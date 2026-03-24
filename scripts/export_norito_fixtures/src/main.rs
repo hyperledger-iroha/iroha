@@ -266,8 +266,7 @@ impl RawFixture {
                     let signed = builder.sign(keypair.private_key());
                     let payload_value = signed.payload().clone();
                     let encoded_struct = payload_value.encode();
-                    let encoded =
-                        normalize_payload_authority_bytes(&encoded_struct, &payload.authority)?;
+                    let encoded = encoded_struct;
                     let payload_base64 = BASE64.encode(&encoded);
                     if check_encoded
                         && let Some(expected) = &self.encoded
@@ -516,8 +515,7 @@ impl RawFixture {
         let signed = builder.sign(keypair.private_key());
         let payload_value = signed.payload().clone();
         let encoded_struct = payload_value.encode();
-        let authority_literal = payload_value.authority.to_string();
-        let encoded = normalize_payload_authority_bytes(&encoded_struct, &authority_literal)?;
+        let encoded = encoded_struct;
         let payload_base64 = BASE64.encode(&encoded);
         if check_encoded && payload_base64_input != payload_base64 {
             bail!(
@@ -780,29 +778,6 @@ fn reencode_signed_with_payload(
         Some(&fields.attachments_field),
         Some(&fields.multisig_field),
     ))
-}
-
-fn normalize_payload_authority_bytes(payload_bytes: &[u8], authority: &str) -> Result<Vec<u8>> {
-    let _guard = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    let mut cursor = 0usize;
-    let chain_field = read_len_prefixed_field(payload_bytes, &mut cursor, "chain_id")?;
-    let _authority_field = read_len_prefixed_field(payload_bytes, &mut cursor, "authority")?;
-    let authority_field = authority.to_string().encode();
-    let rest = &payload_bytes[cursor..];
-
-    let mut out = Vec::with_capacity(
-        chain_field
-            .len()
-            .saturating_add(authority_field.len())
-            .saturating_add(rest.len())
-            .saturating_add(64),
-    );
-    norito::core::write_len_to_vec(&mut out, chain_field.len() as u64);
-    out.extend_from_slice(&chain_field);
-    norito::core::write_len_to_vec(&mut out, authority_field.len() as u64);
-    out.extend_from_slice(&authority_field);
-    out.extend_from_slice(rest);
-    Ok(out)
 }
 
 impl RawPayload {

@@ -152,6 +152,34 @@ def run_transformers(request: dict, request_body: object) -> dict:
     }
 
 
+def run_probe(request: dict, source_files_dir: Path) -> dict:
+    fixture_response = maybe_run_fixture(source_files_dir, {}, request)
+    if fixture_response is not None:
+        return {
+            "backend": fixture_response.get("backend", "local_fixture"),
+            "repo_id": request.get("repo_id"),
+            "model_name": request.get("model_name"),
+            "pipeline_tag": request.get("pipeline_tag"),
+            "worker_instance_id": WORKER_INSTANCE_ID,
+            "worker_pid": os.getpid(),
+            "probe": "ready",
+        }
+
+    pipeline_tag = request.get("pipeline_tag")
+    if not isinstance(pipeline_tag, str) or not pipeline_tag.strip():
+        raise RuntimeError("generated HF source does not expose a usable pipeline_tag")
+    build_transformers_pipeline(source_files_dir, pipeline_tag)
+    return {
+        "backend": "local_transformers",
+        "repo_id": request.get("repo_id"),
+        "model_name": request.get("model_name"),
+        "pipeline_tag": pipeline_tag,
+        "worker_instance_id": WORKER_INSTANCE_ID,
+        "worker_pid": os.getpid(),
+        "probe": "ready",
+    }
+
+
 def handle_request(request: dict) -> dict:
     if request.get("schema_version") != 1:
         return {
@@ -184,13 +212,17 @@ def handle_request(request: dict) -> dict:
     request_body = request.get("request_body")
     if request_body is None:
         request_body = {}
+    probe_only = bool(request.get("probe_only"))
 
     try:
-        fixture_response = maybe_run_fixture(source_files_dir, request_body, request)
-        if fixture_response is not None:
-            response = fixture_response
+        if probe_only:
+            response = run_probe(request, source_files_dir)
         else:
-            response = run_transformers(request, request_body)
+            fixture_response = maybe_run_fixture(source_files_dir, request_body, request)
+            if fixture_response is not None:
+                response = fixture_response
+            else:
+                response = run_transformers(request, request_body)
     except Exception as exc:
         return {
             "ok": False,

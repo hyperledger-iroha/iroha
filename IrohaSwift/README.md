@@ -91,7 +91,7 @@ torii.listAttachments { result in
 let transfer = TransferRequest(
     chainId: "00000000-0000-0000-0000-000000000000",
     authority: accountId,
-    assetDefinitionId: "aid:2f17c72466f84a4bb8a8e24884fdcd2f",
+    assetDefinitionId: "66owaQmAQMuHxPzxUN3bqZ6FJfDa",
     quantity: "1.23",
     destination: "<destination_account_i105>",
     description: "demo",
@@ -115,7 +115,7 @@ sdk.submitAndWait(envelope: envelope) { result in
 ```
 
 `TransferRequest`, `MintRequest`, `BurnRequest`, `ShieldRequest`, and `UnshieldRequest` expect
-canonical `aid:<32-lower-hex-no-dash>` asset-definition IDs on the Swift surface.
+canonical unprefixed Base58 asset-definition IDs on the Swift surface.
 
 `IrohaSDK` trims and validates chain/account/asset identifiers before signing and fails fast on malformed inputs. Override `creationTimeProvider` when you need deterministic timestamps for fixture generation or offline signing flows.
 
@@ -187,8 +187,11 @@ try await torii.chargeSubscriptionNow(subscriptionId: "sub-001", requestBody: ac
 
 ### Canonical request signing
 
-App-facing Torii endpoints accept optional `X-Iroha-Account` /
-`X-Iroha-Signature` headers. Use `ToriiCanonicalRequest` to build them:
+App-facing Torii endpoints accept optional `X-Iroha-Account`,
+`X-Iroha-Signature`, `X-Iroha-Timestamp-Ms`, and `X-Iroha-Nonce` headers.
+Use `ToriiCanonicalRequest` to build them; it signs the canonical request plus
+the freshness metadata and auto-generates timestamp/nonce values when you do not
+pass them explicitly:
 
 ```swift
 let url = URL(string: "https://torii.example/v1/accounts/<account_i105>/assets?limit=5")!
@@ -506,7 +509,7 @@ When you need a full `norito:<hex>` asset id from textual parts, use the new bui
 
 ```swift
 let canonicalAssetId = try ToriiClient.buildCanonicalAssetIdLiteralOffline(
-    assetDefinitionId: "usd#wonderland",
+    assetDefinitionId: "66owaQmAQMuHxPzxUN3bqZ6FJfDa",
     accountId: "<account_i105>"
 )
 ```
@@ -516,7 +519,7 @@ For alias inputs, resolve online and encode in one call:
 ```swift
 if #available(iOS 15.0, macOS 12.0, *) {
     let assetId = try await torii.buildAssetIdLiteralResolvingAliases(
-        assetDefinitionIdOrAlias: "usd#issuer@main",
+        assetDefinitionIdOrAlias: "usd#issuer.main",
         accountIdOrAlias: "alice"
     )
     print(assetId) // norito:<hex>
@@ -774,7 +777,7 @@ let payload = try ConfidentialEncryptedPayload(
 let request = try ShieldRequest(
     chainId: chainId,
     authority: AccountId.make(publicKey: keypair.publicKey),
-    assetDefinitionId: "aid:2f17c72466f84a4bb8a8e24884fdcd2f",
+    assetDefinitionId: "66owaQmAQMuHxPzxUN3bqZ6FJfDa",
     fromAccountId: "<account_i105>",
     amount: "42",
     noteCommitment: noteCommitmentBytes, // 32 bytes
@@ -803,7 +806,7 @@ let proof = try ProofAttachment(
 let request = try UnshieldRequest(
     chainId: chainId,
     authority: AccountId.make(publicKey: keypair.publicKey),
-    assetDefinitionId: "aid:2f17c72466f84a4bb8a8e24884fdcd2f",
+    assetDefinitionId: "66owaQmAQMuHxPzxUN3bqZ6FJfDa",
     toAccountId: "<recipient_account_i105>",
     publicAmount: "50",
     inputs: [Data(repeating: 0x10, count: 32)],
@@ -889,7 +892,7 @@ transition metadata via `/v1/confidential/assets/{definition_id}/transitions`:
 
 ```swift
 if #available(iOS 15, macOS 12, *) {
-    let policy = try await torii.getConfidentialAssetPolicy(assetDefinitionId: "aid:2f17c72466f84a4bb8a8e24884fdcd2f")
+    let policy = try await torii.getConfidentialAssetPolicy(assetDefinitionId: "66owaQmAQMuHxPzxUN3bqZ6FJfDa")
     if let pending = policy.pendingTransition {
         print("Next mode:", pending.newMode, "opens at", pending.windowOpenHeight ?? pending.effectiveHeight)
     }

@@ -2,6 +2,650 @@
 
 Last updated: 2026-03-24
 
+## 2026-03-24 Follow-up: SNS-backed alias leases now resolve from ledger state and reserved `universal` ownership is seeded
+- Completed the next unified dataspace-aware alias ownership slice across
+  `crates/iroha_core/src/{sns.rs,state.rs,smartcontracts/isi/{domain.rs,query.rs,sns.rs}}`,
+  `crates/iroha_data_model/src/query/mod.rs`,
+  `crates/iroha_executor/src/permission.rs`, and
+  `crates/iroha_torii/tests/accounts_onboard.rs`.
+- The shipped behavior in this slice:
+  - SNS-backed alias/domain/dataspace ownership reads now resolve from
+    `World.smart_contract_state` correctly using the same bare Norito codec the
+    state layer persists, so active owner checks no longer miss existing
+    records because of framed-vs-bare decode drift;
+  - executor grant/revoke validation for dataspace-scoped
+    `CanResolveAccountAlias` / `CanManageAccountAlias` now consults an
+    authoritative singular query backed by active SNS dataspace-name ownership
+    instead of the earlier genesis-only fallback;
+  - core account-alias mutation (`Register<Account>` with a label,
+    `BindAccountAlias`, `SetAccountLabel`) now rejects aliases without an
+    active full-alias SNS lease, and the focused core regressions seed the
+    required explicit alias-manage permissions before asserting the lease gate;
+  - `State::new*` now seeds the reserved `universal` dataspace-name record from
+    the genesis-domain owner when that reserved record is absent, giving the
+    reserved dataspace alias a real active owner by default; and
+  - Torii onboarding regressions now seed canonical alias leases with
+    non-expiring test windows, so single-account and multisig onboarding both
+    execute through the same active-lease gate used by steady-state alias
+    registration.
+- Focused validation:
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target-codex-sns cargo test -p iroha_core find_dataspace_name_owner_by_id_returns_active_owner --lib` (pass)
+  - `CARGO_TARGET_DIR=target-codex-sns cargo test -p iroha_core register_account_with_label_requires_active_sns_lease --lib` (pass)
+  - `CARGO_TARGET_DIR=target-codex-sns cargo test -p iroha_core bind_account_alias_requires_active_sns_lease --lib` (pass)
+  - `CARGO_TARGET_DIR=target-codex-sns cargo test -p iroha_core new_for_testing_seeds_reserved_universal_dataspace_name_record --lib` (pass)
+  - `CARGO_TARGET_DIR=target-codex-sns cargo test -p iroha_torii --test accounts_onboard` (pass)
+  - `CARGO_TARGET_DIR=target-codex-sns cargo check -p iroha_core -p iroha_torii -p iroha_executor` (pass)
+
+## 2026-03-24 Follow-up: IVM accelerator startup self-tests now cover more live kernel families
+- Hardened the `ivm` accelerator admission path across
+  `crates/ivm/src/{cuda.rs,gpu_manager.rs,byte_merkle_tree.rs,vector.rs}` and
+  the CUDA/Metal regression files under `crates/ivm/tests/`.
+- Closed the concrete CUDA startup-coverage gaps found during the audit:
+  - the CUDA startup self-test now covers the live Ed25519
+    `signature_kernel`;
+  - the same startup path now covers the BN254 add/sub/mul kernels instead of
+    trusting them transitively after narrower backend init checks; and
+  - stale `ivm --features cuda --tests` drift in
+    `cuda_disable_on_mismatch.rs`, `cuda_env.rs`, `cuda_extra.rs`,
+    `gpu_determinism.rs`, and `hardware_determinism.rs` has been repaired so
+    the feature-gated CUDA test graph compiles again.
+- Added the matching Metal startup guard for the distinct `sha256_leaves`
+  pipeline in `crates/ivm/src/vector.rs`, so Metal no longer treats the
+  single-block SHA-256 self-test as sufficient coverage for Merkle-leaf
+  acceleration.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-cuda2 cargo check -p ivm --features cuda --tests` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo check -p ivm --features metal --tests` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_sha256_leaves_matches_cpu -- --nocapture` (pass with explicit skip after backend disable)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-cuda2 cargo test -p ivm --features cuda --lib selftest_covers_ -- --nocapture` (blocked by host CUDA linker errors: unresolved `cu*` symbols)
+- Remaining implementation gap:
+  - the Metal backend still disables itself on this host because the existing
+    Ed25519 startup parity check fails before the new `sha256_leaves` path can
+    be exercised end-to-end; that fail-closed behavior is desirable, but the
+    underlying Metal Ed25519 mismatch remains open and should be fixed next.
+
+## 2026-03-24 Follow-up: domainless multisig home-domain optionality and signed multisig alias selectors are now live
+- Completed the next unified dataspace-aware alias follow-up across
+  `crates/iroha_executor_data_model/src/isi.rs`,
+  `crates/iroha_executor/src/default/isi/multisig/{mod.rs,account.rs,transaction.rs}`,
+  `crates/iroha_core/src/smartcontracts/isi/multisig.rs`,
+  `crates/iroha_config/src/parameters/{actual.rs,user.rs}`,
+  `crates/iroha_torii/src/{lib.rs,routing.rs}`,
+  and `crates/iroha_torii/tests/accounts_onboard.rs`.
+- The shipped behavior in this slice:
+  - multisig registration/state now persists `home_domain: Option<DomainId>`
+    end to end, so the core path can register and materialize fully domainless
+    multisig accounts and domainless signatory placeholder accounts without
+    inventing a fallback domain;
+  - Torii onboarding config no longer carries `allowed_domain`, and both
+    single-account and multisig onboarding now rely on the canonical alias
+    parser plus explicit alias-manage permission instead of a special
+    onboarding-only domain assumption;
+  - multisig onboarding accepts canonical domainless aliases
+    (`label@dataspace`) and stores the same unified alias semantics as the
+    steady-state alias index; and
+  - `POST /v1/multisig/spec`, `POST /v1/multisig/proposals/list`, and
+    `POST /v1/multisig/proposals/get` now require canonical signed app-auth
+    headers whenever the selector resolves through a multisig alias, matching
+    the earlier `/v1/aliases/resolve*` hardening.
+- Added focused regressions for:
+  - JSON decode defaulting `MultisigRegister.home_domain` to `None`;
+  - core registration of a domainless multisig with empty linked-domain state;
+  - signed-request enforcement for the alias-based multisig spec/proposal
+    read paths; and
+  - Torii onboarding flows using canonical `@universal` aliases plus explicit
+    dataspace alias-manage permission.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo check -p iroha_config -p iroha_executor_data_model -p iroha_executor -p iroha_core` (pass)
+  - `cargo check -p iroha_torii --lib` (pass)
+  - `cargo test -p iroha_executor_data_model multisig_register_json_defaults_home_domain_to_none --lib` (pass)
+  - `cargo test -p iroha_core multisig_register_supports_domainless_home_domain --lib` (pass)
+  - `cargo test -p iroha_torii requires_signed_request_for_alias_selector --lib` (pass)
+  - `cargo test -p iroha_torii --test accounts_onboard accounts_onboard_` (pass)
+- Remaining implementation gap:
+  - dataspace-scoped alias permission grant/revoke validation still uses the
+    temporary genesis-only gate because there is not yet a ledger-backed
+    SNS dataspace-owner source in `World`/Nexus;
+  - SNS-backed ownership/lease enforcement for full account alias keys, domain
+    names, and dataspace aliases is still pending, including the new
+    `/v1/sns/names...` ledger-native API and reserved `universal` seeding; and
+  - the wider SNS shim replacement still requires a new authoritative ledger
+    state surface rather than a small follow-up patch on top of the existing
+    in-memory Torii registrar.
+
+## 2026-03-24 Follow-up: Norito Stage-1 GPU helpers now prove scalar parity before activation
+- Hardened `crates/norito/src/lib.rs` so dynamically loaded JSON Stage-1
+  Metal/CUDA helpers no longer become active just by exporting the expected
+  symbol. The loader now runs a parity self-test against the scalar
+  structural-index builder before caching the helper.
+- This closes the next concrete dynamic-helper integrity edge in the Norito
+  JSON path: a malformed or tampered Stage-1 helper can no longer silently
+  drift structural tape output while still looking well-formed enough to
+  reach the runtime fallback gate only after a live request.
+- Added focused regressions for:
+  - accepting a helper whose structural tape matches the scalar path;
+  - rejecting helpers that return mismatched structural offsets;
+  - rejecting helpers that return non-zero status; and
+  - rejecting helpers that claim success while reporting an out-of-capacity
+    output length.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-stage1 cargo test -p norito --lib accel_tape_validation_tests -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-stage1 cargo test -p norito --features cuda-stage1 --lib accel_tape_validation_tests -- --nocapture` (pass)
+- Remaining implementation gap:
+  - continue the focused `ivm`/`norito` review on the remaining optional
+    accelerator and streaming boundaries beyond the Stage-1, GPU zstd, and
+    CRC64 helper parity gates.
+
+## 2026-03-24 Follow-up: asset-definition docs and SDK references now match Base58 IDs, dotted aliases, and alias-binding lease semantics
+- Closed the remaining public/docs-facing asset-definition cleanup across:
+  - `docs/source/data_model*.md`
+  - `docs/source/data_model_and_isi_spec*.md`
+  - `docs/source/sdk/swift/index*.md`
+  - `IrohaSwift/{README.md,Sources/IrohaSwift/*,Tests/IrohaSwiftTests/*}`
+  - `javascript/iroha_js/{index.d.ts,src/toriiClient.js}`
+- The shipped behavior in this slice:
+  - translated data-model/spec docs and Swift SDK docs/examples now show
+    canonical unprefixed Base58 asset-definition IDs and dotted aliases
+    (`name#domain.dataspace` / `name#dataspace`) instead of legacy `aid:`
+    literals and `name#domain@dataspace`;
+  - SDK-facing references now document `alias_binding { alias, status,
+    lease_expiry_ms, grace_until_ms, bound_at_ms }`, the persisted lease
+    statuses (`permanent`, `leased_active`, `leased_grace`,
+    `expired_pending_cleanup`), and the chain-time alias cutoff semantics;
+  - the Swift SDK now validates canonical Base58 asset-definition IDs,
+    resolves dotted aliases through `/v1/assets/aliases/resolve`, exposes
+    optional `aliasBinding` metadata on alias-resolution payloads, and decodes
+    current 16-byte asset-definition payloads back to Base58 instead of legacy
+    `aid:` strings;
+  - the JS Torii typings/JSDoc now describe full asset-definition records plus
+    the `alias_binding.*` filter/sort fields instead of `{ id }`-only items.
+- Validation:
+  - `swift test --filter testAssetDefinitionIdFromAliasProducesCanonicalBase58Address` (pass)
+  - `swift test --filter testValidateRejectsMalformedAssetDefinition` (pass)
+  - `swift test --filter testResolveAssetAliasAsync` (pass)
+  - `swift test --filter testBuildAssetIdLiteralResolvingAliases` (pass)
+  - `swift test --filter testAssetIdAliasFallbackForInvalidNonAliasDefinition` (pass)
+  - `node --check javascript/iroha_js/src/toriiClient.js` (pass)
+- Remaining implementation gap:
+  - the final internal Rust cleanup for legacy `aid:` test literals and the
+    permissive `AssetDefinitionId::from_str` fallback is still pending broader
+    fixture/test migration.
+
+## 2026-03-24 Follow-up: Norito GPU CRC64 helpers now self-test before use
+- Hardened `crates/norito/src/core/simd_crc64.rs` so dynamically loaded
+  GPU CRC64 helpers no longer become active solely by exporting the expected
+  symbol. The helper now has to pass a parity self-test against the canonical
+  `crc64_fallback` implementation before `hardware_crc64` will trust it.
+- This closes the concrete determinism/integrity edge in the remaining
+  `norito` helper surface: a malformed or tampered CRC64 helper can no longer
+  silently change Norito header checksums or decode-time checksum validation.
+- The debug/test-only helper override path is now actually wired for focused
+  regression coverage, and the debug/test-only `NORITO_GPU_CRC64_MIN_BYTES`
+  override now works so the stub path can be exercised without real GPU-sized
+  payloads.
+- Added focused regressions for:
+  - accepting a helper whose CRC64 output matches the canonical fallback;
+  - rejecting helpers that return mismatched CRC output; and
+  - rejecting helpers that return a non-zero status while claiming the GPU path.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p norito --features cuda-crc64 gpu_crc64_self_test -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-crc64 cargo test -p norito --features cuda-crc64 --lib gpu_min_len_defaults_and_env_override -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-crc64 cargo test -p norito --features cuda-crc64 --lib gpu_crc64_can_load_env_stub -- --nocapture` (pass)
+- Remaining implementation gap:
+  - continue the focused `ivm`/`norito` review on the remaining optional
+    accelerator and streaming boundaries beyond this CRC64 helper parity gate.
+
+## 2026-03-24 Follow-up: asset-definition alias leases now use committed chain time, hard post-grace cutoffs, and authoritative binding state
+- Closed the remaining asset-definition alias lease/API gaps across
+  `crates/iroha_core/src/{state.rs,smartcontracts/isi/domain.rs,smartcontracts/isi/asset.rs}`,
+  `crates/iroha_torii/src/{routing.rs,lib.rs}`,
+  `crates/iroha_torii/tests/asset_definitions_endpoints.rs`, and the English
+  asset docs in `docs/source/{data_model.md,data_model_and_isi_spec.md}`.
+- The shipped behavior in this slice:
+  - public asset alias resolution now uses the latest committed block
+    timestamp instead of node wall clock;
+  - asset aliases stop resolving immediately after their grace window elapses,
+    even before background sweep removes the stale binding record;
+  - stored `World.asset_definitions` rows are normalized to `alias = None`,
+    and effective alias data is derived from the authoritative persisted
+    alias-binding record on reads and rebuilds;
+  - asset-definition app-API list/query filters and sorts now support
+    `alias_binding.status`, `alias_binding.lease_expiry_ms`,
+    `alias_binding.grace_until_ms`, and `alias_binding.bound_at_ms`; and
+  - the CLI alias-resolution helper now parses canonical Base58
+    asset-definition ids from Torii responses instead of the removed `aid:`
+    format.
+- Added focused regressions for:
+  - core alias-lease persistence/rebuild behavior and the post-grace alias
+    cutoff before sweep; and
+  - Torii asset-definition route coverage for full-definition responses plus
+    `alias_binding` sort behavior on `POST /v1/assets/definitions/query`.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-asset-gap cargo test -p iroha_core asset_definition_alias --offline -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-asset-gap cargo test -p iroha_torii --test asset_definitions_endpoints --offline -- --nocapture` (pass)
+- Remaining implementation gap:
+  - the English docs are updated, but translated docs / SDK-facing API
+    references still need the same lease-status and chain-time cutoff wording;
+    that follow-up remains tracked in `roadmap.md`.
+
+## 2026-03-24 Follow-up: alias permissions, signed Torii resolution, and canonical Kotodama alias strings are now wired end to end
+- Completed the next unified dataspace-aware alias slice across
+  `crates/iroha_executor_data_model/src/permission.rs`,
+  `crates/iroha_executor/src/{permission.rs,default/mod.rs}`,
+  `crates/iroha_core/src/{alias/mod.rs,smartcontracts/isi/domain.rs,smartcontracts/ivm/host.rs,state.rs}`,
+  `crates/kotodama_lang/src/{semantic.rs,ir.rs,compiler.rs,regalloc.rs}`,
+  `crates/ivm/tests/kotodama.rs`, and
+  `crates/iroha_torii/src/lib.rs`.
+- Added explicit account-alias permission tokens:
+  - `CanResolveAccountAlias { scope: Domain(..) | Dataspace(..) }`
+  - `CanManageAccountAlias { scope: Domain(..) | Dataspace(..) }`
+- Core alias mutation and resolution now enforce those permissions:
+  - `Register<Account>` with a label, `BindAccountAlias`, and
+    `SetAccountLabel` now require explicit alias-manage permission instead of
+    the earlier temporary self/domain bridge.
+  - IVM host alias resolution now checks explicit alias-resolve permission and
+    returns permission denial when the caller lacks it.
+- Torii account-alias resolution is now signed and on-chain only:
+  - `POST /v1/aliases/resolve` and `POST /v1/aliases/resolve_index` now
+    require canonical signed app-auth headers, reject missing permission with
+    `403`, and no longer fall back to the old alias-service / ISO bridge for
+    account aliases.
+- Kotodama / IVM account-alias resolution now uses one canonical alias string:
+  - `resolve_account_alias("label@domain.dataspace")`
+  - `resolve_account_alias("label@dataspace")`
+  The compiler now publishes that single alias-string TLV into INPUT before
+  invoking the syscall so trigger/runtime execution still receives a valid
+  Norito envelope.
+- Focused validation:
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target-codex-alias3 cargo check -p kotodama_lang -p ivm -p iroha_core -p iroha_torii -p iroha_executor` (pass)
+  - `CARGO_TARGET_DIR=target-codex-alias3 cargo test -p kotodama_lang lower_resolve_account_alias_builtin --lib` (pass)
+  - `CARGO_TARGET_DIR=target-codex-alias3 cargo test -p ivm compile_emits_resolve_account_alias_syscall --test kotodama` (pass)
+  - `CARGO_TARGET_DIR=target-codex-alias3 cargo test -p iroha_core resolve_account_alias_syscall_reads_current_alias_binding --lib` (pass)
+  - `CARGO_TARGET_DIR=target-codex-alias3 cargo test -p iroha_core execute_data_trigger_supports_alias_resolve_and_json_amount_transfer --lib` (pass)
+  - `CARGO_TARGET_DIR=target-codex-alias3 cargo test -p iroha_torii alias_resolve_index_ --lib` (pass)
+  - `CARGO_TARGET_DIR=target-codex-alias3 cargo test -p iroha_torii alias_resolve_requires_signed_request --lib` (pass)
+  - `CARGO_TARGET_DIR=target-codex-alias3 cargo test -p iroha_torii alias_resolve_scans_account_labels_when_alias_index_is_missing --lib` (pass)
+  - `CARGO_TARGET_DIR=target-codex-alias3 cargo test -p iroha_torii alias_resolve_rejects_missing_permission --lib` (pass)
+  - `CARGO_TARGET_DIR=target-codex-alias3 cargo test -p iroha_torii alias_resolve_returns_not_found_for_unknown_alias --lib` (pass)
+  - `CARGO_TARGET_DIR=target-codex-alias3 cargo test -p iroha_torii alias_resolve_ --lib` (expected unrelated failure: existing `asset_alias_resolve_returns_not_found_after_grace`)
+- Remaining implementation gap:
+  - dataspace-scoped alias permission grant/revoke validation still uses the
+    temporary genesis-only gate until ledger-backed SNS dataspace ownership is
+    available;
+  - SNS-backed ownership/lease enforcement for full account alias keys, domain
+    names, and dataspace aliases is still pending;
+  - multisig `home_domain: Option<DomainId>`, domainless multisig onboarding,
+    and the broader onboarding-config cleanup are still pending; and
+  - some broader `iroha_torii` test/compile paths still have unrelated
+    branch-local blockers outside the account-alias slice.
+
+## 2026-03-24 Follow-up: Norito accelerator outputs now fail closed on malformed helper results
+- Hardened `crates/norito/src/lib.rs` so every accelerated JSON Stage-1 tape
+  passes a release-build sanity check before `TapeWalker` consumes it:
+  out-of-bounds, non-structural, or non-monotonic offsets now fall back to
+  the scalar builder instead of reaching direct `input.as_bytes()[off]`
+  indexing.
+- Hardened `crates/norito/src/core/gpu_zstd.rs` so GPU zstd encode/decode
+  paths reject helper-reported success lengths that exceed the destination
+  buffer instead of calling `truncate(out_len)` on unchecked values.
+- This closes the concrete malformed-helper-result edges surfaced by the
+  focused `norito` follow-up: buggy or malformed accelerator output can no
+  longer panic the JSON walker or GPU zstd wrapper by returning invalid
+  offsets or invalid success lengths.
+- Synced the Python and Java Norito changelogs so the bindings parity guard
+  reflects that this Rust-side change is internal hardening rather than a
+  public API change.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `python3 scripts/check_norito_bindings_sync.py` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p norito validate_accel_rejects_out_of_bounds_offsets -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p norito validate_accel_rejects_non_structural_offsets -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p norito try_gpu_encode_rejects_invalid_success_length -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p norito try_gpu_decode_rejects_invalid_success_length -- --nocapture` (pass)
+- Remaining implementation gap:
+  - continue the focused `ivm`/`norito` review on the remaining unsafe,
+    hardware-acceleration, and streaming/crypto boundaries; this patch hardens
+    the Stage-1 and GPU zstd helper handoffs but not the wider review surface.
+
+## 2026-03-24 Follow-up: Torii ingress-auth hardening closed the live security-audit findings
+- Closed the three live ingress/auth findings from the refreshed audit:
+  - `crates/iroha_torii/src/app_auth.rs` now fails closed on
+    multisig-controlled accounts instead of silently accepting any single
+    member signature on the app-auth path;
+  - the same verifier now requires the four-header canonical-request scheme
+    (`X-Iroha-Account`, `X-Iroha-Signature`, `X-Iroha-Timestamp-Ms`,
+    `X-Iroha-Nonce`), enforces freshness, keeps a bounded replay cache, and
+    accepts UTF-8 canonical I105 account literals in request headers; and
+  - Norito-RPC plus operator-auth now trust
+    `x-forwarded-client-cert` only when the TCP peer belongs to configured
+    trusted-proxy CIDRs, defaulting to loopback-only proxies.
+- Surfaced the new config knobs in `iroha_config`:
+  - app-auth clock skew / nonce TTL / replay-cache capacity in
+    `crates/iroha_config/src/parameters/{defaults,actual,user}.rs`; and
+  - `mtls_trusted_proxy_cidrs` for both Norito-RPC and operator-auth in the
+    same config stack.
+- Updated the JS, Swift, and Android canonical-request helpers and docs to
+  emit the same freshness-aware four-header protocol as Torii.
+- Expanded Torii regression coverage beyond the low-level verifier:
+  - `crates/iroha_torii/src/content.rs` now covers replay rejection on the
+    content role-gate path; and
+  - `crates/iroha_torii/src/lib.rs` now covers missing/replayed signatures on
+    Soracloud signed-mutation middleware and adds an attachment-tenancy replay
+    regression.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo check -p iroha_torii --lib` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_torii --lib --no-run` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_torii --lib verify_accepts_valid_signature -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_torii --lib verify_rejects_replayed_nonce -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_torii --lib operator_auth_rejects_forwarded_mtls_from_untrusted_proxy -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_torii --lib trusted_forwarded_header_requires_proxy_membership -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_torii --lib role_gate_rejects_replayed_signature -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_torii --lib soracloud_signed_mutation_middleware_requires_headers_and_rejects_replay -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_torii --lib zk_attachments_tenant_rejects_replayed_signed_headers -- --nocapture` (pass)
+  - `node --test javascript/iroha_js/test/canonicalRequest.test.js javascript/iroha_js/test/toriiCanonicalAuth.test.js` (pass)
+  - `cd IrohaSwift && swift test --filter CanonicalRequestTests` (pass)
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew android:compileDebugUnitTestJavaWithJavac` (pass)
+- Remaining implementation gap:
+  - this ingress/auth slice is closed in the current tree; remaining security
+    follow-up is the broader `ivm`/`norito` review plus broader JS/Swift/Android
+    suite reruns once unrelated branch-level blockers are cleared.
+
+## 2026-03-24 Follow-up: unified dataspace-aware account alias groundwork now spans the data model, core state, executor, and Torii
+- Replaced the old domain-only `AccountLabel` shape with a unified structured
+  alias key carrying `label`, `Option<DomainId>`, and `DataSpaceId`, plus
+  canonical parse/format helpers for `label@domain.dataspace` and
+  `label@dataspace` backed by the current `DataSpaceCatalog`.
+- Made account registration domain-optional in the core data model:
+  `NewAccount.domain` is now optional, `Account::new_domainless` /
+  `NewAccount::new_domainless` preserve empty linked-domain state, and
+  registration/index rebuild paths now validate domain-bearing aliases against
+  the account's actual linked-domain set instead of silently manufacturing a
+  fallback domain link.
+- Wired the same alias type through state rebuilds, alias rekey tracking,
+  Torii on-chain alias parsing/formatting, multisig alias selectors, and
+  account onboarding so single-account onboarding now registers the same
+  canonical alias used by steady-state alias resolution and targets the alias
+  dataspace instead of forcing `GLOBAL`.
+- Multisig onboarding now uses the same canonical parser and stores the same
+  alias binding semantics for domain-bearing aliases; domainless multisig
+  onboarding is still intentionally deferred.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_data_model/src/account/rekey.rs crates/iroha_data_model/src/account.rs crates/iroha_data_model/src/nexus/mod.rs crates/iroha_core/src/state.rs crates/iroha_core/src/state/tiered.rs crates/iroha_core/src/smartcontracts/isi/domain.rs crates/iroha_core/src/pipeline/access.rs crates/iroha_executor/src/default/mod.rs crates/iroha_torii/src/lib.rs crates/iroha_torii/src/routing.rs` (pass)
+  - `cargo test -p iroha_data_model account_label_ --lib` (pass)
+  - `cargo test -p iroha_data_model domainless_account_builder_keeps_empty_linked_domains --lib` (pass)
+  - `CARGO_TARGET_DIR=target-codex-alias cargo test -p iroha_core register_domainless_account_keeps_empty_domain_links_and_indexes_alias --lib` (pass)
+  - `CARGO_TARGET_DIR=target-codex-alias cargo test -p iroha_core set_account_label_rejects_domainful_alias_without_domain_link --lib` (pass)
+  - `CARGO_TARGET_DIR=target-codex-alias cargo test -p iroha_torii alias_resolve_scans_account_labels_when_alias_index_is_missing --lib` (pass)
+  - `CARGO_TARGET_DIR=target-codex-alias cargo test -p iroha_torii multisig_selector_rejects_both_fields --lib` (pass)
+  - `CARGO_TARGET_DIR=target-codex-alias cargo check -p iroha_executor --tests` (pass)
+- Remaining implementation gap:
+  - explicit domain/dataspace alias permissions, HTTP `403` handling, and
+    VM/Kotodama permission-denial mapping are not implemented yet;
+  - SNS-backed ownership/lease enforcement for full alias keys, domain names,
+    and dataspace aliases is still pending;
+  - multisig home-domain optionality and domainless multisig onboarding remain
+    follow-up work; and
+  - Torii onboarding config still needs the broader cleanup that removes the
+    legacy `allowed_domain` assumption entirely.
+
+## 2026-03-24 Follow-up: full-workspace security audit refresh initially reduced the stale Torii report to three live ingress/auth findings
+- Refreshed `security_best_practices_report.md` against current workspace code
+  instead of relying on the earlier Torii/Soracloud snapshot.
+- The initial live findings were:
+  - app canonical request verification treats multisig accounts as
+    "any single member may sign", bypassing threshold/weight policy;
+  - app canonical request signatures remain replayable because the signed
+    message has no timestamp/nonce/replay cache, and the JS/Swift/Android SDK
+    helpers mirror the same two-header scheme; and
+  - Norito-RPC and operator-auth `require_mtls` checks currently trust the
+    presence of `x-forwarded-client-cert` rather than transport-authenticated
+    mTLS state.
+- The previously reported Soracloud findings about raw private keys over HTTP,
+  internal-only local-read proxy execution, unmetered public-runtime fallback,
+  and remote-IP attachment tenancy are now closed/superseded by the currently
+  shipped signed-mutation, public-route, throttling, and signed-account
+  tenancy paths.
+- Spot-checked IVM/crypto/serialization and did not confirm an additional live
+  issue in this audit slice; notable positive evidence includes confidential
+  key zeroization and replay-aware Soranet PoW ticket validation.
+- Validation:
+  - `cargo deny check advisories bans sources` (blocked: `cargo-deny` not installed)
+  - `bash scripts/fuzz_smoke.sh` (pass/skip: `cargo-fuzz` not installed)
+  - `cd javascript/iroha_js && npm test` (blocked by unrelated compile error at `crates/iroha_core/src/pipeline/access.rs:890`)
+  - `cd IrohaSwift && swift test` (fails in existing unrelated account-address / bridge-availability / tx-builder test coverage)
+- Remaining implementation gap:
+  - superseded by the follow-up entry above, which closes those three
+    ingress/auth issues in the current tree.
+
+## 2026-03-24 Follow-up: Soracloud HF runtime health now covers local probes, runtime heartbeats, and proxied-primary failures
+- Extended the embedded HF runtime path in
+  `crates/irohad/src/soracloud_runtime.rs` and the local runner in
+  `crates/irohad/resources/soracloud_hf_local_runner.py` so reconciliation now
+  performs a lightweight resident-worker probe for locally assigned `Warm` and
+  `Warming` HF hosts after import, instead of waiting for a primary `/infer`
+  request to prove the worker can actually load.
+- The probe path now:
+  - starts the resident worker during reconcile for locally assigned warm
+    replicas as well as primaries,
+  - verifies the imported model can build a local backend without running a
+    full inference request, and
+  - submits one authoritative `HeartbeatSoracloudModelHost` after a successful
+    local probe when the validator still has a `Warming` assignment or needs a
+    host-advert TTL refresh, and
+  - emits authoritative `WarmupNoShow` / `AssignedHeartbeatMiss` reports when
+    that local probe fails, including for replica assignments, and now follows
+    those reports immediately with `ReconcileSoracloudModelHosts` so
+    promotion/backfill does not wait for a later sweep, and
+  - treats failed proxy-to-primary generated-HF reads as a remote-primary
+    health signal by reporting `AssignedHeartbeatMiss` for the authoritative
+    primary when a proxied request times out, closes, or returns a non-client
+    runtime failure, and
+  - when ingress routing for a generated-HF public `/infer` request fails
+    earlier because the authoritative placement has no warm primary at all,
+    Torii now asks the runtime handle to enqueue
+    `ReconcileSoracloudModelHosts` immediately instead of waiting for a later
+    expiry or a separate worker-failure signal, and
+  - successful proxy-to-primary generated-HF responses are now also checked
+    against the committed runtime receipt attribution before Torii returns
+    them; if the receipt is missing or does not prove execution by the
+    authoritative warm primary, ingress fails closed and hints
+    `ReconcileSoracloudModelHosts` instead of serving a non-authoritative
+    response, and the same validation now also requires the runtime receipt
+    commitments and certification policy to match the proxied response Torii
+    is about to serve, and those bad receipt-attribution responses now also
+    feed the same remote-primary `AssignedHeartbeatMiss` reporting hook used
+    for proxy timeouts and other proxied runtime failures, and
+  - generated-HF proxy execution failures that already report remote-primary
+    `AssignedHeartbeatMiss` now also request authoritative
+    `ReconcileSoracloudModelHosts` through the same hint path used by routing
+    and bad-receipt failures, and
+  - the proxy receive path now rejects any incoming Soracloud local-read proxy
+    request unless it is the generated-HF `infer` query case and the
+    receiving node is still the committed warm primary for that placement, so
+    the P2P proxy path is no longer a generic remote public local-read tunnel,
+    and
+  - when an assigned replica or stale former primary rejects that incoming
+    generated-HF proxy execution because it is no longer the authoritative
+    warm primary, Torii now also hints
+    `ReconcileSoracloudModelHosts` through the same runtime path instead of
+    relying only on the caller-side routing view, and
+  - Torii now binds each pending generated-HF proxy request to the
+    authoritative primary peer it targeted, so a proxy response from the wrong
+    peer or with an unsupported response schema now fails closed instead of
+    being accepted purely by matching `request_id`, and
+  - now auto-reports `AdvertContradiction` when the local validator's runtime
+    peer id disagrees with its authoritative model-host advert peer id.
+- Added focused runtime tests covering:
+  - resident-worker startup during reconcile for a local warm replica; and
+  - authoritative model-host heartbeat submission after a successful local
+    warming probe; and
+  - immediate authoritative host reconcile submission after runtime-generated
+    warmup/worker failure reports; and
+  - remote-primary health reporting for generated-HF proxy failures; and
+  - runtime-side advert-contradiction reporting for local peer-id mismatch; and
+  - reconcile-time `AssignedHeartbeatMiss` reporting for a failing warm local
+    replica.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo check -p irohad --tests` (pass)
+  - `cargo test -p irohad reconcile_once_starts_resident_worker_for_local_warm_replica -- --nocapture` (pass)
+  - `cargo test -p irohad reconcile_once_submits_model_host_heartbeat_after_successful_warming_probe -- --nocapture` (pass)
+  - `cargo test -p irohad reconcile_once_reports_warmup_no_show_for_local_warming_host_import_failure -- --nocapture` (pass)
+  - `cargo test -p irohad reconcile_once_reports_warm_replica_worker_failure -- --nocapture` (pass)
+  - `cargo test -p irohad execute_local_read_generated_hf_infer_reports_primary_worker_failure_once -- --nocapture` (pass)
+  - `cargo test -p irohad execute_local_read_generated_hf_infer_reuses_resident_worker_across_calls -- --nocapture` (pass)
+  - `cargo test -p irohad execute_local_read_generated_hf_infer_executes_imported_model_locally -- --nocapture` (pass)
+  - `cargo test -p irohad report_generated_hf_proxy_failure_reports_primary_host_violation -- --nocapture` (pass)
+  - `cargo test -p irohad request_generated_hf_reconcile_submits_reconcile_when_no_warm_primary -- --nocapture` (pass)
+  - `cargo test -p irohad request_generated_hf_reconcile_submits_reconcile_for_assigned_replica_authority_failure -- --nocapture` (pass)
+  - `cargo test -p irohad reconcile_once_reports_advert_contradiction_for_local_peer_mismatch -- --nocapture` (pass)
+  - `cargo check -p iroha_torii --tests` (pass)
+  - `cargo check -p iroha_torii --lib` (pass)
+  - `cargo test -p iroha_torii validate_incoming_soracloud_proxy_request_authority_accepts_generated_hf_primary --lib` (pass)
+  - `cargo test -p iroha_torii validate_incoming_soracloud_proxy_request_authority_rejects_non_generated_hf --lib` (pass)
+  - `cargo test -p iroha_torii validate_incoming_soracloud_proxy_request_authority_rejects_non_primary_peer --lib` (pass)
+  - `cargo test -p iroha_torii incoming_proxy_authority_failure_requests_generated_hf_reconcile --lib` (pass)
+  - `cargo test -p iroha_torii validate_generated_hf_proxy_response_authority_accepts_matching_receipt --lib` (pass)
+  - `cargo test -p iroha_torii validate_generated_hf_proxy_response_authority_rejects_mismatched_receipt --lib` (pass)
+  - `cargo test -p iroha_torii validate_generated_hf_proxy_response_authority_rejects_result_commitment_mismatch --lib` (pass)
+  - `cargo test -p iroha_torii soracloud_proxy_response_completes_pending_request --lib` (pass)
+  - `cargo test -p iroha_torii soracloud_proxy_response_rejects_unexpected_responder --lib` (pass)
+  - `cargo test -p iroha_torii soracloud_proxy_response_rejects_unsupported_schema --lib` (pass)
+  - `cargo test -p iroha_torii proxy_execution_failure_reports_remote_primary_health_and_requests_reconcile --lib` (pass)
+  - `cargo test -p iroha_torii proxy_validation_failure_reports_remote_primary_health_and_requests_reconcile --lib` (pass)
+  - `cargo test -p iroha_torii soracloud_proxy_failure_reports_remote_primary_health --lib` (pass)
+  - `cargo test -p iroha_torii soracloud_routing_failure_requests_generated_hf_reconcile --lib` (pass)
+- Remaining implementation gap:
+  - broader cross-node/runtime-cluster health signals still remain follow-up
+    work; the authoritative path is now driven by expiry and the local
+    validator's direct warmup/worker observations plus assigned-host
+    receiver-side authority failures, but not by remote peers' deeper
+    internal worker state.
+
+## 2026-03-24 Follow-up: Torii/Soracloud ingress hardening now enforces signed mutations, signed-account attachment tenancy, and public-runtime throttles
+- Implemented the first remediation slice for the 2026-03-24 Torii/Soracloud
+  security audit across
+  `crates/iroha_torii/src/{app_auth.rs,content.rs,lib.rs,soracloud.rs,zk_attachments.rs}`,
+  `crates/irohad/src/soracloud_runtime.rs`,
+  `crates/iroha_config/src/parameters/{defaults.rs,user.rs,actual.rs}`,
+  `crates/iroha_cli/src/soracloud.rs`, and the Soracloud CLI docs.
+- The shipped hardening in this slice:
+  - canonical request verification now returns both the signed account and the
+    exact verifying public key, and Torii now authenticates standard
+    Soracloud mutation routes from `X-Iroha-Account` /
+    `X-Iroha-Signature` before the handler runs;
+  - standard Soracloud mutation handlers now reject inline
+    `authority` / `private_key` JSON fields and return deterministic
+    `tx_instructions` draft responses instead of server-submitting the
+    transaction;
+  - the CLI now signs those HTTP mutation requests canonically and submits the
+    returned draft transaction itself through the normal Iroha client path;
+  - ZK attachment CRUD now requires signed-account headers for tenancy even
+    when API tokens are disabled, removing the remote-IP fallback; and
+  - public Soracloud runtime ingress now has explicit per-IP rate /
+    burst / inflight limits and the embedded runtime rejects non-public local
+    read routes before local or peer-proxied execution.
+- Added focused regression coverage for:
+  - Soracloud mutation signer enforcement and draft/legacy request-shape split;
+  - signed-account attachment tenancy derivation;
+  - Soracloud public-runtime config defaults; and
+  - runtime rejection of internal service routes on the local-read path.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo check -p iroha_config -p iroha_torii -p irohad -p iroha_cli` (pass)
+  - `cargo test -p iroha_cli signed_ --bins` (pass)
+  - `cargo test -p iroha_torii require_soracloud_mutation_signer --lib` (pass)
+  - `cargo test -p iroha_torii attachment_tenant_is_derived_from_signed_account --lib` (pass)
+  - `cargo test -p iroha_torii verify_accepts_valid_signature --lib` (pass)
+  - `cargo test -p iroha_config soracloud_public_runtime_defaults_are_non_zero --lib` (pass)
+  - `cargo test -p irohad execute_local_read_rejects_internal_service_route --bins` (pass)
+- Remaining implementation gap:
+  - broader `iroha_torii` / `irohad` end-to-end validation is still follow-up
+    work beyond the focused regression set below.
+
+## 2026-03-24 Follow-up: Soracloud legacy inline-signing path removed from HF, autonomy, and private-runtime flows
+- Completed the second remediation slice across
+  `crates/iroha_torii/src/soracloud.rs`,
+  `crates/iroha_cli/src/soracloud.rs`,
+  `crates/iroha_core/src/{soracloud_runtime.rs,smartcontracts/isi/soracloud.rs}`,
+  `crates/iroha_data_model/src/isi/soracloud.rs`, and the Soracloud CLI docs.
+- The remaining hardening in this slice:
+  - `hf-deploy` and `hf-lease-renew` now require client-signed auxiliary
+    provenance for the deterministic generated HF service/apartment artifacts
+    instead of relying on Torii-held caller private keys;
+  - `agent-autonomy-run` and `model/run-private` now use a signed
+    draft-then-finalize flow, where the first mutation records approval/start
+    and the second signed finalize request executes the runtime path and
+    returns authoritative follow-up instructions as deterministic drafts;
+  - `model/decrypt-output` now returns the private-inference checkpoint as a
+    deterministic draft transaction instead of doing a server-side follow-up
+    submission; and
+  - authoritative private-inference checkpoints now rely on the outer
+    transaction signature only, removing the last embedded checkpoint
+    provenance that required Torii-side signing.
+- Added focused regression coverage for:
+  - generated HF service/apartment auxiliary provenance requirements;
+  - signer binding on those generated HF auxiliary payloads; and
+  - acceptance of valid generated auxiliary provenance for first-time
+    deterministic HF admission;
+  - finalize signer mismatch rejection for approved autonomy runs; and
+  - idempotent/no-op handling for non-HF autonomy finalize and for
+    already-recorded authoritative runtime receipt/execution follow-ups.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo check -p iroha_torii -p iroha_cli -p iroha_core -p iroha_data_model` (pass)
+  - `cargo test -p iroha_torii ensure_hf_generated_ --lib` (pass)
+  - `cargo test -p iroha_torii require_soracloud_mutation_signer --lib` (pass)
+  - `cargo test -p iroha_cli signed_ --bins` (pass)
+  - `cargo test -p iroha_core private_inference_release_finalization_reuses_checkpoint_step --lib` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha_target_finalize_gaps cargo check -p iroha_torii` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha_target_finalize_gaps cargo test -p iroha_torii agent_autonomy_run_ --lib` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha_target_finalize_gaps cargo test -p iroha_torii build_authoritative_agent_ --lib` (pass)
+- Remaining implementation gap:
+  - broader end-to-end Soracloud runtime/network coverage is still follow-up
+    work, but the legacy inline-signing path itself is now removed.
+
+## 2026-03-24 Follow-up: Soracloud HF advertise path now auto-reports advert contradictions and syncs placement routing metadata
+- Extended the authoritative Soracloud HF advertise flow in
+  `crates/iroha_core/src/smartcontracts/isi/soracloud.rs` so re-advertised
+  model-host capabilities are checked against both the host-class floor and
+  the validator's currently assigned HF placements before the capability record
+  is replaced.
+- Valid re-advertise mutations now also keep the authoritative placement view
+  in sync for that validator by updating assigned-host `peer_id` and
+  `host_class` metadata and recomputing the current window's reservation fee
+  when the host class changes.
+- Contradictory re-advertise mutations no longer fail with a plain validation
+  error and roll back the evidence path:
+  - the advertise execution path now records persisted
+    `AdvertContradiction` evidence,
+  - applies the existing validator slash/eviction policy, and
+  - triggers the same deterministic placement refresh/rebalance path used by
+    the other host-violation classes.
+- Added focused core tests covering:
+  - valid re-advertise metadata + fee synchronization for an already assigned
+    placement; and
+  - contradictory re-advertise evidence/slash/eviction for an assigned host.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo check -p iroha_core --lib` (pass)
+  - `cargo test -p iroha_core model_host_ --lib` (pass)
+  - `cargo test -p iroha_core report_model_host_violation --lib` (pass)
+  - `cargo test -p iroha_core reconcile_soracloud_model_hosts --lib` (pass)
+  - `cargo test -p iroha_core join_hf_shared_lease_rejects_when_no_model_host_can_run_profile --lib` (pass)
+- Remaining implementation gap:
+  - live runtime-health coverage is still narrower than the full design;
+    beyond advert expiry and the current local warmup/local-primary failure
+    signals, broader replica-health reporting remains follow-up work.
+
 ## 2026-03-24 Follow-up: Soracloud HF runtime health now auto-reports local warmup and primary-worker failures
 - Extended the embedded `irohad` Soracloud runtime in
   `crates/irohad/src/{main.rs,soracloud_runtime.rs}` so locally assigned HF
@@ -29,9 +673,9 @@ Last updated: 2026-03-24
     `jsonwebtoken::decode::<norito::json::Value>` still requires a serde-owned
     claim type)
 - Remaining implementation gap:
-  - automatic advert-contradiction evidence generation and live
-    replica-promotion/backfill driven directly from runtime health still
-    remain open.
+  - broaden live runtime-health reporting beyond the current local warmup +
+    local-primary failure signals if replica-side health should trigger the
+    same authoritative rebalance/slash path proactively.
 
 ## 2026-03-24 Security audit: Torii/Soracloud ingress review identified four actionable issues
 - Wrote `security_best_practices_report.md` after a focused code audit of the
@@ -6021,3 +6665,51 @@ Last updated: 2026-03-24
 - Implemented the syscall in `CoreHost`, `WsvHost`, and the `iroha_core` codec-host forwarding path.
 - Added Kotodama semantic/IR/compiler support for `json_get_numeric(ev, name("amount"))`, typed as `Amount`, plus ABI/host regression tests and syscall docs updates.
 - Intended use: direct on-chain settlement-style triggers such as SBP issuance swap can now consume `"0.00001"` style amounts from `ExecuteTrigger` args and feed them into `transfer_asset(...)` unchanged.
+
+## 2026-03-24 Asset Definition ID and Asset API Unification
+- Switched public asset-definition literals from legacy `aid:<hex>` to canonical unprefixed Base58 addresses with checksum in `iroha_data_model::asset::AssetDefinitionId`.
+- Updated asset-definition alias grammar to dotted long form:
+  - `<name>#<domain>.<dataspace>`
+  - `<name>#<dataspace>`
+- Added direct singular lookup support for asset definitions:
+  - `FindAssetDefinitionById`
+  - JSON query envelope support for `FindAssetDefinitionById`
+- Updated Torii app APIs:
+  - `GET /v1/assets/definitions` now returns full asset-definition objects.
+  - Added `GET /v1/assets/definitions/{asset}`.
+  - Asset-definition selectors on public Torii routes now reject legacy `aid:` literals and resolve canonical Base58 ids or aliases.
+  - Asset holders endpoints now expose `asset`, `asset_alias`, `account_id`, `scope`, and `quantity` instead of filtering/returning raw encoded `AssetId` blobs.
+- Updated CLI/docs/help text to use canonical Base58 asset-definition ids and dotted aliases.
+- Continued the public/parser cleanup so more user-facing entry points now require canonical Base58 explicitly instead of relying on `AssetDefinitionId::from_str` fallback:
+  - CLI ZK commands and Sorafs reward-policy decoding.
+  - JS host `encode_asset_id(...)`.
+  - Kagami localnet asset-spec parsing.
+  - Nexus manifest scope parsing.
+  - ISO 20022 bridge currency bindings and `SplmtryData/AssetDefinitionId` hints.
+  - Core metadata/state-access parsing paths (`block`, `pipeline::access`, witness capture, asset query filters).
+- Reduced legacy `aid:` dependency in internal fixtures/tests by switching several opaque-id fixtures to `AssetDefinitionId::from_uuid_bytes(...)` and updating CLI help/README examples away from `aid:`.
+- Fixed two unrelated compile drifts encountered during verification:
+  - `crates/iroha_data_model/src/account/rekey.rs` now uses static `ParseError` messages.
+  - `crates/kotodama_lang/src/compiler.rs` handles optional account domains when collecting access sets.
+- Repaired asset-definition alias lease durability and API visibility:
+  - `asset_definition_alias_bindings` is now persisted and treated as the authoritative lease record.
+  - World/index rebuild now reconstructs alias lookup state from persisted bindings first, while synthesizing permanent bindings for legacy definitions that only stored `definition.alias`.
+  - Added lease-state classification (`permanent`, `leased_active`, `leased_grace`, `expired_pending_cleanup`) on the binding record.
+  - `SetAssetDefinitionAlias` now rejects `lease_expiry_ms` values that are already expired at bind time.
+  - Torii asset-definition JSON and alias-resolution JSON now include `alias_binding` metadata with `status`, `lease_expiry_ms`, `grace_until_ms`, and `bound_at_ms` when an alias exists.
+- Fixed additional branch drifts uncovered while validating the alias-lease change:
+  - `crates/iroha_config/src/parameters/user.rs` now wraps the app-auth replay-cache default as `NonZeroUsize`.
+  - `crates/iroha_config/src/parameters/actual.rs` now threads `mtls_trusted_proxy_cidrs` into `NoritoRpcTransport`.
+  - `crates/iroha_core/src/kiso.rs`, `crates/iroha_torii/src/test_utils.rs`, `crates/iroha_torii/tests/connect_gating.rs`, `crates/iroha_torii/src/operator_signatures.rs`, and Torii test-state builders were updated to match the current config/auth shapes.
+- Validation:
+  - `cargo check -p iroha_torii --tests`
+  - `cargo fmt --all`
+  - `cargo check -p connect_norito_bridge --tests`
+  - `cargo check -p iroha_core --tests`
+  - `cargo check -p iroha_cli --tests`
+  - `cargo test -p connect_norito_bridge parse_asset_definition_accepts_canonical_base58_literal -- --nocapture`
+  - `cargo test -p connect_norito_bridge --bin swift_parity_regen parse_asset_definition_argument_accepts_canonical_literal -- --nocapture`
+  - `cargo test -p iroha_core asset_definition_alias -- --nocapture`
+  - `cargo test -p iroha_torii --lib asset_alias_resolve -- --nocapture`
+  - `cargo test -p iroha_torii --lib asset_definition_get_returns_full_definition_by_base58_id -- --nocapture`
+  - `cargo test -p iroha_torii --test asset_definitions_endpoints -- --nocapture`

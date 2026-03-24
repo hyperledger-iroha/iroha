@@ -27,7 +27,9 @@ translator: machine-google-reviewed
 تحتوي المعرفات على نماذج سلسلة مستقرة مع `Display`/`FromStr` ذهابًا وإيابًا. تمنع قواعد الاسم المسافات البيضاء وأحرف `@ # $` المحجوزة.- `Name` - معرف نصي تم التحقق منه. القواعد: `crates/iroha_data_model/src/name.rs`.
 - `DomainId` — `name`. المجال: `{ id, logo, metadata, owned_by }`. الإنشاءات: `NewDomain`. الكود: `crates/iroha_data_model/src/domain.rs`.
 - `AccountId` - يتم إنتاج العناوين الأساسية عبر `AccountAddress` (I105 / hex) ويقوم Torii بتطبيع المدخلات من خلال `AccountAddress::parse_encoded`. I105 هو تنسيق الحساب المفضل؛ النموذج I105 مخصص لـ Sora فقط UX. يتم الاحتفاظ بسلسلة `alias` (النموذج القديم المرفوض) المألوفة كاسم مستعار للتوجيه فقط. الحساب: `{ id, metadata }`. الكود: `crates/iroha_data_model/src/account.rs`.- سياسة قبول الحساب — تتحكم النطاقات في إنشاء الحساب الضمني عن طريق تخزين Norito-JSON `AccountAdmissionPolicy` ضمن مفتاح البيانات الوصفية `iroha:account_admission_policy`. عند غياب المفتاح، توفر المعلمة المخصصة على مستوى السلسلة `iroha:default_account_admission_policy` الإعداد الافتراضي؛ عندما يكون ذلك غائبًا أيضًا، يكون الإعداد الافتراضي الثابت هو `ImplicitReceive` (الإصدار الأول). علامات السياسة `mode` (`ExplicitOnly` أو `ImplicitReceive`) بالإضافة إلى الاختيارية لكل معاملة (الافتراضي `16`) والحد الأقصى لإنشاء كل كتلة، و`implicit_creation_fee` اختياري (حساب النسخ أو الغرق)، و`min_initial_amounts` لكل تعريف أصل، و `default_role_on_create` اختياري (يتم منحه بعد `AccountCreated`، ويتم رفضه مع `DefaultRoleError` إذا كان مفقودًا). لا يمكن لـ Genesis الاشتراك؛ ترفض السياسات المعطلة/غير الصالحة تعليمات نمط الاستلام للحسابات غير المعروفة باستخدام `InstructionExecutionError::AccountAdmission`. تقوم الحسابات الضمنية بختم بيانات التعريف `iroha:created_via="implicit"` قبل `AccountCreated`؛ تنبعث الأدوار الافتراضية من `AccountRoleGranted` للمتابعة، وتسمح قواعد خط الأساس لمالك المنفذ للحساب الجديد بإنفاق أصوله/NFTs الخاصة به دون أدوار إضافية. الرمز: `crates/iroha_data_model/src/account/admission.rs`، `crates/iroha_core/src/smartcontracts/isi/account_admission.rs`.
-- `AssetDefinitionId` - `aid:<32-lower-hex-no-dash>` الأساسي (UUID-v4 بايت). التعريف: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. يجب أن تكون القيم الحرفية `alias` هي `<name>#<domain>@<dataspace>` أو `<name>#<dataspace>`، وأن يكون `<name>` مساوٍ لاسم تعريف الأصل. الكود: `crates/iroha_data_model/src/asset/definition.rs`.
+- `AssetDefinitionId` - `unprefixed Base58 address with versioning and checksum` الأساسي (UUID-v4 بايت). التعريف: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. يجب أن تكون القيم الحرفية `alias` هي `<name>#<domain>.<dataspace>` أو `<name>#<dataspace>`، وأن يكون `<name>` مساوٍ لاسم تعريف الأصل. الكود: `crates/iroha_data_model/src/asset/definition.rs`.
+
+  - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`, where `status` is `permanent`, `leased_active`, `leased_grace`, or `expired_pending_cleanup`. Alias selectors resolve against the latest committed block creation time and stop resolving after grace even before sweep removes stale bindings.
 - `AssetId`: `norito:<hex>` الحرفي المشفر بشكل أساسي (النماذج النصية القديمة غير مدعومة في الإصدار الأول).- `NftId` — `nft$domain`. إن إف تي: `{ id, content: Metadata, owned_by }`. الكود: `crates/iroha_data_model/src/nft.rs`.
 - `RoleId` — `name`. الدور: `{ id, permissions: BTreeSet<Permission> }` مع المنشئ `NewRole { inner: Role, grant_to }`. الكود: `crates/iroha_data_model/src/role.rs`.
 - `Permission` — `{ name: Ident, payload: Json }`. الكود: `crates/iroha_data_model/src/permission.rs`.
@@ -192,19 +194,19 @@ translator: machine-google-reviewed
   - إذا كان الرمز الثانوي IVM الخاص بالمشغل مفقودًا في وقت التنفيذ، تتم إزالة المشغل ويتم التعامل مع التنفيذ على أنه عدم تنفيذ مع نتيجة الفشل.
   - تتم إزالة المشغلات المستنفدة على الفور؛ إذا تمت مصادفة إدخال مستنفد أثناء التنفيذ، فسيتم تقليمه ومعاملته على أنه مفقود.
 - تحديث المعلمة:
-  - يتم تحديث `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` ويصدر `ConfigurationEvent::Changed`.CLI / Torii `aid` + أمثلة على الأسماء المستعارة:
+  - يتم تحديث `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` ويصدر `ConfigurationEvent::Changed`.CLI / Torii asset-definition id + أمثلة على الأسماء المستعارة:
 - التسجيل باستخدام المساعدة الأساسية + الاسم الصريح + الاسم المستعار الطويل:
-  -`iroha ledger asset definition register --id aid:2f17c72466f84a4bb8a8e24884fdcd2f --name pkr --alias pkr#ubl@sbp`
+  -`iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#ubl.sbp`
 - التسجيل باستخدام المساعدة الأساسية + الاسم الصريح + الاسم المستعار القصير:
-  -`iroha ledger asset definition register --id aid:550e8400e29b41d4a7164466554400dd --name pkr --alias pkr#sbp`
+  -`iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#sbp`
 - النعناع بالاسم المستعار + مكونات الحساب:
-  -`iroha ledger asset mint --definition-alias pkr#ubl@sbp --account <i105> --quantity 500`
+  -`iroha ledger asset mint --definition-alias pkr#ubl.sbp --account <i105> --quantity 500`
 - حل الاسم المستعار للمساعدة الأساسية:
-  - `POST /v1/assets/aliases/resolve` مع JSON `{ "alias": "pkr#ubl@sbp" }`
+  - `POST /v1/assets/aliases/resolve` مع JSON `{ "alias": "pkr#ubl.sbp" }`
 
 مذكرة الهجرة:
 - معرفات تعريف الأصول النصية `name#domain` غير مدعومة عمدًا في الإصدار الأول.
-- تظل معرفات الأصول عند حدود النعناع/الحرق/النقل أساسية `norito:<hex>`؛ استخدم `iroha tools encode asset-id` مع `--definition aid:...` أو `--alias ...` بالإضافة إلى `--account`.
+- تظل معرفات الأصول عند حدود النعناع/الحرق/النقل أساسية `norito:<hex>`؛ استخدم `iroha tools encode asset-id` مع `--definition <base58-asset-definition-id>` أو `--alias ...` بالإضافة إلى `--account`.
 
 ---
 

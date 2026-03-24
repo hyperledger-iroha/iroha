@@ -1,12 +1,16 @@
 //! Stable account rekey metadata for tracking alias-backed account continuity.
 
-use std::{io::Cursor, vec::Vec};
+use std::{io::Cursor, string::String, vec::Vec};
 
 use iroha_crypto::PublicKey;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
 use super::{Account, AccountId, DomainId, Name};
+use crate::{
+    error::ParseError,
+    nexus::{DataSpaceCatalog, DataSpaceId},
+};
 
 /// Stable account label that survives signatory rotation.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
@@ -16,17 +20,158 @@ use super::{Account, AccountId, DomainId, Name};
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 pub struct AccountLabel {
-    /// Domain in which the account lives.
-    pub domain: DomainId,
-    /// Human-readable label unique within the domain.
+    /// Human-readable label unique within the alias namespace.
     pub label: Name,
+    /// Optional concrete domain scope for the alias.
+    #[norito(default)]
+    pub domain: Option<DomainId>,
+    /// Dataspace in which the alias is registered.
+    #[norito(default)]
+    pub dataspace: DataSpaceId,
 }
 
 impl AccountLabel {
-    /// Create a new account label.
+    /// Create a new account label in the default `universal` dataspace.
     pub fn new(domain: DomainId, label: Name) -> Self {
-        Self { domain, label }
+        Self::new_in_dataspace(label, Some(domain), DataSpaceId::GLOBAL)
     }
+
+    /// Create a new domainless account label in the provided dataspace.
+    #[must_use]
+    pub fn domainless(label: Name, dataspace: DataSpaceId) -> Self {
+        Self::new_in_dataspace(label, None, dataspace)
+    }
+
+    /// Create a new account label from explicit alias components.
+    #[must_use]
+    pub fn new_in_dataspace(label: Name, domain: Option<DomainId>, dataspace: DataSpaceId) -> Self {
+        Self {
+            label,
+            domain,
+            dataspace,
+        }
+    }
+
+    /// Parse a canonical account alias literal.
+    ///
+    /// Supported forms are `label@domain.dataspace` and `label@dataspace`.
+    ///
+    /// # Errors
+    /// Returns [`ParseError`] when the literal is malformed or the dataspace alias is unknown.
+    pub fn from_literal(input: &str, catalog: &DataSpaceCatalog) -> Result<Self, ParseError> {
+        let canonical = canonicalize_literal(input)?;
+        let segments = split_alias_segments(&canonical)?;
+        let label = segments
+            .label
+            .parse()
+            .map_err(|_| ParseError::new("account alias label segment is invalid"))?;
+        let domain = segments
+            .domain
+            .map(|domain| {
+                domain
+                    .parse()
+                    .map_err(|_| ParseError::new("account alias domain segment is invalid"))
+            })
+            .transpose()?;
+        let dataspace = catalog
+            .by_alias(segments.dataspace)
+            .map(|entry| entry.id)
+            .ok_or_else(|| ParseError::new("unknown dataspace alias in account alias"))?;
+        Ok(Self::new_in_dataspace(label, domain, dataspace))
+    }
+
+    /// Render the canonical account alias literal using dataspace aliases from the catalog.
+    ///
+    /// # Errors
+    /// Returns [`ParseError`] when the dataspace identifier is not present in the catalog.
+    pub fn to_literal(&self, catalog: &DataSpaceCatalog) -> Result<String, ParseError> {
+        let dataspace = catalog
+            .by_id(self.dataspace)
+            .ok_or_else(|| ParseError::new("unknown dataspace id for account alias"))?;
+        let label = self.label.as_ref().to_ascii_lowercase();
+        let dataspace_alias = dataspace.alias.to_ascii_lowercase();
+        Ok(match &self.domain {
+            Some(domain) => format!(
+                "{label}@{}.{}",
+                domain.to_string().to_ascii_lowercase(),
+                dataspace_alias
+            ),
+            None => format!("{label}@{dataspace_alias}"),
+        })
+    }
+}
+
+fn canonicalize_literal(input: &str) -> Result<String, ParseError> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err(ParseError::new("account alias must not be empty"));
+    }
+    if trimmed != input {
+        return Err(ParseError::new(
+            "account alias must not contain leading or trailing whitespace",
+        ));
+    }
+    if trimmed.chars().any(char::is_control) {
+        return Err(ParseError::new(
+            "account alias must not contain control characters",
+        ));
+    }
+    Ok(trimmed.to_ascii_lowercase())
+}
+
+struct AliasSegments<'a> {
+    label: &'a str,
+    domain: Option<&'a str>,
+    dataspace: &'a str,
+}
+
+fn split_alias_segments(input: &str) -> Result<AliasSegments<'_>, ParseError> {
+    let (label, right) = input.split_once('@').ok_or_else(|| {
+        ParseError::new(
+            "account alias must use `label@domain.dataspace` or `label@dataspace` format",
+        )
+    })?;
+    if right.contains('@') {
+        return Err(ParseError::new(
+            "account alias must contain exactly one `@` separator",
+        ));
+    }
+
+    if label.is_empty() {
+        return Err(ParseError::new(
+            "account alias label segment must not be empty",
+        ));
+    }
+    if right.is_empty() {
+        return Err(ParseError::new(
+            "account alias dataspace segment must not be empty",
+        ));
+    }
+
+    let dot_count = right.bytes().filter(|byte| *byte == b'.').count();
+    if dot_count == 1 {
+        let (domain, dataspace) = right.split_once('.').expect("counted dot");
+        if domain.is_empty() || dataspace.is_empty() {
+            return Err(ParseError::new(
+                "account alias domain and dataspace segments must not be empty",
+            ));
+        }
+        return Ok(AliasSegments {
+            label,
+            domain: Some(domain),
+            dataspace,
+        });
+    }
+    if dot_count > 1 {
+        return Err(ParseError::new(
+            "account alias must contain at most one `.` after `@`",
+        ));
+    }
+    Ok(AliasSegments {
+        label,
+        domain: None,
+        dataspace: right,
+    })
 }
 
 impl<'a> norito::core::DecodeFromSlice<'a> for AccountLabel {
@@ -36,6 +181,83 @@ impl<'a> norito::core::DecodeFromSlice<'a> for AccountLabel {
         let used =
             usize::try_from(cursor.position()).map_err(|_| norito::core::Error::LengthMismatch)?;
         Ok((value, used))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::nexus::DataSpaceMetadata;
+
+    fn catalog() -> DataSpaceCatalog {
+        DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: DataSpaceId::new(7),
+                alias: "retail".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog")
+    }
+
+    #[test]
+    fn account_label_parses_domainful_literal() {
+        let label =
+            AccountLabel::from_literal("Treasury@Banking.Retail", &catalog()).expect("valid alias");
+        assert_eq!(label.label.as_ref(), "treasury");
+        assert_eq!(
+            label.domain,
+            Some("banking".parse::<DomainId>().expect("domain id"))
+        );
+        assert_eq!(label.dataspace, DataSpaceId::new(7));
+    }
+
+    #[test]
+    fn account_label_parses_domainless_literal() {
+        let label = AccountLabel::from_literal("primary@retail", &catalog()).expect("valid alias");
+        assert_eq!(label.label.as_ref(), "primary");
+        assert_eq!(label.domain, None);
+        assert_eq!(label.dataspace, DataSpaceId::new(7));
+    }
+
+    #[test]
+    fn account_label_roundtrips_canonical_literal() {
+        let catalog = catalog();
+        let label =
+            AccountLabel::from_literal("Treasury@Banking.Retail", &catalog).expect("valid alias");
+        assert_eq!(
+            label.to_literal(&catalog).expect("literal"),
+            "treasury@banking.retail"
+        );
+    }
+
+    #[test]
+    fn account_label_rejects_unknown_dataspace_alias() {
+        let err = AccountLabel::from_literal("primary@banking.missing", &catalog())
+            .expect_err("unknown dataspace must fail");
+        assert!(err.to_string().contains("unknown dataspace alias"));
+    }
+
+    #[test]
+    fn account_label_rejects_invalid_literals() {
+        for raw in [
+            "",
+            " ",
+            "primary",
+            "primary@",
+            "@retail",
+            "primary@@retail",
+            "primary@banking.retail.extra",
+            "primary@banking.",
+            "primary@.retail",
+        ] {
+            assert!(
+                AccountLabel::from_literal(raw, &catalog()).is_err(),
+                "must fail: {raw}"
+            );
+        }
     }
 }
 

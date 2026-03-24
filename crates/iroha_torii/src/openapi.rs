@@ -22,7 +22,7 @@ fn info_section(license: Value) -> Value {
     info.insert(
         "description".into(),
         Value::String(
-            "HTTP surface for Torii. App endpoints accept optional canonical signing headers X-Iroha-Account/X-Iroha-Signature."
+            "HTTP surface for Torii. App endpoints accept optional canonical signing headers X-Iroha-Account/X-Iroha-Signature/X-Iroha-Timestamp-Ms/X-Iroha-Nonce."
                 .to_owned(),
         ),
     );
@@ -1673,8 +1673,12 @@ fn account_transactions_list_query_parameters() -> Vec<Value> {
 fn asset_holders_list_query_parameters() -> Vec<Value> {
     let mut params = pagination_query_parameters();
     params.push(string_query_param(
-        "asset_id",
-        "Filter holders by asset identifier.",
+        "account_id",
+        "Filter holders by canonical I105 account identifier.",
+    ));
+    params.push(string_query_param(
+        "scope",
+        "Filter holders by balance scope (`global` or `dataspace:<id>`).",
     ));
     params
 }
@@ -3918,18 +3922,31 @@ fn asset_paths() -> Map {
         "/v1/assets/definitions".to_owned(),
         Value::Object(json_get_operation(
             "Assets",
-            "List asset definitions with name and alias.",
-            "List asset definitions with canonical id, human-readable name, and optional alias.",
+            "List asset definitions.",
+            "List asset definitions as full objects with canonical Base58 id, optional alias, and `alias_binding` lease metadata when an alias exists.",
             "#/components/schemas/JsonValue",
             Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/assets/definitions/{asset}".to_owned(),
+        Value::Object(json_get_operation(
+            "Assets",
+            "Fetch one asset definition.",
+            "Fetch an asset definition by unprefixed Base58 id or `<name>#<domain>.<dataspace>` / `<name>#<dataspace>` alias, including `alias_binding` lease metadata when present.",
+            "#/components/schemas/JsonValue",
+            vec![string_path_param(
+                "asset",
+                "Asset selector (unprefixed Base58 id or alias).",
+            )],
         )),
     );
     paths.insert(
         "/v1/assets/definitions/query".to_owned(),
         Value::Object(json_post_operation(
             "Assets",
-            "Query asset definitions with name and alias.",
-            "Query asset definitions with JSON envelope, including name and optional alias fields.",
+            "Query asset definitions.",
+            "Query asset definitions with a JSON envelope and full asset-definition objects in the response, including `alias_binding` lease metadata when present.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -3940,13 +3957,13 @@ fn asset_paths() -> Map {
         Value::Object({
             let mut params = vec![string_path_param(
                 "definition_id",
-                "Asset definition identifier.",
+                "Asset selector (unprefixed Base58 id or alias).",
             )];
             params.extend(asset_holders_list_query_parameters());
             json_get_operation(
                 "Assets",
                 "List asset holders.",
-                "List holders for an asset definition (supports pagination and optional asset_id filtering).",
+                "List holders for an asset definition (supports pagination plus optional account_id and scope filtering).",
                 "#/components/schemas/JsonValue",
                 params,
             )
@@ -3962,7 +3979,7 @@ fn asset_paths() -> Map {
             "#/components/schemas/JsonValue",
             vec![string_path_param(
                 "definition_id",
-                "Asset definition identifier.",
+                "Asset selector (unprefixed Base58 id or alias).",
             )],
         )),
     );
@@ -3975,7 +3992,7 @@ fn asset_paths() -> Map {
             "#/components/schemas/JsonValue",
             vec![string_path_param(
                 "definition_id",
-                "Asset definition identifier.",
+                "Asset selector (unprefixed Base58 id or alias).",
             )],
         )),
     );
@@ -5078,7 +5095,7 @@ fn content_paths() -> Map {
                 Value::String(
                     "Fetch content bundle bytes (path captures the remaining path segments). \
 Role- or sponsor-gated bundles require canonical request headers \
-(`X-Iroha-Account`, `X-Iroha-Signature`)."
+(`X-Iroha-Account`, `X-Iroha-Signature`, `X-Iroha-Timestamp-Ms`, `X-Iroha-Nonce`)."
                         .to_owned(),
                 ),
             );
@@ -6984,7 +7001,7 @@ fn asset_alias_resolve_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Returns canonical `aid` plus human-readable fields for `<name>#<domain>@<dataspace>` or `<name>#<dataspace>` aliases."
+            "Returns the canonical Base58 asset definition id, human-readable fields, and `alias_binding` lease metadata for `<name>#<domain>.<dataspace>` or `<name>#<dataspace>` aliases."
                 .to_owned(),
         ),
     );
@@ -7970,7 +7987,7 @@ fn openapi_schemas() -> Map {
             "properties": {
                 "alias": {
                     "type": "string",
-                    "description": "Asset alias literal (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`) to resolve."
+                    "description": "Asset alias literal (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`) to resolve."
                 }
             }
         }),
@@ -8691,11 +8708,14 @@ fn openapi_schemas() -> Map {
                 },
                 "asset_definition_id": {
                     "type": "string",
-                    "description": "Canonical asset definition id (`aid:<32-lower-hex>`)."
+                    "description": "Canonical asset definition id (unprefixed Base58 address)."
                 },
                 "asset_name": {
                     "type": "string",
                     "description": "Human-readable asset name."
+                },
+                "alias_binding": {
+                    "$ref": "#/components/schemas/AssetAliasBinding"
                 },
                 "description": {
                     "type": "string",
@@ -8710,6 +8730,42 @@ fn openapi_schemas() -> Map {
                 "source": {
                     "type": "string",
                     "description": "Resolver source."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "AssetAliasBinding".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["alias", "status", "bound_at_ms"],
+            "additionalProperties": false,
+            "properties": {
+                "alias": {
+                    "type": "string",
+                    "description": "Canonical alias representation."
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["permanent", "leased_active", "leased_grace", "expired_pending_cleanup"],
+                    "description": "Observed lease state for the alias binding."
+                },
+                "lease_expiry_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "nullable": true,
+                    "description": "Lease expiry timestamp in milliseconds since Unix epoch."
+                },
+                "grace_until_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "nullable": true,
+                    "description": "Grace-window end timestamp in milliseconds since Unix epoch."
+                },
+                "bound_at_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Timestamp in milliseconds when the alias binding was recorded."
                 }
             }
         }),
@@ -11765,7 +11821,7 @@ mod tests {
     }
 
     #[test]
-    fn account_and_asset_list_params_include_asset_id_filters() {
+    fn account_and_asset_list_params_include_asset_related_filters() {
         fn params_for(doc: &Value, path: &str) -> Vec<String> {
             let paths = doc
                 .get("paths")
@@ -11805,7 +11861,8 @@ mod tests {
         let asset_holders = params_for(&doc, "/v1/assets/{definition_id}/holders");
         assert!(asset_holders.contains(&"limit".to_owned()));
         assert!(asset_holders.contains(&"offset".to_owned()));
-        assert!(asset_holders.contains(&"asset_id".to_owned()));
+        assert!(asset_holders.contains(&"account_id".to_owned()));
+        assert!(asset_holders.contains(&"scope".to_owned()));
     }
 
     #[test]

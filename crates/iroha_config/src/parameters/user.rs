@@ -161,7 +161,6 @@ use iroha_data_model::{
         prelude::DaStripeLayout,
         types::{BlobClass, DaRentPolicyV1, GovernanceTag, RetentionPolicy},
     },
-    domain::DomainId,
     hijiri::{
         FeeMultiplierBand as ModelFeeMultiplierBand, FeePolicyError as ModelFeePolicyError,
         HijiriFeePolicy as ModelHijiriFeePolicy, Q16 as ModelQ16,
@@ -13792,6 +13791,11 @@ pub struct SoracloudRuntimeHuggingFace {
         default = "DurationMs(std::time::Duration::from_millis(defaults::soracloud_runtime::hf::LOCAL_RUNNER_TIMEOUT_MS))"
     )]
     pub local_runner_timeout_ms: DurationMs,
+    /// TTL applied when the runtime emits authoritative model-host heartbeats after a successful local probe (milliseconds).
+    #[config(
+        default = "DurationMs(std::time::Duration::from_millis(defaults::soracloud_runtime::hf::MODEL_HOST_HEARTBEAT_TTL_MS))"
+    )]
+    pub model_host_heartbeat_ttl_ms: DurationMs,
     /// Whether the runtime may fall back to HF Inference when local execution fails.
     #[config(default = "defaults::soracloud_runtime::hf::ALLOW_INFERENCE_BRIDGE_FALLBACK")]
     pub allow_inference_bridge_fallback: bool,
@@ -13824,6 +13828,9 @@ impl Default for SoracloudRuntimeHuggingFace {
             local_runner_program: defaults::soracloud_runtime::hf::LOCAL_RUNNER_PROGRAM.to_string(),
             local_runner_timeout_ms: DurationMs(std::time::Duration::from_millis(
                 defaults::soracloud_runtime::hf::LOCAL_RUNNER_TIMEOUT_MS,
+            )),
+            model_host_heartbeat_ttl_ms: DurationMs(std::time::Duration::from_millis(
+                defaults::soracloud_runtime::hf::MODEL_HOST_HEARTBEAT_TTL_MS,
             )),
             allow_inference_bridge_fallback:
                 defaults::soracloud_runtime::hf::ALLOW_INFERENCE_BRIDGE_FALLBACK,
@@ -13867,6 +13874,10 @@ impl SoracloudRuntimeHuggingFace {
             local_execution_enabled: self.local_execution_enabled,
             local_runner_program,
             local_runner_timeout: self.local_runner_timeout_ms.get().max(MIN_TIMER_INTERVAL),
+            model_host_heartbeat_ttl: self
+                .model_host_heartbeat_ttl_ms
+                .get()
+                .max(MIN_TIMER_INTERVAL),
             allow_inference_bridge_fallback: self.allow_inference_bridge_fallback,
             import_max_files: self.import_max_files.max(1),
             import_max_file_bytes: self.import_max_file_bytes.max(1),
@@ -13938,6 +13949,15 @@ pub struct Torii {
     /// Rate-limiter cost applied per requested row on app-facing endpoints.
     #[config(default = "defaults::torii::APP_API_RATE_LIMIT_COST_PER_ROW")]
     pub app_api_rate_limit_cost_per_row: u32,
+    /// Maximum allowed clock skew for signed app-facing canonical requests (seconds).
+    #[config(default = "defaults::torii::app_auth::MAX_CLOCK_SKEW_SECS")]
+    pub app_auth_max_clock_skew_secs: u64,
+    /// TTL for signed app-facing request nonces retained for replay detection (seconds).
+    #[config(default = "defaults::torii::app_auth::NONCE_TTL_SECS")]
+    pub app_auth_nonce_ttl_secs: u64,
+    /// Maximum number of app-facing request nonces held in memory for replay detection.
+    #[config(default = "default_app_auth_replay_cache_capacity()")]
+    pub app_auth_replay_cache_capacity: NonZeroUsize,
     /// Per-authority query rate (tokens/sec). None disables.
     pub query_rate_per_authority_per_sec: Option<u32>,
     /// Per-authority burst capacity (tokens). None disables.
@@ -13950,6 +13970,13 @@ pub struct Torii {
     pub deploy_rate_per_origin_per_sec: Option<u32>,
     /// Per-origin deploy burst tokens. None disables.
     pub deploy_burst_per_origin: Option<u32>,
+    /// Public Soracloud local-read rate per remote IP (tokens/sec). None disables.
+    pub soracloud_public_rate_per_ip_per_sec: Option<u32>,
+    /// Public Soracloud local-read burst per remote IP (tokens). None disables.
+    pub soracloud_public_burst_per_ip: Option<u32>,
+    /// Maximum concurrent public Soracloud local-read executions.
+    #[config(default = "defaults::torii::SORACLOUD_PUBLIC_MAX_INFLIGHT")]
+    pub soracloud_public_max_inflight: NonZeroUsize,
     /// Proof endpoint steady-state rate (requests per minute). None disables.
     pub proof_rate_per_minute: Option<u32>,
     /// Proof endpoint burst tokens (requests).
@@ -14517,6 +14544,15 @@ impl Torii {
                 .deploy_burst_per_origin
                 .or(super::defaults::torii::DEPLOY_BURST_PER_ORIGIN)
                 .and_then(std::num::NonZeroU32::new),
+            soracloud_public_rate_per_ip_per_sec: self
+                .soracloud_public_rate_per_ip_per_sec
+                .or(super::defaults::torii::SORACLOUD_PUBLIC_RATE_PER_IP_PER_SEC)
+                .and_then(std::num::NonZeroU32::new),
+            soracloud_public_burst_per_ip: self
+                .soracloud_public_burst_per_ip
+                .or(super::defaults::torii::SORACLOUD_PUBLIC_BURST_PER_IP)
+                .and_then(std::num::NonZeroU32::new),
+            soracloud_public_max_inflight: self.soracloud_public_max_inflight,
             proof_api: actual::ProofApi {
                 rate_per_minute: self
                     .proof_rate_per_minute
@@ -14635,6 +14671,11 @@ impl Torii {
                 max_list_limit,
                 max_fetch_size,
                 rate_limit_cost_per_row,
+                request_signature_max_clock_skew: Duration::from_secs(
+                    self.app_auth_max_clock_skew_secs,
+                ),
+                request_signature_nonce_ttl: Duration::from_secs(self.app_auth_nonce_ttl_secs),
+                request_signature_replay_cache_capacity: self.app_auth_replay_cache_capacity,
             },
         };
 
@@ -14676,7 +14717,7 @@ pub struct ToriiTxHistory {
 impl ToriiTxHistory {
     fn parse(self) -> actual::ToriiTxHistory {
         let allowed_asset_definition_id = self.allowed_asset_definition_id.map(|value| {
-            value.parse::<AssetDefinitionId>().unwrap_or_else(|err| {
+            AssetDefinitionId::parse_address_literal(&value).unwrap_or_else(|err| {
                 panic!("invalid torii.tx_history.allowed_asset_definition_id `{value}`: {err}")
             })
         });
@@ -14792,6 +14833,9 @@ pub struct ToriiOperatorAuth {
     /// Require mTLS at ingress before allowing operator endpoints.
     #[config(default = "defaults::torii::operator_auth::REQUIRE_MTLS")]
     pub require_mtls: bool,
+    /// Trusted proxy CIDRs allowed to assert forwarded client certificates.
+    #[config(default = "defaults::torii::operator_auth::mtls_trusted_proxy_cidrs()")]
+    pub mtls_trusted_proxy_cidrs: Vec<String>,
     /// Token fallback mode (`disabled`, `bootstrap`, `always`).
     #[config(default = "defaults::torii::operator_auth::TOKEN_FALLBACK.to_string()")]
     pub token_fallback: String,
@@ -14884,6 +14928,7 @@ impl ToriiOperatorAuth {
         actual::ToriiOperatorAuth {
             enabled: self.enabled,
             require_mtls: self.require_mtls,
+            mtls_trusted_proxy_cidrs: self.mtls_trusted_proxy_cidrs,
             token_fallback,
             token_source,
             tokens: self.tokens,
@@ -15005,6 +15050,9 @@ pub struct ToriiNoritoRpcTransport {
     /// Require mTLS at the ingress tier before allowing Norito-RPC (surfaced for operators).
     #[config(default = "defaults::torii::transport::norito_rpc::REQUIRE_MTLS")]
     pub require_mtls: bool,
+    /// Trusted proxy CIDRs allowed to assert forwarded client certificates.
+    #[config(default = "defaults::torii::transport::norito_rpc::mtls_trusted_proxy_cidrs()")]
+    pub mtls_trusted_proxy_cidrs: Vec<String>,
     /// Explicit list of client tokens permitted during the `canary` stage.
     #[config(default = "defaults::torii::transport::norito_rpc::allowed_clients()")]
     pub allowed_clients: Vec<String>,
@@ -15018,6 +15066,8 @@ impl Default for ToriiNoritoRpcTransport {
         Self {
             enabled: defaults::torii::transport::norito_rpc::ENABLED,
             require_mtls: defaults::torii::transport::norito_rpc::REQUIRE_MTLS,
+            mtls_trusted_proxy_cidrs:
+                defaults::torii::transport::norito_rpc::mtls_trusted_proxy_cidrs(),
             allowed_clients: defaults::torii::transport::norito_rpc::allowed_clients(),
             stage: defaults::torii::transport::norito_rpc::STAGE.to_string(),
         }
@@ -15088,8 +15138,6 @@ pub struct ToriiOnboarding {
     pub authority: String,
     /// Private key corresponding to the onboarding authority.
     pub private_key: ExposedPrivateKey,
-    /// Optional domain restriction for new accounts (defaults to node domain).
-    pub allowed_domain: Option<String>,
     /// Permission names that onboarding is allowed to grant to new accounts.
     #[config(default)]
     pub allowed_permissions: Vec<String>,
@@ -15111,11 +15159,6 @@ impl ToriiOnboarding {
             },
             iroha_data_model::account::ParsedAccountId::into_account_id,
         );
-        let allowed_domain = self.allowed_domain.map(|domain| {
-            domain.parse::<DomainId>().unwrap_or_else(|err| {
-                panic!("invalid torii.onboarding.allowed_domain `{domain}`: {err}")
-            })
-        });
         let allowed_permissions = self
             .allowed_permissions
             .into_iter()
@@ -15131,7 +15174,6 @@ impl ToriiOnboarding {
         Some(actual::ToriiOnboarding {
             authority,
             private_key: self.private_key,
-            allowed_domain,
             allowed_permissions,
             fee_sponsor_account,
         })
@@ -15247,6 +15289,11 @@ impl ToriiRamLfeProgram {
 fn default_events_buffer_capacity() -> NonZeroUsize {
     std::num::NonZeroUsize::new(defaults::torii::EVENTS_BUFFER_CAPACITY)
         .expect("events buffer capacity must be non-zero")
+}
+
+fn default_app_auth_replay_cache_capacity() -> NonZeroUsize {
+    std::num::NonZeroUsize::new(defaults::torii::app_auth::REPLAY_CACHE_CAPACITY)
+        .expect("app auth replay cache capacity must be non-zero")
 }
 
 fn default_webhook_queue_capacity() -> NonZeroUsize {
@@ -17652,6 +17699,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             defaults::soracloud_runtime::hf::LOCAL_RUNNER_PROGRAM
         );
         assert_eq!(
+            actual.soracloud_runtime.hf.model_host_heartbeat_ttl,
+            StdDuration::from_millis(defaults::soracloud_runtime::hf::MODEL_HOST_HEARTBEAT_TTL_MS)
+        );
+        assert_eq!(
             actual.soracloud_runtime.hf.import_max_files,
             defaults::soracloud_runtime::hf::IMPORT_MAX_FILES
         );
@@ -17727,6 +17778,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             Value::String(" python3.12 ".to_string()),
         );
         hf.insert("local_runner_timeout_ms".into(), Value::Integer(45_000));
+        hf.insert("model_host_heartbeat_ttl_ms".into(), Value::Integer(18_000));
         hf.insert(
             "allow_inference_bridge_fallback".into(),
             Value::Boolean(false),
@@ -17834,6 +17886,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         assert_eq!(
             actual.soracloud_runtime.hf.local_runner_timeout,
             StdDuration::from_millis(45_000)
+        );
+        assert_eq!(
+            actual.soracloud_runtime.hf.model_host_heartbeat_ttl,
+            StdDuration::from_millis(18_000)
         );
         assert!(!actual.soracloud_runtime.hf.allow_inference_bridge_fallback);
         assert_eq!(actual.soracloud_runtime.hf.import_max_files, 48);

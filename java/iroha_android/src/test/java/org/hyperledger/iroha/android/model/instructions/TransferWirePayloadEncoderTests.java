@@ -39,6 +39,7 @@ public final class TransferWirePayloadEncoderTests {
     encodeAssetTransferRejectsInvalidNoritoMultisigSemantics();
     encodeAssetTransferRejectsUnsupportedNoritoMultisigVersion();
     encodeAssetTransferRejectsUnsupportedNoritoAssetIdFlags();
+    encodeAssetTransferRejectsLegacyTextAssetId();
     encodeAssetTransferAcceptsMlDsaI105WhenCurveSupportDisabled();
     encodeAssetTransferAcceptsGostI105WhenCurveSupportDisabled();
     encodeAssetTransferAcceptsSm2I105WhenCurveSupportDisabled();
@@ -47,44 +48,48 @@ public final class TransferWirePayloadEncoderTests {
 
   private static void encodeAssetTransferAcceptsCanonicalNoritoAssetId() {
     final String noritoAssetId = AssetIdEncoder.encodeAssetId("rose", "wonderland", ED25519_KEY);
+    final String definitionAddress = AssetDefinitionIdEncoder.encode("rose", "wonderland");
+    final String destinationAccountId = canonicalAccountIdForPublicKeyMultihash(ED25519_KEY);
 
     final InstructionBox fromNorito =
+        TransferWirePayloadEncoder.encodeAssetTransfer(noritoAssetId, "10", destinationAccountId);
+    final InstructionBox fromCanonicalLiteral =
         TransferWirePayloadEncoder.encodeAssetTransfer(
-            noritoAssetId, "10", ED25519_KEY + "@wonderland");
-    final InstructionBox fromLegacy =
-        TransferWirePayloadEncoder.encodeAssetTransfer(
-            "rose#wonderland#" + ED25519_KEY + "@wonderland",
+            definitionAddress + "#" + destinationAccountId,
             "10",
-            ED25519_KEY + "@wonderland");
+            destinationAccountId);
 
-    assert Arrays.equals(wirePayloadBytes(fromNorito), wirePayloadBytes(fromLegacy))
-        : "canonical norito asset ids must encode to the same transfer payload as legacy asset text";
+    assert Arrays.equals(wirePayloadBytes(fromNorito), wirePayloadBytes(fromCanonicalLiteral))
+        : "canonical norito asset ids must encode to the same transfer payload as canonical text";
   }
 
   private static void encodeAssetTransferAcceptsCompactLenNoritoAssetId() {
-    final byte[] aidBytes = AssetDefinitionIdEncoder.computeAidBytes("rose", "wonderland");
+    final byte[] aidBytes = AssetDefinitionIdEncoder.computeDefinitionBytes("rose", "wonderland");
+    final String definitionAddress = AssetDefinitionIdEncoder.encode("rose", "wonderland");
     final byte[] accountPayload = encodeSingleAccountPayload(ED25519_KEY, NoritoHeader.COMPACT_LEN);
     final byte[] scopePayload = encodeGlobalScopePayload(NoritoHeader.COMPACT_LEN);
+    final String destinationAccountId = canonicalAccountIdForPublicKeyMultihash(ED25519_KEY);
     final String compactNoritoAssetId =
         encodeNoritoAssetId(accountPayload, aidBytes, scopePayload, NoritoHeader.COMPACT_LEN);
 
     final InstructionBox fromCompactNorito =
         TransferWirePayloadEncoder.encodeAssetTransfer(
-            compactNoritoAssetId, "10", ED25519_KEY + "@wonderland");
-    final InstructionBox fromLegacy =
+            compactNoritoAssetId, "10", destinationAccountId);
+    final InstructionBox fromCanonicalLiteral =
         TransferWirePayloadEncoder.encodeAssetTransfer(
-            "rose#wonderland#" + ED25519_KEY + "@wonderland",
+            definitionAddress + "#" + destinationAccountId,
             "10",
-            ED25519_KEY + "@wonderland");
+            destinationAccountId);
 
-    assert Arrays.equals(wirePayloadBytes(fromCompactNorito), wirePayloadBytes(fromLegacy))
+    assert Arrays.equals(wirePayloadBytes(fromCompactNorito), wirePayloadBytes(fromCanonicalLiteral))
         : "compact-len norito asset ids must normalize to the canonical transfer payload";
   }
 
   private static void encodeAssetTransferAcceptsCompactLenNoritoDataspaceScope() {
-    final byte[] aidBytes = AssetDefinitionIdEncoder.computeAidBytes("rose", "wonderland");
+    final byte[] aidBytes = AssetDefinitionIdEncoder.computeDefinitionBytes("rose", "wonderland");
     final byte[] compactAccountPayload = encodeSingleAccountPayload(ED25519_KEY, NoritoHeader.COMPACT_LEN);
     final byte[] compactScopePayload = encodeDataspaceScopePayload(42L, NoritoHeader.COMPACT_LEN);
+    final String destinationAccountId = canonicalAccountIdForPublicKeyMultihash(ED25519_KEY);
     final String compactNoritoAssetId =
         encodeNoritoAssetId(
             compactAccountPayload, aidBytes, compactScopePayload, NoritoHeader.COMPACT_LEN);
@@ -96,10 +101,10 @@ public final class TransferWirePayloadEncoderTests {
 
     final InstructionBox fromCompactNorito =
         TransferWirePayloadEncoder.encodeAssetTransfer(
-            compactNoritoAssetId, "10", ED25519_KEY + "@wonderland");
+            compactNoritoAssetId, "10", destinationAccountId);
     final InstructionBox fromCanonicalNorito =
         TransferWirePayloadEncoder.encodeAssetTransfer(
-            canonicalNoritoAssetId, "10", ED25519_KEY + "@wonderland");
+            canonicalNoritoAssetId, "10", destinationAccountId);
 
     assert Arrays.equals(wirePayloadBytes(fromCompactNorito), wirePayloadBytes(fromCanonicalNorito))
         : "compact-len dataspace scopes must normalize to canonical non-compact transfer payload bytes";
@@ -117,7 +122,9 @@ public final class TransferWirePayloadEncoderTests {
         PublicKeyCodec.encodePublicKeyMultihash(baseKey.curveId(), filledKey((byte) 0x44));
     final String memberB =
         PublicKeyCodec.encodePublicKeyMultihash(baseKey.curveId(), filledKey((byte) 0x11));
-    final byte[] aidBytes = AssetDefinitionIdEncoder.computeAidBytes("rose", "wonderland");
+    final byte[] aidBytes = AssetDefinitionIdEncoder.computeDefinitionBytes("rose", "wonderland");
+    final String definitionAddress = AssetDefinitionIdEncoder.encode("rose", "wonderland");
+    final String destinationAccountId = canonicalAccountIdForPublicKeyMultihash(ED25519_KEY);
 
     final byte[] compactAccountPayload =
         encodeMultisigAccountPayload(
@@ -139,24 +146,23 @@ public final class TransferWirePayloadEncoderTests {
                 AccountAddress.MultisigMemberPayload.of(baseKey.curveId(), 1, filledKey((byte) 0x44)),
                 AccountAddress.MultisigMemberPayload.of(baseKey.curveId(), 1, filledKey((byte) 0x11))));
     final String multisigAccountId =
-        AccountAddress.fromMultisigPolicy(policy).toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
-            + "@wonderland";
+        AccountAddress.fromMultisigPolicy(policy).toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
 
     final InstructionBox fromCompactNorito =
         TransferWirePayloadEncoder.encodeAssetTransfer(
-            compactNoritoAssetId, "10", ED25519_KEY + "@wonderland");
-    final InstructionBox fromLegacy =
+            compactNoritoAssetId, "10", destinationAccountId);
+    final InstructionBox fromCanonicalLiteral =
         TransferWirePayloadEncoder.encodeAssetTransfer(
-            "rose#wonderland#" + multisigAccountId,
+            definitionAddress + "#" + multisigAccountId,
             "10",
-            ED25519_KEY + "@wonderland");
+            destinationAccountId);
 
-    assert Arrays.equals(wirePayloadBytes(fromCompactNorito), wirePayloadBytes(fromLegacy))
+    assert Arrays.equals(wirePayloadBytes(fromCompactNorito), wirePayloadBytes(fromCanonicalLiteral))
         : "compact-len multisig account payloads must normalize to canonical transfer payload bytes";
   }
 
   private static void encodeAssetTransferRejectsMalformedNoritoAccountPayload() {
-    final byte[] aidBytes = AssetDefinitionIdEncoder.computeAidBytes("rose", "wonderland");
+    final byte[] aidBytes = AssetDefinitionIdEncoder.computeDefinitionBytes("rose", "wonderland");
     final byte[] malformedAccountPayload = new byte[] {0x01};
     final byte[] scopePayload = encodeGlobalScopePayload(0);
     final String malformedNoritoAssetId =
@@ -165,7 +171,7 @@ public final class TransferWirePayloadEncoderTests {
     boolean threw = false;
     try {
       TransferWirePayloadEncoder.encodeAssetTransfer(
-          malformedNoritoAssetId, "10", ED25519_KEY + "@wonderland");
+          malformedNoritoAssetId, "10", canonicalAccountIdForPublicKeyMultihash(ED25519_KEY));
     } catch (final IllegalArgumentException ex) {
       final String message = ex.getMessage();
       threw = message != null && message.contains("Invalid AssetId.account payload");
@@ -175,7 +181,7 @@ public final class TransferWirePayloadEncoderTests {
   }
 
   private static void encodeAssetTransferRejectsMalformedNoritoScopePayload() {
-    final byte[] aidBytes = AssetDefinitionIdEncoder.computeAidBytes("rose", "wonderland");
+    final byte[] aidBytes = AssetDefinitionIdEncoder.computeDefinitionBytes("rose", "wonderland");
     final byte[] accountPayload = encodeSingleAccountPayload(ED25519_KEY, 0);
     // Discriminant 1 (Dataspace) without the required variant payload.
     final byte[] malformedScopePayload = new byte[] {0x01, 0x00, 0x00, 0x00};
@@ -185,7 +191,7 @@ public final class TransferWirePayloadEncoderTests {
     boolean threw = false;
     try {
       TransferWirePayloadEncoder.encodeAssetTransfer(
-          malformedNoritoAssetId, "10", ED25519_KEY + "@wonderland");
+          malformedNoritoAssetId, "10", canonicalAccountIdForPublicKeyMultihash(ED25519_KEY));
     } catch (final IllegalArgumentException ex) {
       final String message = ex.getMessage();
       threw = message != null && message.contains("Invalid AssetId.scope payload");
@@ -195,7 +201,7 @@ public final class TransferWirePayloadEncoderTests {
   }
 
   private static void encodeAssetTransferRejectsInvalidNoritoMultisigSemantics() {
-    final byte[] aidBytes = AssetDefinitionIdEncoder.computeAidBytes("rose", "wonderland");
+    final byte[] aidBytes = AssetDefinitionIdEncoder.computeDefinitionBytes("rose", "wonderland");
     final byte[] invalidMultisigAccountPayload =
         encodeMultisigAccountPayload(1, 5, ED25519_KEY, 1, 0);
     final byte[] scopePayload = encodeGlobalScopePayload(0);
@@ -205,7 +211,7 @@ public final class TransferWirePayloadEncoderTests {
     boolean threw = false;
     try {
       TransferWirePayloadEncoder.encodeAssetTransfer(
-          malformedNoritoAssetId, "10", ED25519_KEY + "@wonderland");
+          malformedNoritoAssetId, "10", canonicalAccountIdForPublicKeyMultihash(ED25519_KEY));
     } catch (final IllegalArgumentException ex) {
       final String message = ex.getMessage();
       threw = message != null && message.contains("Invalid AssetId.account payload");
@@ -215,7 +221,7 @@ public final class TransferWirePayloadEncoderTests {
   }
 
   private static void encodeAssetTransferRejectsUnsupportedNoritoMultisigVersion() {
-    final byte[] aidBytes = AssetDefinitionIdEncoder.computeAidBytes("rose", "wonderland");
+    final byte[] aidBytes = AssetDefinitionIdEncoder.computeDefinitionBytes("rose", "wonderland");
     final byte[] invalidMultisigAccountPayload =
         encodeMultisigAccountPayload(2, 1, ED25519_KEY, 1, 0);
     final byte[] scopePayload = encodeGlobalScopePayload(0);
@@ -225,7 +231,7 @@ public final class TransferWirePayloadEncoderTests {
     boolean threw = false;
     try {
       TransferWirePayloadEncoder.encodeAssetTransfer(
-          malformedNoritoAssetId, "10", ED25519_KEY + "@wonderland");
+          malformedNoritoAssetId, "10", canonicalAccountIdForPublicKeyMultihash(ED25519_KEY));
     } catch (final IllegalArgumentException ex) {
       final String message = ex.getMessage();
       threw = message != null && message.contains("Invalid AssetId.account payload");
@@ -235,7 +241,7 @@ public final class TransferWirePayloadEncoderTests {
   }
 
   private static void encodeAssetTransferRejectsUnsupportedNoritoAssetIdFlags() {
-    final byte[] aidBytes = AssetDefinitionIdEncoder.computeAidBytes("rose", "wonderland");
+    final byte[] aidBytes = AssetDefinitionIdEncoder.computeDefinitionBytes("rose", "wonderland");
     final byte[] accountPayload = encodeSingleAccountPayload(ED25519_KEY, NoritoHeader.PACKED_STRUCT);
     final byte[] scopePayload = encodeGlobalScopePayload(NoritoHeader.PACKED_STRUCT);
     final String flaggedNoritoAssetId =
@@ -245,7 +251,7 @@ public final class TransferWirePayloadEncoderTests {
     boolean threw = false;
     try {
       TransferWirePayloadEncoder.encodeAssetTransfer(
-          flaggedNoritoAssetId, "10", ED25519_KEY + "@wonderland");
+          flaggedNoritoAssetId, "10", canonicalAccountIdForPublicKeyMultihash(ED25519_KEY));
     } catch (final IllegalArgumentException ex) {
       final String message = ex.getMessage();
       threw =
@@ -254,6 +260,23 @@ public final class TransferWirePayloadEncoderTests {
     }
 
     assert threw : "unsupported Norito AssetId layout flags must be rejected with a clear error";
+  }
+
+  private static void encodeAssetTransferRejectsLegacyTextAssetId() {
+    final String destinationAccountId = canonicalAccountIdForPublicKeyMultihash(ED25519_KEY);
+    boolean threw = false;
+    try {
+      TransferWirePayloadEncoder.encodeAssetTransfer(
+          "rose#wonderland#" + destinationAccountId,
+          "10",
+          destinationAccountId);
+    } catch (final IllegalArgumentException ex) {
+      threw =
+          ex.getMessage() != null
+              && ex.getMessage().contains("<asset-definition-address>#<account-id>");
+    }
+
+    assert threw : "legacy text asset ids must be rejected";
   }
 
   private static void encodeAssetTransferAcceptsMlDsaI105WhenCurveSupportDisabled()
@@ -286,30 +309,33 @@ public final class TransferWirePayloadEncoderTests {
       final byte keyFill)
       throws Exception {
     final byte[] key = filledKey(keyFill);
+    final byte[] definitionBytes =
+        AssetDefinitionIdEncoder.computeDefinitionBytes("rose", "wonderland");
+    final String definitionAddress = AssetDefinitionIdEncoder.encode("rose", "wonderland");
     final String i105AccountId;
-    final String multihashAccountId;
+    final String multihash;
 
     AccountAddress.configureCurveSupport(curveSupport);
     try {
       final AccountAddress address = AccountAddress.fromAccount(key, algorithm);
-      i105AccountId = address.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT) + "@wonderland";
+      i105AccountId = address.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
       final AccountAddress.SingleKeyPayload payload =
           address.singleKeyPayload().orElseThrow(() -> new AssertionError("expected single-key address"));
-      multihashAccountId =
-          PublicKeyCodec.encodePublicKeyMultihash(payload.curveId(), payload.publicKey())
-              + "@wonderland";
+      multihash = PublicKeyCodec.encodePublicKeyMultihash(payload.curveId(), payload.publicKey());
     } finally {
       AccountAddress.configureCurveSupport(AccountAddress.CurveSupportConfig.ed25519Only());
     }
 
+    final String noritoAssetId =
+        encodeNoritoAssetId(
+            encodeSingleAccountPayload(multihash, 0), definitionBytes, encodeGlobalScopePayload(0), 0);
     final InstructionBox fromI105 =
         TransferWirePayloadEncoder.encodeAssetTransfer(
-            "rose#wonderland#" + i105AccountId, "10", i105AccountId);
-    final InstructionBox fromMultihash =
-        TransferWirePayloadEncoder.encodeAssetTransfer(
-            "rose#wonderland#" + multihashAccountId, "10", multihashAccountId);
+            definitionAddress + "#" + i105AccountId, "10", i105AccountId);
+    final InstructionBox fromNorito =
+        TransferWirePayloadEncoder.encodeAssetTransfer(noritoAssetId, "10", i105AccountId);
 
-    assert Arrays.equals(wirePayloadBytes(fromI105), wirePayloadBytes(fromMultihash))
+    assert Arrays.equals(wirePayloadBytes(fromI105), wirePayloadBytes(fromNorito))
         : "I105 " + algorithm + " account ids must round-trip to the same transfer payload";
   }
 
@@ -324,6 +350,21 @@ public final class TransferWirePayloadEncoderTests {
     final byte[] key = new byte[32];
     Arrays.fill(key, fill);
     return key;
+  }
+
+  private static String canonicalAccountIdForPublicKeyMultihash(final String publicKeyMultihash) {
+    final PublicKeyCodec.PublicKeyPayload payload =
+        PublicKeyCodec.decodePublicKeyLiteral(publicKeyMultihash);
+    if (payload == null) {
+      throw new AssertionError("expected valid multihash fixture");
+    }
+    try {
+      return AccountAddress.fromAccount(
+              payload.keyBytes(), PublicKeyCodec.algorithmForCurveId(payload.curveId()))
+          .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+    } catch (final Exception ex) {
+      throw new IllegalStateException("failed to build canonical account fixture", ex);
+    }
   }
 
   private static byte[] encodeSingleAccountPayload(final String publicKeyMultihash, final int flags) {

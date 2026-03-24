@@ -19,6 +19,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoCodecAdapter;
 import org.hyperledger.iroha.android.norito.NoritoException;
+import org.hyperledger.iroha.android.testing.TestAccountIds;
 import org.hyperledger.iroha.android.telemetry.DeviceProfile;
 import org.hyperledger.iroha.android.telemetry.DeviceProfileProvider;
 import org.hyperledger.iroha.android.telemetry.NetworkContext;
@@ -255,19 +256,21 @@ public final class NoritoRpcClientTests {
   }
 
   private static void callTransactionUsesCodecAdapter() throws Exception {
+    final String aliceAuthority = TestAccountIds.ed25519Authority(0x21);
+    final String bobAuthority = TestAccountIds.ed25519Authority(0x22);
     final RecordingHandler handler =
         new RecordingHandler(200, "encoded".getBytes(StandardCharsets.UTF_8));
     try (SimpleHttpServer server = SimpleHttpServer.start("/rpc/codec", handler)) {
       final TransactionPayload payload =
           TransactionPayload.builder()
               .setChainId("00000001")
-              .setAuthority("alice@test")
+              .setAuthority(aliceAuthority)
               .setInstructionBytes(new byte[] {0x01, 0x02})
               .build();
       final StubCodecAdapter codec =
           new StubCodecAdapter(
               "encoded".getBytes(StandardCharsets.UTF_8),
-              payload.toBuilder().setAuthority("bob@test").build());
+              payload.toBuilder().setAuthority(bobAuthority).build());
       final NoritoRpcClient client =
           NoritoRpcClient.builder()
               .setBaseUri(server.baseUri())
@@ -277,7 +280,7 @@ public final class NoritoRpcClientTests {
           client.callTransaction("/rpc/codec", payload, codec, null);
       assert codec.encodeCallCount() == 1 : "Codec should encode request once";
       assert codec.decodeCallCount() == 1 : "Codec should decode response once";
-      assert "bob@test".equals(decoded.authority())
+      assert bobAuthority.equals(decoded.authority())
           : "Decoded payload should come from codec adapter";
     }
   }

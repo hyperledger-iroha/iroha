@@ -4,7 +4,8 @@
 //! - Stores attachments (proof envelopes or JSON DTOs) under `./storage/torii/zk_attachments/`.
 //!   Base directory is configured via `torii.data_dir`; tests may use `data_dir::OverrideGuard`.
 //! - Deterministic id: Blake2b-32 of the sanitized request bytes (lowercase hex).
-//! - Multi-tenant: attachments are isolated per tenant (API token when enforced, otherwise remote IP).
+//! - Multi-tenant: attachments are isolated per signed Iroha account. API tokens, when enabled,
+//!   are an additional access-control requirement but do not define tenant identity.
 //! - Endpoints:
 //!   - POST `/v1/zk/attachments` – store attachment, returns metadata `{ id, size, content_type, created_ms }`.
 //!   - GET  `/v1/zk/attachments` – list metadata for stored attachments.
@@ -16,7 +17,6 @@
 use std::{
     env, fs,
     io::{Read as _, Write as _},
-    net::IpAddr,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{OnceLock, RwLock, mpsc},
@@ -27,6 +27,7 @@ use std::{
 use axum::{extract::Path as AxumPath, http::StatusCode, response::IntoResponse};
 use flate2::read::GzDecoder;
 use iroha_config::parameters::actual::AttachmentSanitizerMode;
+use iroha_data_model::account::AccountId;
 use iroha_logger::prelude::*;
 use norito::{core as norito_core, json};
 use sha2::{Digest as _, Sha256};
@@ -52,21 +53,21 @@ const TAG_FILTER_LEGACY_SCAN_CAP: usize = 128;
 
 /// Tenant namespace for the attachments store.
 ///
-/// This is a stable, opaque identifier (64-hex) derived from either:
-/// - the validated API token (when `torii.require_api_token` is enabled), or
-/// - the trusted remote IP injected by middleware (`x-iroha-remote-addr`).
+/// This is a stable, opaque identifier (64-hex) derived from a signed Iroha account.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttachmentTenant(String);
 
 impl AttachmentTenant {
-    /// Derive a tenant key from a validated API token.
-    pub fn from_api_token(token: &str) -> Self {
-        Self(hash_identity_hex("token", token))
+    /// Derive a tenant key from a signed account id.
+    pub fn from_account(account: &AccountId) -> Self {
+        Self(hash_identity_hex("account", &account.to_string()))
     }
 
-    /// Derive a tenant key from a trusted remote IP address.
-    pub fn from_remote_ip(ip: IpAddr) -> Self {
-        Self(hash_identity_hex("ip", &ip.to_string()))
+    /// Derive a tenant key from a validated API token.
+    ///
+    /// This remains available for tests and backward-compatible migration helpers.
+    pub fn from_api_token(token: &str) -> Self {
+        Self(hash_identity_hex("token", token))
     }
 
     /// Tenant used when neither token nor remote address is available.
@@ -1947,7 +1948,8 @@ mod tests {
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use flate2::{Compression, write::GzEncoder};
     use http_body_util::BodyExt as _;
-    use iroha_crypto::Hash;
+    use iroha_crypto::{Hash, KeyPair};
+    use iroha_data_model::account::AccountId;
     use std::{io::Write as _, sync::Once};
 
     use axum::{http::StatusCode, response::IntoResponse};
@@ -2034,6 +2036,21 @@ mod tests {
         let decoded: AttachmentMeta = json::from_json(&encoded).expect("deserialize metadata");
 
         assert_eq!(meta, decoded);
+    }
+
+    #[test]
+    fn attachment_tenant_is_derived_from_signed_account() {
+        let alice = AccountId::new(KeyPair::random().public_key().clone());
+        let bob = AccountId::new(KeyPair::random().public_key().clone());
+
+        assert_eq!(
+            super::AttachmentTenant::from_account(&alice),
+            super::AttachmentTenant::from_account(&alice)
+        );
+        assert_ne!(
+            super::AttachmentTenant::from_account(&alice),
+            super::AttachmentTenant::from_account(&bob)
+        );
     }
 
     #[test]

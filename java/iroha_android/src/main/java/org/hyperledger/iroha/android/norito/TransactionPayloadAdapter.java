@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.hyperledger.iroha.android.address.AccountAddress;
+import org.hyperledger.iroha.android.address.AccountIdLiteral;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
 import org.hyperledger.iroha.android.model.Executable;
 import org.hyperledger.iroha.android.model.InstructionBox;
@@ -26,7 +27,6 @@ import org.hyperledger.iroha.norito.TypeAdapter;
 final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload> {
 
   private static final TypeAdapter<String> STRING_ADAPTER = NoritoAdapters.stringAdapter();
-  private static final TypeAdapter<String> DOMAIN_ID_ADAPTER = new DomainIdAdapter();
   private static final TypeAdapter<String> ACCOUNT_ID_ADAPTER = new AccountIdAdapter();
   private static final TypeAdapter<String> CHAIN_ID_ADAPTER = new ChainIdAdapter();
   private static final JsonStringAdapter JSON_STRING_ADAPTER = new JsonStringAdapter();
@@ -158,13 +158,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
 
     @Override
     public void encode(final NoritoEncoder encoder, final String value) {
-      final AccountIdPayload payload = parseAuthority(value);
-      if (payload == null) {
-        STRING_ADAPTER.encode(encoder, value);
-        return;
-      }
-      encodeSizedField(encoder, DOMAIN_ID_ADAPTER, payload.domain);
-      encodeSizedField(encoder, CONTROLLER_ADAPTER, payload.controller);
+      CONTROLLER_ADAPTER.encode(encoder, parseAuthority(value));
     }
 
     @Override
@@ -175,85 +169,41 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
 
     private static String decodePayload(
         final byte[] payload, final int flags, final int flagsHint) {
-      try {
-        return decodeAccountIdStruct(payload, flags, flagsHint);
-      } catch (final IllegalArgumentException ex) {
-        final NoritoDecoder stringDecoder = new NoritoDecoder(payload, flags, flagsHint);
-        final String literal = STRING_ADAPTER.decode(stringDecoder);
-        if (stringDecoder.remaining() != 0) {
-          throw new IllegalArgumentException("Trailing bytes after authority payload");
-        }
-        return literal;
+      final NoritoDecoder controllerDecoder = new NoritoDecoder(payload, flags, flagsHint);
+      final ControllerPayload controller = decodeControllerPayload(controllerDecoder);
+      if (controllerDecoder.remaining() != 0) {
+        throw new IllegalArgumentException("Trailing bytes after authority payload");
       }
+      return renderAuthority(controller);
     }
 
-    private static String decodeAccountIdStruct(
-        final byte[] payload, final int flags, final int flagsHint) {
-      try {
-        return decodeAccountIdSized(payload, flags, flagsHint);
-      } catch (final IllegalArgumentException ex) {
-        return decodeAccountIdLegacy(payload, flags, flagsHint);
-      }
-    }
-
-    private static String decodeAccountIdSized(
-        final byte[] payload, final int flags, final int flagsHint) {
-      final NoritoDecoder decoder = new NoritoDecoder(payload, flags, flagsHint);
-      final String domain = decodeSizedField(decoder, DOMAIN_ID_ADAPTER);
-      final ControllerPayload controller = decodeSizedField(decoder, CONTROLLER_ADAPTER);
-      if (decoder.remaining() != 0) {
-        throw new IllegalArgumentException("Trailing bytes after AccountId payload");
-      }
-      return renderAuthority(domain, controller);
-    }
-
-    private static String decodeAccountIdLegacy(
-        final byte[] payload, final int flags, final int flagsHint) {
-      final NoritoDecoder decoder = new NoritoDecoder(payload, flags, flagsHint);
-      final String domain = STRING_ADAPTER.decode(decoder);
+    private static ControllerPayload decodeControllerPayload(final NoritoDecoder decoder) {
       final long controllerTag = ENUM_TAG_ADAPTER.decode(decoder);
-      final ControllerPayload controller;
       if (controllerTag == SINGLE_CONTROLLER_TAG) {
-        final String publicKeyLiteral = STRING_ADAPTER.decode(decoder);
-        controller = ControllerPayload.single(publicKeyLiteral);
-      } else if (controllerTag == MULTISIG_CONTROLLER_TAG) {
-        final AccountAddress.MultisigPolicyPayload policy = MULTISIG_POLICY_ADAPTER.decode(decoder);
-        controller = ControllerPayload.multisig(policy);
-      } else {
-        throw new IllegalArgumentException("Unsupported AccountController tag: " + controllerTag);
+        return ControllerPayload.single(decodeSizedField(decoder, STRING_ADAPTER));
       }
-      if (decoder.remaining() != 0) {
-        throw new IllegalArgumentException("Trailing bytes after AccountId payload");
+      if (controllerTag == MULTISIG_CONTROLLER_TAG) {
+        return ControllerPayload.multisig(decodeSizedField(decoder, MULTISIG_POLICY_ADAPTER));
       }
-      return renderAuthority(domain, controller);
+      throw new IllegalArgumentException("Unsupported AccountController tag: " + controllerTag);
     }
 
-    private static AccountIdPayload parseAuthority(final String authority) {
-      if (authority == null || authority.isBlank()) {
-        throw new IllegalArgumentException("authority must not be blank");
-      }
-      final String trimmed = authority.trim();
-      final int atIndex = trimmed.lastIndexOf('@');
-      if (atIndex <= 0 || atIndex == trimmed.length() - 1) {
-        return null;
-      }
-      final String identifier = trimmed.substring(0, atIndex);
-      final String domain = trimmed.substring(atIndex + 1).trim();
-      if (domain.isBlank()) {
-        return null;
-      }
-      final ControllerPayload controller = parseIdentifierToController(identifier);
-      if (controller == null) {
-        return null;
-      }
-      return new AccountIdPayload(domain, controller);
-    }
-
-    private static ControllerPayload parseIdentifierToController(final String identifier) {
+    private static ControllerPayload parseAuthority(final String authority) {
+      final String canonicalAuthority =
+          AccountIdLiteral.requireCanonicalI105Address(authority, "authority");
+      final AccountAddress.ParseResult parsed;
       try {
-        final AccountAddress.ParseResult parsed = AccountAddress.parseAny(identifier, null);
+        parsed = AccountAddress.parseEncodedIgnoringCurveSupport(canonicalAuthority, null);
+      } catch (final AccountAddress.AccountAddressException ex) {
+        throw new IllegalArgumentException("authority must use canonical I105 encoding", ex);
+      }
+      return parseAddressToController(parsed.address);
+    }
+
+    private static ControllerPayload parseAddressToController(final AccountAddress address) {
+      try {
         final java.util.Optional<AccountAddress.SingleKeyPayload> singlePayload =
-            parsed.address.singleKeyPayload();
+            address.singleKeyPayloadIgnoringCurveSupport();
         if (singlePayload.isPresent()) {
           final AccountAddress.SingleKeyPayload payload = singlePayload.get();
           final String publicKey =
@@ -261,48 +211,29 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
           return ControllerPayload.single(publicKey);
         }
         final java.util.Optional<AccountAddress.MultisigPolicyPayload> multisigPayload =
-            parsed.address.multisigPolicyPayload();
+            address.multisigPolicyPayloadIgnoringCurveSupport();
         if (multisigPayload.isPresent()) {
           return ControllerPayload.multisig(multisigPayload.get());
         }
-      } catch (final AccountAddress.AccountAddressException ignored) {
-        // Fall through to multihash parsing.
+      } catch (final AccountAddress.AccountAddressException ex) {
+        throw new IllegalArgumentException(
+            "Failed to extract controller from canonical I105 account id", ex);
       }
-      final PublicKeyCodec.PublicKeyPayload payload =
-          PublicKeyCodec.decodePublicKeyLiteral(identifier);
-      if (payload == null) {
-        return null;
-      }
-      final String publicKey =
-          PublicKeyCodec.encodePublicKeyMultihash(payload.curveId(), payload.keyBytes());
-      return ControllerPayload.single(publicKey);
+      throw new IllegalArgumentException(
+          "Address contains neither single-key nor multisig controller");
     }
 
-    private static String renderAuthority(final String domain, final ControllerPayload controller) {
+    private static String renderAuthority(final ControllerPayload controller) {
       if (controller.isSingle()) {
         final String publicKeyLiteral = controller.publicKeyLiteral();
         final PublicKeyCodec.PublicKeyPayload payload =
             PublicKeyCodec.decodePublicKeyLiteral(publicKeyLiteral);
-        if (payload != null) {
-          final String ih58 = toIh58(domain, payload);
-          if (ih58 != null) {
-            return ih58 + "@" + domain;
-          }
+        if (payload == null) {
+          throw new IllegalArgumentException("Invalid single-key AccountController payload");
         }
-        return publicKeyLiteral + "@" + domain;
+        return renderSingleAuthority(payload);
       }
-      final String ih58 = toMultisigIh58(domain, controller.multisigPolicy());
-      return ih58 + "@" + domain;
-    }
-
-    private static final class AccountIdPayload {
-      private final String domain;
-      private final ControllerPayload controller;
-
-      private AccountIdPayload(final String domain, final ControllerPayload controller) {
-        this.domain = domain;
-        this.controller = controller;
-      }
+      return renderMultisigAuthority(controller.multisigPolicy());
     }
 
     private static final class ControllerPayload {
@@ -425,60 +356,28 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
       }
     }
 
-    private static String toIh58(
-        final String domain, final PublicKeyCodec.PublicKeyPayload payload) {
+    private static String renderSingleAuthority(
+        final PublicKeyCodec.PublicKeyPayload payload) {
       final String algorithm = PublicKeyCodec.algorithmForCurveId(payload.curveId());
       if (algorithm == null) {
-        return null;
+        throw new IllegalArgumentException(
+            "Unsupported curve id in AccountController payload: " + payload.curveId());
       }
       try {
-        final AccountAddress address =
-            AccountAddress.fromAccount(domain, payload.keyBytes(), algorithm);
-        return address.toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
+        final AccountAddress address = AccountAddress.fromAccount(payload.keyBytes(), algorithm);
+        return address.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
       } catch (final AccountAddress.AccountAddressException ex) {
-        return null;
+        throw new IllegalArgumentException("Invalid single-key AccountController payload", ex);
       }
     }
 
-    private static String toMultisigIh58(
-        final String domain, final AccountAddress.MultisigPolicyPayload policy) {
+    private static String renderMultisigAuthority(
+        final AccountAddress.MultisigPolicyPayload policy) {
       try {
-        final AccountAddress address = AccountAddress.fromMultisigPolicy(domain, policy);
-        return address.toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
+        final AccountAddress address = AccountAddress.fromMultisigPolicy(policy);
+        return address.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
       } catch (final AccountAddress.AccountAddressException ex) {
         throw new IllegalArgumentException("Invalid multisig policy for AccountId", ex);
-      }
-    }
-  }
-
-  private static final class DomainIdAdapter implements TypeAdapter<String> {
-    @Override
-    public void encode(final NoritoEncoder encoder, final String value) {
-      encodeSizedField(encoder, STRING_ADAPTER, value);
-    }
-
-    @Override
-    public String decode(final NoritoDecoder decoder) {
-      final byte[] payload = decoder.readBytes(decoder.remaining());
-      return decodeDomainPayload(payload, decoder.flags(), decoder.flagsHint());
-    }
-
-    private static String decodeDomainPayload(
-        final byte[] payload, final int flags, final int flagsHint) {
-      try {
-        final NoritoDecoder child = new NoritoDecoder(payload, flags, flagsHint);
-        final String domain = decodeSizedField(child, STRING_ADAPTER);
-        if (child.remaining() != 0) {
-          throw new IllegalArgumentException("Trailing bytes after DomainId payload");
-        }
-        return domain;
-      } catch (final IllegalArgumentException ex) {
-        final NoritoDecoder child = new NoritoDecoder(payload, flags, flagsHint);
-        final String domain = STRING_ADAPTER.decode(child);
-        if (child.remaining() != 0) {
-          throw new IllegalArgumentException("Trailing bytes after DomainId payload");
-        }
-        return domain;
       }
     }
   }

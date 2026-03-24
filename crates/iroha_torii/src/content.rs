@@ -357,7 +357,7 @@ fn signed_account(
     uri: &Uri,
 ) -> Result<AccountId, ContentError> {
     match verify_canonical_request(state, headers, method, uri, &[], None) {
-        Ok(Some(account)) => Ok(account),
+        Ok(Some(verified)) => Ok(verified.account),
         Ok(None) => Err(ContentError::Unauthorized(
             "signed account headers are required".to_string(),
         )),
@@ -684,13 +684,36 @@ mod tests {
         ))
     }
 
+    fn app_auth_test_guard(config: crate::app_auth::CanonicalRequestAuthConfig) -> impl Drop {
+        static TEST_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        struct Guard(std::sync::MutexGuard<'static, ()>);
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                crate::app_auth::configure(crate::app_auth::CanonicalRequestAuthConfig::default());
+            }
+        }
+
+        let guard = TEST_LOCK
+            .get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .expect("test lock");
+        crate::app_auth::configure(config);
+        Guard(guard)
+    }
+
     fn signed_headers(
         account: &AccountId,
         key_pair: &KeyPair,
         method: &Method,
         uri: &Uri,
     ) -> HeaderMap {
-        let message = crate::canonical_request_message(method, uri, &[]);
+        let timestamp_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock")
+            .as_millis() as u64;
+        let nonce = format!("content-test-{timestamp_ms}-{}", uri.path());
+        let message =
+            crate::canonical_request_signature_message(method, uri, &[], timestamp_ms, &nonce);
         let signature = Signature::new(key_pair.private_key(), &message);
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -703,6 +726,11 @@ mod tests {
                 .parse()
                 .expect("signature header"),
         );
+        headers.insert(
+            crate::HEADER_TIMESTAMP_MS,
+            timestamp_ms.to_string().parse().expect("timestamp header"),
+        );
+        headers.insert(crate::HEADER_NONCE, nonce.parse().expect("nonce header"));
         headers
     }
 
@@ -887,6 +915,7 @@ mod tests {
 
     #[test]
     fn role_gate_requires_signed_headers() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
         let key_pair = KeyPair::random();
         let account_id = AccountId::new(key_pair.public_key().clone());
         let state = minimal_state_with_account(&account_id, None);
@@ -904,6 +933,7 @@ mod tests {
 
     #[test]
     fn role_gate_rejects_missing_role() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
         let key_pair = KeyPair::random();
         let account_id = AccountId::new(key_pair.public_key().clone());
         let state = minimal_state_with_account(&account_id, None);
@@ -920,7 +950,33 @@ mod tests {
     }
 
     #[test]
+    fn role_gate_rejects_replayed_signature() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let key_pair = KeyPair::random();
+        let account_id = AccountId::new(key_pair.public_key().clone());
+        let state = minimal_state_with_account(&account_id, None);
+        let mut manifest = sample_manifest();
+        manifest.auth =
+            ContentAuthMode::RoleGate(RoleId::new("auditor".parse().expect("role name")));
+        let method = Method::GET;
+        let uri: Uri = "/v1/content/abc/index.html".parse().expect("uri");
+        let headers = signed_headers(&account_id, &key_pair, &method, &uri);
+
+        let first = enforce_auth(&manifest, &state, &headers, &method, &uri)
+            .expect_err("unsigned role membership should still be forbidden");
+        assert!(matches!(first, ContentError::Forbidden(_)));
+
+        let err =
+            enforce_auth(&manifest, &state, &headers, &method, &uri).expect_err("replay denied");
+        assert!(matches!(
+            err,
+            ContentError::Unauthorized(ref message) if message == "invalid request signature"
+        ));
+    }
+
+    #[test]
     fn sponsor_accepts_matching_uaid() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
         let key_pair = KeyPair::random();
         let account_id = AccountId::new(key_pair.public_key().clone());
         let uaid = iroha_data_model::nexus::UniversalAccountId::from_hash(Hash::new(b"uaid"));
@@ -936,6 +992,7 @@ mod tests {
 
     #[test]
     fn sponsor_rejects_mismatched_uaid() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
         let key_pair = KeyPair::random();
         let account_id = AccountId::new(key_pair.public_key().clone());
         let state = minimal_state_with_account(

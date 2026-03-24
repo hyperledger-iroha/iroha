@@ -16,7 +16,7 @@ mod model {
 
     use super::*;
 
-    /// Asset alias in either `<name>#<domain>@<dataspace>` or `<name>#<dataspace>` format.
+    /// Asset alias in either `<name>#<domain>.<dataspace>` or `<name>#<dataspace>` format.
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[repr(transparent)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
@@ -40,7 +40,7 @@ impl AssetDefinitionAlias {
         validate_segment(dataspace_alias, "asset alias dataspace")?;
         let literal = domain_alias.map_or_else(
             || format!("{name}#{dataspace_alias}"),
-            |domain_alias| format!("{name}#{domain_alias}@{dataspace_alias}"),
+            |domain_alias| format!("{name}#{domain_alias}.{dataspace_alias}"),
         );
         literal.parse()
     }
@@ -104,7 +104,7 @@ struct AliasSegments<'a> {
 fn split_alias_segments(input: &str) -> Result<AliasSegments<'_>, ParseError> {
     let (name, right) = input.split_once('#').ok_or_else(|| {
         ParseError::new(
-            "asset alias must use `<name>#<domain>@<dataspace>` or `<name>#<dataspace>` format",
+            "asset alias must use `<name>#<domain>.<dataspace>` or `<name>#<dataspace>` format",
         )
     })?;
     if right.contains('#') {
@@ -112,17 +112,24 @@ fn split_alias_segments(input: &str) -> Result<AliasSegments<'_>, ParseError> {
             "asset alias must contain exactly one `#` separator",
         ));
     }
-    if let Some((domain, dataspace)) = right.split_once('@') {
-        if dataspace.contains('@') {
-            return Err(ParseError::new(
-                "asset alias must contain at most one `@` separator",
-            ));
-        }
+    if right.contains('@') {
+        return Err(ParseError::new(
+            "asset alias must use `.` instead of `@` between domain and dataspace",
+        ));
+    }
+    let dot_count = right.bytes().filter(|byte| *byte == b'.').count();
+    if dot_count == 1 {
+        let (domain, dataspace) = right.split_once('.').expect("counted dot");
         return Ok(AliasSegments {
             name,
             domain: Some(domain),
             dataspace,
         });
+    }
+    if dot_count > 1 {
+        return Err(ParseError::new(
+            "asset alias must contain at most one `.` after `#`",
+        ));
     }
     Ok(AliasSegments {
         name,
@@ -134,6 +141,13 @@ fn split_alias_segments(input: &str) -> Result<AliasSegments<'_>, ParseError> {
 fn validate_segment(value: &str, segment: &'static str) -> Result<(), ParseError> {
     if value.is_empty() {
         return Err(ParseError::new("asset alias segments must not be empty"));
+    }
+    if matches!(segment, "asset alias domain" | "asset alias dataspace") && value.contains('.') {
+        return Err(ParseError::new(match segment {
+            "asset alias domain" => "asset alias domain segment must not contain `.`",
+            "asset alias dataspace" => "asset alias dataspace segment must not contain `.`",
+            _ => "asset alias segment must not contain `.`",
+        }));
     }
     Name::from_str(value).map_err(|_| {
         ParseError::new(match segment {
@@ -186,7 +200,7 @@ mod tests {
 
     #[test]
     fn asset_alias_parses_valid_literal() {
-        let parsed: AssetDefinitionAlias = "usd#issuer@main".parse().expect("valid alias");
+        let parsed: AssetDefinitionAlias = "usd#issuer.main".parse().expect("valid alias");
         assert_eq!(parsed.name_segment(), "usd");
         assert_eq!(parsed.domain_segment(), Some("issuer"));
         assert_eq!(parsed.dataspace_segment(), "main");
@@ -207,13 +221,14 @@ mod tests {
             " ",
             "usd",
             "usd@main",
-            "usd##issuer@main",
+            "usd##issuer.main",
             "usd#issuer@@main",
-            "#issuer@main",
-            "usd#@main",
-            "usd#issuer@",
-            "usd#main@extra@tail",
-            "usd coin#issuer@main",
+            "#issuer.main",
+            "usd#.main",
+            "usd#issuer.",
+            "usd#main.extra.tail",
+            "usd coin#issuer.main",
+            "usd#issuer@main",
         ] {
             assert!(
                 raw.parse::<AssetDefinitionAlias>().is_err(),
@@ -226,7 +241,7 @@ mod tests {
     fn asset_alias_from_components_builds_long_literal() {
         let alias = AssetDefinitionAlias::from_components("usd", Some("issuer"), "main")
             .expect("components should build");
-        assert_eq!(alias.as_ref(), "usd#issuer@main");
+        assert_eq!(alias.as_ref(), "usd#issuer.main");
     }
 
     #[test]
@@ -234,5 +249,11 @@ mod tests {
         let alias = AssetDefinitionAlias::from_components("usd", None, "main")
             .expect("components should build");
         assert_eq!(alias.as_ref(), "usd#main");
+    }
+
+    #[test]
+    fn asset_alias_rejects_dotted_domain_and_dataspace_segments() {
+        assert!(AssetDefinitionAlias::from_components("usd", Some("issuer.sub"), "main").is_err());
+        assert!(AssetDefinitionAlias::from_components("usd", Some("issuer"), "main.ops").is_err());
     }
 }

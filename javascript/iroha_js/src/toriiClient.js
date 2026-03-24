@@ -1096,8 +1096,13 @@ export class ToriiClient {
 
   /**
    * List asset definitions (`GET /v1/assets/definitions`).
+   * Returned items expose the full asset-definition record and may include
+   * `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`.
+   * Structured filters/sorts accept `alias_binding.status`,
+   * `alias_binding.lease_expiry_ms`, `alias_binding.grace_until_ms`, and
+   * `alias_binding.bound_at_ms`.
    * @param {IterableListOptions} [options]
-   * @returns {Promise<{items: Array<{id: string}>, total: number}>}
+   * @returns {Promise<{items: Array<object>, total: number}>}
    */
   async listAssetDefinitions(options = {}) {
     const { requirePermissions, options: rest } = ToriiClient._splitPermissionedIterableOptions(
@@ -1114,8 +1119,10 @@ export class ToriiClient {
 
   /**
    * Query asset definitions (`POST /v1/assets/definitions/query`).
+   * Returned items expose the full asset-definition record and may include
+   * `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`.
    * @param {IterableQueryOptions} [options]
-   * @returns {Promise<{items: Array<{id: string}>, total: number}>}
+   * @returns {Promise<{items: Array<object>, total: number}>}
    */
   async queryAssetDefinitions(options = {}) {
     const { requirePermissions, options: rest } = ToriiClient._splitPermissionedIterableOptions(
@@ -1133,7 +1140,7 @@ export class ToriiClient {
   /**
    * Iterate over asset definitions using automatic pagination.
    * @param {PaginationIteratorOptions} [options]
-   * @returns {AsyncGenerator<{id: string}, void, unknown>}
+   * @returns {AsyncGenerator<object, void, unknown>}
    */
   iterateAssetDefinitions(options = {}) {
     const { requirePermissions, options: rest } = ToriiClient._splitPermissionedIterableOptions(
@@ -1147,7 +1154,7 @@ export class ToriiClient {
   /**
    * Iterate asset definitions via the structured query endpoint.
    * @param {PaginationIteratorOptions} [options]
-   * @returns {AsyncGenerator<{id: string}, void, unknown>}
+   * @returns {AsyncGenerator<object, void, unknown>}
    */
   iterateAssetDefinitionsQuery(options = {}) {
     const { requirePermissions, options: rest } = ToriiClient._splitPermissionedIterableOptions(

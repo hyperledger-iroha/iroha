@@ -32,7 +32,7 @@ translator: machine-google-reviewed
 - `ChainId`. Անթափանց շղթայի նույնացուցիչ, որն օգտագործվում է գործարքներում կրկնակի պաշտպանության համար:ID-ների լարային ձևեր (շրջագայելի `Display`/`FromStr`-ով).
 - `DomainId`: `name` (օրինակ՝ `wonderland`):
 - `AccountId`. առանց տիրույթի կանոնական հաշվի նույնացուցիչ, որը կոդավորված է `AccountAddress`-ի միջոցով միայն որպես I105: Վերլուծիչի մուտքերը պետք է լինեն կանոնական I105; տիրույթի վերջածանցները (`@domain`), կանոնական I105 բառացիները, այլանունների բառացիները, կանոնական վեցանկյուն վերլուծիչի մուտքագրումը, հին `norito:` օգտակար բեռները և `uaid:`/`opaque:` հաշիվները:
-- `AssetDefinitionId`՝ կանոնական `aid:<32-lower-hex-no-dash>` (UUID-v4 բայթ):
+- `AssetDefinitionId`՝ կանոնական `unprefixed Base58 address with versioning and checksum` (UUID-v4 բայթ):
 - `AssetId`. կանոնական կոդավորված բառացի `norito:<hex>` (նախնական տեքստային ձևերը չեն ապահովվում առաջին թողարկումում):
 - `NftId`՝ `nft$domain` (օրինակ՝ `rose$garden`):
 - `PeerId`՝ `public_key` (հասակակիցների հավասարությունը հանրային բանալին է):
@@ -49,11 +49,13 @@ translator: machine-google-reviewed
 - Շինարար՝ `NewAccount` `Account::new(id)`-ի միջոցով; գրանցումը պահանջում է բացահայտ `ScopedAccountId` տիրույթ և չի հետևում լռելյայններից:
 
 ### Ակտիվների սահմանումներ և ակտիվներ
-- `AssetDefinitionId { aid_bytes: [u8; 16] }` տեքստային կերպով ցուցադրվում է որպես `aid:<32-hex-no-dash>`:
+- `AssetDefinitionId { aid_bytes: [u8; 16] }` տեքստային կերպով ցուցադրվում է որպես `unprefixed Base58 address`:
 - `AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Numeric }`.
+
+  - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`; alias selectors resolve against latest committed block time and stop resolving after grace, while direct reads may still show `expired_pending_cleanup` until sweep.
   - `name`-ը մարդուն ուղղված ցուցադրման տեքստ է պահանջվում և չպետք է պարունակի `#`/`@`:
   - `alias`-ը կամընտիր է և պետք է լինի հետևյալներից մեկը.
-    - `<name>#<domain>@<dataspace>`
+    - `<name>#<domain>.<dataspace>`
     - `<name>#<dataspace>`
     ձախ հատվածով ճիշտ համընկնում է `AssetDefinition.name`-ով:
   - `Mintable`՝ `Infinitely` | `Once` | `Limited(u32)` | `Not`.
@@ -186,7 +188,7 @@ let new_account = Account::new(account_id.to_account_id(domain_id.clone()))
     .with_metadata(Metadata::default());
 
 // Asset definition and an asset for the account
-let asset_def_id: AssetDefinitionId = "aid:2f17c72466f84a4bb8a8e24884fdcd2f".parse().unwrap();
+let asset_def_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa".parse().unwrap();
 let new_asset_def = AssetDefinition::numeric(asset_def_id.clone())
     .with_name("USD Coin".to_owned())
     .with_metadata(Metadata::default());
@@ -230,36 +232,36 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
     .sign(kp.private_key());
 ```
 
-`aid` / արագ հղում (CLI + Torii):
+asset-definition id / արագ հղում (CLI + Torii):
 
 ```bash
-# Register an asset definition with canonical aid + explicit name + alias
+# Register an asset definition with canonical Base58 id + explicit name + alias
 iroha ledger asset definition register \
-  --id aid:2f17c72466f84a4bb8a8e24884fdcd2f \
+  --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#ubl@sbp
+  --alias pkr#ubl.sbp
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
-  --id aid:550e8400e29b41d4a7164466554400dd \
+  --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
   --alias pkr#sbp
 
 # Mint using alias + account components (no manual norito hex copy/paste)
 iroha ledger asset mint \
-  --definition-alias pkr#ubl@sbp \
+  --definition-alias pkr#ubl.sbp \
   --account sorauﾛ1P... \
   --quantity 500
 
-# Resolve alias to canonical aid via Torii
+# Resolve alias to canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#ubl@sbp"}'
+  -d '{"alias":"pkr#ubl.sbp"}'
 ```Միգրացիոն նշում.
 - Հին `name#domain` ակտիվների սահմանման ID-ները չեն ընդունվում v1-ում:
 - Անանուխի/այրման/փոխանցման համար ակտիվների ID-ները մնում են կանոնական `norito:<hex>`; կառուցել դրանք հետևյալով.
-  - `iroha tools encode asset-id --definition aid:... --account <i105>`
-  - կամ `--alias <name>#<domain>@<dataspace>` / `--alias <name>#<dataspace>` + `--account`:
+  - `iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
+  - կամ `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`:
 
 ## Տարբերակում
 

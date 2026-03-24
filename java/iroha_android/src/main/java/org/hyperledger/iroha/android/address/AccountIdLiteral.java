@@ -8,27 +8,33 @@ public final class AccountIdLiteral {
   private AccountIdLiteral() {}
 
   /**
-   * Extracts the IH58 address portion from a {@code "<address>@<domain>"} account identifier.
+   * Requires a canonical encoded account identifier without a trailing {@code @domain} suffix.
    *
    * @param accountId account identifier string
-   * @return IH58 address portion without the domain suffix
+   * @param field field name used in validation messages
+   * @return canonical encoded account identifier
    */
-  public static String extractIh58Address(final String accountId) {
-    final String value = Objects.requireNonNull(accountId, "accountId").trim();
+  public static String requireCanonicalI105Address(final String accountId, final String field) {
+    Objects.requireNonNull(field, "field");
+    final String value = Objects.requireNonNull(accountId, field).trim();
     if (value.isEmpty()) {
-      throw new IllegalArgumentException("accountId must not be blank");
+      throw new IllegalArgumentException(field + " must not be blank");
     }
-    final int atIndex = value.lastIndexOf('@');
-    if (atIndex <= 0 || atIndex == value.length() - 1) {
-      throw new IllegalArgumentException("Invalid account ID format: " + value);
+    if (value.indexOf('@') >= 0) {
+      throw new IllegalArgumentException(
+          field + " must use canonical I105 encoded account without @domain");
     }
-    return value.substring(0, atIndex);
-  }
-
-  /**
-   * Backward-compatible alias for callers that still use the older I105 naming.
-   */
-  public static String extractI105Address(final String accountId) {
-    return extractIh58Address(accountId);
+    final AccountAddress.ParseResult parsed;
+    try {
+      parsed = AccountAddress.parseEncoded(value, null);
+    } catch (final AccountAddress.AccountAddressException ex) {
+      throw new IllegalArgumentException(
+          field + " must use a canonical I105 encoded account literal", ex);
+    }
+    if (parsed.format != AccountAddress.Format.I105) {
+      throw new IllegalArgumentException(
+          field + " must use a canonical I105 encoded account literal");
+    }
+    return value;
   }
 }

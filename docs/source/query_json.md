@@ -38,7 +38,39 @@ The following singular queries are supported:
 - `FindAbiVersion`
 - `FindExecutorDataModel`
 - `FindParameters`
+- `FindAssetDefinitionById` with `{ "asset": "<base58-asset-id>" }`
+- `FindAssetById` with `{ "asset": "<base58-asset-id>", "account_id": "<canonical-i105>", "scope": { "kind": "Global" } }`
 - `FindContractManifestByCodeHash` (requires a 32-byte `code_hash` hex string)
+
+Example singular asset-definition lookup:
+
+```json
+{
+  "singular": {
+    "type": "FindAssetDefinitionById",
+    "payload": {
+      "asset": "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
+    }
+  }
+}
+```
+
+Example singular owned-asset lookup:
+
+```json
+{
+  "singular": {
+    "type": "FindAssetById",
+    "payload": {
+      "asset": "66owaQmAQMuHxPzxUN3bqZ6FJfDa",
+      "account_id": "i105...",
+      "scope": {
+        "kind": "Global"
+      }
+    }
+  }
+}
+```
 
 ## Iterable queries
 

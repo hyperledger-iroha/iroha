@@ -17,6 +17,43 @@ public final class OfflineWalletCertificateDraft {
   private final String verdictIdHex;
   private final String attestationNonceHex;
   private final Long refreshAtMs;
+  private final String deviceId;
+  private final String offlinePublicKey;
+  private final String reserveMode;
+  private final String restorePolicy;
+
+  public OfflineWalletCertificateDraft(
+      final String controller,
+      final OfflineAllowanceCommitment allowance,
+      final String spendPublicKey,
+      final byte[] attestationReport,
+      final long issuedAtMs,
+      final long expiresAtMs,
+      final OfflineWalletPolicy policy,
+      final Map<String, Object> metadata,
+      final String verdictIdHex,
+      final String attestationNonceHex,
+      final Long refreshAtMs,
+      final String deviceId,
+      final String offlinePublicKey,
+      final String reserveMode,
+      final String restorePolicy) {
+    this.controller = Objects.requireNonNull(controller, "controller");
+    this.allowance = Objects.requireNonNull(allowance, "allowance");
+    this.spendPublicKey = Objects.requireNonNull(spendPublicKey, "spendPublicKey");
+    this.attestationReport = Objects.requireNonNull(attestationReport, "attestationReport").clone();
+    this.issuedAtMs = issuedAtMs;
+    this.expiresAtMs = expiresAtMs;
+    this.policy = Objects.requireNonNull(policy, "policy");
+    this.metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
+    this.verdictIdHex = verdictIdHex;
+    this.attestationNonceHex = attestationNonceHex;
+    this.refreshAtMs = refreshAtMs;
+    this.deviceId = normalizeOptional(deviceId);
+    this.offlinePublicKey = normalizeOptional(offlinePublicKey);
+    this.reserveMode = normalizeOptional(reserveMode);
+    this.restorePolicy = normalizeOptional(restorePolicy);
+  }
 
   public OfflineWalletCertificateDraft(
       final String controller,
@@ -30,17 +67,22 @@ public final class OfflineWalletCertificateDraft {
       final String verdictIdHex,
       final String attestationNonceHex,
       final Long refreshAtMs) {
-    this.controller = Objects.requireNonNull(controller, "controller");
-    this.allowance = Objects.requireNonNull(allowance, "allowance");
-    this.spendPublicKey = Objects.requireNonNull(spendPublicKey, "spendPublicKey");
-    this.attestationReport = Objects.requireNonNull(attestationReport, "attestationReport").clone();
-    this.issuedAtMs = issuedAtMs;
-    this.expiresAtMs = expiresAtMs;
-    this.policy = Objects.requireNonNull(policy, "policy");
-    this.metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
-    this.verdictIdHex = verdictIdHex;
-    this.attestationNonceHex = attestationNonceHex;
-    this.refreshAtMs = refreshAtMs;
+    this(
+        controller,
+        allowance,
+        spendPublicKey,
+        attestationReport,
+        issuedAtMs,
+        expiresAtMs,
+        policy,
+        metadata,
+        verdictIdHex,
+        attestationNonceHex,
+        refreshAtMs,
+        null,
+        null,
+        null,
+        null);
   }
 
   /**
@@ -72,7 +114,11 @@ public final class OfflineWalletCertificateDraft {
         metadata,
         verdictIdHex,
         attestationNonceHex,
-        refreshAtMs);
+        refreshAtMs,
+        null,
+        null,
+        null,
+        null);
   }
 
   public String controller() {
@@ -119,6 +165,22 @@ public final class OfflineWalletCertificateDraft {
     return refreshAtMs;
   }
 
+  public String deviceId() {
+    return deviceId;
+  }
+
+  public String offlinePublicKey() {
+    return offlinePublicKey;
+  }
+
+  public String reserveMode() {
+    return reserveMode;
+  }
+
+  public String restorePolicy() {
+    return restorePolicy;
+  }
+
   public Map<String, Object> toJsonMap() {
     final Map<String, Object> map = new LinkedHashMap<>();
     map.put("controller", controller);
@@ -138,6 +200,26 @@ public final class OfflineWalletCertificateDraft {
             ? null
             : OfflineHashLiteral.normalize(attestationNonceHex, "attestation_nonce"));
     map.put("refresh_at_ms", refreshAtMs);
+    if (deviceId != null) {
+      map.put("device_id", deviceId);
+    }
+    if (offlinePublicKey != null) {
+      map.put("offline_public_key", offlinePublicKey);
+    }
+    if (reserveMode != null) {
+      map.put("reserve_mode", reserveMode);
+    }
+    if (restorePolicy != null) {
+      map.put("restore_policy", restorePolicy);
+    }
     return map;
+  }
+
+  private static String normalizeOptional(final String value) {
+    if (value == null) {
+      return null;
+    }
+    final String trimmed = value.trim();
+    return trimmed.isEmpty() ? null : trimmed;
   }
 }

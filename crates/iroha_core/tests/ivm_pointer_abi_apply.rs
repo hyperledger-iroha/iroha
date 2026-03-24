@@ -33,6 +33,12 @@ fn tlv_envelope<T: NoritoSerialize>(type_id: PointerType, val: &T) -> Vec<u8> {
     blob
 }
 
+fn opaque_asset_definition_literal(aid_bytes: [u8; 16]) -> String {
+    AssetDefinitionId::from_uuid_bytes(aid_bytes)
+        .expect("opaque asset definition id")
+        .to_string()
+}
+
 #[test]
 fn apply_queued_isis_from_corehost_transfer_asset() {
     // Build a minimal IVM program that performs SCALL TRANSFER_ASSET and HALT
@@ -320,10 +326,18 @@ fn apply_queued_isis_from_compiled_json_driven_double_transfer() {
     let reserve_raw =
         std::env::var("IVM_DEBUG_FROM_ACCOUNT").expect("IVM_DEBUG_FROM_ACCOUNT must be set");
     let dst_raw = std::env::var("IVM_DEBUG_TO_ACCOUNT").expect("IVM_DEBUG_TO_ACCOUNT must be set");
-    let aed_asset_raw = std::env::var("IVM_DEBUG_AED_ASSET_DEFINITION")
-        .unwrap_or_else(|_| "aid:6872454e9c044641aa581ec5f3801619".to_owned());
-    let pkr_asset_raw = std::env::var("IVM_DEBUG_PKR_ASSET_DEFINITION")
-        .unwrap_or_else(|_| "aid:2e3d34beb8a84239b3d9590770f1189e".to_owned());
+    let aed_asset_raw = std::env::var("IVM_DEBUG_AED_ASSET_DEFINITION").unwrap_or_else(|_| {
+        opaque_asset_definition_literal([
+            0x68, 0x72, 0x45, 0x4e, 0x9c, 0x04, 0x46, 0x41, 0xaa, 0x58, 0x1e, 0xc5, 0xf3, 0x80,
+            0x16, 0x19,
+        ])
+    });
+    let pkr_asset_raw = std::env::var("IVM_DEBUG_PKR_ASSET_DEFINITION").unwrap_or_else(|_| {
+        opaque_asset_definition_literal([
+            0x2e, 0x3d, 0x34, 0xbe, 0xb8, 0xa8, 0x42, 0x39, 0xb3, 0xd9, 0x59, 0x07, 0x70, 0xf1,
+            0x18, 0x9e,
+        ])
+    });
     let domain_raw = std::env::var("IVM_DEBUG_DOMAIN").unwrap_or_else(|_| "sbp".to_owned());
     let ratio_raw = std::env::var("IVM_DEBUG_RATIO").unwrap_or_else(|_| "76".to_owned());
 

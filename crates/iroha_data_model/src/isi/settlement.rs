@@ -409,6 +409,12 @@ mod tests {
     }
 
     fn asset(id: &str) -> AssetDefinitionId {
+        if let Some((name, domain)) = id.split_once('#') {
+            return AssetDefinitionId::new(
+                domain.parse().expect("domain"),
+                name.parse().expect("name"),
+            );
+        }
         id.parse().expect("asset id")
     }
 

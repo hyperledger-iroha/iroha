@@ -488,12 +488,13 @@ fn parse_account_id(input: &str, label: &str) -> napi::Result<AccountId> {
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // napi-rs requires owned `String` inputs at the boundary
 pub fn encode_asset_id(asset_definition_id: String, account_id: String) -> napi::Result<String> {
-    let definition: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("invalid asset definition id: {err}"),
-        )
-    })?;
+    let definition =
+        AssetDefinitionId::parse_address_literal(&asset_definition_id).map_err(|err| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("invalid asset definition id: {err}"),
+            )
+        })?;
     let account = parse_account_id(&account_id, "account id")?;
     Ok(AssetId::new(definition, account).canonical_encoded())
 }

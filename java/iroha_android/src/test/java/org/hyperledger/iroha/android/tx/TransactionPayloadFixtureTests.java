@@ -9,6 +9,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
@@ -17,6 +18,8 @@ import org.hyperledger.iroha.norito.NoritoCodec;
 import org.junit.Test;
 
 public final class TransactionPayloadFixtureTests {
+
+  private static final String SAMPLE_AUTHORITY = sampleAuthority((byte) 0x11);
 
   @Test
   public void validatePayloadFixtures() throws Exception {
@@ -40,7 +43,7 @@ public final class TransactionPayloadFixtureTests {
 
     final Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("chain", "00000001");
-    payload.put("authority", "alice@wonderland");
+    payload.put("authority", SAMPLE_AUTHORITY);
     payload.put("creation_time_ms", 0L);
     payload.put("executable", executable);
     payload.put("metadata", Collections.emptyMap());
@@ -48,7 +51,7 @@ public final class TransactionPayloadFixtureTests {
     final Map<String, Object> fixtureMap = new LinkedHashMap<>();
     fixtureMap.put("name", "wire_instruction_fixture");
     fixtureMap.put("chain", "00000001");
-    fixtureMap.put("authority", "alice@wonderland");
+    fixtureMap.put("authority", SAMPLE_AUTHORITY);
     fixtureMap.put("creation_time_ms", 0L);
     fixtureMap.put("payload", payload);
 
@@ -85,7 +88,7 @@ public final class TransactionPayloadFixtureTests {
 
     final Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("chain", "00000001");
-    payload.put("authority", "alice@wonderland");
+    payload.put("authority", SAMPLE_AUTHORITY);
     payload.put("creation_time_ms", 0L);
     payload.put("executable", executable);
     payload.put("metadata", Collections.emptyMap());
@@ -93,7 +96,7 @@ public final class TransactionPayloadFixtureTests {
     final Map<String, Object> fixtureMap = new LinkedHashMap<>();
     fixtureMap.put("name", "wire_instruction_arguments_fixture");
     fixtureMap.put("chain", "00000001");
-    fixtureMap.put("authority", "alice@wonderland");
+    fixtureMap.put("authority", SAMPLE_AUTHORITY);
     fixtureMap.put("creation_time_ms", 0L);
     fixtureMap.put("payload", payload);
 
@@ -204,5 +207,16 @@ public final class TransactionPayloadFixtureTests {
       return;
     }
     throw new AssertionError(message);
+  }
+
+  private static String sampleAuthority(final byte fill) {
+    final byte[] publicKey = new byte[32];
+    Arrays.fill(publicKey, fill);
+    try {
+      return AccountAddress.fromAccount(publicKey, "ed25519")
+          .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+    } catch (final AccountAddress.AccountAddressException ex) {
+      throw new IllegalStateException("Failed to build sample authority", ex);
+    }
   }
 }

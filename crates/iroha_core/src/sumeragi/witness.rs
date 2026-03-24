@@ -368,7 +368,7 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
         let mut it = rest.splitn(2, ':');
         if let (Some(ad_s), Some(name_s)) = (it.next(), it.next()) {
             if let (Ok(ad), Ok(name)) = (
-                iroha_data_model::asset::AssetDefinitionId::from_str(ad_s),
+                iroha_data_model::asset::AssetDefinitionId::parse_address_literal(ad_s),
                 Name::from_str(name_s),
             ) {
                 if let Ok(def) = state_block.world.asset_definition(&ad) {
@@ -471,7 +471,7 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
         // no further processing needed for asset access
     }
     if let Some(rest) = access_key.strip_prefix("asset_def:")
-        && let Ok(ad) = iroha_data_model::asset::AssetDefinitionId::from_str(rest)
+        && let Ok(ad) = iroha_data_model::asset::AssetDefinitionId::parse_address_literal(rest)
     {
         if let Ok(def) = state_block.world.asset_definition(&ad) {
             record_read_asset_def_total(&ad, Some(def.total_quantity()));

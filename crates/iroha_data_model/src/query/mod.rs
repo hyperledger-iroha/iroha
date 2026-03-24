@@ -861,6 +861,8 @@ mod model {
         FindAbiVersion(runtime::prelude::FindAbiVersion),
         /// Fetch an asset by identifier.
         FindAssetById(asset::prelude::FindAssetById),
+        /// Fetch an asset definition by identifier.
+        FindAssetDefinitionById(asset::prelude::FindAssetDefinitionById),
         /// Fetch a Twitter binding record by hash.
         FindTwitterBindingByHash(oracle::prelude::FindTwitterBindingByHash),
         /// Fetch domain endorsement records.
@@ -879,6 +881,8 @@ mod model {
         FindDaPinIntentByLaneEpochSequence(self::da::prelude::FindDaPinIntentByLaneEpochSequence),
         /// Fetch the registered owner for a `SoraFS` provider.
         FindSorafsProviderOwner(sorafs::prelude::FindSorafsProviderOwner),
+        /// Fetch the active SNS owner for a dataspace alias.
+        FindDataspaceNameOwnerById(sns::prelude::FindDataspaceNameOwnerById),
         #[cfg(test)]
         #[doc(hidden)]
         __TestFallback,
@@ -909,6 +913,8 @@ mod model {
         AbiVersion(runtime::AbiVersion),
         /// Asset payload.
         Asset(crate::asset::value::Asset),
+        /// Asset definition payload.
+        AssetDefinition(crate::asset::definition::AssetDefinition),
         /// Twitter binding payload.
         TwitterBindingRecord(crate::oracle::TwitterBindingRecord),
         /// Domain endorsements payload.
@@ -2424,6 +2430,7 @@ impl_singular_queries! {
     smart_contract::prelude::FindContractManifestByCodeHash => crate::smart_contract::manifest::ContractManifest,
     runtime::prelude::FindAbiVersion => crate::query::runtime::AbiVersion,
     asset::prelude::FindAssetById => crate::asset::value::Asset,
+    asset::prelude::FindAssetDefinitionById => crate::asset::definition::AssetDefinition,
     oracle::FindTwitterBindingByHash => crate::oracle::TwitterBindingRecord,
     endorsement::prelude::FindDomainEndorsements => Vec<crate::nexus::DomainEndorsementRecord>,
     endorsement::prelude::FindDomainEndorsementPolicy => crate::nexus::DomainEndorsementPolicy,
@@ -2432,6 +2439,7 @@ impl_singular_queries! {
     da::prelude::FindDaPinIntentByManifest => crate::da::pin_intent::DaPinIntentWithLocation,
     da::prelude::FindDaPinIntentByAlias => crate::da::pin_intent::DaPinIntentWithLocation,
     da::prelude::FindDaPinIntentByLaneEpochSequence => crate::da::pin_intent::DaPinIntentWithLocation,
+    sns::prelude::FindDataspaceNameOwnerById => crate::account::AccountId,
 }
 
 // NOTE: Query DSL projection traits are provided generically in dsl module now.
@@ -2749,7 +2757,7 @@ pub mod asset {
     use derive_more::Display;
 
     // Bring required IDs into scope for queries! items
-    use crate::AssetId;
+    use crate::{AssetId, asset::AssetDefinitionId};
 
     queries! {
         /// [`FindAssets`] Iroha Query finds all `Asset`s presented.
@@ -2773,6 +2781,16 @@ pub mod asset {
             /// Identifier of the asset to look up.
             pub id: AssetId,
         }
+
+        /// [`FindAssetDefinitionById`] Iroha Query finds a specific `AssetDefinition` by identifier.
+        #[derive(Display)]
+        #[display("Find asset definition `{id}`")]
+        #[repr(transparent)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        pub struct FindAssetDefinitionById {
+            /// Identifier of the asset definition to look up.
+            pub id: AssetDefinitionId,
+        }
     }
 
     impl FindAssetById {
@@ -2782,9 +2800,18 @@ pub mod asset {
         }
     }
 
+    impl FindAssetDefinitionById {
+        /// Return the queried asset definition identifier.
+        pub fn asset_definition_id(&self) -> &AssetDefinitionId {
+            &self.id
+        }
+    }
+
     pub mod prelude {
         //! The prelude re-exports most commonly used traits, structs and macros from this crate.
-        pub use super::{FindAssetById, FindAssets, FindAssetsDefinitions};
+        pub use super::{
+            FindAssetById, FindAssetDefinitionById, FindAssets, FindAssetsDefinitions,
+        };
     }
 }
 
@@ -3293,6 +3320,39 @@ impl SingularQuery for sorafs::prelude::FindSorafsProviderOwner {
 
     fn as_any(&self) -> &dyn Any {
         self
+    }
+}
+
+pub mod sns {
+    //! SNS-related query definitions.
+    //!
+    //! Queries related to authoritative SNS-backed ownership.
+
+    use derive_more::Display;
+
+    use crate::nexus::DataSpaceId;
+
+    queries! {
+        /// Fetch the active SNS owner for a dataspace alias resolved from the current catalog.
+        #[derive(Display)]
+        #[display("Find SNS dataspace owner for `{dataspace_id}`")]
+        #[repr(transparent)]
+        pub struct FindDataspaceNameOwnerById {
+            /// Dataspace identifier whose leased alias owner should be resolved.
+            pub dataspace_id: DataSpaceId,
+        }
+    }
+
+    impl FindDataspaceNameOwnerById {
+        /// Return the queried dataspace identifier.
+        pub fn dataspace_id(&self) -> DataSpaceId {
+            self.dataspace_id
+        }
+    }
+
+    /// Prelude re-exports for SNS queries.
+    pub mod prelude {
+        pub use super::FindDataspaceNameOwnerById;
     }
 }
 

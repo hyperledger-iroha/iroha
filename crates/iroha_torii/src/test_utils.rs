@@ -541,6 +541,14 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             tx_burst_per_authority: None,
             deploy_rate_per_origin_per_sec: None,
             deploy_burst_per_origin: None,
+            soracloud_public_rate_per_ip_per_sec:
+                iroha_config::parameters::defaults::torii::SORACLOUD_PUBLIC_RATE_PER_IP_PER_SEC
+                    .and_then(std::num::NonZeroU32::new),
+            soracloud_public_burst_per_ip:
+                iroha_config::parameters::defaults::torii::SORACLOUD_PUBLIC_BURST_PER_IP
+                    .and_then(std::num::NonZeroU32::new),
+            soracloud_public_max_inflight:
+                iroha_config::parameters::defaults::torii::SORACLOUD_PUBLIC_MAX_INFLIGHT,
             proof_api: iroha_config::parameters::actual::ProofApi {
                 rate_per_minute: defaults::torii::PROOF_RATE_PER_MIN
                     .and_then(std::num::NonZeroU32::new),
@@ -603,6 +611,16 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                     defaults::torii::APP_API_RATE_LIMIT_COST_PER_ROW.max(1),
                 )
                 .expect("rate limit cost must be non-zero"),
+                request_signature_max_clock_skew: std::time::Duration::from_secs(
+                    defaults::torii::app_auth::MAX_CLOCK_SKEW_SECS,
+                ),
+                request_signature_nonce_ttl: std::time::Duration::from_secs(
+                    defaults::torii::app_auth::NONCE_TTL_SECS,
+                ),
+                request_signature_replay_cache_capacity: std::num::NonZeroUsize::new(
+                    defaults::torii::app_auth::REPLAY_CACHE_CAPACITY.max(1),
+                )
+                .expect("request signature replay cache must be non-zero"),
             },
             attachments_ttl_secs: 7 * 24 * 60 * 60,
             attachments_max_bytes: 4 * 1024 * 1024,

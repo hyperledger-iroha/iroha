@@ -7,17 +7,24 @@
 //! through live Torii endpoints.
 
 use std::{
+    cell::RefCell,
     fs,
     num::{NonZeroU16, NonZeroU32, NonZeroU64},
     path::{Path, PathBuf},
     time::Duration,
 };
 
+use base64::Engine as _;
 use eyre::{Result, WrapErr, eyre};
-use iroha::data_model::{
+use iroha::{
+    client::Client,
+    config::Config as ClientConfig,
+    data_model::{
     account::AccountId,
     asset::AssetDefinitionId,
     Encode,
+    isi::InstructionBox,
+    metadata::Metadata,
     name::Name,
     prelude::ExposedPrivateKey,
     smart_contract::manifest::ManifestProvenance,
@@ -51,13 +58,19 @@ use iroha::data_model::{
         encode_training_job_retry_provenance_payload, encode_training_job_start_provenance_payload,
     },
     sorafs::pin_registry::StorageClass,
+    },
+};
+use iroha_core::soracloud_runtime::{
+    HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS, HF_GENERATED_AGENT_LEASE_TICKS,
+    build_soracloud_hf_generated_agent_manifest, build_soracloud_hf_generated_service_bundle,
 };
 use iroha_crypto::{Hash, KeyPair, Signature};
-use norito::json::{self, JsonDeserialize, JsonSerialize};
+use norito::{decode_from_bytes, json::{self, JsonDeserialize, JsonSerialize}};
 use reqwest::{
     blocking::Client as BlockingHttpClient,
     header::{self, HeaderValue},
 };
+use sha2::{Digest as _, Sha256};
 
 use crate::{Run, RunContext};
 
@@ -72,6 +85,12 @@ const HF_DEFAULT_RESOLVED_REVISION: &str = "main";
 const HF_REPO_ID_MAX_BYTES: usize = 256;
 const HF_REVISION_MAX_BYTES: usize = 160;
 const HF_MODEL_NAME_MAX_BYTES: usize = 128;
+const HEADER_IROHA_ACCOUNT: &str = "X-Iroha-Account";
+const HEADER_IROHA_SIGNATURE: &str = "X-Iroha-Signature";
+
+thread_local! {
+    static SORACLOUD_SUBMISSION_CONFIG: RefCell<Option<ClientConfig>> = const { RefCell::new(None) };
+}
 
 /// Soracloud control-plane commands.
 #[derive(clap::Subcommand, Debug)]
@@ -154,6 +173,9 @@ pub enum Command {
 
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        SORACLOUD_SUBMISSION_CONFIG.with(|slot| {
+            *slot.borrow_mut() = Some(context.config().clone());
+        });
         match self {
             Command::Init(args) => context.print_data(&args.run()?),
             Command::Deploy(args) => {
@@ -794,7 +816,7 @@ pub struct AgentWalletSpendArgs {
     /// Apartment name issuing the spend request.
     #[arg(long, value_name = "NAME")]
     apartment_name: String,
-    /// Asset definition identifier (`aid:<32-lower-hex-no-dash>`).
+    /// Asset definition identifier (canonical unprefixed Base58 address).
     #[arg(long, value_name = "ASSET")]
     asset_definition: String,
     /// Spend amount in nanos.
@@ -1132,6 +1154,12 @@ impl AgentAutonomyRunArgs {
         }
 
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let apartment_name = self.apartment_name.clone();
+        let artifact_hash = self.artifact_hash.clone();
+        let provenance_hash = self.provenance_hash.clone();
+        let run_label = self.run_label.clone();
+        let api_token = self.api_token.clone();
+        let timeout_secs = self.timeout_secs;
         let workflow_input_json = match (
             self.workflow_input_json.as_deref(),
             self.workflow_input_json_file.as_deref(),
@@ -1154,14 +1182,56 @@ impl AgentAutonomyRunArgs {
             authority,
             key_pair,
         )?;
-        let (_, payload) = post_torii_soracloud_mutation(
+        let (_, initial_payload) = post_torii_soracloud_mutation(
             torii_url,
             "v1/soracloud/agent/autonomy/run",
             &request,
-            self.api_token.as_deref(),
-            self.timeout_secs,
+            api_token.as_deref(),
+            timeout_secs,
         )?;
-        Ok(payload)
+        let (_, status_after_approval) = fetch_torii_soracloud_agent_autonomy_status(
+            torii_url,
+            &apartment_name,
+            api_token.as_deref(),
+            timeout_secs,
+        )?;
+        let run_id = find_agent_autonomy_run_id(
+            &status_after_approval,
+            &artifact_hash,
+            provenance_hash.as_deref(),
+            &run_label,
+        )?;
+        let finalize_request = AgentAutonomyFinalizeRequest {
+            apartment_name: apartment_name.clone(),
+            run_id: run_id.clone(),
+        };
+        let (_, finalize_payload) = post_torii_soracloud_mutation(
+            torii_url,
+            "v1/soracloud/agent/autonomy/run/finalize",
+            &finalize_request,
+            api_token.as_deref(),
+            timeout_secs,
+        )?;
+        let (_, mut final_status) = fetch_torii_soracloud_agent_autonomy_status(
+            torii_url,
+            &apartment_name,
+            api_token.as_deref(),
+            timeout_secs,
+        )?;
+        if let Some(root) = final_status.as_object_mut() {
+            root.insert("run_id".to_owned(), json::Value::String(run_id));
+            if let Some(value) = extract_json_field(&initial_payload, "submitted_tx_hash")? {
+                root.insert("approval_submitted_tx_hash".to_owned(), value);
+            }
+            if let Some(value) = extract_json_field(&finalize_payload, "submitted_tx_hash")? {
+                root.insert("finalize_submitted_tx_hash".to_owned(), value);
+            }
+            root.insert(
+                "submission_mode".to_owned(),
+                json::Value::String("client_signed".to_owned()),
+            );
+        }
+        Ok(final_status)
     }
 }
 
@@ -2437,6 +2507,10 @@ struct SignedHfDeployRequest {
     payload: HfDeployPayload,
     provenance: ManifestProvenance,
     #[norito(default)]
+    generated_service_provenance: Option<ManifestProvenance>,
+    #[norito(default)]
+    generated_apartment_provenance: Option<ManifestProvenance>,
+    #[norito(default)]
     authority: Option<AccountId>,
     #[norito(default)]
     private_key: Option<ExposedPrivateKey>,
@@ -2503,6 +2577,10 @@ struct HfLeaseRenewPayload {
 struct SignedHfLeaseRenewRequest {
     payload: HfLeaseRenewPayload,
     provenance: ManifestProvenance,
+    #[norito(default)]
+    generated_service_provenance: Option<ManifestProvenance>,
+    #[norito(default)]
+    generated_apartment_provenance: Option<ManifestProvenance>,
     #[norito(default)]
     authority: Option<AccountId>,
     #[norito(default)]
@@ -2777,6 +2855,12 @@ struct SignedAgentAutonomyRunRequest {
     private_key: Option<ExposedPrivateKey>,
 }
 
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AgentAutonomyFinalizeRequest {
+    apartment_name: String,
+    run_id: String,
+}
+
 #[derive(
     Clone,
     Debug,
@@ -2973,7 +3057,7 @@ struct SignedModelWeightRollbackRequest {
 
 fn signed_bundle_request(
     bundle: SoraDeploymentBundleV1,
-    authority: Option<&AccountId>,
+    _authority: Option<&AccountId>,
     key_pair: &KeyPair,
 ) -> Result<SignedBundleRequest> {
     let payload = encode_bundle_provenance_payload(&bundle)
@@ -2985,15 +3069,15 @@ fn signed_bundle_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: authority.cloned(),
-        private_key: authority.map(|_| ExposedPrivateKey(key_pair.private_key().clone())),
+        authority: None,
+        private_key: None,
     })
 }
 
 fn signed_rollback_request(
     service_name: &str,
     target_version: Option<&str>,
-    authority: Option<&AccountId>,
+    _authority: Option<&AccountId>,
     key_pair: &KeyPair,
 ) -> Result<SignedRollbackRequest> {
     if service_name.trim().is_empty() {
@@ -3012,8 +3096,8 @@ fn signed_rollback_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: authority.cloned(),
-        private_key: authority.map(|_| ExposedPrivateKey(key_pair.private_key().clone())),
+        authority: None,
+        private_key: None,
     })
 }
 
@@ -3031,7 +3115,7 @@ fn signed_rollout_request(
     healthy: bool,
     promote_to_percent: Option<u8>,
     governance_tx_hash: Hash,
-    authority: Option<&AccountId>,
+    _authority: Option<&AccountId>,
     key_pair: &KeyPair,
 ) -> Result<SignedRolloutAdvanceRequest> {
     if service_name.trim().is_empty() {
@@ -3059,8 +3143,8 @@ fn signed_rollout_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: authority.cloned(),
-        private_key: authority.map(|_| ExposedPrivateKey(key_pair.private_key().clone())),
+        authority: None,
+        private_key: None,
     })
 }
 
@@ -3068,7 +3152,7 @@ fn signed_agent_deploy_request(
     manifest: AgentApartmentManifestV1,
     lease_ticks: u64,
     autonomy_budget_units: u64,
-    authority: &AccountId,
+    _authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedAgentDeployRequest> {
     let payload = AgentDeployPayload {
@@ -3085,15 +3169,15 @@ fn signed_agent_deploy_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: Some(authority.clone()),
-        private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),
+        authority: None,
+        private_key: None,
     })
 }
 
 fn signed_agent_lease_renew_request(
     apartment_name: &str,
     lease_ticks: u64,
-    authority: &AccountId,
+    _authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedAgentLeaseRenewRequest> {
     if apartment_name.trim().is_empty() {
@@ -3115,8 +3199,8 @@ fn signed_agent_lease_renew_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: Some(authority.clone()),
-        private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),
+        authority: None,
+        private_key: None,
     })
 }
 
@@ -3203,6 +3287,40 @@ fn parse_asset_definition_arg(
         .wrap_err_with(|| format!("invalid {flag_name}"))
 }
 
+fn hf_source_hash(repo_id: &str, resolved_revision: &str) -> Result<Hash> {
+    let payload = norito::to_bytes(&(repo_id, resolved_revision))
+        .wrap_err("failed to encode hf source id payload")?;
+    Ok(Hash::new(payload))
+}
+
+fn sign_generated_hf_service_provenance(
+    bundle: &SoraDeploymentBundleV1,
+    key_pair: &KeyPair,
+) -> Result<ManifestProvenance> {
+    let payload = encode_bundle_provenance_payload(bundle)
+        .wrap_err("failed to encode generated HF service bundle for signing")?;
+    Ok(ManifestProvenance {
+        signer: key_pair.public_key().clone(),
+        signature: Signature::new(key_pair.private_key(), &payload),
+    })
+}
+
+fn sign_generated_hf_apartment_provenance(
+    manifest: &AgentApartmentManifestV1,
+    key_pair: &KeyPair,
+) -> Result<ManifestProvenance> {
+    let payload = encode_agent_deploy_provenance_payload(
+        manifest.clone(),
+        HF_GENERATED_AGENT_LEASE_TICKS,
+        Some(HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS),
+    )
+    .wrap_err("failed to encode generated HF apartment manifest for signing")?;
+    Ok(ManifestProvenance {
+        signer: key_pair.public_key().clone(),
+        signature: Signature::new(key_pair.private_key(), &payload),
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn signed_hf_deploy_request(
     repo_id: &str,
@@ -3214,7 +3332,7 @@ fn signed_hf_deploy_request(
     lease_term_ms: u64,
     lease_asset_definition: &str,
     base_fee_nanos: u128,
-    authority: &AccountId,
+    _authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedHfDeployRequest> {
     if lease_term_ms == 0 {
@@ -3223,15 +3341,23 @@ fn signed_hf_deploy_request(
     if base_fee_nanos == 0 {
         return Err(eyre!("--base-fee-nanos must be greater than zero"));
     }
+    let repo_id = parse_hf_repo_id_arg(repo_id)?;
+    let revision = revision.map(parse_hf_revision_arg).transpose()?;
+    let resolved_revision = revision
+        .clone()
+        .unwrap_or_else(|| HF_DEFAULT_RESOLVED_REVISION.to_owned());
+    let model_name = match model_name {
+        Some(model_name) => parse_hf_model_name_arg(model_name)?,
+        None => default_hf_model_name(&repo_id)?,
+    };
+    let service_name = parse_hf_service_name_arg(service_name)?;
+    let apartment_name = parse_hf_apartment_name_arg(apartment_name)?;
     let payload = HfDeployPayload {
-        repo_id: parse_hf_repo_id_arg(repo_id)?,
-        revision: revision.map(parse_hf_revision_arg).transpose()?,
-        model_name: match model_name {
-            Some(model_name) => parse_hf_model_name_arg(model_name)?,
-            None => default_hf_model_name(repo_id)?,
-        },
-        service_name: parse_hf_service_name_arg(service_name)?,
-        apartment_name: parse_hf_apartment_name_arg(apartment_name)?,
+        repo_id: repo_id.clone(),
+        revision: revision.clone(),
+        model_name: model_name.clone(),
+        service_name: service_name.clone(),
+        apartment_name: apartment_name.clone(),
         storage_class,
         lease_term_ms,
         lease_asset_definition_id: parse_asset_definition_arg(
@@ -3243,14 +3369,41 @@ fn signed_hf_deploy_request(
     let encoded = encode_hf_deploy_signature_payload(&payload)
         .wrap_err("failed to encode hf deploy payload for signing")?;
     let signature = Signature::new(key_pair.private_key(), &encoded);
+    let service_name = service_name
+        .parse::<Name>()
+        .expect("validated HF service name must parse");
+    let source_id = hf_source_hash(&repo_id, &resolved_revision)?;
+    let generated_bundle = build_soracloud_hf_generated_service_bundle(
+        service_name.clone(),
+        &source_id.to_string(),
+        &repo_id,
+        &resolved_revision,
+        &model_name,
+    );
+    let generated_apartment_provenance = apartment_name
+        .as_deref()
+        .map(|apartment_name| {
+            let apartment_name = apartment_name
+                .parse::<Name>()
+                .expect("validated HF apartment name must parse");
+            let manifest =
+                build_soracloud_hf_generated_agent_manifest(apartment_name, &generated_bundle);
+            sign_generated_hf_apartment_provenance(&manifest, key_pair)
+        })
+        .transpose()?;
     Ok(SignedHfDeployRequest {
         payload,
         provenance: ManifestProvenance {
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: Some(authority.clone()),
-        private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),
+        generated_service_provenance: Some(sign_generated_hf_service_provenance(
+            &generated_bundle,
+            key_pair,
+        )?),
+        generated_apartment_provenance,
+        authority: None,
+        private_key: None,
     })
 }
 
@@ -3261,7 +3414,7 @@ fn signed_hf_lease_leave_request(
     lease_term_ms: u64,
     service_name: Option<&str>,
     apartment_name: Option<&str>,
-    authority: &AccountId,
+    _authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedHfLeaseLeaveRequest> {
     if lease_term_ms == 0 {
@@ -3286,8 +3439,8 @@ fn signed_hf_lease_leave_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: Some(authority.clone()),
-        private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),
+        authority: None,
+        private_key: None,
     })
 }
 
@@ -3302,7 +3455,7 @@ fn signed_hf_lease_renew_request(
     lease_term_ms: u64,
     lease_asset_definition: &str,
     base_fee_nanos: u128,
-    authority: &AccountId,
+    _authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedHfLeaseRenewRequest> {
     if lease_term_ms == 0 {
@@ -3311,15 +3464,23 @@ fn signed_hf_lease_renew_request(
     if base_fee_nanos == 0 {
         return Err(eyre!("--base-fee-nanos must be greater than zero"));
     }
+    let repo_id = parse_hf_repo_id_arg(repo_id)?;
+    let revision = revision.map(parse_hf_revision_arg).transpose()?;
+    let resolved_revision = revision
+        .clone()
+        .unwrap_or_else(|| HF_DEFAULT_RESOLVED_REVISION.to_owned());
+    let model_name = match model_name {
+        Some(model_name) => parse_hf_model_name_arg(model_name)?,
+        None => default_hf_model_name(&repo_id)?,
+    };
+    let service_name = parse_hf_service_name_arg(service_name)?;
+    let apartment_name = parse_hf_apartment_name_arg(apartment_name)?;
     let payload = HfLeaseRenewPayload {
-        repo_id: parse_hf_repo_id_arg(repo_id)?,
-        revision: revision.map(parse_hf_revision_arg).transpose()?,
-        model_name: match model_name {
-            Some(model_name) => parse_hf_model_name_arg(model_name)?,
-            None => default_hf_model_name(repo_id)?,
-        },
-        service_name: parse_hf_service_name_arg(service_name)?,
-        apartment_name: parse_hf_apartment_name_arg(apartment_name)?,
+        repo_id: repo_id.clone(),
+        revision: revision.clone(),
+        model_name: model_name.clone(),
+        service_name: service_name.clone(),
+        apartment_name: apartment_name.clone(),
         storage_class,
         lease_term_ms,
         lease_asset_definition_id: parse_asset_definition_arg(
@@ -3331,14 +3492,41 @@ fn signed_hf_lease_renew_request(
     let encoded = encode_hf_lease_renew_signature_payload(&payload)
         .wrap_err("failed to encode hf lease renew payload for signing")?;
     let signature = Signature::new(key_pair.private_key(), &encoded);
+    let service_name = service_name
+        .parse::<Name>()
+        .expect("validated HF service name must parse");
+    let source_id = hf_source_hash(&repo_id, &resolved_revision)?;
+    let generated_bundle = build_soracloud_hf_generated_service_bundle(
+        service_name.clone(),
+        &source_id.to_string(),
+        &repo_id,
+        &resolved_revision,
+        &model_name,
+    );
+    let generated_apartment_provenance = apartment_name
+        .as_deref()
+        .map(|apartment_name| {
+            let apartment_name = apartment_name
+                .parse::<Name>()
+                .expect("validated HF apartment name must parse");
+            let manifest =
+                build_soracloud_hf_generated_agent_manifest(apartment_name, &generated_bundle);
+            sign_generated_hf_apartment_provenance(&manifest, key_pair)
+        })
+        .transpose()?;
     Ok(SignedHfLeaseRenewRequest {
         payload,
         provenance: ManifestProvenance {
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: Some(authority.clone()),
-        private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),
+        generated_service_provenance: Some(sign_generated_hf_service_provenance(
+            &generated_bundle,
+            key_pair,
+        )?),
+        generated_apartment_provenance,
+        authority: None,
+        private_key: None,
     })
 }
 
@@ -3398,8 +3586,8 @@ fn signed_model_host_advertise_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: Some(authority.clone()),
-        private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),
+        authority: None,
+        private_key: None,
     })
 }
 
@@ -3424,8 +3612,8 @@ fn signed_model_host_heartbeat_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: Some(authority.clone()),
-        private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),
+        authority: None,
+        private_key: None,
     })
 }
 
@@ -3445,15 +3633,15 @@ fn signed_model_host_withdraw_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: Some(authority.clone()),
-        private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),
+        authority: None,
+        private_key: None,
     })
 }
 
 fn signed_agent_restart_request(
     apartment_name: &str,
     reason: &str,
-    authority: &AccountId,
+    _authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedAgentRestartRequest> {
     if apartment_name.trim().is_empty() {
@@ -3475,8 +3663,8 @@ fn signed_agent_restart_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: Some(authority.clone()),
-        private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),
+        authority: None,
+        private_key: None,
     })
 }
 
@@ -3484,7 +3672,7 @@ fn signed_agent_policy_revoke_request(
     apartment_name: &str,
     capability: &str,
     reason: Option<&str>,
-    authority: &AccountId,
+    _authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedAgentPolicyRevokeRequest> {
     if apartment_name.trim().is_empty() {
@@ -3507,8 +3695,8 @@ fn signed_agent_policy_revoke_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: Some(authority.clone()),
-        private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),
+        authority: None,
+        private_key: None,
     })
 }
 
@@ -3516,7 +3704,7 @@ fn signed_agent_wallet_spend_request(
     apartment_name: &str,
     asset_definition: &str,
     amount_nanos: u64,
-    authority: &AccountId,
+    _authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedAgentWalletSpendRequest> {
     if apartment_name.trim().is_empty() {
@@ -3542,15 +3730,15 @@ fn signed_agent_wallet_spend_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: Some(authority.clone()),
-        private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),
+        authority: None,
+        private_key: None,
     })
 }
 
 fn signed_agent_wallet_approve_request(
     apartment_name: &str,
     request_id: &str,
-    authority: &AccountId,
+    _authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedAgentWalletApproveRequest> {
     if apartment_name.trim().is_empty() {
@@ -3572,8 +3760,8 @@ fn signed_agent_wallet_approve_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: Some(authority.clone()),
-        private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),
+        authority: None,
+        private_key: None,
     })
 }
 
@@ -3582,7 +3770,7 @@ fn signed_agent_message_send_request(
     to_apartment: &str,
     channel: &str,
     payload: &str,
-    authority: &AccountId,
+    _authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedAgentMessageSendRequest> {
     if from_apartment.trim().is_empty() {
@@ -3612,15 +3800,15 @@ fn signed_agent_message_send_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: Some(authority.clone()),
-        private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),
+        authority: None,
+        private_key: None,
     })
 }
 
 fn signed_agent_message_ack_request(
     apartment_name: &str,
     message_id: &str,
-    authority: &AccountId,
+    _authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedAgentMessageAckRequest> {
     if apartment_name.trim().is_empty() {
@@ -3642,8 +3830,8 @@ fn signed_agent_message_ack_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: Some(authority.clone()),
-        private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),
+        authority: None,
+        private_key: None,
     })
 }
 
@@ -3696,7 +3884,7 @@ fn signed_agent_artifact_allow_request(
     apartment_name: &str,
     artifact_hash: &str,
     provenance_hash: Option<&str>,
-    authority: &AccountId,
+    _authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedAgentArtifactAllowRequest> {
     if apartment_name.trim().is_empty() {
@@ -3720,8 +3908,8 @@ fn signed_agent_artifact_allow_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: Some(authority.clone()),
-        private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),
+        authority: None,
+        private_key: None,
     })
 }
 
@@ -3732,7 +3920,7 @@ fn signed_agent_autonomy_run_request(
     budget_units: u64,
     run_label: &str,
     workflow_input_json: Option<&str>,
-    authority: &AccountId,
+    _authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedAgentAutonomyRunRequest> {
     if apartment_name.trim().is_empty() {
@@ -3769,8 +3957,8 @@ fn signed_agent_autonomy_run_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: Some(authority.clone()),
-        private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),
+        authority: None,
+        private_key: None,
     })
 }
 
@@ -3786,7 +3974,7 @@ fn signed_training_job_start_request(
     step_compute_units: u64,
     compute_budget_units: u64,
     storage_budget_bytes: u64,
-    authority: Option<&AccountId>,
+    _authority: Option<&AccountId>,
     key_pair: &KeyPair,
 ) -> Result<SignedTrainingJobStartRequest> {
     if service_name.trim().is_empty() {
@@ -3839,8 +4027,8 @@ fn signed_training_job_start_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: authority.cloned(),
-        private_key: authority.map(|_| ExposedPrivateKey(key_pair.private_key().clone())),
+        authority: None,
+        private_key: None,
     })
 }
 
@@ -3850,7 +4038,7 @@ fn signed_training_job_checkpoint_request(
     completed_step: u32,
     checkpoint_size_bytes: u64,
     metrics_hash: Hash,
-    authority: Option<&AccountId>,
+    _authority: Option<&AccountId>,
     key_pair: &KeyPair,
 ) -> Result<SignedTrainingJobCheckpointRequest> {
     if service_name.trim().is_empty() {
@@ -3881,8 +4069,8 @@ fn signed_training_job_checkpoint_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: authority.cloned(),
-        private_key: authority.map(|_| ExposedPrivateKey(key_pair.private_key().clone())),
+        authority: None,
+        private_key: None,
     })
 }
 
@@ -3890,7 +4078,7 @@ fn signed_training_job_retry_request(
     service_name: &str,
     job_id: &str,
     reason: &str,
-    authority: Option<&AccountId>,
+    _authority: Option<&AccountId>,
     key_pair: &KeyPair,
 ) -> Result<SignedTrainingJobRetryRequest> {
     if service_name.trim().is_empty() {
@@ -3916,8 +4104,8 @@ fn signed_training_job_retry_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: authority.cloned(),
-        private_key: authority.map(|_| ExposedPrivateKey(key_pair.private_key().clone())),
+        authority: None,
+        private_key: None,
     })
 }
 
@@ -3931,7 +4119,7 @@ fn signed_model_artifact_register_request(
     training_config_hash: Hash,
     reproducibility_hash: Hash,
     provenance_attestation_hash: Hash,
-    authority: Option<&AccountId>,
+    _authority: Option<&AccountId>,
     key_pair: &KeyPair,
 ) -> Result<SignedModelArtifactRegisterRequest> {
     if service_name.trim().is_empty() {
@@ -3965,8 +4153,8 @@ fn signed_model_artifact_register_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: authority.cloned(),
-        private_key: authority.map(|_| ExposedPrivateKey(key_pair.private_key().clone())),
+        authority: None,
+        private_key: None,
     })
 }
 
@@ -3982,7 +4170,7 @@ fn signed_model_weight_register_request(
     training_config_hash: Hash,
     reproducibility_hash: Hash,
     provenance_attestation_hash: Hash,
-    authority: Option<&AccountId>,
+    _authority: Option<&AccountId>,
     key_pair: &KeyPair,
 ) -> Result<SignedModelWeightRegisterRequest> {
     if service_name.trim().is_empty() {
@@ -4024,8 +4212,8 @@ fn signed_model_weight_register_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: authority.cloned(),
-        private_key: authority.map(|_| ExposedPrivateKey(key_pair.private_key().clone())),
+        authority: None,
+        private_key: None,
     })
 }
 
@@ -4035,7 +4223,7 @@ fn signed_model_weight_promote_request(
     weight_version: &str,
     gate_approved: bool,
     gate_report_hash: Hash,
-    authority: Option<&AccountId>,
+    _authority: Option<&AccountId>,
     key_pair: &KeyPair,
 ) -> Result<SignedModelWeightPromoteRequest> {
     if service_name.trim().is_empty() {
@@ -4063,8 +4251,8 @@ fn signed_model_weight_promote_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: authority.cloned(),
-        private_key: authority.map(|_| ExposedPrivateKey(key_pair.private_key().clone())),
+        authority: None,
+        private_key: None,
     })
 }
 
@@ -4073,7 +4261,7 @@ fn signed_model_weight_rollback_request(
     model_name: &str,
     target_version: &str,
     reason: &str,
-    authority: Option<&AccountId>,
+    _authority: Option<&AccountId>,
     key_pair: &KeyPair,
 ) -> Result<SignedModelWeightRollbackRequest> {
     if service_name.trim().is_empty() {
@@ -4103,8 +4291,8 @@ fn signed_model_weight_rollback_request(
             signer: key_pair.public_key().clone(),
             signature,
         },
-        authority: authority.cloned(),
-        private_key: authority.map(|_| ExposedPrivateKey(key_pair.private_key().clone())),
+        authority: None,
+        private_key: None,
     })
 }
 
@@ -4391,6 +4579,93 @@ fn encode_model_weight_rollback_signature_payload(
     .wrap_err("failed to encode model weight rollback signature payload tuple")
 }
 
+fn soracloud_submission_config() -> Result<ClientConfig> {
+    SORACLOUD_SUBMISSION_CONFIG.with(|slot| {
+        slot.borrow()
+            .clone()
+            .ok_or_else(|| eyre!("Soracloud submission config is not initialized"))
+    })
+}
+
+fn canonical_query_string(raw: Option<&str>) -> String {
+    let Some(raw) = raw else {
+        return String::new();
+    };
+    if raw.is_empty() {
+        return String::new();
+    }
+    let mut pairs: Vec<(String, String)> = url::form_urlencoded::parse(raw.as_bytes())
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    pairs.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
+
+    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+    for (key, value) in pairs {
+        serializer.append_pair(&key, &value);
+    }
+    serializer.finish()
+}
+
+fn canonical_request_message(method: &str, endpoint: &reqwest::Url, body: &[u8]) -> Vec<u8> {
+    let body_hash = Sha256::digest(body);
+    format!(
+        "{}\n{}\n{}\n{}",
+        method.to_ascii_uppercase(),
+        endpoint.path(),
+        canonical_query_string(endpoint.query()),
+        hex::encode(body_hash)
+    )
+    .into_bytes()
+}
+
+fn decode_soracloud_tx_instructions(payload: &json::Value) -> Result<Vec<InstructionBox>> {
+    let instructions = payload
+        .get("tx_instructions")
+        .and_then(json::Value::as_array)
+        .ok_or_else(|| eyre!("Soracloud mutation draft response is missing `tx_instructions`"))?;
+    let mut decoded = Vec::with_capacity(instructions.len());
+    for entry in instructions {
+        let payload_hex = entry
+            .get("payload_hex")
+            .and_then(json::Value::as_str)
+            .ok_or_else(|| eyre!("Soracloud tx instruction is missing `payload_hex`"))?;
+        let payload_bytes = hex::decode(payload_hex)
+            .wrap_err("failed to decode Soracloud tx instruction hex payload")?;
+        let instruction: InstructionBox = decode_from_bytes(&payload_bytes)
+            .map_err(|error| eyre!("failed to decode Soracloud instruction skeleton: {error}"))?;
+        decoded.push(instruction);
+    }
+    Ok(decoded)
+}
+
+fn submit_soracloud_draft_transaction(
+    torii_url: &str,
+    timeout_secs: u64,
+    instructions: Vec<InstructionBox>,
+) -> Result<Option<Hash>> {
+    if instructions.is_empty() {
+        return Ok(None);
+    }
+    let mut config = soracloud_submission_config()?;
+    config.torii_api_url = url::Url::parse(torii_url)
+        .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?;
+    config.torii_request_timeout = Duration::from_secs(timeout_secs.max(1));
+    let client = Client::new(config);
+    let transaction = client.build_transaction(instructions, Metadata::default());
+    client
+        .submit_transaction_blocking(&transaction)
+        .map(Into::into)
+        .map(Some)
+        .wrap_err("failed to submit Soracloud mutation transaction")
+}
+
+fn extract_json_field(payload: &json::Value, field: &str) -> Result<Option<json::Value>> {
+    Ok(payload
+        .as_object()
+        .map(|root| root.get(field).cloned())
+        .flatten())
+}
+
 fn post_torii_soracloud_mutation<T>(
     torii_url: &str,
     endpoint_path: &str,
@@ -4407,6 +4682,12 @@ where
         .wrap_err_with(|| format!("failed to derive /{endpoint_path} URL from --torii-url"))?;
     let body = json::to_vec(request_payload)
         .wrap_err("failed to encode soracloud mutation request payload")?;
+    let submission_config = soracloud_submission_config()?;
+    let canonical_message = canonical_request_message("POST", &endpoint, &body);
+    let canonical_signature = Signature::new(
+        submission_config.key_pair.private_key(),
+        &canonical_message,
+    );
 
     let timeout = Duration::from_secs(timeout_secs.max(1));
     let client = BlockingHttpClient::builder()
@@ -4420,6 +4701,14 @@ where
         .header(
             header::CONTENT_TYPE,
             HeaderValue::from_static("application/json"),
+        )
+        .header(
+            HEADER_IROHA_ACCOUNT,
+            submission_config.account.to_string(),
+        )
+        .header(
+            HEADER_IROHA_SIGNATURE,
+            base64::engine::general_purpose::STANDARD.encode(canonical_signature.payload()),
         )
         .body(body);
     if let Some(token) = api_token {
@@ -4441,9 +4730,60 @@ where
             body_text
         ));
     }
-    let payload: norito::json::Value =
+    let mut payload: norito::json::Value =
         json::from_slice(&body).wrap_err("failed to decode Torii mutation JSON payload")?;
+    let instructions = decode_soracloud_tx_instructions(&payload)?;
+    let submitted_tx_hash =
+        submit_soracloud_draft_transaction(torii_url, timeout_secs, instructions)?;
+    if let Some(root) = payload.as_object_mut() {
+        root.insert("submitted_tx_hash".to_owned(), json::to_value(&submitted_tx_hash)?);
+        root.insert(
+            "submission_mode".to_owned(),
+            json::Value::String(
+                if submitted_tx_hash.is_some() {
+                    "client_signed"
+                } else {
+                    "client_signed_noop"
+                }
+                .to_owned(),
+            ),
+        );
+    }
     Ok((endpoint.to_string(), payload))
+}
+
+fn find_agent_autonomy_run_id(
+    status_payload: &json::Value,
+    artifact_hash: &str,
+    provenance_hash: Option<&str>,
+    run_label: &str,
+) -> Result<String> {
+    let runs = status_payload
+        .get("recent_runs")
+        .and_then(json::Value::as_array)
+        .ok_or_else(|| eyre!("agent autonomy status response is missing `recent_runs`"))?;
+    let matched = runs
+        .iter()
+        .filter(|entry| {
+            entry.get("artifact_hash").and_then(json::Value::as_str) == Some(artifact_hash)
+                && entry.get("run_label").and_then(json::Value::as_str) == Some(run_label)
+                && entry.get("provenance_hash").and_then(json::Value::as_str) == provenance_hash
+        })
+        .max_by_key(|entry| {
+            entry.get("approved_sequence")
+                .and_then(json::Value::as_u64)
+                .unwrap_or(0)
+        })
+        .ok_or_else(|| {
+            eyre!(
+                "failed to resolve approved autonomy run for artifact `{artifact_hash}` and label `{run_label}`"
+            )
+        })?;
+    matched
+        .get("run_id")
+        .and_then(json::Value::as_str)
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| eyre!("agent autonomy status entry is missing `run_id`"))
 }
 
 fn fetch_torii_soracloud_status(
@@ -7510,9 +7850,10 @@ mod tests {
     }
 
     fn hf_shared_lease_asset_definition() -> AssetDefinitionId {
-        "aid:2f17c72466f84a4bb8a8e24884fdcd2f"
-            .parse()
-            .expect("valid asset definition")
+        AssetDefinitionId::new(
+            "wonderland".parse().expect("domain"),
+            "lease".parse().expect("name"),
+        )
     }
 
     fn node_available() -> bool {
@@ -7729,8 +8070,8 @@ mod tests {
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert_eq!(request.authority.as_ref(), Some(&authority));
-        assert!(request.private_key.is_some());
+        assert!(request.authority.is_none());
+        assert!(request.private_key.is_none());
     }
 
     #[test]
@@ -7745,8 +8086,8 @@ mod tests {
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert_eq!(request.authority.as_ref(), Some(&authority));
-        assert!(request.private_key.is_some());
+        assert!(request.authority.is_none());
+        assert!(request.private_key.is_none());
     }
 
     #[test]
@@ -7769,8 +8110,8 @@ mod tests {
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert_eq!(request.authority.as_ref(), Some(&authority));
-        assert!(request.private_key.is_some());
+        assert!(request.authority.is_none());
+        assert!(request.private_key.is_none());
     }
 
     #[test]
@@ -7787,8 +8128,8 @@ mod tests {
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert_eq!(request.authority.as_ref(), Some(&authority));
-        assert!(request.private_key.is_some());
+        assert!(request.authority.is_none());
+        assert!(request.private_key.is_none());
     }
 
     #[test]
@@ -7805,8 +8146,8 @@ mod tests {
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert_eq!(request.authority.as_ref(), Some(&authority));
-        assert!(request.private_key.is_some());
+        assert!(request.authority.is_none());
+        assert!(request.private_key.is_none());
     }
 
     #[test]
@@ -7834,8 +8175,34 @@ mod tests {
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
         assert_eq!(request.payload.model_name, "gpt-oss");
-        assert_eq!(request.authority.as_ref(), Some(&authority));
-        assert!(request.private_key.is_some());
+        request
+            .generated_service_provenance
+            .as_ref()
+            .expect("generated service provenance")
+            .signature
+            .verify(
+                &request
+                    .generated_service_provenance
+                    .as_ref()
+                    .expect("generated service provenance")
+                    .signer,
+                &encode_bundle_provenance_payload(
+                    &build_soracloud_hf_generated_service_bundle(
+                        "hf_lease_a".parse().expect("service name"),
+                        &hf_source_hash("openai/gpt-oss", "main")
+                            .expect("source id")
+                            .to_string(),
+                        "openai/gpt-oss",
+                        "main",
+                        "gpt-oss",
+                    ),
+                )
+                .expect("generated bundle payload"),
+            )
+            .expect("generated service provenance should verify");
+        assert!(request.generated_apartment_provenance.is_some());
+        assert!(request.authority.is_none());
+        assert!(request.private_key.is_none());
     }
 
     #[test]
@@ -7860,8 +8227,8 @@ mod tests {
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert_eq!(request.authority.as_ref(), Some(&authority));
-        assert!(request.private_key.is_some());
+        assert!(request.authority.is_none());
+        assert!(request.private_key.is_none());
     }
 
     #[test]
@@ -7890,8 +8257,10 @@ mod tests {
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
         assert_eq!(request.payload.model_name, "gpt-oss");
-        assert_eq!(request.authority.as_ref(), Some(&authority));
-        assert!(request.private_key.is_some());
+        assert!(request.generated_service_provenance.is_some());
+        assert!(request.generated_apartment_provenance.is_some());
+        assert!(request.authority.is_none());
+        assert!(request.private_key.is_none());
     }
 
     #[test]
@@ -7912,8 +8281,8 @@ mod tests {
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert_eq!(request.authority.as_ref(), Some(&authority));
-        assert!(request.private_key.is_some());
+        assert!(request.authority.is_none());
+        assert!(request.private_key.is_none());
     }
 
     #[test]
@@ -7935,8 +8304,8 @@ mod tests {
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert_eq!(request.authority.as_ref(), Some(&authority));
-        assert!(request.private_key.is_some());
+        assert!(request.authority.is_none());
+        assert!(request.private_key.is_none());
     }
 
     #[test]
@@ -7958,8 +8327,8 @@ mod tests {
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert_eq!(request.authority.as_ref(), Some(&authority));
-        assert!(request.private_key.is_some());
+        assert!(request.authority.is_none());
+        assert!(request.private_key.is_none());
     }
 
     #[test]
@@ -7980,8 +8349,8 @@ mod tests {
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert_eq!(request.authority.as_ref(), Some(&authority));
-        assert!(request.private_key.is_some());
+        assert!(request.authority.is_none());
+        assert!(request.private_key.is_none());
     }
 
     #[test]
@@ -8004,8 +8373,8 @@ mod tests {
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert_eq!(request.authority.as_ref(), Some(&authority));
-        assert!(request.private_key.is_some());
+        assert!(request.authority.is_none());
+        assert!(request.private_key.is_none());
     }
 
     #[test]
@@ -8026,8 +8395,8 @@ mod tests {
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert_eq!(request.authority.as_ref(), Some(&authority));
-        assert!(request.private_key.is_some());
+        assert!(request.authority.is_none());
+        assert!(request.private_key.is_none());
     }
 
     #[test]
@@ -8049,8 +8418,8 @@ mod tests {
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
-        assert_eq!(request.authority.as_ref(), Some(&authority));
-        assert!(request.private_key.is_some());
+        assert!(request.authority.is_none());
+        assert!(request.private_key.is_none());
     }
 
     #[test]
@@ -8079,13 +8448,14 @@ mod tests {
             request.payload.workflow_input_json.as_deref(),
             Some("{\"inputs\":[\"alpha\",\"beta\"],\"parameters\":{\"max_new_tokens\":4}}")
         );
-        assert_eq!(request.authority.as_ref(), Some(&authority));
-        assert!(request.private_key.is_some());
+        assert!(request.authority.is_none());
+        assert!(request.private_key.is_none());
     }
 
     #[test]
     fn signed_training_job_start_request_uses_verifiable_signature() {
         let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_training_job_start_request(
             "web_portal",
             "model-1",
@@ -8097,7 +8467,7 @@ mod tests {
             500,
             50_000,
             4_000,
-            None,
+            Some(&authority),
             &key_pair,
         )
         .expect("signed training start request");
@@ -8108,18 +8478,21 @@ mod tests {
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
+        assert!(request.authority.is_none());
+        assert!(request.private_key.is_none());
     }
 
     #[test]
     fn signed_training_job_checkpoint_request_uses_verifiable_signature() {
         let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_training_job_checkpoint_request(
             "web_portal",
             "job-1",
             20,
             1_024,
             Hash::new(b"metrics"),
-            None,
+            Some(&authority),
             &key_pair,
         )
         .expect("signed training checkpoint request");
@@ -8130,16 +8503,19 @@ mod tests {
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
+        assert!(request.authority.is_none());
+        assert!(request.private_key.is_none());
     }
 
     #[test]
     fn signed_training_job_retry_request_uses_verifiable_signature() {
         let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_training_job_retry_request(
             "web_portal",
             "job-1",
             "worker unavailable",
-            None,
+            Some(&authority),
             &key_pair,
         )
         .expect("signed training retry request");
@@ -8150,11 +8526,14 @@ mod tests {
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
+        assert!(request.authority.is_none());
+        assert!(request.private_key.is_none());
     }
 
     #[test]
     fn signed_model_artifact_register_request_uses_verifiable_signature() {
         let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_model_artifact_register_request(
             "web_portal",
             "model-1",
@@ -8164,7 +8543,7 @@ mod tests {
             Hash::new(b"train-config"),
             Hash::new(b"repro"),
             Hash::new(b"attestation"),
-            None,
+            Some(&authority),
             &key_pair,
         )
         .expect("signed model artifact request");
@@ -8175,11 +8554,14 @@ mod tests {
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
+        assert!(request.authority.is_none());
+        assert!(request.private_key.is_none());
     }
 
     #[test]
     fn signed_model_weight_register_request_uses_verifiable_signature() {
         let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_model_weight_register_request(
             "web_portal",
             "model-1",
@@ -8191,7 +8573,7 @@ mod tests {
             Hash::new(b"train-config"),
             Hash::new(b"repro"),
             Hash::new(b"attestation"),
-            None,
+            Some(&authority),
             &key_pair,
         )
         .expect("signed model weight register request");
@@ -8202,18 +8584,21 @@ mod tests {
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
+        assert!(request.authority.is_none());
+        assert!(request.private_key.is_none());
     }
 
     #[test]
     fn signed_model_weight_promote_request_uses_verifiable_signature() {
         let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_model_weight_promote_request(
             "web_portal",
             "model-1",
             "1.0.0",
             true,
             Hash::new(b"gate-report"),
-            None,
+            Some(&authority),
             &key_pair,
         )
         .expect("signed model weight promote request");
@@ -8224,17 +8609,20 @@ mod tests {
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
+        assert!(request.authority.is_none());
+        assert!(request.private_key.is_none());
     }
 
     #[test]
     fn signed_model_weight_rollback_request_uses_verifiable_signature() {
         let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
         let request = signed_model_weight_rollback_request(
             "web_portal",
             "model-1",
             "0.9.0",
             "gate regression",
-            None,
+            Some(&authority),
             &key_pair,
         )
         .expect("signed model weight rollback request");
@@ -8245,6 +8633,8 @@ mod tests {
             .signature
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
+        assert!(request.authority.is_none());
+        assert!(request.private_key.is_none());
     }
 
     #[test]

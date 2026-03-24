@@ -8655,9 +8655,10 @@ mod tests {
     }
 
     fn sample_asset_definition_id(_asset_definition_id: &str) -> AssetDefinitionId {
-        "aid:550e8400e29b41d4a716446655440000"
-            .parse()
-            .expect("valid asset definition id")
+        AssetDefinitionId::new(
+            "wonderland".parse().expect("domain"),
+            "rose".parse().expect("name"),
+        )
     }
 
     fn sample_model_provenance_ref() -> SoraModelProvenanceRefV1 {

@@ -10,7 +10,7 @@ isi! {
     pub struct SetAssetDefinitionAlias {
         /// Asset definition that should be updated.
         pub asset_definition_id: AssetDefinitionId,
-        /// Alias literal (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`). `None` clears
+        /// Alias literal (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`). `None` clears
         /// the binding.
         #[norito(default)]
         pub alias: Option<AssetDefinitionAlias>,

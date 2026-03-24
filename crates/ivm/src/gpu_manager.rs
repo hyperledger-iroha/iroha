@@ -4,6 +4,8 @@ use std::sync::{Arc, OnceLock, atomic::AtomicU64};
 #[cfg(feature = "cuda")]
 use cust::context::CurrentContext;
 #[cfg(feature = "cuda")]
+use cust::init;
+#[cfg(feature = "cuda")]
 use cust::prelude::*;
 #[cfg(feature = "cuda")]
 use parking_lot::RwLock;

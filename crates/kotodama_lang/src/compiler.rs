@@ -1785,24 +1785,27 @@ seiyaku StagedMintRequest {
             },
         };
 
-        let asset_definition: iroha_data_model::asset::AssetDefinitionId =
-            "aid:6872454e9c044641aa581ec5f3801619"
-                .parse()
-                .expect("asset definition id");
-        let src = r#"
-seiyaku Test {
-  kotoage fn run() {}
-  register_trigger intercept {
+        let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().expect("domain"),
+            "rose".parse().expect("name"),
+        );
+        let asset_definition_literal = asset_definition.to_string();
+        let src = format!(
+            r#"
+seiyaku Test {{
+  kotoage fn run() {{}}
+  register_trigger intercept {{
     call run;
-    on data asset added {
-      asset_definition "aid:6872454e9c044641aa581ec5f3801619";
-    }
-  }
-}
-"#;
+    on data asset added {{
+      asset_definition "{asset_definition_literal}";
+    }}
+  }}
+}}
+"#
+        );
         let compiler = Compiler::new();
         let (_bytes, manifest) = compiler
-            .compile_source_with_manifest(src)
+            .compile_source_with_manifest(&src)
             .expect("compile manifest");
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let run = entrypoints
@@ -1853,10 +1856,10 @@ seiyaku Test {
         let peer_literal = "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D";
         let peer: PeerId = peer_literal.parse().expect("peer");
         let domain: DomainId = "wonderland".parse().expect("domain");
-        let asset_definition: iroha_data_model::asset::AssetDefinitionId =
-            "aid:6872454e9c044641aa581ec5f3801619"
-                .parse()
-                .expect("asset definition");
+        let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().expect("domain"),
+            "rose".parse().expect("name"),
+        );
         let asset = AssetId::new(asset_definition.clone(), account.clone());
         let asset_literal = asset.canonical_encoded();
         let nft: NftId = "n0$wonderland".parse().expect("nft");
@@ -4203,7 +4206,8 @@ impl Compiler {
                                     Message::SemanticError(&err),
                                 ));
                             }
-                            let ad: AssetDefinitionId = asset_id_str.parse().map_err(|e| {
+                            let ad = AssetDefinitionId::parse_address_literal(&asset_id_str)
+                                .map_err(|e| {
                                 let err = format!(
                                     "build_unshield_inline invalid AssetDefinitionId literal `{asset_id_str}`: {e}"
                                 );
@@ -4700,39 +4704,21 @@ impl Compiler {
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
-                        Instr::ResolveAccountAlias {
-                            dest,
-                            label,
-                            domain,
-                        } => {
-                            if let Some(label_str) = string_map
-                                .get(&(func_idx, *label))
-                                .map(|s| DataKey(DataKind::Name, s.clone()))
+                        Instr::ResolveAccountAlias { dest, alias } => {
+                            if let Some(alias_str) = string_map
+                                .get(&(func_idx, *alias))
+                                .map(|s| DataKey(DataKind::Blob, s.clone()))
                             {
-                                emit_literal_stub(&mut code, &mut fixups, 10, label_str);
+                                emit_literal_stub(&mut code, &mut fixups, 10, alias_str);
                             } else {
-                                let r = src_reg(label, scratch1, &mut code)?;
+                                let r = src_reg(alias, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(10, r, 0)?);
-                            }
-                            if let Some(domain_str) = string_map
-                                .get(&(func_idx, *domain))
-                                .map(|s| DataKey(DataKind::Domain, s.clone()))
-                            {
-                                emit_literal_stub(&mut code, &mut fixups, 11, domain_str);
-                            } else {
-                                let r = src_reg(domain, scratch2, &mut code)?;
-                                push_word(&mut code, encode_addi(11, r, 0)?);
                             }
                             let pub_word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
                             );
                             code.extend_from_slice(&pub_word.to_le_bytes());
-                            push_word(&mut code, encode_addi(12, 10, 0)?);
-                            push_word(&mut code, encode_addi(10, 11, 0)?);
-                            code.extend_from_slice(&pub_word.to_le_bytes());
-                            push_word(&mut code, encode_addi(11, 10, 0)?);
-                            push_word(&mut code, encode_addi(10, 12, 0)?);
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS as u8,
@@ -6969,7 +6955,7 @@ impl Compiler {
                     )
                 }
                 DataKey(DataKind::AssetDef, s) => {
-                    let id: AssetDefinitionId = s.parse().map_err(|e| {
+                    let id = AssetDefinitionId::parse_address_literal(&s).map_err(|e| {
                         let err = format!("invalid AssetDefinitionId literal `{s}`: {e}");
                         i18n::translate(self.lang, Message::SemanticError(&err))
                     })?;
@@ -7821,7 +7807,9 @@ fn record_instruction_box_access(
         match rb {
             RegisterBox::Domain(r) => add_domain_rw(access_set, r.object.id()),
             RegisterBox::Account(r) => {
-                add_domain_r(access_set, r.object.domain());
+                if let Some(domain) = r.object.domain() {
+                    add_domain_r(access_set, domain);
+                }
                 add_account_rw(access_set, r.object.id());
             }
             RegisterBox::AssetDefinition(r) => {

@@ -20,6 +20,8 @@ pub mod query;
 pub mod ram_lfe;
 pub mod repo;
 pub mod settlement;
+/// SNS-backed ownership query handlers.
+pub mod sns;
 /// Viral social incentive instruction handlers.
 pub mod social;
 /// Soracloud lifecycle and runtime-state instruction handlers.

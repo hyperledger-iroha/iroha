@@ -33,7 +33,7 @@ translation_last_reviewed: 2026-03-12
 - `ChainId`: トランザクションのリプレイ保護に使用される不透明なチェーン識別子。文字列形式の ID (`Display`/`FromStr` とラウンドトリップ可能):
 - `DomainId`: `name` (例: `wonderland`)。
 - `AccountId`: `AccountAddress` を介して I105 のみとしてエンコードされた正規のドメインレス アカウント識別子。パーサー入力は正規の I105 である必要があります。ドメイン サフィックス (`@domain`)、正規 I105 リテラル、エイリアス リテラル、正規 16 進パーサー入力、レガシー `norito:` ペイロード、および `uaid:`/`opaque:` アカウント パーサー フォームは拒否されます。
-- `AssetDefinitionId`: 正規の `aid:<32-lower-hex-no-dash>` (UUID-v4 バイト)。
+- `AssetDefinitionId`: 正規の `unprefixed Base58 address with versioning and checksum` (UUID-v4 バイト)。
 - `AssetId`: 正規エンコードされたリテラル `norito:<hex>` (従来のテキスト形式は最初のリリースではサポートされていません)。
 - `NftId`: `nft$domain` (例: `rose$garden`)。
 - `PeerId`: `public_key` (ピアの同等性は公開キーによって決まります)。
@@ -50,11 +50,13 @@ translation_last_reviewed: 2026-03-12
 - ビルダー: `Account::new(id)` 経由の `NewAccount`。登録には明示的な `ScopedAccountId` ドメインが必要であり、デフォルトからは推測されません。
 
 ### 資産の定義と資産
-- `AssetDefinitionId { aid_bytes: [u8; 16] }` はテキストで `aid:<32-hex-no-dash>` として公開されます。
+- `AssetDefinitionId { aid_bytes: [u8; 16] }` はテキストで `unprefixed Base58 address` として公開されます。
 - `AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Numeric }`。
+
+  - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`; alias selectors resolve against latest committed block time and stop resolving after grace, while direct reads may still show `expired_pending_cleanup` until sweep.
   - `name` は人に向けた表示テキストが必要であり、`#`/`@` を含めることはできません。
   - `alias` はオプションであり、次のいずれかである必要があります。
-    - `<name>#<domain>@<dataspace>`
+    - `<name>#<domain>.<dataspace>`
     - `<name>#<dataspace>`
     左側のセグメントは `AssetDefinition.name` と完全に一致します。
   - `Mintable`: `Infinitely` | `Once` | `Limited(u32)` | `Not`。
@@ -187,7 +189,7 @@ let new_account = Account::new(account_id.to_account_id(domain_id.clone()))
     .with_metadata(Metadata::default());
 
 // Asset definition and an asset for the account
-let asset_def_id: AssetDefinitionId = "aid:2f17c72466f84a4bb8a8e24884fdcd2f".parse().unwrap();
+let asset_def_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa".parse().unwrap();
 let new_asset_def = AssetDefinition::numeric(asset_def_id.clone())
     .with_name("USD Coin".to_owned())
     .with_metadata(Metadata::default());
@@ -231,36 +233,36 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
     .sign(kp.private_key());
 ```
 
-`aid` / エイリアス クイック リファレンス (CLI + Torii):
+asset-definition id / エイリアス クイック リファレンス (CLI + Torii):
 
 ```bash
-# Register an asset definition with canonical aid + explicit name + alias
+# Register an asset definition with canonical Base58 id + explicit name + alias
 iroha ledger asset definition register \
-  --id aid:2f17c72466f84a4bb8a8e24884fdcd2f \
+  --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#ubl@sbp
+  --alias pkr#ubl.sbp
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
-  --id aid:550e8400e29b41d4a7164466554400dd \
+  --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
   --alias pkr#sbp
 
 # Mint using alias + account components (no manual norito hex copy/paste)
 iroha ledger asset mint \
-  --definition-alias pkr#ubl@sbp \
+  --definition-alias pkr#ubl.sbp \
   --account sorauﾛ1P... \
   --quantity 500
 
-# Resolve alias to canonical aid via Torii
+# Resolve alias to canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#ubl@sbp"}'
+  -d '{"alias":"pkr#ubl.sbp"}'
 ```移行メモ:
 - 古い `name#domain` 資産定義 ID は、v1 では受け入れられません。
 - ミント/バーン/転送のアセット ID は正規の `norito:<hex>` のままです。以下を使用してそれらを構築します。
-  - `iroha tools encode asset-id --definition aid:... --account <i105>`
-  - または `--alias <name>#<domain>@<dataspace>` / `--alias <name>#<dataspace>` + `--account`。
+  - `iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
+  - または `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`。
 
 ## バージョン管理
 

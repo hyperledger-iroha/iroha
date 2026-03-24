@@ -847,16 +847,14 @@ impl Execute for ClaimPublicLaneRewards {
                 "invalid nexus.fees.fee_sink_account_id; expected account identifier".into(),
             )
         })?;
-        let fee_asset: AssetDefinitionId = state_transaction
-            .nexus
-            .fees
-            .fee_asset_id
-            .parse()
-            .map_err(|_| {
-                Error::InvariantViolation(
-                    "invalid nexus.fees.fee_asset_id; expected `aid:<32-lower-hex-no-dash>`".into(),
-                )
-            })?;
+        let fee_asset =
+            AssetDefinitionId::parse_address_literal(&state_transaction.nexus.fees.fee_asset_id)
+                .map_err(|_| {
+                    Error::InvariantViolation(
+                        "invalid nexus.fees.fee_asset_id; expected an unprefixed Base58 asset definition id"
+                            .into(),
+                    )
+                })?;
         let dust_threshold = state_transaction.nexus.staking.reward_dust_threshold;
         let dust_numeric = Numeric::new(u128::from(dust_threshold), 0);
 
@@ -1174,16 +1172,13 @@ fn validate_reward_sink(
             "invalid nexus.fees.fee_sink_account_id; expected account identifier".into(),
         )
     })?;
-    let fee_asset: AssetDefinitionId =
-        state_transaction
-            .nexus
-            .fees
-            .fee_asset_id
-            .parse()
+    let fee_asset =
+        AssetDefinitionId::parse_address_literal(&state_transaction.nexus.fees.fee_asset_id)
             .map_err(|_| {
                 Error::InvariantViolation(
-                    "invalid nexus.fees.fee_asset_id; expected `aid:<32-lower-hex-no-dash>`".into(),
-                )
+            "invalid nexus.fees.fee_asset_id; expected an unprefixed Base58 asset definition id"
+                .into(),
+        )
             })?;
     if reward_asset.account() != &sink_account {
         return Err(Error::InvariantViolation(
@@ -1556,11 +1551,13 @@ fn stake_context(
     staker: &AccountId,
     slash_sink_override: Option<&AccountId>,
 ) -> Result<StakeEscrowContext, Error> {
-    let asset_definition: AssetDefinitionId = staking_cfg.stake_asset_id.parse().map_err(|_| {
-        Error::InvariantViolation(
-            "invalid nexus.staking.stake_asset_id; expected `aid:<32-lower-hex-no-dash>`".into(),
-        )
-    })?;
+    let asset_definition =
+        AssetDefinitionId::parse_address_literal(&staking_cfg.stake_asset_id).map_err(|_| {
+            Error::InvariantViolation(
+                "invalid nexus.staking.stake_asset_id; expected an unprefixed Base58 asset definition id"
+                    .into(),
+            )
+        })?;
     let escrow_account = parse_staking_account_literal(
         world,
         &staking_cfg.stake_escrow_account_id,

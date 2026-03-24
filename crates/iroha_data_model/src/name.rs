@@ -67,7 +67,7 @@ impl Name {
             #[allow(clippy::non_ascii_literal)]
             return Err(ParseError {
                 reason: "The `@` character is reserved for scoped alias/public-key constructs, \
-                        `#` for alias separators (for example `name#domain@dataspace`), and `$` — for `nft$domain`.",
+                        `#` for alias separators (for example `name#domain.dataspace`), and `$` — for `nft$domain`.",
             });
         }
         Ok(())

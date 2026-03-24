@@ -18,8 +18,11 @@ IDs have stable string forms with `Display`/`FromStr` round‑trip. Name rules f
 - `DomainId` — `name`. Domain: `{ id, logo, metadata, owned_by }`. Builders: `NewDomain`. Code: `crates/iroha_data_model/src/domain.rs`.
 - `AccountId` — canonical addresses are produced via `AccountAddress` (I105 / hex) and Torii normalises inputs through `AccountAddress::parse_encoded`. I105 is the preferred account format; the I105 form is for Sora-only UX. The familiar `alias` (rejected legacy form) string is retained as a routing alias only. Account: `{ id, metadata }`. Code: `crates/iroha_data_model/src/account.rs`.
 - Account admission policy — domains control implicit account creation by storing a Norito-JSON `AccountAdmissionPolicy` under metadata key `iroha:account_admission_policy`. When the key is absent, the chain-level custom parameter `iroha:default_account_admission_policy` provides the default; when that is also absent, the hard default is `ImplicitReceive` (first release). The policy tags `mode` (`ExplicitOnly` or `ImplicitReceive`) plus optional per-transaction (default `16`) and per-block creation caps, an optional `implicit_creation_fee` (burn or sink account), `min_initial_amounts` per asset definition, and an optional `default_role_on_create` (granted after `AccountCreated`, rejects with `DefaultRoleError` if missing). Genesis cannot opt in; disabled/invalid policies reject receipt-style instructions for unknown accounts with `InstructionExecutionError::AccountAdmission`. Implicit accounts stamp metadata `iroha:created_via="implicit"` before `AccountCreated`; default roles emit a follow-up `AccountRoleGranted`, and executor owner-baseline rules let the new account spend its own assets/NFTs without extra roles. Code: `crates/iroha_data_model/src/account/admission.rs`, `crates/iroha_core/src/smartcontracts/isi/account_admission.rs`.
-- `AssetDefinitionId` — canonical `aid:<32-lower-hex-no-dash>` (UUID-v4 bytes). Definition: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. `alias` literals must be `<name>#<domain>@<dataspace>` or `<name>#<dataspace>`, with `<name>` equal to the asset definition name. Code: `crates/iroha_data_model/src/asset/definition.rs`.
-- `AssetId`: canonical encoded literal `norito:<hex>` (legacy textual forms are not supported in first release).
+- `AssetDefinitionId` — canonical unprefixed Base58 address over the canonical asset-definition bytes. Definition: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. `alias` literals must be `<name>#<domain>.<dataspace>` or `<name>#<dataspace>`, with `<name>` equal to the asset definition name. Code: `crates/iroha_data_model/src/asset/definition.rs`.
+  - Alias lease metadata is persisted separately from the stored asset-definition row. Core/Torii materialize `alias` from the binding record when definitions are read.
+  - Torii asset-definition responses expose `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`, where `status` is `permanent`, `leased_active`, `leased_grace`, or `expired_pending_cleanup`.
+  - Alias selectors resolve against the latest committed block creation time. After `grace_until_ms`, alias selectors stop resolving even if background sweep has not yet removed the stale binding; direct definition reads may still report the stale binding as `expired_pending_cleanup`.
+- `AssetId`: internal ownership-bucket identifier combining `asset`, `account`, and `scope`. Public CLI/Torii selectors use those split fields instead of a single encoded literal.
 - `NftId` — `nft$domain`. NFT: `{ id, content: Metadata, owned_by }`. Code: `crates/iroha_data_model/src/nft.rs`.
 - `RoleId` — `name`. Role: `{ id, permissions: BTreeSet<Permission> }` with builder `NewRole { inner: Role, grant_to }`. Code: `crates/iroha_data_model/src/role.rs`.
 - `Permission` — `{ name: Ident, payload: Json }`. Code: `crates/iroha_data_model/src/permission.rs`.
@@ -213,19 +216,20 @@ Common envelope: `InstructionExecutionError` with variants for evaluation errors
 - Parameter update:
   - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` updates and emits `ConfigurationEvent::Changed`.
 
-CLI / Torii `aid` + alias examples:
-- Register with canonical aid + explicit name + long alias:
-  - `iroha ledger asset definition register --id aid:2f17c72466f84a4bb8a8e24884fdcd2f --name pkr --alias pkr#ubl@sbp`
-- Register with canonical aid + explicit name + short alias:
-  - `iroha ledger asset definition register --id aid:550e8400e29b41d4a7164466554400dd --name pkr --alias pkr#sbp`
+CLI / Torii asset-definition id + alias examples:
+- Register with canonical Base58 id + explicit name + long alias:
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#ubl.sbp`
+- Register with canonical Base58 id + explicit name + short alias:
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#sbp`
 - Mint by alias + account components:
-  - `iroha ledger asset mint --definition-alias pkr#ubl@sbp --account <i105> --quantity 500`
-- Resolve alias to canonical aid:
-  - `POST /v1/assets/aliases/resolve` with JSON `{ "alias": "pkr#ubl@sbp" }`
+  - `iroha ledger asset mint --definition-alias pkr#ubl.sbp --account <i105> --quantity 500`
+- Resolve alias to canonical Base58 id:
+  - `POST /v1/assets/aliases/resolve` with JSON `{ "alias": "pkr#ubl.sbp" }`
 
 Migration note:
-- `name#domain` textual asset-definition IDs are intentionally unsupported in first release.
-- Asset IDs at mint/burn/transfer boundaries stay canonical `norito:<hex>`; use `iroha tools encode asset-id` with `--definition aid:...` or `--alias ...` plus `--account`.
+- `name#domain` textual asset-definition IDs remain intentionally unsupported in the first release; use canonical Base58 IDs or resolve a dotted alias.
+- Public asset selectors use canonical Base58 asset-definition ids plus split ownership fields (`account`, optional `scope`). Raw encoded `AssetId` literals remain internal helpers and are not part of the Torii/CLI selector surface.
+- Asset-definition list/query filters and sorts additionally accept `alias_binding.status`, `alias_binding.lease_expiry_ms`, `alias_binding.grace_until_ms`, and `alias_binding.bound_at_ms`.
 
 ---
 

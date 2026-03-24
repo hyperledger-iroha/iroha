@@ -381,7 +381,7 @@ pub async fn enforce_operator_access(
     if app.operator_auth.is_enabled() {
         if let Err(err) = app
             .operator_auth
-            .authorize_operator_endpoint(req.headers())
+            .authorize_operator_endpoint(req.headers(), None)
             .await
         {
             return err.into_response();

@@ -89,6 +89,7 @@ blake3 = { workspace = true }
 reqwest = { workspace = true, features = ["blocking", "rustls-tls"] }
 toml = { workspace = true }
 tiny-keccak = { workspace = true }
+sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
 qrcode = { version = "0.14.1", default-features = false, features = ["svg", "image"] }
 image = { version = "0.25.9", default-features = false, features = ["png", "gif"] }
 png = "0.18.0"

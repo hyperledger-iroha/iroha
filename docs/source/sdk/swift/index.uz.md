@@ -71,7 +71,7 @@ let accountId = AccountId.make(publicKey: keypair.publicKey)
 let transfer = TransferRequest(
     chainId: "00000000-0000-0000-0000-000000000000",
     authority: accountId,
-    assetDefinitionId: "aid:2f17c72466f84a4bb8a8e24884fdcd2f",
+    assetDefinitionId: "66owaQmAQMuHxPzxUN3bqZ6FJfDa",
     quantity: "1.23",
     destination: accountId,
     description: "demo",
@@ -956,6 +956,8 @@ For higher-level walkthroughs, see:
   `streamAccountTransferHistory` to emit historical transfer summaries and then keep streaming live
   updates without stitching the two flows manually; Combine callers can use
   `accountTransferHistoryPublisher`.
+
+  Asset-definition helpers now target canonical unprefixed Base58 IDs and dotted aliases (`name#domain.dataspace` / `name#dataspace`). Asset-definition list/get/query responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`; alias selectors resolve against latest committed block time and stop resolving after grace, while direct reads can still report `expired_pending_cleanup` until sweep.
 - **Domains & registries:** `listDomains(options:)` wraps `/v1/domains` with typed
   pagination/filtering via `ToriiListOptions`/`ToriiListFilter`/`ToriiListSort`, while
   `iterateDomains(pageSize:maxItems:)` (iOS 15/macOS 12+) emits an

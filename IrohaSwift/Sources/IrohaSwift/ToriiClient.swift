@@ -69,7 +69,9 @@ fileprivate func normalizeMultisigAccountAliasLiteral(_ raw: String, field: Stri
     }
     let components = trimmed.split(separator: "@", omittingEmptySubsequences: false)
     guard components.count == 2, !components[0].isEmpty, !components[1].isEmpty else {
-        throw ToriiClientError.invalidPayload("\(field) must use label@domain form.")
+        throw ToriiClientError.invalidPayload(
+            "\(field) must use label@dataspace or label@domain.dataspace form."
+        )
     }
     return trimmed
 }
@@ -160,6 +162,7 @@ public struct ToriiAssetAliasResolution: Decodable, Sendable {
     public let description: String?
     public let logo: String?
     public let source: String?
+    public let aliasBinding: ToriiAssetDefinitionAliasBinding?
 
     private enum CodingKeys: String, CodingKey {
         case alias
@@ -168,6 +171,23 @@ public struct ToriiAssetAliasResolution: Decodable, Sendable {
         case description
         case logo
         case source
+        case aliasBinding = "alias_binding"
+    }
+}
+
+public struct ToriiAssetDefinitionAliasBinding: Decodable, Sendable {
+    public let alias: String
+    public let status: String
+    public let leaseExpiryMs: UInt64?
+    public let graceUntilMs: UInt64?
+    public let boundAtMs: UInt64
+
+    private enum CodingKeys: String, CodingKey {
+        case alias
+        case status
+        case leaseExpiryMs = "lease_expiry_ms"
+        case graceUntilMs = "grace_until_ms"
+        case boundAtMs = "bound_at_ms"
     }
 }
 
@@ -9881,7 +9901,7 @@ public struct ToriiPipelineTransactionEvent: Decodable, Sendable {
             hash: try container.decode(String.self, forKey: .hash),
             status: try container.decode(String.self, forKey: .status),
             blockHeight: Self.decodeFlexibleUInt64IfPresent(container: container, key: .blockHeight),
-            dataspaceId: try container.decodeIfPresent(String.self, forKey: .dataspaceId),
+            dataspaceId: Self.decodeFlexibleStringIfPresent(container: container, key: .dataspaceId),
             laneId: Self.decodeFlexibleStringIfPresent(container: container, key: .laneId),
             eventName: nil,
             eventId: nil,
@@ -11980,12 +12000,13 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         try OfflineNorito.assetIdLiteral(assetDefinitionId: assetDefinitionId, accountId: accountId)
     }
 
-    /// Derive the deterministic asset definition ID from a human-readable alias.
+    /// Derive the deterministic asset definition ID from a legacy `name#domain` seed.
     ///
-    /// Uses blake3 hash — same algorithm as Iroha server-side `AssetDefinitionId::new`.
+    /// Mutable dotted aliases must be resolved online via `resolveAssetAlias(_:)`.
     ///
-    /// - Parameter alias: Asset alias in `"name#domain"` format, e.g. `"usd#wonderland"`.
-    /// - Returns: Canonical asset definition ID, e.g. `"aid:bef53c1ccd1749e180dfbad6519bfd66"`.
+    /// - Parameter alias: Legacy deterministic seed in `"name#domain"` form.
+    /// - Returns: Canonical unprefixed Base58 asset-definition ID.
+    @available(*, deprecated, message: "Asset aliases are mutable. Resolve aliases through Torii instead of deriving IDs offline.")
     public static func assetDefinitionId(fromAlias alias: String) throws -> String {
         try OfflineNorito.assetDefinitionIdFromAlias(alias)
     }
@@ -12017,7 +12038,8 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         }
 
         var resolvedAssetDefinition = normalizedAssetInput
-        if normalizedAssetInput.contains("@") {
+        let assetLooksLikeAlias = normalizedAssetInput.contains("#")
+        if assetLooksLikeAlias {
             guard let resolvedAlias = try await resolveAssetAlias(normalizedAssetInput) else {
                 throw ToriiClientError.invalidPayload(
                     "asset alias '\(normalizedAssetInput)' was not found"
@@ -12031,7 +12053,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                 resolvedAssetDefinition,
                 resolvedAccountId
             )
-        } catch OfflineNoritoError.invalidAssetId where !normalizedAssetInput.contains("@") {
+        } catch OfflineNoritoError.invalidAssetId where !assetLooksLikeAlias {
             guard let resolvedAlias = try await resolveAssetAlias(normalizedAssetInput) else {
                 throw ToriiClientError.invalidPayload(
                     "asset definition '\(normalizedAssetInput)' is invalid and alias resolution did not find a mapping"
@@ -12782,6 +12804,82 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                       headers: ["Content-Type": "application/json"])
         let data = try await data(for: request)
         return try decodeJSON(ToriiOfflineSpendReceiptsSubmitResponse.self, from: data)
+    }
+
+    public func setupOfflineReserve(
+        _ requestBody: ToriiOfflineReserveSetupRequest
+    ) async throws -> ToriiOfflineReserveEnvelope {
+        let body = try JSONEncoder().encode(requestBody)
+        let request = try makeRequest(
+            path: "/v1/offline/reserve/setup",
+            method: .post,
+            body: body,
+            headers: ["Content-Type": "application/json"]
+        )
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiOfflineReserveEnvelope.self, from: data)
+    }
+
+    public func topUpOfflineReserve(
+        _ requestBody: ToriiOfflineReserveTopUpRequest
+    ) async throws -> ToriiOfflineReserveEnvelope {
+        let body = try JSONEncoder().encode(requestBody)
+        let request = try makeRequest(
+            path: "/v1/offline/reserve/topup",
+            method: .post,
+            body: body,
+            headers: ["Content-Type": "application/json"]
+        )
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiOfflineReserveEnvelope.self, from: data)
+    }
+
+    public func renewOfflineReserve(
+        _ requestBody: ToriiOfflineReserveRenewRequest
+    ) async throws -> ToriiOfflineReserveEnvelope {
+        let body = try JSONEncoder().encode(requestBody)
+        let request = try makeRequest(
+            path: "/v1/offline/reserve/renew",
+            method: .post,
+            body: body,
+            headers: ["Content-Type": "application/json"]
+        )
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiOfflineReserveEnvelope.self, from: data)
+    }
+
+    public func syncOfflineReserve(
+        _ requestBody: ToriiOfflineReserveSyncRequest
+    ) async throws -> ToriiOfflineReserveEnvelope {
+        let body = try JSONEncoder().encode(requestBody)
+        let request = try makeRequest(
+            path: "/v1/offline/reserve/sync",
+            method: .post,
+            body: body,
+            headers: ["Content-Type": "application/json"]
+        )
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiOfflineReserveEnvelope.self, from: data)
+    }
+
+    public func defundOfflineReserve(
+        _ requestBody: ToriiOfflineReserveDefundRequest
+    ) async throws -> ToriiOfflineReserveEnvelope {
+        let body = try JSONEncoder().encode(requestBody)
+        let request = try makeRequest(
+            path: "/v1/offline/reserve/defund",
+            method: .post,
+            body: body,
+            headers: ["Content-Type": "application/json"]
+        )
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiOfflineReserveEnvelope.self, from: data)
+    }
+
+    public func getOfflineRevocationBundle() async throws -> ToriiOfflineRevocationBundle {
+        let request = try makeRequest(path: "/v1/offline/revocations", method: .get)
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiOfflineRevocationBundle.self, from: data)
     }
 
     public func submitOfflineSettlement(_ requestBody: ToriiOfflineSettlementSubmitRequest) async throws -> ToriiOfflineSettlementSubmitResponse {

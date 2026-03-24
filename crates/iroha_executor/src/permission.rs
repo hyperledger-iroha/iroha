@@ -129,6 +129,8 @@ declare_permissions! {
     iroha_executor_data_model::permission::account::{CanRegisterAccount},
     iroha_executor_data_model::permission::account::{CanUnregisterAccount},
     iroha_executor_data_model::permission::account::{CanModifyAccountMetadata},
+    iroha_executor_data_model::permission::account::{CanManageAccountAlias},
+    iroha_executor_data_model::permission::account::{CanResolveAccountAlias},
 
     iroha_executor_data_model::permission::asset_definition::{CanUnregisterAssetDefinition},
     iroha_executor_data_model::permission::asset_definition::{CanModifyAssetDefinitionMetadata},
@@ -933,7 +935,8 @@ pub mod account {
     //! Module with pass conditions for asset related tokens
 
     use iroha_executor_data_model::permission::account::{
-        CanModifyAccountMetadata, CanRegisterAccount, CanUnregisterAccount,
+        AccountAliasPermissionScope, CanManageAccountAlias, CanModifyAccountMetadata,
+        CanRegisterAccount, CanResolveAccountAlias, CanUnregisterAccount,
     };
 
     use super::*;
@@ -950,6 +953,29 @@ pub mod account {
     pub struct Owner<'asset> {
         /// Account id to check against
         pub account: &'asset AccountId,
+    }
+
+    fn validate_dataspace_alias_owner(
+        dataspace: crate::smart_contract::data_model::nexus::DataSpaceId,
+        authority: &AccountId,
+        host: &Iroha,
+    ) -> Result {
+        let owner = host
+            .query_single(
+                crate::smart_contract::data_model::query::sns::prelude::FindDataspaceNameOwnerById::new(dataspace),
+            )
+            .map_err(|_| {
+                ValidationFail::NotPermitted(format!(
+                    "Dataspace alias lease for `{dataspace}` has no active owner"
+                ))
+            })?;
+        if &owner == authority {
+            Ok(())
+        } else {
+            Err(ValidationFail::NotPermitted(format!(
+                "Can't manage dataspace alias permissions for `{dataspace}`"
+            )))
+        }
     }
 
     impl PassCondition for Owner<'_> {
@@ -1003,6 +1029,50 @@ pub mod account {
             host: &Iroha,
         ) -> Result {
             Owner::from(self).validate(authority, host, context)
+        }
+    }
+
+    impl ValidateGrantRevoke for CanResolveAccountAlias {
+        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
+            match &self.scope {
+                AccountAliasPermissionScope::Domain(domain) => {
+                    super::domain::Owner { domain }.validate(authority, host, context)
+                }
+                AccountAliasPermissionScope::Dataspace(dataspace) => {
+                    validate_dataspace_alias_owner(*dataspace, authority, host)
+                }
+            }
+        }
+
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            self.validate_grant(authority, context, host)
+        }
+    }
+
+    impl ValidateGrantRevoke for CanManageAccountAlias {
+        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
+            match &self.scope {
+                AccountAliasPermissionScope::Domain(domain) => {
+                    super::domain::Owner { domain }.validate(authority, host, context)
+                }
+                AccountAliasPermissionScope::Dataspace(dataspace) => {
+                    validate_dataspace_alias_owner(*dataspace, authority, host)
+                }
+            }
+        }
+
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            self.validate_grant(authority, context, host)
         }
     }
 
@@ -1554,9 +1624,11 @@ mod tests {
 
     #[test]
     fn permission_owned_matches_opaque_asset_definition_permission() {
-        let asset_definition: AssetDefinitionId = "aid:6872454e9c044641aa581ec5f3801619"
-            .parse()
-            .expect("opaque asset definition parses");
+        let asset_definition = AssetDefinitionId::from_uuid_bytes([
+            0x68, 0x72, 0x45, 0x4e, 0x9c, 0x04, 0x46, 0x41, 0xaa, 0x58, 0x1e, 0xc5, 0xf3, 0x80,
+            0x16, 0x19,
+        ])
+        .expect("opaque asset definition parses");
         let token = CanMintAssetWithDefinition {
             asset_definition: asset_definition.clone(),
         };

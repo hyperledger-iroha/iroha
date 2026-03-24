@@ -129,6 +129,8 @@ pub mod settlement;
 pub mod smartcontracts;
 /// World state snapshots.
 pub mod snapshot;
+/// Ledger-backed SNS ownership helpers.
+pub mod sns;
 /// Shared Soracloud runtime snapshot types and traits.
 pub mod soracloud_runtime;
 /// SoraNet relay incentive calculator and treasury helpers.

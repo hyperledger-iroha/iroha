@@ -2887,27 +2887,33 @@ fn parse_permission_name(s: &str) -> Result<PermissionToken, VMError> {
         return Ok(PermissionToken::SetAccountDetail(id.subject_id()));
     }
     if let Some(rest) = s.strip_prefix("register_zk_asset:") {
-        let id: AssetDefinitionId = rest.parse().map_err(|_| VMError::NoritoInvalid)?;
+        let id =
+            AssetDefinitionId::parse_address_literal(rest).map_err(|_| VMError::NoritoInvalid)?;
         return Ok(PermissionToken::RegisterZkAsset(id));
     }
     if let Some(rest) = s.strip_prefix("shield:") {
-        let id: AssetDefinitionId = rest.parse().map_err(|_| VMError::NoritoInvalid)?;
+        let id =
+            AssetDefinitionId::parse_address_literal(rest).map_err(|_| VMError::NoritoInvalid)?;
         return Ok(PermissionToken::Shield(id));
     }
     if let Some(rest) = s.strip_prefix("unshield:") {
-        let id: AssetDefinitionId = rest.parse().map_err(|_| VMError::NoritoInvalid)?;
+        let id =
+            AssetDefinitionId::parse_address_literal(rest).map_err(|_| VMError::NoritoInvalid)?;
         return Ok(PermissionToken::Unshield(id));
     }
     if let Some(rest) = s.strip_prefix("mint_asset:") {
-        let id: AssetDefinitionId = rest.parse().map_err(|_| VMError::NoritoInvalid)?;
+        let id =
+            AssetDefinitionId::parse_address_literal(rest).map_err(|_| VMError::NoritoInvalid)?;
         return Ok(PermissionToken::MintAsset(id));
     }
     if let Some(rest) = s.strip_prefix("burn_asset:") {
-        let id: AssetDefinitionId = rest.parse().map_err(|_| VMError::NoritoInvalid)?;
+        let id =
+            AssetDefinitionId::parse_address_literal(rest).map_err(|_| VMError::NoritoInvalid)?;
         return Ok(PermissionToken::BurnAsset(id));
     }
     if let Some(rest) = s.strip_prefix("transfer_asset:") {
-        let id: AssetDefinitionId = rest.parse().map_err(|_| VMError::NoritoInvalid)?;
+        let id =
+            AssetDefinitionId::parse_address_literal(rest).map_err(|_| VMError::NoritoInvalid)?;
         return Ok(PermissionToken::TransferAsset(id));
     }
     if s == "manage_roles" {

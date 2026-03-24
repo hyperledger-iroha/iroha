@@ -408,16 +408,7 @@ fn parse_asset_definition(value: String) -> BridgeResult<AssetDefinitionId> {
         return Err(BridgeError::AssetDefinition);
     }
 
-    if let Ok(id) = trimmed.parse::<AssetDefinitionId>() {
-        return Ok(id);
-    }
-
-    let (name, domain) = trimmed
-        .split_once('#')
-        .ok_or(BridgeError::AssetDefinition)?;
-    let name = Name::from_str(name).map_err(|_| BridgeError::AssetDefinition)?;
-    let domain = DomainId::from_str(domain).map_err(|_| BridgeError::AssetDefinition)?;
-    Ok(AssetDefinitionId::new(domain, name))
+    AssetDefinitionId::parse_address_literal(trimmed).map_err(|_| BridgeError::AssetDefinition)
 }
 
 fn encode_asset_id_literal(
@@ -7437,8 +7428,20 @@ mod accel_tests {
         decode_signed_transaction(bytes).expect("decode signed transaction")
     }
 
+    fn asset_definition_literal(domain: &str, name: &str) -> String {
+        AssetDefinitionId::new(
+            DomainId::from_str(domain).expect("domain"),
+            Name::from_str(name).expect("name"),
+        )
+        .to_string()
+    }
+
+    fn asset_definition_cstring(domain: &str, name: &str) -> CString {
+        cstring(&asset_definition_literal(domain, name))
+    }
+
     #[test]
-    fn encode_asset_id_literal_builds_canonical_from_textual_parts() {
+    fn encode_asset_id_literal_builds_canonical_from_base58_parts() {
         let _guard = chain_guard();
         let (account_cstr, _) = sample_account("bank", 0);
         let account_literal = account_cstr.to_str().expect("account literal");
@@ -7452,7 +7455,7 @@ mod accel_tests {
             ),
             account_id,
         );
-        let asset_definition = cstring("usd#bank");
+        let asset_definition = asset_definition_cstring("bank", "usd");
 
         let mut out_asset_ptr: *mut u8 = ptr::null_mut();
         let mut out_asset_len: c_ulong = 0;
@@ -7737,28 +7740,19 @@ mod accel_tests {
     }
 
     #[test]
-    fn parse_asset_definition_accepts_textual_literal() {
-        let parsed = parse_asset_definition("usd#bank".to_owned())
-            .expect("textual asset definition should parse");
-        let expected = AssetDefinitionId::new(
-            DomainId::from_str("bank").expect("domain"),
-            Name::from_str("usd").expect("name"),
-        );
-        assert_eq!(parsed, expected);
+    fn parse_asset_definition_rejects_legacy_textual_literal() {
+        let err = parse_asset_definition("usd#bank".to_owned())
+            .expect_err("legacy textual asset definition should fail");
+        assert!(matches!(err, BridgeError::AssetDefinition));
     }
 
     #[test]
-    fn parse_asset_definition_accepts_canonical_aid_literal() {
-        let canonical = AssetDefinitionId::new(
-            DomainId::from_str("wonderland").expect("domain"),
-            Name::from_str("rose").expect("name"),
-        )
-        .to_string();
+    fn parse_asset_definition_accepts_canonical_base58_literal() {
+        let canonical = asset_definition_literal("wonderland", "rose");
         let parsed = parse_asset_definition(canonical.clone())
-            .expect("canonical aid asset definition should parse");
-        let expected = canonical
-            .parse::<AssetDefinitionId>()
-            .expect("canonical aid should parse");
+            .expect("canonical base58 asset definition should parse");
+        let expected = AssetDefinitionId::parse_address_literal(&canonical)
+            .expect("canonical base58 should parse");
         assert_eq!(parsed, expected);
     }
 
@@ -7767,7 +7761,7 @@ mod accel_tests {
         let _reset = ChainDiscriminantReset::new(42);
         let chain = cstring("00000042");
         let authority = fixture_authority("wonderland");
-        let asset_definition = cstring("rose#wonderland");
+        let asset_definition = asset_definition_cstring("wonderland", "rose");
         let quantity = cstring("15.7500");
         let destination = authority.clone();
         let private_key = fixture_private_key();
@@ -7811,7 +7805,7 @@ mod accel_tests {
         let _reset = ChainDiscriminantReset::new(42);
         let chain = cstring("00000043");
         let authority = fixture_authority("wonderland");
-        let asset_definition = cstring("rose#wonderland");
+        let asset_definition = asset_definition_cstring("wonderland", "rose");
         let quantity = cstring("42.0100");
         let destination = authority.clone();
         let private_key = fixture_private_key();
@@ -7855,7 +7849,7 @@ mod accel_tests {
         let _reset = ChainDiscriminantReset::new(42);
         let chain = cstring("00000044");
         let authority = fixture_authority("wonderland");
-        let asset_definition = cstring("rose#wonderland");
+        let asset_definition = asset_definition_cstring("wonderland", "rose");
         let quantity = cstring("5.2500");
         let destination = authority.clone();
         let private_key = fixture_private_key();
@@ -7899,7 +7893,7 @@ mod accel_tests {
         let _guard = chain_guard();
         let chain = cstring("test-chain");
         let (authority, private) = sample_account("bank", 0);
-        let asset_definition = cstring("usd#bank");
+        let asset_definition = asset_definition_cstring("bank", "usd");
         let quantity = cstring("10");
         let destination = sample_destination("bank", 1);
         let mut out_signed_ptr: *mut u8 = ptr::null_mut();
@@ -7945,7 +7939,7 @@ mod accel_tests {
         let _guard = chain_guard();
         let chain = cstring("test-chain");
         let (authority, private) = sample_account("bank", 0);
-        let asset_definition = cstring("usd#bank");
+        let asset_definition = asset_definition_cstring("bank", "usd");
         let quantity = cstring("10");
         let destination = sample_destination("bank", 1);
         let mut out_signed_ptr: *mut u8 = ptr::null_mut();
@@ -7994,7 +7988,7 @@ mod accel_tests {
         let _guard = chain_guard();
         let chain = cstring("test-chain");
         let (authority, private) = sample_account("bank", 0);
-        let asset_definition = cstring("usd#bank");
+        let asset_definition = asset_definition_cstring("bank", "usd");
         let quantity = cstring("10");
         let destination = sample_destination("bank", 1);
         let mut out_signed_ptr: *mut u8 = ptr::null_mut();
@@ -8035,7 +8029,7 @@ mod accel_tests {
         let _guard = chain_guard();
         let chain = cstring("test-chain");
         let (authority, private) = sample_account("bank", 0);
-        let asset_definition = cstring("usd#bank");
+        let asset_definition = asset_definition_cstring("bank", "usd");
         let quantity = cstring("10");
         let destination = sample_destination("bank", 1);
         let mut out_signed_ptr: *mut u8 = ptr::null_mut();
@@ -8085,7 +8079,7 @@ mod accel_tests {
         let _guard = chain_guard();
         let chain = cstring("test-chain");
         let (authority, private) = sample_account("bank", 0);
-        let asset_definition = cstring("usd#bank");
+        let asset_definition = asset_definition_cstring("bank", "usd");
         let quantity = cstring("5");
         let destination = sample_destination("bank", 1);
         let mut out_signed_ptr: *mut u8 = ptr::null_mut();
@@ -8130,7 +8124,7 @@ mod accel_tests {
         let _guard = chain_guard();
         let chain = cstring("test-chain");
         let (authority, private) = sample_account("bank", 0);
-        let asset_definition = cstring("usd#bank");
+        let asset_definition = asset_definition_cstring("bank", "usd");
         let quantity = cstring("5");
         let destination = sample_destination("bank", 1);
         let mut out_signed_ptr: *mut u8 = ptr::null_mut();
@@ -8176,7 +8170,7 @@ mod accel_tests {
         let _guard = chain_guard();
         let chain = cstring("test-chain");
         let (authority, private) = sample_account("bank", 0);
-        let asset_definition = cstring("usd#bank");
+        let asset_definition = asset_definition_cstring("bank", "usd");
         let quantity = cstring("3");
         let destination = sample_destination("bank", 1);
         let mut out_signed_ptr: *mut u8 = ptr::null_mut();
@@ -8221,7 +8215,7 @@ mod accel_tests {
         let _guard = chain_guard();
         let chain = cstring("test-chain");
         let (authority, private) = sample_account("bank", 0);
-        let asset_definition = cstring("usd#bank");
+        let asset_definition = asset_definition_cstring("bank", "usd");
         let quantity = cstring("3");
         let destination = sample_destination("bank", 1);
         let mut out_signed_ptr: *mut u8 = ptr::null_mut();
@@ -8267,7 +8261,7 @@ mod accel_tests {
         let _guard = chain_guard();
         let chain = cstring("test-chain");
         let (authority, private) = sample_account("bank", 0);
-        let asset_definition = cstring("usd#bank");
+        let asset_definition = asset_definition_cstring("bank", "usd");
         let inputs = [0x11_u8; 32];
         let outputs = [0x22_u8; 32];
         let proof = cstring(
@@ -8317,7 +8311,7 @@ mod accel_tests {
         let _guard = chain_guard();
         let chain = cstring("test-chain");
         let (authority, private) = sample_account("bank", 0);
-        let asset_definition = cstring("usd#bank");
+        let asset_definition = asset_definition_cstring("bank", "usd");
         let quantity = cstring("NaN");
         let destination = sample_destination("bank", 1);
         let mut out_signed_ptr: *mut u8 = ptr::null_mut();
@@ -9504,7 +9498,7 @@ pub unsafe extern "C" fn connect_norito_decode_signed_transaction_json(
 /// Build a canonical encoded `AssetId` literal (`norito:<hex>`) from textual parts.
 ///
 /// Inputs:
-/// - `asset_definition`: canonical `aid:<32-lower-hex>` or textual `name#domain`
+/// - `asset_definition`: canonical unprefixed Base58 asset-definition id
 /// - `account_id`: canonical account id (I105 literal)
 ///
 /// Output bytes are UTF-8 text for the resulting `norito:<hex>` literal.
@@ -9539,7 +9533,7 @@ pub unsafe extern "C" fn connect_norito_encode_asset_id_literal(
 ///
 /// Response JSON object fields:
 /// - `asset_id`: canonical encoded asset id (`norito:<hex>`)
-/// - `asset_definition_id`: canonical asset definition id (`aid:<32-lower-hex>`)
+/// - `asset_definition_id`: canonical asset definition id (unprefixed Base58 address)
 /// - `account_id`: canonical account id (I105 literal)
 ///
 /// # Safety

@@ -95,6 +95,24 @@ pub mod asset_definition {
 pub mod account {
     use super::*;
 
+    /// Scope carried by account-alias permissions.
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        crate::json_macros::JsonSerialize,
+        crate::json_macros::JsonDeserialize,
+        iroha_schema::IntoSchema,
+    )]
+    #[norito(tag = "scope", content = "value", rename_all = "snake_case")]
+    pub enum AccountAliasPermissionScope {
+        /// Permission scoped to a specific linked domain alias segment.
+        Domain(DomainId),
+        /// Permission scoped to a dataspace alias segment.
+        Dataspace(DataSpaceId),
+    }
+
     permission! {
         /// Permission to register an account within the provided domain.
         pub struct CanRegisterAccount {
@@ -115,6 +133,22 @@ pub mod account {
         pub struct CanModifyAccountMetadata {
             /// Identifier of the account whose metadata may be changed.
             pub account: AccountId,
+        }
+    }
+
+    permission! {
+        /// Permission to resolve account aliases in the specified scope.
+        pub struct CanResolveAccountAlias {
+            /// Alias permission scope.
+            pub scope: AccountAliasPermissionScope,
+        }
+    }
+
+    permission! {
+        /// Permission to register, bind, or update account aliases in the specified scope.
+        pub struct CanManageAccountAlias {
+            /// Alias permission scope.
+            pub scope: AccountAliasPermissionScope,
         }
     }
 }

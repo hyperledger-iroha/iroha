@@ -3,7 +3,7 @@ import Foundation
 public struct TransferRequest {
     public let chainId: String
     public let authority: String
-    public let assetDefinitionId: String // e.g., "aid:2f17c72466f84a4bb8a8e24884fdcd2f"
+    public let assetDefinitionId: String // e.g., "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
     public let quantity: String         // decimal string
     public let destination: String      // account id
     public let description: String?

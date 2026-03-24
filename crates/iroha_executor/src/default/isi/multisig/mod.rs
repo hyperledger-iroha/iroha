@@ -37,6 +37,7 @@ pub(super) fn visit_instruction<V: Execute + Visit + ?Sized>(
 const DELIMITER: char = '/';
 const MULTISIG: &str = "multisig";
 const MULTISIG_SIGNATORY: &str = "MULTISIG_SIGNATORY";
+const DOMAINLESS_NAMESPACE: &str = "domainless";
 
 fn spec_key() -> Name {
     format!("{MULTISIG}{DELIMITER}spec").parse().unwrap()
@@ -116,19 +117,26 @@ pub(super) fn load_account_metadata<V: Execute + Visit + ?Sized>(
 pub(super) fn multisig_home_domain<V: Execute + Visit + ?Sized>(
     multisig_account: &AccountId,
     executor: &V,
-) -> Result<DomainId, ValidationFail> {
+) -> Result<Option<DomainId>, ValidationFail> {
     load_account_metadata(multisig_account, &home_domain_key(), executor)?
         .try_into_any_norito()
         .map_err(metadata_conversion_error)
 }
 
-fn multisig_role_for(home_domain: &DomainId, account: &AccountId) -> RoleId {
-    let suffix = account
+fn account_role_suffix(account: &AccountId) -> String {
+    account
         .canonical_i105()
-        .unwrap_or_else(|_| HashOf::new(account).to_string());
-    format!("{MULTISIG_SIGNATORY}{DELIMITER}{home_domain}{DELIMITER}{suffix}")
-        .parse()
-        .unwrap()
+        .unwrap_or_else(|_| HashOf::new(account).to_string())
+}
+
+fn multisig_role_for(home_domain: Option<&DomainId>, account: &AccountId) -> RoleId {
+    let account_suffix = account_role_suffix(account);
+    let literal = if let Some(home_domain) = home_domain {
+        format!("{MULTISIG_SIGNATORY}{DELIMITER}{home_domain}{DELIMITER}{account_suffix}")
+    } else {
+        format!("{MULTISIG_SIGNATORY}{DELIMITER}{DOMAINLESS_NAMESPACE}{DELIMITER}{account_suffix}")
+    };
+    literal.parse().unwrap()
 }
 
 pub(super) fn is_multisig<V: Execute + Visit + ?Sized>(

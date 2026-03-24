@@ -48,18 +48,20 @@ use iroha_data_model::{
     ChainId,
     isi::{self, InstructionBox},
     name::Name,
+    smart_contract::manifest::ManifestProvenance,
     soracloud::{
         SORA_RUNTIME_RECEIPT_VERSION_V1, SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
         SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1, SORACLOUD_HOST_RESPONSE_VERSION_V1,
         SoraAgentApartmentRecordV1, SoraAgentRuntimeStatusV1, SoraArtifactKindV1,
         SoraCapabilityPolicyV1, SoraCertifiedResponsePolicyV1, SoraDeploymentBundleV1,
+        encode_model_host_heartbeat_provenance_payload,
         SoraModelHostViolationKindV1,
         SoraHfPlacementHostAssignmentV1, SoraHfPlacementHostRoleV1,
         SoraHfPlacementHostStatusV1, SoraHfPlacementRecordV1,
         SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseStatusV1, SoraHfSourceStatusV1,
         SoraModelPrivacyModeV1, SoraNetworkPolicyV1, SoraPrivateInferenceCheckpointV1,
         SoraPrivateInferenceSessionStatusV1, SoraPrivateInferenceSessionV1, SoraRuntimeReceiptV1,
-        SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
+        SoraRouteVisibilityV1, SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
         SoraServiceHealthStatusV1, SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1,
         SoraServiceRuntimeStateV1, SoraServiceStateEntryV1, SoraStateBindingV1,
         SoraStateMutationOperationV1, SoraUploadedModelBindingStatusV1, SoraUploadedModelBundleV1,
@@ -101,6 +103,7 @@ const SORACLOUD_UPLOADED_MODEL_UPLOAD_KEY_VERSION_V1: u32 = 1;
 const SORACLOUD_UPLOADED_MODEL_UPLOAD_KEY_DIR: &str = "uploaded_model_keys";
 const SORACLOUD_UPLOADED_MODEL_UPLOAD_KEY_FILE: &str = "x25519_v1.bin";
 const MODEL_HOST_VIOLATION_REPORT_COOLDOWN_MS: u64 = 30_000;
+const GENERATED_HF_RECONCILE_REQUEST_COOLDOWN_MS: u64 = 30_000;
 
 /// Runtime-manager configuration derived from the explicit Soracloud runtime settings.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -132,6 +135,13 @@ pub(crate) trait SoracloudRuntimeMutationSink: Send + Sync {
         &self,
         instruction: InstructionBox,
         endpoint: &'static str,
+    ) -> eyre::Result<()>;
+
+    /// Submit an authoritative model-host heartbeat using the sink's configured validator authority.
+    fn submit_model_host_heartbeat(
+        &self,
+        validator_account_id: &AccountId,
+        heartbeat_expires_at_ms: u64,
     ) -> eyre::Result<()>;
 }
 
@@ -193,6 +203,33 @@ impl SoracloudRuntimeMutationSink for QueuedSoracloudRuntimeMutationSink {
                     failure.err
                 )
             })
+    }
+
+    fn submit_model_host_heartbeat(
+        &self,
+        validator_account_id: &AccountId,
+        heartbeat_expires_at_ms: u64,
+    ) -> eyre::Result<()> {
+        if *validator_account_id != self.authority {
+            eyre::bail!(
+                "runtime model-host heartbeat validator `{validator_account_id}` does not match sink authority `{}`",
+                self.authority
+            );
+        }
+        let payload = encode_model_host_heartbeat_provenance_payload(
+            validator_account_id,
+            heartbeat_expires_at_ms,
+        )
+        .wrap_err("encode runtime model-host heartbeat provenance payload")?;
+        let instruction = InstructionBox::from(isi::soracloud::HeartbeatSoracloudModelHost {
+            validator_account_id: validator_account_id.clone(),
+            heartbeat_expires_at_ms,
+            provenance: ManifestProvenance {
+                signer: self.key_pair.public_key().clone(),
+                signature: iroha_crypto::Signature::new(self.key_pair.private_key(), &payload),
+            },
+        });
+        self.submit_instruction(instruction, "/internal/soracloud/runtime/model-host-heartbeat")
     }
 }
 
@@ -285,6 +322,19 @@ impl SoracloudModelHostViolationReporter {
                 placement_id = ?log_key.placement_id,
                 "failed to submit Soracloud model-host violation from runtime health"
             );
+            return;
+        }
+        if let Err(error) = mutation_sink.submit_instruction(
+            InstructionBox::from(isi::soracloud::ReconcileSoracloudModelHosts),
+            "/internal/soracloud/runtime/model-host-reconcile",
+        ) {
+            iroha_logger::warn!(
+                ?error,
+                validator_account_id = %log_key.validator_account_id,
+                kind = ?log_key.kind,
+                placement_id = ?log_key.placement_id,
+                "failed to submit Soracloud model-host reconcile after runtime health report"
+            );
         }
     }
 
@@ -357,6 +407,8 @@ pub struct SoracloudRuntimeManagerHandle {
     state: Arc<State>,
     hf_local_workers: SharedHfLocalRunnerWorkers,
     host_violation_reporter: Arc<SoracloudModelHostViolationReporter>,
+    mutation_sink: Option<Arc<dyn SoracloudRuntimeMutationSink>>,
+    generated_hf_reconcile_attempts_ms: Arc<Mutex<BTreeMap<Hash, u64>>>,
 }
 
 impl SoracloudRuntimeManagerHandle {
@@ -370,6 +422,127 @@ impl SoracloudRuntimeManagerHandle {
     #[must_use]
     pub fn state_dir(&self) -> PathBuf {
         self.state_dir.as_ref().clone()
+    }
+
+    fn report_generated_hf_proxy_failure(
+        &self,
+        request: &SoracloudLocalReadRequest,
+        target_peer_id: &str,
+        error: &SoracloudRuntimeExecutionError,
+    ) {
+        if request.handler_name != "infer" || error.kind == SoracloudRuntimeExecutionErrorKind::InvalidRequest
+        {
+            return;
+        }
+        let view = self.state.view();
+        let Some(bundle) = view.world().soracloud_service_revisions().get(&(
+            request.service_name.clone(),
+            request.service_version.clone(),
+        )) else {
+            return;
+        };
+        let Some(binding) = soracloud_hf_generated_source_binding(bundle) else {
+            return;
+        };
+        let Ok(Some(placement)) = resolve_active_hf_placement_for_service(
+            &view,
+            request.service_name.as_str(),
+            &binding.source_id,
+        ) else {
+            return;
+        };
+        let Some(primary_assignment) = placement.assigned_hosts.iter().find(|assignment| {
+            assignment.role == SoraHfPlacementHostRoleV1::Primary
+                && assignment.status == SoraHfPlacementHostStatusV1::Warm
+                && assignment.peer_id == target_peer_id
+        }) else {
+            return;
+        };
+        self.host_violation_reporter.report(
+            &view,
+            &primary_assignment.validator_account_id,
+            SoraModelHostViolationKindV1::AssignedHeartbeatMiss,
+            Some(placement.placement_id),
+            Some(format!(
+                "proxied HF inference for service `{}` targeting primary peer `{target_peer_id}` failed: {}",
+                request.service_name, error.message
+            )),
+        );
+    }
+
+    fn request_generated_hf_reconcile(
+        &self,
+        request: &SoracloudLocalReadRequest,
+        error: &SoracloudRuntimeExecutionError,
+    ) {
+        if request.handler_name != "infer"
+            || error.kind != SoracloudRuntimeExecutionErrorKind::Unavailable
+        {
+            return;
+        }
+        let Some(mutation_sink) = self.mutation_sink.as_ref() else {
+            return;
+        };
+        let view = self.state.view();
+        let Some(bundle) = view.world().soracloud_service_revisions().get(&(
+            request.service_name.clone(),
+            request.service_version.clone(),
+        )) else {
+            return;
+        };
+        let Some(binding) = soracloud_hf_generated_source_binding(bundle) else {
+            return;
+        };
+        let Ok(Some(placement)) = resolve_active_hf_placement_for_service(
+            &view,
+            request.service_name.as_str(),
+            &binding.source_id,
+        ) else {
+            return;
+        };
+        let has_warm_primary = iroha_core::soracloud_runtime::resolve_generated_hf_primary_assignment(
+            view.world(),
+            request.service_name.as_str(),
+            &binding.source_id,
+        )
+        .ok()
+        .flatten()
+        .is_some();
+        let local_assignment_present = placement
+            .assigned_hosts
+            .iter()
+            .any(|assignment| hf_assignment_matches_local_host(&self.config, assignment));
+        if has_warm_primary && !local_assignment_present {
+            return;
+        }
+        if !self.generated_hf_reconcile_attempt_allowed(placement.placement_id) {
+            return;
+        }
+        if let Err(submit_error) = mutation_sink.submit_instruction(
+            InstructionBox::from(isi::soracloud::ReconcileSoracloudModelHosts),
+            "/internal/soracloud/runtime/model-host-reconcile-hint",
+        ) {
+            iroha_logger::warn!(
+                ?submit_error,
+                placement_id = %placement.placement_id,
+                service_name = %request.service_name,
+                service_version = %request.service_version,
+                "failed to enqueue Soracloud model-host reconcile after generated-HF routing failure"
+            );
+        }
+    }
+
+    fn generated_hf_reconcile_attempt_allowed(&self, placement_id: Hash) -> bool {
+        let now_ms = soracloud_runtime_observed_at_ms();
+        let mut attempts = self.generated_hf_reconcile_attempts_ms.lock();
+        if let Some(previous_attempt_ms) = attempts.get(&placement_id)
+            && now_ms.saturating_sub(*previous_attempt_ms)
+                < GENERATED_HF_RECONCILE_REQUEST_COOLDOWN_MS
+        {
+            return false;
+        }
+        attempts.insert(placement_id, now_ms);
+        true
     }
 }
 
@@ -448,6 +621,23 @@ impl SoracloudRuntimeReadHandle for SoracloudRuntimeManagerHandle {
 
     fn local_read_proxy_timeout(&self) -> Duration {
         self.config.hf.request_timeout
+    }
+
+    fn report_generated_hf_proxy_failure(
+        &self,
+        request: &SoracloudLocalReadRequest,
+        target_peer_id: &str,
+        error: &SoracloudRuntimeExecutionError,
+    ) {
+        Self::report_generated_hf_proxy_failure(self, request, target_peer_id, error);
+    }
+
+    fn request_generated_hf_reconcile(
+        &self,
+        request: &SoracloudLocalReadRequest,
+        error: &SoracloudRuntimeExecutionError,
+    ) {
+        Self::request_generated_hf_reconcile(self, request, error);
     }
 }
 
@@ -1647,6 +1837,8 @@ pub(crate) struct SoracloudRuntimeManager {
     snapshot: Arc<RwLock<SoracloudRuntimeSnapshot>>,
     hf_local_workers: SharedHfLocalRunnerWorkers,
     host_violation_reporter: Arc<SoracloudModelHostViolationReporter>,
+    mutation_sink: Option<Arc<dyn SoracloudRuntimeMutationSink>>,
+    last_model_host_heartbeat_attempt_ms: Mutex<Option<u64>>,
     sorafs_node: Option<sorafs_node::NodeHandle>,
     sorafs_provider_cache: Option<Arc<AsyncRwLock<ProviderAdvertCache>>>,
 }
@@ -1684,6 +1876,8 @@ impl SoracloudRuntimeManager {
             snapshot: Arc::new(RwLock::new(SoracloudRuntimeSnapshot::default())),
             hf_local_workers: Arc::new(Mutex::new(BTreeMap::new())),
             host_violation_reporter: SoracloudModelHostViolationReporter::disabled(),
+            mutation_sink: None,
+            last_model_host_heartbeat_attempt_ms: Mutex::new(None),
             sorafs_node: None,
             sorafs_provider_cache: None,
         }
@@ -1696,7 +1890,8 @@ impl SoracloudRuntimeManager {
         mutation_sink: Arc<dyn SoracloudRuntimeMutationSink>,
     ) -> Self {
         self.host_violation_reporter =
-            SoracloudModelHostViolationReporter::with_mutation_sink(mutation_sink);
+            SoracloudModelHostViolationReporter::with_mutation_sink(Arc::clone(&mutation_sink));
+        self.mutation_sink = Some(mutation_sink);
         self
     }
 
@@ -1741,6 +1936,8 @@ impl SoracloudRuntimeManager {
             state: Arc::clone(&manager.state),
             hf_local_workers: Arc::clone(&manager.hf_local_workers),
             host_violation_reporter: Arc::clone(&manager.host_violation_reporter),
+            mutation_sink: manager.mutation_sink.as_ref().map(Arc::clone),
+            generated_hf_reconcile_attempts_ms: Arc::new(Mutex::new(BTreeMap::new())),
         };
         let task = Arc::clone(&manager).spawn_reconcile_task(shutdown_signal);
         (
@@ -1795,6 +1992,7 @@ impl SoracloudRuntimeManager {
             .wrap_err_with(|| format!("create {}", self.hf_sources_root().display()))?;
 
         let view = self.state.view();
+        self.report_local_model_host_advert_contradictions(&view);
         let bundle_registry = collect_service_revision_registry(&view);
         let initial_snapshot = build_runtime_snapshot(
             &view,
@@ -1808,6 +2006,7 @@ impl SoracloudRuntimeManager {
         self.prune_stale_service_materializations(&initial_snapshot)?;
         self.prune_stale_apartment_materializations(&initial_snapshot)?;
         self.import_hf_sources(&view, &initial_snapshot)?;
+        self.probe_local_hf_execution_hosts(&view, &initial_snapshot);
         self.hydrate_missing_artifacts(&view, &initial_snapshot, &bundle_registry)?;
         self.enforce_cache_budgets(&view, &initial_snapshot)?;
         let snapshot = build_runtime_snapshot(
@@ -1823,6 +2022,35 @@ impl SoracloudRuntimeManager {
         )?;
         *self.snapshot.write() = snapshot;
         Ok(())
+    }
+
+    fn report_local_model_host_advert_contradictions(&self, view: &StateView<'_>) {
+        let Some(validator_account_id) = self.config.local_validator_account_id.as_ref() else {
+            return;
+        };
+        let Some(local_peer_id) = self.config.local_peer_id.as_deref() else {
+            return;
+        };
+        let Some(capability) = view
+            .world()
+            .soracloud_model_host_capabilities()
+            .get(validator_account_id)
+        else {
+            return;
+        };
+        if capability.peer_id == local_peer_id {
+            return;
+        }
+        self.host_violation_reporter.report(
+            view,
+            validator_account_id,
+            SoraModelHostViolationKindV1::AdvertContradiction,
+            None,
+            Some(format!(
+                "local runtime peer id `{local_peer_id}` does not match the authoritative model-host advert peer id `{}` for validator `{validator_account_id}`",
+                capability.peer_id
+            )),
+        );
     }
 
     fn runtime_snapshot_path(&self) -> PathBuf {
@@ -2072,6 +2300,142 @@ impl SoracloudRuntimeManager {
                 Some(host.placement_id),
                 Some(format!(
                     "local HF warmup for source `{source_id}` failed before readiness: {error_message}"
+                )),
+            );
+        }
+    }
+
+    fn probe_local_hf_execution_hosts(
+        &self,
+        view: &StateView<'_>,
+        snapshot: &SoracloudRuntimeSnapshot,
+    ) {
+        let mut submitted_local_heartbeat = false;
+        for (source_hash, source) in view.world().soracloud_hf_sources().iter() {
+            let source_id = source_hash.to_string();
+            if !snapshot.hf_sources.contains_key(&source_id) {
+                continue;
+            }
+            let hosts = local_hf_source_execution_hosts(view, &source_id, &self.config);
+            if hosts.is_empty() {
+                continue;
+            }
+            if let Err(error) = probe_hf_local_runner_for_source(
+                &self.config.state_dir,
+                &self.config.hf,
+                &self.hf_local_workers,
+                &source_id,
+                source,
+            ) {
+                iroha_logger::warn!(
+                    ?error,
+                    source_id = %source_id,
+                    repo_id = %source.repo_id,
+                    revision = %source.resolved_revision,
+                    "Soracloud HF local worker probe failed"
+                );
+                self.report_local_hf_execution_probe_failure(
+                    view,
+                    &source_id,
+                    &hosts,
+                    &error.message,
+                );
+            } else if !submitted_local_heartbeat
+                && self.refresh_local_model_host_warmth_if_needed(view, &hosts)
+            {
+                submitted_local_heartbeat = true;
+            }
+        }
+    }
+
+    fn refresh_local_model_host_warmth_if_needed(
+        &self,
+        view: &StateView<'_>,
+        hosts: &[ResolvedHfPlacementExecutionHost],
+    ) -> bool {
+        let Some(mutation_sink) = self.mutation_sink.as_ref() else {
+            return false;
+        };
+        let Some(validator_account_id) = self.config.local_validator_account_id.as_ref() else {
+            return false;
+        };
+        let Some(capability) = view
+            .world()
+            .soracloud_model_host_capabilities()
+            .get(validator_account_id)
+        else {
+            return false;
+        };
+        let now_ms = soracloud_runtime_observed_at_ms();
+        if !capability.is_active_at(now_ms) {
+            return false;
+        }
+        let desired_expiry_ms = desired_model_host_heartbeat_expiry_ms(now_ms, &self.config);
+        let needs_status_promotion = hosts
+            .iter()
+            .any(|host| host.status == SoraHfPlacementHostStatusV1::Warming);
+        let needs_expiry_refresh = capability.heartbeat_expires_at_ms < desired_expiry_ms;
+        if !(needs_status_promotion || needs_expiry_refresh)
+            || !self.local_model_host_heartbeat_attempt_allowed(now_ms)
+        {
+            return false;
+        }
+        if let Err(error) =
+            mutation_sink.submit_model_host_heartbeat(validator_account_id, desired_expiry_ms)
+        {
+            iroha_logger::warn!(
+                ?error,
+                validator_account_id = %validator_account_id,
+                heartbeat_expires_at_ms = desired_expiry_ms,
+                "failed to submit Soracloud model-host heartbeat from runtime health"
+            );
+            return false;
+        }
+        true
+    }
+
+    fn local_model_host_heartbeat_attempt_allowed(&self, now_ms: u64) -> bool {
+        let cooldown_ms =
+            u64::try_from(self.config.reconcile_interval.as_millis()).unwrap_or(u64::MAX);
+        let mut last_attempt_ms = self.last_model_host_heartbeat_attempt_ms.lock();
+        if let Some(previous_attempt_ms) = *last_attempt_ms
+            && now_ms.saturating_sub(previous_attempt_ms) < cooldown_ms
+        {
+            return false;
+        }
+        *last_attempt_ms = Some(now_ms);
+        true
+    }
+
+    fn report_local_hf_execution_probe_failure(
+        &self,
+        view: &StateView<'_>,
+        source_id: &str,
+        hosts: &[ResolvedHfPlacementExecutionHost],
+        error_message: &str,
+    ) {
+        for host in hosts {
+            let host_role = match host.role {
+                SoraHfPlacementHostRoleV1::Primary => "primary",
+                SoraHfPlacementHostRoleV1::Replica => "replica",
+            };
+            let (kind, failure_class) = match host.status {
+                SoraHfPlacementHostStatusV1::Warming => {
+                    (SoraModelHostViolationKindV1::WarmupNoShow, "warming")
+                }
+                SoraHfPlacementHostStatusV1::Warm => (
+                    SoraModelHostViolationKindV1::AssignedHeartbeatMiss,
+                    "warm",
+                ),
+                _ => continue,
+            };
+            self.host_violation_reporter.report(
+                view,
+                &host.validator_account_id,
+                kind,
+                Some(host.placement_id),
+                Some(format!(
+                    "local HF runtime health probe for source `{source_id}` failed on the assigned {failure_class} {host_role} host: {error_message}"
                 )),
             );
         }
@@ -3796,6 +4160,176 @@ fn execute_generated_hf_local_runner(
     })
 }
 
+fn probe_hf_local_runner_for_source(
+    state_dir: &Path,
+    hf_config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
+    hf_local_workers: &SharedHfLocalRunnerWorkers,
+    source_id: &str,
+    source: &iroha_data_model::soracloud::SoraHfSourceRecordV1,
+) -> Result<(), SoracloudRuntimeExecutionError> {
+    if !hf_config.local_execution_enabled {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!(
+                "generated HF local execution for source `{source_id}` requires `soracloud_runtime.hf.local_execution_enabled = true`"
+            ),
+        ));
+    }
+    let Some(import_manifest) = read_hf_import_manifest(state_dir, source_id).map_err(|error| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            format!(
+                "read generated HF import manifest for source `{source_id}` before local worker probe: {error}"
+            ),
+        )
+    })? else {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!(
+                "generated HF source `{source_id}` is not imported into the local cache yet"
+            ),
+        ));
+    };
+    if let Some(import_error) = import_manifest.import_error.as_ref() {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!(
+                "generated HF source `{source_id}` is blocked by a local import error: {import_error}"
+            ),
+        ));
+    }
+
+    let runner_script_path = ensure_hf_local_runner_script(state_dir).map_err(|error| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            format!(
+                "materialize embedded HF local runner for source `{source_id}`: {error}"
+            ),
+        )
+    })?;
+    let source_files_dir = hf_local_source_files_root(state_dir, source_id);
+    let mut runner_request = norito::json::Map::new();
+    runner_request.insert(
+        "schema_version".to_owned(),
+        norito::json::Value::from(HF_LOCAL_RUNNER_REQUEST_SCHEMA_VERSION_V1),
+    );
+    runner_request.insert(
+        "source_id".to_owned(),
+        norito::json::Value::from(source_id.to_owned()),
+    );
+    runner_request.insert(
+        "repo_id".to_owned(),
+        norito::json::Value::from(source.repo_id.clone()),
+    );
+    runner_request.insert(
+        "resolved_revision".to_owned(),
+        norito::json::Value::from(source.resolved_revision.clone()),
+    );
+    runner_request.insert(
+        "model_name".to_owned(),
+        norito::json::Value::from(source.model_name.clone()),
+    );
+    runner_request.insert(
+        "adapter_id".to_owned(),
+        norito::json::Value::from(import_manifest.adapter_id.clone()),
+    );
+    runner_request.insert(
+        "pipeline_tag".to_owned(),
+        import_manifest
+            .pipeline_tag
+            .clone()
+            .map(norito::json::Value::from)
+            .unwrap_or(norito::json::Value::Null),
+    );
+    runner_request.insert(
+        "library_name".to_owned(),
+        import_manifest
+            .library_name
+            .clone()
+            .map(norito::json::Value::from)
+            .unwrap_or(norito::json::Value::Null),
+    );
+    runner_request.insert(
+        "source_files_dir".to_owned(),
+        norito::json::Value::from(source_files_dir.display().to_string()),
+    );
+    runner_request.insert(
+        "request_method".to_owned(),
+        norito::json::Value::from("GET"),
+    );
+    runner_request.insert(
+        "request_path".to_owned(),
+        norito::json::Value::from("/health"),
+    );
+    runner_request.insert("request_query".to_owned(), norito::json::Value::Null);
+    runner_request.insert(
+        "request_headers".to_owned(),
+        norito::json::Value::Object(norito::json::Map::new()),
+    );
+    runner_request.insert(
+        "request_body".to_owned(),
+        norito::json::Value::Object(norito::json::Map::new()),
+    );
+    runner_request.insert("probe_only".to_owned(), norito::json::Value::Bool(true));
+    let runner_request = norito::json::Value::Object(runner_request);
+    let runner_request_bytes = norito::json::to_vec(&runner_request).map_err(|error| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            format!(
+                "serialize local HF worker probe request for source `{source_id}`: {error}"
+            ),
+        )
+    })?;
+    let worker_cache_key = HfLocalRunnerWorkerCacheKey {
+        source_id: source_id.to_owned(),
+        repo_id: source.repo_id.clone(),
+        resolved_revision: source.resolved_revision.clone(),
+        model_name: source.model_name.clone(),
+        adapter_id: import_manifest.adapter_id.clone(),
+        pipeline_tag: import_manifest.pipeline_tag.clone(),
+        library_name: import_manifest.library_name.clone(),
+        imported_at_ms: import_manifest.imported_at_ms,
+        source_files_dir,
+        runner_program: hf_config.local_runner_program.trim().to_owned(),
+        runner_script_path,
+        runner_script_revision: Hash::new(HF_LOCAL_RUNNER_SCRIPT_V1.as_bytes()).to_string(),
+    };
+    let output = execute_hf_local_runner_request(
+        hf_local_workers,
+        worker_cache_key,
+        hf_config.local_runner_timeout,
+        &runner_request_bytes,
+    )?;
+    let runner_response: norito::json::Value =
+        norito::json::from_slice(&output).map_err(|error| {
+            SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Internal,
+                format!(
+                    "decode local HF worker probe response for source `{source_id}` as JSON: {error}"
+                ),
+            )
+        })?;
+    let ok = runner_response
+        .get("ok")
+        .and_then(norito::json::Value::as_bool)
+        .unwrap_or(false);
+    if !ok {
+        let message = runner_response
+            .get("error")
+            .and_then(norito::json::Value::as_object)
+            .and_then(|error| error.get("message"))
+            .and_then(norito::json::Value::as_str)
+            .unwrap_or("local HF worker probe failed without an error message");
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!(
+                "generated HF local worker probe for source `{source_id}` failed: {message}"
+            ),
+        ));
+    }
+    Ok(())
+}
+
 fn execute_generated_hf_inference_bridge_local_read(
     request: &SoracloudLocalReadRequest,
     context: &ResolvedLocalReadContext,
@@ -5457,6 +5991,24 @@ fn resolve_local_read_context(
             message,
         )
     })?;
+    let route = bundle.service.route.as_ref().ok_or_else(|| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+            format!(
+                "service `{}` revision `{}` does not expose a public local-read route",
+                request.service_name, request.service_version
+            ),
+        )
+    })?;
+    if route.visibility != SoraRouteVisibilityV1::Public {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+            format!(
+                "service `{}` revision `{}` local-read route is not public",
+                request.service_name, request.service_version
+            ),
+        ));
+    }
     let Some(handler) = bundle
         .service
         .handlers
@@ -5478,6 +6030,18 @@ fn resolve_local_read_context(
             ),
         ));
     };
+    if !matches!(
+        handler.class,
+        SoraServiceHandlerClassV1::Asset | SoraServiceHandlerClassV1::Query
+    ) {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+            format!(
+                "service `{}` revision `{}` handler `{}` is not publicly routable",
+                request.service_name, request.service_version, request.handler_name
+            ),
+        ));
+    }
     let hf_execution_host =
         if let Some(binding) = soracloud_hf_generated_source_binding(&bundle) {
             resolve_local_hf_execution_host(view, request.service_name.as_str(), &binding.source_id, config)?
@@ -5833,6 +6397,14 @@ fn soracloud_runtime_observed_at_ms() -> u64 {
         .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
         .unwrap_or(1)
         .max(1)
+}
+
+fn desired_model_host_heartbeat_expiry_ms(
+    now_ms: u64,
+    config: &SoracloudRuntimeManagerConfig,
+) -> u64 {
+    let ttl_ms = u64::try_from(config.hf.model_host_heartbeat_ttl.as_millis()).unwrap_or(u64::MAX);
+    now_ms.saturating_add(ttl_ms.max(1))
 }
 
 fn apartment_result_commitment(
@@ -7464,25 +8036,26 @@ mod tests {
     //! Tests for the embedded Soracloud runtime manager.
 
     use super::*;
-    use std::{
-        io::{Read as _, Write as _},
-        net::TcpListener,
-        num::NonZeroU64,
-        sync::{Arc, Mutex, mpsc},
+	    use std::{
+	        io::{Read as _, Write as _},
+	        net::TcpListener,
+	        num::NonZeroU64,
+	        sync::{Arc, Mutex, mpsc},
         thread,
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use eyre::Result;
-    use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
-    use iroha_crypto::{Algorithm, PrivateKey, PublicKey, Signature};
+	    use eyre::Result;
+	    use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
+	    use iroha_crypto::{Algorithm, PrivateKey, PublicKey, Signature};
+	    use iroha_data_model::asset::AssetDefinitionId;
     use iroha_data_model::{
         block::BlockHeader,
         metadata::Metadata,
         smart_contract::manifest::EntryPointKind,
         soracloud::{
             AgentApartmentManifestV1, SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
-            SORA_HF_PLACEMENT_RECORD_VERSION_V1,
+            SORA_HF_PLACEMENT_RECORD_VERSION_V1, SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1,
             SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1, SORA_HF_SHARED_LEASE_POOL_VERSION_V1,
             SORA_HF_SOURCE_RECORD_VERSION_V1, SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
             SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1, SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
@@ -7494,6 +8067,8 @@ mod tests {
             SoraHfPlacementStatusV1, SoraHfResourceProfileV1, SoraHfSharedLeaseMemberStatusV1,
             SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1, SoraHfSharedLeaseStatusV1,
             SoraHfSourceRecordV1, SoraHfSourceStatusV1, SoraRolloutStageV1,
+            SoraModelHostCapabilityRecordV1,
+            SoraRouteVisibilityV1,
             SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1, SoraServiceHealthStatusV1,
             SoraServiceMailboxMessageV1, SoraServiceRolloutStateV1, SoraServiceRuntimeStateV1,
         },
@@ -7502,7 +8077,7 @@ mod tests {
             ReplicationOrderRecord, ReplicationOrderStatus,
         },
     };
-    use iroha_test_samples::{ALICE_ID, BOB_ID};
+    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
     use iroha_torii::sorafs::AdmissionRegistry;
     use sorafs_car::CarBuildPlan;
     use sorafs_chunker::ChunkProfile;
@@ -8431,6 +9006,10 @@ mod tests {
             state,
             hf_local_workers: Arc::clone(&manager.hf_local_workers),
             host_violation_reporter: Arc::clone(&manager.host_violation_reporter),
+            mutation_sink: manager.mutation_sink.as_ref().map(Arc::clone),
+            generated_hf_reconcile_attempts_ms: Arc::new(parking_lot::Mutex::new(
+                BTreeMap::new(),
+            )),
         }
     }
 
@@ -8455,6 +9034,34 @@ mod tests {
                 })
                 .collect()
         }
+
+        fn submitted_model_host_heartbeats(
+            &self,
+        ) -> Vec<iroha_data_model::isi::soracloud::HeartbeatSoracloudModelHost> {
+            self.instructions
+                .lock()
+                .iter()
+                .filter_map(|instruction| {
+                    iroha_data_model::isi::Instruction::as_any(instruction)
+                        .downcast_ref::<
+                            iroha_data_model::isi::soracloud::HeartbeatSoracloudModelHost,
+                        >()
+                        .cloned()
+                })
+                .collect()
+        }
+
+        fn submitted_model_host_reconciles(&self) -> usize {
+            self.instructions
+                .lock()
+                .iter()
+                .filter(|instruction| {
+                    iroha_data_model::isi::Instruction::as_any(*instruction)
+                        .downcast_ref::<iroha_data_model::isi::soracloud::ReconcileSoracloudModelHosts>()
+                        .is_some()
+                })
+                .count()
+        }
     }
 
     impl SoracloudRuntimeMutationSink for RecordingRuntimeMutationSink {
@@ -8464,6 +9071,31 @@ mod tests {
             _endpoint: &'static str,
         ) -> eyre::Result<()> {
             self.instructions.lock().push(instruction);
+            Ok(())
+        }
+
+        fn submit_model_host_heartbeat(
+            &self,
+            validator_account_id: &AccountId,
+            heartbeat_expires_at_ms: u64,
+        ) -> eyre::Result<()> {
+            let payload = encode_model_host_heartbeat_provenance_payload(
+                validator_account_id,
+                heartbeat_expires_at_ms,
+            )?;
+            self.instructions.lock().push(InstructionBox::from(
+                iroha_data_model::isi::soracloud::HeartbeatSoracloudModelHost {
+                    validator_account_id: validator_account_id.clone(),
+                    heartbeat_expires_at_ms,
+                    provenance: ManifestProvenance {
+                        signer: ALICE_KEYPAIR.public_key().clone(),
+                        signature: iroha_crypto::Signature::new(
+                            ALICE_KEYPAIR.private_key(),
+                            &payload,
+                        ),
+                    },
+                },
+            ));
             Ok(())
         }
     }
@@ -8484,9 +9116,11 @@ mod tests {
     ) -> Result<GeneratedHfServiceFixture> {
         let source_id = Hash::new(format!("generated-hf-source:{service_name}").as_bytes());
         let pool_id = Hash::new(format!("generated-hf-pool:{service_name}").as_bytes());
-        let lease_asset_definition_id = "aid:550e8400e29b41d4a716446655440009"
-            .parse()
-            .expect("fixture asset definition");
+        let lease_asset_definition_id = AssetDefinitionId::from_uuid_bytes([
+            0x55, 0x0e, 0x84, 0x00, 0xe2, 0x9b, 0x41, 0xd4, 0xa7, 0x16, 0x44, 0x66, 0x55, 0x44,
+            0x00, 0x09,
+        ])
+        .expect("fixture asset definition");
         let bundle = iroha_core::soracloud_runtime::build_soracloud_hf_generated_service_bundle(
             service_name.parse().expect("valid generated service name"),
             &source_id.to_string(),
@@ -8670,6 +9304,90 @@ mod tests {
         placement_id
     }
 
+    fn set_generated_hf_primary_assignment_status(
+        state: &mut Arc<State>,
+        fixture: &GeneratedHfServiceFixture,
+        primary_status: SoraHfPlacementHostStatusV1,
+    ) {
+        let placements = Arc::get_mut(state)
+            .expect("unique test state")
+            .world
+            .soracloud_hf_placements_mut_for_testing();
+        let mut placement = placements
+            .view()
+            .get(&fixture.pool_id)
+            .cloned()
+            .expect("generated HF placement fixture");
+        for assignment in &mut placement.assigned_hosts {
+            if assignment.role == SoraHfPlacementHostRoleV1::Primary {
+                assignment.status = primary_status;
+            }
+        }
+        placement.status = if primary_status == SoraHfPlacementHostStatusV1::Warm {
+            SoraHfPlacementStatusV1::Ready
+        } else {
+            SoraHfPlacementStatusV1::Degraded
+        };
+        placements.insert(fixture.pool_id, placement);
+    }
+
+    fn set_generated_hf_service_route_visibility(
+        state: &mut Arc<State>,
+        fixture: &GeneratedHfServiceFixture,
+        visibility: SoraRouteVisibilityV1,
+    ) {
+        let key = (
+            fixture.bundle.service.service_name.to_string(),
+            fixture.bundle.service.service_version.clone(),
+        );
+        let revisions = Arc::get_mut(state)
+            .expect("unique test state")
+            .world
+            .soracloud_service_revisions_mut_for_testing();
+        let mut bundle = revisions
+            .view()
+            .get(&key)
+            .cloned()
+            .expect("generated HF fixture bundle should exist");
+        bundle
+            .service
+            .route
+            .as_mut()
+            .expect("generated HF fixture route")
+            .visibility = visibility;
+        revisions.insert(key, bundle);
+    }
+
+    fn insert_local_model_host_capability_fixture(
+        state: &mut Arc<State>,
+        validator_account_id: &AccountId,
+        peer_id: &str,
+        heartbeat_expires_at_ms: u64,
+    ) {
+        Arc::get_mut(state)
+            .expect("unique test state")
+            .world
+            .soracloud_model_host_capabilities_mut_for_testing()
+            .insert(
+                validator_account_id.clone(),
+                SoraModelHostCapabilityRecordV1 {
+                    schema_version: SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1,
+                    validator_account_id: validator_account_id.clone(),
+                    peer_id: peer_id.to_owned(),
+                    supported_backends: BTreeSet::from([SoraHfBackendFamilyV1::Transformers]),
+                    supported_formats: BTreeSet::from([SoraHfModelFormatV1::Safetensors]),
+                    max_model_bytes: 8 * 1024 * 1024 * 1024,
+                    max_disk_cache_bytes: 32 * 1024 * 1024 * 1024,
+                    max_ram_bytes: 32 * 1024 * 1024 * 1024,
+                    max_vram_bytes: 0,
+                    max_concurrent_resident_models: 2,
+                    host_class: "cpu.large".to_owned(),
+                    advertised_at_ms: 10,
+                    heartbeat_expires_at_ms,
+                },
+            );
+    }
+
     fn seed_local_artifact_cache(
         artifacts_root: &Path,
         bundle_hash: Hash,
@@ -8801,6 +9519,7 @@ mod tests {
                 local_execution_enabled: false,
                 local_runner_program: "python3.12".to_owned(),
                 local_runner_timeout: Duration::from_secs(45),
+                model_host_heartbeat_ttl: Duration::from_secs(30),
                 allow_inference_bridge_fallback: false,
                 import_max_files: 12,
                 import_max_file_bytes: 32 * 1024 * 1024,
@@ -8995,9 +9714,11 @@ mod tests {
             assign_fixture_artifact_hashes(&mut bundle, &bundle_bytes, "hf-runtime-ready");
         let source_id = Hash::new(b"hf-source");
         let pool_id = Hash::new(b"hf-pool");
-        let lease_asset_definition_id = "aid:550e8400e29b41d4a716446655440000"
-            .parse()
-            .expect("asset definition");
+        let lease_asset_definition_id = AssetDefinitionId::from_uuid_bytes([
+            0x55, 0x0e, 0x84, 0x00, 0xe2, 0x9b, 0x41, 0xd4, 0xa7, 0x16, 0x44, 0x66, 0x55, 0x44,
+            0x00, 0x00,
+        ])
+        .expect("asset definition");
         {
             let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
             world.soracloud_service_revisions_mut_for_testing().insert(
@@ -9149,9 +9870,11 @@ mod tests {
         let mut state = test_state()?;
         let source_id = Hash::new(b"generated-hf-source");
         let pool_id = Hash::new(b"generated-hf-pool");
-        let lease_asset_definition_id = "aid:550e8400e29b41d4a716446655440001"
-            .parse()
-            .expect("asset definition");
+        let lease_asset_definition_id = AssetDefinitionId::from_uuid_bytes([
+            0x55, 0x0e, 0x84, 0x00, 0xe2, 0x9b, 0x41, 0xd4, 0xa7, 0x16, 0x44, 0x66, 0x55, 0x44,
+            0x00, 0x01,
+        ])
+        .expect("asset definition");
         let bundle = iroha_core::soracloud_runtime::build_soracloud_hf_generated_service_bundle(
             "hf_generated_service"
                 .parse()
@@ -9641,6 +10364,7 @@ mod tests {
                 .as_deref()
                 .is_some_and(|detail| detail.contains("failed before readiness"))
         );
+        assert_eq!(mutation_sink.submitted_model_host_reconciles(), 1);
         Ok(())
     }
 
@@ -9654,6 +10378,11 @@ mod tests {
             "main",
             "gpt2",
         )?;
+        set_generated_hf_service_route_visibility(
+            &mut state,
+            &fixture,
+            SoraRouteVisibilityV1::Public,
+        );
         let config_json = br#"{"model_type":"gpt2"}"#.to_vec();
         let model_info = norito::json!({
             "sha": "commit-456",
@@ -9830,6 +10559,11 @@ mod tests {
             "main",
             "gpt2",
         )?;
+        set_generated_hf_service_route_visibility(
+            &mut state,
+            &fixture,
+            SoraRouteVisibilityV1::Public,
+        );
         let (server, _captured) = spawn_recording_http_route_fixture(BTreeMap::new())?;
 
         let temp_dir = tempfile::tempdir()?;
@@ -9882,6 +10616,11 @@ mod tests {
             "main",
             "gpt2",
         )?;
+        set_generated_hf_service_route_visibility(
+            &mut state,
+            &fixture,
+            SoraRouteVisibilityV1::Public,
+        );
         let (server, _captured) = spawn_recording_http_route_fixture(BTreeMap::new())?;
 
         let temp_dir = tempfile::tempdir()?;
@@ -9928,6 +10667,11 @@ mod tests {
             "main",
             "gpt2",
         )?;
+        set_generated_hf_service_route_visibility(
+            &mut state,
+            &fixture,
+            SoraRouteVisibilityV1::Public,
+        );
         let local_peer_id = "12D3KooWLocalInferRuntimeHost";
         let placement_id = insert_generated_hf_placement_fixture(
             &mut state,
@@ -10059,6 +10803,11 @@ mod tests {
             "main",
             "gpt2",
         )?;
+        set_generated_hf_service_route_visibility(
+            &mut state,
+            &fixture,
+            SoraRouteVisibilityV1::Public,
+        );
         let local_peer_id = "12D3KooWLocalReuseRuntimeHost";
         insert_generated_hf_placement_fixture(
             &mut state,
@@ -10182,6 +10931,384 @@ mod tests {
     }
 
     #[test]
+    fn reconcile_once_starts_resident_worker_for_local_warm_replica() -> Result<()> {
+        let mut state = test_state()?;
+        let fixture = insert_generated_hf_service_fixture(
+            &mut state,
+            "hf_replica_worker_probe_service",
+            "openai-community/gpt2",
+            "main",
+            "gpt2",
+        )?;
+        let local_peer_id = "12D3KooWReplicaProbeRuntimeHost";
+        insert_generated_hf_placement_fixture(
+            &mut state,
+            &fixture,
+            SoraHfPlacementHostRoleV1::Replica,
+            SoraHfPlacementHostStatusV1::Warm,
+            local_peer_id,
+        );
+        let config_json =
+            br#"{"model_type":"gpt2","_soracloud_fixture":{"mode":"echo","prefix":"probe:"}}"#
+                .to_vec();
+        let model_info = norito::json!({
+            "sha": "commit-replica-probe-123",
+            "pipeline_tag": "text-generation",
+            "library_name": "transformers",
+            "tags": ["text-generation"],
+            "siblings": [{"rfilename": "config.json"}]
+        });
+        let mut routes = BTreeMap::new();
+        routes.insert(
+            (
+                "GET".to_owned(),
+                "/api/models/openai-community/gpt2/revision/main".to_owned(),
+            ),
+            HttpFixtureResponse::json(norito::json::to_vec(&model_info)?),
+        );
+        routes.insert(
+            (
+                "HEAD".to_owned(),
+                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
+            ),
+            HttpFixtureResponse::head_ok(
+                "application/json",
+                u64::try_from(config_json.len()).expect("fixture length fits in u64"),
+            ),
+        );
+        routes.insert(
+            (
+                "GET".to_owned(),
+                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
+            ),
+            HttpFixtureResponse::json(config_json),
+        );
+        let (server, _captured) = spawn_recording_http_route_fixture(routes)?;
+
+        let temp_dir = tempfile::tempdir()?;
+        let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
+        config.hf.hub_base_url = server.base_url.clone();
+        config.hf.api_base_url = format!("{}/api", server.base_url);
+        config.hf.import_file_allowlist = vec!["config.json".to_owned()];
+        config.hf.allow_inference_bridge_fallback = false;
+
+        let manager = SoracloudRuntimeManager::new(
+            config.with_local_host_identity(ALICE_ID.clone(), local_peer_id),
+            Arc::clone(&state),
+        );
+        manager.reconcile_once()?;
+
+        assert_eq!(manager.hf_local_workers.lock().len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn reconcile_once_submits_model_host_heartbeat_after_successful_warming_probe() -> Result<()> {
+        let mut state = test_state()?;
+        let fixture = insert_generated_hf_service_fixture(
+            &mut state,
+            "hf_warming_probe_heartbeat_service",
+            "openai-community/gpt2",
+            "main",
+            "gpt2",
+        )?;
+        let local_peer_id = "12D3KooWWarmingProbeRuntimeHost";
+        insert_generated_hf_placement_fixture(
+            &mut state,
+            &fixture,
+            SoraHfPlacementHostRoleV1::Primary,
+            SoraHfPlacementHostStatusV1::Warming,
+            local_peer_id,
+        );
+        let current_heartbeat_expiry_ms =
+            soracloud_runtime_observed_at_ms().saturating_add(20_000);
+        insert_local_model_host_capability_fixture(
+            &mut state,
+            &ALICE_ID,
+            local_peer_id,
+            current_heartbeat_expiry_ms,
+        );
+        let config_json = br#"{"model_type":"gpt2","_soracloud_fixture":{"mode":"echo","prefix":"warm:"}}"#
+            .to_vec();
+        let model_info = norito::json!({
+            "sha": "commit-warming-heartbeat-123",
+            "pipeline_tag": "text-generation",
+            "library_name": "transformers",
+            "tags": ["text-generation"],
+            "siblings": [{"rfilename": "config.json"}]
+        });
+        let mut routes = BTreeMap::new();
+        routes.insert(
+            (
+                "GET".to_owned(),
+                "/api/models/openai-community/gpt2/revision/main".to_owned(),
+            ),
+            HttpFixtureResponse::json(norito::json::to_vec(&model_info)?),
+        );
+        routes.insert(
+            (
+                "HEAD".to_owned(),
+                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
+            ),
+            HttpFixtureResponse::head_ok(
+                "application/json",
+                u64::try_from(config_json.len()).expect("fixture length fits in u64"),
+            ),
+        );
+        routes.insert(
+            (
+                "GET".to_owned(),
+                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
+            ),
+            HttpFixtureResponse::json(config_json),
+        );
+        let (server, _captured) = spawn_recording_http_route_fixture(routes)?;
+
+        let temp_dir = tempfile::tempdir()?;
+        let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
+        config.hf.hub_base_url = server.base_url.clone();
+        config.hf.api_base_url = format!("{}/api", server.base_url);
+        config.hf.import_file_allowlist = vec!["config.json".to_owned()];
+        config.hf.allow_inference_bridge_fallback = false;
+        let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
+
+        let manager = SoracloudRuntimeManager::new(
+            config.with_local_host_identity(ALICE_ID.clone(), local_peer_id),
+            Arc::clone(&state),
+        )
+        .with_mutation_sink(mutation_sink.clone());
+        manager.reconcile_once()?;
+
+        let heartbeats = mutation_sink.submitted_model_host_heartbeats();
+        assert_eq!(heartbeats.len(), 1);
+        assert_eq!(heartbeats[0].validator_account_id, *ALICE_ID);
+        assert!(heartbeats[0].heartbeat_expires_at_ms > current_heartbeat_expiry_ms);
+        assert_eq!(
+            heartbeats[0].provenance.signer,
+            ALICE_KEYPAIR.public_key().clone()
+        );
+        assert_eq!(manager.hf_local_workers.lock().len(), 1);
+        assert!(mutation_sink.submitted_violation_reports().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn reconcile_once_reports_advert_contradiction_for_local_peer_mismatch() -> Result<()> {
+        let mut state = test_state()?;
+        insert_local_model_host_capability_fixture(
+            &mut state,
+            &ALICE_ID,
+            "12D3KooWAdvertisedDifferentPeer",
+            soracloud_runtime_observed_at_ms().saturating_add(30_000),
+        );
+        let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(PathBuf::from("/tmp/test-soracloud-runtime"))
+                .with_local_host_identity(ALICE_ID.clone(), "12D3KooWActualLocalPeer"),
+            Arc::clone(&state),
+        )
+        .with_mutation_sink(mutation_sink.clone());
+
+        manager.reconcile_once()?;
+
+        let reports = mutation_sink.submitted_violation_reports();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].validator_account_id, *ALICE_ID);
+        assert_eq!(reports[0].kind, SoraModelHostViolationKindV1::AdvertContradiction);
+        assert_eq!(reports[0].placement_id, None);
+        assert!(
+            reports[0]
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("does not match the authoritative model-host advert peer id"))
+        );
+        assert_eq!(mutation_sink.submitted_model_host_reconciles(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn report_generated_hf_proxy_failure_reports_primary_host_violation() -> Result<()> {
+        let mut state = test_state()?;
+        let fixture = insert_generated_hf_service_fixture(
+            &mut state,
+            "hf_proxy_primary_failure_service",
+            "openai-community/gpt2",
+            "main",
+            "gpt2",
+        )?;
+        let local_peer_id = "12D3KooWLocalProxyIngressHost";
+        let placement_id = insert_generated_hf_placement_fixture(
+            &mut state,
+            &fixture,
+            SoraHfPlacementHostRoleV1::Replica,
+            SoraHfPlacementHostStatusV1::Warm,
+            local_peer_id,
+        );
+        let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(PathBuf::from("/tmp/test-soracloud-runtime"))
+                .with_local_host_identity(ALICE_ID.clone(), local_peer_id),
+            Arc::clone(&state),
+        )
+        .with_mutation_sink(mutation_sink.clone());
+        let handle = test_runtime_handle(&manager, Arc::clone(&state));
+
+        handle.report_generated_hf_proxy_failure(
+            &SoracloudLocalReadRequest {
+                observed_height: 0,
+                observed_block_hash: None,
+                service_name: fixture.bundle.service.service_name.to_string(),
+                service_version: fixture.bundle.service.service_version.clone(),
+                handler_name: "infer".to_owned(),
+                handler_class: iroha_core::soracloud_runtime::SoracloudLocalReadKind::Query,
+                request_method: "POST".to_owned(),
+                request_path: "/infer".to_owned(),
+                handler_path: "/infer".to_owned(),
+                request_query: None,
+                request_headers: BTreeMap::new(),
+                request_body: br#"{"inputs":"hello"}"#.to_vec(),
+                request_commitment: Hash::new(b"hf-proxy-primary-failure"),
+            },
+            "12D3KooWGeneratedHfFixturePrimary",
+            &SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Unavailable,
+                "proxy request timed out",
+            ),
+        );
+
+        let reports = mutation_sink.submitted_violation_reports();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].validator_account_id, *BOB_ID);
+        assert_eq!(
+            reports[0].kind,
+            SoraModelHostViolationKindV1::AssignedHeartbeatMiss
+        );
+        assert_eq!(reports[0].placement_id, Some(placement_id));
+        assert!(
+            reports[0]
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("targeting primary peer"))
+        );
+        assert_eq!(mutation_sink.submitted_model_host_reconciles(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn request_generated_hf_reconcile_submits_reconcile_when_no_warm_primary() -> Result<()> {
+        let mut state = test_state()?;
+        let fixture = insert_generated_hf_service_fixture(
+            &mut state,
+            "hf_missing_primary_reconcile_service",
+            "openai-community/gpt2",
+            "main",
+            "gpt2",
+        )?;
+        let local_peer_id = "12D3KooWMissingWarmPrimaryReplica";
+        insert_generated_hf_placement_fixture(
+            &mut state,
+            &fixture,
+            SoraHfPlacementHostRoleV1::Replica,
+            SoraHfPlacementHostStatusV1::Warm,
+            local_peer_id,
+        );
+        set_generated_hf_primary_assignment_status(
+            &mut state,
+            &fixture,
+            SoraHfPlacementHostStatusV1::Warming,
+        );
+        let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(PathBuf::from("/tmp/test-soracloud-runtime"))
+                .with_local_host_identity(ALICE_ID.clone(), local_peer_id),
+            Arc::clone(&state),
+        )
+        .with_mutation_sink(mutation_sink.clone());
+        let handle = test_runtime_handle(&manager, Arc::clone(&state));
+        let request = SoracloudLocalReadRequest {
+            observed_height: 0,
+            observed_block_hash: None,
+            service_name: fixture.bundle.service.service_name.to_string(),
+            service_version: fixture.bundle.service.service_version.clone(),
+            handler_name: "infer".to_owned(),
+            handler_class: iroha_core::soracloud_runtime::SoracloudLocalReadKind::Query,
+            request_method: "POST".to_owned(),
+            request_path: "/infer".to_owned(),
+            handler_path: "/infer".to_owned(),
+            request_query: None,
+            request_headers: BTreeMap::new(),
+            request_body: br#"{"inputs":"hello"}"#.to_vec(),
+            request_commitment: Hash::new(b"hf-missing-primary-reconcile"),
+        };
+        let error = SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            "generated HF service has no warm authoritative primary host",
+        );
+
+        handle.request_generated_hf_reconcile(&request, &error);
+        handle.request_generated_hf_reconcile(&request, &error);
+
+        assert!(mutation_sink.submitted_violation_reports().is_empty());
+        assert_eq!(mutation_sink.submitted_model_host_reconciles(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn request_generated_hf_reconcile_submits_reconcile_for_assigned_replica_authority_failure()
+    -> Result<()> {
+        let mut state = test_state()?;
+        let fixture = insert_generated_hf_service_fixture(
+            &mut state,
+            "hf_replica_authority_failure_reconcile_service",
+            "openai-community/gpt2",
+            "main",
+            "gpt2",
+        )?;
+        let local_peer_id = "12D3KooWReplicaAuthorityFailureHost";
+        insert_generated_hf_placement_fixture(
+            &mut state,
+            &fixture,
+            SoraHfPlacementHostRoleV1::Replica,
+            SoraHfPlacementHostStatusV1::Warm,
+            local_peer_id,
+        );
+        let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(PathBuf::from("/tmp/test-soracloud-runtime"))
+                .with_local_host_identity(ALICE_ID.clone(), local_peer_id),
+            Arc::clone(&state),
+        )
+        .with_mutation_sink(mutation_sink.clone());
+        let handle = test_runtime_handle(&manager, Arc::clone(&state));
+        let request = SoracloudLocalReadRequest {
+            observed_height: 0,
+            observed_block_hash: None,
+            service_name: fixture.bundle.service.service_name.to_string(),
+            service_version: fixture.bundle.service.service_version.clone(),
+            handler_name: "infer".to_owned(),
+            handler_class: iroha_core::soracloud_runtime::SoracloudLocalReadKind::Query,
+            request_method: "POST".to_owned(),
+            request_path: "/infer".to_owned(),
+            handler_path: "/infer".to_owned(),
+            request_query: None,
+            request_headers: BTreeMap::new(),
+            request_body: br#"{"inputs":"hello"}"#.to_vec(),
+            request_commitment: Hash::new(b"hf-replica-authority-failure-reconcile"),
+        };
+        let error = SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            "local peer rejected generated-HF proxy execution because it is not the authoritative warm primary",
+        );
+
+        handle.request_generated_hf_reconcile(&request, &error);
+        handle.request_generated_hf_reconcile(&request, &error);
+
+        assert!(mutation_sink.submitted_violation_reports().is_empty());
+        assert_eq!(mutation_sink.submitted_model_host_reconciles(), 1);
+        Ok(())
+    }
+
+    #[test]
     fn execute_local_read_generated_hf_infer_reports_primary_worker_failure_once() -> Result<()> {
         let mut state = test_state()?;
         let fixture = insert_generated_hf_service_fixture(
@@ -10191,6 +11318,11 @@ mod tests {
             "main",
             "gpt2",
         )?;
+        set_generated_hf_service_route_visibility(
+            &mut state,
+            &fixture,
+            SoraRouteVisibilityV1::Public,
+        );
         let local_peer_id = "12D3KooWLocalWorkerFailureRuntimeHost";
         let placement_id = insert_generated_hf_placement_fixture(
             &mut state,
@@ -10296,8 +11428,97 @@ mod tests {
             reports[0]
                 .detail
                 .as_deref()
-                .is_some_and(|detail| detail.contains("assigned primary host"))
+                .is_some_and(|detail| detail.contains("primary host"))
         );
+        assert_eq!(mutation_sink.submitted_model_host_reconciles(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn reconcile_once_reports_warm_replica_worker_failure() -> Result<()> {
+        let mut state = test_state()?;
+        let fixture = insert_generated_hf_service_fixture(
+            &mut state,
+            "hf_replica_worker_failure_service",
+            "openai-community/gpt2",
+            "main",
+            "gpt2",
+        )?;
+        let local_peer_id = "12D3KooWReplicaWorkerFailureRuntimeHost";
+        let placement_id = insert_generated_hf_placement_fixture(
+            &mut state,
+            &fixture,
+            SoraHfPlacementHostRoleV1::Replica,
+            SoraHfPlacementHostStatusV1::Warm,
+            local_peer_id,
+        );
+        let config_json = br#"{"model_type":"gpt2","_soracloud_fixture":{"mode":"explode"}}"#
+            .to_vec();
+        let model_info = norito::json!({
+            "sha": "commit-replica-worker-failure-123",
+            "pipeline_tag": "text-generation",
+            "library_name": "transformers",
+            "tags": ["text-generation"],
+            "siblings": [{"rfilename": "config.json"}]
+        });
+        let mut routes = BTreeMap::new();
+        routes.insert(
+            (
+                "GET".to_owned(),
+                "/api/models/openai-community/gpt2/revision/main".to_owned(),
+            ),
+            HttpFixtureResponse::json(norito::json::to_vec(&model_info)?),
+        );
+        routes.insert(
+            (
+                "HEAD".to_owned(),
+                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
+            ),
+            HttpFixtureResponse::head_ok(
+                "application/json",
+                u64::try_from(config_json.len()).expect("fixture length fits in u64"),
+            ),
+        );
+        routes.insert(
+            (
+                "GET".to_owned(),
+                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
+            ),
+            HttpFixtureResponse::json(config_json),
+        );
+        let (server, _captured) = spawn_recording_http_route_fixture(routes)?;
+
+        let temp_dir = tempfile::tempdir()?;
+        let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
+        config.hf.hub_base_url = server.base_url.clone();
+        config.hf.api_base_url = format!("{}/api", server.base_url);
+        config.hf.import_file_allowlist = vec!["config.json".to_owned()];
+        config.hf.allow_inference_bridge_fallback = false;
+        let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
+
+        let manager = SoracloudRuntimeManager::new(
+            config.with_local_host_identity(ALICE_ID.clone(), local_peer_id),
+            Arc::clone(&state),
+        )
+        .with_mutation_sink(mutation_sink.clone());
+        manager.reconcile_once()?;
+
+        let reports = mutation_sink.submitted_violation_reports();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].validator_account_id, *ALICE_ID);
+        assert_eq!(
+            reports[0].kind,
+            SoraModelHostViolationKindV1::AssignedHeartbeatMiss
+        );
+        assert_eq!(reports[0].placement_id, Some(placement_id));
+        assert!(
+            reports[0]
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("warm replica host"))
+        );
+        assert_eq!(mutation_sink.submitted_model_host_reconciles(), 1);
+        assert_eq!(manager.hf_local_workers.lock().len(), 1);
         Ok(())
     }
 
@@ -10311,6 +11532,11 @@ mod tests {
             "main",
             "gpt2",
         )?;
+        set_generated_hf_service_route_visibility(
+            &mut state,
+            &fixture,
+            SoraRouteVisibilityV1::Public,
+        );
         let local_peer_id = "12D3KooWReplicaRuntimeHost";
         insert_generated_hf_placement_fixture(
             &mut state,
@@ -10363,6 +11589,11 @@ mod tests {
             "main",
             "gpt2",
         )?;
+        set_generated_hf_service_route_visibility(
+            &mut state,
+            &fixture,
+            SoraRouteVisibilityV1::Public,
+        );
         let config_json = br#"{"model_type":"gpt2"}"#.to_vec();
         let model_info = norito::json!({
             "sha": "commit-789",
@@ -11328,6 +12559,80 @@ mod tests {
             response.bindings[0].artifact_hash,
             Some(bundle.service.artifacts[0].artifact_hash)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn execute_local_read_rejects_internal_service_route() -> Result<()> {
+        let mut state = test_state()?;
+        let mut bundle = load_deployment_bundle_fixture()?;
+        let bundle_bytes = b"ivm bundle bytes".to_vec();
+        let asset_bytes = b"<html><body>portal</body></html>".to_vec();
+        bundle.container.bundle_hash = Hash::new(&bundle_bytes);
+        bundle.service.artifacts[0].artifact_hash = Hash::new(&asset_bytes);
+        bundle
+            .service
+            .route
+            .as_mut()
+            .expect("fixture route")
+            .visibility = iroha_data_model::soracloud::SoraRouteVisibilityV1::Internal;
+        let deployment = sample_deployment_state(&bundle);
+        let runtime = sample_runtime_state(&bundle);
+        let temp_dir = tempfile::tempdir()?;
+        let artifacts_root = temp_dir.path().join("artifacts");
+        fs::create_dir_all(&artifacts_root)?;
+        fs::write(
+            artifacts_root.join(hash_cache_name(bundle.container.bundle_hash)),
+            &bundle_bytes,
+        )?;
+        fs::write(
+            artifacts_root.join(hash_cache_name(bundle.service.artifacts[0].artifact_hash)),
+            &asset_bytes,
+        )?;
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            world.soracloud_service_revisions_mut_for_testing().insert(
+                (
+                    bundle.service.service_name.to_string(),
+                    bundle.service.service_version.clone(),
+                ),
+                bundle.clone(),
+            );
+            world
+                .soracloud_service_deployments_mut_for_testing()
+                .insert(bundle.service.service_name.clone(), deployment);
+            world
+                .soracloud_service_runtime_mut_for_testing()
+                .insert(bundle.service.service_name.clone(), runtime);
+        }
+
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(temp_dir.path().to_path_buf()),
+            Arc::clone(&state),
+        );
+        manager.reconcile_once()?;
+        let handle = test_runtime_handle(&manager, Arc::clone(&state));
+
+        let error = handle
+            .execute_local_read(SoracloudLocalReadRequest {
+                observed_height: 0,
+                observed_block_hash: None,
+                service_name: bundle.service.service_name.to_string(),
+                service_version: bundle.service.service_version.clone(),
+                handler_name: "assets".to_owned(),
+                handler_class: iroha_core::soracloud_runtime::SoracloudLocalReadKind::Asset,
+                request_method: "GET".to_owned(),
+                request_path: "/app/assets".to_owned(),
+                handler_path: "/".to_owned(),
+                request_query: None,
+                request_headers: BTreeMap::new(),
+                request_body: Vec::new(),
+                request_commitment: Hash::new(b"asset-request"),
+            })
+            .expect_err("internal routes must not execute through public local-read");
+
+        assert_eq!(error.kind, SoracloudRuntimeExecutionErrorKind::InvalidRequest);
+        assert!(error.message.contains("local-read route is not public"));
         Ok(())
     }
 

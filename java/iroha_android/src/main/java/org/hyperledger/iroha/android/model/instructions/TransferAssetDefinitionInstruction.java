@@ -97,7 +97,9 @@ public final class TransferAssetDefinitionInstruction implements InstructionTemp
     private Builder() {}
 
     public Builder setSourceAccountId(final String sourceAccountId) {
-      this.sourceAccountId = Objects.requireNonNull(sourceAccountId, "sourceAccountId");
+      this.sourceAccountId =
+          org.hyperledger.iroha.android.address.AccountIdLiteral.requireCanonicalI105Address(
+              sourceAccountId, "sourceAccountId");
       return this;
     }
 
@@ -108,7 +110,8 @@ public final class TransferAssetDefinitionInstruction implements InstructionTemp
 
     public Builder setDestinationAccountId(final String destinationAccountId) {
       this.destinationAccountId =
-          Objects.requireNonNull(destinationAccountId, "destinationAccountId");
+          org.hyperledger.iroha.android.address.AccountIdLiteral.requireCanonicalI105Address(
+              destinationAccountId, "destinationAccountId");
       return this;
     }
 

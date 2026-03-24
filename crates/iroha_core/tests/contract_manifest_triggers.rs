@@ -62,6 +62,14 @@ fn setup_state() -> (State, AccountId, KeyPair) {
     (state, account_id, kp)
 }
 
+fn opaque_asset_definition_id() -> AssetDefinitionId {
+    AssetDefinitionId::from_uuid_bytes([
+        0x68, 0x72, 0x45, 0x4e, 0x9c, 0x04, 0x46, 0x41, 0xaa, 0x58, 0x1e, 0xc5, 0xf3, 0x80, 0x16,
+        0x19,
+    ])
+    .expect("opaque asset definition id")
+}
+
 fn assert_contract_trigger_metadata(
     metadata: &Metadata,
     namespace: &str,
@@ -232,9 +240,7 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
     .execute(&authority, &mut stx)
     .expect("register contract bytes");
 
-    let asset_definition: AssetDefinitionId = "aid:6872454e9c044641aa581ec5f3801619"
-        .parse()
-        .expect("asset definition id");
+    let asset_definition = opaque_asset_definition_id();
     let data_trigger_id: TriggerId = "asset_added".parse().expect("data trigger id");
     let pipeline_trigger_id: TriggerId = "block_seen".parse().expect("pipeline trigger id");
 
@@ -406,6 +412,7 @@ fn activate_registers_kotodama_compiled_manifest_triggers_from_source() {
         .expect("grant CanEnactGovernance");
 
     let authority_literal = authority.to_string();
+    let asset_definition = opaque_asset_definition_id();
     let source = format!(
         r#"
 seiyaku Test {{
@@ -413,7 +420,7 @@ seiyaku Test {{
   register_trigger asset_added {{
     call run;
     on data asset added {{
-      asset_definition "aid:6872454e9c044641aa581ec5f3801619";
+      asset_definition "{asset_definition}";
     }}
     authority "{authority_literal}";
     metadata {{
@@ -460,9 +467,7 @@ seiyaku Test {{
 
     let data_trigger_id: TriggerId = "asset_added".parse().expect("data trigger id");
     let pipeline_trigger_id: TriggerId = "block_seen".parse().expect("pipeline trigger id");
-    let asset_definition: AssetDefinitionId = "aid:6872454e9c044641aa581ec5f3801619"
-        .parse()
-        .expect("asset definition");
+    let asset_definition = opaque_asset_definition_id();
 
     let data_action = stx
         .world

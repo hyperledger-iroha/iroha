@@ -6,8 +6,8 @@ package org.hyperledger.iroha.android.crypto;
 /**
  * Pure Java implementation of the BLAKE3 hash function.
  *
- * <p>Supports inputs up to 1024 bytes (single chunk). This covers all asset definition ID
- * strings used for computing {@code aid:} identifiers from {@code "name#domain"} format.
+ * <p>Supports inputs up to 1024 bytes (single chunk). This covers all asset-definition seed
+ * strings used for deriving canonical addresses from {@code "name#domain"} input.
  *
  * <p>Reference: <a href="https://github.com/BLAKE3-team/BLAKE3-specs">BLAKE3 Specification</a>
  */

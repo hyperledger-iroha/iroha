@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
 import org.hyperledger.iroha.android.offline.OfflineAllowanceCommitment;
 import org.hyperledger.iroha.android.offline.OfflineAllowanceList;
 import org.hyperledger.iroha.android.offline.OfflineAllowanceRegisterResponse;
@@ -69,6 +70,7 @@ public final class OfflineToriiClientTests {
   }
 
   private static void listAllowancesParsesResponse() {
+    final String assetDefinitionId = AssetDefinitionIdEncoder.encode("usd", "wonderland");
     final StubExecutor executor =
         new StubExecutor(
             200,
@@ -81,7 +83,7 @@ public final class OfflineToriiClientTests {
                   "controller_id": "alice@wonderland",
                   "controller_display": "alice@wonderland",
                   "asset_id": "usd#wonderland",
-                  "asset_definition_id": "usd#wonderland",
+                  "asset_definition_id": "%s",
                   "asset_definition_name": "USD",
                   "asset_definition_alias": null,
                   "registered_at_ms": 1,
@@ -95,7 +97,8 @@ public final class OfflineToriiClientTests {
                 }
               ]
             }
-            """);
+            """
+                .formatted(assetDefinitionId));
     final OfflineToriiClient client =
         OfflineToriiClient.builder()
             .executor(executor)
@@ -121,9 +124,9 @@ public final class OfflineToriiClientTests {
     assert list.total() == 1 : "allowance total mismatch";
     assert "alice@wonderland".equals(list.items().get(0).controllerId())
         : "allowance controller mismatch";
-    assert "xor#merchants".equals(list.items().get(0).assetDefinitionId())
+    assert assetDefinitionId.equals(list.items().get(0).assetDefinitionId())
         : "allowance asset definition id mismatch";
-    assert "Merchant XOR".equals(list.items().get(0).assetDefinitionName())
+    assert "USD".equals(list.items().get(0).assetDefinitionName())
         : "allowance asset definition name mismatch";
     assert list.items().get(0).certificateExpiresAtMs() == 1_700_000_000_000L
         : "certificate expiry mismatch";

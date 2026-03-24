@@ -16,13 +16,17 @@ impl Drop for AccelGuard {
 fn disable_cuda_via_env() {
     let baseline = ivm::acceleration_config();
     let _guard = AccelGuard(baseline);
-    std::env::set_var("IVM_DISABLE_CUDA", "1");
+    unsafe {
+        std::env::set_var("IVM_DISABLE_CUDA", "1");
+    }
     let vm = IVM::new(1_000);
     assert!(
-        !vm.use_cuda,
+        !vm.uses_cuda(),
         "VM should not enable CUDA when IVM_DISABLE_CUDA is set"
     );
-    std::env::remove_var("IVM_DISABLE_CUDA");
+    unsafe {
+        std::env::remove_var("IVM_DISABLE_CUDA");
+    }
 }
 
 #[cfg(feature = "cuda")]

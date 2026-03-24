@@ -525,8 +525,7 @@ impl AccountAddress {
             {
                 return Err(AccountAddressError::UnexpectedNetworkPrefix { expected, found });
             } else {
-                // Compatibility: legacy literals may omit the chain-discriminant sentinel.
-                encoded
+                return Err(AccountAddressError::MissingI105Sentinel);
             };
         let digits = i105_to_digits(payload)?;
         if digits.len() <= I105_CHECKSUM_LEN {

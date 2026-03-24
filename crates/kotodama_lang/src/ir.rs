@@ -502,11 +502,10 @@ pub enum Instr {
     CurrentTimeMs {
         dest: Temp,
     },
-    /// Resolve a stable `(label, domain)` alias to the current AccountId.
+    /// Resolve a canonical account alias string to the current AccountId.
     ResolveAccountAlias {
         dest: Temp,
-        label: Temp,
-        domain: Temp,
+        alias: Temp,
     },
     /// Load trigger event payload (`Json*`) into `dest` (host-provided).
     GetTriggerEvent {
@@ -2981,14 +2980,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     t
                 }
                 "resolve_account_alias" => {
-                    let label = lower_expr(ctx, &args[0], vars);
-                    let domain = lower_expr(ctx, &args[1], vars);
+                    let alias = lower_expr(ctx, &args[0], vars);
                     let dest = ctx.new_temp();
-                    ctx.current_instr(Instr::ResolveAccountAlias {
-                        dest,
-                        label,
-                        domain,
-                    });
+                    ctx.current_instr(Instr::ResolveAccountAlias { dest, alias });
                     dest
                 }
                 "build_submit_ballot_inline" => {
@@ -4046,8 +4040,7 @@ mod tests {
 
     #[test]
     fn lower_resolve_account_alias_builtin() {
-        let src =
-            "fn main() { let _acct = resolve_account_alias(name(\"banking\"), domain(\"sbp\")); }";
+        let src = "fn main() { let _acct = resolve_account_alias(\"banking@sbp\"); }";
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");

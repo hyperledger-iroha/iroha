@@ -5,6 +5,7 @@ import CryptoKit
 public enum CanonicalRequestError: Error {
     case missingAccountId
     case missingSigningKey
+    case missingNonce
 }
 
 @available(macOS 10.15, iOS 13.0, *)
@@ -49,23 +50,48 @@ public struct CanonicalRequest {
         return Data(rendered.utf8)
     }
 
+    public static func signatureMessage(method: String,
+                                        path: String,
+                                        query: String? = nil,
+                                        body: Data = Data(),
+                                        timestampMs: UInt64,
+                                        nonce: String) throws -> Data {
+        guard !nonce.isEmpty else {
+            throw CanonicalRequestError.missingNonce
+        }
+        let base = canonicalMessage(method: method, path: path, query: query, body: body)
+        let rendered = "\(String(decoding: base, as: UTF8.self))\n\(timestampMs)\n\(nonce)"
+        return Data(rendered.utf8)
+    }
+
     public static func signingHeaders(accountId: String,
                                       method: String,
                                       path: String,
                                       query: String? = nil,
                                       body: Data = Data(),
-                                      signer: SigningKey?) throws -> [String: String] {
+                                      signer: SigningKey?,
+                                      timestampMs: UInt64 = UInt64(Date().timeIntervalSince1970 * 1000),
+                                      nonce: String = UUID().uuidString.replacingOccurrences(of: "-", with: "")) throws -> [String: String] {
         guard !accountId.isEmpty else {
             throw CanonicalRequestError.missingAccountId
         }
         guard let signer = signer else {
             throw CanonicalRequestError.missingSigningKey
         }
-        let message = canonicalMessage(method: method, path: path, query: query, body: body)
+        let message = try signatureMessage(
+            method: method,
+            path: path,
+            query: query,
+            body: body,
+            timestampMs: timestampMs,
+            nonce: nonce
+        )
         let signature = try signer.sign(message)
         return [
             "X-Iroha-Account": accountId,
             "X-Iroha-Signature": Data(signature).base64EncodedString(),
+            "X-Iroha-Timestamp-Ms": String(timestampMs),
+            "X-Iroha-Nonce": nonce,
         ]
     }
 }

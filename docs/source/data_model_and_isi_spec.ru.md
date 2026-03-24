@@ -27,7 +27,9 @@ translator: machine-google-reviewed
 Идентификаторы имеют стабильную строковую форму с двусторонним обменом `Display`/`FromStr`. Правила имен запрещают пробелы и зарезервированные символы `@ # $`.- `Name` — проверенный текстовый идентификатор. Правила: `crates/iroha_data_model/src/name.rs`.
 - `DomainId` — `name`. Домен: `{ id, logo, metadata, owned_by }`. Строители: `NewDomain`. Код: `crates/iroha_data_model/src/domain.rs`.
 - `AccountId` — канонические адреса создаются через `AccountAddress` (I105 / hex), а Torii нормализует входные данные через `AccountAddress::parse_encoded`. I105 — предпочтительный формат учетной записи; форма I105 предназначена для UX только для Sora. Знакомая строка `alias` (отклоненная устаревшая форма) сохраняется только как псевдоним маршрутизации. Аккаунт: `{ id, metadata }`. Код: `crates/iroha_data_model/src/account.rs`.- Политика допуска учетных записей — домены контролируют неявное создание учетных записей, сохраняя Norito-JSON `AccountAdmissionPolicy` под ключом метаданных `iroha:account_admission_policy`. Если ключ отсутствует, пользовательский параметр уровня цепочки `iroha:default_account_admission_policy` предоставляет значение по умолчанию; если он также отсутствует, жесткое значение по умолчанию — `ImplicitReceive` (первая версия). Теги политики `mode` (`ExplicitOnly` или `ImplicitReceive`), а также дополнительные ограничения на каждую транзакцию (по умолчанию `16`) и ограничения на создание каждого блока, необязательный `implicit_creation_fee` (сжигающий или поглощающий аккаунт), `min_initial_amounts` для каждого определения актива и необязательный `default_role_on_create` (предоставляется после `AccountCreated`, отклоняется с `DefaultRoleError`, если отсутствует). Genesis не может принять участие; отключенные/недействительные политики отклоняют инструкции в виде квитанций для неизвестных учетных записей с `InstructionExecutionError::AccountAdmission`. Неявные учетные записи отмечают метаданные `iroha:created_via="implicit"` до `AccountCreated`; роли по умолчанию выдают последующий `AccountRoleGranted`, а базовые правила владельца-исполнителя позволяют новой учетной записи расходовать свои собственные активы/NFT без дополнительных ролей. Код: `crates/iroha_data_model/src/account/admission.rs`, `crates/iroha_core/src/smartcontracts/isi/account_admission.rs`.
-- `AssetDefinitionId` — канонический `aid:<32-lower-hex-no-dash>` (UUID-v4 байта). Определение: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. Литералы `alias` должны быть `<name>#<domain>@<dataspace>` или `<name>#<dataspace>`, где `<name>` соответствует имени определения актива. Код: `crates/iroha_data_model/src/asset/definition.rs`.
+- `AssetDefinitionId` — канонический `unprefixed Base58 address with versioning and checksum` (UUID-v4 байта). Определение: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. Литералы `alias` должны быть `<name>#<domain>.<dataspace>` или `<name>#<dataspace>`, где `<name>` соответствует имени определения актива. Код: `crates/iroha_data_model/src/asset/definition.rs`.
+
+  - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`, where `status` is `permanent`, `leased_active`, `leased_grace`, or `expired_pending_cleanup`. Alias selectors resolve against the latest committed block creation time and stop resolving after grace even before sweep removes stale bindings.
 - `AssetId`: канонический литерал `norito:<hex>` (устаревшие текстовые формы не поддерживаются в первом выпуске).- `NftId` — `nft$domain`. НФТ: `{ id, content: Metadata, owned_by }`. Код: `crates/iroha_data_model/src/nft.rs`.
 - `RoleId` — `name`. Роль: `{ id, permissions: BTreeSet<Permission> }` со строителем `NewRole { inner: Role, grant_to }`. Код: `crates/iroha_data_model/src/role.rs`.
 - `Permission` — `{ name: Ident, payload: Json }`. Код: `crates/iroha_data_model/src/permission.rs`.
@@ -192,19 +194,19 @@ translator: machine-google-reviewed
   — Если байт-код IVM триггера отсутствует во время выполнения, триггер удаляется, и выполнение рассматривается как неактивное с результатом сбоя.
   - Исчерпанные триггеры удаляются сразу; если во время выполнения встречается исчерпанная запись, она удаляется и рассматривается как отсутствующая.
 - Обновление параметров:
-  - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` обновляет и выдает `ConfigurationEvent::Changed`.CLI/Torii `aid` + примеры псевдонимов:
+  - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` обновляет и выдает `ConfigurationEvent::Changed`.CLI/Torii asset-definition id + примеры псевдонимов:
 - Зарегистрируйтесь с помощью канонической помощи + явное имя + длинный псевдоним:
-  - `iroha ledger asset definition register --id aid:2f17c72466f84a4bb8a8e24884fdcd2f --name pkr --alias pkr#ubl@sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#ubl.sbp`
 - Зарегистрируйтесь с помощью канонической помощи + явное имя + короткий псевдоним:
-  - `iroha ledger asset definition register --id aid:550e8400e29b41d4a7164466554400dd --name pkr --alias pkr#sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#sbp`
 - Mint по псевдониму + компоненты аккаунта:
-  - `iroha ledger asset mint --definition-alias pkr#ubl@sbp --account <i105> --quantity 500`
+  - `iroha ledger asset mint --definition-alias pkr#ubl.sbp --account <i105> --quantity 500`
 - Разрешить псевдоним канонической помощи:
-  - `POST /v1/assets/aliases/resolve` с JSON `{ "alias": "pkr#ubl@sbp" }`
+  - `POST /v1/assets/aliases/resolve` с JSON `{ "alias": "pkr#ubl.sbp" }`
 
 Примечание по миграции:
 — Текстовые идентификаторы определения активов `name#domain` намеренно не поддерживаются в первом выпуске.
-— Идентификаторы активов на границах выпуска/сжигания/передачи остаются каноническими `norito:<hex>`; используйте `iroha tools encode asset-id` с `--definition aid:...` или `--alias ...` плюс `--account`.
+— Идентификаторы активов на границах выпуска/сжигания/передачи остаются каноническими `norito:<hex>`; используйте `iroha tools encode asset-id` с `--definition <base58-asset-definition-id>` или `--alias ...` плюс `--account`.
 
 ---
 

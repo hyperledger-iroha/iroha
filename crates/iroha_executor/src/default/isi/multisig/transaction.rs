@@ -50,8 +50,8 @@ impl VisitExecute for MultisigPropose {
             Ok(home_domain) => home_domain,
             Err(err) => deny!(executor, err),
         };
-        let proposer_role = multisig_role_for(&home_domain, &proposer);
-        let multisig_role = multisig_role_for(&home_domain, &multisig_account);
+        let proposer_role = multisig_role_for(home_domain.as_ref(), &proposer);
+        let multisig_role = multisig_role_for(home_domain.as_ref(), &multisig_account);
         let is_downward_proposal = host
             .query(FindRolesByAccountId::new(multisig_account.clone()))
             .execute_all()
@@ -248,7 +248,7 @@ impl VisitExecute for MultisigApprove {
             .map(|roles| {
                 roles
                     .into_iter()
-                    .any(|role| role == multisig_role_for(&home_domain, &multisig_account))
+                    .any(|role| role == multisig_role_for(home_domain.as_ref(), &multisig_account))
             })
             .unwrap_or(false);
 

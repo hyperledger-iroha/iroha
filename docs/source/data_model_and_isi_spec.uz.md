@@ -27,7 +27,9 @@ Determinizm: Barcha ko'rsatmalar semantikasi apparatga bog'liq bo'lmagan sof hol
 Identifikatorlar `Display`/`FromStr` boʻylab sayohatga ega barqaror string shakllariga ega. Nom qoidalari bo'sh joy va ajratilgan `@ # $` belgilarni taqiqlaydi.- `Name` - tasdiqlangan matn identifikatori. Qoidalar: `crates/iroha_data_model/src/name.rs`.
 - `DomainId` — `name`. Domen: `{ id, logo, metadata, owned_by }`. Quruvchilar: `NewDomain`. Kod: `crates/iroha_data_model/src/domain.rs`.
 - `AccountId` - kanonik manzillar `AccountAddress` (I105 / hex) orqali ishlab chiqariladi va Torii `AccountAddress::parse_encoded` orqali kirishlarni normallashtiradi. I105 - afzal qilingan hisob formati; I105 shakli faqat Sora UX uchun. Tanish `alias` (rad etilgan eski shakl) qatori faqat marshrutlash taxallus sifatida saqlanadi. Hisob: `{ id, metadata }`. Kod: `crates/iroha_data_model/src/account.rs`.- Hisobni qabul qilish siyosati — domenlar `iroha:account_admission_policy` metamaʼlumotlar kaliti ostida Norito-JSON `AccountAdmissionPolicy` ni saqlash orqali yashirin hisob yaratishni nazorat qiladi. Kalit yo'q bo'lganda, zanjir darajasidagi maxsus parametr `iroha:default_account_admission_policy` standartni ta'minlaydi; u ham bo'lmasa, qattiq standart `ImplicitReceive` (birinchi versiya). Siyosat teglari `mode` (`ExplicitOnly` yoki `ImplicitReceive`) hamda ixtiyoriy har bir tranzaksiya (standart `16`) va har bir blok yaratish cheklovlari, ixtiyoriy `implicit_creation_fee` hisobi (yoki sink), Har bir aktiv taʼrifi uchun `min_initial_amounts` va ixtiyoriy `default_role_on_create` (`AccountCreated` dan keyin beriladi, agar yoʻq boʻlsa, `DefaultRoleError` bilan rad etiladi). Ibtido ishtirok eta olmaydi; o'chirilgan/yaroqsiz siyosatlar `InstructionExecutionError::AccountAdmission` bilan noma'lum hisoblar uchun kvitansiya uslubidagi ko'rsatmalarni rad etadi. `AccountCreated` dan oldin `iroha:created_via="implicit"` metamaʼlumotlarining yashirin hisob shtampi; standart rollar keyingi `AccountRoleGranted` ni chiqaradi va ijrochi egasining asosiy qoidalari yangi hisobning o'z aktivlarini/NFTlarini qo'shimcha rollarsiz sarflashga imkon beradi. Kod: `crates/iroha_data_model/src/account/admission.rs`, `crates/iroha_core/src/smartcontracts/isi/account_admission.rs`.
-- `AssetDefinitionId` — kanonik `aid:<32-lower-hex-no-dash>` (UUID-v4 bayt). Ta'rif: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. `alias` harflari `<name>#<domain>@<dataspace>` yoki `<name>#<dataspace>`, `<name>` obyekt taʼrifi nomiga teng boʻlishi kerak. Kod: `crates/iroha_data_model/src/asset/definition.rs`.
+- `AssetDefinitionId` — kanonik `unprefixed Base58 address with versioning and checksum` (UUID-v4 bayt). Ta'rif: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. `alias` harflari `<name>#<domain>.<dataspace>` yoki `<name>#<dataspace>`, `<name>` obyekt taʼrifi nomiga teng boʻlishi kerak. Kod: `crates/iroha_data_model/src/asset/definition.rs`.
+
+  - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`, where `status` is `permanent`, `leased_active`, `leased_grace`, or `expired_pending_cleanup`. Alias selectors resolve against the latest committed block creation time and stop resolving after grace even before sweep removes stale bindings.
 - `AssetId`: kanonik kodlangan literal `norito:<hex>` (eski matn shakllari birinchi versiyada qo'llab-quvvatlanmaydi).- `NftId` — `nft$domain`. NFT: `{ id, content: Metadata, owned_by }`. Kod: `crates/iroha_data_model/src/nft.rs`.
 - `RoleId` — `name`. Rol: `{ id, permissions: BTreeSet<Permission> }` quruvchi `NewRole { inner: Role, grant_to }` bilan. Kod: `crates/iroha_data_model/src/role.rs`.
 - `Permission` — `{ name: Ident, payload: Json }`. Kod: `crates/iroha_data_model/src/permission.rs`.
@@ -192,19 +194,19 @@ Umumiy konvert: `InstructionExecutionError` baholash xatolari, soʻrovlar xatosi
   - If a trigger's IVM bytecode is missing at execution time, the trigger is removed and the execution is treated as a no-op with a failure outcome.
   - tugatilgan triggerlar darhol olib tashlanadi; agar ijro paytida tugallangan yozuvga duch kelsa, u kesiladi va yo'qolgan deb hisoblanadi.
 - Parametrlarni yangilash:
-  - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` yangilanadi va `ConfigurationEvent::Changed` chiqaradi.CLI / Torii `aid` + taxalluslarga misollar:
+  - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` yangilanadi va `ConfigurationEvent::Changed` chiqaradi.CLI / Torii asset-definition id + taxalluslarga misollar:
 - Kanonik yordam + aniq ism + uzun taxallus bilan ro'yxatdan o'ting:
-  - `iroha ledger asset definition register --id aid:2f17c72466f84a4bb8a8e24884fdcd2f --name pkr --alias pkr#ubl@sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#ubl.sbp`
 - Kanonik yordam + aniq ism + qisqa taxallus bilan ro'yxatdan o'ting:
-  - `iroha ledger asset definition register --id aid:550e8400e29b41d4a7164466554400dd --name pkr --alias pkr#sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#sbp`
 - Taxallus + hisob komponentlari bo'yicha mint:
-  - `iroha ledger asset mint --definition-alias pkr#ubl@sbp --account <i105> --quantity 500`
+  - `iroha ledger asset mint --definition-alias pkr#ubl.sbp --account <i105> --quantity 500`
 - Kanonik yordam uchun taxallusni hal qiling:
-  - JSON `{ "alias": "pkr#ubl@sbp" }` bilan `POST /v1/assets/aliases/resolve`
+  - JSON `{ "alias": "pkr#ubl.sbp" }` bilan `POST /v1/assets/aliases/resolve`
 
 Migratsiya eslatmasi:
 - `name#domain` matnli obyekt taʼrifi identifikatorlari birinchi versiyada ataylab qoʻllab-quvvatlanmaydi.
-- Yalpish/yonish/o'tkazish chegaralaridagi aktiv identifikatorlari `norito:<hex>` kanonik bo'lib qoladi; `iroha tools encode asset-id` bilan `--definition aid:...` yoki `--alias ...` plus `--account` dan foydalaning.
+- Yalpish/yonish/o'tkazish chegaralaridagi aktiv identifikatorlari `norito:<hex>` kanonik bo'lib qoladi; `iroha tools encode asset-id` bilan `--definition <base58-asset-definition-id>` yoki `--alias ...` plus `--account` dan foydalaning.
 
 ---
 

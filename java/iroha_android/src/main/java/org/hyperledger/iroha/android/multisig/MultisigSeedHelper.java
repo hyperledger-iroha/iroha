@@ -53,17 +53,14 @@ public final class MultisigSeedHelper {
     if (!targetParts.isEd25519()) {
       return false;
     }
-    final Optional<byte[]> derived = deriveDeterministicPublicKey(targetParts.domain, spec);
+    final Optional<byte[]> derived = deriveDeterministicPublicKey(spec);
     if (derived.isEmpty()) {
       return false;
     }
     return Arrays.equals(targetParts.publicKey, derived.get());
   }
 
-  static Optional<byte[]> deriveDeterministicPublicKey(final String domain, final MultisigSpec spec) {
-    if (domain == null || domain.isBlank()) {
-      return Optional.empty();
-    }
+  static Optional<byte[]> deriveDeterministicPublicKey(final MultisigSpec spec) {
     final SortedMap<AccountIdParts, Long> signatories = new TreeMap<>();
     for (final Map.Entry<String, Integer> entry : spec.signatories().entrySet()) {
       final Optional<AccountIdParts> parts = parseAccountIdParts(entry.getKey());
@@ -74,7 +71,6 @@ public final class MultisigSeedHelper {
     }
 
     final NoritoEncoder encoder = new NoritoEncoder(NoritoHeader.MINOR_VERSION);
-    encodeSizedField(encoder, STRING_ADAPTER, domain);
     encodeMultisigSpecField(encoder, signatories, spec);
 
     final byte[] seed = Blake2b.digest256(encoder.toByteArray());
@@ -130,45 +126,27 @@ public final class MultisigSeedHelper {
     if (trimmed.isEmpty()) {
       return Optional.empty();
     }
-    final int atIndex = trimmed.lastIndexOf('@');
-    if (atIndex <= 0 || atIndex == trimmed.length() - 1) {
-      return Optional.empty();
-    }
-    final String identifier = trimmed.substring(0, atIndex);
-    final String domain = trimmed.substring(atIndex + 1).trim();
-    if (domain.isBlank()) {
-      return Optional.empty();
-    }
-    final Optional<KeyPayload> payload = parseSingleKeyIdentifier(identifier);
-    if (payload.isEmpty()) {
-      return Optional.empty();
-    }
-    final int algorithmTag = algorithmTagForCurveId(payload.get().curveId);
-    if (algorithmTag < 0) {
-      return Optional.empty();
-    }
-    return Optional.of(
-        new AccountIdParts(domain, payload.get().curveId, algorithmTag, payload.get().keyBytes));
-  }
-
-  private static Optional<KeyPayload> parseSingleKeyIdentifier(final String identifier) {
+    final AccountAddress address;
     try {
-      final AccountAddress.ParseResult parsed = AccountAddress.parseAny(identifier, null);
-      final Optional<AccountAddress.SingleKeyPayload> payloadOpt =
-          parsed.address.singleKeyPayload();
-      if (payloadOpt.isPresent()) {
-        final AccountAddress.SingleKeyPayload payload = payloadOpt.get();
-        return Optional.of(new KeyPayload(payload.curveId(), payload.publicKey()));
-      }
+      address = AccountAddress.parseEncodedIgnoringCurveSupport(trimmed, null).address;
     } catch (final AccountAddress.AccountAddressException ignored) {
-      // fall through to multihash parsing
-    }
-    final PublicKeyCodec.PublicKeyPayload decoded =
-        PublicKeyCodec.decodePublicKeyLiteral(identifier);
-    if (decoded == null) {
       return Optional.empty();
     }
-    return Optional.of(new KeyPayload(decoded.curveId(), decoded.keyBytes()));
+    try {
+      final Optional<AccountAddress.SingleKeyPayload> payloadOpt =
+          address.singleKeyPayloadIgnoringCurveSupport();
+      if (payloadOpt.isEmpty()) {
+        return Optional.empty();
+      }
+      final AccountAddress.SingleKeyPayload payload = payloadOpt.get();
+      final int algorithmTag = algorithmTagForCurveId(payload.curveId());
+      if (algorithmTag < 0) {
+        return Optional.empty();
+      }
+      return Optional.of(new AccountIdParts(payload.curveId(), algorithmTag, payload.publicKey()));
+    } catch (final AccountAddress.AccountAddressException ignored) {
+      return Optional.empty();
+    }
   }
 
   private static int algorithmTagForCurveId(final int curveId) {
@@ -194,30 +172,19 @@ public final class MultisigSeedHelper {
     }
   }
 
-  private static final class KeyPayload {
-    private final int curveId;
-    private final byte[] keyBytes;
-
-    private KeyPayload(final int curveId, final byte[] keyBytes) {
-      this.curveId = curveId;
-      this.keyBytes = Arrays.copyOf(keyBytes, keyBytes.length);
-    }
-  }
-
   private static final class AccountIdParts implements Comparable<AccountIdParts> {
-    private final String domain;
+    private final int curveId;
     private final int algorithmTag;
     private final byte[] publicKey;
     private final String publicKeyLiteral;
 
-    private AccountIdParts(
-        final String domain,
-        final int curveId,
-        final int algorithmTag,
-        final byte[] publicKey) {
-      this.domain = Objects.requireNonNull(domain, "domain");
+    private AccountIdParts(final int curveId, final int algorithmTag, final byte[] publicKey) {
+      this.curveId = curveId;
       this.algorithmTag = algorithmTag;
       this.publicKey = Arrays.copyOf(publicKey, publicKey.length);
+      if (curveId < 0) {
+        throw new IllegalArgumentException("curveId must be non-negative");
+      }
       this.publicKeyLiteral = PublicKeyCodec.encodePublicKeyMultihash(curveId, publicKey);
     }
 
@@ -227,10 +194,6 @@ public final class MultisigSeedHelper {
 
     @Override
     public int compareTo(final AccountIdParts other) {
-      final int domainCmp = domain.compareTo(other.domain);
-      if (domainCmp != 0) {
-        return domainCmp;
-      }
       final int algoCmp = Integer.compare(algorithmTag, other.algorithmTag);
       if (algoCmp != 0) {
         return algoCmp;
@@ -255,14 +218,12 @@ public final class MultisigSeedHelper {
         return false;
       }
       return algorithmTag == other.algorithmTag
-          && domain.equals(other.domain)
           && Arrays.equals(publicKey, other.publicKey);
     }
 
     @Override
     public int hashCode() {
-      int result = domain.hashCode();
-      result = 31 * result + algorithmTag;
+      int result = algorithmTag;
       result = 31 * result + Arrays.hashCode(publicKey);
       return result;
     }
@@ -286,7 +247,6 @@ public final class MultisigSeedHelper {
       new TypeAdapter<AccountIdParts>() {
         @Override
         public void encode(final NoritoEncoder encoder, final AccountIdParts value) {
-          encodeSizedField(encoder, STRING_ADAPTER, value.domain);
           encodeSizedField(encoder, ACCOUNT_CONTROLLER_ADAPTER, value);
         }
 

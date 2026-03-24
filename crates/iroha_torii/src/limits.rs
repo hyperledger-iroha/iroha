@@ -314,6 +314,26 @@ pub fn is_allowed_by_cidr(headers: &HeaderMap, remote: Option<IpAddr>, allow: &[
     candidate_ip.map_or(false, |ip| cidr_contains(allow, ip))
 }
 
+/// Returns true if a forwarded header is present and the TCP peer belongs to a
+/// trusted proxy CIDR.
+pub fn has_trusted_forwarded_header(
+    headers: &HeaderMap,
+    remote: Option<IpAddr>,
+    trusted_proxies: &[IpNet],
+    header_name: &'static str,
+) -> bool {
+    let Some(remote_ip) = remote else {
+        return false;
+    };
+    if !cidr_contains(trusted_proxies, remote_ip) {
+        return false;
+    }
+    headers
+        .get(header_name)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| !value.trim().is_empty())
+}
+
 /// Configuration for the pre-authentication connection gate.
 #[derive(Debug, Clone)]
 pub struct PreAuthConfig {
@@ -754,6 +774,32 @@ mod tests {
             key_from_headers(&headers2, None, Some("hint"), false),
             "hint"
         );
+    }
+
+    #[test]
+    fn trusted_forwarded_header_requires_proxy_membership() {
+        let trusted = parse_cidrs(&["127.0.0.0/8".to_owned()]);
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-client-cert", "cert=present".parse().unwrap());
+
+        assert!(has_trusted_forwarded_header(
+            &headers,
+            Some("127.0.0.1".parse().unwrap()),
+            &trusted,
+            "x-forwarded-client-cert",
+        ));
+        assert!(!has_trusted_forwarded_header(
+            &headers,
+            Some("198.51.100.10".parse().unwrap()),
+            &trusted,
+            "x-forwarded-client-cert",
+        ));
+        assert!(!has_trusted_forwarded_header(
+            &HeaderMap::new(),
+            Some("127.0.0.1".parse().unwrap()),
+            &trusted,
+            "x-forwarded-client-cert",
+        ));
     }
 
     #[tokio::test]

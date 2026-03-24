@@ -32,7 +32,7 @@ translator: machine-google-reviewed
 - `ChainId`：用於交易中重播保護的不透明鏈標識符。ID 的字串形式（可與 `Display`/`FromStr` 往返）：
 - `DomainId`：`name`（例如，`wonderland`）。
 - `AccountId`：僅透過 `AccountAddress` 編碼為 I105 的規範無域帳戶識別碼。解析器輸入必須是規範的 I105；域後綴 (`@domain`)、規範 I105 文字、別名文字、規範十六進位解析器輸入、舊版 `norito:` 有效負載和 `uaid:`/I1800000000000000 帳戶形式將被拒絕。
-- `AssetDefinitionId`：規格 `aid:<32-lower-hex-no-dash>`（UUID-v4 位元組）。
+- `AssetDefinitionId`：規格 `unprefixed Base58 address with versioning and checksum`（UUID-v4 位元組）。
 - `AssetId`：規範編碼文字 `norito:<hex>`（第一個版本不支援舊文字形式）。
 - `NftId`：`nft$domain`（例如，`rose$garden`）。
 - `PeerId`：`public_key`（對等平等由公鑰決定）。
@@ -49,11 +49,13 @@ translator: machine-google-reviewed
 - 生成器：`NewAccount` 通過 `Account::new(id)`；註冊需要明確的 `ScopedAccountId` 域，並且不會從預設值推斷出域。
 
 ### 資產定義與資產
-- `AssetDefinitionId { aid_bytes: [u8; 16] }` 在文字上顯示為 `aid:<32-hex-no-dash>`。
+- `AssetDefinitionId { aid_bytes: [u8; 16] }` 在文字上顯示為 `unprefixed Base58 address`。
 - `AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Numeric }`。
+
+  - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`; alias selectors resolve against latest committed block time and stop resolving after grace, while direct reads may still show `expired_pending_cleanup` until sweep.
   - `name` 是必需的人性化顯示文本，且不得包含 `#`/`@`。
   - `alias` 是可選的，並且必須是以下之一：
-    - `<name>#<domain>@<dataspace>`
+    - `<name>#<domain>.<dataspace>`
     - `<name>#<dataspace>`
     左側段與 `AssetDefinition.name` 完全匹配。
   - `Mintable`: `Infinitely` | `Once` | `Limited(u32)` | `Not`。
@@ -186,7 +188,7 @@ let new_account = Account::new(account_id.to_account_id(domain_id.clone()))
     .with_metadata(Metadata::default());
 
 // Asset definition and an asset for the account
-let asset_def_id: AssetDefinitionId = "aid:2f17c72466f84a4bb8a8e24884fdcd2f".parse().unwrap();
+let asset_def_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa".parse().unwrap();
 let new_asset_def = AssetDefinition::numeric(asset_def_id.clone())
     .with_name("USD Coin".to_owned())
     .with_metadata(Metadata::default());
@@ -230,36 +232,36 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
     .sign(kp.private_key());
 ```
 
-`aid` / 別名快速參考 (CLI + Torii)：
+asset-definition id / 別名快速參考 (CLI + Torii)：
 
 ```bash
-# Register an asset definition with canonical aid + explicit name + alias
+# Register an asset definition with canonical Base58 id + explicit name + alias
 iroha ledger asset definition register \
-  --id aid:2f17c72466f84a4bb8a8e24884fdcd2f \
+  --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#ubl@sbp
+  --alias pkr#ubl.sbp
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
-  --id aid:550e8400e29b41d4a7164466554400dd \
+  --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
   --alias pkr#sbp
 
 # Mint using alias + account components (no manual norito hex copy/paste)
 iroha ledger asset mint \
-  --definition-alias pkr#ubl@sbp \
+  --definition-alias pkr#ubl.sbp \
   --account sorauﾛ1P... \
   --quantity 500
 
-# Resolve alias to canonical aid via Torii
+# Resolve alias to canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#ubl@sbp"}'
+  -d '{"alias":"pkr#ubl.sbp"}'
 ```遷移注意事項：
 - v1 中不接受舊的 `name#domain` 資產定義 ID。
 - 用於鑄幣/銷毀/轉移的資產 ID 仍然是規範的 `norito:<hex>`；建造它們：
-  - `iroha tools encode asset-id --definition aid:... --account <i105>`
-  - 或 `--alias <name>#<domain>@<dataspace>` / `--alias <name>#<dataspace>` + `--account`。
+  - `iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
+  - 或 `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`。
 
 ## 版本控制
 

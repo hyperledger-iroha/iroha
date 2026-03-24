@@ -169,7 +169,7 @@ mod model {
         #[getset(get = "pub")]
         #[registrable_builder(default = None)]
         pub description: Option<String>,
-        /// Optional alias literal (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`).
+        /// Optional alias literal (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`).
         #[getset(get = "pub")]
         #[registrable_builder(default = None)]
         pub alias: Option<AssetDefinitionAlias>,
@@ -874,9 +874,10 @@ mod validation_tests {
 
     #[test]
     fn constructors_leave_name_empty_without_explicit_with_name() {
-        let id: AssetDefinitionId = "aid:550e8400e29b41d4a716446655440000"
-            .parse()
-            .expect("asset definition id");
+        let id = AssetDefinitionId::new(
+            "wonderland".parse().expect("domain"),
+            "rose".parse().expect("name"),
+        );
 
         let numeric = AssetDefinition::numeric(id.clone());
         assert!(
@@ -911,7 +912,7 @@ mod validation_tests {
 
     #[test]
     fn asset_alias_validation_requires_name_segment_match() {
-        let alias: AssetDefinitionAlias = "usd#issuer@main".parse().expect("alias");
+        let alias: AssetDefinitionAlias = "usd#issuer.main".parse().expect("alias");
         validate_asset_alias(Some(&alias), "usd").expect("matching name segment");
         assert!(validate_asset_alias(Some(&alias), "US Dollar").is_err());
     }
@@ -951,7 +952,7 @@ mod json_tests {
             id,
             name: "Rose".to_owned(),
             description: Some("Flower-backed settlement unit".to_owned()),
-            alias: Some("Rose#issuer@main".parse().expect("asset alias")),
+            alias: Some("Rose#issuer.main".parse().expect("asset alias")),
             spec: NumericSpec::fractional(4),
             mintable: Mintable::Limited(MintabilityTokens::try_new(5).expect("tokens")),
             logo: Some(

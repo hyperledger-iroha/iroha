@@ -22,6 +22,7 @@ This is the list of maintainers, including their email addresses for direct comm
 | Mykhailo Lohachov     | [@mikuyako](https://github.com/aoyako)               | lohachov@soramitsu.co.jp        | Development: Rust                                                             |
 | Alexander Strokov     | [@astrokov7](https://github.com/astrokov7)           | strokov@soramitsu.co.jp         | QA; Python                                                                    |
 | Michael Timofeev      | [@timofeevmd](https://github.com/timofeevmd)         | timofeev@soramitsu.co.jp        | QA                                                                            |
+| Emiliano Rachkovsky   | [@Bio-SORA](https://github.com/Bio-SORA)             | elsorador@gmail.com             | QA                                                                            |
 | Nikita Strygin        | [@DCNick3](https://github.com/DCNick3)               | moslike6@gmail.com              | Development: Rust                                                             |
 | Bogdan Yamkovoy       | [@yamkovoy](https://github.com/yamkovoy)             | yamkovoy@soramitsu.co.jp        | Documentation                                                                 |
 | Dmitry Murzin         | [@dima74](https://github.com/dima74)                 | murzin@soramitsu.co.jp          | Development: Rust                                                             |

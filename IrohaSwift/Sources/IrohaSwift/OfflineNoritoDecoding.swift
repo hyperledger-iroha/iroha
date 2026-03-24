@@ -345,7 +345,7 @@ extension OfflineNorito {
         return "norito:" + wrapped.hexLowercased()
     }
 
-    /// Decode an `AssetDefinitionId` from its Norito binary representation.
+    /// Decode a legacy textual `AssetDefinitionId` payload from its Norito binary representation.
     ///
     /// Binary layout: `[domain_field][name_field]`
     /// where domain = `[str_field]` and name = `[str_field]`.
@@ -377,9 +377,10 @@ extension OfflineNorito {
         }
         // Try ConstVec<u8> layout: 16 bytes encoded as {[u64=1][u8]}*16 = 144 bytes
         if defData.count == 144, let aidBytes = try? decodeFixedBytes(defData), aidBytes.count == 16 {
-            // Return as "aid:<hex>" which can be matched by MoneyFactory
-            let hex = aidBytes.map { String(format: "%02x", $0) }.joined()
-            return (name: "aid:\(hex)", domain: "")
+            guard let address = AssetDefinitionAddress.encode(uuidBytes: aidBytes) else {
+                throw OfflineNoritoDecodingError.invalidField("cannot encode canonical asset definition address")
+            }
+            return (name: address, domain: "")
         }
         throw OfflineNoritoDecodingError.invalidField("cannot decode AssetDefinitionId from \(defData.count) bytes")
     }
@@ -425,13 +426,16 @@ extension OfflineNorito {
         }
     }
 
-    /// Decode a `norito:hex` asset ID literal to `name#domain` asset definition ID.
+    /// Decode a `norito:hex` asset ID literal to the current asset-definition identifier form.
     ///
     /// Handles two binary layouts:
     /// - Full `AssetId` (from NoritoBridge FFI): `{account}{definition}` — may have NRT envelope
     /// - Bare `AssetDefinitionId` (from encode→decode roundtrip): `{domain}{name}`
     ///
-    /// Returns `nil` if the literal is not in `norito:` format or cannot be parsed.
+    /// Returns the canonical unprefixed Base58 asset-definition ID for current
+    /// 16-byte layouts, or the legacy `name#domain` form for older textual
+    /// payloads. Returns `nil` if the literal is not in `norito:` format or
+    /// cannot be parsed.
     public static func assetDefinitionIdFromLiteral(_ literal: String) -> String? {
         let trimmed = literal.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.lowercased().hasPrefix("norito:") else { return nil }
@@ -445,12 +449,15 @@ extension OfflineNorito {
                   bytes[0] == 0x4E, bytes[1] == 0x52, bytes[2] == 0x54, bytes[3] == 0x30 {
             bytes = Data(bytes.dropFirst(40))
         }
-        // Try full AssetId first (account + definition), then bare AssetDefinitionId
+        // Try full AssetId first (account + definition), then bare AssetDefinitionId.
         if let (name, domain) = try? decodeAssetDefinitionIdFromAssetId(bytes) {
-            if name.hasPrefix("aid:") {
-                return name // Already in canonical "aid:<hex>" format
+            if domain.isEmpty {
+                return name
             }
             return "\(name)#\(domain)"
+        }
+        if bytes.count == 16, let address = AssetDefinitionAddress.encode(uuidBytes: bytes) {
+            return address
         }
         if let (name, domain) = try? decodeAssetDefinitionIdDirect(bytes) {
             return "\(name)#\(domain)"

@@ -475,6 +475,54 @@ fn backend() -> &'static Backend {
     BACKEND.get_or_init(|| unsafe { init_backend().unwrap_or(Backend::Cpu) })
 }
 
+fn try_gpu_encode(compress: CompressFn, payload: &[u8], level: i32) -> Option<Vec<u8>> {
+    let mut cap = payload.len().saturating_mul(2) + 128;
+    for _ in 0..5 {
+        let mut out = vec![0; cap];
+        let mut out_len = out.len();
+        let rc = unsafe {
+            compress(
+                payload.as_ptr(),
+                payload.len(),
+                level,
+                out.as_mut_ptr(),
+                &mut out_len,
+            )
+        };
+        if rc == 0 {
+            if out_len == 0 || out_len > out.len() {
+                return None;
+            }
+            out.truncate(out_len);
+            return Some(out);
+        }
+        cap = cap.saturating_mul(2);
+    }
+    None
+}
+
+fn try_gpu_decode(
+    decompress: DecompressFn,
+    compressed: &[u8],
+    target_len: usize,
+) -> Option<Vec<u8>> {
+    let mut out = vec![0; target_len];
+    let mut out_len = out.len();
+    let rc = unsafe {
+        decompress(
+            compressed.as_ptr(),
+            compressed.len(),
+            out.as_mut_ptr(),
+            &mut out_len,
+        )
+    };
+    if rc != 0 || out_len > out.len() {
+        return None;
+    }
+    out.truncate(out_len);
+    Some(out)
+}
+
 /// Returns `true` if a supported GPU backend (CUDA or Metal) is available.
 pub fn available() -> bool {
     if !super::hw::gpu_policy_allowed() {
@@ -491,48 +539,14 @@ pub fn encode_all(payload: Vec<u8>, level: i32) -> io::Result<Vec<u8>> {
     match backend() {
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         Backend::Metal { compress, .. } => {
-            // Try with a conservative buffer first, then grow if needed.
-            let mut cap = payload.len().saturating_mul(2) + 128;
-            for _ in 0..5 {
-                let mut out = vec![0; cap];
-                let mut out_len = out.len();
-                let rc = unsafe {
-                    compress(
-                        payload.as_ptr(),
-                        payload.len(),
-                        level,
-                        out.as_mut_ptr(),
-                        &mut out_len,
-                    )
-                };
-                if rc == 0 {
-                    out.truncate(out_len);
-                    return Ok(out);
-                }
-                cap = cap.saturating_mul(2);
+            if let Some(out) = try_gpu_encode(*compress, &payload, level) {
+                return Ok(out);
             }
         }
         #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
         Backend::Cuda { compress, .. } => {
-            // Try with a conservative buffer first, then grow if needed.
-            let mut cap = payload.len().saturating_mul(2) + 128;
-            for _ in 0..5 {
-                let mut out = vec![0; cap];
-                let mut out_len = out.len();
-                let rc = unsafe {
-                    compress(
-                        payload.as_ptr(),
-                        payload.len(),
-                        level,
-                        out.as_mut_ptr(),
-                        &mut out_len,
-                    )
-                };
-                if rc == 0 {
-                    out.truncate(out_len);
-                    return Ok(out);
-                }
-                cap = cap.saturating_mul(2);
+            if let Some(out) = try_gpu_encode(*compress, &payload, level) {
+                return Ok(out);
             }
         }
         Backend::Cpu => {}
@@ -547,18 +561,7 @@ pub fn decode_all(compressed: &[u8], uncompressed_size: u64) -> Result<Vec<u8>, 
     match backend() {
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         Backend::Metal { decompress, .. } => {
-            let mut out = vec![0; target_len];
-            let mut out_len = out.len();
-            let rc = unsafe {
-                decompress(
-                    compressed.as_ptr(),
-                    compressed.len(),
-                    out.as_mut_ptr(),
-                    &mut out_len,
-                )
-            };
-            if rc == 0 {
-                out.truncate(out_len);
+            if let Some(out) = try_gpu_decode(*decompress, compressed, target_len) {
                 if out.len() != target_len {
                     return Err(super::Error::LengthMismatch);
                 }
@@ -567,18 +570,7 @@ pub fn decode_all(compressed: &[u8], uncompressed_size: u64) -> Result<Vec<u8>, 
         }
         #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
         Backend::Cuda { decompress, .. } => {
-            let mut out = vec![0; target_len];
-            let mut out_len = out.len();
-            let rc = unsafe {
-                decompress(
-                    compressed.as_ptr(),
-                    compressed.len(),
-                    out.as_mut_ptr(),
-                    &mut out_len,
-                )
-            };
-            if rc == 0 {
-                out.truncate(out_len);
+            if let Some(out) = try_gpu_decode(*decompress, compressed, target_len) {
                 if out.len() != target_len {
                     return Err(super::Error::LengthMismatch);
                 }
@@ -771,6 +763,29 @@ mod self_test {
         RC_GPU_UNAVAILABLE
     }
 
+    unsafe extern "C" fn compress_invalid_len_success(
+        _src: *const u8,
+        _src_len: usize,
+        _level: i32,
+        _dst: *mut u8,
+        dst_len: *mut usize,
+    ) -> i32 {
+        let capacity = unsafe { *dst_len };
+        unsafe { *dst_len = capacity.saturating_add(1) };
+        0
+    }
+
+    unsafe extern "C" fn decompress_invalid_len_success(
+        _src: *const u8,
+        _src_len: usize,
+        _dst: *mut u8,
+        dst_len: *mut usize,
+    ) -> i32 {
+        let capacity = unsafe { *dst_len };
+        unsafe { *dst_len = capacity.saturating_add(1) };
+        0
+    }
+
     #[test]
     fn gpu_self_test_passes_for_cpu_stubs() {
         assert!(gpu_self_test(compress_stub, decompress_stub).is_ok());
@@ -779,6 +794,19 @@ mod self_test {
     #[test]
     fn gpu_self_test_accepts_unavailable_compress_when_decode_works() {
         assert!(gpu_self_test(compress_unavailable_stub, decompress_stub).is_ok());
+    }
+
+    #[test]
+    fn try_gpu_encode_rejects_invalid_success_length() {
+        let payload = b"encode helper length check";
+        assert!(try_gpu_encode(compress_invalid_len_success, payload, 1).is_none());
+    }
+
+    #[test]
+    fn try_gpu_decode_rejects_invalid_success_length() {
+        let payload = b"decode helper length check";
+        let encoded = zstd::encode_all(io::Cursor::new(payload), 1).expect("cpu encode");
+        assert!(try_gpu_decode(decompress_invalid_len_success, &encoded, payload.len()).is_none());
     }
 
     #[cfg(unix)]

@@ -24,11 +24,11 @@ feature-gated route builders (`add_app_api_routes`, `add_contracts_and_vk_routes
 
 ### Auth & canonical signing
 
-- App-facing GET/POST endpoints accept optional canonical request headers (`X-Iroha-Account`, `X-Iroha-Signature`) built from `METHOD\n/path\nsorted_query\nsha256(body)`; Torii wraps them into `QueryRequestWithAuthority` before executor validation so they mirror `/query`.
+- App-facing GET/POST endpoints accept optional canonical request headers (`X-Iroha-Account`, `X-Iroha-Signature`, `X-Iroha-Timestamp-Ms`, `X-Iroha-Nonce`) built from `METHOD\n/path\nsorted_query\nsha256(body)\n<timestamp_ms>\n<nonce>`; Torii validates freshness/replay resistance before wrapping them into `QueryRequestWithAuthority`, so they mirror `/query` without accepting stale or replayed signatures.
 - SDK helpers ship in all primary clients:
-  - JS/TS: `buildCanonicalRequestHeaders({ accountId, method, path, query, body, privateKey })` from `canonicalRequest.js`.
-  - Swift: `CanonicalRequest.signingHeaders(accountId:method:path:query:body:signer:)`.
-  - Android (Kotlin/Java): `CanonicalRequestSigner.signingHeaders(accountId, method, path, query, body, signer)`.
+  - JS/TS: `buildCanonicalRequestHeaders({ accountId, method, path, query, body, privateKey, timestampMs?, nonce? })` from `canonicalRequest.js`.
+  - Swift: `CanonicalRequest.signingHeaders(accountId:method:path:query:body:signer:timestampMs:nonce:)` and `ToriiCanonicalRequest.buildHeaders(...)`.
+  - Android (Kotlin/Java): `CanonicalRequestSigner.buildHeaders(method, uri, body, accountId, privateKey, timestampMs, nonce)`.
 - Example snippets:
 ```ts
 import { buildCanonicalRequestHeaders } from "@iroha2/iroha-js";
@@ -44,8 +44,13 @@ let headers = try CanonicalRequest.signingHeaders(accountId: "i105...",
                                                   signer: signingKey)
 ```
 ```kotlin
-val signer = Ed25519Signer(privateKey, publicKey)
-val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
+val headers = CanonicalRequestSigner.buildHeaders(
+    "get",
+    URI.create("https://torii.example/v1/accounts/i105.../assets?limit=5"),
+    ByteArray(0),
+    "i105...",
+    privateKey
+)
 ```
 
 ### Endpoint Inventory

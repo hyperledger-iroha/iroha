@@ -28,7 +28,9 @@ translation_last_reviewed: 2026-03-12
 ID は、`Display`/`FromStr` 往復の安定した文字列形式を持ちます。名前規則では、空白文字と予約された `@ # $` 文字が禁止されています。- `Name` — 検証されたテキスト識別子。ルール: `crates/iroha_data_model/src/name.rs`。
 - `DomainId` — `name`。ドメイン: `{ id, logo, metadata, owned_by }`。ビルダー: `NewDomain`。コード: `crates/iroha_data_model/src/domain.rs`。
 - `AccountId` — 正規アドレスは `AccountAddress` (I105 / 16 進数) を介して生成され、Torii は `AccountAddress::parse_encoded` を介して入力を正規化します。 I105 が推奨されるアカウント形式です。 I105 フォームは Sora のみの UX 用です。おなじみの `alias` (拒否されたレガシー フォーム) 文字列は、ルーティング エイリアスとしてのみ保持されます。アカウント: `{ id, metadata }`。コード: `crates/iroha_data_model/src/account.rs`。- アカウント アドミッション ポリシー - ドメインは、メタデータ キー `iroha:account_admission_policy` の下に Norito-JSON `AccountAdmissionPolicy` を保存することで、暗黙的なアカウント作成を制御します。キーが存在しない場合、チェーンレベルのカスタム パラメータ `iroha:default_account_admission_policy` がデフォルトを提供します。これも存在しない場合、ハードデフォルトは `ImplicitReceive` (最初のリリース) です。ポリシー タグ `mode` (`ExplicitOnly` または `ImplicitReceive`) に加え、オプションのトランザクションごと (デフォルト `16`) およびブロックごとの作成上限、オプションの `implicit_creation_fee` (バーン アカウントまたはシンク アカウント)、資産定義ごとの `min_initial_amounts`、オプションの `default_role_on_create` (`AccountCreated` の後に付与され、欠落している場合は `DefaultRoleError` で拒否されます)。 Genesis はオプトインできません。無効/無効なポリシーは、`InstructionExecutionError::AccountAdmission` の不明なアカウントに対するレシート形式の指示を拒否します。暗黙的なアカウント スタンプ メタデータ `iroha:created_via="implicit"` の前に `AccountCreated`。デフォルトのロールはフォローアップ `AccountRoleGranted` を発行し、実行者の所有者ベースライン ルールにより、新しいアカウントは追加のロールなしで独自の資産/NFT を使用できます。コード: `crates/iroha_data_model/src/account/admission.rs`、`crates/iroha_core/src/smartcontracts/isi/account_admission.rs`。
-- `AssetDefinitionId` — 正規の `aid:<32-lower-hex-no-dash>` (UUID-v4 バイト)。定義: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`。 `alias` リテラルは、`<name>#<domain>@<dataspace>` または `<name>#<dataspace>` である必要があります。`<name>` はアセット定義名と同じです。コード: `crates/iroha_data_model/src/asset/definition.rs`。
+- `AssetDefinitionId` — 正規の `unprefixed Base58 address with versioning and checksum` (UUID-v4 バイト)。定義: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`。 `alias` リテラルは、`<name>#<domain>.<dataspace>` または `<name>#<dataspace>` である必要があります。`<name>` はアセット定義名と同じです。コード: `crates/iroha_data_model/src/asset/definition.rs`。
+
+  - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`, where `status` is `permanent`, `leased_active`, `leased_grace`, or `expired_pending_cleanup`. Alias selectors resolve against the latest committed block creation time and stop resolving after grace even before sweep removes stale bindings.
 - `AssetId`: 正規エンコードされたリテラル `norito:<hex>` (従来のテキスト形式は最初のリリースではサポートされていません)。- `NftId` — `nft$domain`。 NFT: `{ id, content: Metadata, owned_by }`。コード: `crates/iroha_data_model/src/nft.rs`。
 - `RoleId` — `name`。役割: `{ id, permissions: BTreeSet<Permission> }` ビルダー `NewRole { inner: Role, grant_to }`。コード: `crates/iroha_data_model/src/role.rs`。
 - `Permission` — `{ name: Ident, payload: Json }`。コード: `crates/iroha_data_model/src/permission.rs`。
@@ -193,19 +195,19 @@ ID は、`Display`/`FromStr` 往復の安定した文字列形式を持ちます
   - 実行時にトリガーの IVM バイトコードが欠落している場合、トリガーは削除され、実行は失敗結果を伴う no-op として扱われます。
   - 枯渇したトリガーはすぐに削除されます。実行中に枯渇したエントリが見つかった場合、そのエントリは取り除かれ、欠落しているものとして扱われます。
 - パラメータの更新:
-  - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` は `ConfigurationEvent::Changed` を更新および発行します。CLI / Torii `aid` + エイリアスの例:
+  - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` は `ConfigurationEvent::Changed` を更新および発行します。CLI / Torii asset-definition id + エイリアスの例:
 - 正規の補助 + 明示的な名前 + 長いエイリアスを使用して登録します。
-  - `iroha ledger asset definition register --id aid:2f17c72466f84a4bb8a8e24884fdcd2f --name pkr --alias pkr#ubl@sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#ubl.sbp`
 - 正規の補助 + 明示的な名前 + 短いエイリアスを使用して登録します。
-  - `iroha ledger asset definition register --id aid:550e8400e29b41d4a7164466554400dd --name pkr --alias pkr#sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#sbp`
 - エイリアス + アカウント コンポーネントによるミント:
-  - `iroha ledger asset mint --definition-alias pkr#ubl@sbp --account <i105> --quantity 500`
+  - `iroha ledger asset mint --definition-alias pkr#ubl.sbp --account <i105> --quantity 500`
 - エイリアスを正規エイドに解決します。
-  - JSON を使用した `POST /v1/assets/aliases/resolve` `{ "alias": "pkr#ubl@sbp" }`
+  - JSON を使用した `POST /v1/assets/aliases/resolve` `{ "alias": "pkr#ubl.sbp" }`
 
 移行メモ:
 - `name#domain` テキストのアセット定義 ID は、最初のリリースでは意図的にサポートされていません。
-- ミント/バーン/トランスファーの境界におけるアセット ID は正規の `norito:<hex>` のままです。 `iroha tools encode asset-id` と `--definition aid:...`、または `--alias ...` と `--account` を使用します。
+- ミント/バーン/トランスファーの境界におけるアセット ID は正規の `norito:<hex>` のままです。 `iroha tools encode asset-id` と `--definition <base58-asset-definition-id>`、または `--alias ...` と `--account` を使用します。
 
 ---
 

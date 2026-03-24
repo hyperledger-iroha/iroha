@@ -31,17 +31,26 @@ public final class CanonicalRequestSignerTests {
     final URI uri =
         new URI("http://localhost:8080/v1/accounts/alice@wonderland/assets?limit=5");
     final byte[] body = "{\"foo\":1}".getBytes(StandardCharsets.UTF_8);
+    final long timestampMs = 1_717_171_717_000L;
+    final String nonce = "android-canonical-nonce";
 
     final Map<String, String> headers =
         CanonicalRequestSigner.buildHeaders(
-            "get", uri, body, "alice@wonderland", keyPair.getPrivate());
-    final byte[] message = CanonicalRequestSigner.canonicalRequestMessage("get", uri, body);
+            "get", uri, body, "alice@wonderland", keyPair.getPrivate(), timestampMs, nonce);
+    final byte[] message =
+        CanonicalRequestSigner.canonicalRequestSignatureMessage(
+            "get", uri, body, timestampMs, nonce);
     final byte[] signature =
         Base64.getDecoder().decode(headers.get(CanonicalRequestSigner.HEADER_SIGNATURE));
 
     final Signature verifier = Signature.getInstance("Ed25519");
     verifier.initVerify(keyPair.getPublic());
     verifier.update(message);
+    assert Long.toString(timestampMs)
+            .equals(headers.get(CanonicalRequestSigner.HEADER_TIMESTAMP_MS))
+        : "timestamp header mismatch";
+    assert nonce.equals(headers.get(CanonicalRequestSigner.HEADER_NONCE))
+        : "nonce header mismatch";
     assert verifier.verify(signature) : "signature verification failed";
   }
 }

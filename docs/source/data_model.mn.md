@@ -32,7 +32,7 @@ translator: machine-google-reviewed
 - `ChainId`: Гүйлгээнд дахин тоглуулах хамгаалалтад ашигладаг тунгалаг бус хэлхээ танигч.ID-н стринг маягтууд (`Display`/`FromStr`-ээр хоёр тийш эргэх боломжтой):
 - `DomainId`: `name` (жишээ нь, `wonderland`).
 - `AccountId`: `AccountAddress`-ээр зөвхөн I105 гэж кодлогдсон домэйнгүй каноник данс танигч. Шинжилгээний оролт нь каноник I105 байх ёстой; домэйны дагавар (`@domain`), каноник I105 литерал, өөр нэрийн литерал, каноник зургаан талт задлагч оролт, хуучин `norito:` ачааллыг болон `uaid:`/`opaque:` хаягийг задалсан.
-- `AssetDefinitionId`: каноник `aid:<32-lower-hex-no-dash>` (UUID-v4 байт).
+- `AssetDefinitionId`: каноник `unprefixed Base58 address with versioning and checksum` (UUID-v4 байт).
 - `AssetId`: каноник кодлогдсон literal `norito:<hex>` (эхний хувилбар дээр хуучин текст хэлбэрийг дэмждэггүй).
 - `NftId`: `nft$domain` (жишээ нь, `rose$garden`).
 - `PeerId`: `public_key` (үе тэнгийн тэгш байдал нь нийтийн түлхүүрээр байдаг).
@@ -49,11 +49,13 @@ translator: machine-google-reviewed
 - Барилгачин: `Account::new(id)`-ээр дамжуулан `NewAccount`; Бүртгэлийн хувьд тодорхой `ScopedAccountId` домэйн шаардлагатай бөгөөд анхдагчаас нэгийг нь гаргахгүй.
 
 ### Хөрөнгийн тодорхойлолт ба хөрөнгө
-- `AssetDefinitionId { aid_bytes: [u8; 16] }` текстийн хувьд `aid:<32-hex-no-dash>` хэлбэрээр ил гарсан.
+- `AssetDefinitionId { aid_bytes: [u8; 16] }` текстийн хувьд `unprefixed Base58 address` хэлбэрээр ил гарсан.
 - `AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Numeric }`.
+
+  - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`; alias selectors resolve against latest committed block time and stop resolving after grace, while direct reads may still show `expired_pending_cleanup` until sweep.
   - `name` нь хүний ​​нүүрэн дээр харуулсан дэлгэцийн текст шаардлагатай бөгөөд `#`/`@` агуулаагүй байх ёстой.
   - `alias` сонголттой бөгөөд дараахын аль нэг нь байх ёстой.
-    - `<name>#<domain>@<dataspace>`
+    - `<name>#<domain>.<dataspace>`
     - `<name>#<dataspace>`
     зүүн сегмент нь яг таарч байгаа `AssetDefinition.name`.
   - `Mintable`: `Infinitely` | `Once` | `Limited(u32)` | `Not`.
@@ -186,7 +188,7 @@ let new_account = Account::new(account_id.to_account_id(domain_id.clone()))
     .with_metadata(Metadata::default());
 
 // Asset definition and an asset for the account
-let asset_def_id: AssetDefinitionId = "aid:2f17c72466f84a4bb8a8e24884fdcd2f".parse().unwrap();
+let asset_def_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa".parse().unwrap();
 let new_asset_def = AssetDefinition::numeric(asset_def_id.clone())
     .with_name("USD Coin".to_owned())
     .with_metadata(Metadata::default());
@@ -230,36 +232,36 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
     .sign(kp.private_key());
 ```
 
-`aid` / бусад нэрийн шуурхай лавлагаа (CLI + Torii):
+asset-definition id / бусад нэрийн шуурхай лавлагаа (CLI + Torii):
 
 ```bash
-# Register an asset definition with canonical aid + explicit name + alias
+# Register an asset definition with canonical Base58 id + explicit name + alias
 iroha ledger asset definition register \
-  --id aid:2f17c72466f84a4bb8a8e24884fdcd2f \
+  --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#ubl@sbp
+  --alias pkr#ubl.sbp
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
-  --id aid:550e8400e29b41d4a7164466554400dd \
+  --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
   --alias pkr#sbp
 
 # Mint using alias + account components (no manual norito hex copy/paste)
 iroha ledger asset mint \
-  --definition-alias pkr#ubl@sbp \
+  --definition-alias pkr#ubl.sbp \
   --account sorauﾛ1P... \
   --quantity 500
 
-# Resolve alias to canonical aid via Torii
+# Resolve alias to canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#ubl@sbp"}'
+  -d '{"alias":"pkr#ubl.sbp"}'
 ```Шилжилтийн тэмдэглэл:
 - Хуучин `name#domain` хөрөнгийн тодорхойлолтыг v1-д хүлээн зөвшөөрдөггүй.
 - Цутгах/шатаах/шилжүүлэх хөрөнгийн ID-ууд `norito:<hex>` каноник хэвээр байна; тэдгээрийг бүтээх:
-  - `iroha tools encode asset-id --definition aid:... --account <i105>`
-  - эсвэл `--alias <name>#<domain>@<dataspace>` / `--alias <name>#<dataspace>` + `--account`.
+  - `iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
+  - эсвэл `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`.
 
 ## Хувилбар
 

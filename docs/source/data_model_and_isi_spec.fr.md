@@ -27,7 +27,9 @@ Déterminisme : toutes les sémantiques d'instructions sont de pures transition
 Les ID ont des formes de chaîne stables avec un aller-retour `Display`/`FromStr`. Les règles de nom interdisent les espaces et les caractères réservés `@ # $`.- `Name` — identifiant textuel validé. Règles : `crates/iroha_data_model/src/name.rs`.
 - `DomainId` — `name`. Domaine : `{ id, logo, metadata, owned_by }`. Constructeurs : `NewDomain`. Code : `crates/iroha_data_model/src/domain.rs`.
 - `AccountId` — les adresses canoniques sont produites via `AccountAddress` (I105 / hex) et Torii normalise les entrées via `AccountAddress::parse_encoded`. I105 est le format de compte préféré ; le formulaire I105 est destiné à l'UX Sora uniquement. La chaîne familière `alias` (formulaire hérité rejeté) est conservée uniquement comme alias de routage. Compte : `{ id, metadata }`. Code : `crates/iroha_data_model/src/account.rs`.- Politique d'admission de compte : les domaines contrôlent la création de compte implicite en stockant un Norito-JSON `AccountAdmissionPolicy` sous la clé de métadonnées `iroha:account_admission_policy`. Lorsque la clé est absente, le paramètre personnalisé au niveau de la chaîne `iroha:default_account_admission_policy` fournit la valeur par défaut ; lorsque cela est également absent, la valeur par défaut est `ImplicitReceive` (première version). Les balises de stratégie `mode` (`ExplicitOnly` ou `ImplicitReceive`) plus les plafonds facultatifs par transaction (par défaut `16`) et de création par bloc, un `implicit_creation_fee` facultatif (compte de gravure ou de réception), `min_initial_amounts` par définition d'actif et un `default_role_on_create` facultatif (accordé après `AccountCreated`, rejeté avec `DefaultRoleError` s'il est manquant). Genesis ne peut pas s'inscrire ; Les stratégies désactivées/invalides rejettent les instructions de type reçu pour les comptes inconnus avec `InstructionExecutionError::AccountAdmission`. Les comptes implicites tamponnent les métadonnées `iroha:created_via="implicit"` avant `AccountCreated` ; les rôles par défaut émettent un suivi `AccountRoleGranted`, et les règles de base du propriétaire de l'exécuteur permettent au nouveau compte de dépenser ses propres actifs/NFT sans rôles supplémentaires. Code : `crates/iroha_data_model/src/account/admission.rs`, `crates/iroha_core/src/smartcontracts/isi/account_admission.rs`.
-- `AssetDefinitionId` — canonique `aid:<32-lower-hex-no-dash>` (UUID-v4 octets). Définition : `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. Les littéraux `alias` doivent être `<name>#<domain>@<dataspace>` ou `<name>#<dataspace>`, `<name>` étant égal au nom de la définition de l'actif. Code : `crates/iroha_data_model/src/asset/definition.rs`.
+- `AssetDefinitionId` — canonique `unprefixed Base58 address with versioning and checksum` (UUID-v4 octets). Définition : `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. Les littéraux `alias` doivent être `<name>#<domain>.<dataspace>` ou `<name>#<dataspace>`, `<name>` étant égal au nom de la définition de l'actif. Code : `crates/iroha_data_model/src/asset/definition.rs`.
+
+  - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`, where `status` is `permanent`, `leased_active`, `leased_grace`, or `expired_pending_cleanup`. Alias selectors resolve against the latest committed block creation time and stop resolving after grace even before sweep removes stale bindings.
 - `AssetId` : littéral codé canonique `norito:<hex>` (les formes textuelles héritées ne sont pas prises en charge dans la première version).- `NftId` — `nft$domain`. NFT : `{ id, content: Metadata, owned_by }`. Code : `crates/iroha_data_model/src/nft.rs`.
 - `RoleId` — `name`. Rôle : `{ id, permissions: BTreeSet<Permission> }` avec le constructeur `NewRole { inner: Role, grant_to }`. Code : `crates/iroha_data_model/src/role.rs`.
 - `Permission` — `{ name: Ident, payload: Json }`. Code : `crates/iroha_data_model/src/permission.rs`.
@@ -192,19 +194,19 @@ Enveloppe commune : `InstructionExecutionError` avec des variantes pour les err
   - Si le bytecode IVM d'un déclencheur est manquant au moment de l'exécution, le déclencheur est supprimé et l'exécution est traitée comme une non-opération avec un résultat d'échec.
   - Les déclencheurs épuisés sont immédiatement supprimés ; si une entrée épuisée est rencontrée pendant l'exécution, elle est élaguée et traitée comme manquante.
 - Mise à jour des paramètres :
-  - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` met à jour et émet `ConfigurationEvent::Changed`.CLI / Torii `aid` + exemples d'alias :
+  - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` met à jour et émet `ConfigurationEvent::Changed`.CLI / Torii asset-definition id + exemples d'alias :
 - S'inscrire avec aide canonique + nom explicite + alias long :
-  -`iroha ledger asset definition register --id aid:2f17c72466f84a4bb8a8e24884fdcd2f --name pkr --alias pkr#ubl@sbp`
+  -`iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#ubl.sbp`
 - S'inscrire avec aide canonique + nom explicite + alias court :
-  -`iroha ledger asset definition register --id aid:550e8400e29b41d4a7164466554400dd --name pkr --alias pkr#sbp`
+  -`iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#sbp`
 - Mint par alias + composants du compte :
-  -`iroha ledger asset mint --definition-alias pkr#ubl@sbp --account <i105> --quantity 500`
+  -`iroha ledger asset mint --definition-alias pkr#ubl.sbp --account <i105> --quantity 500`
 - Résoudre l'alias à l'aide canonique :
-  - `POST /v1/assets/aliases/resolve` avec JSON `{ "alias": "pkr#ubl@sbp" }`
+  - `POST /v1/assets/aliases/resolve` avec JSON `{ "alias": "pkr#ubl.sbp" }`
 
 Remarque sur la migration :
 - Les ID de définition d'actif textuel `name#domain` ne sont intentionnellement pas pris en charge dans la première version.
-- Les identifiants d'actifs aux limites de création/gravure/transfert restent canoniques `norito:<hex>` ; utilisez `iroha tools encode asset-id` avec `--definition aid:...` ou `--alias ...` plus `--account`.
+- Les identifiants d'actifs aux limites de création/gravure/transfert restent canoniques `norito:<hex>` ; utilisez `iroha tools encode asset-id` avec `--definition <base58-asset-definition-id>` ou `--alias ...` plus `--account`.
 
 ---
 

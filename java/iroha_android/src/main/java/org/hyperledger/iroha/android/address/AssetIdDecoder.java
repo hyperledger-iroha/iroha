@@ -19,7 +19,7 @@ import org.hyperledger.iroha.norito.TypeAdapter;
  * <pre>
  *   struct AssetId {
  *       account: AccountId,
- *       definition: AssetDefinitionId,  // raw [u8; 16] aid_bytes
+ *       definition: AssetDefinitionId,  // raw [u8; 16] UUIDv4 bytes
  *   }
  * </pre>
  *
@@ -43,22 +43,22 @@ public final class AssetIdDecoder {
   private AssetIdDecoder() {}
 
   /**
-   * Decoded asset definition carrying the {@code aid:<hex>} identifier.
+   * Decoded asset definition carrying the canonical Base58 address.
    *
    * <p>Since {@code AssetDefinitionId} is now a one-way blake3 hash,
    * name and domain cannot be recovered from the binary representation.
    * Use the app's cached asset definitions for display info lookup.
    */
   public static final class AssetDefinition {
-    private final String aidHex;
+    private final String address;
 
-    AssetDefinition(String aidHex) {
-      this.aidHex = Objects.requireNonNull(aidHex);
+    AssetDefinition(String address) {
+      this.address = Objects.requireNonNull(address);
     }
 
-    /** Returns the {@code aid:<32-hex>} representation. */
-    public String aidHex() {
-      return aidHex;
+    /** Returns the canonical unprefixed Base58 asset-definition address. */
+    public String address() {
+      return address;
     }
   }
 
@@ -96,11 +96,11 @@ public final class AssetIdDecoder {
     return decodeDefinitionIdBytes(data);
   }
 
-  private static final int AID_BYTES_LEN = 16;
+  private static final int DEFINITION_BYTES_LEN = 16;
 
   /**
    * Decodes raw norito bytes for a full AssetId (account + definition).
-   * Skips the account field and extracts the definition's 16-byte aid.
+   * Skips the account field and extracts the definition's 16 canonical bytes.
    */
   private static AssetDefinition decodeAssetIdBytes(byte[] data) {
     NoritoHeader.DecodeResult headerResult = NoritoHeader.decode(data, ASSET_ID_SCHEMA_HASH);
@@ -134,7 +134,8 @@ public final class AssetIdDecoder {
     // Read definition field — [u8; 16] with per-element u64 length prefix
     final int definitionLen = checkedLength(decoder.readLength(compactLen), "Definition field");
     byte[] definitionPayload = decoder.readBytes(definitionLen);
-    byte[] aidBytes = decodeFixedByteArray(definitionPayload, AID_BYTES_LEN, flags, flagsHint);
+    byte[] definitionBytes =
+        decodeFixedByteArray(definitionPayload, DEFINITION_BYTES_LEN, flags, flagsHint);
 
     final int scopeLen = checkedLength(decoder.readLength(compactLen), "Scope field");
     final byte[] scopePayload = decoder.readBytes(scopeLen);
@@ -144,11 +145,11 @@ public final class AssetIdDecoder {
       throw new IllegalArgumentException("Trailing bytes after AssetId payload");
     }
 
-    return new AssetDefinition(aidBytesToHex(aidBytes));
+    return new AssetDefinition(definitionAddressFromBytes(definitionBytes));
   }
 
   /**
-   * Decodes raw norito bytes for an AssetDefinitionId (no account, just the [u8; 16] aid).
+   * Decodes raw norito bytes for an AssetDefinitionId (no account, just the [u8; 16] bytes).
    */
   private static AssetDefinition decodeDefinitionIdBytes(byte[] data) {
     NoritoHeader.DecodeResult headerResult = NoritoHeader.decode(data, ASSET_DEF_ID_SCHEMA_HASH);
@@ -165,8 +166,9 @@ public final class AssetIdDecoder {
               unsupportedFlags));
     }
 
-    byte[] aidBytes = decodeFixedByteArray(payload, AID_BYTES_LEN, header.flags(), header.minor());
-    return new AssetDefinition(aidBytesToHex(aidBytes));
+    byte[] definitionBytes =
+        decodeFixedByteArray(payload, DEFINITION_BYTES_LEN, header.flags(), header.minor());
+    return new AssetDefinition(definitionAddressFromBytes(definitionBytes));
   }
 
   /**
@@ -397,12 +399,8 @@ public final class AssetIdDecoder {
     return (int) length;
   }
 
-  private static String aidBytesToHex(byte[] aidBytes) {
-    StringBuilder sb = new StringBuilder("aid:");
-    for (byte b : aidBytes) {
-      sb.append(String.format(Locale.ROOT, "%02x", b & 0xFF));
-    }
-    return sb.toString();
+  private static String definitionAddressFromBytes(byte[] definitionBytes) {
+    return AssetDefinitionIdEncoder.encodeFromBytes(definitionBytes);
   }
 
   private static byte[] extractNoritoBytes(String noritoString) {

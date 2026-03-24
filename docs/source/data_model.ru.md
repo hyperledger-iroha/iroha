@@ -32,7 +32,7 @@ translator: machine-google-reviewed
 - `ChainId`: непрозрачный идентификатор цепочки, используемый для защиты от повтора в транзакциях.Строковые формы идентификаторов (возможны двусторонние действия с `Display`/`FromStr`):
 - `DomainId`: `name` (например, `wonderland`).
 - `AccountId`: канонический идентификатор учетной записи без домена, закодированный с помощью `AccountAddress` только как I105. Входные данные парсера должны быть каноническими I105; суффиксы домена (`@domain`), канонические литералы I105, литералы псевдонимов, канонические входные данные шестнадцатеричного анализатора, устаревшие полезные нагрузки `norito:` и формы анализатора учетных записей `uaid:`/`opaque:` отклоняются.
-- `AssetDefinitionId`: канонический `aid:<32-lower-hex-no-dash>` (байты UUID-v4).
+- `AssetDefinitionId`: канонический `unprefixed Base58 address with versioning and checksum` (байты UUID-v4).
 - `AssetId`: канонический литерал `norito:<hex>` (устаревшие текстовые формы не поддерживаются в первом выпуске).
 - `NftId`: `nft$domain` (например, `rose$garden`).
 - `PeerId`: `public_key` (равенство одноранговых узлов осуществляется по открытому ключу).
@@ -49,11 +49,13 @@ translator: machine-google-reviewed
 - Строитель: `NewAccount` через `Account::new(id)`; для регистрации требуется явный домен `ScopedAccountId`, который не выводится из значений по умолчанию.
 
 ### Определения и активы активов
-- `AssetDefinitionId { aid_bytes: [u8; 16] }` отображается в текстовом виде как `aid:<32-hex-no-dash>`.
+- `AssetDefinitionId { aid_bytes: [u8; 16] }` отображается в текстовом виде как `unprefixed Base58 address`.
 - `AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Numeric }`.
+
+  - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`; alias selectors resolve against latest committed block time and stop resolving after grace, while direct reads may still show `expired_pending_cleanup` until sweep.
   - `name` — это текст, отображаемый человеком, который не должен содержать `#`/`@`.
   - `alias` является необязательным и должен быть одним из:
-    - `<name>#<domain>@<dataspace>`
+    - `<name>#<domain>.<dataspace>`
     - `<name>#<dataspace>`
     левый сегмент точно соответствует `AssetDefinition.name`.
   - `Mintable`: `Infinitely` | `Once` | `Limited(u32)` | `Not`.
@@ -186,7 +188,7 @@ let new_account = Account::new(account_id.to_account_id(domain_id.clone()))
     .with_metadata(Metadata::default());
 
 // Asset definition and an asset for the account
-let asset_def_id: AssetDefinitionId = "aid:2f17c72466f84a4bb8a8e24884fdcd2f".parse().unwrap();
+let asset_def_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa".parse().unwrap();
 let new_asset_def = AssetDefinition::numeric(asset_def_id.clone())
     .with_name("USD Coin".to_owned())
     .with_metadata(Metadata::default());
@@ -230,36 +232,36 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
     .sign(kp.private_key());
 ```
 
-`aid` / краткий справочник псевдонимов (CLI + Torii):
+asset-definition id / краткий справочник псевдонимов (CLI + Torii):
 
 ```bash
-# Register an asset definition with canonical aid + explicit name + alias
+# Register an asset definition with canonical Base58 id + explicit name + alias
 iroha ledger asset definition register \
-  --id aid:2f17c72466f84a4bb8a8e24884fdcd2f \
+  --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#ubl@sbp
+  --alias pkr#ubl.sbp
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
-  --id aid:550e8400e29b41d4a7164466554400dd \
+  --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
   --alias pkr#sbp
 
 # Mint using alias + account components (no manual norito hex copy/paste)
 iroha ledger asset mint \
-  --definition-alias pkr#ubl@sbp \
+  --definition-alias pkr#ubl.sbp \
   --account sorauﾛ1P... \
   --quantity 500
 
-# Resolve alias to canonical aid via Torii
+# Resolve alias to canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#ubl@sbp"}'
+  -d '{"alias":"pkr#ubl.sbp"}'
 ```Примечание по миграции:
 — Старые идентификаторы определения актива `name#domain` не принимаются в версии 1.
 — Идентификаторы активов для выпуска/сжигания/передачи остаются каноническими `norito:<hex>`; создайте их с помощью:
-  - `iroha tools encode asset-id --definition aid:... --account <i105>`
-  - или `--alias <name>#<domain>@<dataspace>` / `--alias <name>#<dataspace>` + `--account`.
+  - `iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
+  - или `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`.
 
 ## Управление версиями
 

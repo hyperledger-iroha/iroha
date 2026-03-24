@@ -114,10 +114,9 @@ public final class RegisterRoleInstruction implements InstructionTemplate {
     }
 
     public Builder setOwnerAccountId(final String ownerAccountId) {
-      if (ownerAccountId == null || ownerAccountId.isBlank()) {
-        throw new IllegalArgumentException("ownerAccountId must not be blank");
-      }
-      this.ownerAccountId = ownerAccountId;
+      this.ownerAccountId =
+          org.hyperledger.iroha.android.address.AccountIdLiteral.requireCanonicalI105Address(
+              ownerAccountId, "ownerAccountId");
       return this;
     }
 

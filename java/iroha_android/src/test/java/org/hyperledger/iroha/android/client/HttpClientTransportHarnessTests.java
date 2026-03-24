@@ -19,6 +19,7 @@ import org.hyperledger.iroha.android.sorafs.GatewayFetchOptions;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchRequest;
 import org.hyperledger.iroha.android.sorafs.GatewayProvider;
 import org.hyperledger.iroha.android.sorafs.SorafsGatewayClient;
+import org.hyperledger.iroha.android.testing.TestAccountIds;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
 import org.hyperledger.iroha.android.tx.SignedTransactionHasher;
 
@@ -254,7 +255,7 @@ public final class HttpClientTransportHarnessTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId(String.format("%08x", seed))
-            .setAuthority("alice@wonderland")
+            .setAuthority(TestAccountIds.ed25519Authority(0x23))
             .setCreationTimeMs(1_700_000_000_000L + (seed & 0xFF))
             .setInstructionBytes(new byte[] {seed, (byte) (seed + 1)})
             .setTimeToLiveMs(5_000L)

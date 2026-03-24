@@ -1207,7 +1207,7 @@ pub struct ReserveLedgerArgs {
     /// Reserve escrow account receiving the reserve top-up.
     #[arg(long = "reserve-account", value_name = "ACCOUNT_ID")]
     pub reserve_account: String,
-    /// Asset definition identifier used for transfers (e.g., `aid:2f17c72466f84a4bb8a8e24884fdcd2f`).
+    /// Asset definition identifier used for transfers (canonical unprefixed Base58 address).
     #[arg(long = "asset-definition", value_name = "AID")]
     pub asset_definition: String,
 }
@@ -1229,10 +1229,9 @@ impl ReserveLedgerArgs {
             .wrap_err("failed to resolve --treasury-account")?;
         let reserve = crate::resolve_account_id(context, &self.reserve_account)
             .wrap_err("failed to resolve --reserve-account")?;
-        let asset_definition: AssetDefinitionId = self
-            .asset_definition
-            .parse()
-            .wrap_err("failed to parse --asset-definition")?;
+        let asset_definition =
+            AssetDefinitionId::parse_address_literal(&self.asset_definition)
+                .wrap_err("failed to parse --asset-definition")?;
         let plan = build_reserve_ledger_plan(
             &self.quote_path,
             projection,
@@ -5181,7 +5180,7 @@ impl TryFrom<RewardPolicyState> for RelayBondPolicyV1 {
     fn try_from(value: RewardPolicyState) -> Result<Self> {
         let minimum_exit_bond = Numeric::from_str(&value.minimum_exit_bond)
             .map_err(|err| eyre!("invalid minimum_exit_bond: {err}"))?;
-        let bond_asset_id = AssetDefinitionId::from_str(&value.bond_asset_id)
+        let bond_asset_id = AssetDefinitionId::parse_address_literal(&value.bond_asset_id)
             .map_err(|err| eyre!("invalid bond_asset_id: {err}"))?;
         Ok(Self {
             minimum_exit_bond,

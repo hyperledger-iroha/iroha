@@ -114,13 +114,13 @@ fn pagination_asset_definition_ids() -> Vec<AssetDefinitionId> {
 }
 
 #[test]
-fn pagination_asset_definition_ids_are_canonical_aid_literals() {
+fn pagination_asset_definition_ids_are_canonical_base58_literals() {
     let ids = pagination_asset_definition_ids();
     assert_eq!(ids.len(), 10);
     for id in ids {
         let literal = id.to_string();
-        assert!(literal.starts_with("aid:"));
-        assert_eq!(literal.len(), 36);
+        assert!(!literal.starts_with("aid:"));
+        assert!(!literal.contains(':'));
         assert_eq!(literal.parse::<AssetDefinitionId>().expect("canonical"), id);
     }
 }

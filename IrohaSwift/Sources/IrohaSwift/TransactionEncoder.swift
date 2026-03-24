@@ -28,7 +28,7 @@ public enum TransactionInputError: Error, LocalizedError, Equatable {
         case .emptyAssetDefinitionId:
             return "Asset definition id must not be empty."
         case let .malformedAssetDefinitionId(value):
-            return "Asset definition id must use canonical 'aid:<32-lower-hex-no-dash>' UUID-v4 form (received '\(value)')."
+            return "Asset definition id must use canonical unprefixed Base58 form (received '\(value)')."
         case let .emptyDomainId(field):
             return "Domain id for \(field) must not be empty."
         case let .malformedDomainId(field, value):
@@ -115,26 +115,14 @@ struct TransactionInputValidator {
         if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
             throw TransactionInputError.malformedAssetDefinitionId(trimmed)
         }
-        let prefix = "aid:"
-        guard trimmed.hasPrefix(prefix) else {
+        guard AssetDefinitionAddress.looksCanonical(trimmed) else {
             throw TransactionInputError.malformedAssetDefinitionId(trimmed)
         }
-        let payload = String(trimmed.dropFirst(prefix.count))
-        guard payload.count == 32,
-              !payload.contains("-"),
-              payload.unicodeScalars.allSatisfy({
-                  CharacterSet(charactersIn: "0123456789abcdef").contains($0)
-              }),
-              let raw = Data(hexString: payload),
-              raw.count == 16 else {
+        if NoritoNativeBridge.shared.blake3Hash(data: Data()) != nil,
+           AssetDefinitionAddress.decode(trimmed) == nil {
             throw TransactionInputError.malformedAssetDefinitionId(trimmed)
         }
-        let bytes = [UInt8](raw)
-        guard bytes[6] >> 4 == 0x4,
-              (bytes[8] & 0xC0) == 0x80 else {
-            throw TransactionInputError.malformedAssetDefinitionId(trimmed)
-        }
-        return "\(prefix)\(payload)"
+        return trimmed
     }
 
     static func sanitizeDomainId(_ domainId: String, field: String) throws -> String {

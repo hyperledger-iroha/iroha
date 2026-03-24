@@ -388,10 +388,7 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             f(*num);
             f(*denom);
         }
-        ResolveAccountAlias { label, domain, .. } => {
-            f(*label);
-            f(*domain);
-        }
+        ResolveAccountAlias { alias, .. } => f(*alias),
         Abs { src, .. } => f(*src),
         Isqrt { src, .. } => f(*src),
         Poseidon2 { a, b, .. } => {

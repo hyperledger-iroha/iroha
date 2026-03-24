@@ -2552,20 +2552,31 @@ mod tests {
         assert!(matches!(trigger.filter, TriggerFilter::Data(_)));
     }
 
+    fn sample_asset_definition_literal() -> String {
+        iroha_data_model::asset::AssetDefinitionId::new(
+            "wonderland".parse().expect("domain"),
+            "rose".parse().expect("name"),
+        )
+        .to_string()
+    }
+
     #[test]
     fn parse_trigger_decl_with_structured_data_filter() {
-        let src = r#"
-        seiyaku C {
-            kotoage fn run() {}
-            register_trigger wake {
+        let asset_definition = sample_asset_definition_literal();
+        let src = format!(
+            r#"
+        seiyaku C {{
+            kotoage fn run() {{}}
+            register_trigger wake {{
                 call run;
-                on data asset added {
-                    asset_definition "aid:6872454e9c044641aa581ec5f3801619";
-                }
-            }
-        }
-        "#;
-        let prog = parse(src).expect("parse trigger decl");
+                on data asset added {{
+                    asset_definition "{asset_definition}";
+                }}
+            }}
+        }}
+        "#
+        );
+        let prog = parse(&src).expect("parse trigger decl");
         let trigger = prog
             .items
             .iter()
@@ -2584,10 +2595,7 @@ mod tests {
         );
         assert_eq!(filter.matchers.len(), 1);
         assert_eq!(filter.matchers[0].key, "asset_definition");
-        assert_eq!(
-            filter.matchers[0].value,
-            "aid:6872454e9c044641aa581ec5f3801619"
-        );
+        assert_eq!(filter.matchers[0].value, asset_definition);
     }
 
     #[test]
@@ -2596,7 +2604,7 @@ mod tests {
         let peer =
             "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D".to_string();
         let domain = "wonderland".to_string();
-        let asset_definition = "aid:6872454e9c044641aa581ec5f3801619".to_string();
+        let asset_definition = sample_asset_definition_literal();
         let nft = "n0$wonderland".to_string();
         let trigger = "wake".to_string();
         let role = "auditor".to_string();

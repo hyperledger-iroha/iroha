@@ -317,16 +317,24 @@ public enum OfflineNorito {
         throw OfflineNoritoError.nativeBridgeUnavailable("connect_norito_encode_asset_id_literal")
     }
 
-    /// Derive the deterministic `aid:<hex>` canonical literal from a human-readable alias.
+    /// Derive the deterministic canonical asset-definition address from a legacy `name#domain` seed.
     ///
-    /// Algorithm matches Rust `AssetDefinitionId::new(domain, name)`:
-    ///   `blake3("name#domain")` → truncate to 16 bytes → force UUIDv4 bits → `"aid:<hex>"`
+    /// Algorithm matches Rust `AssetDefinitionId::new(domain, name)` for legacy
+    /// deterministic seeds:
+    ///   `blake3("name#domain")` → truncate to 16 bytes → force UUIDv4 bits → Base58 address
     ///
-    /// - Parameter alias: Asset alias in `"name#domain"` format, e.g. `"usd#wonderland"`.
-    /// - Returns: Canonical asset definition ID, e.g. `"aid:bef53c1ccd1749e180dfbad6519bfd66"`.
+    /// This does not resolve mutable dotted aliases. Resolve those through Torii.
+    ///
+    /// - Parameter alias: Legacy deterministic seed in `"name#domain"` form, e.g. `"usd#wonderland"`.
+    /// - Returns: Canonical unprefixed Base58 asset-definition address.
+    @available(*, deprecated, message: "Asset aliases are mutable. Resolve aliases through Torii instead of deriving IDs offline.")
     static func assetDefinitionIdFromAlias(_ alias: String) throws -> String {
         let trimmed = alias.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed.contains("#") else {
+        let parts = trimmed.split(separator: "#", omittingEmptySubsequences: false)
+        guard parts.count == 2,
+              !parts[0].isEmpty,
+              !parts[1].isEmpty,
+              !parts[1].contains(".") else {
             throw OfflineNoritoError.invalidAssetId(alias)
         }
         let bridge = NoritoNativeBridge.shared
@@ -340,8 +348,10 @@ public enum OfflineNorito {
         // Force UUIDv4 version (0100) and RFC4122 variant (10xx)
         aidBytes[6] = (aidBytes[6] & 0x0f) | 0x40
         aidBytes[8] = (aidBytes[8] & 0x3f) | 0x80
-        let hex = aidBytes.map { String(format: "%02x", $0) }.joined()
-        return "aid:\(hex)"
+        guard let address = AssetDefinitionAddress.encode(uuidBytes: Data(aidBytes)) else {
+            throw OfflineNoritoError.nativeBridgeUnavailable("connect_norito_blake3_hash")
+        }
+        return address
     }
 
     static func encodeAssetDefinitionId(name: String, domain: String) throws -> Data {

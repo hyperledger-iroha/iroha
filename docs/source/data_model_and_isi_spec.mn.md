@@ -27,7 +27,9 @@ translator: machine-google-reviewed
 ID-ууд нь `Display`/`FromStr` хоёр талын аялалтай тогтвортой мөрийн маягтуудтай. Нэрийн дүрэм нь хоосон зай болон нөөцлөгдсөн `@ # $` тэмдэгтүүдийг хориглодог.- `Name` — баталгаажуулсан текст танигч. Дүрэм: `crates/iroha_data_model/src/name.rs`.
 - `DomainId` — `name`. Домэйн: `{ id, logo, metadata, owned_by }`. Барилгачид: `NewDomain`. Код: `crates/iroha_data_model/src/domain.rs`.
 - `AccountId` — каноник хаягуудыг `AccountAddress` (I105 / hex)-ээр гаргадаг ба Torii `AccountAddress::parse_encoded`-ээр дамжуулан оролтыг хэвийн болгодог. I105 бол илүүд үздэг дансны формат юм; I105 маягт нь зөвхөн Sora-д зориулагдсан UX. Танил `alias` (татгалзсан хуучин маягт) мөр нь зөвхөн чиглүүлэлтийн нэрээр хадгалагдана. Данс: `{ id, metadata }`. Код: `crates/iroha_data_model/src/account.rs`.- Дансны элсэлтийн бодлого — домайнууд нь `iroha:account_admission_policy` мета өгөгдлийн түлхүүр дор Norito-JSON `AccountAdmissionPolicy`-г хадгалах замаар далд данс үүсгэхийг хянадаг. Түлхүүр байхгүй үед `iroha:default_account_admission_policy` гинжин түвшний захиалгат параметр нь анхдагчаар хангадаг; Энэ нь бас байхгүй үед хатуу өгөгдмөл нь `ImplicitReceive` (анхны хувилбар). Бодлогын шошгууд нь `mode` (`ExplicitOnly` эсвэл `ImplicitReceive`) дээр нэмэх нь гүйлгээ бүрийн сонголт (өгөгдмөл `16`) болон блок үүсгэх хязгаар, нэмэлт `implicit_creation_fee` данс (sink), Хөрөнгийн тодорхойлолт бүрийн `min_initial_amounts` ба нэмэлт `default_role_on_create` (`AccountCreated`-ийн дараа олгоно, байхгүй бол `DefaultRoleError` татгалзана). Genesis сонголт хийх боломжгүй; идэвхгүй/хүчингүй бодлого нь `InstructionExecutionError::AccountAdmission`-тай үл мэдэгдэх дансны төлбөрийн баримтын маягийн зааврыг үгүйсгэдэг. `AccountCreated`-ээс өмнө `iroha:created_via="implicit"` мета өгөгдлийн далд дансны тамга; өгөгдмөл дүрүүд нь дараагийн `AccountRoleGranted`-г ялгаруулдаг бөгөөд гүйцэтгэгч эзэмшигчийн үндсэн дүрмүүд нь шинэ дансанд нэмэлт үүрэггүйгээр өөрийн хөрөнгө/NFT-ийг зарцуулах боломжийг олгодог. Код: `crates/iroha_data_model/src/account/admission.rs`, `crates/iroha_core/src/smartcontracts/isi/account_admission.rs`.
-- `AssetDefinitionId` — каноник `aid:<32-lower-hex-no-dash>` (UUID-v4 байт). Тодорхойлолт: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. `alias` литерал нь `<name>#<domain>@<dataspace>` эсвэл `<name>#<dataspace>` байх ёстой бөгөөд `<name>` нь хөрөнгийн тодорхойлолтын нэртэй тэнцүү байх ёстой. Код: `crates/iroha_data_model/src/asset/definition.rs`.
+- `AssetDefinitionId` — каноник `unprefixed Base58 address with versioning and checksum` (UUID-v4 байт). Тодорхойлолт: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. `alias` литерал нь `<name>#<domain>.<dataspace>` эсвэл `<name>#<dataspace>` байх ёстой бөгөөд `<name>` нь хөрөнгийн тодорхойлолтын нэртэй тэнцүү байх ёстой. Код: `crates/iroha_data_model/src/asset/definition.rs`.
+
+  - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`, where `status` is `permanent`, `leased_active`, `leased_grace`, or `expired_pending_cleanup`. Alias selectors resolve against the latest committed block creation time and stop resolving after grace even before sweep removes stale bindings.
 - `AssetId`: каноник кодлогдсон literal `norito:<hex>` (эхний хувилбар дээр хуучин текст хэлбэрийг дэмждэггүй).- `NftId` — `nft$domain`. NFT: `{ id, content: Metadata, owned_by }`. Код: `crates/iroha_data_model/src/nft.rs`.
 - `RoleId` — `name`. Үүрэг: `{ id, permissions: BTreeSet<Permission> }` барилгачин `NewRole { inner: Role, grant_to }`. Код: `crates/iroha_data_model/src/role.rs`.
 - `Permission` — `{ name: Ident, payload: Json }`. Код: `crates/iroha_data_model/src/permission.rs`.
@@ -192,19 +194,19 @@ ID-ууд нь `Display`/`FromStr` хоёр талын аялалтай тогт
   - Гүйцэтгэх үед триггерийн IVM байт код дутуу байвал гохыг устгаж, гүйцэтгэлийг бүтэлгүйтлийн үр дагавартай ажиллагаагүй гэж үзнэ.
   - Дууссан өдөөгчийг нэн даруй арилгадаг; Хэрэв гүйцэтгэлийн явцад дууссан оруулгатай тулгарвал түүнийг тайрч, алга болсонд тооцно.
 - Параметр шинэчлэх:
-  - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` шинэчлэгдэж, `ConfigurationEvent::Changed` ялгаруулдаг.CLI / Torii `aid` + бусад нэрийн жишээ:
+  - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` шинэчлэгдэж, `ConfigurationEvent::Changed` ялгаруулдаг.CLI / Torii asset-definition id + бусад нэрийн жишээ:
 - Каноник тусламж + тодорхой нэр + урт нэрээр бүртгүүлэх:
-  - `iroha ledger asset definition register --id aid:2f17c72466f84a4bb8a8e24884fdcd2f --name pkr --alias pkr#ubl@sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#ubl.sbp`
 - Каноник тусламж + тодорхой нэр + богино нэрээр бүртгүүлэх:
-  - `iroha ledger asset definition register --id aid:550e8400e29b41d4a7164466554400dd --name pkr --alias pkr#sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#sbp`
 - Гаалийн нэр + дансны бүрэлдэхүүн хэсгүүд:
-  - `iroha ledger asset mint --definition-alias pkr#ubl@sbp --account <i105> --quantity 500`
+  - `iroha ledger asset mint --definition-alias pkr#ubl.sbp --account <i105> --quantity 500`
 - Каноник тусламжийн нэрсийг шийдвэрлэх:
-  - JSON `{ "alias": "pkr#ubl@sbp" }`-тэй `POST /v1/assets/aliases/resolve`
+  - JSON `{ "alias": "pkr#ubl.sbp" }`-тэй `POST /v1/assets/aliases/resolve`
 
 Шилжилтийн тэмдэглэл:
 - `name#domain` текстийн хөрөнгийн тодорхойлолтын ID-г эхний хувилбар дээр санаатайгаар дэмждэггүй.
-- Үнэлэх/шатаах/шилжүүлэх хил хязгаар дахь хөрөнгийн ID-ууд `norito:<hex>` стандартад нийцдэг; `iroha tools encode asset-id`-г `--definition aid:...` эсвэл `--alias ...` дээр нэмэх нь `--account` ашиглана уу.
+- Үнэлэх/шатаах/шилжүүлэх хил хязгаар дахь хөрөнгийн ID-ууд `norito:<hex>` стандартад нийцдэг; `iroha tools encode asset-id`-г `--definition <base58-asset-definition-id>` эсвэл `--alias ...` дээр нэмэх нь `--account` ашиглана уу.
 
 ---
 

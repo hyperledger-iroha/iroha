@@ -354,7 +354,7 @@ fn parse_lane_settlement_buffer_config(
     };
 
     let account_id = parse_account_literal_with_world(world, account_raw)?;
-    let asset_definition_id = asset_raw.parse::<AssetDefinitionId>().ok()?;
+    let asset_definition_id = AssetDefinitionId::parse_address_literal(asset_raw).ok()?;
     let capacity = MicroXor::from(Decimal::from_str(capacity_raw.trim()).ok()?);
 
     Some(LaneSettlementBufferConfig {

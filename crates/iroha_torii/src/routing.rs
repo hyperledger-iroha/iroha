@@ -38,6 +38,7 @@ use iroha_core::smartcontracts::isi::sorafs::manifest_pin_policy_constraints_fro
 #[cfg(feature = "app_api")]
 use iroha_core::smartcontracts::triggers::set::SetReadOnly;
 use iroha_core::{
+    alias::{authority_can_manage_account_alias, authority_can_resolve_account_alias},
     nexus::{
         portfolio,
         space_directory::{
@@ -47,7 +48,10 @@ use iroha_core::{
     },
     query::store::LiveQueryStoreHandle,
     queue::RoutingDecision,
-    state::{State as CoreState, StateReadOnly, WorldReadOnly},
+    state::{
+        AssetDefinitionAliasBindingRecord, AssetDefinitionAliasLeaseStatus, State as CoreState,
+        StateReadOnly, WorldReadOnly,
+    },
     sumeragi::{
         self, SumeragiHandle,
         consensus::Evidence as ConsensusEvidence,
@@ -1255,6 +1259,10 @@ pub struct RecordSoranetPrivacyShareDto {
 }
 
 #[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
     crate::json_macros::JsonDeserialize,
@@ -1266,7 +1274,12 @@ pub struct AliasVoprfEvaluateResponseDto {
     pub backend: AliasVoprfBackendDto,
 }
 
-#[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+)]
 pub struct AliasResolveRequestDto {
     pub alias: String,
 }
@@ -1621,7 +1634,12 @@ fn collect_kaigi_domain_counters(
     map
 }
 
-#[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+)]
 pub struct AliasResolveIndexRequestDto {
     pub index: u64,
 }
@@ -1656,6 +1674,45 @@ pub struct AliasResolveIndexResponseDto {
 }
 
 #[derive(
+    Clone,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+)]
+pub struct AssetAliasBindingDto {
+    pub alias: String,
+    pub status: String,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub lease_expiry_ms: Option<u64>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub grace_until_ms: Option<u64>,
+    pub bound_at_ms: u64,
+}
+
+fn asset_alias_binding_status_label(status: AssetDefinitionAliasLeaseStatus) -> &'static str {
+    match status {
+        AssetDefinitionAliasLeaseStatus::Permanent => "permanent",
+        AssetDefinitionAliasLeaseStatus::LeasedActive => "leased_active",
+        AssetDefinitionAliasLeaseStatus::LeasedGrace => "leased_grace",
+        AssetDefinitionAliasLeaseStatus::ExpiredPendingCleanup => "expired_pending_cleanup",
+    }
+}
+
+pub(crate) fn asset_alias_binding_dto(
+    binding: &AssetDefinitionAliasBindingRecord,
+    now_ms: u64,
+) -> AssetAliasBindingDto {
+    AssetAliasBindingDto {
+        alias: binding.alias.to_string(),
+        status: asset_alias_binding_status_label(binding.status_at(now_ms)).to_owned(),
+        lease_expiry_ms: binding.lease_expiry_ms,
+        grace_until_ms: binding.grace_until_ms,
+        bound_at_ms: binding.bound_at_ms,
+    }
+}
+
+#[derive(
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
     crate::json_macros::JsonDeserialize,
@@ -1665,6 +1722,8 @@ pub struct AssetAliasResolveResponseDto {
     pub alias: String,
     pub asset_definition_id: String,
     pub asset_name: String,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub alias_binding: Option<AssetAliasBindingDto>,
     #[norito(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -2100,8 +2159,9 @@ pub async fn handle_v1_confidential_asset_transitions(
     state: Arc<CoreState>,
     axum::extract::Path(definition_id): axum::extract::Path<String>,
 ) -> Result<impl IntoResponse> {
+    let now_ms = asset_alias_observation_time_ms(&state);
     let world = state.world_view();
-    let def_id = resolve_asset_definition_selector(&world, &definition_id)?;
+    let def_id = resolve_asset_definition_selector(&world, &definition_id, now_ms)?;
     let block_height = state.committed_height() as u64;
     let definition = world
         .asset_definition(&def_id)
@@ -3219,7 +3279,7 @@ mod connect_session_tests {
 /// Request for recent shielded ledger roots (convenience JSON wrapper).
 /// Mirrors the Norito type used by IVM syscalls.
 pub struct ZkRootsGetRequestDto {
-    /// Asset selector (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`)
+    /// Asset selector (unprefixed Base58 id or `<name>#<domain>.<dataspace>` / `<name>#<dataspace>`)
     /// whose shielded pool roots to fetch.
     pub asset_id: String,
     /// Maximum number of recent roots to return.
@@ -4265,21 +4325,36 @@ pub async fn handle_v1_zk_verify_batch(
 fn resolve_asset_definition_selector(
     world: &impl WorldReadOnly,
     asset_literal: &str,
+    now_ms: u64,
 ) -> Result<iroha_data_model::asset::id::AssetDefinitionId, Error> {
-    const INVALID_SELECTOR_MSG: &str =
-        "invalid asset selector; expected `<name>#<domain>@<dataspace>` or `<name>#<dataspace>`";
+    const INVALID_SELECTOR_MSG: &str = "invalid asset selector; expected an unprefixed Base58 asset definition id or `<name>#<domain>.<dataspace>` / `<name>#<dataspace>`";
 
     let selector = asset_literal.trim();
+    if selector.is_empty() {
+        return Err(Error::Query(
+            iroha_data_model::ValidationFail::NotPermitted(INVALID_SELECTOR_MSG.to_owned()),
+        ));
+    }
+    if let Ok(id) = selector.parse::<iroha_data_model::asset::AssetDefinitionId>() {
+        return world.asset_definition(&id).map(|_| id).map_err(|_| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound,
+            ))
+        });
+    }
+
     let alias: iroha_data_model::asset::AssetDefinitionAlias = selector.parse().map_err(|_| {
         Error::Query(iroha_data_model::ValidationFail::NotPermitted(
             INVALID_SELECTOR_MSG.to_owned(),
         ))
     })?;
-    world.asset_definition_id_by_alias(&alias).ok_or_else(|| {
-        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::NotFound,
-        ))
-    })
+    world
+        .asset_definition_id_by_alias_at(&alias, now_ms)
+        .ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound,
+            ))
+        })
 }
 
 /// POST /v1/zk/roots — convenience endpoint returning recent shielded roots as JSON.
@@ -4292,8 +4367,9 @@ pub async fn handle_v1_zk_roots(
     accept: Option<axum::http::HeaderValue>,
     NoritoJson(req): NoritoJson<ZkRootsGetRequestDto>,
 ) -> Result<Response> {
+    let now_ms = asset_alias_observation_time_ms(&state);
     let world = state.world_view();
-    let ad = resolve_asset_definition_selector(&world, &req.asset_id)?;
+    let ad = resolve_asset_definition_selector(&world, &req.asset_id, now_ms)?;
     let zk = state.zk_snapshot();
     // Bound the requested window by config cap (0 -> cap)
     let cap = zk.root_history_cap;
@@ -4452,6 +4528,18 @@ pub async fn handle_v1_sumeragi_evidence_list(
     Ok(resp)
 }
 
+#[cfg(test)]
+fn test_asset_definition_id_from_hex(hex_literal: &str) -> AssetDefinitionId {
+    let mut bytes = [0_u8; 16];
+    hex::decode_to_slice(hex_literal, &mut bytes).expect("hex fixture asset definition id");
+    AssetDefinitionId::from_uuid_bytes(bytes).expect("uuid v4 fixture asset definition id")
+}
+
+#[cfg(test)]
+fn test_asset_definition_literal_from_hex(hex_literal: &str) -> String {
+    test_asset_definition_id_from_hex(hex_literal).to_string()
+}
+
 #[cfg(all(test, feature = "app_api"))]
 mod zk_roots_selector_tests {
     use std::str::FromStr;
@@ -4482,7 +4570,16 @@ mod zk_roots_selector_tests {
         let (world, definition_id) = selector_world();
         let view = world.view();
         let resolved =
-            resolve_asset_definition_selector(&view, "usd#main").expect("alias should resolve");
+            resolve_asset_definition_selector(&view, "usd#main", 0).expect("alias should resolve");
+        assert_eq!(resolved, definition_id);
+    }
+
+    #[test]
+    fn resolve_asset_definition_selector_accepts_base58_literal() {
+        let (world, definition_id) = selector_world();
+        let view = world.view();
+        let resolved = resolve_asset_definition_selector(&view, &definition_id.to_string(), 0)
+            .expect("base58 id should resolve");
         assert_eq!(resolved, definition_id);
     }
 
@@ -4490,8 +4587,9 @@ mod zk_roots_selector_tests {
     fn resolve_asset_definition_selector_rejects_legacy_aid_literal() {
         let (world, _) = selector_world();
         let view = world.view();
-        let err = resolve_asset_definition_selector(&view, "aid:550e8400e29b11d4a7164466554400dd")
-            .expect_err("legacy aid should fail");
+        let err =
+            resolve_asset_definition_selector(&view, "aid:550e8400e29b11d4a7164466554400dd", 0)
+                .expect_err("legacy aid should fail");
         assert!(matches!(
             err,
             Error::Query(iroha_data_model::ValidationFail::NotPermitted(_))
@@ -4502,7 +4600,7 @@ mod zk_roots_selector_tests {
     fn resolve_asset_definition_selector_rejects_unknown_alias() {
         let (world, _) = selector_world();
         let view = world.view();
-        let err = resolve_asset_definition_selector(&view, "usd#missing")
+        let err = resolve_asset_definition_selector(&view, "usd#missing", 0)
             .expect_err("unknown alias should fail");
         assert!(matches!(
             err,
@@ -7112,32 +7210,20 @@ fn multisig_selector_validation_error(message: impl Into<String>) -> Error {
 }
 
 #[cfg(feature = "app_api")]
-fn parse_multisig_account_alias(alias_input: &str) -> Result<account::rekey::AccountLabel> {
-    let canonical = alias_input.trim().to_ascii_lowercase();
-    let (label, domain) = canonical.split_once('@').ok_or_else(|| {
-        multisig_selector_validation_error(
-            "multisig_account_alias must be formatted as label@domain".to_owned(),
-        )
-    })?;
-    if label.trim().is_empty() || domain.trim().is_empty() {
-        return Err(multisig_selector_validation_error(
-            "multisig_account_alias must be formatted as label@domain".to_owned(),
-        ));
-    }
-
-    let label_name = Name::from_str(label).map_err(|err| {
+fn parse_multisig_account_alias(
+    alias_input: &str,
+    catalog: &DataSpaceCatalog,
+) -> Result<account::rekey::AccountLabel> {
+    account::rekey::AccountLabel::from_literal(alias_input, catalog).map_err(|err| {
         multisig_selector_validation_error(format!("invalid multisig_account_alias: {err}"))
-    })?;
-    let domain_id = DomainId::from_str(domain).map_err(|err| {
-        multisig_selector_validation_error(format!("invalid multisig_account_alias: {err}"))
-    })?;
-    Ok(account::rekey::AccountLabel::new(domain_id, label_name))
+    })
 }
 
 #[cfg(feature = "app_api")]
 fn resolve_multisig_account_selector(
     state: &CoreState,
     selector: &MultisigAccountSelectorDto,
+    resolve_authority: Option<&iroha_data_model::account::AccountId>,
 ) -> Result<iroha_data_model::account::AccountId> {
     let alias = selector
         .multisig_account_alias
@@ -7153,7 +7239,16 @@ fn resolve_multisig_account_selector(
         )),
         (Some(account_id), None) => Ok(account_id.clone()),
         (None, Some(alias)) => {
-            let label = parse_multisig_account_alias(alias)?;
+            let nexus = state.nexus_snapshot();
+            let label = parse_multisig_account_alias(alias, &nexus.dataspace_catalog)?;
+            if let Some(authority) = resolve_authority {
+                let world = state.world_view();
+                if !authority_can_resolve_account_alias(&world, authority, &label) {
+                    return Err(multisig_selector_validation_error(
+                        "missing account-alias resolve permission".to_owned(),
+                    ));
+                }
+            }
             let world = state.world_view();
             world
                 .account_rekey_records()
@@ -7211,11 +7306,13 @@ fn decode_multisig_spec_from_metadata(
 fn resolve_multisig_account_and_spec(
     state: &CoreState,
     selector: &MultisigAccountSelectorDto,
+    resolve_authority: Option<&iroha_data_model::account::AccountId>,
 ) -> Result<(
     iroha_data_model::account::AccountId,
     iroha_executor_data_model::isi::multisig::MultisigSpec,
 )> {
-    let multisig_account_id = resolve_multisig_account_selector(state, selector)?;
+    let multisig_account_id =
+        resolve_multisig_account_selector(state, selector, resolve_authority)?;
     let spec = load_multisig_spec(state, &multisig_account_id)?;
     Ok((multisig_account_id, spec))
 }
@@ -7878,6 +7975,8 @@ mod multisig_contract_call_tests {
         let multisig = sample_account_id();
         let code_hash = Hash::new(b"code-hash".to_vec());
         let payload = IrohaJson::new(norito::json!({ "n": 1 }));
+        let asset_definition =
+            test_asset_definition_literal_from_hex("550e8400e29b41d4a7164466554400aa");
 
         let first = derive_multisig_contract_call_trigger_id(
             &multisig,
@@ -7885,7 +7984,7 @@ mod multisig_contract_call_tests {
             "calc.v1",
             "main",
             Some(&payload),
-            Some("aid:abcd"),
+            Some(asset_definition.as_str()),
             None,
             5_000,
             &code_hash,
@@ -7897,7 +7996,7 @@ mod multisig_contract_call_tests {
             "calc.v1",
             "main",
             Some(&payload),
-            Some("aid:abcd"),
+            Some(asset_definition.as_str()),
             None,
             5_000,
             &code_hash,
@@ -7911,7 +8010,7 @@ mod multisig_contract_call_tests {
             "calc.v1",
             "alternate",
             Some(&payload),
-            Some("aid:abcd"),
+            Some(asset_definition.as_str()),
             None,
             5_000,
             &code_hash,
@@ -7935,6 +8034,8 @@ mod multisig_contract_call_tests {
         };
         let code_hash = Hash::new(b"code-hash".to_vec());
         let payload = IrohaJson::new(norito::json!({ "invoice_id": "INV-1" }));
+        let asset_definition =
+            test_asset_definition_literal_from_hex("550e8400e29b41d4a7164466554400aa");
 
         let (instructions, instructions_hash) = build_multisig_contract_call_instructions(
             &multisig,
@@ -7942,7 +8043,7 @@ mod multisig_contract_call_tests {
             "calc.v1",
             "main",
             Some(&payload),
-            Some("aid:abcd"),
+            Some(asset_definition.as_str()),
             Some(&multisig),
             5_000,
             &manifest,
@@ -8068,9 +8169,7 @@ mod multisig_selector_tests {
     }
 
     fn test_asset_definition_id() -> dm::AssetDefinitionId {
-        "aid:550e8400e29b41d4a7164466554400aa"
-            .parse()
-            .expect("valid aid asset definition id")
+        test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400aa")
     }
 
     fn build_state(world: World) -> Arc<State> {
@@ -8129,7 +8228,7 @@ mod multisig_selector_tests {
     ) {
         let domain_id: DomainId = "hbl".parse().expect("domain");
         let label_name: Name = "cbdc".parse().expect("label");
-        let alias_literal = format!("{}@{}", label_name, domain_id);
+        let alias_literal = format!("{}@{}.universal", label_name, domain_id);
 
         let signer_one = KeyPair::random();
         let signer_two = KeyPair::random();
@@ -8293,7 +8392,7 @@ mod multisig_selector_tests {
     ) {
         let domain_id: DomainId = "hbl".parse().expect("domain");
         let label_name: Name = "cbdc".parse().expect("label");
-        let alias_literal = format!("{}@{}", label_name, domain_id);
+        let alias_literal = format!("{}@{}.universal", label_name, domain_id);
 
         let signer_one = KeyPair::random();
         let signer_two = KeyPair::random();
@@ -8432,8 +8531,9 @@ mod multisig_selector_tests {
                 multisig_account_id: Some(dm::AccountId::new(
                     KeyPair::random().public_key().clone(),
                 )),
-                multisig_account_alias: Some("cbdc@hbl".to_owned()),
+                multisig_account_alias: Some("cbdc@hbl.universal".to_owned()),
             },
+            None,
         )
         .expect_err("selector must be rejected");
         let message = expect_conversion(err);
@@ -8446,6 +8546,7 @@ mod multisig_selector_tests {
         let err = resolve_multisig_account_selector(
             state.as_ref(),
             &MultisigAccountSelectorDto::default(),
+            None,
         )
         .expect_err("selector must be rejected");
         let message = expect_conversion(err);
@@ -8458,7 +8559,7 @@ mod multisig_selector_tests {
         let err = handle_post_multisig_spec(
             state,
             NoritoJson(MultisigSpecRequestDto {
-                selector: alias_selector("missing@hbl"),
+                selector: alias_selector("missing@hbl.universal"),
             }),
         )
         .await
@@ -8484,7 +8585,7 @@ mod multisig_selector_tests {
         let err = handle_post_multisig_spec(
             state,
             NoritoJson(MultisigSpecRequestDto {
-                selector: alias_selector("cbdc@hbl"),
+                selector: alias_selector("cbdc@hbl.universal"),
             }),
         )
         .await
@@ -9610,7 +9711,8 @@ pub async fn handle_post_contract_call_multisig_propose(
         return Err(conversion_error("gas_limit must be positive".to_owned()));
     }
     let gas_limit = gas_limit.unwrap_or(DEFAULT_MULTISIG_CONTRACT_CALL_GAS_LIMIT);
-    let (multisig_account_id, spec) = resolve_multisig_account_and_spec(&state, &selector)?;
+    let (multisig_account_id, spec) =
+        resolve_multisig_account_and_spec(&state, &selector, Some(&signer_account_id))?;
 
     let prepared = prepare_contract_call(&state, &namespace, &contract_id)?;
     let PreparedContractCall {
@@ -9787,7 +9889,8 @@ pub async fn handle_post_contract_call_multisig_approve(
         proposal_id,
         instructions_hash,
     } = req;
-    let (multisig_account_id, spec) = resolve_multisig_account_and_spec(&state, &selector)?;
+    let (multisig_account_id, spec) =
+        resolve_multisig_account_and_spec(&state, &selector, Some(&signer_account_id))?;
     let (hash_literal, instructions_hash) =
         resolve_multisig_proposal_hash(proposal_id.clone(), instructions_hash)?;
     let proposal_id_literal = proposal_id
@@ -9953,7 +10056,8 @@ pub async fn handle_post_multisig_cancel(
         proposal_id,
         instructions_hash,
     } = req;
-    let (multisig_account_id, spec) = resolve_multisig_account_and_spec(&state, &selector)?;
+    let (multisig_account_id, spec) =
+        resolve_multisig_account_and_spec(&state, &selector, Some(&signer_account_id))?;
     let (target_hash_literal, target_instructions_hash) =
         resolve_multisig_proposal_hash(proposal_id, instructions_hash)?;
     let target_record = load_multisig_proposal_record(
@@ -10157,7 +10261,8 @@ pub async fn handle_post_multisig_propose(
         creation_time_ms,
         instructions,
     } = req;
-    let (multisig_account_id, spec) = resolve_multisig_account_and_spec(&state, &selector)?;
+    let (multisig_account_id, spec) =
+        resolve_multisig_account_and_spec(&state, &selector, Some(&signer_account_id))?;
 
     let proposal_hash = HashOf::new(&instructions);
     let proposal_id = hex::encode(proposal_hash.as_ref());
@@ -10312,7 +10417,8 @@ pub async fn handle_post_multisig_approve(
         proposal_id,
         instructions_hash,
     } = req;
-    let (multisig_account_id, spec) = resolve_multisig_account_and_spec(&state, &selector)?;
+    let (multisig_account_id, spec) =
+        resolve_multisig_account_and_spec(&state, &selector, Some(&signer_account_id))?;
     let (hash_literal, instructions_hash) =
         resolve_multisig_proposal_hash(proposal_id.clone(), instructions_hash)?;
     let proposal_id_literal = proposal_id
@@ -10456,12 +10562,34 @@ pub async fn handle_post_multisig_spec(
     state: Arc<CoreState>,
     NoritoJson(req): NoritoJson<MultisigSpecRequestDto>,
 ) -> Result<JsonBody<MultisigSpecResponseDto>> {
+    Ok(JsonBody(multisig_spec_response(&state, &req, None)?))
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_post_multisig_spec_for_authority(
+    state: Arc<CoreState>,
+    req: MultisigSpecRequestDto,
+    resolve_authority: AccountId,
+) -> Result<JsonBody<MultisigSpecResponseDto>> {
+    Ok(JsonBody(multisig_spec_response(
+        &state,
+        &req,
+        Some(&resolve_authority),
+    )?))
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_spec_response(
+    state: &Arc<CoreState>,
+    req: &MultisigSpecRequestDto,
+    resolve_authority: Option<&AccountId>,
+) -> Result<MultisigSpecResponseDto> {
     let (resolved_multisig_account_id, spec) =
-        resolve_multisig_account_and_spec(&state, &req.selector)?;
-    Ok(JsonBody(MultisigSpecResponseDto {
+        resolve_multisig_account_and_spec(state, &req.selector, resolve_authority)?;
+    Ok(MultisigSpecResponseDto {
         resolved_multisig_account_id,
         spec,
-    }))
+    })
 }
 
 /// POST /v1/multisig/proposals/list — list multisig proposals for a multisig authority.
@@ -10471,19 +10599,43 @@ pub async fn handle_post_multisig_proposals_list(
     state: Arc<CoreState>,
     NoritoJson(req): NoritoJson<MultisigProposalsListRequestDto>,
 ) -> Result<JsonBody<MultisigProposalsListResponseDto>> {
+    Ok(JsonBody(multisig_proposals_list_response(
+        &state, &req, None,
+    )?))
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_post_multisig_proposals_list_for_authority(
+    state: Arc<CoreState>,
+    req: MultisigProposalsListRequestDto,
+    resolve_authority: AccountId,
+) -> Result<JsonBody<MultisigProposalsListResponseDto>> {
+    Ok(JsonBody(multisig_proposals_list_response(
+        &state,
+        &req,
+        Some(&resolve_authority),
+    )?))
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_proposals_list_response(
+    state: &Arc<CoreState>,
+    req: &MultisigProposalsListRequestDto,
+    resolve_authority: Option<&AccountId>,
+) -> Result<MultisigProposalsListResponseDto> {
     let requested_statuses = requested_multisig_statuses(&req.status);
     let (resolved_multisig_account_id, spec) =
-        resolve_multisig_account_and_spec(&state, &req.selector)?;
+        resolve_multisig_account_and_spec(state, &req.selector, resolve_authority)?;
     let proposals = list_multisig_proposals(
-        &state,
+        state,
         &resolved_multisig_account_id,
         &spec,
         &requested_statuses,
     )?;
-    Ok(JsonBody(MultisigProposalsListResponseDto {
+    Ok(MultisigProposalsListResponseDto {
         resolved_multisig_account_id,
         proposals,
-    }))
+    })
 }
 
 /// POST /v1/multisig/proposals/get — resolve a multisig selector and fetch a specific proposal.
@@ -10493,26 +10645,50 @@ pub async fn handle_post_multisig_proposals_get(
     state: Arc<CoreState>,
     NoritoJson(req): NoritoJson<MultisigProposalsGetRequestDto>,
 ) -> Result<JsonBody<MultisigProposalGetResponseDto>> {
-    let (resolved_multisig_account_id, spec) =
-        resolve_multisig_account_and_spec(&state, &req.selector)?;
-    let (hash_literal, instructions_hash) =
-        resolve_multisig_proposal_hash(req.proposal_id.clone(), req.instructions_hash)?;
-    let proposal_record = load_multisig_proposal_record(
+    Ok(JsonBody(multisig_proposals_get_response(
+        &state, &req, None,
+    )?))
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_post_multisig_proposals_get_for_authority(
+    state: Arc<CoreState>,
+    req: MultisigProposalsGetRequestDto,
+    resolve_authority: AccountId,
+) -> Result<JsonBody<MultisigProposalGetResponseDto>> {
+    Ok(JsonBody(multisig_proposals_get_response(
         &state,
+        &req,
+        Some(&resolve_authority),
+    )?))
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_proposals_get_response(
+    state: &Arc<CoreState>,
+    req: &MultisigProposalsGetRequestDto,
+    resolve_authority: Option<&AccountId>,
+) -> Result<MultisigProposalGetResponseDto> {
+    let (resolved_multisig_account_id, spec) =
+        resolve_multisig_account_and_spec(state, &req.selector, resolve_authority)?;
+    let (hash_literal, instructions_hash) =
+        resolve_multisig_proposal_hash(req.proposal_id.clone(), req.instructions_hash.clone())?;
+    let proposal_record = load_multisig_proposal_record(
+        state,
         &resolved_multisig_account_id,
         &spec,
         &instructions_hash,
     )?
     .filter(|record| multisig_proposal_is_user_visible(&record.proposal))
     .ok_or_else(multisig_not_found_error)?;
-    Ok(JsonBody(MultisigProposalGetResponseDto {
+    Ok(MultisigProposalGetResponseDto {
         resolved_multisig_account_id,
         proposal_id: hash_literal.clone(),
         instructions_hash: hash_literal,
         proposal: proposal_record.proposal,
         status: proposal_record.status.as_str().to_owned(),
         terminal_at_ms: proposal_record.terminal_at_ms,
-    }))
+    })
 }
 
 /// POST /v1/multisig/approvals/list — list signer-visible multisig approvals.
@@ -10604,7 +10780,7 @@ pub async fn handle_post_multisig_approvals_get(
     NoritoJson(req): NoritoJson<MultisigApprovalsGetRequestDto>,
 ) -> Result<JsonBody<MultisigApprovalsGetResponseDto>> {
     let (hash_literal, instructions_hash) =
-        resolve_multisig_proposal_hash(req.proposal_id.clone(), req.instructions_hash)?;
+        resolve_multisig_proposal_hash(req.proposal_id.clone(), req.instructions_hash.clone())?;
     let mut matches = Vec::new();
 
     for (multisig_account_id, spec) in viewer_multisig_accounts(&state, &viewer_scope)? {
@@ -11771,7 +11947,7 @@ pub struct MultisigAccountSelectorDto {
     /// Active concrete multisig account id.
     #[norito(default)]
     pub multisig_account_id: Option<iroha_data_model::account::AccountId>,
-    /// Stable alias in `label@domain` format.
+    /// Stable alias in canonical `label@domain.dataspace` or `label@dataspace` format.
     #[norito(default)]
     pub multisig_account_alias: Option<String>,
 }
@@ -17550,7 +17726,9 @@ fn instruction_matches_domain_id(
     if let Some(custom) = any.downcast_ref::<CustomInstruction>() {
         if let Ok(multisig) = MultisigInstructionBox::try_from(custom.payload()) {
             return match multisig {
-                MultisigInstructionBox::Register(register) => &register.home_domain == expected,
+                MultisigInstructionBox::Register(register) => {
+                    register.home_domain.as_ref() == Some(expected)
+                }
                 MultisigInstructionBox::Approve(_approve) => false,
                 MultisigInstructionBox::Cancel(_cancel) => false,
                 MultisigInstructionBox::Propose(propose) => propose
@@ -18706,6 +18884,8 @@ const ENDPOINT_REPO_AGREEMENTS_LIST: &str = "/v1/repo/agreements";
 const ENDPOINT_REPO_AGREEMENTS_QUERY: &str = "/v1/repo/agreements/query";
 #[cfg(feature = "app_api")]
 const ENDPOINT_ASSET_DEFINITIONS_LIST: &str = "/v1/assets/definitions";
+#[cfg(feature = "app_api")]
+const ENDPOINT_ASSET_DEFINITION_GET: &str = "/v1/assets/definitions/{asset}";
 #[cfg(feature = "app_api")]
 const ENDPOINT_ASSET_DEFINITIONS_QUERY: &str = "/v1/assets/definitions/query";
 #[cfg(feature = "app_api")]
@@ -20661,7 +20841,7 @@ mod sse_filter_tests {
         let receiver = BOB_ID.clone();
         let deposit = CARPENTER_ID.clone();
         let asset_definition: AssetDefinitionId =
-            "aid:550e8400e29b41d4a7164466554400dd".parse().unwrap();
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
         let bundled = OfflineTransferSettled {
             bundle_id: Hash::new(b"bundle"),
             controller,
@@ -20705,9 +20885,7 @@ mod tx_query_filter_tests {
     }
 
     fn test_asset_definition_id() -> dm::AssetDefinitionId {
-        "aid:550e8400e29b41d4a7164466554400aa"
-            .parse()
-            .expect("valid aid asset definition id")
+        test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400aa")
     }
 
     fn dummy_proof<T>() -> iroha_crypto::MerkleProof<T> {
@@ -21136,7 +21314,7 @@ mod tx_query_filter_tests {
     fn filter_asset_id_eq_matches_instruction_asset() {
         let (account, kp) = account_with_key();
         let asset_def: dm::AssetDefinitionId =
-            "aid:550e8400e29b41d4a7164466554400dd".parse().unwrap();
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
         let asset_id = dm::AssetId::new(asset_def.clone(), account.clone());
         let mint = dm::Mint::asset_numeric(1_u32, asset_id.clone());
 
@@ -21163,7 +21341,7 @@ mod tx_query_filter_tests {
         let telemetry = MaybeTelemetry::disabled();
         let (account, _kp) = account_with_key();
         let asset_def: dm::AssetDefinitionId =
-            "aid:550e8400e29b41d4a7164466554400dd".parse().unwrap();
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
         let asset_id = dm::AssetId::new(asset_def, account);
         let expr = crate::filter::FilterExpr::Eq(
             crate::filter::FieldPath("asset_id".into()),
@@ -21176,7 +21354,7 @@ mod tx_query_filter_tests {
     fn tx_filter_adapter_accepts_asset_definition_id_eq() {
         let telemetry = MaybeTelemetry::disabled();
         let asset_def: dm::AssetDefinitionId =
-            "aid:550e8400e29b41d4a7164466554400dd".parse().unwrap();
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
         let expr = crate::filter::FilterExpr::Eq(
             crate::filter::FieldPath("asset_id".into()),
             norito::json::Value::from(asset_def.to_string()),
@@ -21492,7 +21670,8 @@ mod explorer_lookup_tests {
             let kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
             (dm::AccountId::new(kp.public_key().clone()), kp)
         };
-        let def: dm::AssetDefinitionId = "aid:550e8400e29b41d4a7164466554400bb".parse().unwrap();
+        let def: dm::AssetDefinitionId =
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400bb");
         let alice_asset = dm::AssetId::new(def.clone(), alice.clone());
         let bob_asset = dm::AssetId::new(def, bob.clone());
         let instructions = vec![
@@ -22063,7 +22242,7 @@ mod tx_query_integration_smoke {
 
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
         let asset_def: dm::AssetDefinitionId =
-            "aid:550e8400e29b41d4a7164466554400dd".parse().unwrap();
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
         let asset_id = dm::AssetId::new(asset_def, actor_id.clone().into());
         let mint = dm::Mint::asset_numeric(1_u32, asset_id.clone());
 
@@ -22155,7 +22334,8 @@ mod tx_query_integration_smoke {
         let alice_id = dm::ScopedAccountId::new(domain_id.clone(), kp_alice.public_key().clone());
         let kp_bob = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let bob_id = dm::ScopedAccountId::new(domain_id.clone(), kp_bob.public_key().clone());
-        let def_id: dm::AssetDefinitionId = "aid:550e8400e29b41d4a7164466554400dd".parse().unwrap();
+        let def_id: dm::AssetDefinitionId =
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
 
         dm::Register::domain(dm::Domain::new(domain_id.clone()))
             .execute(exec_id.account(), &mut stx0)
@@ -25088,7 +25268,7 @@ mod app_api_integration_tests {
     }
 
     #[tokio::test]
-    async fn asset_holders_query_filters_by_asset_id() {
+    async fn asset_holders_query_filters_by_account_id() {
         let _guard = app_query_limits_guard();
         let (state, alice_id, _bob_id) = build_asset_holder_fixture_state();
 
@@ -25113,17 +25293,13 @@ mod app_api_integration_tests {
             }),
         );
 
-        let asset_id = AssetId::new(
-            "aid:550e8400e29b41d4a7164466554400dd".parse().unwrap(),
-            alice_id.clone(),
-        );
         let body = json_string(obj(vec![(
             "filter",
             obj(vec![
                 ("op", val("eq")),
                 (
                     "args",
-                    arr(vec![val("asset_id"), val(&asset_id.to_string())]),
+                    arr(vec![val("account_id"), val(&alice_id.to_string())]),
                 ),
             ]),
         )]));
@@ -25272,8 +25448,8 @@ mod app_api_integration_tests {
             .as_str()
             .expect("asset_definition_id field");
         assert!(
-            definition_id.starts_with("aid:"),
-            "asset_definition_id should be canonical aid: {definition_id}"
+            !definition_id.starts_with("aid:"),
+            "asset_definition_id should be canonical Base58: {definition_id}"
         );
         let account_literal = alice_id.to_string();
         assert_eq!(
@@ -25373,7 +25549,7 @@ mod app_api_integration_tests {
     }
 
     #[tokio::test]
-    async fn asset_holders_get_filters_by_asset_id() {
+    async fn asset_holders_get_filters_by_account_id() {
         let _guard = app_query_limits_guard();
         let (state, alice_id, _) = build_asset_holder_fixture_state();
 
@@ -25401,17 +25577,12 @@ mod app_api_integration_tests {
             }),
         );
 
-        let asset_id = AssetId::new(
-            "aid:550e8400e29b41d4a7164466554400dd".parse().unwrap(),
-            alice_id.clone(),
-        )
-        .to_string();
         let expected_account = alice_id.to_string();
         let req = http::Request::builder()
             .method("GET")
             .uri(format!(
-                "/v1/assets/rose%23sbp/holders?asset_id={}",
-                urlencoding::encode(&asset_id)
+                "/v1/assets/rose%23sbp/holders?account_id={}",
+                urlencoding::encode(&expected_account)
             ))
             .body(axum::body::Body::empty())
             .unwrap();
@@ -25442,7 +25613,8 @@ mod app_api_integration_tests {
         let params = AssetHolderGetParams {
             limit: Some(cap + 1),
             offset: 0,
-            asset_id: None,
+            account_id: None,
+            scope: None,
         };
 
         let err = handle_v1_asset_holders(
@@ -25467,7 +25639,8 @@ mod app_api_integration_tests {
         let params = AssetHolderGetParams {
             limit: Some(10),
             offset: 0,
-            asset_id: None,
+            account_id: None,
+            scope: None,
         };
 
         let result = handle_v1_asset_holders(
@@ -25576,11 +25749,14 @@ mod app_api_integration_tests {
         let domain_id: DomainId = "wonderland".parse().unwrap();
         let domain = Domain::new(domain_id.clone()).build(&alice_id);
         let account = Account::new(alice_id.to_account_id(domain_id)).build(&alice_id);
-        let mut asset_def =
-            AssetDefinition::numeric("aid:550e8400e29b41d4a7164466554400dd".parse().unwrap())
-                .confidential_policy(policy)
-                .build(&alice_id);
+        let mut asset_def = AssetDefinition::numeric(AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "rose".parse().unwrap(),
+        ))
+        .confidential_policy(policy)
+        .build(&alice_id);
         asset_def.alias = Some("rose#sbp".parse().expect("asset alias literal"));
+        let expected_asset_id = asset_def.id().to_string();
         let world = World::with([domain], [account], [asset_def]);
         let state = Arc::new(iroha_core::state::State::new_for_testing(
             world,
@@ -25612,10 +25788,7 @@ mod app_api_integration_tests {
             .unwrap()
             .to_bytes();
         let json: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
-        assert_eq!(
-            json["asset_id"].as_str(),
-            Some("aid:550e8400e29b41d4a7164466554400dd")
-        );
+        assert_eq!(json["asset_id"].as_str(), Some(expected_asset_id.as_str()));
         assert_eq!(json["current_mode"].as_str(), Some("Convertible"));
         assert_eq!(json["effective_mode"].as_str(), Some("Convertible"));
         assert_eq!(json["vk_set_hash"].as_str(), Some(expected_vk_hex.as_str()));
@@ -25807,7 +25980,8 @@ mod app_api_integration_tests {
         let bob_id: AccountId = AccountId::new(kp_b.public_key().clone());
 
         let domain_id: DomainId = "wonderland".parse().unwrap();
-        let rose_def: AssetDefinitionId = "aid:550e8400e29b41d4a7164466554400dd".parse().unwrap();
+        let rose_def: AssetDefinitionId =
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
         let mut rose_definition = AssetDefinition::numeric(rose_def.clone())
             .with_name("rose".to_owned())
             .build(&alice_id);
@@ -25886,7 +26060,7 @@ mod query_endpoint_tests {
         let domain = Domain::new(domain_id.clone()).build(&alice_id);
         let account = Account::new(alice_id.to_account_id(domain_id)).build(&alice_id);
         let asset_def_id: AssetDefinitionId =
-            "aid:550e8400e29b41d4a7164466554400dd".parse().unwrap();
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&alice_id);
         let asset_id = AssetId::new(asset_def_id, alice_id.clone());
         let asset = Asset::new(asset_id.clone(), Numeric::from(13_u32));
@@ -33991,8 +34165,10 @@ pub struct AssetHolderGetParams {
     /// Offset for pagination (default 0).
     #[norito(default)]
     pub offset: u64,
-    /// Filter holders by asset identifier.
-    pub asset_id: Option<String>,
+    /// Filter holders by canonical I105 account identifier.
+    pub account_id: Option<String>,
+    /// Filter holders by balance scope (`global` or `dataspace:<id>`).
+    pub scope: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -34979,9 +35155,10 @@ fn build_repo_state_for_tests() -> RepoTestFixture {
     let initiator_id: AccountId = AccountId::new(initiator_keys.public_key().clone());
     let counterparty_id: AccountId = AccountId::new(counterparty_keys.public_key().clone());
     let authority_id = initiator_id.clone();
-    let cash_def_id: AssetDefinitionId = "aid:550e8400e29b41d4a7164466554400f1".parse().unwrap();
+    let cash_def_id: AssetDefinitionId =
+        test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400f1");
     let collateral_def_id: AssetDefinitionId =
-        "aid:550e8400e29b41d4a7164466554400f2".parse().unwrap();
+        test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400f2");
 
     let latest_block = state.view().latest_block();
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -36039,14 +36216,17 @@ fn account_sort_key(
 ) -> MultiSortKey {
     let mut components = Vec::with_capacity(selectors.len());
     for selector in selectors {
-        let value = match selector.field {
-            AccountSortField::Id => account.id().to_string(),
+        let value: SortKeyValue = match selector.field {
+            AccountSortField::Id => account.id().to_string().into(),
             AccountSortField::Metadata(Some(ref name)) => account
                 .metadata()
                 .get(name)
                 .map(metadata_json_to_string)
-                .unwrap_or_default(),
-            AccountSortField::Metadata(None) | AccountSortField::Unsupported => String::new(),
+                .unwrap_or_default()
+                .into(),
+            AccountSortField::Metadata(None) | AccountSortField::Unsupported => {
+                String::new().into()
+            }
         };
         if selector.ascending {
             components.push(SortKeyComponent::asc(value));
@@ -36407,12 +36587,6 @@ fn onboarding_invalid_request(reason: &str) -> Error {
 }
 
 #[cfg(feature = "app_api")]
-fn default_onboarding_domain() -> Option<DomainId> {
-    let label = account::address::default_domain_name();
-    label.as_ref().parse().ok()
-}
-
-#[cfg(feature = "app_api")]
 fn derive_onboarding_uaid(
     alias: &str,
     account_id: &AccountId,
@@ -36435,6 +36609,22 @@ fn onboarding_manifest_issued_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
         .unwrap_or(0)
+}
+
+#[cfg(feature = "app_api")]
+fn ensure_onboarding_signer_can_manage_alias(
+    state: &CoreState,
+    authority: &AccountId,
+    alias: &account::rekey::AccountLabel,
+) -> Result<()> {
+    let world = state.world_view();
+    if authority_can_manage_account_alias(&world, authority, alias) {
+        return Ok(());
+    }
+
+    Err(onboarding_invalid_request(
+        "onboarding signer lacks account-alias manage permission",
+    ))
 }
 
 #[iroha_futures::telemetry_future]
@@ -36460,10 +36650,17 @@ pub async fn handle_v1_accounts_onboard(
     } = req;
 
     let trimmed_alias = alias.trim();
-    let alias_chars = trimmed_alias.chars().count();
-    if trimmed_alias.is_empty() || alias_chars > 64 {
-        return Err(onboarding_invalid_request("alias must be 1-64 characters"));
+    if trimmed_alias.is_empty() {
+        return Err(onboarding_invalid_request("alias must not be empty"));
     }
+    let nexus = app.state.nexus_snapshot();
+    let alias_label =
+        account::rekey::AccountLabel::from_literal(trimmed_alias, &nexus.dataspace_catalog)
+            .map_err(|err| onboarding_invalid_request(&err.to_string()))?;
+    ensure_onboarding_signer_can_manage_alias(app.state.as_ref(), &signer.authority, &alias_label)?;
+    let canonical_alias = alias_label
+        .to_literal(&nexus.dataspace_catalog)
+        .map_err(|err| onboarding_invalid_request(&err.to_string()))?;
     let account_id = if let Some(account_literal) = account_id
         .as_deref()
         .map(str::trim)
@@ -36489,14 +36686,6 @@ pub async fn handle_v1_accounts_onboard(
         ));
     };
 
-    let expected_domain = signer
-        .allowed_domain
-        .clone()
-        .or_else(default_onboarding_domain);
-    let scoped_account_id = expected_domain
-        .map(|domain| account_id.to_account_id(domain))
-        .ok_or_else(|| onboarding_invalid_request("account domain is not configured"))?;
-
     if app.state.world_view().account(&account_id).is_ok() {
         return Err(onboarding_invalid_request("account already exists"));
     }
@@ -36504,9 +36693,9 @@ pub async fn handle_v1_accounts_onboard(
     let uaid = if let Some(literal) = uaid {
         parse_uaid_literal(&literal)?
     } else {
-        derive_onboarding_uaid(trimmed_alias, &account_id, identity.as_ref())
+        derive_onboarding_uaid(&canonical_alias, &account_id, identity.as_ref())
     };
-    let dataspace = DataSpaceId::GLOBAL;
+    let dataspace = alias_label.dataspace;
     let should_publish_manifest = {
         let world = app.state.world_view();
         !world
@@ -36517,7 +36706,7 @@ pub async fn handle_v1_accounts_onboard(
 
     let mut metadata = Metadata::default();
     let alias_key = Name::from_str("display_name").expect("static metadata key");
-    metadata.insert(alias_key, IrohaJson::new(trimmed_alias));
+    metadata.insert(alias_key, IrohaJson::new(canonical_alias.clone()));
     if let Some(identity_payload) = identity.clone() {
         let identity_key = Name::from_str("identity").expect("static metadata key");
         metadata.insert(
@@ -36526,8 +36715,13 @@ pub async fn handle_v1_accounts_onboard(
         );
     }
 
+    let register_builder = match alias_label.domain.clone() {
+        Some(domain) => dm::Account::new(account_id.to_account_id(domain)),
+        None => dm::Account::new_domainless(account_id.clone()),
+    };
     let register = Register::account(
-        dm::Account::new(scoped_account_id)
+        register_builder
+            .with_label(Some(alias_label))
             .with_metadata(metadata)
             .with_uaid(Some(uaid)),
     );
@@ -36660,9 +36854,14 @@ pub async fn handle_v1_accounts_onboard_multisig(
     } = req;
 
     let trimmed_alias = alias.trim();
-    if trimmed_alias.is_empty() || trimmed_alias.chars().count() > 64 {
-        return Err(onboarding_invalid_request("alias must be 1-64 characters"));
+    if trimmed_alias.is_empty() {
+        return Err(onboarding_invalid_request("alias must not be empty"));
     }
+    let nexus = app.state.nexus_snapshot();
+    let alias_label =
+        account::rekey::AccountLabel::from_literal(trimmed_alias, &nexus.dataspace_catalog)
+            .map_err(|err| onboarding_invalid_request(&err.to_string()))?;
+    ensure_onboarding_signer_can_manage_alias(app.state.as_ref(), &signer.authority, &alias_label)?;
     if member_account_ids.len() < 2 {
         return Err(onboarding_invalid_request(
             "multisig onboarding requires at least two member accounts",
@@ -36741,20 +36940,23 @@ pub async fn handle_v1_accounts_onboard_multisig(
         return Ok((StatusCode::OK, resp));
     }
 
-    let home_domain = signer
-        .allowed_domain
-        .clone()
-        .or_else(default_onboarding_domain)
-        .ok_or_else(|| onboarding_invalid_request("multisig home domain is not configured"))?;
     let quorum = NonZeroU16::new(threshold)
         .ok_or_else(|| onboarding_invalid_request("required_signers must be positive"))?;
     let transaction_ttl_ms = NonZeroU64::new(transaction_ttl_ms.unwrap_or(86_400_000).max(1))
         .ok_or_else(|| onboarding_invalid_request("transaction_ttl_ms must be positive"))?;
     let spec = MultisigSpec::new(signatories_with_weights, quorum, transaction_ttl_ms);
-    let instruction = MultisigRegister::with_account(multisig_account.clone(), home_domain, spec);
+    let register =
+        MultisigRegister::with_account(multisig_account.clone(), alias_label.domain.clone(), spec);
+    let bind_alias = SetAccountLabel {
+        account: multisig_account.clone(),
+        label: alias_label,
+    };
 
     let mut builder = TransactionBuilder::new((*app.chain_id).clone(), signer.authority.clone())
-        .with_instructions([InstructionBox::from(instruction)]);
+        .with_instructions([
+            InstructionBox::from(register),
+            InstructionBox::from(bind_alias),
+        ]);
     builder.set_ttl(Duration::from_secs(60));
     let tx = builder.sign(&signer.private_key.0);
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
@@ -38099,7 +38301,9 @@ mod accounts_query_tests {
             .to_i105()
             .expect("i105 encoding");
 
-        let alias_literal = format!("{}@{}", label.label, domain_id);
+        let alias_literal = label
+            .to_literal(&state.nexus_snapshot().dataspace_catalog)
+            .expect("canonical alias literal");
         let alias_env = crate::filter::QueryEnvelope {
             query: None,
             filter: Some(crate::filter::FilterExpr::Eq(
@@ -38231,11 +38435,9 @@ mod asset_definitions_query_tests {
 
         let mut pkr_metadata = dm::Metadata::default();
         pkr_metadata.insert("rank".parse().expect("metadata key"), 2_u32);
-        let mut pkr = dm::AssetDefinition::numeric(
-            "aid:550e8400e29b41d4a7164466554400dd"
-                .parse()
-                .expect("asset definition id"),
-        )
+        let mut pkr = dm::AssetDefinition::numeric(test_asset_definition_id_from_hex(
+            "550e8400e29b41d4a7164466554400dd",
+        ))
         .with_name("PKR".to_owned())
         .with_metadata(pkr_metadata)
         .build(&authority);
@@ -38243,11 +38445,9 @@ mod asset_definitions_query_tests {
 
         let mut usd_metadata = dm::Metadata::default();
         usd_metadata.insert("rank".parse().expect("metadata key"), 1_u32);
-        let usd = dm::AssetDefinition::numeric(
-            "aid:550e8400e29b41d4a7164466554400ee"
-                .parse()
-                .expect("asset definition id"),
-        )
+        let usd = dm::AssetDefinition::numeric(test_asset_definition_id_from_hex(
+            "550e8400e29b41d4a7164466554400ee",
+        ))
         .with_name("USD".to_owned())
         .with_metadata(usd_metadata)
         .build(&authority);
@@ -40525,7 +40725,8 @@ mod explorer_asset_definition_econometrics_tests {
         let kp_carol = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let carol_id = dm::ScopedAccountId::new(domain_id.clone(), kp_carol.public_key().clone());
 
-        let def_id: dm::AssetDefinitionId = "aid:550e8400e29b41d4a7164466554400dd".parse().unwrap();
+        let def_id: dm::AssetDefinitionId =
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
 
         dm::Register::domain(dm::Domain::new(domain_id.clone()))
             .execute(exec_id.account(), &mut stx0)
@@ -40831,7 +41032,8 @@ mod explorer_asset_definition_snapshot_tests {
         let kp_bob = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let bob_id = dm::ScopedAccountId::new(domain_id.clone(), kp_bob.public_key().clone());
 
-        let def_id: dm::AssetDefinitionId = "aid:550e8400e29b41d4a7164466554400dd".parse().unwrap();
+        let def_id: dm::AssetDefinitionId =
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
 
         dm::Register::domain(dm::Domain::new(domain_id.clone()))
             .execute(exec_id.account(), &mut stx0)
@@ -41000,7 +41202,8 @@ mod explorer_asset_definition_snapshot_tests {
         let kp_bob = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let bob_id = dm::ScopedAccountId::new(domain_id.clone(), kp_bob.public_key().clone());
 
-        let def_id: dm::AssetDefinitionId = "aid:550e8400e29b41d4a7164466554400dd".parse().unwrap();
+        let def_id: dm::AssetDefinitionId =
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
 
         dm::Register::domain(dm::Domain::new(domain_id.clone()))
             .execute(exec_id.account(), &mut stx0)
@@ -41173,9 +41376,11 @@ pub async fn handle_v1_explorer_block_detail(
 #[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct AssetDefinitionListItem {
+    definition: iroha_data_model::asset::definition::AssetDefinition,
     id: String,
     name: String,
     alias: Option<String>,
+    alias_binding: Option<AssetAliasBindingDto>,
 }
 
 #[cfg(feature = "app_api")]
@@ -41225,6 +41430,10 @@ enum AssetDefinitionSortField {
     Id,
     Name,
     Alias,
+    AliasBindingStatus,
+    AliasBindingLeaseExpiryMs,
+    AliasBindingGraceUntilMs,
+    AliasBindingBoundAtMs,
     Metadata(Option<iroha_data_model::prelude::Name>),
     Unsupported,
 }
@@ -41249,6 +41458,14 @@ fn compile_asset_definition_sort_spec(
             AssetDefinitionSortField::Name
         } else if sk.key.0.as_str() == "alias" {
             AssetDefinitionSortField::Alias
+        } else if sk.key.0.as_str() == "alias_binding.status" {
+            AssetDefinitionSortField::AliasBindingStatus
+        } else if sk.key.0.as_str() == "alias_binding.lease_expiry_ms" {
+            AssetDefinitionSortField::AliasBindingLeaseExpiryMs
+        } else if sk.key.0.as_str() == "alias_binding.grace_until_ms" {
+            AssetDefinitionSortField::AliasBindingGraceUntilMs
+        } else if sk.key.0.as_str() == "alias_binding.bound_at_ms" {
+            AssetDefinitionSortField::AliasBindingBoundAtMs
         } else if let Some(rest) = sk.key.0.strip_prefix("metadata.") {
             AssetDefinitionSortField::Metadata(rest.parse().ok())
         } else {
@@ -41267,26 +41484,50 @@ fn compile_asset_definition_sort_spec(
 
 #[cfg(feature = "app_api")]
 fn asset_definition_sort_key(
-    def: &iroha_data_model::asset::definition::AssetDefinition,
+    item: &AssetDefinitionListItem,
     selectors: &[AssetDefinitionSortSelector],
 ) -> MultiSortKey {
     let mut components = Vec::with_capacity(selectors.len());
     for selector in selectors {
-        let value = match selector.field {
-            AssetDefinitionSortField::Id => def.id().to_string(),
-            AssetDefinitionSortField::Name => def.name().clone(),
-            AssetDefinitionSortField::Alias => def
-                .alias()
+        let value: SortKeyValue = match selector.field {
+            AssetDefinitionSortField::Id => item.id.clone().into(),
+            AssetDefinitionSortField::Name => item.name.clone().into(),
+            AssetDefinitionSortField::Alias => item.alias.clone().unwrap_or_default().into(),
+            AssetDefinitionSortField::AliasBindingStatus => item
+                .alias_binding
                 .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_default(),
-            AssetDefinitionSortField::Metadata(Some(ref name)) => def
+                .map(|binding| binding.status.clone())
+                .unwrap_or_default()
+                .into(),
+            AssetDefinitionSortField::AliasBindingLeaseExpiryMs => item
+                .alias_binding
+                .as_ref()
+                .and_then(|binding| binding.lease_expiry_ms)
+                .map(iroha_primitives::numeric::Numeric::from)
+                .unwrap_or_else(|| iroha_primitives::numeric::Numeric::from(0_u64))
+                .into(),
+            AssetDefinitionSortField::AliasBindingGraceUntilMs => item
+                .alias_binding
+                .as_ref()
+                .and_then(|binding| binding.grace_until_ms)
+                .map(iroha_primitives::numeric::Numeric::from)
+                .unwrap_or_else(|| iroha_primitives::numeric::Numeric::from(0_u64))
+                .into(),
+            AssetDefinitionSortField::AliasBindingBoundAtMs => item
+                .alias_binding
+                .as_ref()
+                .map(|binding| iroha_primitives::numeric::Numeric::from(binding.bound_at_ms))
+                .unwrap_or_else(|| iroha_primitives::numeric::Numeric::from(0_u64))
+                .into(),
+            AssetDefinitionSortField::Metadata(Some(ref name)) => item
+                .definition
                 .metadata()
                 .get(name)
                 .map(metadata_json_to_string)
-                .unwrap_or_default(),
+                .unwrap_or_default()
+                .into(),
             AssetDefinitionSortField::Metadata(None) | AssetDefinitionSortField::Unsupported => {
-                String::new()
+                String::new().into()
             }
         };
         if selector.ascending {
@@ -41309,14 +41550,7 @@ fn asset_definition_filter_object(
         F::Or(list) => list.iter().any(|e| asset_definition_filter_object(e, def)),
         F::Not(inner) => !asset_definition_filter_object(inner, def),
         F::Eq(f, v) => {
-            if f.0 == "id" {
-                v.as_str().is_some_and(|s| s == def.id().to_string())
-            } else if f.0 == "name" {
-                v.as_str().is_some_and(|s| s == def.name())
-            } else if f.0 == "alias" {
-                v.as_str()
-                    .is_some_and(|s| def.alias().as_ref().map(AsRef::as_ref) == Some(s))
-            } else if let Some(k) = f.0.strip_prefix("metadata.") {
+            if let Some(k) = f.0.strip_prefix("metadata.") {
                 if let Ok(name) = k.parse::<iroha_data_model::prelude::Name>() {
                     def.metadata().get(&name).is_some_and(|j| {
                         j.try_into_any_norito::<norito::json::Value>().ok().as_ref() == Some(v)
@@ -41325,21 +41559,11 @@ fn asset_definition_filter_object(
                     false
                 }
             } else {
-                false
+                true
             }
         }
         F::Ne(f, v) => {
-            if f.0 == "id" {
-                v.as_str()
-                    .map(|s| s != def.id().to_string())
-                    .unwrap_or(true)
-            } else if f.0 == "name" {
-                v.as_str().map(|s| s != def.name()).unwrap_or(true)
-            } else if f.0 == "alias" {
-                v.as_str()
-                    .map(|s| def.alias().as_ref().map(AsRef::as_ref) != Some(s))
-                    .unwrap_or(true)
-            } else if let Some(k) = f.0.strip_prefix("metadata.") {
+            if let Some(k) = f.0.strip_prefix("metadata.") {
                 if let Ok(name) = k.parse::<iroha_data_model::prelude::Name>() {
                     match def.metadata().get(&name) {
                         Some(j) => j
@@ -41353,7 +41577,7 @@ fn asset_definition_filter_object(
                     true
                 }
             } else {
-                false
+                true
             }
         }
         F::Lt(f, v) | F::Lte(f, v) | F::Gt(f, v) | F::Gte(f, v) => {
@@ -41376,21 +41600,10 @@ fn asset_definition_filter_object(
                     }
                 }
             }
-            false
+            !f.0.starts_with("metadata.")
         }
         F::In(f, list) => {
-            if f.0 == "id" {
-                let id = def.id().to_string();
-                list.iter().filter_map(|v| v.as_str()).any(|s| s == id)
-            } else if f.0 == "name" {
-                list.iter()
-                    .filter_map(|v| v.as_str())
-                    .any(|s| s == def.name())
-            } else if f.0 == "alias" {
-                let alias = def.alias().as_ref().map(AsRef::as_ref);
-                alias
-                    .is_some_and(|alias| list.iter().filter_map(|v| v.as_str()).any(|s| s == alias))
-            } else if let Some(k) = f.0.strip_prefix("metadata.") {
+            if let Some(k) = f.0.strip_prefix("metadata.") {
                 if let Ok(name) = k.parse::<iroha_data_model::prelude::Name>() {
                     if let Some(j) = def.metadata().get(&name) {
                         if let Ok(nv) = j.try_into_any_norito::<norito::json::Value>() {
@@ -41400,21 +41613,11 @@ fn asset_definition_filter_object(
                 }
                 false
             } else {
-                false
+                true
             }
         }
         F::Nin(f, list) => {
-            if f.0 == "id" {
-                let id = def.id().to_string();
-                list.iter().filter_map(|v| v.as_str()).all(|s| s != id)
-            } else if f.0 == "name" {
-                list.iter()
-                    .filter_map(|v| v.as_str())
-                    .all(|s| s != def.name())
-            } else if f.0 == "alias" {
-                let alias = def.alias().as_ref().map(AsRef::as_ref);
-                alias.is_none_or(|alias| list.iter().filter_map(|v| v.as_str()).all(|s| s != alias))
-            } else if let Some(k) = f.0.strip_prefix("metadata.") {
+            if let Some(k) = f.0.strip_prefix("metadata.") {
                 if let Ok(name) = k.parse::<iroha_data_model::prelude::Name>() {
                     if let Some(j) = def.metadata().get(&name) {
                         if let Ok(nv) = j.try_into_any_norito::<norito::json::Value>() {
@@ -41426,30 +41629,22 @@ fn asset_definition_filter_object(
                 }
                 true
             } else {
-                false
+                true
             }
         }
         F::Exists(f) => {
-            if f.0 == "id" {
-                true
-            } else if f.0 == "name" {
-                true
-            } else if f.0 == "alias" {
-                def.alias().is_some()
-            } else if let Some(k) = f.0.strip_prefix("metadata.") {
+            if let Some(k) = f.0.strip_prefix("metadata.") {
                 if let Ok(name) = k.parse::<iroha_data_model::prelude::Name>() {
                     def.metadata().get(&name).is_some()
                 } else {
                     false
                 }
             } else {
-                false
+                true
             }
         }
         F::IsNull(f) => {
-            if f.0 == "alias" {
-                def.alias().is_none()
-            } else if let Some(k) = f.0.strip_prefix("metadata.") {
+            if let Some(k) = f.0.strip_prefix("metadata.") {
                 if let Ok(name) = k.parse::<iroha_data_model::prelude::Name>() {
                     def.metadata().get(&name).is_some_and(|j| {
                         j.try_into_any_norito::<norito::json::Value>()
@@ -41460,7 +41655,7 @@ fn asset_definition_filter_object(
                     false
                 }
             } else {
-                false
+                true
             }
         }
     }
@@ -41469,6 +41664,22 @@ fn asset_definition_filter_object(
 #[cfg(feature = "app_api")]
 fn asset_definition_filter_projection(expr: &FilterExpr, proj: &AssetDefinitionListItem) -> bool {
     use FilterExpr as F;
+    let alias_binding_status = proj
+        .alias_binding
+        .as_ref()
+        .map(|binding| binding.status.as_str());
+    let alias_binding_lease_expiry_ms = proj
+        .alias_binding
+        .as_ref()
+        .and_then(|binding| binding.lease_expiry_ms);
+    let alias_binding_grace_until_ms = proj
+        .alias_binding
+        .as_ref()
+        .and_then(|binding| binding.grace_until_ms);
+    let alias_binding_bound_at_ms = proj
+        .alias_binding
+        .as_ref()
+        .map(|binding| binding.bound_at_ms);
     match expr {
         F::And(list) => list
             .iter()
@@ -41481,6 +41692,16 @@ fn asset_definition_filter_projection(expr: &FilterExpr, proj: &AssetDefinitionL
             "id" => v.as_str().is_some_and(|s| s == proj.id),
             "name" => v.as_str().is_some_and(|s| s == proj.name),
             "alias" => v.as_str().is_some_and(|s| proj.alias.as_deref() == Some(s)),
+            "alias_binding.status" => v.as_str().is_some_and(|s| alias_binding_status == Some(s)),
+            "alias_binding.lease_expiry_ms" => v
+                .as_u64()
+                .is_some_and(|n| alias_binding_lease_expiry_ms == Some(n)),
+            "alias_binding.grace_until_ms" => v
+                .as_u64()
+                .is_some_and(|n| alias_binding_grace_until_ms == Some(n)),
+            "alias_binding.bound_at_ms" => v
+                .as_u64()
+                .is_some_and(|n| alias_binding_bound_at_ms == Some(n)),
             field if field.starts_with("metadata.") => true,
             _ => false,
         },
@@ -41490,6 +41711,22 @@ fn asset_definition_filter_projection(expr: &FilterExpr, proj: &AssetDefinitionL
             "alias" => v
                 .as_str()
                 .map(|s| proj.alias.as_deref() != Some(s))
+                .unwrap_or(true),
+            "alias_binding.status" => v
+                .as_str()
+                .map(|s| alias_binding_status != Some(s))
+                .unwrap_or(true),
+            "alias_binding.lease_expiry_ms" => v
+                .as_u64()
+                .map(|n| alias_binding_lease_expiry_ms != Some(n))
+                .unwrap_or(true),
+            "alias_binding.grace_until_ms" => v
+                .as_u64()
+                .map(|n| alias_binding_grace_until_ms != Some(n))
+                .unwrap_or(true),
+            "alias_binding.bound_at_ms" => v
+                .as_u64()
+                .map(|n| alias_binding_bound_at_ms != Some(n))
                 .unwrap_or(true),
             field if field.starts_with("metadata.") => true,
             _ => false,
@@ -41504,6 +41741,22 @@ fn asset_definition_filter_projection(expr: &FilterExpr, proj: &AssetDefinitionL
                 .alias
                 .as_deref()
                 .is_some_and(|alias| list.iter().filter_map(|v| v.as_str()).any(|s| s == alias)),
+            "alias_binding.status" => list
+                .iter()
+                .filter_map(|v| v.as_str())
+                .any(|s| alias_binding_status == Some(s)),
+            "alias_binding.lease_expiry_ms" => list
+                .iter()
+                .filter_map(norito::json::Value::as_u64)
+                .any(|n| alias_binding_lease_expiry_ms == Some(n)),
+            "alias_binding.grace_until_ms" => list
+                .iter()
+                .filter_map(norito::json::Value::as_u64)
+                .any(|n| alias_binding_grace_until_ms == Some(n)),
+            "alias_binding.bound_at_ms" => list
+                .iter()
+                .filter_map(norito::json::Value::as_u64)
+                .any(|n| alias_binding_bound_at_ms == Some(n)),
             field if field.starts_with("metadata.") => true,
             _ => false,
         },
@@ -41517,23 +41770,69 @@ fn asset_definition_filter_projection(expr: &FilterExpr, proj: &AssetDefinitionL
                 .alias
                 .as_deref()
                 .is_none_or(|alias| list.iter().filter_map(|v| v.as_str()).all(|s| s != alias)),
+            "alias_binding.status" => list
+                .iter()
+                .filter_map(|v| v.as_str())
+                .all(|s| alias_binding_status != Some(s)),
+            "alias_binding.lease_expiry_ms" => list
+                .iter()
+                .filter_map(norito::json::Value::as_u64)
+                .all(|n| alias_binding_lease_expiry_ms != Some(n)),
+            "alias_binding.grace_until_ms" => list
+                .iter()
+                .filter_map(norito::json::Value::as_u64)
+                .all(|n| alias_binding_grace_until_ms != Some(n)),
+            "alias_binding.bound_at_ms" => list
+                .iter()
+                .filter_map(norito::json::Value::as_u64)
+                .all(|n| alias_binding_bound_at_ms != Some(n)),
             field if field.starts_with("metadata.") => true,
             _ => false,
         },
         F::Exists(f) => match f.0.as_str() {
             "id" | "name" => true,
             "alias" => proj.alias.is_some(),
+            "alias_binding.status" => alias_binding_status.is_some(),
+            "alias_binding.lease_expiry_ms" => alias_binding_lease_expiry_ms.is_some(),
+            "alias_binding.grace_until_ms" => alias_binding_grace_until_ms.is_some(),
+            "alias_binding.bound_at_ms" => alias_binding_bound_at_ms.is_some(),
             field if field.starts_with("metadata.") => true,
             _ => false,
         },
         F::IsNull(f) => match f.0.as_str() {
             "alias" => proj.alias.is_none(),
+            "alias_binding.status" => alias_binding_status.is_none(),
+            "alias_binding.lease_expiry_ms" => alias_binding_lease_expiry_ms.is_none(),
+            "alias_binding.grace_until_ms" => alias_binding_grace_until_ms.is_none(),
+            "alias_binding.bound_at_ms" => alias_binding_bound_at_ms.is_none(),
             field if field.starts_with("metadata.") => true,
             _ => false,
         },
-        F::Lt(f, _) | F::Lte(f, _) | F::Gt(f, _) | F::Gte(f, _) => {
-            f.0.as_str().starts_with("metadata.")
-        }
+        F::Lt(f, v) | F::Lte(f, v) | F::Gt(f, v) | F::Gte(f, v) => match f.0.as_str() {
+            "alias_binding.lease_expiry_ms" => v.as_u64().is_some_and(|n| match expr {
+                F::Lt(_, _) => alias_binding_lease_expiry_ms.is_some_and(|value| value < n),
+                F::Lte(_, _) => alias_binding_lease_expiry_ms.is_some_and(|value| value <= n),
+                F::Gt(_, _) => alias_binding_lease_expiry_ms.is_some_and(|value| value > n),
+                F::Gte(_, _) => alias_binding_lease_expiry_ms.is_some_and(|value| value >= n),
+                _ => false,
+            }),
+            "alias_binding.grace_until_ms" => v.as_u64().is_some_and(|n| match expr {
+                F::Lt(_, _) => alias_binding_grace_until_ms.is_some_and(|value| value < n),
+                F::Lte(_, _) => alias_binding_grace_until_ms.is_some_and(|value| value <= n),
+                F::Gt(_, _) => alias_binding_grace_until_ms.is_some_and(|value| value > n),
+                F::Gte(_, _) => alias_binding_grace_until_ms.is_some_and(|value| value >= n),
+                _ => false,
+            }),
+            "alias_binding.bound_at_ms" => v.as_u64().is_some_and(|n| match expr {
+                F::Lt(_, _) => alias_binding_bound_at_ms.is_some_and(|value| value < n),
+                F::Lte(_, _) => alias_binding_bound_at_ms.is_some_and(|value| value <= n),
+                F::Gt(_, _) => alias_binding_bound_at_ms.is_some_and(|value| value > n),
+                F::Gte(_, _) => alias_binding_bound_at_ms.is_some_and(|value| value >= n),
+                _ => false,
+            }),
+            field if field.starts_with("metadata.") => true,
+            _ => false,
+        },
     }
 }
 
@@ -41560,15 +41859,38 @@ fn asset_definition_filter_mentions_metadata(expr: &FilterExpr) -> bool {
 #[cfg(feature = "app_api")]
 fn project_asset_definition_list_item(
     def: &iroha_data_model::asset::definition::AssetDefinition,
+    alias_binding: Option<&AssetAliasBindingDto>,
 ) -> AssetDefinitionListItem {
     AssetDefinitionListItem {
+        definition: def.clone(),
         id: def.id().to_string(),
         name: def.name().clone(),
         alias: def.alias().as_ref().map(ToString::to_string),
+        alias_binding: alias_binding.cloned(),
     }
 }
 
-/// GET /v1/assets/definitions — List asset definitions with `id`, `name`, and optional `alias`.
+#[cfg(feature = "app_api")]
+fn asset_definition_to_json_value(
+    def: &iroha_data_model::asset::definition::AssetDefinition,
+    alias_binding: Option<&AssetAliasBindingDto>,
+) -> Result<norito::json::Value> {
+    let mut value = norito::json::to_value(def).map_err(|error| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(
+            error.to_string(),
+        ))
+    })?;
+    if let (Some(binding), norito::json::Value::Object(map)) = (alias_binding, &mut value) {
+        map.insert(
+            "alias".into(),
+            norito::json::Value::from(binding.alias.clone()),
+        );
+        map.insert("alias_binding".into(), json_value(binding));
+    }
+    Ok(value)
+}
+
+/// GET /v1/assets/definitions — List asset definitions as full objects.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_assets_definitions(
@@ -41576,7 +41898,21 @@ pub async fn handle_v1_assets_definitions(
     crate::NoritoQuery(p): crate::NoritoQuery<ListFilterParams>,
 ) -> Result<impl IntoResponse> {
     let world = state.world_view();
-    let definitions: Vec<_> = world.asset_definitions_iter().cloned().collect();
+    let now_ms = asset_alias_observation_time_ms(&state);
+    let alias_bindings: BTreeMap<AssetDefinitionId, AssetAliasBindingDto> = world
+        .asset_definition_alias_bindings()
+        .iter()
+        .map(|(definition_id, binding)| {
+            (
+                definition_id.clone(),
+                asset_alias_binding_dto(binding, now_ms),
+            )
+        })
+        .collect();
+    let definitions: Vec<_> = world
+        .asset_definitions_iter()
+        .filter_map(|definition| world.asset_definition(definition.id()).ok())
+        .collect();
     drop(world);
 
     let sort_spec = p.sort.as_deref().map(parse_sort_spec).unwrap_or_default();
@@ -41596,23 +41932,23 @@ pub async fn handle_v1_assets_definitions(
     }
 
     let filter_ref = filter_expr.as_ref();
+    let alias_bindings_ref = &alias_bindings;
     let mapped_iter = definitions.into_iter().filter_map({
         let selectors = selectors;
         move |def| {
+            let projected =
+                project_asset_definition_list_item(&def, alias_bindings_ref.get(def.id()));
             if let Some(expr) = filter_ref {
-                if !asset_definition_filter_object(expr, &def) {
+                if asset_definition_filter_mentions_metadata(expr)
+                    && !asset_definition_filter_object(expr, &def)
+                {
                     return None;
                 }
-            }
-            let projected = project_asset_definition_list_item(&def);
-            if let Some(expr) =
-                filter_ref.filter(|expr| !asset_definition_filter_mentions_metadata(expr))
-            {
                 if !asset_definition_filter_projection(expr, &projected) {
                     return None;
                 }
             }
-            let key = asset_definition_sort_key(&def, &selectors);
+            let key = asset_definition_sort_key(&projected, &selectors);
             Some((key, projected))
         }
     });
@@ -41621,18 +41957,10 @@ pub async fn handle_v1_assets_definitions(
 
     let mut arr = Vec::with_capacity(items.len());
     for it in &items {
-        let mut m = norito::json::Map::new();
-        m.insert("id".into(), norito::json::Value::from(it.id.clone()));
-        m.insert("name".into(), norito::json::Value::from(it.name.clone()));
-        m.insert(
-            "alias".into(),
-            it.alias
-                .as_ref()
-                .map_or(norito::json::Value::Null, |alias| {
-                    norito::json::Value::from(alias.clone())
-                }),
-        );
-        arr.push(norito::json::Value::Object(m));
+        arr.push(asset_definition_to_json_value(
+            &it.definition,
+            alias_bindings.get(it.definition.id()),
+        )?);
     }
     let mut top = norito::json::Map::new();
     top.insert("items".into(), norito::json::Value::Array(arr));
@@ -41650,8 +41978,44 @@ pub async fn handle_v1_assets_definitions(
     Ok(resp)
 }
 
+/// GET /v1/assets/definitions/{asset} — Fetch a single asset definition by id or alias.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_asset_definition(
+    state: Arc<CoreState>,
+    axum::extract::Path(asset): axum::extract::Path<String>,
+) -> Result<impl IntoResponse> {
+    let world = state.world_view();
+    let now_ms = asset_alias_observation_time_ms(&state);
+    let definition_id = resolve_asset_definition_selector(&world, &asset, now_ms)?;
+    let definition = world.asset_definition(&definition_id).map_err(|_| {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::NotFound,
+        ))
+    })?;
+    let alias_binding = world
+        .asset_definition_alias_bindings()
+        .get(&definition_id)
+        .map(|binding| asset_alias_binding_dto(binding, now_ms));
+    let body = norito::json::to_json_pretty(&asset_definition_to_json_value(
+        &definition,
+        alias_binding.as_ref(),
+    )?)
+    .map_err(|e| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(
+            e.to_string(),
+        ))
+    })?;
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
 /// POST /v1/assets/definitions/query — JSON envelope with optional pagination/sort and
-/// `name`/`alias` projection fields.
+/// full asset-definition objects in the response.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_assets_definitions_query(
@@ -41659,7 +42023,21 @@ pub async fn handle_v1_assets_definitions_query(
     NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
 ) -> Result<impl IntoResponse> {
     let world = state.world_view();
-    let definitions: Vec<_> = world.asset_definitions_iter().cloned().collect();
+    let now_ms = asset_alias_observation_time_ms(&state);
+    let alias_bindings: BTreeMap<AssetDefinitionId, AssetAliasBindingDto> = world
+        .asset_definition_alias_bindings()
+        .iter()
+        .map(|(definition_id, binding)| {
+            (
+                definition_id.clone(),
+                asset_alias_binding_dto(binding, now_ms),
+            )
+        })
+        .collect();
+    let definitions: Vec<_> = world
+        .asset_definitions_iter()
+        .filter_map(|definition| world.asset_definition(definition.id()).ok())
+        .collect();
     drop(world);
 
     let selectors = compile_asset_definition_sort_spec(&envelope.sort);
@@ -41693,23 +42071,23 @@ pub async fn handle_v1_assets_definitions_query(
     }
 
     let filter_ref = envelope.filter.as_ref();
+    let alias_bindings_ref = &alias_bindings;
     let mapped_iter = definitions.into_iter().filter_map({
         let selectors = selectors;
         move |def| {
+            let projected =
+                project_asset_definition_list_item(&def, alias_bindings_ref.get(def.id()));
             if let Some(expr) = filter_ref {
-                if !asset_definition_filter_object(expr, &def) {
+                if asset_definition_filter_mentions_metadata(expr)
+                    && !asset_definition_filter_object(expr, &def)
+                {
                     return None;
                 }
-            }
-            let projected = project_asset_definition_list_item(&def);
-            if let Some(expr) =
-                filter_ref.filter(|expr| !asset_definition_filter_mentions_metadata(expr))
-            {
                 if !asset_definition_filter_projection(expr, &projected) {
                     return None;
                 }
             }
-            let key = asset_definition_sort_key(&def, &selectors);
+            let key = asset_definition_sort_key(&projected, &selectors);
             Some((key, projected))
         }
     });
@@ -41718,18 +42096,10 @@ pub async fn handle_v1_assets_definitions_query(
 
     let mut arr = Vec::with_capacity(items.len());
     for it in &items {
-        let mut m = norito::json::Map::new();
-        m.insert("id".into(), norito::json::Value::from(it.id.clone()));
-        m.insert("name".into(), norito::json::Value::from(it.name.clone()));
-        m.insert(
-            "alias".into(),
-            it.alias
-                .as_ref()
-                .map_or(norito::json::Value::Null, |alias| {
-                    norito::json::Value::from(alias.clone())
-                }),
-        );
-        arr.push(norito::json::Value::Object(m));
+        arr.push(asset_definition_to_json_value(
+            &it.definition,
+            alias_bindings.get(it.definition.id()),
+        )?);
     }
     let mut top = norito::json::Map::new();
     top.insert("items".into(), norito::json::Value::Array(arr));
@@ -41762,10 +42132,24 @@ fn validate_defs_filter_adapter(expr: &FilterExpr) -> Result<()> {
             if f.0.starts_with("metadata.") {
                 return Ok(());
             }
-            if !matches!(f.0.as_str(), "id" | "name" | "alias") {
+            if !matches!(
+                f.0.as_str(),
+                "id" | "name"
+                    | "alias"
+                    | "alias_binding.status"
+                    | "alias_binding.lease_expiry_ms"
+                    | "alias_binding.grace_until_ms"
+                    | "alias_binding.bound_at_ms"
+            ) {
                 return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
             }
-            if !v.is_string() {
+            let valid_value = match f.0.as_str() {
+                "alias_binding.lease_expiry_ms"
+                | "alias_binding.grace_until_ms"
+                | "alias_binding.bound_at_ms" => v.as_u64().is_some(),
+                _ => v.is_string(),
+            };
+            if !valid_value {
                 return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
             }
             Ok(())
@@ -41774,29 +42158,68 @@ fn validate_defs_filter_adapter(expr: &FilterExpr) -> Result<()> {
             if f.0.starts_with("metadata.") {
                 return Ok(());
             }
-            if !matches!(f.0.as_str(), "id" | "name" | "alias") {
+            if !matches!(
+                f.0.as_str(),
+                "id" | "name"
+                    | "alias"
+                    | "alias_binding.status"
+                    | "alias_binding.lease_expiry_ms"
+                    | "alias_binding.grace_until_ms"
+                    | "alias_binding.bound_at_ms"
+            ) {
                 return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
             }
-            if !list.iter().all(norito::json::Value::is_string) {
+            let valid_values = match f.0.as_str() {
+                "alias_binding.lease_expiry_ms"
+                | "alias_binding.grace_until_ms"
+                | "alias_binding.bound_at_ms" => list.iter().all(|value| value.as_u64().is_some()),
+                _ => list.iter().all(norito::json::Value::is_string),
+            };
+            if !valid_values {
                 return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
             }
             Ok(())
         }
         F::Exists(f) => {
-            if !matches!(f.0.as_str(), "id" | "name" | "alias") && !f.0.starts_with("metadata.") {
+            if !matches!(
+                f.0.as_str(),
+                "id" | "name"
+                    | "alias"
+                    | "alias_binding.status"
+                    | "alias_binding.lease_expiry_ms"
+                    | "alias_binding.grace_until_ms"
+                    | "alias_binding.bound_at_ms"
+            ) && !f.0.starts_with("metadata.")
+            {
                 return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
             }
             Ok(())
         }
         F::IsNull(f) => {
-            if f.0.as_str() == "alias" || f.0.starts_with("metadata.") {
+            if matches!(
+                f.0.as_str(),
+                "alias"
+                    | "alias_binding.status"
+                    | "alias_binding.lease_expiry_ms"
+                    | "alias_binding.grace_until_ms"
+                    | "alias_binding.bound_at_ms"
+            ) || f.0.starts_with("metadata.")
+            {
                 Ok(())
             } else {
                 Err(Error::Query(iroha_data_model::ValidationFail::TooComplex))
             }
         }
         F::Lt(f, v) | F::Lte(f, v) | F::Gt(f, v) | F::Gte(f, v) => {
-            if f.0.starts_with("metadata.") && v.as_u64().is_some() {
+            if (f.0.starts_with("metadata.")
+                || matches!(
+                    f.0.as_str(),
+                    "alias_binding.lease_expiry_ms"
+                        | "alias_binding.grace_until_ms"
+                        | "alias_binding.bound_at_ms"
+                ))
+                && v.as_u64().is_some()
+            {
                 Ok(())
             } else {
                 Err(Error::Query(iroha_data_model::ValidationFail::TooComplex))
@@ -42329,7 +42752,7 @@ impl OfflineTransferQueryFilters {
 }
 
 #[cfg(feature = "app_api")]
-fn current_unix_timestamp_ms() -> u64 {
+pub(crate) fn current_unix_timestamp_ms() -> u64 {
     use core::cmp::min;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -42341,6 +42764,14 @@ fn current_unix_timestamp_ms() -> u64 {
         }
         Err(_) => 0,
     }
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) fn asset_alias_observation_time_ms(state: &CoreState) -> u64 {
+    state
+        .latest_block_header_fast()
+        .map(|header| header.creation_time_ms)
+        .unwrap_or(0)
 }
 
 #[cfg(feature = "app_api")]
@@ -44147,9 +44578,8 @@ mod public_lane_tests {
 
     #[test]
     fn pending_reward_to_json_uses_canonical_i105_literals() {
-        let asset_def: AssetDefinitionId = "aid:550e8400e29b41d4a7164466554400cc"
-            .parse()
-            .expect("asset definition id");
+        let asset_def: AssetDefinitionId =
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400cc");
         let reward = PublicLanePendingReward {
             lane_id: LaneId::new(5),
             account: ALICE_ID.clone(),
@@ -44175,9 +44605,9 @@ mod public_lane_tests {
     fn pending_rewards_filter_by_asset_id() {
         let lane_id = LaneId::new(1);
         let asset_def_a: AssetDefinitionId =
-            "aid:550e8400e29b41d4a7164466554400cc".parse().unwrap();
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400cc");
         let asset_def_b: AssetDefinitionId =
-            "aid:550e8400e29b41d4a7164466554400dd".parse().unwrap();
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
         let asset_a = AssetId::new(asset_def_a, ALICE_ID.clone());
         let asset_b = AssetId::new(asset_def_b, ALICE_ID.clone());
 
@@ -49204,7 +49634,9 @@ mod subscription_api_tests {
             },
             pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
                 amount: Numeric::new(10_u32, 0),
-                asset_definition: "aid:550e8400e29b41d4a7164466554400f1".parse().unwrap(),
+                asset_definition: test_asset_definition_id_from_hex(
+                    "550e8400e29b41d4a7164466554400f1",
+                ),
             }),
         };
         let mut metadata = Metadata::default();
@@ -49222,7 +49654,7 @@ mod subscription_api_tests {
     fn subscription_state_and_invoice_from_metadata_roundtrip() {
         let billing_trigger_id: TriggerId = "billing_trigger".parse().unwrap();
         let subscription = SubscriptionState {
-            plan_id: "aid:550e8400e29b41d4a7164466554400f3".parse().unwrap(),
+            plan_id: test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400f3"),
             provider: ALICE_ID.clone(),
             subscriber: ALICE_ID.clone(),
             status: SubscriptionStatus::Active,
@@ -49241,7 +49673,7 @@ mod subscription_api_tests {
             period_end_ms: 2_000,
             attempted_at_ms: 2_000,
             amount: Numeric::new(5_u32, 0),
-            asset_definition: "aid:550e8400e29b41d4a7164466554400f1".parse().unwrap(),
+            asset_definition: test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400f1"),
             status: SubscriptionInvoiceStatus::Paid,
             tx_hash: None,
         };
@@ -49373,7 +49805,9 @@ mod subscription_api_tests {
             },
             pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
                 amount: Numeric::new(10_u32, 0),
-                asset_definition: "aid:550e8400e29b41d4a7164466554400f1".parse().unwrap(),
+                asset_definition: test_asset_definition_id_from_hex(
+                    "550e8400e29b41d4a7164466554400f1",
+                ),
             }),
         }
     }
@@ -49462,9 +49896,9 @@ mod subscription_api_tests {
         let provider = ALICE_ID.clone();
         let other = BOB_ID.clone();
         let plan_primary_id: AssetDefinitionId =
-            "aid:550e8400e29b41d4a7164466554400f4".parse().unwrap();
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400f4");
         let plan_secondary_id: AssetDefinitionId =
-            "aid:550e8400e29b41d4a7164466554400f5".parse().unwrap();
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400f5");
         let plan_a = SubscriptionPlan {
             provider: provider.clone(),
             billing: SubscriptionBilling {
@@ -49478,7 +49912,9 @@ mod subscription_api_tests {
             },
             pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
                 amount: Numeric::new(10_u32, 0),
-                asset_definition: "aid:550e8400e29b41d4a7164466554400f1".parse().unwrap(),
+                asset_definition: test_asset_definition_id_from_hex(
+                    "550e8400e29b41d4a7164466554400f1",
+                ),
             }),
         };
         let plan_b = SubscriptionPlan {
@@ -49516,7 +49952,8 @@ mod subscription_api_tests {
     async fn handle_v1_subscriptions_filters_status() {
         let provider = ALICE_ID.clone();
         let subscriber = BOB_ID.clone();
-        let plan_id: AssetDefinitionId = "aid:550e8400e29b41d4a7164466554400f6".parse().unwrap();
+        let plan_id: AssetDefinitionId =
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400f6");
         let plan = SubscriptionPlan {
             provider: provider.clone(),
             billing: SubscriptionBilling {
@@ -49530,7 +49967,9 @@ mod subscription_api_tests {
             },
             pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
                 amount: Numeric::new(1_u32, 0),
-                asset_definition: "aid:550e8400e29b41d4a7164466554400f1".parse().unwrap(),
+                asset_definition: test_asset_definition_id_from_hex(
+                    "550e8400e29b41d4a7164466554400f1",
+                ),
             }),
         };
         let active_id: NftId = "sub-active$wonderland".parse().unwrap();
@@ -49592,7 +50031,8 @@ mod subscription_api_tests {
     async fn handle_v1_subscription_get_includes_invoice() {
         let provider = ALICE_ID.clone();
         let subscriber = BOB_ID.clone();
-        let plan_id: AssetDefinitionId = "aid:550e8400e29b41d4a7164466554400f7".parse().unwrap();
+        let plan_id: AssetDefinitionId =
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400f7");
         let plan = SubscriptionPlan {
             provider: provider.clone(),
             billing: SubscriptionBilling {
@@ -49606,7 +50046,9 @@ mod subscription_api_tests {
             },
             pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
                 amount: Numeric::new(1_u32, 0),
-                asset_definition: "aid:550e8400e29b41d4a7164466554400f1".parse().unwrap(),
+                asset_definition: test_asset_definition_id_from_hex(
+                    "550e8400e29b41d4a7164466554400f1",
+                ),
             }),
         };
         let subscription_id: NftId = "sub-invoice$wonderland".parse().unwrap();
@@ -49630,7 +50072,7 @@ mod subscription_api_tests {
             period_end_ms: 1_000,
             attempted_at_ms: 1_000,
             amount: Numeric::new(1_u32, 0),
-            asset_definition: "aid:550e8400e29b41d4a7164466554400f1".parse().unwrap(),
+            asset_definition: test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400f1"),
             status: SubscriptionInvoiceStatus::Paid,
             tx_hash: None,
         };
@@ -49668,7 +50110,8 @@ mod subscription_api_tests {
             Vec::new(),
         );
         let (queue, chain_id, telemetry) = test_queue_components();
-        let plan_id: AssetDefinitionId = "aid:550e8400e29b41d4a7164466554400f8".parse().unwrap();
+        let plan_id: AssetDefinitionId =
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400f8");
         let plan = sample_plan(provider.clone());
         let req = SubscriptionPlanCreateDto {
             authority: provider,
@@ -49700,7 +50143,8 @@ mod subscription_api_tests {
     async fn handle_post_v1_subscription_create_enqueues_transaction() {
         let provider = ALICE_ID.clone();
         let subscriber = BOB_ID.clone();
-        let plan_id: AssetDefinitionId = "aid:550e8400e29b41d4a7164466554400f9".parse().unwrap();
+        let plan_id: AssetDefinitionId =
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400f9");
         let plan = sample_plan(provider.clone());
         let state = state_with_plans_and_subscriptions(
             provider.clone(),
@@ -49745,7 +50189,8 @@ mod subscription_api_tests {
     async fn handle_post_v1_subscription_actions_enqueue_transactions() {
         let provider = ALICE_ID.clone();
         let subscriber = BOB_ID.clone();
-        let plan_id: AssetDefinitionId = "aid:550e8400e29b41d4a7164466554400fa".parse().unwrap();
+        let plan_id: AssetDefinitionId =
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400fa");
         let plan = sample_plan(provider.clone());
         let active_id: NftId = "sub-active-actions$wonderland".parse().unwrap();
         let paused_id: NftId = "sub-paused-actions$wonderland".parse().unwrap();
@@ -49965,8 +50410,12 @@ mod adapter_filter_tests {
                 arr(vec![
                     val("id"),
                     arr(vec![
-                        val("aid:550e8400e29b41d4a7164466554400dd"),
-                        val("aid:550e8400e29b41d4a7164466554400ee"),
+                        val(&test_asset_definition_literal_from_hex(
+                            "550e8400e29b41d4a7164466554400dd",
+                        )),
+                        val(&test_asset_definition_literal_from_hex(
+                            "550e8400e29b41d4a7164466554400ee",
+                        )),
                     ]),
                 ]),
             ),
@@ -49995,20 +50444,53 @@ mod adapter_filter_tests {
         let alias_null = FilterExpr::IsNull(FieldPath("alias".into()));
         validate_defs_filter_adapter(&alias_null).unwrap();
 
+        let alias_binding_status = FilterExpr::Eq(
+            FieldPath("alias_binding.status".into()),
+            Value::from("leased_grace"),
+        );
+        validate_defs_filter_adapter(&alias_binding_status).unwrap();
+
+        let alias_binding_bound_at = FilterExpr::Gt(
+            FieldPath("alias_binding.bound_at_ms".into()),
+            Value::from(10_u64),
+        );
+        validate_defs_filter_adapter(&alias_binding_bound_at).unwrap();
+
         let metadata_lt = FilterExpr::Lt(FieldPath("metadata.rank".into()), Value::from(2_u64));
         validate_defs_filter_adapter(&metadata_lt).unwrap();
 
         let bad = FilterExpr::IsNull(FieldPath("name".into()));
         assert!(validate_defs_filter_adapter(&bad).is_err());
+
+        let bad_alias_binding = FilterExpr::Eq(
+            FieldPath("alias_binding.bound_at_ms".into()),
+            Value::from("10"),
+        );
+        assert!(validate_defs_filter_adapter(&bad_alias_binding).is_err());
     }
 
     #[cfg(feature = "app_api")]
     #[test]
     fn defs_filter_projection_matches_name_alias_and_metadata_passthrough() {
+        let authority = AccountId::new(iroha_crypto::KeyPair::random().public_key().clone());
+        let definition = AssetDefinition::numeric(AssetDefinitionId::new(
+            "issuer".parse().expect("domain"),
+            "pkr".parse().expect("name"),
+        ))
+        .with_name("PKR".to_owned())
+        .build(&authority);
         let item = AssetDefinitionListItem {
-            id: "aid:550e8400e29b41d4a7164466554400dd".to_owned(),
+            definition,
+            id: "66owaQmAQMuHxPzxUN3bqZ6FJfDa".to_owned(),
             name: "PKR".to_owned(),
             alias: Some("pkr#sbp".to_owned()),
+            alias_binding: Some(AssetAliasBindingDto {
+                alias: "pkr#sbp".to_owned(),
+                status: "leased_grace".to_owned(),
+                lease_expiry_ms: Some(100),
+                grace_until_ms: Some(200),
+                bound_at_ms: 50,
+            }),
         };
 
         assert!(asset_definition_filter_projection(
@@ -50017,6 +50499,20 @@ mod adapter_filter_tests {
         ));
         assert!(asset_definition_filter_projection(
             &FilterExpr::Eq(FieldPath("alias".into()), Value::from("pkr#sbp")),
+            &item,
+        ));
+        assert!(asset_definition_filter_projection(
+            &FilterExpr::Eq(
+                FieldPath("alias_binding.status".into()),
+                Value::from("leased_grace"),
+            ),
+            &item,
+        ));
+        assert!(asset_definition_filter_projection(
+            &FilterExpr::Gt(
+                FieldPath("alias_binding.bound_at_ms".into()),
+                Value::from(10_u64)
+            ),
             &item,
         ));
         assert!(asset_definition_filter_projection(
@@ -50029,6 +50525,10 @@ mod adapter_filter_tests {
         ));
         assert!(!asset_definition_filter_projection(
             &FilterExpr::IsNull(FieldPath("alias".into())),
+            &item,
+        ));
+        assert!(!asset_definition_filter_projection(
+            &FilterExpr::IsNull(FieldPath("alias_binding.status".into())),
             &item,
         ));
     }
@@ -50050,45 +50550,57 @@ mod adapter_filter_tests {
 
     #[cfg(feature = "app_api")]
     #[test]
-    fn asset_holder_filter_adapter_accepts_asset_id_eq() {
+    fn asset_holder_filter_adapter_accepts_asset_and_scope_eq() {
         use iroha_test_samples::ALICE_ID;
 
-        let asset_def: AssetDefinitionId = "aid:550e8400e29b41d4a7164466554400dd".parse().unwrap();
-        let asset_id = AssetId::new(asset_def, ALICE_ID.clone());
+        let asset_def = AssetDefinitionId::new(
+            "issuer".parse().expect("domain"),
+            "pkr".parse().expect("name"),
+        );
         let expr = FilterExpr::Eq(
-            FieldPath("asset_id".into()),
-            Value::from(asset_id.to_string()),
+            FieldPath("asset".into()),
+            Value::from(asset_def.to_string()),
         );
         validate_holders_filter_adapter(&expr).unwrap();
+        let scope_expr = FilterExpr::Eq(FieldPath("scope".into()), Value::from("global"));
+        validate_holders_filter_adapter(&scope_expr).unwrap();
 
-        let bad = FilterExpr::Eq(FieldPath("asset_id".into()), Value::from("not-an-asset"));
+        let bad = FilterExpr::Eq(FieldPath("asset".into()), Value::from("not-an-asset"));
         assert!(validate_holders_filter_adapter(&bad).is_err());
     }
 
     #[cfg(feature = "app_api")]
     #[test]
-    fn asset_holder_filter_matches_asset_id() {
+    fn asset_holder_filter_matches_asset_and_scope() {
         use iroha_test_samples::ALICE_ID;
 
-        let asset_def: AssetDefinitionId = "aid:550e8400e29b41d4a7164466554400dd".parse().unwrap();
-        let asset_id = AssetId::new(asset_def.clone(), ALICE_ID.clone());
+        let asset_def = AssetDefinitionId::new(
+            "issuer".parse().expect("domain"),
+            "pkr".parse().expect("name"),
+        );
         let item = AssetHolderListItem {
             account_id: ALICE_ID.clone(),
             canonical_id: ALICE_ID.to_string(),
-            asset_id: asset_id.to_string(),
+            asset: asset_def.to_string(),
+            asset_alias: Some("pkr#issuer.main".to_owned()),
+            scope: "global".to_owned(),
             quantity: Numeric::from(10_u32),
         };
         let expr = FilterExpr::Eq(
-            FieldPath("asset_id".into()),
-            Value::from(asset_id.to_string()),
+            FieldPath("asset".into()),
+            Value::from(asset_def.to_string()),
         );
         assert!(filter_asset_holder_item(&expr, &item));
+        let scope_expr = FilterExpr::Eq(FieldPath("scope".into()), Value::from("global"));
+        assert!(filter_asset_holder_item(&scope_expr, &item));
 
-        let other_def: AssetDefinitionId = "aid:550e8400e29b41d4a7164466554400ff".parse().unwrap();
-        let other_asset_id = AssetId::new(other_def, ALICE_ID.clone());
+        let other_def = AssetDefinitionId::new(
+            "issuer".parse().expect("domain"),
+            "usd".parse().expect("name"),
+        );
         let expr2 = FilterExpr::Eq(
-            FieldPath("asset_id".into()),
-            Value::from(other_asset_id.to_string()),
+            FieldPath("asset".into()),
+            Value::from(other_def.to_string()),
         );
         assert!(!filter_asset_holder_item(&expr2, &item));
     }
@@ -50123,8 +50635,7 @@ mod adapter_filter_tests {
         use iroha_test_samples::ALICE_ID;
 
         let controller = ALICE_ID.clone();
-        let definition = AssetDefinitionId::from_str("aid:550e8400e29b41d4a7164466554400cc")
-            .expect("asset definition id");
+        let definition = test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400cc");
         let asset_id = AssetId::new(definition, controller.clone());
         OfflineAllowanceRecord {
             certificate: OfflineWalletCertificate {
@@ -50491,7 +51002,8 @@ mod adapter_filter_tests {
         .expect("filters");
         assert!(filters.matches(&record));
 
-        let other_def: AssetDefinitionId = "aid:550e8400e29b41d4a7164466554400ff".parse().unwrap();
+        let other_def: AssetDefinitionId =
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400ff");
         let other_asset_id = AssetId::new(other_def, record.certificate.controller.clone());
         let params = OfflineAllowanceListParams {
             asset_id: Some(other_asset_id.to_string()),
@@ -50870,7 +51382,8 @@ mod adapter_filter_tests {
         .expect("filters");
         assert!(filters.matches(&record));
 
-        let other_def: AssetDefinitionId = "aid:550e8400e29b41d4a7164466554400ff".parse().unwrap();
+        let other_def: AssetDefinitionId =
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400ff");
         let other_asset = AssetId::new(other_def, record.controller.clone());
         let params = OfflineTransferListParams {
             asset_id: Some(other_asset.to_string()),
@@ -51075,8 +51588,7 @@ fn sample_transfer_record() -> OfflineTransferRecord {
     let controller = ALICE_ID.clone();
     let receiver = BOB_ID.clone();
     let deposit = CARPENTER_ID.clone();
-    let definition = AssetDefinitionId::from_str("aid:550e8400e29b41d4a7164466554400cc")
-        .expect("asset definition id");
+    let definition = test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400cc");
     let asset_id = AssetId::new(definition, controller.clone());
     let certificate = OfflineWalletCertificate {
         controller: controller.clone(),
@@ -51400,7 +51912,9 @@ fn validate_asset_filter_adapter(expr: &FilterExpr) -> Result<()> {
 struct AssetHolderListItem {
     account_id: iroha_data_model::account::AccountId,
     canonical_id: String,
-    asset_id: String,
+    asset: String,
+    asset_alias: Option<String>,
+    scope: String,
     quantity: iroha_primitives::numeric::Numeric,
 }
 
@@ -51476,7 +51990,12 @@ fn filter_asset_holder_item(expr: &crate::filter::FilterExpr, item: &AssetHolder
         F::Not(inner) => !filter_asset_holder_item(inner, item),
         F::Eq(f, v) => match f.0.as_str() {
             "account_id" => v.as_str().map(|s| s == item.canonical_id).unwrap_or(false),
-            "asset_id" => v.as_str().map(|s| s == item.asset_id).unwrap_or(false),
+            "asset" => v.as_str().map(|s| s == item.asset).unwrap_or(false),
+            "asset_alias" => v
+                .as_str()
+                .map(|s| item.asset_alias.as_deref() == Some(s))
+                .unwrap_or(false),
+            "scope" => v.as_str().map(|s| s == item.scope).unwrap_or(false),
             "quantity" => v
                 .as_u64()
                 .map(|n| item.quantity == n.into())
@@ -51485,7 +52004,12 @@ fn filter_asset_holder_item(expr: &crate::filter::FilterExpr, item: &AssetHolder
         },
         F::Ne(f, v) => match f.0.as_str() {
             "account_id" => v.as_str().map(|s| s != item.canonical_id).unwrap_or(false),
-            "asset_id" => v.as_str().map(|s| s != item.asset_id).unwrap_or(false),
+            "asset" => v.as_str().map(|s| s != item.asset).unwrap_or(false),
+            "asset_alias" => v
+                .as_str()
+                .map(|s| item.asset_alias.as_deref() != Some(s))
+                .unwrap_or(false),
+            "scope" => v.as_str().map(|s| s != item.scope).unwrap_or(false),
             "quantity" => v
                 .as_u64()
                 .map(|n| item.quantity != n.into())
@@ -51513,10 +52037,18 @@ fn filter_asset_holder_item(expr: &crate::filter::FilterExpr, item: &AssetHolder
                 .iter()
                 .filter_map(|v| v.as_str())
                 .any(|s| s == item.canonical_id),
-            "asset_id" => list
+            "asset" => list
                 .iter()
                 .filter_map(|v| v.as_str())
-                .any(|s| s == item.asset_id),
+                .any(|s| s == item.asset),
+            "asset_alias" => item
+                .asset_alias
+                .as_deref()
+                .is_some_and(|alias| list.iter().filter_map(|v| v.as_str()).any(|s| s == alias)),
+            "scope" => list
+                .iter()
+                .filter_map(|v| v.as_str())
+                .any(|s| s == item.scope),
             "quantity" => list
                 .iter()
                 .filter_map(norito::json::Value::as_u64)
@@ -51528,19 +52060,61 @@ fn filter_asset_holder_item(expr: &crate::filter::FilterExpr, item: &AssetHolder
                 .iter()
                 .filter_map(|v| v.as_str())
                 .all(|s| s != item.canonical_id),
-            "asset_id" => list
+            "asset" => list
                 .iter()
                 .filter_map(|v| v.as_str())
-                .all(|s| s != item.asset_id),
+                .all(|s| s != item.asset),
+            "asset_alias" => item
+                .asset_alias
+                .as_deref()
+                .is_none_or(|alias| list.iter().filter_map(|v| v.as_str()).all(|s| s != alias)),
+            "scope" => list
+                .iter()
+                .filter_map(|v| v.as_str())
+                .all(|s| s != item.scope),
             "quantity" => list
                 .iter()
                 .filter_map(norito::json::Value::as_u64)
                 .all(|n| item.quantity != n.into()),
             _ => false,
         },
-        F::Exists(f) => matches!(f.0.as_str(), "account_id" | "asset_id" | "quantity"),
+        F::Exists(f) => matches!(
+            f.0.as_str(),
+            "account_id" | "asset" | "asset_alias" | "scope" | "quantity"
+        ),
         F::IsNull(_) => false,
     }
+}
+
+#[cfg(feature = "app_api")]
+fn asset_balance_scope_literal(scope: &iroha_data_model::asset::AssetBalanceScope) -> String {
+    match scope {
+        iroha_data_model::asset::AssetBalanceScope::Global => "global".to_owned(),
+        iroha_data_model::asset::AssetBalanceScope::Dataspace(dataspace) => {
+            format!("dataspace:{}", dataspace.as_u64())
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn parse_asset_balance_scope_literal(
+    raw: &str,
+) -> Result<iroha_data_model::asset::AssetBalanceScope> {
+    let trimmed = raw.trim();
+    if trimmed.eq_ignore_ascii_case("global") {
+        return Ok(iroha_data_model::asset::AssetBalanceScope::Global);
+    }
+    if let Some(rest) = trimmed.strip_prefix("dataspace:") {
+        let dataspace = rest.parse::<u64>().map_err(|_| {
+            conversion_error("scope must be `global` or `dataspace:<id>`".to_owned())
+        })?;
+        return Ok(iroha_data_model::asset::AssetBalanceScope::Dataspace(
+            iroha_data_model::nexus::DataSpaceId::new(dataspace),
+        ));
+    }
+    Err(conversion_error(
+        "scope must be `global` or `dataspace:<id>`".to_owned(),
+    ))
 }
 
 #[iroha_futures::telemetry_future]
@@ -51553,34 +52127,54 @@ pub async fn handle_v1_asset_holders(
 ) -> Result<impl IntoResponse> {
     use std::collections::BTreeMap;
 
-    use iroha_data_model::{account::ScopedAccountId, asset::AssetId};
-    let asset_filter = p
-        .asset_id
+    let account_filter = p
+        .account_id
         .as_deref()
         .map(str::trim)
         .filter(|raw| !raw.is_empty())
         .map(|raw| {
-            AssetId::parse_encoded(raw)
-                .map(|asset| asset.to_string())
-                .map_err(|_| conversion_error("asset_id must be a valid asset id".to_owned()))
+            parse_account_literal(raw, &telemetry, ENDPOINT_ASSET_HOLDERS)
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                .map_err(|err| conversion_error(format!("invalid account_id `{raw}`: {err}")))
         })
         .transpose()?;
+    let scope_filter = p
+        .scope
+        .as_deref()
+        .map(str::trim)
+        .filter(|raw| !raw.is_empty())
+        .map(parse_asset_balance_scope_literal)
+        .transpose()?;
 
+    let now_ms = asset_alias_observation_time_ms(&state);
     let world = state.world_view();
-    let def_id = resolve_asset_definition_selector(&world, &definition_id)?;
+    let def_id = resolve_asset_definition_selector(&world, &definition_id, now_ms)?;
+    let asset_alias = world
+        .asset_definition(&def_id)
+        .ok()
+        .and_then(|definition| definition.alias().as_ref().map(ToString::to_string));
     let assets: Vec<_> = world.assets_by_definition_iter(&def_id).collect();
     drop(world);
-    // Aggregate balances per account
-    let mut map: BTreeMap<AccountId, iroha_primitives::numeric::Numeric> = BTreeMap::new();
+    // Aggregate balances per account and scope.
+    let mut map: BTreeMap<
+        (AccountId, iroha_data_model::asset::AssetBalanceScope),
+        iroha_primitives::numeric::Numeric,
+    > = BTreeMap::new();
     for asset in assets {
-        if let Some(expected) = asset_filter.as_ref()
-            && asset.id().to_string() != *expected
+        if let Some(expected_account) = account_filter.as_ref()
+            && asset.id().account() != expected_account
+        {
+            continue;
+        }
+        if let Some(expected_scope) = scope_filter.as_ref()
+            && asset.id().scope() != expected_scope
         {
             continue;
         }
         let acct = asset.id().account().clone();
+        let scope = asset.id().scope().clone();
         let entry = map
-            .entry(acct)
+            .entry((acct, scope))
             .or_insert_with(iroha_primitives::numeric::Numeric::zero);
         if let Some(sum) = entry.clone().checked_add(asset.value().clone()) {
             *entry = sum;
@@ -51595,15 +52189,18 @@ pub async fn handle_v1_asset_holders(
         .map(|cap| cap.min(pagination.cap));
 
     let (items_vec, total) = collect_page_streaming(
-        map.into_iter().map(|(account_id, quantity)| {
+        map.into_iter().map(|((account_id, scope), quantity)| {
             let canonical_id = account_id.to_string();
-            let asset_id = AssetId::new(def_id.clone(), account_id.clone()).to_string();
+            let asset = def_id.to_string();
+            let scope = asset_balance_scope_literal(&scope);
             (
-                canonical_id.clone(),
+                format!("{canonical_id}:{scope}"),
                 AssetHolderListItem {
                     account_id,
                     canonical_id,
-                    asset_id,
+                    asset,
+                    asset_alias: asset_alias.clone(),
+                    scope,
                     quantity,
                 },
             )
@@ -51617,7 +52214,17 @@ pub async fn handle_v1_asset_holders(
     for it in &items_vec {
         let mut m = norito::json::Map::new();
         let display = crate::account_literal::display_literal(&it.account_id);
+        m.insert("asset".into(), norito::json::Value::from(it.asset.clone()));
+        m.insert(
+            "asset_alias".into(),
+            it.asset_alias
+                .as_ref()
+                .map_or(norito::json::Value::Null, |alias| {
+                    norito::json::Value::from(alias.clone())
+                }),
+        );
         m.insert("account_id".into(), norito::json::Value::from(display));
+        m.insert("scope".into(), norito::json::Value::from(it.scope.clone()));
         m.insert(
             "quantity".into(),
             norito::json::Value::from(format!("{}", it.quantity)),
@@ -51641,7 +52248,7 @@ pub async fn handle_v1_asset_holders(
 }
 
 /// POST /v1/assets/{definition_id}/holders/query — JSON envelope with pagination/sort.
-/// Supports filter fields: `account_id`, `asset_id`, and `quantity`.
+/// Supports filter fields: `account_id`, `asset`, `asset_alias`, `scope`, and `quantity`.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_asset_holders_query(
@@ -51652,17 +52259,24 @@ pub async fn handle_v1_asset_holders_query(
 ) -> Result<impl IntoResponse> {
     use std::collections::BTreeMap;
 
-    use iroha_data_model::asset::AssetId;
-
+    let now_ms = asset_alias_observation_time_ms(&state);
     let world = state.world_view();
-    let def_id = resolve_asset_definition_selector(&world, &definition_id)?;
+    let def_id = resolve_asset_definition_selector(&world, &definition_id, now_ms)?;
+    let asset_alias = world
+        .asset_definition(&def_id)
+        .ok()
+        .and_then(|definition| definition.alias().as_ref().map(ToString::to_string));
     let assets: Vec<_> = world.assets_by_definition_iter(&def_id).collect();
     drop(world);
-    let mut map: BTreeMap<AccountId, iroha_primitives::numeric::Numeric> = BTreeMap::new();
+    let mut map: BTreeMap<
+        (AccountId, iroha_data_model::asset::AssetBalanceScope),
+        iroha_primitives::numeric::Numeric,
+    > = BTreeMap::new();
     for asset in assets {
         let acct = asset.id().account().clone();
+        let scope = asset.id().scope().clone();
         let entry = map
-            .entry(acct)
+            .entry((acct, scope))
             .or_insert_with(iroha_primitives::numeric::Numeric::zero);
         if let Some(sum) = entry.clone().checked_add(asset.value().clone()) {
             *entry = sum;
@@ -51720,14 +52334,17 @@ pub async fn handle_v1_asset_holders_query(
     let mapped_iter = map.into_iter().filter_map({
         let filter_ref = filter_ref;
         let selectors = selectors;
-        let def_id = def_id.clone();
-        move |(account_id, quantity)| {
+        let asset = def_id.to_string();
+        let asset_alias = asset_alias.clone();
+        move |((account_id, scope), quantity)| {
             let canonical_id = account_id.to_string();
-            let asset_id = AssetId::new(def_id.clone(), account_id.clone()).to_string();
+            let scope = asset_balance_scope_literal(&scope);
             let projected = AssetHolderListItem {
                 account_id,
                 canonical_id,
-                asset_id,
+                asset: asset.clone(),
+                asset_alias: asset_alias.clone(),
+                scope,
                 quantity,
             };
             if let Some(expr) = filter_ref {
@@ -51746,7 +52363,17 @@ pub async fn handle_v1_asset_holders_query(
     for it in &items {
         let display = crate::account_literal::display_literal(&it.account_id);
         let mut m = norito::json::Map::new();
+        m.insert("asset".into(), norito::json::Value::from(it.asset.clone()));
+        m.insert(
+            "asset_alias".into(),
+            it.asset_alias
+                .as_ref()
+                .map_or(norito::json::Value::Null, |alias| {
+                    norito::json::Value::from(alias.clone())
+                }),
+        );
         m.insert("account_id".into(), norito::json::Value::from(display));
+        m.insert("scope".into(), norito::json::Value::from(it.scope.clone()));
         m.insert(
             "quantity".into(),
             norito::json::Value::from(format!("{}", it.quantity)),
@@ -51772,13 +52399,19 @@ pub async fn handle_v1_asset_holders_query(
 #[cfg(feature = "app_api")]
 fn validate_holders_filter_adapter(expr: &FilterExpr) -> Result<()> {
     use FilterExpr as F;
-    let validate_asset_id = |value: &norito::json::Value| -> Result<()> {
+    let validate_asset = |value: &norito::json::Value| -> Result<()> {
         let Some(raw) = value.as_str() else {
             return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
         };
-        raw.parse::<iroha_data_model::asset::AssetId>()
+        raw.parse::<iroha_data_model::asset::AssetDefinitionId>()
             .map(|_| ())
             .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))
+    };
+    let validate_scope = |value: &norito::json::Value| -> Result<()> {
+        let Some(raw) = value.as_str() else {
+            return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
+        };
+        parse_asset_balance_scope_literal(raw).map(|_| ())
     };
 
     match expr {
@@ -51790,11 +52423,12 @@ fn validate_holders_filter_adapter(expr: &FilterExpr) -> Result<()> {
         }
         F::Not(inner) => validate_holders_filter_adapter(inner),
         F::Eq(f, v) | F::Ne(f, v) => match f.0.as_str() {
-            "account_id" => v
+            "account_id" | "asset_alias" => v
                 .is_string()
                 .then_some(())
                 .ok_or_else(|| Error::Query(iroha_data_model::ValidationFail::TooComplex)),
-            "asset_id" => validate_asset_id(v),
+            "asset" => validate_asset(v),
+            "scope" => validate_scope(v),
             "quantity" => v
                 .is_number()
                 .then_some(())
@@ -51809,12 +52443,13 @@ fn validate_holders_filter_adapter(expr: &FilterExpr) -> Result<()> {
             _ => Err(Error::Query(iroha_data_model::ValidationFail::TooComplex)),
         },
         F::In(f, list) | F::Nin(f, list) => match f.0.as_str() {
-            "account_id" => list
+            "account_id" | "asset_alias" => list
                 .iter()
                 .all(norito::json::Value::is_string)
                 .then_some(())
                 .ok_or_else(|| Error::Query(iroha_data_model::ValidationFail::TooComplex)),
-            "asset_id" => list.iter().try_for_each(validate_asset_id),
+            "asset" => list.iter().try_for_each(validate_asset),
+            "scope" => list.iter().try_for_each(validate_scope),
             "quantity" => list
                 .iter()
                 .all(norito::json::Value::is_number)
@@ -51823,7 +52458,7 @@ fn validate_holders_filter_adapter(expr: &FilterExpr) -> Result<()> {
             _ => Err(Error::Query(iroha_data_model::ValidationFail::TooComplex)),
         },
         F::Exists(f) | F::IsNull(f) => match f.0.as_str() {
-            "account_id" | "asset_id" | "quantity" => Ok(()),
+            "account_id" | "asset" | "asset_alias" | "scope" | "quantity" => Ok(()),
             _ => Err(Error::Query(iroha_data_model::ValidationFail::TooComplex)),
         },
     }

@@ -27,7 +27,9 @@ translator: machine-google-reviewed
 IDs ཚུ་ལུ་ `Display`/`FromStr` round‐trip དང་ཅིག་ཁར་ བརྟན་ཏོག་ཏོ་ཡིག་རྒྱུན་འབྲི་ཤོག་ཚུ་ཡོདཔ་ཨིན། མིང་ལམ་ལུགས་ཚུ་གིས་ བར་སྟོང་དཀརཔོ་དང་ བཀག་བཞག་ཡོད་པའི་ `@ # $` ཡིག་འབྲུ་ཚུ་བཀག་ཆ་འབདཝ་ཨིན།- `Name` — བདེན་དཔྱད་འབད་ཡོད་པའི་ཚིག་ཡིག་ངོས་འཛིན་པ། ལམ་ལུགས་: `crates/iroha_data_model/src/name.rs`.
 - `DomainId` — `name`. མངའ་ཁོངས་: `{ id, logo, metadata, owned_by }`. བཟོ་བསྐྲུན་པ་ཚུ་: `NewDomain`. གསང་གྲངས་: `crates/iroha_data_model/src/domain.rs`.
 - `AccountId` — ཀེ་ནོ་ནིཀ་ཁ་བྱང་ཚུ་ `AccountAddress` (I105 / hex) བརྒྱུད་དེ་བཟོ་བཏོན་འབདཝ་ཨིནམ་དང་ Torii གིས་ `AccountAddress::parse_encoded` བརྒྱུད་དེ་ ཨིན་པུཊི་ཚུ་སྤྱིར་བཏང་བཟོཝ་ཨིན། I105 འདི་ གདམ་ཁ་ཅན་གྱི་རྩིས་ཐོའི་རྩ་སྒྲིག་ཨིན། I105 འབྲི་ཤོག་འདི་ སོ་ར་རྐྱངམ་ཅིག་ ཡུ་ཨེགསི་གི་དོན་ལུ་ཨིན། གོམས་འདྲིས་ཅན་གྱི་ `alias` (ངོས་ལེན་མ་འབད་བའི་ ཤུལ་བཞག་འབྲི་ཤོག་) ཡིག་རྒྱུན་འདི་ འགྲུལ་ལམ་མིང་གཞན་སྦེ་རྐྱངམ་ཅིག་ བཞགཔ་ཨིན། རྩིས་ཁྲ་: `{ id, metadata }`. གསང་གྲངས་: `crates/iroha_data_model/src/account.rs`.- རྩིས་ཐོ་འཛུལ་ཞུགས་སྲིད་བྱུས་ — མངའ་ཁོངས་ཚུ་གིས་ མེ་ཊ་ཌེ་ཊ་ལྡེ་མིག་ `iroha:account_admission_policy` འོག་ལུ་ Norito-JSON `AccountAdmissionPolicy` གསོག་འཇོག་འབད་དེ་ མངོན་གསལ་རྩིས་ཐོ་གསར་བསྐྲུན་འབད་ནི་འདི་ཚད་འཛིན་འབདཝ་ཨིན། ལྡེ་མིག་འདི་མེད་པའི་སྐབས་ རིམ་སྒྲིག་གནས་རིམ་སྲོལ་སྒྲིག་ཚད་བཟུང་ `iroha:default_account_admission_policy` གིས་ སྔོན་སྒྲིག་བྱིནམ་ཨིན། དེ་ཡང་མེད་པའི་སྐབས་ ཧརཌི་སྔོན་སྒྲིག་འདི་ `ImplicitReceive` (གསར་བཏོན་འགོ་ཐོག་) ཨིན། སྲིད་བྱུས་ངོ་རྟགས་ཚུ་ `mode` (`ExplicitOnly` ཡང་ན་ `ImplicitReceive`) དང་གདམ་ཁ་ཅན་གྱི་ཚོང་འབྲེལ་རེ་ལུ་ (སྔོན་སྒྲིག་ `16`) དང་ སྡེབ་ཚན་རེ་ལུ་ གསར་བསྐྲུན་གྱི་ཀེབ་ཚུ་ གདམ་ཁ་ཅན་གྱི་ `ExplicitOnly` ཡང་ན་ 4000 རྒྱུ་དངོས་ངེས་ཚིག་རེ་ལུ་ `min_initial_amounts` དང་ གདམ་ཁ་ཅན་གྱི་ `default_role_on_create` (`AccountCreated` གི་ཤུལ་ལས་ བྱིན་ཡོདཔ་ཨིན་ གལ་སྲིད་མེད་པ་ཅིན་ `DefaultRoleError` དང་ཅིག་ཁར་ ངོས་ལེན་མི་འབད།) Genesis གིས་ གདམ་ཁ་རྐྱབ་མི་ཚུགས། ལྕོགས་མིན་/ནུས་མེད་སྲིད་བྱུས་ཚུ་གིས་ `InstructionExecutionError::AccountAdmission` དང་ཅིག་ཁར་ མ་ཤེས་པའི་རྩིས་ཐོ་ཚུ་གི་དོན་ལུ་ འཐོབ་ཐངས་བཟོ་རྣམ་གྱི་བཀོད་རྒྱ་ཚུ་ ངོས་ལེན་མི་འབད། བརྡ་སྟོན་རྩིས་ཐོ་ཚུ་གིས་ མེ་ཊ་ཌེ་ཊ་ `iroha:created_via="implicit"` གི་ཧེ་མ་ `AccountCreated`; སྔོན་སྒྲིག་འགན་ཁུར་ཚུ་གིས་ རྗེས་འཇུག་ `AccountRoleGranted` བཏོནམ་ཨིནམ་དང་ ལག་ལེན་འཐབ་མི་ཇོ་བདག་-གཞི་རྟེན་ལམ་ལུགས་ཚུ་གིས་ རྩིས་ཐོ་གསརཔ་འདི་གིས་ འགན་ཁུར་ཁ་སྐོང་མེད་པར་ རང་སོའི་རྒྱུ་དངོས་/ཨེན་ཨེཕ་ཊི་ཚུ་ ཟད་འགྲོ་བཏང་བཅུགཔ་ཨིན། ཨང་རྟགས་: `crates/iroha_data_model/src/account/admission.rs`, `crates/iroha_core/src/smartcontracts/isi/account_admission.rs`.
-- `AssetDefinitionId` — ཀེ་ནོ་ནིཀ་`aid:<32-lower-hex-no-dash>` (UUID-v4 བཱའིཊིསི)། ངེས་ཚིག: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. `alias` ཡིག་འབྲུ་ཚུ་ `<name>#<domain>@<dataspace>` ཡང་ན་ `<name>#<dataspace>` འོང་དགོཔ་ཨིན་ དེ་ཡང་ `<name>` འདི་ རྒྱུ་དངོས་ངེས་ཚིག་མིང་དང་འདྲ་མཉམ་ཨིན། གསང་གྲངས་: `crates/iroha_data_model/src/asset/definition.rs`.
+- `AssetDefinitionId` — ཀེ་ནོ་ནིཀ་`unprefixed Base58 address with versioning and checksum` (UUID-v4 བཱའིཊིསི)། ངེས་ཚིག: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. `alias` ཡིག་འབྲུ་ཚུ་ `<name>#<domain>.<dataspace>` ཡང་ན་ `<name>#<dataspace>` འོང་དགོཔ་ཨིན་ དེ་ཡང་ `<name>` འདི་ རྒྱུ་དངོས་ངེས་ཚིག་མིང་དང་འདྲ་མཉམ་ཨིན། གསང་གྲངས་: `crates/iroha_data_model/src/asset/definition.rs`.
+
+  - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`, where `status` is `permanent`, `leased_active`, `leased_grace`, or `expired_pending_cleanup`. Alias selectors resolve against the latest committed block creation time and stop resolving after grace even before sweep removes stale bindings.
 - `AssetId`: ཀེ་ནོ་ནིཀ་ཨེན་ཀོ་ཌི་འབད་ཡོད་པའི་ཚིག་ཡིག་ `norito:<hex>` (རིག་གཞུང་ཚིག་ཡིག་འབྲི་ཤོག་ཚུ་ གསར་བཏོན་འགོ་དང་པ་ནང་ རྒྱབ་སྐྱོར་མེདཔ་ཨིན།)།- `NftId` — `nft$domain`. NFT: `{ id, content: Metadata, owned_by }`. གསང་གྲངས་: `crates/iroha_data_model/src/nft.rs`.
 - `RoleId` — `name`. འགན་ཁུར་: བཟོ་བསྐྲུན་པ་ `NewRole { inner: Role, grant_to }` དང་ཅིག་ཁར་ `{ id, permissions: BTreeSet<Permission> }`. གསང་གྲངས་: `crates/iroha_data_model/src/role.rs`.
 - `Permission` — `{ name: Ident, payload: Json }`. གསང་གྲངས་: `crates/iroha_data_model/src/permission.rs`.
@@ -194,17 +196,17 @@ IDs ཚུ་ལུ་ `Display`/`FromStr` round‐trip དང་ཅིག་ཁ
 - ཚད་བཟུང་དུས་མཐུན་བཟོ།
   - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` དུས་མཐུན་བཟོ་སྟེ་ `ConfigurationEvent::Changed` བཏོནམ་ཨིན།སི་ཨེལ་ཨའི་ / ཨའི་༡༨ཨེན་ཊི་༠༠༠༠༠༡༤ཨེགསི་ ཨའི་༡༨ཨེན་ཨའི་༠༠༠༠༠༤༡༩ཨེགསི་ + མིང་གཞན་དཔེ་ཚུ།
 - ཀེ་ནོ་ནིཀ་ཨེཌ་ + གསལ་ཏོག་ཏོ་མིང་ + མིང་གཞན་རིངམོ་དང་གཅིག་ཁར་ ཐོ་བཀོད་འབད།
-  - `iroha ledger asset definition register --id aid:2f17c72466f84a4bb8a8e24884fdcd2f --name pkr --alias pkr#ubl@sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#ubl.sbp`
 - ཀེ་ནོ་ནིཀ་ཨེཌ་ + གསལ་ཏོག་ཏོ་མིང་ + མིང་གཞན་ཐུང་ཀུ་དང་གཅིག་ཁར་ ཐོ་བཀོད་འབད།
-  - `iroha ledger asset definition register --id aid:550e8400e29b41d4a7164466554400dd --name pkr --alias pkr#sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#sbp`
 - མིང་གཞན་གྱིས་ མིན་ཊི་ + རྩིས་ཐོའི་ཆ་ཤས་ཚུ།
-  - `iroha ledger asset mint --definition-alias pkr#ubl@sbp --account <i105> --quantity 500`
+  - `iroha ledger asset mint --definition-alias pkr#ubl.sbp --account <i105> --quantity 500`
 - ཁྲིམས་མཐུན་གྱི་རོགས་རམ་ལུ་ མིང་གཞན་སེལ་འཐུ་འབད།
-  - `POST /v1/assets/aliases/resolve` དང་གཅིག་ཁར་ JSON `{ "alias": "pkr#ubl@sbp" }`
+  - `POST /v1/assets/aliases/resolve` དང་གཅིག་ཁར་ JSON `{ "alias": "pkr#ubl.sbp" }`
 
 གནས་སྤོ་དྲན་ཐོ།
 - `name#domain` ཚིག་ཡིག་རྒྱུ་དངོས་-ངེས་ཚིག་ཨའི་ཌི་ཚུ་ གསར་བཏོན་འགོ་དང་པ་ནང་ བསམ་བཞིན་དུ་རྒྱབ་སྐྱོར་མ་འབད་བས།
-- རྒྱུ་དངོས་ཨའི་ཌི་ཚུ་ མིན་ཊི་/བརན་/སྤོ་བཤུད་མཚམས་ཐིག་ཚུ་ནང་ ཀེ་ནོ་ནིཀ་ལུ་སྡོདཔ་ཨིན་ `norito:<hex>`; ལག་ལེན་འཐབ། `iroha tools encode asset-id` དང་ `--definition aid:...` ཡང་ན་ `--alias ...` དང་ `--account`.
+- རྒྱུ་དངོས་ཨའི་ཌི་ཚུ་ མིན་ཊི་/བརན་/སྤོ་བཤུད་མཚམས་ཐིག་ཚུ་ནང་ ཀེ་ནོ་ནིཀ་ལུ་སྡོདཔ་ཨིན་ `norito:<hex>`; ལག་ལེན་འཐབ། `iroha tools encode asset-id` དང་ `--definition <base58-asset-definition-id>` ཡང་ན་ `--alias ...` དང་ `--account`.
 
 ---
 

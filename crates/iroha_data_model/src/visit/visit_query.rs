@@ -45,6 +45,7 @@ pub fn visit_singular_query<V: Visit + ?Sized>(visitor: &mut V, query: &Singular
         visit_find_contract_manifest_by_code_hash(FindContractManifestByCodeHash),
         visit_find_abi_version(FindAbiVersion),
         visit_find_asset_by_id(FindAssetById),
+        visit_find_asset_definition_by_id(FindAssetDefinitionById),
         visit_find_twitter_binding_by_hash(FindTwitterBindingByHash),
         visit_find_da_pin_intent_by_ticket(FindDaPinIntentByTicket),
         visit_find_da_pin_intent_by_manifest(FindDaPinIntentByManifest),
@@ -122,6 +123,9 @@ macro_rules! query_visitors {
             ),
             visit_find_abi_version(&$crate::query::runtime::prelude::FindAbiVersion),
             visit_find_asset_by_id(&$crate::query::asset::prelude::FindAssetById),
+            visit_find_asset_definition_by_id(
+                &$crate::query::asset::prelude::FindAssetDefinitionById
+            ),
             visit_find_twitter_binding_by_hash(
                 &$crate::query::oracle::prelude::FindTwitterBindingByHash
             ),
@@ -209,6 +213,7 @@ mod tests {
             SingularQueryBox::FindContractManifestByCodeHash(_) => {}
             SingularQueryBox::FindAbiVersion(_) => {}
             SingularQueryBox::FindAssetById(_) => {}
+            SingularQueryBox::FindAssetDefinitionById(_) => {}
             SingularQueryBox::FindTwitterBindingByHash(_) => {}
             SingularQueryBox::FindDaPinIntentByTicket(_) => {}
             SingularQueryBox::FindDaPinIntentByManifest(_) => {}
@@ -318,8 +323,13 @@ mod tests {
             ),
             SingularQueryBox::FindAbiVersion(crate::query::runtime::prelude::FindAbiVersion),
             SingularQueryBox::FindAssetById(crate::query::asset::prelude::FindAssetById::new(
-                asset_id,
+                asset_id.clone(),
             )),
+            SingularQueryBox::FindAssetDefinitionById(
+                crate::query::asset::prelude::FindAssetDefinitionById::new(
+                    asset_id.definition().clone(),
+                ),
+            ),
         ];
 
         for query in &queries {

@@ -20,11 +20,15 @@ final class CanonicalRequestTests: XCTestCase {
         }
         let seed = Data(repeating: 5, count: 32)
         let signingKey = try SigningKey.ed25519(privateKey: seed)
-        let message = CanonicalRequest.canonicalMessage(
+        let timestampMs: UInt64 = 1_717_171_717_000
+        let nonce = "swift-canonical-nonce"
+        let message = try CanonicalRequest.signatureMessage(
             method: "get",
             path: "/v1/accounts/6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn/assets",
             query: "limit=1",
-            body: Data("{\"foo\":1}".utf8)
+            body: Data("{\"foo\":1}".utf8),
+            timestampMs: timestampMs,
+            nonce: nonce
         )
         let headers = try CanonicalRequest.signingHeaders(
             accountId: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
@@ -32,11 +36,15 @@ final class CanonicalRequestTests: XCTestCase {
             path: "/v1/accounts/6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn/assets",
             query: "limit=1",
             body: Data("{\"foo\":1}".utf8),
-            signer: signingKey
+            signer: signingKey,
+            timestampMs: timestampMs,
+            nonce: nonce
         )
         let sigB64 = headers["X-Iroha-Signature"] ?? ""
         let signature = Data(base64Encoded: sigB64) ?? Data()
         let publicKey = try Curve25519.Signing.PublicKey(rawRepresentation: signingKey.publicKey())
+        XCTAssertEqual(headers["X-Iroha-Timestamp-Ms"], String(timestampMs))
+        XCTAssertEqual(headers["X-Iroha-Nonce"], nonce)
         XCTAssertTrue(publicKey.isValidSignature(signature, for: message))
     }
 }

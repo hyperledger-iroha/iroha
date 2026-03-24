@@ -9,7 +9,6 @@ use iroha_crypto::{Algorithm, HashOf, KeyPair};
 use iroha_data_model::{
     account::{AccountId, address},
     asset::{AssetId, id::AssetDefinitionId},
-    domain::DomainId,
     isi::{Burn, InstructionBox, Mint, Transfer},
     metadata::Metadata,
     name::Name,
@@ -85,18 +84,8 @@ impl Drop for ChainDiscriminantReset {
 
 fn parse_asset_definition_argument(raw: &str) -> Result<AssetDefinitionId, String> {
     let trimmed = raw.trim();
-    if let Ok(id) = trimmed.parse::<AssetDefinitionId>() {
-        return Ok(id);
-    }
-
-    let (name, domain) = trimmed
-        .split_once('#')
-        .ok_or_else(|| format!("invalid asset definition '{raw}'"))?;
-    let name = Name::from_str(name)
-        .map_err(|_| format!("invalid asset definition '{raw}': invalid name"))?;
-    let domain = DomainId::from_str(domain)
-        .map_err(|_| format!("invalid asset definition '{raw}': invalid domain"))?;
-    Ok(AssetDefinitionId::new(domain, name))
+    AssetDefinitionId::parse_address_literal(trimmed)
+        .map_err(|err| format!("invalid asset definition '{raw}': {err}"))
 }
 
 impl PayloadSpec {
@@ -410,6 +399,11 @@ mod tests {
         account.to_string()
     }
 
+    fn asset_definition_literal(domain: &str, name: &str) -> String {
+        AssetDefinitionId::new(domain.parse().expect("domain"), name.parse().expect("name"))
+            .to_string()
+    }
+
     #[test]
     fn instruction_builder_rejects_legacy_asset_literal_argument() {
         let keypair = KeyPair::from_seed(vec![0xAB; 32], Algorithm::Ed25519);
@@ -442,7 +436,10 @@ mod tests {
         let destination = AccountId::new(keypair.public_key().clone());
         let mut args = BTreeMap::new();
         args.insert("action".into(), "TransferAsset".into());
-        args.insert("asset_definition_id".into(), "rose#wonderland".into());
+        args.insert(
+            "asset_definition_id".into(),
+            asset_definition_literal("wonderland", "rose"),
+        );
         args.insert("quantity".into(), "1.2500".into());
         args.insert("destination".into(), account_literal(&destination));
         let payload = PayloadSpec {
@@ -478,13 +475,9 @@ mod tests {
 
     #[test]
     fn parse_asset_definition_argument_accepts_canonical_literal() {
-        let canonical = AssetDefinitionId::new(
-            DomainId::from_str("wonderland").expect("domain"),
-            Name::from_str("rose").expect("name"),
-        )
-        .to_string();
+        let canonical = asset_definition_literal("wonderland", "rose");
         let parsed =
-            parse_asset_definition_argument(&canonical).expect("canonical aid should parse");
+            parse_asset_definition_argument(&canonical).expect("canonical base58 should parse");
         assert_eq!(parsed.to_string(), canonical);
     }
 }

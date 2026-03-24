@@ -26,8 +26,8 @@ This document explains the structures, identifiers, traits, and protocols that f
 String forms of IDs (round-trippable with `Display`/`FromStr`):
 - `DomainId`: `name` (e.g., `wonderland`).
 - `AccountId`: canonical domainless account identifier encoded via `AccountAddress` as I105 only. Parser inputs must be canonical I105; domain suffixes (`@domain`), canonical I105 literals, alias literals, canonical hex parser input, legacy `norito:` payloads, and `uaid:`/`opaque:` account parser forms are rejected.
-- `AssetDefinitionId`: canonical `aid:<32-lower-hex-no-dash>` (UUID-v4 bytes).
-- `AssetId`: canonical encoded literal `norito:<hex>` (legacy textual forms are not supported in first release).
+- `AssetDefinitionId`: canonical unprefixed Base58 address over the canonical asset-definition bytes.
+- `AssetId`: internal ownership-bucket identifier combining `asset`, `account`, and `scope`. Public CLI/Torii selectors use those split fields instead of a single encoded string.
 - `NftId`: `nft$domain` (e.g., `rose$garden`).
 - `PeerId`: `public_key` (peer equality is by public key).
 
@@ -45,13 +45,16 @@ String forms of IDs (round-trippable with `Display`/`FromStr`):
 - Builder: `NewAccount` via `Account::new(id)`; registration requires an explicit `ScopedAccountId` domain and does not infer one from defaults.
 
 ### Asset Definitions and Assets
-- `AssetDefinitionId { aid_bytes: [u8; 16] }` exposed textually as `aid:<32-hex-no-dash>`.
+- `AssetDefinitionId { aid_bytes: [u8; 16] }` exposed textually as an unprefixed Base58 address with versioning and checksum.
 - `AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Numeric }`.
   - `name` is required human-facing display text and must not contain `#`/`@`.
   - `alias` is optional and must be one of:
-    - `<name>#<domain>@<dataspace>`
+    - `<name>#<domain>.<dataspace>`
     - `<name>#<dataspace>`
     with the left segment exactly matching `AssetDefinition.name`.
+  - Alias lease state is stored authoritatively in the persisted alias-binding record; the inline `alias` field is derived when definitions are read back through core/Torii APIs.
+  - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`, where `status` is one of `permanent`, `leased_active`, `leased_grace`, or `expired_pending_cleanup`.
+  - Alias resolution uses the latest committed block timestamp rather than node wall clock. Once `grace_until_ms` has passed, alias selectors stop resolving immediately even if sweep cleanup has not removed the stale binding yet; direct definition reads may still report the lingering binding as `expired_pending_cleanup`.
   - `Mintable`: `Infinitely` | `Once` | `Limited(u32)` | `Not`.
   - Builders: `AssetDefinition::new(id, spec)` or convenience `numeric(id)`; `name` is required and must be set via `.with_name(...)`.
 - `AssetId { account: AccountId, definition: AssetDefinitionId, scope: AssetBalanceScope }`.
@@ -202,7 +205,10 @@ let new_account = Account::new(account_id.to_account_id(domain_id.clone()))
     .with_metadata(Metadata::default());
 
 // Asset definition and an asset for the account
-let asset_def_id: AssetDefinitionId = "aid:2f17c72466f84a4bb8a8e24884fdcd2f".parse().unwrap();
+let asset_def_id = AssetDefinitionId::new(
+    "wonderland".parse().unwrap(),
+    "usd".parse().unwrap(),
+);
 let new_asset_def = AssetDefinition::numeric(asset_def_id.clone())
     .with_name("USD Coin".to_owned())
     .with_metadata(Metadata::default());
@@ -246,38 +252,38 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
     .sign(kp.private_key());
 ```
 
-`aid` / alias quick reference (CLI + Torii):
+Asset-definition id / alias quick reference (CLI + Torii):
 
 ```bash
-# Register an asset definition with canonical aid + explicit name + alias
+# Register an asset definition with a canonical Base58 id + explicit name + alias
 iroha ledger asset definition register \
-  --id aid:2f17c72466f84a4bb8a8e24884fdcd2f \
+  --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#ubl@sbp
+  --alias pkr#ubl.sbp
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
-  --id aid:550e8400e29b41d4a7164466554400dd \
+  --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
   --alias pkr#sbp
 
-# Mint using alias + account components (no manual norito hex copy/paste)
+# Mint using alias + account components
 iroha ledger asset mint \
-  --definition-alias pkr#ubl@sbp \
+  --definition-alias pkr#ubl.sbp \
   --account sorauﾛ1P... \
   --quantity 500
 
-# Resolve alias to canonical aid via Torii
+# Resolve alias to the canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#ubl@sbp"}'
+  -d '{"alias":"pkr#ubl.sbp"}'
 ```
 
 Migration note:
 - Old `name#domain` asset-definition IDs are not accepted in v1.
-- Asset IDs for mint/burn/transfer remain canonical `norito:<hex>`; build them with:
-  - `iroha tools encode asset-id --definition aid:... --account <i105>`
-  - or `--alias <name>#<domain>@<dataspace>` / `--alias <name>#<dataspace>` + `--account`.
+- Public asset selectors use one asset-definition format only: canonical Base58 ids. Aliases remain optional selectors, but resolve to the same canonical id.
+- Public asset lookups address owned balances with `asset + account + optional scope`; raw encoded `AssetId` literals are an internal representation and are not part of the Torii/CLI selector surface.
+- `POST /v1/assets/definitions/query` and `GET /v1/assets/definitions` accept asset-definition filters/sorts over `alias_binding.status`, `alias_binding.lease_expiry_ms`, `alias_binding.grace_until_ms`, and `alias_binding.bound_at_ms` in addition to `id`, `name`, `alias`, and `metadata.*`.
 
 ## Versioning
 

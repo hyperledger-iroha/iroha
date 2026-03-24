@@ -1,7 +1,7 @@
 //! Asset identifiers.
 
 use std::{
-    fmt, format,
+    array, fmt, format,
     hash::{Hash, Hasher},
     str::FromStr,
     string::String,
@@ -25,13 +25,13 @@ mod model {
 
     /// Canonical asset definition identifier.
     ///
-    /// Textual form is always `aid:<32-lower-hex-no-dash>` where the 16 bytes
-    /// satisfy `UUIDv4` version/variant constraints.
+    /// Textual form is an unprefixed Base58 address over canonical UUIDv4 bytes
+    /// plus a version byte and checksum.
     #[derive(Debug, Clone, Getters, IntoSchema)]
     #[getset(get = "pub")]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct AssetDefinitionId {
-        /// Canonical `UUIDv4` bytes (no textual separators).
+        /// Canonical `UUIDv4` bytes.
         #[getset(get_copy = "pub")]
         pub aid_bytes: [u8; 16],
         /// Deterministic domain component derived from canonical bytes.
@@ -86,7 +86,8 @@ mod model {
 
 string_id!(AssetDefinitionId);
 
-const AID_PREFIX: &str = "aid:";
+const ASSET_DEFINITION_ADDRESS_VERSION: u8 = 1;
+const ASSET_DEFINITION_ADDRESS_LEN: usize = 1 + 16 + 4;
 
 impl PartialEq for AssetDefinitionId {
     fn eq(&self, other: &Self) -> bool {
@@ -272,7 +273,7 @@ impl AssetDefinitionId {
         }
     }
 
-    /// Deterministically derive canonical `aid` bytes from component labels.
+    /// Deterministically derive canonical UUID bytes from component labels.
     #[must_use]
     pub fn new(domain: DomainId, name: Name) -> Self {
         let literal = format!("{name}#{domain}");
@@ -289,13 +290,20 @@ impl AssetDefinitionId {
         }
     }
 
-    /// Canonical textual literal (`aid:<32-lower-hex>`).
+    /// Canonical textual address (unprefixed Base58 with version and checksum).
     #[must_use]
-    pub fn canonical_literal(&self) -> String {
-        format!("{AID_PREFIX}{}", hex::encode(self.aid_bytes))
+    pub fn canonical_address(&self) -> String {
+        let payload = self.address_payload();
+        bs58::encode(payload).into_string()
     }
 
-    /// Returns `true` when this identifier is a canonical opaque `aid:<32-hex>`
+    /// Backwards-compatible alias for [`Self::canonical_address`].
+    #[must_use]
+    pub fn canonical_literal(&self) -> String {
+        self.canonical_address()
+    }
+
+    /// Returns `true` when this identifier is an opaque synthetic identifier
     /// literal rather than a domain-scoped asset definition synthesized from
     /// business domain/name components.
     #[must_use]
@@ -303,43 +311,39 @@ impl AssetDefinitionId {
         self.domain.name.as_ref() == "aid" && self.name.as_ref() == hex::encode(self.aid_bytes)
     }
 
-    /// Parse strictly canonical `aid:<32-lower-hex-no-dash>` literals.
+    /// Parse the canonical unprefixed Base58 address.
     ///
     /// # Errors
-    /// Returns [`ParseError`] when the textual form is not canonical or bytes
-    /// do not satisfy `UUIDv4` constraints.
-    pub fn parse_aid_literal(input: &str) -> Result<Self, ParseError> {
+    /// Returns [`ParseError`] when the textual form is not canonical, fails
+    /// checksum verification, or bytes do not satisfy `UUIDv4` constraints.
+    pub fn parse_address_literal(input: &str) -> Result<Self, ParseError> {
         let trimmed = input.trim();
         if trimmed.is_empty() {
             return Err(ParseError::new("Asset Definition ID must not be empty"));
         }
-        let Some(payload) = trimmed.strip_prefix(AID_PREFIX) else {
+        if trimmed.contains(':') {
             return Err(ParseError::new(
-                "Asset Definition ID must use `aid:<32-lower-hex>` format",
-            ));
-        };
-        if payload.contains('-') {
-            return Err(ParseError::new(
-                "Asset Definition ID must not include dashes",
+                "Asset Definition ID must use unprefixed Base58 format",
             ));
         }
-        if payload.len() != 32 {
+        let payload = bs58::decode(trimmed)
+            .into_vec()
+            .map_err(|_| ParseError::new("Asset Definition ID must be valid Base58"))?;
+        if payload.len() != ASSET_DEFINITION_ADDRESS_LEN {
             return Err(ParseError::new(
-                "Asset Definition ID must contain exactly 32 hex characters",
+                "Asset Definition ID must contain exactly 21 decoded bytes",
             ));
         }
-        if !payload
-            .as_bytes()
-            .iter()
-            .all(|ch| ch.is_ascii_digit() || (b'a'..=b'f').contains(ch))
-        {
+        if payload[0] != ASSET_DEFINITION_ADDRESS_VERSION {
             return Err(ParseError::new(
-                "Asset Definition ID must be lowercase hexadecimal",
+                "Asset Definition ID version is not supported",
             ));
         }
-        let mut aid_bytes = [0u8; 16];
-        hex::decode_to_slice(payload, &mut aid_bytes)
-            .map_err(|_| ParseError::new("Asset Definition ID payload must be valid hex"))?;
+        let expected_checksum = address_checksum(&payload[..17]);
+        if payload[17..] != expected_checksum {
+            return Err(ParseError::new("Asset Definition ID checksum is invalid"));
+        }
+        let aid_bytes = array::from_fn(|index| payload[index + 1]);
         Self::from_uuid_bytes(aid_bytes)
     }
 
@@ -347,10 +351,62 @@ impl AssetDefinitionId {
     pub fn of(domain: DomainId, name: Name) -> Self {
         Self::new(domain, name)
     }
+
+    fn address_payload(&self) -> [u8; ASSET_DEFINITION_ADDRESS_LEN] {
+        let checksum = address_checksum(&[
+            ASSET_DEFINITION_ADDRESS_VERSION,
+            self.aid_bytes[0],
+            self.aid_bytes[1],
+            self.aid_bytes[2],
+            self.aid_bytes[3],
+            self.aid_bytes[4],
+            self.aid_bytes[5],
+            self.aid_bytes[6],
+            self.aid_bytes[7],
+            self.aid_bytes[8],
+            self.aid_bytes[9],
+            self.aid_bytes[10],
+            self.aid_bytes[11],
+            self.aid_bytes[12],
+            self.aid_bytes[13],
+            self.aid_bytes[14],
+            self.aid_bytes[15],
+        ]);
+        [
+            ASSET_DEFINITION_ADDRESS_VERSION,
+            self.aid_bytes[0],
+            self.aid_bytes[1],
+            self.aid_bytes[2],
+            self.aid_bytes[3],
+            self.aid_bytes[4],
+            self.aid_bytes[5],
+            self.aid_bytes[6],
+            self.aid_bytes[7],
+            self.aid_bytes[8],
+            self.aid_bytes[9],
+            self.aid_bytes[10],
+            self.aid_bytes[11],
+            self.aid_bytes[12],
+            self.aid_bytes[13],
+            self.aid_bytes[14],
+            self.aid_bytes[15],
+            checksum[0],
+            checksum[1],
+            checksum[2],
+            checksum[3],
+        ]
+    }
 }
 
 fn is_uuid_v4_bytes(bytes: &[u8; 16]) -> bool {
     (bytes[6] >> 4) == 0b0100 && (bytes[8] & 0b1100_0000) == 0b1000_0000
+}
+
+fn address_checksum(payload: &[u8]) -> [u8; 4] {
+    let digest = blake3::hash(payload);
+    let mut checksum = [0_u8; 4];
+    checksum.copy_from_slice(&digest.as_bytes()[..4]);
+    checksum
 }
 
 fn synthetic_components(aid_bytes: [u8; 16]) -> (DomainId, Name) {
@@ -366,7 +422,7 @@ fn synthetic_components(aid_bytes: [u8; 16]) -> (DomainId, Name) {
 
 impl fmt::Display for AssetDefinitionId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.canonical_literal())
+        f.write_str(&self.canonical_address())
     }
 }
 
@@ -379,7 +435,7 @@ impl FromStr for AssetDefinitionId {
         if trimmed.is_empty() {
             return Err(ParseError::new("Asset Definition ID must not be empty"));
         }
-        Self::parse_aid_literal(trimmed)
+        Self::parse_address_literal(trimmed)
     }
 }
 
@@ -425,20 +481,24 @@ mod tests {
 
     #[test]
     fn asset_definition_id_parses_canonical_aid() {
-        let parsed: AssetDefinitionId = "aid:2f17c72466f84a4bb8a8e24884fdcd2f"
-            .parse()
-            .expect("aid should parse");
-        assert_eq!(
-            parsed.to_string(),
-            "aid:2f17c72466f84a4bb8a8e24884fdcd2f".to_string()
-        );
+        let expected = AssetDefinitionId::from_uuid_bytes([
+            0x2f, 0x17, 0xc7, 0x24, 0x66, 0xf8, 0x4a, 0x4b, 0xb8, 0xa8, 0xe2, 0x48, 0x84, 0xfd,
+            0xcd, 0x2f,
+        ])
+        .expect("uuid v4 bytes");
+        let literal = expected.to_string();
+        let parsed: AssetDefinitionId = literal.parse().expect("address should parse");
+        assert_eq!(parsed, expected);
+        assert_eq!(parsed.to_string(), literal);
     }
 
     #[test]
     fn asset_definition_id_distinguishes_opaque_from_domain_scoped_ids() {
-        let opaque: AssetDefinitionId = "aid:2f17c72466f84a4bb8a8e24884fdcd2f"
-            .parse()
-            .expect("opaque aid should parse");
+        let opaque = AssetDefinitionId::from_uuid_bytes([
+            0x2f, 0x17, 0xc7, 0x24, 0x66, 0xf8, 0x4a, 0x4b, 0xb8, 0xa8, 0xe2, 0x48, 0x84, 0xfd,
+            0xcd, 0x2f,
+        ])
+        .expect("opaque bytes should parse");
         assert!(opaque.is_opaque_canonical());
 
         let domain_scoped = AssetDefinitionId::new(
@@ -498,10 +558,10 @@ mod tests {
     }
 
     #[test]
-    fn asset_definition_id_parse_aid_rejects_legacy_and_dashed_literals() {
-        assert!(AssetDefinitionId::parse_aid_literal("usd#wonderland").is_err());
+    fn asset_definition_id_parse_address_rejects_non_canonical_literals() {
+        assert!(AssetDefinitionId::parse_address_literal("usd#wonderland").is_err());
         assert!(
-            AssetDefinitionId::parse_aid_literal("aid:2f17c724-66f8-4a4b-b8a8-e24884fdcd2f")
+            AssetDefinitionId::parse_address_literal("aid:2f17c724-66f8-4a4b-b8a8-e24884fdcd2f")
                 .is_err()
         );
     }
@@ -512,7 +572,38 @@ mod tests {
             .parse::<AssetDefinitionId>()
             .expect_err("legacy literal must be rejected");
         assert!(
-            err.to_string().contains("aid:<32-lower-hex>"),
+            err.to_string().contains("Base58"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn asset_definition_id_rejects_invalid_checksum() {
+        let mut literal = AssetDefinitionId::new(
+            "wonderland".parse().expect("domain"),
+            "xor".parse().expect("name"),
+        )
+        .to_string()
+        .into_bytes();
+        let last = literal.len() - 1;
+        literal[last] = if literal[last] == b'1' { b'2' } else { b'1' };
+        let literal = String::from_utf8(literal).expect("utf8");
+
+        let err = literal
+            .parse::<AssetDefinitionId>()
+            .expect_err("checksum must fail");
+        assert!(
+            err.to_string().contains("checksum"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn asset_definition_id_rejects_legacy_aid_prefix() {
+        let err = AssetDefinitionId::parse_address_literal("aid:2f17c72466f84a4bb8a8e24884fdcd2f")
+            .expect_err("legacy format must fail");
+        assert!(
+            err.to_string().contains("Base58"),
             "unexpected error: {err}"
         );
     }

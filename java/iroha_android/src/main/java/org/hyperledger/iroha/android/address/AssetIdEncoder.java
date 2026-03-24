@@ -21,7 +21,7 @@ import org.hyperledger.iroha.norito.TypeAdapter;
  * <pre>
  *   struct AssetId {
  *       account: AccountId,
- *       definition: AssetDefinitionId,  // raw [u8; 16] aid_bytes
+ *       definition: AssetDefinitionId,  // raw [u8; 16] UUIDv4 bytes
  *       scope: AssetBalanceScope,       // #[norito(default)]
  *   }
  *   // #[norito(transparent)] — serializes directly as AccountController
@@ -31,7 +31,7 @@ import org.hyperledger.iroha.norito.TypeAdapter;
  *   enum AccountController {
  *       Single(PublicKey),   // discriminant 0
  *   }
- *   // AssetDefinitionId = [u8; 16] blake3-derived aid_bytes
+ *   // AssetDefinitionId = [u8; 16] blake3-derived UUIDv4 bytes
  * </pre>
  */
 public final class AssetIdEncoder {
@@ -77,14 +77,14 @@ public final class AssetIdEncoder {
     encoder.writeUInt(accountBytes.length, 64);
     encoder.writeBytes(accountBytes);
 
-    // AssetDefinitionId = [u8; 16] aid_bytes — each byte gets u64 length prefix per Norito [T; N]
-    byte[] aidBytes = AssetDefinitionIdEncoder.computeAidBytes(assetName, domainName);
-    NoritoEncoder aidEncoder = new NoritoEncoder(flags);
+    // AssetDefinitionId = [u8; 16] definition bytes — each byte gets a u64 length prefix.
+    byte[] definitionBytes = AssetDefinitionIdEncoder.computeDefinitionBytes(assetName, domainName);
+    NoritoEncoder definitionEncoder = new NoritoEncoder(flags);
     org.hyperledger.iroha.android.model.instructions.TransferWirePayloadEncoder
-        .encodeFixedByteArray(aidEncoder, aidBytes);
-    byte[] aidPayload = aidEncoder.toByteArray();
-    encoder.writeUInt(aidPayload.length, 64);
-    encoder.writeBytes(aidPayload);
+        .encodeFixedByteArray(definitionEncoder, definitionBytes);
+    byte[] definitionPayload = definitionEncoder.toByteArray();
+    encoder.writeUInt(definitionPayload.length, 64);
+    encoder.writeBytes(definitionPayload);
 
     // scope: AssetBalanceScope::Global = enum discriminant 0, unit variant
     encodeAssetBalanceScopeGlobal(encoder);
@@ -94,14 +94,15 @@ public final class AssetIdEncoder {
   }
 
   /**
-   * Encodes a full asset ID to {@code norito:<hex>} format using a pre-computed {@code aid:} string.
+   * Encodes a full asset ID to {@code norito:<hex>} format using a canonical asset-definition
+   * address.
    *
-   * @param aidString    the asset definition ID in {@code aid:<hex>} format
+   * @param definitionAddress the canonical unprefixed Base58 asset-definition address
    * @param publicKeyHex the public key in Iroha hex format (e.g., "ed0120ABCD...")
    * @return the norito-encoded string
    */
-  public static String encodeAssetIdFromAid(String aidString, String publicKeyHex) {
-    Objects.requireNonNull(aidString, "aidString");
+  public static String encodeAssetIdFromDefinition(String definitionAddress, String publicKeyHex) {
+    Objects.requireNonNull(definitionAddress, "definitionAddress");
     Objects.requireNonNull(publicKeyHex, "publicKeyHex");
 
     int flags = 0;
@@ -111,13 +112,13 @@ public final class AssetIdEncoder {
     encoder.writeUInt(accountBytes.length, 64);
     encoder.writeBytes(accountBytes);
 
-    byte[] aidBytes = AssetDefinitionIdEncoder.parseAidBytes(aidString);
-    NoritoEncoder aidEncoder2 = new NoritoEncoder(flags);
+    byte[] definitionBytes = AssetDefinitionIdEncoder.parseAddressBytes(definitionAddress);
+    NoritoEncoder definitionEncoder = new NoritoEncoder(flags);
     org.hyperledger.iroha.android.model.instructions.TransferWirePayloadEncoder
-        .encodeFixedByteArray(aidEncoder2, aidBytes);
-    byte[] aidPayload2 = aidEncoder2.toByteArray();
-    encoder.writeUInt(aidPayload2.length, 64);
-    encoder.writeBytes(aidPayload2);
+        .encodeFixedByteArray(definitionEncoder, definitionBytes);
+    byte[] definitionPayload = definitionEncoder.toByteArray();
+    encoder.writeUInt(definitionPayload.length, 64);
+    encoder.writeBytes(definitionPayload);
 
     encodeAssetBalanceScopeGlobal(encoder);
 
@@ -126,7 +127,8 @@ public final class AssetIdEncoder {
   }
 
   /**
-   * Encodes an asset definition ID ({@code name#domain}) to {@code norito:<hex>} format.
+   * Encodes an asset definition ID derived from {@code name#domain} to {@code norito:<hex>}
+   * format.
    *
    * @param assetName  the asset name (e.g., "rose")
    * @param domainName the domain name (e.g., "wonderland")
@@ -137,10 +139,10 @@ public final class AssetIdEncoder {
     Objects.requireNonNull(domainName, "domainName");
 
     int flags = 0;
-    byte[] rawAidBytes = AssetDefinitionIdEncoder.computeAidBytes(assetName, domainName);
+    byte[] definitionBytes = AssetDefinitionIdEncoder.computeDefinitionBytes(assetName, domainName);
     NoritoEncoder aidDefEncoder = new NoritoEncoder(flags);
     org.hyperledger.iroha.android.model.instructions.TransferWirePayloadEncoder
-        .encodeFixedByteArray(aidDefEncoder, rawAidBytes);
+        .encodeFixedByteArray(aidDefEncoder, definitionBytes);
     byte[] payload = aidDefEncoder.toByteArray();
     return wrapWithHeader(payload, flags, ASSET_DEF_ID_SCHEMA_HASH);
   }

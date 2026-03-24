@@ -24,6 +24,8 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
+import org.hyperledger.iroha.android.address.AccountIdLiteral;
+
 /**
  * Encodes asset transfer instructions in wire-framed Norito format.
  *
@@ -65,9 +67,10 @@ public final class TransferWirePayloadEncoder {
   /**
    * Encodes an asset transfer instruction as a wire-framed InstructionBox.
    *
-   * @param assetId The full asset ID (e.g., "rose#wonderland##alice@wonderland")
+   * @param assetId The full asset ID as {@code <asset-definition-address>#<account-id>} or
+   *     {@code norito:<hex>}
    * @param amount The amount to transfer as a string (e.g., "10" or "10.50")
-   * @param destinationAccountId The recipient's account ID
+   * @param destinationAccountId The recipient's canonical I105 account ID
    * @return InstructionBox with wire payload ready for Norito encoding
    */
   public static InstructionBox encodeAssetTransfer(
@@ -179,52 +182,29 @@ public final class TransferWirePayloadEncoder {
   }
 
   /**
-   * Rust: AssetDefinitionId is now a raw {@code [u8; 16]} — the blake3-derived aid_bytes.
-   * Constructed from an {@code aid:<hex>} string or from {@code name#domain} via blake3.
+   * Rust: AssetDefinitionId is now a raw {@code [u8; 16]} payload wrapped by a canonical Base58
+   * address on public surfaces.
    */
   private static final class AssetDefinitionId {
-    private final byte[] aidBytes;
+    private final byte[] definitionBytes;
 
-    AssetDefinitionId(byte[] aidBytes) {
-      if (aidBytes.length != 16) {
-        throw new IllegalArgumentException("aidBytes must be 16 bytes, got " + aidBytes.length);
-      }
-      this.aidBytes = aidBytes.clone();
-    }
-
-    byte[] aidBytes() {
-      return aidBytes.clone();
-    }
-
-    /**
-     * Create from {@code aid:<32-hex>} string.
-     */
-    static AssetDefinitionId fromAid(String aidString) {
-      return new AssetDefinitionId(AssetDefinitionIdEncoder.parseAidBytes(aidString));
-    }
-
-    /**
-     * Create from legacy {@code name#domain} format by computing blake3 hash.
-     */
-    static AssetDefinitionId fromNameDomain(String name, String domain) {
-      return new AssetDefinitionId(AssetDefinitionIdEncoder.computeAidBytes(name, domain));
-    }
-
-    /**
-     * Parse from {@code name#domain} format (legacy) or {@code aid:<hex>} format.
-     */
-    static AssetDefinitionId parse(String assetDefinitionId) {
-      if (AssetDefinitionIdEncoder.isAidEncoded(assetDefinitionId)) {
-        return fromAid(assetDefinitionId);
-      }
-      int hashIndex = assetDefinitionId.indexOf('#');
-      if (hashIndex < 0) {
+    AssetDefinitionId(byte[] definitionBytes) {
+      if (definitionBytes.length != 16) {
         throw new IllegalArgumentException(
-            "Invalid AssetDefinitionId format: " + assetDefinitionId);
+            "definitionBytes must be 16 bytes, got " + definitionBytes.length);
       }
-      String name = assetDefinitionId.substring(0, hashIndex);
-      String domainName = assetDefinitionId.substring(hashIndex + 1);
-      return fromNameDomain(name, domainName);
+      this.definitionBytes = definitionBytes.clone();
+    }
+
+    byte[] definitionBytes() {
+      return definitionBytes.clone();
+    }
+
+    /**
+     * Create from a canonical unprefixed Base58 asset-definition address.
+     */
+    static AssetDefinitionId fromAddress(String address) {
+      return new AssetDefinitionId(AssetDefinitionIdEncoder.parseAddressBytes(address));
     }
   }
 
@@ -278,32 +258,15 @@ public final class TransferWirePayloadEncoder {
       return controller;
     }
 
-    /**
-     * Parse from "signatory@domain" format, extracting just the controller.
-     *
-     * <p>The signatory can be either:
-     * <ul>
-     *   <li>I105 address (single-key or multisig) — decoded via {@link AccountAddress}
-     *   <li>Multihash hex string (e.g., "ed0120abc...") — decoded via {@link PublicKeyCodec}
-     * </ul>
-     */
     static AccountId parse(String accountIdStr) {
-      int atIndex = accountIdStr.lastIndexOf('@');
-      String signatory = atIndex >= 0 ? accountIdStr.substring(0, atIndex) : accountIdStr;
-
-      // Try as multihash hex (ed25519, ml-dsa, gost, sm2, etc.)
-      PublicKeyCodec.PublicKeyPayload pk = PublicKeyCodec.decodePublicKeyLiteral(signatory);
-      if (pk != null) {
-        String multihash = PublicKeyCodec.encodePublicKeyMultihash(pk.curveId(), pk.keyBytes());
-        return new AccountId(AccountController.single(multihash));
-      }
-
-      // Parse as I105 address (supports both single-key and multisig)
-      AccountAddress address;
+      final String canonicalAccountId =
+          AccountIdLiteral.requireCanonicalI105Address(accountIdStr, "accountId");
+      final AccountAddress address;
       try {
-        address = AccountAddress.parseEncodedIgnoringCurveSupport(signatory, null).address;
+        address = AccountAddress.parseEncodedIgnoringCurveSupport(canonicalAccountId, null).address;
       } catch (AccountAddress.AccountAddressException e) {
-        throw new IllegalArgumentException("Failed to parse account identifier: " + signatory, e);
+        throw new IllegalArgumentException(
+            "Failed to parse canonical I105 account identifier: " + canonicalAccountId, e);
       }
 
       try {
@@ -323,7 +286,7 @@ public final class TransferWirePayloadEncoder {
         }
       } catch (AccountAddress.AccountAddressException e) {
         throw new IllegalArgumentException(
-            "Failed to extract controller from I105 address", e);
+            "Failed to extract controller from canonical I105 account id", e);
       }
 
       throw new IllegalArgumentException(
@@ -372,15 +335,14 @@ public final class TransferWirePayloadEncoder {
     }
 
     /**
-     * Parse from "asset#domain#account@domain" or "asset##account@domain" format.
-     * If domain after asset name is empty (##), it means same domain as account.
+     * Parse from {@code <asset-definition-address>#<account-id>} or {@code norito:<hex>}.
      */
     static AssetId parse(String assetIdStr) {
       if (AssetIdDecoder.isNoritoEncoded(assetIdStr)) {
         return parseNoritoEncoded(assetIdStr);
       }
 
-      // Find the last # followed by account@domain
+      // Split the public text form into <asset-definition-address>#<canonical-account-id>.
       int lastHashIndex = assetIdStr.lastIndexOf('#');
       if (lastHashIndex < 0) {
         throw new IllegalArgumentException("Invalid AssetId format: " + assetIdStr);
@@ -391,27 +353,11 @@ public final class TransferWirePayloadEncoder {
 
       AccountId accountId = AccountId.parse(accountIdPart);
 
-      // Extract domain from account part for fallback
-      int atIndex = accountIdPart.lastIndexOf('@');
-      String accountDomain = atIndex >= 0 ? accountIdPart.substring(atIndex + 1) : "";
-
-      AssetDefinitionId assetDef;
-      if (AssetDefinitionIdEncoder.isAidEncoded(assetDefPart)) {
-        assetDef = AssetDefinitionId.fromAid(assetDefPart);
-      } else if (assetDefPart.endsWith("#")) {
-        // Same domain as account: "asset#" -> use account's domain
-        String assetName = assetDefPart.substring(0, assetDefPart.length() - 1);
-        assetDef = AssetDefinitionId.fromNameDomain(assetName, accountDomain);
-      } else {
-        // Different domain: "asset#domain"
-        int hashIndex = assetDefPart.indexOf('#');
-        if (hashIndex < 0) {
-          throw new IllegalArgumentException("Invalid AssetId format: " + assetIdStr);
-        }
-        String assetName = assetDefPart.substring(0, hashIndex);
-        String assetDomain = assetDefPart.substring(hashIndex + 1);
-        assetDef = AssetDefinitionId.fromNameDomain(assetName, assetDomain);
+      if (!AssetDefinitionIdEncoder.isCanonicalAddress(assetDefPart)) {
+        throw new IllegalArgumentException(
+            "Invalid AssetId format: expected <asset-definition-address>#<account-id> or norito:<hex>");
       }
+      AssetDefinitionId assetDef = AssetDefinitionId.fromAddress(assetDefPart);
 
       return new AssetId(accountId, assetDef, null, globalScopePayload());
     }
@@ -444,7 +390,8 @@ public final class TransferWirePayloadEncoder {
         throw new IllegalArgumentException("Invalid AssetId.account payload", ex);
       }
       byte[] definitionPayload = readSizedField(decoder, compactLen, "AssetId.definition");
-      byte[] aidBytes = decodeFixedByteArray(definitionPayload, 16, sourceFlags, header.minor());
+      byte[] definitionBytes =
+          decodeFixedByteArray(definitionPayload, 16, sourceFlags, header.minor());
       byte[] scopePayload = readSizedField(decoder, compactLen, "AssetId.scope");
       final AssetBalanceScopePayload scope;
       try {
@@ -459,14 +406,14 @@ public final class TransferWirePayloadEncoder {
       if (sourceFlags != 0) {
         return new AssetId(
             account,
-            new AssetDefinitionId(aidBytes),
+            new AssetDefinitionId(definitionBytes),
             null,
             encodeAssetBalanceScopePayload(scope));
       }
 
       return new AssetId(
           null,
-          new AssetDefinitionId(aidBytes),
+          new AssetDefinitionId(definitionBytes),
           encodedAccountPayload,
           scopePayload);
     }
@@ -539,7 +486,7 @@ public final class TransferWirePayloadEncoder {
 
     @Override
     public void encode(NoritoEncoder encoder, AssetDefinitionId value) {
-      encodeFixedByteArray(encoder, value.aidBytes());
+      encodeFixedByteArray(encoder, value.definitionBytes());
     }
 
     @Override

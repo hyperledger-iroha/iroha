@@ -11,8 +11,10 @@
 fn cuda_backend_disables_on_forced_selftest_failure_and_parity_holds() {
     ivm::reset_cuda_backend_for_tests();
     // Ensure self-test runs with the forced fail flag before any CUDA init.
-    std::env::set_var("IVM_FORCE_CUDA_SELFTEST_FAIL", "1");
-    std::env::set_var("IVM_DISABLE_CUDA", "0");
+    unsafe {
+        std::env::set_var("IVM_FORCE_CUDA_SELFTEST_FAIL", "1");
+        std::env::set_var("IVM_DISABLE_CUDA", "0");
+    }
 
     let available = ivm::cuda_available();
     assert!(
@@ -83,8 +85,10 @@ fn cuda_backend_disables_on_forced_selftest_failure_and_parity_holds() {
         "aesdec_cuda should fall back to CPU output when CUDA is disabled"
     );
 
-    std::env::remove_var("IVM_FORCE_CUDA_SELFTEST_FAIL");
-    std::env::remove_var("IVM_DISABLE_CUDA");
+    unsafe {
+        std::env::remove_var("IVM_FORCE_CUDA_SELFTEST_FAIL");
+        std::env::remove_var("IVM_DISABLE_CUDA");
+    }
     ivm::reset_cuda_backend_for_tests();
 }
 

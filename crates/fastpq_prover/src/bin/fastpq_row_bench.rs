@@ -600,16 +600,24 @@ mod tests {
     }
 
     #[test]
-    fn transfer_keys_use_canonical_aid_literals() {
+    fn transfer_keys_use_canonical_asset_definition_addresses() {
         let mut generator = RowGenerator::new(7);
         let (_, sender, receiver) = generator.next_transfer_pair(false);
 
         let sender_key = String::from_utf8(sender.key).expect("sender key utf8");
         let receiver_key = String::from_utf8(receiver.key).expect("receiver key utf8");
+        let sender_definition = sender_key
+            .strip_prefix("asset/")
+            .and_then(|value| value.split('/').next())
+            .expect("sender asset key");
+        let receiver_definition = receiver_key
+            .strip_prefix("asset/")
+            .and_then(|value| value.split('/').next())
+            .expect("receiver asset key");
 
-        assert!(sender_key.starts_with("asset/aid:"));
-        assert!(receiver_key.starts_with("asset/aid:"));
-        assert!(!sender_key.contains('#'));
-        assert!(!receiver_key.contains('#'));
+        assert!(AssetDefinitionId::from_str(sender_definition).is_ok());
+        assert!(AssetDefinitionId::from_str(receiver_definition).is_ok());
+        assert!(!sender_definition.contains('#'));
+        assert!(!receiver_definition.contains('#'));
     }
 }

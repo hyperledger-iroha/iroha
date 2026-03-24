@@ -32,7 +32,7 @@ translator: machine-google-reviewed
 - `ChainId`: Транзакцияларҙа ҡабаттан һаҡлау өсөн ҡулланылған асыҡ булмаған сылбыр идентификаторы.Идентификаторҙар телмәр формалары (`Display`/`FromStr` менән түңәрәк рәүештә йөрөү мөмкинлеге):
 - 18НИ00000078Х: 18НИ00000079Х (мәҫәлән, 18НИ00000080Х).
 - `AccountId`: канонический доменһыҙ иҫәп яҙмаһы идентификаторы `AccountAddress` аша I105 тип кенә кодланған. Парсер индереүҙәре канонлы булырға тейеш I105; домен ялғауҙары (`@domain`), канон I105 литералдары, псевдоним литералдары, канон ун алты анализаторы индереүе, мираҫ `norito:` файҙалы йөкләмәләр һәм `uaid:`/`opaque:` формалары анализаторы булып тора.
-- `AssetDefinitionId`: канонический `aid:<32-lower-hex-no-dash>` (UUID-v4 байты).
+- `AssetDefinitionId`: канонический `unprefixed Base58 address with versioning and checksum` (UUID-v4 байты).
 - `AssetId`: канонический кодированный литераль `norito:<hex>` (мираҫ текст формалары беренсе релизда ярҙам итмәй).
 - I18НИ00000091Х: I18НИ00000092Х (мәҫәлән, I18НИ00000093Х).
 - `PeerId`: `public_key` (тигеҙлек асыҡ асҡыс буйынса).
@@ -49,11 +49,13 @@ translator: machine-google-reviewed
 - Төҙөүсе: `NewAccount` аша `Account::new(id)`; теркәү өсөн асыҡ `ScopedAccountId` домен талап ителә һәм ғәҙәттәгесә һығымта яһамай.
 
 ### Активтарҙы билдәләү һәм активтар
-- `AssetDefinitionId { aid_bytes: [u8; 16] }` тексты `aid:<32-hex-no-dash>` тип фашланған.
+- `AssetDefinitionId { aid_bytes: [u8; 16] }` тексты `unprefixed Base58 address` тип фашланған.
 - `AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Numeric }`.
+
+  - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`; alias selectors resolve against latest committed block time and stop resolving after grace, while direct reads may still show `expired_pending_cleanup` until sweep.
   - `name` кешегә ҡараған дисплей тексы кәрәк һәм `#`/`@` булырға тейеш түгел.
   - `alias` теләк буйынса һәм уларҙан береһе булырға тейеш:
-    - `<name>#<domain>@<dataspace>`
+    - `<name>#<domain>.<dataspace>`
     - `<name>#<dataspace>`
     һул сегмент менән теүәл тап килгән `AssetDefinition.name`.
   - `Mintable`: Norito | 18НИ00000123Х | 18НИ00000124Х | I18НИ00000125Х.

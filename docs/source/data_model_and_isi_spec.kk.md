@@ -27,7 +27,9 @@ translator: machine-google-reviewed
 Идентификаторларда `Display`/`FromStr` айналу жолымен тұрақты жол пішіндері бар. Атау ережелері бос орынға және сақталған `@ # $` таңбаларына тыйым салады.- `Name` — расталған мәтіндік идентификатор. Ережелер: `crates/iroha_data_model/src/name.rs`.
 - `DomainId` — `name`. Домен: `{ id, logo, metadata, owned_by }`. Құрылысшылар: `NewDomain`. Код: `crates/iroha_data_model/src/domain.rs`.
 - `AccountId` — канондық мекенжайлар `AccountAddress` (I105 / он алтылық) арқылы шығарылады және Torii `AccountAddress::parse_encoded` арқылы кірістерді қалыпқа келтіреді. I105 - қолайлы тіркелгі пішімі; I105 пішіні тек Sora UX үшін арналған. Таныс `alias` (қабылданбаған бұрынғы пішін) жолы тек бағыттау бүркеншік аты ретінде сақталады. Есептік жазба: `{ id, metadata }`. Код: `crates/iroha_data_model/src/account.rs`.- Тіркелгіні қабылдау саясаты — домендер `iroha:account_admission_policy` метадеректер кілті астында Norito-JSON `AccountAdmissionPolicy` сақтау арқылы жасырын тіркелгі жасауды басқарады. Кілт жоқ кезде, `iroha:default_account_admission_policy` тізбек деңгейіндегі теңшелетін параметр әдепкі мәнді береді; ол да болмаған кезде, қатты әдепкі мән `ImplicitReceive` (бірінші шығарылым) болып табылады. Саясат тегтері `mode` (`ExplicitOnly` немесе `ImplicitReceive`) және қосымша әр транзакция (әдепкі `16`) және әр блокты жасау шектері, қосымша `implicit_creation_fee` тіркелгісі (немесе sink), Актив анықтамасы үшін `min_initial_amounts` және қосымша `default_role_on_create` (`AccountCreated` кейін беріледі, жоқ болса `DefaultRoleError` қабылдамайды). Genesis қосыла алмайды; өшірілген/жарамсыз саясаттар `InstructionExecutionError::AccountAdmission` бар белгісіз тіркелгілерге арналған түбіртек стиліндегі нұсқауларды қабылдамайды. `AccountCreated` алдындағы `iroha:created_via="implicit"` метадеректерінің жасырын тіркелгі мөрі; әдепкі рөлдер `AccountRoleGranted` қосымшасын шығарады және орындаушы иесінің негізгі ережелері жаңа тіркелгіге қосымша рөлдерсіз өз активтерін/NFTs жұмсауға мүмкіндік береді. Код: `crates/iroha_data_model/src/account/admission.rs`, `crates/iroha_core/src/smartcontracts/isi/account_admission.rs`.
-- `AssetDefinitionId` — канондық `aid:<32-lower-hex-no-dash>` (UUID-v4 байт). Анықтама: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. `alias` литералдары `<name>#<domain>@<dataspace>` немесе `<name>#<dataspace>` болуы керек, `<name>` актив анықтамасының атауына тең. Код: `crates/iroha_data_model/src/asset/definition.rs`.
+- `AssetDefinitionId` — канондық `unprefixed Base58 address with versioning and checksum` (UUID-v4 байт). Анықтама: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. `alias` литералдары `<name>#<domain>.<dataspace>` немесе `<name>#<dataspace>` болуы керек, `<name>` актив анықтамасының атауына тең. Код: `crates/iroha_data_model/src/asset/definition.rs`.
+
+  - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`, where `status` is `permanent`, `leased_active`, `leased_grace`, or `expired_pending_cleanup`. Alias selectors resolve against the latest committed block creation time and stop resolving after grace even before sweep removes stale bindings.
 - `AssetId`: канондық кодталған литерал `norito:<hex>` (бұрынғы мәтіндік пішіндерге бірінші шығарылымда қолдау көрсетілмейді).- `NftId` — `nft$domain`. NFT: `{ id, content: Metadata, owned_by }`. Код: `crates/iroha_data_model/src/nft.rs`.
 - `RoleId` — `name`. Рөл: `{ id, permissions: BTreeSet<Permission> }` `NewRole { inner: Role, grant_to }` құрастырушымен. Код: `crates/iroha_data_model/src/role.rs`.
 - `Permission` — `{ name: Ident, payload: Json }`. Код: `crates/iroha_data_model/src/permission.rs`.
@@ -192,19 +194,19 @@ translator: machine-google-reviewed
   - Орындау уақытында триггердің IVM байт коды жоқ болса, триггер жойылады және орындалу сәтсіздік нәтижесімен жұмыс істемейтін ретінде қарастырылады.
   - Таусылған триггерлер дереу жойылады; егер орындау кезінде таусылған жазба кездессе, ол кесіледі және жоқ болып есептеледі.
 - Параметрді жаңарту:
-  - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` жаңартылады және `ConfigurationEvent::Changed` шығарады.CLI / Torii `aid` + бүркеншік ат мысалдары:
+  - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` жаңартылады және `ConfigurationEvent::Changed` шығарады.CLI / Torii asset-definition id + бүркеншік ат мысалдары:
 - Канондық көмек + нақты атау + ұзын бүркеншік атпен тіркелу:
-  - `iroha ledger asset definition register --id aid:2f17c72466f84a4bb8a8e24884fdcd2f --name pkr --alias pkr#ubl@sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#ubl.sbp`
 - Канондық көмек + нақты атау + қысқа бүркеншік атпен тіркелу:
-  - `iroha ledger asset definition register --id aid:550e8400e29b41d4a7164466554400dd --name pkr --alias pkr#sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#sbp`
 - Бүркеншік атпен жалбыз + тіркелгі құрамдастары:
-  - `iroha ledger asset mint --definition-alias pkr#ubl@sbp --account <i105> --quantity 500`
+  - `iroha ledger asset mint --definition-alias pkr#ubl.sbp --account <i105> --quantity 500`
 - Канондық көмекке бүркеншік аттарды шешіңіз:
-  - JSON `{ "alias": "pkr#ubl@sbp" }` бар `POST /v1/assets/aliases/resolve`
+  - JSON `{ "alias": "pkr#ubl.sbp" }` бар `POST /v1/assets/aliases/resolve`
 
 Көшіру жазбасы:
 - `name#domain` мәтіндік актив анықтамасының идентификаторларына бірінші шығарылымда әдейі қолдау көрсетілмейді.
-- Жалға беру/жаю/тасымалдау шекараларындағы актив идентификаторлары канондық `norito:<hex>` болып қалады; `iroha tools encode asset-id` `--definition aid:...` немесе `--alias ...` плюс `--account` арқылы пайдаланыңыз.
+- Жалға беру/жаю/тасымалдау шекараларындағы актив идентификаторлары канондық `norito:<hex>` болып қалады; `iroha tools encode asset-id` `--definition <base58-asset-definition-id>` немесе `--alias ...` плюс `--account` арқылы пайдаланыңыз.
 
 ---
 

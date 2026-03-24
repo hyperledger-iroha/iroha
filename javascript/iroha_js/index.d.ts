@@ -844,7 +844,28 @@ export interface ToriiAccountListItem {
 }
 
 export type ToriiDomainListItem = ToriiAccountListItem;
-export type ToriiAssetDefinitionListItem = ToriiAccountListItem;
+export interface ToriiAssetDefinitionAliasBinding {
+  alias: string;
+  status: "permanent" | "leased_active" | "leased_grace" | "expired_pending_cleanup";
+  lease_expiry_ms?: number | null;
+  grace_until_ms?: number | null;
+  bound_at_ms: number;
+}
+export interface ToriiAssetDefinitionListItem {
+  id: string;
+  name?: string;
+  alias?: string | null;
+  alias_binding?: ToriiAssetDefinitionAliasBinding | null;
+  description?: string | null;
+  mintable?: unknown;
+  spec?: unknown;
+  logo?: string | null;
+  metadata?: unknown;
+  owned_by?: string;
+  total_quantity?: string;
+  balance_scope_policy?: unknown;
+  confidential_policy?: unknown;
+}
 export interface ToriiNftListItem {
   id: string;
 }
@@ -7120,6 +7141,15 @@ export function canonicalRequestMessage(params: {
   body?: Buffer | ArrayBuffer | ArrayBufferView | string;
 }): Buffer;
 
+export function canonicalRequestSignatureMessage(params: {
+  method: string;
+  path: string;
+  query?: string | URLSearchParams;
+  body?: Buffer | ArrayBuffer | ArrayBufferView | string;
+  timestampMs: number;
+  nonce: string;
+}): Buffer;
+
 export function buildCanonicalRequestHeaders(params: {
   accountId: string;
   method: string;
@@ -7127,7 +7157,14 @@ export function buildCanonicalRequestHeaders(params: {
   query?: string | URLSearchParams;
   body?: Buffer | ArrayBuffer | ArrayBufferView | string;
   privateKey: ArrayBufferView | ArrayBuffer | Buffer;
-}): { "X-Iroha-Account": string; "X-Iroha-Signature": string };
+  timestampMs?: number;
+  nonce?: string;
+}): {
+  "X-Iroha-Account": string;
+  "X-Iroha-Signature": string;
+  "X-Iroha-Timestamp-Ms": string;
+  "X-Iroha-Nonce": string;
+};
 
 export function deriveConfidentialKeyset(
   spendKey: ArrayBufferView | ArrayBuffer | Buffer,

@@ -840,7 +840,7 @@ pub mod query {
     use iroha_data_model::{
         asset::{Asset, AssetDefinition, AssetEntry},
         query::{
-            asset::FindAssetById,
+            asset::{FindAssetById, FindAssetDefinitionById},
             dsl::{CompoundPredicate, EvaluatePredicate},
             error::QueryExecutionFail as Error,
             json::{EqualsCondition, InCondition, PredicateJson},
@@ -1086,7 +1086,7 @@ pub mod query {
                         let Value::String(raw) = value else {
                             return None;
                         };
-                        raw.parse::<AssetDefinitionId>().ok()
+                        AssetDefinitionId::parse_address_literal(raw).ok()
                     })
                     .collect::<BTreeSet<_>>()
                     .into_iter()
@@ -1499,6 +1499,16 @@ pub mod query {
             })
         }
     }
+
+    impl ValidSingularQuery for FindAssetDefinitionById {
+        #[metrics(+"find_asset_definition_by_id")]
+        fn execute(&self, state_ro: &impl StateReadOnly) -> Result<AssetDefinition, Error> {
+            Ok(state_ro
+                .world()
+                .asset_definition(self.asset_definition_id())?)
+        }
+    }
+
     impl ValidQuery for FindAssetsDefinitions {
         #[metrics(+"find_asset_definitions")]
         fn execute(
@@ -1509,8 +1519,13 @@ pub mod query {
             Ok(state_ro
                 .world()
                 .asset_definitions_iter()
-                .filter(move |&asset_definition| filter.applies(asset_definition))
-                .cloned())
+                .filter_map(move |asset_definition| {
+                    let effective = state_ro
+                        .world()
+                        .asset_definition(asset_definition.id())
+                        .ok()?;
+                    filter.applies(&effective).then_some(effective)
+                }))
         }
     }
 

@@ -4834,6 +4834,90 @@ pub mod json {
         pub offsets: Vec<u32>,
     }
 
+    #[cfg(any(feature = "metal-stage1", feature = "cuda-stage1", test))]
+    type Stage1HelperFn = unsafe extern "C" fn(
+        in_ptr: *const u8,
+        len: usize,
+        out_offsets: *mut u32,
+        out_capacity: usize,
+        out_len: *mut usize,
+    ) -> i32;
+
+    #[cfg(any(feature = "metal-stage1", feature = "cuda-stage1", test))]
+    fn try_build_struct_index_with_helper(
+        input: &str,
+        func: Stage1HelperFn,
+    ) -> Option<StructIndex> {
+        let bytes = input.as_bytes();
+        let mut offsets: Vec<u32> = Vec::with_capacity(bytes.len());
+        let mut out_len: usize = 0;
+        let rc = unsafe {
+            func(
+                bytes.as_ptr(),
+                bytes.len(),
+                offsets.as_mut_ptr(),
+                offsets.capacity(),
+                &mut out_len,
+            )
+        };
+        if rc != 0 || out_len > offsets.capacity() {
+            return None;
+        }
+        unsafe {
+            offsets.set_len(out_len);
+        }
+        Some(StructIndex { offsets })
+    }
+
+    #[inline]
+    fn accel_tape_is_sane(input: &str, acc: &StructIndex) -> bool {
+        let bytes = input.as_bytes();
+        let mut prev: Option<usize> = None;
+        for &off in &acc.offsets {
+            let off = off as usize;
+            if off >= bytes.len() {
+                return false;
+            }
+            if let Some(prev) = prev
+                && off <= prev
+            {
+                return false;
+            }
+            match bytes[off] {
+                b'"' | b'{' | b'}' | b'[' | b']' | b':' | b',' => {}
+                _ => return false,
+            }
+            prev = Some(off);
+        }
+        true
+    }
+
+    #[cfg(any(feature = "metal-stage1", feature = "cuda-stage1", test))]
+    fn stage1_helper_self_test<F>(mut build: F) -> bool
+    where
+        F: FnMut(&str) -> Option<StructIndex>,
+    {
+        const CASES: &[&str] = &[
+            "{\"a\":1}",
+            "{\"nested\":[{\"quote\":\"a\\\\\\\"b\"},2,3],\"tail\":true}",
+            "[{\"k\":\"v\"}, {\"esc\":\"\\\\\\\\\"}, [1,2,{\"z\":0}]]",
+        ];
+
+        for input in CASES {
+            let Some(acc) = build(input) else {
+                return false;
+            };
+            if !accel_tape_is_sane(input, &acc) {
+                return false;
+            }
+            if acc.offsets != build_struct_index_scalar(input).offsets {
+                return false;
+            }
+        }
+
+        true
+    }
+
     /// Build a structural index for `input`.
     ///
     /// Attempts a SIMD (NEON) path on AArch64 when enabled via the `simd-accel`
@@ -4859,6 +4943,15 @@ pub mod json {
                 eprintln!("norito/json: stage1-validate enabled (debug), validating accelerated tapes against scalar for inputs ≤256KiB");
             }
         });
+        if !accel_tape_is_sane(input, &acc) {
+            if crate::debug_trace_enabled() {
+                eprintln!(
+                    "norito/json: stage1 {} returned malformed offsets; falling back to scalar",
+                    tag
+                );
+            }
+            return build_struct_index_scalar(input);
+        }
         const VALIDATE_MAX_BYTES: usize = 256 * 1024;
         if input.len() <= VALIDATE_MAX_BYTES {
             let scalar = build_struct_index_scalar(input);
@@ -4879,8 +4972,138 @@ pub mod json {
     #[cfg(not(all(debug_assertions, feature = "stage1-validate")))]
     #[inline]
     #[allow(dead_code)]
-    fn validate_accel(_tag: &str, _input: &str, acc: StructIndex) -> StructIndex {
-        acc
+    fn validate_accel(tag: &str, input: &str, acc: StructIndex) -> StructIndex {
+        if accel_tape_is_sane(input, &acc) {
+            return acc;
+        }
+        if crate::debug_trace_enabled() {
+            eprintln!(
+                "norito/json: stage1 {} returned malformed offsets; falling back to scalar",
+                tag
+            );
+        }
+        build_struct_index_scalar(input)
+    }
+
+    #[cfg(test)]
+    mod accel_tape_validation_tests {
+        use std::{ptr, slice};
+
+        use super::{
+            StructIndex, build_struct_index_scalar, stage1_helper_self_test,
+            try_build_struct_index_with_helper, validate_accel,
+        };
+
+        #[test]
+        fn validate_accel_rejects_out_of_bounds_offsets() {
+            let input = "{\"a\":1}";
+            let got = validate_accel("test", input, StructIndex { offsets: vec![999] });
+            assert_eq!(got.offsets, build_struct_index_scalar(input).offsets);
+        }
+
+        #[test]
+        fn validate_accel_rejects_non_structural_offsets() {
+            let input = "{\"a\":1}";
+            let got = validate_accel("test", input, StructIndex { offsets: vec![2] });
+            assert_eq!(got.offsets, build_struct_index_scalar(input).offsets);
+        }
+
+        unsafe extern "C" fn stage1_helper_match(
+            in_ptr: *const u8,
+            len: usize,
+            out_offsets: *mut u32,
+            out_capacity: usize,
+            out_len: *mut usize,
+        ) -> i32 {
+            let input =
+                unsafe { std::str::from_utf8_unchecked(slice::from_raw_parts(in_ptr, len)) };
+            let tape = build_struct_index_scalar(input);
+            unsafe {
+                *out_len = tape.offsets.len();
+            }
+            if tape.offsets.len() > out_capacity {
+                return 2;
+            }
+            unsafe {
+                ptr::copy_nonoverlapping(tape.offsets.as_ptr(), out_offsets, tape.offsets.len());
+            }
+            0
+        }
+
+        unsafe extern "C" fn stage1_helper_mismatch(
+            in_ptr: *const u8,
+            len: usize,
+            out_offsets: *mut u32,
+            out_capacity: usize,
+            out_len: *mut usize,
+        ) -> i32 {
+            let input =
+                unsafe { std::str::from_utf8_unchecked(slice::from_raw_parts(in_ptr, len)) };
+            let mut tape = build_struct_index_scalar(input);
+            if let Some(first) = tape.offsets.first_mut() {
+                *first = first.saturating_add(1);
+            }
+            unsafe {
+                *out_len = tape.offsets.len();
+            }
+            if tape.offsets.len() > out_capacity {
+                return 2;
+            }
+            unsafe {
+                ptr::copy_nonoverlapping(tape.offsets.as_ptr(), out_offsets, tape.offsets.len());
+            }
+            0
+        }
+
+        unsafe extern "C" fn stage1_helper_error(
+            _in_ptr: *const u8,
+            _len: usize,
+            _out_offsets: *mut u32,
+            _out_capacity: usize,
+            _out_len: *mut usize,
+        ) -> i32 {
+            7
+        }
+
+        unsafe extern "C" fn stage1_helper_invalid_len(
+            _in_ptr: *const u8,
+            _len: usize,
+            _out_offsets: *mut u32,
+            out_capacity: usize,
+            out_len: *mut usize,
+        ) -> i32 {
+            unsafe {
+                *out_len = out_capacity.saturating_add(1);
+            }
+            0
+        }
+
+        #[test]
+        fn stage1_helper_self_test_accepts_matching_offsets() {
+            assert!(stage1_helper_self_test(|input| {
+                try_build_struct_index_with_helper(input, stage1_helper_match)
+            }));
+        }
+
+        #[test]
+        fn stage1_helper_self_test_rejects_mismatched_offsets() {
+            assert!(!stage1_helper_self_test(|input| {
+                try_build_struct_index_with_helper(input, stage1_helper_mismatch)
+            }));
+        }
+
+        #[test]
+        fn stage1_helper_self_test_rejects_helper_errors() {
+            assert!(!stage1_helper_self_test(|input| {
+                try_build_struct_index_with_helper(input, stage1_helper_error)
+            }));
+        }
+
+        #[test]
+        fn helper_builder_rejects_invalid_reported_length() {
+            let input = "{\"a\":1}";
+            assert!(try_build_struct_index_with_helper(input, stage1_helper_invalid_len).is_none());
+        }
     }
 
     pub fn build_struct_index(input: &str) -> StructIndex {
@@ -5539,18 +5762,9 @@ pub mod json {
         }
 
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-        type BuildTapeFn = unsafe extern "C" fn(
-            in_ptr: *const u8,
-            len: usize,
-            out_offsets: *mut u32,
-            out_capacity: usize,
-            out_len: *mut usize,
-        ) -> i32;
-
-        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         struct MetalLib {
             _handle: *mut c_void,
-            func: BuildTapeFn,
+            func: super::Stage1HelperFn,
         }
 
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -5610,7 +5824,13 @@ pub mod json {
                     let _ = dlclose(lib);
                     return None;
                 }
-                let func: BuildTapeFn = std::mem::transmute(sym);
+                let func: super::Stage1HelperFn = std::mem::transmute(sym);
+                if !super::stage1_helper_self_test(|input| {
+                    super::try_build_struct_index_with_helper(input, func)
+                }) {
+                    let _ = dlclose(lib);
+                    return None;
+                }
                 Some(MetalLib { _handle: lib, func })
             }
         }
@@ -5627,44 +5847,7 @@ pub mod json {
                 }
                 let lib = guard.as_ref()?;
 
-                let bytes = input.as_bytes();
-                let mut offsets: Vec<u32> = Vec::with_capacity(bytes.len());
-                let mut out_len: usize = 0;
-                let rc = (lib.func)(
-                    bytes.as_ptr(),
-                    bytes.len(),
-                    offsets.as_mut_ptr(),
-                    offsets.capacity(),
-                    &mut out_len,
-                );
-                if rc != 0 {
-                    return None;
-                }
-                if out_len > offsets.capacity() {
-                    return None;
-                }
-                offsets.set_len(out_len);
-                debug_assert!(
-                    {
-                        let mut ok = true;
-                        let mut prev = 0usize;
-                        for (i, off) in offsets.iter().enumerate() {
-                            let o = *off as usize;
-                            if o >= bytes.len() {
-                                ok = false;
-                                break;
-                            }
-                            if i > 0 && o < prev {
-                                ok = false;
-                                break;
-                            }
-                            prev = o;
-                        }
-                        ok
-                    },
-                    "Metal Stage-1 returned invalid structural offsets"
-                );
-                Some(StructIndex { offsets })
+                super::try_build_struct_index_with_helper(input, lib.func)
             }
             #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
             {
@@ -5692,17 +5875,9 @@ pub mod json {
 
         const RTLD_LAZY: c_int = 1;
 
-        type BuildTapeFn = unsafe extern "C" fn(
-            in_ptr: *const u8,
-            len: usize,
-            out_offsets: *mut u32,
-            out_capacity: usize,
-            out_len: *mut usize,
-        ) -> i32;
-
         struct CudaLib {
             _handle: *mut c_void,
-            func: BuildTapeFn,
+            func: super::Stage1HelperFn,
         }
 
         unsafe impl Send for CudaLib {}
@@ -5751,7 +5926,13 @@ pub mod json {
                 let _ = unsafe { dlclose(h) };
                 return None;
             }
-            let func: BuildTapeFn = unsafe { std::mem::transmute(sym) };
+            let func: super::Stage1HelperFn = unsafe { std::mem::transmute(sym) };
+            if !super::stage1_helper_self_test(|input| {
+                super::try_build_struct_index_with_helper(input, func)
+            }) {
+                let _ = unsafe { dlclose(h) };
+                return None;
+            }
             Some(CudaLib { _handle: h, func })
         }
 
@@ -5788,7 +5969,13 @@ pub mod json {
                 let _ = unsafe { dlclose(h) };
                 return None;
             }
-            let func: BuildTapeFn = unsafe { std::mem::transmute(sym) };
+            let func: super::Stage1HelperFn = unsafe { std::mem::transmute(sym) };
+            if !super::stage1_helper_self_test(|input| {
+                super::try_build_struct_index_with_helper(input, func)
+            }) {
+                let _ = unsafe { dlclose(h) };
+                return None;
+            }
             Some(CudaLib { _handle: h, func })
         }
 
@@ -5839,7 +6026,13 @@ pub mod json {
                     let _ = FreeLibrary(h);
                     continue;
                 }
-                let func: BuildTapeFn = unsafe { std::mem::transmute(sym) };
+                let func: super::Stage1HelperFn = unsafe { std::mem::transmute(sym) };
+                if !super::stage1_helper_self_test(|input| {
+                    super::try_build_struct_index_with_helper(input, func)
+                }) {
+                    let _ = FreeLibrary(h);
+                    continue;
+                }
                 return Some(CudaLib { _handle: h, func });
             }
             None
@@ -5859,44 +6052,7 @@ pub mod json {
                 }
                 let lib = guard.as_ref()?;
 
-                let bytes = input.as_bytes();
-                let mut offsets: Vec<u32> = Vec::with_capacity(bytes.len());
-                let mut out_len: usize = 0;
-                let rc = (lib.func)(
-                    bytes.as_ptr(),
-                    bytes.len(),
-                    offsets.as_mut_ptr(),
-                    offsets.capacity(),
-                    &mut out_len,
-                );
-                if rc != 0 {
-                    return None;
-                }
-                if out_len > offsets.capacity() {
-                    return None;
-                }
-                offsets.set_len(out_len);
-                debug_assert!(
-                    {
-                        let mut ok = true;
-                        let mut prev = 0usize;
-                        for (i, off) in offsets.iter().enumerate() {
-                            let o = *off as usize;
-                            if o >= bytes.len() {
-                                ok = false;
-                                break;
-                            }
-                            if i > 0 && o < prev {
-                                ok = false;
-                                break;
-                            }
-                            prev = o;
-                        }
-                        ok
-                    },
-                    "CUDA Stage-1 returned invalid structural offsets"
-                );
-                Some(StructIndex { offsets })
+                super::try_build_struct_index_with_helper(input, lib.func)
             }
         }
     }

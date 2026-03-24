@@ -313,6 +313,8 @@ pub struct SoracloudRuntimeHuggingFace {
     pub local_runner_program: String,
     /// Timeout applied to one local runner invocation.
     pub local_runner_timeout: Duration,
+    /// TTL used when the runtime emits authoritative model-host heartbeats after a successful local probe.
+    pub model_host_heartbeat_ttl: Duration,
     /// Whether the runtime may fall back to HF Inference when local execution fails.
     pub allow_inference_bridge_fallback: bool,
     /// Maximum number of files imported into the node-local shared cache for one source.
@@ -340,6 +342,9 @@ impl Default for SoracloudRuntimeHuggingFace {
             local_runner_program: defaults::soracloud_runtime::hf::LOCAL_RUNNER_PROGRAM.to_owned(),
             local_runner_timeout: Duration::from_millis(
                 defaults::soracloud_runtime::hf::LOCAL_RUNNER_TIMEOUT_MS,
+            ),
+            model_host_heartbeat_ttl: Duration::from_millis(
+                defaults::soracloud_runtime::hf::MODEL_HOST_HEARTBEAT_TTL_MS,
             ),
             allow_inference_bridge_fallback:
                 defaults::soracloud_runtime::hf::ALLOW_INFERENCE_BRIDGE_FALLBACK,
@@ -4789,6 +4794,12 @@ pub struct AppApi {
     pub max_fetch_size: NonZeroU32,
     /// Rate-limiter cost applied per requested row when backpressure is enforced.
     pub rate_limit_cost_per_row: NonZeroU32,
+    /// Maximum allowed clock skew for signed app requests.
+    pub request_signature_max_clock_skew: Duration,
+    /// TTL for app-request nonces retained for replay detection.
+    pub request_signature_nonce_ttl: Duration,
+    /// Maximum number of nonce entries held in memory for replay detection.
+    pub request_signature_replay_cache_capacity: NonZeroUsize,
 }
 
 /// Webhook delivery/backpressure configuration.
@@ -4918,6 +4929,12 @@ pub struct Torii {
     pub deploy_rate_per_origin_per_sec: Option<NonZeroU32>,
     /// Optional per-origin deploy burst capacity (tokens).
     pub deploy_burst_per_origin: Option<NonZeroU32>,
+    /// Optional public Soracloud local-read rate per remote IP (tokens/sec). None disables limiting.
+    pub soracloud_public_rate_per_ip_per_sec: Option<NonZeroU32>,
+    /// Optional public Soracloud local-read burst capacity per remote IP (tokens).
+    pub soracloud_public_burst_per_ip: Option<NonZeroU32>,
+    /// Maximum concurrent public Soracloud local-read executions.
+    pub soracloud_public_max_inflight: NonZeroUsize,
     /// Require a valid API token for app-facing endpoints.
     pub require_api_token: bool,
     /// Allowed API tokens (opaque strings). Empty means no tokens defined.
@@ -5155,6 +5172,8 @@ pub struct ToriiOperatorAuth {
     pub enabled: bool,
     /// Require mTLS at ingress before allowing operator endpoints.
     pub require_mtls: bool,
+    /// Trusted proxy CIDRs allowed to assert forwarded client certificates.
+    pub mtls_trusted_proxy_cidrs: Vec<String>,
     /// Token fallback mode for operator auth.
     pub token_fallback: OperatorTokenFallback,
     /// Token source selection for operator auth.
@@ -5186,6 +5205,7 @@ impl Default for ToriiOperatorAuth {
         Self {
             enabled: defaults::torii::operator_auth::ENABLED,
             require_mtls: defaults::torii::operator_auth::REQUIRE_MTLS,
+            mtls_trusted_proxy_cidrs: defaults::torii::operator_auth::mtls_trusted_proxy_cidrs(),
             token_fallback,
             token_source,
             tokens: defaults::torii::operator_auth::tokens(),
@@ -5443,6 +5463,8 @@ pub struct NoritoRpcTransport {
     pub enabled: bool,
     /// Require mTLS at the ingress tier before allowing Norito-RPC (surfaced via `/rpc/capabilities`).
     pub require_mtls: bool,
+    /// Trusted proxy CIDRs allowed to assert forwarded client certificates.
+    pub mtls_trusted_proxy_cidrs: Vec<String>,
     /// Explicit list of client tokens permitted during the `canary` stage.
     pub allowed_clients: Vec<String>,
     /// Current rollout stage label.
@@ -5488,6 +5510,8 @@ impl Default for NoritoRpcTransport {
         Self {
             enabled: defaults::torii::transport::norito_rpc::ENABLED,
             require_mtls: defaults::torii::transport::norito_rpc::REQUIRE_MTLS,
+            mtls_trusted_proxy_cidrs:
+                defaults::torii::transport::norito_rpc::mtls_trusted_proxy_cidrs(),
             allowed_clients: defaults::torii::transport::norito_rpc::allowed_clients(),
             stage: NoritoRpcStage::parse(defaults::torii::transport::norito_rpc::STAGE)
                 .expect("default Norito-RPC stage label is valid"),
@@ -5563,6 +5587,7 @@ impl From<user::ToriiNoritoRpcTransport> for NoritoRpcTransport {
             enabled: value.enabled,
             require_mtls: value.require_mtls,
             allowed_clients: value.allowed_clients,
+            mtls_trusted_proxy_cidrs: value.mtls_trusted_proxy_cidrs,
             stage,
         }
     }
@@ -5575,8 +5600,6 @@ pub struct ToriiOnboarding {
     pub authority: AccountId,
     /// Private key corresponding to the onboarding authority.
     pub private_key: ExposedPrivateKey,
-    /// Optional domain restriction for registered accounts.
-    pub allowed_domain: Option<DomainId>,
     /// Permission names that onboarding may grant to newly registered accounts.
     pub allowed_permissions: Vec<String>,
     /// Optional sponsor account granted via `CanUseFeeSponsor`.
@@ -7559,6 +7582,10 @@ mod tests_npos_timeouts {
             auth.token_source,
             OperatorTokenSource::OperatorTokens
         ));
+        assert_eq!(
+            auth.mtls_trusted_proxy_cidrs,
+            defaults::torii::operator_auth::mtls_trusted_proxy_cidrs()
+        );
     }
 
     #[test]

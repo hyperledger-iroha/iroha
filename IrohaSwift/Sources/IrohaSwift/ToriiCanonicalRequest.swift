@@ -5,6 +5,8 @@ import CryptoKit
 public enum ToriiCanonicalRequest {
     public static let headerAccount = "X-Iroha-Account"
     public static let headerSignature = "X-Iroha-Signature"
+    public static let headerTimestampMs = "X-Iroha-Timestamp-Ms"
+    public static let headerNonce = "X-Iroha-Nonce"
 
     /// Canonicalise a raw query string by decoding, sorting, and re-encoding.
     public static func canonicalQueryString(from raw: String?) -> String {
@@ -43,18 +45,39 @@ public enum ToriiCanonicalRequest {
         return Data(rendered.utf8)
     }
 
-    /// Build canonical signing headers (`X-Iroha-Account`/`X-Iroha-Signature`).
+    /// Build canonical request bytes for signing with freshness metadata.
+    public static func signatureMessage(method: String,
+                                        url: URL,
+                                        body: Data? = nil,
+                                        timestampMs: UInt64,
+                                        nonce: String) -> Data {
+        let base = canonicalRequestMessage(method: method, url: url, body: body)
+        let rendered = "\(String(decoding: base, as: UTF8.self))\n\(timestampMs)\n\(nonce)"
+        return Data(rendered.utf8)
+    }
+
+    /// Build canonical signing headers including freshness metadata.
     public static func buildHeaders(method: String,
                                     url: URL,
                                     body: Data? = nil,
                                     accountId: String,
-                                    privateKey: Data) throws -> [String: String] {
-        let message = canonicalRequestMessage(method: method, url: url, body: body)
+                                    privateKey: Data,
+                                    timestampMs: UInt64 = UInt64(Date().timeIntervalSince1970 * 1000),
+                                    nonce: String = UUID().uuidString.replacingOccurrences(of: "-", with: "")) throws -> [String: String] {
+        let message = signatureMessage(
+            method: method,
+            url: url,
+            body: body,
+            timestampMs: timestampMs,
+            nonce: nonce
+        )
         let signer = try SigningKey.ed25519(privateKey: privateKey)
         let signature = try signer.sign(message)
         return [
             headerAccount: accountId,
             headerSignature: signature.base64EncodedString(),
+            headerTimestampMs: String(timestampMs),
+            headerNonce: nonce,
         ]
     }
 

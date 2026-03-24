@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.android.model.instructions;
 
+import org.hyperledger.iroha.android.address.AccountAddress;
+import org.hyperledger.iroha.android.address.PublicKeyCodec;
 import java.util.Optional;
 import org.hyperledger.iroha.android.client.IdentifierResolutionPayload;
 import org.hyperledger.iroha.android.client.IdentifierResolutionReceipt;
@@ -10,8 +12,7 @@ import org.hyperledger.iroha.norito.NoritoHeader;
 import org.hyperledger.iroha.norito.TypeAdapter;
 
 public final class ClaimIdentifierWirePayloadEncoderTests {
-  private static final String ACCOUNT_ID =
-      "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@wonderland";
+  private static final String ACCOUNT_ID = canonicalAccountId();
 
   private static final TypeAdapter<Optional<byte[]>> OPTIONAL_BYTES =
       NoritoAdapters.option(NoritoAdapters.rawByteVecAdapter());
@@ -97,5 +98,21 @@ public final class ClaimIdentifierWirePayloadEncoderTests {
       out[i / 2] = (byte) ((high << 4) | low);
     }
     return out;
+  }
+
+  private static String canonicalAccountId() {
+    final PublicKeyCodec.PublicKeyPayload payload =
+        PublicKeyCodec.decodePublicKeyLiteral(
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03");
+    if (payload == null) {
+      throw new IllegalStateException("expected valid ED25519 fixture");
+    }
+    try {
+      return AccountAddress.fromAccount(
+              payload.keyBytes(), PublicKeyCodec.algorithmForCurveId(payload.curveId()))
+          .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+    } catch (final Exception ex) {
+      throw new IllegalStateException("failed to build canonical account fixture", ex);
+    }
   }
 }

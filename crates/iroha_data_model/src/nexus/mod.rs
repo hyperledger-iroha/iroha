@@ -869,6 +869,12 @@ impl DataSpaceCatalog {
     pub fn by_alias(&self, alias: &str) -> Option<&DataSpaceMetadata> {
         self.entries.iter().find(|entry| entry.alias == alias)
     }
+
+    /// Find an entry by identifier.
+    #[must_use]
+    pub fn by_id(&self, id: DataSpaceId) -> Option<&DataSpaceMetadata> {
+        self.entries.iter().find(|entry| entry.id == id)
+    }
 }
 
 impl Default for DataSpaceCatalog {

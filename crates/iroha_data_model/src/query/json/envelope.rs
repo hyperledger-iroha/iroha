@@ -169,8 +169,17 @@ pub enum SingularQueryJson {
     },
     /// Looks up an asset by identifier.
     FindAssetById {
-        /// String representation of the asset identifier.
-        asset_id: String,
+        /// Asset definition address identifying the asset type.
+        asset: String,
+        /// Canonical I105 account identifier owning the asset.
+        account_id: String,
+        /// Optional balance scope selector.
+        scope: Option<Value>,
+    },
+    /// Looks up an asset definition by identifier.
+    FindAssetDefinitionById {
+        /// Asset definition address identifying the asset type.
+        asset: String,
     },
     /// Looks up a contract manifest by code hash.
     FindContractManifestByCodeHash {
@@ -197,9 +206,22 @@ impl SingularQueryJson {
                 payload.insert("code_hash".to_owned(), Value::String(code_hash.clone()));
                 map.insert("payload".to_owned(), Value::Object(payload));
             }
-            Self::FindAssetById { asset_id } => {
+            Self::FindAssetById {
+                asset,
+                account_id,
+                scope,
+            } => {
                 let mut payload = Map::new();
-                payload.insert("asset_id".to_owned(), Value::String(asset_id.clone()));
+                payload.insert("asset".to_owned(), Value::String(asset.clone()));
+                payload.insert("account_id".to_owned(), Value::String(account_id.clone()));
+                if let Some(scope) = scope {
+                    payload.insert("scope".to_owned(), scope.clone());
+                }
+                map.insert("payload".to_owned(), Value::Object(payload));
+            }
+            Self::FindAssetDefinitionById { asset } => {
+                let mut payload = Map::new();
+                payload.insert("asset".to_owned(), Value::String(asset.clone()));
                 map.insert("payload".to_owned(), Value::Object(payload));
             }
             Self::FindDomainsByAccountId { account_id } => {
@@ -281,12 +303,31 @@ impl SingularQueryJson {
                     .get("payload")
                     .and_then(Value::as_object)
                     .ok_or(QueryJsonError::MissingField("singular", "payload"))?;
-                let asset_id = payload
-                    .get("asset_id")
+                let asset = payload
+                    .get("asset")
                     .and_then(Value::as_str)
-                    .ok_or(QueryJsonError::MissingField("payload", "asset_id"))?;
+                    .ok_or(QueryJsonError::MissingField("payload", "asset"))?;
+                let account_id = payload
+                    .get("account_id")
+                    .and_then(Value::as_str)
+                    .ok_or(QueryJsonError::MissingField("payload", "account_id"))?;
                 Ok(SingularQueryJson::FindAssetById {
-                    asset_id: asset_id.to_owned(),
+                    asset: asset.to_owned(),
+                    account_id: account_id.to_owned(),
+                    scope: payload.get("scope").cloned(),
+                })
+            }
+            "FindAssetDefinitionById" => {
+                let payload = map
+                    .get("payload")
+                    .and_then(Value::as_object)
+                    .ok_or(QueryJsonError::MissingField("singular", "payload"))?;
+                let asset = payload
+                    .get("asset")
+                    .and_then(Value::as_str)
+                    .ok_or(QueryJsonError::MissingField("payload", "asset"))?;
+                Ok(SingularQueryJson::FindAssetDefinitionById {
+                    asset: asset.to_owned(),
                 })
             }
             "FindTwitterBindingByHash" => {
@@ -314,6 +355,7 @@ impl SingularQueryJson {
             SingularQueryJson::FindDomainsByAccountId { .. } => "FindDomainsByAccountId",
             SingularQueryJson::FindAccountIdsByDomainId { .. } => "FindAccountIdsByDomainId",
             SingularQueryJson::FindAssetById { .. } => "FindAssetById",
+            SingularQueryJson::FindAssetDefinitionById { .. } => "FindAssetDefinitionById",
             SingularQueryJson::FindContractManifestByCodeHash { .. } => {
                 "FindContractManifestByCodeHash"
             }
@@ -350,12 +392,34 @@ impl SingularQueryJson {
                     crate::query::domain::prelude::FindAccountIdsByDomainId::new(id),
                 ))
             }
-            SingularQueryJson::FindAssetById { asset_id } => {
-                let id = asset_id
-                    .parse()
-                    .map_err(|_| QueryJsonError::InvalidField("payload", "asset_id"))?;
+            SingularQueryJson::FindAssetById {
+                asset,
+                account_id,
+                scope,
+            } => {
+                let definition = crate::asset::AssetDefinitionId::parse_address_literal(&asset)
+                    .map_err(|_| QueryJsonError::InvalidField("payload", "asset"))?;
+                let account = crate::account::AccountId::parse_encoded(&account_id)
+                    .map(crate::account::ParsedAccountId::into_account_id)
+                    .map_err(|_| QueryJsonError::InvalidField("payload", "account_id"))?;
+                let scope = scope
+                    .map(|value| {
+                        json::from_value::<crate::asset::AssetBalanceScope>(value)
+                            .map_err(|_| QueryJsonError::InvalidField("payload", "scope"))
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
                 Ok(SingularQueryBox::FindAssetById(
-                    crate::query::asset::prelude::FindAssetById::new(id),
+                    crate::query::asset::prelude::FindAssetById::new(
+                        crate::asset::AssetId::with_scope(definition, account, scope),
+                    ),
+                ))
+            }
+            SingularQueryJson::FindAssetDefinitionById { asset } => {
+                let id = crate::asset::AssetDefinitionId::parse_address_literal(&asset)
+                    .map_err(|_| QueryJsonError::InvalidField("payload", "asset"))?;
+                Ok(SingularQueryBox::FindAssetDefinitionById(
+                    crate::query::asset::prelude::FindAssetDefinitionById::new(id),
                 ))
             }
             SingularQueryJson::FindContractManifestByCodeHash { code_hash } => {
@@ -1019,6 +1083,65 @@ mod tests {
             }
             other => panic!("unexpected query variant: {other:?}"),
         }
+    }
+
+    #[test]
+    fn find_asset_queries_roundtrip_with_public_selectors() {
+        let definition_id = crate::asset::AssetDefinitionId::new(
+            "wonderland"
+                .parse::<crate::domain::DomainId>()
+                .expect("valid domain id"),
+            "rose".parse::<crate::Name>().expect("valid asset name"),
+        );
+        let keypair = KeyPair::from_seed(vec![0xCD; 32], Algorithm::Ed25519);
+        let account_id = crate::account::AccountId::new(keypair.public_key().clone());
+
+        let singular = SingularQueryJson::FindAssetById {
+            asset: definition_id.to_string(),
+            account_id: account_id.to_string(),
+            scope: Some(norito::json!({ "kind": "Global" })),
+        };
+        let envelope = QueryEnvelopeJson::Singular(singular.clone());
+        let json = norito::json::to_json(&envelope).expect("serialize");
+        let parsed: QueryEnvelopeJson = norito::json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed, envelope);
+
+        let query = match parsed {
+            QueryEnvelopeJson::Singular(s) => s.into_box().expect("into box"),
+            _ => unreachable!(),
+        };
+        match query {
+            SingularQueryBox::FindAssetById(q) => {
+                assert_eq!(q.asset_id().definition(), &definition_id);
+                assert_eq!(q.asset_id().account(), &account_id);
+                assert_eq!(
+                    q.asset_id().scope(),
+                    &crate::asset::AssetBalanceScope::Global
+                );
+            }
+            other => panic!("unexpected query variant: {other:?}"),
+        }
+
+        let definition_query = SingularQueryJson::FindAssetDefinitionById {
+            asset: definition_id.to_string(),
+        };
+        let query = definition_query
+            .into_box()
+            .expect("query conversion succeeds");
+        match query {
+            SingularQueryBox::FindAssetDefinitionById(q) => {
+                assert_eq!(q.asset_definition_id(), &definition_id);
+            }
+            other => panic!("unexpected query variant: {other:?}"),
+        }
+
+        let legacy = SingularQueryJson::FindAssetDefinitionById {
+            asset: "aid:2f17c72466f84a4bb8a8e24884fdcd2f".to_owned(),
+        };
+        let err = legacy
+            .into_box()
+            .expect_err("legacy aid literal must be rejected");
+        assert_eq!(err, QueryJsonError::InvalidField("payload", "asset"));
     }
 
     #[test]

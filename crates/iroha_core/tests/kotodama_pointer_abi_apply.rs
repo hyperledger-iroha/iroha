@@ -69,8 +69,8 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
     let mut tx = block.transaction();
     // Setup: register domains required by account ids and asset definition.
     let account_domain_id: DomainId = "wonderland".parse().unwrap();
-    let asset_def =
-        AssetDefinitionId::parse_aid_literal(&sample_asset_literal).expect("canonical aid literal");
+    let asset_def = AssetDefinitionId::parse_address_literal(&sample_asset_literal)
+        .expect("canonical asset definition literal");
     let reg_account_domain =
         RegisterBox::from(Register::domain(Domain::new(account_domain_id.clone())));
     let asset_domain_id = asset_def.domain().clone();

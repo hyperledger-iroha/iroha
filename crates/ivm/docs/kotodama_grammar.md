@@ -152,7 +152,7 @@ Structured data-trigger example:
 register_trigger cbuae_aed_to_pkr_asset_added {
   call run;
   on data asset added {
-    asset_definition "aid:6872454e9c044641aa581ec5f3801619";
+    asset_definition "66owaQmAQMuHxPzxUN3bqZ6FJfDa";
   }
 }
 ```

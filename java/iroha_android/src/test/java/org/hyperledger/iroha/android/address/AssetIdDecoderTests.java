@@ -22,7 +22,7 @@ public final class AssetIdDecoderTests {
     isNoritoEncodedReturnsTrueForNoritoPrefix();
     isNoritoEncodedReturnsFalseForHashFormat();
     isNoritoEncodedReturnsFalseForNull();
-    decodeExtractsAidHexFromNoritoEncodedAssetId();
+    decodeExtractsDefinitionAddressFromNoritoEncodedAssetId();
     decodeRoundtripForRoseInWonderland();
     decodeRejectsWrongAssetIdSchema();
     decodeRejectsMalformedAccountPayload();
@@ -30,11 +30,11 @@ public final class AssetIdDecoderTests {
     decodeRejectsMalformedScopePayload();
     decodeRejectsTrailingBytesAfterScopePayload();
     decodeRejectsNegativeAccountLength();
-    decodeDefinitionExtractsAidHex();
+    decodeDefinitionExtractsDefinitionAddress();
     decodeDefinitionHandlesRaw16BytePayload();
     decodeDefinitionRejectsWrongSchema();
     decodeDefinitionRejectsUnsupportedLayoutFlags();
-    aidHexStartsWithAidPrefix();
+    decodedAddressUsesCanonicalBase58();
     System.out.println("[IrohaAndroid] AssetIdDecoder tests passed.");
   }
 
@@ -53,15 +53,15 @@ public final class AssetIdDecoderTests {
         : "isNoritoEncoded must return false for null";
   }
 
-  private static void decodeExtractsAidHexFromNoritoEncodedAssetId() {
+  private static void decodeExtractsDefinitionAddressFromNoritoEncodedAssetId() {
     final String encoded = AssetIdEncoder.encodeAssetId(
         "cabbage", "garden_of_live_flowers", ED25519_KEY);
 
     final AssetIdDecoder.AssetDefinition result = AssetIdDecoder.decode(encoded);
     final String expectedAid = AssetDefinitionIdEncoder.encode("cabbage", "garden_of_live_flowers");
 
-    assert expectedAid.equals(result.aidHex())
-        : "decoded aidHex must match expected aid for cabbage#garden_of_live_flowers";
+    assert expectedAid.equals(result.address())
+        : "decoded address must match expected asset-definition address";
   }
 
   private static void decodeRoundtripForRoseInWonderland() {
@@ -71,8 +71,8 @@ public final class AssetIdDecoderTests {
     final AssetIdDecoder.AssetDefinition result = AssetIdDecoder.decode(encoded);
     final String expectedAid = AssetDefinitionIdEncoder.encode("rose", "wonderland");
 
-    assert expectedAid.equals(result.aidHex())
-        : "decoded aidHex must match expected aid for rose#wonderland";
+    assert expectedAid.equals(result.address())
+        : "decoded address must match expected asset-definition address";
   }
 
   private static void decodeRejectsWrongAssetIdSchema() {
@@ -196,17 +196,17 @@ public final class AssetIdDecoderTests {
     assert threw : "decode must reject negative account field lengths";
   }
 
-  private static void decodeDefinitionExtractsAidHex() {
+  private static void decodeDefinitionExtractsDefinitionAddress() {
     final String encoded = AssetIdEncoder.encodeDefinition("rose", "wonderland");
     final AssetIdDecoder.AssetDefinition result = AssetIdDecoder.decodeDefinition(encoded);
     final String expectedAid = AssetDefinitionIdEncoder.encode("rose", "wonderland");
 
-    assert expectedAid.equals(result.aidHex())
-        : "decoded aidHex must match expected aid for rose#wonderland";
+    assert expectedAid.equals(result.address())
+        : "decoded address must match expected asset-definition address";
   }
 
   private static void decodeDefinitionHandlesRaw16BytePayload() {
-    final byte[] aidBytes = AssetDefinitionIdEncoder.computeAidBytes("rose", "wonderland");
+    final byte[] aidBytes = AssetDefinitionIdEncoder.computeDefinitionBytes("rose", "wonderland");
     final byte[] schemaHash = AssetIdEncoder.schemaHashForRustType(
         "iroha_data_model::asset::id::model::AssetDefinitionId");
     final long checksum = CRC64.compute(aidBytes);
@@ -226,8 +226,8 @@ public final class AssetIdDecoderTests {
     final AssetIdDecoder.AssetDefinition result = AssetIdDecoder.decodeDefinition(sb.toString());
     final String expectedAid = AssetDefinitionIdEncoder.encode("rose", "wonderland");
 
-    assert expectedAid.equals(result.aidHex())
-        : "raw 16-byte fast path must produce same aidHex as per-element encoding";
+    assert expectedAid.equals(result.address())
+        : "raw 16-byte fast path must produce the same address as per-element encoding";
   }
 
   private static void decodeDefinitionRejectsWrongSchema() {
@@ -264,11 +264,12 @@ public final class AssetIdDecoderTests {
     assert threw : "decodeDefinition must reject unsupported AssetDefinitionId layout flags";
   }
 
-  private static void aidHexStartsWithAidPrefix() {
+  private static void decodedAddressUsesCanonicalBase58() {
     final String encoded = AssetIdEncoder.encodeDefinition("pkr", "sbp");
     final AssetIdDecoder.AssetDefinition result = AssetIdDecoder.decodeDefinition(encoded);
 
-    assert result.aidHex().startsWith("aid:") : "aidHex must start with aid: prefix";
+    assert AssetDefinitionIdEncoder.isCanonicalAddress(result.address())
+        : "decoded definition must use canonical Base58 address form";
   }
 
   private static String rewriteSchemaHash(final String noritoLiteral, final byte[] schemaHash) {

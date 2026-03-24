@@ -16,13 +16,18 @@ use iroha_core::{
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     Registrable,
-    account::AccountId,
+    account::{AccountAddress, AccountId, rekey::AccountLabel},
     block::BlockHeader,
     domain::DomainId,
+    metadata::Metadata,
     nexus::DataSpaceId,
     peer::PeerId,
     permission::Permission,
     prelude::{Account, Domain, ExposedPrivateKey},
+    sns::{NameControllerV1, NameRecordV1},
+};
+use iroha_executor_data_model::permission::account::{
+    AccountAliasPermissionScope, CanManageAccountAlias,
 };
 use iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManifest;
 use iroha_torii::{Torii, json_entry, json_object};
@@ -31,6 +36,28 @@ use tower::ServiceExt as _;
 
 #[path = "fixtures.rs"]
 mod fixtures;
+
+fn seed_account_alias_lease(world: &mut World, owner: &AccountId, literal: &str) {
+    let catalog = iroha_data_model::nexus::DataSpaceCatalog::default();
+    let alias = AccountLabel::from_literal(literal, &catalog).expect("valid canonical alias");
+    let selector = iroha_core::sns::selector_for_account_alias(&alias, &catalog).expect("selector");
+    let address = AccountAddress::from_account_id(owner).expect("account address");
+    let record = NameRecordV1::new(
+        selector.clone(),
+        owner.clone(),
+        vec![NameControllerV1::account(&address)],
+        0,
+        0,
+        4_000_000_000_000,
+        4_100_000_000_000,
+        4_200_000_000_000,
+        Metadata::default(),
+    );
+    world.smart_contract_state_mut_for_testing().insert(
+        iroha_core::sns::record_storage_key(&selector),
+        norito::codec::Encode::encode(&record),
+    );
+}
 
 #[tokio::test]
 async fn accounts_onboard_publishes_global_manifest_and_binding() {
@@ -47,6 +74,7 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
     let authority_account =
         Account::new(authority_id.clone().to_account_id(domain_id.clone())).build(&authority_id);
     let mut world = World::with([domain], [authority_account], []);
+    seed_account_alias_lease(&mut world, &authority_id, "p2p-user@universal");
     fixtures::seed_peer(&mut world, local_peer_id.clone());
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     {
@@ -69,6 +97,12 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
                 dataspace: DataSpaceId::GLOBAL,
             }),
         );
+        stx.world_mut_for_testing().add_account_permission(
+            &authority_id,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::GLOBAL),
+            }),
+        );
         stx.apply();
         block.commit().expect("commit should persist permission");
     }
@@ -76,7 +110,6 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
     cfg.torii.onboarding = Some(iroha_config::parameters::actual::ToriiOnboarding {
         authority: authority_id.clone(),
         private_key: ExposedPrivateKey(authority_kp.private_key().clone()),
-        allowed_domain: Some(domain_id.clone()),
         allowed_permissions: Vec::new(),
         fee_sponsor_account: None,
     });
@@ -146,7 +179,7 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
     let user_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
     let user_id = AccountId::new(user_kp.public_key().clone());
     let body = json_object(vec![
-        json_entry("alias", "p2p-user"),
+        json_entry("alias", "p2p-user@universal"),
         json_entry("account_id", user_id.to_string()),
     ]);
     let body = norito::json::to_json(&body).expect("serialize onboarding request");
@@ -220,13 +253,36 @@ async fn accounts_onboard_multisig_registers_multisig_account() {
     let authority_account =
         Account::new(authority_id.clone().to_account_id(domain_id.clone())).build(&authority_id);
     let mut world = World::with([domain], [authority_account], []);
+    seed_account_alias_lease(&mut world, &authority_id, "multisig-company@universal");
     fixtures::seed_peer(&mut world, local_peer_id.clone());
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
+    {
+        let height_u64 = u64::try_from(state.view().height())
+            .unwrap_or(0)
+            .saturating_add(1);
+        let header = BlockHeader::new(
+            NonZeroU64::new(height_u64).expect("height>0"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        stx.world_mut_for_testing().add_account_permission(
+            &authority_id,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::GLOBAL),
+            }),
+        );
+        stx.apply();
+        block.commit().expect("commit should persist permission");
+    }
 
     cfg.torii.onboarding = Some(iroha_config::parameters::actual::ToriiOnboarding {
         authority: authority_id.clone(),
         private_key: ExposedPrivateKey(authority_kp.private_key().clone()),
-        allowed_domain: Some(domain_id.clone()),
         allowed_permissions: Vec::new(),
         fee_sponsor_account: None,
     });
@@ -304,7 +360,7 @@ async fn accounts_onboard_multisig_registers_multisig_account() {
             .clone(),
     );
     let body = json_object(vec![
-        json_entry("alias", "multisig-company"),
+        json_entry("alias", "multisig-company@universal"),
         json_entry("required_signers", 2_u64),
         json_entry(
             "member_account_ids",

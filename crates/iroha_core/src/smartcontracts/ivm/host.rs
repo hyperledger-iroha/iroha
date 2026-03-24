@@ -689,8 +689,8 @@ pub trait QueryStateRefOps {
     /// Returns an [`ivm::VMError`] if the alias is missing or resolves ambiguously.
     fn resolve_account_alias(
         &self,
-        label: &Name,
-        domain: &DomainId,
+        authority: &AccountId,
+        alias: &str,
     ) -> Result<AccountId, ivm::VMError>;
     /// Resolve subscription context for a trigger identifier.
     ///
@@ -722,21 +722,21 @@ pub trait QueryStateRefOps {
 impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
     fn resolve_account_alias(
         &self,
-        label: &Name,
-        domain: &DomainId,
+        authority: &AccountId,
+        alias: &str,
     ) -> Result<AccountId, ivm::VMError> {
         match *self {
             QueryStateRef::View(view) => {
-                CoreHostImpl::<NoQueryState>::resolve_account_alias(view, label, domain)
+                CoreHostImpl::<NoQueryState>::resolve_account_alias(view, authority, alias)
             }
             QueryStateRef::QueryView(view) => {
-                CoreHostImpl::<NoQueryState>::resolve_account_alias(view, label, domain)
+                CoreHostImpl::<NoQueryState>::resolve_account_alias(view, authority, alias)
             }
             QueryStateRef::Block(block) => {
-                CoreHostImpl::<NoQueryState>::resolve_account_alias(block, label, domain)
+                CoreHostImpl::<NoQueryState>::resolve_account_alias(block, authority, alias)
             }
             QueryStateRef::Transaction(tx) => {
-                CoreHostImpl::<NoQueryState>::resolve_account_alias(tx, label, domain)
+                CoreHostImpl::<NoQueryState>::resolve_account_alias(tx, authority, alias)
             }
         }
     }
@@ -2411,6 +2411,24 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 decode_from_bytes(&owned).map_err(|_| ivm::VMError::DecodeError)
             }
         }
+    }
+
+    /// Decode a blob pointer-ABI TLV into owned bytes.
+    ///
+    /// # Errors
+    /// Returns an error if the pointer is invalid for the active ABI policy.
+    pub fn decode_tlv_blob(vm: &IVM, ptr: u64) -> Result<Vec<u8>, ivm::VMError> {
+        let tlv = vm.memory.validate_tlv(ptr)?;
+        if tlv.type_id != PointerType::Blob {
+            return Err(ivm::VMError::NoritoInvalid);
+        }
+        if !is_type_allowed_for_policy(vm.syscall_policy(), PointerType::Blob) {
+            return Err(ivm::VMError::AbiTypeNotAllowed {
+                abi: vm.abi_version(),
+                type_id: PointerType::Blob as u16,
+            });
+        }
+        Ok(tlv.payload.to_vec())
     }
 
     /// Decode a JSON pointer-ABI TLV containing Norito-framed JSON.
@@ -4498,10 +4516,18 @@ where
 impl<QS> CoreHostImpl<QS> {
     fn resolve_account_alias<R: StateReadOnly>(
         state: &R,
-        label: &Name,
-        domain: &DomainId,
+        authority: &AccountId,
+        alias: &str,
     ) -> Result<AccountId, ivm::VMError> {
-        let alias_label = AccountLabel::new(domain.clone(), label.clone());
+        let alias_label = AccountLabel::from_literal(alias, &state.nexus().dataspace_catalog)
+            .map_err(|_| ivm::VMError::DecodeError)?;
+        if !crate::alias::authority_can_resolve_account_alias(
+            state.world(),
+            authority,
+            &alias_label,
+        ) {
+            return Err(ivm::VMError::PermissionDenied);
+        }
         if let Some(account_id) = state.world().account_aliases().get(&alias_label).cloned() {
             return Ok(account_id);
         }
@@ -4520,7 +4546,7 @@ impl<QS> CoreHostImpl<QS> {
             }
         }
 
-        matched_account_id.ok_or(ivm::VMError::PermissionDenied)
+        matched_account_id.ok_or(ivm::VMError::DecodeError)
     }
 
     /// Set the trigger identifier for the current execution.
@@ -5189,15 +5215,15 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL => self.subscription_bill(),
             ivm::syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE => self.subscription_record_usage(),
             ivm::syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS => {
-                let label_ptr = vm.register(10);
-                let domain_ptr = vm.register(11);
-                let label: Name = Self::decode_tlv_typed(vm, label_ptr, PointerType::Name)?;
-                let domain: DomainId =
-                    Self::decode_tlv_typed(vm, domain_ptr, PointerType::DomainId)?;
+                let alias_ptr = vm.register(10);
+                let alias_bytes = Self::decode_tlv_blob(vm, alias_ptr)?;
+                let alias_literal =
+                    String::from_utf8(alias_bytes).map_err(|_| ivm::VMError::DecodeError)?;
                 let Some(state_ref) = self.query_state.get() else {
                     return Err(ivm::VMError::NotImplemented { syscall: number });
                 };
-                let account_id = state_ref.resolve_account_alias(&label, &domain)?;
+                let account_id =
+                    state_ref.resolve_account_alias(&self.authority, alias_literal.trim())?;
                 let payload =
                     norito::to_bytes(&account_id).map_err(|_| ivm::VMError::NoritoInvalid)?;
                 let payload_len = Self::len_to_u32(payload.len())?;
@@ -8313,6 +8339,9 @@ mod tests {
             parameters::{FetchSize, ForwardCursor, Pagination, QueryParams, Sorting},
         },
     };
+    use iroha_executor_data_model::permission::account::{
+        AccountAliasPermissionScope, CanResolveAccountAlias,
+    };
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use ivm::{IVM, encoding, instruction, syscalls as ivm_sys};
     use nonzero_ext::nonzero;
@@ -9600,6 +9629,8 @@ mod tests {
         let alias_label: Name = "banking".parse().expect("alias label");
         let alias_account_id: AccountId = fixture_account_in_domain("banking", &alias_domain_label);
         let domain = Domain::new(alias_domain.clone()).build(&authority);
+        let authority_account =
+            Account::new(authority.clone().to_account_id(alias_domain.clone())).build(&authority);
         let aliased_account =
             Account::new(alias_account_id.clone().to_account_id(alias_domain.clone()))
                 .with_label(Some(AccountLabel::new(
@@ -9607,19 +9638,35 @@ mod tests {
                     alias_label.clone(),
                 )))
                 .build(&authority);
-        let world = World::with([domain], [aliased_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
+        let world = World::with([domain], [authority_account, aliased_account], []);
         let state = State::new_for_testing(world, kura, query);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.world_mut_for_testing().add_account_permission(
+            &authority,
+            Permission::from(CanResolveAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::GLOBAL),
+            }),
+        );
+        tx.world_mut_for_testing().add_account_permission(
+            &authority,
+            Permission::from(CanResolveAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(alias_domain.clone()),
+            }),
+        );
+        tx.apply();
+        block.commit().expect("commit permissions");
         let view = state.view();
         let mut host = CoreHostImpl::new(authority);
         host.set_query_state(&view);
         let mut vm = IVM::new(1_000_000);
 
-        let label_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&alias_label));
-        let domain_ptr = store_tlv(&mut vm, PointerType::DomainId, &norito_blob(&alias_domain));
-        vm.set_register(10, label_ptr);
-        vm.set_register(11, domain_ptr);
+        let alias_literal = format!("{alias_label}@{alias_domain_label}.universal");
+        let alias_ptr = store_tlv(&mut vm, PointerType::Blob, alias_literal.as_bytes());
+        vm.set_register(10, alias_ptr);
 
         host.syscall(ivm_sys::SYSCALL_RESOLVE_ACCOUNT_ALIAS, &mut vm)
             .expect("resolve alias syscall");

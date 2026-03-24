@@ -173,7 +173,7 @@ impl<T: Write> RunArgs<T> for LocalnetWizardArgs {
             for i in 0..count {
                 let default_id =
                     canonical_asset_definition_literal("wonderland", &format!("asset{i}"));
-                let id = Text::new("Asset definition id (aid:<32-lower-hex>)")
+                let id = Text::new("Asset definition id (Base58)")
                     .with_default(&default_id)
                     .prompt()?;
                 let name = Text::new("Asset display name")

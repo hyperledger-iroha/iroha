@@ -8,6 +8,7 @@ public final class AssetIdLiteralTests {
 
   public static void main(final String[] args) {
     encodeFromPartsRejectsAliasDefinition();
+    encodeFromPartsRejectsLegacyTextDefinition();
     encodeFromPartsRejectsAliasAccount();
     encodeFromPartsProducesNoritoLiteralWhenNativeAvailable();
     System.out.println("[IrohaAndroid] AssetIdLiteral tests passed.");
@@ -17,17 +18,29 @@ public final class AssetIdLiteralTests {
     final String accountId = sampleI105(0x51);
     boolean threw = false;
     try {
-      AssetIdLiteral.encodeFromParts("usd#issuer@main", accountId);
+      AssetIdLiteral.encodeFromParts("usd#issuer.main", accountId);
     } catch (final IllegalArgumentException ex) {
       threw = ex.getMessage() != null && ex.getMessage().contains("aliases require online");
     }
     assert threw : "Asset definition aliases must be rejected for offline-only encoding";
   }
 
-  private static void encodeFromPartsRejectsAliasAccount() {
+  private static void encodeFromPartsRejectsLegacyTextDefinition() {
+    final String accountId = sampleI105(0x53);
     boolean threw = false;
     try {
-      AssetIdLiteral.encodeFromParts("usd#wonderland", "alice@wonderland");
+      AssetIdLiteral.encodeFromParts("usd#wonderland", accountId);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage() != null && ex.getMessage().contains("canonical definition id");
+    }
+    assert threw : "Legacy text asset definitions must be rejected";
+  }
+
+  private static void encodeFromPartsRejectsAliasAccount() {
+    final String definitionAddress = AssetDefinitionIdEncoder.encode("usd", "wonderland");
+    boolean threw = false;
+    try {
+      AssetIdLiteral.encodeFromParts(definitionAddress, "alice@wonderland");
     } catch (final IllegalArgumentException ex) {
       threw = ex.getMessage() != null && ex.getMessage().contains("must not include @domain");
     }
@@ -41,8 +54,8 @@ public final class AssetIdLiteralTests {
       return;
     }
     final String accountId = sampleI105(0x52);
-    final String literal =
-        AssetIdLiteral.encodeFromParts("usd#wonderland", accountId);
+    final String definitionAddress = AssetDefinitionIdEncoder.encode("usd", "wonderland");
+    final String literal = AssetIdLiteral.encodeFromParts(definitionAddress, accountId);
     assert literal.startsWith("norito:") : "Encoded asset id must use norito prefix";
   }
 

@@ -1126,8 +1126,6 @@ pub struct RecordSoracloudPrivateInferenceCheckpoint {
     pub xor_cost_nanos: u128,
     /// Deterministic checkpoint being published.
     pub checkpoint: SoraPrivateInferenceCheckpointV1,
-    /// Provenance attestation over the checkpoint payload.
-    pub provenance: ManifestProvenance,
 }
 
 impl crate::seal::Instruction for RecordSoracloudPrivateInferenceCheckpoint {}

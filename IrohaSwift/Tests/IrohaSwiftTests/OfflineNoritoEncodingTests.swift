@@ -36,10 +36,13 @@ final class OfflineNoritoEncodingTests: XCTestCase {
             throw XCTSkip("connect_norito_encode_asset_id_literal is unavailable in this runtime")
         }
         let accountId = try makeI105(seed: 7)
-        let literal = try OfflineNorito.assetIdLiteral(assetDefinitionId: "usd#wonderland", accountId: accountId)
+        let literal = try OfflineNorito.assetIdLiteral(
+            assetDefinitionId: "66owaQmAQMuHxPzxUN3bqZ6FJfDa",
+            accountId: accountId
+        )
         let encodedFromLiteral = try OfflineNorito.encodeAssetId(literal)
         let encodedFromParts = try OfflineNorito.encodeAssetId(
-            assetDefinitionId: "usd#wonderland",
+            assetDefinitionId: "66owaQmAQMuHxPzxUN3bqZ6FJfDa",
             accountId: accountId
         )
         XCTAssertEqual(literal.hasPrefix("norito:"), true)
@@ -47,17 +50,20 @@ final class OfflineNoritoEncodingTests: XCTestCase {
     }
 
     func testAssetIdLiteralBuilderRejectsAliasWithoutOnlineResolution() throws {
+        guard NoritoNativeBridge.shared.canEncodeAssetIdLiteral else {
+            throw XCTSkip("connect_norito_encode_asset_id_literal is unavailable in this runtime")
+        }
         let accountId = try makeI105(seed: 9)
         XCTAssertThrowsError(
             try OfflineNorito.assetIdLiteral(
-                assetDefinitionId: "usd#issuer@main",
+                assetDefinitionId: "usd#issuer.main",
                 accountId: accountId
             )
         ) { error in
             guard case let OfflineNoritoError.invalidAssetId(raw) = error else {
                 return XCTFail("Expected invalidAssetId error, got \(error)")
             }
-            XCTAssertEqual(raw, "usd#issuer@main")
+            XCTAssertEqual(raw, "usd#issuer.main")
         }
     }
 
@@ -108,20 +114,24 @@ final class OfflineNoritoEncodingTests: XCTestCase {
 
     // MARK: - assetDefinitionIdFromAlias
 
-    func testAssetDefinitionIdFromAliasProducesExpectedAid() throws {
+    func testAssetDefinitionIdFromAliasProducesCanonicalBase58Address() throws {
         guard NoritoNativeBridge.shared.blake3Hash(data: Data()) != nil else {
             throw XCTSkip("NoritoBridge blake3 hashing unavailable")
         }
-        let aid = try OfflineNorito.assetDefinitionIdFromAlias("usd#wonderland")
-        XCTAssertEqual(aid, "aid:bef53c1ccd1749e180dfbad6519bfd66")
+        let address = try OfflineNorito.assetDefinitionIdFromAlias("usd#wonderland")
+        XCTAssertFalse(address.isEmpty)
+        XCTAssertFalse(address.contains(":"))
+        XCTAssertTrue(AssetDefinitionAddress.looksCanonical(address))
     }
 
     func testAssetDefinitionIdFromAliasPublicAPI() throws {
         guard NoritoNativeBridge.shared.blake3Hash(data: Data()) != nil else {
             throw XCTSkip("NoritoBridge blake3 hashing unavailable")
         }
-        let aid = try ToriiClient.assetDefinitionId(fromAlias: "usd#wonderland")
-        XCTAssertEqual(aid, "aid:bef53c1ccd1749e180dfbad6519bfd66")
+        let address = try ToriiClient.assetDefinitionId(fromAlias: "usd#wonderland")
+        XCTAssertFalse(address.isEmpty)
+        XCTAssertFalse(address.contains(":"))
+        XCTAssertTrue(AssetDefinitionAddress.looksCanonical(address))
     }
 
     func testAssetDefinitionIdFromAliasRejectsInvalidInput() throws {
@@ -136,14 +146,11 @@ final class OfflineNoritoEncodingTests: XCTestCase {
         guard NoritoNativeBridge.shared.blake3Hash(data: Data()) != nil else {
             throw XCTSkip("NoritoBridge blake3 hashing unavailable")
         }
-        let aid = try OfflineNorito.assetDefinitionIdFromAlias("usd#wonderland")
-        // aid:XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX — strip prefix and parse hex
-        let hex = String(aid.dropFirst(4))
-        let bytes = stride(from: 0, to: hex.count, by: 2).map { i -> UInt8 in
-            let start = hex.index(hex.startIndex, offsetBy: i)
-            let end = hex.index(start, offsetBy: 2)
-            return UInt8(hex[start..<end], radix: 16) ?? 0
+        let address = try OfflineNorito.assetDefinitionIdFromAlias("usd#wonderland")
+        guard let bytesData = AssetDefinitionAddress.decode(address) else {
+            return XCTFail("expected a decodable canonical asset definition address")
         }
+        let bytes = [UInt8](bytesData)
         // UUIDv4: bytes[6] high nibble = 0x4, bytes[8] top 2 bits = 10
         XCTAssertEqual(bytes[6] & 0xf0, 0x40, "Version nibble should be 4")
         XCTAssertEqual(bytes[8] & 0xc0, 0x80, "Variant bits should be 10xx")

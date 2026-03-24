@@ -69,7 +69,6 @@ use iroha_data_model::{
         encode_model_weight_register_provenance_payload,
         encode_model_weight_rollback_provenance_payload,
         encode_private_compile_profile_provenance_payload,
-        encode_private_inference_checkpoint_provenance_payload,
         encode_private_inference_start_provenance_payload, encode_rollback_provenance_payload,
         encode_rollout_provenance_payload, encode_state_mutation_provenance_payload,
         encode_training_job_checkpoint_provenance_payload,
@@ -272,6 +271,125 @@ fn validate_model_host_capability_against_class(
         }
     }
     Ok(())
+}
+
+fn active_hf_assigned_placements_for_validator(
+    state_transaction: &StateTransaction<'_, '_>,
+    validator_account_id: &AccountId,
+    now_ms: u64,
+) -> Vec<SoraHfPlacementRecordV1> {
+    state_transaction
+        .world
+        .soracloud_hf_placements
+        .iter()
+        .filter_map(|(pool_id, placement)| {
+            if placement.status == SoraHfPlacementStatusV1::Retired {
+                return None;
+            }
+            let pool = state_transaction
+                .world
+                .soracloud_hf_shared_lease_pools
+                .get(pool_id)?;
+            if matches!(
+                pool.status,
+                SoraHfSharedLeaseStatusV1::Expired | SoraHfSharedLeaseStatusV1::Retired
+            ) {
+                return None;
+            }
+            if pool.window_expires_at_ms <= now_ms && pool.queued_next_window.is_none() {
+                return None;
+            }
+            placement
+                .assigned_hosts
+                .iter()
+                .any(|assignment| {
+                    assignment.validator_account_id == *validator_account_id
+                        && !matches!(
+                            assignment.status,
+                            SoraHfPlacementHostStatusV1::Retired
+                                | SoraHfPlacementHostStatusV1::Unavailable
+                        )
+                })
+                .then_some(placement.clone())
+        })
+        .collect()
+}
+
+fn model_host_capability_advert_contradiction_detail(
+    state_transaction: &StateTransaction<'_, '_>,
+    capability: &SoraModelHostCapabilityRecordV1,
+    now_ms: u64,
+) -> Result<Option<String>, InstructionExecutionError> {
+    if let Err(error) = validate_model_host_capability_against_class(capability) {
+        return Ok(Some(error.to_string()));
+    }
+
+    let placements = active_hf_assigned_placements_for_validator(
+        state_transaction,
+        &capability.validator_account_id,
+        now_ms,
+    );
+    let mut reserved_usage = HfHostReservationUsage::default();
+    for placement in placements {
+        if !capability
+            .supported_backends
+            .contains(&placement.resource_profile.backend_family)
+        {
+            return Ok(Some(format!(
+                "model host capability no longer supports backend family `{:?}` required by placement `{}`",
+                placement.resource_profile.backend_family, placement.placement_id
+            )));
+        }
+        if !capability
+            .supported_formats
+            .contains(&placement.resource_profile.model_format)
+        {
+            return Ok(Some(format!(
+                "model host capability no longer supports model format `{:?}` required by placement `{}`",
+                placement.resource_profile.model_format, placement.placement_id
+            )));
+        }
+        accumulate_hf_host_reservation_usage_totals(
+            &mut reserved_usage,
+            &placement.resource_profile,
+        );
+    }
+
+    for (field, actual, required) in [
+        (
+            "max_model_bytes",
+            capability.max_model_bytes,
+            reserved_usage.required_model_bytes,
+        ),
+        (
+            "max_disk_cache_bytes",
+            capability.max_disk_cache_bytes,
+            reserved_usage.disk_cache_bytes,
+        ),
+        (
+            "max_ram_bytes",
+            capability.max_ram_bytes,
+            reserved_usage.ram_bytes,
+        ),
+        (
+            "max_vram_bytes",
+            capability.max_vram_bytes,
+            reserved_usage.vram_bytes,
+        ),
+    ] {
+        if actual < required {
+            return Ok(Some(format!(
+                "model host capability field `{field}` ({actual}) is below the active assigned reservation total ({required})"
+            )));
+        }
+    }
+    if capability.max_concurrent_resident_models < reserved_usage.resident_models {
+        return Ok(Some(format!(
+            "model host capability field `max_concurrent_resident_models` ({}) is below the active assigned reservation total ({})",
+            capability.max_concurrent_resident_models, reserved_usage.resident_models
+        )));
+    }
+    Ok(None)
 }
 
 fn require_soracloud_permission(
@@ -936,43 +1054,6 @@ fn verify_private_inference_start_provenance(
         .verify(&provenance.signer, &payload)
         .map_err(|_| {
             invalid_parameter("private inference start provenance signature verification failed")
-        })?;
-    Ok(())
-}
-
-fn verify_private_inference_checkpoint_provenance(
-    authority: &AccountId,
-    session_id: &str,
-    status: SoraPrivateInferenceSessionStatusV1,
-    receipt_root: Hash,
-    xor_cost_nanos: u128,
-    checkpoint: &SoraPrivateInferenceCheckpointV1,
-    provenance: &ManifestProvenance,
-) -> Result<(), InstructionExecutionError> {
-    if authority.signatory() != &provenance.signer {
-        return Err(invalid_parameter(
-            "private inference checkpoint provenance signer must match the transaction authority",
-        ));
-    }
-    let payload = encode_private_inference_checkpoint_provenance_payload(
-        session_id,
-        status,
-        receipt_root,
-        xor_cost_nanos,
-        checkpoint.clone(),
-    )
-    .map_err(|err| {
-        invalid_parameter(format!(
-            "failed to encode private inference checkpoint provenance: {err}"
-        ))
-    })?;
-    provenance
-        .signature
-        .verify(&provenance.signer, &payload)
-        .map_err(|_| {
-            invalid_parameter(
-                "private inference checkpoint provenance signature verification failed",
-            )
         })?;
     Ok(())
 }
@@ -2326,6 +2407,59 @@ fn record_model_host_capability(
     Ok(())
 }
 
+fn recompute_hf_placement_total_reservation_fee_nanos(
+    placement: &mut SoraHfPlacementRecordV1,
+) -> Result<(), InstructionExecutionError> {
+    placement.total_reservation_fee_nanos =
+        placement
+            .assigned_hosts
+            .iter()
+            .try_fold(0_u128, |total, host| {
+                hf_host_class_reservation_fee_nanos(&host.host_class, &placement.resource_profile)
+                    .map(|fee| total.saturating_add(fee))
+            })?;
+    Ok(())
+}
+
+fn sync_hf_placements_for_host_capability(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    capability: &SoraModelHostCapabilityRecordV1,
+    now_ms: u64,
+) -> Result<(), InstructionExecutionError> {
+    let placements = active_hf_assigned_placements_for_validator(
+        state_transaction,
+        &capability.validator_account_id,
+        now_ms,
+    );
+    for mut placement in placements {
+        let mut changed = false;
+        for assignment in &mut placement.assigned_hosts {
+            if assignment.validator_account_id != capability.validator_account_id
+                || matches!(
+                    assignment.status,
+                    SoraHfPlacementHostStatusV1::Retired | SoraHfPlacementHostStatusV1::Unavailable
+                )
+            {
+                continue;
+            }
+            if assignment.peer_id != capability.peer_id {
+                assignment.peer_id = capability.peer_id.clone();
+                changed = true;
+            }
+            if assignment.host_class != capability.host_class {
+                assignment.host_class = capability.host_class.clone();
+                changed = true;
+            }
+        }
+        if changed {
+            recompute_hf_placement_total_reservation_fee_nanos(&mut placement)?;
+            placement.last_rebalance_at_ms = now_ms;
+            record_hf_placement(state_transaction, placement)?;
+        }
+    }
+    Ok(())
+}
+
 fn record_hf_shared_lease_pool(
     state_transaction: &mut StateTransaction<'_, '_>,
     record: SoraHfSharedLeasePoolV1,
@@ -2941,6 +3075,7 @@ fn refresh_hf_placements_for_host_status(
                 }
                 placement.assigned_hosts = assigned_hosts;
             }
+            recompute_hf_placement_total_reservation_fee_nanos(&mut placement)?;
             placement.last_rebalance_at_ms = now_ms;
             placement.last_error = reason.map(ToOwned::to_owned);
             record_hf_placement(state_transaction, placement)?;
@@ -3065,6 +3200,13 @@ fn accumulate_hf_host_reservation_usage(
     let usage = usage_by_validator
         .entry(validator_account_id.clone())
         .or_default();
+    accumulate_hf_host_reservation_usage_totals(usage, resource_profile);
+}
+
+fn accumulate_hf_host_reservation_usage_totals(
+    usage: &mut HfHostReservationUsage,
+    resource_profile: &SoraHfResourceProfileV1,
+) {
     usage.required_model_bytes = usage
         .required_model_bytes
         .saturating_add(resource_profile.required_model_bytes);
@@ -3298,15 +3440,11 @@ fn select_hf_placement_for_window(
             },
         )
         .collect::<Vec<_>>();
-    let total_reservation_fee_nanos = assigned_hosts.iter().try_fold(0_u128, |total, host| {
-        hf_host_class_reservation_fee_nanos(&host.host_class, resource_profile)
-            .map(|fee| total.saturating_add(fee))
-    })?;
     let placement_id_payload =
         norito::to_bytes(&(pool_id, selection_seed_hash)).map_err(|err| {
             invalid_parameter(format!("failed to encode hf placement_id payload: {err}"))
         })?;
-    Ok(SoraHfPlacementRecordV1 {
+    let mut placement = SoraHfPlacementRecordV1 {
         schema_version: SORA_HF_PLACEMENT_RECORD_VERSION_V1,
         placement_id: Hash::new(placement_id_payload),
         source_id,
@@ -3317,10 +3455,12 @@ fn select_hf_placement_for_window(
         eligible_validator_count,
         adaptive_target_host_count,
         assigned_hosts,
-        total_reservation_fee_nanos,
+        total_reservation_fee_nanos: 0,
         last_rebalance_at_ms: now_ms.max(1),
         last_error: None,
-    })
+    };
+    recompute_hf_placement_total_reservation_fee_nanos(&mut placement)?;
+    Ok(placement)
 }
 
 fn ensure_hf_placement_for_active_pool(
@@ -5454,7 +5594,26 @@ impl Execute for isi::AdvertiseSoracloudModelHost {
             ));
         }
         reconcile_expired_model_hosts(state_transaction, now_ms)?;
-        record_model_host_capability(state_transaction, capability)
+        capability
+            .validate()
+            .map_err(|err| invalid_parameter(err.to_string()))?;
+        if let Some(detail) = model_host_capability_advert_contradiction_detail(
+            state_transaction,
+            &capability,
+            now_ms,
+        )? {
+            report_model_host_violation(
+                state_transaction,
+                &capability.validator_account_id,
+                SoraModelHostViolationKindV1::AdvertContradiction,
+                None,
+                Some(detail),
+                now_ms,
+            )?;
+            return Ok(());
+        }
+        record_model_host_capability(state_transaction, capability.clone())?;
+        sync_hf_placements_for_host_capability(state_transaction, &capability, now_ms)
     }
 }
 
@@ -9232,7 +9391,6 @@ impl Execute for isi::RecordSoracloudPrivateInferenceCheckpoint {
             receipt_root,
             xor_cost_nanos,
             checkpoint,
-            provenance,
         } = self;
         let session_id = parse_private_session_id(&session_id)?;
         let checkpoint_session_id = parse_private_session_id(&checkpoint.session_id)?;
@@ -9242,15 +9400,6 @@ impl Execute for isi::RecordSoracloudPrivateInferenceCheckpoint {
             ));
         }
         parse_private_decrypt_request_id(&checkpoint.decrypt_request_id)?;
-        verify_private_inference_checkpoint_provenance(
-            authority,
-            &session_id,
-            status,
-            receipt_root,
-            xor_cost_nanos,
-            &checkpoint,
-            &provenance,
-        )?;
         checkpoint
             .validate()
             .map_err(|err| invalid_parameter(err.to_string()))?;
@@ -10450,11 +10599,18 @@ mod tests {
     fn model_host_advertise_provenance(
         capability: &SoraModelHostCapabilityRecordV1,
     ) -> ManifestProvenance {
+        model_host_advertise_provenance_for(&ALICE_KEYPAIR, capability)
+    }
+
+    fn model_host_advertise_provenance_for(
+        key_pair: &KeyPair,
+        capability: &SoraModelHostCapabilityRecordV1,
+    ) -> ManifestProvenance {
         let payload = encode_model_host_advertise_provenance_payload(capability)
             .expect("model host advertise payload");
         ManifestProvenance {
-            signer: ALICE_KEYPAIR.public_key().clone(),
-            signature: iroha_crypto::Signature::new(ALICE_KEYPAIR.private_key(), &payload),
+            signer: key_pair.public_key().clone(),
+            signature: iroha_crypto::Signature::new(key_pair.private_key(), &payload),
         }
     }
 
@@ -10636,6 +10792,105 @@ mod tests {
         assert_eq!(
             placement.assigned_hosts[0].status,
             SoraHfPlacementHostStatusV1::Warm
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn model_host_readvertise_updates_assigned_placement_metadata() -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let pool_id = Hash::new(b"placement-pool");
+
+        let initial_header =
+            ValidBlock::new_dummy_and_modify_header(&KeyPair::random().into_parts().1, |header| {
+                header.creation_time_ms = 100;
+            })
+            .as_ref()
+            .header();
+        let mut initial_block = state.block(initial_header);
+        let mut initial_tx = initial_block.transaction();
+        let capability = sample_model_host_capability(ALICE_ID.clone(), 100, 1_000);
+        isi::AdvertiseSoracloudModelHost {
+            capability: capability.clone(),
+            provenance: model_host_advertise_provenance(&capability),
+        }
+        .execute(&ALICE_ID, &mut initial_tx)?;
+        record_hf_shared_lease_pool(
+            &mut initial_tx,
+            sample_hf_shared_lease_pool_record(pool_id, Hash::new(b"metadata-source"), 100),
+        )?;
+        record_hf_placement(
+            &mut initial_tx,
+            SoraHfPlacementRecordV1 {
+                schema_version: SORA_HF_PLACEMENT_RECORD_VERSION_V1,
+                placement_id: Hash::new(b"metadata-placement"),
+                source_id: Hash::new(b"metadata-source"),
+                pool_id,
+                status: SoraHfPlacementStatusV1::Ready,
+                selection_seed_hash: Hash::new(b"metadata-seed"),
+                resource_profile: sample_hf_resource_profile(),
+                eligible_validator_count: 1,
+                adaptive_target_host_count: 1,
+                assigned_hosts: vec![SoraHfPlacementHostAssignmentV1 {
+                    validator_account_id: ALICE_ID.clone(),
+                    peer_id: capability.peer_id.clone(),
+                    role: SoraHfPlacementHostRoleV1::Primary,
+                    status: SoraHfPlacementHostStatusV1::Warm,
+                    host_class: capability.host_class.clone(),
+                }],
+                total_reservation_fee_nanos: 1_000,
+                last_rebalance_at_ms: 100,
+                last_error: None,
+            },
+        )?;
+        initial_tx.apply();
+        initial_block.commit()?;
+
+        let updated_header =
+            ValidBlock::new_dummy_and_modify_header(&KeyPair::random().into_parts().1, |header| {
+                header.creation_time_ms = 200;
+            })
+            .as_ref()
+            .header();
+        let mut updated_block = state.block(updated_header);
+        let mut updated_tx = updated_block.transaction();
+        let mut updated_capability = capability.clone();
+        updated_capability.advertised_at_ms = 200;
+        updated_capability.heartbeat_expires_at_ms = 1_200;
+        updated_capability.peer_id = "12D3KooWUpdatedMetadataPeer".to_string();
+        updated_capability.host_class = "cpu.small".to_string();
+        isi::AdvertiseSoracloudModelHost {
+            capability: updated_capability.clone(),
+            provenance: model_host_advertise_provenance(&updated_capability),
+        }
+        .execute(&ALICE_ID, &mut updated_tx)?;
+        updated_tx.apply();
+        updated_block.commit()?;
+
+        let view = state.view();
+        let advertised = view
+            .world()
+            .soracloud_model_host_capabilities()
+            .get(&ALICE_ID)
+            .expect("updated capability");
+        assert_eq!(advertised.peer_id, updated_capability.peer_id);
+        assert_eq!(advertised.host_class, updated_capability.host_class);
+        let placement = view
+            .world()
+            .soracloud_hf_placements()
+            .get(&pool_id)
+            .expect("updated placement");
+        assert_eq!(placement.last_rebalance_at_ms, 200);
+        assert_eq!(placement.total_reservation_fee_nanos, 500);
+        assert_eq!(placement.assigned_hosts.len(), 1);
+        assert_eq!(
+            placement.assigned_hosts[0].peer_id,
+            updated_capability.peer_id
+        );
+        assert_eq!(
+            placement.assigned_hosts[0].host_class,
+            updated_capability.host_class
         );
         Ok(())
     }
@@ -11136,6 +11391,152 @@ mod tests {
             .expect("bob validator after heartbeat slash");
         assert_eq!(bob_validator.total_stake, Numeric::new(975, 0));
         assert_eq!(bob_validator.self_stake, Numeric::new(975, 0));
+        assert!(matches!(
+            bob_validator.status,
+            PublicLaneValidatorStatus::Slashed(_)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn model_host_advertise_contradiction_emits_evidence_and_slashes_validator()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let mut state = state_with_soracloud_permission(&kura)?;
+        let pool_id = Hash::new(b"advert-contradiction-pool");
+        let source_id = Hash::new(b"advert-contradiction-source");
+        let stake_asset_definition_id = AssetDefinitionId::new(
+            "wonderland".parse().expect("domain"),
+            "stake".parse().expect("stake"),
+        );
+        state.nexus.get_mut().staking.stake_asset_id = stake_asset_definition_id.to_string();
+        state.nexus.get_mut().staking.stake_escrow_account_id = ALICE_ID.to_string();
+        state.nexus.get_mut().staking.slash_sink_account_id = ALICE_ID.to_string();
+
+        let setup_header =
+            ValidBlock::new_dummy_and_modify_header(&KeyPair::random().into_parts().1, |header| {
+                header.creation_time_ms = 100;
+            })
+            .as_ref()
+            .header();
+        let mut setup_block = state.block(setup_header);
+        let mut setup_tx = setup_block.transaction();
+        configure_staking_assets_for_validator_slash_test(&mut setup_tx, &BOB_ID, 1_000)?;
+        Grant::account_permission(
+            Permission::new(CAN_MANAGE_SORACLOUD_PERMISSION.into(), Json::new(())),
+            BOB_ID.clone(),
+        )
+        .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut setup_tx)?;
+        insert_active_public_lane_validator(&mut setup_tx, BOB_ID.clone(), 1_000);
+        let mut bob_capability = sample_model_host_capability(BOB_ID.clone(), 10, 1_000);
+        bob_capability.peer_id = "12D3KooWBobContradictionPeer".to_string();
+        record_model_host_capability(&mut setup_tx, bob_capability.clone())?;
+        record_hf_shared_lease_pool(
+            &mut setup_tx,
+            sample_hf_shared_lease_pool_record(pool_id, source_id, 100),
+        )?;
+        record_hf_placement(
+            &mut setup_tx,
+            SoraHfPlacementRecordV1 {
+                schema_version: SORA_HF_PLACEMENT_RECORD_VERSION_V1,
+                placement_id: Hash::new(b"advert-contradiction-placement"),
+                source_id,
+                pool_id,
+                status: SoraHfPlacementStatusV1::Ready,
+                selection_seed_hash: Hash::new(b"advert-contradiction-seed"),
+                resource_profile: sample_hf_resource_profile(),
+                eligible_validator_count: 1,
+                adaptive_target_host_count: 1,
+                assigned_hosts: vec![SoraHfPlacementHostAssignmentV1 {
+                    validator_account_id: BOB_ID.clone(),
+                    peer_id: bob_capability.peer_id.clone(),
+                    role: SoraHfPlacementHostRoleV1::Primary,
+                    status: SoraHfPlacementHostStatusV1::Warm,
+                    host_class: bob_capability.host_class.clone(),
+                }],
+                total_reservation_fee_nanos: 1_000,
+                last_rebalance_at_ms: 100,
+                last_error: None,
+            },
+        )?;
+        setup_tx.apply();
+        setup_block.commit()?;
+
+        let advertise_header = ValidBlock::new_dummy_and_modify_header(
+            &BOB_KEYPAIR.clone().into_parts().1,
+            |header| {
+                header.creation_time_ms = 200;
+            },
+        )
+        .as_ref()
+        .header();
+        let mut advertise_block = state.block(advertise_header);
+        let mut advertise_tx = advertise_block.transaction();
+        let mut contradictory_capability = bob_capability.clone();
+        contradictory_capability.advertised_at_ms = 200;
+        contradictory_capability.heartbeat_expires_at_ms = 1_200;
+        contradictory_capability.supported_formats =
+            std::collections::BTreeSet::from([SoraHfModelFormatV1::Gguf]);
+        isi::AdvertiseSoracloudModelHost {
+            capability: contradictory_capability.clone(),
+            provenance: model_host_advertise_provenance_for(
+                &BOB_KEYPAIR,
+                &contradictory_capability,
+            ),
+        }
+        .execute(&BOB_ID, &mut advertise_tx)?;
+        advertise_tx.apply();
+        advertise_block.commit()?;
+
+        let view = state.view();
+        assert!(
+            view.world()
+                .soracloud_model_host_capabilities()
+                .get(&BOB_ID)
+                .is_none()
+        );
+        let evidence = view
+            .world()
+            .soracloud_model_host_violation_evidence()
+            .iter()
+            .map(|(_evidence_id, record)| record.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(evidence.len(), 1);
+        assert_eq!(
+            evidence[0].kind,
+            SoraModelHostViolationKindV1::AdvertContradiction
+        );
+        assert!(evidence[0].penalty_applied);
+        assert!(evidence[0].host_evicted);
+        assert!(evidence[0].placement_id.is_none());
+        assert!(
+            evidence[0]
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("model format"))
+        );
+        let placement = view
+            .world()
+            .soracloud_hf_placements()
+            .get(&pool_id)
+            .expect("updated placement after contradiction");
+        assert!(
+            placement
+                .assigned_hosts
+                .iter()
+                .all(|assignment| assignment.validator_account_id != BOB_ID.clone())
+        );
+        assert_eq!(
+            placement.last_error.as_deref(),
+            evidence[0].detail.as_deref()
+        );
+        let bob_validator = view
+            .world()
+            .public_lane_validators()
+            .get(&(LaneId::SINGLE, BOB_ID.clone()))
+            .expect("bob validator after contradiction slash");
+        assert_eq!(bob_validator.total_stake, Numeric::new(900, 0));
+        assert_eq!(bob_validator.self_stake, Numeric::new(900, 0));
         assert!(matches!(
             bob_validator.status,
             PublicLaneValidatorStatus::Slashed(_)
@@ -13317,15 +13718,6 @@ mod tests {
             updated_at_ms: existing_checkpoint.updated_at_ms.saturating_add(1),
         };
         let completed_xor_cost_nanos = existing_xor_cost_nanos.saturating_add(release_xor_nanos);
-        let checkpoint_payload = encode_private_inference_checkpoint_provenance_payload(
-            &session_id,
-            SoraPrivateInferenceSessionStatusV1::Completed,
-            completed_receipt_root,
-            completed_xor_cost_nanos,
-            completed_checkpoint.clone(),
-        )
-        .expect("private checkpoint payload");
-
         iroha_data_model::isi::InstructionBox::from(
             isi::RecordSoracloudPrivateInferenceCheckpoint {
                 session_id: session_id.clone(),
@@ -13333,13 +13725,6 @@ mod tests {
                 receipt_root: completed_receipt_root,
                 xor_cost_nanos: completed_xor_cost_nanos,
                 checkpoint: completed_checkpoint.clone(),
-                provenance: ManifestProvenance {
-                    signer: ALICE_KEYPAIR.public_key().clone(),
-                    signature: iroha_crypto::Signature::new(
-                        ALICE_KEYPAIR.private_key(),
-                        &checkpoint_payload,
-                    ),
-                },
             },
         )
         .execute(&ALICE_ID, &mut stx)?;

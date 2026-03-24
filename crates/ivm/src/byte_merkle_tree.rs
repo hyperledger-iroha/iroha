@@ -291,7 +291,7 @@ impl ByteMerkleTree {
                 }
                 blocks
             };
-            if ivm::cuda_available()
+            if crate::cuda_available()
                 && leaves_count >= merkle_cuda_min_leaves()
                 && let Some(digests) = {
                     let blocks = make_blocks();
@@ -347,7 +347,7 @@ impl ByteMerkleTree {
         }
         // Then CUDA
         #[cfg(feature = "cuda")]
-        if ivm::cuda_available()
+        if crate::cuda_available()
             && let Some(digests) = crate::cuda::sha256_leaves_cuda(&blocks)
         {
             let mut leaves = self.leaves.lock();
@@ -560,7 +560,7 @@ impl ByteMerkleTree {
         #[cfg(feature = "cuda")]
         if {
             let min_cuda = merkle_cuda_min_leaves();
-            ivm::cuda_available() && leaves_count >= min_cuda
+            crate::cuda_available() && leaves_count >= min_cuda
         } {
             // Prepare padded blocks similar to Metal path
             let mut blocks: Vec<[u8; 64]> = Vec::with_capacity(leaves_count);

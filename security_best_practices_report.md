@@ -4,106 +4,319 @@ Date: 2026-03-24
 
 ## Executive Summary
 
-I reviewed the highest-risk Rust surfaces in this workspace, with emphasis on Torii HTTP ingress, Soracloud local-read/proxy execution, and the ZK attachment store. I found four concrete security issues: two high severity, one medium-high, and one medium. The most serious issue is that Soracloud mutation endpoints currently require callers to transmit raw account private keys to Torii so the server can sign transactions on their behalf.
+I refreshed the earlier Torii/Soracloud report against the current workspace
+code and extended the review across the highest-risk server, SDK, and
+crypto/serialization surfaces. This audit initially confirmed three
+ingress/authentication issues: two high severity and one medium severity.
+Those three findings are now closed in the current tree by the remediation
+described below.
 
-This audit was code-focused rather than exhaustive. I prioritized externally reachable and recently changed control-plane/runtime paths over the full consensus, codec, and SDK surface.
+The four previously reported Soracloud findings about raw private keys over
+HTTP, internal-only local-read proxy execution, unmetered public-runtime
+fallback, and remote-IP attachment tenancy are no longer live in current code.
+Those are marked closed/superseded below with updated code references.
 
-## High Severity
-
-### SEC-01: Soracloud control-plane mutations require callers to send raw private keys to Torii
-
-Impact: Compromise of Torii, any upstream proxy, request-body logging, tracing, or crash dumps can expose long-lived account private keys that authorize arbitrary on-chain actions beyond the single mutation request.
-
-Evidence:
-
-- Multiple Soracloud mutation DTOs embed `private_key: Option<ExposedPrivateKey>`, for example `SignedBundleRequest` and `SignedRollbackRequest` in `crates/iroha_torii/src/soracloud.rs:339-346` and `crates/iroha_torii/src/soracloud.rs:356-363`.
-- Torii refuses to process mutations unless that private key is present and matches the supplied authority in `crates/iroha_torii/src/soracloud.rs:5200-5217`.
-- Torii then signs the on-chain transaction server-side with that HTTP-supplied key in `crates/iroha_torii/src/soracloud.rs:5404-5406`.
-- The deploy path is representative: after verifying provenance, it still extracts the caller private key and uses it for transaction submission in `crates/iroha_torii/src/soracloud.rs:8671-8692`.
-
-Why this matters:
-
-- Provenance signatures already prove intent for the control-plane payload. Requiring the raw account private key as an additional HTTP field turns Torii into a remote signing oracle.
-- API-token protection is not equivalent to key protection. Once Torii can see the private key, every layer that can inspect traffic or process memory becomes part of the signing trust boundary.
-
-Recommendation:
-
-- Remove `private_key` from Soracloud HTTP DTOs.
-- Accept either fully signed transactions or a client-signed mutation envelope that Torii verifies but never re-signs.
-- If delegated signing is absolutely required, move it behind a KMS/HSM boundary and have Torii reference a signer handle, never the raw key material.
+This remained a code-centric audit rather than an exhaustive red-team exercise.
+I prioritized externally reachable Torii ingress and request-auth paths, then
+spot-checked IVM, `iroha_crypto`, `norito`, and the Swift/Android/JS SDK
+request-signing helpers. No live confirmed issue from that ingress/auth slice
+remains after the fixes in this report. Follow-up hardening also expanded the
+fail-closed startup truth sets for sampled IVM CUDA/Metal accelerator paths;
+that work did not confirm a new fail-open issue, but it did surface an
+existing Metal Ed25519 parity mismatch that currently disables the Metal
+backend on this host and remains an open correctness blocker.
 
 ## High Severity
 
-### SEC-02: Any peer can trigger Soracloud proxy execution for arbitrary local-read handlers, including internal-only services
+### SEC-05: App canonical request verification bypassed multisig thresholds (Closed 2026-03-24)
 
-Impact: A malicious or compromised peer can make the authoritative primary execute local reads and inference workloads that never passed Torii’s public-route admission checks, including handlers on services that are marked internal-only.
+Impact:
 
-Evidence:
-
-- Incoming Soracloud proxy requests are executed directly from the peer bus in `crates/iroha_torii/src/lib.rs:8489-8527`.
-- The runtime accepts the supplied `SoracloudLocalReadRequest` and executes it after only snapshot/context validation in `crates/irohad/src/soracloud_runtime.rs:425-448`.
-- Local-read context resolution checks the requested service, version, and handler class/name, but it does not check route visibility, host, or whether the request originated from a Torii-admitted public route in `crates/irohad/src/soracloud_runtime.rs:5369-5464`.
-- Generated HF services are explicitly created with `SoraRouteVisibilityV1::Internal` in `crates/iroha_core/src/soracloud_runtime.rs:178-183`.
-
-Why this matters:
-
-- The HTTP ingress path narrows exposure by resolving only public routes before constructing a request. The peer proxy path skips that boundary entirely.
-- In a Byzantine setting, some peers are expected to be faulty. Treating peer-originated application requests as implicitly authorized is too strong.
-
-Recommendation:
-
-- Restrict proxy execution to a narrow, explicit request type for the exact generated-HF `/infer` flow.
-- Bind each proxied request to a Torii-generated admission token over the request commitment and verify that token on the primary before execution.
-- Reject proxy requests for handlers whose route visibility is not public and do not allow arbitrary service/handler selection from the peer bus.
-
-## Medium-High Severity
-
-### SEC-03: Public Soracloud runtime fallback bypasses Torii’s normal API-token and rate-limit checks
-
-Impact: Unauthenticated callers can hit expensive public local-read and inference handlers without passing through the access-control and costed rate-limiting path used by the rest of Torii, making application-layer denial of service materially easier.
+- Any single member key of a multisig-controlled account can authorize
+  app-facing requests that are supposed to require a threshold or weighted
+  quorum.
+- This affects every endpoint that trusts `verify_canonical_request`, including
+  Soracloud signed mutation ingress, content access, and signed-account ZK
+  attachment tenancy.
 
 Evidence:
 
-- Soracloud public runtime handling is installed as a router-wide fallback in `crates/iroha_torii/src/lib.rs:17561-17563`.
-- The fallback handler resolves the route and executes the local read or primary proxy request directly, but it never calls `check_access`, `check_access_enforced`, or any limiter in `crates/iroha_torii/src/lib.rs:8674-8736`.
-- The normal access path applies API-token validation and a token-bucket limiter in `crates/iroha_torii/src/lib.rs:2280-2338`.
+- `verify_canonical_request` expands a multisig controller into the full member
+  public-key list and accepts the first key that verifies the request
+  signature, without evaluating threshold or accumulated weight:
+  `crates/iroha_torii/src/app_auth.rs:198-210`.
+- The actual multisig policy model carries both a `threshold` and weighted
+  members, and rejects policies whose threshold exceeds total weight:
+  `crates/iroha_data_model/src/account/controller.rs:92-95`,
+  `crates/iroha_data_model/src/account/controller.rs:163-178`,
+  `crates/iroha_data_model/src/account/controller.rs:188-196`.
+- The helper is on the authorization path for Soracloud mutation ingress in
+  `crates/iroha_torii/src/lib.rs:2141-2157`, content signed-account access in
+  `crates/iroha_torii/src/content.rs:359-360`, and attachment tenancy in
+  `crates/iroha_torii/src/lib.rs:7962-7968`.
 
 Why this matters:
 
-- Public Soracloud reads can fan out into on-node query work, asset assembly, or model inference/proxy execution. Those are much more expensive than lightweight JSON metadata endpoints.
-- A catch-all fallback is especially risky because new unmatched public paths automatically inherit this unmetered execution path.
+- The request signer is treated as the account authority for HTTP admission,
+  but the implementation silently downgrades multisig accounts to "any single
+  member may act alone."
+- That turns a defense-in-depth HTTP signature layer into an authorization
+  bypass for multisig-protected accounts.
 
 Recommendation:
 
-- Replace the fallback with explicit public runtime routes or a dedicated sub-router.
-- Apply a distinct public-runtime limiter keyed by remote IP or another tenant identity before request parsing and before proxying to the primary.
-- Add concurrency caps and endpoint-specific cost accounting for inference traffic.
+- Either reject multisig-controlled accounts at the app-auth layer until a
+  proper witness format exists, or extend the protocol so the HTTP request
+  carries and verifies a full multisig witness set that satisfies threshold and
+  weight.
+- Add regressions covering Soracloud mutation middleware, content auth, and ZK
+  attachments for below-threshold multisig signatures.
+
+Remediation status:
+
+- Closed in current code by failing closed on multisig-controlled accounts in
+  `crates/iroha_torii/src/app_auth.rs`.
+- The verifier no longer accepts "any single member may sign" semantics for
+  multisig HTTP authorization; multisig requests are rejected until a
+  threshold-satisfying witness format exists.
+- Regression coverage now includes a dedicated multisig rejection case in
+  `crates/iroha_torii/src/app_auth.rs`.
+
+## High Severity
+
+### SEC-06: App canonical request signatures were replayable indefinitely (Closed 2026-03-24)
+
+Impact:
+
+- A captured valid request can be replayed because the signed message has no
+  timestamp, nonce, expiry, or replay cache.
+- This can repeat state-changing Soracloud mutation requests and reissue
+  account-bound content/attachment operations long after the original client
+  intended them.
+
+Evidence:
+
+- Torii defines the app canonical request as only
+  `METHOD + path + sorted query + body hash` in
+  `crates/iroha_torii/src/app_auth.rs:1-17` and
+  `crates/iroha_torii/src/app_auth.rs:74-89`.
+- The verifier accepts only `X-Iroha-Account` and `X-Iroha-Signature` and does
+  not enforce freshness or maintain a replay cache:
+  `crates/iroha_torii/src/app_auth.rs:137-218`.
+- The JS, Swift, and Android SDK helpers generate the same replay-prone header
+  pair with no nonce/timestamp fields:
+  `javascript/iroha_js/src/canonicalRequest.js:50-82`,
+  `IrohaSwift/Sources/IrohaSwift/CanonicalRequest.swift:41-68`, and
+  `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/CanonicalRequestSigner.java:67-106`.
+- Torii's operator-signature path already uses the stronger pattern the
+  app-facing path is missing: timestamp, nonce, and replay cache in
+  `crates/iroha_torii/src/operator_signatures.rs:1-21` and
+  `crates/iroha_torii/src/operator_signatures.rs:266-294`.
+
+Why this matters:
+
+- HTTPS alone does not prevent replay by a reverse proxy, debug logger,
+  compromised client host, or any intermediary that can record valid requests.
+- Because the same scheme is implemented in all major client SDKs, the replay
+  weakness is systemic rather than server-only.
+
+Recommendation:
+
+- Add signed freshness material to app-auth requests, at minimum a timestamp
+  and nonce, and reject stale or reused tuples with a bounded replay cache.
+- Version the app canonical-request format explicitly so Torii and the SDKs can
+  deprecate the old two-header scheme safely.
+- Add regressions proving replay rejection for Soracloud mutations, content
+  access, and attachment CRUD.
+
+Remediation status:
+
+- Closed in current code. Torii now requires the four-header scheme
+  (`X-Iroha-Account`, `X-Iroha-Signature`, `X-Iroha-Timestamp-Ms`,
+  `X-Iroha-Nonce`) and signs/verifies
+  `METHOD + path + sorted query + body hash + timestamp + nonce` in
+  `crates/iroha_torii/src/app_auth.rs`.
+- Freshness validation now enforces a bounded clock-skew window, validates
+  nonce shape, and rejects reused nonces with an in-memory replay cache whose
+  knobs are surfaced through `crates/iroha_config/src/parameters/{defaults,actual,user}.rs`.
+- The JS, Swift, and Android helpers now emit the same four-header format in
+  `javascript/iroha_js/src/canonicalRequest.js`,
+  `IrohaSwift/Sources/IrohaSwift/CanonicalRequest.swift`, and
+  `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/CanonicalRequestSigner.java`.
+- Regression coverage now includes positive signature verification plus replay,
+  stale-timestamp, and missing-freshness rejection cases in
+  `crates/iroha_torii/src/app_auth.rs`.
 
 ## Medium Severity
 
-### SEC-04: ZK attachment isolation collapses to remote IP when API tokens are disabled
+### SEC-07: mTLS enforcement trusted a spoofable forwarded header (Closed 2026-03-24)
 
-Impact: Different users behind the same NAT, office proxy, mobile carrier gateway, or other shared egress can list, fetch, count, and delete each other’s attachments.
+Impact:
+
+- Deployments that rely on `require_mtls` can be bypassed if Torii is directly
+  reachable or the front proxy does not strip client-supplied
+  `x-forwarded-client-cert`.
+- The issue is configuration-dependent, but when triggered it turns a claimed
+  client-certificate requirement into a plain header check.
 
 Evidence:
 
-- The attachment tenant model is documented and implemented as “validated API token or remote IP” in `crates/iroha_torii/src/zk_attachments.rs:53-75`.
-- Tenant derivation falls back to `from_remote_ip` and then `anonymous` in `crates/iroha_torii/src/lib.rs:7851-7867`.
-- Attachment CRUD handlers use only that derived tenant after the generic access check in `crates/iroha_torii/src/lib.rs:7870-7926`.
-- Generic access checks enforce an API token only when `torii.require_api_token` is enabled in `crates/iroha_torii/src/lib.rs:2289-2338`.
+- Norito-RPC gating enforces `require_mtls` by calling
+  `norito_rpc_mtls_present`, which only checks whether
+  `x-forwarded-client-cert` exists and is non-empty:
+  `crates/iroha_torii/src/lib.rs:1897-1926`.
+- Operator-auth bootstrap/login flows call `check_common`, which rejects only
+  when `mtls_present(headers)` is false:
+  `crates/iroha_torii/src/operator_auth.rs:562-570`.
+- `mtls_present` is also only a non-empty `x-forwarded-client-cert` check in
+  `crates/iroha_torii/src/operator_auth.rs:1212-1216`.
+- Those operator-auth handlers are still exposed as routes at
+  `crates/iroha_torii/src/lib.rs:16658-16672`.
 
 Why this matters:
 
-- IP address is not a stable security principal. Shared networks are common, and reverse proxies can collapse many end users into one apparent source.
-- This is a confidentiality and integrity issue, not just a quota-accounting quirk, because the same tenant key gates read and delete operations.
+- A forwarded-header convention is only trustworthy when Torii sits behind a
+  hardened proxy that strips and rewrites the header. The code does not verify
+  that deployment assumption itself.
+- Security controls that silently depend on reverse-proxy hygiene are easy to
+  misconfigure during staging, canary, or incident-response routing changes.
 
 Recommendation:
 
-- Require a real caller identity for attachment access, such as a validated API token or a signed account identity.
-- If anonymous uploads must remain supported, separate upload from read/delete and issue unguessable per-object capability tokens instead of storing all anonymous users in a shared namespace.
+- Prefer direct transport-state enforcement where possible. If a proxy must be
+  used, trust an authenticated proxy-to-Torii channel and require an allow-list
+  or signed attestation from that proxy instead of raw header presence.
+- Document that `require_mtls` is unsafe on directly exposed Torii listeners.
+- Add negative tests for forged `x-forwarded-client-cert` input on Norito-RPC
+  and operator-auth bootstrap routes.
 
-## Residual Risks And Coverage Gaps
+Remediation status:
 
-- I did not perform an exhaustive audit of consensus, Norito codec internals, the Swift/Android SDKs, or every Sorafs/Soracloud code path.
-- I did not run `cargo test`, `cargo clippy`, or dynamic probes because this was a read-only security review.
-- The findings above are grounded in concrete code paths and should be treated as fix candidates even if broader review later uncovers additional issues.
+- Closed in current code by binding forwarded-header trust to configured proxy
+  CIDRs instead of raw header presence alone.
+- `crates/iroha_torii/src/limits.rs` now provides the shared
+  `has_trusted_forwarded_header(...)` gate, and both Norito-RPC
+  (`crates/iroha_torii/src/lib.rs`) and operator-auth
+  (`crates/iroha_torii/src/operator_auth.rs`) use it with the caller TCP peer
+  address.
+- `iroha_config` now exposes `mtls_trusted_proxy_cidrs` for both
+  operator-auth and Norito-RPC; defaults are loopback-only.
+- Regression coverage now rejects forged `x-forwarded-client-cert` input from
+  an untrusted remote in both operator-auth and the shared limits helper.
+
+## Closed Or Superseded Findings From The Earlier Report
+
+- Earlier raw-private-key Soracloud finding: closed. Current mutation ingress
+  rejects inline `authority` / `private_key` fields in
+  `crates/iroha_torii/src/soracloud.rs:5305-5308`, binds the HTTP signer to the
+  mutation provenance in `crates/iroha_torii/src/soracloud.rs:5310-5315`, and
+  returns draft transaction instructions instead of server-submitting a signed
+  transaction in `crates/iroha_torii/src/soracloud.rs:5556-5565`.
+- Earlier internal-only local-read proxy execution finding: closed. Public
+  route resolution now skips non-public and update/private-update handlers in
+  `crates/iroha_torii/src/soracloud.rs:8445-8463`, and the runtime rejects
+  non-public local-read routes in
+  `crates/irohad/src/soracloud_runtime.rs:5906-5923`.
+- Earlier public-runtime unmetered fallback finding: closed as written. Public
+  runtime ingress now enforces rate limits and inflight caps in
+  `crates/iroha_torii/src/lib.rs:8837-8852` before resolving a public route in
+  `crates/iroha_torii/src/lib.rs:8858-8860`.
+- Earlier remote-IP attachment-tenancy finding: closed. Attachment tenancy now
+  requires a verified signed account in
+  `crates/iroha_torii/src/lib.rs:7962-7968`.
+  Attachment tenancy previously inherited SEC-05 and SEC-06; that inheritance
+  is closed by the current app-auth remediations above.
+
+## Coverage Notes
+
+- Server/runtime/config/networking: SEC-05, SEC-06, and SEC-07 were confirmed
+  during the audit and are now closed in the current tree.
+- IVM/crypto/serialization: no additional confirmed finding from this audit
+  slice. Positive evidence includes confidential key material zeroization in
+  `crates/iroha_crypto/src/confidential.rs:53-60` and replay-aware Soranet PoW
+  signed-ticket validation in `crates/iroha_crypto/src/soranet/pow.rs:823-879`.
+  Follow-up hardening now also rejects malformed accelerator output in two
+  sampled Norito paths: `crates/norito/src/lib.rs` validates accelerated JSON
+  Stage-1 tapes before `TapeWalker` dereferences offsets and now also requires
+  dynamically loaded Metal/CUDA Stage-1 helpers to prove parity with the
+  scalar structural-index builder before activation, and
+  `crates/norito/src/core/gpu_zstd.rs` validates GPU-reported output lengths
+  before truncating encode/decode buffers. `crates/norito/src/core/simd_crc64.rs`
+  now also self-tests dynamically loaded GPU CRC64 helpers against the
+  canonical fallback before `hardware_crc64` will trust them, so malformed
+  helper libraries fail closed instead of silently changing Norito checksum
+  behavior. Invalid helper results now fall back instead of panicking release
+  builds or drifting checksum parity. On the IVM side, sampled accelerator
+  startup gates now also cover the CUDA Ed25519 `signature_kernel`, CUDA BN254
+  add/sub/mul kernels, and the Metal `sha256_leaves` kernel before those
+  paths are trusted. The remaining live issue in this area is a fail-closed
+  correctness blocker, not a confirmed security bypass: the existing Metal
+  Ed25519 startup parity check still fails on this host and disables the Metal
+  backend.
+- SDKs/examples: no separate key-storage or transport-validation bug was
+  confirmed in the sampled code. The JS, Swift, and Android canonical-request
+  helpers have been updated to the new freshness-aware four-header scheme.
+- Examples and mobile sample apps were reviewed only at a spot-check level and
+  should not be treated as exhaustively audited.
+
+## Validation And Coverage Gaps
+
+- `cargo deny check advisories bans sources` could not run because
+  `cargo-deny` is not installed in the environment.
+- `bash scripts/fuzz_smoke.sh` returned successfully but only reported that
+  `cargo-fuzz` is not installed, so no fuzz smoke actually ran.
+- Torii remediation validation now includes:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo check -p iroha_torii --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_torii --lib --no-run`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_torii --lib verify_accepts_valid_signature -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_torii --lib verify_rejects_replayed_nonce -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_torii --lib operator_auth_rejects_forwarded_mtls_from_untrusted_proxy -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_torii --lib trusted_forwarded_header_requires_proxy_membership -- --nocapture`
+- SDK-side remediation validation now includes:
+  - `node --test javascript/iroha_js/test/canonicalRequest.test.js javascript/iroha_js/test/toriiCanonicalAuth.test.js`
+  - `cd IrohaSwift && swift test --filter CanonicalRequestTests`
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew android:compileDebugUnitTestJavaWithJavac`
+- Norito follow-up validation now includes:
+  - `python3 scripts/check_norito_bindings_sync.py`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p norito validate_accel_rejects_out_of_bounds_offsets -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p norito validate_accel_rejects_non_structural_offsets -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p norito try_gpu_encode_rejects_invalid_success_length -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p norito try_gpu_decode_rejects_invalid_success_length -- --nocapture`
+- IVM accelerator follow-up validation now includes:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-cuda2 cargo check -p ivm --features cuda --tests`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo check -p ivm --features metal --tests`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_sha256_leaves_matches_cpu -- --nocapture`
+- Focused CUDA lib-test execution remains environment-limited on this host:
+  `CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-cuda2 cargo test -p ivm --features cuda --lib selftest_covers_ -- --nocapture`
+  still fails to link because the CUDA driver symbols (`cu*`) are unavailable.
+- Focused Metal runtime validation is partially blocked by an older
+  fail-closed correctness issue: enabling the Metal backend on this host still
+  trips the existing Ed25519 startup parity check, so the new `sha256_leaves`
+  regression currently passes via an explicit skip after backend disable
+  rather than exercising a live Metal backend end-to-end.
+- I did not rerun a full workspace Rust test sweep, full `npm test`, or the
+  full Swift/Android suites during this remediation pass.
+
+## Prioritized Remediation Backlog
+
+### Next Tranche
+
+- Investigate and fix the existing Metal Ed25519 startup parity mismatch so
+  the Metal backend can stay enabled and the new `sha256_leaves` startup guard
+  can be validated end-to-end instead of only compile-time plus skip-path.
+- Rerun the focused CUDA lib-test self-test slice on a host with CUDA driver
+  libraries installed, so the expanded CUDA startup truth set is validated
+  beyond `cargo check`.
+- Rerun broader JS/Swift/Android suites once the unrelated suite-level blockers
+  on this branch are cleared, so the new canonical-request protocol is covered
+  beyond the focused helper tests above.
+- Decide whether the long-term app-auth multisig story should remain
+  fail-closed or grow a first-class HTTP multisig witness format.
+
+### Monitor
+
+- Continue the focused review of `ivm` hardware-acceleration / unsafe paths
+  and the remaining `norito` streaming/crypto boundaries. The JSON Stage-1
+  and GPU zstd helper handoffs have now been hardened to fail closed in
+  release builds, and the sampled IVM accelerator startup truth sets are now
+  broader, but the wider unsafe/determinism review is still open.

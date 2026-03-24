@@ -6,7 +6,6 @@ pub use admission::{
     ACCOUNT_ADMISSION_POLICY_METADATA_KEY, AccountAdmissionMode, AccountAdmissionPolicy,
     DEFAULT_MAX_IMPLICIT_ACCOUNT_CREATIONS_PER_TX,
 };
-use bs58;
 use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model_derive::{IdEqOrdHash, model};
 use iroha_primitives::json::Json;
@@ -109,7 +108,7 @@ mod model {
         pub linked_domains: BTreeSet<DomainId>,
     }
 
-    /// Builder submitted in a transaction to register an account in a specific domain.
+    /// Builder submitted in a transaction to register an account, optionally linking it to a domain.
     #[derive(derive_more::Debug, Clone, IdEqOrdHash, Decode, Encode, IntoSchema)]
     #[allow(clippy::multiple_inherent_impl)]
     #[cfg_attr(
@@ -121,8 +120,9 @@ mod model {
     pub struct NewAccount {
         /// Canonical domainless account identity.
         pub id: AccountId,
-        /// Domain in which this registration materializes the account link.
-        pub domain: DomainId,
+        /// Optional domain in which this registration materializes the account link.
+        #[norito(default)]
+        pub domain: Option<DomainId>,
         /// Metadata supplied during registration.
         pub metadata: Metadata,
         /// Stable label under which the account is addressed (if provided).
@@ -593,9 +593,8 @@ impl AccountId {
     ///
     /// Canonical I105 literals are accepted.
     /// Legacy forms such as `<identifier>@<domain>`, canonical hex, dotted/non-canonical
-    /// I105 literals, aliases, UAID, and opaque account literals are rejected.
-    /// Legacy Base58 envelope literals remain accepted for backward compatibility and are
-    /// canonicalized into I105 on output.
+    /// I105 literals, aliases, UAID, opaque account literals, and historical
+    /// Base58 envelopes are rejected.
     /// The returned canonical string always matches the canonical I105 representation.
     ///
     /// # Errors
@@ -652,37 +651,20 @@ impl AccountId {
                 | AccountAddressError::UnsupportedAddressFormat
                 | AccountAddressError::InvalidLength
                 | AccountAddressError::ChecksumMismatch,
-            ) => Self::parse_legacy_base58_envelope(input).map_or_else(
-                || {
-                    if matches!(
-                        AccountAddress::from_i105_for_discriminant(input, Some(expected_prefix)),
-                        Err(AccountAddressError::ChecksumMismatch)
-                    ) {
-                        Err(ParseError::new(
-                            AccountAddressErrorCode::ChecksumMismatch.as_str(),
-                        ))
-                    } else {
-                        Err(ParseError::new(ERR_ACCOUNT_LITERAL_FORMAT))
-                    }
-                },
-                |account_id| Ok((account_id, AccountAddressSource::Encoded)),
-            ),
+            ) => {
+                if matches!(
+                    AccountAddress::from_i105_for_discriminant(input, Some(expected_prefix)),
+                    Err(AccountAddressError::ChecksumMismatch)
+                ) {
+                    Err(ParseError::new(
+                        AccountAddressErrorCode::ChecksumMismatch.as_str(),
+                    ))
+                } else {
+                    Err(ParseError::new(ERR_ACCOUNT_LITERAL_FORMAT))
+                }
+            }
             Err(err) => Err(ParseError::new(err.code_str())),
         }
-    }
-
-    fn parse_legacy_base58_envelope(input: &str) -> Option<Self> {
-        // Legacy account literals are base58 envelopes:
-        // [0x71, 0x0b] + canonical account payload + 2-byte trailer.
-        let raw = bs58::decode(input).into_vec().ok()?;
-        if raw.len() <= 4 || raw[0] != 0x71 || raw[1] != 0x0b {
-            return None;
-        }
-        let canonical = &raw[2..raw.len().saturating_sub(2)];
-        AccountAddress::from_canonical_bytes(canonical)
-            .ok()?
-            .to_account_id()
-            .ok()
     }
 }
 
@@ -845,6 +827,13 @@ impl Account {
         <Self as Registered>::With::new(id)
     }
 
+    /// Construct a registration builder for a domainless account.
+    #[inline]
+    #[must_use]
+    pub fn new_domainless(id: AccountId) -> <Self as Registered>::With {
+        <Self as Registered>::With::new_domainless(id)
+    }
+
     /// Return a reference to the account signatory, panicking if the controller is not single-key.
     #[inline]
     #[must_use]
@@ -898,9 +887,13 @@ impl NewAccount {
             label: self.label,
             uaid: self.uaid,
             opaque_ids: self.opaque_ids,
-            linked_domains: BTreeSet::from([self.domain]),
+            linked_domains: linked_domains_from_registration(&self.domain),
         }
     }
+}
+
+fn linked_domains_from_registration(domain: &Option<DomainId>) -> BTreeSet<DomainId> {
+    domain.iter().cloned().collect()
 }
 
 impl NewAccount {
@@ -909,7 +902,7 @@ impl NewAccount {
     pub fn new(id: ScopedAccountId) -> Self {
         Self {
             id: id.account,
-            domain: id.domain,
+            domain: Some(id.domain),
             metadata: Metadata::default(),
             label: None,
             uaid: None,
@@ -922,7 +915,7 @@ impl NewAccount {
     pub fn new_in_domain(id: AccountId, domain: DomainId) -> Self {
         Self {
             id,
-            domain,
+            domain: Some(domain),
             metadata: Metadata::default(),
             label: None,
             uaid: None,
@@ -930,16 +923,31 @@ impl NewAccount {
         }
     }
 
-    /// Borrow the explicit domain targeted by this registration.
+    /// Create a registration builder for a domainless account.
     #[must_use]
-    pub fn domain(&self) -> &DomainId {
-        &self.domain
+    pub fn new_domainless(id: AccountId) -> Self {
+        Self {
+            id,
+            domain: None,
+            metadata: Metadata::default(),
+            label: None,
+            uaid: None,
+            opaque_ids: Vec::new(),
+        }
     }
 
-    /// Return the scoped identifier associated with this registration.
+    /// Borrow the optional domain targeted by this registration.
     #[must_use]
-    pub fn scoped_id(&self) -> ScopedAccountId {
-        self.id.to_account_id(self.domain.clone())
+    pub fn domain(&self) -> Option<&DomainId> {
+        self.domain.as_ref()
+    }
+
+    /// Return the scoped identifier associated with this registration when a domain is present.
+    #[must_use]
+    pub fn scoped_id(&self) -> Option<ScopedAccountId> {
+        self.domain
+            .clone()
+            .map(|domain| self.id.to_account_id(domain))
     }
 
     /// Replace metadata on this builder.
@@ -1010,7 +1018,7 @@ impl Registrable for NewAccount {
             label: self.label,
             uaid: self.uaid,
             opaque_ids: self.opaque_ids,
-            linked_domains: BTreeSet::from([self.domain]),
+            linked_domains: linked_domains_from_registration(&self.domain),
         }
     }
 }
@@ -1035,7 +1043,10 @@ impl fmt::Display for Account {
 
 impl fmt::Display for NewAccount {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}@{}", self.id, self.domain)
+        match &self.domain {
+            Some(domain) => write!(f, "{}@{}", self.id, domain),
+            None => write!(f, "{}", self.id),
+        }
     }
 }
 
@@ -1555,6 +1566,20 @@ mod tests {
         details.set_uaid(None);
         assert!(details.uaid().is_none());
     }
+
+    #[test]
+    fn domainless_account_builder_keeps_empty_linked_domains() {
+        let key_pair = KeyPair::random();
+        let account_id = AccountId::new(key_pair.public_key().clone());
+
+        let account = Account::new_domainless(account_id.clone()).build(&account_id);
+        assert!(account.linked_domains.is_empty());
+
+        let new_account = NewAccount::new_domainless(account_id.clone());
+        assert_eq!(new_account.domain(), None);
+        assert_eq!(new_account.scoped_id(), None);
+        assert_eq!(new_account.to_string(), account_id.to_string());
+    }
 }
 
 #[cfg(all(test, feature = "json"))]
@@ -1659,6 +1684,23 @@ mod json_tests {
     }
 
     #[test]
+    fn new_domainless_account_json_roundtrip_defaults() {
+        let _guard = guard_chain_discriminant();
+        let keypair = KeyPair::random();
+        let id = AccountId::new(keypair.public_key().clone());
+        let new_account = NewAccount::new_domainless(id.clone());
+
+        let json = norito::json::to_json(&new_account).expect("serialize new account");
+        let decoded: NewAccount = norito::json::from_json(&json).expect("deserialize new account");
+
+        assert_eq!(decoded, new_account);
+        assert_eq!(decoded.domain(), None);
+        assert!(decoded.label.is_none());
+        assert!(decoded.uaid.is_none());
+        assert_eq!(decoded.metadata, Metadata::default());
+    }
+
+    #[test]
     fn new_account_json_roundtrip_with_label_and_uaid() {
         let _guard = guard_chain_discriminant();
         let domain: DomainId = "wonderland".parse().expect("domain id");
@@ -1672,7 +1714,7 @@ mod json_tests {
 
         let new_account = NewAccount {
             id: id.clone(),
-            domain,
+            domain: Some(domain),
             metadata: metadata.clone(),
             label: Some(label.clone()),
             uaid: Some(uaid),
@@ -1689,19 +1731,20 @@ mod json_tests {
     }
 
     #[test]
-    fn new_account_json_requires_explicit_domain() {
+    fn new_account_json_allows_domainless_payload() {
         let _guard = guard_chain_discriminant();
         let keypair = KeyPair::random();
         let id = AccountId::new(keypair.public_key().clone());
         let i105 = id.canonical_i105().expect("i105 encoding");
         let payload = format!("{{\"id\":\"{i105}\"}}");
 
-        let err =
-            norito::json::from_json::<NewAccount>(&payload).expect_err("domain must be explicit");
-        assert!(
-            err.to_string().contains("domain"),
-            "unexpected error: {err}"
-        );
+        let decoded =
+            norito::json::from_json::<NewAccount>(&payload).expect("domainless account payload");
+        assert_eq!(decoded.id, id);
+        assert_eq!(decoded.domain(), None);
+        assert!(decoded.label.is_none());
+        assert!(decoded.uaid.is_none());
+        assert_eq!(decoded.metadata, Metadata::default());
     }
 
     #[test]

@@ -276,8 +276,9 @@ const torii = new ToriiClient("http://127.0.0.1:8080", {
 
 ### Canonical request headers
 
-App-facing JSON endpoints accept optional `X-Iroha-Account` / `X-Iroha-Signature`
-headers. Provide `canonicalAuth` to sign requests on the fly:
+App-facing JSON endpoints accept optional `X-Iroha-Account`,
+`X-Iroha-Signature`, `X-Iroha-Timestamp-Ms`, and `X-Iroha-Nonce` headers.
+Provide `canonicalAuth` to sign requests on the fly:
 
 ```js
 import { ToriiClient, generateKeyPair } from "@iroha/iroha-js";
@@ -292,7 +293,8 @@ const { items } = await torii.listAccountAssets("i105...", {
 ```
 
 When constructing ad-hoc HTTP calls, reuse `buildCanonicalRequestHeaders` to
-render the two headers from a method/path/query/body tuple.
+render the four headers from a method/path/query/body tuple. The helper also
+includes freshness metadata to prevent replay.
 
 ## Iterable Lists & Pagination
 

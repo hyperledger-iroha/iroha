@@ -28,6 +28,11 @@ Soracloud v1 is an authoritative, IVM-only runtime.
 - `iroha app soracloud deploy`
   - validates `SoraDeploymentBundleV1` admission rules locally, signs the
     request, and calls `POST /v1/soracloud/deploy`.
+  - the CLI now signs the HTTP request canonically with
+    `X-Iroha-Account`, `X-Iroha-Signature`, `X-Iroha-Timestamp-Ms`, and
+    `X-Iroha-Nonce`, receives a deterministic draft transaction instruction set
+    from Torii, then submits the real transaction itself through the normal
+    Iroha client lane.
   - Torii also enforces SCR-host admission caps and fail-closed capability
     checks before the mutation is accepted.
 - `iroha app soracloud upgrade`
@@ -138,10 +143,12 @@ Soracloud v1 is an authoritative, IVM-only runtime.
     runtime `Failed` plus `last_error` instead of silently reporting `Ready`.
   - generated HF apartments now consume approved autonomy runs through the
     node-local runtime path:
-    - `agent-autonomy-run` still records the authoritative approval first, but
-      when the target apartment is the generated HF apartment Torii now
-      immediately asks the embedded runtime manager to execute that approved
-      run against the bound generated HF `/infer` service;
+    - `agent-autonomy-run` now follows a two-step flow: the first signed
+      mutation records the authoritative approval and returns a deterministic
+      draft transaction, then a second signed finalize request asks the
+      embedded runtime manager to execute that approved run against the bound
+      generated HF `/infer` service and returns any authoritative follow-up
+      instructions as another deterministic draft;
     - the approved run record now also persists a canonical
       `request_commitment`, so the later generated service receipt can be
       bound back to the exact authoritative autonomy approval;
@@ -183,6 +190,11 @@ Soracloud v1 is an authoritative, IVM-only runtime.
     the embedded runtime still fails closed on direct replica/unassigned local
     execution and generated HF runtime receipts carry `placement_id`,
     validator, and peer attribution from the authoritative placement record.
+  - when that proxy-to-primary path times out, closes before a response, or
+    comes back with a non-client runtime failure from the authoritative
+    primary, the ingress node now reports `AssignedHeartbeatMiss` for that
+    primary and enqueues `ReconcileSoracloudModelHosts` through the same
+    internal mutation lane.
   - authoritative expired-host reconciliation now records persisted
     model-host violation evidence, reuses the public-lane validator slash path,
     and applies the default HF shared-lease penalty policy:
@@ -195,11 +207,68 @@ Soracloud v1 is an authoritative, IVM-only runtime.
     `WarmupNoShow`, and resident-worker failures on the local warm primary
     emit throttled `AssignedHeartbeatMiss` reports through the normal
     transaction queue.
+  - reconcile now also pre-starts and probes resident HF workers for locally
+    assigned warm/warming hosts, including replicas, so a replica can fail
+    closed into the authoritative `AssignedHeartbeatMiss` path before any
+    public `/infer` request ever lands on the primary.
+  - when that local probe succeeds, the runtime now also emits one
+    authoritative `model-host-heartbeat` mutation for the local validator when
+    the assigned host is still `Warming` or the active host advert needs a TTL
+    refresh, so successful local readiness promotes the same authoritative
+    placement/advert state that manual heartbeats would update.
+  - when the runtime emits a local `WarmupNoShow` or
+    `AssignedHeartbeatMiss`, it now also enqueues
+    `ReconcileSoracloudModelHosts` through the same internal mutation lane so
+    authoritative failover/backfill starts immediately instead of waiting for
+    a later periodic host-expiry sweep.
+  - when public generated-HF ingress fails even earlier because the committed
+    placement has no warm primary to proxy to, Torii now asks the runtime
+    handle to enqueue that same authoritative
+    `ReconcileSoracloudModelHosts` instruction immediately instead of waiting
+    for a later expiry or worker-failure signal.
+  - when public generated-HF ingress does receive a proxied success response,
+    Torii now verifies the included runtime receipt still proves execution by
+    the committed warm primary for the active placement; missing or mismatched
+    placement attribution now fails closed and hints that same authoritative
+    `ReconcileSoracloudModelHosts` path instead of returning a
+    non-authoritative response. Torii also now rejects proxied success
+    responses when the runtime receipt commitments or certification policy do
+    not match the response it is about to return, and that same bad-receipt
+    path also feeds the remote-primary `AssignedHeartbeatMiss` reporting
+    hook.
+  - proxied generated-HF execution failures now request that same
+    authoritative `ReconcileSoracloudModelHosts` path after reporting the
+    remote primary health fault, rather than waiting for a later expiry
+    sweep.
+  - Torii now binds each pending generated-HF proxy request to the
+    authoritative primary peer it targeted. A proxy response from the wrong
+    peer, or with an unsupported proxy response schema version, now fails
+    closed instead of being accepted only because its `request_id` matched a
+    pending request.
+  - incoming Soracloud proxy execution is also now restricted to the intended
+    generated-HF `infer` query case on the committed warm primary. Non-HF
+    public local-read routes, and generated-HF requests delivered to a node
+    that is no longer the authoritative warm primary, now fail closed instead
+    of executing over the P2P proxy path.
+  - when an assigned replica or stale former primary rejects that incoming
+    generated-HF proxy execution because it is no longer the authoritative
+    warm primary, the receiver-side runtime now also hints
+    `ReconcileSoracloudModelHosts` instead of relying only on the caller-side
+    routing view.
+  - reconcile now also emits `AdvertContradiction` automatically when the
+    local validator's configured runtime peer id disagrees with the
+    authoritative `model-host-advertise` peer id for that validator.
+  - valid model-host re-advertise mutations now also synchronize authoritative
+    assigned-host `peer_id` / `host_class` metadata and recompute current
+    placement reservation fees when the host class changes.
+  - contradictory model-host re-advertise mutations now emit immediate
+    `AdvertContradiction` evidence, apply the existing validator slash/evict
+    path, and refresh affected placements instead of just failing validation.
   - remaining HF hosting work is now:
-    - deterministic replica failover/backfill against live runtime health
-      beyond the authoritative expired-host sweep, and
-    - automatic advert-contradiction evidence emission beyond the current
-      operator-driven path.
+    - broader cross-node/runtime-cluster health signals beyond the local
+      validator's direct worker/warmup observations plus assigned-host
+      receiver-side authority failures when remote-peer internal health should
+      also feed the authoritative rebalance/slash path.
   - generated HF local execution now keeps a resident per-source Python worker
     alive under `irohad`, reuses the loaded model across repeated `/infer`
     calls, and restarts that worker deterministically if the local import
@@ -250,6 +319,27 @@ iroha app soracloud deploy \
 ## Notes
 
 - Local validation still runs before requests are signed and submitted.
+- Standard Soracloud mutation endpoints no longer accept raw `authority` /
+  `private_key` JSON fields for deploy, upgrade, rollback, rollout, agent
+  lifecycle, training, model-host, and model-weight paths; Torii authenticates
+  those requests from the canonical HTTP signature headers instead.
+- `hf-deploy` and `hf-lease-renew` now include client-signed auxiliary
+  provenance for the deterministic generated HF service/apartment artifacts,
+  so Torii no longer needs caller private keys to admit those follow-up
+  objects.
+- `agent-autonomy-run` and `model/run-private` now use a draft-then-finalize
+  flow: the first signed mutation records the authoritative approval/start,
+  and a second signed finalize request executes the runtime path and returns
+  any authoritative follow-up instructions as deterministic draft
+  transactions.
+- `model/decrypt-output` now returns the authoritative private-inference
+  checkpoint as a deterministic draft transaction, signed only by the outer
+  transaction rather than by an embedded Torii-held private key.
+- ZK attachment CRUD now keys tenancy off the signed Iroha account and still
+  treats API tokens as an extra access gate when enabled.
+- Public Soracloud local-read ingress now applies explicit per-IP rate and
+  concurrency limits and re-checks public route visibility before local or
+  proxied execution.
 - Private-runtime capability enforcement happens inside the Soracloud host ABI,
   not inside CLI or Torii-local scaffolding.
 - `ram_lfe` remains a separate hidden-function subsystem. User-uploaded private

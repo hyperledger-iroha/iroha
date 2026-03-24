@@ -770,6 +770,14 @@ mod tests {
                 tx_burst_per_authority: None,
                 deploy_rate_per_origin_per_sec: None,
                 deploy_burst_per_origin: None,
+                soracloud_public_rate_per_ip_per_sec:
+                    iroha_config::parameters::defaults::torii::SORACLOUD_PUBLIC_RATE_PER_IP_PER_SEC
+                        .and_then(std::num::NonZeroU32::new),
+                soracloud_public_burst_per_ip:
+                    iroha_config::parameters::defaults::torii::SORACLOUD_PUBLIC_BURST_PER_IP
+                        .and_then(std::num::NonZeroU32::new),
+                soracloud_public_max_inflight:
+                    iroha_config::parameters::defaults::torii::SORACLOUD_PUBLIC_MAX_INFLIGHT,
                 require_api_token: false,
                 api_tokens: Vec::new(),
                 api_fee_asset_id: None,
@@ -920,6 +928,16 @@ mod tests {
                         iroha_config::parameters::defaults::torii::APP_API_RATE_LIMIT_COST_PER_ROW,
                     )
                     .expect("non-zero app-api rate limit cost"),
+                    request_signature_max_clock_skew: Duration::from_secs(
+                        iroha_config::parameters::defaults::torii::app_auth::MAX_CLOCK_SKEW_SECS,
+                    ),
+                    request_signature_nonce_ttl: Duration::from_secs(
+                        iroha_config::parameters::defaults::torii::app_auth::NONCE_TTL_SECS,
+                    ),
+                    request_signature_replay_cache_capacity: NonZeroUsize::new(
+                        iroha_config::parameters::defaults::torii::app_auth::REPLAY_CACHE_CAPACITY,
+                    )
+                    .expect("non-zero app-api replay cache capacity"),
                 },
                 webhook: iroha_config::parameters::actual::Webhook {
                     queue_capacity: NonZeroUsize::new(

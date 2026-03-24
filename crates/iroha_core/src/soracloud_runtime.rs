@@ -111,6 +111,12 @@ pub fn soracloud_hf_generated_service_contract_artifact() -> Vec<u8> {
     bytes
 }
 
+/// Lease term used for deterministic HF-generated agent apartments.
+pub const HF_GENERATED_AGENT_LEASE_TICKS: u64 = 86_400;
+
+/// Autonomy budget applied to deterministic HF-generated agent apartments.
+pub const HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS: u64 = 1_000;
+
 /// Build the canonical generated Soracloud service bundle used for HF-backed deployments.
 #[must_use]
 pub fn build_soracloud_hf_generated_service_bundle(
@@ -722,6 +728,23 @@ pub trait SoracloudRuntimeReadHandle: Send + Sync {
     /// Return the maximum time Torii should wait for an internal Soracloud proxy read.
     fn local_read_proxy_timeout(&self) -> Duration {
         Duration::from_secs(10)
+    }
+
+    /// Report a failed generated-HF proxy read targeting the authoritative primary host.
+    fn report_generated_hf_proxy_failure(
+        &self,
+        _request: &SoracloudLocalReadRequest,
+        _target_peer_id: &str,
+        _error: &SoracloudRuntimeExecutionError,
+    ) {
+    }
+
+    /// Request authoritative HF host reconciliation after ingress observes routing failure.
+    fn request_generated_hf_reconcile(
+        &self,
+        _request: &SoracloudLocalReadRequest,
+        _error: &SoracloudRuntimeExecutionError,
+    ) {
     }
 }
 

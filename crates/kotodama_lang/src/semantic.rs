@@ -3389,12 +3389,9 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     })
                 }
                 "resolve_account_alias" => {
-                    if arg_typed.len() != 2
-                        || arg_typed[0].ty != Type::Name
-                        || arg_typed[1].ty != Type::DomainId
-                    {
+                    if arg_typed.len() != 1 || arg_typed[0].ty != Type::String {
                         return Err(SemanticError {
-                            message: "resolve_account_alias expects (Name, DomainId)".into(),
+                            message: "resolve_account_alias expects (String)".into(),
                         });
                     }
                     Ok(TypedExpr {
@@ -6216,11 +6213,9 @@ mod tests {
     }
 
     #[test]
-    fn resolve_account_alias_accepts_name_and_domain() {
-        let program = parse(
-            "fn f() { let _acct = resolve_account_alias(name(\"banking\"), domain(\"sbp\")); }",
-        )
-        .expect("parse resolve_account_alias");
+    fn resolve_account_alias_accepts_canonical_string() {
+        let program = parse("fn f() { let _acct = resolve_account_alias(\"banking@sbp\"); }")
+            .expect("parse resolve_account_alias");
         analyze(&program).expect("resolve_account_alias should type-check");
     }
 
@@ -6230,7 +6225,7 @@ mod tests {
             "fn f() { \
                 let ev = trigger_event(); \
                 let dst = json_get_account_id(ev, name(\"account_id\")); \
-                let sink = resolve_account_alias(name(\"banking\"), domain(\"sbp\")); \
+                let sink = resolve_account_alias(\"banking@sbp\"); \
                 let _same = dst == sink; \
             }",
         )
@@ -6360,22 +6355,24 @@ mod tests {
 
     #[test]
     fn trigger_decl_supports_structured_asset_data_filter() {
-        let asset_definition: AssetDefinitionId = "aid:6872454e9c044641aa581ec5f3801619"
-            .parse()
-            .expect("asset definition id");
-        let program = parse(
+        let asset_definition = AssetDefinitionId::new(
+            "wonderland".parse().expect("domain"),
+            "rose".parse().expect("name"),
+        );
+        let asset_definition_literal = asset_definition.to_string();
+        let program = parse(&format!(
             r#"
-            seiyaku C {
-                kotoage fn run() {}
-                register_trigger wake {
+            seiyaku C {{
+                kotoage fn run() {{}}
+                register_trigger wake {{
                     call run;
-                    on data asset added {
-                        asset_definition "aid:6872454e9c044641aa581ec5f3801619";
-                    }
-                }
-            }
+                    on data asset added {{
+                        asset_definition "{asset_definition_literal}";
+                    }}
+                }}
+            }}
             "#,
-        )
+        ))
         .expect("parse trigger decl");
         let typed = analyze(&program).expect("analyze trigger decl");
         let trigger = &typed.triggers[0];
@@ -6420,9 +6417,10 @@ mod tests {
         let peer_literal = "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D";
         let peer: PeerId = peer_literal.parse().expect("peer");
         let domain: DomainId = "wonderland".parse().expect("domain");
-        let asset_definition: AssetDefinitionId = "aid:6872454e9c044641aa581ec5f3801619"
-            .parse()
-            .expect("asset definition");
+        let asset_definition = AssetDefinitionId::new(
+            "wonderland".parse().expect("domain"),
+            "rose".parse().expect("name"),
+        );
         let asset = AssetId::new(asset_definition.clone(), account.clone());
         let asset_literal = asset.canonical_encoded();
         let nft: NftId = "n0$wonderland".parse().expect("nft");
@@ -6663,7 +6661,7 @@ mod tests {
                 register_trigger wake {
                     call run;
                     on data asset added {
-                        asset_definition "not-an-aid";
+                        asset_definition "not-an-address";
                     }
                 }
             }
@@ -6679,20 +6677,25 @@ mod tests {
 
     #[test]
     fn trigger_decl_rejects_duplicate_data_matchers() {
-        let program = parse(
-            r#"
-            seiyaku C {
-                kotoage fn run() {}
-                register_trigger wake {
-                    call run;
-                    on data asset added {
-                        asset_definition "aid:6872454e9c044641aa581ec5f3801619";
-                        asset_definition "aid:6872454e9c044641aa581ec5f3801619";
-                    }
-                }
-            }
-            "#,
+        let asset_definition_literal = AssetDefinitionId::new(
+            "wonderland".parse().expect("domain"),
+            "rose".parse().expect("name"),
         )
+        .to_string();
+        let program = parse(&format!(
+            r#"
+            seiyaku C {{
+                kotoage fn run() {{}}
+                register_trigger wake {{
+                    call run;
+                    on data asset added {{
+                        asset_definition "{asset_definition_literal}";
+                        asset_definition "{asset_definition_literal}";
+                    }}
+                }}
+            }}
+            "#,
+        ))
         .expect("parse trigger decl");
         let err = analyze(&program).expect_err("duplicate matcher should error");
         assert!(err.message.contains("duplicate `asset_definition` matcher"));

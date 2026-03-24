@@ -27,7 +27,9 @@ translator: machine-google-reviewed
 ID များတွင် `Display`/`FromStr` ဖြင့် အသွားအပြန် တည်ငြိမ်သော စာကြောင်းပုံစံများရှိသည်။ အမည်စည်းမျဉ်းများသည် နေရာလွတ်နှင့် သီးသန့် `@ # $` စာလုံးများကို တားမြစ်ထားသည်။- `Name` — တရားဝင်အတည်ပြုထားသော စာသားအမှတ်အသား။ စည်းမျဉ်းများ- `crates/iroha_data_model/src/name.rs`။
 - `DomainId` — `name`။ ဒိုမိန်း- `{ id, logo, metadata, owned_by }`။ တည်ဆောက်သူများ- `NewDomain`။ ကုဒ်- `crates/iroha_data_model/src/domain.rs`။
 - `AccountId` — Canonical လိပ်စာများကို `AccountAddress` (I105 / hex) မှတဆင့် ထုတ်လုပ်ပြီး Torii သည် `AccountAddress::parse_encoded` မှတဆင့် သွင်းအားများကို ပုံမှန်ဖြစ်စေသည်။ I105 သည် ဦးစားပေးအကောင့်ဖော်မတ်ဖြစ်သည်။ I105 ဖောင်သည် Sora-only UX အတွက်ဖြစ်သည်။ အကျွမ်းတဝင်ရှိသော `alias` (ပယ်ချထားသော အမွေအနှစ်ပုံစံ) စာကြောင်းကို လမ်းကြောင်းသတ်မှတ်ခြင်းအဖြစ်သာ သိမ်းဆည်းထားသည်။ အကောင့်- `{ id, metadata }`။ ကုဒ်- `crates/iroha_data_model/src/account.rs`။- အကောင့်ဝင်ခွင့်မူဝါဒ — ဒိုမိန်းများသည် မက်တာဒေတာကီး `iroha:account_admission_policy` အောက်တွင် Norito-JSON `AccountAdmissionPolicy` ကို သိမ်းဆည်းခြင်းဖြင့် သွယ်ဝိုက်သောအကောင့်ဖန်တီးမှုကို ထိန်းချုပ်ပါသည်။ သော့မရှိသည့်အခါ၊ ကွင်းဆက်အဆင့် စိတ်ကြိုက်ကန့်သတ်ဘောင် `iroha:default_account_admission_policy` သည် ပုံသေကို ပေးသည်။ ၎င်းသည်လည်းမရှိသည့်အခါ၊ hard default သည် `ImplicitReceive` (ပထမထုတ်သည်) ဖြစ်သည်။ မူဝါဒသည် `mode` (`ExplicitOnly` သို့မဟုတ် `ImplicitReceive`) နှင့် ရွေးချယ်နိုင်သော ငွေပေးချေမှုတစ်ခုခြင်း (မူလ `16`) နှင့် ပိတ်ဆို့ဖန်တီးမှုစာထုပ်များ၊ ချန်လှပ်ထားသော Norito (per-block per-block) အကောင့်တစ်ခုလျှင် Norito (သို့) ပိုင်ဆိုင်မှု အဓိပ္ပါယ်ဖွင့်ဆိုချက်နှင့် ရွေးချယ်နိုင်သော `default_role_on_create` (`AccountCreated` ပြီးနောက် ခွင့်ပြုထားသော၊ ပျောက်ဆုံးပါက `DefaultRoleError` ဖြင့် ငြင်းပယ်သည်)။ ကမ္ဘာဦးကျမ်းတွင် မပါဝင်နိုင်ပါ။ `InstructionExecutionError::AccountAdmission` ပါ အမည်မသိအကောင့်များအတွက် ပြေစာပုံစံ ညွှန်ကြားချက်များကို ပိတ်ထားသည်/တရားမဝင်သော မူဝါဒများကို ငြင်းပယ်ပါ။ `AccountCreated` မတိုင်ခင် `iroha:created_via="implicit"`၊ မူရင်းအခန်းကဏ္ဍများသည် နောက်ဆက်တွဲ `AccountRoleGranted` ကို ထုတ်လွှတ်ပြီး ပိုင်ရှင်-အခြေခံစည်းမျဉ်းများသည် အကောင့်အသစ်အား အပိုအခန်းကဏ္ဍများမပါဘဲ ၎င်း၏ကိုယ်ပိုင်ပိုင်ဆိုင်မှု/NFT များကို သုံးစွဲခွင့်ပေးသည်။ Code: `crates/iroha_data_model/src/account/admission.rs`, `crates/iroha_core/src/smartcontracts/isi/account_admission.rs`။
-- `AssetDefinitionId` — canonical `aid:<32-lower-hex-no-dash>` (UUID-v4 bytes)။ အဓိပ္ပါယ်- `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`။ `alias` စာလုံးများသည် `<name>#<domain>@<dataspace>` သို့မဟုတ် `<name>#<dataspace>` ဖြစ်ရမည်၊ `<name>` သည် ပိုင်ဆိုင်မှုအဓိပ္ပါယ်ဖွင့်ဆိုချက်အမည်နှင့် ညီမျှရပါမည်။ ကုဒ်- `crates/iroha_data_model/src/asset/definition.rs`။
+- `AssetDefinitionId` — canonical `unprefixed Base58 address with versioning and checksum` (UUID-v4 bytes)။ အဓိပ္ပါယ်- `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`။ `alias` စာလုံးများသည် `<name>#<domain>.<dataspace>` သို့မဟုတ် `<name>#<dataspace>` ဖြစ်ရမည်၊ `<name>` သည် ပိုင်ဆိုင်မှုအဓိပ္ပါယ်ဖွင့်ဆိုချက်အမည်နှင့် ညီမျှရပါမည်။ ကုဒ်- `crates/iroha_data_model/src/asset/definition.rs`။
+
+  - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`, where `status` is `permanent`, `leased_active`, `leased_grace`, or `expired_pending_cleanup`. Alias selectors resolve against the latest committed block creation time and stop resolving after grace even before sweep removes stale bindings.
 - `AssetId`- canonical encoded ပကတိ `norito:<hex>` (ပထမထုတ်ဝေမှုတွင် အမွေအနှစ်စာသားပုံစံများကို ပံ့ပိုးမထားပါ။)- `NftId` — `nft$domain`။ NFT- `{ id, content: Metadata, owned_by }`။ ကုဒ်- `crates/iroha_data_model/src/nft.rs`။
 - `RoleId` — `name`။ အခန်းကဏ္ဍ- တည်ဆောက်သူ `NewRole { inner: Role, grant_to }` နှင့်အတူ `{ id, permissions: BTreeSet<Permission> }`။ ကုဒ်- `crates/iroha_data_model/src/role.rs`။
 - `Permission` — `{ name: Ident, payload: Json }`။ ကုဒ်- `crates/iroha_data_model/src/permission.rs`။
@@ -192,19 +194,19 @@ Execution ကို `iroha_core::smartcontracts::isi` တွင် `Execute for 
   - လုပ်ဆောင်သည့်အချိန်တွင် trigger ၏ IVM bytecode ပျောက်ဆုံးပါက၊ trigger ကိုဖယ်ရှားပြီး execution အား ပျက်ကွက်ရလဒ်အဖြစ် no-op အဖြစ် သတ်မှတ်သည်။
   - ကုန်ခမ်းသွားသော အစပျိုးများကို ချက်ချင်းဖယ်ရှားသည်။ ကွပ်မျက်စဉ်အတွင်း အားအင်ကုန်ခမ်းသွားပါက ၎င်းကို ဖြတ်တောက်ပြီး ပျောက်ဆုံးသည်ဟု သတ်မှတ်သည်။
 - ကန့်သတ်ချက် အပ်ဒိတ်-
-  - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` ကို အပ်ဒိတ်လုပ်ပြီး `ConfigurationEvent::Changed` ကို ထုတ်လွှတ်သည်။CLI / Torii `aid` + alias ဥပမာများ-
-- canonical aid + တိကျသောအမည် + ရှည်လျားသောအမည်များဖြင့် မှတ်ပုံတင်ပါ-
-  - `iroha ledger asset definition register --id aid:2f17c72466f84a4bb8a8e24884fdcd2f --name pkr --alias pkr#ubl@sbp`
-- canonical aid + တိကျသောအမည် + အတိုကောက်အမည်များ ဖြင့် မှတ်ပုံတင်ပါ။
-  - `iroha ledger asset definition register --id aid:550e8400e29b41d4a7164466554400dd --name pkr --alias pkr#sbp`
+  - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` ကို အပ်ဒိတ်လုပ်ပြီး `ConfigurationEvent::Changed` ကို ထုတ်လွှတ်သည်။CLI / Torii asset-definition id + alias ဥပမာများ-
+- canonical Base58 id + တိကျသောအမည် + ရှည်လျားသောအမည်များဖြင့် မှတ်ပုံတင်ပါ-
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#ubl.sbp`
+- canonical Base58 id + တိကျသောအမည် + အတိုကောက်အမည်များ ဖြင့် မှတ်ပုံတင်ပါ။
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#sbp`
 - နာမည်များ + အကောင့်အစိတ်အပိုင်းများမှ Mint
-  - `iroha ledger asset mint --definition-alias pkr#ubl@sbp --account <i105> --quantity 500`
-- canonical aid ကို alias များကို ဖြေရှင်းပါ
-  - JSON `{ "alias": "pkr#ubl@sbp" }` ဖြင့် `POST /v1/assets/aliases/resolve`
+  - `iroha ledger asset mint --definition-alias pkr#ubl.sbp --account <i105> --quantity 500`
+- canonical Base58 id ကို alias များကို ဖြေရှင်းပါ
+  - JSON `{ "alias": "pkr#ubl.sbp" }` ဖြင့် `POST /v1/assets/aliases/resolve`
 
 ပြောင်းရွှေ့မှုမှတ်စု-
 - `name#domain` စာသားပိုင်ဆိုင်မှု-အဓိပ္ပါယ်ဖွင့်ဆိုချက် ID များသည် ပထမထုတ်ဝေမှုတွင် ရည်ရွယ်ချက်ရှိရှိ ပံ့ပိုးမထားပါ။
-- mint/burn/transfer boundaries များရှိ ပိုင်ဆိုင်မှု ID များသည် canonical `norito:<hex>` တွင် ရှိနေသည်။ `iroha tools encode asset-id` ကို `--definition aid:...` သို့မဟုတ် `--alias ...` နှင့် `--account` ကို အသုံးပြုပါ။
+- mint/burn/transfer boundaries များရှိ ပိုင်ဆိုင်မှု ID များသည် canonical `norito:<hex>` တွင် ရှိနေသည်။ `iroha tools encode asset-id` ကို `--definition <base58-asset-definition-id>` သို့မဟုတ် `--alias ...` နှင့် `--account` ကို အသုံးပြုပါ။
 
 ---
 

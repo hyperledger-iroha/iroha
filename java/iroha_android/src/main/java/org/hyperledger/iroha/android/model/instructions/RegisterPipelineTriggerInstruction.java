@@ -140,10 +140,9 @@ public final class RegisterPipelineTriggerInstruction implements InstructionTemp
     }
 
     public Builder setAuthority(final String authority) {
-      if (authority == null || authority.isBlank()) {
-        throw new IllegalArgumentException("authority must not be blank");
-      }
-      this.authority = authority;
+      this.authority =
+          org.hyperledger.iroha.android.address.AccountIdLiteral.requireCanonicalI105Address(
+              authority, "authority");
       return this;
     }
 

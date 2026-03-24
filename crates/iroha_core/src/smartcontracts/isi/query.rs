@@ -421,6 +421,9 @@ impl ExecuteSingularQuery for SingularQueryBox {
             SingularQueryBox::FindAssetById(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
+            SingularQueryBox::FindAssetDefinitionById(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
             SingularQueryBox::FindTwitterBindingByHash(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
@@ -446,6 +449,9 @@ impl ExecuteSingularQuery for SingularQueryBox {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindSorafsProviderOwner(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindDataspaceNameOwnerById(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
         }

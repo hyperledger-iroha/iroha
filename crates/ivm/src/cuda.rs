@@ -2,12 +2,9 @@
 
 #[cfg(feature = "cuda")]
 mod imp {
-    use std::{
-        ffi::CString,
-        sync::{
-            Mutex, OnceLock,
-            atomic::{AtomicBool, Ordering},
-        },
+    use std::sync::{
+        Mutex, OnceLock,
+        atomic::{AtomicBool, Ordering},
     };
 
     use cust::{memory::DeviceCopy, prelude::*};
@@ -32,11 +29,15 @@ mod imp {
 
     static CUDA_DISABLED: AtomicBool = AtomicBool::new(false);
     static CUDA_FORCED_DISABLED: AtomicBool = AtomicBool::new(false);
-    static CUDA_SELFTEST_OK: OnceLock<bool> = OnceLock::new();
+    static CUDA_SELFTEST_OK: OnceLock<Mutex<Option<bool>>> = OnceLock::new();
     static CUDA_LAST_ERROR: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 
     fn cuda_error_slot() -> &'static Mutex<Option<String>> {
         CUDA_LAST_ERROR.get_or_init(|| Mutex::new(None))
+    }
+
+    fn cuda_selftest_cache() -> &'static Mutex<Option<bool>> {
+        CUDA_SELFTEST_OK.get_or_init(|| Mutex::new(None))
     }
 
     fn set_cuda_status_message(message: Option<String>) {
@@ -63,6 +64,10 @@ mod imp {
 
     unsafe impl DeviceCopy for KernelStatus {}
 
+    fn device_buffer_uninitialized<T: DeviceCopy>(len: usize) -> Option<DeviceBuffer<T>> {
+        unsafe { DeviceBuffer::<T>::uninitialized(len).ok() }
+    }
+
     const BN254_LIMBS: usize = 4;
     const POSEIDON2_WIDTH: usize = 3;
     const POSEIDON6_WIDTH: usize = 6;
@@ -70,6 +75,7 @@ mod imp {
     const POSEIDON6_STATE_WORDS: usize = POSEIDON6_WIDTH * BN254_LIMBS;
     const POSEIDON_FULL_ROUNDS: u32 = 8;
     const POSEIDON_PARTIAL_ROUNDS: u32 = 56;
+    const POSEIDON_STATUS_ERR_STRIDE: u32 = 2; // keep in sync with poseidon.cu STATUS_ERR_STRIDE
     const POSEIDON_STATUS_ERR_ROUNDS: u32 = 3; // keep in sync with poseidon.cu STATUS_ERR_ROUNDS
 
     fn flatten_round_constants<const WIDTH: usize>(
@@ -121,8 +127,7 @@ mod imp {
         let mgr = crate::GpuManager::shared()?;
         mgr.with_gpu_for_task(0, |gpu| {
             gpu.with_stream(|stream| {
-                let ptx = CString::new(BITONIC_PTX).ok()?;
-                let module = Module::from_ptx(ptx, &[]).ok()?;
+                let module = Module::from_ptx(BITONIC_PTX, &[]).ok()?;
                 let function = module.get_function("bitonic_step").ok()?;
                 let mut d_hi = DeviceBuffer::from_slice(&hi_pad).ok()?;
                 let mut d_lo = DeviceBuffer::from_slice(&lo_pad).ok()?;
@@ -172,12 +177,11 @@ mod imp {
         let mgr = crate::GpuManager::shared()?;
         mgr.with_gpu_for_task(0, |gpu| {
             gpu.with_stream(|stream| {
-                let ptx = CString::new(BN254_PTX).ok()?;
-                let module = Module::from_ptx(ptx, &[]).ok()?;
+                let module = Module::from_ptx(BN254_PTX, &[]).ok()?;
                 let function = module.get_function(kernel_name).ok()?;
                 let mut d_lhs = DeviceBuffer::from_slice(lhs).ok()?;
                 let mut d_rhs = DeviceBuffer::from_slice(rhs).ok()?;
-                let mut d_out = DeviceBuffer::<u64>::uninitialized(BN254_LIMBS).ok()?;
+                let mut d_out = device_buffer_uninitialized::<u64>(BN254_LIMBS)?;
                 let threads: u32 = 128;
                 let grid: u32 = 1;
                 let launch_res = unsafe {
@@ -206,7 +210,7 @@ mod imp {
                 }
                 Some(out)
             })
-        })
+        })?
     }
 
     fn sha256_scalar_ref(state: &mut [u32; 8], block: &[u8; 64]) {
@@ -310,11 +314,155 @@ mod imp {
         true
     }
 
+    fn ed25519_cuda_selftest() -> bool {
+        use curve25519_dalek::scalar::Scalar;
+        use ed25519_dalek::{Signer, SigningKey};
+        use sha2::{Digest, Sha512};
+
+        let key = SigningKey::from_bytes(&[9u8; 32]);
+        let pk = key.verifying_key();
+        let msg = b"ivm-cuda-ed25519-selftest";
+        let sig = key.sign(msg).to_bytes();
+        let mut hasher = Sha512::new();
+        hasher.update(&sig[..32]);
+        hasher.update(pk.as_bytes());
+        hasher.update(msg);
+        let hram = Scalar::from_hash(hasher).to_bytes();
+
+        let mgr = match crate::GpuManager::shared() {
+            Some(mgr) => mgr,
+            None => {
+                record_cuda_disable("ed25519 CUDA self-test could not acquire GPU manager");
+                return false;
+            }
+        };
+        let single_ok = mgr.with_gpu_for_task(0, |gpu| {
+            gpu.with_stream(|stream| {
+                let module = Module::from_ptx(SIG_PTX, &[]).ok()?;
+                let function = module.get_function("signature_kernel").ok()?;
+                let mut d_sig = DeviceBuffer::from_slice(sig.as_ref()).ok()?;
+                let mut d_pk = DeviceBuffer::from_slice(pk.as_bytes()).ok()?;
+                let mut d_hram = DeviceBuffer::from_slice(hram.as_ref()).ok()?;
+                let mut d_out = device_buffer_uninitialized::<u8>(1)?;
+                unsafe {
+                    launch!(function<<<1, 32, 0, stream>>>(
+                        d_sig.as_device_ptr(),
+                        d_pk.as_device_ptr(),
+                        d_hram.as_device_ptr(),
+                        1u32,
+                        d_out.as_device_ptr()
+                    ))
+                    .ok()?;
+                }
+                stream.synchronize().ok()?;
+                let mut out = [0u8; 1];
+                d_out.copy_to(&mut out).ok()?;
+                Some(out[0] == 1)
+            })
+        });
+        if single_ok != Some(Some(true)) {
+            record_cuda_disable("golden self-test mismatch: ed25519 single");
+            return false;
+        }
+
+        let mut bad_sig = sig;
+        bad_sig[0] ^= 0x80;
+        let sigs = [sig, bad_sig];
+        let pks = [pk.to_bytes(), pk.to_bytes()];
+        let hrams = [hram, hram];
+        let flat_sigs: Vec<u8> = sigs
+            .iter()
+            .flat_map(|value| value.iter())
+            .copied()
+            .collect();
+        let flat_pks: Vec<u8> = pks.iter().flat_map(|value| value.iter()).copied().collect();
+        let flat_hrams: Vec<u8> = hrams
+            .iter()
+            .flat_map(|value| value.iter())
+            .copied()
+            .collect();
+        let batch_ok = mgr.with_gpu_for_task(0, |gpu| {
+            gpu.with_stream(|stream| {
+                let module = Module::from_ptx(SIG_PTX, &[]).ok()?;
+                let function = module.get_function("signature_kernel").ok()?;
+                let mut d_sig = DeviceBuffer::from_slice(&flat_sigs).ok()?;
+                let mut d_pk = DeviceBuffer::from_slice(&flat_pks).ok()?;
+                let mut d_hram = DeviceBuffer::from_slice(&flat_hrams).ok()?;
+                let mut d_out = device_buffer_uninitialized::<u8>(2)?;
+                unsafe {
+                    launch!(function<<<1, 128, 0, stream>>>(
+                        d_sig.as_device_ptr(),
+                        d_pk.as_device_ptr(),
+                        d_hram.as_device_ptr(),
+                        2u32,
+                        d_out.as_device_ptr()
+                    ))
+                    .ok()?;
+                }
+                stream.synchronize().ok()?;
+                let mut out = [0u8; 2];
+                d_out.copy_to(&mut out).ok()?;
+                Some(out == [1u8, 0u8])
+            })
+        });
+        if batch_ok != Some(Some(true)) {
+            record_cuda_disable("golden self-test mismatch: ed25519 batch");
+            return false;
+        }
+
+        true
+    }
+
+    fn bn254_cuda_selftest() -> bool {
+        let add_lhs = FieldElem::from_u64(3);
+        let add_rhs = FieldElem::from_u64(4);
+        let add_expected = crate::bn254_vec::add_scalar(add_lhs, add_rhs).0;
+        let Some(add_out) = bn254_launch_kernel("bn254_add_kernel", &add_lhs.0, &add_rhs.0) else {
+            record_cuda_disable("bn254 CUDA self-test launch failed: add");
+            return false;
+        };
+        if add_out != add_expected {
+            record_cuda_disable("golden self-test mismatch: bn254 add");
+            return false;
+        }
+
+        let sub_lhs = FieldElem::from_u64(2);
+        let sub_rhs = FieldElem::from_u64(5);
+        let sub_expected = crate::bn254_vec::sub_scalar(sub_lhs, sub_rhs).0;
+        let Some(sub_out) = bn254_launch_kernel("bn254_sub_kernel", &sub_lhs.0, &sub_rhs.0) else {
+            record_cuda_disable("bn254 CUDA self-test launch failed: sub");
+            return false;
+        };
+        if sub_out != sub_expected {
+            record_cuda_disable("golden self-test mismatch: bn254 sub");
+            return false;
+        }
+
+        let mul_lhs = FieldElem::from_u64(u32::MAX as u64 + 17);
+        let mul_rhs = FieldElem::from_u64(11);
+        let mul_expected = crate::bn254_vec::mul_scalar(mul_lhs, mul_rhs).0;
+        let Some(mul_out) = bn254_launch_kernel("bn254_mul_kernel", &mul_lhs.0, &mul_rhs.0) else {
+            record_cuda_disable("bn254 CUDA self-test launch failed: mul");
+            return false;
+        };
+        if mul_out != mul_expected {
+            record_cuda_disable("golden self-test mismatch: bn254 mul");
+            return false;
+        }
+
+        true
+    }
+
     fn ensure_cuda_selftest() -> bool {
         if CUDA_FORCED_DISABLED.load(Ordering::SeqCst) || CUDA_DISABLED.load(Ordering::SeqCst) {
             return false;
         }
-        *CUDA_SELFTEST_OK.get_or_init(|| {
+        if let Ok(guard) = cuda_selftest_cache().lock()
+            && let Some(cached) = *guard
+        {
+            return cached;
+        }
+        let result = {
             if CUDA_FORCED_DISABLED.load(Ordering::SeqCst)
                 || (crate::dev_env::dev_env_flag("IVM_DISABLE_CUDA")
                     && std::env::var("IVM_DISABLE_CUDA")
@@ -374,17 +522,10 @@ mod imp {
             block[3] = 0x80;
             block[63] = 24;
             sha256_scalar_ref(&mut st_scalar, &block);
-            let ptx = match CString::new(SHA_PTX) {
-                Ok(p) => p,
-                Err(_) => {
-                    record_cuda_disable("failed to load SHA256 PTX string");
-                    return false;
-                }
-            };
             let ok = if let Some(mgr) = crate::GpuManager::shared() {
                 let result = mgr.with_gpu_for_task(0, |gpu| {
                     gpu.with_stream(|stream| {
-                        let module = Module::from_ptx(ptx, &[]).ok()?;
+                        let module = Module::from_ptx(SHA_PTX, &[]).ok()?;
                         let function = module.get_function("sha256_compress").ok()?;
                         let mut d_state = DeviceBuffer::from_slice(&st_cuda).ok()?;
                         let mut d_block = DeviceBuffer::from_slice(&block).ok()?;
@@ -414,17 +555,10 @@ mod imp {
             }
             let mut k_cuda = k_scalar;
             crate::sha3::keccak_f1600(&mut k_scalar);
-            let ptx = match CString::new(SHA3_PTX) {
-                Ok(p) => p,
-                Err(_) => {
-                    record_cuda_disable("failed to load SHA3 PTX string");
-                    return false;
-                }
-            };
             let ok = if let Some(mgr) = crate::GpuManager::shared() {
                 let result = mgr.with_gpu_for_task(0, |gpu| {
                     gpu.with_stream(|stream| {
-                        let module = Module::from_ptx(ptx, &[]).ok()?;
+                        let module = Module::from_ptx(SHA3_PTX, &[]).ok()?;
                         let function = module.get_function("keccak_f1600_cuda").ok()?;
                         let mut d_state = DeviceBuffer::from_slice(&k_cuda).ok()?;
                         unsafe {
@@ -454,22 +588,15 @@ mod imp {
             ];
             let cpu_enc = crate::aes::aesenc_impl(state, rk);
             let cpu_dec = crate::aes::aesdec_impl(cpu_enc, rk);
-            let ptx = match CString::new(AES_PTX) {
-                Ok(p) => p,
-                Err(_) => {
-                    record_cuda_disable("failed to load AES PTX string");
-                    return false;
-                }
-            };
             let ok = if let Some(mgr) = crate::GpuManager::shared() {
                 let result = mgr.with_gpu_for_task(0, |gpu| {
                     gpu.with_stream(|stream| {
-                        let module = Module::from_ptx(ptx, &[]).ok()?;
+                        let module = Module::from_ptx(AES_PTX, &[]).ok()?;
                         // AESENC
                         let enc_fn = module.get_function("aesenc_round").ok()?;
                         let mut d_state = DeviceBuffer::from_slice(&state).ok()?;
                         let mut d_rk = DeviceBuffer::from_slice(&rk).ok()?;
-                        let mut d_out = DeviceBuffer::<u8>::uninitialized(16).ok()?;
+                        let mut d_out = device_buffer_uninitialized::<u8>(16)?;
                         unsafe {
                             launch!(enc_fn<<<1, 1, 0, stream>>>(
                                 d_state.as_device_ptr(),
@@ -487,7 +614,7 @@ mod imp {
                         // AESDEC on the encoded block
                         let dec_fn = module.get_function("aesdec_round").ok()?;
                         let mut d_state2 = DeviceBuffer::from_slice(&enc_out).ok()?;
-                        let mut d_out2 = DeviceBuffer::<u8>::uninitialized(16).ok()?;
+                        let mut d_out2 = device_buffer_uninitialized::<u8>(16)?;
                         unsafe {
                             launch!(dec_fn<<<1, 1, 0, stream>>>(
                                 d_state2.as_device_ptr(),
@@ -533,11 +660,10 @@ mod imp {
                 let r1 = crate::aes::aesdec_impl(cpu_enc2, rk1);
                 crate::aes::aesdec_impl(r1, rk2)
             };
-            let ptx = CString::new(AES_PTX).unwrap();
             let ok = if let Some(mgr) = crate::GpuManager::shared() {
                 let result = mgr.with_gpu_for_task(0, |gpu| {
                     gpu.with_stream(|stream| {
-                        let module = Module::from_ptx(ptx, &[]).ok()?;
+                        let module = Module::from_ptx(AES_PTX, &[]).ok()?;
                         // Encrypt 2 rounds
                         let enc_fn = module.get_function("aesenc_rounds_batch").ok()?;
                         let mut d_states = DeviceBuffer::from_slice(&state).ok()?;
@@ -548,7 +674,7 @@ mod imp {
                             buf
                         };
                         let mut d_rks = DeviceBuffer::from_slice(&rks).ok()?;
-                        let mut d_out = DeviceBuffer::<u8>::uninitialized(16).ok()?;
+                        let mut d_out = device_buffer_uninitialized::<u8>(16)?;
                         unsafe {
                             launch!(enc_fn<<<1, 1, 0, stream>>>(
                                 d_states.as_device_ptr(),
@@ -568,7 +694,7 @@ mod imp {
                         // Decrypt 2 rounds on enc2
                         let dec_fn = module.get_function("aesdec_rounds_batch").ok()?;
                         let mut d_states2 = DeviceBuffer::from_slice(&enc2).ok()?;
-                        let mut d_out2 = DeviceBuffer::<u8>::uninitialized(16).ok()?;
+                        let mut d_out2 = device_buffer_uninitialized::<u8>(16)?;
                         unsafe {
                             launch!(dec_fn<<<1, 1, 0, stream>>>(
                                 d_states2.as_device_ptr(),
@@ -599,9 +725,19 @@ mod imp {
             if !poseidon_cuda_selftest() {
                 return false;
             }
+            if !ed25519_cuda_selftest() {
+                return false;
+            }
+            if !bn254_cuda_selftest() {
+                return false;
+            }
             set_cuda_status_message(None);
             true
-        })
+        };
+        if let Ok(mut guard) = cuda_selftest_cache().lock() {
+            *guard = Some(result);
+        }
+        result
     }
 
     pub fn cuda_last_error_message() -> Option<String> {
@@ -628,7 +764,9 @@ mod imp {
         CUDA_FORCED_DISABLED.store(!enabled, Ordering::SeqCst);
         if enabled {
             CUDA_DISABLED.store(false, Ordering::SeqCst);
-            CUDA_SELFTEST_OK.take();
+            if let Ok(mut guard) = cuda_selftest_cache().lock() {
+                *guard = None;
+            }
             set_cuda_status_message(None);
         } else {
             CUDA_DISABLED.store(true, Ordering::SeqCst);
@@ -640,7 +778,9 @@ mod imp {
     pub fn reset_cuda_backend_for_tests() {
         CUDA_DISABLED.store(false, Ordering::SeqCst);
         CUDA_FORCED_DISABLED.store(false, Ordering::SeqCst);
-        CUDA_SELFTEST_OK.take();
+        if let Ok(mut guard) = cuda_selftest_cache().lock() {
+            *guard = None;
+        }
         set_cuda_status_message(None);
     }
 
@@ -655,12 +795,11 @@ mod imp {
         let mgr = crate::GpuManager::shared()?;
         mgr.with_gpu_for_task(0, |gpu| {
             gpu.with_stream(|stream| {
-                let ptx = CString::new(PTX).ok()?;
-                let module = Module::from_ptx(ptx, &[]).ok()?;
+                let module = Module::from_ptx(PTX, &[]).ok()?;
                 let function = module.get_function("sum").ok()?;
                 let mut d_a = DeviceBuffer::from_slice(a).ok()?;
                 let mut d_b = DeviceBuffer::from_slice(b).ok()?;
-                let mut d_out = DeviceBuffer::<f32>::uninitialized(len).ok()?;
+                let mut d_out = device_buffer_uninitialized::<f32>(len)?;
                 unsafe {
                     launch!(function<<<(len as u32 + 255) / 256, 256, 0, stream>>>(
                         d_a.as_device_ptr(),
@@ -674,8 +813,8 @@ mod imp {
                 let mut out = vec![0f32; len];
                 d_out.copy_to(&mut out).ok()?;
                 Some(out)
-            })?
-        })
+            })
+        })?
     }
 
     fn launch_u32_kernel(name: &str, a: &[u32], b: &[u32]) -> Option<Vec<u32>> {
@@ -686,12 +825,11 @@ mod imp {
         let mgr = crate::GpuManager::shared()?;
         mgr.with_gpu_for_task(0, |gpu| {
             gpu.with_stream(|stream| {
-                let ptx = CString::new(VEC_PTX).ok()?;
-                let module = Module::from_ptx(ptx, &[]).ok()?;
+                let module = Module::from_ptx(VEC_PTX, &[]).ok()?;
                 let function = module.get_function(name).ok()?;
                 let mut d_a = DeviceBuffer::from_slice(a).ok()?;
                 let mut d_b = DeviceBuffer::from_slice(b).ok()?;
-                let mut d_out = DeviceBuffer::<u32>::uninitialized(len).ok()?;
+                let mut d_out = device_buffer_uninitialized::<u32>(len)?;
                 unsafe {
                     launch!(function<<<(len as u32 + 255) / 256, 256, 0, stream>>> (
                         d_a.as_device_ptr(),
@@ -705,8 +843,8 @@ mod imp {
                 let mut out = vec![0u32; len];
                 d_out.copy_to(&mut out).ok()?;
                 Some(out)
-            })?
-        })
+            })
+        })?
     }
 
     fn launch_u64_kernel(name: &str, a: &[u64], b: &[u64]) -> Option<Vec<u64>> {
@@ -717,12 +855,11 @@ mod imp {
         let mgr = crate::GpuManager::shared()?;
         mgr.with_gpu_for_task(0, |gpu| {
             gpu.with_stream(|stream| {
-                let ptx = CString::new(VEC_PTX).ok()?;
-                let module = Module::from_ptx(ptx, &[]).ok()?;
+                let module = Module::from_ptx(VEC_PTX, &[]).ok()?;
                 let function = module.get_function(name).ok()?;
                 let mut d_a = DeviceBuffer::from_slice(a).ok()?;
                 let mut d_b = DeviceBuffer::from_slice(b).ok()?;
-                let mut d_out = DeviceBuffer::<u64>::uninitialized(len).ok()?;
+                let mut d_out = device_buffer_uninitialized::<u64>(len)?;
                 unsafe {
                     launch!(function<<<(len as u32 + 255) / 256, 256, 0, stream>>> (
                         d_a.as_device_ptr(),
@@ -736,8 +873,8 @@ mod imp {
                 let mut out = vec![0u64; len];
                 d_out.copy_to(&mut out).ok()?;
                 Some(out)
-            })?
-        })
+            })
+        })?
     }
 
     pub fn vadd32_cuda(a: &[u32], b: &[u32]) -> Option<Vec<u32>> {
@@ -785,11 +922,7 @@ mod imp {
             Some(m) => m,
             None => return false,
         };
-        let ptx = match CString::new(SHA_PTX) {
-            Ok(p) => p,
-            Err(_) => return false,
-        };
-        let module = match Module::from_ptx(ptx, &[]) {
+        let module = match Module::from_ptx(SHA_PTX, &[]) {
             Ok(m) => m,
             Err(_) => return false,
         };
@@ -801,11 +934,11 @@ mod imp {
             gpu.with_stream(|stream| {
                 let mut d_state = match DeviceBuffer::from_slice(state) {
                     Ok(b) => b,
-                    Err(_) => return false,
+                    Err(_) => return Some(false),
                 };
                 let mut d_block = match DeviceBuffer::from_slice(block) {
                     Ok(b) => b,
-                    Err(_) => return false,
+                    Err(_) => return Some(false),
                 };
                 unsafe {
                     if launch!(function<<<1, 1, 0, stream>>>(
@@ -814,21 +947,22 @@ mod imp {
                     ))
                     .is_err()
                     {
-                        return false;
+                        return Some(false);
                     }
                 }
                 if stream.synchronize().is_err() {
-                    return false;
+                    return Some(false);
                 }
                 if d_state.copy_to(state).is_err() {
-                    return false;
+                    return Some(false);
                 }
-                true
+                Some(true)
             })
         });
         match result {
-            Some(r) => r,
+            Some(Some(r)) => r,
             None => false,
+            Some(None) => false,
         }
     }
 
@@ -840,8 +974,7 @@ mod imp {
             return None;
         }
         let mgr = crate::GpuManager::shared()?;
-        let ptx = std::ffi::CString::new(SHA_LEAVES_PTX).ok()?;
-        let module = Module::from_ptx(ptx, &[]).ok()?;
+        let module = Module::from_ptx(SHA_LEAVES_PTX, &[]).ok()?;
         let function = module.get_function("sha256_leaves").ok()?;
         let count = blocks.len() as u32;
         if count == 0 {
@@ -853,7 +986,7 @@ mod imp {
         let result = mgr.with_gpu_for_task(0, |gpu| {
             gpu.with_stream(|stream| {
                 let mut d_blocks = DeviceBuffer::from_slice(&flat).ok()?;
-                let mut d_out = DeviceBuffer::<u32>::uninitialized(out_words.len()).ok()?;
+                let mut d_out = device_buffer_uninitialized::<u32>(out_words.len())?;
                 // Launch with 256 threads per block
                 let threads: u32 = 256;
                 let grid: u32 = ((count + threads - 1) / threads).max(1);
@@ -870,7 +1003,7 @@ mod imp {
                 Some(())
             })
         });
-        result?;
+        result??;
         // Convert to big-endian digest bytes
         let mut digests = Vec::with_capacity(count as usize);
         for i in 0..(count as usize) {
@@ -898,8 +1031,7 @@ mod imp {
             return Some(digests[0]);
         }
         let mgr = crate::GpuManager::shared()?;
-        let ptx = std::ffi::CString::new(SHA_PAIRS_PTX).ok()?;
-        let module = Module::from_ptx(ptx, &[]).ok()?;
+        let module = Module::from_ptx(SHA_PAIRS_PTX, &[]).ok()?;
         let function = module.get_function("sha256_pairs_reduce").ok()?;
 
         // Flatten input
@@ -911,7 +1043,7 @@ mod imp {
             let ok = mgr.with_gpu_for_task(0, |gpu| {
                 gpu.with_stream(|stream| {
                     let mut d_in = DeviceBuffer::from_slice(&cur).ok()?;
-                    let mut d_out = DeviceBuffer::<u8>::uninitialized(next.len()).ok()?;
+                    let mut d_out = device_buffer_uninitialized::<u8>(next.len())?;
                     let threads: u32 = 256;
                     let grid: u32 = ((next_count + threads - 1) / threads).max(1);
                     unsafe {
@@ -927,7 +1059,7 @@ mod imp {
                     Some(())
                 })
             });
-            ok?;
+            ok??;
             cur = next;
             cur_count = next_count;
             if cur_count == 1 {
@@ -968,10 +1100,9 @@ mod imp {
         let manager = crate::GpuManager::shared()?;
         manager.with_gpu_for_task(0, |gpu| {
             gpu.with_stream(|stream| {
-                let ptx = CString::new(POSEIDON_PTX).ok()?;
-                let module = Module::from_ptx(ptx, &[]).ok()?;
+                let module = Module::from_ptx(POSEIDON_PTX, &[]).ok()?;
                 let function = module.get_function(kernel_name).ok()?;
-                let mut d_state = DeviceBuffer::from_slice(state_words.as_slice()).ok()?;
+                let mut d_state = DeviceBuffer::from_slice(state_words).ok()?;
                 let mut d_rc = DeviceBuffer::from_slice(rc_flat).ok()?;
                 let mut d_mds = DeviceBuffer::from_slice(mds_flat).ok()?;
                 let mut d_status = DeviceBuffer::from_slice(&status).ok()?;
@@ -1189,11 +1320,7 @@ mod imp {
             Some(m) => m,
             None => return false,
         };
-        let ptx = match CString::new(SHA3_PTX) {
-            Ok(p) => p,
-            Err(_) => return false,
-        };
-        let module = match Module::from_ptx(ptx, &[]) {
+        let module = match Module::from_ptx(SHA3_PTX, &[]) {
             Ok(m) => m,
             Err(_) => return false,
         };
@@ -1205,25 +1332,26 @@ mod imp {
             gpu.with_stream(|stream| {
                 let mut d_state = match DeviceBuffer::from_slice(state) {
                     Ok(b) => b,
-                    Err(_) => return false,
+                    Err(_) => return Some(false),
                 };
                 unsafe {
                     if launch!(function<<<1, 1, 0, stream>>>(d_state.as_device_ptr())).is_err() {
-                        return false;
+                        return Some(false);
                     }
                 }
                 if stream.synchronize().is_err() {
-                    return false;
+                    return Some(false);
                 }
                 if d_state.copy_to(state).is_err() {
-                    return false;
+                    return Some(false);
                 }
-                true
+                Some(true)
             })
         });
         match result {
-            Some(r) => r,
+            Some(Some(r)) => r,
             None => false,
+            Some(None) => false,
         }
     }
 
@@ -1235,12 +1363,11 @@ mod imp {
         let mgr = crate::GpuManager::shared()?;
         mgr.with_gpu_for_task(0, |gpu| {
             gpu.with_stream(|stream| {
-                let ptx = CString::new(AES_PTX).ok()?;
-                let module = Module::from_ptx(ptx, &[]).ok()?;
+                let module = Module::from_ptx(AES_PTX, &[]).ok()?;
                 let function = module.get_function("aesenc_round").ok()?;
                 let mut d_state = DeviceBuffer::from_slice(&state).ok()?;
                 let mut d_rk = DeviceBuffer::from_slice(&rk).ok()?;
-                let mut d_out = DeviceBuffer::<u8>::uninitialized(16).ok()?;
+                let mut d_out = device_buffer_uninitialized::<u8>(16)?;
                 unsafe {
                     launch!(function<<<1, 1, 0, stream>>>(
                         d_state.as_device_ptr(),
@@ -1253,8 +1380,8 @@ mod imp {
                 let mut out = [0u8; 16];
                 d_out.copy_to(&mut out).ok()?;
                 Some(out)
-            })?
-        })
+            })
+        })?
         .or_else(|| Some(crate::aes::aesenc_impl(state, rk)))
     }
 
@@ -1265,12 +1392,11 @@ mod imp {
         let mgr = crate::GpuManager::shared()?;
         mgr.with_gpu_for_task(0, |gpu| {
             gpu.with_stream(|stream| {
-                let ptx = CString::new(AES_PTX).ok()?;
-                let module = Module::from_ptx(ptx, &[]).ok()?;
+                let module = Module::from_ptx(AES_PTX, &[]).ok()?;
                 let function = module.get_function("aesdec_round").ok()?;
                 let mut d_state = DeviceBuffer::from_slice(&state).ok()?;
                 let mut d_rk = DeviceBuffer::from_slice(&rk).ok()?;
-                let mut d_out = DeviceBuffer::<u8>::uninitialized(16).ok()?;
+                let mut d_out = device_buffer_uninitialized::<u8>(16)?;
                 unsafe {
                     launch!(function<<<1, 1, 0, stream>>>(
                         d_state.as_device_ptr(),
@@ -1283,8 +1409,8 @@ mod imp {
                 let mut out = [0u8; 16];
                 d_out.copy_to(&mut out).ok()?;
                 Some(out)
-            })?
-        })
+            })
+        })?
         .or_else(|| Some(crate::aes::aesdec_impl(state, rk)))
     }
 
@@ -1302,8 +1428,7 @@ mod imp {
             );
         }
         let mgr = crate::GpuManager::shared()?;
-        let ptx = CString::new(AES_PTX).ok()?;
-        let module = Module::from_ptx(ptx, &[]).ok()?;
+        let module = Module::from_ptx(AES_PTX, &[]).ok()?;
         let function = module.get_function("aesenc_round_batch").ok()?;
         let count = states.len() as u32;
         // Flatten input
@@ -1313,7 +1438,7 @@ mod imp {
             gpu.with_stream(|stream| {
                 let mut d_states = DeviceBuffer::from_slice(&flat).ok()?;
                 let mut d_rk = DeviceBuffer::from_slice(&rk).ok()?;
-                let mut d_out = DeviceBuffer::<u8>::uninitialized(out.len()).ok()?;
+                let mut d_out = device_buffer_uninitialized::<u8>(out.len())?;
                 let threads: u32 = 256;
                 let grid: u32 = ((count + threads - 1) / threads).max(1);
                 unsafe {
@@ -1330,7 +1455,7 @@ mod imp {
                 Some(())
             })
         });
-        ok?;
+        ok??;
         let mut vec_out = Vec::with_capacity(states.len());
         for i in 0..states.len() {
             let mut block = [0u8; 16];
@@ -1354,8 +1479,7 @@ mod imp {
             );
         }
         let mgr = crate::GpuManager::shared()?;
-        let ptx = CString::new(AES_PTX).ok()?;
-        let module = Module::from_ptx(ptx, &[]).ok()?;
+        let module = Module::from_ptx(AES_PTX, &[]).ok()?;
         let function = module.get_function("aesdec_round_batch").ok()?;
         let count = states.len() as u32;
         let flat: Vec<u8> = states.iter().flat_map(|b| b.iter()).copied().collect();
@@ -1364,7 +1488,7 @@ mod imp {
             gpu.with_stream(|stream| {
                 let mut d_states = DeviceBuffer::from_slice(&flat).ok()?;
                 let mut d_rk = DeviceBuffer::from_slice(&rk).ok()?;
-                let mut d_out = DeviceBuffer::<u8>::uninitialized(out.len()).ok()?;
+                let mut d_out = device_buffer_uninitialized::<u8>(out.len())?;
                 let threads: u32 = 256;
                 let grid: u32 = ((count + threads - 1) / threads).max(1);
                 unsafe {
@@ -1381,7 +1505,7 @@ mod imp {
                 Some(())
             })
         });
-        ok?;
+        ok??;
         let mut vec_out = Vec::with_capacity(states.len());
         for i in 0..states.len() {
             let mut block = [0u8; 16];
@@ -1406,8 +1530,7 @@ mod imp {
             return Some(states.iter().copied().collect());
         }
         let mgr = crate::GpuManager::shared()?;
-        let ptx = CString::new(AES_PTX).ok()?;
-        let module = Module::from_ptx(ptx, &[]).ok()?;
+        let module = Module::from_ptx(AES_PTX, &[]).ok()?;
         let function = module.get_function("aesenc_rounds_batch").ok()?;
         let count = states.len() as u32;
         let nrounds = round_keys.len() as u32;
@@ -1418,7 +1541,7 @@ mod imp {
             gpu.with_stream(|stream| {
                 let mut d_states = DeviceBuffer::from_slice(&flat_states).ok()?;
                 let mut d_rks = DeviceBuffer::from_slice(&flat_rks).ok()?;
-                let mut d_out = DeviceBuffer::<u8>::uninitialized(out.len()).ok()?;
+                let mut d_out = device_buffer_uninitialized::<u8>(out.len())?;
                 let threads: u32 = 256;
                 let grid: u32 = ((count + threads - 1) / threads).max(1);
                 unsafe {
@@ -1436,7 +1559,7 @@ mod imp {
                 Some(())
             })
         });
-        ok?;
+        ok??;
         let mut vec_out = Vec::with_capacity(states.len());
         for i in 0..states.len() {
             let mut block = [0u8; 16];
@@ -1461,8 +1584,7 @@ mod imp {
             return Some(states.iter().copied().collect());
         }
         let mgr = crate::GpuManager::shared()?;
-        let ptx = CString::new(AES_PTX).ok()?;
-        let module = Module::from_ptx(ptx, &[]).ok()?;
+        let module = Module::from_ptx(AES_PTX, &[]).ok()?;
         let function = module.get_function("aesdec_rounds_batch").ok()?;
         let count = states.len() as u32;
         let nrounds = round_keys.len() as u32;
@@ -1473,7 +1595,7 @@ mod imp {
             gpu.with_stream(|stream| {
                 let mut d_states = DeviceBuffer::from_slice(&flat_states).ok()?;
                 let mut d_rks = DeviceBuffer::from_slice(&flat_rks).ok()?;
-                let mut d_out = DeviceBuffer::<u8>::uninitialized(out.len()).ok()?;
+                let mut d_out = device_buffer_uninitialized::<u8>(out.len())?;
                 let threads: u32 = 256;
                 let grid: u32 = ((count + threads - 1) / threads).max(1);
                 unsafe {
@@ -1491,7 +1613,7 @@ mod imp {
                 Some(())
             })
         });
-        ok?;
+        ok??;
         let mut vec_out = Vec::with_capacity(states.len());
         for i in 0..states.len() {
             let mut block = [0u8; 16];
@@ -1545,8 +1667,7 @@ mod imp {
         let hram_bytes = hram_scalar.to_bytes();
 
         let mgr = crate::GpuManager::shared()?;
-        let ptx = CString::new(SIG_PTX).ok()?;
-        let module = Module::from_ptx(ptx, &[]).ok()?;
+        let module = Module::from_ptx(SIG_PTX, &[]).ok()?;
         let function = module.get_function("signature_kernel").ok()?;
 
         let gpu_result = mgr.with_gpu_for_task(0, |gpu| {
@@ -1554,7 +1675,7 @@ mod imp {
                 let mut d_sig = DeviceBuffer::from_slice(sig_bytes.as_ref()).ok()?;
                 let mut d_pk = DeviceBuffer::from_slice(pk_bytes.as_ref()).ok()?;
                 let mut d_hram = DeviceBuffer::from_slice(hram_bytes.as_ref()).ok()?;
-                let mut d_out = DeviceBuffer::<u8>::uninitialized(1).ok()?;
+                let mut d_out = device_buffer_uninitialized::<u8>(1)?;
                 unsafe {
                     launch!(function<<<1, 32, 0, stream>>>(
                         d_sig.as_device_ptr(),
@@ -1609,15 +1730,14 @@ mod imp {
         }
 
         let mgr = crate::GpuManager::shared()?;
-        let ptx = CString::new(SIG_PTX).ok()?;
-        let module = Module::from_ptx(ptx, &[]).ok()?;
+        let module = Module::from_ptx(SIG_PTX, &[]).ok()?;
         let function = module.get_function("signature_kernel").ok()?;
         let gpu_result = mgr.with_gpu_for_task(0, |gpu| {
             gpu.with_stream(|stream| {
                 let mut d_sig = DeviceBuffer::from_slice(&flat_sigs).ok()?;
                 let mut d_pk = DeviceBuffer::from_slice(&flat_pks).ok()?;
                 let mut d_hram = DeviceBuffer::from_slice(&flat_hrams).ok()?;
-                let mut d_out = DeviceBuffer::<u8>::uninitialized(count).ok()?;
+                let mut d_out = device_buffer_uninitialized::<u8>(count)?;
                 let threads: u32 = 128;
                 let blocks: u32 = ((count as u32) + threads - 1) / threads;
                 unsafe {
@@ -1744,6 +1864,30 @@ mod imp {
                 CUDA_DISABLED.load(Ordering::SeqCst),
                 disabled_before,
                 "fault injection must not disable CUDA backend"
+            );
+        }
+
+        #[test]
+        fn ed25519_selftest_covers_signature_kernel() {
+            if !ensure_cuda_selftest() {
+                eprintln!("CUDA unavailable; skipping ed25519 self-test regression");
+                return;
+            }
+            assert!(
+                ed25519_cuda_selftest(),
+                "ed25519 CUDA self-test must accept the golden truth set",
+            );
+        }
+
+        #[test]
+        fn bn254_selftest_covers_cuda_kernels() {
+            if !ensure_cuda_selftest() {
+                eprintln!("CUDA unavailable; skipping BN254 self-test regression");
+                return;
+            }
+            assert!(
+                bn254_cuda_selftest(),
+                "bn254 CUDA self-test must accept the golden truth set",
             );
         }
     }

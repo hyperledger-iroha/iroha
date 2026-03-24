@@ -28,7 +28,9 @@ translation_last_reviewed: 2026-03-12
 לזהות יש צורות מחרוזות יציבות עם `Display`/`FromStr` הלוך ושוב. כללי השמות אוסרים על רווח לבן ועל תווי `@ # $` השמורים.- `Name` - מזהה טקסטואלי מאומת. כללים: `crates/iroha_data_model/src/name.rs`.
 - `DomainId` — `name`. דומיין: `{ id, logo, metadata, owned_by }`. בונים: `NewDomain`. קוד: `crates/iroha_data_model/src/domain.rs`.
 - `AccountId` — כתובות קנוניות מופקות באמצעות `AccountAddress` (I105 / hex) ו-Torii מנרמל כניסות דרך `AccountAddress::parse_encoded`. I105 הוא פורמט החשבון המועדף; טופס I105 מיועד ל-Sora בלבד UX. המחרוזת המוכרת `alias` (טופס מדור קודם) נשמרת ככינוי ניתוב בלבד. חשבון: `{ id, metadata }`. קוד: `crates/iroha_data_model/src/account.rs`.- מדיניות כניסת חשבון - דומיינים שולטים ביצירת חשבון מרומז על ידי אחסון Norito-JSON `AccountAdmissionPolicy` תחת מפתח מטא נתונים `iroha:account_admission_policy`. כאשר המפתח נעדר, הפרמטר המותאם אישית ברמת השרשרת `iroha:default_account_admission_policy` מספק את ברירת המחדל; כאשר זה גם נעדר, ברירת המחדל הקשה היא `ImplicitReceive` (מהדורה ראשונה). תגי המדיניות `mode` (`ExplicitOnly` או `ImplicitReceive`) בתוספת אופציונליים לכל עסקה (ברירת מחדל `16`) ומכסי יצירה לכל בלוק, חשבון `mode` אופציונלי (I0burn או 8NI40X) הגדרת נכס, ו-`default_role_on_create` אופציונלי (ניתן לאחר `AccountCreated`, נדחה עם `DefaultRoleError` אם חסר). בראשית אין אפשרות להצטרף; מדיניות מושבתת/לא חוקית דוחה הוראות בסגנון קבלה עבור חשבונות לא ידועים עם `InstructionExecutionError::AccountAdmission`. חשבונות מרומזים חותמים מטא נתונים `iroha:created_via="implicit"` לפני `AccountCreated`; תפקידי ברירת המחדל מוציאים מעקב `AccountRoleGranted`, וכללי הבסיס של הבעלים המוציאים לפועל מאפשרים לחשבון החדש להוציא את הנכסים/NFT שלו ללא תפקידים נוספים. קוד: `crates/iroha_data_model/src/account/admission.rs`, `crates/iroha_core/src/smartcontracts/isi/account_admission.rs`.
-- `AssetDefinitionId` - `aid:<32-lower-hex-no-dash>` קנוני (UUID-v4 בתים). הגדרה: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. ספרות `alias` חייבות להיות `<name>#<domain>@<dataspace>` או `<name>#<dataspace>`, כאשר `<name>` שווה לשם הגדרת הנכס. קוד: `crates/iroha_data_model/src/asset/definition.rs`.
+- `AssetDefinitionId` - `unprefixed Base58 address with versioning and checksum` קנוני (UUID-v4 בתים). הגדרה: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. ספרות `alias` חייבות להיות `<name>#<domain>.<dataspace>` או `<name>#<dataspace>`, כאשר `<name>` שווה לשם הגדרת הנכס. קוד: `crates/iroha_data_model/src/asset/definition.rs`.
+
+  - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`, where `status` is `permanent`, `leased_active`, `leased_grace`, or `expired_pending_cleanup`. Alias selectors resolve against the latest committed block creation time and stop resolving after grace even before sweep removes stale bindings.
 - `AssetId`: מילולית מקודדת קנונית `norito:<hex>` (טפסים טקסטואליים מדור קודם אינם נתמכים במהדורה הראשונה).- `NftId` — `nft$domain`. NFT: `{ id, content: Metadata, owned_by }`. קוד: `crates/iroha_data_model/src/nft.rs`.
 - `RoleId` — `name`. תפקיד: `{ id, permissions: BTreeSet<Permission> }` עם Builder `NewRole { inner: Role, grant_to }`. קוד: `crates/iroha_data_model/src/role.rs`.
 - `Permission` — `{ name: Ident, payload: Json }`. קוד: `crates/iroha_data_model/src/permission.rs`.
@@ -193,19 +195,19 @@ translation_last_reviewed: 2026-03-12
   - אם קוד הבתים IVM של טריגר חסר בזמן הביצוע, הטריגר מוסר והביצוע יטופל כאי-אופ עם תוצאה של כשל.
   - טריגרים מדולדלים מוסרים מיד; אם נתקלים בכניסה מדולדלת במהלך הביצוע היא נגזמת ומטופלת כחסרה.
 - עדכון פרמטר:
-  - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` מעדכן ופולט `ConfigurationEvent::Changed`.CLI / Torii `aid` + דוגמאות כינוי:
+  - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` מעדכן ופולט `ConfigurationEvent::Changed`.CLI / Torii asset-definition id + דוגמאות כינוי:
 - הרשמה בסיוע קנוני + שם מפורש + כינוי ארוך:
-  - `iroha ledger asset definition register --id aid:2f17c72466f84a4bb8a8e24884fdcd2f --name pkr --alias pkr#ubl@sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#ubl.sbp`
 - הרשמה בסיוע קנוני + שם מפורש + כינוי קצר:
-  - `iroha ledger asset definition register --id aid:550e8400e29b41d4a7164466554400dd --name pkr --alias pkr#sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#sbp`
 - נטבע בכינוי + רכיבי חשבון:
-  - `iroha ledger asset mint --definition-alias pkr#ubl@sbp --account <i105> --quantity 500`
+  - `iroha ledger asset mint --definition-alias pkr#ubl.sbp --account <i105> --quantity 500`
 - פתרון כינוי לסיוע קנוני:
-  - `POST /v1/assets/aliases/resolve` עם JSON `{ "alias": "pkr#ubl@sbp" }`
+  - `POST /v1/assets/aliases/resolve` עם JSON `{ "alias": "pkr#ubl.sbp" }`
 
 הערת הגירה:
 - מזהי `name#domain` הגדרת נכסים טקסטואליים אינם נתמכים בכוונה במהדורה הראשונה.
-- מזהי נכסים בגבולות הטבעה/שריפה/העברה נשארים קנוניים `norito:<hex>`; השתמש ב-`iroha tools encode asset-id` עם `--definition aid:...` או `--alias ...` בתוספת `--account`.
+- מזהי נכסים בגבולות הטבעה/שריפה/העברה נשארים קנוניים `norito:<hex>`; השתמש ב-`iroha tools encode asset-id` עם `--definition <base58-asset-definition-id>` או `--alias ...` בתוספת `--account`.
 
 ---
 

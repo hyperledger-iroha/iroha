@@ -160,7 +160,7 @@ final class BridgeAvailabilitySurfaceTests: XCTestCase {
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let request = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
                                       authority: authority,
-                                      assetDefinitionId: "aid:2f17c72466f84a4bb8a8e24884fdcd2f",
+                                      assetDefinitionId: "66owaQmAQMuHxPzxUN3bqZ6FJfDa",
                                       quantity: "1",
                                       destination: authority,
                                       description: nil,

@@ -576,12 +576,12 @@ Iroha Client CLI provides a simple way to interact with the Iroha Web API
 
    Example usage:
 
-   `echo "[]" | iroha -io domain register --id "domain" | iroha -i asset definition register --id "aid:2f17c72466f84a4bb8a8e24884fdcd2f" --name "USD" --scale 0`
+   `echo "[]" | iroha -io domain register --id "domain" | iroha -i asset definition register --id "<base58-asset-definition-id>" --name "USD" --scale 0`
 * `-o`, `--output` — Outputs instructions to stdout without submitting them.
 
    Example usage:
 
-   `iroha -o domain register --id "domain" | iroha -io asset definition register --id "aid:2f17c72466f84a4bb8a8e24884fdcd2f" --name "USD" --scale 0 | iroha transaction stdin`
+   `iroha -o domain register --id "domain" | iroha -io asset definition register --id "<base58-asset-definition-id>" --name "USD" --scale 0 | iroha transaction stdin`
 * `--output-format <OUTPUT_FORMAT>` — Output format for command responses
 
   Default value: `json`
@@ -1189,8 +1189,8 @@ Retrieve details of a specific asset definition
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset definition identifier (`aid:<32-lower-hex-no-dash>`)
-* `--alias <ALIAS>` — Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`)
+* `-i`, `--id <ID>` — Asset definition identifier (canonical unprefixed Base58)
+* `--alias <ALIAS>` — Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`)
 
 
 
@@ -1202,12 +1202,12 @@ Register an asset definition
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset definition identifier (`aid:<32-lower-hex-no-dash>`)
+* `-i`, `--id <ID>` — Asset definition identifier (canonical unprefixed Base58)
 * `--name <NAME>` — Human-readable asset name
 * `--description <DESCRIPTION>` — Optional human-readable description
-* `--alias <ALIAS>` — Optional explicit alias literal (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`)
-* `--alias-domain <ALIAS_DOMAIN>` — Optional alias owner/domain segment used to build `<name>#<domain>@<dataspace>`
-* `--alias-dataspace <ALIAS_DATASPACE>` — Optional alias dataspace segment used to build `<name>#<domain>@<dataspace>` or `<name>#<dataspace>`
+* `--alias <ALIAS>` — Optional explicit alias literal (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`)
+* `--alias-domain <ALIAS_DOMAIN>` — Optional alias owner/domain segment used to build `<name>#<domain>.<dataspace>`
+* `--alias-dataspace <ALIAS_DATASPACE>` — Optional alias dataspace segment used to build `<name>#<domain>.<dataspace>` or `<name>#<dataspace>`
 * `--logo <LOGO>` — Optional logo URI. Must use `sorafs://...`
 * `-m`, `--mint-once` — Disables minting after the first instance
 * `-s`, `--scale <SCALE>` — Numeric scale of the asset. No value means unconstrained
@@ -1231,8 +1231,8 @@ Unregister an asset definition
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset definition identifier (`aid:<32-lower-hex-no-dash>`)
-* `--alias <ALIAS>` — Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`)
+* `-i`, `--id <ID>` — Asset definition identifier (canonical unprefixed Base58)
+* `--alias <ALIAS>` — Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`)
 
 
 
@@ -1244,8 +1244,8 @@ Transfer ownership of an asset definition
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Asset definition identifier (`aid:<32-lower-hex-no-dash>`)
-* `--alias <ALIAS>` — Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`)
+* `-i`, `--id <ID>` — Asset definition identifier (canonical unprefixed Base58)
+* `--alias <ALIAS>` — Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`)
 * `-f`, `--from <FROM>` — Source account identifier (canonical I105 literal)
 * `-t`, `--to <TO>` — Destination account identifier (canonical I105 literal)
 
@@ -4869,7 +4869,7 @@ Get recent shielded roots for an asset (JSON). Posts to /v1/zk/roots
 
 ###### **Options:**
 
-* `--asset-id <ASSET_ID>` — `AssetDefinitionId` like `aid:2f17c72466f84a4bb8a8e24884fdcd2f`
+* `--asset-id <ASSET_ID>` — Canonical unprefixed Base58 `AssetDefinitionId`
 * `--max <MAX>` — Maximum number of roots to return (0 = server cap)
 
   Default value: `0`
@@ -5020,7 +5020,7 @@ Register a ZK-capable asset (Hybrid mode) with policy and VK ids
 
 ###### **Options:**
 
-* `--asset <ASSET_ID>` — `AssetDefinitionId` like `aid:2f17c72466f84a4bb8a8e24884fdcd2f`
+* `--asset <ASSET_ID>` — Canonical unprefixed Base58 `AssetDefinitionId`
 * `--allow-shield` — Allow shielding from public to shielded (default: true)
 
   Default value: `true`
@@ -5041,7 +5041,7 @@ Shield public funds into a shielded ledger (demo flow)
 
 ###### **Options:**
 
-* `--asset <ASSET_ID>` — `AssetDefinitionId` like `aid:2f17c72466f84a4bb8a8e24884fdcd2f`
+* `--asset <ASSET_ID>` — Canonical unprefixed Base58 `AssetDefinitionId`
 * `--from <ACCOUNT_ID>` — Account identifier to debit (canonical I105 account literal)
 * `--amount <AMOUNT>` — Public amount to debit
 * `--note-commitment <HEX32>` — Output note commitment (hex, 64 chars)
@@ -5060,7 +5060,7 @@ Unshield funds from shielded ledger to public (demo flow)
 
 ###### **Options:**
 
-* `--asset <ASSET_ID>` — `AssetDefinitionId` like `aid:2f17c72466f84a4bb8a8e24884fdcd2f`
+* `--asset <ASSET_ID>` — Canonical unprefixed Base58 `AssetDefinitionId`
 * `--to <ACCOUNT_ID>` — Recipient account identifier to credit (canonical I105 account literal)
 * `--amount <AMOUNT>` — Public amount to credit
 * `--inputs <HEX32[,HEX32,...]>` — Spent nullifiers (comma-separated list of 64-hex strings)
@@ -6170,7 +6170,7 @@ Convert a rent quote into deterministic ledger transfer instructions
 * `--provider-account <ACCOUNT_ID>` — Provider payout account that receives the base rent remainder
 * `--pdp-bonus-account <ACCOUNT_ID>` — Account earmarked for PDP bonus payouts
 * `--potr-bonus-account <ACCOUNT_ID>` — Account earmarked for `PoTR` bonus payouts
-* `--asset-definition <AID>` — Asset definition identifier used for transfers (e.g., `aid:2f17c72466f84a4bb8a8e24884fdcd2f`)
+* `--asset-definition <AID>` — Asset definition identifier used for transfers (canonical unprefixed Base58)
 
 
 
@@ -7052,7 +7052,7 @@ Submit an apartment wallet spend request under policy guardrails
 ###### **Options:**
 
 * `--apartment-name <NAME>` — Apartment name issuing the spend request
-* `--asset-definition <ASSET>` — Asset definition identifier (`aid:<32-lower-hex-no-dash>`)
+* `--asset-definition <ASSET>` — Asset definition identifier (canonical unprefixed Base58)
 * `--amount-nanos <NANOS>` — Spend amount in nanos
 * `--torii-url <URL>` — Torii base URL for authoritative `agent/wallet/spend`
 * `--api-token <TOKEN>` — Optional API token sent as `x-api-token` when mutating live control-plane APIs
@@ -8933,7 +8933,7 @@ Convert a reserve quote into rent/reserve transfer instructions
 * `--provider-account <ACCOUNT_ID>` — Provider account paying the rent and reserve top-ups
 * `--treasury-account <ACCOUNT_ID>` — Treasury account receiving the rent payment
 * `--reserve-account <ACCOUNT_ID>` — Reserve escrow account receiving the reserve top-up
-* `--asset-definition <AID>` — Asset definition identifier used for transfers (e.g., `aid:2f17c72466f84a4bb8a8e24884fdcd2f`)
+* `--asset-definition <AID>` — Asset definition identifier used for transfers (canonical unprefixed Base58)
 
 
 
@@ -9836,8 +9836,8 @@ Encode a canonical asset id (`norito:<hex>`)
 
 ###### **Options:**
 
-* `--definition <DEFINITION>` — Canonical asset definition id (`aid:<32-lower-hex-no-dash>`)
-* `--alias <ALIAS>` — Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`)
+* `--definition <DEFINITION>` — Canonical asset definition id (unprefixed Base58)
+* `--alias <ALIAS>` — Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`)
 * `--account <ACCOUNT>` — Canonical I105 account literal receiving the asset bucket
 
 

@@ -64,9 +64,8 @@ public final class AssetIdLiteral {
   /**
    * Builds a canonical encoded asset identifier from textual parts.
    *
-   * <p>This method accepts canonical asset-definition literals (`aid:...`) and textual
-   * definitions (`name#domain`). Alias-shaped definitions (`...@...`) are rejected because alias
-   * resolution requires online access.
+   * <p>This method accepts only canonical unprefixed Base58 asset-definition addresses.
+   * Alias-shaped definitions are rejected because alias resolution requires online access.
    *
    * @param assetDefinitionId asset definition literal
    * @param accountId canonical account identifier (I105)
@@ -75,7 +74,8 @@ public final class AssetIdLiteral {
   public static String encodeFromParts(
       final String assetDefinitionId, final String accountId) {
     final String normalizedDefinition = normalizeAssetDefinitionLiteral(assetDefinitionId);
-    final String normalizedAccount = AccountIdLiteral.extractI105Address(accountId);
+    final String normalizedAccount =
+        AccountIdLiteral.requireCanonicalI105Address(accountId, "accountId");
     if (!NATIVE_AVAILABLE) {
       throw new IllegalStateException("connect_norito_bridge is not available in this runtime");
     }
@@ -104,12 +104,16 @@ public final class AssetIdLiteral {
     if (trimmed.isEmpty()) {
       throw new IllegalArgumentException("assetDefinitionId must not be blank");
     }
-    if (trimmed.indexOf('@') >= 0) {
+    if (trimmed.indexOf('@') >= 0 || trimmed.indexOf('#') >= 0) {
       throw new IllegalArgumentException(
-          "assetDefinitionId aliases require online resolution; provide canonical definition id");
+          "assetDefinitionId aliases or text selectors require online resolution; provide canonical definition id");
     }
     if (trimmed.indexOf(' ') >= 0 || trimmed.indexOf('\t') >= 0 || trimmed.indexOf('\n') >= 0) {
       throw new IllegalArgumentException("assetDefinitionId must not contain whitespace");
+    }
+    if (!AssetDefinitionIdEncoder.isCanonicalAddress(trimmed)) {
+      throw new IllegalArgumentException(
+          "assetDefinitionId must use canonical unprefixed Base58 form");
     }
     return trimmed;
   }

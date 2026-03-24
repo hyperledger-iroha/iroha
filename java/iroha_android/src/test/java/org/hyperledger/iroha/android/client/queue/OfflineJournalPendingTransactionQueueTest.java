@@ -8,6 +8,7 @@ import org.hyperledger.iroha.android.offline.OfflineJournal;
 import org.hyperledger.iroha.android.offline.OfflineJournalKey;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
+import org.hyperledger.iroha.android.testing.TestAccountIds;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
 import org.hyperledger.iroha.android.tx.offline.OfflineSigningEnvelope;
 
@@ -78,7 +79,7 @@ public final class OfflineJournalPendingTransactionQueueTest {
       final TransactionPayload payload =
           TransactionPayload.builder()
               .setChainId("00000001")
-              .setAuthority("queue@wonderland")
+              .setAuthority(TestAccountIds.ed25519Authority(0x25))
               .setCreationTimeMs(1_700_000_000_000L)
               .setInstructionBytes("payload".getBytes(StandardCharsets.UTF_8))
               .setTimeToLiveMs(5_000L)

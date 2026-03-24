@@ -32,7 +32,7 @@ translator: machine-google-reviewed
 - `ChainId`: مبہم چین شناخت کنندہ لین دین میں ری پلے تحفظ کے لیے استعمال ہوتا ہے۔IDs کی اسٹرنگ فارمز (`Display`/`FromStr` کے ساتھ گول ٹرپ ایبل):
 - `DomainId`: `name` (e.g., `wonderland`).
 - `AccountId`: کیننیکل ڈومین لیس اکاؤنٹ شناخت کنندہ `AccountAddress` کے ذریعے صرف I105 کے طور پر انکوڈ کیا گیا ہے۔ تجزیہ کار ان پٹ کو کینونیکل I105 ہونا چاہیے؛ ڈومین لاحقے (`@domain`)، کیننیکل I105 لٹریلز، عرفی لٹریلز، کینونیکل ہیکس پارسر ان پٹ، لیگیسی `norito:` پے لوڈز، اور `uaid:`/`opaque:` اکاؤنٹس کو دوبارہ ترتیب دیا گیا ہے۔
-- `AssetDefinitionId`: کیننیکل `aid:<32-lower-hex-no-dash>` (UUID-v4 بائٹس)۔
+- `AssetDefinitionId`: کیننیکل `unprefixed Base58 address with versioning and checksum` (UUID-v4 بائٹس)۔
 - `AssetId`: کیننیکل انکوڈ شدہ لٹریل `norito:<hex>` (میراثی متنی شکلیں پہلی ریلیز میں تعاون یافتہ نہیں ہیں)۔
 - `NftId`: `nft$domain` (جیسے، `rose$garden`)۔
 - `PeerId`: `public_key` (ہم مرتبہ کی مساوات عوامی کلید کے ذریعہ ہے)۔
@@ -49,11 +49,13 @@ translator: machine-google-reviewed
 - بلڈر: `NewAccount` بذریعہ `Account::new(id)`؛ رجسٹریشن کے لیے ایک واضح `ScopedAccountId` ڈومین کی ضرورت ہوتی ہے اور ڈیفالٹس سے کسی کا اندازہ نہیں ہوتا ہے۔
 
 ### اثاثہ کی تعریفیں اور اثاثے۔
-- `AssetDefinitionId { aid_bytes: [u8; 16] }` متنی طور پر `aid:<32-hex-no-dash>` کے طور پر ظاہر ہوا۔
+- `AssetDefinitionId { aid_bytes: [u8; 16] }` متنی طور پر `unprefixed Base58 address` کے طور پر ظاہر ہوا۔
 - `AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Numeric }`۔
+
+  - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`; alias selectors resolve against latest committed block time and stop resolving after grace, while direct reads may still show `expired_pending_cleanup` until sweep.
   - `name` کو انسان کا سامنا کرنے والا ڈسپلے متن درکار ہے اور اس میں `#`/`@` شامل نہیں ہونا چاہیے۔
   - `alias` اختیاری ہے اور ان میں سے ایک ہونا ضروری ہے:
-    - `<name>#<domain>@<dataspace>`
+    - `<name>#<domain>.<dataspace>`
     - `<name>#<dataspace>`
     بائیں حصے کے ساتھ بالکل مماثل `AssetDefinition.name`۔
   - `Mintable`: `Infinitely` | `Once` | `Limited(u32)` | `Not`۔
@@ -186,7 +188,7 @@ let new_account = Account::new(account_id.to_account_id(domain_id.clone()))
     .with_metadata(Metadata::default());
 
 // Asset definition and an asset for the account
-let asset_def_id: AssetDefinitionId = "aid:2f17c72466f84a4bb8a8e24884fdcd2f".parse().unwrap();
+let asset_def_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa".parse().unwrap();
 let new_asset_def = AssetDefinition::numeric(asset_def_id.clone())
     .with_name("USD Coin".to_owned())
     .with_metadata(Metadata::default());
@@ -230,36 +232,36 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
     .sign(kp.private_key());
 ```
 
-`aid` / عرف فوری حوالہ (CLI + Torii):
+asset-definition id / عرف فوری حوالہ (CLI + Torii):
 
 ```bash
-# Register an asset definition with canonical aid + explicit name + alias
+# Register an asset definition with canonical Base58 id + explicit name + alias
 iroha ledger asset definition register \
-  --id aid:2f17c72466f84a4bb8a8e24884fdcd2f \
+  --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#ubl@sbp
+  --alias pkr#ubl.sbp
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
-  --id aid:550e8400e29b41d4a7164466554400dd \
+  --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
   --alias pkr#sbp
 
 # Mint using alias + account components (no manual norito hex copy/paste)
 iroha ledger asset mint \
-  --definition-alias pkr#ubl@sbp \
+  --definition-alias pkr#ubl.sbp \
   --account sorauﾛ1P... \
   --quantity 500
 
-# Resolve alias to canonical aid via Torii
+# Resolve alias to canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#ubl@sbp"}'
+  -d '{"alias":"pkr#ubl.sbp"}'
 ```نقل مکانی نوٹ:
 - پرانی `name#domain` اثاثہ کی تعریف کی IDs v1 میں قبول نہیں کی جاتی ہیں۔
 - ٹکسال/برن/منتقلی کے لیے اثاثہ IDs کیننیکل `norito:<hex>` رہیں۔ ان کے ساتھ بنائیں:
-  - `iroha tools encode asset-id --definition aid:... --account <i105>`
-  - یا `--alias <name>#<domain>@<dataspace>` / `--alias <name>#<dataspace>` + `--account`۔
+  - `iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
+  - یا `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`۔
 
 ## ورژن بنانا
 

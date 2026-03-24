@@ -24,7 +24,9 @@ struct MockNode {
 impl MockNode {
     fn execute(&self, prog: &[u8], block: &[u8; 64], initial: &[u32; 8]) -> [u32; 8] {
         if !self.use_cuda {
-            std::env::set_var("IVM_DISABLE_CUDA", "1");
+            unsafe {
+                std::env::set_var("IVM_DISABLE_CUDA", "1");
+            }
         }
         let mut vm = IVM::new(u64::MAX);
         for (i, b) in block.iter().enumerate() {
@@ -36,7 +38,9 @@ impl MockNode {
         vm.load_program(prog).unwrap();
         vm.run().unwrap();
         if !self.use_cuda {
-            std::env::remove_var("IVM_DISABLE_CUDA");
+            unsafe {
+                std::env::remove_var("IVM_DISABLE_CUDA");
+            }
         }
         let mut out = [0u32; 8];
         out[..4].copy_from_slice(&vm.vector_register(0));

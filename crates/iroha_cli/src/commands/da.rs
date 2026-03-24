@@ -995,7 +995,7 @@ pub struct RentLedgerArgs {
     /// Account earmarked for `PoTR` bonus payouts.
     #[arg(long = "potr-bonus-account", value_name = "ACCOUNT_ID")]
     pub potr_bonus_account: String,
-    /// Asset definition identifier used for transfers (e.g., `aid:2f17c72466f84a4bb8a8e24884fdcd2f`).
+    /// Asset definition identifier used for transfers (canonical unprefixed Base58 address).
     #[arg(long = "asset-definition", value_name = "AID")]
     pub asset_definition: String,
 }

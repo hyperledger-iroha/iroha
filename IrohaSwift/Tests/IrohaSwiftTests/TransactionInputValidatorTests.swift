@@ -2,7 +2,7 @@ import XCTest
 @testable import IrohaSwift
 
 final class TransactionInputValidatorTests: XCTestCase {
-    private let sampleAid = "aid:2f17c72466f84a4bb8a8e24884fdcd2f"
+    private let sampleAid = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
 
     private func i105(seed: UInt8 = 1,
                       domain: String = AccountAddress.defaultDomainName) throws -> String {

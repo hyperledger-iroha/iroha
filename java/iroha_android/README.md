@@ -68,13 +68,18 @@ network prefix stay aligned with `docs/source/sns/address_display_guidelines.md`
 ```java
 import org.hyperledger.iroha.android.multisig.MultisigProposalTtlPreview;
 import org.hyperledger.iroha.android.multisig.MultisigSpec;
+import org.hyperledger.iroha.android.address.AccountAddress;
 
+byte[] aliceKey = new byte[32];
+byte[] bobKey = new byte[32];
+String alice = AccountAddress.fromAccount(aliceKey, "ed25519").toI105(753);
+String bob = AccountAddress.fromAccount(bobKey, "ed25519").toI105(753);
 MultisigSpec spec =
     MultisigSpec.builder()
         .setQuorum(3)
         .setTransactionTtlMs(86_400_000L)
-        .addSignatory("alice@wonderland", 2)
-        .addSignatory("bob@wonderland", 1)
+        .addSignatory(alice, 2)
+        .addSignatory(bob, 1)
         .build();
 
 MultisigProposalTtlPreview preview = spec.enforceProposalTtl(90_000L, System.currentTimeMillis());
@@ -85,9 +90,9 @@ System.out.println("expires at: " + preview.expiresAtMs());
 `enforceProposalTtl` rejects TTL overrides above the policy cap (`transaction_ttl_ms`) before
 submission so apps can surface the same error Torii would return. Use
 `previewProposalExpiry` when you only need a preview (cap + expiry) without throwing.
-When registering a multisig controller, supply an explicit account id in the same domain as the
-signatories (random keys are fine—the controller must never be used for direct signing). Nodes now
-quarantine deterministically derived controller ids and will reject registration and subsequent
+When registering a multisig controller, supply an explicit canonical I105 account id for a random
+controller key (the controller must never be used for direct signing). Nodes now quarantine
+deterministically derived controller ids and will reject registration and subsequent
 propose/approve attempts that use them.
 
 ```java
@@ -708,9 +713,10 @@ custom `underlying` context) when surfacing the events.
 
 ### Canonical request signing
 
-Torii app endpoints accept optional `X-Iroha-Account` / `X-Iroha-Signature`
-headers. Use `CanonicalRequestSigner` when calling account-scoped helpers or
-building ad-hoc HTTP requests:
+Torii app endpoints accept optional `X-Iroha-Account`, `X-Iroha-Signature`,
+`X-Iroha-Timestamp-Ms`, and `X-Iroha-Nonce` headers. Use
+`CanonicalRequestSigner` when calling account-scoped helpers or building ad-hoc
+HTTP requests:
 
 ```java
 import java.net.URI;
@@ -721,8 +727,8 @@ Map<String, String> headers =
     CanonicalRequestSigner.buildHeaders("get", uri, new byte[0], "alice@wonderland", keyPair.getPrivate());
 ```
 
-Signatures cover the canonical method/path/query/body layout, matching the Rust
-verifier Torii uses on app-facing endpoints.
+Signatures cover the canonical method/path/query/body layout plus freshness
+metadata, matching the Rust verifier Torii uses on app-facing endpoints.
 
 ### Pipeline Hashes
 

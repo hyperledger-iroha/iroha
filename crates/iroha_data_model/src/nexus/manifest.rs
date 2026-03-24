@@ -539,12 +539,12 @@ fn parse_scope(value: &Value, idx: usize) -> Result<CapabilityScope, json::Error
     };
     let asset =
         match parse_optional_str(scope_obj, "asset", idx)? {
-            Some(value) => Some(AssetDefinitionId::from_str(value).map_err(|err| {
-                json::Error::InvalidField {
+            Some(value) => Some(AssetDefinitionId::parse_address_literal(value).map_err(
+                |err| json::Error::InvalidField {
                     field: format!("entries[{idx}].scope.asset"),
                     message: err.to_string(),
-                }
-            })?),
+                },
+            )?),
             None => None,
         };
     let role = match scope_obj.get("role") {

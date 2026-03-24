@@ -1227,7 +1227,7 @@ fn opt_name(value: Option<&str>, flag: &str) -> Result<Option<Name>> {
 fn opt_asset(value: Option<&str>, flag: &str) -> Result<Option<AssetDefinitionId>> {
     value
         .map(|raw| {
-            raw.parse::<AssetDefinitionId>()
+            AssetDefinitionId::parse_address_literal(raw)
                 .wrap_err_with(|| format!("failed to parse {flag}"))
         })
         .transpose()
@@ -1389,7 +1389,13 @@ mod tests {
         let allow_args = ManifestScaffoldAllowArgs {
             program: Some("cbdc.transfer".to_owned()),
             method: Some("transfer".to_owned()),
-            asset: Some("aid:6e156b5010e645f883eb831946b88db8".to_owned()),
+            asset: Some(
+                AssetDefinitionId::new(
+                    "wonderland".parse().expect("domain"),
+                    "cbdc".parse().expect("name"),
+                )
+                .to_string(),
+            ),
             role: Some("initiator".to_owned()),
             max_amount: Some("500000000".to_owned()),
             window: Some("per-day".to_owned()),

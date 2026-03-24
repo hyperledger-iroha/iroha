@@ -48,10 +48,7 @@ use std::{
     },
 };
 #[cfg(all(target_os = "macos", feature = "metal"))]
-use std::{
-    mem::transmute,
-    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
-};
+use std::{mem::transmute, sync::atomic::AtomicUsize};
 
 /// The SIMD backend selected at runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1346,6 +1343,115 @@ impl MetalState {
                 );
             }
 
+            let sha_leaves_ok = {
+                use core::ptr::NonNull;
+
+                use objc2_metal::*;
+
+                let mut block_a = [0u8; 64];
+                block_a[0] = b'a';
+                block_a[1] = b'b';
+                block_a[2] = b'c';
+                block_a[3] = 0x80;
+                block_a[63] = 24;
+
+                let mut block_b = [0u8; 64];
+                block_b[0] = b'n';
+                block_b[1] = b'o';
+                block_b[2] = b'r';
+                block_b[3] = b'i';
+                block_b[4] = b't';
+                block_b[5] = b'o';
+                block_b[6] = 0x80;
+                block_b[63] = 48;
+
+                let blocks = [block_a, block_b];
+                let expected: Vec<[u8; 32]> = blocks
+                    .iter()
+                    .map(|block| {
+                        let mut state = [
+                            0x6a09e667u32,
+                            0xbb67ae85,
+                            0x3c6ef372,
+                            0xa54ff53a,
+                            0x510e527f,
+                            0x9b05688c,
+                            0x1f83d9ab,
+                            0x5be0cd19,
+                        ];
+                        sha256_compress_scalar_ref(&mut state, block);
+                        let mut digest = [0u8; 32];
+                        for (index, word) in state.iter().enumerate() {
+                            digest[index * 4..index * 4 + 4].copy_from_slice(&word.to_be_bytes());
+                        }
+                        digest
+                    })
+                    .collect();
+
+                let flat: Vec<u8> = blocks
+                    .iter()
+                    .flat_map(|block| block.iter())
+                    .copied()
+                    .collect();
+                let buf_blocks = unsafe {
+                    device.newBufferWithBytes_length_options(
+                        NonNull::new_unchecked(flat.as_ptr() as *mut core::ffi::c_void),
+                        flat.len(),
+                        MTLResourceOptions::CPUCacheModeDefaultCache,
+                    )?
+                };
+                let buf_out = device.newBufferWithLength_options(
+                    blocks.len() * 8 * core::mem::size_of::<u32>(),
+                    MTLResourceOptions::StorageModeShared,
+                )?;
+                let cmd_buf = queue.commandBuffer()?;
+                let encoder = cmd_buf.computeCommandEncoder()?;
+                encoder.setComputePipelineState(&sha256_leaves);
+                unsafe {
+                    encoder.setBuffer_offset_atIndex(Some(&buf_blocks), 0, 0);
+                    encoder.setBuffer_offset_atIndex(Some(&buf_out), 0, 1);
+                }
+                let grid = MTLSize {
+                    width: blocks.len() as NSUInteger,
+                    height: 1,
+                    depth: 1,
+                };
+                let threads = MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                };
+                encoder.dispatchThreads_threadsPerThreadgroup(grid, threads);
+                encoder.endEncoding();
+                cmd_buf.commit();
+                if !finalize_command_buffer(&cmd_buf, "metal self-test sha256 leaves") {
+                    return None;
+                }
+                let words = unsafe {
+                    std::slice::from_raw_parts(
+                        buf_out.contents().as_ptr() as *const u32,
+                        blocks.len() * 8,
+                    )
+                };
+                let actual: Vec<[u8; 32]> = words
+                    .chunks_exact(8)
+                    .map(|chunk| {
+                        let mut digest = [0u8; 32];
+                        for (index, word) in chunk.iter().enumerate() {
+                            digest[index * 4..index * 4 + 4].copy_from_slice(&word.to_be_bytes());
+                        }
+                        digest
+                    })
+                    .collect();
+                actual == expected
+            };
+            if debug_selftest {
+                eprintln!(
+                    "ivm: metal self-test sha256-leaves {}",
+                    if sha_leaves_ok { "ok" } else { "FAIL" }
+                );
+            }
+
             // AES round quick check against CPU reference
             let aes_ok = {
                 use core::ptr::NonNull;
@@ -1866,7 +1972,14 @@ impl MetalState {
                 );
             }
 
-            add_ok && sha_ok && aes_ok && aes_fused_ok && keccak_ok && sha_pairs_ok && ed25519_ok
+            add_ok
+                && sha_ok
+                && sha_leaves_ok
+                && aes_ok
+                && aes_fused_ok
+                && keccak_ok
+                && sha_pairs_ok
+                && ed25519_ok
         };
 
         if !self_test_ok {
@@ -2477,6 +2590,105 @@ pub fn metal_sha256_pairs_reduce(digests: &[[u8; 32]]) -> Option<[u8; 32]> {
 #[cfg(not(all(target_os = "macos", feature = "metal")))]
 pub fn metal_sha256_pairs_reduce(_digests: &[[u8; 32]]) -> Option<[u8; 32]> {
     None
+}
+
+#[cfg(all(target_os = "macos", feature = "metal", test))]
+fn metal_ed25519_verify_batch_direct_for_tests(
+    signatures: &[[u8; 64]],
+    public_keys: &[[u8; 32]],
+    hrams: &[[u8; 32]],
+) -> Option<Vec<bool>> {
+    if signatures.len() != public_keys.len() || signatures.len() != hrams.len() {
+        return None;
+    }
+    if signatures.is_empty() {
+        return Some(Vec::new());
+    }
+
+    use core::ptr::NonNull;
+
+    use objc2::rc::autoreleasepool;
+    use objc2_foundation::{NSString, ns_string};
+    use objc2_metal::*;
+
+    autoreleasepool(|_| {
+        let device = discover_metal_device()?;
+        let queue = device.newCommandQueue()?;
+        let lib = device
+            .newLibraryWithSource_options_error(&NSString::from_str(METAL_ED25519_SHADER), None)
+            .ok()?;
+        let func = lib.newFunctionWithName(ns_string!("signature_kernel"))?;
+        let pipeline = device
+            .newComputePipelineStateWithFunction_error(&func)
+            .ok()?;
+
+        let n = signatures.len();
+        let flat_sigs: Vec<u8> = signatures.iter().flat_map(|s| s.iter()).copied().collect();
+        let flat_pks: Vec<u8> = public_keys.iter().flat_map(|p| p.iter()).copied().collect();
+        let flat_hrams: Vec<u8> = hrams.iter().flat_map(|h| h.iter()).copied().collect();
+        let count_buf = [n as u32];
+
+        let buf_sigs = unsafe {
+            device.newBufferWithBytes_length_options(
+                NonNull::new_unchecked(flat_sigs.as_ptr() as *mut core::ffi::c_void),
+                flat_sigs.len(),
+                MTLResourceOptions::CPUCacheModeDefaultCache,
+            )?
+        };
+        let buf_pks = unsafe {
+            device.newBufferWithBytes_length_options(
+                NonNull::new_unchecked(flat_pks.as_ptr() as *mut core::ffi::c_void),
+                flat_pks.len(),
+                MTLResourceOptions::CPUCacheModeDefaultCache,
+            )?
+        };
+        let buf_hrams = unsafe {
+            device.newBufferWithBytes_length_options(
+                NonNull::new_unchecked(flat_hrams.as_ptr() as *mut core::ffi::c_void),
+                flat_hrams.len(),
+                MTLResourceOptions::CPUCacheModeDefaultCache,
+            )?
+        };
+        let buf_count = unsafe {
+            device.newBufferWithBytes_length_options(
+                NonNull::new_unchecked(count_buf.as_ptr() as *mut core::ffi::c_void),
+                core::mem::size_of::<u32>(),
+                MTLResourceOptions::CPUCacheModeDefaultCache,
+            )?
+        };
+        let buf_out =
+            device.newBufferWithLength_options(n, MTLResourceOptions::StorageModeShared)?;
+
+        let cmd = queue.commandBuffer()?;
+        let enc = cmd.computeCommandEncoder()?;
+        enc.setComputePipelineState(&pipeline);
+        unsafe {
+            enc.setBuffer_offset_atIndex(Some(&buf_sigs), 0, 0);
+            enc.setBuffer_offset_atIndex(Some(&buf_pks), 0, 1);
+            enc.setBuffer_offset_atIndex(Some(&buf_hrams), 0, 2);
+            enc.setBuffer_offset_atIndex(Some(&buf_count), 0, 3);
+            enc.setBuffer_offset_atIndex(Some(&buf_out), 0, 4);
+        }
+        let grid = MTLSize {
+            width: n as NSUInteger,
+            height: 1,
+            depth: 1,
+        };
+        let threads = MTLSize {
+            width: pipeline.threadExecutionWidth().max(1),
+            height: 1,
+            depth: 1,
+        };
+        enc.dispatchThreads_threadsPerThreadgroup(grid, threads);
+        enc.endEncoding();
+        cmd.commit();
+        if !finalize_command_buffer(&cmd, "metal ed25519 batch verify direct") {
+            return None;
+        }
+        let out =
+            unsafe { std::slice::from_raw_parts(buf_out.contents().as_ptr() as *const u8, n) };
+        Some(out.iter().map(|byte| *byte != 0).collect())
+    })
 }
 
 #[cfg(all(target_os = "macos", feature = "metal"))]
@@ -4506,6 +4718,66 @@ mod tests {
 
     #[cfg(all(target_os = "macos", feature = "metal"))]
     #[test]
+    fn metal_sha256_leaves_matches_cpu() {
+        if !metal_available() {
+            eprintln!("Metal unavailable; skipping sha256 leaves parity test");
+            return;
+        }
+
+        reset_metal_backend_for_tests();
+        warm_up_metal();
+
+        let mut block_a = [0u8; 64];
+        block_a[0] = b'a';
+        block_a[1] = b'b';
+        block_a[2] = b'c';
+        block_a[3] = 0x80;
+        block_a[63] = 24;
+
+        let mut block_b = [0u8; 64];
+        block_b[0] = b'n';
+        block_b[1] = b'o';
+        block_b[2] = b'r';
+        block_b[3] = b'i';
+        block_b[4] = b't';
+        block_b[5] = b'o';
+        block_b[6] = 0x80;
+        block_b[63] = 48;
+
+        let blocks = [block_a, block_b];
+        let expected: Vec<[u8; 32]> = blocks
+            .iter()
+            .map(|block| {
+                let mut state = [
+                    0x6a09e667u32,
+                    0xbb67ae85,
+                    0x3c6ef372,
+                    0xa54ff53a,
+                    0x510e527f,
+                    0x9b05688c,
+                    0x1f83d9ab,
+                    0x5be0cd19,
+                ];
+                sha256_compress_scalar_ref(&mut state, block);
+                let mut digest = [0u8; 32];
+                for (index, word) in state.iter().enumerate() {
+                    digest[index * 4..index * 4 + 4].copy_from_slice(&word.to_be_bytes());
+                }
+                digest
+            })
+            .collect();
+
+        let Some(actual) = metal_sha256_leaves(&blocks) else {
+            eprintln!(
+                "Metal backend unavailable after startup self-tests; skipping sha256 leaves parity test",
+            );
+            return;
+        };
+        assert_eq!(actual, expected);
+    }
+
+    #[cfg(all(target_os = "macos", feature = "metal"))]
+    #[test]
     fn metal_ed25519_batch_matches_cpu() {
         use curve25519_dalek::scalar::Scalar;
         use ed25519_dalek::{Signer, SigningKey};
@@ -4517,8 +4789,6 @@ mod tests {
         }
 
         reset_metal_backend_for_tests();
-        warm_up_metal();
-
         let key = SigningKey::from_bytes(&[5u8; 32]);
         let pk = key.verifying_key();
         let msg = b"metal batch test";
@@ -4536,10 +4806,10 @@ mod tests {
         let pks = [pk.to_bytes(), pk.to_bytes()];
         let hrams = [hram, hram];
 
-        if let Some(results) = metal_ed25519_verify_batch(&sigs, &pks, &hrams) {
+        if let Some(results) = metal_ed25519_verify_batch_direct_for_tests(&sigs, &pks, &hrams) {
             assert_eq!(results, vec![true, false]);
         } else {
-            eprintln!("Metal ed25519 batch path unavailable; skipping parity assertion");
+            eprintln!("Metal ed25519 direct path unavailable; skipping parity assertion");
         }
     }
 
@@ -4676,9 +4946,9 @@ mod tests {
         reset_metal_backend_for_tests();
         let first = METAL_STATE.with(|cell| {
             cell.borrow_mut().take();
-            with_metal_state(|state| state.queue.as_ptr() as usize)
+            with_metal_state(|state| objc2::rc::Retained::as_ptr(&state.queue) as usize)
         });
-        let second = with_metal_state(|state| state.queue.as_ptr() as usize);
+        let second = with_metal_state(|state| objc2::rc::Retained::as_ptr(&state.queue) as usize);
 
         match (first, second) {
             (Some(a), Some(b)) => assert_eq!(a, b, "warm_up_metal should reuse cached Metal state"),

@@ -222,6 +222,8 @@ pub mod soracloud_runtime {
         pub const LOCAL_RUNNER_PROGRAM: &str = "python3";
         /// Default timeout applied to one local runner invocation.
         pub const LOCAL_RUNNER_TIMEOUT_MS: u64 = 120_000;
+        /// Default TTL for runtime-originated authoritative model-host heartbeats.
+        pub const MODEL_HOST_HEARTBEAT_TTL_MS: u64 = 30_000;
         /// Whether generated HF services may fall back to the HF Inference bridge.
         pub const ALLOW_INFERENCE_BRIDGE_FALLBACK: bool = true;
         /// Default maximum number of Hub files imported into the shared local cache for one source.
@@ -1383,6 +1385,12 @@ pub mod torii {
     pub const DEPLOY_RATE_PER_ORIGIN_PER_SEC: Option<u32> = Some(4);
     /// Maximum burst tokens accumulated per origin for deploy endpoints.
     pub const DEPLOY_BURST_PER_ORIGIN: Option<u32> = Some(8);
+    /// Default public Soracloud local-read rate per remote IP every second.
+    pub const SORACLOUD_PUBLIC_RATE_PER_IP_PER_SEC: Option<u32> = Some(5);
+    /// Default public Soracloud local-read burst capacity per remote IP.
+    pub const SORACLOUD_PUBLIC_BURST_PER_IP: Option<u32> = Some(10);
+    /// Default maximum number of concurrent public Soracloud local-read executions.
+    pub const SORACLOUD_PUBLIC_MAX_INFLIGHT: NonZeroUsize = nonzero!(32usize);
     /// Steady-state proof endpoint rate (requests per minute). None disables.
     pub const PROOF_RATE_PER_MIN: Option<u32> = Some(120);
     /// Burst tokens for proof endpoints (requests).
@@ -1485,6 +1493,10 @@ pub mod torii {
         pub const ENABLED: bool = false;
         /// Require mTLS at the ingress tier before allowing operator endpoints.
         pub const REQUIRE_MTLS: bool = false;
+        /// Trusted proxy CIDRs that may assert the forwarded client certificate header.
+        pub fn mtls_trusted_proxy_cidrs() -> Vec<String> {
+            vec!["127.0.0.0/8".to_owned(), "::1/128".to_owned()]
+        }
         /// Token fallback mode (`disabled`, `bootstrap`, `always`).
         pub const TOKEN_FALLBACK: &str = "bootstrap";
         /// Token source selection (`operator`, `api`, `both`).
@@ -1568,6 +1580,15 @@ pub mod torii {
     pub const APP_API_MAX_FETCH_SIZE: u32 = 500;
     /// Rate-limiter cost applied per requested row on app-facing endpoints.
     pub const APP_API_RATE_LIMIT_COST_PER_ROW: u32 = 1;
+    /// Canonical request freshness defaults for app-facing signed HTTP requests.
+    pub mod app_auth {
+        /// Maximum allowed clock skew for signed app requests (seconds).
+        pub const MAX_CLOCK_SKEW_SECS: u64 = 60;
+        /// TTL for app request nonces retained for replay detection (seconds).
+        pub const NONCE_TTL_SECS: u64 = 300;
+        /// Maximum number of app request nonces held in memory for replay detection.
+        pub const REPLAY_CACHE_CAPACITY: usize = 10_000;
+    }
     /// Maximum pending webhook deliveries persisted on disk.
     pub const WEBHOOK_QUEUE_CAPACITY: usize = 10_000;
     /// Maximum delivery attempts before a payload is dropped.
@@ -1845,8 +1866,12 @@ pub mod torii {
         pub mod norito_rpc {
             /// Enable Norito-RPC decoding by default so lab/devnet builds can exercise the transport.
             pub const ENABLED: bool = true;
-            /// mTLS requirement flag is surfaced for operators; enforcement happens at the ingress layer.
+            /// Require the forwarded client certificate header from a trusted ingress proxy.
             pub const REQUIRE_MTLS: bool = false;
+            /// Trusted proxy CIDRs that may assert the forwarded client certificate header.
+            pub fn mtls_trusted_proxy_cidrs() -> Vec<String> {
+                vec!["127.0.0.0/8".to_owned(), "::1/128".to_owned()]
+            }
             /// Default rollout stage label for Norito-RPC.
             pub const STAGE: &str = "disabled";
 
@@ -3513,11 +3538,18 @@ pub mod settlement {
 
 #[cfg(test)]
 mod tests {
-    use super::governance;
+    use super::{governance, torii};
 
     #[test]
     fn jdg_signature_schemes_includes_simple_threshold() {
         let schemes = governance::jdg_signature_schemes();
         assert!(schemes.contains(&"simple_threshold".to_string()));
+    }
+
+    #[test]
+    fn soracloud_public_runtime_defaults_are_non_zero() {
+        assert_eq!(torii::SORACLOUD_PUBLIC_RATE_PER_IP_PER_SEC, Some(5));
+        assert_eq!(torii::SORACLOUD_PUBLIC_BURST_PER_IP, Some(10));
+        assert_eq!(torii::SORACLOUD_PUBLIC_MAX_INFLIGHT.get(), 32);
     }
 }

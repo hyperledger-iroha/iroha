@@ -27,7 +27,9 @@ Determinizm: Bütün təlimat semantikası aparatdan asılı davranış olmadan 
 ID-lər `Display`/`FromStr` gediş-gəliş ilə sabit sətir formalarına malikdir. Ad qaydaları boşluqları və qorunan `@ # $` simvollarını qadağan edir.- `Name` — təsdiqlənmiş mətn identifikatoru. Qaydalar: `crates/iroha_data_model/src/name.rs`.
 - `DomainId` — `name`. Domen: `{ id, logo, metadata, owned_by }`. İnşaatçılar: `NewDomain`. Kod: `crates/iroha_data_model/src/domain.rs`.
 - `AccountId` — kanonik ünvanlar `AccountAddress` (I105 / hex) vasitəsilə istehsal olunur və Torii `AccountAddress::parse_encoded` vasitəsilə girişləri normallaşdırır. I105 üstünlük verilən hesab formatıdır; I105 forması yalnız Sora UX üçündür. Tanış `alias` (rədd edilmiş köhnə forma) sətri yalnız marşrut ləqəbi kimi saxlanılır. Hesab: `{ id, metadata }`. Kod: `crates/iroha_data_model/src/account.rs`.- Hesabın qəbulu siyasəti — domenlər `iroha:account_admission_policy` metadata açarı altında Norito-JSON `AccountAdmissionPolicy` saxlamaqla gizli hesab yaradılmasına nəzarət edir. Açar olmadıqda, zəncirvari səviyyəli fərdi parametr `iroha:default_account_admission_policy` standartı təmin edir; bu da olmadıqda, sabit standart `ImplicitReceive` (ilk buraxılış) olur. Siyasət teqləri `mode` (`ExplicitOnly` və ya `ImplicitReceive`) üstəgəl hər bir əməliyyat üçün isteğe bağlı (defolt `16`) və hər blok yaratma qapaqları, isteğe bağlı `implicit_creation_fee` hesabı (və ya sink), Aktiv tərifinə görə `min_initial_amounts` və isteğe bağlı `default_role_on_create` (`AccountCreated`-dən sonra verilir, itkin olduqda `DefaultRoleError` ilə rədd edilir). Genesis qoşula bilməz; əlil/etibarsız siyasətlər `InstructionExecutionError::AccountAdmission` ilə naməlum hesablar üçün qəbz tipli təlimatları rədd edir. `AccountCreated`-dən əvvəl gizli hesablar `iroha:created_via="implicit"` metadata möhürü; defolt rollar izləmə `AccountRoleGranted` yayır və icraçı sahibinin əsas qaydaları yeni hesaba əlavə rollar olmadan öz aktivlərini/NFT-lərini xərcləməyə imkan verir. Kod: `crates/iroha_data_model/src/account/admission.rs`, `crates/iroha_core/src/smartcontracts/isi/account_admission.rs`.
-- `AssetDefinitionId` — kanonik `aid:<32-lower-hex-no-dash>` (UUID-v4 bayt). Tərif: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. `alias` hərfi `<name>#<domain>@<dataspace>` və ya `<name>#<dataspace>` olmalıdır, `<name>` aktivin tərifinin adına bərabərdir. Kod: `crates/iroha_data_model/src/asset/definition.rs`.
+- `AssetDefinitionId` — kanonik `unprefixed Base58 address with versioning and checksum` (UUID-v4 bayt). Tərif: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. `alias` hərfi `<name>#<domain>.<dataspace>` və ya `<name>#<dataspace>` olmalıdır, `<name>` aktivin tərifinin adına bərabərdir. Kod: `crates/iroha_data_model/src/asset/definition.rs`.
+
+  - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`, where `status` is `permanent`, `leased_active`, `leased_grace`, or `expired_pending_cleanup`. Alias selectors resolve against the latest committed block creation time and stop resolving after grace even before sweep removes stale bindings.
 - `AssetId`: kanonik kodlaşdırılmış literal `norito:<hex>` (ilk buraxılışda köhnə mətn formaları dəstəklənmir).- `NftId` — `nft$domain`. NFT: `{ id, content: Metadata, owned_by }`. Kod: `crates/iroha_data_model/src/nft.rs`.
 - `RoleId` — `name`. Rol: `{ id, permissions: BTreeSet<Permission> }` inşaatçı ilə `NewRole { inner: Role, grant_to }`. Kodu: `crates/iroha_data_model/src/role.rs`.
 - `Permission` — `{ name: Ident, payload: Json }`. Kodu: `crates/iroha_data_model/src/permission.rs`.
@@ -192,19 +194,19 @@ Növ: `ExecuteTrigger { trigger: TriggerId, args: Json }`.
   - Əgər icra zamanı triggerin IVM bayt kodu çatışmırsa, tətik çıxarılır və icra uğursuzluq nəticəsi ilə heç bir əməliyyat kimi qəbul edilir.
   - Tükənmiş tətiklər dərhal aradan qaldırılır; icra zamanı tükənmiş bir girişə rast gəlinərsə, o, budanır və itkin hesab edilir.
 - Parametr yeniləməsi:
-  - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` yeniləyir və `ConfigurationEvent::Changed` yayır.CLI / Torii `aid` + ləqəb nümunələri:
+  - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` yeniləyir və `ConfigurationEvent::Changed` yayır.CLI / Torii asset-definition id + ləqəb nümunələri:
 - Kanonik yardım + açıq ad + uzun ləqəb ilə qeydiyyatdan keçin:
-  - `iroha ledger asset definition register --id aid:2f17c72466f84a4bb8a8e24884fdcd2f --name pkr --alias pkr#ubl@sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#ubl.sbp`
 - Kanonik yardım + açıq ad + qısa ləqəb ilə qeydiyyatdan keçin:
-  - `iroha ledger asset definition register --id aid:550e8400e29b41d4a7164466554400dd --name pkr --alias pkr#sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#sbp`
 - Ləqəb + hesab komponentləri ilə nanə:
-  - `iroha ledger asset mint --definition-alias pkr#ubl@sbp --account <i105> --quantity 500`
+  - `iroha ledger asset mint --definition-alias pkr#ubl.sbp --account <i105> --quantity 500`
 - Kanonik yardım üçün ləqəb həll edin:
-  - JSON `{ "alias": "pkr#ubl@sbp" }` ilə `POST /v1/assets/aliases/resolve`
+  - JSON `{ "alias": "pkr#ubl.sbp" }` ilə `POST /v1/assets/aliases/resolve`
 
 Miqrasiya qeydi:
 - `name#domain` mətn aktivi tərifi identifikatorları ilk buraxılışda qəsdən dəstəklənmir.
-- Nanə/yandırma/köçürmə sərhədlərində aktiv identifikatorları kanonik olaraq qalır `norito:<hex>`; `iroha tools encode asset-id` ilə `--definition aid:...` və ya `--alias ...` plus `--account` istifadə edin.
+- Nanə/yandırma/köçürmə sərhədlərində aktiv identifikatorları kanonik olaraq qalır `norito:<hex>`; `iroha tools encode asset-id` ilə `--definition <base58-asset-definition-id>` və ya `--alias ...` plus `--account` istifadə edin.
 
 ---
 

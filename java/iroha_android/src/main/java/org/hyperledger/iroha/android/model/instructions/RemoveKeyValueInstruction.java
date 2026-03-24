@@ -137,7 +137,10 @@ public final class RemoveKeyValueInstruction implements InstructionTemplate {
     }
 
     public Builder setAccountId(final String accountId) {
-      return setTarget(Target.ACCOUNT, accountId);
+      return setTarget(
+          Target.ACCOUNT,
+          org.hyperledger.iroha.android.address.AccountIdLiteral.requireCanonicalI105Address(
+              accountId, "accountId"));
     }
 
     public Builder setAssetDefinitionId(final String assetDefinitionId) {
@@ -190,4 +193,3 @@ public final class RemoveKeyValueInstruction implements InstructionTemplate {
     }
   }
 }
-

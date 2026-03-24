@@ -853,6 +853,20 @@ pub mod domain {
             AnyPermission::CanUnregisterDomain(permission) => &permission.domain == domain_id,
             AnyPermission::CanModifyDomainMetadata(permission) => &permission.domain == domain_id,
             AnyPermission::CanRegisterAccount(permission) => &permission.domain == domain_id,
+            AnyPermission::CanResolveAccountAlias(permission) => {
+                matches!(
+                    permission.scope,
+                    iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(ref domain)
+                        if domain == domain_id
+                )
+            }
+            AnyPermission::CanManageAccountAlias(permission) => {
+                matches!(
+                    permission.scope,
+                    iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(ref domain)
+                        if domain == domain_id
+                )
+            }
             AnyPermission::CanUnregisterAssetDefinition(permission) => {
                 permission.asset_definition.domain() == domain_id
             }
@@ -934,7 +948,13 @@ pub mod account {
         executor: &mut V,
         isi: &Register<Account>,
     ) {
-        let domain_id = isi.object().domain();
+        let domain_id = if let Some(domain_id) = isi.object().domain() {
+            domain_id
+        } else {
+            // TODO: Replace this temporary self/unrestricted bridge with explicit domainless
+            // account registration permissions once dataspace-aware alias permissions land.
+            execute!(executor, isi);
+        };
 
         match crate::permission::domain::is_domain_owner(
             domain_id,
@@ -1088,6 +1108,8 @@ pub mod account {
             | AnyPermission::CanExecuteTrigger(_)
             | AnyPermission::CanModifyTrigger(_)
             | AnyPermission::CanModifyTriggerMetadata(_)
+            | AnyPermission::CanResolveAccountAlias(_)
+            | AnyPermission::CanManageAccountAlias(_)
             | AnyPermission::CanManagePeers(_)
             | AnyPermission::CanRegisterDomain(_)
             | AnyPermission::CanUnregisterDomain(_)
@@ -1313,6 +1335,8 @@ pub mod asset_definition {
             }
             AnyPermission::CanUnregisterAccount(_)
             | AnyPermission::CanModifyAccountMetadata(_)
+            | AnyPermission::CanResolveAccountAlias(_)
+            | AnyPermission::CanManageAccountAlias(_)
             | AnyPermission::CanRegisterTrigger(_)
             | AnyPermission::CanUnregisterTrigger(_)
             | AnyPermission::CanExecuteTrigger(_)
@@ -2484,6 +2508,8 @@ pub mod trigger {
             | AnyPermission::CanRegisterAccount(_)
             | AnyPermission::CanUnregisterAccount(_)
             | AnyPermission::CanModifyAccountMetadata(_)
+            | AnyPermission::CanResolveAccountAlias(_)
+            | AnyPermission::CanManageAccountAlias(_)
             | AnyPermission::CanUnregisterAssetDefinition(_)
             | AnyPermission::CanModifyAssetDefinitionMetadata(_)
             | AnyPermission::CanModifyAssetMetadataWithDefinition(_)

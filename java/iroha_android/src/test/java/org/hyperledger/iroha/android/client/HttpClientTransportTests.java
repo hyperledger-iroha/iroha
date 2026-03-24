@@ -18,6 +18,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.hyperledger.iroha.android.IrohaKeyManager;
 import org.hyperledger.iroha.android.IrohaKeyManager.KeySecurityPreference;
+import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
 import org.hyperledger.iroha.android.client.queue.FilePendingTransactionQueue;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
@@ -32,6 +33,7 @@ import org.hyperledger.iroha.android.nexus.UaidManifestQuery;
 import org.hyperledger.iroha.android.nexus.UaidManifestQuery.UaidManifestStatusFilter;
 import org.hyperledger.iroha.android.nexus.UaidManifestsResponse;
 import org.hyperledger.iroha.android.nexus.UaidManifestsResponse.UaidManifestRecord;
+import org.hyperledger.iroha.android.testing.TestAccountIds;
 import org.hyperledger.iroha.android.nexus.UaidManifestsResponse.UaidManifestStatus;
 import org.hyperledger.iroha.android.nexus.UaidPortfolioQuery;
 import org.hyperledger.iroha.android.nexus.UaidPortfolioResponse;
@@ -725,6 +727,7 @@ public final class HttpClientTransportTests {
   private static void uaidPortfolioRequestParsesResponse() {
     final String hex =
         "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+    final String assetDefinitionId = AssetDefinitionIdEncoder.encode("xor", "nexus");
     final String json =
         ("{"
             + "\"uaid\":\"uaid:"
@@ -738,7 +741,9 @@ public final class HttpClientTransportTests {
             + "\"account_id\":\"alice@wonderland\","
             + "\"label\":\"Primary\","
             + "\"assets\":[{"
-            + "\"asset_id\":\"xor#wonderland\",\"asset_definition_id\":\"xor#nexus\",\"quantity\":\"42\""
+            + "\"asset_id\":\"xor#wonderland\",\"asset_definition_id\":\""
+            + assetDefinitionId
+            + "\",\"quantity\":\"42\""
             + "}]"
             + "}]"
             + "}]"
@@ -772,7 +777,7 @@ public final class HttpClientTransportTests {
     assert account.assets().size() == 1 : "Expected single asset entry";
     final UaidPortfolioResponse.UaidPortfolioAsset asset = account.assets().get(0);
     assert "xor#wonderland".equals(asset.assetId()) : "Asset ID mismatch";
-    assert "xor#nexus".equals(asset.assetDefinitionId()) : "Asset definition mismatch";
+    assert assetDefinitionId.equals(asset.assetDefinitionId()) : "Asset definition mismatch";
     assert "42".equals(asset.quantity()) : "Asset quantity mismatch";
 
     final TransportRequest request = executor.lastRequest();
@@ -791,6 +796,7 @@ public final class HttpClientTransportTests {
   private static void uaidPortfolioRequestSupportsQuery() {
     final String hex =
         "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff0102030405060708090a0b0c0d0e0f11";
+    final String encodedAssetId = "norito:A1B2";
     final String json =
         "{"
             + "\"uaid\":\"uaid:"
@@ -808,7 +814,7 @@ public final class HttpClientTransportTests {
     final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
 
     final UaidPortfolioQuery query =
-        UaidPortfolioQuery.builder().setAssetId("xor#wonderland").build();
+        UaidPortfolioQuery.builder().setAssetId(encodedAssetId).build();
     transport.getUaidPortfolio("uaid:" + hex.toUpperCase(), query).join();
 
     final TransportRequest request = executor.lastRequest();
@@ -819,7 +825,7 @@ public final class HttpClientTransportTests {
         .equals(
             "https://torii.example/v1/accounts/uaid%3A"
                 + hex
-                + "/portfolio?asset_id=xor%23wonderland")
+                + "/portfolio?asset_id=norito%3Aa1b2")
         : "UAID portfolio query must include asset_id filter";
   }
 
@@ -1409,9 +1415,11 @@ public final class HttpClientTransportTests {
     assert request.uri().toString().equals("https://torii.example/api/v1/ram-lfe/receipts/verify")
         : "RAM-LFE verify URI mismatch";
     @SuppressWarnings("unchecked")
-    final Map<String, Object> payload = (Map<String, Object>) JsonParser.parse(readBody(request));
-    assert "c0ffee".equals(payload.get("output_hex")) : "Verify output_hex mismatch";
-    assert payload.get("receipt") instanceof Map<?, ?> : "Verify request must preserve raw receipt";
+    final Map<String, Object> requestPayload =
+        (Map<String, Object>) JsonParser.parse(readBody(request));
+    assert "c0ffee".equals(requestPayload.get("output_hex")) : "Verify output_hex mismatch";
+    assert requestPayload.get("receipt") instanceof Map<?, ?>
+        : "Verify request must preserve raw receipt";
   }
 
   private static void identifierNormalizationCanonicalizesInputs() {
@@ -1770,7 +1778,7 @@ public final class HttpClientTransportTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId(String.format("%08x", fillValue))
-            .setAuthority("alice@wonderland")
+            .setAuthority(TestAccountIds.ed25519Authority(0x26))
             .setCreationTimeMs(1_700_000_000_000L + (fillValue & 0xFF))
             .setInstructionBytes(new byte[] {fillValue, (byte) (fillValue + 1)})
             .setTimeToLiveMs(5_000L)

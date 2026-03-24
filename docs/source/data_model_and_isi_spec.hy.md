@@ -27,7 +27,9 @@ translator: machine-google-reviewed
 ID-ներն ունեն կայուն լարային ձևեր `Display`/`FromStr` հետադարձ ճանապարհով: Անվան կանոններն արգելում են բացատները և վերապահված `@ # $` նիշերը:- `Name` — վավերացված տեքստային նույնացուցիչ: Կանոններ՝ `crates/iroha_data_model/src/name.rs`:
 - `DomainId` — `name`. Դոմեն՝ `{ id, logo, metadata, owned_by }`: Շինարարներ՝ `NewDomain`: Կոդ՝ `crates/iroha_data_model/src/domain.rs`։
 - `AccountId` — կանոնական հասցեները արտադրվում են `AccountAddress` (I105 / hex) և Torii-ի միջոցով նորմալացնում է մուտքերը `AccountAddress::parse_encoded`-ի միջոցով: I105-ը հաշվի նախընտրելի ձևաչափն է. I105 ձևը նախատեսված է միայն Sora-ի UX-ի համար: Ծանոթ `alias` (մերժված ժառանգական ձև) տողը պահպանվում է միայն որպես երթուղային այլանուն: Հաշիվ՝ `{ id, metadata }`: Կոդ՝ `crates/iroha_data_model/src/account.rs`։- Հաշվի ընդունման քաղաքականություն — տիրույթները վերահսկում են անուղղակի հաշվի ստեղծումը` պահելով Norito-JSON `AccountAdmissionPolicy` `iroha:account_admission_policy` մետատվյալների բանալու տակ: Երբ բանալին բացակայում է, շղթայի մակարդակի մաքսային պարամետրը `iroha:default_account_admission_policy` ապահովում է լռելյայն; երբ դա նույնպես բացակայում է, կոշտ կանխադրվածը `ImplicitReceive` է (առաջին թողարկում): Քաղաքականության պիտակները `mode` (`ExplicitOnly` կամ `ImplicitReceive`) գումարած կամընտիր յուրաքանչյուր գործարքի համար (կանխադրված `16`) և յուրաքանչյուր բլոկի ստեղծման գլխարկներ, կամընտիր SoraFS հաշիվ `min_initial_amounts` յուրաքանչյուր ակտիվի սահմանման համար և կամընտիր `default_role_on_create` (տրամադրվում է `AccountCreated`-ից հետո, մերժվում է `DefaultRoleError`-ով, եթե բացակայում է): Genesis-ը չի կարող մասնակցել. անջատված/անվավեր քաղաքականությունները մերժում են `InstructionExecutionError::AccountAdmission`-ով անհայտ հաշիվների անդորրագրի ոճի հրահանգները: Անուղղակի հաշիվների կնիքի մետատվյալները `iroha:created_via="implicit"` մինչև `AccountCreated`; լռելյայն դերերը թողարկում են հաջորդող `AccountRoleGranted`, և կատարողի սեփականատիրոջ ելակետային կանոնները թույլ են տալիս, որ նոր հաշիվը ծախսի իր սեփական ակտիվները/NFT-ները՝ առանց լրացուցիչ դերերի: Կոդ՝ `crates/iroha_data_model/src/account/admission.rs`, `crates/iroha_core/src/smartcontracts/isi/account_admission.rs`։
-- `AssetDefinitionId` — կանոնական `aid:<32-lower-hex-no-dash>` (UUID-v4 բայթ): Սահմանում. `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`: `alias` բառացիները պետք է լինեն `<name>#<domain>@<dataspace>` կամ `<name>#<dataspace>`, որոնց դեպքում `<name>` հավասար է ակտիվի սահմանման անվանմանը: Կոդ՝ `crates/iroha_data_model/src/asset/definition.rs`։
+- `AssetDefinitionId` — կանոնական `unprefixed Base58 address with versioning and checksum` (UUID-v4 բայթ): Սահմանում. `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`: `alias` բառացիները պետք է լինեն `<name>#<domain>.<dataspace>` կամ `<name>#<dataspace>`, որոնց դեպքում `<name>` հավասար է ակտիվի սահմանման անվանմանը: Կոդ՝ `crates/iroha_data_model/src/asset/definition.rs`։
+
+  - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`, where `status` is `permanent`, `leased_active`, `leased_grace`, or `expired_pending_cleanup`. Alias selectors resolve against the latest committed block creation time and stop resolving after grace even before sweep removes stale bindings.
 - `AssetId`. կանոնական կոդավորված բառացի `norito:<hex>` (նախնական տեքստային ձևերը չեն ապահովվում առաջին թողարկումում):- `NftId` — `nft$domain`. NFT՝ `{ id, content: Metadata, owned_by }`: Կոդ՝ `crates/iroha_data_model/src/nft.rs`։
 - `RoleId` — `name`. Դերը՝ `{ id, permissions: BTreeSet<Permission> }` շինարարով `NewRole { inner: Role, grant_to }`: Կոդ՝ `crates/iroha_data_model/src/role.rs`։
 - `Permission` — `{ name: Ident, payload: Json }`. Կոդ՝ `crates/iroha_data_model/src/permission.rs`։
@@ -192,19 +194,19 @@ ID-ներն ունեն կայուն լարային ձևեր `Display`/`FromStr` 
   - Եթե գործարկման պահին գործարկողի IVM բայթկոդը բացակայում է, գործարկիչը հանվում է, և կատարումը դիտվում է որպես անգործունակ՝ ձախողման հետևանքով:
   - սպառված ձգանները անմիջապես հեռացվում են. եթե կատարման ընթացքում նկատվում է սպառված մուտք, այն կտրվում և համարվում է բացակայող:
 - Պարամետրի թարմացում.
-  - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())`-ը թարմացնում և թողարկում է `ConfigurationEvent::Changed`:CLI / Torii `aid` + կեղծանունների օրինակներ.
+  - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())`-ը թարմացնում և թողարկում է `ConfigurationEvent::Changed`:CLI / Torii asset-definition id + կեղծանունների օրինակներ.
 - Գրանցվեք կանոնական օգնությամբ + հստակ անուն + երկար կեղծանունով.
-  - `iroha ledger asset definition register --id aid:2f17c72466f84a4bb8a8e24884fdcd2f --name pkr --alias pkr#ubl@sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#ubl.sbp`
 - Գրանցվեք կանոնական օգնությամբ + հստակ անուն + կարճ կեղծանունով.
-  - `iroha ledger asset definition register --id aid:550e8400e29b41d4a7164466554400dd --name pkr --alias pkr#sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#sbp`
 - Անանուխը կեղծանունով + հաշվի բաղադրիչներ.
-  - `iroha ledger asset mint --definition-alias pkr#ubl@sbp --account <i105> --quantity 500`
+  - `iroha ledger asset mint --definition-alias pkr#ubl.sbp --account <i105> --quantity 500`
 - Լուծեք կանոնական օգնության կեղծանունները.
-  - `POST /v1/assets/aliases/resolve` JSON `{ "alias": "pkr#ubl@sbp" }`-ով
+  - `POST /v1/assets/aliases/resolve` JSON `{ "alias": "pkr#ubl.sbp" }`-ով
 
 Միգրացիոն նշում.
 - `name#domain` տեքստային ակտիվների սահմանման ID-ները միտումնավոր չեն աջակցվում առաջին թողարկումում:
-- Ակտիվների ID-ները դրամահատարանի/այրման/փոխանցման սահմաններում մնում են կանոնական `norito:<hex>`; օգտագործել `iroha tools encode asset-id` `--definition aid:...` կամ `--alias ...` գումարած `--account` հետ:
+- Ակտիվների ID-ները դրամահատարանի/այրման/փոխանցման սահմաններում մնում են կանոնական `norito:<hex>`; օգտագործել `iroha tools encode asset-id` `--definition <base58-asset-definition-id>` կամ `--alias ...` գումարած `--account` հետ:
 
 ---
 

@@ -3,6 +3,7 @@ package org.hyperledger.iroha.android.offline;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
+import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
 
 public final class OfflineJsonParserTest {
 
@@ -20,12 +21,14 @@ public final class OfflineJsonParserTest {
     parsesSettlementSubmitResponse();
     parsesBundleProofStatusResponse();
     draftJsonOmitsOperator();
+    draftJsonCarriesDeviceBoundReserveFields();
     rejectsFractionalTotals();
     rejectsFractionalOptionalTimestamp();
     System.out.println("[IrohaAndroid] OfflineJsonParserTest passed.");
   }
 
   private static void parsesAllowancePayload() {
+    final String assetDefinitionId = AssetDefinitionIdEncoder.encode("usd", "wonderland");
     final String json =
         """
         {
@@ -36,7 +39,7 @@ public final class OfflineJsonParserTest {
               "controller_id": "alice@wonderland",
               "controller_display": "alice@wonderland",
               "asset_id": "usd#wonderland",
-              "asset_definition_id": "usd#wonderland",
+              "asset_definition_id": "%s",
               "asset_definition_name": "USD",
               "asset_definition_alias": null,
               "registered_at_ms": 1700000000000,
@@ -50,7 +53,8 @@ public final class OfflineJsonParserTest {
             }
           ]
         }
-        """;
+        """
+            .formatted(assetDefinitionId);
     final OfflineAllowanceList list =
         OfflineJsonParser.parseAllowances(json.getBytes(StandardCharsets.UTF_8));
     assert list.total() == 1 : "total mismatch";
@@ -59,7 +63,7 @@ public final class OfflineJsonParserTest {
     assert "deadbeef".equals(item.certificateIdHex()) : "certificate id mismatch";
     assert "alice@wonderland".equals(item.controllerId()) : "controller mismatch";
     assert "usd#wonderland".equals(item.assetId()) : "asset mismatch";
-    assert "usd#wonderland".equals(item.assetDefinitionId()) : "asset definition id mismatch";
+    assert assetDefinitionId.equals(item.assetDefinitionId()) : "asset definition id mismatch";
     assert "USD".equals(item.assetDefinitionName()) : "asset definition name mismatch";
     assert item.assetDefinitionAlias() == null : "asset definition alias mismatch";
     assert item.registeredAtMs() == 1_700_000_000_000L : "timestamp mismatch";
@@ -375,6 +379,37 @@ public final class OfflineJsonParserTest {
         : "draft operator must be derived by Torii and omitted from JSON map";
   }
 
+  private static void draftJsonCarriesDeviceBoundReserveFields() {
+    final OfflineAllowanceCommitment allowance =
+        new OfflineAllowanceCommitment("usd#wonderland", "10", new byte[] {1, 2, 3});
+    final OfflineWalletPolicy policy = new OfflineWalletPolicy("10", "5", 1700500000000L);
+    final OfflineWalletCertificateDraft draft =
+        new OfflineWalletCertificateDraft(
+            "alice@wonderland",
+            allowance,
+            "ed0120deadbeef",
+            new byte[] {4, 5, 6},
+            1700000000000L,
+            1700500000000L,
+            policy,
+            Map.of("android.offline.device_id", "device-123"),
+            null,
+            null,
+            null,
+            "device-123",
+            "base64-public-key",
+            "device_bound_irreversible",
+            "not_restorable");
+    final Map<String, Object> json = draft.toJsonMap();
+    assert "device-123".equals(json.get("device_id")) : "device_id missing";
+    assert "base64-public-key".equals(json.get("offline_public_key"))
+        : "offline_public_key missing";
+    assert "device_bound_irreversible".equals(json.get("reserve_mode"))
+        : "reserve_mode missing";
+    assert "not_restorable".equals(json.get("restore_policy"))
+        : "restore_policy missing";
+  }
+
   private static void rejectsFractionalTotals() {
     final String json =
         """
@@ -393,6 +428,7 @@ public final class OfflineJsonParserTest {
   }
 
   private static void rejectsFractionalOptionalTimestamp() {
+    final String assetDefinitionId = AssetDefinitionIdEncoder.encode("usd", "wonderland");
     final String json =
         """
         {
@@ -403,7 +439,7 @@ public final class OfflineJsonParserTest {
               "controller_id": "alice@wonderland",
               "controller_display": "alice@wonderland",
               "asset_id": "usd#wonderland",
-              "asset_definition_id": "usd#wonderland",
+              "asset_definition_id": "%s",
               "asset_definition_name": "USD",
               "asset_definition_alias": null,
               "registered_at_ms": 1700000000000,
@@ -417,7 +453,8 @@ public final class OfflineJsonParserTest {
             }
           ]
         }
-        """;
+        """
+            .formatted(assetDefinitionId);
     boolean thrown = false;
     try {
       OfflineJsonParser.parseAllowances(json.getBytes(StandardCharsets.UTF_8));

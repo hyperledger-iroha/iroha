@@ -1410,7 +1410,6 @@ pub struct World {
     #[norito(skip)]
     pub(crate) asset_definition_aliases: Storage<AssetDefinitionAlias, AssetDefinitionId>,
     /// Alias lease metadata keyed by canonical asset definition id.
-    #[norito(skip)]
     pub(crate) asset_definition_alias_bindings:
         Storage<AssetDefinitionId, AssetDefinitionAliasBindingRecord>,
     /// Asset-definition index keyed by definition domain.
@@ -2903,9 +2902,6 @@ impl WorldTransaction<'_, '_> {
                 bound_at_ms,
             },
         );
-        if let Some(definition) = self.asset_definitions.get_mut(definition_id) {
-            definition.alias = Some(alias);
-        }
         Ok(())
     }
 
@@ -2916,9 +2912,6 @@ impl WorldTransaction<'_, '_> {
             .remove(definition_id.clone())
         {
             self.asset_definition_aliases.remove(existing.alias);
-        }
-        if let Some(definition) = self.asset_definitions.get_mut(definition_id) {
-            definition.alias = None;
         }
     }
 
@@ -4814,12 +4807,25 @@ pub struct GovernanceLocksForReferendum {
         std::collections::BTreeMap<iroha_data_model::account::AccountId, GovernanceLockRecord>,
 }
 
+/// Public status of an asset-definition alias lease at a specific observation time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AssetDefinitionAliasLeaseStatus {
+    /// Alias has no expiry and resolves permanently until explicitly cleared.
+    Permanent,
+    /// Alias lease has not reached its expiry timestamp yet.
+    LeasedActive,
+    /// Alias lease expired, but the alias still resolves during the grace window.
+    LeasedGrace,
+    /// Alias lease and grace both elapsed, but the sweep has not removed the binding yet.
+    ExpiredPendingCleanup,
+}
+
 /// On-chain alias lease metadata for an asset definition.
 #[derive(
     Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
 )]
 pub struct AssetDefinitionAliasBindingRecord {
-    /// Bound alias literal (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`).
+    /// Bound alias literal (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`).
     pub alias: AssetDefinitionAlias,
     /// Lease expiry timestamp (unix ms). `None` means non-expiring binding.
     #[norito(default)]
@@ -4836,6 +4842,25 @@ pub struct AssetDefinitionAliasBindingRecord {
 }
 
 impl AssetDefinitionAliasBindingRecord {
+    /// Classify the binding at `now_ms`.
+    #[must_use]
+    pub fn status_at(&self, now_ms: u64) -> AssetDefinitionAliasLeaseStatus {
+        match self.lease_expiry_ms {
+            None => AssetDefinitionAliasLeaseStatus::Permanent,
+            Some(lease_expiry_ms) if now_ms < lease_expiry_ms => {
+                AssetDefinitionAliasLeaseStatus::LeasedActive
+            }
+            Some(_)
+                if self
+                    .grace_until_ms
+                    .is_some_and(|grace_until| now_ms <= grace_until) =>
+            {
+                AssetDefinitionAliasLeaseStatus::LeasedGrace
+            }
+            Some(_) => AssetDefinitionAliasLeaseStatus::ExpiredPendingCleanup,
+        }
+    }
+
     /// Return `true` when the alias should be unbound at `now_ms`.
     #[must_use]
     pub fn is_grace_expired_at(&self, now_ms: u64) -> bool {
@@ -7852,10 +7877,12 @@ mod storage_migration_tests {
         let first = AccountId::new(KeyPair::random().public_key().clone());
         let second = AccountId::new(KeyPair::random().public_key().clone());
 
-        let first_details =
+        let mut first_details =
             AccountDetails::new(Metadata::default(), Some(label.clone()), None, Vec::new());
-        let second_details =
+        first_details.set_linked_domains(BTreeSet::from([domain_id.clone()]));
+        let mut second_details =
             AccountDetails::new(Metadata::default(), Some(label.clone()), None, Vec::new());
+        second_details.set_linked_domains(BTreeSet::from([domain_id.clone()]));
         world
             .accounts
             .insert(first.clone(), AccountValue::new(first_details));
@@ -7883,7 +7910,8 @@ mod storage_migration_tests {
         );
         let account_id = AccountId::new(KeyPair::random().public_key().clone());
 
-        let details = AccountDetails::new(Metadata::default(), Some(label), None, Vec::new());
+        let mut details = AccountDetails::new(Metadata::default(), Some(label), None, Vec::new());
+        details.set_linked_domains(BTreeSet::from([domain_id.clone()]));
         world
             .accounts
             .insert(account_id, AccountValue::new(details));
@@ -7912,12 +7940,13 @@ mod storage_migration_tests {
         );
         let account_id = AccountId::new(KeyPair::random().public_key().clone());
 
-        let details = AccountDetails::new(
+        let mut details = AccountDetails::new(
             Metadata::default(),
             Some(primary_label.clone()),
             None,
             Vec::new(),
         );
+        details.set_linked_domains(BTreeSet::from([domain_id.clone()]));
         world
             .accounts
             .insert(account_id.clone(), AccountValue::new(details));
@@ -7946,7 +7975,10 @@ mod storage_migration_tests {
         let mut world = World::default();
 
         let domain_id: DomainId = "alias.world".parse().expect("domain id");
-        let label = AccountLabel::new(domain_id, "cbdc".parse::<Name>().expect("label name"));
+        let label = AccountLabel::new(
+            domain_id.clone(),
+            "cbdc".parse::<Name>().expect("label name"),
+        );
         let member_a = iroha_data_model::account::MultisigMember::new(
             KeyPair::random().public_key().clone(),
             1,
@@ -7960,8 +7992,9 @@ mod storage_migration_tests {
         let policy = iroha_data_model::account::MultisigPolicy::new(2, vec![member_a, member_b])
             .expect("multisig policy");
         let account_id = AccountId::new_multisig(policy);
-        let details =
+        let mut details =
             AccountDetails::new(Metadata::default(), Some(label.clone()), None, Vec::new());
+        details.set_linked_domains(BTreeSet::from([domain_id.clone()]));
         world
             .accounts
             .insert(account_id.clone(), AccountValue::new(details));
@@ -7988,14 +8021,18 @@ mod storage_migration_tests {
         let mut world = World::default();
 
         let domain_id: DomainId = "alias.world".parse().expect("domain id");
-        let label = AccountLabel::new(domain_id, "treasury".parse::<Name>().expect("label name"));
+        let label = AccountLabel::new(
+            domain_id.clone(),
+            "treasury".parse::<Name>().expect("label name"),
+        );
         let first_id = AccountId::new(KeyPair::random().public_key().clone());
         let second_key = KeyPair::random();
         let second_id = AccountId::new(second_key.public_key().clone());
 
         let first_details = AccountDetails::new(Metadata::default(), None, None, Vec::new());
-        let second_details =
+        let mut second_details =
             AccountDetails::new(Metadata::default(), Some(label.clone()), None, Vec::new());
+        second_details.set_linked_domains(BTreeSet::from([domain_id.clone()]));
         world
             .accounts
             .insert(first_id.clone(), AccountValue::new(first_details));
@@ -10517,9 +10554,16 @@ impl World {
                     "Account alias {label:?} looks like raw PII; use UAID/opaque identifiers"
                 ));
             }
-            if view.get(&account_id).is_none() {
+            let Some(account_value) = view.get(&account_id) else {
                 return Err(format!(
                     "Account alias {label:?} references missing account {account_id}"
+                ));
+            };
+            if let Some(domain) = &label.domain
+                && !account_value.as_ref().linked_domains().contains(domain)
+            {
+                return Err(format!(
+                    "Account alias {label:?} requires linked domain {domain}"
                 ));
             }
             if let Some(existing) = index.get(&label) {
@@ -10539,6 +10583,13 @@ impl World {
             if account_label_is_pii(label) {
                 return Err(format!(
                     "Account alias {label:?} looks like raw PII; use UAID/opaque identifiers"
+                ));
+            }
+            if let Some(domain) = &label.domain
+                && !value.as_ref().linked_domains().contains(domain)
+            {
+                return Err(format!(
+                    "Account alias {label:?} requires linked domain {domain}"
                 ));
             }
             if let Some(existing) = index.get(label) {
@@ -10609,10 +10660,17 @@ impl World {
         }
 
         for (label, record) in &records {
-            if view.get(&record.active_account_id).is_none() {
+            let Some(account_value) = view.get(&record.active_account_id) else {
                 return Err(format!(
                     "Account rekey record {label:?} references missing account {}",
                     record.active_account_id
+                ));
+            };
+            if let Some(domain) = &label.domain
+                && !account_value.as_ref().linked_domains().contains(domain)
+            {
+                return Err(format!(
+                    "Account rekey record {label:?} requires linked domain {domain}"
                 ));
             }
         }
@@ -10623,25 +10681,49 @@ impl World {
 
     fn rebuild_asset_definition_alias_indexes(&mut self) -> Result<(), String> {
         let mut by_alias = BTreeMap::new();
-        let mut by_definition = BTreeMap::new();
-        let view = self.asset_definitions.view();
-        for (definition_id, definition) in view.iter() {
+        let mut by_definition =
+            BTreeMap::<AssetDefinitionId, AssetDefinitionAliasBindingRecord>::new();
+        let definitions = self.asset_definitions.view();
+
+        for (definition_id, binding) in self.asset_definition_alias_bindings.view().iter() {
+            if definitions.get(definition_id).is_none() {
+                return Err(format!(
+                    "Asset alias binding `{}` references missing asset definition {definition_id}",
+                    binding.alias
+                ));
+            }
+            if let Some(existing) = by_alias.get(&binding.alias)
+                && existing != definition_id
+            {
+                return Err(format!(
+                    "Asset alias `{}` already bound to asset definition {existing}",
+                    binding.alias
+                ));
+            }
+            by_alias.insert(binding.alias.clone(), definition_id.clone());
+            by_definition.insert(definition_id.clone(), binding.clone());
+        }
+
+        for (definition_id, definition) in definitions.iter() {
+            if by_definition.contains_key(definition_id) {
+                continue;
+            }
+
             let Some(alias) = definition.alias().as_ref().cloned() else {
                 continue;
             };
-            if let Some(existing) = by_alias.get(&alias) {
-                if existing != definition_id {
-                    return Err(format!(
-                        "Asset alias `{alias}` already bound to asset definition {existing}"
-                    ));
-                }
-                continue;
+            if let Some(existing) = by_alias.get(&alias)
+                && existing != definition_id
+            {
+                return Err(format!(
+                    "Asset alias `{alias}` already bound to asset definition {existing}"
+                ));
             }
             by_alias.insert(alias.clone(), definition_id.clone());
             by_definition.insert(
                 definition_id.clone(),
                 AssetDefinitionAliasBindingRecord {
-                    alias,
+                    alias: alias.clone(),
                     lease_expiry_ms: None,
                     grace_until_ms: None,
                     bound_at_ms: 0,
@@ -10649,7 +10731,19 @@ impl World {
             );
         }
         self.asset_definition_aliases = by_alias.into_iter().collect();
+        let normalized_definitions: BTreeMap<AssetDefinitionId, AssetDefinition> = definitions
+            .iter()
+            .map(|(definition_id, definition)| {
+                let mut definition = definition.clone();
+                definition.alias = None;
+                (definition_id.clone(), definition)
+            })
+            .collect();
+        if normalized_definitions.len() != definitions.iter().count() {
+            return Err("asset definition rebuild lost entries".to_owned());
+        }
         self.asset_definition_alias_bindings = by_definition.into_iter().collect();
+        self.asset_definitions = normalized_definitions.into_iter().collect();
         Ok(())
     }
 
@@ -11103,7 +11197,7 @@ pub trait WorldReadOnly {
     fn account_rekey_records(&self) -> &impl StorageReadOnly<AccountLabel, AccountRekeyRecord>;
     /// Asset definition storage (read-only).
     fn asset_definitions(&self) -> &impl StorageReadOnly<AssetDefinitionId, AssetDefinition>;
-    /// Alias index mapping `<name>#<domain>@<dataspace>` or `<name>#<dataspace>` to canonical
+    /// Alias index mapping `<name>#<domain>.<dataspace>` or `<name>#<dataspace>` to canonical
     /// aid.
     fn asset_definition_aliases(
         &self,
@@ -11634,6 +11728,27 @@ pub trait WorldReadOnly {
         self.asset_definition_aliases().get(alias).cloned()
     }
 
+    /// Resolve an asset alias to canonical aid at a specific observation time.
+    ///
+    /// Expired aliases stop resolving once their grace window has elapsed, even if
+    /// the sweep has not removed the stale binding yet.
+    #[inline]
+    fn asset_definition_id_by_alias_at(
+        &self,
+        alias: &AssetDefinitionAlias,
+        now_ms: u64,
+    ) -> Option<AssetDefinitionId> {
+        let definition_id = self.asset_definition_aliases().get(alias)?.clone();
+        let binding = self.asset_definition_alias_bindings().get(&definition_id);
+        match binding {
+            Some(binding) if binding.alias == *alias && !binding.is_grace_expired_at(now_ms) => {
+                Some(definition_id)
+            }
+            Some(_) => None,
+            None => Some(definition_id),
+        }
+    }
+
     /// Iterate holders tracked for an asset definition.
     fn asset_definition_holders_iter<'a>(
         &'a self,
@@ -11832,10 +11947,16 @@ pub trait WorldReadOnly {
     /// # Errors
     /// - Asset definition entry not found
     fn asset_definition(&self, asset_id: &AssetDefinitionId) -> Result<AssetDefinition, FindError> {
-        self.asset_definitions()
+        let mut definition = self
+            .asset_definitions()
             .get(asset_id)
             .ok_or_else(|| FindError::AssetDefinition(asset_id.clone()))
-            .cloned()
+            .cloned()?;
+        definition.alias = self
+            .asset_definition_alias_bindings()
+            .get(asset_id)
+            .map(|binding| binding.alias.clone());
+        Ok(definition)
     }
 
     /// Get total amount of [`Asset`].
@@ -15745,6 +15866,50 @@ impl State {
         Some(rebuilt)
     }
 
+    fn seed_reserved_universal_dataspace_name_record(world: &mut World) {
+        let owner = {
+            let world_view = world.view();
+            world_view
+                .domain(&iroha_genesis::GENESIS_DOMAIN_ID)
+                .ok()
+                .map(|domain| domain.owned_by.clone())
+        };
+        let Some(owner) = owner else {
+            return;
+        };
+
+        let selector = crate::sns::selector_for_dataspace_alias(
+            crate::sns::RESERVED_UNIVERSAL_DATASPACE_ALIAS,
+        )
+        .expect("reserved dataspace alias must stay canonical");
+        let storage_key = crate::sns::record_storage_key(&selector);
+        if world
+            .smart_contract_state
+            .view()
+            .get(&storage_key)
+            .is_some()
+        {
+            return;
+        }
+
+        let address = iroha_data_model::account::AccountAddress::from_account_id(&owner)
+            .expect("account id should convert to account address");
+        let record = iroha_data_model::sns::NameRecordV1::new(
+            selector,
+            owner,
+            vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            Metadata::default(),
+        );
+        world
+            .smart_contract_state
+            .insert(storage_key, norito::codec::Encode::encode(&record));
+    }
+
     #[must_use]
     #[inline]
     #[allow(clippy::too_many_lines)]
@@ -15755,6 +15920,7 @@ impl State {
         #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     ) -> Self {
         world.rebuild_account_subject_domain_indexes();
+        Self::seed_reserved_universal_dataspace_name_record(&mut world);
         #[cfg(feature = "telemetry")]
         let telemetry_seed = telemetry.clone();
         let initial_crypto = iroha_config::parameters::actual::Crypto::default();
@@ -25183,7 +25349,12 @@ impl StateTransaction<'_, '_> {
                 .world
                 .accounts
                 .get(asset_id.account())
-                .and_then(|value| value.as_ref().label().map(|label| label.domain.to_string()))
+                .and_then(|value| {
+                    value
+                        .as_ref()
+                        .label()
+                        .and_then(|label| label.domain.as_ref().map(ToString::to_string))
+                })
                 .or_else(|| {
                     linked_domains
                         .iter()
@@ -26025,6 +26196,8 @@ pub(crate) mod deserialize {
         let identifier_claims = take_optional_default(&mut map, "identifier_claims")?;
         let asset_definitions: Storage<AssetDefinitionId, AssetDefinition> =
             take_required(&mut map, "asset_definitions")?;
+        let asset_definition_alias_bindings =
+            take_optional_default(&mut map, "asset_definition_alias_bindings")?;
         let assets: Storage<AssetId, AssetValue> = take_required(&mut map, "assets")?;
         let account_rekey_records = take_optional_default(&mut map, "account_rekey_records")?;
         let asset_metadata = take_optional_default(&mut map, "asset_metadata")?;
@@ -26176,7 +26349,7 @@ pub(crate) mod deserialize {
             account_rekey_records,
             asset_definitions,
             asset_definition_aliases: Storage::default(),
-            asset_definition_alias_bindings: Storage::default(),
+            asset_definition_alias_bindings,
             domain_asset_definitions: Storage::default(),
             asset_definition_holders: Storage::default(),
             asset_definition_assets: Storage::default(),
@@ -27030,6 +27203,301 @@ mod tests {
     use super::*;
     #[cfg(feature = "telemetry")]
     use crate::telemetry::StateTelemetry;
+
+    fn asset_alias_test_world(
+        alias: Option<AssetDefinitionAlias>,
+    ) -> (World, AssetDefinitionId, AssetDefinitionAlias) {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let domain_id: DomainId = "issuer".parse().expect("domain");
+        let definition_id =
+            AssetDefinitionId::new(domain_id.clone(), "usd".parse().expect("asset name"));
+        let mut definition = AssetDefinition::numeric(definition_id.clone())
+            .with_name("usd".to_owned())
+            .build(&authority);
+        let legacy_alias = alias.unwrap_or_else(|| "usd#legacy".parse().expect("legacy alias"));
+        definition.alias = Some(legacy_alias.clone());
+
+        let domain = Domain::new(domain_id.clone()).build(&authority);
+        let account = Account::new(authority.clone().to_account_id(domain_id)).build(&authority);
+        (
+            World::with([domain], [account], [definition]),
+            definition_id,
+            legacy_alias,
+        )
+    }
+
+    #[test]
+    fn new_for_testing_seeds_reserved_universal_dataspace_name_record() {
+        let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
+        let genesis_domain =
+            Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id);
+        let genesis_account = Account::new(
+            genesis_id
+                .clone()
+                .to_account_id(iroha_genesis::GENESIS_DOMAIN_ID.clone()),
+        )
+        .build(&genesis_id);
+        let state = State::new_for_testing(
+            World::with([genesis_domain], [genesis_account], []),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        );
+
+        let view = state.view();
+        assert_eq!(
+            crate::sns::active_dataspace_owner_by_alias(
+                view.world(),
+                crate::sns::RESERVED_UNIVERSAL_DATASPACE_ALIAS,
+                0,
+            ),
+            Some(genesis_id)
+        );
+    }
+
+    #[test]
+    fn asset_definition_alias_binding_status_classifies_lifecycle() {
+        let leased_alias: AssetDefinitionAlias = "usd#lease".parse().expect("lease alias");
+        let binding = AssetDefinitionAliasBindingRecord {
+            alias: leased_alias,
+            lease_expiry_ms: Some(200),
+            grace_until_ms: Some(250),
+            bound_at_ms: 100,
+        };
+        assert_eq!(
+            binding.status_at(150),
+            AssetDefinitionAliasLeaseStatus::LeasedActive
+        );
+        assert_eq!(
+            binding.status_at(200),
+            AssetDefinitionAliasLeaseStatus::LeasedGrace
+        );
+        assert_eq!(
+            binding.status_at(250),
+            AssetDefinitionAliasLeaseStatus::LeasedGrace
+        );
+        assert_eq!(
+            binding.status_at(251),
+            AssetDefinitionAliasLeaseStatus::ExpiredPendingCleanup
+        );
+
+        let permanent_binding = AssetDefinitionAliasBindingRecord {
+            alias: "usd#permanent".parse().expect("permanent alias"),
+            lease_expiry_ms: None,
+            grace_until_ms: None,
+            bound_at_ms: 100,
+        };
+        assert_eq!(
+            permanent_binding.status_at(10_000),
+            AssetDefinitionAliasLeaseStatus::Permanent
+        );
+    }
+
+    #[test]
+    fn rebuild_asset_definition_alias_indexes_prefers_persisted_bindings() {
+        let (mut world, definition_id, legacy_alias) = asset_alias_test_world(None);
+        let persisted_alias: AssetDefinitionAlias = "usd#canonical".parse().expect("alias");
+        let binding = AssetDefinitionAliasBindingRecord {
+            alias: persisted_alias.clone(),
+            lease_expiry_ms: Some(200),
+            grace_until_ms: Some(300),
+            bound_at_ms: 100,
+        };
+
+        world.asset_definition_aliases = Storage::default();
+        world.asset_definition_alias_bindings =
+            std::iter::once((definition_id.clone(), binding.clone())).collect();
+        let mut stored_definition = world
+            .asset_definitions
+            .view()
+            .get(&definition_id)
+            .expect("stored definition")
+            .clone();
+        stored_definition.alias = Some(legacy_alias.clone());
+        world
+            .asset_definitions
+            .insert(definition_id.clone(), stored_definition);
+        world
+            .rebuild_asset_definition_alias_indexes()
+            .expect("rebuild should succeed");
+        let view = world.view();
+
+        assert_eq!(
+            view.asset_definition_aliases().get(&persisted_alias),
+            Some(&definition_id)
+        );
+        assert!(
+            view.asset_definition_aliases().get(&legacy_alias).is_none(),
+            "stale inline alias must not override the persisted binding"
+        );
+        assert_eq!(
+            view.asset_definition_alias_bindings()
+                .get(&definition_id)
+                .expect("binding"),
+            &binding
+        );
+        assert_eq!(
+            view.asset_definition(&definition_id)
+                .expect("definition")
+                .alias()
+                .as_ref(),
+            Some(&persisted_alias)
+        );
+        assert!(
+            world
+                .asset_definitions
+                .view()
+                .get(&definition_id)
+                .expect("stored definition")
+                .alias()
+                .is_none(),
+            "stored asset definition alias must be derived from bindings"
+        );
+    }
+
+    #[test]
+    fn rebuild_asset_definition_alias_indexes_synthesizes_legacy_bindings() {
+        let (mut world, definition_id, legacy_alias) = asset_alias_test_world(None);
+        world.asset_definition_aliases = Storage::default();
+        world.asset_definition_alias_bindings = Storage::default();
+        let mut stored_definition = world
+            .asset_definitions
+            .view()
+            .get(&definition_id)
+            .expect("stored definition")
+            .clone();
+        stored_definition.alias = Some(legacy_alias.clone());
+        world
+            .asset_definitions
+            .insert(definition_id.clone(), stored_definition);
+
+        world
+            .rebuild_asset_definition_alias_indexes()
+            .expect("rebuild should synthesize a permanent binding");
+        let view = world.view();
+
+        let binding = view
+            .asset_definition_alias_bindings()
+            .get(&definition_id)
+            .expect("binding");
+        assert_eq!(binding.alias, legacy_alias);
+        assert_eq!(binding.lease_expiry_ms, None);
+        assert_eq!(binding.grace_until_ms, None);
+        assert_eq!(binding.bound_at_ms, 0);
+        assert_eq!(
+            view.asset_definition_aliases().get(&legacy_alias),
+            Some(&definition_id)
+        );
+        assert_eq!(
+            view.asset_definition(&definition_id)
+                .expect("definition")
+                .alias()
+                .as_ref(),
+            Some(&legacy_alias)
+        );
+        assert!(
+            world
+                .asset_definitions
+                .view()
+                .get(&definition_id)
+                .expect("stored definition")
+                .alias()
+                .is_none(),
+            "stored asset definition alias must be normalized away"
+        );
+    }
+
+    #[test]
+    fn asset_definition_alias_lookup_stops_after_grace_even_before_sweep() {
+        let (mut world, definition_id, _) = asset_alias_test_world(None);
+        let alias: AssetDefinitionAlias = "usd#lease".parse().expect("alias");
+        world.asset_definition_aliases = Storage::default();
+        world.asset_definition_alias_bindings = std::iter::once((
+            definition_id.clone(),
+            AssetDefinitionAliasBindingRecord {
+                alias: alias.clone(),
+                lease_expiry_ms: Some(200),
+                grace_until_ms: Some(250),
+                bound_at_ms: 100,
+            },
+        ))
+        .collect();
+        world
+            .rebuild_asset_definition_alias_indexes()
+            .expect("rebuild should succeed");
+
+        let view = world.view();
+        assert_eq!(
+            view.asset_definition_id_by_alias_at(&alias, 249),
+            Some(definition_id.clone())
+        );
+        assert_eq!(view.asset_definition_id_by_alias_at(&alias, 251), None);
+        assert_eq!(
+            view.asset_definition_aliases().get(&alias),
+            Some(&definition_id),
+            "stale binding remains indexed until sweep"
+        );
+        assert_eq!(
+            view.asset_definition(&definition_id)
+                .expect("definition")
+                .alias()
+                .as_ref(),
+            Some(&alias),
+            "effective definition still exposes the persisted binding for inspection"
+        );
+    }
+
+    #[test]
+    fn asset_definition_alias_bindings_roundtrip_through_state_json() {
+        let (mut world, definition_id, _) = asset_alias_test_world(None);
+        let alias: AssetDefinitionAlias = "usd#durable".parse().expect("alias");
+        let binding = AssetDefinitionAliasBindingRecord {
+            alias: alias.clone(),
+            lease_expiry_ms: Some(2_000),
+            grace_until_ms: Some(2_500),
+            bound_at_ms: 1_000,
+        };
+        world.asset_definition_aliases = Storage::default();
+        world.asset_definition_alias_bindings =
+            std::iter::once((definition_id.clone(), binding.clone())).collect();
+        world
+            .rebuild_asset_definition_alias_indexes()
+            .expect("rebuild should succeed");
+
+        let state = State::new(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let json_value = norito::json::to_value(&state).expect("serialize state");
+        let seed = deserialize::KuraSeed {
+            kura: Kura::blank_kura_for_testing(),
+            query_handle: LiveQueryStore::start_test(),
+            #[cfg(feature = "telemetry")]
+            telemetry: crate::telemetry::StateTelemetry::default(),
+        };
+        let restored = seed
+            .into_state_from_json(json_value)
+            .expect("deserialize state");
+        let view = restored.world_view();
+
+        assert_eq!(
+            view.asset_definition_alias_bindings()
+                .get(&definition_id)
+                .expect("binding"),
+            &binding
+        );
+        assert_eq!(
+            view.asset_definition_aliases().get(&alias),
+            Some(&definition_id)
+        );
+        assert_eq!(
+            view.asset_definition(&definition_id)
+                .expect("definition")
+                .alias()
+                .as_ref(),
+            Some(&alias)
+        );
+    }
     use crate::{
         block::{BlockBuilder, BlockValidationError, ValidBlock, valid::validate_axt_envelopes},
         da::DaShardCursorJournal,
@@ -36537,9 +37005,11 @@ mod tests {
         let rose_id = AssetDefinitionId::new(wonderland.clone(), "rose".parse().unwrap());
         let tulip_id = AssetDefinitionId::new(wonderland.clone(), "tulip".parse().unwrap());
         let cactus_id = AssetDefinitionId::new(denoland.clone(), "cactus".parse().unwrap());
-        let opaque_id: AssetDefinitionId = "aid:2e3d34beb8a84239b3d9590770f1189e"
-            .parse()
-            .expect("opaque aid asset definition id");
+        let opaque_id = AssetDefinitionId::from_uuid_bytes([
+            0x2e, 0x3d, 0x34, 0xbe, 0xb8, 0xa8, 0x42, 0x39, 0xb3, 0xd9, 0x59, 0x07, 0x70, 0xf1,
+            0x18, 0x9e,
+        ])
+        .expect("opaque asset definition id");
         for definition_id in [&rose_id, &tulip_id, &cactus_id] {
             Register::asset_definition({
                 let __asset_definition_id = definition_id.clone();
@@ -37854,8 +38324,14 @@ mod tests {
         {
             let mut state_block = state.block(block2.as_ref().header());
             let mut stx = state_block.transaction();
+            let opaque_asset_id = AssetDefinitionId::from_uuid_bytes([
+                0x2e, 0x3d, 0x34, 0xbe, 0xb8, 0xa8, 0x42, 0x39, 0xb3, 0xd9, 0x59, 0x07, 0x70, 0xf1,
+                0x18, 0x9e,
+            ])
+            .expect("opaque asset definition id");
             let args_json = format!(
-                r#"{{"action":"create","request_id":"cd38ea58-bc66-4844-921f-22af49b6cf3d","asset_id":"aid:2e3d34beb8a84239b3d9590770f1189e","asset_definition_blob_hex":"4e5254300000035dc38f291ebaa4035dc38f291ebaa4000900000000000000003666540b910988cf0001000000000000002e01000000000000003d0100000000000000340100000000000000be0100000000000000b80100000000000000a80100000000000000420100000000000000390100000000000000b30100000000000000d90100000000000000590100000000000000070100000000000000700100000000000000f101000000000000001801000000000000009e","fi_id":"hbl","to_account_id":"{}","amount_i64":53378,"requested_by_actor_id":"operator1@hbl","created_at_ms":1773904751245,"expires_at_ms":1773905351245}}"#,
+                r#"{{"action":"create","request_id":"cd38ea58-bc66-4844-921f-22af49b6cf3d","asset_id":"{}","asset_definition_blob_hex":"4e5254300000035dc38f291ebaa4035dc38f291ebaa4000900000000000000003666540b910988cf0001000000000000002e01000000000000003d0100000000000000340100000000000000be0100000000000000b80100000000000000a80100000000000000420100000000000000390100000000000000b30100000000000000d90100000000000000590100000000000000070100000000000000700100000000000000f101000000000000001801000000000000009e","fi_id":"hbl","to_account_id":"{}","amount_i64":53378,"requested_by_actor_id":"operator1@hbl","created_at_ms":1773904751245,"expires_at_ms":1773905351245}}"#,
+                opaque_asset_id,
                 (*BOB_ID).to_string()
             );
             let event = ExecuteTriggerEvent {
@@ -37927,7 +38403,7 @@ mod tests {
                 if (amount <= 0) {
                   return;
                 }
-                let src = resolve_account_alias(name("banking"), domain("wonderland"));
+                let src = resolve_account_alias("banking@wonderland.universal");
                 let payout = amount * 76;
                 if (dst_domain != name("wonderland")) {
                   return;
@@ -37955,7 +38431,7 @@ mod tests {
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
-            Register::account(new_sample_account(&ALICE_ID).with_label(Some(banking_label)))
+            Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
             Register::account(new_sample_account(&BOB_ID))
@@ -37982,6 +38458,60 @@ mod tests {
                 Permission::new("alias_transfer_run".into(), Json::new(())),
                 ALICE_ID.clone(),
             )
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            Grant::account_permission(
+                Permission::from(
+                    iroha_executor_data_model::permission::account::CanManageAccountAlias {
+                        scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Dataspace(
+                            iroha_data_model::nexus::DataSpaceId::GLOBAL,
+                        ),
+                    },
+                ),
+                ALICE_ID.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            Grant::account_permission(
+                Permission::from(
+                    iroha_executor_data_model::permission::account::CanManageAccountAlias {
+                        scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(
+                            domain_id.clone(),
+                        ),
+                    },
+                ),
+                ALICE_ID.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            Grant::account_permission(
+                Permission::from(
+                    iroha_executor_data_model::permission::account::CanResolveAccountAlias {
+                        scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Dataspace(
+                            iroha_data_model::nexus::DataSpaceId::GLOBAL,
+                        ),
+                    },
+                ),
+                ALICE_ID.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            Grant::account_permission(
+                Permission::from(
+                    iroha_executor_data_model::permission::account::CanResolveAccountAlias {
+                        scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(
+                            domain_id.clone(),
+                        ),
+                    },
+                ),
+                ALICE_ID.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            iroha_data_model::isi::domain_link::SetAccountLabel {
+                account: ALICE_ID.clone(),
+                label: banking_label.clone(),
+            }
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
 

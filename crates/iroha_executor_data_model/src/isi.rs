@@ -173,7 +173,6 @@ pub mod multisig {
         Decode,
         Encode,
         IntoSchema,
-        Constructor,
         DeriveJsonSerialize,
     )]
     pub struct MultisigRegister {
@@ -183,33 +182,43 @@ pub mod multisig {
         /// canonical multisig controller derived from the spec after registration, so the key is
         /// never used for signing.
         pub account: AccountId,
-        /// Explicit home domain used for registration authorization, linking, and RBAC namespacing.
-        pub home_domain: DomainId,
+        /// Optional home domain used for registration authorization, linking, and RBAC
+        /// namespacing.
+        pub home_domain: Option<DomainId>,
         /// Specification of the multisig account
         pub spec: MultisigSpec,
     }
 
     impl MultisigRegister {
-        /// Construct a multisig registration using an explicit account id.
-        pub fn with_account(account: AccountId, home_domain: DomainId, spec: MultisigSpec) -> Self {
+        /// Construct a multisig registration.
+        pub fn new(
+            account: AccountId,
+            home_domain: impl Into<Option<DomainId>>,
+            spec: MultisigSpec,
+        ) -> Self {
             Self {
                 account,
-                home_domain,
+                home_domain: home_domain.into(),
                 spec,
             }
+        }
+
+        /// Construct a multisig registration using an explicit account id.
+        pub fn with_account(
+            account: AccountId,
+            home_domain: impl Into<Option<DomainId>>,
+            spec: MultisigSpec,
+        ) -> Self {
+            Self::new(account, home_domain, spec)
         }
 
         /// Construct a multisig registration using a freshly generated domainless account id.
         /// The generated key is not meant for direct signing; it only anchors the registration
         /// step before the account is rekeyed to the canonical controller derived from the spec.
-        pub fn from_spec(home_domain: DomainId, spec: MultisigSpec) -> Self {
+        pub fn from_spec(home_domain: impl Into<Option<DomainId>>, spec: MultisigSpec) -> Self {
             let key_pair = KeyPair::random();
             let account = AccountId::new(key_pair.public_key().clone());
-            Self {
-                account,
-                home_domain,
-                spec,
-            }
+            Self::new(account, home_domain, spec)
         }
     }
 
@@ -217,7 +226,7 @@ pub mod multisig {
         fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
             let mut visitor = json::MapVisitor::new(parser)?;
             let mut account: Option<AccountId> = None;
-            let mut home_domain: Option<DomainId> = None;
+            let mut home_domain: Option<Option<DomainId>> = None;
             let mut spec: Option<MultisigSpec> = None;
 
             while let Some(key) = visitor.next_key()? {
@@ -227,7 +236,7 @@ pub mod multisig {
                         account = Some(value);
                     }
                     "home_domain" => {
-                        let value = visitor.parse_value::<DomainId>()?;
+                        let value = visitor.parse_value::<Option<DomainId>>()?;
                         home_domain = Some(value);
                     }
                     "spec" => {
@@ -244,12 +253,9 @@ pub mod multisig {
 
             let spec = spec.ok_or_else(|| json::Error::missing_field("spec"))?;
             let account = account.ok_or_else(|| json::Error::missing_field("account"))?;
-            let home_domain =
-                home_domain.ok_or_else(|| json::Error::missing_field("home_domain"))?;
-
             Ok(Self {
                 account,
-                home_domain,
+                home_domain: home_domain.unwrap_or(None),
                 spec,
             })
         }
@@ -357,9 +363,7 @@ pub mod multisig {
     }
 
     /// Native ledger value for a multisig account state entry.
-    #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, Constructor,
-    )]
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
         derive(crate::json_macros::FastJson, crate::json_macros::FastJsonWrite)
@@ -367,10 +371,25 @@ pub mod multisig {
     pub struct MultisigAccountState {
         /// Canonical multisig account id for this state entry.
         pub account_id: AccountId,
-        /// Home domain used to materialize missing signatory accounts and roles.
-        pub home_domain: DomainId,
+        /// Optional home domain used to materialize missing signatory accounts and roles.
+        pub home_domain: Option<DomainId>,
         /// Multisig policy specification.
         pub spec: MultisigSpec,
+    }
+
+    impl MultisigAccountState {
+        /// Construct a multisig account state snapshot.
+        pub fn new(
+            account_id: AccountId,
+            home_domain: impl Into<Option<DomainId>>,
+            spec: MultisigSpec,
+        ) -> Self {
+            Self {
+                account_id,
+                home_domain: home_domain.into(),
+                spec,
+            }
+        }
     }
 
     /// Native ledger value for a multisig proposal state entry.
@@ -696,7 +715,7 @@ pub mod multisig {
             let registrar = KeyPair::from_seed(vec![0; 32], Algorithm::Ed25519);
             let multisig_account = AccountId::of(registrar.public_key().clone());
             let spec = sample_spec();
-            let register = MultisigRegister::with_account(multisig_account, domain, spec);
+            let register = MultisigRegister::with_account(multisig_account, Some(domain), spec);
             InstructionBox::from(register)
         }
 
@@ -719,7 +738,7 @@ pub mod multisig {
             let registrar = KeyPair::from_seed(vec![42; 32], Algorithm::Ed25519);
             let multisig_account = AccountId::of(registrar.public_key().clone());
             let spec = sample_spec();
-            let register = MultisigRegister::with_account(multisig_account, domain, spec);
+            let register = MultisigRegister::with_account(multisig_account, Some(domain), spec);
             let rendered =
                 norito::json::to_json(&register).expect("multisig register should serialize");
             assert!(
@@ -733,7 +752,7 @@ pub mod multisig {
         }
 
         #[test]
-        fn multisig_register_json_requires_account_and_home_domain_fields() {
+        fn multisig_register_json_requires_account_field() {
             let spec = sample_spec();
             let spec_json = norito::json::to_json(&spec).expect("spec should serialize");
             let payload = format!(r#"{{"spec": {spec_json}}}"#);
@@ -744,35 +763,37 @@ pub mod multisig {
                 rendered.contains("account"),
                 "missing account error should mention account field: {rendered}"
             );
-
-            let key = KeyPair::from_seed(vec![7; 32], Algorithm::Ed25519);
-            let account = AccountId::of(key.public_key().clone());
-            let account_json = norito::json::to_json(&account).expect("account json");
-            let payload = format!(r#"{{"account": {account_json}, "spec": {spec_json}}}"#);
-            let err = norito::json::from_str::<MultisigRegister>(&payload)
-                .expect_err("missing home_domain should be rejected");
-            let rendered = err.to_string();
-            assert!(
-                rendered.contains("home_domain"),
-                "missing home_domain error should mention the field: {rendered}"
-            );
         }
 
         #[test]
         fn multisig_register_from_spec_randomizes_controller() {
             let domain: DomainId = "non-derived".parse().expect("valid domain");
             let spec = sample_spec();
-            let first = MultisigRegister::from_spec(domain.clone(), spec.clone());
-            let second = MultisigRegister::from_spec(domain.clone(), spec.clone());
+            let first = MultisigRegister::from_spec(Some(domain.clone()), spec.clone());
+            let second = MultisigRegister::from_spec(Some(domain.clone()), spec.clone());
 
             assert_eq!(
-                &first.home_domain, &domain,
+                first.home_domain.as_ref(),
+                Some(&domain),
                 "generated controller must carry the explicit home domain"
             );
             assert_ne!(
                 first.account, second.account,
                 "from_spec should randomize the controller id for each call"
             );
+        }
+
+        #[test]
+        fn multisig_register_json_defaults_home_domain_to_none() {
+            let key = KeyPair::from_seed(vec![7; 32], Algorithm::Ed25519);
+            let account = AccountId::of(key.public_key().clone());
+            let account_json = norito::json::to_json(&account).expect("account json");
+            let spec = sample_spec();
+            let spec_json = norito::json::to_json(&spec).expect("spec json");
+            let payload = format!(r#"{{"account": {account_json}, "spec": {spec_json}}}"#);
+            let register = norito::json::from_str::<MultisigRegister>(&payload)
+                .expect("missing home_domain should default to none");
+            assert_eq!(register.home_domain, None);
         }
 
         #[test]

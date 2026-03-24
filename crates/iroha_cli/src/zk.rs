@@ -73,7 +73,7 @@ pub enum Command {
 
 #[derive(clap::Args, Debug)]
 pub struct RootsArgs {
-    /// `AssetDefinitionId` like `aid:2f17c72466f84a4bb8a8e24884fdcd2f`
+    /// Canonical unprefixed Base58 `AssetDefinitionId`
     #[arg(long, value_name = "ASSET_ID")]
     asset_id: String,
     /// Maximum number of roots to return (0 = server cap)
@@ -1422,7 +1422,7 @@ mod attachments_cleanup_tests {
 
 #[derive(clap::Args, Debug)]
 pub struct ShieldArgs {
-    /// `AssetDefinitionId` like `aid:2f17c72466f84a4bb8a8e24884fdcd2f`
+    /// Canonical unprefixed Base58 `AssetDefinitionId`
     #[arg(long, value_name = "ASSET_ID")]
     asset: String,
     /// Account identifier to debit (canonical I105 account literal)
@@ -1541,7 +1541,7 @@ impl Run for ShieldArgs {
             confidential::ConfidentialEncryptedPayload,
             prelude::{AccountId, AssetDefinitionId, InstructionBox},
         };
-        let asset: AssetDefinitionId = self.asset.parse()?;
+        let asset = AssetDefinitionId::parse_address_literal(&self.asset)?;
         let from =
             crate::resolve_account_id(context, &self.from).wrap_err("failed to resolve --from")?;
         let note_commitment = parse_hex32(&self.note_commitment)?;
@@ -1610,7 +1610,7 @@ impl Run for EnvelopeArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct UnshieldArgs {
-    /// `AssetDefinitionId` like `aid:2f17c72466f84a4bb8a8e24884fdcd2f`
+    /// Canonical unprefixed Base58 `AssetDefinitionId`
     #[arg(long, value_name = "ASSET_ID")]
     asset: String,
     /// Recipient account identifier to credit (canonical I105 account literal)
@@ -1782,7 +1782,7 @@ mod tests {
 impl Run for UnshieldArgs {
     fn run<C: RunContext>(self, context: &mut C) -> eyre::Result<()> {
         use iroha::data_model::prelude::{AccountId, AssetDefinitionId, InstructionBox};
-        let asset: AssetDefinitionId = self.asset.parse()?;
+        let asset = AssetDefinitionId::parse_address_literal(&self.asset)?;
         let to = crate::resolve_account_id(context, &self.to).wrap_err("failed to resolve --to")?;
         let inputs = parse_inputs_csv(&self.inputs)?;
         let proof_json_str = std::fs::read_to_string(&self.proof_json)?;
@@ -1816,7 +1816,7 @@ impl Run for UnshieldArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct ZkRegisterAssetArgs {
-    /// `AssetDefinitionId` like `aid:2f17c72466f84a4bb8a8e24884fdcd2f`
+    /// Canonical unprefixed Base58 `AssetDefinitionId`
     #[arg(long, value_name = "ASSET_ID")]
     asset: String,
     /// Allow shielding from public to shielded (default: true)
@@ -1849,7 +1849,7 @@ impl Run for ZkRegisterAssetArgs {
         use iroha::data_model::isi::zk::{RegisterZkAsset, ZkAssetMode};
         use iroha::data_model::prelude::{AssetDefinitionId, InstructionBox};
 
-        let asset: AssetDefinitionId = self.asset.parse()?;
+        let asset = AssetDefinitionId::parse_address_literal(&self.asset)?;
         let vk_transfer = match self.vk_transfer {
             Some(s) => Some(parse_vk_id_pair(&s)?),
             None => None,

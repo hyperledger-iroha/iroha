@@ -15,6 +15,7 @@ import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
+import org.hyperledger.iroha.android.testing.TestAccountIds;
 import org.hyperledger.iroha.android.tx.SignedTransactionHasher;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
 
@@ -616,7 +617,7 @@ public final class HttpClientTransportStatusTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId(String.format("%08x", seed))
-            .setAuthority("alice@wonderland")
+            .setAuthority(TestAccountIds.ed25519Authority(0x27))
             .setCreationTimeMs(1_700_000_000_000L + (seed & 0xFF))
             .setInstructionBytes(new byte[] {seed, (byte) (seed + 1)})
             .setTimeToLiveMs(5_000L)

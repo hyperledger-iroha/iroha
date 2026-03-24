@@ -615,7 +615,8 @@ final class ToriiClientTests: XCTestCase {
             return
         }
         if NoritoNativeBridge.shared.isAvailable {
-            XCTAssertEqual(item.asset_definition_id?.starts(with: "aid:"), true)
+            XCTAssertTrue((item.asset_definition_id ?? "").count > 10)
+            XCTAssertFalse((item.asset_definition_id ?? "").contains(":"))
             XCTAssertFalse((item.account_id ?? "").isEmpty)
         } else {
             XCTAssertNil(item.asset_definition_id)
@@ -631,10 +632,10 @@ final class ToriiClientTests: XCTestCase {
             let body = """
             [{
               "asset_id":"norito:4e52543000000001",
-              "asset_definition_id":"aid:2f17c72466f84a4bb8a8e24884fdcd2f",
+              "asset_definition_id":"66owaQmAQMuHxPzxUN3bqZ6FJfDa",
               "account_id":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
               "asset_name":"USD",
-              "asset_alias":"usd#issuer@main",
+              "asset_alias":"usd#issuer.main",
               "quantity":"10"
             }]
             """.data(using: .utf8)!
@@ -643,10 +644,10 @@ final class ToriiClientTests: XCTestCase {
 
         let balances = try await makeClient().getAssets(accountId: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
         XCTAssertEqual(balances.count, 1)
-        XCTAssertEqual(balances.first?.asset_definition_id, "aid:2f17c72466f84a4bb8a8e24884fdcd2f")
+        XCTAssertEqual(balances.first?.asset_definition_id, "66owaQmAQMuHxPzxUN3bqZ6FJfDa")
         XCTAssertEqual(balances.first?.account_id, "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
         XCTAssertEqual(balances.first?.asset_name, "USD")
-        XCTAssertEqual(balances.first?.asset_alias, "usd#issuer@main")
+        XCTAssertEqual(balances.first?.asset_alias, "usd#issuer.main")
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -672,31 +673,33 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(request.url?.path, "/v1/assets/aliases/resolve")
             XCTAssertEqual(request.httpMethod, "POST")
             let payload = self.bodyJSON(from: request)
-            XCTAssertEqual(payload["alias"] as? String, "usd#issuer@main")
+            XCTAssertEqual(payload["alias"] as? String, "usd#issuer.main")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let body = """
             {
-              "alias":"usd#issuer@main",
-              "asset_definition_id":"aid:2f17c72466f84a4bb8a8e24884fdcd2f",
+              "alias":"usd#issuer.main",
+              "asset_definition_id":"66owaQmAQMuHxPzxUN3bqZ6FJfDa",
               "asset_name":"USD",
               "description":"United States Dollar",
               "logo":"sorafs://logos/usd.png",
-              "source":"world_state"
+              "source":"world_state",
+              "alias_binding":{"alias":"usd#issuer.main","status":"permanent","bound_at_ms":1}
             }
             """.data(using: .utf8)!
             return (response, body)
         }
 
-        let resolved = try await makeClient().resolveAssetAlias("usd#issuer@main")
-        XCTAssertEqual(resolved?.alias, "usd#issuer@main")
-        XCTAssertEqual(resolved?.assetDefinitionId, "aid:2f17c72466f84a4bb8a8e24884fdcd2f")
+        let resolved = try await makeClient().resolveAssetAlias("usd#issuer.main")
+        XCTAssertEqual(resolved?.alias, "usd#issuer.main")
+        XCTAssertEqual(resolved?.assetDefinitionId, "66owaQmAQMuHxPzxUN3bqZ6FJfDa")
         XCTAssertEqual(resolved?.assetName, "USD")
         XCTAssertEqual(resolved?.description, "United States Dollar")
         XCTAssertEqual(resolved?.logo, "sorafs://logos/usd.png")
         XCTAssertEqual(resolved?.source, "world_state")
+        XCTAssertEqual(resolved?.aliasBinding?.status, "permanent")
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -711,7 +714,7 @@ final class ToriiClientTests: XCTestCase {
             return (response, body)
         }
 
-        let resolved = try await makeClient().resolveAssetAlias("missing#issuer@main")
+        let resolved = try await makeClient().resolveAssetAlias("missing#issuer.main")
         XCTAssertNil(resolved)
     }
 
@@ -1550,13 +1553,13 @@ final class ToriiClientTests: XCTestCase {
                 return (response, body)
             case "/v1/assets/aliases/resolve":
                 let payload = self.bodyJSON(from: request)
-                XCTAssertEqual(payload["alias"] as? String, "usd#issuer@main")
+                XCTAssertEqual(payload["alias"] as? String, "usd#issuer.main")
                 let response = HTTPURLResponse(url: request.url!,
                                                statusCode: 200,
                                                httpVersion: nil,
                                                headerFields: ["Content-Type": "application/json"])!
                 let body = """
-                {"alias":"usd#issuer@main","asset_definition_id":"usd#wonderland","asset_name":"USD"}
+                {"alias":"usd#issuer.main","asset_definition_id":"66owaQmAQMuHxPzxUN3bqZ6FJfDa","asset_name":"USD"}
                 """.data(using: .utf8)!
                 return (response, body)
             default:
@@ -1570,13 +1573,13 @@ final class ToriiClientTests: XCTestCase {
         }
 
         let literal = try await client.buildAssetIdLiteralResolvingAliases(
-            assetDefinitionIdOrAlias: "usd#issuer@main",
+            assetDefinitionIdOrAlias: "usd#issuer.main",
             accountIdOrAlias: "alice"
         )
         XCTAssertEqual(literal, "norito:aa")
         let observedCalls = encodeCallsQueue.sync { encodeCalls }
         XCTAssertEqual(observedCalls.count, 1)
-        XCTAssertEqual(observedCalls.first?.0, "usd#wonderland")
+        XCTAssertEqual(observedCalls.first?.0, "66owaQmAQMuHxPzxUN3bqZ6FJfDa")
         XCTAssertEqual(observedCalls.first?.1, accountId)
     }
 
@@ -1607,7 +1610,7 @@ final class ToriiClientTests: XCTestCase {
                                                httpVersion: nil,
                                                headerFields: ["Content-Type": "application/json"])!
                 let body = """
-                {"alias":"symbol-without-domain","asset_definition_id":"usd#wonderland","asset_name":"USD"}
+                {"alias":"symbol-without-domain","asset_definition_id":"66owaQmAQMuHxPzxUN3bqZ6FJfDa","asset_name":"USD"}
                 """.data(using: .utf8)!
                 return (response, body)
             case "/v1/aliases/resolve":
@@ -1633,7 +1636,7 @@ final class ToriiClientTests: XCTestCase {
         )
         XCTAssertEqual(literal, "norito:bb")
         let observedCalls = encodeCallsQueue.sync { encodeCalls }
-        XCTAssertEqual(observedCalls.map(\.0), ["symbol-without-domain", "usd#wonderland"])
+        XCTAssertEqual(observedCalls.map(\.0), ["symbol-without-domain", "66owaQmAQMuHxPzxUN3bqZ6FJfDa"])
         XCTAssertEqual(observedCalls.map(\.1), [accountId, accountId])
     }
 
@@ -2920,9 +2923,10 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(summary.direction, .incoming, "Mint should always be incoming")
         XCTAssertEqual(summary.status, "Committed")
         XCTAssertEqual(summary.transactionHash, "9bca4ad18474058cbbad5bbc49e5e11cf58d90fc28b094ac8f8963a5116fdff5")
-        // assetDefinitionId should be decoded from ConstVec<u8> to "aid:<hex>" format
-        XCTAssertEqual(summary.assetDefinitionId, "aid:bef53c1ccd1749e180dfbad6519bfd66",
-                       "assetDefinitionId should be decoded to aid: format")
+        // assetDefinitionId should be decoded from ConstVec<u8> to canonical Base58 form
+        XCTAssertFalse(summary.assetDefinitionId.isEmpty)
+        XCTAssertFalse(summary.assetDefinitionId.contains(":"),
+                       "assetDefinitionId should decode to unprefixed Base58 form")
         // receiverAccountId should be extracted from the norito asset ID
         XCTAssertFalse(summary.receiverAccountId.isEmpty, "receiverAccountId should not be empty")
         print("[TEST] Mint summary assetDefinitionId = \(summary.assetDefinitionId)")
@@ -2967,7 +2971,7 @@ final class ToriiClientTests: XCTestCase {
             print("[TEST] def field size = \(defField.count)")
             print("[TEST] def field hex = \(defField.map { String(format: "%02x", $0) }.joined())")
             if defField.count == 16 {
-                print("[TEST] aid:\(defField.map { String(format: "%02x", $0) }.joined())")
+                print("[TEST] asset_definition_bytes:\(defField.map { String(format: "%02x", $0) }.joined())")
             }
         } catch {
             print("[TEST] readField failed: \(error)")
@@ -7453,6 +7457,24 @@ id: 88
         XCTAssertEqual(record.subjectBlockHash, blockHash)
         XCTAssertEqual(record.commitQc?.postStateRoot, String(repeating: "c", count: 64))
         XCTAssertEqual(record.commitQc?.validatorSet.count, 2)
+    }
+
+    func testPipelineTransactionEventDecodesNumericDataspaceId() throws {
+        let payload = """
+        {
+            "event": "Transaction",
+            "hash": "abc123",
+            "status": "Applied",
+            "dataspace_id": 9
+        }
+        """
+
+        let event = try JSONDecoder().decode(
+            ToriiPipelineTransactionEvent.self,
+            from: Data(payload.utf8)
+        )
+
+        XCTAssertEqual(event.dataspaceId, "9")
     }
 
     func testSumeragiMembershipDecodingWithoutViewHash() throws {

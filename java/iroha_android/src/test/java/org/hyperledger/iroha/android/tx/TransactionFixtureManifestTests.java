@@ -59,6 +59,8 @@ public final class TransactionFixtureManifestTests {
   private static final TypeAdapter<String> JSON_ADAPTER = new JsonAdapter();
   private static final TypeAdapter<Long> UINT64_ADAPTER = NoritoAdapters.uint(64);
   private static final TypeAdapter<Long> UINT32_ADAPTER = NoritoAdapters.uint(32);
+  private static final TypeAdapter<Long> UINT8_ADAPTER = NoritoAdapters.uint(8);
+  private static final TypeAdapter<Long> UINT16_ADAPTER = NoritoAdapters.uint(16);
   private static final TypeAdapter<Optional<Long>> TTL_ADAPTER =
       NoritoAdapters.option(NoritoAdapters.uint(64));
   private static final TypeAdapter<Optional<Long>> NONCE_ADAPTER =
@@ -70,6 +72,12 @@ public final class TransactionFixtureManifestTests {
       NoritoAdapters.sequence(new InstructionEnvelopeAdapter());
   private static final TypeAdapter<List<MetadataEntry>> METADATA_ENTRY_LIST_ADAPTER =
       NoritoAdapters.sequence(new MetadataEntryAdapter());
+  private static final TypeAdapter<AccountAddress.MultisigMemberPayload> MULTISIG_MEMBER_ADAPTER =
+      new MultisigMemberPayloadAdapter();
+  private static final TypeAdapter<List<AccountAddress.MultisigMemberPayload>>
+      MULTISIG_MEMBER_LIST_ADAPTER = NoritoAdapters.sequence(MULTISIG_MEMBER_ADAPTER);
+  private static final TypeAdapter<AccountAddress.MultisigPolicyPayload> MULTISIG_POLICY_ADAPTER =
+      new MultisigPolicyPayloadAdapter();
   private static int compatChecked = 0;
 
   @Test
@@ -315,7 +323,7 @@ public final class TransactionFixtureManifestTests {
     }
     final String accountLiteral = normalizeAuthority(authority);
     try {
-      final AccountAddress accountAddress = AccountAddress.fromIH58(accountLiteral, null);
+      final AccountAddress accountAddress = AccountAddress.fromI105(accountLiteral, null);
       final Optional<AccountAddress.SingleKeyPayload> payload = accountAddress.singleKeyPayload();
       if (!payload.isPresent()) {
         throw new IllegalStateException(
@@ -612,89 +620,38 @@ public final class TransactionFixtureManifestTests {
   }
 
   private static String decodeAuthorityField(final byte[] payload, final String field) {
-    try {
-      return decodeAccountIdStruct(payload, field);
-    } catch (final IllegalArgumentException ex) {
-      return decodeFieldPayload(payload, STRING_ADAPTER, field);
-    }
+    return decodeAccountIdPayload(payload, field);
   }
 
-  private static String decodeAccountIdStruct(final byte[] payload, final String field) {
-    try {
-      return decodeAccountIdSized(payload, field);
-    } catch (final IllegalArgumentException ex) {
-      return decodeAccountIdLegacy(payload, field);
-    }
-  }
-
-  private static String decodeAccountIdSized(final byte[] payload, final String field) {
+  private static String decodeAccountIdPayload(final byte[] payload, final String field) {
     final NoritoDecoder decoder = new NoritoDecoder(payload, NoritoHeader.MINOR_VERSION);
-    final byte[] domainField = readField(decoder, field + ".domain");
-    final String domain = decodeDomainIdField(domainField, field + ".domain");
-    final byte[] controllerField = readField(decoder, field + ".controller");
-    final String publicKeyLiteral = decodeAccountControllerField(
-        controllerField, field + ".controller");
-    if (decoder.remaining() != 0) {
-      throw new IllegalArgumentException(field + ": trailing bytes after AccountId payload");
-    }
-    final PublicKeyPayload payloadData = decodePublicKeyLiteral(publicKeyLiteral);
-    if (payloadData != null) {
-      final String ih58 = toIh58(domain, payloadData);
-      if (ih58 != null) {
-        return ih58 + "@" + domain;
-      }
-    }
-    return publicKeyLiteral + "@" + domain;
-  }
-
-  private static String decodeAccountIdLegacy(final byte[] payload, final String field) {
-    final NoritoDecoder decoder = new NoritoDecoder(payload, NoritoHeader.MINOR_VERSION);
-    final String domain = STRING_ADAPTER.decode(decoder);
     final long controllerTag = UINT32_ADAPTER.decode(decoder);
-    if (controllerTag != 0L) {
-      throw new IllegalArgumentException(field + ": unsupported AccountController tag " + controllerTag);
-    }
-    final String publicKeyLiteral = STRING_ADAPTER.decode(decoder);
-    if (decoder.remaining() != 0) {
-      throw new IllegalArgumentException(field + ": trailing bytes after AccountId payload");
-    }
-    final PublicKeyPayload payloadData = decodePublicKeyLiteral(publicKeyLiteral);
-    if (payloadData != null) {
-      final String ih58 = toIh58(domain, payloadData);
-      if (ih58 != null) {
-        return ih58 + "@" + domain;
-      }
-    }
-    return publicKeyLiteral + "@" + domain;
-  }
-
-  private static String decodeDomainIdField(final byte[] payload, final String field) {
-    try {
-      final NoritoDecoder decoder = new NoritoDecoder(payload, NoritoHeader.MINOR_VERSION);
-      final byte[] nameField = readField(decoder, field + ".name");
-      final String name = decodeFieldPayload(nameField, STRING_ADAPTER, field + ".name");
+    if (controllerTag == 0L) {
+      final byte[] publicKeyField = readField(decoder, field + ".controller.public_key");
+      final String publicKeyLiteral =
+          decodeFieldPayload(publicKeyField, STRING_ADAPTER, field + ".controller.public_key");
       if (decoder.remaining() != 0) {
-        throw new IllegalArgumentException(field + ": trailing bytes after DomainId payload");
+        throw new IllegalArgumentException(field + ": trailing bytes after AccountController payload");
       }
-      return name;
-    } catch (final IllegalArgumentException ex) {
-      return decodeFieldPayload(payload, STRING_ADAPTER, field);
+      final PublicKeyPayload payloadData = decodePublicKeyLiteral(publicKeyLiteral);
+      if (payloadData == null) {
+        throw new IllegalArgumentException(field + ": invalid single-key AccountController payload");
+      }
+      return renderSingleAuthority(payloadData, field);
     }
-  }
-
-  private static String decodeAccountControllerField(final byte[] payload, final String field) {
-    final NoritoDecoder decoder = new NoritoDecoder(payload, NoritoHeader.MINOR_VERSION);
-    final long controllerTag = UINT32_ADAPTER.decode(decoder);
-    if (controllerTag != 0L) {
-      throw new IllegalArgumentException(field + ": unsupported AccountController tag " + controllerTag);
+    if (controllerTag == 1L) {
+      final byte[] policyField = readField(decoder, field + ".controller.multisig_policy");
+      final AccountAddress.MultisigPolicyPayload policy =
+          decodeFieldPayload(
+              policyField,
+              MULTISIG_POLICY_ADAPTER,
+              field + ".controller.multisig_policy");
+      if (decoder.remaining() != 0) {
+        throw new IllegalArgumentException(field + ": trailing bytes after AccountController payload");
+      }
+      return renderMultisigAuthority(policy, field);
     }
-    final byte[] publicKeyField = readField(decoder, field + ".public_key");
-    final String publicKeyLiteral =
-        decodeFieldPayload(publicKeyField, STRING_ADAPTER, field + ".public_key");
-    if (decoder.remaining() != 0) {
-      throw new IllegalArgumentException(field + ": trailing bytes after AccountController payload");
-    }
-    return publicKeyLiteral;
+    throw new IllegalArgumentException(field + ": unsupported AccountController tag " + controllerTag);
   }
 
   private static PublicKeyPayload decodePublicKeyLiteral(final String literal) {
@@ -763,16 +720,28 @@ public final class TransactionFixtureManifestTests {
     return -1;
   }
 
-  private static String toIh58(final String domain, final PublicKeyPayload payload) {
+  private static String renderSingleAuthority(final PublicKeyPayload payload, final String field) {
     final String algorithm = algorithmForCurveId(payload.curveId);
     if (algorithm == null) {
-      return null;
+      throw new IllegalArgumentException(
+          field + ": unsupported curve id in AccountController payload");
     }
     try {
-      final AccountAddress address = AccountAddress.fromAccount(domain, payload.keyBytes, algorithm);
-      return address.toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
+      final AccountAddress address = AccountAddress.fromAccount(payload.keyBytes, algorithm);
+      return address.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
     } catch (final AccountAddress.AccountAddressException ex) {
-      return null;
+      throw new IllegalArgumentException(field + ": invalid single-key AccountController payload", ex);
+    }
+  }
+
+  private static String renderMultisigAuthority(
+      final AccountAddress.MultisigPolicyPayload policy,
+      final String field) {
+    try {
+      return AccountAddress.fromMultisigPolicy(policy)
+          .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+    } catch (final AccountAddress.AccountAddressException ex) {
+      throw new IllegalArgumentException(field + ": invalid multisig AccountController payload", ex);
     }
   }
 
@@ -876,6 +845,44 @@ public final class TransactionFixtureManifestTests {
       throw new IllegalStateException(field + ": trailing bytes after field payload");
     }
     return value;
+  }
+
+  private static final class MultisigPolicyPayloadAdapter
+      implements TypeAdapter<AccountAddress.MultisigPolicyPayload> {
+    @Override
+    public void encode(
+        final NoritoEncoder encoder, final AccountAddress.MultisigPolicyPayload value) {
+      throw new UnsupportedOperationException("Encoding multisig policy payloads is not used");
+    }
+
+    @Override
+    public AccountAddress.MultisigPolicyPayload decode(final NoritoDecoder decoder) {
+      final int version = Math.toIntExact(UINT8_ADAPTER.decode(decoder));
+      final int threshold = Math.toIntExact(UINT16_ADAPTER.decode(decoder));
+      final List<AccountAddress.MultisigMemberPayload> members =
+          MULTISIG_MEMBER_LIST_ADAPTER.decode(decoder);
+      return AccountAddress.MultisigPolicyPayload.of(version, threshold, members);
+    }
+  }
+
+  private static final class MultisigMemberPayloadAdapter
+      implements TypeAdapter<AccountAddress.MultisigMemberPayload> {
+    @Override
+    public void encode(
+        final NoritoEncoder encoder, final AccountAddress.MultisigMemberPayload value) {
+      throw new UnsupportedOperationException("Encoding multisig member payloads is not used");
+    }
+
+    @Override
+    public AccountAddress.MultisigMemberPayload decode(final NoritoDecoder decoder) {
+      final String publicKeyLiteral = STRING_ADAPTER.decode(decoder);
+      final int weight = Math.toIntExact(UINT16_ADAPTER.decode(decoder));
+      final PublicKeyPayload payload = decodePublicKeyLiteral(publicKeyLiteral);
+      if (payload == null) {
+        throw new IllegalArgumentException("Invalid multisig member public key");
+      }
+      return AccountAddress.MultisigMemberPayload.of(payload.curveId, weight, payload.keyBytes);
+    }
   }
 
   private static final class SignedParts {
@@ -1302,15 +1309,7 @@ public final class TransactionFixtureManifestTests {
     if (authority == null) {
       return null;
     }
-    final String trimmed = authority.trim();
-    if (trimmed.isEmpty()) {
-      return trimmed;
-    }
-    final int atIndex = trimmed.lastIndexOf('@');
-    if (atIndex > 0) {
-      return trimmed.substring(0, atIndex);
-    }
-    return trimmed;
+    return authority.trim();
   }
 
   private static Map<String, Object> asMap(final Object value, final String field) {

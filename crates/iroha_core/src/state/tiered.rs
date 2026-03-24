@@ -2825,8 +2825,8 @@ mod measured_bytes_impls {
     impl MeasuredBytes for AccountLabel {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<AccountLabel>();
-            total = total.saturating_add(self.domain.measured_bytes_extra());
             total = total.saturating_add(self.label.measured_bytes_extra());
+            total = total.saturating_add(self.domain.measured_bytes_extra());
             total
         }
     }

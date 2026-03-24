@@ -405,7 +405,7 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
         }
         if let Some(rest) = raw.strip_prefix("asset_def.detail:") {
             let (id, key) = rest.split_once(':')?;
-            let id: AssetDefinitionId = id.parse().ok()?;
+            let id = AssetDefinitionId::parse_address_literal(id).ok()?;
             let key: Name = key.parse().ok()?;
             canonical.push(CanonicalStateKey::AssetDefinitionMetadata(
                 AssetDefinitionMetadataKey { id, key },
@@ -496,7 +496,7 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
             return Some(());
         }
         if let Some(rest) = raw.strip_prefix("asset_def:") {
-            if let Ok(id) = rest.parse::<AssetDefinitionId>() {
+            if let Ok(id) = AssetDefinitionId::parse_address_literal(rest) {
                 canonical.push(CanonicalStateKey::AssetDefinition(id));
             } else if !rest.is_empty() {
                 // Compatibility: accept historical alias-shaped asset definition hints
@@ -887,7 +887,9 @@ where
         match rb {
             RegisterBox::Domain(r) => add_domain_rw(&mut set, &r.object.id().clone()),
             RegisterBox::Account(r) => {
-                add_domain_r(&mut set, r.object.domain());
+                if let Some(domain_id) = r.object.domain() {
+                    add_domain_r(&mut set, domain_id);
+                }
                 add_account_rw(&mut set, r.object.id());
             }
             RegisterBox::AssetDefinition(r) => {

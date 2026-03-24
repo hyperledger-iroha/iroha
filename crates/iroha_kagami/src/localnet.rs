@@ -86,7 +86,7 @@ pub struct LocalnetOptions {
 /// Asset definition plus optional minting target for sample generation.
 #[derive(Debug, Clone)]
 pub struct AssetSpec {
-    /// Canonical asset definition ID (`aid:<32-lower-hex>`).
+    /// Canonical asset definition ID (unprefixed Base58 address).
     pub id: String,
     /// Human-readable display name for the asset definition.
     pub name: String,
@@ -1675,7 +1675,8 @@ fn extend_genesis(
     }
 
     for asset in assets {
-        let asset_def: AssetDefinitionId = asset.id.parse().wrap_err("invalid asset id")?;
+        let asset_def = AssetDefinitionId::parse_address_literal(&asset.id)
+            .wrap_err("invalid asset definition id")?;
         let definition = AssetDefinition::new(asset_def.clone(), NumericSpec::default())
             .with_name(asset.name.clone())
             .with_metadata(Metadata::default());

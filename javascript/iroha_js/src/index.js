@@ -57,6 +57,7 @@ export {
 export {
   canonicalQueryString,
   canonicalRequestMessage,
+  canonicalRequestSignatureMessage,
   buildCanonicalRequestHeaders,
 } from "./canonicalRequest.js";
 export {

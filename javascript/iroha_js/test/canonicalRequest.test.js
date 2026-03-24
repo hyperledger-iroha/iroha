@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import {
   canonicalQueryString,
   canonicalRequestMessage,
+  canonicalRequestSignatureMessage,
   buildCanonicalRequestHeaders,
   generateKeyPair,
   verifyEd25519,
@@ -32,11 +33,15 @@ test("canonical request signing: headers include a verifiable signature", () => 
   }).toI105();
   const body = Buffer.from('{"foo":1}');
   const path = `/v1/accounts/${accountId}/assets`;
-  const message = canonicalRequestMessage({
+  const timestampMs = 1_717_171_717_000;
+  const nonce = "deterministic-nonce";
+  const message = canonicalRequestSignatureMessage({
     method: "get",
     path,
     query: "limit=10",
     body,
+    timestampMs,
+    nonce,
   });
   const headers = buildCanonicalRequestHeaders({
     accountId,
@@ -45,7 +50,11 @@ test("canonical request signing: headers include a verifiable signature", () => 
     query: "limit=10",
     body,
     privateKey,
+    timestampMs,
+    nonce,
   });
   const signature = Buffer.from(headers["X-Iroha-Signature"], "base64");
+  assert.equal(headers["X-Iroha-Timestamp-Ms"], String(timestampMs));
+  assert.equal(headers["X-Iroha-Nonce"], nonce);
   assert.equal(verifyEd25519(message, signature, publicKey), true);
 });

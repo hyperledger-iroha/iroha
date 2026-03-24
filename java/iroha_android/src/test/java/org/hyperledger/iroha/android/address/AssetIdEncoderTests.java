@@ -14,7 +14,7 @@ public final class AssetIdEncoderTests {
 
   public static void main(final String[] args) {
     encodeAssetIdCanonicalizesPublicKeyLiteral();
-    encodeAssetIdFromAidCanonicalizesPublicKeyLiteral();
+    encodeAssetIdFromDefinitionCanonicalizesPublicKeyLiteral();
     encodeAssetIdRejectsInvalidPublicKeyLiteral();
     System.out.println("[IrohaAndroid] AssetIdEncoder tests passed.");
   }
@@ -30,15 +30,16 @@ public final class AssetIdEncoderTests {
         : "encodeAssetId must normalize public key literals to the canonical multihash form";
   }
 
-  private static void encodeAssetIdFromAidCanonicalizesPublicKeyLiteral() {
-    final String aid = AssetDefinitionIdEncoder.encode("rose", "wonderland");
-    final String canonical = AssetIdEncoder.encodeAssetIdFromAid(aid, ED25519_KEY);
+  private static void encodeAssetIdFromDefinitionCanonicalizesPublicKeyLiteral() {
+    final String definitionAddress = AssetDefinitionIdEncoder.encode("rose", "wonderland");
+    final String canonical =
+        AssetIdEncoder.encodeAssetIdFromDefinition(definitionAddress, ED25519_KEY);
     final String prefixed =
-        AssetIdEncoder.encodeAssetIdFromAid(
-            aid, "pk:" + ED25519_KEY.toLowerCase(Locale.ROOT));
+        AssetIdEncoder.encodeAssetIdFromDefinition(
+            definitionAddress, "pk:" + ED25519_KEY.toLowerCase(Locale.ROOT));
 
     assert canonical.equals(prefixed)
-        : "encodeAssetIdFromAid must canonicalize hex-looking public key literals";
+        : "encodeAssetIdFromDefinition must canonicalize hex-looking public key literals";
   }
 
   private static void encodeAssetIdRejectsInvalidPublicKeyLiteral() {

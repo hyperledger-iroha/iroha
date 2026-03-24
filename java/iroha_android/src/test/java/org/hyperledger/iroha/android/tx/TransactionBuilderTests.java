@@ -24,6 +24,7 @@ import org.hyperledger.iroha.android.crypto.keystore.KeystoreKeyProvider;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoCodecAdapter;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
+import org.hyperledger.iroha.android.testing.TestAccountIds;
 import org.hyperledger.iroha.norito.NoritoAdapters;
 import org.hyperledger.iroha.norito.NoritoCodec;
 import org.hyperledger.iroha.android.tx.offline.OfflineEnvelopeOptions;
@@ -48,7 +49,7 @@ public final class TransactionBuilderTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000002")
-            .setAuthority("bob@wonderland")
+            .setAuthority(TestAccountIds.ed25519Authority(0x28))
             .setCreationTimeMs(1_735_000_001_234L)
             .setExecutable(Executable.ivm("payload-bytes".getBytes()))
             .setTimeToLiveMs(10_000L)
@@ -84,7 +85,7 @@ public final class TransactionBuilderTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000003")
-            .setAuthority("carol@wonderland")
+            .setAuthority(TestAccountIds.ed25519Authority(0x29))
             .setCreationTimeMs(1_735_000_111_000L)
             .setExecutable(Executable.ivm("alias-sign".getBytes()))
             .setTimeToLiveMs(null)
@@ -153,7 +154,7 @@ public final class TransactionBuilderTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000004")
-            .setAuthority("dave@wonderland")
+            .setAuthority(TestAccountIds.ed25519Authority(0x2A))
             .setExecutable(Executable.ivm("attested".getBytes()))
             .build();
 
@@ -178,7 +179,7 @@ public final class TransactionBuilderTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000005")
-            .setAuthority("erin@wonderland")
+            .setAuthority(TestAccountIds.ed25519Authority(0x2B))
             .setExecutable(Executable.ivm("software".getBytes()))
             .build();
 

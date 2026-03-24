@@ -1,8 +1,10 @@
 package org.hyperledger.iroha.android.governance;
 
 import java.math.BigInteger;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.model.instructions.CastPlainBallotInstruction;
 import org.hyperledger.iroha.android.model.instructions.CastZkBallotInstruction;
 import org.hyperledger.iroha.android.model.instructions.EnactReferendumInstruction;
@@ -173,15 +175,17 @@ public final class GovernanceInstructionBuilderTests {
   }
 
   private static void castPlainBallotRoundTrip() {
+    final String ownerAccountId = sampleI105(0x11);
     final CastPlainBallotInstruction instruction =
         CastPlainBallotInstruction.builder()
             .setReferendumId("ref-42")
-            .setOwnerAccountId("alice@sora")
+            .setOwnerAccountId(ownerAccountId)
             .setAmount(new BigInteger("125000"))
             .setDurationBlocks(512)
             .setDirection(1)
             .build();
     assert "ref-42".equals(instruction.referendumId()) : "referendum id mismatch";
+    assert ownerAccountId.equals(instruction.ownerAccountId()) : "owner mismatch";
     assert "125000".equals(instruction.amount()) : "amount mismatch";
     assert instruction.direction() == 1 : "direction mismatch";
   }
@@ -208,21 +212,35 @@ public final class GovernanceInstructionBuilderTests {
   }
 
   private static void persistCouncilRoundTrip() {
+    final String memberA = sampleI105(0x21);
+    final String memberB = sampleI105(0x22);
+    final String alternate = sampleI105(0x23);
     final PersistCouncilForEpochInstruction instruction =
         PersistCouncilForEpochInstruction.builder()
             .setEpoch(99)
-            .addMember("alice@sora")
-            .addMember("bob@sora")
-            .addAlternate("carol@sora")
+            .addMember(memberA)
+            .addMember(memberB)
+            .addAlternate(alternate)
             .setCandidatesCount(5)
             .setVerified(2)
             .setDerivedBy(GovernanceInstructionUtils.CouncilDerivationKind.VRF)
             .build();
-    assert instruction.members().equals(List.of("alice@sora", "bob@sora")) : "members mismatch";
-    assert instruction.alternates().equals(List.of("carol@sora")) : "alternates mismatch";
+    assert instruction.members().equals(List.of(memberA, memberB)) : "members mismatch";
+    assert instruction.alternates().equals(List.of(alternate)) : "alternates mismatch";
     assert instruction.candidatesCount() == 5 : "candidates mismatch";
     assert instruction.verified() == 2 : "verified mismatch";
     assert instruction.derivedBy() == GovernanceInstructionUtils.CouncilDerivationKind.VRF
         : "derived_by mismatch";
+  }
+
+  private static String sampleI105(final int fill) {
+    try {
+      final byte[] publicKey = new byte[32];
+      Arrays.fill(publicKey, (byte) fill);
+      return AccountAddress.fromAccount(publicKey, "ed25519")
+          .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+    } catch (final Exception ex) {
+      throw new IllegalStateException("failed to build canonical account fixture", ex);
+    }
   }
 }

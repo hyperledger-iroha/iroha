@@ -27,7 +27,9 @@ translator: machine-google-reviewed
 IDs میں `Display`/`FromStr` راؤنڈ ٹرپ کے ساتھ مستحکم سٹرنگ فارمز ہوتے ہیں۔ نام کے قواعد وائٹ اسپیس اور محفوظ `@ # $` حروف کو منع کرتے ہیں۔- `Name` — توثیق شدہ متنی شناخت کنندہ۔ قواعد: `crates/iroha_data_model/src/name.rs`۔
 - `DomainId` — `name`۔ ڈومین: `{ id, logo, metadata, owned_by }`۔ بلڈرز: `NewDomain`۔ کوڈ: `crates/iroha_data_model/src/domain.rs`۔
 - `AccountId` — کیننیکل ایڈریس `AccountAddress` (I105/hex) کے ذریعے تیار کیے جاتے ہیں اور Torii `AccountAddress::parse_encoded` کے ذریعے ان پٹ کو معمول بناتا ہے۔ I105 ترجیحی اکاؤنٹ فارمیٹ ہے۔ I105 فارم صرف Sora-UX کے لیے ہے۔ واقف `alias` (مسترد شدہ لیگیسی فارم) اسٹرنگ کو صرف روٹنگ عرف کے طور پر برقرار رکھا گیا ہے۔ اکاؤنٹ: `{ id, metadata }`۔ کوڈ: `crates/iroha_data_model/src/account.rs`۔- اکاؤنٹ میں داخلے کی پالیسی — ڈومینز Norito-JSON `AccountAdmissionPolicy` کو میٹا ڈیٹا کلید `iroha:account_admission_policy` کے تحت اسٹور کرکے مضمر اکاؤنٹ کی تخلیق کو کنٹرول کرتے ہیں۔ جب کلید غائب ہو تو، چین کی سطح کا کسٹم پیرامیٹر `iroha:default_account_admission_policy` ڈیفالٹ فراہم کرتا ہے۔ جب وہ بھی غائب ہو تو، ہارڈ ڈیفالٹ `ImplicitReceive` (پہلی ریلیز) ہے۔ پالیسی ٹیگز `mode` (`ExplicitOnly` یا `ImplicitReceive`) کے علاوہ اختیاری فی ٹرانزیکشن (پہلے سے طے شدہ `16`) اور فی بلاک تخلیق کیپس، ایک اختیاری Norito یا اکاؤنٹس `min_initial_amounts` فی اثاثہ کی تعریف، اور ایک اختیاری `default_role_on_create` (`AccountCreated` کے بعد عطا کیا جاتا ہے، اگر غائب ہو تو `DefaultRoleError` کے ساتھ مسترد کرتا ہے)۔ پیدائش آپٹ ان نہیں کر سکتی۔ غیر فعال/غلط پالیسیاں `InstructionExecutionError::AccountAdmission` والے نامعلوم اکاؤنٹس کے لیے رسید طرز کی ہدایات کو مسترد کرتی ہیں۔ `AccountCreated` سے پہلے مضمر اکاؤنٹس سٹیمپ میٹا ڈیٹا `iroha:created_via="implicit"`؛ پہلے سے طے شدہ رولز فالو اپ `AccountRoleGranted` کا اخراج کرتے ہیں، اور ایگزیکیوٹر کے مالک کے بنیادی اصول نئے اکاؤنٹ کو اضافی کرداروں کے بغیر اپنے اثاثے/NFTs خرچ کرنے دیتے ہیں۔ کوڈ: `crates/iroha_data_model/src/account/admission.rs`, `crates/iroha_core/src/smartcontracts/isi/account_admission.rs`۔
-- `AssetDefinitionId` — کیننیکل `aid:<32-lower-hex-no-dash>` (UUID-v4 بائٹس)۔ تعریف: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`۔ `alias` لٹریلز `<name>#<domain>@<dataspace>` یا `<name>#<dataspace>`، `<name>` کے ساتھ اثاثہ کی تعریف کے نام کے برابر ہونا چاہیے۔ کوڈ: `crates/iroha_data_model/src/asset/definition.rs`۔
+- `AssetDefinitionId` — کیننیکل `unprefixed Base58 address with versioning and checksum` (UUID-v4 بائٹس)۔ تعریف: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`۔ `alias` لٹریلز `<name>#<domain>.<dataspace>` یا `<name>#<dataspace>`، `<name>` کے ساتھ اثاثہ کی تعریف کے نام کے برابر ہونا چاہیے۔ کوڈ: `crates/iroha_data_model/src/asset/definition.rs`۔
+
+  - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`, where `status` is `permanent`, `leased_active`, `leased_grace`, or `expired_pending_cleanup`. Alias selectors resolve against the latest committed block creation time and stop resolving after grace even before sweep removes stale bindings.
 - `AssetId`: کیننیکل انکوڈ شدہ لٹریل `norito:<hex>` (میراثی متنی شکلیں پہلی ریلیز میں تعاون یافتہ نہیں ہیں)۔- `NftId` — `nft$domain`۔ NFT: `{ id, content: Metadata, owned_by }`۔ کوڈ: `crates/iroha_data_model/src/nft.rs`۔
 - `RoleId` — `name`۔ کردار: بلڈر `NewRole { inner: Role, grant_to }` کے ساتھ `{ id, permissions: BTreeSet<Permission> }`۔ کوڈ: `crates/iroha_data_model/src/role.rs`۔
 - `Permission` — `{ name: Ident, payload: Json }`۔ کوڈ: `crates/iroha_data_model/src/permission.rs`۔
@@ -192,19 +194,19 @@ IDs میں `Display`/`FromStr` راؤنڈ ٹرپ کے ساتھ مستحکم سٹ
   - اگر عمل درآمد کے وقت ایک ٹرگر کا IVM بائیک کوڈ غائب ہے، تو ٹرگر کو ہٹا دیا جاتا ہے اور ایگزیکیوشن کو ناکامی کے نتیجے کے ساتھ ایک غیر آپشن سمجھا جاتا ہے۔
   - ختم ہونے والے محرکات کو فوری طور پر ہٹا دیا جاتا ہے۔ اگر عمل درآمد کے دوران ایک ختم شدہ اندراج کا سامنا کرنا پڑتا ہے تو اسے کاٹ دیا جاتا ہے اور اسے غائب سمجھا جاتا ہے۔
 - پیرامیٹر اپ ڈیٹ:
-  - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` اپ ڈیٹ کرتا ہے اور `ConfigurationEvent::Changed` کو خارج کرتا ہے۔CLI / Torii `aid` + عرف مثالیں:
+  - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` اپ ڈیٹ کرتا ہے اور `ConfigurationEvent::Changed` کو خارج کرتا ہے۔CLI / Torii asset-definition id + عرف مثالیں:
 - کینونیکل ایڈ + واضح نام + لمبا عرف کے ساتھ رجسٹر کریں:
-  - `iroha ledger asset definition register --id aid:2f17c72466f84a4bb8a8e24884fdcd2f --name pkr --alias pkr#ubl@sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#ubl.sbp`
 - کینونیکل ایڈ + واضح نام + مختصر عرف کے ساتھ رجسٹر کریں:
-  - `iroha ledger asset definition register --id aid:550e8400e29b41d4a7164466554400dd --name pkr --alias pkr#sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#sbp`
 - عرف + اکاؤنٹ کے اجزاء کے لحاظ سے ٹکسال:
-  - `iroha ledger asset mint --definition-alias pkr#ubl@sbp --account <i105> --quantity 500`
+  - `iroha ledger asset mint --definition-alias pkr#ubl.sbp --account <i105> --quantity 500`
 - کیننیکل امداد کے عرف کو حل کریں:
-  - JSON `{ "alias": "pkr#ubl@sbp" }` کے ساتھ `POST /v1/assets/aliases/resolve`
+  - JSON `{ "alias": "pkr#ubl.sbp" }` کے ساتھ `POST /v1/assets/aliases/resolve`
 
 نقل مکانی نوٹ:
 - `name#domain` ٹیکسٹول اثاثہ کی تعریف IDs پہلی ریلیز میں جان بوجھ کر غیر تعاون یافتہ ہیں۔
-- ٹکسال/برن/ٹرانسفر باؤنڈری پر اثاثہ IDs کیننیکل `norito:<hex>` رہیں۔ `iroha tools encode asset-id` `--definition aid:...` یا `--alias ...` پلس `--account` کے ساتھ استعمال کریں۔
+- ٹکسال/برن/ٹرانسفر باؤنڈری پر اثاثہ IDs کیننیکل `norito:<hex>` رہیں۔ `iroha tools encode asset-id` `--definition <base58-asset-definition-id>` یا `--alias ...` پلس `--account` کے ساتھ استعمال کریں۔
 
 ---
 

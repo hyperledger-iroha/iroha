@@ -99,14 +99,14 @@ struct Args {
     ///
     /// Example usage:
     ///
-    /// `echo "[]" | iroha -io domain register --id "domain" | iroha -i asset definition register --id "aid:2f17c72466f84a4bb8a8e24884fdcd2f" --name "USD" --scale 0`
+    /// `echo "[]" | iroha -io domain register --id "domain" | iroha -i asset definition register --id "66owaQmAQMuHxPzxUN3bqZ6FJfDa" --name "USD" --scale 0`
     #[arg(short, long)]
     input: bool,
     /// Outputs instructions to stdout without submitting them.
     ///
     /// Example usage:
     ///
-    /// `iroha -o domain register --id "domain" | iroha -io asset definition register --id "aid:2f17c72466f84a4bb8a8e24884fdcd2f" --name "USD" --scale 0 | iroha transaction stdin`
+    /// `iroha -o domain register --id "domain" | iroha -io asset definition register --id "66owaQmAQMuHxPzxUN3bqZ6FJfDa" --name "USD" --scale 0 | iroha transaction stdin`
     #[arg(short, long)]
     output: bool,
     /// Output format for command responses.
@@ -670,10 +670,10 @@ mod tools {
 
         #[derive(clap::Args, Debug)]
         pub struct AssetId {
-            /// Canonical asset definition id (`aid:<32-lower-hex-no-dash>`)
+            /// Canonical asset definition id (unprefixed Base58 address)
             #[arg(long, conflicts_with = "alias")]
             pub definition: Option<AssetDefinitionId>,
-            /// Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`).
+            /// Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`).
             #[arg(long, conflicts_with = "definition")]
             pub alias: Option<AssetDefinitionAlias>,
             /// Canonical I105 account literal receiving the asset bucket.
@@ -692,7 +692,7 @@ mod tools {
                         resolve_asset_definition_id_by_alias(&client, &alias)?
                     }
                     _ => eyre::bail!(
-                        "provide either `--definition aid:...` or `--alias <name>#<domain>@<dataspace>|<name>#<dataspace>`"
+                        "provide either `--definition <base58-asset-id>` or `--alias <name>#<domain>.<dataspace>|<name>#<dataspace>`"
                     ),
                 };
                 let asset_id = iroha::data_model::asset::AssetId::new(definition, account);
@@ -2265,8 +2265,8 @@ mod asset {
 
         #[derive(clap::Args, Debug)]
         pub struct Register {
-            /// Asset definition identifier (`aid:<32-lower-hex-no-dash>`)
-            #[arg(short, long, value_parser = parse_asset_definition_aid_literal)]
+            /// Asset definition identifier (unprefixed Base58 address)
+            #[arg(short, long, value_parser = parse_asset_definition_literal)]
             pub id: AssetDefinitionId,
             /// Human-readable asset name.
             #[arg(long)]
@@ -2274,14 +2274,14 @@ mod asset {
             /// Optional human-readable description.
             #[arg(long)]
             pub description: Option<String>,
-            /// Optional explicit alias literal (`<name>#<domain>@<dataspace>` or
+            /// Optional explicit alias literal (`<name>#<domain>.<dataspace>` or
             /// `<name>#<dataspace>`).
             #[arg(long, conflicts_with_all = ["alias_domain", "alias_dataspace"])]
             pub alias: Option<AssetDefinitionAlias>,
-            /// Optional alias owner/domain segment used to build `<name>#<domain>@<dataspace>`.
+            /// Optional alias owner/domain segment used to build `<name>#<domain>.<dataspace>`.
             #[arg(long, requires = "alias_dataspace", conflicts_with = "alias")]
             pub alias_domain: Option<Name>,
-            /// Optional alias dataspace segment used to build `<name>#<domain>@<dataspace>` or
+            /// Optional alias dataspace segment used to build `<name>#<domain>.<dataspace>` or
             /// `<name>#<dataspace>`.
             #[arg(long, conflicts_with = "alias")]
             pub alias_dataspace: Option<Name>,
@@ -2314,10 +2314,10 @@ mod asset {
 
         #[derive(clap::Args, Debug)]
         pub struct Transfer {
-            /// Asset definition identifier (`aid:<32-lower-hex-no-dash>`).
-            #[arg(short, long, value_parser = parse_asset_definition_aid_literal, required_unless_present = "alias", conflicts_with = "alias")]
+            /// Asset definition identifier (unprefixed Base58 address).
+            #[arg(short, long, value_parser = parse_asset_definition_literal, required_unless_present = "alias", conflicts_with = "alias")]
             pub id: Option<AssetDefinitionId>,
-            /// Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`).
+            /// Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`).
             #[arg(long, required_unless_present = "id", conflicts_with = "id")]
             pub alias: Option<AssetDefinitionAlias>,
             /// Source account identifier (canonical I105 literal)
@@ -2330,10 +2330,10 @@ mod asset {
 
         #[derive(clap::Args, Debug)]
         pub struct Id {
-            /// Asset definition identifier (`aid:<32-lower-hex-no-dash>`).
-            #[arg(short, long, value_parser = parse_asset_definition_aid_literal, required_unless_present = "alias", conflicts_with = "alias")]
+            /// Asset definition identifier (unprefixed Base58 address).
+            #[arg(short, long, value_parser = parse_asset_definition_literal, required_unless_present = "alias", conflicts_with = "alias")]
             pub id: Option<AssetDefinitionId>,
-            /// Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`).
+            /// Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`).
             #[arg(long, required_unless_present = "id", conflicts_with = "id")]
             pub alias: Option<AssetDefinitionAlias>,
         }
@@ -2502,9 +2502,10 @@ mod asset {
 
             fn base_register_args() -> Register {
                 Register {
-                    id: "aid:2f17c72466f84a4bb8a8e24884fdcd2f"
-                        .parse()
-                        .expect("valid id"),
+                    id: AssetDefinitionId::new(
+                        "wonderland".parse().expect("domain"),
+                        "rose".parse().expect("asset name"),
+                    ),
                     name: "Rose".to_owned(),
                     description: None,
                     alias: None,
@@ -2566,7 +2567,7 @@ mod asset {
                 let alias = register_alias_from_args(&args)
                     .expect("alias should derive")
                     .expect("alias should be present");
-                assert_eq!(alias.as_ref(), "Rose#issuer@main");
+                assert_eq!(alias.as_ref(), "Rose#issuer.main");
             }
 
             #[test]
@@ -2587,7 +2588,7 @@ mod asset {
         /// Encoded asset identifier (`norito:<hex>`).
         #[arg(short, long, value_parser = parse_asset_id_literal, conflicts_with_all = ["definition_alias", "account"])]
         pub id: Option<AssetId>,
-        /// Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`) used
+        /// Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`) used
         /// with `--account`.
         #[arg(long, requires = "account", conflicts_with = "id")]
         pub definition_alias: Option<AssetDefinitionAlias>,
@@ -2610,7 +2611,7 @@ mod asset {
         /// Encoded asset identifier (`norito:<hex>`).
         #[arg(short, long, value_parser = parse_asset_id_literal, conflicts_with_all = ["definition_alias", "account"])]
         pub id: Option<AssetId>,
-        /// Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`) used
+        /// Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`) used
         /// with `--account`.
         #[arg(long, requires = "account", conflicts_with = "id")]
         pub definition_alias: Option<AssetDefinitionAlias>,
@@ -2624,7 +2625,7 @@ mod asset {
         /// Encoded asset identifier (`norito:<hex>`).
         #[arg(short, long, value_parser = parse_asset_id_literal, conflicts_with_all = ["definition_alias", "account"])]
         pub id: Option<AssetId>,
-        /// Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`) used
+        /// Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`) used
         /// with `--account`.
         #[arg(long, requires = "account", conflicts_with = "id")]
         pub definition_alias: Option<AssetDefinitionAlias>,
@@ -6910,12 +6911,12 @@ fn resolve_asset_definition_id_by_alias(
         .get("asset_definition_id")
         .and_then(norito::json::Value::as_str)
         .ok_or_else(|| eyre!("asset alias resolve response missing `asset_definition_id` field"))?;
-    AssetDefinitionId::parse_aid_literal(definition_raw)
+    AssetDefinitionId::parse_address_literal(definition_raw)
         .map_err(|err| eyre!("invalid `asset_definition_id` in alias response: {err}"))
 }
 
-fn parse_asset_definition_aid_literal(literal: &str) -> Result<AssetDefinitionId> {
-    AssetDefinitionId::parse_aid_literal(literal)
+fn parse_asset_definition_literal(literal: &str) -> Result<AssetDefinitionId> {
+    AssetDefinitionId::parse_address_literal(literal)
         .map_err(|err| eyre!("asset definition literal: {err}"))
 }
 
@@ -7351,18 +7352,23 @@ mod tests {
     }
 
     #[test]
-    fn parse_asset_definition_aid_literal_accepts_aid() {
-        let parsed = parse_asset_definition_aid_literal("aid:2f17c72466f84a4bb8a8e24884fdcd2f")
-            .expect("aid literal should parse");
-        assert_eq!(parsed.to_string(), "aid:2f17c72466f84a4bb8a8e24884fdcd2f");
+    fn parse_asset_definition_literal_accepts_base58() {
+        let expected = AssetDefinitionId::new(
+            "wonderland".parse().expect("domain"),
+            "rose".parse().expect("name"),
+        );
+        let parsed =
+            parse_asset_definition_literal(&expected.to_string())
+            .expect("base58 literal should parse");
+        assert_eq!(parsed, expected);
     }
 
     #[test]
-    fn parse_asset_definition_aid_literal_rejects_legacy_literal() {
-        let err = parse_asset_definition_aid_literal("xor#wonderland")
+    fn parse_asset_definition_literal_rejects_legacy_literal() {
+        let err = parse_asset_definition_literal("aid:2f17c72466f84a4bb8a8e24884fdcd2f")
             .expect_err("legacy literal should be rejected");
         assert!(
-            err.to_string().contains("aid:<32-lower-hex>"),
+            err.to_string().contains("Base58"),
             "unexpected error: {err}"
         );
     }

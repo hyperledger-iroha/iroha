@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.nexus;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
 
 public final class UaidJsonParserTests {
 
@@ -18,6 +19,7 @@ public final class UaidJsonParserTests {
   }
 
   private static void parsesPortfolioPayload() {
+    final String assetDefinitionId = AssetDefinitionIdEncoder.encode("usd", "wonderland");
     final String json =
         """
         {
@@ -34,7 +36,7 @@ public final class UaidJsonParserTests {
                   "assets": [
                     {
                       "asset_id": "usd#wonderland#alice",
-                      "asset_definition_id": "usd#wonderland",
+                      "asset_definition_id": "%s",
                       "quantity": "15"
                     }
                   ]
@@ -43,7 +45,8 @@ public final class UaidJsonParserTests {
             }
           ]
         }
-        """;
+        """
+            .formatted(assetDefinitionId);
     final UaidPortfolioResponse response =
         UaidJsonParser.parsePortfolio(json.getBytes(StandardCharsets.UTF_8));
     assert UAID.equals(response.uaid()) : "uaid mismatch";
@@ -61,7 +64,7 @@ public final class UaidJsonParserTests {
     assert account.assets().size() == 1 : "asset list size mismatch";
     final UaidPortfolioResponse.UaidPortfolioAsset asset = account.assets().get(0);
     assert "usd#wonderland#alice".equals(asset.assetId()) : "asset id mismatch";
-    assert "usd#wonderland".equals(asset.assetDefinitionId()) : "definition id mismatch";
+    assert assetDefinitionId.equals(asset.assetDefinitionId()) : "definition id mismatch";
     assert "15".equals(asset.quantity()) : "quantity mismatch";
   }
 

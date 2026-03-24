@@ -30,9 +30,9 @@ public final class OfflineSpendReceiptPayloadEncoder {
    * Encode OfflineSpendReceiptPayload to Norito bytes for signing.
    *
    * @param txIdHex 32-byte transaction ID as hex (64 chars)
-   * @param fromAccountId sender AccountId (e.g., "alice@domain")
-   * @param toAccountId receiver AccountId
-   * @param assetId full asset ID (e.g., "token#domain#alice@domain")
+   * @param fromAccountId sender canonical I105 AccountId
+   * @param toAccountId receiver canonical I105 AccountId
+   * @param assetId full encoded asset ID (e.g., {@code norito:<hex>})
    * @param amount decimal amount string
    * @param issuedAtMs timestamp in milliseconds
    * @param invoiceId invoice identifier

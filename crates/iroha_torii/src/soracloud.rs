@@ -19,6 +19,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use iroha_core::soracloud_runtime::{
+    HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS, HF_GENERATED_AGENT_LEASE_TICKS,
     SoracloudApartmentAutonomyExecutionSummaryV1, SoracloudApartmentExecutionRequest,
     SoracloudLocalReadKind, SoracloudPrivateInferenceExecutionAction,
     SoracloudPrivateInferenceExecutionRequest, SoracloudPrivateInferenceExecutionResult,
@@ -27,7 +28,7 @@ use iroha_core::soracloud_runtime::{
     build_soracloud_hf_generated_service_bundle, soracloud_hf_generated_source_binding,
 };
 use iroha_core::state::{StateReadOnly, WorldReadOnly};
-use iroha_crypto::{Hash, HashOf, Signature};
+use iroha_crypto::{Hash, HashOf, PublicKey, Signature};
 use iroha_data_model::{
     Encode,
     account::AccountId,
@@ -80,7 +81,6 @@ use iroha_data_model::{
         encode_model_weight_register_provenance_payload,
         encode_model_weight_rollback_provenance_payload,
         encode_private_compile_profile_provenance_payload,
-        encode_private_inference_checkpoint_provenance_payload,
         encode_private_inference_output_release_provenance_payload,
         encode_private_inference_start_provenance_payload, encode_rollback_provenance_payload,
         encode_rollout_provenance_payload, encode_state_mutation_provenance_payload,
@@ -92,7 +92,6 @@ use iroha_data_model::{
         encode_uploaded_model_finalize_provenance_payload,
     },
     sorafs::pin_registry::StorageClass,
-    transaction::{SignedTransaction, signed::TransactionBuilder},
 };
 use mv::storage::StorageReadOnly;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
@@ -118,6 +117,12 @@ const TRAINING_JOB_STATUS_SCHEMA_VERSION_V1: u16 = 1;
 const TRAINING_MAX_RETRIES: u8 = 16;
 const TRAINING_MAX_WORKER_GROUP_SIZE: u16 = 1024;
 const TRAINING_MAX_REASON_BYTES: usize = 512;
+pub(crate) const VERIFIED_ACCOUNT_HEADER: &str = "x-iroha-internal-soracloud-account";
+pub(crate) const VERIFIED_SIGNER_HEADER: &str = "x-iroha-internal-soracloud-signer";
+
+pub(crate) fn requires_signed_mutation_request(method: &axum::http::Method, path: &str) -> bool {
+    method == axum::http::Method::POST && path.starts_with("/v1/soracloud/")
+}
 const TRAINING_MAX_IDENTIFIER_BYTES: usize = 128;
 const MODEL_WEIGHT_STATUS_SCHEMA_VERSION_V1: u16 = 1;
 const MODEL_WEIGHT_MAX_DATASET_REF_BYTES: usize = 512;
@@ -130,7 +135,6 @@ const HF_REPO_ID_MAX_BYTES: usize = 256;
 const HF_REVISION_MAX_BYTES: usize = 160;
 const HF_MODEL_NAME_MAX_BYTES: usize = 128;
 const HF_DEFAULT_RESOLVED_REVISION: &str = "main";
-const HF_GENERATED_AGENT_LEASE_TICKS: u64 = 86_400;
 const SCR_HOST_MAX_CPU_MILLIS: u32 = 64_000;
 const SCR_HOST_MAX_MEMORY_BYTES: u64 = 512 * 1024 * 1024 * 1024;
 const SCR_HOST_MAX_EPHEMERAL_STORAGE_BYTES: u64 = 2 * 1024 * 1024 * 1024 * 1024;
@@ -138,8 +142,6 @@ const SCR_HOST_MAX_OPEN_FILES: u32 = 131_072;
 const SCR_HOST_MAX_TASKS: u16 = 16_384;
 const SCR_HOST_MAX_START_GRACE_SECS: u32 = 600;
 const SCR_HOST_MAX_STOP_GRACE_SECS: u32 = 600;
-const SORACLOUD_MUTATION_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(30);
-const SORACLOUD_MUTATION_CONFIRMATION_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 #[derive(
     Clone,
@@ -494,6 +496,10 @@ pub(crate) struct SignedHfDeployRequest {
     pub payload: HfDeployPayload,
     pub provenance: ManifestProvenance,
     #[norito(default)]
+    pub generated_service_provenance: Option<ManifestProvenance>,
+    #[norito(default)]
+    pub generated_apartment_provenance: Option<ManifestProvenance>,
+    #[norito(default)]
     pub authority: Option<AccountId>,
     #[norito(default)]
     pub private_key: Option<ExposedPrivateKey>,
@@ -541,6 +547,10 @@ pub(crate) struct HfLeaseRenewPayload {
 pub(crate) struct SignedHfLeaseRenewRequest {
     pub payload: HfLeaseRenewPayload,
     pub provenance: ManifestProvenance,
+    #[norito(default)]
+    pub generated_service_provenance: Option<ManifestProvenance>,
+    #[norito(default)]
+    pub generated_apartment_provenance: Option<ManifestProvenance>,
     #[norito(default)]
     pub authority: Option<AccountId>,
     #[norito(default)]
@@ -732,6 +742,12 @@ pub(crate) struct SignedAgentAutonomyRunRequest {
     pub authority: Option<AccountId>,
     #[norito(default)]
     pub private_key: Option<ExposedPrivateKey>,
+}
+
+#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct AgentAutonomyFinalizeRequest {
+    pub apartment_name: String,
+    pub run_id: String,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -1026,6 +1042,11 @@ pub(crate) struct SignedPrivateInferenceOutputReleaseRequest {
     pub authority: Option<AccountId>,
     #[norito(default)]
     pub private_key: Option<ExposedPrivateKey>,
+}
+
+#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct PrivateInferenceFinalizeRequest {
+    pub session_id: String,
 }
 
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
@@ -3141,37 +3162,72 @@ async fn derive_hf_resource_profile(
     })
 }
 
-fn sign_generated_bundle_provenance(
-    bundle: &SoraDeploymentBundleV1,
+fn verify_auxiliary_provenance_payload(
     signer: &SoracloudMutationSigner,
-) -> Result<ManifestProvenance, SoracloudError> {
-    let payload = encode_bundle_signature_payload(bundle)?;
-    Ok(ManifestProvenance {
-        signer: signer.authority.signatory().clone(),
-        signature: Signature::new(&signer.private_key.0, &payload),
-    })
+    provenance: &ManifestProvenance,
+    payload: Vec<u8>,
+    signer_error: &'static str,
+    signature_error: &'static str,
+) -> Result<(), SoracloudError> {
+    if provenance.signer != signer.request_signer {
+        return Err(SoracloudError::unauthorized(signer_error));
+    }
+    provenance
+        .signature
+        .verify(&provenance.signer, &payload)
+        .map_err(|_| SoracloudError::bad_request(signature_error))?;
+    Ok(())
 }
 
-fn sign_generated_agent_deploy_provenance(
+fn required_generated_bundle_provenance(
+    bundle: &SoraDeploymentBundleV1,
+    signer: &SoracloudMutationSigner,
+    provenance: Option<&ManifestProvenance>,
+) -> Result<ManifestProvenance, SoracloudError> {
+    let provenance = provenance.ok_or_else(|| {
+        SoracloudError::bad_request(
+            "generated_service_provenance is required when deploying a new HF-generated service",
+        )
+    })?;
+    let payload = encode_bundle_signature_payload(bundle)?;
+    verify_auxiliary_provenance_payload(
+        signer,
+        provenance,
+        payload,
+        "generated service provenance signer must match the signed request signer",
+        "generated service provenance signature verification failed",
+    )?;
+    Ok(provenance.clone())
+}
+
+fn required_generated_agent_deploy_provenance(
     manifest: &AgentApartmentManifestV1,
     signer: &SoracloudMutationSigner,
-    lease_ticks: u64,
-    autonomy_budget_units: u64,
+    provenance: Option<&ManifestProvenance>,
 ) -> Result<ManifestProvenance, SoracloudError> {
+    let provenance = provenance.ok_or_else(|| {
+        SoracloudError::bad_request(
+            "generated_apartment_provenance is required when deploying a new HF-generated apartment",
+        )
+    })?;
     let payload = encode_agent_deploy_provenance_payload(
         manifest.clone(),
-        lease_ticks,
-        Some(autonomy_budget_units),
+        HF_GENERATED_AGENT_LEASE_TICKS,
+        Some(HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS),
     )
     .map_err(|err| {
         SoracloudError::internal(format!(
             "failed to encode generated HF agent deploy payload: {err}"
         ))
     })?;
-    Ok(ManifestProvenance {
-        signer: signer.authority.signatory().clone(),
-        signature: Signature::new(&signer.private_key.0, &payload),
-    })
+    verify_auxiliary_provenance_payload(
+        signer,
+        provenance,
+        payload,
+        "generated apartment provenance signer must match the signed request signer",
+        "generated apartment provenance signature verification failed",
+    )?;
+    Ok(provenance.clone())
 }
 
 fn authoritative_active_service_bundle(
@@ -3209,6 +3265,7 @@ fn ensure_hf_generated_service_instruction(
     repo_id: &str,
     resolved_revision: &str,
     model_name: &str,
+    generated_provenance: Option<&ManifestProvenance>,
 ) -> Result<Option<InstructionBox>, SoracloudError> {
     let state_view = app.state.view();
     let world = state_view.world();
@@ -3235,7 +3292,7 @@ fn ensure_hf_generated_service_instruction(
     }
 
     admit_scr_host_bundle(bundle)?;
-    let provenance = sign_generated_bundle_provenance(bundle, signer)?;
+    let provenance = required_generated_bundle_provenance(bundle, signer, generated_provenance)?;
     Ok(Some(InstructionBox::from(
         isi::soracloud::DeploySoracloudService {
             bundle: bundle.clone(),
@@ -3248,6 +3305,7 @@ fn ensure_hf_generated_agent_instruction(
     app: &SharedAppState,
     signer: &SoracloudMutationSigner,
     manifest: &AgentApartmentManifestV1,
+    generated_provenance: Option<&ManifestProvenance>,
 ) -> Result<Option<InstructionBox>, SoracloudError> {
     let state_view = app.state.view();
     let world = state_view.world();
@@ -3265,17 +3323,13 @@ fn ensure_hf_generated_agent_instruction(
         )));
     }
 
-    let provenance = sign_generated_agent_deploy_provenance(
-        manifest,
-        signer,
-        HF_GENERATED_AGENT_LEASE_TICKS,
-        AGENT_AUTONOMY_DEFAULT_BUDGET_UNITS,
-    )?;
+    let provenance =
+        required_generated_agent_deploy_provenance(manifest, signer, generated_provenance)?;
     Ok(Some(InstructionBox::from(
         isi::soracloud::DeploySoracloudAgentApartment {
             manifest: manifest.clone(),
             lease_ticks: HF_GENERATED_AGENT_LEASE_TICKS,
-            autonomy_budget_units: AGENT_AUTONOMY_DEFAULT_BUDGET_UNITS,
+            autonomy_budget_units: HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS,
             provenance,
         },
     )))
@@ -5150,7 +5204,21 @@ fn encode_model_host_withdraw_signature_payload(
 #[derive(Clone)]
 struct SoracloudMutationSigner {
     authority: AccountId,
-    private_key: ExposedPrivateKey,
+    request_signer: PublicKey,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SoracloudMutationDraftResponse {
+    ok: bool,
+    authority: String,
+    signed_by: String,
+    tx_instructions: Vec<SoracloudTxInstr>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SoracloudTxInstr {
+    wire_id: String,
+    payload_hex: String,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -5161,13 +5229,6 @@ struct SoracloudAuditBaseline {
     model_artifact_max: u64,
     hf_shared_lease_max: u64,
     agent_apartment_max: u64,
-}
-
-#[derive(Clone, Debug)]
-struct SoracloudSubmittedTx {
-    tx_hash: HashOf<SignedTransaction>,
-    routing_decision: iroha_core::queue::RoutingDecision,
-    audit_baseline: SoracloudAuditBaseline,
 }
 
 #[derive(Debug)]
@@ -5197,101 +5258,105 @@ impl IntoResponse for SoracloudMutationError {
     }
 }
 
+fn verified_soracloud_request_identity(
+    headers: &HeaderMap,
+) -> Result<(AccountId, PublicKey), SoracloudError> {
+    let account = headers
+        .get(VERIFIED_ACCOUNT_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| {
+            SoracloudError::unauthorized(
+                "signed request headers are required for Soracloud mutation endpoints",
+            )
+        })
+        .and_then(|literal| {
+            AccountId::parse_encoded(literal.trim())
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                .map_err(|_| {
+                    SoracloudError::internal(
+                        "failed to parse verified Soracloud account header".to_owned(),
+                    )
+                })
+        })?;
+    let signer = headers
+        .get(VERIFIED_SIGNER_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| {
+            SoracloudError::unauthorized(
+                "signed request headers are required for Soracloud mutation endpoints",
+            )
+        })
+        .and_then(|literal| {
+            literal.trim().parse::<PublicKey>().map_err(|_| {
+                SoracloudError::internal(
+                    "failed to parse verified Soracloud signer header".to_owned(),
+                )
+            })
+        })?;
+    Ok((account, signer))
+}
+
 fn require_soracloud_mutation_signer(
+    headers: &HeaderMap,
+    provenance: &ManifestProvenance,
     authority: Option<AccountId>,
     private_key: Option<ExposedPrivateKey>,
 ) -> Result<SoracloudMutationSigner, SoracloudError> {
-    let authority =
-        authority.ok_or_else(|| SoracloudError::bad_request("authority is required"))?;
-    let private_key =
-        private_key.ok_or_else(|| SoracloudError::bad_request("private_key is required"))?;
-    let signer_keypair = iroha_crypto::KeyPair::from(private_key.0.clone());
-    if signer_keypair.public_key() != authority.signatory() {
+    if authority.is_some() || private_key.is_some() {
         return Err(SoracloudError::bad_request(
-            "private_key does not match authority",
+            "authority/private_key fields are no longer accepted; sign the HTTP request with X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce",
+        ));
+    }
+    let (authority, request_signer) = verified_soracloud_request_identity(headers)?;
+    if provenance.signer != request_signer {
+        return Err(SoracloudError::unauthorized(
+            "request signer must match mutation provenance signer",
         ));
     }
     Ok(SoracloudMutationSigner {
         authority,
-        private_key,
+        request_signer,
     })
 }
 
-fn soracloud_audit_baseline(app: &SharedAppState) -> SoracloudAuditBaseline {
-    let state_view = app.state.view();
-    let world = state_view.world();
-    SoracloudAuditBaseline {
-        service_max: world
-            .soracloud_service_audit_events()
-            .iter()
-            .map(|(sequence, _event)| *sequence)
-            .max()
-            .unwrap_or(0),
-        training_job_max: world
-            .soracloud_training_job_audit_events()
-            .iter()
-            .map(|(sequence, _event)| *sequence)
-            .max()
-            .unwrap_or(0),
-        model_weight_max: world
-            .soracloud_model_weight_audit_events()
-            .iter()
-            .map(|(sequence, _event)| *sequence)
-            .max()
-            .unwrap_or(0),
-        model_artifact_max: world
-            .soracloud_model_artifact_audit_events()
-            .iter()
-            .map(|(sequence, _event)| *sequence)
-            .max()
-            .unwrap_or(0),
-        hf_shared_lease_max: world
-            .soracloud_hf_shared_lease_audit_events()
-            .iter()
-            .map(|(sequence, _event)| *sequence)
-            .max()
-            .unwrap_or(0),
-        agent_apartment_max: world
-            .soracloud_agent_apartment_audit_events()
-            .iter()
-            .map(|(sequence, _event)| *sequence)
-            .max()
-            .unwrap_or(0),
-    }
+fn require_soracloud_request_signer(
+    headers: &HeaderMap,
+) -> Result<SoracloudMutationSigner, SoracloudError> {
+    let (authority, request_signer) = verified_soracloud_request_identity(headers)?;
+    Ok(SoracloudMutationSigner {
+        authority,
+        request_signer,
+    })
 }
 
-fn attach_routing_headers(
-    response: &mut Response,
-    routing_decision: iroha_core::queue::RoutingDecision,
-) {
-    if let Ok(lane_header) =
-        axum::http::HeaderValue::from_str(&routing_decision.lane_id.as_u32().to_string())
-    {
-        response.headers_mut().insert(
-            axum::http::header::HeaderName::from_static("x-iroha-route-lane-id"),
-            lane_header,
-        );
-    }
-    if let Ok(dataspace_header) =
-        axum::http::HeaderValue::from_str(&routing_decision.dataspace_id.as_u64().to_string())
-    {
-        response.headers_mut().insert(
-            axum::http::header::HeaderName::from_static("x-iroha-route-dataspace-id"),
-            dataspace_header,
-        );
-    }
+fn soracloud_draft_response(
+    signer: &SoracloudMutationSigner,
+    instructions: Vec<InstructionBox>,
+) -> Response {
+    let tx_instructions = instructions
+        .into_iter()
+        .map(soracloud_tx_instr_from_box)
+        .collect();
+    JsonBody(SoracloudMutationDraftResponse {
+        ok: true,
+        authority: signer.authority.to_string(),
+        signed_by: signer.request_signer.to_string(),
+        tx_instructions,
+    })
+    .into_response()
 }
 
-fn response_with_routing_headers<T>(
-    routing_decision: iroha_core::queue::RoutingDecision,
-    body: T,
-) -> Response
-where
-    T: norito::json::JsonSerialize + Send,
-{
-    let mut response = JsonBody(body).into_response();
-    attach_routing_headers(&mut response, routing_decision);
-    response
+fn soracloud_tx_instr_from_box(boxed: InstructionBox) -> SoracloudTxInstr {
+    use iroha_data_model::isi::Instruction;
+
+    let type_name = Instruction::id(&*boxed);
+    let payload = Instruction::dyn_encode(&*boxed);
+    let framed = iroha_data_model::isi::frame_instruction_payload(type_name, &payload)
+        .expect("instruction payload must use canonical Norito framing");
+    SoracloudTxInstr {
+        wire_id: type_name.to_string(),
+        payload_hex: hex::encode(framed),
+    }
 }
 
 fn latest_service_audit_event_after<'a, P>(
@@ -5390,84 +5455,7 @@ where
         .max_by_key(|event| event.sequence)
 }
 
-async fn submit_soracloud_instructions(
-    app: &SharedAppState,
-    signer: SoracloudMutationSigner,
-    instructions: Vec<InstructionBox>,
-    endpoint: &'static str,
-) -> Result<SoracloudSubmittedTx, crate::Error> {
-    let audit_baseline = soracloud_audit_baseline(app);
-    debug_assert!(
-        !instructions.is_empty(),
-        "Soracloud mutation submission requires at least one instruction"
-    );
-    let tx = TransactionBuilder::new((*app.chain_id).clone(), signer.authority)
-        .with_instructions(instructions)
-        .sign(&signer.private_key.0);
-    let tx_hash = tx.hash();
-    let routing_decision = crate::routing::handle_transaction_with_metrics(
-        app.chain_id.clone(),
-        app.queue.clone(),
-        app.state.clone(),
-        tx,
-        app.telemetry.clone(),
-        endpoint,
-    )
-    .await?;
-    Ok(SoracloudSubmittedTx {
-        tx_hash,
-        routing_decision,
-        audit_baseline,
-    })
-}
-
-async fn submit_soracloud_instruction(
-    app: &SharedAppState,
-    signer: SoracloudMutationSigner,
-    instruction: InstructionBox,
-    endpoint: &'static str,
-) -> Result<SoracloudSubmittedTx, crate::Error> {
-    submit_soracloud_instructions(app, signer, vec![instruction], endpoint).await
-}
-
-fn soracloud_mutation_pipeline_status(
-    app: &SharedAppState,
-    tx_hash: &HashOf<SignedTransaction>,
-) -> Option<crate::PipelineStatusEntry> {
-    app.pipeline_status_cache.refresh_pending_blocks(&app.kura);
-
-    if let Some(entry) = app.pipeline_status_cache.lookup(tx_hash)
-        && matches!(
-            entry.kind,
-            crate::PipelineStatusKind::Applied
-                | crate::PipelineStatusKind::Rejected
-                | crate::PipelineStatusKind::Expired
-        )
-    {
-        return Some(entry);
-    }
-
-    if let Some(entry) = crate::pipeline_status_from_state(app, tx_hash) {
-        app.pipeline_status_cache
-            .record_entry(tx_hash.clone(), entry.clone());
-        return Some(entry);
-    }
-
-    if let Some(entry) = app.pipeline_status_cache.lookup(tx_hash) {
-        return Some(entry);
-    }
-
-    if app.queue.contains_pending_hash(tx_hash.clone(), &app.state) {
-        let entry =
-            crate::PipelineStatusEntry::fresh(crate::PipelineStatusKind::Queued, None, None);
-        app.pipeline_status_cache
-            .record_entry(tx_hash.clone(), entry.clone());
-        return Some(entry);
-    }
-
-    None
-}
-
+#[cfg(test)]
 fn error_chain_message(error: &(dyn std::error::Error + 'static)) -> String {
     let mut parts = Vec::new();
     let mut current = Some(error);
@@ -5481,6 +5469,7 @@ fn error_chain_message(error: &(dyn std::error::Error + 'static)) -> String {
     parts.join(": ")
 }
 
+#[cfg(test)]
 fn join_nested_message(primary: String, nested: String) -> String {
     if nested.is_empty() || nested == primary {
         primary
@@ -5491,6 +5480,7 @@ fn join_nested_message(primary: String, nested: String) -> String {
     }
 }
 
+#[cfg(test)]
 fn instruction_execution_message(
     error: &iroha_data_model::isi::error::InstructionExecutionError,
 ) -> String {
@@ -5504,6 +5494,7 @@ fn instruction_execution_message(
     }
 }
 
+#[cfg(test)]
 fn validation_fail_message(validation: &iroha_data_model::ValidationFail) -> String {
     match validation {
         iroha_data_model::ValidationFail::InstructionFailed(error) => {
@@ -5513,6 +5504,7 @@ fn validation_fail_message(validation: &iroha_data_model::ValidationFail) -> Str
     }
 }
 
+#[cfg(test)]
 fn transaction_rejection_message(
     reason: &iroha_data_model::transaction::error::TransactionRejectionReason,
 ) -> String {
@@ -5529,86 +5521,49 @@ fn transaction_rejection_message(
     }
 }
 
-async fn wait_for_soracloud_transaction(
-    app: &SharedAppState,
-    tx_hash: &HashOf<SignedTransaction>,
-) -> Result<(), SoracloudError> {
-    let deadline = tokio::time::Instant::now() + SORACLOUD_MUTATION_CONFIRMATION_TIMEOUT;
-    loop {
-        if let Some(entry) = soracloud_mutation_pipeline_status(app, tx_hash) {
-            match entry.kind {
-                crate::PipelineStatusKind::Applied => return Ok(()),
-                crate::PipelineStatusKind::Rejected => {
-                    let message = entry.rejection.as_ref().map_or_else(
-                        || format!("Soracloud transaction `{tx_hash}` was rejected"),
-                        |reason| {
-                            format!(
-                                "Soracloud transaction `{tx_hash}` was rejected: {}",
-                                transaction_rejection_message(reason)
-                            )
-                        },
-                    );
-                    return Err(SoracloudError::bad_request(message));
-                }
-                crate::PipelineStatusKind::Expired => {
-                    return Err(SoracloudError::conflict(format!(
-                        "Soracloud transaction `{tx_hash}` expired before reaching authoritative state"
-                    )));
-                }
-                crate::PipelineStatusKind::Queued
-                | crate::PipelineStatusKind::Approved
-                | crate::PipelineStatusKind::Committed => {}
-            }
-        }
-
-        if tokio::time::Instant::now() >= deadline {
-            return Err(SoracloudError::conflict(format!(
-                "timed out waiting for Soracloud transaction `{tx_hash}` to reach authoritative state"
-            )));
-        }
-
-        tokio::time::sleep(SORACLOUD_MUTATION_CONFIRMATION_POLL_INTERVAL).await;
-    }
-}
-
 async fn submit_confirm_and_respond<T, F>(
-    app: &SharedAppState,
+    _app: &SharedAppState,
     signer: SoracloudMutationSigner,
     instruction: InstructionBox,
-    endpoint: &'static str,
-    build_response: F,
+    _endpoint: &'static str,
+    _build_response: F,
 ) -> Result<Response, SoracloudMutationError>
 where
     T: norito::json::JsonSerialize + Send,
     F: FnOnce(&SharedAppState, &SoracloudAuditBaseline) -> Result<T, SoracloudError>,
 {
-    let submitted = submit_soracloud_instruction(app, signer, instruction, endpoint).await?;
-    wait_for_soracloud_transaction(app, &submitted.tx_hash).await?;
-    let payload = build_response(app, &submitted.audit_baseline)?;
-    Ok(response_with_routing_headers(
-        submitted.routing_decision,
-        payload,
-    ))
+    submit_confirm_and_respond_instructions(
+        _app,
+        signer,
+        vec![instruction],
+        _endpoint,
+        _build_response,
+    )
+    .await
 }
 
 async fn submit_confirm_and_respond_instructions<T, F>(
-    app: &SharedAppState,
+    _app: &SharedAppState,
     signer: SoracloudMutationSigner,
     instructions: Vec<InstructionBox>,
-    endpoint: &'static str,
-    build_response: F,
+    _endpoint: &'static str,
+    _build_response: F,
 ) -> Result<Response, SoracloudMutationError>
 where
     T: norito::json::JsonSerialize + Send,
     F: FnOnce(&SharedAppState, &SoracloudAuditBaseline) -> Result<T, SoracloudError>,
 {
-    let submitted = submit_soracloud_instructions(app, signer, instructions, endpoint).await?;
-    wait_for_soracloud_transaction(app, &submitted.tx_hash).await?;
-    let payload = build_response(app, &submitted.audit_baseline)?;
-    Ok(response_with_routing_headers(
-        submitted.routing_decision,
-        payload,
-    ))
+    let tx_instructions = instructions
+        .into_iter()
+        .map(soracloud_tx_instr_from_box)
+        .collect();
+    Ok(JsonBody(SoracloudMutationDraftResponse {
+        ok: true,
+        authority: signer.authority.to_string(),
+        signed_by: signer.request_signer.to_string(),
+        tx_instructions,
+    })
+    .into_response())
 }
 
 fn audit_action_to_control_plane_action(action: SoraServiceLifecycleActionV1) -> SoracloudAction {
@@ -8680,7 +8635,12 @@ pub(crate) async fn handle_deploy(
     if let Err(err) = admit_scr_host_bundle(&request.bundle) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -8724,7 +8684,12 @@ pub(crate) async fn handle_upgrade(
     if let Err(err) = admit_scr_host_bundle(&request.bundle) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -8765,7 +8730,12 @@ pub(crate) async fn handle_rollback(
     if let Err(err) = verify_rollback_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -8815,7 +8785,12 @@ pub(crate) async fn handle_rollout(
     if let Err(err) = verify_rollout_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -8871,7 +8846,12 @@ pub(crate) async fn handle_state_mutation(
     if let Err(err) = verify_state_mutation_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -8937,7 +8917,12 @@ pub(crate) async fn handle_fhe_job_run(
     if let Err(err) = verify_fhe_job_run_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -9004,7 +8989,12 @@ pub(crate) async fn handle_decryption_request(
     if let Err(err) = verify_decryption_request_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -9057,7 +9047,12 @@ pub(crate) async fn handle_health_access_request(
     if let Err(err) = verify_decryption_request_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -9127,7 +9122,12 @@ pub(crate) async fn handle_training_job_start(
     if let Err(err) = verify_training_job_start_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -9188,7 +9188,12 @@ pub(crate) async fn handle_training_job_checkpoint(
     if let Err(err) = verify_training_job_checkpoint_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -9244,7 +9249,12 @@ pub(crate) async fn handle_training_job_retry(
     if let Err(err) = verify_training_job_retry_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -9315,7 +9325,12 @@ pub(crate) async fn handle_model_weight_register(
     if let Err(err) = verify_model_weight_register_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -9378,7 +9393,12 @@ pub(crate) async fn handle_model_weight_promote(
     if let Err(err) = verify_model_weight_promote_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -9436,7 +9456,12 @@ pub(crate) async fn handle_model_weight_rollback(
     if let Err(err) = verify_model_weight_rollback_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -9510,7 +9535,12 @@ pub(crate) async fn handle_model_artifact_register(
     if let Err(err) = verify_model_artifact_register_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -9592,7 +9622,12 @@ pub(crate) async fn handle_uploaded_model_init(
     if let Err(err) = verify_uploaded_model_bundle_init_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -9643,7 +9678,12 @@ pub(crate) async fn handle_uploaded_model_chunk(
     if let Err(err) = verify_uploaded_model_chunk_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -9694,7 +9734,12 @@ pub(crate) async fn handle_uploaded_model_finalize(
     if let Err(err) = verify_uploaded_model_finalize_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -9762,7 +9807,12 @@ pub(crate) async fn handle_private_compile(
     if let Err(err) = verify_private_compile_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -9822,7 +9872,12 @@ pub(crate) async fn handle_uploaded_model_allow(
     if let Err(err) = verify_uploaded_model_allow_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -9909,29 +9964,58 @@ pub(crate) async fn handle_private_inference_run(
         return SoracloudError::conflict("private uploaded-model runtime is not available")
             .into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
-    let session_id = request.payload.session.session_id.clone();
-    let signed_by = request.provenance.signer.to_string();
-    let submitted = match submit_soracloud_instruction(
+    match submit_confirm_and_respond::<(), _>(
         &app,
-        signer.clone(),
+        signer,
         InstructionBox::from(isi::soracloud::StartSoracloudPrivateInference {
             session: request.payload.session,
             provenance: request.provenance,
         }),
         "/v1/soracloud/model/run-private",
+        |_app, _baseline| {
+            Err(SoracloudError::internal(
+                "private inference start returns a draft response".to_owned(),
+            ))
+        },
     )
     .await
     {
-        Ok(submitted) => submitted,
+        Ok(response) => response,
         Err(err) => return err.into_response(),
-    };
-    if let Err(err) = wait_for_soracloud_transaction(&app, &submitted.tx_hash).await {
+    }
+}
+
+pub(crate) async fn handle_private_inference_run_finalize(
+    State(app): State<SharedAppState>,
+    headers: HeaderMap,
+    NoritoJson(request): NoritoJson<PrivateInferenceFinalizeRequest>,
+) -> Response {
+    if let Err(err) =
+        crate::check_access(&app, &headers, None, "v1/soracloud/model/run-private").await
+    {
         return err.into_response();
     }
+    if app.soracloud_runtime.is_none() {
+        return SoracloudError::conflict("private uploaded-model runtime is not available")
+            .into_response();
+    }
+    let signer = match require_soracloud_request_signer(&headers) {
+        Ok(signer) => signer,
+        Err(err) => return err.into_response(),
+    };
+    let session_id = match parse_training_job_id(&request.session_id) {
+        Ok(session_id) => session_id,
+        Err(err) => return err.into_response(),
+    };
     let runtime_execution = match execute_runtime_private_inference(
         &app,
         &session_id,
@@ -9945,57 +10029,18 @@ pub(crate) async fn handle_private_inference_run(
             }
         }
     };
-    let checkpoint_provenance_payload = match encode_private_inference_checkpoint_provenance_payload(
-        &session_id,
-        runtime_execution.status,
-        runtime_execution.receipt_root,
-        runtime_execution.xor_cost_nanos,
-        runtime_execution.checkpoint.clone(),
-    ) {
-        Ok(payload) => payload,
-        Err(err) => {
-            return SoracloudError::internal(format!(
-                "failed to encode private inference checkpoint payload: {err}"
-            ))
-            .into_response();
-        }
-    };
-    let checkpoint_provenance = ManifestProvenance {
-        signer: signer.authority.signatory().clone(),
-        signature: Signature::new(&signer.private_key.0, &checkpoint_provenance_payload),
-    };
-    let checkpoint_submitted = match submit_soracloud_instruction(
-        &app,
-        signer,
-        InstructionBox::from(isi::soracloud::RecordSoracloudPrivateInferenceCheckpoint {
-            session_id: session_id.clone(),
-            status: runtime_execution.status,
-            receipt_root: runtime_execution.receipt_root,
-            xor_cost_nanos: runtime_execution.xor_cost_nanos,
-            checkpoint: runtime_execution.checkpoint,
-            provenance: checkpoint_provenance,
-        }),
-        "/v1/soracloud/model/run-private",
-    )
-    .await
-    {
-        Ok(submitted) => submitted,
-        Err(err) => return err.into_response(),
-    };
-    if let Err(err) = wait_for_soracloud_transaction(&app, &checkpoint_submitted.tx_hash).await {
-        return err.into_response();
-    }
-    match authoritative_private_inference_status_response(&app, &session_id) {
-        Ok(status) => response_with_routing_headers(
-            checkpoint_submitted.routing_decision,
-            PrivateInferenceMutationResponse {
-                action: PrivateInferenceAction::Start,
-                status,
-                signed_by,
+    soracloud_draft_response(
+        &signer,
+        vec![InstructionBox::from(
+            isi::soracloud::RecordSoracloudPrivateInferenceCheckpoint {
+                session_id,
+                status: runtime_execution.status,
+                receipt_root: runtime_execution.receipt_root,
+                xor_cost_nanos: runtime_execution.xor_cost_nanos,
+                checkpoint: runtime_execution.checkpoint,
             },
-        ),
-        Err(err) => err.into_response(),
-    }
+        )],
+    )
 }
 
 pub(crate) async fn handle_private_inference_status(
@@ -10097,12 +10142,16 @@ pub(crate) async fn handle_private_inference_checkpoint(
         return SoracloudError::conflict("private uploaded-model runtime is not available")
             .into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
     let session_id = request.payload.session_id.clone();
-    let signed_by = request.provenance.signer.to_string();
     let runtime_execution = match execute_runtime_private_inference(
         &app,
         &session_id,
@@ -10115,57 +10164,18 @@ pub(crate) async fn handle_private_inference_checkpoint(
             return SoracloudError::conflict(error_message).into_response();
         }
     };
-    let checkpoint_provenance_payload = match encode_private_inference_checkpoint_provenance_payload(
-        &session_id,
-        runtime_execution.status,
-        runtime_execution.receipt_root,
-        runtime_execution.xor_cost_nanos,
-        runtime_execution.checkpoint.clone(),
-    ) {
-        Ok(payload) => payload,
-        Err(err) => {
-            return SoracloudError::internal(format!(
-                "failed to encode private inference checkpoint payload: {err}"
-            ))
-            .into_response();
-        }
-    };
-    let checkpoint_provenance = ManifestProvenance {
-        signer: signer.authority.signatory().clone(),
-        signature: Signature::new(&signer.private_key.0, &checkpoint_provenance_payload),
-    };
-    let submitted = match submit_soracloud_instruction(
-        &app,
-        signer,
-        InstructionBox::from(isi::soracloud::RecordSoracloudPrivateInferenceCheckpoint {
-            session_id: session_id.clone(),
-            status: runtime_execution.status,
-            receipt_root: runtime_execution.receipt_root,
-            xor_cost_nanos: runtime_execution.xor_cost_nanos,
-            checkpoint: runtime_execution.checkpoint,
-            provenance: checkpoint_provenance,
-        }),
-        "/v1/soracloud/model/decrypt-output",
-    )
-    .await
-    {
-        Ok(submitted) => submitted,
-        Err(err) => return err.into_response(),
-    };
-    if let Err(err) = wait_for_soracloud_transaction(&app, &submitted.tx_hash).await {
-        return err.into_response();
-    }
-    match authoritative_private_inference_status_response(&app, &session_id) {
-        Ok(status) => response_with_routing_headers(
-            submitted.routing_decision,
-            PrivateInferenceMutationResponse {
-                action: PrivateInferenceAction::OutputRelease,
-                status,
-                signed_by,
+    soracloud_draft_response(
+        &signer,
+        vec![InstructionBox::from(
+            isi::soracloud::RecordSoracloudPrivateInferenceCheckpoint {
+                session_id,
+                status: runtime_execution.status,
+                receipt_root: runtime_execution.receipt_root,
+                xor_cost_nanos: runtime_execution.xor_cost_nanos,
+                checkpoint: runtime_execution.checkpoint,
             },
-        ),
-        Err(err) => err.into_response(),
-    }
+        )],
+    )
 }
 
 pub(crate) async fn handle_hf_deploy(
@@ -10180,7 +10190,12 @@ pub(crate) async fn handle_hf_deploy(
     if let Err(err) = verify_hf_deploy_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -10247,13 +10262,19 @@ pub(crate) async fn handle_hf_deploy(
         &repo_id,
         &resolved_revision,
         &model_name,
+        request.generated_service_provenance.as_ref(),
     ) {
         Ok(Some(instruction)) => instructions.push(instruction),
         Ok(None) => {}
         Err(err) => return err.into_response(),
     }
     if let Some(manifest) = generated_apartment_manifest.as_ref() {
-        match ensure_hf_generated_agent_instruction(&app, &signer, manifest) {
+        match ensure_hf_generated_agent_instruction(
+            &app,
+            &signer,
+            manifest,
+            request.generated_apartment_provenance.as_ref(),
+        ) {
             Ok(Some(instruction)) => instructions.push(instruction),
             Ok(None) => {}
             Err(err) => return err.into_response(),
@@ -10353,7 +10374,12 @@ pub(crate) async fn handle_hf_lease_leave(
     if let Err(err) = verify_hf_lease_leave_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -10435,7 +10461,12 @@ pub(crate) async fn handle_hf_lease_renew(
     if let Err(err) = verify_hf_lease_renew_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -10502,13 +10533,19 @@ pub(crate) async fn handle_hf_lease_renew(
         &repo_id,
         &resolved_revision,
         &model_name,
+        request.generated_service_provenance.as_ref(),
     ) {
         Ok(Some(instruction)) => instructions.push(instruction),
         Ok(None) => {}
         Err(err) => return err.into_response(),
     }
     if let Some(manifest) = generated_apartment_manifest.as_ref() {
-        match ensure_hf_generated_agent_instruction(&app, &signer, manifest) {
+        match ensure_hf_generated_agent_instruction(
+            &app,
+            &signer,
+            manifest,
+            request.generated_apartment_provenance.as_ref(),
+        ) {
             Ok(Some(instruction)) => instructions.push(instruction),
             Ok(None) => {}
             Err(err) => return err.into_response(),
@@ -10592,7 +10629,12 @@ pub(crate) async fn handle_model_host_advertise(
     if let Err(err) = verify_model_host_advertise_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -10636,7 +10678,12 @@ pub(crate) async fn handle_model_host_heartbeat(
     if let Err(err) = verify_model_host_heartbeat_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -10682,7 +10729,12 @@ pub(crate) async fn handle_model_host_withdraw(
     if let Err(err) = verify_model_host_withdraw_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -10724,7 +10776,12 @@ pub(crate) async fn handle_agent_deploy(
     if let Err(err) = verify_agent_deploy_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -10768,7 +10825,12 @@ pub(crate) async fn handle_agent_lease_renew(
     if let Err(err) = verify_agent_lease_renew_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -10813,7 +10875,12 @@ pub(crate) async fn handle_agent_restart(
     if let Err(err) = verify_agent_restart_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -10874,7 +10941,12 @@ pub(crate) async fn handle_agent_wallet_spend(
     if let Err(err) = verify_agent_wallet_spend_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -10929,7 +11001,12 @@ pub(crate) async fn handle_agent_wallet_approve(
     if let Err(err) = verify_agent_wallet_approve_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -10981,7 +11058,12 @@ pub(crate) async fn handle_agent_policy_revoke(
     if let Err(err) = verify_agent_policy_revoke_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -11034,7 +11116,12 @@ pub(crate) async fn handle_agent_message_send(
     if let Err(err) = verify_agent_message_send_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -11099,7 +11186,12 @@ pub(crate) async fn handle_agent_message_ack(
     if let Err(err) = verify_agent_message_ack_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -11168,7 +11260,12 @@ pub(crate) async fn handle_agent_autonomy_allow(
     if let Err(err) = verify_agent_artifact_allow_signature(&request) {
         return err.into_response();
     }
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -11446,91 +11543,66 @@ fn failed_private_inference_runtime_result(
     })
 }
 
-async fn record_authoritative_agent_runtime_receipt(
+fn build_authoritative_agent_runtime_receipt_instruction(
     app: &SharedAppState,
-    authority: Option<AccountId>,
-    private_key: Option<ExposedPrivateKey>,
     runtime_execution: &AgentRuntimeExecutionSummary,
-) -> Result<Option<AgentRuntimeReceiptRecord>, String> {
+) -> Result<Option<InstructionBox>, String> {
     let Some(runtime_receipt) = runtime_execution.runtime_receipt.as_ref() else {
         return Ok(None);
     };
     {
         let state_view = app.state.view();
-        if let Some(existing) = state_view
+        if state_view
             .world()
             .soracloud_runtime_receipts()
             .get(&runtime_receipt.receipt_id)
+            .is_some()
         {
-            return Ok(Some(authoritative_agent_runtime_receipt_record(existing)));
+            return Ok(None);
         }
     }
-    let signer =
-        require_soracloud_mutation_signer(authority, private_key).map_err(|error| error.message)?;
-    let submitted =
-        submit_soracloud_instruction(
-            app,
-            signer,
-            InstructionBox::from(isi::soracloud::RecordSoracloudRuntimeReceipt {
-                receipt: SoraRuntimeReceiptV1 {
-                    schema_version: iroha_data_model::soracloud::SORA_RUNTIME_RECEIPT_VERSION_V1,
-                    receipt_id: runtime_receipt.receipt_id,
-                    service_name: runtime_receipt.service_name.parse().map_err(|error| {
-                        format!("invalid runtime receipt service name: {error}")
-                    })?,
-                    service_version: runtime_receipt.service_version.clone(),
-                    handler_name: runtime_receipt.handler_name.parse().map_err(|error| {
-                        format!("invalid runtime receipt handler name: {error}")
-                    })?,
-                    handler_class: runtime_receipt.handler_class,
-                    request_commitment: runtime_receipt.request_commitment,
-                    result_commitment: runtime_receipt.result_commitment,
-                    certified_by: runtime_receipt.certified_by,
-                    emitted_sequence: runtime_receipt.emitted_sequence,
-                    placement_id: runtime_receipt.placement_id,
-                    selected_validator_account_id: runtime_receipt
-                        .selected_validator_account_id
-                        .clone(),
-                    selected_peer_id: runtime_receipt.selected_peer_id.clone(),
-                    mailbox_message_id: None,
-                    journal_artifact_hash: runtime_receipt.journal_artifact_hash,
-                    checkpoint_artifact_hash: runtime_receipt.checkpoint_artifact_hash,
-                },
-            }),
-            "/v1/soracloud/agent/autonomy/run/runtime-receipt",
-        )
-        .await
-        .map_err(|error| format!("failed to submit runtime receipt: {error}"))?;
-    wait_for_soracloud_transaction(app, &submitted.tx_hash)
-        .await
-        .map_err(|error| error.message)?;
-    let state_view = app.state.view();
-    state_view
-        .world()
-        .soracloud_runtime_receipts()
-        .get(&runtime_receipt.receipt_id)
-        .map(authoritative_agent_runtime_receipt_record)
-        .ok_or_else(|| {
-            format!(
-                "runtime receipt `{}` was not visible in authoritative state after commit",
-                runtime_receipt.receipt_id
-            )
-        })
-        .map(Some)
+    Ok(Some(InstructionBox::from(
+        isi::soracloud::RecordSoracloudRuntimeReceipt {
+            receipt: SoraRuntimeReceiptV1 {
+                schema_version: iroha_data_model::soracloud::SORA_RUNTIME_RECEIPT_VERSION_V1,
+                receipt_id: runtime_receipt.receipt_id,
+                service_name: runtime_receipt
+                    .service_name
+                    .parse()
+                    .map_err(|error| format!("invalid runtime receipt service name: {error}"))?,
+                service_version: runtime_receipt.service_version.clone(),
+                handler_name: runtime_receipt
+                    .handler_name
+                    .parse()
+                    .map_err(|error| format!("invalid runtime receipt handler name: {error}"))?,
+                handler_class: runtime_receipt.handler_class,
+                request_commitment: runtime_receipt.request_commitment,
+                result_commitment: runtime_receipt.result_commitment,
+                certified_by: runtime_receipt.certified_by,
+                emitted_sequence: runtime_receipt.emitted_sequence,
+                placement_id: runtime_receipt.placement_id,
+                selected_validator_account_id: runtime_receipt
+                    .selected_validator_account_id
+                    .clone(),
+                selected_peer_id: runtime_receipt.selected_peer_id.clone(),
+                mailbox_message_id: None,
+                journal_artifact_hash: runtime_receipt.journal_artifact_hash,
+                checkpoint_artifact_hash: runtime_receipt.checkpoint_artifact_hash,
+            },
+        },
+    )))
 }
 
-async fn record_authoritative_agent_autonomy_execution_audit(
+fn build_authoritative_agent_autonomy_execution_audit_instruction(
     app: &SharedAppState,
-    authority: Option<AccountId>,
-    private_key: Option<ExposedPrivateKey>,
     apartment_name: &str,
     process_generation: u64,
     runtime_execution: &AgentRuntimeExecutionSummary,
-    authoritative_runtime_receipt: Option<&AgentRuntimeReceiptRecord>,
-) -> Result<Option<AgentAutonomyExecutionAuditRecord>, String> {
+    runtime_receipt_id: Option<Hash>,
+) -> Result<Option<InstructionBox>, String> {
     {
         let state_view = app.state.view();
-        if let Some(existing) = state_view
+        if state_view
             .world()
             .soracloud_agent_apartment_audit_events()
             .iter()
@@ -11542,17 +11614,14 @@ async fn record_authoritative_agent_autonomy_execution_audit(
             })
             .max_by_key(|event| event.sequence)
             .filter(|event| event.result_commitment == Some(runtime_execution.result_commitment))
+            .is_some()
         {
-            return Ok(Some(authoritative_agent_execution_audit_record(existing)));
+            return Ok(None);
         }
     }
 
-    let signer =
-        require_soracloud_mutation_signer(authority, private_key).map_err(|error| error.message)?;
-    let submitted = submit_soracloud_instruction(
-        app,
-        signer,
-        InstructionBox::from(isi::soracloud::RecordSoracloudAgentAutonomyExecution {
+    Ok(Some(InstructionBox::from(
+        isi::soracloud::RecordSoracloudAgentAutonomyExecution {
             apartment_name: apartment_name.parse().map_err(|error| {
                 format!("invalid apartment execution audit apartment name: {error}")
             })?,
@@ -11577,45 +11646,17 @@ async fn record_authoritative_agent_autonomy_execution_audit(
                 .map_err(|error| {
                     format!("invalid apartment execution audit handler name: {error}")
                 })?,
-            runtime_receipt_id: authoritative_runtime_receipt
-                .map(|receipt| receipt.receipt_id)
-                .or_else(|| {
-                    runtime_execution
-                        .runtime_receipt
-                        .as_ref()
-                        .map(|receipt| receipt.receipt_id)
-                }),
+            runtime_receipt_id: runtime_receipt_id.or_else(|| {
+                runtime_execution
+                    .runtime_receipt
+                    .as_ref()
+                    .map(|receipt| receipt.receipt_id)
+            }),
             journal_artifact_hash: Some(runtime_execution.journal_artifact_hash),
             checkpoint_artifact_hash: runtime_execution.checkpoint_artifact_hash,
             error: runtime_execution.error.clone(),
-        }),
-        "/v1/soracloud/agent/autonomy/run/execution-audit",
-    )
-    .await
-    .map_err(|error| format!("failed to submit apartment execution audit: {error}"))?;
-    wait_for_soracloud_transaction(app, &submitted.tx_hash)
-        .await
-        .map_err(|error| error.message)?;
-    let state_view = app.state.view();
-    state_view
-        .world()
-        .soracloud_agent_apartment_audit_events()
-        .iter()
-        .filter_map(|(_sequence, event)| {
-            (event.action == SoraAgentApartmentActionV1::AutonomyRunExecuted
-                && event.apartment_name.as_ref() == apartment_name
-                && event.run_id.as_deref() == Some(runtime_execution.run_id.as_str()))
-            .then_some(event)
-        })
-        .max_by_key(|event| event.sequence)
-        .map(authoritative_agent_execution_audit_record)
-        .ok_or_else(|| {
-            format!(
-                "autonomy execution audit for apartment `{apartment_name}` run `{}` was not visible in authoritative state after commit",
-                runtime_execution.run_id
-            )
-        })
-        .map(Some)
+        },
+    )))
 }
 
 pub(crate) async fn handle_agent_autonomy_run(
@@ -11632,11 +11673,12 @@ pub(crate) async fn handle_agent_autonomy_run(
     if let Err(err) = verify_agent_autonomy_run_signature(&request) {
         return err.into_response();
     }
-    let receipt_authority = request.authority.clone();
-    let receipt_private_key = request.private_key.clone();
-    let execution_audit_authority = request.authority.clone();
-    let execution_audit_private_key = request.private_key.clone();
-    let signer = match require_soracloud_mutation_signer(request.authority, request.private_key) {
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
         Ok(signer) => signer,
         Err(err) => return err.into_response(),
     };
@@ -11647,11 +11689,7 @@ pub(crate) async fn handle_agent_autonomy_run(
                 .into_response();
         }
     };
-    let apartment_label = apartment_name.to_string();
-    let artifact_hash = request.payload.artifact_hash.clone();
-    let provenance_hash = request.payload.provenance_hash.clone();
-    let run_label = request.payload.run_label.clone();
-    let submitted = match submit_soracloud_instruction(
+    match submit_confirm_and_respond::<(), _>(
         &app,
         signer,
         InstructionBox::from(isi::soracloud::RunSoracloudAgentAutonomy {
@@ -11664,85 +11702,133 @@ pub(crate) async fn handle_agent_autonomy_run(
             provenance: request.provenance,
         }),
         "/v1/soracloud/agent/autonomy/run",
+        |_app, _baseline| {
+            Err(SoracloudError::internal(
+                "agent autonomy approval returns a draft response".to_owned(),
+            ))
+        },
     )
     .await
     {
-        Ok(submitted) => submitted,
-        Err(err) => return err.into_response(),
-    };
-    if let Err(err) = wait_for_soracloud_transaction(&app, &submitted.tx_hash).await {
-        return err.into_response();
-    }
-    let mut response = match authoritative_agent_autonomy_run_mutation_response(
-        &app,
-        &submitted.audit_baseline,
-        &apartment_label,
-        &artifact_hash,
-        provenance_hash.as_deref(),
-        &run_label,
-    ) {
         Ok(response) => response,
         Err(err) => return err.into_response(),
-    };
-    match execute_runtime_agent_autonomy_run(&app, &response) {
-        Ok(runtime_execution) => {
-            response.runtime_execution = runtime_execution.clone();
-            if let Some(runtime_execution) = runtime_execution {
-                let authoritative_runtime_receipt =
-                    match record_authoritative_agent_runtime_receipt(
-                        &app,
-                        receipt_authority,
-                        receipt_private_key,
-                        &runtime_execution,
-                    )
-                    .await
-                    {
-                        Ok(authoritative_runtime_receipt) => {
-                            response.authoritative_runtime_receipt = authoritative_runtime_receipt;
-                            response.authoritative_runtime_receipt.clone()
-                        }
-                        Err(error) => {
-                            response.authoritative_runtime_receipt_error = Some(error);
-                            response.authoritative_runtime_receipt.clone()
-                        }
-                    };
-                match record_authoritative_agent_autonomy_execution_audit(
-                    &app,
-                    execution_audit_authority,
-                    execution_audit_private_key,
-                    &response.apartment_name,
-                    response.process_generation,
-                    &runtime_execution,
-                    authoritative_runtime_receipt.as_ref(),
-                )
-                .await
-                {
-                    Ok(authoritative_execution_audit) => {
-                        response.authoritative_execution_audit = authoritative_execution_audit;
-                        let state_view = app.state.view();
-                        if let Some(record) = state_view
-                            .world()
-                            .soracloud_agent_apartments()
-                            .get(response.apartment_name.as_str())
-                        {
-                            response.last_active_sequence = record.last_active_sequence;
-                            response.last_checkpoint_sequence = record.last_checkpoint_sequence;
-                            response.checkpoint_count = record.checkpoint_count;
-                            response.audit_event_count = authoritative_agent_event_count(
-                                state_view.world(),
-                                response.apartment_name.as_str(),
-                            );
-                        }
-                    }
-                    Err(error) => {
-                        response.authoritative_execution_audit_error = Some(error);
-                    }
-                }
-            }
-        }
-        Err(error) => response.runtime_execution_error = Some(error),
     }
-    response_with_routing_headers(submitted.routing_decision, response)
+}
+
+pub(crate) async fn handle_agent_autonomy_run_finalize(
+    State(app): State<SharedAppState>,
+    headers: HeaderMap,
+    NoritoJson(request): NoritoJson<AgentAutonomyFinalizeRequest>,
+) -> Response {
+    if let Err(err) =
+        crate::check_access(&app, &headers, None, "v1/soracloud/agent/autonomy/run").await
+    {
+        return err.into_response();
+    }
+    let signer = match require_soracloud_request_signer(&headers) {
+        Ok(signer) => signer,
+        Err(err) => return err.into_response(),
+    };
+    let apartment_name: Name = match request.apartment_name.parse() {
+        Ok(apartment_name) => apartment_name,
+        Err(err) => {
+            return SoracloudError::bad_request(format!("invalid apartment_name: {err}"))
+                .into_response();
+        }
+    };
+    let run_id = request.run_id.trim();
+    if run_id.is_empty() {
+        return SoracloudError::bad_request("run_id must not be empty").into_response();
+    }
+
+    let response = {
+        let state_view = app.state.view();
+        let world = state_view.world();
+        let record = match world
+            .soracloud_agent_apartments()
+            .get(apartment_name.as_ref())
+            .cloned()
+        {
+            Some(record) => record,
+            None => {
+                return SoracloudError::not_found(format!(
+                    "apartment `{apartment_name}` not found in authoritative Soracloud state"
+                ))
+                .into_response();
+            }
+        };
+        let run = match record
+            .autonomy_run_history
+            .iter()
+            .find(|run| run.run_id == run_id)
+            .cloned()
+        {
+            Some(run) => run,
+            None => {
+                return SoracloudError::not_found(format!(
+                    "approved autonomy run `{run_id}` not found for apartment `{apartment_name}`"
+                ))
+                .into_response();
+            }
+        };
+        let event = match world
+            .soracloud_agent_apartment_audit_events()
+            .get(&run.approved_sequence)
+            .cloned()
+            .filter(|event| {
+                event.action == SoraAgentApartmentActionV1::AutonomyRunApproved
+                    && event.apartment_name == apartment_name
+                    && event.run_id.as_deref() == Some(run_id)
+            }) {
+            Some(event) => event,
+            None => {
+                return SoracloudError::conflict(format!(
+                    "autonomy approval audit event for apartment `{apartment_name}` run `{run_id}` is missing from authoritative state"
+                ))
+                .into_response();
+            }
+        };
+        if event.signer != signer.request_signer {
+            return SoracloudError::unauthorized(
+                "agent autonomy finalize signer must match the original run approval signer",
+            )
+            .into_response();
+        }
+        match authoritative_agent_autonomy_mutation_response(&app, &record, &event) {
+            Ok(response) => response,
+            Err(err) => return err.into_response(),
+        }
+    };
+
+    let runtime_execution = match execute_runtime_agent_autonomy_run(&app, &response) {
+        Ok(runtime_execution) => runtime_execution,
+        Err(error) => return SoracloudError::conflict(error).into_response(),
+    };
+    let Some(runtime_execution) = runtime_execution else {
+        return soracloud_draft_response(&signer, Vec::new());
+    };
+    let runtime_receipt_id = runtime_execution
+        .runtime_receipt
+        .as_ref()
+        .map(|receipt| receipt.receipt_id);
+    let mut instructions = Vec::new();
+    match build_authoritative_agent_runtime_receipt_instruction(&app, &runtime_execution) {
+        Ok(Some(instruction)) => instructions.push(instruction),
+        Ok(None) => {}
+        Err(error) => return SoracloudError::conflict(error).into_response(),
+    }
+    match build_authoritative_agent_autonomy_execution_audit_instruction(
+        &app,
+        response.apartment_name.as_str(),
+        response.process_generation,
+        &runtime_execution,
+        runtime_receipt_id,
+    ) {
+        Ok(Some(instruction)) => instructions.push(instruction),
+        Ok(None) => {}
+        Err(error) => return SoracloudError::conflict(error).into_response(),
+    }
+    soracloud_draft_response(&signer, instructions)
 }
 
 pub(crate) async fn handle_agent_autonomy_status(
@@ -11987,9 +12073,11 @@ mod tests {
     }
 
     fn hf_shared_lease_asset_definition() -> AssetDefinitionId {
-        "aid:2f17c72466f84a4bb8a8e24884fdcd2f"
-            .parse()
-            .expect("valid asset definition")
+        AssetDefinitionId::from_uuid_bytes([
+            0x2f, 0x17, 0xc7, 0x24, 0x66, 0xf8, 0x4a, 0x4b, 0xb8, 0xa8, 0xe2, 0x48, 0x84, 0xfd,
+            0xcd, 0x2f,
+        ])
+        .expect("valid asset definition")
     }
 
     fn signed_bundle_request(
@@ -12029,6 +12117,239 @@ mod tests {
             authority: None,
             private_key: None,
         }
+    }
+
+    fn verified_request_headers(account: &AccountId, signer: &PublicKey) -> axum::http::HeaderMap {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            VERIFIED_ACCOUNT_HEADER,
+            account.to_string().parse().expect("valid account header"),
+        );
+        headers.insert(
+            VERIFIED_SIGNER_HEADER,
+            signer.to_string().parse().expect("valid signer header"),
+        );
+        headers
+    }
+
+    fn test_soracloud_mutation_signer(key_pair: &KeyPair) -> SoracloudMutationSigner {
+        SoracloudMutationSigner {
+            authority: AccountId::new(key_pair.public_key().clone()),
+            request_signer: key_pair.public_key().clone(),
+        }
+    }
+
+    fn signed_generated_service_provenance(
+        bundle: &SoraDeploymentBundleV1,
+        key_pair: &KeyPair,
+    ) -> ManifestProvenance {
+        let payload = encode_bundle_signature_payload(bundle).expect("bundle payload");
+        ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature: Signature::new(key_pair.private_key(), &payload),
+        }
+    }
+
+    fn signed_generated_apartment_provenance(
+        manifest: &AgentApartmentManifestV1,
+        key_pair: &KeyPair,
+    ) -> ManifestProvenance {
+        let payload = encode_agent_deploy_provenance_payload(
+            manifest.clone(),
+            HF_GENERATED_AGENT_LEASE_TICKS,
+            Some(HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS),
+        )
+        .expect("agent deploy payload");
+        ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature: Signature::new(key_pair.private_key(), &payload),
+        }
+    }
+
+    fn fixture_agent_run_record(
+        apartment_name: &str,
+        run_id: &str,
+        approved_sequence: u64,
+        process_generation: u64,
+    ) -> SoraAgentAutonomyRunRecordV1 {
+        let artifact_hash = "hash:artifact#1".to_owned();
+        let provenance_hash = Some("hash:prov#1".to_owned());
+        let budget_units = 25;
+        let run_label = "nightly".to_owned();
+        let workflow_input_json = Some("{\"inputs\":\"nightly\"}".to_owned());
+        let request_commitment =
+            iroha_data_model::soracloud::derive_agent_autonomy_request_commitment(
+                apartment_name,
+                &artifact_hash,
+                provenance_hash.as_deref(),
+                budget_units,
+                run_id,
+                &run_label,
+                workflow_input_json.as_deref(),
+                process_generation,
+            );
+        SoraAgentAutonomyRunRecordV1 {
+            run_id: run_id.to_owned(),
+            artifact_hash,
+            provenance_hash,
+            budget_units,
+            run_label,
+            workflow_input_json,
+            approved_process_generation: process_generation,
+            request_commitment,
+            approved_sequence,
+        }
+    }
+
+    fn fixture_agent_apartment_record(
+        manifest: AgentApartmentManifestV1,
+        run: SoraAgentAutonomyRunRecordV1,
+        process_generation: u64,
+    ) -> SoraAgentApartmentRecordV1 {
+        SoraAgentApartmentRecordV1 {
+            schema_version: iroha_data_model::soracloud::SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
+            manifest_hash: Hash::new(Encode::encode(&manifest)),
+            manifest,
+            status: SoraAgentRuntimeStatusV1::Running,
+            deployed_sequence: 1,
+            lease_started_sequence: 1,
+            lease_expires_sequence: 100,
+            last_renewed_sequence: 1,
+            restart_count: 0,
+            last_restart_sequence: None,
+            last_restart_reason: None,
+            process_generation,
+            process_started_sequence: 1,
+            last_active_sequence: run.approved_sequence,
+            last_checkpoint_sequence: None,
+            checkpoint_count: 0,
+            persistent_state: SoraAgentPersistentStateV1 {
+                total_bytes: 0,
+                key_sizes: BTreeMap::new(),
+            },
+            revoked_policy_capabilities: BTreeSet::new(),
+            pending_wallet_requests: BTreeMap::new(),
+            wallet_daily_spend: BTreeMap::new(),
+            mailbox_queue: Vec::new(),
+            autonomy_budget_ceiling_units: 100,
+            autonomy_budget_remaining_units: 75,
+            uploaded_model_binding: None,
+            artifact_allowlist: BTreeMap::new(),
+            autonomy_run_history: vec![run],
+        }
+    }
+
+    fn fixture_autonomy_approval_event(
+        apartment_name: &str,
+        manifest_hash: Hash,
+        signer: &KeyPair,
+        run: &SoraAgentAutonomyRunRecordV1,
+    ) -> SoraAgentApartmentAuditEventV1 {
+        SoraAgentApartmentAuditEventV1 {
+            schema_version: SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1,
+            sequence: run.approved_sequence,
+            action: SoraAgentApartmentActionV1::AutonomyRunApproved,
+            apartment_name: apartment_name.parse().expect("valid apartment name"),
+            status: SoraAgentRuntimeStatusV1::Running,
+            lease_expires_sequence: 100,
+            manifest_hash,
+            restart_count: 0,
+            signer: signer.public_key().clone(),
+            request_id: Some(run.run_id.clone()),
+            asset_definition: None,
+            amount_nanos: None,
+            capability: None,
+            reason: None,
+            from_apartment: None,
+            to_apartment: None,
+            channel: None,
+            payload_hash: None,
+            artifact_hash: Some(run.artifact_hash.clone()),
+            provenance_hash: run.provenance_hash.clone(),
+            run_id: Some(run.run_id.clone()),
+            run_label: Some(run.run_label.clone()),
+            budget_units: Some(run.budget_units),
+            service_name: None,
+            service_version: None,
+            handler_name: None,
+            result_commitment: None,
+            runtime_receipt_id: None,
+            journal_artifact_hash: None,
+            checkpoint_artifact_hash: None,
+            succeeded: None,
+        }
+    }
+
+    fn attach_test_runtime(app: &mut SharedAppState, state_dir: PathBuf) {
+        Arc::get_mut(app)
+            .expect("unique app state")
+            .soracloud_runtime = Some(Arc::new(TestHfRuntimeHandle {
+            snapshot: SoracloudRuntimeSnapshot::default(),
+            state_dir,
+        }));
+    }
+
+    #[test]
+    fn signed_mutation_request_matcher_targets_only_soracloud_posts() {
+        assert!(requires_signed_mutation_request(
+            &axum::http::Method::POST,
+            "/v1/soracloud/deploy",
+        ));
+        assert!(!requires_signed_mutation_request(
+            &axum::http::Method::GET,
+            "/v1/soracloud/deploy",
+        ));
+        assert!(!requires_signed_mutation_request(
+            &axum::http::Method::POST,
+            "/v1/zk/attachments",
+        ));
+    }
+
+    #[test]
+    fn require_soracloud_mutation_signer_rejects_inline_signing_material() {
+        let key_pair = KeyPair::random();
+        let account = AccountId::new(key_pair.public_key().clone());
+        let headers = verified_request_headers(&account, key_pair.public_key());
+        let provenance = ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature: Signature::new(key_pair.private_key(), b"mutation"),
+        };
+
+        let error = match require_soracloud_mutation_signer(
+            &headers,
+            &provenance,
+            Some(account),
+            Some(ExposedPrivateKey(key_pair.private_key().clone())),
+        ) {
+            Ok(_) => panic!("inline signing material must be rejected"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            error
+                .message
+                .contains("authority/private_key fields are no longer accepted")
+        );
+    }
+
+    #[test]
+    fn require_soracloud_mutation_signer_binds_provenance_to_request_signer() {
+        let request_keypair = KeyPair::random();
+        let provenance_keypair = KeyPair::random();
+        let account = AccountId::new(request_keypair.public_key().clone());
+        let headers = verified_request_headers(&account, request_keypair.public_key());
+        let provenance = ManifestProvenance {
+            signer: provenance_keypair.public_key().clone(),
+            signature: Signature::new(provenance_keypair.private_key(), b"mutation"),
+        };
+
+        let error = match require_soracloud_mutation_signer(&headers, &provenance, None, None) {
+            Ok(_) => panic!("provenance signer mismatch must be rejected"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[test]
@@ -13982,9 +14303,7 @@ mod tests {
             let app = mk_app_state_for_tests_with_world(world);
             let signer = SoracloudMutationSigner {
                 authority: ALICE_ID.clone(),
-                private_key: ExposedPrivateKey(
-                    iroha_test_samples::ALICE_KEYPAIR.private_key().clone(),
-                ),
+                request_signer: ALICE_ID.signatory().clone(),
             };
 
             let instruction = ensure_hf_generated_service_instruction(
@@ -13995,11 +14314,135 @@ mod tests {
                 "openai/gpt-oss",
                 "main",
                 "gpt_oss_20b",
+                None,
             )
             .map_err(|err| eyre::eyre!("ensure service instruction failed: {}", err.message))?;
             assert!(instruction.is_none());
             Ok(())
         })
+    }
+
+    #[test]
+    fn ensure_hf_generated_service_instruction_requires_generated_provenance() {
+        use iroha_core::state::World;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        runtime.block_on(async move {
+            let source_id = hf_source_id("openai/gpt-oss", "main").expect("source id");
+            let bundle = build_soracloud_hf_generated_service_bundle(
+                "hf_generated_service".parse().expect("valid service name"),
+                &source_id.to_string(),
+                "openai/gpt-oss",
+                "main",
+                "gpt_oss_20b",
+            );
+            let app = mk_app_state_for_tests_with_world(World::default());
+            let signer = test_soracloud_mutation_signer(&KeyPair::random());
+
+            let error = ensure_hf_generated_service_instruction(
+                &app,
+                &signer,
+                &bundle,
+                &source_id,
+                "openai/gpt-oss",
+                "main",
+                "gpt_oss_20b",
+                None,
+            )
+            .expect_err("new HF-generated service must require auxiliary provenance");
+
+            assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+            assert!(
+                error
+                    .message
+                    .contains("generated_service_provenance is required")
+            );
+        });
+    }
+
+    #[test]
+    fn ensure_hf_generated_service_instruction_accepts_valid_generated_provenance() {
+        use iroha_core::state::World;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        runtime.block_on(async move {
+            let key_pair = KeyPair::random();
+            let signer = test_soracloud_mutation_signer(&key_pair);
+            let source_id = hf_source_id("openai/gpt-oss", "main").expect("source id");
+            let bundle = build_soracloud_hf_generated_service_bundle(
+                "hf_generated_service".parse().expect("valid service name"),
+                &source_id.to_string(),
+                "openai/gpt-oss",
+                "main",
+                "gpt_oss_20b",
+            );
+            let provenance = signed_generated_service_provenance(&bundle, &key_pair);
+            let app = mk_app_state_for_tests_with_world(World::default());
+
+            let instruction = ensure_hf_generated_service_instruction(
+                &app,
+                &signer,
+                &bundle,
+                &source_id,
+                "openai/gpt-oss",
+                "main",
+                "gpt_oss_20b",
+                Some(&provenance),
+            )
+            .expect("valid generated provenance should be accepted");
+
+            assert!(instruction.is_some());
+        });
+    }
+
+    #[test]
+    fn ensure_hf_generated_service_instruction_rejects_signer_mismatch() {
+        use iroha_core::state::World;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        runtime.block_on(async move {
+            let signer_keypair = KeyPair::random();
+            let provenance_keypair = KeyPair::random();
+            let signer = test_soracloud_mutation_signer(&signer_keypair);
+            let source_id = hf_source_id("openai/gpt-oss", "main").expect("source id");
+            let bundle = build_soracloud_hf_generated_service_bundle(
+                "hf_generated_service".parse().expect("valid service name"),
+                &source_id.to_string(),
+                "openai/gpt-oss",
+                "main",
+                "gpt_oss_20b",
+            );
+            let provenance = signed_generated_service_provenance(&bundle, &provenance_keypair);
+            let app = mk_app_state_for_tests_with_world(World::default());
+
+            let error = ensure_hf_generated_service_instruction(
+                &app,
+                &signer,
+                &bundle,
+                &source_id,
+                "openai/gpt-oss",
+                "main",
+                "gpt_oss_20b",
+                Some(&provenance),
+            )
+            .expect_err("mismatched generated service signer must be rejected");
+
+            assert_eq!(error.status(), StatusCode::UNAUTHORIZED);
+            assert!(
+                error
+                    .message
+                    .contains("generated service provenance signer must match")
+            );
+        });
     }
 
     #[test]
@@ -14053,9 +14496,7 @@ mod tests {
             let app = mk_app_state_for_tests_with_world(world);
             let signer = SoracloudMutationSigner {
                 authority: ALICE_ID.clone(),
-                private_key: ExposedPrivateKey(
-                    iroha_test_samples::ALICE_KEYPAIR.private_key().clone(),
-                ),
+                request_signer: ALICE_ID.signatory().clone(),
             };
 
             let error = ensure_hf_generated_service_instruction(
@@ -14066,6 +14507,7 @@ mod tests {
                 "openai/gpt-oss",
                 "main",
                 "gpt_oss_20b",
+                None,
             )
             .expect_err("unrelated existing service should be rejected");
             assert!(
@@ -14136,18 +14578,126 @@ mod tests {
             let app = mk_app_state_for_tests_with_world(world);
             let signer = SoracloudMutationSigner {
                 authority: ALICE_ID.clone(),
-                private_key: ExposedPrivateKey(
-                    iroha_test_samples::ALICE_KEYPAIR.private_key().clone(),
-                ),
+                request_signer: ALICE_ID.signatory().clone(),
             };
 
-            let instruction = ensure_hf_generated_agent_instruction(&app, &signer, &manifest)
+            let instruction = ensure_hf_generated_agent_instruction(&app, &signer, &manifest, None)
                 .map_err(|err| {
                     eyre::eyre!("ensure apartment instruction failed: {}", err.message)
                 })?;
             assert!(instruction.is_none());
             Ok(())
         })
+    }
+
+    #[test]
+    fn ensure_hf_generated_agent_instruction_requires_generated_provenance() {
+        use iroha_core::state::World;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        runtime.block_on(async move {
+            let source_id = hf_source_id("openai/gpt-oss", "main").expect("source id");
+            let bundle = build_soracloud_hf_generated_service_bundle(
+                "hf_generated_service".parse().expect("valid service name"),
+                &source_id.to_string(),
+                "openai/gpt-oss",
+                "main",
+                "gpt_oss_20b",
+            );
+            let manifest = build_soracloud_hf_generated_agent_manifest(
+                "hf_generated_agent".parse().expect("valid apartment name"),
+                &bundle,
+            );
+            let app = mk_app_state_for_tests_with_world(World::default());
+            let signer = test_soracloud_mutation_signer(&KeyPair::random());
+
+            let error = ensure_hf_generated_agent_instruction(&app, &signer, &manifest, None)
+                .expect_err("new HF-generated apartment must require auxiliary provenance");
+
+            assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+            assert!(
+                error
+                    .message
+                    .contains("generated_apartment_provenance is required")
+            );
+        });
+    }
+
+    #[test]
+    fn ensure_hf_generated_agent_instruction_accepts_valid_generated_provenance() {
+        use iroha_core::state::World;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        runtime.block_on(async move {
+            let key_pair = KeyPair::random();
+            let signer = test_soracloud_mutation_signer(&key_pair);
+            let source_id = hf_source_id("openai/gpt-oss", "main").expect("source id");
+            let bundle = build_soracloud_hf_generated_service_bundle(
+                "hf_generated_service".parse().expect("valid service name"),
+                &source_id.to_string(),
+                "openai/gpt-oss",
+                "main",
+                "gpt_oss_20b",
+            );
+            let manifest = build_soracloud_hf_generated_agent_manifest(
+                "hf_generated_agent".parse().expect("valid apartment name"),
+                &bundle,
+            );
+            let provenance = signed_generated_apartment_provenance(&manifest, &key_pair);
+            let app = mk_app_state_for_tests_with_world(World::default());
+
+            let instruction =
+                ensure_hf_generated_agent_instruction(&app, &signer, &manifest, Some(&provenance))
+                    .expect("valid generated provenance should be accepted");
+
+            assert!(instruction.is_some());
+        });
+    }
+
+    #[test]
+    fn ensure_hf_generated_agent_instruction_rejects_signer_mismatch() {
+        use iroha_core::state::World;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        runtime.block_on(async move {
+            let signer_keypair = KeyPair::random();
+            let provenance_keypair = KeyPair::random();
+            let signer = test_soracloud_mutation_signer(&signer_keypair);
+            let source_id = hf_source_id("openai/gpt-oss", "main").expect("source id");
+            let bundle = build_soracloud_hf_generated_service_bundle(
+                "hf_generated_service".parse().expect("valid service name"),
+                &source_id.to_string(),
+                "openai/gpt-oss",
+                "main",
+                "gpt_oss_20b",
+            );
+            let manifest = build_soracloud_hf_generated_agent_manifest(
+                "hf_generated_agent".parse().expect("valid apartment name"),
+                &bundle,
+            );
+            let provenance = signed_generated_apartment_provenance(&manifest, &provenance_keypair);
+            let app = mk_app_state_for_tests_with_world(World::default());
+
+            let error =
+                ensure_hf_generated_agent_instruction(&app, &signer, &manifest, Some(&provenance))
+                    .expect_err("mismatched generated apartment signer must be rejected");
+
+            assert_eq!(error.status(), StatusCode::UNAUTHORIZED);
+            assert!(
+                error
+                    .message
+                    .contains("generated apartment provenance signer must match")
+            );
+        });
     }
 
     #[test]
@@ -14705,6 +15255,294 @@ mod tests {
             receipt.result_commitment,
             Hash::new(b"ops-agent-result-newer")
         );
+    }
+
+    #[test]
+    fn handle_agent_autonomy_run_finalize_rejects_signer_mismatch() -> Result<(), eyre::Report> {
+        use iroha_core::state::World;
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+
+        runtime.block_on(async move {
+            let apartment_name = "ops_agent";
+            let run = fixture_agent_run_record(apartment_name, "ops_agent:autonomy:1", 7, 1);
+            let manifest = fixture_agent_manifest();
+            let record = fixture_agent_apartment_record(manifest.clone(), run.clone(), 1);
+            let approval_signer = KeyPair::random();
+            let finalize_signer = KeyPair::random();
+
+            let mut world = World::default();
+            world
+                .soracloud_agent_apartments_mut_for_testing()
+                .insert(apartment_name.to_owned(), record.clone());
+            world
+                .soracloud_agent_apartment_audit_events_mut_for_testing()
+                .insert(
+                    run.approved_sequence,
+                    fixture_autonomy_approval_event(
+                        apartment_name,
+                        record.manifest_hash,
+                        &approval_signer,
+                        &run,
+                    ),
+                );
+
+            let mut app = mk_app_state_for_tests_with_world(world);
+            let temp_dir = tempfile::tempdir()?;
+            attach_test_runtime(&mut app, temp_dir.path().to_path_buf());
+
+            let account = AccountId::new(finalize_signer.public_key().clone());
+            let headers = verified_request_headers(&account, finalize_signer.public_key());
+            let response = handle_agent_autonomy_run_finalize(
+                State(app),
+                headers,
+                NoritoJson(AgentAutonomyFinalizeRequest {
+                    apartment_name: apartment_name.to_owned(),
+                    run_id: run.run_id.clone(),
+                }),
+            )
+            .await;
+
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn execute_runtime_agent_autonomy_run_returns_none_for_non_hf_apartment()
+    -> Result<(), eyre::Report> {
+        use iroha_core::state::World;
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+
+        runtime.block_on(async move {
+            let apartment_name = "ops_agent";
+            let run = fixture_agent_run_record(apartment_name, "ops_agent:autonomy:2", 9, 1);
+            let mut manifest = fixture_agent_manifest();
+            manifest.tool_capabilities.clear();
+            let record = fixture_agent_apartment_record(manifest, run.clone(), 1);
+            let signer = KeyPair::random();
+
+            let mut world = World::default();
+            world
+                .soracloud_agent_apartments_mut_for_testing()
+                .insert(apartment_name.to_owned(), record.clone());
+            world
+                .soracloud_agent_apartment_audit_events_mut_for_testing()
+                .insert(
+                    run.approved_sequence,
+                    fixture_autonomy_approval_event(
+                        apartment_name,
+                        record.manifest_hash,
+                        &signer,
+                        &run,
+                    ),
+                );
+
+            let mut app = mk_app_state_for_tests_with_world(world);
+            let temp_dir = tempfile::tempdir()?;
+            attach_test_runtime(&mut app, temp_dir.path().to_path_buf());
+
+            let response = authoritative_agent_autonomy_mutation_response(
+                &app,
+                &record,
+                &fixture_autonomy_approval_event(
+                    apartment_name,
+                    record.manifest_hash,
+                    &signer,
+                    &run,
+                ),
+            )
+            .map_err(|err| eyre::eyre!("autonomy mutation response failed: {err:?}"))?;
+            let runtime_execution = execute_runtime_agent_autonomy_run(&app, &response)
+                .map_err(|error| eyre::eyre!("runtime execution check failed: {error}"))?;
+            assert!(runtime_execution.is_none());
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn build_authoritative_agent_runtime_receipt_instruction_is_idempotent()
+    -> Result<(), eyre::Report> {
+        use iroha_core::state::World;
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+
+        runtime.block_on(async move {
+            let receipt_id = Hash::new(b"ops-agent-runtime-receipt");
+            let request_commitment = Hash::new(b"ops-agent-runtime-request");
+            let result_commitment = Hash::new(b"ops-agent-runtime-result");
+            let journal_artifact_hash = Hash::new(b"ops-agent-runtime-journal");
+            let checkpoint_artifact_hash = Hash::new(b"ops-agent-runtime-checkpoint");
+            let mut world = World::default();
+            world.soracloud_runtime_receipts_mut_for_testing().insert(
+                receipt_id,
+                SoraRuntimeReceiptV1 {
+                    schema_version: iroha_data_model::soracloud::SORA_RUNTIME_RECEIPT_VERSION_V1,
+                    receipt_id,
+                    service_name: "hf_agent_service".parse().expect("valid service name"),
+                    service_version: "hf.generated.v1".to_owned(),
+                    handler_name: "infer".parse().expect("valid handler name"),
+                    handler_class: SoraServiceHandlerClassV1::Query,
+                    request_commitment,
+                    result_commitment,
+                    certified_by: SoraCertifiedResponsePolicyV1::AuditReceipt,
+                    emitted_sequence: 77,
+                    mailbox_message_id: None,
+                    journal_artifact_hash: Some(journal_artifact_hash),
+                    checkpoint_artifact_hash: Some(checkpoint_artifact_hash),
+                    placement_id: None,
+                    selected_validator_account_id: None,
+                    selected_peer_id: None,
+                },
+            );
+
+            let app = mk_app_state_for_tests_with_world(world);
+            let summary = AgentRuntimeExecutionSummary {
+                apartment_name: "ops_agent".to_owned(),
+                run_id: "ops_agent:autonomy:runtime".to_owned(),
+                service_name: Some("hf_agent_service".to_owned()),
+                service_version: Some("hf.generated.v1".to_owned()),
+                handler_name: Some("infer".to_owned()),
+                succeeded: true,
+                result_commitment,
+                journal_artifact_hash,
+                checkpoint_artifact_hash: Some(checkpoint_artifact_hash),
+                runtime_receipt: Some(AgentRuntimeReceiptRecord {
+                    receipt_id,
+                    service_name: "hf_agent_service".to_owned(),
+                    service_version: "hf.generated.v1".to_owned(),
+                    handler_name: "infer".to_owned(),
+                    handler_class: SoraServiceHandlerClassV1::Query,
+                    request_commitment,
+                    result_commitment,
+                    certified_by: SoraCertifiedResponsePolicyV1::AuditReceipt,
+                    emitted_sequence: 77,
+                    placement_id: None,
+                    selected_validator_account_id: None,
+                    selected_peer_id: None,
+                    journal_artifact_hash: Some(journal_artifact_hash),
+                    checkpoint_artifact_hash: Some(checkpoint_artifact_hash),
+                }),
+                workflow_steps: Vec::new(),
+                content_type: None,
+                response_json: None,
+                response_text: None,
+                error: None,
+            };
+
+            let instruction = build_authoritative_agent_runtime_receipt_instruction(&app, &summary)
+                .expect("idempotent receipt helper should succeed");
+            assert!(instruction.is_none());
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn build_authoritative_agent_autonomy_execution_audit_instruction_is_idempotent()
+    -> Result<(), eyre::Report> {
+        use iroha_core::state::World;
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+
+        runtime.block_on(async move {
+            let result_commitment = Hash::new(b"ops-agent-executed-result");
+            let runtime_receipt_id = Hash::new(b"ops-agent-executed-receipt");
+            let journal_artifact_hash = Hash::new(b"ops-agent-executed-journal");
+            let checkpoint_artifact_hash = Hash::new(b"ops-agent-executed-checkpoint");
+            let mut world = World::default();
+            world
+                .soracloud_agent_apartment_audit_events_mut_for_testing()
+                .insert(
+                    88,
+                    SoraAgentApartmentAuditEventV1 {
+                        schema_version: SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1,
+                        sequence: 88,
+                        action: SoraAgentApartmentActionV1::AutonomyRunExecuted,
+                        apartment_name: "ops_agent".parse().expect("valid apartment name"),
+                        status: SoraAgentRuntimeStatusV1::Running,
+                        lease_expires_sequence: 100,
+                        manifest_hash: Hash::new(b"agent-manifest"),
+                        restart_count: 0,
+                        signer: KeyPair::random().public_key().clone(),
+                        request_id: Some("ops_agent:autonomy:executed".to_owned()),
+                        asset_definition: None,
+                        amount_nanos: None,
+                        capability: None,
+                        reason: None,
+                        from_apartment: None,
+                        to_apartment: None,
+                        channel: None,
+                        payload_hash: None,
+                        artifact_hash: Some("hash:artifact#1".to_owned()),
+                        provenance_hash: Some("hash:prov#1".to_owned()),
+                        run_id: Some("ops_agent:autonomy:executed".to_owned()),
+                        run_label: Some("nightly".to_owned()),
+                        budget_units: Some(25),
+                        service_name: Some("hf_agent_service".to_owned()),
+                        service_version: Some("hf.generated.v1".to_owned()),
+                        handler_name: Some("infer".to_owned()),
+                        result_commitment: Some(result_commitment),
+                        runtime_receipt_id: Some(runtime_receipt_id),
+                        journal_artifact_hash: Some(journal_artifact_hash),
+                        checkpoint_artifact_hash: Some(checkpoint_artifact_hash),
+                        succeeded: Some(true),
+                    },
+                );
+
+            let app = mk_app_state_for_tests_with_world(world);
+            let summary = AgentRuntimeExecutionSummary {
+                apartment_name: "ops_agent".to_owned(),
+                run_id: "ops_agent:autonomy:executed".to_owned(),
+                service_name: Some("hf_agent_service".to_owned()),
+                service_version: Some("hf.generated.v1".to_owned()),
+                handler_name: Some("infer".to_owned()),
+                succeeded: true,
+                result_commitment,
+                journal_artifact_hash,
+                checkpoint_artifact_hash: Some(checkpoint_artifact_hash),
+                runtime_receipt: Some(AgentRuntimeReceiptRecord {
+                    receipt_id: runtime_receipt_id,
+                    service_name: "hf_agent_service".to_owned(),
+                    service_version: "hf.generated.v1".to_owned(),
+                    handler_name: "infer".to_owned(),
+                    handler_class: SoraServiceHandlerClassV1::Query,
+                    request_commitment: Hash::new(b"ops-agent-executed-request"),
+                    result_commitment,
+                    certified_by: SoraCertifiedResponsePolicyV1::AuditReceipt,
+                    emitted_sequence: 88,
+                    placement_id: None,
+                    selected_validator_account_id: None,
+                    selected_peer_id: None,
+                    journal_artifact_hash: Some(journal_artifact_hash),
+                    checkpoint_artifact_hash: Some(checkpoint_artifact_hash),
+                }),
+                workflow_steps: Vec::new(),
+                content_type: None,
+                response_json: None,
+                response_text: None,
+                error: None,
+            };
+
+            let instruction = build_authoritative_agent_autonomy_execution_audit_instruction(
+                &app,
+                "ops_agent",
+                1,
+                &summary,
+                Some(runtime_receipt_id),
+            )
+            .expect("idempotent audit helper should succeed");
+            assert!(instruction.is_none());
+            Ok(())
+        })
     }
 
     #[test]

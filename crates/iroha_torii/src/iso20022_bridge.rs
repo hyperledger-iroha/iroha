@@ -473,7 +473,7 @@ impl Iso20022BridgeRuntime {
                     binding.currency
                 );
             }
-            let asset_def = AssetDefinitionId::from_str(&binding.asset_definition)
+            let asset_def = AssetDefinitionId::parse_address_literal(&binding.asset_definition)
                 .wrap_err_with(|| format!("invalid asset definition for currency {currency}"))?;
             currencies.insert(currency, asset_def);
         }
@@ -953,8 +953,8 @@ impl Iso20022BridgeRuntime {
 
         let asset_definition =
             if let Some(hint) = parsed.field_text("SplmtryData/AssetDefinitionId") {
-                let definition =
-                    AssetDefinitionId::from_str(hint).map_err(|_| MsgError::ValidationFailed)?;
+                let definition = AssetDefinitionId::parse_address_literal(hint)
+                    .map_err(|_| MsgError::ValidationFailed)?;
                 context.asset_definition_id = Some(definition.to_string());
                 definition
             } else {
@@ -1134,8 +1134,8 @@ impl Iso20022BridgeRuntime {
 
         let asset_definition =
             if let Some(hint) = parsed.field_text("SplmtryData/AssetDefinitionId") {
-                let definition =
-                    AssetDefinitionId::from_str(hint).map_err(|_| MsgError::ValidationFailed)?;
+                let definition = AssetDefinitionId::parse_address_literal(hint)
+                    .map_err(|_| MsgError::ValidationFailed)?;
                 context.asset_definition_id = Some(definition.to_string());
                 definition
             } else {

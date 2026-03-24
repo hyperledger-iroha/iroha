@@ -60,8 +60,16 @@ pub(super) fn gpu_min_len() -> usize {
     if cached != 0 {
         return cached;
     }
-    GPU_MIN_LEN.store(GPU_MIN_DEFAULT, Ordering::Relaxed);
-    GPU_MIN_DEFAULT
+    #[cfg(any(test, debug_assertions))]
+    let configured = std::env::var("NORITO_GPU_CRC64_MIN_BYTES")
+        .ok()
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(GPU_MIN_DEFAULT);
+    #[cfg(not(any(test, debug_assertions)))]
+    let configured = GPU_MIN_DEFAULT;
+    GPU_MIN_LEN.store(configured, Ordering::Relaxed);
+    configured
 }
 
 #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
@@ -108,6 +116,13 @@ fn crc64_pmull_runtime(data: &[u8]) -> u64 {
 type GpuFn = unsafe extern "C" fn(*const u8, usize, *mut u64) -> i32;
 
 #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GpuSelfTestFailure {
+    HelperError(i32),
+    Mismatch { expected: u64, actual: u64 },
+}
+
+#[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
 #[derive(Clone, Copy)]
 struct GpuLib {
     handle: *mut c_void,
@@ -125,6 +140,70 @@ impl GpuLib {
         let mut out = 0u64;
         let rc = (self.func)(data.as_ptr(), data.len(), &mut out);
         if rc == 0 { Some(out) } else { None }
+    }
+}
+
+#[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
+fn gpu_crc64_self_test(func: GpuFn) -> Result<(), GpuSelfTestFailure> {
+    const SAMPLE_A: &[u8] = b"norito-crc64-gpu-self-test";
+    const SAMPLE_B: &[u8] = &[
+        0x00, 0xFF, 0x10, 0x20, 0x7E, 0x33, 0x44, 0x99, 0xAB, 0xCD, 0xEF, 0x01, 0x12, 0x23, 0x34,
+        0x45, 0x56,
+    ];
+    const SAMPLE_C: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    const SAMPLES: &[&[u8]] = &[SAMPLE_A, SAMPLE_B, SAMPLE_C];
+
+    for sample in SAMPLES {
+        let expected = crc64_fallback(sample);
+        let mut actual = 0u64;
+        let rc = unsafe { func(sample.as_ptr(), sample.len(), &mut actual) };
+        if rc != 0 {
+            return Err(GpuSelfTestFailure::HelperError(rc));
+        }
+        if actual != expected {
+            return Err(GpuSelfTestFailure::Mismatch { expected, actual });
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(all(any(feature = "metal-crc64", feature = "cuda-crc64"), unix))]
+unsafe fn close_gpu_library_handle(handle: *mut c_void) {
+    unsafe extern "C" {
+        fn dlclose(handle: *mut c_void) -> c_int;
+    }
+
+    if !handle.is_null() {
+        let _ = unsafe { dlclose(handle) };
+    }
+}
+
+#[cfg(all(any(feature = "metal-crc64", feature = "cuda-crc64"), windows))]
+unsafe fn close_gpu_library_handle(handle: *mut c_void) {
+    extern "system" {
+        fn FreeLibrary(hLibModule: *mut c_void) -> i32;
+    }
+
+    if !handle.is_null() {
+        let _ = unsafe { FreeLibrary(handle) };
+    }
+}
+
+#[cfg(all(
+    any(feature = "metal-crc64", feature = "cuda-crc64"),
+    not(any(unix, windows))
+))]
+unsafe fn close_gpu_library_handle(_handle: *mut c_void) {}
+
+#[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
+fn validate_gpu_lib(lib: GpuLib) -> Option<GpuLib> {
+    match gpu_crc64_self_test(lib.func) {
+        Ok(()) => Some(lib),
+        Err(_) => {
+            unsafe { close_gpu_library_handle(lib.handle) };
+            None
+        }
     }
 }
 
@@ -166,8 +245,38 @@ fn load_gpu_backend() -> GpuBackend {
 
 #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
 fn load_override_from_env() -> Option<GpuLib> {
-    let _ = std::env::var("NORITO_CRC64_GPU_LIB").ok();
-    None
+    #[cfg(any(test, debug_assertions))]
+    {
+        let raw = std::env::var_os("NORITO_CRC64_GPU_LIB")?;
+
+        #[cfg(unix)]
+        {
+            use std::{ffi::CString, os::unix::ffi::OsStrExt};
+
+            let bytes = raw.as_os_str().as_bytes();
+            if bytes.is_empty() || bytes.contains(&0) {
+                return None;
+            }
+            let path = CString::new(bytes).ok()?;
+            return unsafe { load_library_unix(path.as_c_str()) }.and_then(validate_gpu_lib);
+        }
+
+        #[cfg(windows)]
+        {
+            let path = std::ffi::CString::new(raw.to_str()?).ok()?;
+            return unsafe { load_library_windows(path.as_c_str()) }.and_then(validate_gpu_lib);
+        }
+
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = raw;
+            None
+        }
+    }
+    #[cfg(not(any(test, debug_assertions)))]
+    {
+        None
+    }
 }
 
 #[cfg(all(
@@ -220,7 +329,7 @@ unsafe fn load_metal_crc64() -> Option<GpuLib> {
             continue;
         }
         if let Some(func) = resolve_symbol_unix(handle, GPU_SYMBOLS) {
-            return Some(GpuLib { handle, func });
+            return validate_gpu_lib(GpuLib { handle, func });
         }
     }
     None
@@ -268,7 +377,7 @@ unsafe fn load_cuda_crc64() -> Option<GpuLib> {
             continue;
         }
         if let Some(func) = resolve_symbol_unix(handle, GPU_SYMBOLS) {
-            return Some(GpuLib { handle, func });
+            return validate_gpu_lib(GpuLib { handle, func });
         }
     }
     None
@@ -318,7 +427,7 @@ unsafe fn load_cuda_crc64() -> Option<GpuLib> {
             continue;
         }
         if let Some(func) = resolve_symbol_windows(handle, GPU_SYMBOLS) {
-            return Some(GpuLib { handle, func });
+            return validate_gpu_lib(GpuLib { handle, func });
         }
     }
     None
@@ -335,7 +444,7 @@ unsafe fn load_library_unix(path: &CStr) -> Option<GpuLib> {
         return None;
     }
     let func = resolve_symbol_unix(handle, GPU_SYMBOLS)?;
-    Some(GpuLib { handle, func })
+    validate_gpu_lib(GpuLib { handle, func })
 }
 
 #[cfg(all(any(feature = "metal-crc64", feature = "cuda-crc64"), windows))]
@@ -371,7 +480,7 @@ unsafe fn load_library_windows(path: &CStr) -> Option<GpuLib> {
         return None;
     }
     let func = resolve_symbol_windows(handle, GPU_SYMBOLS)?;
-    Some(GpuLib { handle, func })
+    validate_gpu_lib(GpuLib { handle, func })
 }
 
 #[cfg(all(any(feature = "metal-crc64", feature = "cuda-crc64"), unix))]
@@ -1073,12 +1182,68 @@ mod tests {
         unsafe { std::env::remove_var("NORITO_GPU_CRC64_MIN_BYTES") };
         GPU_MIN_LEN.store(0, Ordering::Relaxed);
         assert_eq!(gpu_min_len(), GPU_MIN_DEFAULT);
+
+        unsafe {
+            std::env::set_var("NORITO_GPU_CRC64_MIN_BYTES", "1024");
+        }
+        GPU_MIN_LEN.store(0, Ordering::Relaxed);
+        assert_eq!(gpu_min_len(), 1024);
+        unsafe {
+            std::env::remove_var("NORITO_GPU_CRC64_MIN_BYTES");
+        }
+    }
+
+    #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
+    unsafe extern "C" fn crc64_good_stub(data: *const u8, len: usize, out: *mut u64) -> i32 {
+        if data.is_null() || out.is_null() {
+            return -1;
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(data, len) };
+        let crc = crc64_fallback(bytes);
+        unsafe { *out = crc };
+        0
+    }
+
+    #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
+    unsafe extern "C" fn crc64_bad_stub(_data: *const u8, _len: usize, out: *mut u64) -> i32 {
+        if out.is_null() {
+            return -1;
+        }
+        unsafe { *out = 0 };
+        0
+    }
+
+    #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
+    unsafe extern "C" fn crc64_error_stub(_data: *const u8, _len: usize, _out: *mut u64) -> i32 {
+        7
+    }
+
+    #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
+    #[test]
+    fn gpu_crc64_self_test_accepts_matching_helper() {
+        assert_eq!(gpu_crc64_self_test(crc64_good_stub), Ok(()));
+    }
+
+    #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
+    #[test]
+    fn gpu_crc64_self_test_rejects_mismatched_helper_output() {
+        let err = gpu_crc64_self_test(crc64_bad_stub)
+            .expect_err("crc64 helper with mismatched output must fail self-test");
+        assert!(matches!(err, GpuSelfTestFailure::Mismatch { .. }));
+    }
+
+    #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
+    #[test]
+    fn gpu_crc64_self_test_rejects_helper_errors() {
+        let err = gpu_crc64_self_test(crc64_error_stub)
+            .expect_err("crc64 helper with non-zero return code must fail self-test");
+        assert_eq!(err, GpuSelfTestFailure::HelperError(7));
     }
 
     #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
     fn build_crc64_stub(dir: &PathBuf) -> PathBuf {
         const SRC: &str = r#"
-        const POLY: u64 = 0x42F0_E1EB_A9EA_3693;
+        const POLY_REV: u64 = 0xC96C_5795_D787_0F42;
 
         #[no_mangle]
         pub unsafe extern "C" fn norito_crc64_gpu(
@@ -1090,18 +1255,18 @@ mod tests {
                 return -1;
             }
             let bytes = std::slice::from_raw_parts(data, len);
-            let mut crc = 0u64;
+            let mut crc = !0u64;
             for &b in bytes {
-                crc ^= (b as u64) << 56;
+                crc ^= b as u64;
                 for _ in 0..8 {
-                    if (crc & 0x8000_0000_0000_0000) != 0 {
-                        crc = (crc << 1) ^ POLY;
+                    if (crc & 1) != 0 {
+                        crc = (crc >> 1) ^ POLY_REV;
                     } else {
-                        crc <<= 1;
+                        crc >>= 1;
                     }
                 }
             }
-            unsafe { *out = crc };
+            unsafe { *out = !crc };
             0
         }
         "#;
@@ -1136,8 +1301,10 @@ mod tests {
         let tmp_dir =
             std::env::temp_dir().join(format!("norito_crc64_stub_{}", std::process::id()));
         let lib_path = build_crc64_stub(&tmp_dir);
-        std::env::set_var("NORITO_CRC64_GPU_LIB", lib_path);
-        std::env::set_var("NORITO_GPU_CRC64_MIN_BYTES", "1024");
+        unsafe {
+            std::env::set_var("NORITO_CRC64_GPU_LIB", lib_path);
+            std::env::set_var("NORITO_GPU_CRC64_MIN_BYTES", "1024");
+        }
         GPU_MIN_LEN.store(0, Ordering::Relaxed);
         reset_gpu_backend_for_tests();
 
@@ -1146,8 +1313,10 @@ mod tests {
         let gpu = try_gpu_crc64(&payload).expect("stub gpu path should load");
         assert_eq!(gpu, expected);
 
-        std::env::remove_var("NORITO_CRC64_GPU_LIB");
-        std::env::remove_var("NORITO_GPU_CRC64_MIN_BYTES");
+        unsafe {
+            std::env::remove_var("NORITO_CRC64_GPU_LIB");
+            std::env::remove_var("NORITO_GPU_CRC64_MIN_BYTES");
+        }
         reset_gpu_backend_for_tests();
         let _ = fs::remove_dir_all(tmp_dir);
     }

@@ -32,7 +32,7 @@ translator: machine-google-reviewed
 - `ChainId`: معرف سلسلة غير شفاف يستخدم لحماية إعادة التشغيل في المعاملات.نماذج سلسلة من المعرفات (قابلة للتعثر مع `Display`/`FromStr`):
 - `DomainId`: `name` (على سبيل المثال، `wonderland`).
 - `AccountId`: معرف الحساب الأساسي بدون نطاق المشفر عبر `AccountAddress` كـ I105 فقط. يجب أن تكون مدخلات المحلل اللغوي I105 الأساسية؛ يتم رفض لاحقات المجال (`@domain`)، وأحرف I105 الأساسية، وأحرف الاسم المستعار، وإدخال المحلل اللغوي السداسي الكنسي، وحمولات `norito:` القديمة، ونماذج محلل الحساب `uaid:`/`opaque:`.
-- `AssetDefinitionId`: `aid:<32-lower-hex-no-dash>` الأساسي (UUID-v4 بايت).
+- `AssetDefinitionId`: `unprefixed Base58 address with versioning and checksum` الأساسي (UUID-v4 بايت).
 - `AssetId`: `norito:<hex>` الحرفي المشفر الأساسي (النماذج النصية القديمة غير مدعومة في الإصدار الأول).
 - `NftId`: `nft$domain` (على سبيل المثال، `rose$garden`).
 - `PeerId`: `public_key` (تتم المساواة بين الأقران عن طريق المفتاح العام).
@@ -49,11 +49,13 @@ translator: machine-google-reviewed
 - المنشئ: `NewAccount` عبر `Account::new(id)`؛ يتطلب التسجيل مجال `ScopedAccountId` صريحًا ولا يستنتج واحدًا من الإعدادات الافتراضية.
 
 ### تعريفات الأصول والأصول
-- `AssetDefinitionId { aid_bytes: [u8; 16] }` معروض نصيًا كـ `aid:<32-hex-no-dash>`.
+- `AssetDefinitionId { aid_bytes: [u8; 16] }` معروض نصيًا كـ `unprefixed Base58 address`.
 -`AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Numeric }`.
+
+  - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`; alias selectors resolve against latest committed block time and stop resolving after grace, while direct reads may still show `expired_pending_cleanup` until sweep.
   - `name` مطلوب نص عرض ذو واجهة بشرية ويجب ألا يحتوي على `#`/`@`.
   - `alias` اختياري ويجب أن يكون واحدًا مما يلي:
-    -`<name>#<domain>@<dataspace>`
+    -`<name>#<domain>.<dataspace>`
     -`<name>#<dataspace>`
     مع الجزء الأيسر المطابق تمامًا لـ `AssetDefinition.name`.
   - `Mintable`: `Infinitely` | `Once` | `Limited(u32)` | `Not`.
@@ -186,7 +188,7 @@ let new_account = Account::new(account_id.to_account_id(domain_id.clone()))
     .with_metadata(Metadata::default());
 
 // Asset definition and an asset for the account
-let asset_def_id: AssetDefinitionId = "aid:2f17c72466f84a4bb8a8e24884fdcd2f".parse().unwrap();
+let asset_def_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa".parse().unwrap();
 let new_asset_def = AssetDefinition::numeric(asset_def_id.clone())
     .with_name("USD Coin".to_owned())
     .with_metadata(Metadata::default());
@@ -230,36 +232,36 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
     .sign(kp.private_key());
 ```
 
-`aid` / المرجع السريع للاسم المستعار (CLI + Torii):
+asset-definition id / المرجع السريع للاسم المستعار (CLI + Torii):
 
 ```bash
-# Register an asset definition with canonical aid + explicit name + alias
+# Register an asset definition with canonical Base58 id + explicit name + alias
 iroha ledger asset definition register \
-  --id aid:2f17c72466f84a4bb8a8e24884fdcd2f \
+  --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#ubl@sbp
+  --alias pkr#ubl.sbp
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
-  --id aid:550e8400e29b41d4a7164466554400dd \
+  --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
   --alias pkr#sbp
 
 # Mint using alias + account components (no manual norito hex copy/paste)
 iroha ledger asset mint \
-  --definition-alias pkr#ubl@sbp \
+  --definition-alias pkr#ubl.sbp \
   --account sorauﾛ1P... \
   --quantity 500
 
-# Resolve alias to canonical aid via Torii
+# Resolve alias to canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#ubl@sbp"}'
+  -d '{"alias":"pkr#ubl.sbp"}'
 ```مذكرة الهجرة:
 - لا يتم قبول معرفات تعريف الأصول `name#domain` القديمة في الإصدار 1.
 - تظل معرفات الأصول الخاصة بالنعناع/النسخ/النقل هي `norito:<hex>` الأساسية؛ بناء لهم مع:
-  -`iroha tools encode asset-id --definition aid:... --account <i105>`
-  - أو `--alias <name>#<domain>@<dataspace>` / `--alias <name>#<dataspace>` + `--account`.
+  -`iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
+  - أو `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`.
 
 ## الإصدار
 
