@@ -11,6 +11,7 @@ These guidelines apply to the `docs/` directory.
 - When code examples are updated, run `cargo test`, fix any build issues, and ensure they compile.
 - Prefer runnable examples; keep them in `examples/` within the relevant crate when feasible and reference them here.
 - Validate links and anchors when changing paths. Optionally use `lychee` with `lychee.toml` at the repo root for link checking.
+- Treat the Kotlin SDK under `kotlin/` as the default Android/JVM SDK in new documentation. Keep Java Android docs only when they describe the mirrored compatibility surface or migration details.
 - Follow the repository root `AGENTS.md` for formatting and general guidance.
 
 ## Status and Roadmap

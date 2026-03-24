@@ -2,6 +2,35 @@
 
 Last updated: 2026-03-24
 
+Latest sync (2026-03-24 mobile Java→Kotlin migration verification):
+`kotlin/` currently passes its mobile-facing JVM/build slice, but the legacy
+Java Android baseline still has red tests after the compile blocker in
+`java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportTests.java`
+was fixed:
+
+- green so far:
+  - `kotlin/:core-jvm:test`
+  - `kotlin/:client-android:assembleRelease`
+  - `kotlin/:offline-wallet-android:assembleRelease`
+  - `java/iroha_android/:android:test`
+  - `java/iroha_android/:jvm:test`
+  - `java/iroha_android/:samples-android:testDebugUnitTest`
+- still red in the legacy baseline:
+  - `GradleHarnessTests[org.hyperledger.iroha.android.address.AccountAddressTests]`
+    because the checked-in address compliance fixture shape no longer matches
+    what the harness loader expects for `encodings.ih58`,
+  - `GradleHarnessTests[org.hyperledger.iroha.android.client.OfflineToriiClientTests]`
+    because `listAllowancesParsesResponse()` still expects a different
+    `assetDefinitionId`, and
+  - 5 failures in `AccountLiteralHardCutTests` around strict encoded-only
+    literal rejection.
+
+Open work for this slice now remains:
+- fix the 7 failing Java `:core:test` cases so the migration baseline is
+  actually green end to end; and
+- add direct Kotlin regression coverage for the Java-only red slices above
+  before claiming full mobile migration parity.
+
 Latest sync (2026-03-24 multisig integration DTO re-export compile fix):
 `crates/iroha_torii/src/{lib.rs,routing.rs}` and
 `integration_tests/tests/multisig.rs` now align the multisig integration test

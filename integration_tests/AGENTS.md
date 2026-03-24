@@ -23,6 +23,7 @@ These guidelines apply to the `integration_tests/` crate.
 - Keep new tests deterministic: avoid wall-clock sleeps, unbounded retries, or randomness without a seeded RNG.
 - Prefer table-driven tests and explicit timeouts for networking and telemetry polling.
 - When adding a new fixture, document it in `README.md`, keep it under `fixtures/`, and add a regeneration helper when possible (for example use `sorafs_gateway_fixtures` for gateway data).
+- If a shared wire-format fixture or parity test currently checks Java SDK classes, extend the coverage so the Kotlin SDK is checked against the same fixture corpus too.
 - Always run `cargo test -p integration_tests` before sending changes. To target a subset use `cargo test -p integration_tests <test_name> -- --nocapture`.
 - If a test requires an external binary or script, assert its presence (e.g., via `which`) and provide a helpful error.
 

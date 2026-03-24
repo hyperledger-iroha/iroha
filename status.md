@@ -2,6 +2,69 @@
 
 Last updated: 2026-03-24
 
+## 2026-03-24 Follow-up: mobile migration verification is green on Kotlin, but the legacy Java Android baseline is still red
+- Ran the Kotlin SDK mobile-facing verification slice and confirmed the new
+  migration target currently builds/tests cleanly:
+  - `kotlin/:core-jvm:test` passed, and
+  - `kotlin/:client-android:assembleRelease` plus
+    `kotlin/:offline-wallet-android:assembleRelease` passed.
+- Ran the legacy Java Android verification slice to compare the migration
+  target against the existing baseline:
+  - `java/iroha_android/:android:test` passed,
+  - `java/iroha_android/:jvm:test` passed,
+  - `java/iroha_android/:samples-android:testDebugUnitTest` passed, and
+  - `java/iroha_android/:core:test` failed with 7 red tests.
+- Fixed one blocking compile regression in
+  `java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportTests.java`
+  so the Java baseline could run far enough to expose the real failing tests
+  instead of stopping in `:core:compileTestJava`.
+- Remaining failing Java baseline tests are:
+  - `GradleHarnessTests[org.hyperledger.iroha.android.address.AccountAddressTests]`
+    because the address compliance fixture loader now expects
+    `encodings.ih58` to be an object for
+    `addr-single-default-ed25519`,
+  - `GradleHarnessTests[org.hyperledger.iroha.android.client.OfflineToriiClientTests]`
+    because `listAllowancesParsesResponse()` still expects a different
+    `assetDefinitionId`, and
+  - 5 failing cases in
+    `org.hyperledger.iroha.android.model.instructions.AccountLiteralHardCutTests`
+    around strict encoded-only literal handling.
+- Validation:
+  - `cd kotlin && ./gradlew :core-jvm:test :client-android:assembleRelease :offline-wallet-android:assembleRelease --console=plain` (pass)
+  - `cd java/iroha_android && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ANDROID_HOME=/Users/sdi/Library/Android/sdk ANDROID_SDK_ROOT=/Users/sdi/Library/Android/sdk ./gradlew check --console=plain` (fails in `:core:test`)
+  - `cd java/iroha_android && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ANDROID_HOME=/Users/sdi/Library/Android/sdk ANDROID_SDK_ROOT=/Users/sdi/Library/Android/sdk ./gradlew :jvm:test :samples-android:testDebugUnitTest --console=plain` (pass)
+- Remaining migration-confidence gap:
+  - the Kotlin SDK test suite is green, but some of the red Java baseline
+    behaviors above do not yet have direct Kotlin regression coverage, so the
+    repository cannot yet claim full Java→Kotlin migration parity on the
+    mobile surface.
+
+## 2026-03-24 Follow-up: Kotlin SDK parity guidance and Norito fixture checks now cover the new Kotlin SDK
+- Updated the repository agent guidance so the new `kotlin/` SDK is treated as
+  the default Android/JVM client surface, with the migration rule that Kotlin
+  SDK behavior changes must be mirrored in the corresponding `java/`
+  implementation until the Java Android SDK is retired.
+- Added the Kotlin SDK constraints from `kotlin/CLAUDE.md` to the shared agent
+  guidance: no reflection in the Kotlin SDK, keep `core-jvm` Android-free,
+  keep Android client code in `client-android`, and keep offline
+  wallet/JNI-specific code in `offline-wallet-android`.
+- Added focused Kotlin parity coverage under `kotlin/core-jvm` for the shared
+  Android fixture corpus and Norito wire-format checks, including direct
+  fixture-loader edge cases that previously only existed in the Java tests.
+- Extended `scripts/check_norito_bindings_sync.py` so Norito source changes now
+  require `kotlin/core-jvm` updates alongside Python and Java, the helper runs
+  the Kotlin parity tests, untracked files are inspected individually, and
+  repository-internal `AGENTS.md` updates do not trigger false Norito binding
+  drift failures.
+- Validation:
+  - `cd kotlin && ./gradlew :core-jvm:test --console=plain` (pass)
+  - `BASE_REF=HEAD python3 scripts/check_norito_bindings_sync.py` (pass)
+  - `python3 -m py_compile scripts/check_norito_bindings_sync.py scripts/tests/check_norito_bindings_sync_test.py` (pass)
+- Remaining validation gap:
+  - `python3 -m pytest scripts/tests/check_norito_bindings_sync_test.py` was
+    not runnable here because `pytest` is not installed in the current Python
+    environment.
+
 ## 2026-03-24 Follow-up: multisig integration tests compile against `iroha_torii`'s public API again
 - Fixed the `error[E0603]` regression in
   `integration_tests/tests/multisig.rs` by exposing the multisig request DTOs
