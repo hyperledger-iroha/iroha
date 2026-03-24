@@ -33,7 +33,9 @@ use std::{
 };
 
 use crate::genesis_bootstrap::GenesisBootstrapper;
-use crate::soracloud_runtime::{SoracloudRuntimeManager, SoracloudRuntimeManagerHandle};
+use crate::soracloud_runtime::{
+    QueuedSoracloudRuntimeMutationSink, SoracloudRuntimeManager, SoracloudRuntimeManagerHandle,
+};
 use clap::Parser;
 use error_stack::{Report, ResultExt};
 use eyre::Result as EyreResult;
@@ -4648,8 +4650,16 @@ impl Iroha {
         );
         let shared_sorafs_cache = build_shared_sorafs_provider_cache(&config);
 
+        let chain_id = Arc::new(config.common.chain.clone());
         let local_validator_account_id = AccountId::new(config.common.key_pair.public_key().clone());
         let local_peer_id = config.common.trusted_peers.value().myself.id().to_string();
+        let runtime_mutation_sink = Arc::new(QueuedSoracloudRuntimeMutationSink::new(
+            Arc::clone(&chain_id),
+            Arc::clone(&queue),
+            Arc::clone(&state),
+            local_validator_account_id.clone(),
+            config.common.key_pair.clone(),
+        ));
         let runtime_manager = SoracloudRuntimeManager::new(
             soracloud_runtime::SoracloudRuntimeManagerConfig::from_runtime_config(
                 &config.soracloud_runtime,
@@ -4657,6 +4667,7 @@ impl Iroha {
             .with_local_host_identity(local_validator_account_id, local_peer_id),
             Arc::clone(&state),
         )
+        .with_mutation_sink(runtime_mutation_sink)
         .with_sorafs_node(sorafs_node.clone());
         let runtime_manager = if let Some(cache) = shared_sorafs_cache.clone() {
             runtime_manager.with_sorafs_provider_cache(cache)

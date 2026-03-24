@@ -2,6 +2,76 @@
 
 Last updated: 2026-03-24
 
+Latest sync (2026-03-24 Soracloud HF runtime-health violation reporting):
+`crates/irohad/src/{main.rs,soracloud_runtime.rs}` now push the next HF
+hosting runtime-control slice through the normal transaction lane:
+
+- `irohad` now builds a queue-backed internal Soracloud mutation sink for the
+  local validator identity and reuses it from the embedded runtime manager;
+- reconcile-time HF import/warmup failures on locally assigned `Warming` hosts
+  now emit authoritative `WarmupNoShow` violation reports automatically instead
+  of waiting for advert expiry; and
+- generated HF `/infer` execution now emits throttled
+  `AssignedHeartbeatMiss` reports when the resident worker on the local warm
+  primary fails, so runtime-local worker faults reach the same authoritative
+  slash/rebalance path as expiry-driven failures.
+
+Validation:
+- `cargo fmt --all`
+- `CARGO_TARGET_DIR=target_runtime_health cargo check -p irohad --tests`
+  (blocked by the unrelated `iroha_torii` JWT claims compile error at
+  `crates/iroha_torii/src/lib.rs:15085`)
+
+Open work for this slice now remains:
+- add automatic advert-contradiction evidence generation from capability/runtime
+  validation instead of leaving that evidence path operator-triggered; and
+- promote replicas/backfill placements directly from live runtime-health
+  signals instead of leaving that loop anchored to expiry + request failure
+  reporting.
+
+Latest sync (2026-03-24 security audit findings):
+`security_best_practices_report.md` now tracks a focused Torii/Soracloud
+security review of the highest-risk ingress/runtime surfaces:
+
+- Soracloud mutation endpoints should stop accepting raw caller private keys
+  over HTTP and move to client-side signing or a KMS/HSM-backed delegated
+  signer model;
+- Soracloud P2P proxy execution should only accept narrowly scoped
+  Torii-admitted proxy requests and must reject internal-only/local-read
+  handler access from arbitrary peers;
+- public Soracloud runtime ingress should move off the unmetered fallback path
+  and gain explicit route, rate, and concurrency controls; and
+- ZK attachments should use a caller identity stronger than remote IP when API
+  tokens are disabled.
+
+Validation completed so far:
+- manual code review only
+
+Open work for this slice now remains:
+- implement fixes for the four findings and add regression coverage proving the
+  public/runtime/proxy boundaries and attachment tenancy rules cannot regress.
+
+Latest sync (2026-03-24 multisig integration DTO re-export compile fix):
+`crates/iroha_torii/src/{lib.rs,routing.rs}` and
+`integration_tests/tests/multisig.rs` now align the multisig integration test
+with the crate's public API surface again:
+
+- `iroha_torii` now re-exports the multisig selector/cancel/proposals DTOs
+  needed by the integration test instead of requiring a private
+  `iroha_torii::routing` import,
+- the newly exposed request DTO fields now satisfy workspace `missing_docs`
+  linting, and
+- `MultisigAccountSelectorDto` now derives `Clone`, matching the existing
+  multisig integration test request construction.
+
+Validation completed so far:
+- `cargo fmt --all`
+- `cargo test -p integration_tests multisig --no-run`
+
+Open work for this slice now remains:
+- rerun the broader workspace sweep when the longer validation budget is
+  available.
+
 Latest sync (2026-03-24 Soracloud HF host-violation evidence + slash-path integration):
 `crates/iroha_data_model/src/{soracloud.rs,isi/{mod.rs,registry.rs,soracloud.rs}}`,
 `crates/iroha_core/src/{state.rs,smartcontracts/isi/{mod.rs,soracloud.rs}}`,
@@ -29,11 +99,11 @@ Validation:
 - `cargo test -p iroha_core reconcile_soracloud_model_hosts --lib -- --nocapture`
 
 Open work for this slice now remains:
-- connect live resident-worker/runtime-health failures to
-  `ReportSoracloudModelHostViolation` instead of relying only on advert-expiry
-  sweeps; and
 - add automatic advert-contradiction evidence generation from capability/runtime
-  validation instead of leaving that evidence path operator-triggered.
+  validation instead of leaving that evidence path operator-triggered; and
+- promote replicas/backfill placements directly from live runtime-health
+  signals instead of relying on expiry sweeps plus request-failure reporting
+  alone.
 
 Latest sync (2026-03-23 Soracloud HF authoritative expiry reconciliation):
 `crates/iroha_data_model/src/isi/{mod.rs,registry.rs,soracloud.rs}` and

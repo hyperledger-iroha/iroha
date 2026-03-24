@@ -11759,6 +11759,7 @@ pub struct ContractCallResponseDto {
 #[cfg(feature = "app_api")]
 #[derive(
     Debug,
+    Clone,
     Default,
     crate::json_macros::JsonDeserialize,
     norito::derive::NoritoDeserialize,
@@ -12053,6 +12054,7 @@ pub struct MultisigSpecResponseDto {
 )]
 /// Request payload for listing multisig proposals.
 pub struct MultisigProposalsListRequestDto {
+    /// Alias-aware selector for the multisig authority whose proposals are listed.
     #[norito(flatten)]
     pub selector: MultisigAccountSelectorDto,
     /// Optional status filter list such as `COLLECTING_SIGNATURES`, `FINALIZED`, `CANCELED`, or `EXPIRED`.
@@ -12092,10 +12094,13 @@ pub struct MultisigProposalsListResponseDto {
 )]
 /// Request payload for fetching a single multisig proposal.
 pub struct MultisigProposalsGetRequestDto {
+    /// Alias-aware selector for the multisig authority that owns the proposal.
     #[norito(flatten)]
     pub selector: MultisigAccountSelectorDto,
+    /// Optional stable proposal identifier used to select the proposal directly.
     #[norito(default)]
     pub proposal_id: Option<String>,
+    /// Optional deterministic hash of the proposal instructions.
     #[norito(default)]
     pub instructions_hash: Option<String>,
 }

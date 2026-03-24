@@ -267,9 +267,7 @@ use iroha_primitives::addr::SocketAddr;
 use iroha_torii_shared::{ErrorEnvelope, QueueErrorEnvelope, QueueErrorSnapshot, uri};
 use ivm::iso20022::{MsgError, parse_message};
 #[cfg(feature = "app_api")]
-use jsonwebtoken::{
-    Algorithm as JwtAlgorithm, DecodingKey, crypto::verify as verify_jwt_signature, decode_header,
-};
+use jsonwebtoken::{Algorithm as JwtAlgorithm, DecodingKey, Validation, decode};
 use mv::storage::StorageReadOnly;
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 use norito::json::{self, Value};
@@ -365,9 +363,10 @@ pub use routing::{
     DeployAndActivateInstanceDto, DeployAndActivateInstanceResponseDto, DeployContractDto,
     DeployContractResponseDto, EvidenceListQuery, EvidenceSubmitRequestDto, KaigiRelayDetailDto,
     KaigiRelayDomainMetricsDto, KaigiRelayHealthSnapshotDto, KaigiRelaySummaryDto,
-    KaigiRelaySummaryListDto, MaybeTelemetry, PinAliasDto, PinPolicyDto, PinPolicyStorageClassDto,
-    ProofApiLimits, ProofFindByIdQueryDto, ProofListQuery, QueryOptions, RegisterPinManifestDto,
-    RegisterPinManifestResponseDto, SpaceDirectoryManifestPublishDto,
+    KaigiRelaySummaryListDto, MaybeTelemetry, MultisigAccountSelectorDto, MultisigCancelRequestDto,
+    MultisigProposalsGetRequestDto, MultisigProposalsListRequestDto, PinAliasDto, PinPolicyDto,
+    PinPolicyStorageClassDto, ProofApiLimits, ProofFindByIdQueryDto, ProofListQuery, QueryOptions,
+    RegisterPinManifestDto, RegisterPinManifestResponseDto, SpaceDirectoryManifestPublishDto,
     SpaceDirectoryManifestRevokeDto, VkListQuery, ZkRootsGetRequestDto, ZkVkRegisterDto,
     ZkVkUpdateDto, ZkVoteGetTallyRequestDto, handle_count_proofs, handle_get_contract_code_bytes,
     handle_get_proof, handle_get_vk, handle_list_proofs, handle_list_vk, handle_post_contract_call,
@@ -824,6 +823,25 @@ struct TxHistoryViewerContext {
     alias_candidates: Vec<String>,
     account_ids: Vec<AccountId>,
     is_mandatory_alias: bool,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, serde::Deserialize)]
+#[serde(untagged)]
+enum TxHistoryAudienceClaim {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, serde::Deserialize)]
+struct TxHistoryJwtClaims {
+    sub: Option<String>,
+    dataspace_id: Option<String>,
+    exp: Option<u64>,
+    nbf: Option<u64>,
+    iss: Option<String>,
+    aud: Option<TxHistoryAudienceClaim>,
 }
 
 #[cfg(feature = "app_api")]
@@ -15071,90 +15089,57 @@ fn tx_history_reject(
 fn decode_tx_history_jwt_claims(
     auth_header: &str,
     jwt: &TxHistoryJwtConfig,
-) -> Result<norito::json::Map, String> {
+) -> Result<TxHistoryJwtClaims, String> {
     let token = auth_header
         .trim()
         .strip_prefix("Bearer ")
         .or_else(|| auth_header.trim().strip_prefix("bearer "))
         .ok_or_else(|| "Authorization header must use Bearer token".to_string())?;
-    let header = decode_header(token).map_err(|_| "invalid JWT header".to_string())?;
-    if header.alg != jwt.algorithm {
-        return Err("JWT algorithm does not match Torii tx_history configuration".to_string());
-    }
     let key = jwt.key.decoding_key(jwt.algorithm)?;
-    let (signature_segment, message) = token
-        .rsplit_once('.')
-        .ok_or_else(|| "invalid JWT".to_string())?;
-    let (header_segment, payload_segment) = message
-        .split_once('.')
-        .ok_or_else(|| "invalid JWT".to_string())?;
-    let _ = header_segment;
-    let verified = verify_jwt_signature(signature_segment, message.as_bytes(), &key, header.alg)
-        .map_err(|_| "invalid JWT".to_string())?;
-    if !verified {
-        return Err("invalid JWT".to_string());
-    }
-
-    let payload_bytes = if payload_segment.trim().is_empty() {
-        Vec::new()
-    } else {
-        URL_SAFE_NO_PAD
-            .decode(payload_segment.as_bytes())
-            .or_else(|_| {
-                let mut padded = payload_segment.trim().to_string();
-                while !padded.len().is_multiple_of(4) {
-                    padded.push('=');
-                }
-                BASE64_URL_SAFE.decode(padded.as_bytes())
-            })
-            .map_err(|_| "invalid JWT payload".to_string())?
-    };
-    let claims_value = if payload_bytes.is_empty() {
-        norito::json::Value::Object(norito::json::Map::new())
-    } else {
-        norito::json::from_slice(&payload_bytes).map_err(|_| "invalid JWT payload".to_string())?
-    };
-    let claims = match claims_value {
-        norito::json::Value::Object(map) => map,
-        _ => return Err("JWT claims must be a JSON object".to_string()),
-    };
+    let mut validation = Validation::new(jwt.algorithm);
+    validation.required_spec_claims.clear();
+    validation.validate_exp = false;
+    validation.validate_nbf = false;
+    validation.validate_aud = false;
+    let claims = decode::<TxHistoryJwtClaims>(token, &key, &validation)
+        .map_err(|err| match err.kind() {
+            jsonwebtoken::errors::ErrorKind::InvalidAlgorithm => {
+                "JWT algorithm does not match Torii tx_history configuration".to_string()
+            }
+            jsonwebtoken::errors::ErrorKind::InvalidToken
+            | jsonwebtoken::errors::ErrorKind::InvalidSignature => "invalid JWT".to_string(),
+            _ => "invalid JWT payload".to_string(),
+        })?
+        .claims;
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| "system clock is before UNIX_EPOCH".to_string())?
         .as_secs();
-    let exp = claims
-        .get("exp")
-        .and_then(norito::json::Value::as_u64)
-        .ok_or_else(|| "missing exp claim".to_string())?;
+    let exp = claims.exp.ok_or_else(|| "missing exp claim".to_string())?;
     if exp <= now {
         return Err("JWT expired".to_string());
     }
-    if let Some(nbf) = claims.get("nbf").and_then(norito::json::Value::as_u64)
+    if let Some(nbf) = claims.nbf
         && now < nbf
     {
         return Err("JWT is not yet valid".to_string());
     }
     if let Some(expected_issuer) = jwt.issuer.as_deref() {
         let actual_issuer = claims
-            .get("iss")
-            .and_then(norito::json::Value::as_str)
+            .iss
+            .as_deref()
             .ok_or_else(|| "missing iss claim".to_string())?;
         if actual_issuer.trim() != expected_issuer {
             return Err("invalid JWT issuer".to_string());
         }
     }
     if let Some(expected_audience) = jwt.audience.as_deref() {
-        let matches = claims.get("aud").is_some_and(|audience| {
-            audience
-                .as_str()
-                .is_some_and(|value| value.trim() == expected_audience)
-                || audience.as_array().is_some_and(|values| {
-                    values
-                        .iter()
-                        .filter_map(norito::json::Value::as_str)
-                        .any(|value| value.trim() == expected_audience)
-                })
+        let matches = claims.aud.as_ref().is_some_and(|audience| match audience {
+            TxHistoryAudienceClaim::Single(value) => value.trim() == expected_audience,
+            TxHistoryAudienceClaim::Multiple(values) => {
+                values.iter().any(|value| value.trim() == expected_audience)
+            }
         });
         if !matches {
             return Err("invalid JWT audience".to_string());
@@ -15227,8 +15212,8 @@ fn tx_history_viewer_from_headers(
         )
     })?;
     let subject = claims
-        .get("sub")
-        .and_then(norito::json::Value::as_str)
+        .sub
+        .as_deref()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {
@@ -15239,8 +15224,8 @@ fn tx_history_viewer_from_headers(
             )
         })?;
     let dataspace_id = claims
-        .get("dataspace_id")
-        .and_then(norito::json::Value::as_str)
+        .dataspace_id
+        .as_deref()
         .map(|value| value.trim().to_ascii_lowercase())
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {
@@ -24678,6 +24663,8 @@ mod tests {
         },
     };
     use iroha_executor_data_model::permission::sorafs::CanOperateSorafsRepair;
+    #[cfg(feature = "app_api")]
+    use jsonwebtoken::{EncodingKey, Header, encode};
     use nonzero_ext::nonzero;
     use sorafs_manifest::repair::{
         REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1, REPAIR_WORKER_SIGNATURE_VERSION_V1,
@@ -24977,6 +24964,74 @@ mod tests {
 
     fn next_block_height(app: &SharedAppState) -> u64 {
         current_block_height(app).saturating_add(1).max(1)
+    }
+
+    #[cfg(feature = "app_api")]
+    #[derive(serde::Serialize)]
+    struct TxHistoryJwtClaimsFixture {
+        sub: String,
+        dataspace_id: String,
+        roles: Vec<String>,
+        iat: u64,
+        nbf: u64,
+        exp: u64,
+        iss: String,
+        aud: String,
+    }
+
+    #[cfg(feature = "app_api")]
+    fn sample_tx_history_jwt(secret: &str) -> String {
+        let claims = TxHistoryJwtClaimsFixture {
+            sub: "operator1@hbl".to_string(),
+            dataspace_id: "hbl".to_string(),
+            roles: vec!["FI_OPERATOR".to_string()],
+            iat: 1_700_000_000,
+            nbf: 1_700_000_000,
+            exp: 4_102_444_800,
+            iss: "pk-cbdc-dev".to_string(),
+            aud: "pk-cbdc".to_string(),
+        };
+        encode(
+            &Header::new(JwtAlgorithm::HS256),
+            &claims,
+            &EncodingKey::from_secret(secret.as_bytes()),
+        )
+        .expect("sample tx-history jwt should sign")
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn tx_history_jwt_claims_accept_valid_hmac_token() {
+        let secret = "shared-secret";
+        let token = sample_tx_history_jwt(secret);
+        let jwt = TxHistoryJwtConfig {
+            algorithm: JwtAlgorithm::HS256,
+            key: TxHistoryJwtKey::Hmac(secret.as_bytes().to_vec()),
+            issuer: Some("pk-cbdc-dev".to_string()),
+            audience: Some("pk-cbdc".to_string()),
+        };
+
+        let claims = decode_tx_history_jwt_claims(&format!("Bearer {token}"), &jwt)
+            .expect("valid tx-history token should decode");
+
+        assert_eq!(claims.sub.as_deref(), Some("operator1@hbl"));
+        assert_eq!(claims.dataspace_id.as_deref(), Some("hbl"));
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn tx_history_jwt_claims_reject_invalid_hmac_signature() {
+        let token = sample_tx_history_jwt("correct-secret");
+        let jwt = TxHistoryJwtConfig {
+            algorithm: JwtAlgorithm::HS256,
+            key: TxHistoryJwtKey::Hmac(b"wrong-secret".to_vec()),
+            issuer: Some("pk-cbdc-dev".to_string()),
+            audience: Some("pk-cbdc".to_string()),
+        };
+
+        let err = decode_tx_history_jwt_claims(&format!("Bearer {token}"), &jwt)
+            .expect_err("mismatched secret must fail");
+        assert_eq!(err, "invalid JWT");
     }
 
     #[cfg(feature = "zk-stark")]

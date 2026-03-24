@@ -24,7 +24,7 @@ use iroha_test_network::*;
 use iroha_test_samples::{
     ALICE_ID, BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR, gen_account_in, load_sample_ivm,
 };
-use iroha_torii::routing::{
+use iroha_torii::{
     MultisigAccountSelectorDto, MultisigCancelRequestDto, MultisigProposalsGetRequestDto,
     MultisigProposalsListRequestDto,
 };

@@ -190,11 +190,16 @@ Soracloud v1 is an authoritative, IVM-only runtime.
     `assigned_heartbeat_miss_slash_bps=250`,
     `assigned_heartbeat_miss_strike_threshold=3`, and
     `advert_contradiction_slash_bps=1000`.
+  - locally assigned HF runtime health now also feeds that same evidence path:
+    reconcile-time import/warmup failures on a local `Warming` host emit
+    `WarmupNoShow`, and resident-worker failures on the local warm primary
+    emit throttled `AssignedHeartbeatMiss` reports through the normal
+    transaction queue.
   - remaining HF hosting work is now:
     - deterministic replica failover/backfill against live runtime health
       beyond the authoritative expired-host sweep, and
-    - automatic advert-contradiction and runtime-worker-health violation
-      emission beyond the current operator/expiry-driven evidence path.
+    - automatic advert-contradiction evidence emission beyond the current
+      operator-driven path.
   - generated HF local execution now keeps a resident per-source Python worker
     alive under `irohad`, reuses the loaded model across repeated `/infer`
     calls, and restarts that worker deterministically if the local import

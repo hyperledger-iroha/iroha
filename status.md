@@ -2,6 +2,70 @@
 
 Last updated: 2026-03-24
 
+## 2026-03-24 Follow-up: Soracloud HF runtime health now auto-reports local warmup and primary-worker failures
+- Extended the embedded `irohad` Soracloud runtime in
+  `crates/irohad/src/{main.rs,soracloud_runtime.rs}` so locally assigned HF
+  hosts can submit authoritative `ReportSoracloudModelHostViolation`
+  instructions through the normal transaction queue instead of relying only on
+  advert-expiry reconciliation.
+- The runtime now:
+  - enqueues `WarmupNoShow` evidence automatically when a locally assigned
+    `Warming` HF host fails its import/warmup path during reconciliation;
+  - enqueues `AssignedHeartbeatMiss` evidence automatically when the warm local
+    primary's resident HF worker fails during generated `/infer` execution; and
+  - throttles repeated submissions per `(validator, kind, placement)` so one
+    bad worker loop does not flood the queue while the authoritative
+    control-plane rebalance/slash path catches up.
+- Added focused runtime tests covering:
+  - reconcile-time warmup failure reporting for a local `Warming` placement;
+    and
+  - execute-time resident-worker failure reporting for a local warm primary,
+    including throttling across repeated `/infer` failures.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target_runtime_health cargo check -p irohad --tests`
+    (blocked by an unrelated pre-existing `iroha_torii` compile error at
+    `crates/iroha_torii/src/lib.rs:15085`, where
+    `jsonwebtoken::decode::<norito::json::Value>` still requires a serde-owned
+    claim type)
+- Remaining implementation gap:
+  - automatic advert-contradiction evidence generation and live
+    replica-promotion/backfill driven directly from runtime health still
+    remain open.
+
+## 2026-03-24 Security audit: Torii/Soracloud ingress review identified four actionable issues
+- Wrote `security_best_practices_report.md` after a focused code audit of the
+  highest-risk externally reachable surfaces in `iroha_torii` and the
+  Soracloud runtime/proxy path.
+- Findings captured in the report:
+  - Soracloud mutation endpoints currently require callers to send raw private
+    keys to Torii for server-side transaction signing;
+  - Soracloud peer proxy requests can execute arbitrary local-read handlers on
+    the primary without re-checking public-route visibility;
+  - public Soracloud runtime fallback handling bypasses Torii's normal API
+    token and rate-limiting path; and
+  - ZK attachment tenancy falls back to remote IP when API tokens are disabled,
+    allowing cross-user attachment access on shared egress networks.
+- Validation:
+  - manual code review only; no build/test commands were run
+- Remaining implementation gap:
+  - the report findings still need prioritization and remediation work.
+
+## 2026-03-24 Follow-up: multisig integration tests compile against `iroha_torii`'s public API again
+- Fixed the `error[E0603]` regression in
+  `integration_tests/tests/multisig.rs` by exposing the multisig request DTOs
+  that the test uses from the `iroha_torii` crate root instead of reaching
+  through the private `routing` module.
+- Added the missing public-item documentation required for the newly
+  re-exported multisig request DTO fields and derived `Clone` for
+  `MultisigAccountSelectorDto` so the existing test request construction still
+  compiles unchanged.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p integration_tests multisig --no-run` (pass)
+- Remaining validation gap:
+  - the broader workspace sweep was not rerun for this targeted compile fix.
+
 ## 2026-03-24 Follow-up: Soracloud HF expiry reconciliation now emits authoritative host-violation evidence and staking slashes
 - Extended the Soracloud HF control loop across
   `crates/iroha_data_model/src/{soracloud.rs,isi/{mod.rs,registry.rs,soracloud.rs}}`,
