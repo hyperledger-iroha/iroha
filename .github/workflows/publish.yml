@@ -45,7 +45,7 @@ jobs:
         run: mv ${{ env.DEFAULTS_DIR }}/libs/default_executor.wasm ${{ env.DEFAULTS_DIR }}/executor.wasm
       - name: Set up Docker Buildx
         id: buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
         with:
           install: true
           version: latest
@@ -140,7 +140,7 @@ jobs:
       - name: Set up Docker Buildx
         id: buildx
         if: always()
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
         with:
           install: true
           version: latest
