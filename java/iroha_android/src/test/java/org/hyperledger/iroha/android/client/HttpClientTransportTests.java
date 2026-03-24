@@ -1409,9 +1409,11 @@ public final class HttpClientTransportTests {
     assert request.uri().toString().equals("https://torii.example/api/v1/ram-lfe/receipts/verify")
         : "RAM-LFE verify URI mismatch";
     @SuppressWarnings("unchecked")
-    final Map<String, Object> payload = (Map<String, Object>) JsonParser.parse(readBody(request));
-    assert "c0ffee".equals(payload.get("output_hex")) : "Verify output_hex mismatch";
-    assert payload.get("receipt") instanceof Map<?, ?> : "Verify request must preserve raw receipt";
+    final Map<String, Object> requestPayload =
+        (Map<String, Object>) JsonParser.parse(readBody(request));
+    assert "c0ffee".equals(requestPayload.get("output_hex")) : "Verify output_hex mismatch";
+    assert requestPayload.get("receipt") instanceof Map<?, ?>
+        : "Verify request must preserve raw receipt";
   }
 
   private static void identifierNormalizationCanonicalizesInputs() {
