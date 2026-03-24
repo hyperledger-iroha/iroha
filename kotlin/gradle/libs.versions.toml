@@ -1,0 +1,16 @@
+[versions]
+kotlin = "2.3.10"
+agp = "9.0.1"
+junit = "5.11.4"
+zstd = "1.5.7-7"
+bouncycastle = "1.78.1"
+
+[libraries]
+junit-params = { module = "org.junit.jupiter:junit-jupiter-params", version.ref = "junit" }
+zstd-jni = { module = "com.github.luben:zstd-jni", version.ref = "zstd" }
+bcprov = { module = "org.bouncycastle:bcprov-jdk18on", version.ref = "bouncycastle" }
+
+[plugins]
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+android-library = { id = "com.android.library", version.ref = "agp" }

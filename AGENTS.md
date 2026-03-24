@@ -11,6 +11,7 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 - Test one crate: `cargo test -p <crate>`
 - Run one test: `cargo test -p <crate> <test_name> -- --nocapture`
 - Swift SDK: from the `IrohaSwift` directory run `swift test` to execute the Swift package tests.
+- Kotlin SDK: from the `kotlin` directory run `./gradlew :core-jvm:test --console=plain`; build Android artifacts with `./gradlew :client-android:assembleRelease :offline-wallet-android:assembleRelease --quiet`.
 - Android SDK: from `java/iroha_android` run `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test`.
 - Scripts dependencies: `python3 -m pip install -r scripts/requirements.txt`.
 - Script tests: `pytest pytests/scripts`.
@@ -34,6 +35,8 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
     - `iroha_cli` – command-line interface for interacting with a node.
     - `iroha_core`, `iroha_data_model`, `iroha_crypto`, and other supporting crates.
 - `IrohaSwift/` – Swift Package for the client/mobile SDK. Its sources live under `Sources/IrohaSwift/` and its unit tests under `Tests/IrohaSwiftTests/`. Run `swift test` from this directory to exercise the Swift suite.
+- `kotlin/` – default JVM/Android SDK for new mobile work. `core-jvm` contains the pure Kotlin/JVM Norito + client/model stack, `client-android` adds Android-only client/keystore integration, and `offline-wallet-android` contains Android-only offline wallet code and JNI libraries.
+- `java/` – Java SDKs kept in sync with the Kotlin SDK during the migration period. `java/norito_java` mirrors the Kotlin Norito implementation and `java/iroha_android` mirrors the Android/client surface until the Kotlin SDK fully replaces it.
 - `integration_tests/` – Cargo crate hosting cross-component tests under `tests/`.
 - `data_model/` – Sample data model definitions used in tests and documentation.
 - `docs/` – Project documentation and design notes. Markdown sources live in `docs/source/`.
@@ -58,6 +61,9 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 - If logic changes, make sure all .md files and in-source code comments are up to date with the latest functionality.
 - Make sure that all logic added is done in such a way that it won't hurt the use of the IVM in a blockchain setting where different nodes on a P2P network have different hardware, but still the output should be the same given the same input block.
 - When answering questions about behaviour or implementation details, read the relevant code paths first and ensure you understand how they work before responding.
+- Treat the Kotlin SDK as the default solution for Android consumers. Keep Kotlin API/behavior changes mirrored in the corresponding `java/` implementation until the Java Android SDK is fully retired.
+- Kotlin SDK constraints from `kotlin/CLAUDE.md` are repository policy for new Kotlin SDK code: no `java.lang.reflect.*`, keep `core-jvm` free of Android dependencies, keep Android client code in `client-android`, and keep offline wallet Android/JNI code in `offline-wallet-android`.
+- Any cross-library wire-format or fixture test that currently validates Java SDK classes must validate the Kotlin SDK classes against the same shared fixtures as well.
 - Configuration: Prefer `iroha_config` parameters over environment variables for all runtime behavior. Add new knobs to `crates/iroha_config` (user → actual → defaults) and thread values explicitly through constructors or dependency injection (e.g., host setters). Keep any environment-based toggles only for developer convenience in tests and do not rely on them in production paths. We do not support shipping features behind environment variables—production behavior must always be sourced from the configuration files, and those configs must expose sensible defaults so a newcomer can clone the repo, run the binaries, and have everything “just work” without editing values manually.
   - For IVM/Kotodama v1, strict pointer‑ABI type policy is always enforced. There is no ABI-policy toggle; contracts and hosts must adhere to the ABI policy unconditionally.
 - Don't gate anything used in IVM syscalls or opcodes; every Iroha build must ship those code paths to keep deterministic behavior across nodes.
