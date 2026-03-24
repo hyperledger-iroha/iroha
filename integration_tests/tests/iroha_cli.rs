@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command as ProcessCommand,
     sync::Once,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use integration_tests::sandbox;
@@ -16,6 +16,7 @@ use iroha::{
     crypto::{ExposedPrivateKey, Hash, KeyPair},
     data_model::{
         Encode,
+        account::AccountId,
         asset::{AssetDefinitionId, AssetId},
         permission::Permission,
         prelude::{Grant, Json, Mint},
@@ -155,6 +156,17 @@ fn soracloud_hf_lease_asset_definition() -> AssetDefinitionId {
         "domain".parse().expect("test domain should parse"),
         "xor".parse().expect("test xor asset name should parse"),
     )
+}
+
+const SORACLOUD_LIVE_HF_TEST_REPO_ID: &str = "hf-internal-testing/tiny-random-gpt2";
+const SORACLOUD_LIVE_HF_TEST_MODEL_NAME: &str = "tiny-random-gpt2";
+
+fn soracloud_live_hf_allowed_signing() -> toml::Value {
+    toml::Value::Array(vec![
+        toml::Value::String("ed25519".to_owned()),
+        toml::Value::String("secp256k1".to_owned()),
+        toml::Value::String("bls_normal".to_owned()),
+    ])
 }
 
 #[test]
@@ -330,6 +342,112 @@ async fn run_soracloud_command(
         .await?)
 }
 
+fn validator_program_config(
+    network: &iroha_test_network::Network,
+) -> eyre::Result<(ProgramConfig, String, AccountId)> {
+    let validator_peer = network
+        .peers()
+        .first()
+        .ok_or_else(|| eyre::eyre!("test network should expose at least one peer"))?;
+    let validator_account_id = AccountId::new(validator_peer.public_key().clone());
+    let expected_public_key = validator_peer.public_key().to_string();
+
+    for entry in std::fs::read_dir(network.env_dir())? {
+        let candidate = entry?.path().join("config.base.toml");
+        if !candidate.is_file() {
+            continue;
+        }
+
+        let config: toml::Value = toml::from_str(&std::fs::read_to_string(&candidate)?)?;
+        let Some(public_key) = config.get("public_key").and_then(toml::Value::as_str) else {
+            continue;
+        };
+        if public_key != expected_public_key {
+            continue;
+        }
+
+        let private_key = config
+            .get("private_key")
+            .and_then(toml::Value::as_str)
+            .ok_or_else(|| {
+                eyre::eyre!(
+                    "peer config `{}` is missing `private_key`",
+                    candidate.display()
+                )
+            })?
+            .parse::<ExposedPrivateKey>()?
+            .0;
+        let key_pair = KeyPair::new(validator_peer.public_key().clone(), private_key)
+            .map_err(|err| eyre::eyre!("failed to rebuild validator keypair: {err}"))?;
+        return Ok((
+            program_config_for_account(&network.client(), "wonderland", &key_pair),
+            validator_peer.id().to_string(),
+            validator_account_id,
+        ));
+    }
+
+    Err(eyre::eyre!(
+        "failed to locate config for validator peer `{}` under `{}`",
+        validator_peer.id(),
+        network.env_dir().display()
+    ))
+}
+
+async fn advertise_soracloud_model_host(
+    cwd: &Path,
+    network: &iroha_test_network::Network,
+) -> eyre::Result<()> {
+    let (validator_config, peer_id, validator_account_id) = validator_program_config(network)?;
+    network.client().submit_blocking(Grant::account_permission(
+        Permission::new("CanManageSoracloud".into(), Json::new(())),
+        validator_account_id,
+    ))?;
+
+    let torii_url = network.client().torii_url.to_string();
+    let heartbeat_expires_at_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)?
+        .as_millis()
+        .saturating_add(600_000)
+        .min(u128::from(u64::MAX)) as u64;
+    let heartbeat_expires_at_ms = heartbeat_expires_at_ms.to_string();
+    let advertise = run_soracloud_command(
+        cwd,
+        &validator_config,
+        &[
+            "model-host-advertise",
+            "--peer-id",
+            peer_id.as_str(),
+            "--backends",
+            "transformers",
+            "--formats",
+            "safetensors",
+            "--max-model-bytes",
+            "2147483648",
+            "--max-disk-cache-bytes",
+            "8589934592",
+            "--max-ram-bytes",
+            "8589934592",
+            "--max-concurrent-resident-models",
+            "4",
+            "--host-class",
+            "cpu.small",
+            "--heartbeat-expires-at-ms",
+            heartbeat_expires_at_ms.as_str(),
+            "--torii-url",
+            torii_url.as_str(),
+        ],
+    )
+    .await?;
+    assert!(
+        advertise.status.success(),
+        "model-host-advertise failed with status {} and stderr: {}",
+        advertise.status,
+        String::from_utf8_lossy(&advertise.stderr)
+    );
+
+    Ok(())
+}
+
 fn assert_requires_torii_url(output: &std::process::Output) {
     assert!(
         !output.status.success(),
@@ -446,7 +564,11 @@ async fn soracloud_status_uses_live_torii_control_plane() -> eyre::Result<()> {
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full");
+                .write("telemetry_profile", "full")
+                .write(
+                    ["crypto", "allowed_signing"],
+                    soracloud_live_hf_allowed_signing(),
+                );
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -511,7 +633,11 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full");
+                .write("telemetry_profile", "full")
+                .write(
+                    ["crypto", "allowed_signing"],
+                    soracloud_live_hf_allowed_signing(),
+                );
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -766,7 +892,12 @@ async fn soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_contr
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full");
+                .write("telemetry_profile", "full")
+                .write(
+                    ["crypto", "allowed_signing"],
+                    soracloud_live_hf_allowed_signing(),
+                )
+                .write(["sumeragi", "consensus_mode"], "npos");
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -919,7 +1050,12 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full");
+                .write("telemetry_profile", "full")
+                .write(
+                    ["crypto", "allowed_signing"],
+                    soracloud_live_hf_allowed_signing(),
+                )
+                .write(["sumeragi", "consensus_mode"], "npos");
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -1508,7 +1644,12 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full");
+                .write("telemetry_profile", "full")
+                .write(
+                    ["crypto", "allowed_signing"],
+                    soracloud_live_hf_allowed_signing(),
+                )
+                .write(["sumeragi", "consensus_mode"], "npos");
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -1526,8 +1667,9 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
         toml::to_string(&config.toml())?.as_bytes(),
     )
     .await?;
+    advertise_soracloud_model_host(dir.path(), &network).await?;
 
-    let repo_id = "openai/gpt-oss";
+    let repo_id = SORACLOUD_LIVE_HF_TEST_REPO_ID;
     let service_name_a = "hf_lease_a";
     let service_name_b = "hf_lease_b";
     let service_name_renew = "hf_lease_renew";
@@ -1591,7 +1733,7 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
     );
     assert_eq!(
         deploy_source.get("model_name").and_then(Value::as_str),
-        Some("gpt-oss")
+        Some(SORACLOUD_LIVE_HF_TEST_MODEL_NAME)
     );
     assert_eq!(
         deploy_source
@@ -1925,7 +2067,12 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full");
+                .write("telemetry_profile", "full")
+                .write(
+                    ["crypto", "allowed_signing"],
+                    soracloud_live_hf_allowed_signing(),
+                )
+                .write(["sumeragi", "consensus_mode"], "npos");
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -1943,12 +2090,13 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
         toml::to_string(&config.toml())?.as_bytes(),
     )
     .await?;
+    advertise_soracloud_model_host(dir.path(), &network).await?;
 
-    let repo_id = "openai/gpt-oss";
+    let repo_id = SORACLOUD_LIVE_HF_TEST_REPO_ID;
     let initial_service_name = "hf_queue_a";
     let queued_service_name = "hf_queue_next";
     let promoted_service_name = "hf_queue_promoted";
-    let renewed_model_name = "gpt-oss-renewed";
+    let renewed_model_name = "tiny-random-gpt2-renewed";
     let lease_term_ms_value = 10_000_u64;
     let lease_term_ms = lease_term_ms_value.to_string();
     let base_fee_nanos = "10000".to_string();
@@ -2232,7 +2380,12 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
-                .write("telemetry_profile", "full");
+                .write("telemetry_profile", "full")
+                .write(
+                    ["crypto", "allowed_signing"],
+                    soracloud_live_hf_allowed_signing(),
+                )
+                .write(["sumeragi", "consensus_mode"], "npos");
         })
         .with_genesis_instruction(Grant::account_permission(
             Permission::new("CanManageSoracloud".into(), Json::new(())),
@@ -2288,8 +2441,9 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
         toml::to_string(&alice_config.toml())?.as_bytes(),
     )
     .await?;
+    advertise_soracloud_model_host(dir.path(), &network).await?;
 
-    let repo_id = "openai/gpt-oss";
+    let repo_id = SORACLOUD_LIVE_HF_TEST_REPO_ID;
     let torii_url = network.client().torii_url.to_string();
     let lease_term_ms = 60_000_u64;
     let lease_term_ms_literal = lease_term_ms.to_string();

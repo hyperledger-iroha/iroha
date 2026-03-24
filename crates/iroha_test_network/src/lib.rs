@@ -2527,10 +2527,13 @@ impl Network {
             .peers
             .first()
             .and_then(|peer| resolve_actual_config(peer, &config_layers));
+        let genesis_crypto = actual_config
+            .as_ref()
+            .map(|config| config::manifest_crypto_from_actual(&config.crypto));
         let da_proof_policies = actual_config
             .as_ref()
             .map(|config| iroha_core::da::proof_policy_bundle(&config.nexus.lane_config));
-        let nexus_config = actual_config.map(|config| config.nexus);
+        let nexus_config = actual_config.as_ref().map(|config| config.nexus.clone());
         let consensus_handshake_meta = consensus_handshake_parameter(&self.consensus_profile);
 
         if let Some(cached_genesis) = self.cached_genesis.get() {
@@ -2665,6 +2668,7 @@ impl Network {
             self.topology_entries.clone(),
             self.genesis_key_pair.clone(),
             self.chain_id(),
+            genesis_crypto,
             da_proof_policies,
             nexus_config,
             Some(consensus_handshake_meta),
@@ -4874,6 +4878,9 @@ impl NetworkBuilder {
         let da_proof_policies = resolved_npos_config
             .as_ref()
             .map(|config| iroha_core::da::proof_policy_bundle(&config.nexus.lane_config));
+        let genesis_crypto = resolved_npos_config
+            .as_ref()
+            .map(|config| config::manifest_crypto_from_actual(&config.crypto));
         let nexus_config = resolved_npos_config
             .as_ref()
             .map(|config| config.nexus.clone());
@@ -4884,6 +4891,7 @@ impl NetworkBuilder {
             topology_entries.clone(),
             genesis_key_pair.clone(),
             consensus_chain_id.clone(),
+            genesis_crypto,
             da_proof_policies,
             nexus_config,
             None,

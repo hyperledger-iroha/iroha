@@ -1514,7 +1514,7 @@ impl SoracloudRuntimeManager {
                 "failed to restore persisted Soracloud runtime-manager snapshot"
             );
         }
-        if let Err(error) = manager.reconcile_once() {
+        if let Err(error) = Arc::clone(&manager).run_startup_reconcile() {
             iroha_logger::warn!(
                 ?error,
                 state_dir = %manager.config.state_dir.display(),
@@ -1535,6 +1535,15 @@ impl SoracloudRuntimeManager {
         )
     }
 
+    fn run_startup_reconcile(self: Arc<Self>) -> eyre::Result<()> {
+        std::thread::Builder::new()
+            .name("soracloud-runtime-startup-reconcile".to_owned())
+            .spawn(move || self.reconcile_once())
+            .wrap_err("spawn Soracloud startup reconcile thread")?
+            .join()
+            .map_err(|panic| eyre::eyre!("Soracloud startup reconcile thread panicked: {panic:?}"))?
+    }
+
     fn spawn_reconcile_task(self: Arc<Self>, shutdown_signal: ShutdownSignal) -> JoinHandle<()> {
         tokio::task::spawn(async move {
             let mut interval = tokio::time::interval(self.config.reconcile_interval);
@@ -1543,12 +1552,23 @@ impl SoracloudRuntimeManager {
             loop {
                 tokio::select! {
                     _ = interval.tick() => {
-                        if let Err(error) = self.reconcile_once() {
-                            iroha_logger::warn!(
-                                ?error,
-                                state_dir = %self.config.state_dir.display(),
-                                "Soracloud runtime-manager reconciliation failed"
-                            );
+                        let manager = Arc::clone(&self);
+                        match tokio::task::spawn_blocking(move || manager.reconcile_once()).await {
+                            Ok(Ok(())) => {}
+                            Ok(Err(error)) => {
+                                iroha_logger::warn!(
+                                    ?error,
+                                    state_dir = %self.config.state_dir.display(),
+                                    "Soracloud runtime-manager reconciliation failed"
+                                );
+                            }
+                            Err(error) => {
+                                iroha_logger::warn!(
+                                    ?error,
+                                    state_dir = %self.config.state_dir.display(),
+                                    "Soracloud runtime-manager reconciliation task panicked"
+                                );
+                            }
                         }
                     }
                     () = shutdown_signal.receive() => {
@@ -9408,6 +9428,93 @@ mod tests {
         assert!(
             read_hf_import_manifest(temp_dir.path(), &fixture.source_id.to_string())?.is_some(),
             "assigned hosts should materialize the canonical HF import",
+        );
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn reconcile_task_imports_generated_hf_source_without_panicking() -> Result<()> {
+        let mut state = test_state()?;
+        let fixture = insert_generated_hf_service_fixture(
+            &mut state,
+            "hf_async_reconcile_import",
+            "openai-community/gpt2",
+            "main",
+            "gpt2",
+        )?;
+        let local_peer_id = "12D3KooWAsyncReconcileRuntimeHost";
+        insert_generated_hf_placement_fixture(
+            &mut state,
+            &fixture,
+            SoraHfPlacementHostRoleV1::Primary,
+            SoraHfPlacementHostStatusV1::Warm,
+            local_peer_id,
+        );
+        let config_json = br#"{"model_type":"gpt2"}"#.to_vec();
+        let model_info = norito::json!({
+            "sha": "commit-async-reconcile-123",
+            "pipeline_tag": "text-generation",
+            "library_name": "transformers",
+            "tags": ["text-generation"],
+            "siblings": [{"rfilename": "config.json"}]
+        });
+        let mut routes = BTreeMap::new();
+        routes.insert(
+            (
+                "GET".to_owned(),
+                "/api/models/openai-community/gpt2/revision/main".to_owned(),
+            ),
+            HttpFixtureResponse::json(norito::json::to_vec(&model_info)?),
+        );
+        routes.insert(
+            (
+                "HEAD".to_owned(),
+                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
+            ),
+            HttpFixtureResponse::head_ok(
+                "application/json",
+                u64::try_from(config_json.len()).expect("fixture length fits in u64"),
+            ),
+        );
+        routes.insert(
+            (
+                "GET".to_owned(),
+                "/openai-community/gpt2/resolve/main/config.json".to_owned(),
+            ),
+            HttpFixtureResponse::json(config_json),
+        );
+        let (server, _captured) = spawn_recording_http_route_fixture(routes)?;
+
+        let temp_dir = tempfile::tempdir()?;
+        let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
+        config.hf.hub_base_url = server.base_url.clone();
+        config.hf.api_base_url = format!("{}/api", server.base_url);
+        config.hf.import_file_allowlist = vec!["config.json".to_owned()];
+
+        let manager = Arc::new(SoracloudRuntimeManager::new(
+            config.with_local_host_identity(ALICE_ID.clone(), local_peer_id),
+            Arc::clone(&state),
+        ));
+        let shutdown = ShutdownSignal::new();
+        let task = Arc::clone(&manager).spawn_reconcile_task(shutdown.clone());
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if read_hf_import_manifest(temp_dir.path(), &fixture.source_id.to_string())?
+                    .is_some()
+                {
+                    break Ok::<(), eyre::Report>(());
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .map_err(|_| eyre::eyre!("timed out waiting for background HF import manifest"))??;
+        shutdown.send();
+        task.await.expect("reconcile task should shut down cleanly");
+
+        assert!(
+            read_hf_import_manifest(temp_dir.path(), &fixture.source_id.to_string())?.is_some(),
+            "background reconcile should import the assigned HF source without panicking",
         );
         Ok(())
     }

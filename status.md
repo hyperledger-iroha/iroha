@@ -2,6 +2,53 @@
 
 Last updated: 2026-03-24
 
+## 2026-03-24 Follow-up: Soracloud HF lease integration tests no longer crash peers during runtime reconciliation
+- Fixed `crates/irohad/src/soracloud_runtime.rs` so Soracloud runtime-manager
+  reconciliation no longer runs `reqwest::blocking` Hugging Face / remote
+  hydration work on Tokio async worker threads:
+  - startup reconciliation now runs on a dedicated OS thread before the
+    periodic loop is spawned, and
+  - interval-driven reconciliation now dispatches `reconcile_once()` through
+    `tokio::task::spawn_blocking`, preventing Tokio's
+    `Cannot drop a runtime in a context where blocking is not allowed` panic
+    when the blocking HTTP clients are dropped.
+- Added focused async regression coverage in
+  `crates/irohad/src/soracloud_runtime.rs` proving the background reconcile
+  task can import an assigned generated-HF source without panicking.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p irohad reconcile_task_imports_generated_hf_source_without_panicking -- --nocapture` (pass)
+  - `cargo test -p integration_tests --test iroha_cli soracloud_hf_shared_lease_commands_use_live_torii_control_plane -- --nocapture --test-threads=1` (pass)
+  - `cargo test -p integration_tests --test iroha_cli soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window -- --nocapture --test-threads=1` (pass)
+  - `cargo test -p integration_tests --test iroha_cli soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts -- --nocapture --test-threads=1` (pass)
+- Remaining validation gap:
+  - the broader workspace sweep is still pending.
+
+## 2026-03-24 Follow-up: Soracloud HF live CLI lease tests pass again against the authoritative control plane
+- Updated the live Soracloud HF lease integration coverage in
+  `integration_tests/tests/iroha_cli.rs` to use the small public
+  `hf-internal-testing/tiny-random-gpt2` safetensors fixture instead of
+  `openai/gpt-oss`, whose anonymous model-info endpoint now returns
+  `401 Unauthorized`.
+- Reworked the live HF fixture setup so the tests advertise a valid
+  `cpu.small` Soracloud model host from a real validator account on an NPoS
+  test network, including the `bls_normal` signing allowlist and class-floor
+  capacities required by authoritative `model-host-advertise`.
+- Fixed `crates/iroha_cli/src/soracloud.rs` so `model-host-advertise` emits the
+  supported schema version and a live `advertised_at_ms` timestamp instead of
+  relying on Torii-side normalization.
+- Fixed `crates/iroha_test_network/src/{config.rs,lib.rs}` so custom
+  `crypto.allowed_signing` overrides are propagated into the genesis crypto
+  manifest as well as the runtime config, keeping BLS admission consistent
+  during live-control-plane tests.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_test_network genesis_with_crypto_override_embeds_manifest_metadata -- --nocapture` (pass)
+  - `cargo test -p iroha_cli --bin iroha signed_model_host_advertise_request_uses_supported_schema_version -- --nocapture` (pass)
+  - `cargo test -p integration_tests --test iroha_cli soracloud_hf_ -- --nocapture --test-threads=1` (pass)
+- Remaining validation gap:
+  - the broader workspace sweep is still pending.
+
 ## 2026-03-24 Follow-up: multisig integration tests compile against `iroha_torii`'s public API again
 - Fixed the `error[E0603]` regression in
   `integration_tests/tests/multisig.rs` by exposing the multisig request DTOs

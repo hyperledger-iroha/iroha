@@ -10,7 +10,7 @@ use std::{
     fs,
     num::{NonZeroU16, NonZeroU32, NonZeroU64},
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use eyre::{Result, WrapErr, eyre};
@@ -23,7 +23,7 @@ use iroha::data_model::{
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
         AgentApartmentManifestV1, SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SORA_STATE_BINDING_VERSION_V1,
-        SoraArtifactKindV1, SoraArtifactRefV1,
+        SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1, SoraArtifactKindV1, SoraArtifactRefV1,
         SoraCertifiedResponsePolicyV1, SoraContainerManifestV1, SoraContainerRuntimeV1,
         SoraDeploymentBundleV1, SoraHfBackendFamilyV1, SoraHfModelFormatV1,
         SoraMailboxContractV1, SoraModelHostCapabilityRecordV1, SoraNetworkPolicyV1,
@@ -3365,8 +3365,19 @@ fn signed_model_host_advertise_request(
             "--max-model-bytes, --max-disk-cache-bytes, --max-ram-bytes, and --max-concurrent-resident-models must be greater than zero"
         ));
     }
+    let advertised_at_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|err| eyre!("failed to determine current unix time: {err}"))?
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64;
+    let advertised_at_ms = advertised_at_ms.max(1);
+    if args.heartbeat_expires_at_ms <= advertised_at_ms {
+        return Err(eyre!(
+            "--heartbeat-expires-at-ms must be greater than the current unix time in milliseconds"
+        ));
+    }
     let capability = SoraModelHostCapabilityRecordV1 {
-        schema_version: 0,
+        schema_version: SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1,
         validator_account_id: authority.clone(),
         peer_id: args.peer_id.trim().to_owned(),
         supported_backends: args
@@ -3385,7 +3396,7 @@ fn signed_model_host_advertise_request(
         max_vram_bytes: args.max_vram_bytes,
         max_concurrent_resident_models: args.max_concurrent_resident_models,
         host_class: args.host_class.trim().to_owned(),
-        advertised_at_ms: 0,
+        advertised_at_ms,
         heartbeat_expires_at_ms: args.heartbeat_expires_at_ms,
     };
     let payload = ModelHostAdvertisePayload { capability };
@@ -7890,6 +7901,56 @@ mod tests {
             .verify(&request.provenance.signer, &payload)
             .expect("signature should verify");
         assert_eq!(request.payload.model_name, "gpt-oss");
+        assert_eq!(request.authority.as_ref(), Some(&authority));
+        assert!(request.private_key.is_some());
+    }
+
+    #[test]
+    fn signed_model_host_advertise_request_uses_supported_schema_version() {
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let heartbeat_expires_at_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("current time should be after unix epoch")
+            .as_millis()
+            .saturating_add(600_000)
+            .min(u128::from(u64::MAX)) as u64;
+        let request = signed_model_host_advertise_request(
+            ModelHostAdvertiseArgs {
+                peer_id: "12D3KooWTestHostPeer".to_owned(),
+                backends: vec![ModelHostBackendArg::Transformers],
+                formats: vec![ModelHostModelFormatArg::Safetensors],
+                max_model_bytes: 16 * 1024 * 1024,
+                max_disk_cache_bytes: 32 * 1024 * 1024,
+                max_ram_bytes: 32 * 1024 * 1024,
+                max_vram_bytes: 0,
+                max_concurrent_resident_models: 4,
+                host_class: "cpu.large".to_owned(),
+                heartbeat_expires_at_ms,
+                torii_url: Some("http://127.0.0.1:8080".to_owned()),
+                api_token: None,
+                timeout_secs: 10,
+            },
+            &authority,
+            &key_pair,
+        )
+        .expect("signed model host advertise request");
+        let payload = encode_model_host_advertise_signature_payload(&request.payload)
+            .expect("encode payload");
+        request
+            .provenance
+            .signature
+            .verify(&request.provenance.signer, &payload)
+            .expect("signature should verify");
+        assert_eq!(
+            request.payload.capability.schema_version,
+            SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1
+        );
+        assert!(request.payload.capability.advertised_at_ms > 0);
+        assert!(
+            request.payload.capability.heartbeat_expires_at_ms
+                > request.payload.capability.advertised_at_ms
+        );
         assert_eq!(request.authority.as_ref(), Some(&authority));
         assert!(request.private_key.is_some());
     }

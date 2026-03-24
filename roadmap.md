@@ -2,6 +2,55 @@
 
 Last updated: 2026-03-24
 
+Latest sync (2026-03-24 Soracloud runtime-manager async reconcile panic fix):
+`crates/irohad/src/soracloud_runtime.rs`
+now keeps HF-source reconciliation off Tokio async worker threads:
+
+- startup reconciliation now runs on a dedicated thread,
+- the periodic reconcile loop now uses `tokio::task::spawn_blocking`, so the
+  blocking Hugging Face / remote hydration clients can be created and dropped
+  without tripping Tokio's runtime-drop panic, and
+- a focused async regression test now proves the background reconcile task can
+  import an assigned generated-HF source without panicking.
+
+Validation completed so far:
+- `cargo fmt --all`
+- `cargo test -p irohad reconcile_task_imports_generated_hf_source_without_panicking -- --nocapture`
+- `cargo test -p integration_tests --test iroha_cli soracloud_hf_shared_lease_commands_use_live_torii_control_plane -- --nocapture --test-threads=1`
+- `cargo test -p integration_tests --test iroha_cli soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window -- --nocapture --test-threads=1`
+- `cargo test -p integration_tests --test iroha_cli soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts -- --nocapture --test-threads=1`
+
+Open work for this slice now remains:
+- rerun the broader workspace sweep when the longer validation budget is
+  available.
+
+Latest sync (2026-03-24 Soracloud HF live CLI lease fixture and advertise-path repair):
+`integration_tests/tests/iroha_cli.rs`,
+`crates/iroha_cli/src/soracloud.rs`, and
+`crates/iroha_test_network/src/{config.rs,lib.rs}` now align the live HF lease
+fixtures with the authoritative control-plane rules:
+
+- the live `hf-deploy` / `hf-lease-renew` / refund-proration integration tests
+  now use the public `hf-internal-testing/tiny-random-gpt2` safetensors
+  fixture instead of `openai/gpt-oss`;
+- the HF live fixtures now start NPoS validator networks, allow
+  `bls_normal` transaction signing, and advertise a valid `cpu.small`
+  host-capability record before exercising the lease commands;
+- `model-host-advertise` now signs the supported schema version and a live
+  `advertised_at_ms` value from the CLI; and
+- test-network genesis generation now carries custom crypto overrides into the
+  embedded manifest so runtime admission matches the configured signing policy.
+
+Validation completed so far:
+- `cargo fmt --all`
+- `cargo test -p iroha_test_network genesis_with_crypto_override_embeds_manifest_metadata -- --nocapture`
+- `cargo test -p iroha_cli --bin iroha signed_model_host_advertise_request_uses_supported_schema_version -- --nocapture`
+- `cargo test -p integration_tests --test iroha_cli soracloud_hf_ -- --nocapture --test-threads=1`
+
+Open work for this slice now remains:
+- rerun the broader workspace sweep when the longer validation budget is
+  available.
+
 Latest sync (2026-03-24 multisig integration DTO re-export compile fix):
 `crates/iroha_torii/src/{lib.rs,routing.rs}` and
 `integration_tests/tests/multisig.rs` now align the multisig integration test
