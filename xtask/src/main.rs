@@ -5546,7 +5546,7 @@ where
             let mut payer = "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_string();
             let mut treasury =
                 "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_string();
-            let mut asset = "xor#wonderland".to_string();
+            let mut asset = "4cuvDVPuLBKJyN6dPbRQhmLh68sU".to_string();
             let mut allow_hard_cap = false;
             let mut pending = args.peekable();
             while let Some(arg) = pending.next() {
@@ -10548,7 +10548,7 @@ mod space_directory_tests {
         "dataspace": 11,
         "program": "cbdc.transfer",
         "method": "transfer",
-        "asset": "aid:6e156b5010e645f883eb831946b88db8",
+        "asset": "61CtjvNd9T3THAR65GsMVHr82Bjc",
         "role": "Initiator"
       },
       "effect": {

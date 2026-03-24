@@ -9636,7 +9636,7 @@ mod tests {
             payer_kind: super::NexusFeePayer::Payer,
             payer_id: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".to_owned(),
             amount: 10,
-            asset_id: "xor#sora".to_owned(),
+            asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_owned(),
         });
         super::record_nexus_fee_event(super::NexusFeeEvent::SponsorDisabled {
             payer_id: "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU".to_owned(),

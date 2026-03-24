@@ -94,7 +94,7 @@ egress_credit_per_gib_micro = 1500            # 0.0015 XOR/GiB egress credit
 
 ### Создание планов книги арендной платы
 
-Запустите `iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition xor#sora`
+Запустите `iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc`
 конвертировать постоянную арендную плату в исполняемые передачи книги. Команда
 анализирует встроенный `ledger_projection`, выдает инструкции Norito `Transfer`
 которые собирают базовую ренту в казну, направляют резерву/поставщику

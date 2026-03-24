@@ -363,8 +363,8 @@ pub struct ManifestScaffoldAllowArgs {
     /// Method/entry-point for the allow entry.
     #[arg(long = "allow-method", value_name = "NAME", id = "allow_method")]
     pub method: Option<String>,
-    /// Asset identifier (e.g. `xor#sora`) for the allow entry.
-    #[arg(long = "allow-asset", value_name = "DEF#DOMAIN", id = "allow_asset")]
+    /// Asset identifier (e.g. `61CtjvNd9T3THAR65GsMVHr82Bjc`) for the allow entry.
+    #[arg(long = "allow-asset", value_name = "ASSET-ID", id = "allow_asset")]
     pub asset: Option<String>,
     /// AMX role enforced by the allow entry (`initiator` or `participant`).
     #[arg(long = "allow-role", value_name = "ROLE", id = "allow_role")]
@@ -395,8 +395,8 @@ pub struct ManifestScaffoldDenyArgs {
     /// Method/entry-point for the deny entry.
     #[arg(long = "deny-method", value_name = "NAME", id = "deny_method")]
     pub method: Option<String>,
-    /// Asset identifier (e.g. `xor#sora`) for the deny entry.
-    #[arg(long = "deny-asset", value_name = "DEF#DOMAIN", id = "deny_asset")]
+    /// Asset identifier (e.g. `61CtjvNd9T3THAR65GsMVHr82Bjc`) for the deny entry.
+    #[arg(long = "deny-asset", value_name = "ASSET-ID", id = "deny_asset")]
     pub asset: Option<String>,
     /// AMX role enforced by the deny entry.
     #[arg(long = "deny-role", value_name = "ROLE", id = "deny_role")]

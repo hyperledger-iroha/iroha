@@ -96,7 +96,7 @@ final class TransactionEncoderValidationTests: XCTestCase {
         let authority = try canonicalAuthorityLiteral(from: signingKey)
         let request = RemoveMetadataRequest(chainId: "chain",
                                             authority: authority,
-                                            target: .asset("rose#wonderland"),
+                                            target: .asset("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
                                             key: "profile",
                                             ttlMs: nil)
 
@@ -106,7 +106,7 @@ final class TransactionEncoderValidationTests: XCTestCase {
                                                              creationTimeMs: 5)
         ) { error in
             XCTAssertEqual(error as? TransactionInputError,
-                           .malformedAssetId("rose#wonderland"))
+                           .malformedAssetId("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"))
         }
     }
 

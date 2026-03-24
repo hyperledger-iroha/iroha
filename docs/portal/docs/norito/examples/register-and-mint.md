@@ -37,7 +37,7 @@ seiyaku RegisterAndMint {
 
     // Mint 250 ROSE to Alice
     let to = account!("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn");
-    let asset = asset_definition!("rose#wonderland");
+    let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     mint_asset(to, asset, 250);
   }
 }

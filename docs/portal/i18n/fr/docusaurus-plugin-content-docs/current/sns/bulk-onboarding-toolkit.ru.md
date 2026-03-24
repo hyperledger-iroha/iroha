@@ -35,7 +35,7 @@ charges utiles автоматически, записывая структури
 | `suffix_id` | Oui | Le suffixe d'identification de l'identifiant (désposé ou `0x` hex). |
 | `owner` | Oui | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | Oui | Le chien `1..=255`. |
-| `payment_asset_id` | Oui | Règlement actif (par exemple `xor#sora`). |
+| `payment_asset_id` | Oui | Règlement actif (par exemple `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Oui | Sans cela, les éditions précédentes sont actives. |
 | `settlement_tx` | Oui | JSON utilise ou utilise une plate-forme de conversion ou de hachage. |
 | `payment_payer` | Oui | AccountId, plaque d'immatriculation automatique. |
@@ -79,7 +79,7 @@ Dans le cas du script, il y a un manifeste agrégé :
       "term_years": 2,
       "pricing_class_hint": null,
       "payment": {
-        "asset_id":"xor#sora",
+        "asset_id":"61CtjvNd9T3THAR65GsMVHr82Bjc",
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
@@ -109,7 +109,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v1/sns/names
   done
 ```
 
@@ -129,9 +129,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- Aide à retarder l'arrivée d'Odin `POST /v1/sns/registrations` et à l'aider à le faire.
+- Aide à retarder l'arrivée d'Odin `POST /v1/sns/names` et à l'aider à le faire.
   est activé par HTTP. Les réponses sont ajoutées au journal des messages de NDJSON.
-- `--poll-status` est automatiquement installé `/v1/sns/registrations/{selector}` après
+- `--poll-status` est automatiquement installé `/v1/sns/names/{namespace}/{literal}` après
   каждой отправки (до `--poll-attempts`, by умолчанию 5), чтобы подтвердить
   видимость записи. Recherchez `--suffix-map` (mapping JSON `suffix_id` dans la zone
   "suffixe"), l'instrument que vous utilisez est `{label}.{suffix}` pour l'interrogation.
@@ -212,7 +212,7 @@ Voici la mesure du générateur `sns_bulk_release.sh` qui correspond à la séri
 # TYPE sns_bulk_release_requests_total gauge
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
-sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
+sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="61CtjvNd9T3THAR65GsMVHr82Bjc"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 

@@ -226,7 +226,7 @@ Pointer constructors (emit Norito TLV into INPUT and return a typed pointer)
 
 Prelude macros provide shorter aliases and inline validation for these constructors:
 - `account!("i105...")`, `account_id!("i105...")`
-- `asset_definition!("rose#wonderland")`, `asset_id!("rose#wonderland")`
+- `asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`, `asset_id!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`
 - `domain!("wonderland")`, `domain_id!("wonderland")`
 - `name!("example")`
 - `json!("{\"hello\":\"world\"}")` or structured literals such as `json!{ hello: "world" }`

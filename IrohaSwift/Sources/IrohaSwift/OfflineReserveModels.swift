@@ -119,7 +119,9 @@ public struct ToriiOfflineReserveState: Codable, Sendable, Equatable, Identifiab
     public let accountId: String
     public let deviceId: String
     public let offlinePublicKey: String
+    public let assetDefinitionId: String
     public let balance: String
+    public let parkedBalance: String
     public let serverRevision: UInt64
     public let serverStateHash: String
     public let pendingLocalRevision: UInt64
@@ -133,7 +135,9 @@ public struct ToriiOfflineReserveState: Codable, Sendable, Equatable, Identifiab
         accountId: String,
         deviceId: String,
         offlinePublicKey: String,
+        assetDefinitionId: String,
         balance: String,
+        parkedBalance: String,
         serverRevision: UInt64,
         serverStateHash: String,
         pendingLocalRevision: UInt64,
@@ -144,7 +148,9 @@ public struct ToriiOfflineReserveState: Codable, Sendable, Equatable, Identifiab
         self.accountId = accountId
         self.deviceId = deviceId
         self.offlinePublicKey = offlinePublicKey
+        self.assetDefinitionId = assetDefinitionId
         self.balance = balance
+        self.parkedBalance = parkedBalance
         self.serverRevision = serverRevision
         self.serverStateHash = serverStateHash
         self.pendingLocalRevision = pendingLocalRevision
@@ -157,7 +163,9 @@ public struct ToriiOfflineReserveState: Codable, Sendable, Equatable, Identifiab
         case accountId = "account_id"
         case deviceId = "device_id"
         case offlinePublicKey = "offline_public_key"
+        case assetDefinitionId = "asset_definition_id"
         case balance
+        case parkedBalance = "parked_balance"
         case serverRevision = "server_revision"
         case serverStateHash = "server_state_hash"
         case pendingLocalRevision = "pending_local_revision"
@@ -206,6 +214,8 @@ public struct ToriiOfflineTransferReceipt: Codable, Sendable, Equatable, Identif
     public let offlinePublicKey: String
     public let preBalance: String
     public let postBalance: String
+    public let preParkedBalance: String
+    public let postParkedBalance: String
     public let preStateHash: String
     public let postStateHash: String
     public let localRevision: UInt64
@@ -232,6 +242,8 @@ public struct ToriiOfflineTransferReceipt: Codable, Sendable, Equatable, Identif
         offlinePublicKey: String,
         preBalance: String,
         postBalance: String,
+        preParkedBalance: String,
+        postParkedBalance: String,
         preStateHash: String,
         postStateHash: String,
         localRevision: UInt64,
@@ -255,6 +267,8 @@ public struct ToriiOfflineTransferReceipt: Codable, Sendable, Equatable, Identif
         self.offlinePublicKey = offlinePublicKey
         self.preBalance = preBalance
         self.postBalance = postBalance
+        self.preParkedBalance = preParkedBalance
+        self.postParkedBalance = postParkedBalance
         self.preStateHash = preStateHash
         self.postStateHash = postStateHash
         self.localRevision = localRevision
@@ -280,6 +294,8 @@ public struct ToriiOfflineTransferReceipt: Codable, Sendable, Equatable, Identif
         case offlinePublicKey = "offline_public_key"
         case preBalance = "pre_balance"
         case postBalance = "post_balance"
+        case preParkedBalance = "pre_parked_balance"
+        case postParkedBalance = "post_parked_balance"
         case preStateHash = "pre_state_hash"
         case postStateHash = "post_state_hash"
         case localRevision = "local_revision"
@@ -326,6 +342,7 @@ public struct ToriiOfflineReserveSetupRequest: Codable, Sendable, Equatable {
     public let accountId: String
     public let deviceId: String
     public let offlinePublicKey: String
+    public let assetDefinitionId: String
     public let appAttestKeyId: String
     public let attestation: ToriiOfflineDeviceAttestation
 
@@ -333,12 +350,14 @@ public struct ToriiOfflineReserveSetupRequest: Codable, Sendable, Equatable {
         accountId: String,
         deviceId: String,
         offlinePublicKey: String,
+        assetDefinitionId: String,
         appAttestKeyId: String,
         attestation: ToriiOfflineDeviceAttestation
     ) {
         self.accountId = accountId
         self.deviceId = deviceId
         self.offlinePublicKey = offlinePublicKey
+        self.assetDefinitionId = assetDefinitionId
         self.appAttestKeyId = appAttestKeyId
         self.attestation = attestation
     }
@@ -347,6 +366,7 @@ public struct ToriiOfflineReserveSetupRequest: Codable, Sendable, Equatable {
         case accountId = "account_id"
         case deviceId = "device_id"
         case offlinePublicKey = "offline_public_key"
+        case assetDefinitionId = "asset_definition_id"
         case appAttestKeyId = "app_attest_key_id"
         case attestation
     }
@@ -358,6 +378,7 @@ public struct ToriiOfflineReserveTopUpRequest: Codable, Sendable, Equatable {
     public let accountId: String
     public let deviceId: String
     public let offlinePublicKey: String
+    public let assetDefinitionId: String
     public let appAttestKeyId: String
     public let amount: String
     public let attestation: ToriiOfflineDeviceAttestation
@@ -368,6 +389,7 @@ public struct ToriiOfflineReserveTopUpRequest: Codable, Sendable, Equatable {
         accountId: String,
         deviceId: String,
         offlinePublicKey: String,
+        assetDefinitionId: String,
         appAttestKeyId: String,
         amount: String,
         attestation: ToriiOfflineDeviceAttestation
@@ -377,6 +399,7 @@ public struct ToriiOfflineReserveTopUpRequest: Codable, Sendable, Equatable {
         self.accountId = accountId
         self.deviceId = deviceId
         self.offlinePublicKey = offlinePublicKey
+        self.assetDefinitionId = assetDefinitionId
         self.appAttestKeyId = appAttestKeyId
         self.amount = amount
         self.attestation = attestation
@@ -388,6 +411,7 @@ public struct ToriiOfflineReserveTopUpRequest: Codable, Sendable, Equatable {
         case accountId = "account_id"
         case deviceId = "device_id"
         case offlinePublicKey = "offline_public_key"
+        case assetDefinitionId = "asset_definition_id"
         case appAttestKeyId = "app_attest_key_id"
         case amount
         case attestation
@@ -583,7 +607,8 @@ public enum ToriiOfflineReserveCodec {
         counterpartyReserveId: String,
         amount: String,
         localRevision: UInt64,
-        postBalance: String
+        postBalance: String,
+        postParkedBalance: String
     ) throws -> String {
         try hashHex(
             LocalStateHashPayload(
@@ -594,7 +619,8 @@ public enum ToriiOfflineReserveCodec {
                 counterpartyReserveId: counterpartyReserveId,
                 amount: canonicalAmountString(amount),
                 localRevision: localRevision,
-                postBalance: canonicalAmountString(postBalance)
+                postBalance: canonicalAmountString(postBalance),
+                postParkedBalance: canonicalAmountString(postParkedBalance)
             )
         )
     }
@@ -666,7 +692,9 @@ public enum ToriiOfflineReserveCodec {
                 accountId: reserveState.accountId,
                 deviceId: reserveState.deviceId,
                 offlinePublicKey: reserveState.offlinePublicKey,
+                assetDefinitionId: reserveState.assetDefinitionId,
                 balance: try canonicalAmountString(reserveState.balance),
+                parkedBalance: try canonicalAmountString(reserveState.parkedBalance),
                 serverRevision: reserveState.serverRevision,
                 serverStateHash: reserveState.serverStateHash,
                 pendingLocalRevision: reserveState.pendingLocalRevision,
@@ -697,6 +725,8 @@ public enum ToriiOfflineReserveCodec {
                 offlinePublicKey: receipt.offlinePublicKey,
                 preBalance: try canonicalAmountString(receipt.preBalance),
                 postBalance: try canonicalAmountString(receipt.postBalance),
+                preParkedBalance: try canonicalAmountString(receipt.preParkedBalance),
+                postParkedBalance: try canonicalAmountString(receipt.postParkedBalance),
                 preStateHash: receipt.preStateHash,
                 postStateHash: receipt.postStateHash,
                 localRevision: receipt.localRevision,
@@ -735,7 +765,9 @@ private extension ToriiOfflineReserveCodec {
         let accountId: String
         let deviceId: String
         let offlinePublicKey: String
+        let assetDefinitionId: String
         let balance: String
+        let parkedBalance: String
         let serverRevision: UInt64
         let serverStateHash: String
         let pendingLocalRevision: UInt64
@@ -758,6 +790,8 @@ private extension ToriiOfflineReserveCodec {
         let offlinePublicKey: String
         let preBalance: String
         let postBalance: String
+        let preParkedBalance: String
+        let postParkedBalance: String
         let preStateHash: String
         let postStateHash: String
         let localRevision: UInt64
@@ -781,6 +815,7 @@ private extension ToriiOfflineReserveCodec {
         let amount: String
         let localRevision: UInt64
         let postBalance: String
+        let postParkedBalance: String
     }
 
     static func parseAmount(_ rawValue: String) throws -> Decimal {

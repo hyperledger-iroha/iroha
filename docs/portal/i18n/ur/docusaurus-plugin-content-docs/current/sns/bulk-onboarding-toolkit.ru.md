@@ -37,7 +37,7 @@ JSON پے لوڈز یا CLI ریرنس پیمائش نہیں کرتے ہیں ، 
 | `suffix_id` | ہاں | عددی لاحقہ شناخت کنندہ (اعشاریہ یا `0x` ہیکس)۔ |
 | `owner` | ہاں | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | ہاں | انٹیجر `1..=255`۔ |
-| `payment_asset_id` | ہاں | تصفیہ اثاثہ (مثال کے طور پر `xor#sora`)۔ |
+| `payment_asset_id` | ہاں | تصفیہ اثاثہ (مثال کے طور پر `61CtjvNd9T3THAR65GsMVHr82Bjc`)۔ |
 | `payment_gross` / `payment_net` | ہاں | اثاثہ کے اکائیوں کی نمائندگی کرنے والے دستخط شدہ عدد۔ |
 | `settlement_tx` | ہاں | ادائیگی کے لین دین یا ہیش کو بیان کرتے ہوئے JSON قدر یا تار۔ |
 | `payment_payer` | ہاں | اکاؤنٹ آئی ڈی جس نے ادائیگی کو اختیار دیا۔ |
@@ -83,7 +83,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
       "term_years": 2,
       "pricing_class_hint": null,
       "payment": {
-        "asset_id":"xor#sora",
+        "asset_id":"61CtjvNd9T3THAR65GsMVHr82Bjc",
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
@@ -113,7 +113,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v1/sns/names
   done
 ```## 3. خودکار ترسیل
 
@@ -131,9 +131,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- مددگار ایک `POST /v1/sns/registrations` فی درخواست کرتا ہے اور رک جاتا ہے جب
+- مددگار ایک `POST /v1/sns/names` فی درخواست کرتا ہے اور رک جاتا ہے جب
   پہلی HTTP غلطی۔ جوابات کو NDJSON ریکارڈ کے بطور لاگ میں شامل کیا جاتا ہے۔
-- `--poll-status` درخواست کرتا ہے `/v1/sns/registrations/{selector}` کے بعد ایک بار پھر
+- `--poll-status` درخواست کرتا ہے `/v1/sns/names/{namespace}/{literal}` کے بعد ایک بار پھر
   تصدیق کرنے کے لئے ہر ایک بھیجیں (`--poll-attempts` ، پہلے سے طے شدہ 5)
   ریکارڈ کی نمائش۔ `--suffix-map` (JSON میپنگ `suffix_id` کو اقدار پر بتائیں
   "لاحقہ") تاکہ ٹول پولنگ کے لئے `{label}.{suffix}` آؤٹ پٹ کر سکے۔
@@ -218,7 +218,7 @@ docs/portal/scripts/sns_bulk_release.sh \
 # TYPE sns_bulk_release_requests_total gauge
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
-sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
+sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="61CtjvNd9T3THAR65GsMVHr82Bjc"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ````metrics.prom` کو Prometheus SIDECAR پر پاس کریں (مثال کے طور پر پرومٹیل یا بیچ کے ذریعے
 درآمد کنندہ) تاکہ رجسٹرار ، اسٹیورڈز اور گورننس کے ساتھی متفق ہوں

@@ -110,15 +110,15 @@ Struct ReservedAssignmentRequestV1 {
 
 | Son nöqtə | Metod | Yük | Təsvir |
 |----------|--------|---------|-------------|
-| `/v1/sns/registrations` | POST | `RegisterNameRequestV1` | Qeydiyyatdan keçin və ya adı yenidən açın. Qiymət səviyyəsini həll edir, ödəniş/idarəetmə sübutlarını təsdiqləyir, qeyd hadisələrini yayır. |
-| `/v1/sns/registrations/{selector}/renew` | POST | `RenewNameRequestV1` | Müddəti uzatmaq. Siyasətdən lütf/ödəniş pəncərələrini tətbiq edir. |
-| `/v1/sns/registrations/{selector}/transfer` | POST | `TransferNameRequestV1` | İdarəetmə təsdiqləri əlavə edildikdən sonra mülkiyyəti köçürün. |
-| `/v1/sns/registrations/{selector}/controllers` | PUT | `UpdateControllersRequestV1` | Nəzarətçi dəstini dəyişdirin; imzalanmış hesab ünvanlarını doğrulayır. |
-| `/v1/sns/registrations/{selector}/freeze` | POST | `FreezeNameRequestV1` | Qəyyum/məclis dondurulur. Qəyyum bileti və idarəetmə sənədinə istinad tələb olunur. |
-| `/v1/sns/registrations/{selector}/freeze` | SİL | `GovernanceHookV1` | Təmirdən sonra dondurun; şuranın ləğv edilməsinin qeydə alınmasını təmin edir. |
+| `/v1/sns/names` | POST | `RegisterNameRequestV1` | Qeydiyyatdan keçin və ya adı yenidən açın. Qiymət səviyyəsini həll edir, ödəniş/idarəetmə sübutlarını təsdiqləyir, qeyd hadisələrini yayır. |
+| `/v1/sns/names/{namespace}/{literal}/renew` | POST | `RenewNameRequestV1` | Müddəti uzatmaq. Siyasətdən lütf/ödəniş pəncərələrini tətbiq edir. |
+| `/v1/sns/names/{namespace}/{literal}/transfer` | POST | `TransferNameRequestV1` | İdarəetmə təsdiqləri əlavə edildikdən sonra mülkiyyəti köçürün. |
+| `/v1/sns/names/{namespace}/{literal}/controllers` | PUT | `UpdateControllersRequestV1` | Nəzarətçi dəstini dəyişdirin; imzalanmış hesab ünvanlarını doğrulayır. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | POST | `FreezeNameRequestV1` | Qəyyum/məclis dondurulur. Qəyyum bileti və idarəetmə sənədinə istinad tələb olunur. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | SİL | `GovernanceHookV1` | Təmirdən sonra dondurun; şuranın ləğv edilməsinin qeydə alınmasını təmin edir. |
 | `/v1/sns/reserved/{selector}` | POST | `ReservedAssignmentRequestV1` | Qorunan adların stüard/məclis təyinatı. |
 | `/v1/sns/policies/{suffix_id}` | GET | — | Cari əldə edin `SuffixPolicyV1` (keşlənə bilər). |
-| `/v1/sns/registrations/{selector}` | GET | — | Cari `NameRecordV1` + effektiv vəziyyəti qaytarır (Aktiv, Grace və s.). |
+| `/v1/sns/names/{namespace}/{literal}` | GET | — | Cari `NameRecordV1` + effektiv vəziyyəti qaytarır (Aktiv, Grace və s.). |
 
 **Seçicinin kodlaşdırılması:** `{selector}` yol seqmenti ADDR-5 üçün I105 (üstünlük verilir), sıxılmış (`sora`, ikinci ən yaxşı) və ya kanonik hex qəbul edir; Torii onu `NameSelectorV1` vasitəsilə normallaşdırır.
 
@@ -133,7 +133,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -158,7 +158,7 @@ iroha sns policy --suffix-id 1
 iroha sns renew \
   --selector makoto.sora \
   --term-years 1 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 120 \
   --payment-settlement '"renewal-settlement"' \
   --payment-signature '"steward-signature"'
@@ -181,7 +181,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` etibarlı `GovernanceHookV1` qeydini (təklif identifikatoru, səs heşləri, stüard/qəyyum imzaları) ehtiva etməlidir. Hər bir əmr sadəcə olaraq müvafiq `/v1/sns/registrations/{selector}/…` son nöqtəsini əks etdirir ki, beta operatorları SDK-ların çağıracağı dəqiq Torii səthlərini məşq edə bilsinlər.
+`--governance-json` etibarlı `GovernanceHookV1` qeydini (təklif identifikatoru, səs heşləri, stüard/qəyyum imzaları) ehtiva etməlidir. Hər bir əmr sadəcə olaraq müvafiq `/v1/sns/names/{namespace}/{literal}/…` son nöqtəsini əks etdirir ki, beta operatorları SDK-ların çağıracağı dəqiq Torii səthlərini məşq edə bilsinlər.
 
 ## 4. gRPC Xidməti
 
@@ -253,7 +253,7 @@ Lütf yeniləmələrinə standart sorğu və cəzanın aşkarlanması daxildir:
 
 1. Qəyyum `FreezeNameRequestV1`-i biletə istinad edən insident id ilə təqdim edir.
 2. Torii rekordu `NameStatus::Frozen`-ə köçürür, `NameFrozen` yayır.
-3. Təmirdən sonra şuranın məsələləri ləğv edilir; operator DELETE `/v1/sns/registrations/{selector}/freeze`-i `GovernanceHookV1` ilə göndərir.
+3. Təmirdən sonra şuranın məsələləri ləğv edilir; operator DELETE `/v1/sns/names/{namespace}/{literal}/freeze`-i `GovernanceHookV1` ilə göndərir.
 4. Torii ləğvi təsdiqləyir, `NameUnfrozen` yayır.
 
 ## 7. Doğrulama və Xəta Kodları

@@ -873,7 +873,7 @@ public final class HttpClientTransportTests {
     final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
 
     final UaidBindingsQuery query =
-        UaidBindingsQuery.builder().setAddressFormat(AddressFormatOption.COMPRESSED).build();
+        UaidBindingsQuery.builder().setAddressFormat(AddressFormatOption.I105).build();
     final UaidBindingsResponse response =
         transport.getUaidBindings("uaid:" + hex.toUpperCase(), query).join();
     assert response.dataspaces().size() == 1 : "Expected bindings entry";
@@ -887,7 +887,7 @@ public final class HttpClientTransportTests {
         .equals(
             "https://torii.example/v1/space-directory/uaids/uaid%3A"
                 + hex
-                + "?address_format=compressed")
+                + "?address_format=i105")
         : "Bindings URI must encode UAID literal and query";
   }
 
@@ -932,7 +932,7 @@ public final class HttpClientTransportTests {
             .setStatus(UaidManifestStatusFilter.INACTIVE)
             .setLimit(25L)
             .setOffset(5L)
-            .setAddressFormat(AddressFormatOption.IH58)
+            .setAddressFormat(AddressFormatOption.I105)
             .build();
 
     final UaidManifestsResponse response =
@@ -964,7 +964,7 @@ public final class HttpClientTransportTests {
         .equals(
             "https://torii.example/v1/space-directory/uaids/uaid%3A"
                 + hex
-                + "/manifests?dataspace=9&status=inactive&limit=25&offset=5&address_format=ih58")
+                + "/manifests?dataspace=9&status=inactive&limit=25&offset=5&address_format=i105")
         : "Manifest URI must include encoded query parameters";
   }
 

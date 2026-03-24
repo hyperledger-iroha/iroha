@@ -19,7 +19,7 @@ use iroha::data_model::{
         UpdateControllersRequestV1,
     },
 };
-use iroha::sns::CaseExportQuery;
+use iroha::sns::SnsNamespacePath;
 use iroha_primitives::json::Json;
 use norito::json::{self, Map, Value};
 use std::{
@@ -45,9 +45,9 @@ static SUFFIX_CATALOG: LazyLock<SuffixCatalog> = LazyLock::new(|| {
 #[derive(Subcommand, Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum Command {
-    /// Register a SNS name via `/v1/sns/registrations`.
+    /// Register a SNS name via `/v1/sns/names`.
     Register(RegisterArgs),
-    /// Renew a SNS name via `/v1/sns/registrations/{selector}/renew`.
+    /// Renew a SNS name via `/v1/sns/names/domain/{literal}/renew`.
     Renew(RenewArgs),
     /// Transfer ownership of a SNS name.
     Transfer(TransferArgs),
@@ -61,7 +61,7 @@ pub enum Command {
     Registration(GetRegistrationArgs),
     /// Fetch the policy for a suffix.
     Policy(GetPolicyArgs),
-    /// Governance helpers (arbitration, transparency exports, etc.).
+    /// Governance helper placeholders retained for dry-run validation only.
     #[command(subcommand)]
     Governance(GovernanceCommand),
 }
@@ -119,7 +119,7 @@ pub struct PaymentOptions {
     /// Optional path to a JSON file containing `PaymentProofV1`. When omitted the inline flags are used.
     #[arg(long = "payment-json", value_name = "PATH")]
     pub json_path: Option<PathBuf>,
-    /// Payment asset identifier (e.g., `xor#sora`).
+    /// Payment asset identifier (e.g., `61CtjvNd9T3THAR65GsMVHr82Bjc`).
     #[arg(long = "payment-asset-id", value_name = "ASSET-ID")]
     pub asset_id: Option<String>,
     /// Gross payment amount (base + surcharges) in native units.
@@ -172,7 +172,7 @@ pub struct RegisterArgs {
 
 #[derive(Args, Debug)]
 pub struct RenewArgs {
-    /// Selector literal (e.g. `makoto.sora`).
+    /// Legacy domain selector literal (e.g. `makoto.sora`).
     #[arg(long, value_name = "LABEL.SUFFIX")]
     pub selector: String,
     /// Additional term to purchase (years).
@@ -185,7 +185,7 @@ pub struct RenewArgs {
 
 #[derive(Args, Debug)]
 pub struct TransferArgs {
-    /// Selector literal (e.g. `makoto.sora`).
+    /// Legacy domain selector literal (e.g. `makoto.sora`).
     #[arg(long, value_name = "LABEL.SUFFIX")]
     pub selector: String,
     /// New owner account identifier.
@@ -198,7 +198,7 @@ pub struct TransferArgs {
 
 #[derive(Args, Debug)]
 pub struct UpdateControllersArgs {
-    /// Selector literal (e.g. `makoto.sora`).
+    /// Legacy domain selector literal (e.g. `makoto.sora`).
     #[arg(long, value_name = "LABEL.SUFFIX")]
     pub selector: String,
     /// Replacement controller account identifiers (repeatable). Defaults to `[config account]`.
@@ -208,7 +208,7 @@ pub struct UpdateControllersArgs {
 
 #[derive(Args, Debug)]
 pub struct FreezeArgs {
-    /// Selector literal (e.g. `makoto.sora`).
+    /// Legacy domain selector literal (e.g. `makoto.sora`).
     #[arg(long, value_name = "LABEL.SUFFIX")]
     pub selector: String,
     /// Reason recorded in the freeze log.
@@ -224,7 +224,7 @@ pub struct FreezeArgs {
 
 #[derive(Args, Debug)]
 pub struct UnfreezeArgs {
-    /// Selector literal (e.g. `makoto.sora`).
+    /// Legacy domain selector literal (e.g. `makoto.sora`).
     #[arg(long, value_name = "LABEL.SUFFIX")]
     pub selector: String,
     /// Path to `GovernanceHookV1` JSON authorising the unfreeze.
@@ -382,7 +382,8 @@ impl Run for RenewArgs {
         let request = self.build_request(&context.config().account, &|literal| {
             crate::resolve_account_id(context, literal)
         })?;
-        let record = client.sns().renew(self.selector_literal(), &request)?;
+        let literal = domain_literal_from_selector(self.selector_literal())?;
+        let record = client.sns().renew(SnsNamespacePath::Domain, literal, &request)?;
         context.print_data(&record)
     }
 }
@@ -414,10 +415,11 @@ impl TransferArgs {
 impl Run for TransferArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let request = self.build_request(&|literal| crate::resolve_account_id(context, literal))?;
+        let literal = domain_literal_from_selector(self.selector_literal())?;
         let record = context
             .client_from_config()
             .sns()
-            .transfer(self.selector_literal(), &request)?;
+            .transfer(SnsNamespacePath::Domain, literal, &request)?;
         context.print_data(&record)
     }
 }
@@ -453,10 +455,11 @@ impl Run for UpdateControllersArgs {
         let request = self.build_request(&context.config().account, &|literal| {
             crate::resolve_account_id(context, literal)
         })?;
+        let literal = domain_literal_from_selector(self.selector_literal())?;
         let record = context
             .client_from_config()
             .sns()
-            .update_controllers(self.selector_literal(), &request)?;
+            .update_controllers(SnsNamespacePath::Domain, literal, &request)?;
         context.print_data(&record)
     }
 }
@@ -479,10 +482,11 @@ impl FreezeArgs {
 impl Run for FreezeArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let request = self.build_request()?;
+        let literal = domain_literal_from_selector(self.selector_literal())?;
         let record = context
             .client_from_config()
             .sns()
-            .freeze(self.selector_literal(), &request)?;
+            .freeze(SnsNamespacePath::Domain, literal, &request)?;
         context.print_data(&record)
     }
 }
@@ -505,17 +509,18 @@ impl UnfreezeArgs {
 impl Run for UnfreezeArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let hook = self.governance()?;
+        let literal = domain_literal_from_selector(self.selector_literal())?;
         let record = context
             .client_from_config()
             .sns()
-            .unfreeze(self.selector_literal(), &hook)?;
+            .unfreeze(SnsNamespacePath::Domain, literal, &hook)?;
         context.print_data(&record)
     }
 }
 
 #[derive(Args, Debug)]
 pub struct GetRegistrationArgs {
-    /// Selector literal (`label.suffix`) in canonical I105 form.
+    /// Legacy domain selector literal (`label.suffix`) in canonical I105 form.
     #[arg(long, value_name = "SELECTOR")]
     pub selector: String,
 }
@@ -523,7 +528,8 @@ pub struct GetRegistrationArgs {
 impl Run for GetRegistrationArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client = context.client_from_config();
-        let record = client.sns().get_registration(&self.selector)?;
+        let literal = domain_literal_from_selector(&self.selector)?;
+        let record = client.sns().get_name(SnsNamespacePath::Domain, literal)?;
         context.print_data(&record)
     }
 }
@@ -675,24 +681,19 @@ impl Run for CaseCreateArgs {
             let text = "Arbitration case validated (dry-run).".to_string();
             print_with_optional_text(context, Some(text), &case_payload)
         } else {
-            let result = context
-                .client_from_config()
-                .sns()
-                .create_case(&case_payload)?;
-            print_with_optional_text(context, None, &result)
+            Err(eyre!(
+                "Torii removed `/v1/sns/governance/cases`; use ledger-backed `/v1/sns/names...` operations instead"
+            ))
         }
     }
 }
 
 impl Run for CaseExportArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let query = CaseExportQuery {
-            since: self.since.as_deref(),
-            status: self.status.as_deref(),
-            limit: self.limit,
-        };
-        let response = context.client_from_config().sns().export_cases(query)?;
-        context.print_data(&response)
+        let _ = context;
+        Err(eyre!(
+            "Torii removed `/v1/sns/governance/cases`; use ledger-backed `/v1/sns/names...` operations instead"
+        ))
     }
 }
 
@@ -700,6 +701,17 @@ fn account_controller(account: &AccountId) -> Result<NameControllerV1> {
     let address =
         AccountAddress::from_account_id(account).wrap_err("failed to encode controller address")?;
     Ok(NameControllerV1::account(&address))
+}
+
+fn domain_literal_from_selector(selector: &str) -> Result<&str> {
+    let trimmed = selector.trim();
+    let (label, suffix) = trimmed
+        .split_once('.')
+        .ok_or_else(|| eyre!("selector must be of the form `label.suffix`"))?;
+    if label.trim().is_empty() || suffix.trim().is_empty() {
+        return Err(eyre!("selector must be of the form `label.suffix`"));
+    }
+    Ok(label.trim())
 }
 
 fn load_optional_governance(path: Option<&PathBuf>) -> Result<Option<GovernanceHookV1>> {
@@ -1313,7 +1325,7 @@ mod tests {
 
     fn sample_payment_options() -> PaymentOptions {
         PaymentOptions {
-            asset_id: Some("xor#sora".into()),
+            asset_id: Some("61CtjvNd9T3THAR65GsMVHr82Bjc".into()),
             gross: Some(120),
             settlement: Some("\"tx-1\"".into()),
             signature: Some("\"sig\"".into()),
@@ -1329,7 +1341,7 @@ mod tests {
             status: "active".to_string(),
             steward_account: account_id.clone(),
             fund_splitter_account: account_id,
-            payment_asset_id: "xor#sora".to_string(),
+            payment_asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_string(),
             referral_cap_bps: 0,
             min_term_years: 1,
             max_term_years: 2,

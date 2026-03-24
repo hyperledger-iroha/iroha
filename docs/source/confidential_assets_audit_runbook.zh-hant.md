@@ -32,7 +32,7 @@ translator: machine-google-reviewed
   可以選擇將範圍限定為單個資產定義。 CLI 示例：
 
   ```bash
-  iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "rose#wonderland" } }'
+  iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM" } }'
   ```
 
 - 政策元數據和待定轉換可通過

@@ -27,7 +27,7 @@ translation_last_reviewed: 2026-02-07
 ## 1. የንብረት ፍቺ (CLI) ይመዝገቡ
 
 ```bash
-iroha --config defaults/client.toml asset definition register --id coffee#wonderland
+iroha --config defaults/client.toml asset definition register --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 ## 2. ምስክርነቶችን ወደ ውጭ ላክ

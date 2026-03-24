@@ -17504,12 +17504,17 @@ mod test {
     #[test]
     fn settlement_conversion_and_haircut_totals_increment() {
         let metrics = Metrics::default();
-        metrics.inc_settlement_conversion_total("lane-1", "ds-7", "xor#sora", 4);
+        metrics.inc_settlement_conversion_total(
+            "lane-1",
+            "ds-7",
+            "61CtjvNd9T3THAR65GsMVHr82Bjc",
+            4,
+        );
         metrics.inc_settlement_haircut_total("lane-1", "ds-7", 3_500_000);
 
         let conversions = metrics
             .settlement_conversion_total
-            .with_label_values(&["lane-1", "ds-7", "xor#sora"])
+            .with_label_values(&["lane-1", "ds-7", "61CtjvNd9T3THAR65GsMVHr82Bjc"])
             .get();
         assert_eq!(conversions, 4);
 

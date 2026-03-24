@@ -228,7 +228,7 @@ register_trigger wake {
 - `asset_handle(string|0xhex) -> AssetHandle*`
 - `proof_blob(string|0xhex) -> ProofBlob*`Prelude 宏為這些構造函數提供更短的別名和內聯驗證：
 - `account!("i105...")`, `account_id!("i105...")`
-- `asset_definition!("rose#wonderland")`、`asset_id!("rose#wonderland")`
+- `asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`、`asset_id!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`
 - `domain!("wonderland")`, `domain_id!("wonderland")`
 - `name!("example")`
 - `json!("{\"hello\":\"world\"}")` 或結構化文字，例如 `json!{ hello: "world" }`

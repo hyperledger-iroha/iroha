@@ -12,9 +12,7 @@ use norito::{
 
 use super::{
     AccountAddressError::*, CONTROLLER_MULTISIG_TAG, CONTROLLER_SINGLE_KEY_TAG, DomainSelector,
-    I105_BASE_U8, I105_CHECKSUM_LEN, chain_discriminant, compute_local_digest,
-    default_domain_guard, default_domain_name, i105_alphabet, i105_sentinel_for_discriminant,
-    i105_to_digits,
+    compute_local_digest, default_domain_guard, default_domain_name,
 };
 use crate::{
     account::{AccountAddress, AccountAddressError, AccountId, MultisigMember, MultisigPolicy},
@@ -24,6 +22,31 @@ use crate::{
 
 /// Default I105 prefix used for deterministic vectors.
 pub const DEFAULT_VECTOR_NETWORK_PREFIX: u16 = 0x1234;
+
+const I105_BASE_U8: u8 = 58;
+const I105_CHECKSUM_LEN: usize = 2;
+const BASE58_ALPHABET: &str = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+
+fn i105_to_digits(payload: &str) -> Result<Vec<u8>, AccountAddressError> {
+    payload
+        .chars()
+        .map(|ch| {
+            BASE58_ALPHABET
+                .find(ch)
+                .map(|index| index as u8)
+                .ok_or(AccountAddressError::InvalidI105Char(ch))
+        })
+        .collect()
+}
+
+fn digits_to_i105_literal(digits: &[u8]) -> String {
+    let alphabet = BASE58_ALPHABET.as_bytes();
+    let mut out = String::with_capacity(digits.len());
+    for digit in digits {
+        out.push(alphabet[usize::from(*digit)] as char);
+    }
+    out
+}
 
 const VECTOR_SINGLE_DOMAINS: [(&str, u8); 12] = [
     ("default", 0x00),
@@ -124,15 +147,10 @@ impl AddressVectorBundle {
             (
                 "formats",
                 Value::Array(
-                    [
-                        "i105",
-                        "canonical_hex",
-                        "i105_default_halfwidth",
-                        "i105_default_fullwidth",
-                    ]
-                    .into_iter()
-                    .map(json_value)
-                    .collect(),
+                    ["i105", "canonical_hex", "i105_default"]
+                        .into_iter()
+                        .map(json_value)
+                        .collect(),
                 ),
             ),
         ]);
@@ -159,10 +177,8 @@ pub struct SingleKeyVector {
     pub canonical_hex: String,
     /// I105-encoded controller address string.
     pub i105: String,
-    /// Halfwidth `i105_default` representation of the controller address.
-    pub i105_default_halfwidth: String,
-    /// Fullwidth `i105_default` representation of the controller address.
-    pub i105_default_fullwidth: String,
+    /// Canonical default-discriminant I105 representation of the controller address.
+    pub i105_default: String,
     /// Domain selector input data required to reproduce the controller address.
     pub domain_selector: DomainSelectorVector,
     /// Curve identifier used by the controller's public key.
@@ -182,10 +198,6 @@ impl SingleKeyVector {
             ("value", json_value(&self.i105)),
             ("network_prefix", json_value(&network_prefix_hex)),
         ]);
-        let i105_default = json_object(vec![
-            ("halfwidth", json_value(&self.i105_default_halfwidth)),
-            ("fullwidth", json_value(&self.i105_default_fullwidth)),
-        ]);
         let controller = json_object(vec![
             ("kind", json_value("single")),
             ("curve_id", json_value(&controller_curve_hex)),
@@ -199,7 +211,7 @@ impl SingleKeyVector {
             ("account_id", json_value(&self.account_id)),
             ("canonical_hex", json_value(&self.canonical_hex)),
             ("i105", i105),
-            ("i105_default", i105_default),
+            ("i105_default", json_value(&self.i105_default)),
             ("domain_selector", self.domain_selector.to_json_value()),
             ("controller", controller),
         ])
@@ -217,10 +229,8 @@ pub struct MultisigVector {
     pub canonical_hex: String,
     /// I105-encoded multisig address string.
     pub i105: String,
-    /// Halfwidth `i105_default` representation of the address.
-    pub i105_default_halfwidth: String,
-    /// Fullwidth `i105_default` representation of the address.
-    pub i105_default_fullwidth: String,
+    /// Canonical default-discriminant I105 representation of the address.
+    pub i105_default: String,
     /// Domain selector inputs that reproduce the canonical account.
     pub domain_selector: DomainSelectorVector,
     /// Multisig version number embedded in the controller payload.
@@ -249,10 +259,6 @@ impl MultisigVector {
             ("value", json_value(&self.i105)),
             ("network_prefix", json_value(&network_prefix_hex)),
         ]);
-        let i105_default = json_object(vec![
-            ("halfwidth", json_value(&self.i105_default_halfwidth)),
-            ("fullwidth", json_value(&self.i105_default_fullwidth)),
-        ]);
         let version = self.version;
         let threshold = self.threshold;
         let total_weight = self.total_weight;
@@ -271,7 +277,7 @@ impl MultisigVector {
             ("account_id", json_value(&self.account_id)),
             ("canonical_hex", json_value(&self.canonical_hex)),
             ("i105", i105),
-            ("i105_default", i105_default),
+            ("i105_default", json_value(&self.i105_default)),
             ("domain_selector", self.domain_selector.to_json_value()),
             ("controller", controller),
         ])
@@ -448,12 +454,9 @@ fn build_single_vector(
     let i105 = address
         .to_i105_for_discriminant(network_prefix)
         .expect("I105 encoding must succeed");
-    let i105_default_halfwidth = address
+    let i105_default = address
         .to_i105()
         .expect("i105_default encoding must succeed");
-    let i105_default_fullwidth = address
-        .to_i105_fullwidth()
-        .expect("fullwidth i105_default encoding must succeed");
     let canonical_bytes = address
         .canonical_bytes()
         .expect("canonical bytes must be obtainable");
@@ -479,8 +482,7 @@ fn build_single_vector(
         account_id: account.to_string(),
         canonical_hex,
         i105,
-        i105_default_halfwidth,
-        i105_default_fullwidth,
+        i105_default,
         domain_selector,
         controller_curve_id: single_payload.curve_id,
         controller_algorithm: algorithm.to_string(),
@@ -538,12 +540,9 @@ fn build_multisig_vectors(network_prefix: u16) -> Vec<MultisigVector> {
                 i105: address
                     .to_i105_for_discriminant(network_prefix)
                     .expect("I105 encoding must succeed for multisig vector"),
-                i105_default_halfwidth: address
+                i105_default: address
                     .to_i105()
                     .expect("i105_default encoding must succeed for multisig vector"),
-                i105_default_fullwidth: address
-                    .to_i105_fullwidth()
-                    .expect("fullwidth i105_default encoding must succeed for multisig vector"),
                 domain_selector: canonical_selector_metadata(),
                 version: controller_payload.version,
                 threshold: controller_payload.threshold,
@@ -593,7 +592,6 @@ impl ErrorHarness {
         vec![
             self.i105_invalid_char(),
             self.i105_checksum_mismatch(),
-            self.i105_missing_sentinel(),
             Self::i105_too_short(),
             self.i105_unexpected_discriminant(),
             Self::canonical_invalid_hex(),
@@ -604,8 +602,7 @@ impl ErrorHarness {
 
     fn i105_invalid_char(&self) -> ErrorVector {
         let mut invalid_char = self.i105_default.clone();
-        let sentinel_len = i105_sentinel_for_discriminant(chain_discriminant()).len();
-        invalid_char.replace_range(sentinel_len..=sentinel_len, "!");
+        invalid_char.replace_range(0..=0, "!");
         let err =
             AccountAddress::from_i105(&invalid_char).expect_err("invalid character must fail");
 
@@ -621,18 +618,13 @@ impl ErrorHarness {
     }
 
     fn i105_checksum_mismatch(&self) -> ErrorVector {
-        let sentinel = i105_sentinel_for_discriminant(chain_discriminant());
-        let mut digits = i105_to_digits(&self.i105_default[sentinel.len()..])
-            .expect("valid i105_default digits");
+        let mut digits = i105_to_digits(&self.i105_default).expect("valid i105_default digits");
         let tamper_index = digits
             .len()
             .saturating_sub(I105_CHECKSUM_LEN)
             .saturating_sub(1);
         digits[tamper_index] = (digits[tamper_index] + 1) % I105_BASE_U8;
-        let mut tampered = sentinel;
-        for digit in &digits {
-            tampered.push_str(i105_alphabet()[usize::from(*digit)]);
-        }
+        let tampered = digits_to_i105_literal(&digits);
         let err = AccountAddress::from_i105(&tampered).expect_err("checksum mismatch must fail");
 
         ErrorVector {
@@ -646,25 +638,8 @@ impl ErrorHarness {
         }
     }
 
-    fn i105_missing_sentinel(&self) -> ErrorVector {
-        let sentinel = i105_sentinel_for_discriminant(chain_discriminant());
-        let missing_sentinel = self.i105_default[sentinel.len()..].to_string();
-        let err =
-            AccountAddress::from_i105(&missing_sentinel).expect_err("missing sentinel must fail");
-
-        ErrorVector {
-            label: "i105_missing_sentinel",
-            decoder: "i105",
-            input: missing_sentinel,
-            error_variant: variant_name(&err),
-            error_code: err.code_str(),
-            message: err.to_string(),
-            details: None,
-        }
-    }
-
     fn i105_too_short() -> ErrorVector {
-        let too_short = i105_sentinel_for_discriminant(chain_discriminant());
+        let too_short = String::new();
         let err = AccountAddress::from_i105(&too_short).expect_err("too short i105 form must fail");
 
         ErrorVector {
@@ -901,11 +876,8 @@ fn variant_name(error: &AccountAddressError) -> &'static str {
         InvalidPublicKey => "InvalidPublicKey",
         UnknownCurve(_) => "UnknownCurve",
         UnexpectedTrailingBytes => "UnexpectedTrailingBytes",
-        MissingI105Sentinel => "MissingI105Sentinel",
         I105TooShort => "I105TooShort",
         InvalidI105Char(_) => "InvalidI105Char",
-        InvalidI105Base => "InvalidI105Base",
-        InvalidI105Digit(_) => "InvalidI105Digit",
         UnsupportedAddressFormat => "UnsupportedAddressFormat",
         MultisigMemberOverflow(_) => "MultisigMemberOverflow",
         InvalidMultisigPolicy(_) => "InvalidMultisigPolicy",
@@ -986,8 +958,8 @@ mod tests {
             "6n7GJpgAsyaEoHR6UoQ39uQBWyJ896aEhEV2zDUAkryN943iyVxm5Rw"
         );
         assert_eq!(
-            default_vector.i105_default_halfwidth,
-            "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
+            default_vector.i105_default,
+            "6n7GJpgAsyaEoHR6UoQ39uQBWyJ896aEhEV2zDUAkryN943iyVxm5Rw"
         );
         assert!(matches!(
             default_vector.domain_selector,
@@ -1011,14 +983,12 @@ mod tests {
 
         assert!(variants.contains(&"InvalidI105Char"));
         assert!(variants.contains(&"ChecksumMismatch"));
-        assert!(variants.contains(&"MissingI105Sentinel"));
         assert!(variants.contains(&"I105TooShort"));
         assert!(variants.contains(&"UnexpectedNetworkPrefix"));
         assert!(variants.contains(&"UnsupportedAddressFormat"));
         assert!(variants.contains(&"DomainMismatch"));
         assert!(codes.contains(&"ERR_INVALID_I105_CHAR"));
         assert!(codes.contains(&"ERR_CHECKSUM_MISMATCH"));
-        assert!(codes.contains(&"ERR_MISSING_I105_SENTINEL"));
         assert!(codes.contains(&"ERR_I105_TOO_SHORT"));
         assert!(codes.contains(&"ERR_UNEXPECTED_NETWORK_PREFIX"));
         assert!(codes.contains(&"ERR_UNSUPPORTED_ADDRESS_FORMAT"));
@@ -1036,7 +1006,6 @@ mod tests {
         let expected = vec![
             ("i105_invalid_char", "i105"),
             ("i105_checksum_mismatch", "i105"),
-            ("i105_missing_sentinel", "i105"),
             ("i105_too_short", "i105"),
             ("i105_unexpected_discriminant", "i105"),
             ("canonical_invalid_hex", "canonical_hex"),

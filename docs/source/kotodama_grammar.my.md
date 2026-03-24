@@ -228,7 +228,7 @@ Pointer constructors (Norito TLV ကို INPUT သို့ ထုတ်ပြ
 - `asset_handle(string|0xhex) -> AssetHandle*`
 - `proof_blob(string|0xhex) -> ProofBlob*`Prelude macro သည် တိုတောင်းသော aliases နှင့် inline validation ကို ပေးစွမ်းသည်-
 - `account!("i105...")`, `account_id!("i105...")`
-- `asset_definition!("rose#wonderland")`, `asset_id!("rose#wonderland")`
+- `asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`, `asset_id!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`
 - `domain!("wonderland")`၊ `domain_id!("wonderland")`
 - `name!("example")`
 - `json!("{\"hello\":\"world\"}")` သို့မဟုတ် `json!{ hello: "world" }` ကဲ့သို့သော ဖွဲ့စည်းတည်ဆောက်ထားသော စာလုံးများ

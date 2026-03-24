@@ -151,6 +151,224 @@
         ],
         "type": "object"
       },
+      "AssetAliasBinding": {
+        "additionalProperties": false,
+        "properties": {
+          "alias": {
+            "description": "Canonical alias representation.",
+            "type": "string"
+          },
+          "bound_at_ms": {
+            "description": "Timestamp in milliseconds when the alias binding was recorded.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "grace_until_ms": {
+            "description": "Grace-window end timestamp in milliseconds since Unix epoch.",
+            "format": "uint64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "lease_expiry_ms": {
+            "description": "Lease expiry timestamp in milliseconds since Unix epoch.",
+            "format": "uint64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "status": {
+            "description": "Observed lease state for the alias binding.",
+            "enum": [
+              "permanent",
+              "leased_active",
+              "leased_grace",
+              "expired_pending_cleanup"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "alias",
+          "status",
+          "bound_at_ms"
+        ],
+        "type": "object"
+      },
+      "AssetAliasResolveRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "alias": {
+            "description": "Asset alias literal (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`) to resolve.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "alias"
+        ],
+        "type": "object"
+      },
+      "AssetAliasResolveResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "alias": {
+            "description": "Canonical alias representation.",
+            "type": "string"
+          },
+          "alias_binding": {
+            "$ref": "#/components/schemas/AssetAliasBinding"
+          },
+          "asset_definition_id": {
+            "description": "Canonical asset definition id (unprefixed Base58 address).",
+            "type": "string"
+          },
+          "asset_name": {
+            "description": "Human-readable asset name.",
+            "type": "string"
+          },
+          "description": {
+            "description": "Optional asset description.",
+            "nullable": true,
+            "type": "string"
+          },
+          "logo": {
+            "description": "Optional SoraFS logo URI.",
+            "nullable": true,
+            "type": "string"
+          },
+          "source": {
+            "description": "Resolver source.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "alias",
+          "asset_definition_id",
+          "asset_name"
+        ],
+        "type": "object"
+      },
+      "BfvIdentifierPublicParameters": {
+        "additionalProperties": false,
+        "properties": {
+          "max_input_bytes": {
+            "description": "Maximum number of UTF-8 bytes accepted by the BFV input envelope.",
+            "format": "uint16",
+            "type": "integer"
+          },
+          "parameters": {
+            "$ref": "#/components/schemas/BfvParameters"
+          },
+          "public_key": {
+            "$ref": "#/components/schemas/BfvPublicKey"
+          }
+        },
+        "required": [
+          "parameters",
+          "public_key",
+          "max_input_bytes"
+        ],
+        "type": "object"
+      },
+      "BfvParameters": {
+        "additionalProperties": false,
+        "properties": {
+          "ciphertext_modulus": {
+            "description": "Ciphertext modulus `q` used by the BFV input-encryption envelope.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "plaintext_modulus": {
+            "description": "Plaintext modulus `t` used by the BFV input-encryption envelope.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "polynomial_degree": {
+            "description": "Ring degree used by the BFV input-encryption envelope.",
+            "format": "uint32",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "polynomial_degree",
+          "plaintext_modulus",
+          "ciphertext_modulus"
+        ],
+        "type": "object"
+      },
+      "BfvPublicKey": {
+        "additionalProperties": false,
+        "properties": {
+          "a": {
+            "description": "Second BFV public-key polynomial.",
+            "items": {
+              "format": "uint64",
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "b": {
+            "description": "First BFV public-key polynomial.",
+            "items": {
+              "format": "uint64",
+              "type": "integer"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "b",
+          "a"
+        ],
+        "type": "object"
+      },
+      "BfvRamEncryptedInputMode": {
+        "description": "Canonicalization mode applied before the programmed RAM-FHE backend executes.",
+        "enum": [
+          "resolver_canonicalized_envelope_v1"
+        ],
+        "type": "string"
+      },
+      "BfvRamProgramProfile": {
+        "additionalProperties": false,
+        "properties": {
+          "ciphertext_mul_per_step": {
+            "description": "Maximum ciphertext-ciphertext multiplications per programmed step.",
+            "format": "uint8",
+            "type": "integer"
+          },
+          "encrypted_input_mode": {
+            "$ref": "#/components/schemas/BfvRamEncryptedInputMode"
+          },
+          "memory_lane_count": {
+            "description": "Number of ciphertext memory lanes persisted across program steps.",
+            "format": "uint16",
+            "type": "integer"
+          },
+          "min_ciphertext_modulus": {
+            "description": "Minimum supported BFV ciphertext modulus for the programmed profile.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "profile_version": {
+            "description": "Stable programmed RAM-FHE profile version.",
+            "format": "uint8",
+            "type": "integer"
+          },
+          "register_count": {
+            "description": "Number of ciphertext registers in the hidden execution machine.",
+            "format": "uint16",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "profile_version",
+          "register_count",
+          "memory_lane_count",
+          "ciphertext_mul_per_step",
+          "encrypted_input_mode",
+          "min_ciphertext_modulus"
+        ],
+        "type": "object"
+      },
       "BlockExecutionReceiptProof": {
         "additionalProperties": false,
         "properties": {
@@ -650,6 +868,256 @@
         ],
         "type": "object"
       },
+      "IdentifierClaimLookupResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "description": "Canonical account identifier currently bound to the UAID.",
+            "type": "string"
+          },
+          "expires_at_ms": {
+            "description": "Optional identifier-claim expiry timestamp in milliseconds since Unix epoch.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "opaque_id": {
+            "description": "Derived opaque identifier literal.",
+            "type": "string"
+          },
+          "policy_id": {
+            "description": "Identifier policy namespace bound to the claim.",
+            "type": "string"
+          },
+          "receipt_hash": {
+            "description": "Deterministic hidden-function receipt hash for the original evaluation.",
+            "type": "string"
+          },
+          "uaid": {
+            "description": "UAID currently bound to the opaque identifier.",
+            "type": "string"
+          },
+          "verified_at_ms": {
+            "description": "Ledger timestamp in milliseconds when the identifier claim was accepted.",
+            "format": "uint64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "policy_id",
+          "opaque_id",
+          "receipt_hash",
+          "uaid",
+          "account_id",
+          "verified_at_ms"
+        ],
+        "type": "object"
+      },
+      "IdentifierPolicyListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "Registered identifier policies.",
+            "items": {
+              "$ref": "#/components/schemas/IdentifierPolicySummary"
+            },
+            "type": "array"
+          },
+          "total": {
+            "description": "Number of policies returned.",
+            "format": "uint64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "items"
+        ],
+        "type": "object"
+      },
+      "IdentifierPolicySummary": {
+        "additionalProperties": false,
+        "properties": {
+          "active": {
+            "description": "Whether the policy is active for new claims and resolutions.",
+            "type": "boolean"
+          },
+          "backend": {
+            "description": "Hidden-function backend advertised by the policy commitment.",
+            "type": "string"
+          },
+          "input_encryption": {
+            "description": "Optional encrypted-input scheme published for this policy.",
+            "type": "string"
+          },
+          "input_encryption_public_parameters": {
+            "description": "Optional hex-encoded Norito payload containing the public input-encryption parameters.",
+            "type": "string"
+          },
+          "input_encryption_public_parameters_decoded": {
+            "$ref": "#/components/schemas/BfvIdentifierPublicParameters"
+          },
+          "normalization": {
+            "description": "Client-side canonicalization mode required before encrypted input is produced.",
+            "type": "string"
+          },
+          "note": {
+            "description": "Optional human-readable note attached to the policy.",
+            "type": "string"
+          },
+          "owner": {
+            "description": "Canonical account identifier that owns the policy.",
+            "type": "string"
+          },
+          "policy_id": {
+            "description": "Identifier policy namespace literal (`<kind>#<business_rule>`).",
+            "type": "string"
+          },
+          "ram_fhe_profile": {
+            "$ref": "#/components/schemas/BfvRamProgramProfile"
+          },
+          "resolver_public_key": {
+            "description": "Public key used to verify resolution receipts.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "policy_id",
+          "owner",
+          "active",
+          "normalization",
+          "resolver_public_key",
+          "backend"
+        ],
+        "type": "object"
+      },
+      "IdentifierResolutionReceiptPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "description": "Canonical account identifier currently bound to the UAID.",
+            "type": "string"
+          },
+          "expires_at_ms": {
+            "description": "Optional receipt expiry timestamp in milliseconds since Unix epoch.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "opaque_id": {
+            "description": "Derived opaque identifier literal.",
+            "type": "string"
+          },
+          "policy_id": {
+            "description": "Identifier policy namespace used for the resolution.",
+            "type": "string"
+          },
+          "receipt_hash": {
+            "description": "Deterministic hidden-function receipt hash for this evaluation.",
+            "type": "string"
+          },
+          "resolved_at_ms": {
+            "description": "Resolution timestamp in milliseconds since Unix epoch.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "uaid": {
+            "description": "UAID currently bound to the opaque identifier.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "policy_id",
+          "opaque_id",
+          "receipt_hash",
+          "uaid",
+          "account_id",
+          "resolved_at_ms"
+        ],
+        "type": "object"
+      },
+      "IdentifierResolveRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "encrypted_input": {
+            "description": "Hex-encoded Norito BFV ciphertext envelope. Supply exactly one of `input` or `encrypted_input`.",
+            "type": "string"
+          },
+          "input": {
+            "description": "Plaintext identifier input. Supply exactly one of `input` or `encrypted_input`.",
+            "type": "string"
+          },
+          "policy_id": {
+            "description": "Identifier policy namespace literal (`<kind>#<business_rule>`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "policy_id"
+        ],
+        "type": "object"
+      },
+      "IdentifierResolveResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "description": "Canonical account identifier currently bound to the UAID.",
+            "type": "string"
+          },
+          "backend": {
+            "description": "Hidden-function backend that produced the opaque identifier.",
+            "type": "string"
+          },
+          "expires_at_ms": {
+            "description": "Optional receipt expiry timestamp in milliseconds since Unix epoch.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "opaque_id": {
+            "description": "Derived opaque identifier literal.",
+            "type": "string"
+          },
+          "policy_id": {
+            "description": "Identifier policy namespace used for resolution.",
+            "type": "string"
+          },
+          "receipt_hash": {
+            "description": "Deterministic hidden-function receipt hash for this evaluation.",
+            "type": "string"
+          },
+          "resolved_at_ms": {
+            "description": "Resolution timestamp in milliseconds since Unix epoch.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "signature": {
+            "description": "Hex-encoded resolver signature over the canonical receipt payload.",
+            "type": "string"
+          },
+          "signature_payload": {
+            "$ref": "#/components/schemas/IdentifierResolutionReceiptPayload"
+          },
+          "signature_payload_hex": {
+            "description": "Hex-encoded Norito payload bytes that were signed by the resolver.",
+            "type": "string"
+          },
+          "uaid": {
+            "description": "UAID currently bound to the opaque identifier.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "policy_id",
+          "opaque_id",
+          "receipt_hash",
+          "uaid",
+          "account_id",
+          "resolved_at_ms",
+          "backend",
+          "signature",
+          "signature_payload_hex",
+          "signature_payload"
+        ],
+        "type": "object"
+      },
       "JsonList": {
         "items": {
           "$ref": "#/components/schemas/JsonValue"
@@ -915,6 +1383,461 @@
         ],
         "type": "object"
       },
+      "MultisigAccountSelector": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "required": [
+              "multisig_account_id"
+            ]
+          },
+          {
+            "required": [
+              "multisig_account_alias"
+            ]
+          }
+        ],
+        "properties": {
+          "multisig_account_alias": {
+            "description": "Stable multisig alias in `label@domain` format.",
+            "type": "string"
+          },
+          "multisig_account_id": {
+            "description": "Active concrete multisig account id.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "MultisigApproveRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/MultisigAccountSelector"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "creation_time_ms": {
+                "format": "uint64",
+                "type": "integer"
+              },
+              "instructions_hash": {
+                "type": "string"
+              },
+              "private_key": {
+                "type": "object"
+              },
+              "proposal_id": {
+                "type": "string"
+              },
+              "public_key_hex": {
+                "type": "string"
+              },
+              "signature_b64": {
+                "type": "string"
+              },
+              "signer_account_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "signer_account_id"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "MultisigContractCallApproveRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/MultisigAccountSelector"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "creation_time_ms": {
+                "format": "uint64",
+                "type": "integer"
+              },
+              "instructions_hash": {
+                "type": "string"
+              },
+              "private_key": {
+                "type": "object"
+              },
+              "proposal_id": {
+                "type": "string"
+              },
+              "public_key_hex": {
+                "type": "string"
+              },
+              "signature_b64": {
+                "type": "string"
+              },
+              "signer_account_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "signer_account_id"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "MultisigContractCallProposeRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/MultisigAccountSelector"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "contract_id": {
+                "type": "string"
+              },
+              "creation_time_ms": {
+                "format": "uint64",
+                "type": "integer"
+              },
+              "entrypoint": {
+                "type": "string"
+              },
+              "fee_sponsor": {
+                "type": "string"
+              },
+              "gas_asset_id": {
+                "type": "string"
+              },
+              "gas_limit": {
+                "format": "uint64",
+                "type": "integer"
+              },
+              "namespace": {
+                "type": "string"
+              },
+              "payload": {
+                "type": "object"
+              },
+              "private_key": {
+                "type": "object"
+              },
+              "public_key_hex": {
+                "type": "string"
+              },
+              "signature_b64": {
+                "type": "string"
+              },
+              "signer_account_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "signer_account_id",
+              "namespace",
+              "contract_id",
+              "entrypoint"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "MultisigContractCallResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "creation_time_ms": {
+            "format": "uint64",
+            "type": "integer"
+          },
+          "executed_tx_hash_hex": {
+            "type": "string"
+          },
+          "instructions_hash": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "proposal_id": {
+            "type": "string"
+          },
+          "resolved_multisig_account_id": {
+            "type": "string"
+          },
+          "signing_message_b64": {
+            "type": "string"
+          },
+          "submitted": {
+            "type": "boolean"
+          },
+          "tx_hash_hex": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "resolved_multisig_account_id"
+        ],
+        "type": "object"
+      },
+      "MultisigProposalEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "instructions_hash": {
+            "type": "string"
+          },
+          "proposal": {
+            "$ref": "#/components/schemas/MultisigProposalPayload"
+          },
+          "proposal_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "proposal_id",
+          "instructions_hash",
+          "proposal"
+        ],
+        "type": "object"
+      },
+      "MultisigProposalGetResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "instructions_hash": {
+            "type": "string"
+          },
+          "proposal": {
+            "$ref": "#/components/schemas/MultisigProposalPayload"
+          },
+          "proposal_id": {
+            "type": "string"
+          },
+          "resolved_multisig_account_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "resolved_multisig_account_id",
+          "proposal_id",
+          "instructions_hash",
+          "proposal"
+        ],
+        "type": "object"
+      },
+      "MultisigProposalPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "approvals": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "expires_at_ms": {
+            "format": "uint64",
+            "type": "integer"
+          },
+          "instructions": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "is_relayed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "proposed_at_ms": {
+            "format": "uint64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "instructions",
+          "proposed_at_ms",
+          "expires_at_ms",
+          "approvals"
+        ],
+        "type": "object"
+      },
+      "MultisigProposalsGetRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/MultisigAccountSelector"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "instructions_hash": {
+                "type": "string"
+              },
+              "proposal_id": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "MultisigProposalsListRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/MultisigAccountSelector"
+          }
+        ]
+      },
+      "MultisigProposalsListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "proposals": {
+            "items": {
+              "$ref": "#/components/schemas/MultisigProposalEntry"
+            },
+            "type": "array"
+          },
+          "resolved_multisig_account_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "resolved_multisig_account_id",
+          "proposals"
+        ],
+        "type": "object"
+      },
+      "MultisigProposeRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/MultisigAccountSelector"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "creation_time_ms": {
+                "format": "uint64",
+                "type": "integer"
+              },
+              "instructions": {
+                "items": {
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "private_key": {
+                "type": "object"
+              },
+              "public_key_hex": {
+                "type": "string"
+              },
+              "signature_b64": {
+                "type": "string"
+              },
+              "signer_account_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "signer_account_id",
+              "instructions"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "MultisigResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "creation_time_ms": {
+            "format": "uint64",
+            "type": "integer"
+          },
+          "executed_tx_hash_hex": {
+            "type": "string"
+          },
+          "instructions_hash": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "proposal_id": {
+            "type": "string"
+          },
+          "resolved_multisig_account_id": {
+            "type": "string"
+          },
+          "signing_message_b64": {
+            "type": "string"
+          },
+          "submitted": {
+            "type": "boolean"
+          },
+          "tx_hash_hex": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "resolved_multisig_account_id"
+        ],
+        "type": "object"
+      },
+      "MultisigSpecPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "quorum": {
+            "format": "uint16",
+            "type": "integer"
+          },
+          "signatories": {
+            "additionalProperties": {
+              "format": "uint8",
+              "type": "integer"
+            },
+            "description": "Map of signer account ids to weight.",
+            "type": "object"
+          },
+          "transaction_ttl_ms": {
+            "format": "uint64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "signatories",
+          "quorum",
+          "transaction_ttl_ms"
+        ],
+        "type": "object"
+      },
+      "MultisigSpecRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/MultisigAccountSelector"
+          }
+        ]
+      },
+      "MultisigSpecResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "resolved_multisig_account_id": {
+            "type": "string"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/MultisigSpecPayload"
+          }
+        },
+        "required": [
+          "resolved_multisig_account_id",
+          "spec"
+        ],
+        "type": "object"
+      },
       "OfflineAllowanceIssueRequest": {
         "properties": {
           "authority": {
@@ -951,10 +1874,6 @@
       },
       "OfflineAllowanceItem": {
         "properties": {
-          "asset_id": {
-            "description": "Concrete asset id bound to the allowance.",
-            "type": "string"
-          },
           "asset_definition_alias": {
             "description": "Human-facing asset-definition alias resolved from the ledger, when configured.",
             "nullable": true,
@@ -966,6 +1885,10 @@
           },
           "asset_definition_name": {
             "description": "Human-facing asset-definition name resolved from the ledger.",
+            "type": "string"
+          },
+          "asset_id": {
+            "description": "Concrete asset id bound to the allowance.",
             "type": "string"
           },
           "attestation_nonce_hex": {
@@ -2527,6 +3450,290 @@
         ],
         "type": "object"
       },
+      "RamLfeExecuteRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "encrypted_input": {
+            "description": "Hex-encoded Norito BFV ciphertext envelope. Supply exactly one of `input_hex` or `encrypted_input`.",
+            "type": "string"
+          },
+          "input_hex": {
+            "description": "Hex-encoded plaintext input bytes. Supply exactly one of `input_hex` or `encrypted_input`.",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RamLfeExecuteResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "associated_data_hash": {
+            "description": "Hash of the associated-data blob bound into execution.",
+            "type": "string"
+          },
+          "backend": {
+            "description": "RAM-LFE backend that produced the receipt.",
+            "type": "string"
+          },
+          "executed_at_ms": {
+            "description": "Execution timestamp in milliseconds since Unix epoch.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "expires_at_ms": {
+            "description": "Optional receipt expiry timestamp in milliseconds since Unix epoch.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "opaque_hash": {
+            "description": "Opaque evaluator hash returned by the RAM-LFE backend.",
+            "type": "string"
+          },
+          "output_hash": {
+            "description": "Hash of the plaintext output bytes.",
+            "type": "string"
+          },
+          "output_hex": {
+            "description": "Hex-encoded plaintext output bytes.",
+            "type": "string"
+          },
+          "program_id": {
+            "description": "RAM-LFE program identifier.",
+            "type": "string"
+          },
+          "receipt": {
+            "$ref": "#/components/schemas/RamLfeExecutionReceipt"
+          },
+          "receipt_hash": {
+            "description": "Deterministic receipt hash returned by the RAM-LFE backend.",
+            "type": "string"
+          },
+          "verification_mode": {
+            "description": "Receipt attestation mode (`signed` or `proof`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "program_id",
+          "opaque_hash",
+          "receipt_hash",
+          "output_hex",
+          "output_hash",
+          "associated_data_hash",
+          "executed_at_ms",
+          "backend",
+          "verification_mode",
+          "receipt"
+        ],
+        "type": "object"
+      },
+      "RamLfeExecutionReceipt": {
+        "additionalProperties": false,
+        "properties": {
+          "payload": {
+            "$ref": "#/components/schemas/RamLfeExecutionReceiptPayload"
+          },
+          "proof": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "signature": {
+            "$ref": "#/components/schemas/JsonValue"
+          }
+        },
+        "required": [
+          "payload"
+        ],
+        "type": "object"
+      },
+      "RamLfeExecutionReceiptPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "associated_data_hash": {
+            "description": "Hash of the associated-data blob bound into execution.",
+            "type": "string"
+          },
+          "backend": {
+            "description": "RAM-LFE backend that produced the receipt.",
+            "type": "string"
+          },
+          "executed_at_ms": {
+            "description": "Execution timestamp in milliseconds since Unix epoch.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "expires_at_ms": {
+            "description": "Optional receipt expiry timestamp in milliseconds since Unix epoch.",
+            "format": "uint64",
+            "type": "integer"
+          },
+          "output_hash": {
+            "description": "Hash of the plaintext output bytes.",
+            "type": "string"
+          },
+          "program_digest": {
+            "description": "Published digest of the hidden compiled program.",
+            "type": "string"
+          },
+          "program_id": {
+            "description": "RAM-LFE program identifier.",
+            "type": "string"
+          },
+          "verification_mode": {
+            "description": "Receipt attestation mode (`signed` or `proof`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "program_id",
+          "program_digest",
+          "backend",
+          "verification_mode",
+          "output_hash",
+          "associated_data_hash",
+          "executed_at_ms"
+        ],
+        "type": "object"
+      },
+      "RamLfeProgramPolicyListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "description": "Registered RAM-LFE program policies.",
+            "items": {
+              "$ref": "#/components/schemas/RamLfeProgramPolicySummary"
+            },
+            "type": "array"
+          },
+          "total": {
+            "description": "Number of program policies returned.",
+            "format": "uint64",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "items"
+        ],
+        "type": "object"
+      },
+      "RamLfeProgramPolicySummary": {
+        "additionalProperties": false,
+        "properties": {
+          "active": {
+            "description": "Whether the program policy is active for new executions.",
+            "type": "boolean"
+          },
+          "backend": {
+            "description": "RAM-LFE backend advertised by the program policy.",
+            "type": "string"
+          },
+          "input_encryption": {
+            "description": "Optional encrypted-input scheme published for this program.",
+            "type": "string"
+          },
+          "input_encryption_public_parameters": {
+            "description": "Optional hex-encoded Norito payload containing the public input-encryption parameters.",
+            "type": "string"
+          },
+          "input_encryption_public_parameters_decoded": {
+            "$ref": "#/components/schemas/BfvIdentifierPublicParameters"
+          },
+          "note": {
+            "description": "Optional human-readable note attached to the program policy.",
+            "type": "string"
+          },
+          "owner": {
+            "description": "Canonical account identifier that owns the program policy.",
+            "type": "string"
+          },
+          "program_id": {
+            "description": "RAM-LFE program identifier.",
+            "type": "string"
+          },
+          "ram_fhe_profile": {
+            "$ref": "#/components/schemas/BfvRamProgramProfile"
+          },
+          "resolver_public_key": {
+            "description": "Public key used to verify RAM-LFE execution receipts.",
+            "type": "string"
+          },
+          "verification_mode": {
+            "description": "Receipt attestation mode (`signed` or `proof`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "program_id",
+          "owner",
+          "active",
+          "resolver_public_key",
+          "backend",
+          "verification_mode"
+        ],
+        "type": "object"
+      },
+      "RamLfeReceiptVerifyRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "output_hex": {
+            "description": "Optional hex-encoded plaintext output bytes to compare against `receipt.payload.output_hash`.",
+            "type": "string"
+          },
+          "receipt": {
+            "$ref": "#/components/schemas/RamLfeExecutionReceipt"
+          }
+        },
+        "required": [
+          "receipt"
+        ],
+        "type": "object"
+      },
+      "RamLfeReceiptVerifyResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "associated_data_hash": {
+            "description": "Receipt payload associated-data hash.",
+            "type": "string"
+          },
+          "backend": {
+            "description": "RAM-LFE backend advertised by the receipt.",
+            "type": "string"
+          },
+          "error": {
+            "description": "Validation failure reason when `valid == false`.",
+            "type": "string"
+          },
+          "output_hash": {
+            "description": "Receipt payload output hash.",
+            "type": "string"
+          },
+          "output_hash_matches": {
+            "description": "Whether the supplied `output_hex` matched `output_hash`, when provided.",
+            "type": "boolean"
+          },
+          "program_id": {
+            "description": "RAM-LFE program identifier from the receipt.",
+            "type": "string"
+          },
+          "valid": {
+            "description": "Whether the receipt validated against the published program policy.",
+            "type": "boolean"
+          },
+          "verification_mode": {
+            "description": "Receipt attestation mode (`signed` or `proof`).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "valid",
+          "program_id",
+          "backend",
+          "verification_mode",
+          "output_hash",
+          "associated_data_hash"
+        ],
+        "type": "object"
+      },
       "RepoAgreement": {
         "additionalProperties": false,
         "properties": {
@@ -3024,7 +4231,7 @@
     }
   },
   "info": {
-    "description": "HTTP surface for Torii. App endpoints accept optional canonical signing headers X-Iroha-Account/X-Iroha-Signature.",
+    "description": "HTTP surface for Torii. App endpoints accept optional canonical signing headers X-Iroha-Account/X-Iroha-Signature/X-Iroha-Timestamp-Ms/X-Iroha-Nonce.",
     "license": {
       "name": "Apache-2.0",
       "url": "https://www.apache.org/licenses/LICENSE-2.0"
@@ -3635,6 +4842,48 @@
         ]
       }
     },
+    "/v1/accounts/{account_id}/identifiers/claim-receipt": {
+      "post": {
+        "description": "Normalize a raw identifier input under a hidden-function policy and return a signed receipt that can be embedded into `ClaimIdentifier`.",
+        "parameters": [
+          {
+            "description": "Canonical target account identifier for the claim receipt.",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IdentifierResolveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentifierResolveResponse"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Issue an identifier claim receipt.",
+        "tags": [
+          "Identifiers"
+        ]
+      }
+    },
     "/v1/accounts/{account_id}/permissions": {
       "get": {
         "description": "List permissions granted to an account.",
@@ -3998,9 +5247,71 @@
         ]
       }
     },
+    "/v1/assets/aliases/resolve": {
+      "post": {
+        "description": "Returns the canonical Base58 asset definition id, human-readable fields, and `alias_binding` lease metadata for `<name>#<domain>.<dataspace>` or `<name>#<dataspace>` aliases.",
+        "operationId": "assetAliasResolve",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssetAliasResolveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssetAliasResolveResponse"
+                }
+              }
+            },
+            "description": "Asset alias successfully resolved."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Malformed request (alias missing or invalid)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Asset alias not found."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Asset alias is ambiguously bound to multiple definitions."
+          }
+        },
+        "summary": "Resolve an asset alias into canonical asset definition fields.",
+        "tags": [
+          "Aliases"
+        ]
+      }
+    },
     "/v1/assets/definitions": {
       "get": {
-        "description": "List asset definitions.",
+        "description": "List asset definitions as full objects with canonical Base58 id, optional alias, and `alias_binding` lease metadata when an alias exists.",
         "responses": {
           "200": {
             "content": {
@@ -4021,7 +5332,7 @@
     },
     "/v1/assets/definitions/query": {
       "post": {
-        "description": "Query asset definitions with JSON envelope.",
+        "description": "Query asset definitions with a JSON envelope and full asset-definition objects in the response, including `alias_binding` lease metadata when present.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -4050,12 +5361,44 @@
         ]
       }
     },
-    "/v1/assets/{definition_id}/holders": {
+    "/v1/assets/definitions/{asset}": {
       "get": {
-        "description": "List holders for an asset definition (supports pagination and optional asset_id filtering).",
+        "description": "Fetch an asset definition by unprefixed Base58 id or `<name>#<domain>.<dataspace>` / `<name>#<dataspace>` alias, including `alias_binding` lease metadata when present.",
         "parameters": [
           {
-            "description": "Asset definition identifier.",
+            "description": "Asset selector (unprefixed Base58 id or alias).",
+            "in": "path",
+            "name": "asset",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Fetch one asset definition.",
+        "tags": [
+          "Assets"
+        ]
+      }
+    },
+    "/v1/assets/{definition_id}/holders": {
+      "get": {
+        "description": "List holders for an asset definition (supports pagination plus optional account_id and scope filtering).",
+        "parameters": [
+          {
+            "description": "Asset selector (unprefixed Base58 id or alias).",
             "in": "path",
             "name": "definition_id",
             "required": true,
@@ -4084,9 +5427,18 @@
             }
           },
           {
-            "description": "Filter holders by asset identifier.",
+            "description": "Filter holders by canonical I105 account identifier.",
             "in": "query",
-            "name": "asset_id",
+            "name": "account_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter holders by balance scope (`global` or `dataspace:<id>`).",
+            "in": "query",
+            "name": "scope",
             "required": false,
             "schema": {
               "type": "string"
@@ -4116,7 +5468,7 @@
         "description": "Query holders for an asset definition.",
         "parameters": [
           {
-            "description": "Asset definition identifier.",
+            "description": "Asset selector (unprefixed Base58 id or alias).",
             "in": "path",
             "name": "definition_id",
             "required": true,
@@ -4266,7 +5618,7 @@
         "description": "Fetch confidential asset transition history for an asset definition.",
         "parameters": [
           {
-            "description": "Asset definition identifier.",
+            "description": "Asset selector (unprefixed Base58 id or alias).",
             "in": "path",
             "name": "definition_id",
             "required": true,
@@ -4431,7 +5783,7 @@
     },
     "/v1/content/{bundle}/{path}": {
       "get": {
-        "description": "Fetch content bundle bytes (path captures the remaining path segments). Role- or sponsor-gated bundles require canonical request headers (`X-Iroha-Account`, `X-Iroha-Signature`).",
+        "description": "Fetch content bundle bytes (path captures the remaining path segments). Role- or sponsor-gated bundles require canonical request headers (`X-Iroha-Account`, `X-Iroha-Signature`, `X-Iroha-Timestamp-Ms`, `X-Iroha-Nonce`).",
         "parameters": [
           {
             "description": "Content bundle identifier.",
@@ -4502,14 +5854,14 @@
         ]
       }
     },
-    "/v1/contracts/code": {
+    "/v1/contracts/call/multisig/approve": {
       "post": {
-        "description": "Submit contract bytecode for registration.",
+        "description": "Resolve a multisig selector, target a proposal by `proposal_id` or `instructions_hash`, and optionally submit the approval transaction.",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/JsonValue"
+                "$ref": "#/components/schemas/MultisigContractCallApproveRequest"
               }
             }
           },
@@ -4520,16 +5872,87 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/MultisigContractCallResponse"
                 }
               }
             },
             "description": "Successful response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid multisig selector or payload."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Multisig alias or referenced proposal not found."
           }
         },
-        "summary": "Register contract code.",
+        "summary": "Approve a multisig contract call proposal.",
         "tags": [
-          "Contracts"
+          "Multisig"
+        ]
+      }
+    },
+    "/v1/contracts/call/multisig/propose": {
+      "post": {
+        "description": "Resolve a multisig selector, wrap a contract call in a multisig proposal envelope, and optionally submit it.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MultisigContractCallProposeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MultisigContractCallResponse"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid multisig selector or payload."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Multisig alias or referenced contract instance not found."
+          }
+        },
+        "summary": "Propose a multisig contract call.",
+        "tags": [
+          "Multisig"
         ]
       }
     },
@@ -5685,7 +7108,7 @@
             }
           },
           {
-            "description": "Filter transfer instructions by participant account (source or destination; accepts canonical I105 account literals).",
+            "description": "Filter instructions by referenced account (transfer participants, asset-owner scoped mint/burn/asset-metadata updates, multisig accounts, and public-lane reward assets; accepts canonical I105 account literals).",
             "in": "query",
             "name": "account",
             "required": false,
@@ -6632,6 +8055,90 @@
         ]
       }
     },
+    "/v1/identifier-policies": {
+      "get": {
+        "description": "List globally registered hidden-function identifier policies and their public metadata.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentifierPolicyListResponse"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "List identifier policies.",
+        "tags": [
+          "Identifiers"
+        ]
+      }
+    },
+    "/v1/identifiers/receipts/{receipt_hash}": {
+      "get": {
+        "description": "Resolve a persisted identifier claim by its deterministic receipt hash for audit and support tooling.",
+        "parameters": [
+          {
+            "description": "Hidden-function receipt hash used to look up the persisted claim binding.",
+            "in": "path",
+            "name": "receipt_hash",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentifierClaimLookupResponse"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Look up an identifier claim by receipt hash.",
+        "tags": [
+          "Identifiers"
+        ]
+      }
+    },
+    "/v1/identifiers/resolve": {
+      "post": {
+        "description": "Resolve a normalized identifier input under a hidden-function policy and return the bound canonical account target when a live claim exists.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IdentifierResolveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentifierResolveResponse"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Resolve an identifier.",
+        "tags": [
+          "Identifiers"
+        ]
+      }
+    },
     "/v1/iso20022/pacs008": {
       "post": {
         "description": "Submit a pacs.008 message for ISO 20022 bridging.",
@@ -7139,6 +8646,312 @@
         ]
       }
     },
+    "/v1/multisig/approve": {
+      "post": {
+        "description": "Resolve a multisig selector, target a proposal by `proposal_id` or `instructions_hash`, and optionally submit the approval transaction.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MultisigApproveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MultisigResponse"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid multisig selector or payload."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Multisig alias or referenced proposal not found."
+          }
+        },
+        "summary": "Approve a multisig proposal.",
+        "tags": [
+          "Multisig"
+        ]
+      }
+    },
+    "/v1/multisig/cancel": {
+      "post": {
+        "description": "Resolve a multisig selector, target an active proposal by `proposal_id` or `instructions_hash`, and either propose or approve the corresponding cancel action.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MultisigCancelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MultisigCancelResponse"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid multisig selector or payload."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Multisig alias or referenced proposal not found."
+          }
+        },
+        "summary": "Cancel a multisig proposal.",
+        "tags": [
+          "Multisig"
+        ]
+      }
+    },
+    "/v1/multisig/proposals/get": {
+      "post": {
+        "description": "Resolve a multisig selector and fetch a proposal by `proposal_id` or `instructions_hash`.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MultisigProposalsGetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MultisigProposalGetResponse"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid multisig selector or payload."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Multisig alias or proposal not found."
+          }
+        },
+        "summary": "Fetch a multisig proposal.",
+        "tags": [
+          "Multisig"
+        ]
+      }
+    },
+    "/v1/multisig/proposals/list": {
+      "post": {
+        "description": "Resolve a multisig selector and list nonterminal proposals for the active concrete multisig authority.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MultisigProposalsListRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MultisigProposalsListResponse"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid multisig selector or payload."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Multisig alias not found."
+          }
+        },
+        "summary": "List active multisig proposals.",
+        "tags": [
+          "Multisig"
+        ]
+      }
+    },
+    "/v1/multisig/propose": {
+      "post": {
+        "description": "Resolve a multisig selector, wrap an instruction batch in a multisig proposal envelope, and optionally submit it.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MultisigProposeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MultisigResponse"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid multisig selector or payload."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Multisig alias not found."
+          }
+        },
+        "summary": "Propose a multisig instruction batch.",
+        "tags": [
+          "Multisig"
+        ]
+      }
+    },
+    "/v1/multisig/spec": {
+      "post": {
+        "description": "Resolve a multisig selector and return the current active concrete authority plus its multisig specification.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MultisigSpecRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MultisigSpecResponse"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid multisig selector or payload."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Multisig alias not found."
+          }
+        },
+        "summary": "Fetch the active multisig spec.",
+        "tags": [
+          "Multisig"
+        ]
+      }
+    },
     "/v1/nexus/dataspaces/accounts/{literal}/summary": {
       "get": {
         "description": "Resolves the supplied canonical I105 account literal and returns a joined view of UAID bindings, space-directory manifests, portfolio counters, and per-dataspace consensus commitments.",
@@ -7519,1314 +9332,6 @@
         ]
       }
     },
-    "/v1/offline/allowances": {
-      "get": {
-        "description": "Returns operator-issued offline wallet certificates plus ledger-maintained counter checkpoints. Supports optional filter, pagination, and sort parameters encoded as query arguments.",
-        "operationId": "offlineAllowancesList",
-        "parameters": [
-          {
-            "description": "Optional Norito JSON filter expression encoded as a compact string (see Torii filter DSL).",
-            "in": "query",
-            "name": "filter",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Optional page size limit.",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Optional starting offset (default 0).",
-            "in": "query",
-            "name": "offset",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Optional CSV sort spec, e.g., `registered_at_ms:desc`.",
-            "in": "query",
-            "name": "sort",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter allowances by controller account (accepts canonical I105 account literals).",
-            "in": "query",
-            "name": "controller_id",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter allowances by asset identifier.",
-            "in": "query",
-            "name": "asset_id",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Only include allowances whose certificate expiry is at or before this unix timestamp (ms).",
-            "in": "query",
-            "name": "certificate_expires_before_ms",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Only include allowances whose certificate expiry is at or after this unix timestamp (ms).",
-            "in": "query",
-            "name": "certificate_expires_after_ms",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Only include allowances whose issuer policy expiry is at or before this unix timestamp (ms).",
-            "in": "query",
-            "name": "policy_expires_before_ms",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Only include allowances whose issuer policy expiry is at or after this unix timestamp (ms).",
-            "in": "query",
-            "name": "policy_expires_after_ms",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Filter to allowances whose attestation refresh deadline is at or before this unix timestamp (ms).",
-            "in": "query",
-            "name": "refresh_before_ms",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Filter to allowances whose attestation refresh deadline is at or after this unix timestamp (ms).",
-            "in": "query",
-            "name": "refresh_after_ms",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Match allowances whose cached attestation verdict id (hex) equals the provided value (case-insensitive).",
-            "in": "query",
-            "name": "verdict_id_hex",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Match allowances whose attestation nonce (hex) equals the provided value (case-insensitive).",
-            "in": "query",
-            "name": "attestation_nonce_hex",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "When true, only allowances that already have attestation verdict metadata are returned.",
-            "in": "query",
-            "name": "require_verdict",
-            "required": false,
-            "schema": {
-              "type": "boolean"
-            }
-          },
-          {
-            "description": "When true, only allowances that are missing attestation verdict metadata are returned.",
-            "in": "query",
-            "name": "only_missing_verdict",
-            "required": false,
-            "schema": {
-              "type": "boolean"
-            }
-          },
-          {
-            "description": "Include certificates/policies/refresh windows that have already expired (defaults to false).",
-            "in": "query",
-            "name": "include_expired",
-            "required": false,
-            "schema": {
-              "type": "boolean"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OfflineAllowanceListResponse"
-                }
-              }
-            },
-            "description": "Offline allowances retrieved."
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Invalid filter or pagination parameters.",
-            "headers": {
-              "x-iroha-reject-code": {
-                "description": "Stable offline rejection reason code (for example: certificate_expired, counter_conflict, allowance_exceeded, invoice_duplicate). Present only when the failure maps to an offline rejection.",
-                "schema": {
-                  "example": "certificate_expired",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "summary": "List registered offline allowances.",
-        "tags": [
-          "Offline"
-        ]
-      },
-      "post": {
-        "description": "Accepts an operator-signed OfflineWalletCertificate and enqueues a `RegisterOfflineAllowance` transaction.",
-        "operationId": "offlineAllowancesIssue",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OfflineAllowanceIssueRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OfflineAllowanceIssueResponse"
-                }
-              }
-            },
-            "description": "Offline allowance registration enqueued."
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Invalid allowance payload.",
-            "headers": {
-              "x-iroha-reject-code": {
-                "description": "Stable offline rejection reason code (for example: certificate_expired, counter_conflict, allowance_exceeded, invoice_duplicate). Present only when the failure maps to an offline rejection.",
-                "schema": {
-                  "example": "certificate_expired",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Register a new offline allowance certificate.",
-        "tags": [
-          "Offline"
-        ]
-      }
-    },
-    "/v1/offline/allowances/query": {
-      "post": {
-        "description": "Accepts the Norito `QueryEnvelope` structure so clients can submit complex filters, selectors, and pagination hints when listing allowances.",
-        "operationId": "offlineAllowancesQuery",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OfflineQueryEnvelope"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OfflineAllowanceListResponse"
-                }
-              }
-            },
-            "description": "Offline allowances retrieved."
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Invalid filter or pagination parameters.",
-            "headers": {
-              "x-iroha-reject-code": {
-                "description": "Stable offline rejection reason code (for example: certificate_expired, counter_conflict, allowance_exceeded, invoice_duplicate). Present only when the failure maps to an offline rejection.",
-                "schema": {
-                  "example": "certificate_expired",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Query offline allowances with a JSON envelope.",
-        "tags": [
-          "Offline"
-        ]
-      }
-    },
-    "/v1/offline/allowances/{certificate_id_hex}": {
-      "get": {
-        "description": "Returns the on-ledger OfflineAllowanceRecord for the provided certificate id.",
-        "operationId": "offlineAllowanceGet",
-        "parameters": [
-          {
-            "description": "Deterministic certificate id rendered as hex.",
-            "in": "path",
-            "name": "certificate_id_hex",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OfflineAllowanceItem"
-                }
-              }
-            },
-            "description": "Offline allowance retrieved."
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Offline allowance not found.",
-            "headers": {
-              "x-iroha-reject-code": {
-                "description": "Stable offline rejection reason code (for example: certificate_expired, counter_conflict, allowance_exceeded, invoice_duplicate). Present only when the failure maps to an offline rejection.",
-                "schema": {
-                  "example": "certificate_expired",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Fetch a specific offline allowance.",
-        "tags": [
-          "Offline"
-        ]
-      }
-    },
-    "/v1/offline/allowances/{certificate_id_hex}/renew": {
-      "post": {
-        "description": "Accepts a new OfflineWalletCertificate and enqueues a RegisterOfflineAllowance transaction, scoped to an existing certificate id.",
-        "operationId": "offlineAllowanceRenew",
-        "parameters": [
-          {
-            "description": "Deterministic certificate id rendered as hex.",
-            "in": "path",
-            "name": "certificate_id_hex",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OfflineCertificateRenewRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OfflineCertificateRenewResponse"
-                }
-              }
-            },
-            "description": "Offline allowance renewal enqueued."
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Invalid renewal payload.",
-            "headers": {
-              "x-iroha-reject-code": {
-                "description": "Stable offline rejection reason code (for example: certificate_expired, counter_conflict, allowance_exceeded, invoice_duplicate). Present only when the failure maps to an offline rejection.",
-                "schema": {
-                  "example": "certificate_expired",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Renew an offline allowance certificate.",
-        "tags": [
-          "Offline"
-        ]
-      }
-    },
-    "/v1/offline/build-claims/issue": {
-      "post": {
-        "description": "Signs an OfflineBuildClaim bound to a receipt tx id using Torii's configured offline issuer key.",
-        "operationId": "offlineBuildClaimIssue",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OfflineBuildClaimIssueRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OfflineBuildClaimIssueResponse"
-                }
-              }
-            },
-            "description": "Offline build claim issued."
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Invalid build-claim payload.",
-            "headers": {
-              "x-iroha-reject-code": {
-                "description": "Stable offline rejection reason code (for example: certificate_expired, counter_conflict, allowance_exceeded, invoice_duplicate). Present only when the failure maps to an offline rejection.",
-                "schema": {
-                  "example": "certificate_expired",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Issue an offline build claim.",
-        "tags": [
-          "Offline"
-        ]
-      }
-    },
-    "/v1/offline/bundle/proof_status": {
-      "get": {
-        "description": "Computes the Poseidon receipts root for the stored bundle, compares it to the receipts root advertised by the optional aggregate proof envelope, and returns a concise status payload without streaming full receipts.",
-        "operationId": "offlineBundleProofStatus",
-        "parameters": [
-          {
-            "description": "Deterministic bundle identifier (hex).",
-            "in": "query",
-            "name": "bundle_id_hex",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OfflineBundleProofStatusResponse"
-                }
-              }
-            },
-            "description": "Offline bundle proof status retrieved."
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Invalid bundle id.",
-            "headers": {
-              "x-iroha-reject-code": {
-                "description": "Stable offline rejection reason code (for example: certificate_expired, counter_conflict, allowance_exceeded, invoice_duplicate). Present only when the failure maps to an offline rejection.",
-                "schema": {
-                  "example": "certificate_expired",
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Offline bundle not found.",
-            "headers": {
-              "x-iroha-reject-code": {
-                "description": "Stable offline rejection reason code (for example: certificate_expired, counter_conflict, allowance_exceeded, invoice_duplicate). Present only when the failure maps to an offline rejection.",
-                "schema": {
-                  "example": "certificate_expired",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Fetch lightweight offline bundle proof status.",
-        "tags": [
-          "Offline"
-        ]
-      }
-    },
-    "/v1/offline/certificates": {
-      "get": {
-        "description": "Returns operator-issued offline wallet certificates plus ledger-maintained counter checkpoints. Supports optional filter, pagination, and sort parameters encoded as query arguments.",
-        "operationId": "offlineAllowancesList",
-        "parameters": [
-          {
-            "description": "Optional Norito JSON filter expression encoded as a compact string (see Torii filter DSL).",
-            "in": "query",
-            "name": "filter",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Optional page size limit.",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Optional starting offset (default 0).",
-            "in": "query",
-            "name": "offset",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Optional CSV sort spec, e.g., `registered_at_ms:desc`.",
-            "in": "query",
-            "name": "sort",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter allowances by controller account (accepts canonical I105 account literals).",
-            "in": "query",
-            "name": "controller_id",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter allowances by asset identifier.",
-            "in": "query",
-            "name": "asset_id",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Only include allowances whose certificate expiry is at or before this unix timestamp (ms).",
-            "in": "query",
-            "name": "certificate_expires_before_ms",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Only include allowances whose certificate expiry is at or after this unix timestamp (ms).",
-            "in": "query",
-            "name": "certificate_expires_after_ms",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Only include allowances whose issuer policy expiry is at or before this unix timestamp (ms).",
-            "in": "query",
-            "name": "policy_expires_before_ms",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Only include allowances whose issuer policy expiry is at or after this unix timestamp (ms).",
-            "in": "query",
-            "name": "policy_expires_after_ms",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Filter to allowances whose attestation refresh deadline is at or before this unix timestamp (ms).",
-            "in": "query",
-            "name": "refresh_before_ms",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Filter to allowances whose attestation refresh deadline is at or after this unix timestamp (ms).",
-            "in": "query",
-            "name": "refresh_after_ms",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Match allowances whose cached attestation verdict id (hex) equals the provided value (case-insensitive).",
-            "in": "query",
-            "name": "verdict_id_hex",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Match allowances whose attestation nonce (hex) equals the provided value (case-insensitive).",
-            "in": "query",
-            "name": "attestation_nonce_hex",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "When true, only allowances that already have attestation verdict metadata are returned.",
-            "in": "query",
-            "name": "require_verdict",
-            "required": false,
-            "schema": {
-              "type": "boolean"
-            }
-          },
-          {
-            "description": "When true, only allowances that are missing attestation verdict metadata are returned.",
-            "in": "query",
-            "name": "only_missing_verdict",
-            "required": false,
-            "schema": {
-              "type": "boolean"
-            }
-          },
-          {
-            "description": "Include certificates/policies/refresh windows that have already expired (defaults to false).",
-            "in": "query",
-            "name": "include_expired",
-            "required": false,
-            "schema": {
-              "type": "boolean"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OfflineAllowanceListResponse"
-                }
-              }
-            },
-            "description": "Offline allowances retrieved."
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Invalid filter or pagination parameters.",
-            "headers": {
-              "x-iroha-reject-code": {
-                "description": "Stable offline rejection reason code (for example: certificate_expired, counter_conflict, allowance_exceeded, invoice_duplicate). Present only when the failure maps to an offline rejection.",
-                "schema": {
-                  "example": "certificate_expired",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "summary": "List registered offline allowances.",
-        "tags": [
-          "Offline"
-        ]
-      },
-      "post": {
-        "description": "Accepts an operator-signed OfflineWalletCertificate and enqueues a `RegisterOfflineAllowance` transaction.",
-        "operationId": "offlineAllowancesIssue",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OfflineAllowanceIssueRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OfflineAllowanceIssueResponse"
-                }
-              }
-            },
-            "description": "Offline allowance registration enqueued."
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Invalid allowance payload.",
-            "headers": {
-              "x-iroha-reject-code": {
-                "description": "Stable offline rejection reason code (for example: certificate_expired, counter_conflict, allowance_exceeded, invoice_duplicate). Present only when the failure maps to an offline rejection.",
-                "schema": {
-                  "example": "certificate_expired",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Register a new offline allowance certificate.",
-        "tags": [
-          "Offline"
-        ]
-      }
-    },
-    "/v1/offline/certificates/issue": {
-      "post": {
-        "description": "Accepts an unsigned OfflineWalletCertificate draft and returns the operator-signed certificate payload without registering it on-ledger. Torii derives `operator` from its configured offline issuer keypair; client-supplied draft `operator` values are optional and ignored.",
-        "operationId": "offlineCertificateIssue",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OfflineCertificateIssueRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OfflineCertificateIssueResponse"
-                }
-              }
-            },
-            "description": "Offline certificate issued."
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Invalid certificate payload.",
-            "headers": {
-              "x-iroha-reject-code": {
-                "description": "Stable offline rejection reason code (for example: certificate_expired, counter_conflict, allowance_exceeded, invoice_duplicate). Present only when the failure maps to an offline rejection.",
-                "schema": {
-                  "example": "certificate_expired",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Issue an offline wallet certificate.",
-        "tags": [
-          "Offline"
-        ]
-      }
-    },
-    "/v1/offline/certificates/query": {
-      "post": {
-        "description": "Accepts the Norito `QueryEnvelope` structure so clients can submit complex filters, selectors, and pagination hints when listing allowances.",
-        "operationId": "offlineAllowancesQuery",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OfflineQueryEnvelope"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OfflineAllowanceListResponse"
-                }
-              }
-            },
-            "description": "Offline allowances retrieved."
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Invalid filter or pagination parameters.",
-            "headers": {
-              "x-iroha-reject-code": {
-                "description": "Stable offline rejection reason code (for example: certificate_expired, counter_conflict, allowance_exceeded, invoice_duplicate). Present only when the failure maps to an offline rejection.",
-                "schema": {
-                  "example": "certificate_expired",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Query offline allowances with a JSON envelope.",
-        "tags": [
-          "Offline"
-        ]
-      }
-    },
-    "/v1/offline/certificates/revoke": {
-      "post": {
-        "description": "Enqueues a RegisterOfflineVerdictRevocation transaction referencing the attestation verdict tied to the supplied certificate id.",
-        "operationId": "offlineCertificateRevoke",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OfflineCertificateRevokeRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OfflineCertificateRevokeResponse"
-                }
-              }
-            },
-            "description": "Offline verdict revocation enqueued."
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Invalid revocation payload.",
-            "headers": {
-              "x-iroha-reject-code": {
-                "description": "Stable offline rejection reason code (for example: certificate_expired, counter_conflict, allowance_exceeded, invoice_duplicate). Present only when the failure maps to an offline rejection.",
-                "schema": {
-                  "example": "certificate_expired",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Revoke an offline certificate verdict.",
-        "tags": [
-          "Offline"
-        ]
-      }
-    },
-    "/v1/offline/certificates/{certificate_id_hex}": {
-      "get": {
-        "description": "Returns the on-ledger OfflineAllowanceRecord for the provided certificate id.",
-        "operationId": "offlineAllowanceGet",
-        "parameters": [
-          {
-            "description": "Deterministic certificate id rendered as hex.",
-            "in": "path",
-            "name": "certificate_id_hex",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OfflineAllowanceItem"
-                }
-              }
-            },
-            "description": "Offline allowance retrieved."
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Offline allowance not found.",
-            "headers": {
-              "x-iroha-reject-code": {
-                "description": "Stable offline rejection reason code (for example: certificate_expired, counter_conflict, allowance_exceeded, invoice_duplicate). Present only when the failure maps to an offline rejection.",
-                "schema": {
-                  "example": "certificate_expired",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Fetch a specific offline allowance.",
-        "tags": [
-          "Offline"
-        ]
-      }
-    },
-    "/v1/offline/certificates/{certificate_id_hex}/renew": {
-      "post": {
-        "description": "Accepts a new OfflineWalletCertificate and enqueues a RegisterOfflineAllowance transaction, scoped to an existing certificate id.",
-        "operationId": "offlineAllowanceRenew",
-        "parameters": [
-          {
-            "description": "Deterministic certificate id rendered as hex.",
-            "in": "path",
-            "name": "certificate_id_hex",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OfflineCertificateRenewRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OfflineCertificateRenewResponse"
-                }
-              }
-            },
-            "description": "Offline allowance renewal enqueued."
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Invalid renewal payload.",
-            "headers": {
-              "x-iroha-reject-code": {
-                "description": "Stable offline rejection reason code (for example: certificate_expired, counter_conflict, allowance_exceeded, invoice_duplicate). Present only when the failure maps to an offline rejection.",
-                "schema": {
-                  "example": "certificate_expired",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Renew an offline allowance certificate.",
-        "tags": [
-          "Offline"
-        ]
-      }
-    },
-    "/v1/offline/certificates/{certificate_id_hex}/renew/issue": {
-      "post": {
-        "description": "Signs a refreshed OfflineWalletCertificate draft after confirming the referenced allowance exists on-ledger. Torii derives `operator` from its configured offline issuer keypair; client-supplied draft `operator` values are optional and ignored.",
-        "operationId": "offlineCertificateRenewIssue",
-        "parameters": [
-          {
-            "description": "Deterministic certificate id rendered as hex.",
-            "in": "path",
-            "name": "certificate_id_hex",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OfflineCertificateIssueRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OfflineCertificateIssueResponse"
-                }
-              }
-            },
-            "description": "Offline certificate issued."
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Invalid certificate payload.",
-            "headers": {
-              "x-iroha-reject-code": {
-                "description": "Stable offline rejection reason code (for example: certificate_expired, counter_conflict, allowance_exceeded, invoice_duplicate). Present only when the failure maps to an offline rejection.",
-                "schema": {
-                  "example": "certificate_expired",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Issue a renewed offline certificate.",
-        "tags": [
-          "Offline"
-        ]
-      }
-    },
-    "/v1/offline/receipts": {
-      "get": {
-        "description": "Returns individual spend receipts extracted from offline-to-online transfer bundles, suitable for audit dashboards.",
-        "operationId": "offlineReceiptsList",
-        "parameters": [
-          {
-            "description": "Optional Norito JSON filter expression encoded as a compact string (see Torii filter DSL).",
-            "in": "query",
-            "name": "filter",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Optional page size limit.",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Optional starting offset (default 0).",
-            "in": "query",
-            "name": "offset",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Optional CSV sort spec, e.g., `registered_at_ms:desc`.",
-            "in": "query",
-            "name": "sort",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter receipts by sender/controller account (accepts canonical I105 account literals).",
-            "in": "query",
-            "name": "controller_id",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter receipts by receiver account (accepts canonical I105 account literals).",
-            "in": "query",
-            "name": "receiver_id",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Restrict receipts to a specific bundle identifier (hex, case-insensitive).",
-            "in": "query",
-            "name": "bundle_id_hex",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Restrict receipts to a specific certificate identifier (hex, case-insensitive).",
-            "in": "query",
-            "name": "certificate_id_hex",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter receipts by invoice identifier.",
-            "in": "query",
-            "name": "invoice_id",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter receipts by asset identifier.",
-            "in": "query",
-            "name": "asset_id",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OfflineReceiptListResponse"
-                }
-              }
-            },
-            "description": "Offline receipts retrieved."
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Invalid filter or pagination parameters.",
-            "headers": {
-              "x-iroha-reject-code": {
-                "description": "Stable offline rejection reason code (for example: certificate_expired, counter_conflict, allowance_exceeded, invoice_duplicate). Present only when the failure maps to an offline rejection.",
-                "schema": {
-                  "example": "certificate_expired",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "summary": "List flattened offline spend receipts.",
-        "tags": [
-          "Offline"
-        ]
-      }
-    },
-    "/v1/offline/receipts/query": {
-      "post": {
-        "description": "Supports the Norito QueryEnvelope body to paginate and filter receipts extracted from settlement bundles.",
-        "operationId": "offlineReceiptsQuery",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OfflineQueryEnvelope"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OfflineReceiptListResponse"
-                }
-              }
-            },
-            "description": "Offline receipts retrieved."
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Invalid filter or pagination parameters.",
-            "headers": {
-              "x-iroha-reject-code": {
-                "description": "Stable offline rejection reason code (for example: certificate_expired, counter_conflict, allowance_exceeded, invoice_duplicate). Present only when the failure maps to an offline rejection.",
-                "schema": {
-                  "example": "certificate_expired",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Query flattened offline receipts via JSON envelope.",
-        "tags": [
-          "Offline"
-        ]
-      }
-    },
     "/v1/offline/rejections": {
       "get": {
         "description": "Returns aggregated counts grouped by platform and rejection reason so operators can monitor App Attest and KeyMint validation failures.",
@@ -8868,30 +9373,9 @@
         ]
       }
     },
-    "/v1/offline/revocations": {
-      "get": {
-        "description": "Return the latest offline revocation entries.",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "List offline revocations.",
-        "tags": [
-          "Offline"
-        ]
-      }
-    },
-    "/v1/offline/revocations/query": {
+    "/v1/offline/reserve/defund": {
       "post": {
-        "description": "Submit a QueryEnvelope to filter offline revocations.",
+        "description": "Sync pending receipts, move reserve value back online, and return the updated reserve envelope.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -8914,250 +9398,165 @@
             "description": "Successful response"
           }
         },
-        "summary": "Query offline revocations via JSON envelope.",
+        "summary": "Defund an offline reserve.",
         "tags": [
           "Offline"
         ]
       }
     },
-    "/v1/offline/settlements": {
-      "get": {
-        "description": "Alias of `/v1/offline/transfers` for settlement audit readers.",
-        "operationId": "offlineSettlementsList",
-        "parameters": [
-          {
-            "description": "Optional Norito JSON filter expression encoded as a compact string (see Torii filter DSL).",
-            "in": "query",
-            "name": "filter",
-            "required": false,
-            "schema": {
-              "type": "string"
+    "/v1/offline/reserve/renew": {
+      "post": {
+        "description": "Refresh the spend authorization for an existing reserve lineage without moving funds.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
             }
           },
-          {
-            "description": "Optional page size limit.",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Optional starting offset (default 0).",
-            "in": "query",
-            "name": "offset",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Optional CSV sort spec, e.g., `registered_at_ms:desc`.",
-            "in": "query",
-            "name": "sort",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter bundles by originating controller account (accepts canonical I105 account literals).",
-            "in": "query",
-            "name": "controller_id",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter bundles by receiver account (accepts canonical I105 account literals).",
-            "in": "query",
-            "name": "receiver_id",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter bundles by deposit account (accepts canonical I105 account literals).",
-            "in": "query",
-            "name": "deposit_account_id",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Filter bundles by asset identifier.",
-            "in": "query",
-            "name": "asset_id",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Match bundles whose originating certificate id (hex) equals the provided value (case-insensitive).",
-            "in": "query",
-            "name": "certificate_id_hex",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Only include bundles whose originating certificate expiry is at or before this unix timestamp (ms).",
-            "in": "query",
-            "name": "certificate_expires_before_ms",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Only include bundles whose originating certificate expiry is at or after this unix timestamp (ms).",
-            "in": "query",
-            "name": "certificate_expires_after_ms",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Only include bundles whose policy expiry is at or before this unix timestamp (ms).",
-            "in": "query",
-            "name": "policy_expires_before_ms",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Only include bundles whose policy expiry is at or after this unix timestamp (ms).",
-            "in": "query",
-            "name": "policy_expires_after_ms",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Filter to bundles whose attestation refresh deadline is at or before this unix timestamp (ms).",
-            "in": "query",
-            "name": "refresh_before_ms",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Filter to bundles whose attestation refresh deadline is at or after this unix timestamp (ms).",
-            "in": "query",
-            "name": "refresh_after_ms",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Match bundles whose attestation verdict id (hex) equals the provided value (case-insensitive).",
-            "in": "query",
-            "name": "verdict_id_hex",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Match bundles whose attestation nonce (hex) equals the provided value (case-insensitive).",
-            "in": "query",
-            "name": "attestation_nonce_hex",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Restrict settled bundles to a specific Android attestation policy (use `play_integrity` or `hms_safety_detect`).",
-            "in": "query",
-            "name": "platform_policy",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "When true, only bundles that already have attestation verdict metadata are returned.",
-            "in": "query",
-            "name": "require_verdict",
-            "required": false,
-            "schema": {
-              "type": "boolean"
-            }
-          },
-          {
-            "description": "When true, only bundles missing attestation verdict metadata are returned.",
-            "in": "query",
-            "name": "only_missing_verdict",
-            "required": false,
-            "schema": {
-              "type": "boolean"
-            }
-          }
-        ],
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/OfflineTransferListResponse"
+                  "$ref": "#/components/schemas/JsonValue"
                 }
               }
             },
-            "description": "Offline transfer bundles retrieved."
+            "description": "Successful response"
+          }
+        },
+        "summary": "Renew an offline spend authorization.",
+        "tags": [
+          "Offline"
+        ]
+      }
+    },
+    "/v1/offline/reserve/setup": {
+      "post": {
+        "description": "Create the zero-balance reserve lineage for a device or return the existing reserve envelope.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
           },
-          "400": {
+          "required": true
+        },
+        "responses": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/JsonValue"
                 }
               }
             },
-            "description": "Invalid filter or pagination parameters.",
-            "headers": {
-              "x-iroha-reject-code": {
-                "description": "Stable offline rejection reason code (for example: certificate_expired, counter_conflict, allowance_exceeded, invoice_duplicate). Present only when the failure maps to an offline rejection.",
-                "schema": {
-                  "example": "certificate_expired",
-                  "type": "string"
-                }
-              }
-            }
+            "description": "Successful response"
           }
         },
-        "summary": "List offline settlement bundles.",
+        "summary": "Create or fetch an offline reserve lineage.",
+        "tags": [
+          "Offline"
+        ]
+      }
+    },
+    "/v1/offline/reserve/sync": {
+      "post": {
+        "description": "Submit pending offline transfer receipts and return the updated authoritative reserve envelope.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Sync offline reserve receipts.",
+        "tags": [
+          "Offline"
+        ]
+      }
+    },
+    "/v1/offline/reserve/topup": {
+      "post": {
+        "description": "Move online balance into the device-bound reserve and return the authoritative reserve envelope.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Top up an offline reserve.",
+        "tags": [
+          "Offline"
+        ]
+      }
+    },
+    "/v1/offline/revocations": {
+      "get": {
+        "description": "Return the issuer-signed deny-list bundle used by offline wallets.",
+        "operationId": "offlineRevocationsGet",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Fetch the signed offline revocation bundle.",
         "tags": [
           "Offline"
         ]
       },
       "post": {
-        "description": "Enqueues a `SubmitOfflineToOnlineTransfer` transaction carrying the provided OfflineToOnlineTransfer bundle. When `torii.offline_issuer` is configured, Torii auto-issues missing receipt `build_claim` entries before submission. Use `build_claim_overrides[]` for per-receipt app/build/window overrides; set `repair_existing_build_claims=true` to re-issue existing claims.",
-        "operationId": "offlineSettlementsSubmit",
+        "description": "Submit an operator/admin request that records an on-ledger offline verdict revocation.",
+        "operationId": "offlineRevocationsRegister",
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/OfflineSettlementSubmitRequest"
+                "$ref": "#/components/schemas/JsonValue"
               }
             }
           },
@@ -9168,341 +9567,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/OfflineSettlementSubmitResponse"
+                  "$ref": "#/components/schemas/JsonValue"
                 }
               }
             },
-            "description": "Offline settlement submission enqueued."
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Invalid settlement payload.",
-            "headers": {
-              "x-iroha-reject-code": {
-                "description": "Stable offline rejection reason code (for example: certificate_expired, counter_conflict, allowance_exceeded, invoice_duplicate). Present only when the failure maps to an offline rejection.",
-                "schema": {
-                  "example": "certificate_expired",
-                  "type": "string"
-                }
-              }
-            }
+            "description": "Successful response"
           }
         },
-        "summary": "Submit an offline settlement bundle.",
-        "tags": [
-          "Offline"
-        ]
-      }
-    },
-    "/v1/offline/settlements/query": {
-      "post": {
-        "description": "Supports the Norito `QueryEnvelope` body to paginate and filter bundle records, enabling regulator views or PSP dashboards.",
-        "operationId": "offlineTransfersQuery",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OfflineQueryEnvelope"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OfflineTransferListResponse"
-                }
-              }
-            },
-            "description": "Offline transfer bundles retrieved."
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Invalid filter or pagination parameters.",
-            "headers": {
-              "x-iroha-reject-code": {
-                "description": "Stable offline rejection reason code (for example: certificate_expired, counter_conflict, allowance_exceeded, invoice_duplicate). Present only when the failure maps to an offline rejection.",
-                "schema": {
-                  "example": "certificate_expired",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Query offline transfer bundles via JSON envelope.",
-        "tags": [
-          "Offline"
-        ]
-      }
-    },
-    "/v1/offline/settlements/{bundle_id_hex}": {
-      "get": {
-        "description": "Returns the same enriched transfer payload as `/v1/offline/transfers`, scoped to a single `bundle_id_hex`.",
-        "operationId": "offlineTransferGet",
-        "parameters": [
-          {
-            "description": "Deterministic bundle identifier rendered as hex.",
-            "in": "path",
-            "name": "bundle_id_hex",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OfflineTransferItem"
-                }
-              }
-            },
-            "description": "Offline transfer bundle retrieved."
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Offline transfer bundle not found.",
-            "headers": {
-              "x-iroha-reject-code": {
-                "description": "Stable offline rejection reason code (for example: certificate_expired, counter_conflict, allowance_exceeded, invoice_duplicate). Present only when the failure maps to an offline rejection.",
-                "schema": {
-                  "example": "certificate_expired",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Fetch a specific offline transfer bundle.",
-        "tags": [
-          "Offline"
-        ]
-      }
-    },
-    "/v1/offline/spend-receipts": {
-      "post": {
-        "description": "Validates receipt signatures and returns their Poseidon merkle root.",
-        "operationId": "offlineSpendReceiptsSubmit",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OfflineSpendReceiptsSubmitRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OfflineSpendReceiptsSubmitResponse"
-                }
-              }
-            },
-            "description": "Offline receipts validated."
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Invalid receipt payload.",
-            "headers": {
-              "x-iroha-reject-code": {
-                "description": "Stable offline rejection reason code (for example: certificate_expired, counter_conflict, allowance_exceeded, invoice_duplicate). Present only when the failure maps to an offline rejection.",
-                "schema": {
-                  "example": "certificate_expired",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Validate offline spend receipts.",
-        "tags": [
-          "Offline"
-        ]
-      }
-    },
-    "/v1/offline/state": {
-      "get": {
-        "description": "Returns registered allowances, settlement bundles, counter summaries, and verdict revocations for wallet sync.",
-        "operationId": "offlineStateGet",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OfflineStateResponse"
-                }
-              }
-            },
-            "description": "Offline state snapshot retrieved."
-          }
-        },
-        "summary": "Fetch an offline state snapshot.",
-        "tags": [
-          "Offline"
-        ]
-      }
-    },
-    "/v1/offline/summaries": {
-      "get": {
-        "description": "Returns controller-facing summaries of the latest App Attest and Android marker counters observed for each allowance certificate.",
-        "operationId": "offlineSummariesList",
-        "parameters": [
-          {
-            "description": "Optional Norito JSON filter expression encoded as a compact string (see Torii filter DSL).",
-            "in": "query",
-            "name": "filter",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Optional page size limit.",
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Optional starting offset (default 0).",
-            "in": "query",
-            "name": "offset",
-            "required": false,
-            "schema": {
-              "format": "uint64",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Optional CSV sort spec, e.g., `registered_at_ms:desc`.",
-            "in": "query",
-            "name": "sort",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OfflineSummaryListResponse"
-                }
-              }
-            },
-            "description": "Offline counter summaries retrieved."
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Invalid filter or pagination parameters.",
-            "headers": {
-              "x-iroha-reject-code": {
-                "description": "Stable offline rejection reason code (for example: certificate_expired, counter_conflict, allowance_exceeded, invoice_duplicate). Present only when the failure maps to an offline rejection.",
-                "schema": {
-                  "example": "certificate_expired",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "summary": "List hardware counter summaries for offline allowances.",
-        "tags": [
-          "Offline"
-        ]
-      }
-    },
-    "/v1/offline/summaries/query": {
-      "post": {
-        "description": "Accepts the Norito `QueryEnvelope` structure so operators can fetch counter checkpoints with complex filters, selectors, and pagination hints.",
-        "operationId": "offlineSummariesQuery",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OfflineQueryEnvelope"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OfflineSummaryListResponse"
-                }
-              }
-            },
-            "description": "Offline counter summaries retrieved."
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Invalid filter or pagination parameters.",
-            "headers": {
-              "x-iroha-reject-code": {
-                "description": "Stable offline rejection reason code (for example: certificate_expired, counter_conflict, allowance_exceeded, invoice_duplicate). Present only when the failure maps to an offline rejection.",
-                "schema": {
-                  "example": "certificate_expired",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Query offline counter summaries with a JSON envelope.",
+        "summary": "Register an offline verdict revocation.",
         "tags": [
           "Offline"
         ]
@@ -9734,37 +9806,6 @@
           }
         },
         "summary": "List pending offline-to-online transfer bundles.",
-        "tags": [
-          "Offline"
-        ]
-      }
-    },
-    "/v1/offline/transfers/proof": {
-      "post": {
-        "description": "Generate FASTPQ witness payloads from a transfer payload.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Build offline transfer proof requests.",
         "tags": [
           "Offline"
         ]
@@ -10197,6 +10238,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "Read scope hint (`local`, `auto`, or `global`; defaults to `auto`).",
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -10329,6 +10379,100 @@
         "summary": "Fetch a proof record.",
         "tags": [
           "Proofs"
+        ]
+      }
+    },
+    "/v1/ram-lfe/program-policies": {
+      "get": {
+        "description": "List globally registered RAM-LFE program policies and their public execution metadata.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RamLfeProgramPolicyListResponse"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "List RAM-LFE program policies.",
+        "tags": [
+          "RamLfe"
+        ]
+      }
+    },
+    "/v1/ram-lfe/programs/{program_id}/execute": {
+      "post": {
+        "description": "Execute a RAM-LFE program from plaintext or BFV-encrypted input and return the stateless execution receipt.",
+        "parameters": [
+          {
+            "description": "RAM-LFE program identifier.",
+            "in": "path",
+            "name": "program_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RamLfeExecuteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RamLfeExecuteResponse"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Execute a RAM-LFE program.",
+        "tags": [
+          "RamLfe"
+        ]
+      }
+    },
+    "/v1/ram-lfe/receipts/verify": {
+      "post": {
+        "description": "Validate a stateless RAM-LFE execution receipt against the published on-chain program policy and optionally compare a caller-supplied output blob to the receipt output hash.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RamLfeReceiptVerifyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RamLfeReceiptVerifyResponse"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Verify a RAM-LFE receipt.",
+        "tags": [
+          "RamLfe"
         ]
       }
     },
@@ -10621,28 +10765,9 @@
         ]
       }
     },
-    "/v1/sns/governance/cases": {
-      "get": {
-        "description": "List SNS governance cases.",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "List SNS governance cases.",
-        "tags": [
-          "SNS"
-        ]
-      },
+    "/v1/sns/names": {
       "post": {
-        "description": "Create a SNS governance case.",
+        "description": "Register a ledger-backed SNS name record in one of the fixed namespaces.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -10665,83 +10790,29 @@
             "description": "Successful response"
           }
         },
-        "summary": "Create a SNS governance case.",
+        "summary": "Register a SNS name lease.",
         "tags": [
           "SNS"
         ]
       }
     },
-    "/v1/sns/policies/{suffix_id}": {
+    "/v1/sns/names/{namespace}/{literal}": {
       "get": {
-        "description": "Fetch SNS policy by suffix id.",
+        "description": "Fetch a ledger-backed SNS name record by namespace and canonical literal.",
         "parameters": [
           {
-            "description": "Suffix identifier.",
+            "description": "SNS namespace (`account-alias`, `domain`, or `dataspace`).",
             "in": "path",
-            "name": "suffix_id",
+            "name": "namespace",
             "required": true,
             "schema": {
               "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Fetch SNS policy.",
-        "tags": [
-          "SNS"
-        ]
-      }
-    },
-    "/v1/sns/registrations": {
-      "post": {
-        "description": "Register a SNS suffix.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
             }
           },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Register a SNS suffix.",
-        "tags": [
-          "SNS"
-        ]
-      }
-    },
-    "/v1/sns/registrations/{selector}": {
-      "get": {
-        "description": "Fetch a SNS registration by selector.",
-        "parameters": [
           {
-            "description": "SNS selector value.",
+            "description": "Canonical SNS literal for the namespace.",
             "in": "path",
-            "name": "selector",
+            "name": "literal",
             "required": true,
             "schema": {
               "type": "string"
@@ -10760,20 +10831,29 @@
             "description": "Successful response"
           }
         },
-        "summary": "Fetch a SNS registration.",
+        "summary": "Fetch a SNS name record.",
         "tags": [
           "SNS"
         ]
       }
     },
-    "/v1/sns/registrations/{selector}/controllers": {
+    "/v1/sns/names/{namespace}/{literal}/controllers": {
       "post": {
-        "description": "Update SNS registration controllers.",
+        "description": "Update controllers for a ledger-backed SNS name record.",
         "parameters": [
           {
-            "description": "SNS selector value.",
+            "description": "SNS namespace (`account-alias`, `domain`, or `dataspace`).",
             "in": "path",
-            "name": "selector",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical SNS literal for the namespace.",
+            "in": "path",
+            "name": "literal",
             "required": true,
             "schema": {
               "type": "string"
@@ -10808,14 +10888,23 @@
         ]
       }
     },
-    "/v1/sns/registrations/{selector}/freeze": {
+    "/v1/sns/names/{namespace}/{literal}/freeze": {
       "delete": {
-        "description": "Unfreeze a SNS registration.",
+        "description": "Unfreeze a ledger-backed SNS name record.",
         "parameters": [
           {
-            "description": "SNS selector value.",
+            "description": "SNS namespace (`account-alias`, `domain`, or `dataspace`).",
             "in": "path",
-            "name": "selector",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical SNS literal for the namespace.",
+            "in": "path",
+            "name": "literal",
             "required": true,
             "schema": {
               "type": "string"
@@ -10834,18 +10923,27 @@
             "description": "Successful response"
           }
         },
-        "summary": "Unfreeze a SNS registration.",
+        "summary": "Unfreeze a SNS name record.",
         "tags": [
           "SNS"
         ]
       },
       "post": {
-        "description": "Freeze a SNS registration.",
+        "description": "Freeze a ledger-backed SNS name record.",
         "parameters": [
           {
-            "description": "SNS selector value.",
+            "description": "SNS namespace (`account-alias`, `domain`, or `dataspace`).",
             "in": "path",
-            "name": "selector",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical SNS literal for the namespace.",
+            "in": "path",
+            "name": "literal",
             "required": true,
             "schema": {
               "type": "string"
@@ -10874,20 +10972,29 @@
             "description": "Successful response"
           }
         },
-        "summary": "Freeze a SNS registration.",
+        "summary": "Freeze a SNS name record.",
         "tags": [
           "SNS"
         ]
       }
     },
-    "/v1/sns/registrations/{selector}/renew": {
+    "/v1/sns/names/{namespace}/{literal}/renew": {
       "post": {
-        "description": "Renew a SNS registration by selector.",
+        "description": "Renew a ledger-backed SNS name record by namespace and canonical literal.",
         "parameters": [
           {
-            "description": "SNS selector value.",
+            "description": "SNS namespace (`account-alias`, `domain`, or `dataspace`).",
             "in": "path",
-            "name": "selector",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical SNS literal for the namespace.",
+            "in": "path",
+            "name": "literal",
             "required": true,
             "schema": {
               "type": "string"
@@ -10916,20 +11023,29 @@
             "description": "Successful response"
           }
         },
-        "summary": "Renew a SNS registration.",
+        "summary": "Renew a SNS name record.",
         "tags": [
           "SNS"
         ]
       }
     },
-    "/v1/sns/registrations/{selector}/transfer": {
+    "/v1/sns/names/{namespace}/{literal}/transfer": {
       "post": {
-        "description": "Transfer a SNS registration by selector.",
+        "description": "Transfer a ledger-backed SNS name record by namespace and canonical literal.",
         "parameters": [
           {
-            "description": "SNS selector value.",
+            "description": "SNS namespace (`account-alias`, `domain`, or `dataspace`).",
             "in": "path",
-            "name": "selector",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Canonical SNS literal for the namespace.",
+            "in": "path",
+            "name": "literal",
             "required": true,
             "schema": {
               "type": "string"
@@ -10958,7 +11074,39 @@
             "description": "Successful response"
           }
         },
-        "summary": "Transfer a SNS registration.",
+        "summary": "Transfer a SNS name record.",
+        "tags": [
+          "SNS"
+        ]
+      }
+    },
+    "/v1/sns/policies/{suffix_id}": {
+      "get": {
+        "description": "Fetch SNS policy by suffix id.",
+        "parameters": [
+          {
+            "description": "Suffix identifier.",
+            "in": "path",
+            "name": "suffix_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Fetch SNS policy.",
         "tags": [
           "SNS"
         ]
@@ -14717,6 +14865,10 @@
       "name": "Contracts"
     },
     {
+      "description": "Alias-aware multisig propose, approve, spec, and proposal lookup helpers.",
+      "name": "Multisig"
+    },
+    {
       "description": "Zero-knowledge proofs, VK registry, and attachments.",
       "name": "ZK"
     },
@@ -14739,6 +14891,14 @@
     {
       "description": "Account listing and account-scoped query helpers.",
       "name": "Accounts"
+    },
+    {
+      "description": "Generic RAM-LFE program-policy, execute, and receipt-verification helpers.",
+      "name": "RamLfe"
+    },
+    {
+      "description": "Identifier-policy listing, resolution, and claim-receipt helpers.",
+      "name": "Identifiers"
     },
     {
       "description": "Domain listing and query helpers.",

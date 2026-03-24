@@ -107,15 +107,15 @@ Struct ReservedAssignmentRequestV1 {
 
 | Конечная точка | طریقہ | Полезная нагрузка | تفصیل |
 |----------|-------|---------|-------|
-| `/v1/sns/registrations` | ПОСТ | `RegisterNameRequestV1` | Если вы хотите, чтобы это произошло, ценовой уровень حل کرتا ہے، доказательства оплаты/управления کی توثیق کرتا ہے، события реестра излучают کرتا ہے۔ |
-| `/v1/sns/registrations/{selector}/renew` | ПОСТ | `RenewNameRequestV1` | مدت بڑھاتا ہے۔ Окна благодати/искупления |
-| `/v1/sns/registrations/{selector}/transfer` | ПОСТ | `TransferNameRequestV1` | حکمرانی одобрения لگنے کے بعد منتقل کرتا ہے۔ |
-| `/v1/sns/registrations/{selector}/controllers` | ПУТЬ | `UpdateControllersRequestV1` | контроллеры подписанные адреса учетных записей کی توثیق کرتا ہے۔ |
-| `/v1/sns/registrations/{selector}/freeze` | ПОСТ | `FreezeNameRequestV1` | заморозка опекуна/совета۔ Билет опекуна и квитанция об управлении کا حوالہ درکار۔ |
-| `/v1/sns/registrations/{selector}/freeze` | УДАЛИТЬ | `GovernanceHookV1` | исправление کے بعد разморозить; совет отвергает ریکارڈ ہونے کو یقینی بناتا ہے۔ |
+| `/v1/sns/names` | ПОСТ | `RegisterNameRequestV1` | Если вы хотите, чтобы это произошло, ценовой уровень حل کرتا ہے، доказательства оплаты/управления کی توثیق کرتا ہے، события реестра излучают کرتا ہے۔ |
+| `/v1/sns/names/{namespace}/{literal}/renew` | ПОСТ | `RenewNameRequestV1` | مدت بڑھاتا ہے۔ Окна благодати/искупления |
+| `/v1/sns/names/{namespace}/{literal}/transfer` | ПОСТ | `TransferNameRequestV1` | حکمرانی одобрения لگنے کے بعد منتقل کرتا ہے۔ |
+| `/v1/sns/names/{namespace}/{literal}/controllers` | ПУТЬ | `UpdateControllersRequestV1` | контроллеры подписанные адреса учетных записей کی توثیق کرتا ہے۔ |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | ПОСТ | `FreezeNameRequestV1` | заморозка опекуна/совета۔ Билет опекуна и квитанция об управлении کا حوالہ درکار۔ |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | УДАЛИТЬ | `GovernanceHookV1` | исправление کے بعد разморозить; совет отвергает ریکارڈ ہونے کو یقینی بناتا ہے۔ |
 | `/v1/sns/reserved/{selector}` | ПОСТ | `ReservedAssignmentRequestV1` | зарезервированные имена, управляющий/совет, назначение, назначение. |
 | `/v1/sns/policies/{suffix_id}` | ПОЛУЧИТЬ | -- | `SuffixPolicyV1` موجودہ حاصل کرتا ہے (кэшируемый)۔ |
-| `/v1/sns/registrations/{selector}` | ПОЛУЧИТЬ | -- | موجودہ `NameRecordV1` + موثر حالت (Active, Grace وغیرہ) واپس کرتا ہے۔ |
+| `/v1/sns/names/{namespace}/{literal}` | ПОЛУЧИТЬ | -- | موجودہ `NameRecordV1` + موثر حالت (Active, Grace وغیرہ) واپس کرتا ہے۔ |
 
 **Кодировка селектора:** `{selector}` сегмент пути I105, сжатый (`sora`) или канонический шестнадцатеричный ADDR-5, который может быть использован в качестве исходного кода. Torii `NameSelectorV1` سے нормализовать کرتا ہے۔**Модель ошибки:** Конечные точки Norito JSON `code`, `message`, `details` и многое другое. Коды `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
 
@@ -128,7 +128,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -153,7 +153,7 @@ iroha sns policy --suffix-id 1
 iroha sns renew \
   --selector makoto.sora \
   --term-years 1 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 120 \
   --payment-settlement '"renewal-settlement"' \
   --payment-signature '"steward-signature"'
@@ -176,7 +176,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` میں درست `GovernanceHookV1` ریکارڈ ہونا چاہیے (идентификатор предложения, хеши голосования, подписи стюарда/опекуна)۔ ہر کمانڈ متعلقہ `/v1/sns/registrations/{selector}/...` endpoint کی عکاسی کرتی ہے تاکہ beta операторы بالکل وہی Torii поверхности репетируют Использование SDK или SDK
+`--governance-json` میں درست `GovernanceHookV1` ریکارڈ ہونا چاہیے (идентификатор предложения, хеши голосования, подписи стюарда/опекуна)۔ ہر کمانڈ متعلقہ `/v1/sns/names/{namespace}/{literal}/...` endpoint کی عکاسی کرتی ہے تاکہ beta операторы بالکل وہی Torii поверхности репетируют Использование SDK или SDK
 
 ## 4. Служба gRPC
 
@@ -246,7 +246,7 @@ Torii доказательства того, что вам нужно знать
 
 1. Guardian `FreezeNameRequestV1` отправьте сообщение с идентификатором инцидента или билетом на следующий день.
 2. Torii записывает `NameStatus::Frozen`, выдает сигнал `NameFrozen`, выдает сигнал.
-3. Исправление может быть отменено советом جاری کرتا ہے؛ Оператор DELETE `/v1/sns/registrations/{selector}/freeze` или `GovernanceHookV1` کے ساتھ بھیجتا ہے۔
+3. Исправление может быть отменено советом جاری کرتا ہے؛ Оператор DELETE `/v1/sns/names/{namespace}/{literal}/freeze` или `GovernanceHookV1` کے ساتھ بھیجتا ہے۔
 4. Torii переопределить проверку проверки, `NameUnfrozen` выдать команду
 
 ## 7. Коды проверки и ошибок

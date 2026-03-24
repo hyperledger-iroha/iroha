@@ -228,7 +228,7 @@ register_trigger wake {
 - `asset_handle(string|0xhex) -> AssetHandle*`
 - `proof_blob(string|0xhex) -> ProofBlob*`Prelude ማክሮዎች ለእነዚህ ግንበኞች አጠር ያሉ ተለዋጭ ስሞችን እና የመስመር ላይ ማረጋገጫን ይሰጣሉ፡-
 - `account!("i105...")`፣ `account_id!("i105...")`
-- `asset_definition!("rose#wonderland")`፣ `asset_id!("rose#wonderland")`
+- `asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`፣ `asset_id!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`
 - `domain!("wonderland")`፣ `domain_id!("wonderland")`
 - `name!("example")`
 - `json!("{\"hello\":\"world\"}")` ወይም እንደ `json!{ hello: "world" }` ያሉ የተዋቀሩ ቀጥተኛ ቃላት

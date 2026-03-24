@@ -288,10 +288,8 @@ pub struct JsAccountAddressRender {
     pub canonical_hex: String,
     /// I105 encoding generated with the supplied network prefix.
     pub i105: String,
-    /// I105-default half-width sentinel encoding (`sora…`).
+    /// Canonical default-discriminant I105 encoding.
     pub i105_default: String,
-    /// I105-default full-width sentinel encoding (イロハ glyphs).
-    pub i105_default_fullwidth: String,
 }
 
 /// Deterministic gateway host bindings exposed to JavaScript callers.
@@ -467,12 +465,10 @@ pub fn account_address_render(
         .to_i105_for_discriminant(network_prefix)
         .map_err(account_address_err)?;
     let i105_default = address.to_i105().map_err(account_address_err)?;
-    let i105_default_fullwidth = address.to_i105_fullwidth().map_err(account_address_err)?;
     Ok(JsAccountAddressRender {
         canonical_hex,
         i105,
         i105_default,
-        i105_default_fullwidth,
     })
 }
 

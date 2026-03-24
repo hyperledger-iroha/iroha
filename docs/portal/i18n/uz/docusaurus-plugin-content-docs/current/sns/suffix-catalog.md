@@ -32,7 +32,7 @@ asboblar holat hujjatlarini qirib tashlamasdan bir xil parametrlarni yuklashi mu
 | `status` | enum | `active`, `paused` yoki `revoked` ishga tushirishga tayyorligini tavsiflaydi. |
 | `steward_account` | string | Boshqaruv uchun mas'ul hisob (registrator siyosati ilgaklariga mos keladi). |
 | `fund_splitter_account` | string | `fee_split` bo'yicha marshrutlashdan oldin to'lovlarni qabul qiluvchi hisob. |
-| `payment_asset_id` | string | Hisoblash uchun foydalanilgan aktiv (dastlabki kogorta uchun `xor#sora`). |
+| `payment_asset_id` | string | Hisoblash uchun foydalanilgan aktiv (dastlabki kogorta uchun `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `min_term_years` / `max_term_years` | butun | Siyosatdan sotib olish muddati chegaralari. |
 | `grace_period_days` / `redemption_period_days` | butun | Yangilanish xavfsizligi oynalari Torii tomonidan qo'llaniladi. |
 | `referral_cap_bps` | butun | Boshqaruv tomonidan ruxsat etilgan maksimal tavsiyanomalar (asosiy nuqtalar). |
@@ -45,9 +45,9 @@ asboblar holat hujjatlarini qirib tashlamasdan bir xil parametrlarni yuklashi mu
 
 | Suffiks | ID (`hex`) | Styuard | Fond ajratuvchi | Holati | To'lov aktivi | Yo'naltiruvchi chegara (bps) | Muddat (min – maks yillar) | Inoyat / To'lov (kunlar) | Narxlash darajalari (regex → asosiy narx / auktsion) | Zaxiralangan teglar | To'lovni taqsimlash (T/S/R/E bps) | Siyosat versiyasi |
 |--------|------------|---------|---------------|--------|---------------|--------------------|--------------------------|--------------------------|--------------------------|-----------------------------------|
-| `.sora` | `0x0001` | `i105...` | `i105...` | Faol | `xor#sora` | 500 | 1 – 5 | 30 / 60 | `T0: ^[a-z0-9]{3,}$ → 120 XOR (Vickrey)` | `treasury → i105...` | `7000 / 3000 / 1000 / 0` | 1 |
-| `.nexus` | `0x0002` | `i105...` | `i105...` | To'xtatildi | `xor#sora` | 300 | 1 – 3 | 15 / 30 | `T0: ^[a-z0-9]{4,}$ → 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ → 4000 XOR (Dutch floor 500)` | `treasury → i105...`, `guardian → i105...` | `6500 / 2500 / 800 / 200` | 2 |
-| `.dao` | `0x0003` | `i105...` | `i105...` | Bekor qilingan | `xor#sora` | 0 | 1 – 2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ → 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
+| `.sora` | `0x0001` | `i105...` | `i105...` | Faol | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 500 | 1 – 5 | 30 / 60 | `T0: ^[a-z0-9]{3,}$ → 120 XOR (Vickrey)` | `treasury → i105...` | `7000 / 3000 / 1000 / 0` | 1 |
+| `.nexus` | `0x0002` | `i105...` | `i105...` | To'xtatildi | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 300 | 1 – 3 | 15 / 30 | `T0: ^[a-z0-9]{4,}$ → 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ → 4000 XOR (Dutch floor 500)` | `treasury → i105...`, `guardian → i105...` | `6500 / 2500 / 800 / 200` | 2 |
+| `.dao` | `0x0003` | `i105...` | `i105...` | Bekor qilingan | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 0 | 1 – 2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ → 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
 
 ## JSON parchasi
 
@@ -61,13 +61,13 @@ asboblar holat hujjatlarini qirib tashlamasdan bir xil parametrlarni yuklashi mu
       "suffix_id": 1,
       "status": "active",
       "fund_splitter_account": "i105...",
-      "payment_asset_id": "xor#sora",
+      "payment_asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
       "referral_cap_bps": 500,
       "pricing": [
         {
           "tier_id": 0,
           "label_regex": "^[a-z0-9]{3,}$",
-          "base_price": {"asset_id": "xor#sora", "amount": 120},
+          "base_price": {"asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc", "amount": 120},
           "auction_kind": "vickrey_commit_reveal",
           "min_duration_years": 1,
           "max_duration_years": 5

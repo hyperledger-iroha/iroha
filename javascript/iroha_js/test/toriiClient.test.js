@@ -66,6 +66,7 @@ function sampleAccountForms() {
     publicKey,
   });
   const i105Literal = address.toI105(SORA_I105_DISCRIMINANT);
+  const nonCanonicalI105 = address.toI105(0x02f2);
   const canonical = normalizeAccountId(
     i105Literal,
     "toriiClient.sampleAccountForms",
@@ -81,6 +82,7 @@ function sampleAccountForms() {
     canonical,
     i105: i105Literal,
     i105Default: address.toI105Default(),
+    nonCanonicalI105,
     local8,
   });
 }
@@ -359,7 +361,7 @@ function createOfflineTransferPayload(overrides = {}) {
     receiver_display: receiver.i105Default,
     deposit_account_id: deposit.i105,
     deposit_account_display: deposit.i105Default,
-    asset_id: "usd#wonderland",
+    asset_id: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
     receipt_count: 1,
     total_amount: "1",
     claimed_delta: "1",
@@ -397,8 +399,8 @@ function createOfflineAllowanceItem(overrides = {}) {
     certificate_id_hex: "aa".repeat(32),
     controller_id: SAMPLE_ACCOUNT_ID,
     controller_display: SAMPLE_ACCOUNT_FORMS.i105Default,
-    asset_id: "usd#wonderland",
-    asset_definition_id: "usd#wonderland",
+    asset_id: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
+    asset_definition_id: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
     asset_definition_name: "USD",
     asset_definition_alias: null,
     registered_at_ms: 1,
@@ -682,7 +684,7 @@ test("listRepoAgreements normalizes repo payload", async () => {
   assert.equal(page.items.length, 1);
   const agreement = page.items[0];
   assert.equal(agreement.id, "alpha_repo");
-  assert.equal(agreement.cashLeg.assetDefinitionId, "usd#wonderland");
+  assert.equal(agreement.cashLeg.assetDefinitionId, "7EAD8EFYUx1aVKZPUU1fyKvr8dF1");
   assert.equal(agreement.collateralLeg.metadata.isin, "US0000000001");
   assert.equal(agreement.governance.marginFrequencySecs, 86400);
 });
@@ -1569,7 +1571,7 @@ test("getSorafsPinManifest enforces alias proof policy", async (t) => {
     generatedAtUnix: now - 60,
     expiresAtUnix: now + 600,
   });
-  const proof = fixture.proof_b64;
+  const proof = fixture.proofB64;
   const evaluation = native.sorafsEvaluateAliasProof(proof, policy, now);
 
   let called = 0;
@@ -1607,7 +1609,7 @@ test("getSorafsPinManifest rejects stale alias proof", async (t) => {
     generatedAtUnix: now - 10_000,
     expiresAtUnix: now - 1,
   });
-  const proof = fixture.proof_b64;
+  const proof = fixture.proofB64;
   const evaluation = native.sorafsEvaluateAliasProof(proof, policy, now);
 
   const client = new ToriiClient(BASE_URL, {
@@ -1643,7 +1645,7 @@ test("getSorafsPinManifest invokes warning hook for refresh-window proofs", asyn
     generatedAtUnix: now - (refreshStart + 10),
     expiresAtUnix: now + 600,
   });
-  const proof = fixture.proof_b64;
+  const proof = fixture.proofB64;
   const evaluation = native.sorafsEvaluateAliasProof(proof, policy, now);
   assert.equal(evaluation.state, "refresh_window");
 
@@ -1831,7 +1833,7 @@ test("getSorafsPinManifestTyped normalizes manifest, aliases, and orders", async
     generatedAtUnix: now - 120,
     expiresAtUnix: now + 600,
   });
-  const proof = fixture.proof_b64;
+  const proof = fixture.proofB64;
   const evaluation = native.sorafsEvaluateAliasProof(proof, policy, now);
 
   const manifestHex = "e".repeat(64);
@@ -9506,7 +9508,7 @@ test("governanceSubmitZk ballots reject noncanonical owners", async () => {
         electionId: "ref-zk",
         proof: [1, 2, 3],
         public: {
-          owner: SAMPLE_ACCOUNT_FORMS.i105Default,
+          owner: SAMPLE_ACCOUNT_FORMS.nonCanonicalI105,
           amount: "42",
           duration_blocks: 128,
         },
@@ -9557,7 +9559,7 @@ test("governanceSubmitZkBallotV1 rejects noncanonical owner", async () => {
         electionId: "ref-zk",
         backend: "halo2/ipa",
         envelope: [4, 5],
-        owner: SAMPLE_ACCOUNT_FORMS.i105Default,
+        owner: SAMPLE_ACCOUNT_FORMS.nonCanonicalI105,
         amount: "42",
         duration_blocks: 128,
       }),
@@ -9628,7 +9630,7 @@ test("governanceSubmitZkBallotProofV1 rejects noncanonical owner", async () => {
         chainId: "chain-0",
         electionId: "ref-zk",
         ballot: {
-          owner: SAMPLE_ACCOUNT_FORMS.i105Default,
+          owner: SAMPLE_ACCOUNT_FORMS.nonCanonicalI105,
           amount: "42",
           duration_blocks: 128,
         },
@@ -11333,7 +11335,7 @@ test("listExplorerNfts encodes owner/domain filters and pagination", async () =>
       jsonData: {
         pagination: { page: 2, per_page: 5, total_pages: 3, total_items: 12 },
         items: [
-          { id: "nft#wonderland#1", owned_by: SAMPLE_ACCOUNT_ID, metadata: { role: "demo" } },
+          { id: "6HptcdrgYMsS3ARWDMaabCQJtqQd#1", owned_by: SAMPLE_ACCOUNT_ID, metadata: { role: "demo" } },
         ],
       },
       headers: { "content-type": "application/json" },
@@ -11356,7 +11358,7 @@ test("listExplorerNfts encodes owner/domain filters and pagination", async () =>
   assert.equal(parsed.searchParams.get("canonical_i105"), null);
   assert.deepEqual(page.pagination, { page: 2, perPage: 5, totalPages: 3, totalItems: 12 });
   assert.deepEqual(page.items[0], {
-    id: "nft#wonderland#1",
+    id: "6HptcdrgYMsS3ARWDMaabCQJtqQd#1",
     ownedBy: SAMPLE_ACCOUNT_ID,
     metadata: { role: "demo" },
   });
@@ -11371,7 +11373,7 @@ test("iterateAccountNfts walks explorer pagination and honours maxItems", async 
     const start = (page - 1) * perPage;
     const remaining = Math.max(0, totalItems - start);
     const items = Array.from({ length: Math.min(perPage, remaining) }, (_, index) => ({
-      id: `nft#wonderland#${start + index + 1}`,
+      id: `6HptcdrgYMsS3ARWDMaabCQJtqQd#${start + index + 1}`,
       owned_by: SAMPLE_ACCOUNT_ID,
       metadata: { page, perPage },
     }));
@@ -11398,7 +11400,7 @@ test("iterateAccountNfts walks explorer pagination and honours maxItems", async 
   })) {
     seen.push(nft.id);
   }
-  assert.deepEqual(seen, ["nft#wonderland#1", "nft#wonderland#2", "nft#wonderland#3"]);
+  assert.deepEqual(seen, ["6HptcdrgYMsS3ARWDMaabCQJtqQd#1", "6HptcdrgYMsS3ARWDMaabCQJtqQd#2", "6HptcdrgYMsS3ARWDMaabCQJtqQd#3"]);
 });
 
 test("listExplorerNfts surfaces permission errors", async () => {
@@ -11458,11 +11460,11 @@ test("queryNfts posts Norito envelope", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   await client.queryNfts({
-    filter: { Eq: ["id", "nft#wonderland"] },
+    filter: { Eq: ["id", "6HptcdrgYMsS3ARWDMaabCQJtqQd"] },
     sort: [{ key: "id", order: "desc" }],
     fetchSize: 10,
   });
-  assert.deepEqual(capturedBody.filter, { Eq: ["id", "nft#wonderland"] });
+  assert.deepEqual(capturedBody.filter, { Eq: ["id", "6HptcdrgYMsS3ARWDMaabCQJtqQd"] });
   assert.deepEqual(capturedBody.sort, [{ key: "id", order: "desc" }]);
   assert.equal(capturedBody.fetch_size, 10);
   assert.equal(capturedBody.canonical_i105, undefined);
@@ -11659,8 +11661,8 @@ test("iterateAssetDefinitionsQuery paginates query responses", async () => {
     callCount += 1;
     const items =
       offset === 0
-        ? [{ id: "rose#wonderland" }]
-        : [{ id: "clover#wonderland" }];
+        ? [{ id: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM" }]
+        : [{ id: "6sfXUWFsj5B9CV4dXLq6nkU3H55W" }];
     return createResponse({
       status: 200,
       jsonData: { items, total: 2 },
@@ -11672,7 +11674,7 @@ test("iterateAssetDefinitionsQuery paginates query responses", async () => {
   for await (const def of client.iterateAssetDefinitionsQuery({ pageSize: 1 })) {
     ids.push(def.id);
   }
-  assert.deepEqual(ids, ["rose#wonderland", "clover#wonderland"]);
+  assert.deepEqual(ids, ["62Fk4FPcMuLvW5QjDGNF2a4jAmjM", "6sfXUWFsj5B9CV4dXLq6nkU3H55W"]);
   assert.equal(callCount, 2);
 });
 
@@ -11793,7 +11795,7 @@ test("listAccountPermissions encodes pagination and parses response", async () =
     return createResponse({
       status: 200,
       jsonData: {
-        items: [{ name: "CanMintAsset", payload: { asset: "rose#wonderland" } }],
+        items: [{ name: "CanMintAsset", payload: { asset: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM" } }],
         total: 1,
       },
       headers: { "content-type": "application/json" },
@@ -11805,7 +11807,7 @@ test("listAccountPermissions encodes pagination and parses response", async () =
     offset: 2,
   });
   assert.deepEqual(result, {
-    items: [{ name: "CanMintAsset", payload: { asset: "rose#wonderland" } }],
+    items: [{ name: "CanMintAsset", payload: { asset: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM" } }],
     total: 1,
   });
   await assert.rejects(
@@ -11984,7 +11986,7 @@ test("listAccountAssets encodes assetId filters", async () => {
 });
 
 test("listAccountAssets rejects unsupported asset#domain#account filters", async () => {
-  const invalidAssetId = `rose#wonderland#${FIXTURE_ALICE_ID}`;
+  const invalidAssetId = `62Fk4FPcMuLvW5QjDGNF2a4jAmjM#${FIXTURE_ALICE_ID}`;
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {
       throw new Error("fetch should not be called");
@@ -12465,7 +12467,7 @@ test("listAccountAssets trims and encodes path segments", async () => {
 test("listAssetHolders encodes definition id", async () => {
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
-    assert.equal(parsed.pathname, "/v1/assets/rose%23wonderland/holders");
+    assert.equal(parsed.pathname, "/v1/assets/62Fk4FPcMuLvW5QjDGNF2a4jAmjM/holders");
     return createResponse({
       status: 200,
       jsonData: {
@@ -12476,7 +12478,7 @@ test("listAssetHolders encodes definition id", async () => {
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const payload = await client.listAssetHolders("rose#wonderland");
+  const payload = await client.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
   assert.equal(payload.items[0].account_id, FIXTURE_ALICE_ID);
 });
 
@@ -12485,7 +12487,7 @@ test("listAssetHolders encodes assetId filters", async () => {
   const normalizedAssetId = "norito:deadbeef";
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
-    assert.equal(parsed.pathname, "/v1/assets/rose%23wonderland/holders");
+    assert.equal(parsed.pathname, "/v1/assets/62Fk4FPcMuLvW5QjDGNF2a4jAmjM/holders");
     assert.equal(parsed.searchParams.get("asset_id"), normalizedAssetId);
     return createResponse({
       status: 200,
@@ -12497,7 +12499,7 @@ test("listAssetHolders encodes assetId filters", async () => {
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const payload = await client.listAssetHolders("rose#wonderland", { assetId });
+  const payload = await client.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", { assetId });
   assert.equal(payload.items[0].account_id, FIXTURE_ALICE_ID);
 });
 
@@ -12511,7 +12513,7 @@ test("listAssetHolders validates holder identifiers", async () => {
       }),
   });
   await assert.rejects(
-    () => client.listAssetHolders("rose#wonderland"),
+    () => client.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
     /asset holder list response\.items\[0]\.account_id/,
   );
 });
@@ -12535,7 +12537,7 @@ test("listAssetHolders rejects camelCase accountId fields", async () => {
       }),
   });
   await assert.rejects(
-    () => client.listAssetHolders("rose#wonderland"),
+    () => client.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
     /asset holder list response\.items\[0]\.accountId is not supported/,
   );
 });
@@ -12543,7 +12545,7 @@ test("listAssetHolders rejects camelCase accountId fields", async () => {
 test("queryAssetHolders posts encoded definition path", async () => {
   const fetchImpl = async (url, init) => {
     const parsed = new URL(url);
-    assert.equal(parsed.pathname, "/v1/assets/rose%23wonderland/holders/query");
+    assert.equal(parsed.pathname, "/v1/assets/62Fk4FPcMuLvW5QjDGNF2a4jAmjM/holders/query");
     assert.equal(init.method, "POST");
     return createResponse({
       status: 200,
@@ -12552,7 +12554,7 @@ test("queryAssetHolders posts encoded definition path", async () => {
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await client.queryAssetHolders("rose#wonderland", {});
+  await client.queryAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {});
 });
 
 test("iterateAssetHolders paginates holder list", async () => {
@@ -12572,7 +12574,7 @@ test("iterateAssetHolders paginates holder list", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const holders = [];
-  for await (const holder of client.iterateAssetHolders("rose#wonderland", { pageSize: 1 })) {
+  for await (const holder of client.iterateAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", { pageSize: 1 })) {
     holders.push(holder.account_id);
   }
   assert.deepEqual(holders, [FIXTURE_ALICE_ID, FIXTURE_BOB_NARNIA_ID]);
@@ -12582,7 +12584,7 @@ test("iterateAssetHoldersQuery paginates query responses", async () => {
   let callCount = 0;
   const fetchImpl = async (url, init) => {
     const parsed = new URL(url);
-    assert.equal(parsed.pathname, "/v1/assets/rose%23wonderland/holders/query");
+    assert.equal(parsed.pathname, "/v1/assets/62Fk4FPcMuLvW5QjDGNF2a4jAmjM/holders/query");
     const body = JSON.parse(init.body);
     const offset = Number(body.pagination?.offset ?? 0);
     callCount += 1;
@@ -12598,7 +12600,7 @@ test("iterateAssetHoldersQuery paginates query responses", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const ids = [];
-  for await (const holder of client.iterateAssetHoldersQuery("rose#wonderland", {
+  for await (const holder of client.iterateAssetHoldersQuery("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
     pageSize: 1,
   })) {
     ids.push(holder.account_id);
@@ -12820,8 +12822,7 @@ test("resolveToriiClientConfig merges config, env, and overrides", async () => {
 });
 
 test("extractToriiFeatureConfig normalizes feature sections", () => {
-  const hashedAccountRaw =
-    "6cmzPVPX8e5qQsHdB57DhqFT9wp2MiMoXsvt9LYUtypj1nx96bF5s8W";
+  const hashedAccountRaw = SAMPLE_ACCOUNT_FORMS.nonCanonicalI105;
   const hashedAccountCanonical = normalizeAccountId(
     hashedAccountRaw,
     "hashedAccount",
@@ -15291,7 +15292,7 @@ test("listTriggers encodes query params and normalizes payload", async () => {
   );
   const triggerPayload = {
     id: "apps::mint_rewards",
-    action: { Mint: { Asset: { object: "rose#wonderland" } } },
+    action: { Mint: { Asset: { object: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM" } } },
     metadata: { label: "demo" },
   };
   const fetchImpl = async (url) => {
@@ -15356,7 +15357,7 @@ test("getTrigger handles 404 and normalizes metadata", async () => {
   let calls = 0;
   const payload = {
     id: "apps::mint_rewards",
-    action: { Mint: { Asset: { object: "rose#wonderland" } } },
+    action: { Mint: { Asset: { object: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM" } } },
   };
   const fetchImpl = async () => {
     calls += 1;
@@ -15634,7 +15635,7 @@ test("listOfflineAllowances normalizes payloads and query params", async () => {
   const allowanceRecord = {
     certificate: {
       controller: FIXTURE_ALICE_ID,
-      allowance: { asset: "usd#wonderland", amount: "500" },
+      allowance: { asset: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1", amount: "500" },
     },
     current_commitment: "0xdeadbeef",
     registered_at_ms: 1234,
@@ -15662,8 +15663,8 @@ test("listOfflineAllowances normalizes payloads and query params", async () => {
         certificate_id_hex: "cafebabe",
         controller_id: FIXTURE_ALICE_ID,
         controller_display: "soraqqqqqqqq",
-        asset_id: "usd#wonderland",
-        asset_definition_id: "usd#wonderland",
+        asset_id: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
+        asset_definition_id: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
         asset_definition_name: "USD",
         asset_definition_alias: "usd#main",
             registered_at_ms: "1234",
@@ -15683,8 +15684,8 @@ test("listOfflineAllowances normalizes payloads and query params", async () => {
             certificate_id_hex: "feedface",
             controller_id: FIXTURE_BOB_ID,
             controller_display: "soraqqqqqqqr",
-            asset_id: "usd#wonderland",
-            asset_definition_id: "usd#wonderland",
+            asset_id: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
+            asset_definition_id: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
             asset_definition_name: "USD",
             asset_definition_alias: null,
             registered_at_ms: 2000,
@@ -15720,8 +15721,8 @@ test("listOfflineAllowances normalizes payloads and query params", async () => {
   assert.equal(item.certificate_id_hex, "cafebabe");
   assert.equal(item.controller_id, FIXTURE_ALICE_ID);
   assert.equal(item.controller_display, "soraqqqqqqqq");
-  assert.equal(item.asset_id, "usd#wonderland");
-  assert.equal(item.asset_definition_id, "usd#wonderland");
+  assert.equal(item.asset_id, "7EAD8EFYUx1aVKZPUU1fyKvr8dF1");
+  assert.equal(item.asset_definition_id, "7EAD8EFYUx1aVKZPUU1fyKvr8dF1");
   assert.equal(item.asset_definition_name, "USD");
   assert.equal(item.asset_definition_alias, "usd#main");
   assert.equal(item.registered_at_ms, 1234);
@@ -15788,8 +15789,8 @@ test("listOfflineAllowances captures play integrity metadata", async () => {
             certificate_id_hex: "cafebabe",
             controller_id: FIXTURE_ALICE_ID,
             controller_display: "soraqqqqqqqq",
-            asset_id: "usd#wonderland",
-            asset_definition_id: "usd#wonderland",
+            asset_id: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
+            asset_definition_id: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
             asset_definition_name: "USD",
             asset_definition_alias: null,
             registered_at_ms: "1234",
@@ -15847,8 +15848,8 @@ test("listOfflineAllowances captures hms safety detect metadata", async () => {
             certificate_id_hex: "deadbeef",
             controller_id: FIXTURE_BOB_ID,
             controller_display: "soraqqqqqqqq",
-            asset_id: "usd#wonderland",
-            asset_definition_id: "usd#wonderland",
+            asset_id: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
+            asset_definition_id: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
             asset_definition_name: "USD",
             asset_definition_alias: null,
             registered_at_ms: "1234",
@@ -16022,7 +16023,7 @@ test("issueOfflineCertificate posts draft and parses response", async () => {
   const draft = {
     controller: FIXTURE_ALICE_ID,
     allowance: {
-      asset: "usd#wonderland",
+      asset: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
       amount: "10",
       commitment: Buffer.from([1, 2, 3]),
     },
@@ -16047,7 +16048,7 @@ test("issueOfflineCertificate posts draft and parses response", async () => {
           controller: FIXTURE_ALICE_ID,
           operator: FIXTURE_AUTHORITY_ID,
           allowance: {
-            asset: "usd#wonderland",
+            asset: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
             amount: "10",
             commitment: [1, 2, 3],
           },
@@ -16396,7 +16397,7 @@ test("issueOfflineCertificate rejects invalid Numeric amounts", async () => {
   const draft = {
     controller: FIXTURE_ALICE_ID,
     allowance: {
-      asset: "usd#wonderland",
+      asset: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
       amount: "1e-3",
       commitment: Buffer.from([1, 2, 3]),
     },
@@ -16430,7 +16431,7 @@ test("issueOfflineCertificateRenewal posts to renewal path", async () => {
           controller: FIXTURE_ALICE_ID,
           operator: FIXTURE_AUTHORITY_ID,
           allowance: {
-            asset: "usd#wonderland",
+            asset: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
             amount: "10",
             commitment: [1, 2, 3],
           },
@@ -16457,7 +16458,7 @@ test("issueOfflineCertificateRenewal posts to renewal path", async () => {
   await client.issueOfflineCertificateRenewal(certId.toUpperCase(), {
     controller: FIXTURE_ALICE_ID,
     allowance: {
-      asset: "usd#wonderland",
+      asset: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
       amount: "10",
       commitment: [1, 2, 3],
     },
@@ -16500,7 +16501,7 @@ test("registerOfflineAllowance posts certificate and parses response", async () 
     controller: FIXTURE_ALICE_ID,
     operator: FIXTURE_AUTHORITY_ID,
     allowance: {
-      asset: "usd#wonderland",
+      asset: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
       amount: "10",
       commitment: [1, 2, 3],
     },
@@ -16549,7 +16550,7 @@ test("renewOfflineAllowance posts to renewal path", async () => {
     controller: FIXTURE_ALICE_ID,
     operator: FIXTURE_AUTHORITY_ID,
     allowance: {
-      asset: "usd#wonderland",
+      asset: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
       amount: "10",
       commitment: [1, 2, 3],
     },
@@ -16595,7 +16596,7 @@ test("topUpOfflineAllowance chains issue and register", async () => {
           controller: FIXTURE_ALICE_ID,
           operator: FIXTURE_AUTHORITY_ID,
           allowance: {
-            asset: "usd#wonderland",
+            asset: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
             amount: "10",
             commitment: [1, 2, 3],
           },
@@ -16631,7 +16632,7 @@ test("topUpOfflineAllowance chains issue and register", async () => {
   const draft = {
     controller: FIXTURE_ALICE_ID,
     allowance: {
-      asset: "usd#wonderland",
+      asset: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
       amount: "10",
       commitment: Buffer.from([1, 2, 3]),
     },
@@ -16674,7 +16675,7 @@ test("topUpOfflineAllowanceRenewal chains issue and renew", async () => {
           controller: FIXTURE_ALICE_ID,
           operator: FIXTURE_AUTHORITY_ID,
           allowance: {
-            asset: "usd#wonderland",
+            asset: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
             amount: "10",
             commitment: [1, 2, 3],
           },
@@ -16710,7 +16711,7 @@ test("topUpOfflineAllowanceRenewal chains issue and renew", async () => {
   const draft = {
     controller: FIXTURE_ALICE_ID,
     allowance: {
-      asset: "usd#wonderland",
+      asset: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
       amount: "10",
       commitment: Buffer.from([1, 2, 3]),
     },
@@ -17226,7 +17227,7 @@ test("queryOfflineSummaries rejects unsupported filter fields", async () => {
   await assert.rejects(
     () =>
       client.queryOfflineSummaries({
-        filter: { Eq: ["asset_id", "usd#wonderland"] },
+        filter: { Eq: ["asset_id", "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"] },
       }),
     /"asset_id" is not allowed/i,
   );
@@ -17364,7 +17365,7 @@ test("queryOfflineTransfers posts envelope and normalizes optional fields", asyn
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.queryOfflineTransfers({
-    filter: { Eq: ["asset_id", "usd#wonderland"] },
+    filter: { Eq: ["asset_id", "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"] },
     fetchSize: 25,
     limit: 5,
     sort: [{ key: "receipt_count", order: "desc" }],
@@ -17375,7 +17376,7 @@ test("queryOfflineTransfers posts envelope and normalizes optional fields", asyn
   assert.deepEqual(body.pagination, { offset: 0, limit: 5 });
   assert.equal(body.fetch_size, 25);
   assert.equal(body.canonical_i105, undefined);
-  assert.deepEqual(body.filter, { Eq: ["asset_id", "usd#wonderland"] });
+  assert.deepEqual(body.filter, { Eq: ["asset_id", "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"] });
   assert.deepEqual(body.sort, [{ key: "receipt_count", order: "desc" }]);
   assert.equal(result.total, 1);
   const transfer = result.items[0];
@@ -17901,7 +17902,7 @@ test("registerSnsName posts payload and normalizes response", async () => {
   let captured;
   const fetchImpl = async (url, init) => {
     captured = { url, init };
-    assert.equal(url, `${BASE_URL}/v1/sns/registrations`);
+    assert.equal(url, `${BASE_URL}/v1/sns/names`);
     assert.equal(init.method, "POST");
     const parsed = JSON.parse(init.body);
     assert.equal(parsed.selector.suffix_id, 1);
@@ -18003,11 +18004,11 @@ test("SNS mutation helpers reject unsupported option fields", async () => {
     /registerSnsName options contains unsupported fields: extra/,
   );
   await assert.rejects(
-    () => client.renewSnsRegistration("makoto", sampleRenewPayload, { note: "nope" }),
+    () => client.renewSnsRegistration("makoto.sora", sampleRenewPayload, { note: "nope" }),
     /renewSnsRegistration options contains unsupported fields: note/,
   );
   await assert.rejects(
-    () => client.transferSnsRegistration("makoto", sampleTransferPayload, { retry: false }),
+    () => client.transferSnsRegistration("makoto.sora", sampleTransferPayload, { retry: false }),
     /transferSnsRegistration options contains unsupported fields: retry/,
   );
 });
@@ -18129,7 +18130,7 @@ test("freezeSnsRegistration posts normalized payload and parses record", async (
     { reason: "  abuse report ", until_ms: 5000, guardian_ticket: { token: "grant" } },
     { signal: controller.signal },
   );
-  assert.equal(captured.url, `${BASE_URL}/v1/sns/registrations/alice.sora/freeze`);
+  assert.equal(captured.url, `${BASE_URL}/v1/sns/names/domain/alice/freeze`);
   assert.equal(captured.init.method, "POST");
   assert.deepEqual(JSON.parse(String(captured.init.body)), {
     reason: "abuse report",
@@ -18179,7 +18180,7 @@ test("unfreezeSnsRegistration posts governance hook payload", async () => {
     steward_ack: " ack ",
     guardian_clearance: " clearance ",
   });
-  assert.equal(captured.url, `${BASE_URL}/v1/sns/registrations/alice.sora/freeze`);
+  assert.equal(captured.url, `${BASE_URL}/v1/sns/names/domain/alice/freeze`);
   assert.equal(captured.init.method, "DELETE");
   assert.deepEqual(JSON.parse(String(captured.init.body)), {
     proposal_id: "prop-123",
@@ -18202,7 +18203,7 @@ test("freeze/unfreeze SNS governance helpers enforce validation", async () => {
   });
   await assert.rejects(
     () =>
-      client.freezeSnsRegistration("alice", {
+      client.freezeSnsRegistration("alice.sora", {
         reason: "r",
         until_ms: 1,
       }),
@@ -18211,7 +18212,7 @@ test("freeze/unfreeze SNS governance helpers enforce validation", async () => {
   await assert.rejects(
     () =>
       client.freezeSnsRegistration(
-        "alice",
+        "alice.sora",
         { reason: "ok", until_ms: 1, guardian_ticket: {} },
         // @ts-expect-error runtime validation
         { extra: true },
@@ -18221,7 +18222,7 @@ test("freeze/unfreeze SNS governance helpers enforce validation", async () => {
   await assert.rejects(
     () =>
       client.unfreezeSnsRegistration(
-        "alice",
+        "alice.sora",
         {
           proposal_id: "p",
           council_vote_hash: "c",
@@ -18235,76 +18236,16 @@ test("freeze/unfreeze SNS governance helpers enforce validation", async () => {
   );
 });
 
-test("createSnsGovernanceCase posts payload, forwards AbortSignal, and normalizes response", async () => {
-  const controller = new AbortController();
-  let captured;
-  const fetchImpl = async (url, init) => {
-    captured = { url, init };
-    return createResponse({
-      status: 201,
-      jsonData: SAMPLE_SNS_GOV_CASE_RESPONSE,
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const payload = { reason: "abuse-report", selector: "alice" };
-  const response = await client.createSnsGovernanceCase(payload, { signal: controller.signal });
-  assert.equal(captured.url, `${BASE_URL}/v1/sns/governance/cases`);
-  assert.equal(captured.init.method, "POST");
-  assert.deepEqual(JSON.parse(captured.init.body), payload);
-  assert.ok(captured.init.signal instanceof AbortSignal);
-  assert.deepEqual(response, {
-    caseId: "SNS-2026-00001",
-    selector: { suffixId: 42, label: "alice", globalForm: "alice.sora" },
-    disputeType: "ownership",
-    priority: "urgent",
-    reportedAt: "2026-04-01T00:00:00Z",
-    acknowledgedAt: "2026-04-01T01:00:00Z",
-    triageStartedAt: "2026-04-01T01:30:00Z",
-    hearingScheduledAt: null,
-    resolutionIssuedAt: null,
-    status: "open",
-    reporter: { role: "registrar", contact: "ops@example.com", referenceTicket: "SUP-1" },
-    respondents: [
-      { role: "registrant", accountId: FIXTURE_ALICE_ID, contact: "alice@example.com" },
-    ],
-    allegations: [{ code: "A1", summary: "ownership dispute", policyReference: "policy-1" }],
-    evidence: [
-      {
-        id: "evidence-1",
-        kind: "document",
-        uri: "s3://evidence/alice",
-        hashHex: "aa".repeat(32),
-        description: "Initial report",
-        sealed: true,
-      },
-    ],
-    sla: {
-      acknowledgeBy: "2026-04-01T02:00:00Z",
-      resolutionBy: "2026-04-05T00:00:00Z",
-      extensions: [
-        {
-          approvedBy: "council",
-          reason: "Awaiting guardian review",
-          newResolutionBy: "2026-04-06T00:00:00Z",
-        },
-      ],
-    },
-    actions: [
-      {
-        timestamp: "2026-04-01T00:10:00Z",
-        actor: "registrar",
-        action: "intake",
-        notes: "Initial capture",
-      },
-    ],
-    decision: {
-      finding: "upheld",
-      remedies: ["refund"],
-      effectiveAt: "2026-04-05T01:00:00Z",
-      publicationState: "public",
+test("createSnsGovernanceCase rejects because Torii removed the endpoint", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("fetch should not run when the endpoint is removed");
     },
   });
+  await assert.rejects(
+    () => client.createSnsGovernanceCase({ reason: "abuse-report", selector: "alice" }),
+    /Torii removed \/v1\/sns\/governance\/cases/,
+  );
 });
 
 test("createSnsGovernanceCase rejects non-object payload", async () => {
@@ -18338,85 +18279,22 @@ test("createSnsGovernanceCase rejects unsupported option keys", async () => {
   );
 });
 
-test("createSnsGovernanceCase normalizes camelCase payload fields before posting", async () => {
-  let captured;
+test("createSnsGovernanceCase still validates payload before reporting endpoint removal", async () => {
   const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async (url, init) => {
-      captured = { url, init };
-      return createResponse({
-        status: 201,
-        jsonData: SAMPLE_SNS_GOV_CASE_RESPONSE,
-        headers: { "content-type": "application/json" },
-      });
+    fetchImpl: async () => {
+      throw new Error("fetch should not run when the endpoint is removed");
     },
   });
-  await client.createSnsGovernanceCase({
-    selector: { suffixId: 7, label: "alice", globalForm: "alice.sora" },
-    disputeType: "ownership",
-    priority: "high",
-    reason: "abuse-report",
-    reporter: { role: "registrar", contact: "ops@example.com", referenceTicket: "SUP-42" },
-    respondents: [{ role: "registrant", accountId: FIXTURE_ALICE_ID }],
-    allegations: [{ code: "A1", summary: "ownership dispute", policyReference: "policy-1" }],
-    evidence: [
-      {
-        id: "E1",
-        kind: "document",
-        uri: "s3://evidence/alice",
-        hashHex: "aa".repeat(32),
-        description: "Initial report",
-      },
-    ],
-    sla: {
-      acknowledgeBy: "2026-04-01T02:00:00Z",
-      resolutionBy: "2026-04-05T00:00:00Z",
-    },
-    actions: [{ timestamp: "2026-04-01T00:10:00Z", actor: "registrar", action: "intake" }],
-    decision: {
-      finding: "upheld",
-      remedies: ["refund"],
-      effectiveAt: "2026-04-05T01:00:00Z",
-      publicationState: "public",
-    },
-    reportedAt: "2026-04-01T00:00:00Z",
-  });
-  assert.deepEqual(JSON.parse(captured.init.body), {
-    selector: { suffix_id: 7, label: "alice", global_form: "alice.sora" },
-    dispute_type: "ownership",
-    priority: "high",
-    reason: "abuse-report",
-    reporter: { role: "registrar", contact: "ops@example.com", reference_ticket: "SUP-42" },
-    respondents: [{ role: "registrant", account_id: FIXTURE_ALICE_ID }],
-    allegations: [{ code: "A1", summary: "ownership dispute", policy_reference: "policy-1" }],
-    evidence: [
-      {
-        id: "E1",
-        kind: "document",
-        uri: "s3://evidence/alice",
-        hash: "aa".repeat(32),
-        description: "Initial report",
-        sealed: false,
-      },
-    ],
-    sla: {
-      acknowledge_by: "2026-04-01T02:00:00Z",
-      resolution_by: "2026-04-05T00:00:00Z",
-    },
-    actions: [
-      {
-        timestamp: "2026-04-01T00:10:00Z",
-        actor: "registrar",
-        action: "intake",
-      },
-    ],
-    decision: {
-      finding: "upheld",
-      remedies: ["refund"],
-      effective_at: "2026-04-05T01:00:00Z",
-      publication_state: "public",
-    },
-    reported_at: "2026-04-01T00:00:00Z",
-  });
+  await assert.rejects(
+    () =>
+      client.createSnsGovernanceCase({
+        selector: { suffixId: 7, label: "alice", globalForm: "alice.sora" },
+        disputeType: "ownership",
+        priority: "high",
+        reason: "abuse-report",
+      }),
+    /Torii removed \/v1\/sns\/governance\/cases/,
+  );
 });
 
 test("createSnsGovernanceCase rejects invalid dispute type before calling Torii", async () => {
@@ -18435,95 +18313,21 @@ test("createSnsGovernanceCase rejects invalid dispute type before calling Torii"
   );
 });
 
-test("exportSnsGovernanceCases normalizes filters, options, and response payload", async () => {
-  const controller = new AbortController();
-  let calledUrl;
-  let capturedInit;
-  const fetchImpl = async (url, init) => {
-    calledUrl = url;
-    capturedInit = init;
-    return createResponse({
-      status: 200,
-      jsonData: {
-        cases: [SAMPLE_SNS_GOV_CASE_RESPONSE],
-        next_since: "2026-04-06T00:00:00Z",
-        next_cursor: "cursor-1",
-        total_count: 1,
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.exportSnsGovernanceCases({
-    since: "2026-01-01T00:00:00Z",
-    status: "open",
-    limit: 10,
-    signal: controller.signal,
+test("exportSnsGovernanceCases rejects because Torii removed the endpoint", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("fetch should not run when the endpoint is removed");
+    },
   });
-  assert.ok(calledUrl?.includes("/v1/sns/governance/cases"));
-  assert.ok(calledUrl?.includes("since=2026-01-01T00%3A00%3A00Z"));
-  assert.ok(calledUrl?.includes("status=open"));
-  assert.ok(calledUrl?.includes("limit=10"));
-  assert.ok(capturedInit?.signal instanceof AbortSignal);
-  assert.deepEqual(result, {
-    cases: [
-      {
-        caseId: "SNS-2026-00001",
-        selector: { suffixId: 42, label: "alice", globalForm: "alice.sora" },
-        disputeType: "ownership",
-        priority: "urgent",
-        reportedAt: "2026-04-01T00:00:00Z",
-        acknowledgedAt: "2026-04-01T01:00:00Z",
-        triageStartedAt: "2026-04-01T01:30:00Z",
-        hearingScheduledAt: null,
-        resolutionIssuedAt: null,
+  await assert.rejects(
+    () =>
+      client.exportSnsGovernanceCases({
+        since: "2026-01-01T00:00:00Z",
         status: "open",
-        reporter: { role: "registrar", contact: "ops@example.com", referenceTicket: "SUP-1" },
-        respondents: [
-          { role: "registrant", accountId: FIXTURE_ALICE_ID, contact: "alice@example.com" },
-        ],
-        allegations: [{ code: "A1", summary: "ownership dispute", policyReference: "policy-1" }],
-        evidence: [
-          {
-            id: "evidence-1",
-            kind: "document",
-            uri: "s3://evidence/alice",
-            hashHex: "aa".repeat(32),
-            description: "Initial report",
-            sealed: true,
-          },
-        ],
-        sla: {
-          acknowledgeBy: "2026-04-01T02:00:00Z",
-          resolutionBy: "2026-04-05T00:00:00Z",
-          extensions: [
-            {
-              approvedBy: "council",
-              reason: "Awaiting guardian review",
-              newResolutionBy: "2026-04-06T00:00:00Z",
-            },
-          ],
-        },
-        actions: [
-          {
-            timestamp: "2026-04-01T00:10:00Z",
-            actor: "registrar",
-            action: "intake",
-            notes: "Initial capture",
-          },
-        ],
-        decision: {
-          finding: "upheld",
-          remedies: ["refund"],
-          effectiveAt: "2026-04-05T01:00:00Z",
-          publicationState: "public",
-        },
-      },
-    ],
-    nextSince: "2026-04-06T00:00:00Z",
-    nextCursor: "cursor-1",
-    totalCount: 1,
-  });
+        limit: 10,
+      }),
+    /Torii removed \/v1\/sns\/governance\/cases/,
+  );
 });
 
 test("exportSnsGovernanceCases enforces option validation", async () => {
@@ -18555,47 +18359,23 @@ test("exportSnsGovernanceCases enforces option validation", async () => {
   );
 });
 
-test("iterateSnsGovernanceCases paginates using nextSince cursor", async () => {
-  const caseB = JSON.parse(JSON.stringify(SAMPLE_SNS_GOV_CASE_RESPONSE));
-  caseB.case_id = "SNS-2026-00002";
-  caseB.selector = {
-    ...caseB.selector,
-    label: "bob",
-    global_form: "bob.sora",
-  };
-  const responses = [
-    {
-      cases: [SAMPLE_SNS_GOV_CASE_RESPONSE],
-      next_since: "2026-04-06T00:00:00Z",
-      next_cursor: null,
-      total_count: 2,
+test("iterateSnsGovernanceCases rejects because Torii removed the endpoint", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("fetch should not run when the endpoint is removed");
     },
-    { cases: [caseB], next_since: null, next_cursor: null, total_count: 2 },
-  ];
-  const urls = [];
-  let callCount = 0;
-  const fetchImpl = async (url) => {
-    urls.push(url);
-    const payload = responses[callCount++] ?? responses[responses.length - 1];
-    return createResponse({
-      status: 200,
-      jsonData: payload,
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const seen = [];
-  for await (const record of client.iterateSnsGovernanceCases({
-    since: "2026-01-01T00:00:00Z",
-    limit: 1,
-  })) {
-    seen.push(record.caseId);
-  }
-  assert.deepEqual(seen, ["SNS-2026-00001", "SNS-2026-00002"]);
-  assert.equal(urls.length, 2);
-  assert.ok(urls[0].includes("limit=1"));
-  assert.ok(urls[0].includes("since=2026-01-01T00%3A00%3A00Z"));
-  assert.ok(urls[1].includes("since=2026-04-06T00%3A00%3A00Z"));
+  });
+  await assert.rejects(
+    async () => {
+      for await (const _ of client.iterateSnsGovernanceCases({
+        since: "2026-01-01T00:00:00Z",
+        limit: 1,
+      })) {
+        // no-op
+      }
+    },
+    /Torii removed \/v1\/sns\/governance\/cases/,
+  );
 });
 
 test("listTelemetryPeersInfo normalizes peer telemetry metadata", async () => {

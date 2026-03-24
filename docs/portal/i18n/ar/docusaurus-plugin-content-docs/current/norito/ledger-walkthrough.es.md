@@ -64,7 +64,7 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 يقوم CLI بطباعة تجزئة المعاملة المرسلة (على سبيل المثال، `0x5f...`). Guardalo para Consulting el estado mas tarde.
@@ -72,7 +72,7 @@ iroha --config defaults/client.toml asset definition register \
 ## 3. وحدة واحدة في حساب المشغل
 
 يتم تشغيل عدد كبير من الأنشطة على قدم المساواة مع `(asset definition, account)`. أكونا
-250 وحدة من `coffee#wonderland` و`$ADMIN_ACCOUNT`:
+250 وحدة من `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` و`$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

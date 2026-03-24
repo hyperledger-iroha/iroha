@@ -11,13 +11,29 @@ inline long load4(const thread uchar* in) {
     return in[0] | ((long)in[1] << 8) | ((long)in[2] << 16) | ((long)in[3] << 24);
 }
 
+inline int shift_right_floor_i32(int value, int bits) {
+    if (value >= 0) {
+        return value >> bits;
+    }
+    long magnitude = -(long)value;
+    return -(int)((magnitude + (((long)1 << bits) - 1)) >> bits);
+}
+
+inline long shift_right_floor_i64(long value, int bits) {
+    if (value >= 0) {
+        return value >> bits;
+    }
+    long magnitude = -value;
+    return -((magnitude + (((long)1 << bits) - 1)) >> bits);
+}
+
 constant int FE_D[10] = {
     -10913610, 13857413, -15372611, 6949391,   114729,
     -8787816,  -6275908, -3247719,  -18696448, -12055116};
 
 constant int FE_D2[10] = {
-    -21827220, 27714826, -30745222, 13898782,   229458,
-    -17575632, -12551816, -6495438, -37392896, -24110232};
+    -21827239, -5839606, -30745221, 13898782, 229458,
+    15978800,  -12551817, -6495438, 29715968, 9444199};
 
 constant int FE_SQRTM1[10] = {
     -32595792, -7943725, 9377950, 3500415, 12389472,
@@ -79,6 +95,54 @@ inline void fe_cmov(fe f, const fe g, int b) {
     }
 }
 
+inline void fe_normalize(fe h) {
+    long t[10];
+    for (int i = 0; i < 10; ++i) {
+        t[i] = h[i];
+    }
+
+    long carry0 = shift_right_floor_i64(t[0] + (long)(1 << 25), 26);
+    t[1] += carry0;
+    t[0] -= carry0 << 26;
+    long carry4 = shift_right_floor_i64(t[4] + (long)(1 << 25), 26);
+    t[5] += carry4;
+    t[4] -= carry4 << 26;
+    long carry1 = shift_right_floor_i64(t[1] + (long)(1 << 24), 25);
+    t[2] += carry1;
+    t[1] -= carry1 << 25;
+    long carry5 = shift_right_floor_i64(t[5] + (long)(1 << 24), 25);
+    t[6] += carry5;
+    t[5] -= carry5 << 25;
+    long carry2 = shift_right_floor_i64(t[2] + (long)(1 << 25), 26);
+    t[3] += carry2;
+    t[2] -= carry2 << 26;
+    long carry6 = shift_right_floor_i64(t[6] + (long)(1 << 25), 26);
+    t[7] += carry6;
+    t[6] -= carry6 << 26;
+    long carry3 = shift_right_floor_i64(t[3] + (long)(1 << 24), 25);
+    t[4] += carry3;
+    t[3] -= carry3 << 25;
+    long carry7 = shift_right_floor_i64(t[7] + (long)(1 << 24), 25);
+    t[8] += carry7;
+    t[7] -= carry7 << 25;
+    carry4 = shift_right_floor_i64(t[4] + (long)(1 << 25), 26);
+    t[5] += carry4;
+    t[4] -= carry4 << 26;
+    long carry8 = shift_right_floor_i64(t[8] + (long)(1 << 25), 26);
+    t[9] += carry8;
+    t[8] -= carry8 << 26;
+    long carry9 = shift_right_floor_i64(t[9] + (long)(1 << 24), 25);
+    t[0] += carry9 * 19;
+    t[9] -= carry9 << 25;
+    carry0 = shift_right_floor_i64(t[0] + (long)(1 << 25), 26);
+    t[1] += carry0;
+    t[0] -= carry0 << 26;
+
+    for (int i = 0; i < 10; ++i) {
+        h[i] = (int)t[i];
+    }
+}
+
 inline void fe_mul(fe h, const fe f, const fe g) {
     int f0 = f[0];
     int f1 = f[1];
@@ -114,80 +178,309 @@ inline void fe_mul(fe h, const fe f, const fe g) {
     int f5_2 = 2 * f5;
     int f7_2 = 2 * f7;
     int f9_2 = 2 * f9;
+    long f0g0 = (long)f0 * g0;
+    long f0g1 = (long)f0 * g1;
+    long f0g2 = (long)f0 * g2;
+    long f0g3 = (long)f0 * g3;
+    long f0g4 = (long)f0 * g4;
+    long f0g5 = (long)f0 * g5;
+    long f0g6 = (long)f0 * g6;
+    long f0g7 = (long)f0 * g7;
+    long f0g8 = (long)f0 * g8;
+    long f0g9 = (long)f0 * g9;
+    long f1g0 = (long)f1 * g0;
+    long f1g1_2 = (long)f1_2 * g1;
+    long f1g2 = (long)f1 * g2;
+    long f1g3_2 = (long)f1_2 * g3;
+    long f1g4 = (long)f1 * g4;
+    long f1g5_2 = (long)f1_2 * g5;
+    long f1g6 = (long)f1 * g6;
+    long f1g7_2 = (long)f1_2 * g7;
+    long f1g8 = (long)f1 * g8;
+    long f1g9_38 = (long)f1_2 * g9_19;
+    long f2g0 = (long)f2 * g0;
+    long f2g1 = (long)f2 * g1;
+    long f2g2 = (long)f2 * g2;
+    long f2g3 = (long)f2 * g3;
+    long f2g4 = (long)f2 * g4;
+    long f2g5 = (long)f2 * g5;
+    long f2g6 = (long)f2 * g6;
+    long f2g7 = (long)f2 * g7;
+    long f2g8_19 = (long)f2 * g8_19;
+    long f2g9_19 = (long)f2 * g9_19;
+    long f3g0 = (long)f3 * g0;
+    long f3g1_2 = (long)f3_2 * g1;
+    long f3g2 = (long)f3 * g2;
+    long f3g3_2 = (long)f3_2 * g3;
+    long f3g4 = (long)f3 * g4;
+    long f3g5_2 = (long)f3_2 * g5;
+    long f3g6 = (long)f3 * g6;
+    long f3g7_38 = (long)f3_2 * g7_19;
+    long f3g8_19 = (long)f3 * g8_19;
+    long f3g9_38 = (long)f3_2 * g9_19;
+    long f4g0 = (long)f4 * g0;
+    long f4g1 = (long)f4 * g1;
+    long f4g2 = (long)f4 * g2;
+    long f4g3 = (long)f4 * g3;
+    long f4g4 = (long)f4 * g4;
+    long f4g5 = (long)f4 * g5;
+    long f4g6_19 = (long)f4 * g6_19;
+    long f4g7_19 = (long)f4 * g7_19;
+    long f4g8_19 = (long)f4 * g8_19;
+    long f4g9_19 = (long)f4 * g9_19;
+    long f5g0 = (long)f5 * g0;
+    long f5g1_2 = (long)f5_2 * g1;
+    long f5g2 = (long)f5 * g2;
+    long f5g3_2 = (long)f5_2 * g3;
+    long f5g4 = (long)f5 * g4;
+    long f5g5_38 = (long)f5_2 * g5_19;
+    long f5g6_19 = (long)f5 * g6_19;
+    long f5g7_38 = (long)f5_2 * g7_19;
+    long f5g8_19 = (long)f5 * g8_19;
+    long f5g9_38 = (long)f5_2 * g9_19;
+    long f6g0 = (long)f6 * g0;
+    long f6g1 = (long)f6 * g1;
+    long f6g2 = (long)f6 * g2;
+    long f6g3 = (long)f6 * g3;
+    long f6g4_19 = (long)f6 * g4_19;
+    long f6g5_19 = (long)f6 * g5_19;
+    long f6g6_19 = (long)f6 * g6_19;
+    long f6g7_19 = (long)f6 * g7_19;
+    long f6g8_19 = (long)f6 * g8_19;
+    long f6g9_19 = (long)f6 * g9_19;
+    long f7g0 = (long)f7 * g0;
+    long f7g1_2 = (long)f7_2 * g1;
+    long f7g2 = (long)f7 * g2;
+    long f7g3_38 = (long)f7_2 * g3_19;
+    long f7g4_19 = (long)f7 * g4_19;
+    long f7g5_38 = (long)f7_2 * g5_19;
+    long f7g6_19 = (long)f7 * g6_19;
+    long f7g7_38 = (long)f7_2 * g7_19;
+    long f7g8_19 = (long)f7 * g8_19;
+    long f7g9_38 = (long)f7_2 * g9_19;
+    long f8g0 = (long)f8 * g0;
+    long f8g1 = (long)f8 * g1;
+    long f8g2_19 = (long)f8 * g2_19;
+    long f8g3_19 = (long)f8 * g3_19;
+    long f8g4_19 = (long)f8 * g4_19;
+    long f8g5_19 = (long)f8 * g5_19;
+    long f8g6_19 = (long)f8 * g6_19;
+    long f8g7_19 = (long)f8 * g7_19;
+    long f8g8_19 = (long)f8 * g8_19;
+    long f8g9_19 = (long)f8 * g9_19;
+    long f9g0 = (long)f9 * g0;
+    long f9g1_38 = (long)f9_2 * g1_19;
+    long f9g2_19 = (long)f9 * g2_19;
+    long f9g3_38 = (long)f9_2 * g3_19;
+    long f9g4_19 = (long)f9 * g4_19;
+    long f9g5_38 = (long)f9_2 * g5_19;
+    long f9g6_19 = (long)f9 * g6_19;
+    long f9g7_38 = (long)f9_2 * g7_19;
+    long f9g8_19 = (long)f9 * g8_19;
+    long f9g9_38 = (long)f9_2 * g9_19;
 
-    long h0 = (long)f0 * g0 + (long)f1_2 * g9_19 + (long)f2 * g8_19 +
-                (long)f3_2 * g7_19 + (long)f4 * g6_19 + (long)f5_2 * g5_19 +
-                (long)f6 * g4_19 + (long)f7_2 * g3_19 + (long)f8 * g2_19 +
-                (long)f9_2 * g1_19;
-    long h1 = (long)f0 * g1 + (long)f1 * g0 + (long)f2 * g9_19 +
-                (long)f3 * g8_19 + (long)f4 * g7_19 + (long)f5 * g6_19 +
-                (long)f6 * g5_19 + (long)f7 * g4_19 + (long)f8 * g3_19 +
-                (long)f9 * g2_19;
-    long h2 = (long)f0 * g2 + (long)f1_2 * g1 + (long)f2 * g0 +
-                (long)f3_2 * g9_19 + (long)f4 * g8_19 + (long)f5_2 * g7_19 +
-                (long)f6 * g6_19 + (long)f7_2 * g5_19 + (long)f8 * g4_19 +
-                (long)f9_2 * g3_19;
-    long h3 = (long)f0 * g3 + (long)f1 * g2 + (long)f2 * g1 + (long)f3 * g0 +
-                (long)f4 * g9_19 + (long)f5 * g8_19 + (long)f6 * g7_19 +
-                (long)f7 * g6_19 + (long)f8 * g5_19 + (long)f9 * g4_19;
-    long h4 = (long)f0 * g4 + (long)f1_2 * g3 + (long)f2 * g2 +
-                (long)f3_2 * g1 + (long)f4 * g0 + (long)f5_2 * g9_19 +
-                (long)f6 * g8_19 + (long)f7_2 * g7_19 + (long)f8 * g6_19 +
-                (long)f9_2 * g5_19;
-    long h5 = (long)f0 * g5 + (long)f1 * g4 + (long)f2 * g3 + (long)f3 * g2 +
-                (long)f4 * g1 + (long)f5 * g0 + (long)f6 * g9_19 +
-                (long)f7 * g8_19 + (long)f8 * g7_19 + (long)f9 * g6_19;
-    long h6 = (long)f0 * g6 + (long)f1_2 * g5 + (long)f2 * g4 +
-                (long)f3_2 * g3 + (long)f4 * g2 + (long)f5_2 * g1 +
-                (long)f6 * g0 + (long)f7_2 * g9_19 + (long)f8 * g8_19 +
-                (long)f9_2 * g7_19;
-    long h7 = (long)f0 * g7 + (long)f1 * g6 + (long)f2 * g5 + (long)f3 * g4 +
-                (long)f4 * g3 + (long)f5 * g2 + (long)f6 * g1 + (long)f7 * g0 +
-                (long)f8 * g9_19 + (long)f9 * g8_19;
-    long h8 = (long)f0 * g8 + (long)f1_2 * g7 + (long)f2 * g6 +
-                (long)f3_2 * g5 + (long)f4 * g4 + (long)f5_2 * g3 +
-                (long)f6 * g2 + (long)f7_2 * g1 + (long)f8 * g0 +
-                (long)f9_2 * g9_19;
-    long h9 = (long)f0 * g9 + (long)f1 * g8 + (long)f2 * g7 + (long)f3 * g6 +
-                (long)f4 * g5 + (long)f5 * g4 + (long)f6 * g3 + (long)f7 * g2 +
-                (long)f8 * g1 + (long)f9 * g0;
+    long h0 = f0g0 + f1g9_38 + f2g8_19 + f3g7_38 + f4g6_19 + f5g5_38 + f6g4_19 + f7g3_38 +
+              f8g2_19 + f9g1_38;
+    long h1 = f0g1 + f1g0 + f2g9_19 + f3g8_19 + f4g7_19 + f5g6_19 + f6g5_19 + f7g4_19 +
+              f8g3_19 + f9g2_19;
+    long h2 = f0g2 + f1g1_2 + f2g0 + f3g9_38 + f4g8_19 + f5g7_38 + f6g6_19 + f7g5_38 +
+              f8g4_19 + f9g3_38;
+    long h3 = f0g3 + f1g2 + f2g1 + f3g0 + f4g9_19 + f5g8_19 + f6g7_19 + f7g6_19 +
+              f8g5_19 + f9g4_19;
+    long h4 = f0g4 + f1g3_2 + f2g2 + f3g1_2 + f4g0 + f5g9_38 + f6g8_19 + f7g7_38 +
+              f8g6_19 + f9g5_38;
+    long h5 = f0g5 + f1g4 + f2g3 + f3g2 + f4g1 + f5g0 + f6g9_19 + f7g8_19 + f8g7_19 +
+              f9g6_19;
+    long h6 = f0g6 + f1g5_2 + f2g4 + f3g3_2 + f4g2 + f5g1_2 + f6g0 + f7g9_38 + f8g8_19 +
+              f9g7_38;
+    long h7 = f0g7 + f1g6 + f2g5 + f3g4 + f4g3 + f5g2 + f6g1 + f7g0 + f8g9_19 + f9g8_19;
+    long h8 = f0g8 + f1g7_2 + f2g6 + f3g5_2 + f4g4 + f5g3_2 + f6g2 + f7g1_2 + f8g0 +
+              f9g9_38;
+    long h9 = f0g9 + f1g8 + f2g7 + f3g6 + f4g5 + f5g4 + f6g3 + f7g2 + f8g1 + f9g0;
 
-    long carry0 = (h0 + (long)(1 << 25)) >> 26;
+    long carry0 = shift_right_floor_i64(h0 + (long)(1 << 25), 26);
     h1 += carry0;
     h0 -= carry0 << 26;
-    long carry4 = (h4 + (long)(1 << 25)) >> 26;
+    long carry4 = shift_right_floor_i64(h4 + (long)(1 << 25), 26);
     h5 += carry4;
     h4 -= carry4 << 26;
-    long carry1 = (h1 + (long)(1 << 24)) >> 25;
+    long carry1 = shift_right_floor_i64(h1 + (long)(1 << 24), 25);
     h2 += carry1;
     h1 -= carry1 << 25;
-    long carry5 = (h5 + (long)(1 << 24)) >> 25;
+    long carry5 = shift_right_floor_i64(h5 + (long)(1 << 24), 25);
     h6 += carry5;
     h5 -= carry5 << 25;
-    long carry2 = (h2 + (long)(1 << 25)) >> 26;
+    long carry2 = shift_right_floor_i64(h2 + (long)(1 << 25), 26);
     h3 += carry2;
     h2 -= carry2 << 26;
-    long carry6 = (h6 + (long)(1 << 25)) >> 26;
+    long carry6 = shift_right_floor_i64(h6 + (long)(1 << 25), 26);
     h7 += carry6;
     h6 -= carry6 << 26;
-    long carry3 = (h3 + (long)(1 << 24)) >> 25;
+    long carry3 = shift_right_floor_i64(h3 + (long)(1 << 24), 25);
     h4 += carry3;
     h3 -= carry3 << 25;
-    long carry7 = (h7 + (long)(1 << 24)) >> 25;
+    long carry7 = shift_right_floor_i64(h7 + (long)(1 << 24), 25);
     h8 += carry7;
     h7 -= carry7 << 25;
-    long carry8 = (h8 + (long)(1 << 25)) >> 26;
+    long carry8 = shift_right_floor_i64(h8 + (long)(1 << 25), 26);
     h9 += carry8;
     h8 -= carry8 << 26;
-    long carry9 = (h9 + (long)(1 << 24)) >> 25;
+    long carry9 = shift_right_floor_i64(h9 + (long)(1 << 24), 25);
     h0 += carry9 * 19;
     h9 -= carry9 << 25;
-    carry0 = (h0 + (long)(1 << 25)) >> 26;
+    carry0 = shift_right_floor_i64(h0 + (long)(1 << 25), 26);
     h1 += carry0;
     h0 -= carry0 << 26;
-    carry1 = (h1 + (long)(1 << 24)) >> 25;
+
+    h[0] = (int)h0;
+    h[1] = (int)h1;
+    h[2] = (int)h2;
+    h[3] = (int)h3;
+    h[4] = (int)h4;
+    h[5] = (int)h5;
+    h[6] = (int)h6;
+    h[7] = (int)h7;
+    h[8] = (int)h8;
+    h[9] = (int)h9;
+    fe_normalize(h);
+}
+
+inline void fe_sq(fe h, const fe f) {
+    int f0 = f[0];
+    int f1 = f[1];
+    int f2 = f[2];
+    int f3 = f[3];
+    int f4 = f[4];
+    int f5 = f[5];
+    int f6 = f[6];
+    int f7 = f[7];
+    int f8 = f[8];
+    int f9 = f[9];
+    int f0_2 = 2 * f0;
+    int f1_2 = 2 * f1;
+    int f2_2 = 2 * f2;
+    int f3_2 = 2 * f3;
+    int f4_2 = 2 * f4;
+    int f5_2 = 2 * f5;
+    int f6_2 = 2 * f6;
+    int f7_2 = 2 * f7;
+    int f5_38 = 38 * f5;
+    int f6_19 = 19 * f6;
+    int f7_38 = 38 * f7;
+    int f8_19 = 19 * f8;
+    int f9_38 = 38 * f9;
+    long f0f0 = (long)f0 * f0;
+    long f0f1_2 = (long)f0_2 * f1;
+    long f0f2_2 = (long)f0_2 * f2;
+    long f0f3_2 = (long)f0_2 * f3;
+    long f0f4_2 = (long)f0_2 * f4;
+    long f0f5_2 = (long)f0_2 * f5;
+    long f0f6_2 = (long)f0_2 * f6;
+    long f0f7_2 = (long)f0_2 * f7;
+    long f0f8_2 = (long)f0_2 * f8;
+    long f0f9_2 = (long)f0_2 * f9;
+    long f1f1_2 = (long)f1_2 * f1;
+    long f1f2_2 = (long)f1_2 * f2;
+    long f1f3_4 = (long)f1_2 * f3_2;
+    long f1f4_2 = (long)f1_2 * f4;
+    long f1f5_4 = (long)f1_2 * f5_2;
+    long f1f6_2 = (long)f1_2 * f6;
+    long f1f7_4 = (long)f1_2 * f7_2;
+    long f1f8_2 = (long)f1_2 * f8;
+    long f1f9_76 = (long)f1_2 * f9_38;
+    long f2f2 = (long)f2 * f2;
+    long f2f3_2 = (long)f2_2 * f3;
+    long f2f4_2 = (long)f2_2 * f4;
+    long f2f5_2 = (long)f2_2 * f5;
+    long f2f6_2 = (long)f2_2 * f6;
+    long f2f7_2 = (long)f2_2 * f7;
+    long f2f8_38 = (long)f2_2 * f8_19;
+    long f2f9_38 = (long)f2 * f9_38;
+    long f3f3_2 = (long)f3_2 * f3;
+    long f3f4_2 = (long)f3_2 * f4;
+    long f3f5_4 = (long)f3_2 * f5_2;
+    long f3f6_2 = (long)f3_2 * f6;
+    long f3f7_76 = (long)f3_2 * f7_38;
+    long f3f8_38 = (long)f3_2 * f8_19;
+    long f3f9_76 = (long)f3_2 * f9_38;
+    long f4f4 = (long)f4 * f4;
+    long f4f5_2 = (long)f4_2 * f5;
+    long f4f6_38 = (long)f4_2 * f6_19;
+    long f4f7_38 = (long)f4 * f7_38;
+    long f4f8_38 = (long)f4_2 * f8_19;
+    long f4f9_38 = (long)f4 * f9_38;
+    long f5f5_38 = (long)f5 * f5_38;
+    long f5f6_38 = (long)f5_2 * f6_19;
+    long f5f7_76 = (long)f5_2 * f7_38;
+    long f5f8_38 = (long)f5_2 * f8_19;
+    long f5f9_76 = (long)f5_2 * f9_38;
+    long f6f6_19 = (long)f6 * f6_19;
+    long f6f7_38 = (long)f6 * f7_38;
+    long f6f8_38 = (long)f6_2 * f8_19;
+    long f6f9_38 = (long)f6 * f9_38;
+    long f7f7_38 = (long)f7 * f7_38;
+    long f7f8_38 = (long)f7_2 * f8_19;
+    long f7f9_76 = (long)f7_2 * f9_38;
+    long f8f8_19 = (long)f8 * f8_19;
+    long f8f9_38 = (long)f8 * f9_38;
+    long f9f9_38 = (long)f9 * f9_38;
+    long h0 = f0f0 + f1f9_76 + f2f8_38 + f3f7_76 + f4f6_38 + f5f5_38;
+    long h1 = f0f1_2 + f2f9_38 + f3f8_38 + f4f7_38 + f5f6_38;
+    long h2 = f0f2_2 + f1f1_2 + f3f9_76 + f4f8_38 + f5f7_76 + f6f6_19;
+    long h3 = f0f3_2 + f1f2_2 + f4f9_38 + f5f8_38 + f6f7_38;
+    long h4 = f0f4_2 + f1f3_4 + f2f2 + f5f9_76 + f6f8_38 + f7f7_38;
+    long h5 = f0f5_2 + f1f4_2 + f2f3_2 + f6f9_38 + f7f8_38;
+    long h6 = f0f6_2 + f1f5_4 + f2f4_2 + f3f3_2 + f7f9_76 + f8f8_19;
+    long h7 = f0f7_2 + f1f6_2 + f2f5_2 + f3f4_2 + f8f9_38;
+    long h8 = f0f8_2 + f1f7_4 + f2f6_2 + f3f5_4 + f4f4 + f9f9_38;
+    long h9 = f0f9_2 + f1f8_2 + f2f7_2 + f3f6_2 + f4f5_2;
+    long carry0;
+    long carry1;
+    long carry2;
+    long carry3;
+    long carry4;
+    long carry5;
+    long carry6;
+    long carry7;
+    long carry8;
+    long carry9;
+
+    carry0 = shift_right_floor_i64(h0 + (long)(1 << 25), 26);
+    h1 += carry0;
+    h0 -= carry0 << 26;
+    carry4 = shift_right_floor_i64(h4 + (long)(1 << 25), 26);
+    h5 += carry4;
+    h4 -= carry4 << 26;
+    carry1 = shift_right_floor_i64(h1 + (long)(1 << 24), 25);
     h2 += carry1;
     h1 -= carry1 << 25;
+    carry5 = shift_right_floor_i64(h5 + (long)(1 << 24), 25);
+    h6 += carry5;
+    h5 -= carry5 << 25;
+    carry2 = shift_right_floor_i64(h2 + (long)(1 << 25), 26);
+    h3 += carry2;
+    h2 -= carry2 << 26;
+    carry6 = shift_right_floor_i64(h6 + (long)(1 << 25), 26);
+    h7 += carry6;
+    h6 -= carry6 << 26;
+    carry3 = shift_right_floor_i64(h3 + (long)(1 << 24), 25);
+    h4 += carry3;
+    h3 -= carry3 << 25;
+    carry7 = shift_right_floor_i64(h7 + (long)(1 << 24), 25);
+    h8 += carry7;
+    h7 -= carry7 << 25;
+    carry4 = shift_right_floor_i64(h4 + (long)(1 << 25), 26);
+    h5 += carry4;
+    h4 -= carry4 << 26;
+    carry8 = shift_right_floor_i64(h8 + (long)(1 << 25), 26);
+    h9 += carry8;
+    h8 -= carry8 << 26;
+    carry9 = shift_right_floor_i64(h9 + (long)(1 << 24), 25);
+    h0 += carry9 * 19;
+    h9 -= carry9 << 25;
+    carry0 = shift_right_floor_i64(h0 + (long)(1 << 25), 26);
+    h1 += carry0;
+    h0 -= carry0 << 26;
 
     h[0] = (int)h0;
     h[1] = (int)h1;
@@ -201,14 +494,164 @@ inline void fe_mul(fe h, const fe f, const fe g) {
     h[9] = (int)h9;
 }
 
-inline void fe_sq(fe h, const fe f) {
-    fe_mul(h, f, f);
-}
-
 inline void fe_sq2(fe h, const fe f) {
-    fe t;
-    fe_sq(t, f);
-    fe_add(h, t, t);
+    int f0 = f[0];
+    int f1 = f[1];
+    int f2 = f[2];
+    int f3 = f[3];
+    int f4 = f[4];
+    int f5 = f[5];
+    int f6 = f[6];
+    int f7 = f[7];
+    int f8 = f[8];
+    int f9 = f[9];
+    int f0_2 = 2 * f0;
+    int f1_2 = 2 * f1;
+    int f2_2 = 2 * f2;
+    int f3_2 = 2 * f3;
+    int f4_2 = 2 * f4;
+    int f5_2 = 2 * f5;
+    int f6_2 = 2 * f6;
+    int f7_2 = 2 * f7;
+    int f5_38 = 38 * f5;
+    int f6_19 = 19 * f6;
+    int f7_38 = 38 * f7;
+    int f8_19 = 19 * f8;
+    int f9_38 = 38 * f9;
+    long f0f0 = (long)f0 * f0;
+    long f0f1_2 = (long)f0_2 * f1;
+    long f0f2_2 = (long)f0_2 * f2;
+    long f0f3_2 = (long)f0_2 * f3;
+    long f0f4_2 = (long)f0_2 * f4;
+    long f0f5_2 = (long)f0_2 * f5;
+    long f0f6_2 = (long)f0_2 * f6;
+    long f0f7_2 = (long)f0_2 * f7;
+    long f0f8_2 = (long)f0_2 * f8;
+    long f0f9_2 = (long)f0_2 * f9;
+    long f1f1_2 = (long)f1_2 * f1;
+    long f1f2_2 = (long)f1_2 * f2;
+    long f1f3_4 = (long)f1_2 * f3_2;
+    long f1f4_2 = (long)f1_2 * f4;
+    long f1f5_4 = (long)f1_2 * f5_2;
+    long f1f6_2 = (long)f1_2 * f6;
+    long f1f7_4 = (long)f1_2 * f7_2;
+    long f1f8_2 = (long)f1_2 * f8;
+    long f1f9_76 = (long)f1_2 * f9_38;
+    long f2f2 = (long)f2 * f2;
+    long f2f3_2 = (long)f2_2 * f3;
+    long f2f4_2 = (long)f2_2 * f4;
+    long f2f5_2 = (long)f2_2 * f5;
+    long f2f6_2 = (long)f2_2 * f6;
+    long f2f7_2 = (long)f2_2 * f7;
+    long f2f8_38 = (long)f2_2 * f8_19;
+    long f2f9_38 = (long)f2 * f9_38;
+    long f3f3_2 = (long)f3_2 * f3;
+    long f3f4_2 = (long)f3_2 * f4;
+    long f3f5_4 = (long)f3_2 * f5_2;
+    long f3f6_2 = (long)f3_2 * f6;
+    long f3f7_76 = (long)f3_2 * f7_38;
+    long f3f8_38 = (long)f3_2 * f8_19;
+    long f3f9_76 = (long)f3_2 * f9_38;
+    long f4f4 = (long)f4 * f4;
+    long f4f5_2 = (long)f4_2 * f5;
+    long f4f6_38 = (long)f4_2 * f6_19;
+    long f4f7_38 = (long)f4 * f7_38;
+    long f4f8_38 = (long)f4_2 * f8_19;
+    long f4f9_38 = (long)f4 * f9_38;
+    long f5f5_38 = (long)f5 * f5_38;
+    long f5f6_38 = (long)f5_2 * f6_19;
+    long f5f7_76 = (long)f5_2 * f7_38;
+    long f5f8_38 = (long)f5_2 * f8_19;
+    long f5f9_76 = (long)f5_2 * f9_38;
+    long f6f6_19 = (long)f6 * f6_19;
+    long f6f7_38 = (long)f6 * f7_38;
+    long f6f8_38 = (long)f6_2 * f8_19;
+    long f6f9_38 = (long)f6 * f9_38;
+    long f7f7_38 = (long)f7 * f7_38;
+    long f7f8_38 = (long)f7_2 * f8_19;
+    long f7f9_76 = (long)f7_2 * f9_38;
+    long f8f8_19 = (long)f8 * f8_19;
+    long f8f9_38 = (long)f8 * f9_38;
+    long f9f9_38 = (long)f9 * f9_38;
+    long h0 = f0f0 + f1f9_76 + f2f8_38 + f3f7_76 + f4f6_38 + f5f5_38;
+    long h1 = f0f1_2 + f2f9_38 + f3f8_38 + f4f7_38 + f5f6_38;
+    long h2 = f0f2_2 + f1f1_2 + f3f9_76 + f4f8_38 + f5f7_76 + f6f6_19;
+    long h3 = f0f3_2 + f1f2_2 + f4f9_38 + f5f8_38 + f6f7_38;
+    long h4 = f0f4_2 + f1f3_4 + f2f2 + f5f9_76 + f6f8_38 + f7f7_38;
+    long h5 = f0f5_2 + f1f4_2 + f2f3_2 + f6f9_38 + f7f8_38;
+    long h6 = f0f6_2 + f1f5_4 + f2f4_2 + f3f3_2 + f7f9_76 + f8f8_19;
+    long h7 = f0f7_2 + f1f6_2 + f2f5_2 + f3f4_2 + f8f9_38;
+    long h8 = f0f8_2 + f1f7_4 + f2f6_2 + f3f5_4 + f4f4 + f9f9_38;
+    long h9 = f0f9_2 + f1f8_2 + f2f7_2 + f3f6_2 + f4f5_2;
+    long carry0;
+    long carry1;
+    long carry2;
+    long carry3;
+    long carry4;
+    long carry5;
+    long carry6;
+    long carry7;
+    long carry8;
+    long carry9;
+
+    h0 += h0;
+    h1 += h1;
+    h2 += h2;
+    h3 += h3;
+    h4 += h4;
+    h5 += h5;
+    h6 += h6;
+    h7 += h7;
+    h8 += h8;
+    h9 += h9;
+
+    carry0 = shift_right_floor_i64(h0 + (long)(1 << 25), 26);
+    h1 += carry0;
+    h0 -= carry0 << 26;
+    carry4 = shift_right_floor_i64(h4 + (long)(1 << 25), 26);
+    h5 += carry4;
+    h4 -= carry4 << 26;
+    carry1 = shift_right_floor_i64(h1 + (long)(1 << 24), 25);
+    h2 += carry1;
+    h1 -= carry1 << 25;
+    carry5 = shift_right_floor_i64(h5 + (long)(1 << 24), 25);
+    h6 += carry5;
+    h5 -= carry5 << 25;
+    carry2 = shift_right_floor_i64(h2 + (long)(1 << 25), 26);
+    h3 += carry2;
+    h2 -= carry2 << 26;
+    carry6 = shift_right_floor_i64(h6 + (long)(1 << 25), 26);
+    h7 += carry6;
+    h6 -= carry6 << 26;
+    carry3 = shift_right_floor_i64(h3 + (long)(1 << 24), 25);
+    h4 += carry3;
+    h3 -= carry3 << 25;
+    carry7 = shift_right_floor_i64(h7 + (long)(1 << 24), 25);
+    h8 += carry7;
+    h7 -= carry7 << 25;
+    carry4 = shift_right_floor_i64(h4 + (long)(1 << 25), 26);
+    h5 += carry4;
+    h4 -= carry4 << 26;
+    carry8 = shift_right_floor_i64(h8 + (long)(1 << 25), 26);
+    h9 += carry8;
+    h8 -= carry8 << 26;
+    carry9 = shift_right_floor_i64(h9 + (long)(1 << 24), 25);
+    h0 += carry9 * 19;
+    h9 -= carry9 << 25;
+    carry0 = shift_right_floor_i64(h0 + (long)(1 << 25), 26);
+    h1 += carry0;
+    h0 -= carry0 << 26;
+
+    h[0] = (int)h0;
+    h[1] = (int)h1;
+    h[2] = (int)h2;
+    h[3] = (int)h3;
+    h[4] = (int)h4;
+    h[5] = (int)h5;
+    h[6] = (int)h6;
+    h[7] = (int)h7;
+    h[8] = (int)h8;
+    h[9] = (int)h9;
 }
 
 inline void fe_mul121666(fe h, const fe f) {
@@ -217,37 +660,37 @@ inline void fe_mul121666(fe h, const fe f) {
     for (int i = 0; i < 10; ++i) {
         t[i] = (long)f[i] * 121666;
     }
-    carry = (t[0] + (long)(1 << 25)) >> 26;
+    carry = shift_right_floor_i64(t[0] + (long)(1 << 25), 26);
     t[1] += carry;
     t[0] -= carry << 26;
-    carry = (t[4] + (long)(1 << 25)) >> 26;
+    carry = shift_right_floor_i64(t[4] + (long)(1 << 25), 26);
     t[5] += carry;
     t[4] -= carry << 26;
-    carry = (t[1] + (long)(1 << 24)) >> 25;
+    carry = shift_right_floor_i64(t[1] + (long)(1 << 24), 25);
     t[2] += carry;
     t[1] -= carry << 25;
-    carry = (t[5] + (long)(1 << 24)) >> 25;
+    carry = shift_right_floor_i64(t[5] + (long)(1 << 24), 25);
     t[6] += carry;
     t[5] -= carry << 25;
-    carry = (t[2] + (long)(1 << 25)) >> 26;
+    carry = shift_right_floor_i64(t[2] + (long)(1 << 25), 26);
     t[3] += carry;
     t[2] -= carry << 26;
-    carry = (t[6] + (long)(1 << 25)) >> 26;
+    carry = shift_right_floor_i64(t[6] + (long)(1 << 25), 26);
     t[7] += carry;
     t[6] -= carry << 26;
-    carry = (t[3] + (long)(1 << 24)) >> 25;
+    carry = shift_right_floor_i64(t[3] + (long)(1 << 24), 25);
     t[4] += carry;
     t[3] -= carry << 25;
-    carry = (t[7] + (long)(1 << 24)) >> 25;
+    carry = shift_right_floor_i64(t[7] + (long)(1 << 24), 25);
     t[8] += carry;
     t[7] -= carry << 25;
-    carry = (t[8] + (long)(1 << 25)) >> 26;
+    carry = shift_right_floor_i64(t[8] + (long)(1 << 25), 26);
     t[9] += carry;
     t[8] -= carry << 26;
-    carry = (t[9] + (long)(1 << 24)) >> 25;
+    carry = shift_right_floor_i64(t[9] + (long)(1 << 24), 25);
     t[0] += carry * 19;
     t[9] -= carry << 25;
-    carry = (t[0] + (long)(1 << 25)) >> 26;
+    carry = shift_right_floor_i64(t[0] + (long)(1 << 25), 26);
     t[1] += carry;
     t[0] -= carry << 26;
     for (int i = 0; i < 10; ++i) {
@@ -303,7 +746,7 @@ inline void fe_pow22523(fe out, const fe z) {
     fe_mul(t0, t1, t0);
     fe_sq(t0, t0);
     fe_sq(t0, t0);
-    fe_mul(out, t0, t1);
+    fe_mul(out, t0, z);
 }
 
 inline void fe_invert(fe out, const fe z) {
@@ -363,47 +806,47 @@ inline void fe_tobytes(uchar s[32], const fe h) {
     int t[10];
     fe_copy(t, h);
 
-    int q = (19 * t[9] + (1 << 24)) >> 25;
-    q = (t[0] + q) >> 26;
-    q = (t[1] + q) >> 25;
-    q = (t[2] + q) >> 26;
-    q = (t[3] + q) >> 25;
-    q = (t[4] + q) >> 26;
-    q = (t[5] + q) >> 25;
-    q = (t[6] + q) >> 26;
-    q = (t[7] + q) >> 25;
-    q = (t[8] + q) >> 26;
-    q = (t[9] + q) >> 25;
+    int q = shift_right_floor_i32(19 * t[9] + (1 << 24), 25);
+    q = shift_right_floor_i32(t[0] + q, 26);
+    q = shift_right_floor_i32(t[1] + q, 25);
+    q = shift_right_floor_i32(t[2] + q, 26);
+    q = shift_right_floor_i32(t[3] + q, 25);
+    q = shift_right_floor_i32(t[4] + q, 26);
+    q = shift_right_floor_i32(t[5] + q, 25);
+    q = shift_right_floor_i32(t[6] + q, 26);
+    q = shift_right_floor_i32(t[7] + q, 25);
+    q = shift_right_floor_i32(t[8] + q, 26);
+    q = shift_right_floor_i32(t[9] + q, 25);
 
     t[0] += 19 * q;
-    int carry0 = t[0] >> 26;
+    int carry0 = shift_right_floor_i32(t[0], 26);
     t[1] += carry0;
     t[0] -= carry0 << 26;
-    int carry1 = t[1] >> 25;
+    int carry1 = shift_right_floor_i32(t[1], 25);
     t[2] += carry1;
     t[1] -= carry1 << 25;
-    int carry2 = t[2] >> 26;
+    int carry2 = shift_right_floor_i32(t[2], 26);
     t[3] += carry2;
     t[2] -= carry2 << 26;
-    int carry3 = t[3] >> 25;
+    int carry3 = shift_right_floor_i32(t[3], 25);
     t[4] += carry3;
     t[3] -= carry3 << 25;
-    int carry4 = t[4] >> 26;
+    int carry4 = shift_right_floor_i32(t[4], 26);
     t[5] += carry4;
     t[4] -= carry4 << 26;
-    int carry5 = t[5] >> 25;
+    int carry5 = shift_right_floor_i32(t[5], 25);
     t[6] += carry5;
     t[5] -= carry5 << 25;
-    int carry6 = t[6] >> 26;
+    int carry6 = shift_right_floor_i32(t[6], 26);
     t[7] += carry6;
     t[6] -= carry6 << 26;
-    int carry7 = t[7] >> 25;
+    int carry7 = shift_right_floor_i32(t[7], 25);
     t[8] += carry7;
     t[7] -= carry7 << 25;
-    int carry8 = t[8] >> 26;
+    int carry8 = shift_right_floor_i32(t[8], 26);
     t[9] += carry8;
     t[8] -= carry8 << 26;
-    int carry9 = t[9] >> 25;
+    int carry9 = shift_right_floor_i32(t[9], 25);
     t[9] -= carry9 << 25;
 
     s[0] = t[0] >> 0;
@@ -452,39 +895,48 @@ inline void fe_frombytes(fe h, const uchar s[32]) {
     long h8 = load3(s + 26) << 4;
     long h9 = (load3(s + 29) & 0x7FFFFF) << 2;
 
-    long carry0 = (h0 + (long)(1 << 25)) >> 26;
-    h1 += carry0;
-    h0 -= carry0 << 26;
-    long carry1 = (h1 + (long)(1 << 24)) >> 25;
+    long carry0;
+    long carry1;
+    long carry2;
+    long carry3;
+    long carry4;
+    long carry5;
+    long carry6;
+    long carry7;
+    long carry8;
+    long carry9;
+
+    carry9 = shift_right_floor_i64(h9 + (long)(1 << 24), 25);
+    h0 += carry9 * 19;
+    h9 -= carry9 << 25;
+    carry1 = shift_right_floor_i64(h1 + (long)(1 << 24), 25);
     h2 += carry1;
     h1 -= carry1 << 25;
-    long carry2 = (h2 + (long)(1 << 25)) >> 26;
-    h3 += carry2;
-    h2 -= carry2 << 26;
-    long carry3 = (h3 + (long)(1 << 24)) >> 25;
+    carry3 = shift_right_floor_i64(h3 + (long)(1 << 24), 25);
     h4 += carry3;
     h3 -= carry3 << 25;
-    long carry4 = (h4 + (long)(1 << 25)) >> 26;
-    h5 += carry4;
-    h4 -= carry4 << 26;
-    long carry5 = (h5 + (long)(1 << 24)) >> 25;
+    carry5 = shift_right_floor_i64(h5 + (long)(1 << 24), 25);
     h6 += carry5;
     h5 -= carry5 << 25;
-    long carry6 = (h6 + (long)(1 << 25)) >> 26;
-    h7 += carry6;
-    h6 -= carry6 << 26;
-    long carry7 = (h7 + (long)(1 << 24)) >> 25;
+    carry7 = shift_right_floor_i64(h7 + (long)(1 << 24), 25);
     h8 += carry7;
     h7 -= carry7 << 25;
-    long carry8 = (h8 + (long)(1 << 25)) >> 26;
-    h9 += carry8;
-    h8 -= carry8 << 26;
-    long carry9 = (h9 + (long)(1 << 24)) >> 25;
-    h9 -= carry9 << 25;
-    h0 += carry9 * 19;
-    carry0 = (h0 + (long)(1 << 25)) >> 26;
+
+    carry0 = shift_right_floor_i64(h0 + (long)(1 << 25), 26);
     h1 += carry0;
     h0 -= carry0 << 26;
+    carry2 = shift_right_floor_i64(h2 + (long)(1 << 25), 26);
+    h3 += carry2;
+    h2 -= carry2 << 26;
+    carry4 = shift_right_floor_i64(h4 + (long)(1 << 25), 26);
+    h5 += carry4;
+    h4 -= carry4 << 26;
+    carry6 = shift_right_floor_i64(h6 + (long)(1 << 25), 26);
+    h7 += carry6;
+    h6 -= carry6 << 26;
+    carry8 = shift_right_floor_i64(h8 + (long)(1 << 25), 26);
+    h9 += carry8;
+    h8 -= carry8 << 26;
 
     h[0] = (int)h0;
     h[1] = (int)h1;
@@ -556,10 +1008,12 @@ inline int ge_frombytes_negate_vartime(thread ge_p3* h, const thread uchar s[32]
     fe_add(v, v, h->Z);
     fe_sq(v3, v);
     fe_mul(v3, v3, v);
-    fe_mul(v3, v3, u);
-    fe_pow22523(h->X, v3);
-    fe_mul(h->X, h->X, u);
+    fe_sq(h->X, v3);
     fe_mul(h->X, h->X, v);
+    fe_mul(h->X, h->X, u);
+    fe_pow22523(h->X, h->X);
+    fe_mul(h->X, h->X, v3);
+    fe_mul(h->X, h->X, u);
     fe_sq(vxx, h->X);
     fe_mul(vxx, vxx, v);
     fe_sub(check, vxx, u);
@@ -668,6 +1122,7 @@ inline void ge_double_scalarmult(
     if (ge_frombytes_negate_vartime(&base, base_bytes) != 0) {
         return;
     }
+    ge_neg(&base, &base);
     for (int bit = 255; bit >= 0; --bit) {
         ge_p3 tmp;
         ge_double(&tmp, r);
@@ -692,24 +1147,24 @@ inline void ge_double_scalarmult(
     }
 }
 
-inline bool ed25519_verify_device(
+inline uchar ed25519_verify_device_status(
     const thread uchar R[32],
     const thread uchar S[32],
     const thread uchar A[32],
     const thread uchar hram[32]
 ) {
     if (!sc_is_canonical(S)) {
-        return false;
+        return 1u;
     }
     ge_p3 A_point;
     if (ge_frombytes_negate_vartime(&A_point, A) != 0) {
-        return false;
+        return 2u;
     }
     ge_p3 R_point;
     if (ge_frombytes_negate_vartime(&R_point, R) != 0) {
-        return false;
+        return 3u;
     }
-    (void)R_point; // canonical check only
+    (void)R_point;
 
     ge_p3 check;
     ge_double_scalarmult(&check, hram, &A_point, S);
@@ -719,7 +1174,16 @@ inline bool ed25519_verify_device(
     for (int i = 0; i < 32; ++i) {
         ok &= (check_bytes[i] == R[i]);
     }
-    return ok != 0;
+    return ok != 0 ? 5u : 4u;
+}
+
+inline bool ed25519_verify_device(
+    const thread uchar R[32],
+    const thread uchar S[32],
+    const thread uchar A[32],
+    const thread uchar hram[32]
+) {
+    return ed25519_verify_device_status(R, S, A, hram) == 5u;
 }
 
 kernel void signature_kernel(
@@ -748,4 +1212,282 @@ kernel void signature_kernel(
     }
     bool ok = ed25519_verify_device(R, S, A, h_local);
     results[idx] = ok ? 1u : 0u;
+}
+
+kernel void signature_status_kernel(
+    device const uchar* signatures [[buffer(0)]],
+    device const uchar* public_keys [[buffer(1)]],
+    device const uchar* hram_scalars [[buffer(2)]],
+    constant uint& count [[buffer(3)]],
+    device uchar* results [[buffer(4)]],
+    uint idx [[thread_position_in_grid]]
+) {
+    if (idx >= count) {
+        return;
+    }
+    const device uchar* sig = signatures + idx * 64;
+    const device uchar* pk = public_keys + idx * 32;
+    const device uchar* hram = hram_scalars + idx * 32;
+    uchar R[32];
+    uchar S[32];
+    uchar A[32];
+    uchar h_local[32];
+    for (uint i = 0; i < 32; ++i) {
+        R[i] = sig[i];
+        S[i] = sig[32 + i];
+        A[i] = pk[i];
+        h_local[i] = hram[i];
+    }
+    results[idx] = ed25519_verify_device_status(R, S, A, h_local);
+}
+
+kernel void signature_check_bytes_kernel(
+    device const uchar* signatures [[buffer(0)]],
+    device const uchar* public_keys [[buffer(1)]],
+    device const uchar* hram_scalars [[buffer(2)]],
+    constant uint& count [[buffer(3)]],
+    device uchar* outputs [[buffer(4)]],
+    uint idx [[thread_position_in_grid]]
+) {
+    if (idx >= count) {
+        return;
+    }
+    const device uchar* sig = signatures + idx * 64;
+    const device uchar* pk = public_keys + idx * 32;
+    const device uchar* hram = hram_scalars + idx * 32;
+    uchar R[32];
+    uchar S[32];
+    uchar A[32];
+    uchar h_local[32];
+    for (uint i = 0; i < 32; ++i) {
+        R[i] = sig[i];
+        S[i] = sig[32 + i];
+        A[i] = pk[i];
+        h_local[i] = hram[i];
+    }
+    ge_p3 A_point;
+    ge_p3 check;
+    uchar check_bytes[32];
+    device uchar* output = outputs + idx * 32;
+    for (uint i = 0; i < 32; ++i) {
+        output[i] = 0u;
+    }
+    if (!sc_is_canonical(S)) {
+        return;
+    }
+    if (ge_frombytes_negate_vartime(&A_point, A) != 0) {
+        return;
+    }
+    ge_double_scalarmult(&check, h_local, &A_point, S);
+    ge_tobytes(check_bytes, &check);
+    for (uint i = 0; i < 32; ++i) {
+        output[i] = check_bytes[i];
+    }
+}
+
+kernel void field_roundtrip_kernel(
+    device const uchar* inputs [[buffer(0)]],
+    constant uint& count [[buffer(1)]],
+    device uchar* outputs [[buffer(2)]],
+    uint idx [[thread_position_in_grid]]
+) {
+    if (idx >= count) {
+        return;
+    }
+    const device uchar* input = inputs + idx * 32;
+    uchar local_in[32];
+    for (uint i = 0; i < 32; ++i) {
+        local_in[i] = input[i];
+    }
+    fe value;
+    uchar local_out[32];
+    fe_frombytes(value, local_in);
+    fe_tobytes(local_out, value);
+    device uchar* output = outputs + idx * 32;
+    for (uint i = 0; i < 32; ++i) {
+        output[i] = local_out[i];
+    }
+}
+
+kernel void point_decompress_status_kernel(
+    device const uchar* inputs [[buffer(0)]],
+    constant uint& count [[buffer(1)]],
+    device uchar* statuses [[buffer(2)]],
+    device uchar* outputs [[buffer(3)]],
+    uint idx [[thread_position_in_grid]]
+) {
+    if (idx >= count) {
+        return;
+    }
+    const device uchar* input = inputs + idx * 32;
+    uchar local_in[32];
+    for (uint i = 0; i < 32; ++i) {
+        local_in[i] = input[i];
+    }
+
+    ge_p3 point;
+    uchar status = 0u;
+    uchar local_out[32];
+    for (uint i = 0; i < 32; ++i) {
+        local_out[i] = 0u;
+    }
+    if (ge_frombytes_negate_vartime(&point, local_in) != 0) {
+        status = 2u;
+    } else {
+        ge_tobytes(local_out, &point);
+        status = 5u;
+    }
+    statuses[idx] = status;
+    device uchar* output = outputs + idx * 32;
+    for (uint i = 0; i < 32; ++i) {
+        output[i] = local_out[i];
+    }
+}
+
+kernel void point_decompress_trace_kernel(
+    device const uchar* inputs [[buffer(0)]],
+    constant uint& count [[buffer(1)]],
+    device uchar* outputs [[buffer(2)]],
+    uint idx [[thread_position_in_grid]]
+) {
+    if (idx >= count) {
+        return;
+    }
+    const device uchar* input = inputs + idx * 32;
+    uchar local_in[32];
+    for (uint i = 0; i < 32; ++i) {
+        local_in[i] = input[i];
+    }
+
+    fe y;
+    fe z;
+    fe u;
+    fe v;
+    fe v2;
+    fe v3;
+    fe v6;
+    fe v7;
+    fe uv7;
+    fe pow_out;
+    fe x;
+    fe vxx;
+    fe check_minus;
+    fe check_plus;
+    fe fe_d;
+    uchar encoded[32];
+
+    fe_copy_const(fe_d, FE_D);
+    fe_frombytes(y, local_in);
+    fe_1(z);
+    fe_sq(u, y);
+    fe_mul(v, u, fe_d);
+    fe_sub(u, u, z);
+    fe_add(v, v, z);
+    fe_sq(v2, v);
+    fe_mul(v3, v2, v);
+    fe_sq(v6, v3);
+    fe_mul(v7, v6, v);
+    fe_mul(uv7, v7, u);
+    fe_pow22523(pow_out, uv7);
+    fe_mul(x, pow_out, v3);
+    fe_mul(x, x, u);
+    fe_sq(vxx, x);
+    fe_mul(vxx, vxx, v);
+    fe_sub(check_minus, vxx, u);
+    fe_add(check_plus, vxx, u);
+
+    device uchar* output = outputs + idx * (7 * 32);
+    fe_tobytes(encoded, u);
+    for (uint i = 0; i < 32; ++i) {
+        output[i] = encoded[i];
+    }
+    fe_tobytes(encoded, v);
+    for (uint i = 0; i < 32; ++i) {
+        output[32 + i] = encoded[i];
+    }
+    fe_tobytes(encoded, uv7);
+    for (uint i = 0; i < 32; ++i) {
+        output[64 + i] = encoded[i];
+    }
+    fe_tobytes(encoded, pow_out);
+    for (uint i = 0; i < 32; ++i) {
+        output[96 + i] = encoded[i];
+    }
+    fe_tobytes(encoded, x);
+    for (uint i = 0; i < 32; ++i) {
+        output[128 + i] = encoded[i];
+    }
+    fe_tobytes(encoded, check_minus);
+    for (uint i = 0; i < 32; ++i) {
+        output[160 + i] = encoded[i];
+    }
+    fe_tobytes(encoded, check_plus);
+    for (uint i = 0; i < 32; ++i) {
+        output[192 + i] = encoded[i];
+    }
+}
+
+kernel void point_decompress_limb_trace_kernel(
+    device const uchar* inputs [[buffer(0)]],
+    constant uint& count [[buffer(1)]],
+    device int* outputs [[buffer(2)]],
+    uint idx [[thread_position_in_grid]]
+) {
+    if (idx >= count) {
+        return;
+    }
+    const device uchar* input = inputs + idx * 32;
+    uchar local_in[32];
+    for (uint i = 0; i < 32; ++i) {
+        local_in[i] = input[i];
+    }
+
+    fe y;
+    fe z;
+    fe u;
+    fe v;
+    fe v2;
+    fe v3;
+    fe v6;
+    fe v7;
+    fe uv7;
+    fe pow_out;
+    fe x;
+    fe vxx;
+    fe check_minus;
+    fe check_plus;
+    fe fe_d;
+
+    fe_copy_const(fe_d, FE_D);
+    fe_frombytes(y, local_in);
+    fe_1(z);
+    fe_sq(u, y);
+    fe_mul(v, u, fe_d);
+    fe_sub(u, u, z);
+    fe_add(v, v, z);
+    fe_sq(v2, v);
+    fe_mul(v3, v2, v);
+    fe_sq(v6, v3);
+    fe_mul(v7, v6, v);
+    fe_mul(uv7, v7, u);
+    fe_pow22523(pow_out, uv7);
+    fe_mul(x, pow_out, v3);
+    fe_mul(x, x, u);
+    fe_sq(vxx, x);
+    fe_mul(vxx, vxx, v);
+    fe_sub(check_minus, vxx, u);
+    fe_add(check_plus, vxx, u);
+
+    device int* output = outputs + idx * (9 * 10);
+    for (uint i = 0; i < 10; ++i) {
+        output[i] = u[i];
+        output[10 + i] = v[i];
+        output[20 + i] = v2[i];
+        output[30 + i] = v3[i];
+        output[40 + i] = v6[i];
+        output[50 + i] = v7[i];
+        output[60 + i] = uv7[i];
+        output[70 + i] = pow_out[i];
+        output[80 + i] = check_minus[i];
+    }
 }

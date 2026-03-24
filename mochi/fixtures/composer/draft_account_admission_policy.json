@@ -9,7 +9,7 @@
     "max_implicit_creations_per_tx": 3,
     "max_implicit_creations_per_block": 10,
     "implicit_creation_fee": {
-      "asset_definition_id": "rose#wonderland",
+      "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
       "amount": "1",
       "destination": {
         "destination": "Burn",
@@ -17,8 +17,8 @@
       }
     },
     "min_initial_amounts": {
-      "rose#wonderland": "5",
-      "cabbage#wonderland": "1"
+      "62Fk4FPcMuLvW5QjDGNF2a4jAmjM": "5",
+      "5f9QzYSrzikeDsmrBouSTHREggYu": "1"
     },
     "default_role_on_create": "basic_user"
   }

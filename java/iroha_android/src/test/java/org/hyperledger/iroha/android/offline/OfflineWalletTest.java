@@ -75,7 +75,7 @@ public final class OfflineWalletTest {
               {
                 "from": "alice@wonderland",
                 "to": "merchant@wonderland",
-                "asset": "usd#wonderland#merchant@wonderland",
+                "asset": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1#merchant@wonderland",
                 "amount": "3.14"
               }
             ],
@@ -91,7 +91,7 @@ public final class OfflineWalletTest {
               "merchant@wonderland",
               "merchant@wonderland#deposit",
               "merchant@wonderland#deposit",
-              "usd#wonderland",
+              "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
               1,
               "3.14",
               "3.14",
@@ -105,7 +105,7 @@ public final class OfflineWalletTest {
       assert "bundle".equals(entry.txId()) : "tx id mismatch";
       assert "alice@wonderland".equals(entry.senderId()) : "sender mismatch";
       assert "merchant@wonderland".equals(entry.receiverId()) : "receiver mismatch";
-      assert "usd#wonderland#merchant@wonderland".equals(entry.assetId()) : "asset mismatch";
+      assert "7EAD8EFYUx1aVKZPUU1fyKvr8dF1#merchant@wonderland".equals(entry.assetId()) : "asset mismatch";
       assert "3.14".equals(entry.amount()) : "amount mismatch";
     } finally {
       Files.deleteIfExists(logFile);
@@ -294,7 +294,7 @@ public final class OfflineWalletTest {
                         "certificate": {
                           "controller": "alice@wonderland",
                           "operator": "alice@wonderland",
-                          "allowance": { "asset": "usd#wonderland", "amount": "10", "commitment": [1, 2] },
+                          "allowance": { "asset": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "amount": "10", "commitment": [1, 2] },
                           "spend_public_key": "ed0120deadbeef",
                           "attestation_report": [3, 4],
                           "issued_at_ms": 100,
@@ -322,7 +322,7 @@ public final class OfflineWalletTest {
               .build();
       final OfflineWallet wallet = new OfflineWallet(client, logFile, false);
       final OfflineAllowanceCommitment allowance =
-          new OfflineAllowanceCommitment("usd#wonderland", "10", new byte[] {1, 2});
+          new OfflineAllowanceCommitment("7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "10", new byte[] {1, 2});
       final OfflineWalletPolicy policy = new OfflineWalletPolicy("10", "5", 200L);
       final OfflineWalletCertificateDraft draft =
           new OfflineWalletCertificateDraft(
@@ -378,8 +378,8 @@ public final class OfflineWalletTest {
               "deadbeef",
               "merchant@wonderland",
               "Merchant Wonderland",
-              "usd#wonderland",
-              "usd#wonderland",
+              "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
+              "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
               "USD",
               null,
               Instant.parse("2025-01-01T00:00:00Z").toEpochMilli(),
@@ -470,8 +470,8 @@ public final class OfflineWalletTest {
         certificateId,
         "alice@sora",
         "Alice",
-        "usd#wonderland",
-        "usd#wonderland",
+        "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
+        "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
         "USD",
         null,
         0L,

@@ -36,7 +36,7 @@ Esta receta apunta a la variante de escritorio/JVM del módulo `java/iroha_andro
 ## 1. Registra la definición del activo (CLI)
 
 ```bash
-iroha --config defaults/client.toml asset definition register --id coffee#wonderland
+iroha --config defaults/client.toml asset definition register --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 ## 2. Exporta credenciales

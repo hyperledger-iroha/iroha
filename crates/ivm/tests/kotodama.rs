@@ -309,7 +309,7 @@ fn prelude_macros_compile() {
             kotoage fn run() permission(Admin) {
                 let alice = account!("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn");
                 let bob = account!("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU");
-                let asset = asset_definition!("rose#wonderland");
+                let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
                 set_account_detail(authority(), name!("cursor"), json!{ query: "sc_dummy", cursor: 1 });
                 transfer_asset(alice, bob, asset, 1);
             }
@@ -328,7 +328,7 @@ fn public_function_without_permission_rejected() {
                 transfer_asset(
                     account!("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
                     account!("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU"),
-                    asset_definition!("rose#wonderland"),
+                    asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
                     1
                 );
             }
@@ -406,7 +406,7 @@ fn public_function_with_permission_is_allowed() {
                 transfer_asset(
                     account!("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
                     account!("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU"),
-                    asset_definition!("rose#wonderland"),
+                    asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
                     1
                 );
             }
@@ -1520,7 +1520,7 @@ fn semantic_type_enforcement_for_typed_syscalls() {
     use ivm::kotodama::parser::parse;
     // Wrong types should fail
     let bad =
-        parse("fn f() { mint_asset(name(\"x\"), asset_definition(\"rose#wonderland\"), 1); }")
+        parse("fn f() { mint_asset(name(\"x\"), asset_definition(\"62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"), 1); }")
             .unwrap();
     assert!(analyze(&bad).is_err());
     let bad2 = parse("fn f() { set_account_detail(account_id(\"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn\"), json(\"1\"), name(\"k\")); }").unwrap();
@@ -2011,7 +2011,7 @@ fn manifest_includes_isi_access_hints_for_static_targets() {
     let src = r#"
         fn main() {
             let acc = account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn");
-            let asset = asset_definition("rose#wonderland");
+            let asset = asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
             mint_asset(acc, asset, 1);
             burn_asset(acc, asset, 1);
         }
@@ -2967,7 +2967,7 @@ fn ir_lower_get_or_insert_default_pointer_variants_use_pointer_syscalls() {
         ),
         (
             "AssetDefinitionId",
-            r#"asset_definition("rose#wonderland")"#,
+            r#"asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")"#,
         ),
         ("DomainId", r#"domain("wonderland")"#),
         ("NftId", r#"nft_id("rose:uuid:0123$wonderland")"#),

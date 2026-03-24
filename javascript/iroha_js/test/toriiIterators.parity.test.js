@@ -39,7 +39,7 @@ test("listNfts forwards pagination/sort/filter and validates filter payloads", a
     requests.push(url);
     return createResponse({
       status: 200,
-      jsonData: { items: [{ id: "art#wonderland#0001" }], total: 1 },
+      jsonData: { items: [{ id: "5Pz9SwdN9eXPbiXPX9HRCpzCcE3o#0001" }], total: 1 },
       headers: { "content-type": "application/json" },
     });
   };
@@ -47,9 +47,9 @@ test("listNfts forwards pagination/sort/filter and validates filter payloads", a
   const payload = await client.listNfts({
     limit: 2,
     sort: [{ key: "id", order: "asc" }],
-    filter: { Eq: ["id.definition_id", "art#wonderland"] },
+    filter: { Eq: ["id.definition_id", "5Pz9SwdN9eXPbiXPX9HRCpzCcE3o"] },
   });
-  assert.equal(payload.items[0].id, "art#wonderland#0001");
+  assert.equal(payload.items[0].id, "5Pz9SwdN9eXPbiXPX9HRCpzCcE3o#0001");
   assert.equal(requests.length, 1);
   const parsed = new URL(requests[0]);
   assert.equal(parsed.pathname, "/v1/nfts");
@@ -57,7 +57,7 @@ test("listNfts forwards pagination/sort/filter and validates filter payloads", a
   assert.equal(parsed.searchParams.get("sort"), "id:asc");
   const parsedFilter = parsed.searchParams.get("filter");
   assert.ok(parsedFilter);
-  assert.deepEqual(JSON.parse(parsedFilter), { Eq: ["id.definition_id", "art#wonderland"] });
+  assert.deepEqual(JSON.parse(parsedFilter), { Eq: ["id.definition_id", "5Pz9SwdN9eXPbiXPX9HRCpzCcE3o"] });
 
   const badClient = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(

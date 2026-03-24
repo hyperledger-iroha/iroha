@@ -59,14 +59,14 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 قدمت CLI تجزئة المعاملة (مثلاً `0x5f…`) هذا أمر مهم بعد الاستعلام عن حالة أي شخص في الجامعة.
 
 ## 3. وحدات الورق بالنعناع
 
-تم تحديد كميات الأصول `(asset definition, account)`. `$ADMIN_ACCOUNT` يحتوي على 250 وحدة بالنعناع `coffee#wonderland`:
+تم تحديد كميات الأصول `(asset definition, account)`. `$ADMIN_ACCOUNT` يحتوي على 250 وحدة بالنعناع `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

@@ -22,9 +22,15 @@ spot-checked IVM, `iroha_crypto`, `norito`, and the Swift/Android/JS SDK
 request-signing helpers. No live confirmed issue from that ingress/auth slice
 remains after the fixes in this report. Follow-up hardening also expanded the
 fail-closed startup truth sets for sampled IVM CUDA/Metal accelerator paths;
-that work did not confirm a new fail-open issue, but it did surface an
-existing Metal Ed25519 parity mismatch that currently disables the Metal
-backend on this host and remains an open correctness blocker.
+that work did not confirm a new fail-open issue. The remaining live issue in
+that area is now a narrower correctness blocker: the sampled Metal Ed25519
+signature kernel still fails parity on this host, but the startup path has
+been tightened so only that pipeline is disabled and production verification
+falls back to CPU while the rest of the Metal backend stays available. A
+follow-up arithmetic cleanup also corrected three objective ref10 drift points
+in the sampled Metal/CUDA Ed25519 ports: the `d2` constant, the exact `fe_sq2`
+reduction path, and an extra final `fe_mul` carry step that did not belong in
+ref10.
 
 ## High Severity
 
@@ -250,9 +256,16 @@ Remediation status:
   startup gates now also cover the CUDA Ed25519 `signature_kernel`, CUDA BN254
   add/sub/mul kernels, and the Metal `sha256_leaves` kernel before those
   paths are trusted. The remaining live issue in this area is a fail-closed
-  correctness blocker, not a confirmed security bypass: the existing Metal
-  Ed25519 startup parity check still fails on this host and disables the Metal
-  backend.
+  correctness blocker, not a confirmed security bypass: the existing
+  Metal/CUDA Ed25519 point-decompression path still fails the sampled
+  signature-kernel parity check, so the Metal startup path now disables only
+  that signature pipeline and leaves the rest of the Metal backend available
+  with CPU fallback for Ed25519 verification. The latest Metal decompression
+  trace narrows the remaining defect further: for the Ed25519 base point,
+  `u = y^2 - 1` and `v = d y^2 + 1` already match the CPU/ref10 reference, but
+  the first observed divergence appears while constructing `uv^7` before
+  `fe_pow22523`, so the remaining gap is in the field square/multiply chain,
+  not in device discovery or fail-open admission logic.
 - SDKs/examples: no separate key-storage or transport-validation bug was
   confirmed in the sampled code. The JS, Swift, and Android canonical-request
   helpers have been updated to the new freshness-aware four-header scheme.
@@ -285,15 +298,16 @@ Remediation status:
 - IVM accelerator follow-up validation now includes:
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-cuda2 cargo check -p ivm --features cuda --tests`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo check -p ivm --features metal --tests`
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_ed25519_batch_matches_cpu -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_sha256_leaves_matches_cpu -- --nocapture`
 - Focused CUDA lib-test execution remains environment-limited on this host:
   `CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-cuda2 cargo test -p ivm --features cuda --lib selftest_covers_ -- --nocapture`
   still fails to link because the CUDA driver symbols (`cu*`) are unavailable.
-- Focused Metal runtime validation is partially blocked by an older
-  fail-closed correctness issue: enabling the Metal backend on this host still
-  trips the existing Ed25519 startup parity check, so the new `sha256_leaves`
-  regression currently passes via an explicit skip after backend disable
-  rather than exercising a live Metal backend end-to-end.
+- Focused Metal runtime validation is no longer blocked at the full-backend
+  level on this host: the sampled Ed25519 signature-kernel mismatch now
+  disables only that pipeline, and the `metal_sha256_leaves_matches_cpu`
+  regression runs against a live Metal backend while Ed25519 verification
+  falls back to CPU.
 - I did not rerun a full workspace Rust test sweep, full `npm test`, or the
   full Swift/Android suites during this remediation pass.
 
@@ -301,9 +315,9 @@ Remediation status:
 
 ### Next Tranche
 
-- Investigate and fix the existing Metal Ed25519 startup parity mismatch so
-  the Metal backend can stay enabled and the new `sha256_leaves` startup guard
-  can be validated end-to-end instead of only compile-time plus skip-path.
+- Investigate and fix the remaining Metal/CUDA Ed25519 point-decompression /
+  signature-kernel mismatch so Ed25519 verification can rejoin the live
+  accelerator set instead of the current fail-closed CPU fallback.
 - Rerun the focused CUDA lib-test self-test slice on a host with CUDA driver
   libraries installed, so the expanded CUDA startup truth set is validated
   beyond `cargo check`.

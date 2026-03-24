@@ -89,11 +89,11 @@ dentro dos limites configurados:
 -`iroha_zk_verifier_cache_events_total{cache,event}`
 
 Registre os valores imediatamente antes e depois da carga de trabalho de calibração. Um
-um único comando por ativo é suficiente; exemplo para `xor#wonderland`:
+um único comando por ativo é suficiente; exemplo para `4cuvDVPuLBKJyN6dPbRQhmLh68sU`:
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \
-  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="xor#wonderland"}'
+  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="4cuvDVPuLBKJyN6dPbRQhmLh68sU"}'
 ```
 
 Anexe a saída bruta (ou instantâneo Prometheus) ao tíquete de calibração para que o

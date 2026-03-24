@@ -31,7 +31,6 @@ struct PositiveEncodings {
     canonical_bytes: Vec<u8>,
     i105: String,
     i105_default: String,
-    i105_default_fullwidth: String,
 }
 
 struct SingleCase {
@@ -151,16 +150,12 @@ fn encodings(address: &AccountAddress) -> PositiveEncodings {
     let i105_default = address
         .to_i105()
         .expect("i105_default encoding must succeed");
-    let i105_default_fullwidth = address
-        .to_i105_fullwidth()
-        .expect("fullwidth i105_default encoding must succeed");
 
     PositiveEncodings {
         canonical_hex,
         canonical_bytes,
         i105,
         i105_default,
-        i105_default_fullwidth,
     }
 }
 
@@ -189,7 +184,6 @@ fn build_single_case(case_id: &str, seed: u8, raw_domain: &str, note: &str) -> S
                 "string": encodings.i105.clone(),
             }),
             "i105_default": encodings.i105_default.clone(),
-            "i105_default_fullwidth": encodings.i105_default_fullwidth.clone(),
         })
     });
 
@@ -266,7 +260,6 @@ fn build_multisig_cases() -> Vec<MultisigCase> {
                         "string": encodings.i105.clone(),
                     }),
                     "i105_default": encodings.i105_default.clone(),
-                    "i105_default_fullwidth": encodings.i105_default_fullwidth.clone(),
                 })
             });
 
@@ -285,9 +278,6 @@ fn error_to_json(err: &AccountAddressError) -> Value {
             "expected": *expected,
             "found": *found,
         }),
-        AccountAddressError::MissingI105Sentinel => {
-            json_obj!({ "kind": "MissingI105Sentinel" })
-        }
         AccountAddressError::InvalidI105Char(ch) => json_obj!({
             "kind": "InvalidI105Char",
             "char": ch.to_string(),
@@ -370,12 +360,15 @@ fn find_i105_default_checksum_mismatch(input: &str) -> (String, AccountAddressEr
     panic!("failed to derive deterministic i105-default checksum-mismatch vector");
 }
 
-fn replace_nth_char(input: &str, index: usize, replacement: char) -> String {
-    let mut chars: Vec<char> = input.chars().collect();
-    if let Some(slot) = chars.get_mut(index) {
-        *slot = replacement;
+fn find_i105_invalid_char(input: &str) -> (String, AccountAddressError) {
+    let candidates = ['0', 'O', 'I', 'l', '+', '/'];
+    for candidate in candidates {
+        let mutated = mutate_last_char(input, candidate);
+        if let Err(err) = AccountAddress::from_i105(&mutated) {
+            return (mutated, err);
+        }
     }
-    chars.into_iter().collect()
+    panic!("failed to derive deterministic I105 invalid-character vector");
 }
 
 fn canonical_with_trailing_zero(encodings: &PositiveEncodings) -> String {
@@ -422,8 +415,8 @@ pub fn compliance_vectors_json() -> Value {
         AccountAddress::from_i105_for_discriminant(&i105_wrong_prefix, Some(NETWORK_PREFIX))
             .unwrap_err();
 
-    let i105_default_bad_char = replace_nth_char(&single_default.encodings.i105_default, 6, 'A');
-    let err_bad_char = AccountAddress::from_i105(&i105_default_bad_char).unwrap_err();
+    let (i105_default_bad_char, err_bad_char) =
+        find_i105_invalid_char(&single_default.encodings.i105_default);
 
     let (i105_default_bad_checksum, err_bad_checksum) =
         find_i105_default_checksum_mismatch(&single_default.encodings.i105_default);
@@ -463,14 +456,14 @@ pub fn compliance_vectors_json() -> Value {
         json_obj!({
             "case_id": "i105_default-invalid-character",
             "format": "i105_default",
-            "note": "Introduces ASCII 'A' outside the Sora I105-default alphabet.",
+            "note": "Introduces a non-Base58 glyph outside the canonical I105 alphabet.",
             "input": i105_default_bad_char,
             "expected_error": error_to_json(&err_bad_char),
         }),
         json_obj!({
             "case_id": "i105_default-checksum-mismatch",
             "format": "i105_default",
-            "note": "Checksum nibble replaced to trigger Bech32m verification failure.",
+            "note": "Checksum bytes replaced to trigger canonical I105 verification failure.",
             "input": i105_default_bad_checksum,
             "expected_error": error_to_json(&err_bad_checksum),
         }),

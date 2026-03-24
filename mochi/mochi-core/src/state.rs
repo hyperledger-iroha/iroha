@@ -958,7 +958,9 @@ mod tests {
 
     #[test]
     fn state_entry_asset_includes_json_encoding() {
-        let definition_id: AssetDefinitionId = "xor#wonderland".parse().expect("definition id");
+        let definition_id: AssetDefinitionId = "4cuvDVPuLBKJyN6dPbRQhmLh68sU"
+            .parse()
+            .expect("definition id");
         let asset_id = AssetId::new(definition_id, ALICE_ID.clone());
         let asset = Asset::new(asset_id, Numeric::from(42_u32));
         let entry = StateEntry::from_asset(asset);
@@ -973,7 +975,9 @@ mod tests {
 
     #[test]
     fn state_entry_asset_definition_includes_metadata() {
-        let definition_id: AssetDefinitionId = "xor#wonderland".parse().expect("definition id");
+        let definition_id: AssetDefinitionId = "4cuvDVPuLBKJyN6dPbRQhmLh68sU"
+            .parse()
+            .expect("definition id");
         let definition =
             AssetDefinition::new(definition_id, NumericSpec::default()).build(&ALICE_ID);
         let entry = StateEntry::from_asset_definition(definition);

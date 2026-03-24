@@ -94,7 +94,7 @@ CLI tooling (`iroha app da rent-quote`) იღებს იგივე Norito/J
 
 ### იჯარის წიგნის გეგმების გენერირება
 
-გაუშვით `iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition xor#sora`
+გაუშვით `iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc`
 მუდმივი ქირავნობის კვოტის გადაქცევა შესრულებად წიგნში გადარიცხვებად. ბრძანება
 აანალიზებს ჩაშენებულ `ledger_projection`-ს, გამოსცემს Norito `Transfer` ინსტრუქციებს
 რომელიც აგროვებს საბაზისო ქირას ხაზინაში, მარშრუტებს რეზერვს/პროვაიდერს

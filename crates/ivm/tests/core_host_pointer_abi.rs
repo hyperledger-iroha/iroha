@@ -162,7 +162,11 @@ fn transfer_asset_validates_tlvs() {
     vm.memory
         .preload_input(from.len() as u64 + 8, &to)
         .expect("preload input");
-    let asset = make_tlv(PointerType::AssetDefinitionId as u16, 1, b"rose#wonderland");
+    let asset = make_tlv(
+        PointerType::AssetDefinitionId as u16,
+        1,
+        b"62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+    );
     vm.memory
         .preload_input(from.len() as u64 + to.len() as u64 + 16, &asset)
         .expect("preload input");

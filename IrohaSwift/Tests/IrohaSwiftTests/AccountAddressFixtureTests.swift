@@ -38,23 +38,6 @@ final class AccountAddressFixtureTests: XCTestCase {
         )
         XCTAssertEqual(i105Default, vector.encodings.i105Default, "\(vector.caseId): i105-default mismatch")
 
-        let i105DefaultFull = try address.toI105DefaultFullWidth()
-        if let expectedFull = vector.encodings.i105DefaultFullwidth {
-            let decodedExpected = try AccountAddress.fromI105Default(expectedFull)
-            XCTAssertEqual(
-                try decodedExpected.canonicalHex().lowercased(),
-                try address.canonicalHex().lowercased(),
-                "\(vector.caseId): i105-default full-width canonical mismatch"
-            )
-            XCTAssertEqual(
-                i105DefaultFull.applyingTransform(.fullwidthToHalfwidth, reverse: false) ?? i105DefaultFull,
-                expectedFull.applyingTransform(.fullwidthToHalfwidth, reverse: false) ?? expectedFull,
-                "\(vector.caseId): i105-default full-width mismatch"
-            )
-        } else {
-            XCTAssertEqual(i105DefaultFull, i105Default, "\(vector.caseId): i105-default fallback mismatch")
-        }
-
         // Parse entry points should lead back to the same canonical bytes.
         let parsedI105 = try AccountAddress.parseEncoded(vector.encodings.i105.string,
                                                      expectedPrefix: vector.encodings.i105.prefix)
@@ -170,8 +153,6 @@ private struct AccountAddressNegativeCase: Decodable {
                 return AccountAddressError.checksumMismatch.code
             case "UnexpectedNetworkPrefix":
                 return AccountAddressError.unexpectedNetworkPrefix(expected: expected ?? 0, found: found ?? 0).code
-            case "MissingI105Sentinel":
-                return AccountAddressError.missingCompressedSentinel.code
             case "InvalidHexAddress":
                 return AccountAddressError.invalidHexAddress.code
             case "UnexpectedTrailingBytes":
@@ -248,13 +229,11 @@ private struct AccountAddressPositiveCase: Decodable {
 
         let canonicalHex: String
         let i105Default: String
-        let i105DefaultFullwidth: String?
         let i105: I105
 
         private enum CodingKeys: String, CodingKey {
             case canonicalHex
             case i105Default
-            case i105DefaultFullwidth
             case i105
         }
 
@@ -262,7 +241,6 @@ private struct AccountAddressPositiveCase: Decodable {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             canonicalHex = try container.decode(String.self, forKey: .canonicalHex)
             i105Default = try container.decode(String.self, forKey: .i105Default)
-            i105DefaultFullwidth = try container.decodeIfPresent(String.self, forKey: .i105DefaultFullwidth)
             i105 = try container.decode(I105.self, forKey: .i105)
         }
     }

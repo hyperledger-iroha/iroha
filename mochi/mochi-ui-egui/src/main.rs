@@ -1169,7 +1169,7 @@ impl ComposerTemplate {
                             .expect("development authorities must not be empty");
                         (fallback.account_id(), fallback.label())
                     });
-                app.composer_asset_id = template_asset_id("rose#wonderland", owner)
+                app.composer_asset_id = template_asset_id("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", owner)
                     .unwrap_or_else(|| "norito:4e52543000000001".to_owned());
                 app.composer_quantity = "10".to_owned();
                 app.composer_destination_account.clear();
@@ -1185,7 +1185,7 @@ impl ComposerTemplate {
                             .expect("development authorities must not be empty");
                         (fallback.account_id(), fallback.label())
                     });
-                app.composer_asset_id = template_asset_id("cabbage#garden_of_live_flowers", owner)
+                app.composer_asset_id = template_asset_id("5CJ6HCMxWw9xhuHmxDrzEfWGeE7M", owner)
                     .unwrap_or_else(|| "norito:4e52543000000002".to_owned());
                 app.composer_quantity = "5".to_owned();
                 app.composer_destination_account.clear();
@@ -1201,7 +1201,7 @@ impl ComposerTemplate {
                             .expect("development authorities must not be empty");
                         (fallback.account_id(), fallback.label())
                     });
-                app.composer_asset_id = template_asset_id("rose#wonderland", owner)
+                app.composer_asset_id = template_asset_id("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", owner)
                     .unwrap_or_else(|| "norito:4e52543000000001".to_owned());
                 app.composer_quantity = "1".to_owned();
                 app.composer_destination_account.clear();
@@ -1214,8 +1214,9 @@ impl ComposerTemplate {
                         .first()
                         .expect("development authorities must not be empty")
                 });
-                app.composer_asset_id = template_asset_id("rose#wonderland", signer.account_id())
-                    .unwrap_or_else(|| "norito:4e52543000000001".to_owned());
+                app.composer_asset_id =
+                    template_asset_id("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", signer.account_id())
+                        .unwrap_or_else(|| "norito:4e52543000000001".to_owned());
                 app.composer_quantity = "2".to_owned();
                 let destination = signers
                     .iter()
@@ -1235,8 +1236,9 @@ impl ComposerTemplate {
                         .first()
                         .expect("development authorities must not be empty")
                 });
-                app.composer_asset_id = template_asset_id("rose#wonderland", signer.account_id())
-                    .unwrap_or_else(|| "norito:4e52543000000001".to_owned());
+                app.composer_asset_id =
+                    template_asset_id("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", signer.account_id())
+                        .unwrap_or_else(|| "norito:4e52543000000001".to_owned());
                 app.composer_quantity = "1".to_owned();
                 app.composer_destination_account = sample_account_id(SAMPLE_OTHER_PUBLIC_KEY);
                 app.last_info = Some("Loaded implicit receive transfer template.".to_owned());
@@ -9875,7 +9877,7 @@ impl MochiApp {
             ui.add(
                 egui::TextEdit::multiline(&mut self.composer_admission_min_initial_amounts)
                     .desired_rows(3)
-                    .hint_text("rose#wonderland = 5"),
+                    .hint_text("62Fk4FPcMuLvW5QjDGNF2a4jAmjM = 5"),
             );
             ui.horizontal(|ui| {
                 ui.label("Default role on create");
@@ -12803,11 +12805,11 @@ mod tests {
 
     #[test]
     fn parse_min_initial_amounts_parses_lines() {
-        let raw = "rose#wonderland = 5\ncabbage#wonderland = 1";
+        let raw = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM = 5\n5f9QzYSrzikeDsmrBouSTHREggYu = 1";
         let parsed = MochiApp::parse_min_initial_amounts(raw).expect("amounts parse");
         assert_eq!(parsed.len(), 2);
-        let rose: AssetDefinitionId = "rose#wonderland".parse().unwrap();
-        let cabbage: AssetDefinitionId = "cabbage#wonderland".parse().unwrap();
+        let rose: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".parse().unwrap();
+        let cabbage: AssetDefinitionId = "5f9QzYSrzikeDsmrBouSTHREggYu".parse().unwrap();
         assert_eq!(parsed.get(&rose), Some(&"5".parse::<Numeric>().unwrap()));
         assert_eq!(parsed.get(&cabbage), Some(&"1".parse::<Numeric>().unwrap()));
     }
@@ -12850,11 +12852,11 @@ mod tests {
         app.composer_admission_max_per_tx = "2".to_owned();
         app.composer_admission_max_per_block = "5".to_owned();
         app.composer_admission_fee_enabled = true;
-        app.composer_admission_fee_asset = "rose#wonderland".to_owned();
+        app.composer_admission_fee_asset = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".to_owned();
         app.composer_admission_fee_amount = "1".to_owned();
         app.composer_admission_fee_destination_burn = false;
         app.composer_admission_fee_destination_account = account_literal(&ALICE_ID);
-        app.composer_admission_min_initial_amounts = "rose#wonderland = 5".to_owned();
+        app.composer_admission_min_initial_amounts = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM = 5".to_owned();
         app.composer_admission_default_role = "basic_user".to_owned();
 
         let (domain, policy) = app
@@ -12865,7 +12867,7 @@ mod tests {
         assert_eq!(policy.max_implicit_creations_per_tx, Some(2));
         assert_eq!(policy.max_implicit_creations_per_block, Some(5));
         let fee = policy.implicit_creation_fee.expect("fee configured");
-        let asset: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let asset: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".parse().unwrap();
         assert_eq!(fee.asset_definition_id, asset);
         assert_eq!(fee.amount, "1".parse::<Numeric>().unwrap());
         let treasury = ALICE_ID.clone();
@@ -12875,7 +12877,7 @@ mod tests {
         }
         let min_amounts = policy.min_initial_amounts;
         assert_eq!(min_amounts.len(), 1);
-        let min_asset: AssetDefinitionId = "rose#wonderland".parse().unwrap();
+        let min_asset: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".parse().unwrap();
         assert_eq!(
             min_amounts.get(&min_asset),
             Some(&"5".parse::<Numeric>().unwrap())
@@ -13663,7 +13665,7 @@ mod tests {
             search: "peer".to_owned(),
             domain: "wonderland".to_owned(),
             owner: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_owned(),
-            asset_definition: "rose#wonderland".to_owned(),
+            asset_definition: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".to_owned(),
         };
         filter.adapt_to_kind(StateQueryKind::Peers);
         assert_eq!(
@@ -14334,7 +14336,10 @@ mod tests {
     fn add_instruction_to_batch_appends_draft() {
         let mut app = MochiApp::default();
         app.composer_selected_signer = Some(0);
-        let asset = AssetId::new("rose#wonderland".parse().unwrap(), ALICE_ID.clone());
+        let asset = AssetId::new(
+            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".parse().unwrap(),
+            ALICE_ID.clone(),
+        );
         app.composer_asset_id = asset_literal(&asset);
         app.composer_quantity = "5".to_owned();
         app.add_instruction_to_batch(None);
@@ -14347,7 +14352,10 @@ mod tests {
         let mut app = MochiApp::default();
         app.composer_instruction_kind = ComposerInstructionKind::TransferAsset;
         app.composer_selected_signer = Some(0);
-        let asset = AssetId::new("rose#wonderland".parse().unwrap(), ALICE_ID.clone());
+        let asset = AssetId::new(
+            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".parse().unwrap(),
+            ALICE_ID.clone(),
+        );
         app.composer_asset_id = asset_literal(&asset);
         app.composer_quantity = "1".to_owned();
         app.add_instruction_to_batch(None);

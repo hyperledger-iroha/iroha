@@ -73,7 +73,7 @@ Creez un nouvel actif infiniment mintable appele `coffee` dans le domaine
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 Le CLI affiche le hash de transaction soumis (par exemple, `0x5f...`). Conservez-le
@@ -82,7 +82,7 @@ pour consulter le statut plus tard.
 ## 3. Minter des unites sur le compte operateur
 
 Les quantites d'actifs vivent sous la paire `(asset definition, account)`. Mintez 250
-unites de `coffee#wonderland` dans `$ADMIN_ACCOUNT` :
+unites de `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` dans `$ADMIN_ACCOUNT` :
 
 ```sh
 iroha --config defaults/client.toml asset mint \

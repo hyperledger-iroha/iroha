@@ -1590,7 +1590,9 @@ mod tests {
     #[test]
     fn mint_preview_produces_summary() {
         let account = account_literal(&ALICE_ID);
-        let asset_def: AssetDefinitionId = "rose#wonderland".parse().expect("definition id");
+        let asset_def: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+            .parse()
+            .expect("definition id");
         let asset_id = format!("{asset_def}#{account}");
 
         let preview = mint_numeric_preview("mochi-local", &asset_id, 5_u32).expect("preview");
@@ -1622,7 +1624,10 @@ mod tests {
 
     #[test]
     fn transfer_draft_parses_inputs() {
-        let asset_id = AssetId::new("rose#wonderland".parse().unwrap(), ALICE_ID.clone());
+        let asset_id = AssetId::new(
+            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".parse().unwrap(),
+            ALICE_ID.clone(),
+        );
         let asset_str = asset_literal(&asset_id);
         let destination = account_literal(&BOB_ID);
         let draft =
@@ -1637,7 +1642,10 @@ mod tests {
 
     #[test]
     fn burn_draft_parses_inputs() {
-        let asset_id = AssetId::new("rose#wonderland".parse().unwrap(), ALICE_ID.clone());
+        let asset_id = AssetId::new(
+            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".parse().unwrap(),
+            ALICE_ID.clone(),
+        );
         let asset_str = asset_literal(&asset_id);
         let draft =
             InstructionDraft::burn_from_input(&asset_str, "3").expect("burn draft should parse");
@@ -1656,7 +1664,9 @@ mod tests {
 
     #[test]
     fn compose_preview_accepts_multiple_instructions() {
-        let asset_def: AssetDefinitionId = "rose#wonderland".parse().expect("definition id");
+        let asset_def: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+            .parse()
+            .expect("definition id");
         let asset_id = AssetId::new(asset_def, ALICE_ID.clone());
         let mint = InstructionDraft::MintAsset {
             asset: asset_id.clone(),
@@ -1705,7 +1715,9 @@ mod tests {
 
     #[test]
     fn drafts_json_roundtrip_covers_all_variants() {
-        let asset_def: AssetDefinitionId = "rose#wonderland".parse().expect("definition id");
+        let asset_def: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+            .parse()
+            .expect("definition id");
         let asset_id = AssetId::new(asset_def.clone(), ALICE_ID.clone());
         let asset_id_str = asset_literal(&asset_id);
         let account = account_literal(&ALICE_ID);
@@ -1719,7 +1731,7 @@ mod tests {
         let register_account =
             InstructionDraft::register_account_from_input(&account).expect("account draft");
         let register_definition = InstructionDraft::register_asset_definition_from_input(
-            "rose#wonderland",
+            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
             Mintable::Once,
         )
         .expect("definition draft");
@@ -1933,7 +1945,9 @@ mod tests {
             max_implicit_creations_per_tx: Some(3),
             max_implicit_creations_per_block: Some(10),
             implicit_creation_fee: Some(ImplicitAccountCreationFee {
-                asset_definition_id: "rose#wonderland".parse().expect("asset definition"),
+                asset_definition_id: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+                    .parse()
+                    .expect("asset definition"),
                 amount: Numeric::from(1_u32),
                 destination: ImplicitAccountFeeDestination::Burn,
             }),
@@ -1947,7 +1961,7 @@ mod tests {
         let summary = draft.summary();
         assert!(summary.contains("tx cap 3"));
         assert!(summary.contains("block cap 10"));
-        assert!(summary.contains("fee 1 rose#wonderland"));
+        assert!(summary.contains("fee 1 62Fk4FPcMuLvW5QjDGNF2a4jAmjM"));
         assert!(summary.contains("default role basic_user"));
     }
 
@@ -1980,7 +1994,9 @@ mod tests {
             .find(|auth| auth.label() == "Bob (dev)")
             .expect("Bob signer present");
 
-        let asset_def: AssetDefinitionId = "rose#wonderland".parse().expect("definition id");
+        let asset_def: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+            .parse()
+            .expect("definition id");
         let asset_id = AssetId::new(asset_def, ALICE_ID.clone());
         let asset_id_str = asset_literal(&asset_id);
         let mint = InstructionDraft::mint_from_input(&asset_id_str, "1").expect("mint draft");
@@ -2124,7 +2140,9 @@ mod tests {
             .find(|auth| auth.allows_permission(InstructionPermission::MintAsset))
             .expect("signer with mint permission present");
         let account = account_literal(signer.account_id());
-        let asset_def: AssetDefinitionId = "rose#wonderland".parse().expect("definition id");
+        let asset_def: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+            .parse()
+            .expect("definition id");
         let asset_id = format!("{asset_def}#{account}");
         let draft = InstructionDraft::mint_from_input(&asset_id, "5").expect("mint draft");
 

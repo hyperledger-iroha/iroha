@@ -52,7 +52,7 @@ fn tlv_unknown_type_is_rejected() {
     let mut vm = IVM::new(0);
     let meta = ProgramMetadata::default().encode();
     vm.load_program(&meta).unwrap();
-    let payload = b"rose#wonderland";
+    let payload = b"62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
     let tlv = build_tlv(0xDEAD, 1, payload, false);
     vm.memory.preload_input(0, &tlv).expect("preload input");
     let addr = ivm::Memory::INPUT_START;

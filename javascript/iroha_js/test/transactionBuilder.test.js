@@ -55,6 +55,7 @@ const CANONICAL_LILY_ASSET_ID_INPUT = CANONICAL_ASSET_ID_INPUT.replace(/726f7365
 const SECOND_CANONICAL_ASSET_ID_INPUT = CANONICAL_ASSET_ID_INPUT.replace("6165e1e191d7b79c", "7165e1e191d7b79c");
 const ASSET_ID = CANONICAL_ASSET_ID_INPUT;
 const ASSET_ID_INPUT = CANONICAL_ASSET_ID_INPUT;
+const ASSET_DEFINITION_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 const test = makeNativeTest(baseTest);
 
 function i105FromEd25519AccountId(raw) {
@@ -72,6 +73,14 @@ function i105FromEd25519AccountId(raw) {
   const publicKeyHex = signatory.slice(6);
   const publicKey = Buffer.from(publicKeyHex, "hex");
   return AccountAddress.fromAccount({ domain, publicKey }).toI105();
+}
+
+function encodeAssetIdForKnownAccount(assetDefinitionId, accountId) {
+  assert.equal(assetDefinitionId, ASSET_DEFINITION_ID);
+  if (accountId === AUTHORITY_ID || accountId === AUTHORITY_ID_INPUT) {
+    return CANONICAL_ASSET_ID_INPUT;
+  }
+  throw new Error(`unexpected account id for test asset encoding: ${accountId}`);
 }
 
 function crc16(tag, body) {
@@ -359,7 +368,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer a
       buildRegisterAssetDefinitionMintAndTransferTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
-        assetDefinition: { assetDefinitionId: "rose#wonderland" },
+        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
         mints: [
           { assetId: CANONICAL_ASSET_ID_INPUT, quantity: "7" },
           { assetId: SECOND_CANONICAL_ASSET_ID_INPUT, quantity: "2" },
@@ -414,13 +423,24 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer a
   });
 });
 
-test("buildRegisterAssetDefinitionMintAndTransferTransaction rejects legacy mint.accountId", () => {
-  assert.throws(
+test("buildRegisterAssetDefinitionMintAndTransferTransaction derives asset ids from accountId", () => {
+  const captures = [];
+  withNativeBinding(
+    {
+      encodeAssetId: encodeAssetIdForKnownAccount,
+      buildTransaction: (_chain, authority, instructions) => {
+        captures.push({ authority, instructions: instructions.map((j) => JSON.parse(j)) });
+        return {
+          signed_transaction: Buffer.from([0x32]),
+          hash: Buffer.alloc(32, 0xee),
+        };
+      },
+    },
     () =>
       buildRegisterAssetDefinitionMintAndTransferTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
-        assetDefinition: { assetDefinitionId: "rose#wonderland" },
+        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
         mints: [
           {
             accountId: AUTHORITY_ID_INPUT,
@@ -431,8 +451,16 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction rejects legacy mint
         transfers: [{ quantity: "1", destinationAccountId: AUTHORITY_ID_INPUT }],
         privateKey: PRIVATE_KEY,
       }),
-    /accountId is no longer supported/i,
   );
+  assert.equal(captures.length, 1);
+  assert.deepEqual(captures[0].instructions[1], {
+    Mint: {
+      Asset: {
+        destination: CANONICAL_ASSET_ID_INPUT,
+        object: "1",
+      },
+    },
+  });
 });
 
 test("buildMintAndTransferTransaction returns canonical hash", () => {
@@ -458,7 +486,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction returns canonical h
   const built = buildRegisterAssetDefinitionMintAndTransferTransaction({
     chainId: "test-chain",
     authority: AUTHORITY_ID_INPUT,
-    assetDefinition: { assetDefinitionId: "rose#wonderland" },
+    assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
     mint: { assetId: CANONICAL_ASSET_ID_INPUT, quantity: "4" },
     transfer: {
       sourceAssetId: CANONICAL_ASSET_ID_INPUT,
@@ -989,28 +1017,28 @@ test("confidential transaction builders wrap expected instruction payloads", () 
     verifyingKeyRef: "halo2/ipa:vk_transfer",
   };
   const register = captureInstructionObject(() =>
-    buildRegisterZkAssetTransaction({
-      chainId: "test-chain",
-      authority: AUTHORITY_ID_INPUT,
-      registration: {
-        assetDefinitionId: "rose#wonderland",
-        mode: "Hybrid",
-        transferVerifyingKey: "halo2/ipa:vk_transfer",
-      },
+      buildRegisterZkAssetTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        registration: {
+        assetDefinitionId: ASSET_DEFINITION_ID,
+          mode: "Hybrid",
+          transferVerifyingKey: "halo2/ipa:vk_transfer",
+        },
       privateKey: PRIVATE_KEY,
     }),
   );
   assert.ok(register.zk?.RegisterZkAsset);
 
   const policy = captureInstructionObject(() =>
-    buildScheduleConfidentialPolicyTransitionTransaction({
-      chainId: "test-chain",
-      authority: AUTHORITY_ID_INPUT,
-      transition: {
-        assetDefinitionId: "rose#wonderland",
-        newMode: "TransparentOnly",
-        effectiveHeight: 5,
-        transitionId: Buffer.alloc(32, 0xaa),
+      buildScheduleConfidentialPolicyTransitionTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        transition: {
+        assetDefinitionId: ASSET_DEFINITION_ID,
+          newMode: "TransparentOnly",
+          effectiveHeight: 5,
+          transitionId: Buffer.alloc(32, 0xaa),
       },
       privateKey: PRIVATE_KEY,
     }),
@@ -1018,27 +1046,27 @@ test("confidential transaction builders wrap expected instruction payloads", () 
   assert.ok(policy.zk?.ScheduleConfidentialPolicyTransition);
 
   const cancel = captureInstructionObject(() =>
-    buildCancelConfidentialPolicyTransitionTransaction({
-      chainId: "test-chain",
-      authority: AUTHORITY_ID_INPUT,
-      cancellation: {
-        assetDefinitionId: "rose#wonderland",
-        transitionId: Buffer.alloc(32, 0xbb),
-      },
+      buildCancelConfidentialPolicyTransitionTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        cancellation: {
+        assetDefinitionId: ASSET_DEFINITION_ID,
+          transitionId: Buffer.alloc(32, 0xbb),
+        },
       privateKey: PRIVATE_KEY,
     }),
   );
   assert.ok(cancel.zk?.CancelConfidentialPolicyTransition);
 
   const shield = captureInstructionObject(() =>
-    buildShieldTransaction({
-      chainId: "test-chain",
-      authority: AUTHORITY_ID_INPUT,
-      shield: {
-        assetDefinitionId: "rose#wonderland",
-        fromAccountId: AUTHORITY_ID_INPUT,
-        amount: "10",
-        noteCommitment: Buffer.alloc(32, 0x03),
+      buildShieldTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        shield: {
+        assetDefinitionId: ASSET_DEFINITION_ID,
+          fromAccountId: AUTHORITY_ID_INPUT,
+          amount: "10",
+          noteCommitment: Buffer.alloc(32, 0x03),
         encryptedPayload,
       },
       privateKey: PRIVATE_KEY,
@@ -1047,14 +1075,14 @@ test("confidential transaction builders wrap expected instruction payloads", () 
   assert.ok(shield.zk?.Shield);
 
   const transfer = captureInstructionObject(() =>
-    buildZkTransferTransaction({
-      chainId: "test-chain",
-      authority: AUTHORITY_ID_INPUT,
-      transfer: {
-        assetDefinitionId: "rose#wonderland",
-        inputs: [Buffer.alloc(32, 0x10)],
-        outputs: [Buffer.alloc(32, 0x20)],
-        proof,
+      buildZkTransferTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        transfer: {
+        assetDefinitionId: ASSET_DEFINITION_ID,
+          inputs: [Buffer.alloc(32, 0x10)],
+          outputs: [Buffer.alloc(32, 0x20)],
+          proof,
       },
       privateKey: PRIVATE_KEY,
     }),
@@ -1062,14 +1090,14 @@ test("confidential transaction builders wrap expected instruction payloads", () 
   assert.ok(transfer.zk?.ZkTransfer);
 
   const unshield = captureInstructionObject(() =>
-    buildUnshieldTransaction({
-      chainId: "test-chain",
-      authority: AUTHORITY_ID_INPUT,
-      unshield: {
-        assetDefinitionId: "rose#wonderland",
-        destinationAccountId: AUTHORITY_ID_INPUT,
-        publicAmount: 3,
-        inputs: [Buffer.alloc(32, 0x30)],
+      buildUnshieldTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        unshield: {
+        assetDefinitionId: ASSET_DEFINITION_ID,
+          destinationAccountId: AUTHORITY_ID_INPUT,
+          publicAmount: 3,
+          inputs: [Buffer.alloc(32, 0x30)],
         proof,
         rootHint: Buffer.alloc(32, 0x40),
       },

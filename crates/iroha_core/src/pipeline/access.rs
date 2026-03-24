@@ -1642,7 +1642,7 @@ mod tests {
         ];
         let writes = vec![
             "state:beta".to_owned(),
-            "asset_def:rose#wonderland".to_owned(),
+            "asset_def:62Fk4FPcMuLvW5QjDGNF2a4jAmjM".to_owned(),
         ];
         let set =
             access_set_from_hint_keys(&reads, &writes).expect("expected valid access set hints");
@@ -1653,7 +1653,10 @@ mod tests {
                 .contains(&format!("account.detail:{alice}:cursor"))
         );
         assert!(set.write_keys.contains("state:beta"));
-        assert!(set.write_keys.contains("asset_def:rose#wonderland"));
+        assert!(
+            set.write_keys
+                .contains("asset_def:62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
+        );
     }
 
     #[test]

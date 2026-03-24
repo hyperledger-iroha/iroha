@@ -2,6 +2,67 @@
 
 Last updated: 2026-03-24
 
+Latest sync (2026-03-24 alias/SNS slice validation cleanup):
+the remaining focused validation blockers around the completed unified alias /
+on-chain SNS work have been cleared across
+`javascript/iroha_js/test/toriiClient.test.js` and the `iroha_torii` crate:
+
+- the JS Torii client file now matches the current SDK/native contract for
+  SoraFS alias-proof fixtures, canonical/non-canonical I105 expectations, and
+  `label.suffix` SNS selector validation; and
+- a fresh `cargo check -p iroha_torii --lib` passes again, so the slice no
+  longer has a focused Torii compile blocker.
+
+Validation:
+- `node --test test/toriiClient.test.js`
+- `CARGO_TARGET_DIR=target-codex-finish cargo check -p iroha_torii --lib`
+
+Open work for this slice now remains:
+- no slice-specific implementation work remains; only broader repo-wide test or
+  lint sweeps are still deferred here.
+
+Latest sync (2026-03-24 Metal per-pipeline fail-closed fallback):
+`crates/ivm/src/{vector.rs,metal_ed25519.metal}` and
+`crates/ivm/cuda/signature.cu`
+now keep this host's Metal backend live even though the sampled Ed25519
+signature kernel still fails its startup parity check:
+
+- required Metal startup probes still fail closed, but the Ed25519 signature
+  pipeline is now treated as an optional sub-pipeline that can be disabled
+  individually instead of forcing the whole backend offline;
+- production Ed25519 batch verification already falls back to CPU when the
+  Metal signature pipeline is absent, so SHA/AES/Keccak/Merkle-leaf Metal
+  acceleration now remains active on this machine despite the sampled
+  Ed25519 mismatch; and
+- the focused Metal regressions now validate that behavior directly, so
+  `metal_sha256_leaves_matches_cpu` no longer relies on the earlier
+  "backend disabled" skip path.
+- follow-up arithmetic cleanup already landed in both accelerator ports:
+  ref10 `d2`, exact `fe_sq2`, and the trailing `fe_mul` carry bug are fixed,
+  so the remaining mismatch is narrower than the earlier full-port drift.
+
+Validation:
+- `cargo fmt --all`
+- `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_ed25519_batch_matches_cpu -- --nocapture`
+- `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_sha256_leaves_matches_cpu -- --nocapture`
+- `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo check -p ivm --features metal --tests`
+
+Open work for this slice now remains:
+- fix the raw Metal/CUDA Ed25519 point-decompression/signature-kernel mismatch
+  so sampled signature verification can run on the accelerator instead of the
+  current fail-closed CPU fallback.
+  The latest Metal trace shows `u` and `v` already match ref10 for the
+  Ed25519 base point, and the first divergence appears while constructing
+  `uv^7` before `fe_pow22523`, so the next pass should stay focused on the
+  field square/multiply chain rather than backend discovery or pipeline
+  plumbing;
+- rerun the focused CUDA lib-test self-test slice on a host with the CUDA
+  driver libraries available, since this environment still cannot link the
+  `cust`-backed tests; and
+- continue the deeper `ivm` accelerator review across the remaining
+  CUDA/Metal/determinism boundaries once the live startup truth sets are fully
+  stable.
+
 Latest sync (2026-03-24 SNS-backed alias lease reads + reserved `universal` seeding):
 `crates/iroha_core/src/{sns.rs,state.rs,smartcontracts/isi/{domain.rs,query.rs,sns.rs}}`,
 `crates/iroha_data_model/src/query/mod.rs`,
@@ -69,9 +130,6 @@ Validation:
 - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_sha256_leaves_matches_cpu -- --nocapture`
 
 Open work for this slice now remains:
-- investigate and fix the existing Metal Ed25519 startup parity mismatch that
-  currently disables the backend on this host before the new
-  `sha256_leaves` guard can be exercised end-to-end;
 - rerun the focused CUDA lib-test self-test slice on a host with the CUDA
   driver libraries available, since this environment still fails to link
   `cust`-backed tests due unresolved `cu*` symbols; and
@@ -612,10 +670,11 @@ was fixed:
   - `java/iroha_android/:android:test`
   - `java/iroha_android/:jvm:test`
   - `java/iroha_android/:samples-android:testDebugUnitTest`
-- still red in the legacy baseline:
-  - `GradleHarnessTests[org.hyperledger.iroha.android.address.AccountAddressTests]`
-    because the checked-in address compliance fixture shape no longer matches
-    what the harness loader expects for `encodings.ih58`,
+- the account-address fixture/harness drift is now closed: the checked-in
+  compliance vectors and Android loaders both use canonical `i105` /
+  `i105_default` encodings, and the stale `ih58`/compressed fixture schema is
+  gone from the Java SDK surface.
+- remaining red in the legacy baseline:
   - `GradleHarnessTests[org.hyperledger.iroha.android.client.OfflineToriiClientTests]`
     because `listAllowancesParsesResponse()` still expects a different
     `assetDefinitionId`, and
@@ -623,7 +682,7 @@ was fixed:
     literal rejection.
 
 Open work for this slice now remains:
-- fix the 7 failing Java `:core:test` cases so the migration baseline is
+- fix the remaining Java `:core:test` failures so the migration baseline is
   actually green end to end; and
 - add direct Kotlin regression coverage for the Java-only red slices above
   before claiming full mobile migration parity.

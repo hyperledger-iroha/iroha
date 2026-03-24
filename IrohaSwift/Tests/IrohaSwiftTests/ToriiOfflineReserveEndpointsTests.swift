@@ -67,7 +67,9 @@ final class ToriiOfflineReserveEndpointsTests: XCTestCase {
             accountId: "alice@hbl",
             deviceId: "device-1",
             offlinePublicKey: "offline-public-key",
+            assetDefinitionId: "xor#pk",
             balance: "97.50",
+            parkedBalance: "0",
             serverRevision: 4,
             serverStateHash: "server-hash",
             pendingLocalRevision: 2,
@@ -92,6 +94,8 @@ final class ToriiOfflineReserveEndpointsTests: XCTestCase {
             offlinePublicKey: "offline-public-key",
             preBalance: "97.50",
             postBalance: "67.25",
+            preParkedBalance: "0",
+            postParkedBalance: "0",
             preStateHash: "pre-hash",
             postStateHash: "post-hash",
             localRevision: 3,
@@ -117,6 +121,7 @@ final class ToriiOfflineReserveEndpointsTests: XCTestCase {
                     XCTAssertEqual(request.accountId, "alice@hbl")
                     XCTAssertEqual(request.deviceId, "device-1")
                     XCTAssertEqual(request.offlinePublicKey, "offline-public-key")
+                    XCTAssertEqual(request.assetDefinitionId, "xor#pk")
                     XCTAssertEqual(request.appAttestKeyId, "attest-key")
                 }
             ),
@@ -128,6 +133,7 @@ final class ToriiOfflineReserveEndpointsTests: XCTestCase {
                     let request = try XCTUnwrap(body).decoded(ToriiOfflineReserveTopUpRequest.self)
                     XCTAssertEqual(request.operationId, "topup-1")
                     XCTAssertEqual(request.reserveId, "reserve-1")
+                    XCTAssertEqual(request.assetDefinitionId, "xor#pk")
                     XCTAssertEqual(request.amount, "100.00")
                 }
             ),
@@ -193,6 +199,7 @@ final class ToriiOfflineReserveEndpointsTests: XCTestCase {
                 accountId: "alice@hbl",
                 deviceId: "device-1",
                 offlinePublicKey: "offline-public-key",
+                assetDefinitionId: "xor#pk",
                 appAttestKeyId: "attest-key",
                 attestation: attestation
             )
@@ -206,6 +213,7 @@ final class ToriiOfflineReserveEndpointsTests: XCTestCase {
                 accountId: "alice@hbl",
                 deviceId: "device-1",
                 offlinePublicKey: "offline-public-key",
+                assetDefinitionId: "xor#pk",
                 appAttestKeyId: "attest-key",
                 amount: "100.00",
                 attestation: attestation

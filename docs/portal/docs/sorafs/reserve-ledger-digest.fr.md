@@ -37,7 +37,7 @@ de facturation.
      --provider-account i105... \
      --treasury-account i105... \
      --reserve-account i105... \
-     --asset-definition xor#sora \
+     --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc \
      --json-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.json
    ```
    Le helper du registre attache un bloc `ledger_projection` (loyer du, manque de reserve,

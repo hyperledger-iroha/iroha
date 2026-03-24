@@ -94,7 +94,7 @@ egress_credit_per_gib_micro = 1500            # 0.0015 XOR/GiB egress credit
 
 ### کرایہ لیجر کے منصوبے تیار کرنا
 
-`iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition xor#sora` چلائیں
+`iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc` چلائیں
 مستقل کرایہ کی قیمت کو قابل عمل لیجر ٹرانسفر میں تبدیل کرنے کے لئے۔ حکم
 پارسیس ایمبیڈڈ `ledger_projection` ، Norito `Transfer` ہدایات کا اخراج کرتا ہے
 جو ٹریژری میں بیس کرایہ جمع کرتے ہیں ، ریزرو/فراہم کنندہ کو راستہ دیتے ہیں

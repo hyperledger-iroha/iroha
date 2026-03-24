@@ -38,7 +38,7 @@ Parser کو درج ذیل header row درکار ہے (order flexible ہے):
 | `suffix_id` | כן | Numeric suffix identifier (decimal یا `0x` hex). |
 | `owner` | כן | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | כן | מספר שלם `1..=255`. |
-| `payment_asset_id` | כן | Settlement asset (مثال `xor#sora`). |
+| `payment_asset_id` | כן | Settlement asset (مثال `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | כן | Unsigned integers جو asset-native units کو represent کریں۔ |
 | `settlement_tx` | כן | JSON value یا literal string جو payment transaction یا hash بیان کرے۔ |
 | `payment_payer` | כן | AccountId جس نے payment authorize کی۔ |
@@ -84,7 +84,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
       "term_years": 2,
       "pricing_class_hint": null,
       "payment": {
-        "asset_id":"xor#sora",
+        "asset_id":"61CtjvNd9T3THAR65GsMVHr82Bjc",
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
@@ -114,7 +114,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v1/sns/names
   done
 ```## 3. הגשות אוטומטיות
 
@@ -132,10 +132,10 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- Helper ہر request کے لئے `POST /v1/sns/registrations` بھیجتا ہے اور پہلی HTTP
+- Helper ہر request کے لئے `POST /v1/sns/names` بھیجتا ہے اور پہلی HTTP
   error پر abort کرتا ہے۔ Responses log path میں NDJSON records کے طور پر append
   ہوتے ہیں۔
-- `--poll-status` ہر submission کے بعد `/v1/sns/registrations/{selector}` کو
+- `--poll-status` ہر submission کے بعد `/v1/sns/names/{namespace}/{literal}` کو
   دوبارہ query کرتا ہے (زیادہ سے زیادہ `--poll-attempts`, default 5) تاکہ record
   visible ہونے کی تصدیق ہو۔ `--suffix-map` (JSON או `suffix_id` ערכי "סיומת"
   سے map کرے) فراہم کریں تاکہ tool `{label}.{suffix}` literals derive کر سکے۔
@@ -222,7 +222,7 @@ Workflows صرف release directory کو ایک artefact کے طور پر archive
 # TYPE sns_bulk_release_requests_total gauge
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
-sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
+sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="61CtjvNd9T3THAR65GsMVHr82Bjc"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ````metrics.prom` کو اپنے Prometheus sidecar میں feed کریں (مثال کے طور پر Promtail
 یا batch importer کے ذریعے) تاکہ registrars, stewards اور governance peers bulk

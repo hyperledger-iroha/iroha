@@ -65,7 +65,7 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 يعرض CLI تجزئة المعاملة الواردة (على سبيل المثال، `0x5f...`). كونسيرفيز لو
@@ -74,7 +74,7 @@ iroha --config defaults/client.toml asset definition register \
 ## 3.Minter des Units sur le compteoperator
 
 الكميات النشطة تعيش داخل الزوج `(asset definition, account)`. مينتز 250
-يوحد `coffee#wonderland` في `$ADMIN_ACCOUNT` :
+يوحد `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` في `$ADMIN_ACCOUNT` :
 
 ```sh
 iroha --config defaults/client.toml asset mint \

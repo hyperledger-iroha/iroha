@@ -56,14 +56,14 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 ה-CLI מדפיס את ה-hash של הטרנזקציה שנשלחה (לדוגמה, `0x5f…`). שמרו אותו כדי לבדוק את הסטטוס בהמשך.
 
 ## 3. מינט יחידות לחשבון המפעיל
 
-כמויות נכס חיות תחת הצמד `(asset definition, account)`. מינטו 250 יחידות של `coffee#wonderland` אל `$ADMIN_ACCOUNT`:
+כמויות נכס חיות תחת הצמד `(asset definition, account)`. מינטו 250 יחידות של `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` אל `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

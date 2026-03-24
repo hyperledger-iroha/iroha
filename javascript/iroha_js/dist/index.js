@@ -14,6 +14,7 @@ export {
   inspectAccountId,
   configureCurveSupport,
 } from "./address.js";
+export { normalizeIdentifierInput } from "./normalizers.js";
 export { MultisigSpecBuilder, MultisigSpec } from "./multisig.js";
 export { ValidationError, ValidationErrorCode } from "./validationError.js";
 export {
@@ -26,8 +27,12 @@ export {
   extractPipelineStatusKind,
   decodePdpCommitmentHeader,
   buildConnectWebSocketUrl,
+  encryptIdentifierInputForPolicy,
+  buildIdentifierRequestForPolicy,
   buildRbcSampleRequest,
+  getIdentifierBfvPublicParameters,
   openConnectWebSocket,
+  verifyIdentifierResolutionReceipt,
 } from "./toriiClient.js";
 export { NoritoRpcClient, NoritoRpcError } from "./noritoRpcClient.js";
 export {
@@ -52,6 +57,7 @@ export {
 export {
   canonicalQueryString,
   canonicalRequestMessage,
+  canonicalRequestSignatureMessage,
   buildCanonicalRequestHeaders,
 } from "./canonicalRequest.js";
 export {

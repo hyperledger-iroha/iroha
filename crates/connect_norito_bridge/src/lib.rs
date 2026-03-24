@@ -286,9 +286,6 @@ fn account_address_error_fields(err: &AccountAddressError) -> Option<JsonMap> {
         InvalidI105Char(ch) => {
             fields.insert("char".into(), JsonValue::from(ch.to_string()));
         }
-        InvalidI105Digit(digit) => {
-            fields.insert("digit".into(), JsonValue::from(u64::from(*digit)));
-        }
         MultisigMemberOverflow(count) => {
             fields.insert("count".into(), JsonValue::from(*count as u64));
         }
@@ -1674,10 +1671,8 @@ pub unsafe extern "C" fn connect_norito_account_address_render(
     out_hex_len: *mut c_ulong,
     out_i105_ptr: *mut *mut c_uchar,
     out_i105_len: *mut c_ulong,
-    out_compressed_ptr: *mut *mut c_uchar,
-    out_compressed_len: *mut c_ulong,
-    out_compressed_full_ptr: *mut *mut c_uchar,
-    out_compressed_full_len: *mut c_ulong,
+    out_i105_default_ptr: *mut *mut c_uchar,
+    out_i105_default_len: *mut c_ulong,
     out_error_json_ptr: *mut *mut c_uchar,
     out_error_json_len: *mut c_ulong,
 ) -> c_int {
@@ -1686,10 +1681,8 @@ pub unsafe extern "C" fn connect_norito_account_address_render(
         || out_hex_len.is_null()
         || out_i105_ptr.is_null()
         || out_i105_len.is_null()
-        || out_compressed_ptr.is_null()
-        || out_compressed_len.is_null()
-        || out_compressed_full_ptr.is_null()
-        || out_compressed_full_len.is_null()
+        || out_i105_default_ptr.is_null()
+        || out_i105_default_len.is_null()
     {
         return ERR_NULL_PTR;
     }
@@ -1715,13 +1708,7 @@ pub unsafe extern "C" fn connect_norito_account_address_render(
             return write_account_address_error(err, out_error_json_ptr, out_error_json_len);
         }
     };
-    let compressed = match address.to_i105() {
-        Ok(value) => value,
-        Err(err) => {
-            return write_account_address_error(err, out_error_json_ptr, out_error_json_len);
-        }
-    };
-    let compressed_full = match address.to_i105_fullwidth() {
+    let i105_default = match address.to_i105() {
         Ok(value) => value,
         Err(err) => {
             return write_account_address_error(err, out_error_json_ptr, out_error_json_len);
@@ -1736,16 +1723,9 @@ pub unsafe extern "C" fn connect_norito_account_address_render(
             return code;
         }
         if let Err(code) = write_bytes(
-            out_compressed_ptr,
-            out_compressed_len,
-            compressed.as_bytes(),
-        ) {
-            return code;
-        }
-        if let Err(code) = write_bytes(
-            out_compressed_full_ptr,
-            out_compressed_full_len,
-            compressed_full.as_bytes(),
+            out_i105_default_ptr,
+            out_i105_default_len,
+            i105_default.as_bytes(),
         ) {
             return code;
         }
@@ -12521,10 +12501,8 @@ mod tests {
         let mut hex_len: c_ulong = 0;
         let mut i105_ptr: *mut c_uchar = ptr::null_mut();
         let mut i105_len: c_ulong = 0;
-        let mut compressed_ptr: *mut c_uchar = ptr::null_mut();
-        let mut compressed_len: c_ulong = 0;
-        let mut compressed_full_ptr: *mut c_uchar = ptr::null_mut();
-        let mut compressed_full_len: c_ulong = 0;
+        let mut i105_default_ptr: *mut c_uchar = ptr::null_mut();
+        let mut i105_default_len: c_ulong = 0;
         let mut render_err_ptr: *mut c_uchar = ptr::null_mut();
         let mut render_err_len: c_ulong = 0;
 
@@ -12537,10 +12515,8 @@ mod tests {
                 &mut hex_len,
                 &mut i105_ptr,
                 &mut i105_len,
-                &mut compressed_ptr,
-                &mut compressed_len,
-                &mut compressed_full_ptr,
-                &mut compressed_full_len,
+                &mut i105_default_ptr,
+                &mut i105_default_len,
                 &mut render_err_ptr,
                 &mut render_err_len,
             )
@@ -12552,8 +12528,7 @@ mod tests {
 
         connect_norito_free(hex_ptr);
         connect_norito_free(i105_ptr);
-        connect_norito_free(compressed_ptr);
-        connect_norito_free(compressed_full_ptr);
+        connect_norito_free(i105_default_ptr);
 
         let canonical_literal =
             CString::new(address.canonical_hex().expect("canonical hex")).expect("cstring");

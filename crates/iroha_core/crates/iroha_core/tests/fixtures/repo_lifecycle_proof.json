@@ -3,11 +3,11 @@
     {
       "agreement": {
         "cash": {
-          "asset": "usd#wonderland",
+          "asset": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
           "quantity": "1000"
         },
         "collateral": {
-          "asset": "bond#wonderland",
+          "asset": "4fEiy2n5VMFVfi6BzDJge519zAzg",
           "quantity": "1100"
         },
         "counterparty": "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU",
@@ -48,11 +48,11 @@
     {
       "agreement": {
         "cash": {
-          "asset": "usd#wonderland",
+          "asset": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
           "quantity": "1000"
         },
         "collateral": {
-          "asset": "bond#wonderland",
+          "asset": "4fEiy2n5VMFVfi6BzDJge519zAzg",
           "quantity": "1100"
         },
         "counterparty": "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU",

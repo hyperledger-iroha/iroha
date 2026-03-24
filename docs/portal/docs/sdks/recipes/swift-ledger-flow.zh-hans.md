@@ -28,7 +28,7 @@ translator: machine-google-reviewed
 ## 1. 注册资产 (CLI)
 
 ```bash
-iroha --config defaults/client.toml asset definition register --id coffee#wonderland
+iroha --config defaults/client.toml asset definition register --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 ## 2. 准备凭证
@@ -81,7 +81,7 @@ struct LedgerFlow {
         let torii = ToriiClient(baseURL: URL(string: "http://127.0.0.1:8080")!)
         let sdk = IrohaSDK(toriiClient: torii)
 
-        let assetDefinition = "coffee#wonderland"
+        let assetDefinition = "7Sp2j6zDvJFnMoscAiMaWbWHRDBZ"
         let adminAssetId = TxBuilder.makeAssetId(assetDefinitionId: assetDefinition, accountId: adminAccount)
 
         // Mint 250 units into the admin account.

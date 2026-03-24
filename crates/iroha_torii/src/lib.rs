@@ -1102,8 +1102,6 @@ struct AppState {
     soracloud_proxy_pending: Arc<tokio::sync::Mutex<BTreeMap<Hash, PendingSoracloudProxyRequest>>>,
     #[cfg(feature = "app_api")]
     soracloud_proxy_sequence: std::sync::atomic::AtomicU64,
-    #[cfg(feature = "app_api")]
-    sns_registry: Arc<sns::Registry>,
 }
 
 pub(crate) type SharedAppState = std::sync::Arc<AppState>;
@@ -3804,168 +3802,6 @@ async fn handler_repo_agreements_query(
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_allowances_list(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    AxQuery(p): AxQuery<crate::routing::OfflineAllowanceListParams>,
-) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
-        return routing::handle_v1_offline_allowances(
-            app.state.clone(),
-            AxQuery(p),
-            app.telemetry.clone(),
-        )
-        .await;
-    }
-
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, "v1/offline/allowances", enforce).await?;
-
-    routing::handle_v1_offline_allowances(app.state.clone(), AxQuery(p), app.telemetry.clone())
-        .await
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_allowances_query(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
-        crate::filter::QueryEnvelope,
-    >,
-) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
-        return routing::handle_v1_offline_allowances_query(
-            app.state.clone(),
-            crate::utils::extractors::NoritoJson(env),
-            app.telemetry.clone(),
-        )
-        .await;
-    }
-
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, "v1/offline/allowances/query", enforce).await?;
-
-    routing::handle_v1_offline_allowances_query(
-        app.state.clone(),
-        crate::utils::extractors::NoritoJson(env),
-        app.telemetry.clone(),
-    )
-    .await
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_certificates_query(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
-        crate::filter::QueryEnvelope,
-    >,
-) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
-        return routing::handle_v1_offline_allowances_query(
-            app.state.clone(),
-            crate::utils::extractors::NoritoJson(env),
-            app.telemetry.clone(),
-        )
-        .await;
-    }
-
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(
-        &app,
-        &headers,
-        None,
-        "v1/offline/certificates/query",
-        enforce,
-    )
-    .await?;
-
-    routing::handle_v1_offline_allowances_query(
-        app.state.clone(),
-        crate::utils::extractors::NoritoJson(env),
-        app.telemetry.clone(),
-    )
-    .await
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_allowances_issue(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::routing::OfflineAllowanceIssueRequest,
-    >,
-) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
-        return routing::handle_post_v1_offline_allowances_issue(
-            app.chain_id.clone(),
-            app.queue.clone(),
-            app.state.clone(),
-            app.telemetry.clone(),
-            crate::utils::extractors::NoritoJson(req),
-        )
-        .await;
-    }
-
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, "v1/offline/allowances", enforce).await?;
-
-    routing::handle_post_v1_offline_allowances_issue(
-        app.chain_id.clone(),
-        app.queue.clone(),
-        app.state.clone(),
-        app.telemetry.clone(),
-        crate::utils::extractors::NoritoJson(req),
-    )
-    .await
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_certificates_issue(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::routing::OfflineCertificateIssueRequest,
-    >,
-) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
-        return routing::handle_post_v1_offline_certificates_issue(
-            app.clone(),
-            crate::utils::extractors::NoritoJson(req),
-            app.telemetry.clone(),
-        )
-        .await;
-    }
-
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(
-        &app,
-        &headers,
-        None,
-        "v1/offline/certificates/issue",
-        enforce,
-    )
-    .await?;
-
-    routing::handle_post_v1_offline_certificates_issue(
-        app.clone(),
-        crate::utils::extractors::NoritoJson(req),
-        app.telemetry.clone(),
-    )
-    .await
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
 async fn handler_offline_build_claims_issue(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -4003,166 +3839,6 @@ async fn handler_offline_build_claims_issue(
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_allowance_get(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    AxPath(certificate_id_hex): AxPath<String>,
-) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
-        return routing::handle_v1_offline_allowance_get(
-            app.state.clone(),
-            certificate_id_hex,
-            app.telemetry.clone(),
-        )
-        .await;
-    }
-
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(
-        &app,
-        &headers,
-        None,
-        "v1/offline/allowances/{certificate_id_hex}",
-        enforce,
-    )
-    .await?;
-
-    routing::handle_v1_offline_allowance_get(
-        app.state.clone(),
-        certificate_id_hex,
-        app.telemetry.clone(),
-    )
-    .await
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_certificates_renew_issue(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    AxPath(certificate_id_hex): AxPath<String>,
-    crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::routing::OfflineCertificateIssueRequest,
-    >,
-) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
-        return routing::handle_post_v1_offline_certificates_renew_issue(
-            app.clone(),
-            certificate_id_hex,
-            crate::utils::extractors::NoritoJson(req),
-            app.telemetry.clone(),
-        )
-        .await;
-    }
-
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(
-        &app,
-        &headers,
-        None,
-        "v1/offline/certificates/{certificate_id_hex}/renew/issue",
-        enforce,
-    )
-    .await?;
-
-    routing::handle_post_v1_offline_certificates_renew_issue(
-        app.clone(),
-        certificate_id_hex,
-        crate::utils::extractors::NoritoJson(req),
-        app.telemetry.clone(),
-    )
-    .await
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_allowances_renew(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    AxPath(certificate_id_hex): AxPath<String>,
-    crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::routing::OfflineCertificateRenewRequest,
-    >,
-) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
-        return routing::handle_post_v1_offline_allowances_renew(
-            app.chain_id.clone(),
-            app.queue.clone(),
-            app.state.clone(),
-            app.telemetry.clone(),
-            certificate_id_hex,
-            crate::utils::extractors::NoritoJson(req),
-        )
-        .await;
-    }
-
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(
-        &app,
-        &headers,
-        None,
-        "v1/offline/allowances/{certificate_id_hex}/renew",
-        enforce,
-    )
-    .await?;
-
-    routing::handle_post_v1_offline_allowances_renew(
-        app.chain_id.clone(),
-        app.queue.clone(),
-        app.state.clone(),
-        app.telemetry.clone(),
-        certificate_id_hex,
-        crate::utils::extractors::NoritoJson(req),
-    )
-    .await
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_certificates_revoke(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::routing::OfflineCertificateRevokeRequest,
-    >,
-) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
-        return routing::handle_post_v1_offline_certificates_revoke(
-            app.chain_id.clone(),
-            app.queue.clone(),
-            app.state.clone(),
-            app.telemetry.clone(),
-            crate::utils::extractors::NoritoJson(req),
-        )
-        .await;
-    }
-
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(
-        &app,
-        &headers,
-        None,
-        "v1/offline/certificates/revoke",
-        enforce,
-    )
-    .await?;
-
-    routing::handle_post_v1_offline_certificates_revoke(
-        app.chain_id.clone(),
-        app.queue.clone(),
-        app.state.clone(),
-        app.telemetry.clone(),
-        crate::utils::extractors::NoritoJson(req),
-    )
-    .await
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
 async fn handler_offline_reserve_setup(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -4194,7 +3870,7 @@ async fn handler_offline_reserve_topup(
         check_access_enforced(&app, &headers, None, "v1/offline/reserve/topup", enforce).await?;
     }
 
-    json_ok(crate::offline_reserve::top_up_reserve(app.as_ref(), req)?)
+    json_ok(crate::offline_reserve::top_up_reserve(app.as_ref(), req).await?)
 }
 
 #[cfg(feature = "app_api")]
@@ -4212,7 +3888,7 @@ async fn handler_offline_reserve_renew(
         check_access_enforced(&app, &headers, None, "v1/offline/reserve/renew", enforce).await?;
     }
 
-    json_ok(crate::offline_reserve::renew_reserve(app.as_ref(), req)?)
+    json_ok(crate::offline_reserve::renew_reserve(app.as_ref(), req).await?)
 }
 
 #[cfg(feature = "app_api")]
@@ -4248,7 +3924,7 @@ async fn handler_offline_reserve_defund(
         check_access_enforced(&app, &headers, None, "v1/offline/reserve/defund", enforce).await?;
     }
 
-    json_ok(crate::offline_reserve::defund_reserve(app.as_ref(), req)?)
+    json_ok(crate::offline_reserve::defund_reserve(app.as_ref(), req).await?)
 }
 
 #[cfg(feature = "app_api")]
@@ -4263,257 +3939,25 @@ async fn handler_offline_reserve_revocations(
         check_access_enforced(&app, &headers, None, "v1/offline/revocations", enforce).await?;
     }
 
-    json_ok(crate::offline_reserve::revocation_bundle(app.as_ref())?)
+    json_ok(crate::offline_reserve::revocation_list(app.as_ref())?)
 }
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_settlements_submit(
+async fn handler_offline_reserve_revoke(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::routing::OfflineSettlementSubmitRequest,
+        crate::offline_reserve::OfflineReserveRevocationRequest,
     >,
 ) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
-        return routing::handle_post_v1_offline_settlements_submit(
-            app.chain_id.clone(),
-            app.queue.clone(),
-            app.state.clone(),
-            app.offline_issuer.clone(),
-            app.telemetry.clone(),
-            crate::utils::extractors::NoritoJson(req),
-        )
-        .await;
+    if !limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        check_access_enforced(&app, &headers, None, "v1/offline/revocations", enforce).await?;
     }
 
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, "v1/offline/settlements", enforce).await?;
-
-    routing::handle_post_v1_offline_settlements_submit(
-        app.chain_id.clone(),
-        app.queue.clone(),
-        app.state.clone(),
-        app.offline_issuer.clone(),
-        app.telemetry.clone(),
-        crate::utils::extractors::NoritoJson(req),
-    )
-    .await
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_spend_receipts_submit(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::routing::OfflineSpendReceiptsSubmitRequest,
-    >,
-) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
-        return routing::handle_post_v1_offline_spend_receipts(
-            app.state.clone(),
-            crate::utils::extractors::NoritoJson(req),
-            app.telemetry.clone(),
-        )
-        .await;
-    }
-
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, "v1/offline/spend-receipts", enforce).await?;
-
-    routing::handle_post_v1_offline_spend_receipts(
-        app.state.clone(),
-        crate::utils::extractors::NoritoJson(req),
-        app.telemetry.clone(),
-    )
-    .await
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_state(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
-        return routing::handle_v1_offline_state(app.state.clone(), app.telemetry.clone()).await;
-    }
-
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, "v1/offline/state", enforce).await?;
-
-    routing::handle_v1_offline_state(app.state.clone(), app.telemetry.clone()).await
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_revocations_list(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    AxQuery(p): AxQuery<crate::routing::ListFilterParams>,
-) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
-        return routing::handle_v1_offline_revocations(
-            app.state.clone(),
-            AxQuery(p),
-            app.telemetry.clone(),
-        )
-        .await;
-    }
-
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, "v1/offline/revocations", enforce).await?;
-
-    routing::handle_v1_offline_revocations(app.state.clone(), AxQuery(p), app.telemetry.clone())
-        .await
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_revocations_query(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
-        crate::filter::QueryEnvelope,
-    >,
-) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
-        return routing::handle_v1_offline_revocations_query(
-            app.state.clone(),
-            crate::utils::extractors::NoritoJson(env),
-            app.telemetry.clone(),
-        )
-        .await;
-    }
-
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(
-        &app,
-        &headers,
-        None,
-        "v1/offline/revocations/query",
-        enforce,
-    )
-    .await?;
-
-    routing::handle_v1_offline_revocations_query(
-        app.state.clone(),
-        crate::utils::extractors::NoritoJson(env),
-        app.telemetry.clone(),
-    )
-    .await
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_summaries_list(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    AxQuery(p): AxQuery<crate::routing::ListFilterParams>,
-) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
-        return routing::handle_v1_offline_summaries(
-            app.state.clone(),
-            AxQuery(p),
-            app.telemetry.clone(),
-        )
-        .await;
-    }
-
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, "v1/offline/summaries", enforce).await?;
-
-    routing::handle_v1_offline_summaries(app.state.clone(), AxQuery(p), app.telemetry.clone()).await
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_summaries_query(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
-        crate::filter::QueryEnvelope,
-    >,
-) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
-        return routing::handle_v1_offline_summaries_query(
-            app.state.clone(),
-            crate::utils::extractors::NoritoJson(env),
-            app.telemetry.clone(),
-        )
-        .await;
-    }
-
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, "v1/offline/summaries/query", enforce).await?;
-
-    routing::handle_v1_offline_summaries_query(
-        app.state.clone(),
-        crate::utils::extractors::NoritoJson(env),
-        app.telemetry.clone(),
-    )
-    .await
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_receipts_list(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    AxQuery(p): AxQuery<crate::routing::OfflineReceiptListParams>,
-) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
-        return routing::handle_v1_offline_receipts(
-            app.state.clone(),
-            AxQuery(p),
-            app.telemetry.clone(),
-        )
-        .await;
-    }
-
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, "v1/offline/receipts", enforce).await?;
-
-    routing::handle_v1_offline_receipts(app.state.clone(), AxQuery(p), app.telemetry.clone()).await
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_receipts_query(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
-        crate::filter::QueryEnvelope,
-    >,
-) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
-        return routing::handle_v1_offline_receipts_query(
-            app.state.clone(),
-            crate::utils::extractors::NoritoJson(env),
-            app.telemetry.clone(),
-        )
-        .await;
-    }
-
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, "v1/offline/receipts/query", enforce).await?;
-
-    routing::handle_v1_offline_receipts_query(
-        app.state.clone(),
-        crate::utils::extractors::NoritoJson(env),
-        app.telemetry.clone(),
-    )
-    .await
+    json_ok(crate::offline_reserve::register_revocation(app.as_ref(), req).await?)
 }
 
 #[cfg(feature = "app_api")]
@@ -4605,100 +4049,6 @@ async fn handler_offline_transfers_query(
         app.telemetry.clone(),
     )
     .await
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_transfer_proof(
-    State(app): State<SharedAppState>,
-    Extension(negotiated): Extension<api_version::NegotiatedVersion>,
-    headers: axum::http::HeaderMap,
-    crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::routing::OfflineTransferProofRequest,
-    >,
-) -> Result<impl IntoResponse, Error> {
-    ensure_proof_api_version(&app, negotiated, "v1/offline/transfers/proof")?;
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
-        return routing::handle_v1_offline_transfer_proof(
-            app.state.clone(),
-            crate::utils::extractors::NoritoJson(req),
-            app.telemetry.clone(),
-        )
-        .await;
-    }
-
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_proof_access(
-        &app,
-        negotiated,
-        &headers,
-        None,
-        "v1/offline/transfers/proof",
-        1,
-        enforce,
-    )
-    .await?;
-
-    routing::handle_v1_offline_transfer_proof(
-        app.state.clone(),
-        crate::utils::extractors::NoritoJson(req),
-        app.telemetry.clone(),
-    )
-    .await
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_offline_bundle_proof_status(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    AxQuery(p): AxQuery<crate::routing::OfflineBundleProofStatusParams>,
-) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
-        return routing::handle_v1_offline_bundle_proof_status(
-            app.state.clone(),
-            AxQuery(p),
-            app.telemetry.clone(),
-        )
-        .await;
-    }
-
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(
-        &app,
-        &headers,
-        None,
-        "v1/offline/bundle/proof_status",
-        enforce,
-    )
-    .await?;
-
-    routing::handle_v1_offline_bundle_proof_status(
-        app.state.clone(),
-        AxQuery(p),
-        app.telemetry.clone(),
-    )
-    .await
-}
-
-#[cfg(all(feature = "app_api", feature = "telemetry"))]
-#[axum::debug_handler]
-async fn handler_offline_rejections(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
-        return routing::handle_v1_offline_rejections(app.state.clone(), app.telemetry.clone())
-            .await;
-    }
-
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, "v1/offline/rejections", enforce).await?;
-
-    routing::handle_v1_offline_rejections(app.state.clone(), app.telemetry.clone()).await
 }
 
 #[cfg(feature = "app_api")]
@@ -8702,6 +8052,75 @@ fn handle_incoming_soracloud_generated_hf_proxy_authority_failure(
 }
 
 #[cfg(feature = "app_api")]
+fn resolve_incoming_soracloud_proxy_forward_target(
+    app: &SharedAppState,
+    request: &SoracloudLocalReadRequest,
+    error: &SoracloudRuntimeExecutionError,
+) -> Option<iroha_data_model::peer::PeerId> {
+    if error.kind != SoracloudRuntimeExecutionErrorKind::Unavailable {
+        return None;
+    }
+    if !local_soracloud_proxy_receiver_is_assigned_host(app, request).ok()? {
+        return None;
+    }
+    resolve_soracloud_local_read_proxy_target(app, request)
+        .ok()
+        .flatten()
+}
+
+#[cfg(feature = "app_api")]
+fn local_soracloud_proxy_receiver_is_assigned_host(
+    app: &SharedAppState,
+    request: &SoracloudLocalReadRequest,
+) -> Result<bool, SoracloudRuntimeExecutionError> {
+    if request.handler_name != "infer" {
+        return Ok(false);
+    }
+    let Some(runtime) = app.soracloud_runtime.as_ref() else {
+        return Ok(false);
+    };
+    let Some(local_peer_id) = runtime.local_peer_id() else {
+        return Ok(false);
+    };
+    let local_peer_id: iroha_data_model::peer::PeerId = local_peer_id.parse().map_err(|error| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            format!("invalid local Soracloud peer id `{local_peer_id}`: {error}"),
+        )
+    })?;
+
+    let state_view = app.state.view();
+    let Some(bundle) = state_view.world().soracloud_service_revisions().get(&(
+        request.service_name.clone(),
+        request.service_version.clone(),
+    )) else {
+        return Ok(false);
+    };
+    let Some(binding) =
+        iroha_core::soracloud_runtime::soracloud_hf_generated_source_binding(bundle)
+    else {
+        return Ok(false);
+    };
+    let Some(placement) = iroha_core::soracloud_runtime::resolve_generated_hf_active_placement(
+        state_view.world(),
+        request.service_name.as_str(),
+        &binding.source_id,
+    )
+    .map_err(|message| {
+        SoracloudRuntimeExecutionError::new(SoracloudRuntimeExecutionErrorKind::Internal, message)
+    })?
+    else {
+        return Ok(false);
+    };
+
+    Ok(placement.assigned_hosts.iter().any(|assignment| {
+        assignment.peer_id == local_peer_id.to_string()
+            && assignment.status
+                != iroha_data_model::soracloud::SoraHfPlacementHostStatusV1::Retired
+    }))
+}
+
+#[cfg(feature = "app_api")]
 fn validate_generated_hf_proxy_response_authority(
     app: &SharedAppState,
     request: &SoracloudLocalReadRequest,
@@ -9079,12 +8498,36 @@ async fn process_incoming_soracloud_proxy_request(
                 )),
             },
             Err(error) => {
-                handle_incoming_soracloud_generated_hf_proxy_authority_failure(
+                if let Some(primary_peer_id) = resolve_incoming_soracloud_proxy_forward_target(
                     &app,
                     &proxy_request.request,
                     &error,
-                );
-                SoracloudLocalReadProxyOutcomeV1::Err(error)
+                ) {
+                    match execute_soracloud_local_read_via_proxy(
+                        &app,
+                        primary_peer_id,
+                        proxy_request.request.clone(),
+                    )
+                    .await
+                    {
+                        Ok(response) => SoracloudLocalReadProxyOutcomeV1::Ok(response),
+                        Err(forward_error) => {
+                            handle_incoming_soracloud_generated_hf_proxy_authority_failure(
+                                &app,
+                                &proxy_request.request,
+                                &forward_error,
+                            );
+                            SoracloudLocalReadProxyOutcomeV1::Err(forward_error)
+                        }
+                    }
+                } else {
+                    handle_incoming_soracloud_generated_hf_proxy_authority_failure(
+                        &app,
+                        &proxy_request.request,
+                        &error,
+                    );
+                    SoracloudLocalReadProxyOutcomeV1::Err(error)
+                }
             }
         }
     };
@@ -16630,9 +16073,11 @@ struct AccountOnboardingSigner {
 #[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct OfflineIssuerSigner {
+    operator_authority: Option<AccountId>,
     operator_keypair: KeyPair,
     legacy_operator_keypairs: Vec<KeyPair>,
     allowed_controllers: Vec<AccountId>,
+    reserve_policy: iroha_config::parameters::actual::ToriiOfflineReservePolicy,
 }
 
 #[cfg(feature = "app_api")]
@@ -17752,65 +17197,8 @@ impl Torii {
                     post(handler_repo_agreements_query),
                 )
                 .route(
-                    "/v1/offline/allowances",
-                    get(handler_offline_allowances_list).post(handler_offline_allowances_issue),
-                )
-                .route(
-                    "/v1/offline/allowances/{certificate_id_hex}",
-                    get(handler_offline_allowance_get),
-                )
-                .route(
-                    "/v1/offline/allowances/{certificate_id_hex}/renew",
-                    post(handler_offline_allowances_renew),
-                )
-                .route(
-                    "/v1/offline/certificates",
-                    get(handler_offline_allowances_list).post(handler_offline_allowances_issue),
-                )
-                .route(
-                    "/v1/offline/certificates/issue",
-                    post(handler_offline_certificates_issue),
-                )
-                .route(
-                    "/v1/offline/build-claims/issue",
-                    post(handler_offline_build_claims_issue),
-                )
-                .route(
-                    "/v1/offline/certificates/{certificate_id_hex}",
-                    get(handler_offline_allowance_get),
-                )
-                .route(
-                    "/v1/offline/certificates/{certificate_id_hex}/renew",
-                    post(handler_offline_allowances_renew),
-                )
-                .route(
-                    "/v1/offline/certificates/{certificate_id_hex}/renew/issue",
-                    post(handler_offline_certificates_renew_issue),
-                )
-                .route(
-                    "/v1/offline/certificates/revoke",
-                    post(handler_offline_certificates_revoke),
-                )
-                .route("/v1/offline/receipts", get(handler_offline_receipts_list))
-                .route(
-                    "/v1/offline/receipts/query",
-                    post(handler_offline_receipts_query),
-                )
-                .route(
-                    "/v1/offline/allowances/query",
-                    post(handler_offline_allowances_query),
-                )
-                .route(
-                    "/v1/offline/certificates/query",
-                    post(handler_offline_certificates_query),
-                )
-                .route(
                     "/v1/offline/revocations",
-                    get(handler_offline_reserve_revocations),
-                )
-                .route(
-                    "/v1/offline/revocations/query",
-                    post(handler_offline_revocations_query),
+                    get(handler_offline_reserve_revocations).post(handler_offline_reserve_revoke),
                 )
                 .route(
                     "/v1/offline/reserve/setup",
@@ -17832,11 +17220,6 @@ impl Torii {
                     "/v1/offline/reserve/defund",
                     post(handler_offline_reserve_defund),
                 )
-                .route("/v1/offline/summaries", get(handler_offline_summaries_list))
-                .route(
-                    "/v1/offline/summaries/query",
-                    post(handler_offline_summaries_query),
-                )
                 .route("/v1/offline/transfers", get(handler_offline_transfers_list))
                 .route(
                     "/v1/offline/transfers/{bundle_id_hex}",
@@ -17845,68 +17228,37 @@ impl Torii {
                 .route(
                     "/v1/offline/transfers/query",
                     post(handler_offline_transfers_query),
-                )
-                .route(
-                    "/v1/offline/settlements",
-                    get(handler_offline_transfers_list).post(handler_offline_settlements_submit),
-                )
-                .route(
-                    "/v1/offline/settlements/{bundle_id_hex}",
-                    get(handler_offline_transfer_get),
-                )
-                .route(
-                    "/v1/offline/settlements/query",
-                    post(handler_offline_transfers_query),
-                )
-                .route(
-                    "/v1/offline/spend-receipts",
-                    post(handler_offline_spend_receipts_submit),
-                )
-                .route("/v1/offline/state", get(handler_offline_state))
-                .route(
-                    "/v1/offline/transfers/proof",
-                    post(handler_offline_transfer_proof),
-                )
-                .route(
-                    "/v1/offline/bundle/proof_status",
-                    get(handler_offline_bundle_proof_status),
                 );
             #[cfg(feature = "push")]
             let router = router.route("/v1/notify/devices", post(handler_push_register_device));
-            #[cfg(all(feature = "app_api", feature = "telemetry"))]
-            let router = router.route("/v1/offline/rejections", get(handler_offline_rejections));
-            #[cfg(not(all(feature = "app_api", feature = "telemetry")))]
-            let router = router;
             let router = router
-                // SNS registrar scaffolding
-                .route("/v1/sns/registrations", post(sns::handle_register))
+                // Ledger-backed SNS namespace registry
+                .route("/v1/sns/names", post(sns::handle_register_name))
                 .route(
-                    "/v1/sns/registrations/{selector}",
-                    get(sns::handle_get_registration),
+                    "/v1/sns/names/{namespace}/{literal}",
+                    get(sns::handle_get_name),
                 )
                 .route(
-                    "/v1/sns/registrations/{selector}/renew",
-                    post(sns::handle_renew_registration),
+                    "/v1/sns/names/{namespace}/{literal}/renew",
+                    post(sns::handle_renew_name),
                 )
                 .route(
-                    "/v1/sns/registrations/{selector}/transfer",
-                    post(sns::handle_transfer_registration),
+                    "/v1/sns/names/{namespace}/{literal}/transfer",
+                    post(sns::handle_transfer_name),
                 )
                 .route(
-                    "/v1/sns/registrations/{selector}/controllers",
-                    post(sns::handle_update_controllers),
+                    "/v1/sns/names/{namespace}/{literal}/controllers",
+                    post(sns::handle_update_name_controllers),
                 )
                 .route(
-                    "/v1/sns/registrations/{selector}/freeze",
-                    post(sns::handle_freeze_registration),
+                    "/v1/sns/names/{namespace}/{literal}/freeze",
+                    post(sns::handle_freeze_name),
                 )
                 .route(
-                    "/v1/sns/registrations/{selector}/freeze",
-                    delete(sns::handle_unfreeze_registration),
+                    "/v1/sns/names/{namespace}/{literal}/freeze",
+                    delete(sns::handle_unfreeze_name),
                 )
                 .route("/v1/sns/policies/{suffix_id}", get(sns::handle_get_policy))
-                .route("/v1/sns/governance/cases", post(sns::handle_post_case))
-                .route("/v1/sns/governance/cases", get(sns::handle_get_cases))
                 .route("/v1/soracloud/status", get(handler_soracloud_status))
                 .route("/v1/soracloud/deploy", post(soracloud::handle_deploy))
                 .route("/v1/soracloud/upgrade", post(soracloud::handle_upgrade))
@@ -19077,9 +18429,11 @@ impl Torii {
                 })
                 .collect();
             OfflineIssuerSigner {
+                operator_authority: cfg.operator_authority.clone(),
                 operator_keypair,
                 legacy_operator_keypairs,
                 allowed_controllers: cfg.allowed_controllers.clone(),
+                reserve_policy: cfg.reserve_policy.clone(),
             }
         });
         #[cfg(feature = "app_api")]
@@ -19520,8 +18874,6 @@ impl Torii {
             soracloud_proxy_pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
             #[cfg(feature = "app_api")]
             soracloud_proxy_sequence: std::sync::atomic::AtomicU64::new(1),
-            #[cfg(feature = "app_api")]
-            sns_registry: Arc::new(sns::Registry::bootstrap_default()),
         });
 
         #[cfg(feature = "app_api")]
@@ -19561,7 +18913,6 @@ impl Torii {
             &app_state.offline_issuer,
             &app_state.uaid_onboarding,
             &app_state.soracloud_runtime,
-            &app_state.sns_registry,
         );
 
         #[cfg(all(feature = "app_api", feature = "telemetry"))]
@@ -21590,8 +20941,6 @@ pub(crate) mod tests_runtime_handlers {
             soracloud_proxy_pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
             #[cfg(feature = "app_api")]
             soracloud_proxy_sequence: std::sync::atomic::AtomicU64::new(1),
-            #[cfg(feature = "app_api")]
-            sns_registry: Arc::new(sns::Registry::bootstrap_default()),
             rbc_sampling_enabled: false,
             rbc_sampling_store_dir: None,
             rbc_sampling_max_samples: 0,
@@ -23965,7 +23314,7 @@ pub(crate) mod tests_runtime_handlers {
         service_name: String,
         service_version: String,
     ) -> SoracloudLocalReadRequest {
-        SoracloudLocalReadRequest {
+        let mut request = SoracloudLocalReadRequest {
             observed_height: 1,
             observed_block_hash: None,
             service_name,
@@ -23978,15 +23327,17 @@ pub(crate) mod tests_runtime_handlers {
             request_query: None,
             request_headers: BTreeMap::new(),
             request_body: b"{\"input\":\"hello\"}".to_vec(),
-            request_commitment: Hash::new(b"generated-hf-request"),
-        }
+            request_commitment: Hash::new(b""),
+        };
+        request.request_commitment = super::soracloud_local_read_request_commitment(&request);
+        request
     }
 
     fn sample_public_query_request(
         service_name: String,
         service_version: String,
     ) -> SoracloudLocalReadRequest {
-        SoracloudLocalReadRequest {
+        let mut request = SoracloudLocalReadRequest {
             observed_height: 1,
             observed_block_hash: None,
             service_name,
@@ -23999,8 +23350,10 @@ pub(crate) mod tests_runtime_handlers {
             request_query: None,
             request_headers: BTreeMap::new(),
             request_body: Vec::new(),
-            request_commitment: Hash::new(b"public-query-request"),
-        }
+            request_commitment: Hash::new(b""),
+        };
+        request.request_commitment = super::soracloud_local_read_request_commitment(&request);
+        request
     }
 
     fn sample_generated_hf_proxy_response(
@@ -24064,6 +23417,38 @@ pub(crate) mod tests_runtime_handlers {
                 checkpoint_artifact_hash: None,
             }),
         }
+    }
+
+    fn active_generated_hf_replica_peer_id(
+        world: &World,
+        service_name: &str,
+        service_version: &str,
+    ) -> String {
+        let world = world.view();
+        let bundle = world
+            .soracloud_service_revisions()
+            .get(&(service_name.to_owned(), service_version.to_owned()))
+            .expect("generated HF service fixture bundle");
+        let binding = iroha_core::soracloud_runtime::soracloud_hf_generated_source_binding(bundle)
+            .expect("generated HF binding");
+        let placement = iroha_core::soracloud_runtime::resolve_generated_hf_active_placement(
+            &world,
+            service_name,
+            &binding.source_id,
+        )
+        .expect("generated HF placement lookup")
+        .expect("generated HF placement");
+        placement
+            .assigned_hosts
+            .iter()
+            .find(|assignment| {
+                assignment.role == iroha_data_model::soracloud::SoraHfPlacementHostRoleV1::Replica
+                    && assignment.status
+                        != iroha_data_model::soracloud::SoraHfPlacementHostStatusV1::Retired
+            })
+            .expect("generated HF replica assignment")
+            .peer_id
+            .clone()
     }
 
     #[tokio::test]
@@ -24325,9 +23710,10 @@ pub(crate) mod tests_runtime_handlers {
     #[tokio::test]
     async fn incoming_proxy_authority_failure_requests_generated_hf_reconcile() {
         let primary_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
-        let local_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
         let (world, service_name, service_version) =
             seed_generated_hf_public_world(&primary_peer_id);
+        let local_peer_id =
+            active_generated_hf_replica_peer_id(&world, &service_name, &service_version);
         let captured_reconcile_requests = Arc::new(std::sync::Mutex::new(Vec::new()));
         let mut app = mk_app_state_for_tests_with_world(world);
         Arc::get_mut(&mut app)
@@ -24370,6 +23756,115 @@ pub(crate) mod tests_runtime_handlers {
                 .message
                 .contains("not the authoritative warm primary")
         );
+    }
+
+    #[tokio::test]
+    async fn resolve_incoming_soracloud_proxy_forward_target_returns_primary() {
+        let primary_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
+        let (world, service_name, service_version) =
+            seed_generated_hf_public_world(&primary_peer_id);
+        let local_peer_id =
+            active_generated_hf_replica_peer_id(&world, &service_name, &service_version);
+        let mut app = mk_app_state_for_tests_with_world(world);
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime {
+            snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
+            state_dir: PathBuf::from("/tmp/test-soracloud-runtime"),
+            local_peer_id: Some(local_peer_id),
+            result: Err(
+                iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Unavailable,
+                    "forward target resolution test should not execute the runtime locally",
+                ),
+            ),
+            captured_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
+            captured_proxy_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
+            captured_reconcile_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
+        }));
+        let request = sample_generated_hf_infer_request(service_name, service_version);
+        let error = SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            "local peer is no longer the authoritative warm primary",
+        );
+
+        let forward_target =
+            super::resolve_incoming_soracloud_proxy_forward_target(&app, &request, &error)
+                .expect("non-primary generated-HF receiver should forward to primary");
+
+        assert_eq!(forward_target.to_string(), primary_peer_id);
+    }
+
+    #[tokio::test]
+    async fn resolve_incoming_soracloud_proxy_forward_target_rejects_unassigned_receiver() {
+        let primary_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
+        let local_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
+        let (world, service_name, service_version) =
+            seed_generated_hf_public_world(&primary_peer_id);
+        let mut app = mk_app_state_for_tests_with_world(world);
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime {
+            snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
+            state_dir: PathBuf::from("/tmp/test-soracloud-runtime"),
+            local_peer_id: Some(local_peer_id),
+            result: Err(
+                iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Unavailable,
+                    "unassigned receiver test should not execute the runtime locally",
+                ),
+            ),
+            captured_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
+            captured_proxy_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
+            captured_reconcile_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
+        }));
+        let request = sample_generated_hf_infer_request(service_name, service_version);
+        let error = SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            "local peer is no longer the authoritative warm primary",
+        );
+
+        let forward_target =
+            super::resolve_incoming_soracloud_proxy_forward_target(&app, &request, &error);
+
+        assert!(
+            forward_target.is_none(),
+            "unassigned receivers must not act as generated-HF proxy intermediaries"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_incoming_soracloud_proxy_forward_target_rejects_invalid_request() {
+        let primary_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
+        let (world, service_name, service_version) =
+            seed_generated_hf_public_world(&primary_peer_id);
+        let mut app = mk_app_state_for_tests_with_world(world);
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime {
+            snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
+            state_dir: PathBuf::from("/tmp/test-soracloud-runtime"),
+            local_peer_id: Some(primary_peer_id),
+            result: Err(
+                iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Unavailable,
+                    "forward target resolution test should not execute the runtime locally",
+                ),
+            ),
+            captured_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
+            captured_proxy_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
+            captured_reconcile_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
+        }));
+        let request = sample_generated_hf_infer_request(service_name, service_version);
+        let error = SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+            "proxy request commitment is invalid",
+        );
+
+        let forward_target =
+            super::resolve_incoming_soracloud_proxy_forward_target(&app, &request, &error);
+
+        assert!(forward_target.is_none());
     }
 
     #[tokio::test]
@@ -28316,11 +27811,11 @@ mod tests {
                 .expect("base58 id should resolve"),
             long_id
         );
-        let aid_error =
-            parse_asset_definition_id(app.as_ref(), "aid:2f17c72466f84a4bb8a8e24884fdcd2f")
-                .expect_err("legacy aid literal must be rejected");
+        let prefixed_error =
+            parse_asset_definition_id(app.as_ref(), "prefix:2f17c72466f84a4bb8a8e24884fdcd2f")
+                .expect_err("prefixed literal must be rejected");
         assert!(matches!(
-            aid_error,
+            prefixed_error,
             Error::Query(ValidationFail::TooComplex)
         ));
 

@@ -61,14 +61,14 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 Проверьте хеш CLI (например, `0x5f…`). Это произошло в 2007 году.
 
 ## 3. Сделай это в Стиве
 
-Установите флажок `(asset definition, account)`. На 250 секунд от `coffee#wonderland` до `$ADMIN_ACCOUNT`:
+Установите флажок `(asset definition, account)`. На 250 секунд от `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` до `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

@@ -80,7 +80,6 @@ struct Encodings {
     canonical_hex: String,
     i105: I105Encoding,
     i105_default: String,
-    i105_default_fullwidth: String,
 }
 
 #[derive(Debug, JsonDeserialize)]
@@ -209,20 +208,14 @@ fn validate_positive_case(case: &PositiveCase, default_prefix: u16) {
         case.case_id
     );
 
-    // Compressed decoding (half-/full-width)
-    for (encoding, label) in [
-        (&case.encodings.i105_default, "i105_default-half"),
-        (&case.encodings.i105_default_fullwidth, "i105_default-full"),
-    ] {
-        let decoded = AccountAddress::from_i105(encoding)
-            .unwrap_or_else(|err| panic!("{label} decode failed: {err}"));
-        assert_eq!(
-            canonical_bytes(&decoded),
-            canonical_payload,
-            "{}: {label} canonical mismatch",
-            case.case_id
-        );
-    }
+    let decoded = AccountAddress::from_i105(&case.encodings.i105_default)
+        .unwrap_or_else(|err| panic!("i105_default decode failed: {err}"));
+    assert_eq!(
+        canonical_bytes(&decoded),
+        canonical_payload,
+        "{}: i105_default canonical mismatch",
+        case.case_id
+    );
 
     match case.category.as_str() {
         "single" => validate_single_case(case, &canonical),
@@ -280,10 +273,6 @@ fn assert_error(err: &AccountAddressError, expected: &ExpectedError, case_id: &s
                 panic!("{case_id}: expected UnexpectedNetworkPrefix, got {err}");
             }
         }
-        "MissingI105Sentinel" => assert!(
-            matches!(err, AccountAddressError::MissingI105Sentinel),
-            "{case_id}: expected MissingI105Sentinel, got {err}"
-        ),
         "InvalidCompressedChar" | "InvalidI105Char" => {
             if let AccountAddressError::InvalidI105Char(ch) = err {
                 let expected_char = expected

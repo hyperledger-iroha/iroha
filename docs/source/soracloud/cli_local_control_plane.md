@@ -257,6 +257,19 @@ Soracloud v1 is an authoritative, IVM-only runtime.
     warm primary, the receiver-side runtime now also hints
     `ReconcileSoracloudModelHosts` instead of relying only on the caller-side
     routing view.
+  - when that same incoming generated-HF proxy authority failure happens on
+    the local authoritative primary itself, the runtime now treats it as a
+    first-class host-health signal: warm primaries self-report
+    `AssignedHeartbeatMiss`, warming primaries self-report `WarmupNoShow`,
+    and both paths immediately reuse the same authoritative
+    `ReconcileSoracloudModelHosts` control loop.
+  - when that same non-primary receiver is still one of the authoritative
+    assigned hosts and can resolve the warm primary from committed chain state,
+    it now re-proxies the generated-HF request onward to that primary instead
+    of failing immediately. Unassigned validators fail closed instead of acting
+    as generic intermediary HF proxy hops, and the original ingress node still
+    validates the returned runtime receipt against authoritative placement
+    state.
   - reconcile now also emits `AdvertContradiction` automatically when the
     local validator's configured runtime peer id disagrees with the
     authoritative `model-host-advertise` peer id for that validator.

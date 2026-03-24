@@ -35,7 +35,7 @@ I18NI000000011X-та билдәләнгән эш ағымы һәм аңлата
     --provider-account i105... \
     --treasury-account i105... \
     --reserve-account i105... \
-    --asset-definition xor#sora \
+    --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc \
     --json-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.json
    ```
    Баш һөйәге ярҙамсыһы I18NI000000012X блокын беркетә (аренда тейешле, запас

@@ -117,15 +117,15 @@ Struct ReservedAssignmentRequestV1 {
 
 | Эндпоинт | Метод | Payload | Описание |
 |----------|-------|---------|----------|
-| `/v1/sns/registrations` | POST | `RegisterNameRequestV1` | Регистрирует или повторно открывает имя. Разрешает ценовой tier, проверяет доказательства платежа/управления, испускает события реестра. |
-| `/v1/sns/registrations/{selector}/renew` | POST | `RenewNameRequestV1` | Продлевает срок. Применяет окна grace/redemption из политики. |
-| `/v1/sns/registrations/{selector}/transfer` | POST | `TransferNameRequestV1` | Передает владение после прикрепления согласований управления. |
-| `/v1/sns/registrations/{selector}/controllers` | PUT | `UpdateControllersRequestV1` | Заменяет набор controllers; проверяет подписанные адреса аккаунтов. |
-| `/v1/sns/registrations/{selector}/freeze` | POST | `FreezeNameRequestV1` | Freeze guardian/council. Требует guardian ticket и ссылку на governance docket. |
-| `/v1/sns/registrations/{selector}/freeze` | DELETE | `GovernanceHookV1` | Unfreeze после устранения; убеждается, что council override зафиксирован. |
+| `/v1/sns/names` | POST | `RegisterNameRequestV1` | Регистрирует или повторно открывает имя. Разрешает ценовой tier, проверяет доказательства платежа/управления, испускает события реестра. |
+| `/v1/sns/names/{namespace}/{literal}/renew` | POST | `RenewNameRequestV1` | Продлевает срок. Применяет окна grace/redemption из политики. |
+| `/v1/sns/names/{namespace}/{literal}/transfer` | POST | `TransferNameRequestV1` | Передает владение после прикрепления согласований управления. |
+| `/v1/sns/names/{namespace}/{literal}/controllers` | PUT | `UpdateControllersRequestV1` | Заменяет набор controllers; проверяет подписанные адреса аккаунтов. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | POST | `FreezeNameRequestV1` | Freeze guardian/council. Требует guardian ticket и ссылку на governance docket. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | DELETE | `GovernanceHookV1` | Unfreeze после устранения; убеждается, что council override зафиксирован. |
 | `/v1/sns/reserved/{selector}` | POST | `ReservedAssignmentRequestV1` | Назначение reserved имен steward/council. |
 | `/v1/sns/policies/{suffix_id}` | GET | -- | Получает текущую `SuffixPolicyV1` (кэшируемо). |
-| `/v1/sns/registrations/{selector}` | GET | -- | Возвращает текущий `NameRecordV1` + эффективное состояние (Active, Grace, и т. д.). |
+| `/v1/sns/names/{namespace}/{literal}` | GET | -- | Возвращает текущий `NameRecordV1` + эффективное состояние (Active, Grace, и т. д.). |
 
 **Кодирование selector:** сегмент `{selector}` принимает I105, I105 или канонический hex по ADDR-5; Torii нормализует через `NameSelectorV1`.
 
@@ -140,7 +140,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -165,7 +165,7 @@ iroha sns policy --suffix-id 1
 iroha sns renew \
   --selector makoto.sora \
   --term-years 1 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 120 \
   --payment-settlement '"renewal-settlement"' \
   --payment-signature '"steward-signature"'
@@ -188,7 +188,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` должен содержать корректную запись `GovernanceHookV1` (proposal id, vote hashes, подписи steward/guardian). Каждая команда просто отражает соответствующий эндпоинт `/v1/sns/registrations/{selector}/...` чтобы операторы беты могли репетировать точные поверхности Torii, которые будут вызывать SDK.
+`--governance-json` должен содержать корректную запись `GovernanceHookV1` (proposal id, vote hashes, подписи steward/guardian). Каждая команда просто отражает соответствующий эндпоинт `/v1/sns/names/{namespace}/{literal}/...` чтобы операторы беты могли репетировать точные поверхности Torii, которые будут вызывать SDK.
 
 ## 4. gRPC сервис
 
@@ -260,7 +260,7 @@ Torii проверяет доказательства, проверяя:
 
 1. Guardian отправляет `FreezeNameRequestV1` с ticket, ссылающимся на id инцидента.
 2. Torii переводит запись в `NameStatus::Frozen`, испускает `NameFrozen`.
-3. После устранения council выпускает override; оператор отправляет DELETE `/v1/sns/registrations/{selector}/freeze` с `GovernanceHookV1`.
+3. После устранения council выпускает override; оператор отправляет DELETE `/v1/sns/names/{namespace}/{literal}/freeze` с `GovernanceHookV1`.
 4. Torii проверяет override, испускает `NameUnfrozen`.
 
 ## 7. Валидация и коды ошибок

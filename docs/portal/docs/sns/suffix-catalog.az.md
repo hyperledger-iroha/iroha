@@ -34,7 +34,7 @@ alətlər status sənədlərini silmədən eyni parametrləri yükləyə bilər.
 | `status` | enum | `active`, `paused` və ya `revoked` buraxılışa hazırlığı təsvir edir. |
 | `steward_account` | simli | İdarəetmə üçün cavabdeh olan hesab (registrator siyasət qarmaqlarına uyğun gəlir). |
 | `fund_splitter_account` | simli | `fee_split` üzrə marşrutlaşdırmadan əvvəl ödənişləri qəbul edən hesab. |
-| `payment_asset_id` | simli | Hesablaşma üçün istifadə olunan aktiv (ilkin kohort üçün `xor#sora`). |
+| `payment_asset_id` | simli | Hesablaşma üçün istifadə olunan aktiv (ilkin kohort üçün `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `min_term_years` / `max_term_years` | tam | Siyasətdən satınalma müddətini məhdudlaşdırın. |
 | `grace_period_days` / `redemption_period_days` | tam | Yeniləmə təhlükəsizlik pəncərələri Torii tərəfindən tətbiq edilir. |
 | `referral_cap_bps` | tam | Rəhbərlik tərəfindən icazə verilən maksimum müraciətin ayrılması (əsas nöqtələr). |
@@ -47,9 +47,9 @@ alətlər status sənədlərini silmədən eyni parametrləri yükləyə bilər.
 
 | şəkilçi | ID (`hex`) | Stüard | Fond bölücü | Status | Ödəniş aktivi | İstinad həddi (bps) | Müddət (min – max illər) | Grace / Redemption (günlər) | Qiymətləndirmə səviyyələri (regex → əsas qiymət / auksion) | Qorunan etiketlər | Ödəniş bölgüsü (T/S/R/E bps) | Siyasət versiyası |
 |--------|------------|---------|---------------|--------|---------------|--------------------|--------------------------|--------------------------|--------------------------|-----------------|
-| `.sora` | `0x0001` | `i105...` | `i105...` | Aktiv | `xor#sora` | 500 | 1 – 5 | 30 / 60 | `T0: ^[a-z0-9]{3,}$ → 120 XOR (Vickrey)` | `treasury → i105...` | `7000 / 3000 / 1000 / 0` | 1 |
-| `.nexus` | `0x0002` | `i105...` | `i105...` | Dayandırıldı | `xor#sora` | 300 | 1 – 3 | 15 / 30 | `T0: ^[a-z0-9]{4,}$ → 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ → 4000 XOR (Dutch floor 500)` | `treasury → i105...`, `guardian → i105...` | `6500 / 2500 / 800 / 200` | 2 |
-| `.dao` | `0x0003` | `i105...` | `i105...` | Ləğv edildi | `xor#sora` | 0 | 1 – 2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ → 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
+| `.sora` | `0x0001` | `i105...` | `i105...` | Aktiv | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 500 | 1 – 5 | 30 / 60 | `T0: ^[a-z0-9]{3,}$ → 120 XOR (Vickrey)` | `treasury → i105...` | `7000 / 3000 / 1000 / 0` | 1 |
+| `.nexus` | `0x0002` | `i105...` | `i105...` | Dayandırıldı | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 300 | 1 – 3 | 15 / 30 | `T0: ^[a-z0-9]{4,}$ → 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ → 4000 XOR (Dutch floor 500)` | `treasury → i105...`, `guardian → i105...` | `6500 / 2500 / 800 / 200` | 2 |
+| `.dao` | `0x0003` | `i105...` | `i105...` | Ləğv edildi | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 0 | 1 – 2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ → 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
 
 ## JSON çıxarışı
 
@@ -63,13 +63,13 @@ alətlər status sənədlərini silmədən eyni parametrləri yükləyə bilər.
       "suffix_id": 1,
       "status": "active",
       "fund_splitter_account": "i105...",
-      "payment_asset_id": "xor#sora",
+      "payment_asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
       "referral_cap_bps": 500,
       "pricing": [
         {
           "tier_id": 0,
           "label_regex": "^[a-z0-9]{3,}$",
-          "base_price": {"asset_id": "xor#sora", "amount": 120},
+          "base_price": {"asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc", "amount": 120},
           "auction_kind": "vickrey_commit_reveal",
           "min_duration_years": 1,
           "max_duration_years": 5

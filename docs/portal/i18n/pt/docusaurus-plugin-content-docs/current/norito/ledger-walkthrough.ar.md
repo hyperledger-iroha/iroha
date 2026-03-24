@@ -61,14 +61,14 @@ Para obter mais informações sobre o `coffee`, use o `wonderland`:
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 Use o hash CLI do arquivo (como `0x5f…`). Você pode fazer isso sem parar.
 
 ## 3. سك وحدات في حساب المشغل
 
-Verifique o valor do arquivo `(asset definition, account)`. 250 unidades de `coffee#wonderland` em `$ADMIN_ACCOUNT`:
+Verifique o valor do arquivo `(asset definition, account)`. 250 unidades de `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` em `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

@@ -11,7 +11,7 @@ use iroha_data_model::{
         custom::{CustomParameter, CustomParameterId},
         system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter},
     },
-    prelude::{AccountId, AssetId, ChainId, DomainId, Name, NumericSpec},
+    prelude::{AccountId, AssetDefinitionId, AssetId, ChainId, DomainId, Name, NumericSpec},
 };
 use iroha_executor_data_model::permission::{
     domain::CanRegisterDomain, parameter::CanSetParameters,
@@ -44,6 +44,9 @@ pub fn default_manifest(
     let wonderland: Name = "wonderland".parse()?;
     let wonderland_id = DomainId::new(wonderland.clone());
     let garden: Name = "garden_of_live_flowers".parse()?;
+    let garden_id = DomainId::new(garden.clone());
+    let rose_definition = AssetDefinitionId::new(wonderland_id.clone(), "rose".parse()?);
+    let cabbage_definition = AssetDefinitionId::new(garden_id, "cabbage".parse()?);
 
     let mut builder = builder
         .domain_with_metadata(wonderland.clone(), meta.clone())
@@ -58,17 +61,15 @@ pub fn default_manifest(
 
     let mint_rose = Mint::asset_numeric(
         13u32,
-        AssetId::new("rose#wonderland".parse()?, ALICE_ID.clone()),
+        AssetId::new(rose_definition.clone(), ALICE_ID.clone()),
     );
-    let mint_cabbage = Mint::asset_numeric(
-        44u32,
-        AssetId::new("cabbage#garden_of_live_flowers".parse()?, ALICE_ID.clone()),
-    );
+    let mint_cabbage =
+        Mint::asset_numeric(44u32, AssetId::new(cabbage_definition, ALICE_ID.clone()));
     let grant_set_parameters = Grant::account_permission(CanSetParameters, ALICE_ID.clone());
     let grant_register_domains = Grant::account_permission(CanRegisterDomain, ALICE_ID.clone());
     let transfer_rose_definition = Transfer::asset_definition(
         genesis_account_id.clone(),
-        "rose#wonderland".parse()?,
+        rose_definition,
         ALICE_ID.clone(),
     );
     let transfer_wonderland = Transfer::domain(

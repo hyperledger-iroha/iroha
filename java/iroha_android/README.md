@@ -51,13 +51,11 @@ import org.hyperledger.iroha.android.address.AccountAddress;
 byte[] key = new byte[32];
 AccountAddress address = AccountAddress.fromAccount("default", key, "ed25519");
 System.out.println(address.canonicalHex());
-System.out.println(address.toIH58(753));
-System.out.println(address.toCompressedSora());
+System.out.println(address.toI105(753));
 
 AccountAddress.DisplayFormats formats = address.displayFormats();
-System.out.println(formats.ih58);
-System.out.println(formats.compressed);
-System.out.println(formats.compressedWarning);
+System.out.println(formats.i105);
+System.out.println(formats.i105Warning);
 ```
 
 Use `displayFormats()` whenever UI layers need to render or copy addresses so the warning text and

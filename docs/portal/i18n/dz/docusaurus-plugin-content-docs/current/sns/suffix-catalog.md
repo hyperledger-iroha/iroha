@@ -61,13 +61,13 @@ translation_last_reviewed: 2026-02-07
       "suffix_id": 1,
       "status": "active",
       "fund_splitter_account": "i105...",
-      "payment_asset_id": "xor#sora",
+      "payment_asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
       "referral_cap_bps": 500,
       "pricing": [
         {
           "tier_id": 0,
           "label_regex": "^[a-z0-9]{3,}$",
-          "base_price": {"asset_id": "xor#sora", "amount": 120},
+          "base_price": {"asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc", "amount": 120},
           "auction_kind": "vickrey_commit_reveal",
           "min_duration_years": 1,
           "max_duration_years": 5

@@ -7364,9 +7364,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_asset_definition_literal_rejects_legacy_literal() {
-        let err = parse_asset_definition_literal("aid:2f17c72466f84a4bb8a8e24884fdcd2f")
-            .expect_err("legacy literal should be rejected");
+    fn parse_asset_definition_literal_rejects_prefixed_literal() {
+        let err = parse_asset_definition_literal("prefix:2f17c72466f84a4bb8a8e24884fdcd2f")
+            .expect_err("prefixed literal should be rejected");
         assert!(
             err.to_string().contains("Base58"),
             "unexpected error: {err}"

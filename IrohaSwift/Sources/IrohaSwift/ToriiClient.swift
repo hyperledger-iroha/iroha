@@ -4281,7 +4281,7 @@ public struct ToriiOfflineBundleProofStatus: Decodable, Sendable, Equatable {
     }
 }
 
-/// Typed view of the optional proof summary payload returned by `/v1/offline/bundle/proof_status`.
+/// Typed view of the optional proof summary payload returned by Torii.
 public struct ToriiOfflineBundleProofSummary: Decodable, Sendable, Equatable {
     public let version: UInt16
     public let proofSumBytes: UInt64?
@@ -4749,28 +4749,6 @@ public struct ToriiOfflineTransferItem: Codable, Sendable {
 public struct ToriiOfflineTransferList: Decodable, Sendable {
     public let items: [ToriiOfflineTransferItem]
     public let total: UInt64
-}
-
-/// Execution outcome for an offline settlement bundle.
-///
-/// Semantics:
-/// - ``settled``: a settlement record exists on Torii (`status=settled|archived`).
-/// - ``pending``: the bundle was submitted by this client but no settlement record exists yet.
-/// - ``rejected(reason:)``: a submit rejection was observed locally or the server reported a rejected status.
-/// - ``unknown``: no settlement record exists and this client has no local submit outcome for the bundle.
-public enum ToriiSettlementExecutionStatus: Sendable, Equatable {
-    case settled
-    case rejected(reason: String?)
-    case pending
-    case unknown
-
-    /// Rejection reason when ``self`` is ``rejected(reason:)``.
-    public var rejectionReason: String? {
-        guard case .rejected(let reason) = self else {
-            return nil
-        }
-        return reason
-    }
 }
 
 public struct ToriiOfflineReceiptListItem: Decodable, Sendable, Equatable {
@@ -10606,8 +10584,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     private let dataModelQueue = DispatchQueue(label: "org.hyperledger.iroha.torii.data-model")
     private let serverClockQueue = DispatchQueue(label: "org.hyperledger.iroha.torii.server-clock")
     private var observedServerClock: ObservedServerClock?
-    private var cachedOfflineSettlementStatusByBundleIdHex: [String: ToriiSettlementExecutionStatus] = [:]
-    private let offlineSettlementStatusQueue = DispatchQueue(label: "org.hyperledger.iroha.torii.offline-settlement-status")
     private static let defaultListPageSize = 100
     internal var assetIdLiteralBuilder: (String, String) throws -> String = {
         try OfflineNorito.assetIdLiteral(assetDefinitionId: $0, accountId: $1)
@@ -11095,202 +11071,15 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     @discardableResult
-    public func listOfflineAllowances(params: ToriiOfflineListParams? = nil,
-                                      completion: @escaping (Result<ToriiOfflineAllowanceList, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.listOfflineAllowances(params: params) }
-    }
-
-    @discardableResult
     public func listOfflineTransfers(params: ToriiOfflineListParams? = nil,
                                      completion: @escaping (Result<ToriiOfflineTransferList, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.listOfflineTransfers(params: params) }
-    }
-
-    public func listOfflineSummaries(params: ToriiOfflineListParams? = nil,
-                                     completion: @escaping (Result<ToriiOfflineSummaryList, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.listOfflineSummaries(params: params) }
-    }
-
-    @discardableResult
-    public func listOfflineRevocations(params: ToriiOfflineRevocationListParams? = nil,
-                                       completion: @escaping (Result<ToriiOfflineRevocationList, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.listOfflineRevocations(params: params) }
-    }
-
-    @discardableResult
-    public func getOfflineBundleProofStatus(params: ToriiOfflineBundleProofStatusParams,
-                                            completion: @escaping (Result<ToriiOfflineBundleProofStatus, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getOfflineBundleProofStatus(params: params) }
-    }
-
-    @discardableResult
-    public func listOfflineReceipts(params: ToriiOfflineReceiptListParams? = nil,
-                                    completion: @escaping (Result<ToriiOfflineReceiptList, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.listOfflineReceipts(params: params) }
-    }
-
-    @discardableResult
-    public func queryOfflineReceipts(_ envelope: ToriiQueryEnvelope,
-                                     completion: @escaping (Result<ToriiOfflineReceiptList, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.queryOfflineReceipts(envelope) }
-    }
-
-    @discardableResult
-    public func queryOfflineAllowances(_ envelope: ToriiQueryEnvelope,
-                                       completion: @escaping (Result<ToriiOfflineAllowanceList, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.queryOfflineAllowances(envelope) }
-    }
-
-    @discardableResult
-    public func queryOfflineCertificates(_ envelope: ToriiQueryEnvelope,
-                                         completion: @escaping (Result<ToriiOfflineAllowanceList, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.queryOfflineCertificates(envelope) }
     }
 
     @discardableResult
     public func queryOfflineTransfers(_ envelope: ToriiQueryEnvelope,
                                       completion: @escaping (Result<ToriiOfflineTransferList, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.queryOfflineTransfers(envelope) }
-    }
-
-    @discardableResult
-    public func queryOfflineSettlements(_ envelope: ToriiQueryEnvelope,
-                                        completion: @escaping (Result<ToriiOfflineTransferList, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.queryOfflineSettlements(envelope) }
-    }
-
-    @discardableResult
-    public func getSettlementStatus(bundleIdHex: String,
-                                    completion: @escaping (Result<ToriiSettlementExecutionStatus, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getSettlementStatus(bundleIdHex: bundleIdHex) }
-    }
-
-    @discardableResult
-    public func getOfflineSettlementStatus(bundleIdHex: String,
-                                           completion: @escaping (Result<ToriiSettlementExecutionStatus, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getOfflineSettlementStatus(bundleIdHex: bundleIdHex) }
-    }
-
-    @discardableResult
-    public func queryOfflineRevocations(_ envelope: ToriiQueryEnvelope,
-                                        completion: @escaping (Result<ToriiOfflineRevocationList, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.queryOfflineRevocations(envelope) }
-    }
-
-    @discardableResult
-    public func getOfflineState(completion: @escaping (Result<ToriiOfflineStateResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getOfflineState() }
-    }
-
-    @discardableResult
-    public func issueOfflineCertificate(_ requestBody: ToriiOfflineCertificateIssueRequest,
-                                        completion: @escaping (Result<ToriiOfflineCertificateIssueResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.issueOfflineCertificate(requestBody) }
-    }
-
-    @discardableResult
-    public func issueOfflineBuildClaim(_ requestBody: ToriiOfflineBuildClaimIssueRequest,
-                                       completion: @escaping (Result<ToriiOfflineBuildClaimIssueResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.issueOfflineBuildClaim(requestBody) }
-    }
-
-    @discardableResult
-    public func registerOfflineAllowance(_ requestBody: ToriiOfflineAllowanceRegisterRequest,
-                                         completion: @escaping (Result<ToriiOfflineAllowanceRegisterResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.registerOfflineAllowance(requestBody) }
-    }
-
-    @discardableResult
-    public func renewOfflineAllowance(certificateIdHex: String,
-                                      requestBody: ToriiOfflineAllowanceRegisterRequest,
-                                      completion: @escaping (Result<ToriiOfflineAllowanceRegisterResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.renewOfflineAllowance(certificateIdHex: certificateIdHex,
-                                                                   requestBody: requestBody) }
-    }
-
-    @discardableResult
-    public func issueOfflineCertificateRenewal(certificateIdHex: String,
-                                               requestBody: ToriiOfflineCertificateIssueRequest,
-                                               completion: @escaping (Result<ToriiOfflineCertificateIssueResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.issueOfflineCertificateRenewal(certificateIdHex: certificateIdHex,
-                                                                            requestBody: requestBody) }
-    }
-
-    @discardableResult
-    public func topUpOfflineAllowance(draft: OfflineWalletCertificateDraft,
-                                      authority: String,
-                                      privateKey: String,
-                                      attestationNonce: Data? = nil,
-                                      completion: @escaping (Result<ToriiOfflineTopUpResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.topUpOfflineAllowance(draft: draft,
-                                                                   authority: authority,
-                                                                   privateKey: privateKey,
-                                                                   attestationNonce: attestationNonce) }
-    }
-
-    @discardableResult
-    public func topUpOfflineAllowanceRenewal(certificateIdHex: String,
-                                             draft: OfflineWalletCertificateDraft,
-                                             authority: String,
-                                             privateKey: String,
-                                             attestationNonce: Data? = nil,
-                                             completion: @escaping (Result<ToriiOfflineTopUpResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.topUpOfflineAllowanceRenewal(certificateIdHex: certificateIdHex,
-                                                                          draft: draft,
-                                                                          authority: authority,
-                                                                          privateKey: privateKey,
-                                                                          attestationNonce: attestationNonce) }
-    }
-
-    /// Reprovisions an existing offline allowance by renewing the certificate with a
-    /// new Pedersen commitment while preserving the current allowance amount and policy.
-    ///
-    /// This is intended for recovery flows that rotate the commitment/blinding without
-    /// changing balances or policy caps.
-    @discardableResult
-    public func reprovisionOfflineAllowance(certificateIdHex: String,
-                                            currentCertificateRecordData: Data,
-                                            newCommitment: Data,
-                                            authority: String,
-                                            privateKey: String,
-                                            lineage: OfflineCertificateLineage,
-                                            completion: @escaping (Result<ToriiOfflineTopUpResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.reprovisionOfflineAllowance(certificateIdHex: certificateIdHex,
-                                                                         currentCertificateRecordData: currentCertificateRecordData,
-                                                                         newCommitment: newCommitment,
-                                                                         authority: authority,
-                                                                         privateKey: privateKey,
-                                                                         lineage: lineage) }
-    }
-
-    @discardableResult
-    public func submitOfflineSpendReceipts(_ requestBody: ToriiOfflineSpendReceiptsSubmitRequest,
-                                           completion: @escaping (Result<ToriiOfflineSpendReceiptsSubmitResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.submitOfflineSpendReceipts(requestBody) }
-    }
-
-    @discardableResult
-    public func submitOfflineSettlement(_ requestBody: ToriiOfflineSettlementSubmitRequest,
-                                        completion: @escaping (Result<ToriiOfflineSettlementSubmitResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.submitOfflineSettlement(requestBody) }
-    }
-
-    @discardableResult
-    public func submitOfflineSettlementAndWait(_ requestBody: ToriiOfflineSettlementSubmitRequest,
-                                               pollOptions: PipelineStatusPollOptions = .default,
-                                               mode: PipelineEndpointMode = .pipeline,
-                                               completion: @escaping (Result<ToriiOfflineSettlementSubmitResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) {
-            try await self.submitOfflineSettlementAndWait(requestBody,
-                                                          pollOptions: pollOptions,
-                                                          mode: mode)
-        }
-    }
-
-    @discardableResult
-    public func requestOfflineTransferProof(_ requestBody: ToriiOfflineTransferProofRequest,
-                                            completion: @escaping (Result<ToriiJSONValue, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.requestOfflineTransferProof(requestBody) }
     }
 
     @discardableResult
@@ -12000,17 +11789,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         try OfflineNorito.assetIdLiteral(assetDefinitionId: assetDefinitionId, accountId: accountId)
     }
 
-    /// Derive the deterministic asset definition ID from a legacy `name#domain` seed.
-    ///
-    /// Mutable dotted aliases must be resolved online via `resolveAssetAlias(_:)`.
-    ///
-    /// - Parameter alias: Legacy deterministic seed in `"name#domain"` form.
-    /// - Returns: Canonical unprefixed Base58 asset-definition ID.
-    @available(*, deprecated, message: "Asset aliases are mutable. Resolve aliases through Torii instead of deriving IDs offline.")
-    public static func assetDefinitionId(fromAlias alias: String) throws -> String {
-        try OfflineNorito.assetDefinitionIdFromAlias(alias)
-    }
-
     public func buildAssetIdLiteralResolvingAliases(assetDefinitionIdOrAlias: String,
                                                     accountIdOrAlias: String) async throws -> String {
         let normalizedAssetInput = try ToriiRequestValidation.normalizedNonEmpty(
@@ -12504,73 +12282,10 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         return try decodeJSON(ToriiUaidManifestsResponse.self, from: data)
     }
 
-    public func listOfflineAllowances(params: ToriiOfflineListParams? = nil) async throws -> ToriiOfflineAllowanceList {
-        let request = try makeRequest(path: "/v1/offline/allowances", queryItems: try params?.queryItems())
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineAllowanceList.self, from: data)
-    }
-
     public func listOfflineTransfers(params: ToriiOfflineListParams? = nil) async throws -> ToriiOfflineTransferList {
         let request = try makeRequest(path: "/v1/offline/transfers", queryItems: try params?.queryItems())
         let data = try await data(for: request)
         return try decodeJSON(ToriiOfflineTransferList.self, from: data)
-    }
-
-    public func listOfflineSummaries(params: ToriiOfflineListParams? = nil) async throws -> ToriiOfflineSummaryList {
-        let request = try makeRequest(path: "/v1/offline/summaries", queryItems: try params?.queryItems())
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineSummaryList.self, from: data)
-    }
-
-    public func listOfflineRevocations(params: ToriiOfflineRevocationListParams? = nil) async throws -> ToriiOfflineRevocationList {
-        let request = try makeRequest(path: "/v1/offline/revocations", queryItems: try params?.queryItems())
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineRevocationList.self, from: data)
-    }
-
-    public func getOfflineBundleProofStatus(params: ToriiOfflineBundleProofStatusParams) async throws -> ToriiOfflineBundleProofStatus {
-        let request = try makeRequest(path: "/v1/offline/bundle/proof_status", queryItems: try params.queryItems())
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineBundleProofStatus.self, from: data)
-    }
-
-    public func listOfflineReceipts(params: ToriiOfflineReceiptListParams? = nil) async throws -> ToriiOfflineReceiptList {
-        let request = try makeRequest(path: "/v1/offline/receipts", queryItems: try params?.queryItems())
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineReceiptList.self, from: data)
-    }
-
-    public func queryOfflineReceipts(_ envelope: ToriiQueryEnvelope) async throws -> ToriiOfflineReceiptList {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(envelope)
-        let request = try makeRequest(path: "/v1/offline/receipts/query",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineReceiptList.self, from: data)
-    }
-
-    public func queryOfflineAllowances(_ envelope: ToriiQueryEnvelope) async throws -> ToriiOfflineAllowanceList {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(envelope)
-        let request = try makeRequest(path: "/v1/offline/allowances/query",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineAllowanceList.self, from: data)
-    }
-
-    public func queryOfflineCertificates(_ envelope: ToriiQueryEnvelope) async throws -> ToriiOfflineAllowanceList {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(envelope)
-        let request = try makeRequest(path: "/v1/offline/certificates/query",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineAllowanceList.self, from: data)
     }
 
     public func queryOfflineTransfers(_ envelope: ToriiQueryEnvelope) async throws -> ToriiOfflineTransferList {
@@ -12582,228 +12297,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                       headers: ["Content-Type": "application/json"])
         let data = try await data(for: request)
         return try decodeJSON(ToriiOfflineTransferList.self, from: data)
-    }
-
-    public func queryOfflineSettlements(_ envelope: ToriiQueryEnvelope) async throws -> ToriiOfflineTransferList {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(envelope)
-        let request = try makeRequest(path: "/v1/offline/settlements/query",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineTransferList.self, from: data)
-    }
-
-    /// Resolves settlement execution status for a specific offline bundle id.
-    ///
-    /// This method combines server settlement rows with local submit outcomes:
-    /// - server row present with `settled`/`archived` -> ``ToriiSettlementExecutionStatus/settled``
-    /// - server row present with `rejected` -> ``ToriiSettlementExecutionStatus/rejected(reason:)``
-    /// - no server row but this client submitted the bundle -> ``ToriiSettlementExecutionStatus/pending``
-    /// - no row and no local knowledge -> ``ToriiSettlementExecutionStatus/unknown``
-    public func getSettlementStatus(bundleIdHex: String) async throws -> ToriiSettlementExecutionStatus {
-        let normalizedBundleId = try Self.normalizeBundleIdHex(bundleIdHex, field: "bundleIdHex")
-        let envelope = ToriiQueryEnvelope(
-            filter: Self.queryEqualsFilter(field: "bundle_id_hex", value: normalizedBundleId),
-            sort: [ToriiQuerySortKey(key: "recorded_at_ms", order: .desc)],
-            pagination: ToriiQueryPagination(limit: 1, offset: 0)
-        )
-        let settlements = try await queryOfflineSettlements(envelope)
-        if let item = settlements.items.first {
-            let resolved = try await settlementStatus(from: item)
-            cacheOfflineSettlementStatus(resolved, bundleIdHex: normalizedBundleId)
-            return resolved
-        }
-        if let cached = cachedOfflineSettlementStatus(bundleIdHex: normalizedBundleId) {
-            return cached
-        }
-        return .unknown
-    }
-
-    /// Alias for ``getSettlementStatus(bundleIdHex:)``.
-    public func getOfflineSettlementStatus(bundleIdHex: String) async throws -> ToriiSettlementExecutionStatus {
-        try await getSettlementStatus(bundleIdHex: bundleIdHex)
-    }
-
-    public func queryOfflineRevocations(_ envelope: ToriiQueryEnvelope) async throws -> ToriiOfflineRevocationList {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(envelope)
-        let request = try makeRequest(path: "/v1/offline/revocations/query",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineRevocationList.self, from: data)
-    }
-
-    public func getOfflineState() async throws -> ToriiOfflineStateResponse {
-        let request = try makeRequest(path: "/v1/offline/state")
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineStateResponse.self, from: data)
-    }
-
-    public func issueOfflineCertificate(_ requestBody: ToriiOfflineCertificateIssueRequest) async throws -> ToriiOfflineCertificateIssueResponse {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(requestBody)
-        let request = try makeRequest(path: "/v1/offline/certificates/issue",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineCertificateIssueResponse.self, from: data)
-    }
-
-    public func issueOfflineBuildClaim(_ requestBody: ToriiOfflineBuildClaimIssueRequest) async throws -> ToriiOfflineBuildClaimIssueResponse {
-        let normalizedCertificateId = try Self.normalizeHash32HexOrLiteral(
-            requestBody.certificateIdHex,
-            field: "certificate_id_hex"
-        )
-        let normalizedTxId = try Self.normalizeHash32HexOrLiteral(
-            requestBody.txIdHex,
-            field: "tx_id_hex"
-        )
-        let normalizedPlatform = try ToriiRequestValidation.normalizedNonEmpty(
-            requestBody.platform,
-            field: "platform"
-        ).lowercased()
-        guard normalizedPlatform == "apple" || normalizedPlatform == "android" else {
-            throw ToriiClientError.invalidPayload("platform must be either \"apple\" or \"android\".")
-        }
-        let normalizedRequest = ToriiOfflineBuildClaimIssueRequest(
-            certificateIdHex: normalizedCertificateId,
-            txIdHex: normalizedTxId,
-            platform: normalizedPlatform,
-            appId: requestBody.appId,
-            buildNumber: requestBody.buildNumber,
-            issuedAtMs: requestBody.issuedAtMs,
-            expiresAtMs: requestBody.expiresAtMs
-        )
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(normalizedRequest)
-        let request = try makeRequest(path: "/v1/offline/build-claims/issue",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineBuildClaimIssueResponse.self, from: data)
-    }
-
-    public func registerOfflineAllowance(_ requestBody: ToriiOfflineAllowanceRegisterRequest) async throws -> ToriiOfflineAllowanceRegisterResponse {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(requestBody)
-        let request = try makeRequest(path: "/v1/offline/allowances",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineAllowanceRegisterResponse.self, from: data)
-    }
-
-    public func renewOfflineAllowance(certificateIdHex: String,
-                                      requestBody: ToriiOfflineAllowanceRegisterRequest) async throws -> ToriiOfflineAllowanceRegisterResponse {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(requestBody)
-        let encodedId = encodePathComponent(certificateIdHex)
-        let request = try makeRequest(path: "/v1/offline/allowances/\(encodedId)/renew",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineAllowanceRegisterResponse.self, from: data)
-    }
-
-    public func issueOfflineCertificateRenewal(certificateIdHex: String,
-                                               requestBody: ToriiOfflineCertificateIssueRequest) async throws -> ToriiOfflineCertificateIssueResponse {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(requestBody)
-        let encodedId = encodePathComponent(certificateIdHex)
-        let request = try makeRequest(path: "/v1/offline/certificates/\(encodedId)/renew/issue",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineCertificateIssueResponse.self, from: data)
-    }
-
-    public func topUpOfflineAllowance(draft: OfflineWalletCertificateDraft,
-                                      authority: String,
-                                      privateKey: String,
-                                      attestationNonce: Data? = nil) async throws -> ToriiOfflineTopUpResponse {
-        let effectiveDraft = try Self.draftByApplyingAttestationNonce(draft, attestationNonce)
-        let issueRequest = try ToriiOfflineCertificateIssueRequest(certificate: effectiveDraft)
-        let issued = try await issueOfflineCertificate(issueRequest)
-        let registerRequest = ToriiOfflineAllowanceRegisterRequest(authority: authority,
-                                                                   privateKey: privateKey,
-                                                                   certificate: issued.certificate)
-        let registered = try await registerOfflineAllowance(registerRequest)
-        try ensureTopUpCertificateIdsMatch(issued: issued, registered: registered)
-        return ToriiOfflineTopUpResponse(certificate: issued, registration: registered)
-    }
-
-    public func topUpOfflineAllowanceRenewal(certificateIdHex: String,
-                                             draft: OfflineWalletCertificateDraft,
-                                             authority: String,
-                                             privateKey: String,
-                                             attestationNonce: Data? = nil) async throws -> ToriiOfflineTopUpResponse {
-        let effectiveDraft = try Self.draftByApplyingAttestationNonce(draft, attestationNonce)
-        let issueRequest = try ToriiOfflineCertificateIssueRequest(certificate: effectiveDraft)
-        let issued = try await issueOfflineCertificateRenewal(certificateIdHex: certificateIdHex,
-                                                              requestBody: issueRequest)
-        let renewRequest = ToriiOfflineAllowanceRegisterRequest(authority: authority,
-                                                                privateKey: privateKey,
-                                                                certificate: issued.certificate)
-        let registered = try await renewOfflineAllowance(certificateIdHex: certificateIdHex,
-                                                         requestBody: renewRequest)
-        try ensureTopUpCertificateIdsMatch(issued: issued, registered: registered)
-        return ToriiOfflineTopUpResponse(certificate: issued, registration: registered)
-    }
-
-    /// Reprovisions an existing offline allowance by renewing the certificate with a
-    /// new Pedersen commitment while preserving allowance amount/policy fields.
-    ///
-    /// This avoids `topUp(0)` workarounds in recovery flows where only the commitment
-    /// must change.
-    /// Reprovision from raw record data — decodes the certificate internally.
-    public func reprovisionOfflineAllowance(certificateIdHex: String,
-                                            currentCertificateRecordData: Data,
-                                            newCommitment: Data,
-                                            authority: String,
-                                            privateKey: String,
-                                            lineage: OfflineCertificateLineage) async throws -> ToriiOfflineTopUpResponse {
-        let currentCertificate = try OfflineWalletCertificate(recordData: currentCertificateRecordData)
-        return try await reprovisionOfflineAllowance(certificateIdHex: certificateIdHex,
-                                                      currentCertificate: currentCertificate,
-                                                      newCommitment: newCommitment,
-                                                      authority: authority,
-                                                      privateKey: privateKey,
-                                                      lineage: lineage)
-    }
-
-    func reprovisionOfflineAllowance(certificateIdHex: String,
-                                            currentCertificate: OfflineWalletCertificate,
-                                            newCommitment: Data,
-                                            authority: String,
-                                            privateKey: String,
-                                            lineage: OfflineCertificateLineage) async throws -> ToriiOfflineTopUpResponse {
-        let draft = try Self.makeOfflineReprovisionDraft(currentCertificate: currentCertificate,
-                                                         newCommitment: newCommitment,
-                                                         lineage: lineage)
-        return try await topUpOfflineAllowanceRenewal(certificateIdHex: certificateIdHex,
-                                                      draft: draft,
-                                                      authority: authority,
-                                                      privateKey: privateKey)
-    }
-
-    public func submitOfflineSpendReceipts(_ requestBody: ToriiOfflineSpendReceiptsSubmitRequest) async throws -> ToriiOfflineSpendReceiptsSubmitResponse {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(requestBody)
-        let request = try makeRequest(path: "/v1/offline/spend-receipts",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineSpendReceiptsSubmitResponse.self, from: data)
     }
 
     public func setupOfflineReserve(
@@ -12882,51 +12375,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         return try decodeJSON(ToriiOfflineRevocationBundle.self, from: data)
     }
 
-    public func submitOfflineSettlement(_ requestBody: ToriiOfflineSettlementSubmitRequest) async throws -> ToriiOfflineSettlementSubmitResponse {
-        let normalizedOverrides = try requestBody.buildClaimOverrides.enumerated().map { index, buildClaimOverride in
-            let normalizedTxIdHex = try Self.normalizeHash32HexOrLiteral(
-                buildClaimOverride.txIdHex,
-                field: "build_claim_overrides[\(index)].tx_id_hex"
-            )
-            return ToriiOfflineSettlementBuildClaimOverride(
-                txIdHex: normalizedTxIdHex,
-                appId: buildClaimOverride.appId,
-                buildNumber: buildClaimOverride.buildNumber,
-                issuedAtMs: buildClaimOverride.issuedAtMs,
-                expiresAtMs: buildClaimOverride.expiresAtMs
-            )
-        }
-        let normalizedBundleId = Self.extractBundleIdHex(from: requestBody.transfer)
-        let normalizedRequest = ToriiOfflineSettlementSubmitRequest(
-            authority: requestBody.authority,
-            privateKey: requestBody.privateKey,
-            transfer: requestBody.transfer,
-            buildClaimOverrides: normalizedOverrides,
-            repairExistingBuildClaims: requestBody.repairExistingBuildClaims
-        )
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(normalizedRequest)
-        let request = try makeRequest(path: "/v1/offline/settlements",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        do {
-            let data = try await data(for: request)
-            let response = try decodeJSON(ToriiOfflineSettlementSubmitResponse.self, from: data)
-            let cachedBundleId = (try? Self.normalizeBundleIdHex(response.bundleIdHex, field: "bundle_id_hex")) ?? normalizedBundleId
-            if let cachedBundleId {
-                cacheOfflineSettlementStatus(.pending, bundleIdHex: cachedBundleId)
-            }
-            return response
-        } catch {
-            if let normalizedBundleId,
-               let rejectCode = Self.extractRejectCode(from: error) {
-                cacheOfflineSettlementStatus(.rejected(reason: rejectCode), bundleIdHex: normalizedBundleId)
-            }
-            throw error
-        }
-    }
-
     public func waitForTransactionStatus(hashHex: String,
                                          pollOptions: PipelineStatusPollOptions = .default,
                                          mode: PipelineEndpointMode = .pipeline) async throws -> ToriiPipelineTransactionStatus {
@@ -12959,50 +12407,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                 await Task.yield()
             }
         }
-    }
-
-    public func submitOfflineSettlementAndWait(_ requestBody: ToriiOfflineSettlementSubmitRequest,
-                                               pollOptions: PipelineStatusPollOptions = .default,
-                                               mode: PipelineEndpointMode = .pipeline) async throws -> ToriiOfflineSettlementSubmitResponse {
-        let settlement = try await submitOfflineSettlement(requestBody)
-        let cachedBundleId =
-            (try? Self.normalizeBundleIdHex(settlement.bundleIdHex, field: "bundle_id_hex"))
-            ?? Self.extractBundleIdHex(from: requestBody.transfer)
-        guard let txHashHex = settlement.txHashHex, !txHashHex.isEmpty else {
-            throw ToriiClientError.invalidPayload(
-                "offline settlement submit response missing transaction_hash_hex"
-            )
-        }
-        do {
-            _ = try await waitForTransactionStatus(hashHex: txHashHex,
-                                                   pollOptions: pollOptions,
-                                                   mode: mode)
-            return settlement
-        } catch let error as PipelineStatusError {
-            if case .failure = error, let cachedBundleId {
-                cacheOfflineSettlementStatus(.rejected(reason: error.rejectionReason),
-                                             bundleIdHex: cachedBundleId)
-            }
-            throw error
-        }
-    }
-
-    public func requestOfflineTransferProof(_ requestBody: ToriiOfflineTransferProofRequest) async throws -> ToriiJSONValue {
-        let data = try await requestOfflineTransferProofData(requestBody)
-        return try decodeJSON(ToriiJSONValue.self, from: data)
-    }
-
-    /// Returns the raw JSON bytes from the Torii proof endpoint, preserving
-    /// the original Iroha JSON format (important for ``norito::json`` parsing
-    /// in the native bridge).
-    public func requestOfflineTransferProofData(_ requestBody: ToriiOfflineTransferProofRequest) async throws -> Data {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(requestBody)
-        let request = try makeRequest(path: "/v1/offline/transfers/proof",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        return try await data(for: request)
     }
 
     public func getConnectStatus() async throws -> ToriiConnectStatusSnapshot? {
@@ -15658,89 +15062,11 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                       rawEvent: parsed.raw)
     }
 
-    private func settlementStatus(from item: ToriiOfflineTransferItem) async throws -> ToriiSettlementExecutionStatus {
-        let normalizedStatus = item.status
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        switch normalizedStatus {
-        case "settled", "archived":
-            return .settled
-        case "rejected":
-            let reason = try await settlementRejectionReason(from: item)
-            return .rejected(reason: reason)
-        case "pending", "queued", "in_pool", "in-pool", "pool":
-            return .pending
-        default:
-            return .unknown
-        }
-    }
-
-    private func settlementRejectionReason(from item: ToriiOfflineTransferItem) async throws -> String? {
-        if let reason = item.rejectionReason?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !reason.isEmpty {
-            return reason
-        }
-        if let reason = Self.extractRejectionReason(from: item.transfer) {
-            return reason
-        }
-        guard let verdictIdHex = item.verdictIdHex,
-              let normalizedVerdictIdHex = try? Self.normalizeBundleIdHex(verdictIdHex,
-                                                                           field: "verdictIdHex") else {
-            return nil
-        }
-        let envelope = ToriiQueryEnvelope(
-            filter: Self.queryEqualsFilter(field: "verdict_id_hex", value: normalizedVerdictIdHex),
-            sort: [ToriiQuerySortKey(key: "revoked_at_ms", order: .desc)],
-            pagination: ToriiQueryPagination(limit: 1, offset: 0)
-        )
-        let revocations = try await queryOfflineRevocations(envelope)
-        return revocations.items.first?.reason
-    }
-
-    private func cacheOfflineSettlementStatus(_ status: ToriiSettlementExecutionStatus,
-                                              bundleIdHex: String) {
-        offlineSettlementStatusQueue.sync {
-            cachedOfflineSettlementStatusByBundleIdHex[bundleIdHex] = status
-        }
-    }
-
-    private func cachedOfflineSettlementStatus(bundleIdHex: String) -> ToriiSettlementExecutionStatus? {
-        offlineSettlementStatusQueue.sync {
-            cachedOfflineSettlementStatusByBundleIdHex[bundleIdHex]
-        }
-    }
-
-    private static func extractRejectCode(from error: Error) -> String? {
-        guard let clientError = error as? ToriiClientError else {
-            return nil
-        }
-        guard case let .httpStatus(_, _, rejectCode) = clientError else {
-            return nil
-        }
-        return rejectCode
-    }
-
     private static func queryEqualsFilter(field: String, value: String) -> ToriiJSONValue {
         .object([
             "op": .string("eq"),
             "args": .array([.string(field), .string(value)])
         ])
-    }
-
-    private static func normalizeBundleIdHex(_ bundleIdHex: String,
-                                             field: String) throws -> String {
-        let trimmed = try ToriiRequestValidation.normalizedNonEmpty(bundleIdHex, field: field)
-        if trimmed.lowercased().hasPrefix("hash:") {
-            return try normalizeHashLiteralBundleId(trimmed, field: field)
-        }
-        var normalized = trimmed
-        if normalized.hasPrefix("0x") || normalized.hasPrefix("0X") {
-            normalized = String(normalized.dropFirst(2))
-        }
-        guard Data(hexString: normalized) != nil else {
-            throw ToriiClientError.invalidPayload("\(field) must be a valid hex string.")
-        }
-        return normalized.lowercased()
     }
 
     private static func normalizeHash32HexOrLiteral(_ value: String,
@@ -15810,41 +15136,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         return current & 0xFFFF
     }
 
-    private static func extractBundleIdHex(from transfer: ToriiJSONValue) -> String? {
-        guard case let .object(transferObject) = transfer else {
-            return nil
-        }
-        if let explicit = transferObject["bundle_id_hex"]?.normalizedString,
-           let normalized = try? normalizeBundleIdHex(explicit, field: "transfer.bundle_id_hex") {
-            return normalized
-        }
-        if let literal = transferObject["bundle_id"]?.normalizedString,
-           let normalized = try? normalizeBundleIdHex(literal, field: "transfer.bundle_id") {
-            return normalized
-        }
-        return nil
-    }
-
-    private static func extractRejectionReason(from transfer: ToriiJSONValue) -> String? {
-        guard case let .object(record) = transfer else {
-            return nil
-        }
-        if let reason = firstNormalizedString(in: record,
-                                              keys: ["rejection_reason", "reject_code", "reason"]) {
-            return reason
-        }
-        if let rejection = objectValue(record["rejection"]),
-           let reason = firstNormalizedString(in: rejection,
-                                              keys: ["reason", "code", "reject_code"]) {
-            return reason
-        }
-        if let error = objectValue(record["error"]),
-           let reason = firstNormalizedString(in: error,
-                                              keys: ["reason", "code", "reject_code"]) {
-            return reason
-        }
-        return nil
-    }
 
     private static func objectValue(_ value: ToriiJSONValue?) -> [String: ToriiJSONValue]? {
         guard let value else { return nil }

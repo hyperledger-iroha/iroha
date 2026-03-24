@@ -1172,7 +1172,7 @@ impl MetalState {
             .newComputePipelineStateWithFunction_error(&func_dbr)
             .ok()?;
 
-        let ed25519_signature = {
+        let mut ed25519_signature = {
             match device
                 .newLibraryWithSource_options_error(&NSString::from_str(METAL_ED25519_SHADER), None)
             {
@@ -1184,7 +1184,9 @@ impl MetalState {
             }
         };
 
-        // Optional self-test to ensure parity; on mismatch, disable Metal path.
+        // Startup self-tests prove parity for required Metal pipelines. Optional
+        // pipelines, such as Ed25519 batch verification, can fail closed
+        // individually while the rest of the backend remains available.
         let force_fail = if crate::dev_env::dev_env_flag("IVM_FORCE_METAL_SELFTEST_FAIL") {
             std::env::var("IVM_FORCE_METAL_SELFTEST_FAIL")
                 .map(|v| v == "1")
@@ -1971,15 +1973,18 @@ impl MetalState {
                     if ed25519_ok { "ok" } else { "FAIL" }
                 );
             }
+            if !ed25519_ok {
+                eprintln!(
+                    "ivm: metal signature kernel self-test failed; disabling only the ed25519 Metal pipeline"
+                );
+                ed25519_signature = None;
+                set_metal_status_message(Some(
+                    "metal ed25519 signature kernel self-test mismatch; CPU fallback remains active"
+                        .to_owned(),
+                ));
+            }
 
-            add_ok
-                && sha_ok
-                && sha_leaves_ok
-                && aes_ok
-                && aes_fused_ok
-                && keccak_ok
-                && sha_pairs_ok
-                && ed25519_ok
+            add_ok && sha_ok && sha_leaves_ok && aes_ok && aes_fused_ok && keccak_ok && sha_pairs_ok
         };
 
         if !self_test_ok {
@@ -2592,105 +2597,6 @@ pub fn metal_sha256_pairs_reduce(_digests: &[[u8; 32]]) -> Option<[u8; 32]> {
     None
 }
 
-#[cfg(all(target_os = "macos", feature = "metal", test))]
-fn metal_ed25519_verify_batch_direct_for_tests(
-    signatures: &[[u8; 64]],
-    public_keys: &[[u8; 32]],
-    hrams: &[[u8; 32]],
-) -> Option<Vec<bool>> {
-    if signatures.len() != public_keys.len() || signatures.len() != hrams.len() {
-        return None;
-    }
-    if signatures.is_empty() {
-        return Some(Vec::new());
-    }
-
-    use core::ptr::NonNull;
-
-    use objc2::rc::autoreleasepool;
-    use objc2_foundation::{NSString, ns_string};
-    use objc2_metal::*;
-
-    autoreleasepool(|_| {
-        let device = discover_metal_device()?;
-        let queue = device.newCommandQueue()?;
-        let lib = device
-            .newLibraryWithSource_options_error(&NSString::from_str(METAL_ED25519_SHADER), None)
-            .ok()?;
-        let func = lib.newFunctionWithName(ns_string!("signature_kernel"))?;
-        let pipeline = device
-            .newComputePipelineStateWithFunction_error(&func)
-            .ok()?;
-
-        let n = signatures.len();
-        let flat_sigs: Vec<u8> = signatures.iter().flat_map(|s| s.iter()).copied().collect();
-        let flat_pks: Vec<u8> = public_keys.iter().flat_map(|p| p.iter()).copied().collect();
-        let flat_hrams: Vec<u8> = hrams.iter().flat_map(|h| h.iter()).copied().collect();
-        let count_buf = [n as u32];
-
-        let buf_sigs = unsafe {
-            device.newBufferWithBytes_length_options(
-                NonNull::new_unchecked(flat_sigs.as_ptr() as *mut core::ffi::c_void),
-                flat_sigs.len(),
-                MTLResourceOptions::CPUCacheModeDefaultCache,
-            )?
-        };
-        let buf_pks = unsafe {
-            device.newBufferWithBytes_length_options(
-                NonNull::new_unchecked(flat_pks.as_ptr() as *mut core::ffi::c_void),
-                flat_pks.len(),
-                MTLResourceOptions::CPUCacheModeDefaultCache,
-            )?
-        };
-        let buf_hrams = unsafe {
-            device.newBufferWithBytes_length_options(
-                NonNull::new_unchecked(flat_hrams.as_ptr() as *mut core::ffi::c_void),
-                flat_hrams.len(),
-                MTLResourceOptions::CPUCacheModeDefaultCache,
-            )?
-        };
-        let buf_count = unsafe {
-            device.newBufferWithBytes_length_options(
-                NonNull::new_unchecked(count_buf.as_ptr() as *mut core::ffi::c_void),
-                core::mem::size_of::<u32>(),
-                MTLResourceOptions::CPUCacheModeDefaultCache,
-            )?
-        };
-        let buf_out =
-            device.newBufferWithLength_options(n, MTLResourceOptions::StorageModeShared)?;
-
-        let cmd = queue.commandBuffer()?;
-        let enc = cmd.computeCommandEncoder()?;
-        enc.setComputePipelineState(&pipeline);
-        unsafe {
-            enc.setBuffer_offset_atIndex(Some(&buf_sigs), 0, 0);
-            enc.setBuffer_offset_atIndex(Some(&buf_pks), 0, 1);
-            enc.setBuffer_offset_atIndex(Some(&buf_hrams), 0, 2);
-            enc.setBuffer_offset_atIndex(Some(&buf_count), 0, 3);
-            enc.setBuffer_offset_atIndex(Some(&buf_out), 0, 4);
-        }
-        let grid = MTLSize {
-            width: n as NSUInteger,
-            height: 1,
-            depth: 1,
-        };
-        let threads = MTLSize {
-            width: pipeline.threadExecutionWidth().max(1),
-            height: 1,
-            depth: 1,
-        };
-        enc.dispatchThreads_threadsPerThreadgroup(grid, threads);
-        enc.endEncoding();
-        cmd.commit();
-        if !finalize_command_buffer(&cmd, "metal ed25519 batch verify direct") {
-            return None;
-        }
-        let out =
-            unsafe { std::slice::from_raw_parts(buf_out.contents().as_ptr() as *const u8, n) };
-        Some(out.iter().map(|byte| *byte != 0).collect())
-    })
-}
-
 #[cfg(all(target_os = "macos", feature = "metal"))]
 pub(crate) fn metal_ed25519_verify_batch(
     signatures: &[[u8; 64]],
@@ -2785,6 +2691,612 @@ pub(crate) fn metal_ed25519_verify_batch(
                 unsafe { std::slice::from_raw_parts(buf_out.contents().as_ptr() as *const u8, n) };
             Some(out.iter().map(|b| *b != 0).collect())
         })
+    })
+}
+
+#[cfg(all(target_os = "macos", feature = "metal", test))]
+fn metal_ed25519_run_kernel_for_tests(
+    function_name: &str,
+    signatures: &[[u8; 64]],
+    public_keys: &[[u8; 32]],
+    hrams: &[[u8; 32]],
+) -> Option<Vec<u8>> {
+    if signatures.len() != public_keys.len() || signatures.len() != hrams.len() {
+        return None;
+    }
+    if signatures.is_empty() {
+        return Some(Vec::new());
+    }
+
+    use core::ptr::NonNull;
+
+    use objc2::rc::autoreleasepool;
+    use objc2_foundation::NSString;
+    use objc2_metal::*;
+
+    autoreleasepool(|_| {
+        let device = discover_metal_device()?;
+        let queue = device.newCommandQueue()?;
+        let lib = device
+            .newLibraryWithSource_options_error(&NSString::from_str(METAL_ED25519_SHADER), None)
+            .ok()?;
+        let function_name = NSString::from_str(function_name);
+        let func = lib.newFunctionWithName(&function_name)?;
+        let pipeline = device
+            .newComputePipelineStateWithFunction_error(&func)
+            .ok()?;
+
+        let n = signatures.len();
+        let flat_sigs: Vec<u8> = signatures.iter().flat_map(|s| s.iter()).copied().collect();
+        let flat_pks: Vec<u8> = public_keys.iter().flat_map(|p| p.iter()).copied().collect();
+        let flat_hrams: Vec<u8> = hrams.iter().flat_map(|h| h.iter()).copied().collect();
+        let count_buf = [n as u32];
+
+        let buf_sigs = unsafe {
+            device.newBufferWithBytes_length_options(
+                NonNull::new_unchecked(flat_sigs.as_ptr() as *mut core::ffi::c_void),
+                flat_sigs.len(),
+                MTLResourceOptions::CPUCacheModeDefaultCache,
+            )?
+        };
+        let buf_pks = unsafe {
+            device.newBufferWithBytes_length_options(
+                NonNull::new_unchecked(flat_pks.as_ptr() as *mut core::ffi::c_void),
+                flat_pks.len(),
+                MTLResourceOptions::CPUCacheModeDefaultCache,
+            )?
+        };
+        let buf_hrams = unsafe {
+            device.newBufferWithBytes_length_options(
+                NonNull::new_unchecked(flat_hrams.as_ptr() as *mut core::ffi::c_void),
+                flat_hrams.len(),
+                MTLResourceOptions::CPUCacheModeDefaultCache,
+            )?
+        };
+        let buf_count = unsafe {
+            device.newBufferWithBytes_length_options(
+                NonNull::new_unchecked(count_buf.as_ptr() as *mut core::ffi::c_void),
+                core::mem::size_of::<u32>(),
+                MTLResourceOptions::CPUCacheModeDefaultCache,
+            )?
+        };
+        let buf_out =
+            device.newBufferWithLength_options(n, MTLResourceOptions::StorageModeShared)?;
+
+        let cmd = queue.commandBuffer()?;
+        let enc = cmd.computeCommandEncoder()?;
+        enc.setComputePipelineState(&pipeline);
+        unsafe {
+            enc.setBuffer_offset_atIndex(Some(&buf_sigs), 0, 0);
+            enc.setBuffer_offset_atIndex(Some(&buf_pks), 0, 1);
+            enc.setBuffer_offset_atIndex(Some(&buf_hrams), 0, 2);
+            enc.setBuffer_offset_atIndex(Some(&buf_count), 0, 3);
+            enc.setBuffer_offset_atIndex(Some(&buf_out), 0, 4);
+        }
+        let grid = MTLSize {
+            width: n as NSUInteger,
+            height: 1,
+            depth: 1,
+        };
+        let threads = MTLSize {
+            width: pipeline.threadExecutionWidth().max(1),
+            height: 1,
+            depth: 1,
+        };
+        enc.dispatchThreads_threadsPerThreadgroup(grid, threads);
+        enc.endEncoding();
+        cmd.commit();
+        if !finalize_command_buffer(&cmd, "metal ed25519 batch verify direct") {
+            return None;
+        }
+        let out =
+            unsafe { std::slice::from_raw_parts(buf_out.contents().as_ptr() as *const u8, n) };
+        Some(out.to_vec())
+    })
+}
+
+#[cfg(all(target_os = "macos", feature = "metal", test))]
+fn metal_ed25519_verify_batch_direct_for_tests(
+    signatures: &[[u8; 64]],
+    public_keys: &[[u8; 32]],
+    hrams: &[[u8; 32]],
+) -> Option<Vec<bool>> {
+    let out =
+        metal_ed25519_run_kernel_for_tests("signature_kernel", signatures, public_keys, hrams)?;
+    Some(out.into_iter().map(|byte| byte != 0).collect())
+}
+
+#[cfg(all(target_os = "macos", feature = "metal", test))]
+fn metal_ed25519_status_batch_direct_for_tests(
+    signatures: &[[u8; 64]],
+    public_keys: &[[u8; 32]],
+    hrams: &[[u8; 32]],
+) -> Option<Vec<u8>> {
+    metal_ed25519_run_kernel_for_tests("signature_status_kernel", signatures, public_keys, hrams)
+}
+
+#[cfg(all(target_os = "macos", feature = "metal", test))]
+fn metal_ed25519_check_bytes_for_tests(
+    signatures: &[[u8; 64]],
+    public_keys: &[[u8; 32]],
+    hrams: &[[u8; 32]],
+) -> Option<Vec<[u8; 32]>> {
+    if signatures.is_empty() {
+        return Some(Vec::new());
+    }
+
+    use core::ptr::NonNull;
+
+    use objc2::rc::autoreleasepool;
+    use objc2_foundation::NSString;
+    use objc2_metal::*;
+
+    if signatures.len() != public_keys.len() || signatures.len() != hrams.len() {
+        return None;
+    }
+
+    autoreleasepool(|_| {
+        let device = discover_metal_device()?;
+        let queue = device.newCommandQueue()?;
+        let lib = device
+            .newLibraryWithSource_options_error(&NSString::from_str(METAL_ED25519_SHADER), None)
+            .ok()?;
+        let function_name = NSString::from_str("signature_check_bytes_kernel");
+        let func = lib.newFunctionWithName(&function_name)?;
+        let pipeline = device
+            .newComputePipelineStateWithFunction_error(&func)
+            .ok()?;
+
+        let n = signatures.len();
+        let flat_sigs: Vec<u8> = signatures
+            .iter()
+            .flat_map(|sig| sig.iter())
+            .copied()
+            .collect();
+        let flat_pks: Vec<u8> = public_keys
+            .iter()
+            .flat_map(|pk| pk.iter())
+            .copied()
+            .collect();
+        let flat_hrams: Vec<u8> = hrams
+            .iter()
+            .flat_map(|scalar| scalar.iter())
+            .copied()
+            .collect();
+        let count_buf = [n as u32];
+
+        let buf_sigs = unsafe {
+            device.newBufferWithBytes_length_options(
+                NonNull::new_unchecked(flat_sigs.as_ptr() as *mut core::ffi::c_void),
+                flat_sigs.len(),
+                MTLResourceOptions::CPUCacheModeDefaultCache,
+            )?
+        };
+        let buf_pks = unsafe {
+            device.newBufferWithBytes_length_options(
+                NonNull::new_unchecked(flat_pks.as_ptr() as *mut core::ffi::c_void),
+                flat_pks.len(),
+                MTLResourceOptions::CPUCacheModeDefaultCache,
+            )?
+        };
+        let buf_hrams = unsafe {
+            device.newBufferWithBytes_length_options(
+                NonNull::new_unchecked(flat_hrams.as_ptr() as *mut core::ffi::c_void),
+                flat_hrams.len(),
+                MTLResourceOptions::CPUCacheModeDefaultCache,
+            )?
+        };
+        let buf_count = unsafe {
+            device.newBufferWithBytes_length_options(
+                NonNull::new_unchecked(count_buf.as_ptr() as *mut core::ffi::c_void),
+                core::mem::size_of::<u32>(),
+                MTLResourceOptions::CPUCacheModeDefaultCache,
+            )?
+        };
+        let buf_out =
+            device.newBufferWithLength_options(n * 32, MTLResourceOptions::StorageModeShared)?;
+
+        let cmd = queue.commandBuffer()?;
+        let enc = cmd.computeCommandEncoder()?;
+        enc.setComputePipelineState(&pipeline);
+        unsafe {
+            enc.setBuffer_offset_atIndex(Some(&buf_sigs), 0, 0);
+            enc.setBuffer_offset_atIndex(Some(&buf_pks), 0, 1);
+            enc.setBuffer_offset_atIndex(Some(&buf_hrams), 0, 2);
+            enc.setBuffer_offset_atIndex(Some(&buf_count), 0, 3);
+            enc.setBuffer_offset_atIndex(Some(&buf_out), 0, 4);
+        }
+        let grid = MTLSize {
+            width: n as NSUInteger,
+            height: 1,
+            depth: 1,
+        };
+        let threads = MTLSize {
+            width: pipeline.threadExecutionWidth().max(1),
+            height: 1,
+            depth: 1,
+        };
+        enc.dispatchThreads_threadsPerThreadgroup(grid, threads);
+        enc.endEncoding();
+        cmd.commit();
+        if !finalize_command_buffer(&cmd, "metal ed25519 check bytes direct") {
+            return None;
+        }
+        let out =
+            unsafe { std::slice::from_raw_parts(buf_out.contents().as_ptr() as *const u8, n * 32) };
+        Some(
+            out.chunks_exact(32)
+                .map(|chunk| {
+                    let mut bytes = [0u8; 32];
+                    bytes.copy_from_slice(chunk);
+                    bytes
+                })
+                .collect(),
+        )
+    })
+}
+
+#[cfg(all(target_os = "macos", feature = "metal", test))]
+fn metal_ed25519_field_roundtrip_for_tests(inputs: &[[u8; 32]]) -> Option<Vec<[u8; 32]>> {
+    if inputs.is_empty() {
+        return Some(Vec::new());
+    }
+
+    use core::ptr::NonNull;
+
+    use objc2::rc::autoreleasepool;
+    use objc2_foundation::NSString;
+    use objc2_metal::*;
+
+    autoreleasepool(|_| {
+        let device = discover_metal_device()?;
+        let queue = device.newCommandQueue()?;
+        let lib = device
+            .newLibraryWithSource_options_error(&NSString::from_str(METAL_ED25519_SHADER), None)
+            .ok()?;
+        let function_name = NSString::from_str("field_roundtrip_kernel");
+        let func = lib.newFunctionWithName(&function_name)?;
+        let pipeline = device
+            .newComputePipelineStateWithFunction_error(&func)
+            .ok()?;
+
+        let n = inputs.len();
+        let flat_inputs: Vec<u8> = inputs
+            .iter()
+            .flat_map(|point| point.iter())
+            .copied()
+            .collect();
+        let count_buf = [n as u32];
+
+        let buf_inputs = unsafe {
+            device.newBufferWithBytes_length_options(
+                NonNull::new_unchecked(flat_inputs.as_ptr() as *mut core::ffi::c_void),
+                flat_inputs.len(),
+                MTLResourceOptions::CPUCacheModeDefaultCache,
+            )?
+        };
+        let buf_count = unsafe {
+            device.newBufferWithBytes_length_options(
+                NonNull::new_unchecked(count_buf.as_ptr() as *mut core::ffi::c_void),
+                core::mem::size_of::<u32>(),
+                MTLResourceOptions::CPUCacheModeDefaultCache,
+            )?
+        };
+        let buf_out =
+            device.newBufferWithLength_options(n * 32, MTLResourceOptions::StorageModeShared)?;
+
+        let cmd = queue.commandBuffer()?;
+        let enc = cmd.computeCommandEncoder()?;
+        enc.setComputePipelineState(&pipeline);
+        unsafe {
+            enc.setBuffer_offset_atIndex(Some(&buf_inputs), 0, 0);
+            enc.setBuffer_offset_atIndex(Some(&buf_count), 0, 1);
+            enc.setBuffer_offset_atIndex(Some(&buf_out), 0, 2);
+        }
+        let grid = MTLSize {
+            width: n as NSUInteger,
+            height: 1,
+            depth: 1,
+        };
+        let threads = MTLSize {
+            width: pipeline.threadExecutionWidth().max(1),
+            height: 1,
+            depth: 1,
+        };
+        enc.dispatchThreads_threadsPerThreadgroup(grid, threads);
+        enc.endEncoding();
+        cmd.commit();
+        if !finalize_command_buffer(&cmd, "metal ed25519 field roundtrip direct") {
+            return None;
+        }
+        let out =
+            unsafe { std::slice::from_raw_parts(buf_out.contents().as_ptr() as *const u8, n * 32) };
+        Some(
+            out.chunks_exact(32)
+                .map(|chunk| {
+                    let mut value = [0u8; 32];
+                    value.copy_from_slice(chunk);
+                    value
+                })
+                .collect(),
+        )
+    })
+}
+
+#[cfg(all(target_os = "macos", feature = "metal", test))]
+fn metal_ed25519_point_decompress_for_tests(
+    inputs: &[[u8; 32]],
+) -> Option<(Vec<u8>, Vec<[u8; 32]>)> {
+    if inputs.is_empty() {
+        return Some((Vec::new(), Vec::new()));
+    }
+
+    use core::ptr::NonNull;
+
+    use objc2::rc::autoreleasepool;
+    use objc2_foundation::NSString;
+    use objc2_metal::*;
+
+    autoreleasepool(|_| {
+        let device = discover_metal_device()?;
+        let queue = device.newCommandQueue()?;
+        let lib = device
+            .newLibraryWithSource_options_error(&NSString::from_str(METAL_ED25519_SHADER), None)
+            .ok()?;
+        let function_name = NSString::from_str("point_decompress_status_kernel");
+        let func = lib.newFunctionWithName(&function_name)?;
+        let pipeline = device
+            .newComputePipelineStateWithFunction_error(&func)
+            .ok()?;
+
+        let n = inputs.len();
+        let flat_inputs: Vec<u8> = inputs
+            .iter()
+            .flat_map(|point| point.iter())
+            .copied()
+            .collect();
+        let count_buf = [n as u32];
+
+        let buf_inputs = unsafe {
+            device.newBufferWithBytes_length_options(
+                NonNull::new_unchecked(flat_inputs.as_ptr() as *mut core::ffi::c_void),
+                flat_inputs.len(),
+                MTLResourceOptions::CPUCacheModeDefaultCache,
+            )?
+        };
+        let buf_count = unsafe {
+            device.newBufferWithBytes_length_options(
+                NonNull::new_unchecked(count_buf.as_ptr() as *mut core::ffi::c_void),
+                core::mem::size_of::<u32>(),
+                MTLResourceOptions::CPUCacheModeDefaultCache,
+            )?
+        };
+        let buf_status =
+            device.newBufferWithLength_options(n, MTLResourceOptions::StorageModeShared)?;
+        let buf_out =
+            device.newBufferWithLength_options(n * 32, MTLResourceOptions::StorageModeShared)?;
+
+        let cmd = queue.commandBuffer()?;
+        let enc = cmd.computeCommandEncoder()?;
+        enc.setComputePipelineState(&pipeline);
+        unsafe {
+            enc.setBuffer_offset_atIndex(Some(&buf_inputs), 0, 0);
+            enc.setBuffer_offset_atIndex(Some(&buf_count), 0, 1);
+            enc.setBuffer_offset_atIndex(Some(&buf_status), 0, 2);
+            enc.setBuffer_offset_atIndex(Some(&buf_out), 0, 3);
+        }
+        let grid = MTLSize {
+            width: n as NSUInteger,
+            height: 1,
+            depth: 1,
+        };
+        let threads = MTLSize {
+            width: pipeline.threadExecutionWidth().max(1),
+            height: 1,
+            depth: 1,
+        };
+        enc.dispatchThreads_threadsPerThreadgroup(grid, threads);
+        enc.endEncoding();
+        cmd.commit();
+        if !finalize_command_buffer(&cmd, "metal ed25519 point decompress direct") {
+            return None;
+        }
+        let statuses =
+            unsafe { std::slice::from_raw_parts(buf_status.contents().as_ptr() as *const u8, n) };
+        let out =
+            unsafe { std::slice::from_raw_parts(buf_out.contents().as_ptr() as *const u8, n * 32) };
+        Some((
+            statuses.to_vec(),
+            out.chunks_exact(32)
+                .map(|chunk| {
+                    let mut value = [0u8; 32];
+                    value.copy_from_slice(chunk);
+                    value
+                })
+                .collect(),
+        ))
+    })
+}
+
+#[cfg(all(target_os = "macos", feature = "metal", test))]
+fn metal_ed25519_point_trace_for_tests(inputs: &[[u8; 32]]) -> Option<Vec<[[u8; 32]; 7]>> {
+    if inputs.is_empty() {
+        return Some(Vec::new());
+    }
+
+    use core::ptr::NonNull;
+
+    use objc2::rc::autoreleasepool;
+    use objc2_foundation::NSString;
+    use objc2_metal::*;
+
+    autoreleasepool(|_| {
+        let device = discover_metal_device()?;
+        let queue = device.newCommandQueue()?;
+        let lib = device
+            .newLibraryWithSource_options_error(&NSString::from_str(METAL_ED25519_SHADER), None)
+            .ok()?;
+        let function_name = NSString::from_str("point_decompress_trace_kernel");
+        let func = lib.newFunctionWithName(&function_name)?;
+        let pipeline = device
+            .newComputePipelineStateWithFunction_error(&func)
+            .ok()?;
+
+        let n = inputs.len();
+        let flat_inputs: Vec<u8> = inputs
+            .iter()
+            .flat_map(|point| point.iter())
+            .copied()
+            .collect();
+        let count_buf = [n as u32];
+
+        let buf_inputs = unsafe {
+            device.newBufferWithBytes_length_options(
+                NonNull::new_unchecked(flat_inputs.as_ptr() as *mut core::ffi::c_void),
+                flat_inputs.len(),
+                MTLResourceOptions::CPUCacheModeDefaultCache,
+            )?
+        };
+        let buf_count = unsafe {
+            device.newBufferWithBytes_length_options(
+                NonNull::new_unchecked(count_buf.as_ptr() as *mut core::ffi::c_void),
+                core::mem::size_of::<u32>(),
+                MTLResourceOptions::CPUCacheModeDefaultCache,
+            )?
+        };
+        let buf_out = device
+            .newBufferWithLength_options(n * 7 * 32, MTLResourceOptions::StorageModeShared)?;
+
+        let cmd = queue.commandBuffer()?;
+        let enc = cmd.computeCommandEncoder()?;
+        enc.setComputePipelineState(&pipeline);
+        unsafe {
+            enc.setBuffer_offset_atIndex(Some(&buf_inputs), 0, 0);
+            enc.setBuffer_offset_atIndex(Some(&buf_count), 0, 1);
+            enc.setBuffer_offset_atIndex(Some(&buf_out), 0, 2);
+        }
+        let grid = MTLSize {
+            width: n as NSUInteger,
+            height: 1,
+            depth: 1,
+        };
+        let threads = MTLSize {
+            width: pipeline.threadExecutionWidth().max(1),
+            height: 1,
+            depth: 1,
+        };
+        enc.dispatchThreads_threadsPerThreadgroup(grid, threads);
+        enc.endEncoding();
+        cmd.commit();
+        if !finalize_command_buffer(&cmd, "metal ed25519 point trace direct") {
+            return None;
+        }
+        let out = unsafe {
+            std::slice::from_raw_parts(buf_out.contents().as_ptr() as *const u8, n * 7 * 32)
+        };
+        Some(
+            out.chunks_exact(7 * 32)
+                .map(|chunk| {
+                    let mut fields = [[0u8; 32]; 7];
+                    for (field, field_bytes) in fields.iter_mut().zip(chunk.chunks_exact(32)) {
+                        field.copy_from_slice(field_bytes);
+                    }
+                    fields
+                })
+                .collect(),
+        )
+    })
+}
+
+#[cfg(all(target_os = "macos", feature = "metal", test))]
+fn metal_ed25519_point_limb_trace_for_tests(inputs: &[[u8; 32]]) -> Option<Vec<[[i32; 10]; 9]>> {
+    if inputs.is_empty() {
+        return Some(Vec::new());
+    }
+
+    use core::ptr::NonNull;
+
+    use objc2::rc::autoreleasepool;
+    use objc2_foundation::NSString;
+    use objc2_metal::*;
+
+    autoreleasepool(|_| {
+        let device = discover_metal_device()?;
+        let queue = device.newCommandQueue()?;
+        let lib = device
+            .newLibraryWithSource_options_error(&NSString::from_str(METAL_ED25519_SHADER), None)
+            .ok()?;
+        let function_name = NSString::from_str("point_decompress_limb_trace_kernel");
+        let func = lib.newFunctionWithName(&function_name)?;
+        let pipeline = device
+            .newComputePipelineStateWithFunction_error(&func)
+            .ok()?;
+
+        let n = inputs.len();
+        let flat_inputs: Vec<u8> = inputs
+            .iter()
+            .flat_map(|point| point.iter())
+            .copied()
+            .collect();
+        let count_buf = [n as u32];
+
+        let buf_inputs = unsafe {
+            device.newBufferWithBytes_length_options(
+                NonNull::new_unchecked(flat_inputs.as_ptr() as *mut core::ffi::c_void),
+                flat_inputs.len(),
+                MTLResourceOptions::CPUCacheModeDefaultCache,
+            )?
+        };
+        let buf_count = unsafe {
+            device.newBufferWithBytes_length_options(
+                NonNull::new_unchecked(count_buf.as_ptr() as *mut core::ffi::c_void),
+                core::mem::size_of::<u32>(),
+                MTLResourceOptions::CPUCacheModeDefaultCache,
+            )?
+        };
+        let buf_out = device.newBufferWithLength_options(
+            n * 9 * 10 * core::mem::size_of::<i32>(),
+            MTLResourceOptions::StorageModeShared,
+        )?;
+
+        let cmd = queue.commandBuffer()?;
+        let enc = cmd.computeCommandEncoder()?;
+        enc.setComputePipelineState(&pipeline);
+        unsafe {
+            enc.setBuffer_offset_atIndex(Some(&buf_inputs), 0, 0);
+            enc.setBuffer_offset_atIndex(Some(&buf_count), 0, 1);
+            enc.setBuffer_offset_atIndex(Some(&buf_out), 0, 2);
+        }
+        let grid = MTLSize {
+            width: n as NSUInteger,
+            height: 1,
+            depth: 1,
+        };
+        let threads = MTLSize {
+            width: pipeline.threadExecutionWidth().max(1),
+            height: 1,
+            depth: 1,
+        };
+        enc.dispatchThreads_threadsPerThreadgroup(grid, threads);
+        enc.endEncoding();
+        cmd.commit();
+        if !finalize_command_buffer(&cmd, "metal ed25519 point limb trace direct") {
+            return None;
+        }
+        let out = unsafe {
+            std::slice::from_raw_parts(buf_out.contents().as_ptr() as *const i32, n * 9 * 10)
+        };
+        Some(
+            out.chunks_exact(9 * 10)
+                .map(|chunk| {
+                    let mut fields = [[0i32; 10]; 9];
+                    for (field, field_values) in fields.iter_mut().zip(chunk.chunks_exact(10)) {
+                        field.copy_from_slice(field_values);
+                    }
+                    fields
+                })
+                .collect(),
+        )
     })
 }
 
@@ -4779,7 +5291,7 @@ mod tests {
     #[cfg(all(target_os = "macos", feature = "metal"))]
     #[test]
     fn metal_ed25519_batch_matches_cpu() {
-        use curve25519_dalek::scalar::Scalar;
+        use curve25519_dalek::{constants::ED25519_BASEPOINT_COMPRESSED, scalar::Scalar};
         use ed25519_dalek::{Signer, SigningKey};
         use sha2::{Digest, Sha512};
 
@@ -4805,11 +5317,54 @@ mod tests {
         let sigs = [sig, bad_sig];
         let pks = [pk.to_bytes(), pk.to_bytes()];
         let hrams = [hram, hram];
+        let points = [pk.to_bytes(), *ED25519_BASEPOINT_COMPRESSED.as_bytes()];
 
-        if let Some(results) = metal_ed25519_verify_batch_direct_for_tests(&sigs, &pks, &hrams) {
-            assert_eq!(results, vec![true, false]);
-        } else {
-            eprintln!("Metal ed25519 direct path unavailable; skipping parity assertion");
+        let direct = metal_ed25519_verify_batch_direct_for_tests(&sigs, &pks, &hrams);
+        let status = metal_ed25519_status_batch_direct_for_tests(&sigs, &pks, &hrams);
+        let check_bytes = metal_ed25519_check_bytes_for_tests(&sigs, &pks, &hrams);
+        let field_roundtrip = metal_ed25519_field_roundtrip_for_tests(&points);
+        let point_decompress = metal_ed25519_point_decompress_for_tests(&points);
+        let point_trace =
+            metal_ed25519_point_trace_for_tests(&[*ED25519_BASEPOINT_COMPRESSED.as_bytes()]);
+        let point_limb_trace =
+            metal_ed25519_point_limb_trace_for_tests(&[*ED25519_BASEPOINT_COMPRESSED.as_bytes()]);
+        eprintln!(
+            "metal ed25519 direct={direct:?} status={status:?} check_bytes={check_bytes:?} field_roundtrip={field_roundtrip:?} point_decompress={point_decompress:?} point_trace={point_trace:?} point_limb_trace={point_limb_trace:?}"
+        );
+
+        let Some(field_roundtrip) = field_roundtrip else {
+            panic!("Metal field roundtrip diagnostic kernel should return results");
+        };
+        for (expected, actual) in points.iter().zip(field_roundtrip.iter()) {
+            let mut expected_y = *expected;
+            expected_y[31] &= 0x7f;
+            assert_eq!(
+                *actual, expected_y,
+                "Metal fe_frombytes/fe_tobytes should preserve the encoded y-coordinate",
+            );
+        }
+
+        reset_metal_backend_for_tests();
+        assert!(
+            metal_available(),
+            "Metal backend should initialize on Metal-capable hosts",
+        );
+
+        match metal_ed25519_verify_batch(&sigs, &pks, &hrams) {
+            Some(results) => assert_eq!(results, vec![true, false]),
+            None => {
+                let signature_pipeline_missing =
+                    with_metal_state_try(|ctx| Some(ctx.ed25519_signature.is_none()))
+                        .unwrap_or(false);
+                assert!(
+                    signature_pipeline_missing,
+                    "Metal ed25519 fallback should only disable the signature pipeline",
+                );
+                assert!(
+                    metal_available(),
+                    "Metal backend should remain available when ed25519 falls back to CPU",
+                );
+            }
         }
     }
 

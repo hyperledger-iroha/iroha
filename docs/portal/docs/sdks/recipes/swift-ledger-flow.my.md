@@ -28,7 +28,7 @@ translator: machine-google-reviewed
 ## 1. ပိုင်ဆိုင်မှု (CLI) ကို မှတ်ပုံတင်ပါ။
 
 ```bash
-iroha --config defaults/client.toml asset definition register --id coffee#wonderland
+iroha --config defaults/client.toml asset definition register --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 ## 2. အထောက်အထားများကို ပြင်ဆင်ပါ။
@@ -81,7 +81,7 @@ struct LedgerFlow {
         let torii = ToriiClient(baseURL: URL(string: "http://127.0.0.1:8080")!)
         let sdk = IrohaSDK(toriiClient: torii)
 
-        let assetDefinition = "coffee#wonderland"
+        let assetDefinition = "7Sp2j6zDvJFnMoscAiMaWbWHRDBZ"
         let adminAssetId = TxBuilder.makeAssetId(assetDefinitionId: assetDefinition, accountId: adminAccount)
 
         // Mint 250 units into the admin account.

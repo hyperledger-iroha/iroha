@@ -71,7 +71,7 @@ domen:
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI təqdim edilmiş əməliyyat hashını çap edir (məsələn,
@@ -80,7 +80,7 @@ CLI təqdim edilmiş əməliyyat hashını çap edir (məsələn,
 ## 3. Vahidləri operator hesabına köçürün
 
 Aktiv kəmiyyətləri `(asset definition, account)` cütü altında yaşayır. Nanə 250
-`coffee#wonderland` vahidləri `$ADMIN_ACCOUNT`-ə:
+`7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` vahidləri `$ADMIN_ACCOUNT`-ə:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

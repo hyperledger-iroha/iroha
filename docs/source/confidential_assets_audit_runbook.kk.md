@@ -32,7 +32,7 @@ translator: machine-google-reviewed
   таңдау бойынша бір актив анықтамасына ауқымды бөлу. CLI мысалы:
 
   ```bash
-  iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "rose#wonderland" } }'
+  iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM" } }'
   ```
 
 - Саясат метадеректері және күтудегі ауысулар арқылы қол жетімді

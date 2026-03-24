@@ -137,6 +137,8 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::offline::SubmitOfflineToOnlineTransfer>,
     dispatch_instruction::<iroha_data_model::isi::offline::RegisterOfflineVerdictRevocation>,
     dispatch_instruction::<iroha_data_model::isi::offline::ReclaimExpiredOfflineAllowance>,
+    dispatch_instruction::<iroha_data_model::isi::offline::ReserveOfflineEscrowBalance>,
+    dispatch_instruction::<iroha_data_model::isi::offline::RefundOfflineEscrowBalance>,
     dispatch_instruction::<iroha_data_model::isi::social::ClaimTwitterFollowReward>,
     dispatch_instruction::<iroha_data_model::isi::social::SendToTwitter>,
     dispatch_instruction::<iroha_data_model::isi::social::CancelTwitterEscrow>,

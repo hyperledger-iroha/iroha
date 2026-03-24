@@ -65,7 +65,7 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI جمع کروائے گئے ٹرانزیکشن (مثال کے طور پر ، `0x5f…`) کے ہیش کو آؤٹ پٹ کرے گا۔ اس کے لئے محفوظ کریں
@@ -74,7 +74,7 @@ CLI جمع کروائے گئے ٹرانزیکشن (مثال کے طور پر ، 
 ## 3. اپنے آپریٹر اکاؤنٹ میں یونٹ شامل کریں
 
 اثاثہ کی رقم جوڑی `(asset definition, account)` کے تحت رہتی ہے۔ 250 پکڑو
-یونٹ `coffee#wonderland` سے `$ADMIN_ACCOUNT`:
+یونٹ `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` سے `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

@@ -35,7 +35,7 @@ CLI 助手加上 `scripts/telemetry/reserve_ledger_digest.py` 轉換器
     --provider-account i105... \
     --treasury-account i105... \
     --reserve-account i105... \
-    --asset-definition xor#sora \
+    --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc \
     --json-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.json
    ```
    賬本助手附加一個 `ledger_projection` 塊（租金到期，保留

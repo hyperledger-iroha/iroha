@@ -32,7 +32,7 @@ registrations.
 | Component | Symbol | Description | Notes |
 |-----------|--------|-------------|-------|
 | Gross fee | `gross_fee` | Amount paid by registrant (XOR) | Derived from registrar pricing (`pricing_class`, term years). |
-| Treasury share | `treasury_share = gross_fee × 0.70` | Routed to `xor#sora::treasury`. | Governance may adjust via `PaymentPolicyV1`. |
+| Treasury share | `treasury_share = gross_fee × 0.70` | Routed to `61CtjvNd9T3THAR65GsMVHr82Bjc::treasury`. | Governance may adjust via `PaymentPolicyV1`. |
 | Steward share | `steward_share = gross_fee × 0.30 - referral_bonus` | Paid to suffix steward escrow. | Negative balance blocked. |
 | Referral bonus | `referral_bonus = min(gross_fee × referral_percent, gross_fee × 0.10)` | Optional per registration. | Referral policy stored per suffix. |
 | Refund holdback | `holdback` | Optional governance override (e.g., disputes). | Deducted from treasury share until released. |
@@ -43,11 +43,11 @@ Settlement bundles MUST publish the following Norito structure:
 PaymentBundleV1:
   settlement_id: <uuid>
   selector: <label.suffix>
-  gross_fee: "100 xor#sora"
-  treasury_share: "70 xor#sora"
-  steward_share: "25 xor#sora"
-  referral_bonus: "5 xor#sora"
-  holdback: "0 xor#sora"
+  gross_fee: "100 61CtjvNd9T3THAR65GsMVHr82Bjc"
+  treasury_share: "70 61CtjvNd9T3THAR65GsMVHr82Bjc"
+  steward_share: "25 61CtjvNd9T3THAR65GsMVHr82Bjc"
+  referral_bonus: "5 61CtjvNd9T3THAR65GsMVHr82Bjc"
+  holdback: "0 61CtjvNd9T3THAR65GsMVHr82Bjc"
   invoices: [InvoiceLineV1, …]
   ledger_projection:
     debit_account: "i105..."

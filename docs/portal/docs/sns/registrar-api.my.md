@@ -110,15 +110,15 @@ Struct ReservedAssignmentRequestV1 {
 
 | အဆုံးမှတ် | နည်းလမ်း | ဝန်ဆောင်ခ | ဖော်ပြချက် |
 |----------|--------|---------|-------------|
-| `/v1/sns/registrations` | POST | `RegisterNameRequestV1` | အမည်စာရင်းသွင်းပါ သို့မဟုတ် ပြန်လည်ဖွင့်ပါ။ စျေးနှုန်းအဆင့်ကို ဖြေရှင်းပါ၊ ငွေပေးချေမှု/အုပ်ချုပ်မှုဆိုင်ရာ အထောက်အထားများကို အတည်ပြုပေးသည်၊ မှတ်ပုံတင်ခြင်းဆိုင်ရာ ဖြစ်ရပ်များကို ထုတ်လွှတ်ပါသည်။ |
-| `/v1/sns/registrations/{selector}/renew` | POST | `RenewNameRequestV1` | သက်တမ်းတိုး။ မူဝါဒမှ ကျေးဇူးတော်/ရွေးနှုတ်မှု ပြတင်းပေါက်များကို တွန်းအားပေးသည်။ |
-| `/v1/sns/registrations/{selector}/transfer` | POST | `TransferNameRequestV1` | အုပ်ချုပ်မှုအတည်ပြုချက်များ ပူးတွဲပါရှိပြီး ပိုင်ဆိုင်မှုလွှဲပြောင်းပါ။ |
-| `/v1/sns/registrations/{selector}/controllers` | PUT | `UpdateControllersRequestV1` | ထိန်းချုပ်ကိရိယာအစုံကို အစားထိုးပါ။ လက်မှတ်ထိုးထားသော အကောင့်လိပ်စာများကို အတည်ပြုသည်။ |
-| `/v1/sns/registrations/{selector}/freeze` | POST | `FreezeNameRequestV1` | အုပ်ထိန်းသူ/ကောင်စီကို ခေတ္တရပ်ဆိုင်းထားသည်။ အုပ်ထိန်းသူလက်မှတ်နှင့် အုပ်ချုပ်မှုဆိုင်ရာစာရွက်စာတမ်းများကို ကိုးကားရန် လိုအပ်သည်။ |
-| `/v1/sns/registrations/{selector}/freeze` | ဖျက်ရန် | `GovernanceHookV1` | ပြုပြင်ပြီးနောက် အေးခဲမှုကို ပြန်ဖြုတ်ပါ။ မှတ်တမ်းတင်ထားသော ကောင်စီကို ထပ်လောင်းသေချာစေပါသည်။ |
+| `/v1/sns/names` | POST | `RegisterNameRequestV1` | အမည်စာရင်းသွင်းပါ သို့မဟုတ် ပြန်လည်ဖွင့်ပါ။ စျေးနှုန်းအဆင့်ကို ဖြေရှင်းပါ၊ ငွေပေးချေမှု/အုပ်ချုပ်မှုဆိုင်ရာ အထောက်အထားများကို အတည်ပြုပေးသည်၊ မှတ်ပုံတင်ခြင်းဆိုင်ရာ ဖြစ်ရပ်များကို ထုတ်လွှတ်ပါသည်။ |
+| `/v1/sns/names/{namespace}/{literal}/renew` | POST | `RenewNameRequestV1` | သက်တမ်းတိုး။ မူဝါဒမှ ကျေးဇူးတော်/ရွေးနှုတ်မှု ပြတင်းပေါက်များကို တွန်းအားပေးသည်။ |
+| `/v1/sns/names/{namespace}/{literal}/transfer` | POST | `TransferNameRequestV1` | အုပ်ချုပ်မှုအတည်ပြုချက်များ ပူးတွဲပါရှိပြီး ပိုင်ဆိုင်မှုလွှဲပြောင်းပါ။ |
+| `/v1/sns/names/{namespace}/{literal}/controllers` | PUT | `UpdateControllersRequestV1` | ထိန်းချုပ်ကိရိယာအစုံကို အစားထိုးပါ။ လက်မှတ်ထိုးထားသော အကောင့်လိပ်စာများကို အတည်ပြုသည်။ |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | POST | `FreezeNameRequestV1` | အုပ်ထိန်းသူ/ကောင်စီကို ခေတ္တရပ်ဆိုင်းထားသည်။ အုပ်ထိန်းသူလက်မှတ်နှင့် အုပ်ချုပ်မှုဆိုင်ရာစာရွက်စာတမ်းများကို ကိုးကားရန် လိုအပ်သည်။ |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | ဖျက်ရန် | `GovernanceHookV1` | ပြုပြင်ပြီးနောက် အေးခဲမှုကို ပြန်ဖြုတ်ပါ။ မှတ်တမ်းတင်ထားသော ကောင်စီကို ထပ်လောင်းသေချာစေပါသည်။ |
 | `/v1/sns/reserved/{selector}` | POST | `ReservedAssignmentRequestV1` | ဘဏ္ဍာစိုး/ကောင်စီ၏ သီးသန့်အမည်များကို တာဝန်ပေးသည်။ |
 | `/v1/sns/policies/{suffix_id}` | GET | — | လက်ရှိ `SuffixPolicyV1` (cacheable) ကို ရယူပါ။ |
-| `/v1/sns/registrations/{selector}` | GET | — | လက်ရှိ `NameRecordV1` + ထိရောက်မှုအခြေအနေ (တက်ကြွ၊ ကျေးဇူးတော်၊ စသည်) ကို ပြန်ပေးသည်။ |
+| `/v1/sns/names/{namespace}/{literal}` | GET | — | လက်ရှိ `NameRecordV1` + ထိရောက်မှုအခြေအနေ (တက်ကြွ၊ ကျေးဇူးတော်၊ စသည်) ကို ပြန်ပေးသည်။ |
 
 **ရွေးချယ်မှုကုဒ်နံပါတ်-** `{selector}` လမ်းကြောင်းအပိုင်းသည် I105 (နှစ်သက်ရာ)၊ ချုံ့ထားသော (`sora`၊ ဒုတိယအကောင်းဆုံး) သို့မဟုတ် canonical hex အလိုက် ADDR-5၊ Torii သည် `NameSelectorV1` မှတစ်ဆင့် ပုံမှန်ဖြစ်စေသည်။
 
@@ -133,7 +133,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -158,7 +158,7 @@ iroha sns policy --suffix-id 1
 iroha sns renew \
   --selector makoto.sora \
   --term-years 1 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 120 \
   --payment-settlement '"renewal-settlement"' \
   --payment-signature '"steward-signature"'
@@ -181,7 +181,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` တွင် မှန်ကန်သော `GovernanceHookV1` မှတ်တမ်း (အဆိုပြုချက် ID၊ မဲနှိုက်ချက်များ၊ ဘဏ္ဍာစိုး/အုပ်ထိန်းသူလက်မှတ်များ) ပါဝင်ရပါမည်။ ညွှန်ကြားချက်တစ်ခုစီသည် သက်ဆိုင်ရာ `/v1/sns/registrations/{selector}/…` အဆုံးမှတ်ကို ထင်ဟပ်နေစေသောကြောင့် beta အော်ပရေတာများသည် SDKs ခေါ်ဆိုမည့် Torii မျက်နှာပြင်များကို အတိအကျ ပြန်လည်လေ့ကျင့်နိုင်ပါသည်။
+`--governance-json` တွင် မှန်ကန်သော `GovernanceHookV1` မှတ်တမ်း (အဆိုပြုချက် ID၊ မဲနှိုက်ချက်များ၊ ဘဏ္ဍာစိုး/အုပ်ထိန်းသူလက်မှတ်များ) ပါဝင်ရပါမည်။ ညွှန်ကြားချက်တစ်ခုစီသည် သက်ဆိုင်ရာ `/v1/sns/names/{namespace}/{literal}/…` အဆုံးမှတ်ကို ထင်ဟပ်နေစေသောကြောင့် beta အော်ပရေတာများသည် SDKs ခေါ်ဆိုမည့် Torii မျက်နှာပြင်များကို အတိအကျ ပြန်လည်လေ့ကျင့်နိုင်ပါသည်။
 
 ## 4. gRPC ဝန်ဆောင်မှု
 
@@ -253,7 +253,7 @@ Torii သည် စစ်ဆေးခြင်းဖြင့် အထောက
 
 1. Guardian သည် လက်မှတ်ကိုးကားသည့်အဖြစ်အပျက် ID ဖြင့် `FreezeNameRequestV1` ကို တင်ပြသည်။
 2. Torii သည် မှတ်တမ်းကို `NameStatus::Frozen` သို့ ရွှေ့ပြီး `NameFrozen` ကို ထုတ်လွှတ်သည်။
-3. ပြန်လည်ပြင်ဆင်ပြီးနောက်၊ အော်ပရေတာသည် `/v1/sns/registrations/{selector}/freeze` ဖြင့် DELETE `GovernanceHookV1` ပေးပို့သည်။
+3. ပြန်လည်ပြင်ဆင်ပြီးနောက်၊ အော်ပရေတာသည် `/v1/sns/names/{namespace}/{literal}/freeze` ဖြင့် DELETE `GovernanceHookV1` ပေးပို့သည်။
 4. Torii သည် override ကို အတည်ပြုပြီး `NameUnfrozen` ကို ထုတ်လွှတ်သည်။
 
 ## 7. Validation & Error Codes များ

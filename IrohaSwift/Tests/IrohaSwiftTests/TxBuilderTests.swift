@@ -216,7 +216,7 @@ final class TxBuilderTests: XCTestCase {
     private static let fixtureChainId = "00000000-0000-0000-0000-000000000000"
     private static let fixtureDomain = "wonderland"
     private static let fixtureExplorerAccountId = AccountId.make(publicKey: Data(repeating: 0x2A, count: 32))
-    private static let fixtureAssetDefinition = "rose#wonderland"
+    private static let fixtureAssetDefinition = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
     private static let fixtureCreationTimeMs: UInt64 = 1_700_000_000_000
     private enum FixtureError: Error { case invalidKey }
 
@@ -364,7 +364,7 @@ final class TxBuilderTests: XCTestCase {
         let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
         let transfer = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
                                        authority: AccountId.make(publicKey: keypair.publicKey),
-                                       assetDefinitionId: "rose#wonderland",
+                                       assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                        quantity: "1",
                                        destination: AccountId.make(publicKey: keypair.publicKey),
                                        description: nil,
@@ -859,7 +859,7 @@ final class TxBuilderTests: XCTestCase {
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let transfer = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
                                        authority: authority,
-                                       assetDefinitionId: "rose#wonderland",
+                                       assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                        quantity: "1",
                                        destination: authority,
                                        description: nil,
@@ -923,7 +923,7 @@ final class TxBuilderTests: XCTestCase {
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let transfer = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
                                        authority: authority,
-                                       assetDefinitionId: "rose#wonderland",
+                                       assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                        quantity: "1",
                                        destination: authority,
                                        description: nil,
@@ -949,7 +949,7 @@ final class TxBuilderTests: XCTestCase {
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let transfer = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
                                        authority: authority,
-                                       assetDefinitionId: "rose#wonderland",
+                                       assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                        quantity: "1",
                                        destination: authority,
                                        description: nil)
@@ -970,7 +970,7 @@ final class TxBuilderTests: XCTestCase {
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let transfer = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
                                        authority: authority,
-                                       assetDefinitionId: "rose#wonderland",
+                                       assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                        quantity: "1",
                                        destination: authority,
                                        description: nil)
@@ -1279,7 +1279,7 @@ final class TxBuilderTests: XCTestCase {
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let transfer = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
                                        authority: authority,
-                                       assetDefinitionId: "rose#wonderland",
+                                       assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                        quantity: "1",
                                        destination: authority,
                                        description: nil,
@@ -1310,7 +1310,7 @@ final class TxBuilderTests: XCTestCase {
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let transfer = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
                                        authority: authority,
-                                       assetDefinitionId: "rose#wonderland",
+                                       assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                        quantity: "1",
                                        destination: authority,
                                        description: nil,
@@ -1336,7 +1336,7 @@ final class TxBuilderTests: XCTestCase {
                                                                      authority: authority,
                                                                      creationTimeMs: UInt64(Date().timeIntervalSince1970 * 1000),
                                                                      ttlMs: nil,
-                                                                     assetDefinitionId: "rose#wonderland",
+                                                                     assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                                                      quantity: "42",
                                                                      destination: destination,
                                                                      privateKey: keypair.privateKeyBytes) else {
@@ -1401,7 +1401,7 @@ final class TxBuilderTests: XCTestCase {
         let destination = authority
         let request = MintRequest(chainId: "00000000-0000-0000-0000-000000000000",
                                   authority: authority,
-                                  assetDefinitionId: "rose#wonderland",
+                                  assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                   quantity: "3.14",
                                   destination: destination,
                                   ttlMs: 45)
@@ -1444,7 +1444,7 @@ final class TxBuilderTests: XCTestCase {
         let destination = authority
         let request = BurnRequest(chainId: "00000000-0000-0000-0000-000000000000",
                                   authority: authority,
-                                  assetDefinitionId: "rose#wonderland",
+                                  assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                   quantity: "2",
                                   destination: destination,
                                   ttlMs: 120)

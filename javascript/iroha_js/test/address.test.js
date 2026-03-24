@@ -188,10 +188,10 @@ test("account address golden vectors round-trip", () => {
     canonical,
     "0x02000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201",
   );
-  assert.equal(i105, "sorauﾛ1P5ﾁXEｴﾕGjgﾕﾚﾎﾕｸﾁEtﾀ3ﾂｺ2gALｺﾒefﾍ8DLgｾoCVGUYHS5");
+  assert.equal(i105, "6cmzPVPX6eXMQPXrQzgef9LubBFmrK8yVoJ51F9DSpWfztubMTChZA6");
   assert.equal(
     i105Default,
-    "sorauﾛ1P5ﾁXEｴﾕGjgﾕﾚﾎﾕｸﾁEtﾀ3ﾂｺ2gALｺﾒefﾍ8DLgｾoCVGUYHS5",
+    "6cmzPVPX6eXMQPXrQzgef9LubBFmrK8yVoJ51F9DSpWfztubMTChZA6",
   );
 
   const { address: parsedI105 } = AccountAddress.parseEncoded(i105, 753);
@@ -605,16 +605,12 @@ test("i105Default helper exports mirror instance methods", () => {
   });
   const canonicalBytes = address.canonicalBytes();
   const encoded = encodeI105AccountAddress(canonicalBytes);
-  const encodedFull = encodeI105AccountAddress(canonicalBytes, { fullWidth: true });
 
   assert.equal(encoded, address.toI105Default());
-  assert.equal(encodedFull, address.toI105DefaultFullWidth());
 
   const decoded = decodeI105AccountAddress(encoded);
-  const decodedFull = decodeI105AccountAddress(encodedFull);
 
   assert.deepEqual(Buffer.from(decoded), Buffer.from(canonicalBytes));
-  assert.deepEqual(Buffer.from(decodedFull), Buffer.from(canonicalBytes));
 });
 
 test("decodeI105AccountAddress enforces string input", () => {
@@ -645,13 +641,7 @@ test("encodeI105AccountAddress rejects invalid options", () => {
     (error) =>
       error instanceof TypeError && /unsupported fields: extra/.test(error.message),
   );
-  assert.throws(
-    () => encodeI105AccountAddress(canonicalBytes, { fullWidth: "yes" }),
-    (error) =>
-      error instanceof TypeError &&
-      /options\.fullWidth must be a boolean/.test(error.message),
-  );
-  const rendered = encodeI105AccountAddress(canonicalBytes, { fullWidth: false });
+  const rendered = encodeI105AccountAddress(canonicalBytes);
   assert.equal(rendered, address.toI105Default());
 });
 
@@ -690,12 +680,12 @@ test("toI105 enforces prefix bounds and type", () => {
   );
 });
 
-test("I105 format enforces sentinel", () => {
+test("I105 format rejects invalid base58 characters", () => {
   assert.throws(
     () => AccountAddress.fromI105Default("invalid"),
     (error) =>
       error instanceof AccountAddressError &&
-      error.code === AccountAddressErrorCode.MISSING_I105_SENTINEL,
+      error.code === AccountAddressErrorCode.INVALID_I105_CHAR,
   );
 });
 
@@ -704,20 +694,21 @@ test("native codec propagates I105 errors", () => {
     () => AccountAddress.fromI105("!!!!"),
     (error) => {
       assert(error instanceof AccountAddressError);
-      assert.equal(error.code, AccountAddressErrorCode.MISSING_I105_SENTINEL);
+      assert.equal(error.code, AccountAddressErrorCode.INVALID_I105_CHAR);
       return true;
     },
   );
 });
 
-test("parseEncoded rejects extended I105 literals that embed selector bytes", () => {
+test("parseEncoded rejects legacy non-canonical literals", () => {
   const literal =
     "sora34mSYn4nMg3BgfL1zuxFV3ikfCrVFzEjWsSzQeJtj1gXsHiYjkrUTuF6bySUzjZuH2PPbWgvG";
   assert.throws(
     () => AccountAddress.parseEncoded(literal),
     (error) =>
       error instanceof AccountAddressError &&
-      (error.code === AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES ||
+      (error.code === AccountAddressErrorCode.INVALID_I105_CHAR ||
+        error.code === AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES ||
         error.code === AccountAddressErrorCode.CHECKSUM_MISMATCH ||
         error.code === AccountAddressErrorCode.UNKNOWN_CURVE),
   );
@@ -821,12 +812,7 @@ test("account address compliance vectors", () => {
     const caseId = vector.case_id;
     const i105Vector = vector.encodings.i105;
     assert.ok(i105Vector, `${caseId}: missing i105 encoding fixture`);
-    const fixtureI105Literal = i105Vector.string.startsWith("sora") ||
-      i105Vector.string.startsWith("test") ||
-      i105Vector.string.startsWith("dev") ||
-      /^n[0-9]+/.test(i105Vector.string)
-      ? i105Vector.string
-      : vector.encodings.i105_default;
+    const fixtureI105Literal = i105Vector.string;
     let canonical;
     try {
       canonical = AccountAddress.fromI105(fixtureI105Literal, i105Vector.prefix);
@@ -864,24 +850,18 @@ test("account address compliance vectors", () => {
       `${caseId}: I105 parse canonical mismatch`,
     );
 
-    // Compressed round-trip (half-width and full-width)
-    for (const [encoding, label] of [
-      [vector.encodings.i105_default, "half-width"],
-      [vector.encodings.i105_default_fullwidth, "full-width"],
-    ]) {
-      const decoded = AccountAddress.fromI105Default(encoding);
-      assert.deepEqual(
-        Buffer.from(decoded.canonicalBytes()),
-        canonicalBytes,
-        `${caseId}: i105Default ${label} canonical mismatch`,
-      );
-      const { address: parsedCompressed } = AccountAddress.parseEncoded(encoding);
-      assert.deepEqual(
-        Buffer.from(parsedCompressed.canonicalBytes()),
-        canonicalBytes,
-        `${caseId}: i105Default ${label} parse canonical mismatch`,
-      );
-    }
+    const decoded = AccountAddress.fromI105Default(vector.encodings.i105_default);
+    assert.deepEqual(
+      Buffer.from(decoded.canonicalBytes()),
+      canonicalBytes,
+      `${caseId}: i105Default canonical mismatch`,
+    );
+    const { address: parsedCompressed } = AccountAddress.parseEncoded(vector.encodings.i105_default);
+    assert.deepEqual(
+      Buffer.from(parsedCompressed.canonicalBytes()),
+      canonicalBytes,
+      `${caseId}: i105Default parse canonical mismatch`,
+    );
 
     // Rendering parity
     assert.equal(
@@ -893,11 +873,6 @@ test("account address compliance vectors", () => {
       canonical.toI105Default(),
       vector.encodings.i105_default,
       `${caseId}: i105Default re-encode mismatch`,
-    );
-    assert.equal(
-      canonical.toI105DefaultFullWidth(),
-      vector.encodings.i105_default_fullwidth,
-      `${caseId}: i105Default full-width re-encode mismatch`,
     );
     assert.equal(
       canonical.canonicalHex().toLowerCase(),
@@ -929,20 +904,8 @@ test("account address compliance vectors", () => {
     const caseId = vector.case_id;
     switch (vector.format) {
       case "i105": {
-        const inputHasI105Sentinel = vector.input.startsWith("sora") ||
-          vector.input.startsWith("test") ||
-          vector.input.startsWith("dev") ||
-          /^n[0-9]+/.test(vector.input);
-        let i105Input = vector.input;
-        if (!inputHasI105Sentinel) {
-          if (vector.expected_error.kind === "UnexpectedNetworkPrefix") {
-            i105Input = `n754A${vector.input}`;
-          } else {
-            i105Input = `sora${vector.input}`;
-          }
-        }
         assert.throws(
-          () => AccountAddress.fromI105(i105Input, vector.expected_prefix ?? fixture.default_network_prefix),
+          () => AccountAddress.fromI105(vector.input, vector.expected_prefix ?? fixture.default_network_prefix),
           (error) => matchesExpectedError(error, vector.expected_error, caseId),
         );
         break;
@@ -998,6 +961,9 @@ function matchesExpectedError(error, expected, caseId) {
       `${caseId}: multisig policy error mismatch`,
     );
   }
+  if (normalized.kind === "InvalidI105Char") {
+    assert.equal(normalized.char, expected.char, `${caseId}: invalid character mismatch`);
+  }
   return true;
 }
 
@@ -1009,8 +975,8 @@ function normalizeError(error) {
       return { kind: "InvalidHexAddress" };
     case AccountAddressErrorCode.INVALID_LENGTH:
       return { kind: "InvalidLength" };
-    case AccountAddressErrorCode.MISSING_I105_SENTINEL:
-      return { kind: "MissingI105Sentinel" };
+    case AccountAddressErrorCode.INVALID_I105_CHAR:
+      return { kind: "InvalidI105Char", char: error.details?.char };
     case AccountAddressErrorCode.UNEXPECTED_NETWORK_PREFIX:
       return {
         kind: "UnexpectedNetworkPrefix",

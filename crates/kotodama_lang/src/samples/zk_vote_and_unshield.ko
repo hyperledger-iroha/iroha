@@ -62,7 +62,7 @@ seiyaku ZkVoteAndUnshield {
     verify_and_submit_ballot(env_ballot, submit);
 
     let unshield = build_unshield_inline(
-      asset_definition!("rose#wonderland"),
+      asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       authority(),
       1,
       nullifier,

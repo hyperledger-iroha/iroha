@@ -4867,7 +4867,7 @@ final class ToriiClientTests: XCTestCase {
 
         StubURLProtocol.handler = { request in
             // URL.path always returns decoded path. Check absoluteString to verify encoding.
-            XCTAssertTrue(request.url!.absoluteString.contains("/v1/confidential/assets/rose%23wonderland/transitions"))
+            XCTAssertTrue(request.url!.absoluteString.contains("/v1/confidential/assets/62Fk4FPcMuLvW5QjDGNF2a4jAmjM/transitions"))
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -4875,7 +4875,7 @@ final class ToriiClientTests: XCTestCase {
             return (response, payload)
         }
 
-        let policy = try await makeClient().getConfidentialAssetPolicy(assetDefinitionId: "  rose#wonderland  ")
+        let policy = try await makeClient().getConfidentialAssetPolicy(assetDefinitionId: "  62Fk4FPcMuLvW5QjDGNF2a4jAmjM  ")
         XCTAssertEqual(policy.assetId, "norito:4e52543000000001")
         XCTAssertEqual(policy.blockHeight, 1024)
         XCTAssertEqual(policy.currentMode, "Convertible")
@@ -4908,7 +4908,7 @@ final class ToriiClientTests: XCTestCase {
 
         StubURLProtocol.handler = { request in
             // URL.path always returns decoded path. Check absoluteString to verify encoding.
-            XCTAssertTrue(request.url!.absoluteString.contains("/v1/confidential/assets/rose%23wonderland/transitions"))
+            XCTAssertTrue(request.url!.absoluteString.contains("/v1/confidential/assets/62Fk4FPcMuLvW5QjDGNF2a4jAmjM/transitions"))
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -4916,7 +4916,7 @@ final class ToriiClientTests: XCTestCase {
             return (response, payload)
         }
 
-        makeClient().getConfidentialAssetPolicy(assetDefinitionId: "rose#wonderland") { result in
+        makeClient().getConfidentialAssetPolicy(assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM") { result in
             switch result {
             case .success(let policy):
                 XCTAssertEqual(policy.blockHeight, 42)

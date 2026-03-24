@@ -31,7 +31,7 @@ DNS gateways или инструменты кошельков, могли заг
 | `status` | enum | `active`, `paused` или `revoked`, описывающие готовность к запуску. |
 | `steward_account` | string | Аккаунт, ответственный за stewardship (совпадает с policy hooks регистратора). |
 | `fund_splitter_account` | string | Аккаунт, который получает платежи до маршрутизации по `fee_split`. |
-| `payment_asset_id` | string | Актив для settlement (`xor#sora` для начальной когорты). |
+| `payment_asset_id` | string | Актив для settlement (`61CtjvNd9T3THAR65GsMVHr82Bjc` для начальной когорты). |
 | `min_term_years` / `max_term_years` | integer | Границы срока покупки из политики. |
 | `grace_period_days` / `redemption_period_days` | integer | Окна безопасности продления, применяемые Torii. |
 | `referral_cap_bps` | integer | Максимальный referral carve-out, разрешенный управлением (basis points). |
@@ -44,9 +44,9 @@ DNS gateways или инструменты кошельков, могли заг
 
 | Суффикс | ID (`hex`) | Steward | Fund splitter | Статус | Платежный актив | Лимит referral (bps) | Срок (min - max лет) | Grace / Redemption (дни) | Ценовые уровни (regex -> базовая цена / аукцион) | Зарезервированные метки | Разделение fees (T/S/R/E bps) | Версия политики |
 |---------|------------|---------|---------------|--------|-----------------|----------------------|----------------------|---------------------------|--------------------------------------------------|-------------------------|------------------------------|---------------|
-| `.sora` | `0x0001` | `i105...` | `i105...` | Активен | `xor#sora` | 500 | 1-5 | 30 / 60 | `T0: ^[a-z0-9]{3,}$ -> 120 XOR (Vickrey)` | `treasury -> i105...` | `7000 / 3000 / 1000 / 0` | 1 |
-| `.nexus` | `0x0002` | `i105...` | `i105...` | Приостановлен | `xor#sora` | 300 | 1-3 | 15 / 30 | `T0: ^[a-z0-9]{4,}$ -> 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ -> 4000 XOR (Dutch floor 500)` | `treasury -> i105...`, `guardian -> i105...` | `6500 / 2500 / 800 / 200` | 2 |
-| `.dao` | `0x0003` | `i105...` | `i105...` | Отозван | `xor#sora` | 0 | 1-2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ -> 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
+| `.sora` | `0x0001` | `i105...` | `i105...` | Активен | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 500 | 1-5 | 30 / 60 | `T0: ^[a-z0-9]{3,}$ -> 120 XOR (Vickrey)` | `treasury -> i105...` | `7000 / 3000 / 1000 / 0` | 1 |
+| `.nexus` | `0x0002` | `i105...` | `i105...` | Приостановлен | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 300 | 1-3 | 15 / 30 | `T0: ^[a-z0-9]{4,}$ -> 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ -> 4000 XOR (Dutch floor 500)` | `treasury -> i105...`, `guardian -> i105...` | `6500 / 2500 / 800 / 200` | 2 |
+| `.dao` | `0x0003` | `i105...` | `i105...` | Отозван | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 0 | 1-2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ -> 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
 
 ## Фрагмент JSON
 
@@ -60,13 +60,13 @@ DNS gateways или инструменты кошельков, могли заг
       "suffix_id": 1,
       "status": "active",
       "fund_splitter_account": "i105...",
-      "payment_asset_id": "xor#sora",
+      "payment_asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
       "referral_cap_bps": 500,
       "pricing": [
         {
           "tier_id": 0,
           "label_regex": "^[a-z0-9]{3,}$",
-          "base_price": {"asset_id": "xor#sora", "amount": 120},
+          "base_price": {"asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc", "amount": 120},
           "auction_kind": "vickrey_commit_reveal",
           "min_duration_years": 1,
           "max_duration_years": 5

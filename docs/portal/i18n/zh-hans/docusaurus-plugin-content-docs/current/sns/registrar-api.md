@@ -108,15 +108,15 @@ Struct ReservedAssignmentRequestV1 {
 
 |端点 |方法|有效负载|描述 |
 |----------|--------|---------|------------|
-| `/v1/sns/registrations` |发布 | `RegisterNameRequestV1` |注册或重新命名名称。解决定价层、验证支付/治理证明、发出注册事件。 |
-| `/v1/sns/registrations/{selector}/renew` |发布 | `RenewNameRequestV1` |延长期限。强制实施政策中的宽限/赎回窗口。 |
-| `/v1/sns/registrations/{selector}/transfer` |发布 | `TransferNameRequestV1` |一旦获得治理批准，就转让所有权。 |
-| `/v1/sns/registrations/{selector}/controllers` |放置 | `UpdateControllersRequestV1` |更换控制器组；验证签名的帐户地址。 |
-| `/v1/sns/registrations/{selector}/freeze` |发布 | `FreezeNameRequestV1` |监护人/议会冻结。需要监护人票证和治理记录参考。 |
-| `/v1/sns/registrations/{selector}/freeze` |删除 | `GovernanceHookV1` |修复后解冻；确保理事会推翻记录。 |
+| `/v1/sns/names` |发布 | `RegisterNameRequestV1` |注册或重新命名名称。解决定价层、验证支付/治理证明、发出注册事件。 |
+| `/v1/sns/names/{namespace}/{literal}/renew` |发布 | `RenewNameRequestV1` |延长期限。强制实施政策中的宽限/赎回窗口。 |
+| `/v1/sns/names/{namespace}/{literal}/transfer` |发布 | `TransferNameRequestV1` |一旦获得治理批准，就转让所有权。 |
+| `/v1/sns/names/{namespace}/{literal}/controllers` |放置 | `UpdateControllersRequestV1` |更换控制器组；验证签名的帐户地址。 |
+| `/v1/sns/names/{namespace}/{literal}/freeze` |发布 | `FreezeNameRequestV1` |监护人/议会冻结。需要监护人票证和治理记录参考。 |
+| `/v1/sns/names/{namespace}/{literal}/freeze` |删除 | `GovernanceHookV1` |修复后解冻；确保理事会推翻记录。 |
 | `/v1/sns/reserved/{selector}` |发布 | `ReservedAssignmentRequestV1` |管理员/理事会分配保留名称。 |
 | `/v1/sns/policies/{suffix_id}` |获取 | — |获取当前 `SuffixPolicyV1`（可缓存）。 |
-| `/v1/sns/registrations/{selector}` |获取 | — |返回当前 `NameRecordV1` + 有效状态（Active、Grace 等）。 |
+| `/v1/sns/names/{namespace}/{literal}` |获取 | — |返回当前 `NameRecordV1` + 有效状态（Active、Grace 等）。 |
 
 **选择器编码：** `{selector}` 路径段接受 I105（首选）、压缩（`sora`，第二好）或每个 ADDR-5 的规范十六进制； Torii 通过 `NameSelectorV1` 将其标准化。
 
@@ -131,7 +131,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -156,7 +156,7 @@ iroha sns policy --suffix-id 1
 iroha sns renew \
   --selector makoto.sora \
   --term-years 1 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 120 \
   --payment-settlement '"renewal-settlement"' \
   --payment-signature '"steward-signature"'
@@ -179,7 +179,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` 必须包含有效的 `GovernanceHookV1` 记录（提案 ID、投票哈希、管理员/监护人签名）。每个命令都简单地镜像相应的 `/v1/sns/registrations/{selector}/…` 端点，因此 beta 操作员可以排练 SDK 将调用的确切 Torii 表面。
+`--governance-json` 必须包含有效的 `GovernanceHookV1` 记录（提案 ID、投票哈希、管理员/监护人签名）。每个命令都简单地镜像相应的 `/v1/sns/names/{namespace}/{literal}/…` 端点，因此 beta 操作员可以排练 SDK 将调用的确切 Torii 表面。
 
 ## 4.gRPC 服务
 
@@ -251,7 +251,7 @@ Torii 通过检查来验证证明：
 
 1. 监护人提交 `FreezeNameRequestV1` 以及引用事件 ID 的工单。
 2. Torii 将记录移动到 `NameStatus::Frozen`，发出 `NameFrozen`。
-3.整改后，理事会问题优先；操作员发送 DELETE `/v1/sns/registrations/{selector}/freeze` 和 `GovernanceHookV1`。
+3.整改后，理事会问题优先；操作员发送 DELETE `/v1/sns/names/{namespace}/{literal}/freeze` 和 `GovernanceHookV1`。
 4. Torii 验证覆盖，发出 `NameUnfrozen`。
 
 ## 7. 验证和错误代码

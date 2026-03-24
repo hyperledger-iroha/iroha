@@ -29,7 +29,7 @@ translator: machine-google-reviewed
 ## 1. ပိုင်ဆိုင်မှု အဓိပ္ပါယ်ဖွင့်ဆိုချက် (CLI) ကို မှတ်ပုံတင်ပါ။
 
 ```bash
-iroha --config defaults/client.toml asset definition register --id coffee#wonderland
+iroha --config defaults/client.toml asset definition register --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 ## 2. အထောက်အထားများကို ထုတ်ယူပါ။

@@ -66,7 +66,7 @@ Crie um novo ativo infinitamente acunável chamado `coffee` dentro do domínio
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 A CLI imprime o hash da transação enviada (por exemplo, `0x5f...`). Guarde-o para consultar o estado mais tarde.
@@ -74,7 +74,7 @@ A CLI imprime o hash da transação enviada (por exemplo, `0x5f...`). Guarde-o p
 ## 3. Acuna unidades na conta do operador
 
 As quantidades de ativos vivem abaixo do par `(asset definition, account)`. Acuna
-250 unidades de `coffee#wonderland` em `$ADMIN_ACCOUNT`:
+250 unidades de `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` em `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

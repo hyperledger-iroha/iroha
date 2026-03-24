@@ -61,14 +61,14 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI ハッシュ المقدمة (مثلا `0x5f…`)。ありがとうございます。
 
 ## 3. いいえ、いいえ。
 
-`(asset definition, account)` を確認してください。 250 日 `coffee#wonderland` 日 `$ADMIN_ACCOUNT`:
+`(asset definition, account)` を確認してください。 250 日 `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` 日 `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

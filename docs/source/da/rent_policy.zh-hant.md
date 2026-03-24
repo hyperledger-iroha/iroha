@@ -94,7 +94,7 @@ CLI 工具 (`iroha app da rent-quote`) 接受相同的 Norito/JSON 策略輸入
 
 ### 生成租金分類帳計劃
 
-運行 `iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition xor#sora`
+運行 `iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc`
 將持久的租金報價轉換為可執行的分類帳轉賬。命令
 解析嵌入的 `ledger_projection`，發出 Norito `Transfer` 指令
 將基本租金收入國庫，路由儲備金/提供商

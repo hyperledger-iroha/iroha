@@ -228,7 +228,7 @@ Pointer konstruktorlari (INPUT ga Norito TLV chiqaring va yozilgan ko'rsatgichni
 - `asset_handle(string|0xhex) -> AssetHandle*`
 - `proof_blob(string|0xhex) -> ProofBlob*`Prelude makroslari ushbu konstruktorlar uchun qisqaroq taxalluslar va inline tekshiruvini ta'minlaydi:
 - `account!("i105...")`, `account_id!("i105...")`
-- `asset_definition!("rose#wonderland")`, `asset_id!("rose#wonderland")`
+- `asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`, `asset_id!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`
 - `domain!("wonderland")`, `domain_id!("wonderland")`
 - `name!("example")`
 - `json!("{\"hello\":\"world\"}")` yoki tuzilgan harflar, masalan, `json!{ hello: "world" }`

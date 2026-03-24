@@ -59,14 +59,14 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 Utilice el hash CLI para el archivo (modelo `0x5f…`). احفظه كي تستعلم عن الحالة لاحقا.
 
 ## 3. سك وحدات في حساب المشغل
 
-توجد كميات الاصول تحت الزوج `(asset definition, account)`. Hay 250 puntos entre `coffee#wonderland` y `$ADMIN_ACCOUNT`:
+توجد كميات الاصول تحت الزوج `(asset definition, account)`. Hay 250 puntos entre `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` y `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

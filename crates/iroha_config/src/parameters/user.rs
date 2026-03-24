@@ -15186,6 +15186,8 @@ pub struct ToriiOfflineIssuer {
     /// Master enable switch (defaults to enabled).
     #[config(default = "defaults::torii::offline_issuer::ENABLED")]
     pub enabled: bool,
+    /// Optional on-chain operator account used for reserve and revocation transactions.
+    pub operator_authority: Option<String>,
     /// Private key used to sign offline wallet certificates.
     pub operator_private_key: ExposedPrivateKey,
     /// Additional legacy private keys accepted for build-claim signatures.
@@ -15194,6 +15196,9 @@ pub struct ToriiOfflineIssuer {
     /// Optional allow-list of controllers eligible for issuance.
     #[config(default = "defaults::torii::offline_issuer::allowed_controllers()")]
     pub allowed_controllers: Vec<String>,
+    /// Device-bound offline reserve policy.
+    #[config(default)]
+    pub reserve_policy: ToriiOfflineReservePolicy,
 }
 
 impl ToriiOfflineIssuer {
@@ -15213,11 +15218,66 @@ impl ToriiOfflineIssuer {
                 )
             })
             .collect();
+        let operator_authority = self.operator_authority.map(|authority| {
+            AccountId::parse_encoded(&authority).map_or_else(
+                |err| {
+                    panic!("invalid torii.offline_issuer.operator_authority `{authority}`: {err}")
+                },
+                iroha_data_model::account::ParsedAccountId::into_account_id,
+            )
+        });
         Some(actual::ToriiOfflineIssuer {
+            operator_authority,
             operator_private_key: self.operator_private_key,
             legacy_operator_private_keys: self.legacy_operator_private_keys,
             allowed_controllers,
+            reserve_policy: self.reserve_policy.parse(),
         })
+    }
+}
+
+/// Device-bound offline reserve policy values.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct ToriiOfflineReservePolicy {
+    /// Maximum total spendable offline balance per reserve.
+    #[config(default = "defaults::torii::offline_issuer::RESERVE_MAX_BALANCE.to_owned()")]
+    pub max_balance: String,
+    /// Maximum single offline transfer value.
+    #[config(default = "defaults::torii::offline_issuer::RESERVE_MAX_TX_VALUE.to_owned()")]
+    pub max_tx_value: String,
+    /// Authorization lifetime in milliseconds.
+    #[config(default = "defaults::torii::offline_issuer::RESERVE_AUTHORIZATION_TTL_MS")]
+    pub authorization_ttl_ms: u64,
+    /// Authorization refresh deadline in milliseconds.
+    #[config(default = "defaults::torii::offline_issuer::RESERVE_AUTHORIZATION_REFRESH_MS")]
+    pub authorization_refresh_ms: u64,
+    /// Revocation bundle lifetime in milliseconds.
+    #[config(default = "defaults::torii::offline_issuer::RESERVE_REVOCATION_TTL_MS")]
+    pub revocation_ttl_ms: u64,
+}
+
+impl Default for ToriiOfflineReservePolicy {
+    fn default() -> Self {
+        Self {
+            max_balance: defaults::torii::offline_issuer::RESERVE_MAX_BALANCE.to_owned(),
+            max_tx_value: defaults::torii::offline_issuer::RESERVE_MAX_TX_VALUE.to_owned(),
+            authorization_ttl_ms: defaults::torii::offline_issuer::RESERVE_AUTHORIZATION_TTL_MS,
+            authorization_refresh_ms:
+                defaults::torii::offline_issuer::RESERVE_AUTHORIZATION_REFRESH_MS,
+            revocation_ttl_ms: defaults::torii::offline_issuer::RESERVE_REVOCATION_TTL_MS,
+        }
+    }
+}
+
+impl ToriiOfflineReservePolicy {
+    fn parse(self) -> actual::ToriiOfflineReservePolicy {
+        actual::ToriiOfflineReservePolicy {
+            max_balance: self.max_balance,
+            max_tx_value: self.max_tx_value,
+            authorization_ttl: Duration::from_millis(self.authorization_ttl_ms),
+            authorization_refresh: Duration::from_millis(self.authorization_refresh_ms),
+            revocation_ttl: Duration::from_millis(self.revocation_ttl_ms),
+        }
     }
 }
 
@@ -17417,8 +17477,8 @@ mod offline_cfg_tests {
         let cfg = Governance {
             vk_ballot: None,
             vk_tally: None,
-            voting_asset_id: "xor#sora".to_string(),
-            citizenship_asset_id: "xor#sora".to_string(),
+            voting_asset_id: defaults::governance::voting_asset_id(),
+            citizenship_asset_id: defaults::governance::citizenship_asset_id(),
             citizenship_bond_amount: 99,
             citizenship_escrow_account: defaults::governance::citizenship_escrow_account(),
             min_bond_amount: 42,
@@ -17436,7 +17496,8 @@ mod offline_cfg_tests {
             parliament_committee_size: 11,
             parliament_term_blocks: 12_345,
             parliament_min_stake: 456,
-            parliament_eligibility_asset_id: "SORA#stake".to_string(),
+            parliament_eligibility_asset_id: defaults::governance::parliament_eligibility_asset_id(
+            ),
             parliament_alternate_size: Some(13),
             ..Governance::default()
         };

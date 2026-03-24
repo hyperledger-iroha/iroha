@@ -29,7 +29,7 @@ balans.
 ## 1. Aktiv tərifini (CLI) qeydiyyatdan keçirin
 
 ```bash
-iroha --config defaults/client.toml asset definition register --id coffee#wonderland
+iroha --config defaults/client.toml asset definition register --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 ## 2. Etibarnamələri ixrac edin

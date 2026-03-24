@@ -35,8 +35,7 @@ const NEW_ACCOUNT_ID_RAW =
 const NEW_ACCOUNT_ID = i105FromEd25519AccountId(NEW_ACCOUNT_ID_RAW);
 const NEW_ACCOUNT_ID_INPUT = i105FromEd25519AccountId(NEW_ACCOUNT_ID_RAW);
 const REGISTER_ACCOUNT_DOMAIN_ID = "wonderland";
-const ASSET_DEFINITION_ID = "rose#wonderland";
-const ASSET_DEFINITION_ID_INPUT = ASSET_DEFINITION_ID.toLowerCase();
+const ASSET_DEFINITION_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 const NODE_CAPABILITIES = {
   abi_version: 1,
   data_model_version: 1,
@@ -75,6 +74,17 @@ function i105FromEd25519AccountId(raw) {
   const publicKeyHex = signatory.slice(6);
   const publicKey = Buffer.from(publicKeyHex, "hex");
   return AccountAddress.fromAccount({ domain, publicKey }).toI105();
+}
+
+function encodeAssetIdForKnownAccount(assetDefinitionId, accountId) {
+  assert.equal(assetDefinitionId, ASSET_DEFINITION_ID);
+  if (accountId === AUTHORITY_ID || accountId === AUTHORITY_ID_INPUT) {
+    return CANONICAL_ASSET_ID_INPUT;
+  }
+  if (accountId === NEW_ACCOUNT_ID || accountId === NEW_ACCOUNT_ID_INPUT) {
+    return SECOND_CANONICAL_ASSET_ID_INPUT;
+  }
+  throw new Error(`unexpected account id for test asset encoding: ${accountId}`);
 }
 
 test("hashSignedTransaction delegates to native binding and returns hex", () => {
@@ -310,6 +320,7 @@ test("buildBurnAssetTransaction yields single burn instruction", () => {
   const captures = [];
   withNativeBinding(
     {
+      encodeAssetId: encodeAssetIdForKnownAccount,
       buildTransaction: (_chain, authority, instructions) => {
         captures.push({ authority, instructions: instructions.map((j) => JSON.parse(j)) });
         return {
@@ -340,6 +351,7 @@ test("buildBurnTriggerTransaction yields single trigger burn instruction", () =>
   const captures = [];
   withNativeBinding(
     {
+      encodeAssetId: encodeAssetIdForKnownAccount,
       buildTransaction: (_chain, authority, instructions) => {
         captures.push({ authority, instructions: instructions.map((j) => JSON.parse(j)) });
         return {
@@ -850,7 +862,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction rejects mismatched assetId/
         mints: [
           {
             accountId: NEW_ACCOUNT_ID_INPUT,
-            assetId: `${ASSET_DEFINITION_ID}##someone_else`,
+            assetId: CANONICAL_ASSET_ID_INPUT,
             quantity: "1",
           },
         ],
@@ -864,6 +876,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction expands definition,
   const captures = [];
   withNativeBinding(
     {
+      encodeAssetId: encodeAssetIdForKnownAccount,
       buildTransaction: (_chain, authority, instructions) => {
         captures.push({ authority, instructions: instructions.map((j) => JSON.parse(j)) });
         return {
@@ -913,6 +926,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer a
   const secondAccountIdInput = i105FromEd25519AccountId(secondAccountIdRaw);
   withNativeBinding(
     {
+      encodeAssetId: encodeAssetIdForKnownAccount,
       buildTransaction: (_chain, authority, instructions) => {
         captures.push({ authority, instructions: instructions.map((j) => JSON.parse(j)) });
         return {
@@ -1035,7 +1049,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction rejects mismatched 
         mints: [
           {
             accountId: NEW_ACCOUNT_ID_INPUT,
-            assetId: `${ASSET_DEFINITION_ID}##someone_else`,
+            assetId: CANONICAL_ASSET_ID_INPUT,
             quantity: "1",
           },
         ],

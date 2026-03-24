@@ -4098,21 +4098,34 @@ export class ToriiClient {
     return normalizeSnsSuffixPolicy(payload);
   }
 
+  _normalizeLegacySnsDomainSelector(selector, context) {
+    const normalizedSelector = requireNonEmptyString(selector, "selector").trim();
+    const dotIndex = normalizedSelector.indexOf(".");
+    if (dotIndex <= 0 || dotIndex === normalizedSelector.length - 1) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_FIELD,
+        `${context} selector must be of the form label.suffix`,
+        "selector",
+      );
+    }
+    return normalizedSelector.slice(0, dotIndex);
+  }
+
   /**
-   * Fetch a Sora Name Service registration (`GET /v1/sns/registrations/{selector}`).
+   * Fetch a Sora Name Service registration (`GET /v1/sns/names/domain/{literal}`).
    * @param {string} selector
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<SnsNameRecord>}
    */
   async getSnsRegistration(selector, options = {}) {
-    const normalizedSelector = requireNonEmptyString(selector, "selector").trim();
+    const literal = this._normalizeLegacySnsDomainSelector(selector, "getSnsRegistration");
     const { signal } = normalizeSignalOnlyOption(
       options,
       "getSnsRegistration",
     );
     const response = await this._request(
       "GET",
-      `/v1/sns/registrations/${encodeURIComponent(normalizedSelector)}`,
+      `/v1/sns/names/domain/${encodeURIComponent(literal)}`,
       {
         headers: { Accept: "application/json" },
         signal,
@@ -4127,7 +4140,7 @@ export class ToriiClient {
   }
 
   /**
-   * Register a Sora Name Service name (`POST /v1/sns/registrations`).
+   * Register a Sora Name Service name (`POST /v1/sns/names`).
    * @param {SnsRegisterNameRequest} request
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<SnsRegisterNameResponse>}
@@ -4135,7 +4148,7 @@ export class ToriiClient {
   async registerSnsName(request, options = {}) {
     const payload = normalizeSnsRegisterRequest(request, "registerSnsName");
     const { signal } = normalizeSignalOnlyOption(options, "registerSnsName");
-    const response = await this._request("POST", "/v1/sns/registrations", {
+    const response = await this._request("POST", "/v1/sns/names", {
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
@@ -4152,19 +4165,19 @@ export class ToriiClient {
   }
 
   /**
-   * Renew a Sora Name Service registration (`POST /v1/sns/registrations/{selector}/renew`).
+   * Renew a Sora Name Service registration (`POST /v1/sns/names/domain/{literal}/renew`).
    * @param {string} selector
    * @param {SnsRenewNameRequest} request
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<SnsNameRecord>}
    */
   async renewSnsRegistration(selector, request, options = {}) {
-    const normalizedSelector = requireNonEmptyString(selector, "selector").trim();
+    const literal = this._normalizeLegacySnsDomainSelector(selector, "renewSnsRegistration");
     const payload = normalizeSnsRenewRequest(request, "renewSnsRegistration");
     const { signal } = normalizeSignalOnlyOption(options, "renewSnsRegistration");
     const response = await this._request(
       "POST",
-      `/v1/sns/registrations/${encodeURIComponent(normalizedSelector)}/renew`,
+      `/v1/sns/names/domain/${encodeURIComponent(literal)}/renew`,
       {
         headers: {
           "Content-Type": "application/json",
@@ -4183,19 +4196,19 @@ export class ToriiClient {
   }
 
   /**
-   * Transfer ownership of a Sora Name Service registration (`POST /v1/sns/registrations/{selector}/transfer`).
+   * Transfer ownership of a Sora Name Service registration (`POST /v1/sns/names/domain/{literal}/transfer`).
    * @param {string} selector
    * @param {SnsTransferNameRequest} request
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<SnsNameRecord>}
    */
   async transferSnsRegistration(selector, request, options = {}) {
-    const normalizedSelector = requireNonEmptyString(selector, "selector").trim();
+    const literal = this._normalizeLegacySnsDomainSelector(selector, "transferSnsRegistration");
     const payload = normalizeSnsTransferRequest(request, "transferSnsRegistration");
     const { signal } = normalizeSignalOnlyOption(options, "transferSnsRegistration");
     const response = await this._request(
       "POST",
-      `/v1/sns/registrations/${encodeURIComponent(normalizedSelector)}/transfer`,
+      `/v1/sns/names/domain/${encodeURIComponent(literal)}/transfer`,
       {
         headers: {
           "Content-Type": "application/json",
@@ -4214,19 +4227,19 @@ export class ToriiClient {
   }
 
   /**
-   * Freeze a Sora Name Service registration (`POST /v1/sns/registrations/{selector}/freeze`).
+   * Freeze a Sora Name Service registration (`POST /v1/sns/names/domain/{literal}/freeze`).
    * @param {string} selector
    * @param {SnsFreezeNameRequest} request
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<SnsNameRecord>}
   */
   async freezeSnsRegistration(selector, request, options = {}) {
-    const normalizedSelector = requireNonEmptyString(selector, "selector").trim();
+    const literal = this._normalizeLegacySnsDomainSelector(selector, "freezeSnsRegistration");
     const payload = normalizeSnsFreezeRequest(request, "freezeSnsRegistration");
     const { signal } = normalizeSignalOnlyOption(options, "freezeSnsRegistration");
     const response = await this._request(
       "POST",
-      `/v1/sns/registrations/${encodeURIComponent(normalizedSelector)}/freeze`,
+      `/v1/sns/names/domain/${encodeURIComponent(literal)}/freeze`,
       {
         headers: {
           "Content-Type": "application/json",
@@ -4245,19 +4258,19 @@ export class ToriiClient {
   }
 
   /**
-   * Remove a freeze from a Sora Name Service registration (`DELETE /v1/sns/registrations/{selector}/freeze`).
+   * Remove a freeze from a Sora Name Service registration (`DELETE /v1/sns/names/domain/{literal}/freeze`).
    * @param {string} selector
    * @param {SnsGovernanceHook} request
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<SnsNameRecord>}
   */
   async unfreezeSnsRegistration(selector, request, options = {}) {
-    const normalizedSelector = requireNonEmptyString(selector, "selector").trim();
+    const literal = this._normalizeLegacySnsDomainSelector(selector, "unfreezeSnsRegistration");
     const payload = normalizeSnsGovernanceHook(request, "unfreezeSnsRegistration");
     const { signal } = normalizeSignalOnlyOption(options, "unfreezeSnsRegistration");
     const response = await this._request(
       "DELETE",
-      `/v1/sns/registrations/${encodeURIComponent(normalizedSelector)}/freeze`,
+      `/v1/sns/names/domain/${encodeURIComponent(literal)}/freeze`,
       {
         headers: {
           "Content-Type": "application/json",
@@ -4276,51 +4289,25 @@ export class ToriiClient {
   }
 
   /**
-   * Create an SNS arbitration case (`POST /v1/sns/governance/cases`).
+   * SNS governance case routes were removed from Torii.
    * @param {Record<string, unknown>} payload
    * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<SnsGovernanceCase>}
+   * @returns {Promise<never>}
    */
   async createSnsGovernanceCase(payload, options = {}) {
-    const body = normalizeSnsGovernanceCaseCreatePayload(payload);
-    const { signal } = normalizeSignalOnlyOption(
-      options,
-      "createSnsGovernanceCase",
-    );
-    const response = await this._request("POST", "/v1/sns/governance/cases", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify(body),
-      signal,
-    });
-    await this._expectStatus(response, [200, 201]);
-    const json = await this._maybeJson(response);
-    if (!json) {
-      throw new Error("sns governance case endpoint returned no payload");
-    }
-    return normalizeSnsGovernanceCase(json, "sns governance case response");
+    normalizeSnsGovernanceCaseCreatePayload(payload);
+    normalizeSignalOnlyOption(options, "createSnsGovernanceCase");
+    throw new Error("Torii removed /v1/sns/governance/cases; use /v1/sns/names operations instead");
   }
 
   /**
-   * Export SNS arbitration cases (`GET /v1/sns/governance/cases`).
+   * SNS governance case routes were removed from Torii.
    * @param {SnsCaseExportOptions} [options]
-   * @returns {Promise<SnsGovernanceCaseExportResult>}
+   * @returns {Promise<never>}
    */
   async exportSnsGovernanceCases(options = {}) {
-    const { signal, params } = normalizeSnsCaseExportOptions(options);
-    const response = await this._request("GET", "/v1/sns/governance/cases", {
-      headers: { Accept: "application/json" },
-      params,
-      signal,
-    });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      throw new Error("sns governance export endpoint returned no payload");
-    }
-    return normalizeSnsGovernanceCaseExportResponse(payload);
+    normalizeSnsCaseExportOptions(options);
+    throw new Error("Torii removed /v1/sns/governance/cases; use /v1/sns/names operations instead");
   }
 
   /**

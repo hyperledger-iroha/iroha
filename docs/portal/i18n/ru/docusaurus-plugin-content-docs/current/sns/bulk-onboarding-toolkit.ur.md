@@ -38,7 +38,7 @@ translation_last_reviewed: 2026-02-07
 | `suffix_id` | Да | Числовой идентификатор суффикса (десятеричный یا `0x`, шестнадцатеричный). |
 | `owner` | Да | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | Да | Целое число `1..=255`. |
-| `payment_asset_id` | Да | Расчетный актив (مثال `xor#sora`). |
+| `payment_asset_id` | Да | Расчетный актив (مثال `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Да | Целые числа без знака и собственные единицы актива представляют собой کریں۔. |
 | `settlement_tx` | Да | Значение JSON, литеральная строка, платежная транзакция, хеш и т. д. |
 | `payment_payer` | Да | AccountId и авторизация платежа. |
@@ -84,7 +84,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
       "term_years": 2,
       "pricing_class_hint": null,
       "payment": {
-        "asset_id":"xor#sora",
+        "asset_id":"61CtjvNd9T3THAR65GsMVHr82Bjc",
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
@@ -114,7 +114,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v1/sns/names
   done
 ```## 3. Автоматическая отправка
 
@@ -132,10 +132,10 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- Помощник запросит запрос `POST /v1/sns/registrations` для HTTP-запроса.
+- Помощник запросит запрос `POST /v1/sns/names` для HTTP-запроса.
   ошибка или прерывание کرتا ہے۔ Путь к журналу ответов, записи NDJSON и добавление
   ہوتے ہیں۔
-- `--poll-status` ہر представление `/v1/sns/registrations/{selector}` کو
+- `--poll-status` ہر представление `/v1/sns/names/{namespace}/{literal}` کو
   دوبارہ query کرتا ہے (زیادہ سے زیادہ `--poll-attempts`, по умолчанию 5) تاکہ запись
   видимый ہونے کی تصدیق ہو۔ `--suffix-map` (JSON или `suffix_id` для значений «суффикса»).
   سے карта کرے) فراہم کریں تاکہ инструмент `{label}.{suffix}` литералы получают کر سکے۔
@@ -222,7 +222,7 @@ docs/portal/scripts/sns_bulk_release.sh \
 # TYPE sns_bulk_release_requests_total gauge
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
-sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
+sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="61CtjvNd9T3THAR65GsMVHr82Bjc"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ````metrics.prom` کو اپنے Prometheus с коляской для корма (مثال کے طور پر Promtail
 یا пакетный импортер کے ذریعے) تاکہ регистраторы, стюарды اور коллеги по управлению массой

@@ -13918,12 +13918,15 @@ mod tests {
         let ops_name: iroha_data_model::name::Name = "ops_agent".parse().expect("valid");
         let worker_name: iroha_data_model::name::Name = "worker_agent".parse().expect("valid");
 
-        let wallet_spend_payload =
-            encode_agent_wallet_spend_provenance_payload(ops_name.as_ref(), "xor#sora", 1_000_000)
-                .expect("wallet spend payload");
+        let wallet_spend_payload = encode_agent_wallet_spend_provenance_payload(
+            ops_name.as_ref(),
+            "61CtjvNd9T3THAR65GsMVHr82Bjc",
+            1_000_000,
+        )
+        .expect("wallet spend payload");
         iroha_data_model::isi::InstructionBox::from(isi::RequestSoracloudAgentWalletSpend {
             apartment_name: ops_name.clone(),
-            asset_definition: "xor#sora".to_string(),
+            asset_definition: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_string(),
             amount_nanos: 1_000_000,
             provenance: ManifestProvenance {
                 signer: ALICE_KEYPAIR.public_key().clone(),
@@ -14055,7 +14058,7 @@ mod tests {
         assert_eq!(
             ops_record
                 .wallet_daily_spend
-                .get("xor#sora:0")
+                .get("61CtjvNd9T3THAR65GsMVHr82Bjc:0")
                 .expect("wallet day aggregate")
                 .spent_nanos,
             1_000_000

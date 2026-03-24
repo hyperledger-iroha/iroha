@@ -1454,6 +1454,17 @@ pub mod torii {
         /// Master enable switch for offline certificate issuer endpoints.
         pub const ENABLED: bool = true;
 
+        /// Default reserve policy max balance.
+        pub const RESERVE_MAX_BALANCE: &str = "1000000";
+        /// Default reserve policy max single transfer value.
+        pub const RESERVE_MAX_TX_VALUE: &str = "1000000";
+        /// Default authorization lifetime in milliseconds.
+        pub const RESERVE_AUTHORIZATION_TTL_MS: u64 = 24 * 60 * 60 * 1000;
+        /// Default authorization refresh deadline in milliseconds.
+        pub const RESERVE_AUTHORIZATION_REFRESH_MS: u64 = 12 * 60 * 60 * 1000;
+        /// Default revocation bundle lifetime in milliseconds.
+        pub const RESERVE_REVOCATION_TTL_MS: u64 = 6 * 60 * 60 * 1000;
+
         /// Additional legacy operator private keys retained for build-claim compatibility.
         pub fn legacy_operator_private_keys() -> Vec<iroha_crypto::ExposedPrivateKey> {
             Vec::new()

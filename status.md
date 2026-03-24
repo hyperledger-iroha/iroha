@@ -2,6 +2,85 @@
 
 Last updated: 2026-03-24
 
+## 2026-03-24 Account-address first-release hard cut (JS/Swift/Android)
+- Removed the remaining compressed/sentinel/full-width account-address
+  compatibility surface from the public JS, Swift, and Android SDKs so the
+  first-release literal model is just canonical I105 Base58.
+- JavaScript (`javascript/iroha_js`):
+  - the pure-JS fallback codec now matches Rust exactly: 14-bit prefix bytes
+    + canonical payload + 2-byte `I105PRE` checksum, encoded with the standard
+    Base58 alphabet and no textual sentinel;
+  - removed the leftover public error codes tied to the sentinel-era codec
+    (`MISSING_I105_SENTINEL`, `INVALID_I105_BASE`,
+    `INVALID_I105_DIGIT`);
+  - updated `test/address.test.js`, `index.d.ts`, and regenerated
+    `dist/address.js`.
+- Swift (`IrohaSwift`):
+  - removed the last exported full-width helper
+    `AccountAddress.toI105DefaultFullWidth()`;
+  - `swift build` now completes cleanly after the account-address cleanup.
+- Android (`java/iroha_android`):
+  - `AccountAddress` now exposes only canonical I105 render/parse helpers;
+    `toI105FullWidth`, the compressed-era warning/accessor naming, and the old
+    sentinel/compressed error codes are gone;
+  - `DisplayFormats` now carries `i105`, `discriminant`, and `i105Warning`
+    only;
+  - `AddressFormatOption` has been collapsed to `I105`, and the transport
+    query-builder expectations now use `address_format=i105`.
+- Repository hygiene:
+  - strict grep across `IrohaSwift`, `javascript/iroha_js`,
+    `java/iroha_android`, and `docs/source` is now clean for the removed
+    full-width/sentinel/compressed account-address symbols when excluding the
+    historical notes in `status.md`/`roadmap.md`.
+- Focused validation:
+  - `cd javascript/iroha_js && IROHA_JS_DISABLE_NATIVE=1 node --test test/address.test.js` (pass)
+  - `cd javascript/iroha_js && npm run build:dist` (pass)
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew android:compileDebugJavaWithJavac android:compileDebugUnitTestJavaWithJavac` (pass)
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew samples-android:testDebugUnitTest --tests org.hyperledger.iroha.android.samples.SampleAddressTest` (pass)
+  - `cd IrohaSwift && swift build` (pass)
+  - `cargo test -p iroha_data_model --test account_address_vectors -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --test account_address_vectors -- --nocapture` currently stops on unrelated branch-local `norito::json!` macro errors in `crates/iroha_torii/src/offline_reserve.rs`
+
+## 2026-03-24 Follow-up: Metal now degrades per-pipeline instead of dropping the whole backend on Ed25519 mismatch
+- Hardened the Metal startup path in `crates/ivm/src/vector.rs` so this host
+  no longer loses the entire Metal backend when the sampled Ed25519
+  `signature_kernel` self-test fails.
+- The shipped behavior in this slice:
+  - the startup truth set still probes the Ed25519 Metal signature kernel and
+    continues to fail closed on mismatch, but it now disables only the
+    `ed25519_signature` pipeline instead of tearing down the full Metal state;
+  - production batch verification already treats a missing Metal signature
+    pipeline as `None`, so Ed25519 verification now falls back to the CPU path
+    while SHA/AES/Keccak/Merkle-leaf Metal kernels stay live on this machine;
+  - the `metal_sha256_leaves_matches_cpu` regression now executes against a
+    live Metal backend on this host instead of passing only via the earlier
+    "backend disabled" skip path; and
+  - the sampled Ed25519 double-scalar routine in both
+    `crates/ivm/src/metal_ed25519.metal` and `crates/ivm/cuda/signature.cu`
+    now keeps the base point on the positive branch during verification, which
+    is the correct sign convention even though the remaining point-decode bug
+    still forces the Metal signature pipeline to stay fail-closed here.
+  - follow-up arithmetic cleanup also corrected two more ref10 drift points in
+    both accelerator ports: the precomputed `d2` constant now matches ref10,
+    `fe_sq2` now uses the exact ref10 reduction path instead of a simplified
+    `fe_sq` + `fe_add`, and the extra final `carry1` reduction has been
+    removed from `fe_mul`.
+- Focused validation:
+  - `cargo fmt --all` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_ed25519_batch_matches_cpu -- --nocapture` (pass; verifies CPU fallback without disabling Metal)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_sha256_leaves_matches_cpu -- --nocapture` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo check -p ivm --features metal --tests` (pass)
+- Remaining implementation gap:
+  - the raw Metal/CUDA Ed25519 point-decompression path is still wrong and
+    fails the sampled signature-kernel self-test on this host, so Ed25519
+    acceleration remains intentionally unavailable until that decompressor is
+    fixed and revalidated; and
+  - the new Metal-only decompression trace shows the divergence has narrowed:
+    `u = y^2 - 1` and `v = d y^2 + 1` match the CPU/ref10 reference for the
+    Ed25519 base point, but the first mismatch appears while building `uv^7`
+    ahead of `fe_pow22523`, so the remaining bug is inside the field
+    square/multiply chain rather than device discovery or request plumbing.
+
 ## 2026-03-24 Follow-up: SNS-backed alias leases now resolve from ledger state and reserved `universal` ownership is seeded
 - Completed the next unified dataspace-aware alias ownership slice across
   `crates/iroha_core/src/{sns.rs,state.rs,smartcontracts/isi/{domain.rs,query.rs,sns.rs}}`,
@@ -115,6 +194,79 @@ Last updated: 2026-03-24
   - the wider SNS shim replacement still requires a new authoritative ledger
     state surface rather than a small follow-up patch on top of the existing
     in-memory Torii registrar.
+
+## 2026-03-24 Follow-up: Ledger-backed SNS routes now reach the client/test/tooling surface
+- Continued the unified alias / on-chain SNS migration across the remaining
+  consumer surfaces:
+  - `crates/iroha_data_model/src/sns/mod.rs` now exports the fixed
+    namespace suffix ids (`account-alias`, `domain`, `dataspace`) as public
+    constants so the API boundary does not depend on `iroha_core` internals;
+  - `crates/iroha_core/src/sns.rs` now reuses those shared constants and the
+    focused world/SNS regressions were repaired so the new domain-lease and
+    reserved-`universal` coverage compiles again;
+  - `crates/iroha/src/sns.rs` now targets `/v1/sns/names...` and exposes
+    namespace-aware read/mutation helpers instead of the old selector-path
+    contract;
+  - `integration_tests/tests/sns.rs`,
+    `crates/iroha_torii/tests/sns_registrar.rs`,
+    `scripts/sns_bulk_onboard.py`,
+    `javascript/iroha_js/src/toriiClient.js`,
+    `javascript/iroha_js/test/toriiClient.test.js`, and
+    `crates/iroha_cli/CommandLineHelp.md`
+    were updated to stop calling the removed legacy SNS registration routes; and
+  - the removed governance-case shim is now surfaced as an explicit
+    removal in the CLI and JS helpers instead of silently drifting to stale
+    Torii calls.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target-codex-final2 cargo check -p iroha_core -p iroha_torii -p iroha -p iroha_cli -p integration_tests`
+    is currently blocked by unrelated existing `crates/iroha_torii/src/offline_reserve.rs`
+    serde/Norito compile failures on this branch; the alias/SNS changes in this
+    follow-up are not the source of those parser/derive errors.
+
+## 2026-03-24 Follow-up: generated SNS artifacts now match the ledger-backed names API
+- Closed the last generated/public drift in the unified alias / on-chain SNS
+  slice:
+  - `crates/iroha_core/src/smartcontracts/isi/world.rs` now enforces an active
+    SNS domain-name lease during `Register<Domain>`, so the focused
+    `register_domain_requires_active_sns_lease_for_non_genesis_owner`
+    regression now passes against the actual world ISI path instead of only the
+    lower-level SNS helpers;
+  - `javascript/iroha_js/dist/toriiClient.js` was rebuilt from the updated SDK
+    sources, so the shipped JS bundle now uses `/v1/sns/names...` and retains
+    only the deliberate governance-case removal stubs; and
+  - `docs/portal/static/openapi/{torii.json,versions/current/torii.json}` were
+    regenerated from `xtask openapi`, so the checked-in portal specs now expose
+    `/v1/sns/names` and no longer advertise the removed SNS registration or
+    governance-case routes.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target-codex-final2 cargo test -p iroha_core register_domain_requires_active_sns_lease_for_non_genesis_owner --lib` (pass)
+  - `CARGO_TARGET_DIR=target-codex-final2 cargo test -p iroha_core reserved_universal_dataspace_record_is_immutable --lib` (pass)
+  - `npm run build:dist` in `javascript/iroha_js` (pass)
+  - `CARGO_TARGET_DIR=target-codex-openapi NORITO_SKIP_BINDINGS_SYNC=1 cargo run -p xtask --bin xtask -- openapi --output docs/portal/static/openapi/torii.json --output docs/portal/static/openapi/versions/current/torii.json` (pass)
+- Remaining validation gap:
+  - broader workspace-wide validation remains intentionally deferred; this
+    follow-up only exercised the focused Torii/JS paths needed to close the
+    alias/SNS slice.
+
+## 2026-03-24 Follow-up: JS Torii client and focused Torii crate validation are clean again
+- Cleared the remaining branch-local validation blockers that were still
+  obscuring the completed unified alias / on-chain SNS work:
+  - `javascript/iroha_js/test/toriiClient.test.js` now matches the current
+    SDK/native contract by using the camelCase SoraFS native fixture fields,
+    an explicit non-canonical I105 fixture for the governance-owner rejection
+    cases, a valid account-id fixture in the feature-config snapshot test, and
+    valid `label.suffix` selectors in the SNS option-validation checks; and
+  - `cargo check -p iroha_torii --lib` now runs cleanly again on a fresh target
+    dir, so there is no remaining focused `iroha_torii` compile blocker in the
+    alias/SNS slice.
+- Validation:
+  - `node --test test/toriiClient.test.js` in `javascript/iroha_js` (pass, 637 tests)
+  - `CARGO_TARGET_DIR=target-codex-finish cargo check -p iroha_torii --lib` (pass)
+- Remaining validation gap:
+  - `cargo test --workspace` and other full-repo sweeps were not run here per
+    request.
 
 ## 2026-03-24 Follow-up: Norito Stage-1 GPU helpers now prove scalar parity before activation
 - Hardened `crates/norito/src/lib.rs` so dynamically loaded JSON Stage-1

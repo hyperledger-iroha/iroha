@@ -408,27 +408,21 @@ mod tests {
         AccountId::new(signatory.parse().expect("public key"))
     }
 
-    fn asset(id: &str) -> AssetDefinitionId {
-        if let Some((name, domain)) = id.split_once('#') {
-            return AssetDefinitionId::new(
-                domain.parse().expect("domain"),
-                name.parse().expect("name"),
-            );
-        }
-        id.parse().expect("asset id")
+    fn asset(domain: &str, name: &str) -> AssetDefinitionId {
+        AssetDefinitionId::new(domain.parse().expect("domain"), name.parse().expect("name"))
     }
 
     #[test]
     fn dvp_roundtrip_encodes_plan() {
         let settlement_id: SettlementId = "dvp_trade_1".parse().expect("settlement id");
         let delivery_leg = SettlementLeg::new(
-            asset("bond#wonderland"),
+            asset("wonderland", "bond"),
             1_000u32.into(),
             account(ALICE_SIGNATORY, "test"),
             account(BOB_SIGNATORY, "test"),
         );
         let payment_leg = SettlementLeg::new(
-            asset("usd#wonderland"),
+            asset("wonderland", "usd"),
             1_005u32.into(),
             account(BOB_SIGNATORY, "test"),
             account(ALICE_SIGNATORY, "test"),
@@ -461,13 +455,13 @@ mod tests {
     fn pvp_display_includes_identifier() {
         let settlement_id: SettlementId = "pvp_fx_1".parse().expect("settlement id");
         let primary_leg = SettlementLeg::new(
-            asset("usd#wonderland"),
+            asset("wonderland", "usd"),
             1_000u32.into(),
             account(ALICE_SIGNATORY, "test"),
             account(BOB_SIGNATORY, "test"),
         );
         let counter_leg = SettlementLeg::new(
-            asset("eur#wonderland"),
+            asset("wonderland", "eur"),
             920u32.into(),
             account(BOB_SIGNATORY, "test"),
             account(ALICE_SIGNATORY, "test"),

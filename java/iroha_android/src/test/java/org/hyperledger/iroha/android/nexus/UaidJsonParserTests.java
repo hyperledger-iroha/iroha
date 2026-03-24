@@ -35,7 +35,7 @@ public final class UaidJsonParserTests {
                   "label": "alice",
                   "assets": [
                     {
-                      "asset_id": "usd#wonderland#alice",
+                      "asset_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1#alice",
                       "asset_definition_id": "%s",
                       "quantity": "15"
                     }
@@ -63,7 +63,7 @@ public final class UaidJsonParserTests {
     assert "alice".equals(account.label()) : "account label mismatch";
     assert account.assets().size() == 1 : "asset list size mismatch";
     final UaidPortfolioResponse.UaidPortfolioAsset asset = account.assets().get(0);
-    assert "usd#wonderland#alice".equals(asset.assetId()) : "asset id mismatch";
+    assert "7EAD8EFYUx1aVKZPUU1fyKvr8dF1#alice".equals(asset.assetId()) : "asset id mismatch";
     assert assetDefinitionId.equals(asset.assetDefinitionId()) : "definition id mismatch";
     assert "15".equals(asset.quantity()) : "quantity mismatch";
   }

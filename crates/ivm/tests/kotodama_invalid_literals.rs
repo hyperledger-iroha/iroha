@@ -81,7 +81,7 @@ fn build_unshield_inline_rejects_non_literal_amount() {
             let amt = 1 + 1;
             let inputs = blob("0x01020304");
             build_unshield_inline(
-                asset_definition("rose#wonderland"),
+                asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
                 account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
                 amt,
                 inputs,
@@ -126,7 +126,7 @@ fn build_unshield_inline_rejects_wrong_inputs_length() {
     let src = r#"
         fn main() {
             build_unshield_inline(
-                asset_definition("rose#wonderland"),
+                asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
                 account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
                 1,
                 blob("short"),
@@ -149,7 +149,7 @@ fn build_unshield_inline_rejects_negative_amount() {
     let src = r#"
         fn main() {
             build_unshield_inline(
-                asset_definition("rose#wonderland"),
+                asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
                 account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
                 -1,
                 blob("0123456789abcdef0123456789abcdef"),

@@ -42,7 +42,7 @@ seiyaku TransferCall {
     transfer_asset(
       account!("ih58..."),
       account!("ih58..."),
-      asset_definition!("rose#wonderland"),
+      asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );
   }

@@ -950,7 +950,8 @@ mod tests {
     }
 
     fn sample_asset() -> AssetId {
-        let definition = AssetDefinitionId::from_str("usd#wonderland").expect("definition id");
+        let definition =
+            AssetDefinitionId::from_str("7EAD8EFYUx1aVKZPUU1fyKvr8dF1").expect("definition id");
         let key_pair = KeyPair::from_seed(vec![0xAB; 32], Algorithm::Ed25519);
         let account = AccountId::new(key_pair.public_key().clone());
         AssetId::new(definition, account)

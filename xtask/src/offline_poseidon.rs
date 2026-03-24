@@ -231,7 +231,7 @@ fn sample_account() -> AccountId {
 }
 
 fn sample_asset(owner: &AccountId) -> AssetId {
-    let definition: AssetDefinitionId = "usd#wonderland".parse().expect("definition");
+    let definition: AssetDefinitionId = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1".parse().expect("definition");
     AssetId::new(definition, owner.clone())
 }
 

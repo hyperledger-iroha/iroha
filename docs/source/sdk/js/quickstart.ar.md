@@ -346,7 +346,7 @@ const holdings = await torii.listAccountAssets("i105...", {
   assetId: "norito:4e52543000000001",
 });
 console.log("asset holdings", holdings.items);
-const holders = await torii.listAssetHolders("rose#wonderland", {
+const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 5,
   assetId: "norito:4e52543000000001",
 });
@@ -359,7 +359,7 @@ console.log("recent hashes", txs.items.map((tx) => tx.entrypoint_hash));
 
 for await (const nft of torii.iterateNfts({
   pageSize: 10,
-  filter: { Eq: ["id.definition_id", "art#wonderland"] },
+  filter: { Eq: ["id.definition_id", "5Pz9SwdN9eXPbiXPX9HRCpzCcE3o"] },
   sort: [{ key: "id", order: "asc" }],
 })) {
   console.log("nft:", nft.id);
@@ -367,7 +367,7 @@ for await (const nft of torii.iterateNfts({
 
 for await (const holding of torii.iterateAccountAssetsQuery("i105...", {
   pageSize: 8,
-  filter: { Eq: ["asset_id.definition_id", "rose#wonderland"] },
+  filter: { Eq: ["asset_id.definition_id", "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"] },
   select: [{ Fields: ["asset_id", "quantity"] }],
 })) {
   console.log("compressed holding", holding.asset_id, "->", holding.quantity);

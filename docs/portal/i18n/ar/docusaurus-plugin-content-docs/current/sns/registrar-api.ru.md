@@ -103,15 +103,15 @@ Struct ReservedAssignmentRequestV1 {
 
 ## 3. نقاط الراحة| نقطة النهاية | الطريقة | الحمولة | الوصف |
 |----------|-------|--------|----------|
-| `/v1/sns/registrations` | مشاركة | `RegisterNameRequestV1` | قم بالتسجيل أو فتح الاسم مرة أخرى. قم بتقسيم الطبقة السعرية، وتحقق من صحة اللوحة/الإدارة، واحصل على مسجل الاشتراك. |
-| `/v1/sns/registrations/{selector}/renew` | مشاركة | `RenewNameRequestV1` | توسيع نطاق. بادئ ذي بدء، النعمة/الفداء من السياسة. |
-| `/v1/sns/registrations/{selector}/transfer` | مشاركة | `TransferNameRequestV1` | قبل الترحيب بعد التحكم في الانحناء. |
-| `/v1/sns/registrations/{selector}/controllers` | ضع | `UpdateControllersRequestV1` | تخصيص وحدات التحكم; التحقق من حسابات عنوان البريد الإلكتروني. |
-| `/v1/sns/registrations/{selector}/freeze` | مشاركة | `FreezeNameRequestV1` | تجميد الوصي/المجلس. تحتاج إلى تذكرة الوصي وقائمة الحوكمة. |
-| `/v1/sns/registrations/{selector}/freeze` | حذف | `GovernanceHookV1` | قم بإلغاء التجميد بعد التصريف؛ من المفرح أن المجلس يتجاوز الإجازة. |
+| `/v1/sns/names` | مشاركة | `RegisterNameRequestV1` | قم بالتسجيل أو فتح الاسم مرة أخرى. قم بتقسيم الطبقة السعرية، وتحقق من صحة اللوحة/الإدارة، واحصل على مسجل الاشتراك. |
+| `/v1/sns/names/{namespace}/{literal}/renew` | مشاركة | `RenewNameRequestV1` | توسيع نطاق. بادئ ذي بدء، النعمة/الفداء من السياسة. |
+| `/v1/sns/names/{namespace}/{literal}/transfer` | مشاركة | `TransferNameRequestV1` | قبل الترحيب بعد التحكم في الانحناء. |
+| `/v1/sns/names/{namespace}/{literal}/controllers` | ضع | `UpdateControllersRequestV1` | تخصيص وحدات التحكم; التحقق من حسابات عنوان البريد الإلكتروني. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | مشاركة | `FreezeNameRequestV1` | تجميد الوصي/المجلس. تحتاج إلى تذكرة الوصي وقائمة الحوكمة. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | حذف | `GovernanceHookV1` | قم بإلغاء التجميد بعد التصريف؛ من المفرح أن المجلس يتجاوز الإجازة. |
 | `/v1/sns/reserved/{selector}` | مشاركة | `ReservedAssignmentRequestV1` | الاسم محفوظة لمضيف/مجلس. |
 | `/v1/sns/policies/{suffix_id}` | احصل على | -- | احصل على تيكويو `SuffixPolicyV1` (كشيريمو). |
-| `/v1/sns/registrations/{selector}` | احصل على | -- | تم تجديده `NameRecordV1` + مواد فعالة (Active، Grace، إلخ). |
+| `/v1/sns/names/{namespace}/{literal}` | احصل على | -- | تم تجديده `NameRecordV1` + مواد فعالة (Active، Grace، إلخ). |
 
 **محدد الإضافة:** الجزء `{selector}` يستخدم I105، مضغوط (`sora`) أو سداسي عشري قانوني بواسطة ADDR-5؛ تمت تسوية Torii من خلال `NameSelectorV1`.**نموذج أوشيبوك:** جميع نقاط الاتصال تتصل بـ Norito JSON مع `code`، `message`، `details`. تتضمن الرموز `sns_err_reserved`، و`sns_err_payment_mismatch`، و`sns_err_policy_violation`، و`sns_err_governance_missing`.
 
@@ -124,7 +124,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -149,7 +149,7 @@ iroha sns policy --suffix-id 1
 iroha sns renew \
   --selector makoto.sora \
   --term-years 1 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 120 \
   --payment-settlement '"renewal-settlement"' \
   --payment-signature '"steward-signature"'
@@ -172,7 +172,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` يجب أن تكتب بشكل صحيح `GovernanceHookV1` (معرف الاقتراح، تجزئات التصويت، إضافة المضيف/الوصي). يقوم الأمر بمجرد توجيه نقطة الاتصال اللاسلكية `/v1/sns/registrations/{selector}/...` إلى المشغلين الذين يمكنهم تكرارها مرة أخرى Torii، الذي سيتم إنشاء SDK.
+`--governance-json` يجب أن تكتب بشكل صحيح `GovernanceHookV1` (معرف الاقتراح، تجزئات التصويت، إضافة المضيف/الوصي). يقوم الأمر بمجرد توجيه نقطة الاتصال اللاسلكية `/v1/sns/names/{namespace}/{literal}/...` إلى المشغلين الذين يمكنهم تكرارها مرة أخرى Torii، الذي سيتم إنشاء SDK.
 
 ## 4. خدمة gRPC```text
 service Registrar {
@@ -240,7 +240,7 @@ Torii يختبر التوثيق، يختبر:
 
 1. يقوم الجارديان بمعالجة `FreezeNameRequestV1` بالتذكرة، مع تحديد هوية الهوية.
 2. Torii يعيد الكتابة إلى `NameStatus::Frozen`، ويكتب `NameFrozen`.
-3. قام مجلس التفويض بتجاوز التجاوز؛ يقوم المشغل بحذف `/v1/sns/registrations/{selector}/freeze` مع `GovernanceHookV1`.
+3. قام مجلس التفويض بتجاوز التجاوز؛ يقوم المشغل بحذف `/v1/sns/names/{namespace}/{literal}/freeze` مع `GovernanceHookV1`.
 4. Torii تحقق من التجاوز، واكتب `NameUnfrozen`.## 7. التحقق من صحة ورموز أوشيبوك
 
 | كود | الوصف | HTTP |

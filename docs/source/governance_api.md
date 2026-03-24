@@ -132,7 +132,7 @@ The council fallback used by Torii when no persisted roster exists is parameteri
   approval_q_num = 1
   approval_q_den = 2
   min_turnout = 0
-  voting_asset_id = "xor#sora"         # governance bond asset (Sora Nexus default)
+  voting_asset_id = "61CtjvNd9T3THAR65GsMVHr82Bjc"         # governance bond asset (Sora Nexus default)
   min_bond_amount = 150                # smallest units of voting_asset_id
   bond_escrow_account = "i105..."
   slash_receiver_account = "i105..."
@@ -142,7 +142,7 @@ The council fallback used by Torii when no persisted roster exists is parameteri
   parliament_committee_size = 21
   parliament_term_blocks = 43200
   parliament_min_stake = 1
-  parliament_eligibility_asset_id = "SORA#stake"
+  parliament_eligibility_asset_id = "79jULkZVMgnbzxBe6NvqeDxVEeEk"
 ```
 
 Equivalent environment overrides:
@@ -150,7 +150,7 @@ Equivalent environment overrides:
 ```
 GOV_VK_BACKEND=halo2/ipa
 GOV_VK_NAME=ballot_v1
-GOV_VOTING_ASSET_ID=xor#sora
+GOV_VOTING_ASSET_ID=61CtjvNd9T3THAR65GsMVHr82Bjc
 GOV_MIN_BOND_AMOUNT=150
 GOV_BOND_ESCROW_ACCOUNT=i105...
 GOV_SLASH_RECEIVER_ACCOUNT=i105...
@@ -160,7 +160,7 @@ GOV_SLASH_INELIGIBLE_PROOF_BPS=1500
 GOV_PARLIAMENT_COMMITTEE_SIZE=21
 GOV_PARLIAMENT_TERM_BLOCKS=43200
 GOV_PARLIAMENT_MIN_STAKE=1
-GOV_PARLIAMENT_ELIGIBILITY_ASSET_ID=SORA#stake
+GOV_PARLIAMENT_ELIGIBILITY_ASSET_ID=79jULkZVMgnbzxBe6NvqeDxVEeEk
 GOV_ALIAS_TEU_MINIMUM=0
 GOV_ALIAS_FRONTIER_TELEMETRY=true
 ```

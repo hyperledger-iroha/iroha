@@ -34,7 +34,7 @@ translator: machine-google-reviewed
 | `status` | enum | `active`፣ `paused`፣ ወይም `revoked` የማስጀመሪያ ዝግጁነትን የሚገልጽ። |
 | `steward_account` | ሕብረቁምፊ | ለመጋቢነት ኃላፊነት ያለው መለያ (ተዛማጆች የመዝጋቢ ፖሊሲ መንጠቆዎች)። |
 | `fund_splitter_account` | ሕብረቁምፊ | በ`fee_split` ከመሄዱ በፊት ክፍያዎችን የሚቀበል መለያ። |
-| `payment_asset_id` | ሕብረቁምፊ | ለመቋቋሚያ ጥቅም ላይ የዋለ ንብረት (`xor#sora` ለመጀመሪያው ቡድን)። |
+| `payment_asset_id` | ሕብረቁምፊ | ለመቋቋሚያ ጥቅም ላይ የዋለ ንብረት (`61CtjvNd9T3THAR65GsMVHr82Bjc` ለመጀመሪያው ቡድን)። |
 | `min_term_years` / `max_term_years` | ኢንቲጀር | ከፖሊሲው የግዢ ጊዜ ገደቦች. |
 | `grace_period_days` / `redemption_period_days` | ኢንቲጀር | በTorii የተተገበሩ የእድሳት ደህንነት መስኮቶች። |
 | `referral_cap_bps` | ኢንቲጀር | በአስተዳደር የሚፈቀደው ከፍተኛው የሪፈራል ቀረጻ (መሰረታዊ ነጥቦች)። |
@@ -47,9 +47,9 @@ translator: machine-google-reviewed
 
 | ቅጥያ | መታወቂያ (`hex`) | መጋቢ | ፈንድ መከፋፈያ | ሁኔታ | የክፍያ ንብረት | ሪፈራል ካፕ (bps) | ጊዜ (ደቂቃ-  ከፍተኛ ዓመታት) | ጸጋ / ቤዛ (ቀናት) | የዋጋ አሰጣጥ ደረጃዎች (regex → መነሻ ዋጋ / ጨረታ) | የተያዙ መለያዎች | ክፍያ ተከፍሎ (T/S/R/E bps) | የፖሊሲ ስሪት |
 |--------|------------|------------|-----------|----------|-----------|------------|
-| `.sora` | `0x0001` | `i105...` | `i105...` | ንቁ | `xor#sora` | 500 | 1 – 5 | 30/60 | `T0: ^[a-z0-9]{3,}$ → 120 XOR (Vickrey)` | `treasury → i105...` | `7000 / 3000 / 1000 / 0` | 1 |
-| `.nexus` | `0x0002` | `i105...` | `i105...` | ባለበት ቆሟል | `xor#sora` | 300 | 1 – 3 | 15/30 | `T0: ^[a-z0-9]{4,}$ → 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ → 4000 XOR (Dutch floor 500)` | `treasury → i105...`, `guardian → i105...` | `6500 / 2500 / 800 / 200` | 2 |
-| `.dao` | `0x0003` | `i105...` | `i105...` | ተሽሯል | `xor#sora` | 0 | 1 – 2 | 30/30 | `T0: ^[a-z0-9]{3,}$ → 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
+| `.sora` | `0x0001` | `i105...` | `i105...` | ንቁ | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 500 | 1 – 5 | 30/60 | `T0: ^[a-z0-9]{3,}$ → 120 XOR (Vickrey)` | `treasury → i105...` | `7000 / 3000 / 1000 / 0` | 1 |
+| `.nexus` | `0x0002` | `i105...` | `i105...` | ባለበት ቆሟል | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 300 | 1 – 3 | 15/30 | `T0: ^[a-z0-9]{4,}$ → 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ → 4000 XOR (Dutch floor 500)` | `treasury → i105...`, `guardian → i105...` | `6500 / 2500 / 800 / 200` | 2 |
+| `.dao` | `0x0003` | `i105...` | `i105...` | ተሽሯል | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 0 | 1 – 2 | 30/30 | `T0: ^[a-z0-9]{3,}$ → 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
 
 ## JSON የተቀነጨበ
 
@@ -63,13 +63,13 @@ translator: machine-google-reviewed
       "suffix_id": 1,
       "status": "active",
       "fund_splitter_account": "i105...",
-      "payment_asset_id": "xor#sora",
+      "payment_asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
       "referral_cap_bps": 500,
       "pricing": [
         {
           "tier_id": 0,
           "label_regex": "^[a-z0-9]{3,}$",
-          "base_price": {"asset_id": "xor#sora", "amount": 120},
+          "base_price": {"asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc", "amount": 120},
           "auction_kind": "vickrey_commit_reveal",
           "min_duration_years": 1,
           "max_duration_years": 5

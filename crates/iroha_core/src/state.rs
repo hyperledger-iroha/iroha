@@ -15910,6 +15910,46 @@ impl State {
             .insert(storage_key, norito::codec::Encode::encode(&record));
     }
 
+    fn seed_existing_domain_name_records(world: &mut World) {
+        let domains: Vec<_> = world
+            .domains
+            .view()
+            .iter()
+            .map(|(domain_id, domain)| (domain_id.clone(), domain.owned_by().clone()))
+            .collect();
+
+        for (domain_id, owner) in domains {
+            let selector = crate::sns::selector_for_domain(&domain_id)
+                .expect("stored domain ids are canonical");
+            let storage_key = crate::sns::record_storage_key(&selector);
+            if world
+                .smart_contract_state
+                .view()
+                .get(&storage_key)
+                .is_some()
+            {
+                continue;
+            }
+
+            let address = iroha_data_model::account::AccountAddress::from_account_id(&owner)
+                .expect("account id should convert to account address");
+            let record = iroha_data_model::sns::NameRecordV1::new(
+                selector,
+                owner,
+                vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+                0,
+                0,
+                u64::MAX,
+                u64::MAX,
+                u64::MAX,
+                Metadata::default(),
+            );
+            world
+                .smart_contract_state
+                .insert(storage_key, norito::codec::Encode::encode(&record));
+        }
+    }
+
     #[must_use]
     #[inline]
     #[allow(clippy::too_many_lines)]
@@ -15920,7 +15960,9 @@ impl State {
         #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     ) -> Self {
         world.rebuild_account_subject_domain_indexes();
+        crate::sns::seed_default_namespace_policies(&mut world);
         Self::seed_reserved_universal_dataspace_name_record(&mut world);
+        Self::seed_existing_domain_name_records(&mut world);
         #[cfg(feature = "telemetry")]
         let telemetry_seed = telemetry.clone();
         let initial_crypto = iroha_config::parameters::actual::Crypto::default();

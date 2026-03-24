@@ -89,11 +89,11 @@ translator: machine-google-reviewed
 - `iroha_zk_verifier_cache_events_total{cache,event}`
 
 記錄校準工作負載之前和之後的值。一個
-每個資產單個命令就足夠了； `xor#wonderland` 的示例：
+每個資產單個命令就足夠了； `4cuvDVPuLBKJyN6dPbRQhmLh68sU` 的示例：
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \
-  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="xor#wonderland"}'
+  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="4cuvDVPuLBKJyN6dPbRQhmLh68sU"}'
 ```
 
 將原始輸出（或 Prometheus 快照）附加到校準票，以便

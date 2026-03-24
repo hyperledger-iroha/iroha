@@ -103,15 +103,15 @@ Struct ReservedAssignmentRequestV1 {
 
 ## 3. راحة نقاط النهاية| نقطة النهاية | الطريقة | الحمولة | وصف |
 |----------|-------|--------|-----------|
-| `/v1/sns/registrations` | مشاركة | `RegisterNameRequestV1` | قم بالتسجيل أو إعادة إنشاء الاسم. حل مستوى الأسعار، وإثبات صحة الدفع/الإدارة، وإصدار أحداث التسجيل. |
-| `/v1/sns/registrations/{selector}/renew` | مشاركة | `RenewNameRequestV1` | estende o termo. Aplica janelas de Grace/Redemption da Politica. |
-| `/v1/sns/registrations/{selector}/transfer` | مشاركة | `TransferNameRequestV1` | نقل الملكية عند الحصول على موافقة الإدارة على الإضافات. |
-| `/v1/sns/registrations/{selector}/controllers` | ضع | `UpdateControllersRequestV1` | استبدال مجموعة وحدات التحكم؛ صالح enderecos de conta assinados. |
-| `/v1/sns/registrations/{selector}/freeze` | مشاركة | `FreezeNameRequestV1` | تجميد الوصي/المجلس. اطلب من ولي الأمر الرجوع إلى جدول الحوكمة. |
-| `/v1/sns/registrations/{selector}/freeze` | حذف | `GovernanceHookV1` | قم بإلغاء تجميد apos remediacao؛ تجاوز الضمان من خلال تسجيل المجلس. |
+| `/v1/sns/names` | مشاركة | `RegisterNameRequestV1` | قم بالتسجيل أو إعادة إنشاء الاسم. حل مستوى الأسعار، وإثبات صحة الدفع/الإدارة، وإصدار أحداث التسجيل. |
+| `/v1/sns/names/{namespace}/{literal}/renew` | مشاركة | `RenewNameRequestV1` | estende o termo. Aplica janelas de Grace/Redemption da Politica. |
+| `/v1/sns/names/{namespace}/{literal}/transfer` | مشاركة | `TransferNameRequestV1` | نقل الملكية عند الحصول على موافقة الإدارة على الإضافات. |
+| `/v1/sns/names/{namespace}/{literal}/controllers` | ضع | `UpdateControllersRequestV1` | استبدال مجموعة وحدات التحكم؛ صالح enderecos de conta assinados. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | مشاركة | `FreezeNameRequestV1` | تجميد الوصي/المجلس. اطلب من ولي الأمر الرجوع إلى جدول الحوكمة. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | حذف | `GovernanceHookV1` | قم بإلغاء تجميد apos remediacao؛ تجاوز الضمان من خلال تسجيل المجلس. |
 | `/v1/sns/reserved/{selector}` | مشاركة | `ReservedAssignmentRequestV1` | تمت إضافة الأسماء المحجوزة إلى المضيف/المجلس. |
 | `/v1/sns/policies/{suffix_id}` | احصل على | -- | Busca `SuffixPolicyV1` atual (cacheavel). |
-| `/v1/sns/registrations/{selector}` | احصل على | -- | Retorna `NameRecordV1` atual + estado efetivo (نشط، نعمة، وما إلى ذلك). |
+| `/v1/sns/names/{namespace}/{literal}` | احصل على | -- | Retorna `NameRecordV1` atual + estado efetivo (نشط، نعمة، وما إلى ذلك). |
 
 **مفتاح التحديد:** الجزء `{selector}` يحتوي على I105، مدمج أو سداسي عشري متوافق مع ADDR-5؛ Torii تطبيع عبر `NameSelectorV1`.**نموذج الأخطاء:** جميع نقاط نهاية نظام التشغيل ترجع إلى Norito JSON com `code`, `message`, `details`. تتضمن الرموز `sns_err_reserved`، و`sns_err_payment_mismatch`، و`sns_err_policy_violation`، و`sns_err_governance_missing`.
 
@@ -124,7 +124,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -149,7 +149,7 @@ Veja `crates/iroha_cli/src/commands/sns.rs` للتنفيذ؛ تقوم الأوا
 iroha sns renew \
   --selector makoto.sora \
   --term-years 1 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 120 \
   --payment-settlement '"renewal-settlement"' \
   --payment-signature '"steward-signature"'
@@ -172,7 +172,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` يجب أن يكون لديك سجل `GovernanceHookV1` صالح (معرف الاقتراح، تجزئات التصويت، المضيف/الوصي). كل ما عليك فعله هو تحديد نقطة النهاية `/v1/sns/registrations/{selector}/...` التي تتوافق مع مشغلي الإصدار التجريبي تمامًا مثل السطوح Torii التي ترسمها SDKs.## 4.سيرفيكو جي آر بي سي
+`--governance-json` يجب أن يكون لديك سجل `GovernanceHookV1` صالح (معرف الاقتراح، تجزئات التصويت، المضيف/الوصي). كل ما عليك فعله هو تحديد نقطة النهاية `/v1/sns/names/{namespace}/{literal}/...` التي تتوافق مع مشغلي الإصدار التجريبي تمامًا مثل السطوح Torii التي ترسمها SDKs.## 4.سيرفيكو جي آر بي سي
 
 ```text
 service Registrar {
@@ -240,7 +240,7 @@ Torii تم التحقق منه كما يتم تقديمه:
 
 1. يرسل الجارديان `FreezeNameRequestV1` بمرجع تذكرة معرف الحادث.
 2. Torii قم بنقل التسجيل لـ `NameStatus::Frozen`، قم بإصدار `NameFrozen`.
-3. Apos remediacao، o تجاوز المجلس؛ o يقوم المشغل بحذف `/v1/sns/registrations/{selector}/freeze` com `GovernanceHookV1`.
+3. Apos remediacao، o تجاوز المجلس؛ o يقوم المشغل بحذف `/v1/sns/names/{namespace}/{literal}/freeze` com `GovernanceHookV1`.
 4. Torii التحقق من الصحة أو التجاوز، إصدار `NameUnfrozen`.## 7. التحقق من صحة رموز الخطأ
 
 | كوديجو ​​| وصف | HTTP |

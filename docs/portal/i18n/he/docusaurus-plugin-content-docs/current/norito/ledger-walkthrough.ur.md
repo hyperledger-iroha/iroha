@@ -61,14 +61,14 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI submitted transaction hash (مثلاً `0x5f…`) پرنٹ کرتا ہے۔ اسے محفوظ کریں تاکہ بعد میں status کو query کیا جا سکے۔
 
 ## 3. آپریٹر اکاؤنٹ میں units mint کریں
 
-asset quantities `(asset definition, account)` کے جوڑے کے تحت رہتی ہیں۔ `$ADMIN_ACCOUNT` דגם `coffee#wonderland` 250 יחידות מנטה.
+asset quantities `(asset definition, account)` کے جوڑے کے تحت رہتی ہیں۔ `$ADMIN_ACCOUNT` דגם `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` 250 יחידות מנטה.
 
 ```sh
 iroha --config defaults/client.toml asset mint \

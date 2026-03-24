@@ -103,15 +103,15 @@ Struct ReservedAssignmentRequestV1 {
 
 ## 3. نقاط النهاية REST| نقطة النهاية | طريقی | الحمولة | تفاصيل |
 |----------|-------|---------|-------|
-| `/v1/sns/registrations` | مشاركة | `RegisterNameRequestV1` | اسم السجل أو تكرار. حل طبقة التسعير هو إثبات الدفع/الحوكمة، وتصدر أحداث التسجيل هذه البطاقة. |
-| `/v1/sns/registrations/{selector}/renew` | مشاركة | `RenewNameRequestV1` | مدت بڑهاتا ہے۔ نوافذ النعمة/الفداء في باليس هي نافعة للكرتا. |
-| `/v1/sns/registrations/{selector}/transfer` | مشاركة | `TransferNameRequestV1` | الموافقات الحكومرانية يتم الحصول عليها بعد انتقال الملكية. |
-| `/v1/sns/registrations/{selector}/controllers` | ضع | `UpdateControllersRequestV1` | وحدات تحكم سيلتا بلتا؛ عناوين الحساب الموقعة کی توثیق کرتا ہے۔ |
-| `/v1/sns/registrations/{selector}/freeze` | مشاركة | `FreezeNameRequestV1` | تجميد الوصي/المجلس ۔ تذكرة الوصي وجدول الحوكمة حوالة درکار۔ |
-| `/v1/sns/registrations/{selector}/freeze` | حذف | `GovernanceHookV1` | علاج بعد التجميد؛ لقد أدى تجاوز المجلس إلى زيادة كبيرة في عدد التسجيلات. |
+| `/v1/sns/names` | مشاركة | `RegisterNameRequestV1` | اسم السجل أو تكرار. حل طبقة التسعير هو إثبات الدفع/الحوكمة، وتصدر أحداث التسجيل هذه البطاقة. |
+| `/v1/sns/names/{namespace}/{literal}/renew` | مشاركة | `RenewNameRequestV1` | مدت بڑهاتا ہے۔ نوافذ النعمة/الفداء في باليس هي نافعة للكرتا. |
+| `/v1/sns/names/{namespace}/{literal}/transfer` | مشاركة | `TransferNameRequestV1` | الموافقات الحكومرانية يتم الحصول عليها بعد انتقال الملكية. |
+| `/v1/sns/names/{namespace}/{literal}/controllers` | ضع | `UpdateControllersRequestV1` | وحدات تحكم سيلتا بلتا؛ عناوين الحساب الموقعة کی توثیق کرتا ہے۔ |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | مشاركة | `FreezeNameRequestV1` | تجميد الوصي/المجلس ۔ تذكرة الوصي وجدول الحوكمة حوالة درکار۔ |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | حذف | `GovernanceHookV1` | علاج بعد التجميد؛ لقد أدى تجاوز المجلس إلى زيادة كبيرة في عدد التسجيلات. |
 | `/v1/sns/reserved/{selector}` | مشاركة | `ReservedAssignmentRequestV1` | الأسماء المحجوزة هي المضيف/المجلس كمهمة مهمة. |
 | `/v1/sns/policies/{suffix_id}` | احصل على | -- | `SuffixPolicyV1` موجود ومتاح (قابل للتخزين المؤقت). |
-| `/v1/sns/registrations/{selector}` | احصل على | -- | موجود `NameRecordV1` + أكثر حالة (نشط، Grace وغيره) واپس کرتا. |
+| `/v1/sns/names/{namespace}/{literal}` | احصل على | -- | موجود `NameRecordV1` + أكثر حالة (نشط، Grace وغيره) واپس کرتا. |
 
 **ترميز المحدد:** `{selector}` مقطع المسار I105، مضغوط (`sora`) أو سداسي عشري أساسي ADDR-5 کے مطابق مقبول کرتا ہے؛ Torii `NameSelectorV1` تطبيع الكرتا.**نموذج الخطأ:** نقاط النهاية الكاملة Norito JSON `code`, `message`, `details`. تتضمن الرموز `sns_err_reserved` و`sns_err_payment_mismatch` و`sns_err_policy_violation` و`sns_err_governance_missing`.
 
@@ -124,7 +124,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -149,7 +149,7 @@ iroha sns policy --suffix-id 1
 iroha sns renew \
   --selector makoto.sora \
   --term-years 1 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 120 \
   --payment-settlement '"renewal-settlement"' \
   --payment-signature '"steward-signature"'
@@ -172,7 +172,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` صحيح `GovernanceHookV1` تسجيل الدخول (معرف الاقتراح، تجزئات التصويت، توقيعات المضيف/الوصي). هناك علاقة بين نقطة نهاية `/v1/sns/registrations/{selector}/...` ونقطة النهاية التي يتدرب فيها مشغلو بيتا وأسطح Torii على أدوات تطوير البرامج (SDK) الجديدة.
+`--governance-json` صحيح `GovernanceHookV1` تسجيل الدخول (معرف الاقتراح، تجزئات التصويت، توقيعات المضيف/الوصي). هناك علاقة بين نقطة نهاية `/v1/sns/names/{namespace}/{literal}/...` ونقطة النهاية التي يتدرب فيها مشغلو بيتا وأسطح Torii على أدوات تطوير البرامج (SDK) الجديدة.
 
 ## 4. خدمة gRPC
 
@@ -238,7 +238,7 @@ Torii البراهين التي تم إنشاؤها من قبل:
 
 ### 6.3 تجميد الوصي وتجاوز المجلس1. Guardian `FreezeNameRequestV1` أرسل بطاقة وتذكرة معرّف الحادث کا حوالة دینے وتذكرة ہہے.
 2. سجل Torii الذي ينتقل إلى `NameStatus::Frozen`، `NameFrozen` ينبعث من الكرتا.
-3. الإصلاح بعد تجاوز المجلس للقرار؛ عامل التشغيل DELETE `/v1/sns/registrations/{selector}/freeze` أو `GovernanceHookV1` وهو ما حدث بالفعل.
+3. الإصلاح بعد تجاوز المجلس للقرار؛ عامل التشغيل DELETE `/v1/sns/names/{namespace}/{literal}/freeze` أو `GovernanceHookV1` وهو ما حدث بالفعل.
 4. Torii تجاوز التحقق من صحة البطاقة، `NameUnfrozen` ينبعث منها بطاقة.
 
 ## 7. رموز التحقق والخطأ

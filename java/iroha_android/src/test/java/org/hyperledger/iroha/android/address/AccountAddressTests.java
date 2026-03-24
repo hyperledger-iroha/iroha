@@ -21,7 +21,7 @@ public final class AccountAddressTests {
     complianceFixtureSuite();
     goldenVectorsRoundTrip();
     i105PrefixMismatchThrows();
-    i105RequiresSentinel();
+    i105RejectsInvalidCharacters();
     curveSupportDefaults();
     curveSupportConfigurationToggle();
     singleKeyPayloadExtraction();
@@ -60,8 +60,6 @@ public final class AccountAddressTests {
     final int prefix = asNumber(i105.get("prefix"), caseId + ".encodings.i105.prefix", caseId).intValue();
     final String i105String = asString(i105.get("string"), caseId + ".encodings.i105.string", caseId);
     final String defaultI105 = asString(encodings.get("i105_default"), caseId + ".encodings.i105_default", caseId);
-    final String defaultI105Full =
-        asString(encodings.get("i105_default_fullwidth"), caseId + ".encodings.i105_default_fullwidth", caseId);
 
     final AccountAddress canonical = AccountAddress.fromCanonicalHex(canonicalHex);
     final byte[] canonicalBytes = canonical.canonicalBytes();
@@ -70,38 +68,26 @@ public final class AccountAddressTests {
     assert Arrays.equals(i105Parsed.address.canonicalBytes(), canonicalBytes)
         : caseId + ": i105 parse canonical mismatch";
 
-    for (String encodingLabel : List.of("default", "full-width")) {
-      final String encoding = "default".equals(encodingLabel) ? defaultI105 : defaultI105Full;
-      final AccountAddress decoded = AccountAddress.fromI105(encoding, null);
-      assert Arrays.equals(decoded.canonicalBytes(), canonicalBytes)
-          : caseId + ": i105_default " + encodingLabel + " canonical mismatch";
+    final AccountAddress decoded = AccountAddress.fromI105(defaultI105, null);
+    assert Arrays.equals(decoded.canonicalBytes(), canonicalBytes)
+        : caseId + ": i105_default canonical mismatch";
 
-      final AccountAddress.ParseResult parsed = AccountAddress.parseEncoded(encoding, null);
-      assert parsed.format == AccountAddress.Format.I105
-          : caseId + ": i105_default " + encodingLabel + " parse format mismatch";
-      assert Arrays.equals(parsed.address.canonicalBytes(), canonicalBytes)
-          : caseId + ": i105_default " + encodingLabel + " parse canonical mismatch";
-    }
-
-    final AccountAddress.ParseResult canonicalParsed = AccountAddress.parseAny(canonicalHex, null);
-    assert canonicalParsed.format == AccountAddress.Format.CANONICAL_HEX
-        : caseId + ": canonical parse format mismatch";
-    assert Arrays.equals(canonicalParsed.address.canonicalBytes(), canonicalBytes)
-        : caseId + ": canonical parse mismatch";
+    final AccountAddress.ParseResult parsedDefault = AccountAddress.parseEncoded(defaultI105, null);
+    assert parsedDefault.format == AccountAddress.Format.I105
+        : caseId + ": i105_default parse format mismatch";
+    assert Arrays.equals(parsedDefault.address.canonicalBytes(), canonicalBytes)
+        : caseId + ": i105_default parse canonical mismatch";
 
     final String reencodedI105 = canonical.toI105(prefix);
     assert reencodedI105.equals(i105String) : caseId + ": i105 re-encode mismatch";
     assert reencodedI105.equals(defaultI105) : caseId + ": i105_default re-encode mismatch";
-    final String reencodedFull = canonical.toI105FullWidth(prefix);
-    assert reencodedFull.equals(defaultI105Full)
-        : caseId + ": i105_default full-width re-encode mismatch";
     assert canonical.canonicalHex().equalsIgnoreCase(canonicalHex)
         : caseId + ": canonical hex re-encode mismatch";
 
     final AccountAddress.DisplayFormats formats = canonical.displayFormats(prefix);
     assert formats.i105.equals(i105String) : caseId + ": displayFormats i105 mismatch";
     assert formats.discriminant == prefix : caseId + ": displayFormats discriminant mismatch";
-    assert formats.i105Warning.equals(AccountAddress.compressedWarningMessage())
+    assert formats.i105Warning.equals(AccountAddress.i105WarningMessage())
         : caseId + ": displayFormats warning mismatch";
 
     final AccountAddress.DisplayFormats defaultFormats = canonical.displayFormats();
@@ -109,7 +95,7 @@ public final class AccountAddressTests {
         : caseId + ": default displayFormats discriminant mismatch";
     assert defaultFormats.i105.equals(defaultI105)
         : caseId + ": default displayFormats i105 mismatch";
-    assert defaultFormats.i105Warning.equals(AccountAddress.compressedWarningMessage())
+    assert defaultFormats.i105Warning.equals(AccountAddress.i105WarningMessage())
         : caseId + ": default displayFormats warning mismatch";
   }
 
@@ -135,8 +121,8 @@ public final class AccountAddressTests {
         expectError(caseId, expected, () -> AccountAddress.parseEncoded(input, null));
         break;
       case "canonical_hex":
-        expectError(caseId, expected, () -> AccountAddress.fromCanonicalHex(input));
         expectError(caseId, expected, () -> AccountAddress.parseAny(input, null));
+        expectError(caseId, expected, () -> AccountAddress.parseEncoded(input, null));
         break;
       default:
         throw new IllegalStateException(caseId + ": unsupported negative format " + format);
@@ -152,7 +138,7 @@ public final class AccountAddressTests {
 
     assert canonical.equals("0x020001200000000000000000000000000000000000000000000000000000000000000000")
         : "canonical encoding mismatch";
-    assert i105.equals("sora2QGﾈkﾀLWP9ﾑﾐUﾓYq96rKRｻヱAAUｸGSﾊﾒｸCｺヰﾅijtJoﾎﾇｷ69DQ7G")
+    assert i105.equals("6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCify")
         : "I105 encoding mismatch";
 
     final AccountAddress.ParseResult i105Parsed =
@@ -160,11 +146,6 @@ public final class AccountAddressTests {
     assert i105Parsed.format == AccountAddress.Format.I105 : "expected I105 format";
     assert Arrays.equals(address.canonicalBytes(), i105Parsed.address.canonicalBytes())
         : "I105 round-trip mismatch";
-
-    final AccountAddress.ParseResult hexParsed = AccountAddress.parseAny(canonical, null);
-    assert hexParsed.format == AccountAddress.Format.CANONICAL_HEX : "expected canonical hex format";
-    assert Arrays.equals(address.canonicalBytes(), hexParsed.address.canonicalBytes())
-        : "canonical hex round-trip mismatch";
   }
 
   private static void i105PrefixMismatchThrows() throws Exception {
@@ -194,14 +175,14 @@ public final class AccountAddressTests {
     assert Arrays.equals(info.publicKey(), key) : "public key mismatch";
   }
 
-  private static void i105RequiresSentinel() {
+  private static void i105RejectsInvalidCharacters() {
     boolean threw = false;
     try {
       AccountAddress.fromI105("invalid", null);
     } catch (final AccountAddress.AccountAddressException ex) {
-      threw = ex.getCode() == AccountAddress.AccountAddressErrorCode.MISSING_COMPRESSED_SENTINEL;
+      threw = ex.getCode() == AccountAddress.AccountAddressErrorCode.INVALID_I105_CHAR;
     }
-    assert threw : "I105 parsing should reject invalid sentinel";
+    assert threw : "I105 parsing should reject invalid base58 symbols";
   }
 
   private static void curveSupportDefaults() {
@@ -275,7 +256,6 @@ public final class AccountAddressTests {
   private static AccountAddress.AccountAddressErrorCode codeForKind(final String kind) {
     return switch (kind) {
       case "UnsupportedFormat" -> AccountAddress.AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT;
-      case "InvalidDigit" -> AccountAddress.AccountAddressErrorCode.INVALID_COMPRESSED_DIGIT;
       case "UnsupportedController" -> AccountAddress.AccountAddressErrorCode.UNKNOWN_CONTROLLER_TAG;
       default -> AccountAddress.AccountAddressErrorCode.valueOf(camelToEnum(kind));
     };
@@ -316,12 +296,12 @@ public final class AccountAddressTests {
       case "UnexpectedNetworkPrefix":
         final Object expectedPrefix = expected.get("expected");
         final Object foundPrefix = expected.get("found");
-        return message.contains("unexpected IH58 network prefix")
+        return message.contains("unexpected I105 discriminant")
             && (expectedPrefix == null || message.contains(expectedPrefix.toString()))
             && (foundPrefix == null || message.contains(foundPrefix.toString()));
-      case "InvalidCompressedChar":
+      case "InvalidI105Char":
         final Object invalidChar = expected.get("char");
-        return message.contains("invalid compressed alphabet symbol")
+        return message.contains("invalid I105 alphabet symbol")
             && (invalidChar == null || message.contains(Objects.toString(invalidChar)));
       case "InvalidMultisigPolicy":
         return message.contains("InvalidMultisigPolicy") || message.contains("unknown controller tag");

@@ -108,15 +108,15 @@ Struct ReservedAssignmentRequestV1 {
 
 |エンドポイント |メトド |ペイロード |説明 |
 |----------|----------|----------|-------------|
-| `/v1/sns/registrations` |投稿 | `RegisterNameRequestV1` |登録者は名前を付けません。貴重な情報を再取得し、パゴ/ゴベルナンザのプルエバスを検証し、登録イベントを発行します。 |
-| `/v1/sns/registrations/{selector}/renew` |投稿 | `RenewNameRequestV1` |終点を延長します。 Aplica ventanas de gracia/redencion segun la politica. |
-| `/v1/sns/registrations/{selector}/transfer` |投稿 | `TransferNameRequestV1` |必要な管理を変更します。 |
-| `/v1/sns/registrations/{selector}/controllers` |置く | `UpdateControllersRequestV1` | Reemplaza el set deコントローラー;会社の方向を確認します。 |
-| `/v1/sns/registrations/{selector}/freeze` |投稿 | `FreezeNameRequestV1` |フリーズdeガーディアン/カウンシル。保護者と政府の参照用チケットが必要です。 |
-| `/v1/sns/registrations/{selector}/freeze` |削除 | `GovernanceHookV1` |トラス修復を解凍します。アセグラは議会登録を無効にします。 |
+| `/v1/sns/names` |投稿 | `RegisterNameRequestV1` |登録者は名前を付けません。貴重な情報を再取得し、パゴ/ゴベルナンザのプルエバスを検証し、登録イベントを発行します。 |
+| `/v1/sns/names/{namespace}/{literal}/renew` |投稿 | `RenewNameRequestV1` |終点を延長します。 Aplica ventanas de gracia/redencion segun la politica. |
+| `/v1/sns/names/{namespace}/{literal}/transfer` |投稿 | `TransferNameRequestV1` |必要な管理を変更します。 |
+| `/v1/sns/names/{namespace}/{literal}/controllers` |置く | `UpdateControllersRequestV1` | Reemplaza el set deコントローラー;会社の方向を確認します。 |
+| `/v1/sns/names/{namespace}/{literal}/freeze` |投稿 | `FreezeNameRequestV1` |フリーズdeガーディアン/カウンシル。保護者と政府の参照用チケットが必要です。 |
+| `/v1/sns/names/{namespace}/{literal}/freeze` |削除 | `GovernanceHookV1` |トラス修復を解凍します。アセグラは議会登録を無効にします。 |
 | `/v1/sns/reserved/{selector}` |投稿 | `ReservedAssignmentRequestV1` |管理者/評議会の任命保護区の割り当て。 |
 | `/v1/sns/policies/{suffix_id}` |入手 | -- | Obtiene `SuffixPolicyV1` 実際（キャッシュ可能）。 |
-| `/v1/sns/registrations/{selector}` |入手 | -- | Devuelve `NameRecordV1` 実際 + 効果 (アクティブ、グレースなど)。 |
+| `/v1/sns/names/{namespace}/{literal}` |入手 | -- | Devuelve `NameRecordV1` 実際 + 効果 (アクティブ、グレースなど)。 |
 
 **セレクターのコード:** セグメント `{selector}` アセプタ I105、16 進カノニコ セグン ADDR-5 を含む。 Torii は `NameSelectorV1` 経由で正規化されます。
 
@@ -131,7 +131,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -156,7 +156,7 @@ iroha sns policy --suffix-id 1
 iroha sns renew \
   --selector makoto.sora \
   --term-years 1 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 120 \
   --payment-settlement '"renewal-settlement"' \
   --payment-signature '"steward-signature"'
@@ -177,7 +177,7 @@ iroha sns freeze \
 iroha sns unfreeze \
   --selector makoto.sora \
   --governance-json /path/to/unfreeze_hook.json
-````--governance-json` 登録されたコンテナー `GovernanceHookV1` 有効 (提案 ID、投票ハッシュ、管理者/保護者)。エンドポイント `/v1/sns/registrations/{selector}/...` は、ベータ版のオペラドールの正確な内容に対応しており、Torii は SDK を参照しています。
+````--governance-json` 登録されたコンテナー `GovernanceHookV1` 有効 (提案 ID、投票ハッシュ、管理者/保護者)。エンドポイント `/v1/sns/names/{namespace}/{literal}/...` は、ベータ版のオペラドールの正確な内容に対応しており、Torii は SDK を参照しています。
 
 ## 4. gRPC のサービス
 
@@ -249,7 +249,7 @@ Torii 検証ラス プルエバス コンプロバンド:
 
 1. Guardian envia `FreezeNameRequestV1` con ticket que Referencia id de Incidente。
 2. Torii は `NameStatus::Frozen` を登録し、`NameFrozen` を発行します。
-3. トラス修復、エルカウンシルエミットオーバーライド。エル オペラドール envia DELETE `/v1/sns/registrations/{selector}/freeze` と `GovernanceHookV1`。
+3. トラス修復、エルカウンシルエミットオーバーライド。エル オペラドール envia DELETE `/v1/sns/names/{namespace}/{literal}/freeze` と `GovernanceHookV1`。
 4. Torii 有効オーバーライド、`NameUnfrozen` を発行します。
 
 ## 7. エラーコードの検証

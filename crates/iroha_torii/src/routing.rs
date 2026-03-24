@@ -4584,12 +4584,12 @@ mod zk_roots_selector_tests {
     }
 
     #[test]
-    fn resolve_asset_definition_selector_rejects_legacy_aid_literal() {
+    fn resolve_asset_definition_selector_rejects_prefixed_literal() {
         let (world, _) = selector_world();
         let view = world.view();
         let err =
-            resolve_asset_definition_selector(&view, "aid:550e8400e29b11d4a7164466554400dd", 0)
-                .expect_err("legacy aid should fail");
+            resolve_asset_definition_selector(&view, "prefix:550e8400e29b11d4a7164466554400dd", 0)
+                .expect_err("prefixed literal should fail");
         assert!(matches!(
             err,
             Error::Query(iroha_data_model::ValidationFail::NotPermitted(_))
@@ -25645,7 +25645,7 @@ mod app_api_integration_tests {
 
         let result = handle_v1_asset_holders(
             state,
-            axum::extract::Path("aid:550e8400e29b41d4a7164466554400dd".to_string()),
+            axum::extract::Path("prefix:550e8400e29b41d4a7164466554400dd".to_string()),
             crate::NoritoQuery(params),
             MaybeTelemetry::for_tests(),
         )
@@ -25654,7 +25654,7 @@ mod app_api_integration_tests {
         match result {
             Err(Error::Query(iroha_data_model::ValidationFail::NotPermitted(_))) => {}
             Err(other) => panic!("unexpected error: {other:?}"),
-            Ok(_) => panic!("legacy aid selector must be rejected"),
+            Ok(_) => panic!("prefixed selector must be rejected"),
         }
     }
 
@@ -25814,20 +25814,20 @@ mod app_api_integration_tests {
     }
 
     #[tokio::test]
-    async fn confidential_asset_transitions_rejects_legacy_aid_path_selector() {
+    async fn confidential_asset_transitions_rejects_prefixed_path_selector() {
         let _guard = app_query_limits_guard();
         let (state, _, _) = build_asset_holder_fixture_state();
 
         let result = handle_v1_confidential_asset_transitions(
             state,
-            axum::extract::Path("aid:550e8400e29b41d4a7164466554400dd".to_string()),
+            axum::extract::Path("prefix:550e8400e29b41d4a7164466554400dd".to_string()),
         )
         .await;
 
         match result {
             Err(Error::Query(iroha_data_model::ValidationFail::NotPermitted(_))) => {}
             Err(other) => panic!("unexpected error: {other:?}"),
-            Ok(_) => panic!("legacy aid selector must be rejected"),
+            Ok(_) => panic!("prefixed selector must be rejected"),
         }
     }
 

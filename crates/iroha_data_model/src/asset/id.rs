@@ -555,16 +555,16 @@ mod tests {
     fn asset_definition_id_parse_address_rejects_non_canonical_literals() {
         assert!(AssetDefinitionId::parse_address_literal("usd#wonderland").is_err());
         assert!(
-            AssetDefinitionId::parse_address_literal("aid:2f17c724-66f8-4a4b-b8a8-e24884fdcd2f")
+            AssetDefinitionId::parse_address_literal("prefix:2f17c72466f84a4bb8a8e24884fdcd2f")
                 .is_err()
         );
     }
 
     #[test]
-    fn asset_definition_id_from_str_rejects_legacy_literal() {
+    fn asset_definition_id_from_str_rejects_textual_seed_literal() {
         let err = "usd#wonderland"
             .parse::<AssetDefinitionId>()
-            .expect_err("legacy literal must be rejected");
+            .expect_err("textual seed literal must be rejected");
         assert!(
             err.to_string().contains("Base58"),
             "unexpected error: {err}"
@@ -593,9 +593,10 @@ mod tests {
     }
 
     #[test]
-    fn asset_definition_id_rejects_legacy_aid_prefix() {
-        let err = AssetDefinitionId::parse_address_literal("aid:2f17c72466f84a4bb8a8e24884fdcd2f")
-            .expect_err("legacy format must fail");
+    fn asset_definition_id_rejects_prefixed_literal() {
+        let err =
+            AssetDefinitionId::parse_address_literal("prefix:2f17c72466f84a4bb8a8e24884fdcd2f")
+                .expect_err("prefixed format must fail");
         assert!(
             err.to_string().contains("Base58"),
             "unexpected error: {err}"

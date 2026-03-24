@@ -16,7 +16,7 @@ public final class OfflineAllowanceInstructionBuilderTests {
     rejectsInvalidAttestationReportBase64();
     final OfflineAllowance allowance =
         OfflineAllowance.builder()
-            .setAssetId("xor#sora#ed0120EXAMPLE@sora")
+            .setAssetId("61CtjvNd9T3THAR65GsMVHr82Bjc#ed0120EXAMPLE@sora")
             .setAmount("250.00")
             .setCommitmentHex("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
             .build();
@@ -73,7 +73,7 @@ public final class OfflineAllowanceInstructionBuilderTests {
           .setOperator("ed0120ABCDEF@wonderland")
           .setAllowance(
               OfflineAllowance.builder()
-                  .setAssetId("xor#sora#ed0120EXAMPLE@sora")
+                  .setAssetId("61CtjvNd9T3THAR65GsMVHr82Bjc#ed0120EXAMPLE@sora")
                   .setAmount("250.00")
                   .setCommitmentHex("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
                   .build())

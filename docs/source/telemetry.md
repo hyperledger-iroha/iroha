@@ -956,7 +956,7 @@ checkpoints churn faster than expected. Capture evidence with a simple scrape:
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \
-  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)){asset_id="xor#wonderland"}'
+  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)){asset_id="4cuvDVPuLBKJyN6dPbRQhmLh68sU"}'
 ```
 
 Pair this with `rg 'iroha_confidential_(root|frontier)_evictions_total'` to prove

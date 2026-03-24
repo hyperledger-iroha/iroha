@@ -63,7 +63,7 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI muestra esta transmisión automática (por ejemplo, `0x5f…`). Сохраните его, чтобы
@@ -72,7 +72,7 @@ CLI muestra esta transmisión automática (por ejemplo, `0x5f…`). Сохран
 ## 3. Замитьте единицы на операторский аккаунт
 
 La acción del colector está activada según el párrafo `(asset definition, account)`. Замитьте 250
-Edición `coffee#wonderland` en `$ADMIN_ACCOUNT`:
+Edición `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` en `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

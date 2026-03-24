@@ -28,7 +28,7 @@ import SampleDownload from '@site/src/components/SampleDownload';
 ## 1. アセット定義を登録（CLI）
 
 ```bash
-iroha --config defaults/client.toml asset definition register --id coffee#wonderland
+iroha --config defaults/client.toml asset definition register --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 ## 2. 認証情報をエクスポート

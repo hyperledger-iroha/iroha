@@ -391,7 +391,6 @@ struct NativeAccountAddressRenderResult {
     let canonicalHex: String
     let i105: String
     let i105Default: String
-    let i105DefaultFullWidth: String
 }
 
 enum NativeBridgeError: Error, Equatable {
@@ -1197,7 +1196,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private typealias AccountAddressRenderFn = @convention(c) (
         UnsafePointer<UInt8>?, UInt,
         UInt16,
-        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<UInt>?,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<UInt>?,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<UInt>?,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<UInt>?,
@@ -2932,10 +2930,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         var hexLen: UInt = 0
         var i105Ptr: UnsafeMutablePointer<UInt8>? = nil
         var i105Len: UInt = 0
-        var compressedPtr: UnsafeMutablePointer<UInt8>? = nil
-        var compressedLen: UInt = 0
-        var compressedFullPtr: UnsafeMutablePointer<UInt8>? = nil
-        var compressedFullLen: UInt = 0
+        var i105DefaultPtr: UnsafeMutablePointer<UInt8>? = nil
+        var i105DefaultLen: UInt = 0
         var errorPtr: UnsafeMutablePointer<UInt8>? = nil
         var errorLen: UInt = 0
 
@@ -2948,10 +2944,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 &hexLen,
                 &i105Ptr,
                 &i105Len,
-                &compressedPtr,
-                &compressedLen,
-                &compressedFullPtr,
-                &compressedFullLen,
+                &i105DefaultPtr,
+                &i105DefaultLen,
                 &errorPtr,
                 &errorLen
             )
@@ -2961,31 +2955,27 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             guard
                 let canonicalHex = takeString(pointer: hexPtr, length: hexLen),
                 let i105 = takeString(pointer: i105Ptr, length: i105Len),
-                let compressed = takeString(pointer: compressedPtr, length: compressedLen),
-                let compressedFull = takeString(pointer: compressedFullPtr, length: compressedFullLen)
+                let i105Default = takeString(pointer: i105DefaultPtr, length: i105DefaultLen)
             else {
                 return nil
             }
             return NativeAccountAddressRenderResult(
                 canonicalHex: canonicalHex,
                 i105: i105,
-                i105Default: compressed,
-                i105DefaultFullWidth: compressedFull
+                i105Default: i105Default
             )
         }
 
         if let error = consumeAccountAddressError(pointer: errorPtr, length: errorLen) {
             if let hexPtr { freeFn?(hexPtr) }
             if let i105Ptr { freeFn?(i105Ptr) }
-            if let compressedPtr { freeFn?(compressedPtr) }
-            if let compressedFullPtr { freeFn?(compressedFullPtr) }
+            if let i105DefaultPtr { freeFn?(i105DefaultPtr) }
             throw error
         }
 
         if let hexPtr { freeFn?(hexPtr) }
         if let i105Ptr { freeFn?(i105Ptr) }
-        if let compressedPtr { freeFn?(compressedPtr) }
-        if let compressedFullPtr { freeFn?(compressedFullPtr) }
+        if let i105DefaultPtr { freeFn?(i105DefaultPtr) }
         return nil
         #else
         return nil

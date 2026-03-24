@@ -36,7 +36,7 @@ Cette recette cible la variante desktop/JVM du module `java/iroha_android`. Elle
 ## 1. Enregistrez la définition d’actif (CLI)
 
 ```bash
-iroha --config defaults/client.toml asset definition register --id coffee#wonderland
+iroha --config defaults/client.toml asset definition register --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 ## 2. Exportez les identifiants

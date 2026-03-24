@@ -33,6 +33,9 @@ DEFAULT_REQUIRED_COLUMNS = (
     "payment_payer",
     "payment_signature",
 )
+ACCOUNT_ALIAS_SUFFIX_ID = 0x1001
+DOMAIN_NAME_SUFFIX_ID = 0x1002
+DATASPACE_ALIAS_SUFFIX_ID = 0x1003
 
 
 class BulkOnboardError(Exception):
@@ -358,19 +361,28 @@ def selector_key(request: dict[str, Any]) -> str:
     return f"{suffix_id}:{label}"
 
 
+def namespace_from_suffix_id(suffix_id: int) -> str:
+    if suffix_id == ACCOUNT_ALIAS_SUFFIX_ID:
+        return "account-alias"
+    if suffix_id == DOMAIN_NAME_SUFFIX_ID:
+        return "domain"
+    if suffix_id == DATASPACE_ALIAS_SUFFIX_ID:
+        return "dataspace"
+    raise BulkOnboardError(
+        f"unsupported SNS namespace suffix id {suffix_id}; expected one of "
+        f"{ACCOUNT_ALIAS_SUFFIX_ID:#06x}, {DOMAIN_NAME_SUFFIX_ID:#06x}, or {DATASPACE_ALIAS_SUFFIX_ID:#06x}"
+    )
+
+
 def selector_literal(
     request: dict[str, Any],
-    suffix_map: dict[int, str],
+    _suffix_map: dict[int, str],
 ) -> str | None:
     selector = request.get("selector", {})
-    suffix_id = selector.get("suffix_id")
     label = selector.get("label")
-    if suffix_id is None or label is None:
+    if label is None:
         return None
-    suffix = suffix_map.get(int(suffix_id))
-    if not suffix:
-        return None
-    return f"{label}.{suffix}"
+    return str(label)
 
 
 def stringify_jsonish(value: Any) -> str:
@@ -449,7 +461,7 @@ class ToriiSubmitter:
         self._opener = opener or urllib.request.urlopen
 
     def submit(self, index: int, request_payload: dict[str, Any]) -> None:
-        endpoint = f"{self.url}/v1/sns/registrations"
+        endpoint = f"{self.url}/v1/sns/names"
         data = json.dumps(request_payload, separators=(",", ":")).encode("utf-8")
         selector = selector_key(request_payload)
         headers = {
@@ -490,14 +502,19 @@ class ToriiSubmitter:
             raise BulkOnboardError(
                 f"Torii submission failed for {selector} (status={status}): {detail[:200]}"
             )
-        if success and self.poll_attempts > 0 and self.suffix_map:
+        if success and self.poll_attempts > 0:
+            selector_payload = request_payload.get("selector", {})
+            suffix_id = selector_payload.get("suffix_id")
+            if suffix_id is None:
+                raise BulkOnboardError("request is missing selector.suffix_id")
+            namespace = namespace_from_suffix_id(int(suffix_id))
             literal = selector_literal(request_payload, self.suffix_map)
             if literal:
-                self._poll_status(index, selector, literal)
+                self._poll_status(index, selector, namespace, literal)
 
-    def _poll_status(self, index: int, selector: str, literal: str) -> None:
+    def _poll_status(self, index: int, selector: str, namespace: str, literal: str) -> None:
         encoded = urllib.parse.quote(literal, safe="")
-        endpoint = f"{self.url}/v1/sns/registrations/{encoded}"
+        endpoint = f"{self.url}/v1/sns/names/{namespace}/{encoded}"
         for attempt in range(1, self.poll_attempts + 1):
             req = urllib.request.Request(endpoint, headers={"Authorization": f"Bearer {self.token}"})
             try:
@@ -720,7 +737,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--poll-status",
         action="store_true",
-        help="After each Torii submission, poll `/v1/sns/registrations/{selector}` for confirmation.",
+        help="After each Torii submission, poll `/v1/sns/names/{namespace}/{literal}` for confirmation.",
     )
     parser.add_argument(
         "--poll-attempts",
@@ -736,7 +753,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument(
         "--suffix-map",
-        help="JSON mapping of suffix_id → suffix string used when building selector literals during polling.",
+        help="Optional legacy JSON mapping of suffix_id → suffix string; canonical `/v1/sns/names/{namespace}/{literal}` polling ignores the suffix portion and only needs the literal.",
     )
     parser.add_argument(
         "--submission-log",

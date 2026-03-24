@@ -37,7 +37,7 @@ Reserve+Rent ポリシー (ロードマップ項目 **SFM-6**) では、`sorafs 
      --provider-account i105... \
      --treasury-account i105... \
      --reserve-account i105... \
-     --asset-definition xor#sora \
+     --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc \
      --json-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.json
    ```
    ledger ヘルパーは `ledger_projection` ブロック (rent due、reserve shortfall、top-up delta、

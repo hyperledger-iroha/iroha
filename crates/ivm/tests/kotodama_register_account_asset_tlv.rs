@@ -13,7 +13,7 @@ fn kotodama_register_account_and_unregister_asset() {
           register_domain(domain("default"));
           register_account(account_id("6cmzPVPX8F5t35VB7wQQ68PAW8Wb1iAEr4PZHPLTQ3p69JAGG9oifzi"));
           register_asset("rose", "ROSE", 0, 1);
-          unregister_asset(asset_definition("rose#wonderland"));
+          unregister_asset(asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"));
           unregister_account(account_id("6cmzPVPX8F5t35VB7wQQ68PAW8Wb1iAEr4PZHPLTQ3p69JAGG9oifzi"));
         }
     "#;

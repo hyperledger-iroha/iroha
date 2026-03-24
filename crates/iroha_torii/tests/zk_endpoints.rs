@@ -32,7 +32,7 @@ async fn zk_roots_endpoint_returns_200() {
     );
 
     let body_value = iroha_torii::json_object(vec![
-        iroha_torii::json_entry("asset_id", "rose#wonderland"),
+        iroha_torii::json_entry("asset_id", "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
         iroha_torii::json_entry("max", 10u64),
     ]);
     let body = norito::json::to_string(&body_value).expect("serialize roots request");

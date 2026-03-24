@@ -36,7 +36,7 @@ L'analyseur analyse la ligne d'en-tête ici (commande flexible ici) :| Colonne 
 | `suffix_id` | Oui | Identificateur de suffixe numérique (décimal یا `0x` hex). |
 | `owner` | Oui | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | Oui | Entier `1..=255`. |
-| `payment_asset_id` | Oui | Actif de règlement (مثال `xor#sora`). |
+| `payment_asset_id` | Oui | Actif de règlement (مثال `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Oui | Les entiers non signés et les unités natives de l'actif représentent کریں۔ |
 | `settlement_tx` | Oui | Valeur JSON, chaîne littérale, transaction de paiement, hachage, par exemple |
 | `payment_payer` | Oui | AccountId pour l'autorisation de paiement |
@@ -80,7 +80,7 @@ Voici le manifeste agrégé du script :
       "term_years": 2,
       "pricing_class_hint": null,
       "payment": {
-        "asset_id":"xor#sora",
+        "asset_id":"61CtjvNd9T3THAR65GsMVHr82Bjc",
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
@@ -110,7 +110,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v1/sns/names
   done
 ```
 
@@ -130,10 +130,10 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- Helper request pour `POST /v1/sns/registrations` par HTTP
+- Helper request pour `POST /v1/sns/names` par HTTP
   erreur پر abandonner کرتا ہے۔ Chemin du journal des réponses avec enregistrements NDJSON et ajout
   ہوتے ہیں۔
-- `--poll-status` pour la soumission par `/v1/sns/registrations/{selector}` pour
+- `--poll-status` pour la soumission par `/v1/sns/names/{namespace}/{literal}` pour
   دوبارہ requête کرتا ہے (زیادہ سے زیادہ `--poll-attempts`, par défaut 5) تاکہ record
   visible ہونے کی تصدیق ہو۔ `--suffix-map` (JSON et `suffix_id` et valeurs "suffixe"
   سے map کرے) فراہم کریں تاکہ outil `{label}.{suffix}` les littéraux dérivent کر سکے۔
@@ -216,7 +216,7 @@ Workflows dans le répertoire des versions et dans les artefacts et dans les arc
 # TYPE sns_bulk_release_requests_total gauge
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
-sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
+sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="61CtjvNd9T3THAR65GsMVHr82Bjc"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 

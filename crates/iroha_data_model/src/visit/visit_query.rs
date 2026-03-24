@@ -220,6 +220,7 @@ mod tests {
             SingularQueryBox::FindDaPinIntentByAlias(_) => {}
             SingularQueryBox::FindDaPinIntentByLaneEpochSequence(_) => {}
             SingularQueryBox::FindSorafsProviderOwner(_) => {}
+            SingularQueryBox::FindDataspaceNameOwnerById(_) => {}
             SingularQueryBox::FindDomainEndorsements(_) => {}
             SingularQueryBox::FindDomainEndorsementPolicy(_) => {}
             SingularQueryBox::FindDomainCommittee(_) => {}

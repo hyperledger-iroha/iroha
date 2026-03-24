@@ -33,7 +33,7 @@ CLI օգնականները գումարած `scripts/telemetry/reserve_ledger_di
     --provider-account i105... \
     --treasury-account i105... \
     --reserve-account i105... \
-    --asset-definition xor#sora \
+    --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc \
     --json-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.json
    ```
    Գրասենյակի օգնականը կցում է `ledger_projection` բլոկ (վարձավճար, պահուստ

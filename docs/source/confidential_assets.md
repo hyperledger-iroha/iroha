@@ -83,7 +83,7 @@ Example response:
 
 ```json
 {
-  "asset_id": "rose#wonderland",
+  "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
   "block_height": 4217,
   "current_mode": "Convertible",
   "effective_mode": "Convertible",
@@ -409,7 +409,7 @@ let account = AccountId.make(publicKey: keypair.publicKey, domain: "wonderland")
 let request = RegisterZkAssetRequest(
     chainId: chainId,
     authority: account,
-    assetDefinitionId: "rose#wonderland",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: myZkParams,
     ttlMs: 60_000
 )
@@ -442,7 +442,7 @@ import {
 const unsigned = buildRegisterZkAssetTransaction({
   registration: {
     authority: "i105...",
-    assetDefinitionId: "rose#wonderland",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: {
       commit_params: "vk_shield",
       reveal_params: "vk_unshield",
@@ -473,7 +473,7 @@ You can verify the metrics locally before wiring Grafana:
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \
-  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="xor#wonderland"}'
+  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="4cuvDVPuLBKJyN6dPbRQhmLh68sU"}'
 ```
 
 Pair this with `rg 'iroha_confidential_tree_depth'` on the same scrape to confirm that depth grows with new commitments while eviction counters only increase when the history caps trim entries. These values must line up with the Grafana dashboard export you attach to governance evidence bundles.

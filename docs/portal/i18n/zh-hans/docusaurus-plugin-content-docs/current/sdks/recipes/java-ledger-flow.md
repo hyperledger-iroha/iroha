@@ -27,7 +27,7 @@ translation_last_reviewed: 2026-02-07
 ## 1. 注册资产定义（CLI）
 
 ```bash
-iroha --config defaults/client.toml asset definition register --id coffee#wonderland
+iroha --config defaults/client.toml asset definition register --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 ## 2.导出凭证

@@ -64,7 +64,7 @@ Créer un nouvel actif infiniment accessible appelé `coffee` à l'intérieur du
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 La CLI imprime le hachage de la transaction envoyée (par exemple, `0x5f...`). Guardalo para consultar el estado mas tarde.
@@ -72,7 +72,7 @@ La CLI imprime le hachage de la transaction envoyée (par exemple, `0x5f...`). G
 ## 3. Acuna unidades en la cuenta del operador
 
 Les nombres d’actifs vivent sous le par `(asset definition, account)`. Acuna
-250 unités de `coffee#wonderland` et `$ADMIN_ACCOUNT` :
+250 unités de `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` et `$ADMIN_ACCOUNT` :
 
 ```sh
 iroha --config defaults/client.toml asset mint \

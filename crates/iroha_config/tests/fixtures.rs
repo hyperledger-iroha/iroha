@@ -1886,8 +1886,8 @@ fn minimal_config_snapshot() {
             gov: Governance {
                 vk_ballot: None,
                 vk_tally: None,
-                voting_asset_id: xor#sora,
-                citizenship_asset_id: xor#sora,
+                voting_asset_id: 61CtjvNd9T3THAR65GsMVHr82Bjc,
+                citizenship_asset_id: 61CtjvNd9T3THAR65GsMVHr82Bjc,
                 citizenship_bond_amount: 150,
                 citizenship_escrow_account: 6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn,
                 min_bond_amount: 150,
@@ -1921,7 +1921,7 @@ fn minimal_config_snapshot() {
                 viral_incentives: ViralIncentives {
                     incentive_pool_account: 6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn,
                     escrow_account: 6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn,
-                    reward_asset_definition_id: xor#sora,
+                    reward_asset_definition_id: 61CtjvNd9T3THAR65GsMVHr82Bjc,
                     follow_reward_amount: Numeric {
                         mantissa: 1,
                         scale: 0,
@@ -2040,7 +2040,7 @@ fn minimal_config_snapshot() {
                 parliament_committee_size: 21,
                 parliament_term_blocks: 43200,
                 parliament_min_stake: 1,
-                parliament_eligibility_asset_id: SORA#stake,
+                parliament_eligibility_asset_id: 79jULkZVMgnbzxBe6NvqeDxVEeEk,
                 parliament_alternate_size: None,
                 parliament_quorum_bps: 6667,
                 rules_committee_size: 7,

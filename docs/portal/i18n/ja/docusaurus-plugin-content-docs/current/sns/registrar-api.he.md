@@ -118,15 +118,15 @@ Struct ReservedAssignmentRequestV1 {
 
 | エンドポイント | メソッド | ペイロード | 説明 |
 |----------------|----------|------------|------|
-| `/v1/sns/registrations` | POST | `RegisterNameRequestV1` | 名前の登録または再開。価格 tier を解決し、支払い/ガバナンス証明を検証し、レジストリエベントを発行。 |
-| `/v1/sns/registrations/{selector}/renew` | POST | `RenewNameRequestV1` | 期間を延長。ポリシーの猶予/救済ウィンドウを適用。 |
-| `/v1/sns/registrations/{selector}/transfer` | POST | `TransferNameRequestV1` | ガバナンス承認が付与されたら所有権を移転。 |
-| `/v1/sns/registrations/{selector}/controllers` | PUT | `UpdateControllersRequestV1` | controller 集合を置換; 署名済みアカウントアドレスを検証。 |
-| `/v1/sns/registrations/{selector}/freeze` | POST | `FreezeNameRequestV1` | guardian/council フリーズ。guardian チケットとガバナンス台帳への参照が必要。 |
-| `/v1/sns/registrations/{selector}/freeze` | DELETE | `GovernanceHookV1` | 修復後に解除; council override が記録されていることを確認。 |
+| `/v1/sns/names` | POST | `RegisterNameRequestV1` | 名前の登録または再開。価格 tier を解決し、支払い/ガバナンス証明を検証し、レジストリエベントを発行。 |
+| `/v1/sns/names/{namespace}/{literal}/renew` | POST | `RenewNameRequestV1` | 期間を延長。ポリシーの猶予/救済ウィンドウを適用。 |
+| `/v1/sns/names/{namespace}/{literal}/transfer` | POST | `TransferNameRequestV1` | ガバナンス承認が付与されたら所有権を移転。 |
+| `/v1/sns/names/{namespace}/{literal}/controllers` | PUT | `UpdateControllersRequestV1` | controller 集合を置換; 署名済みアカウントアドレスを検証。 |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | POST | `FreezeNameRequestV1` | guardian/council フリーズ。guardian チケットとガバナンス台帳への参照が必要。 |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | DELETE | `GovernanceHookV1` | 修復後に解除; council override が記録されていることを確認。 |
 | `/v1/sns/reserved/{selector}` | POST | `ReservedAssignmentRequestV1` | steward/council による予約名の割当。 |
 | `/v1/sns/policies/{suffix_id}` | GET | -- | 現在の `SuffixPolicyV1` を取得 (キャッシュ可能)。 |
-| `/v1/sns/registrations/{selector}` | GET | -- | 現在の `NameRecordV1` と有効状態 (Active, Grace など) を返す。 |
+| `/v1/sns/names/{namespace}/{literal}` | GET | -- | 現在の `NameRecordV1` と有効状態 (Active, Grace など) を返す。 |
 
 **セレクタのエンコード:** `{selector}` パスセグメントは ADDR-5 に従う I105/圧縮/正規 hex を受け付け、Torii が `NameSelectorV1` で正規化します。
 
@@ -141,7 +141,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -166,7 +166,7 @@ iroha sns policy --suffix-id 1
 iroha sns renew \
   --selector makoto.sora \
   --term-years 1 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 120 \
   --payment-settlement '"renewal-settlement"' \
   --payment-signature '"steward-signature"'
@@ -189,7 +189,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` には有効な `GovernanceHookV1` レコード (proposal id, vote hashes, steward/guardian 署名) が必要です。各コマンドは対応する `/v1/sns/registrations/{selector}/...` エンドポイントをそのまま反映するため、ベータオペレーターは SDK が呼び出す Torii サーフェスを正確にリハーサルできます。
+`--governance-json` には有効な `GovernanceHookV1` レコード (proposal id, vote hashes, steward/guardian 署名) が必要です。各コマンドは対応する `/v1/sns/names/{namespace}/{literal}/...` エンドポイントをそのまま反映するため、ベータオペレーターは SDK が呼び出す Torii サーフェスを正確にリハーサルできます。
 
 ## 4. gRPC サービス
 
@@ -261,7 +261,7 @@ Torii は以下を確認して証明を検証します:
 
 1. guardian が incident id を参照するチケット付きで `FreezeNameRequestV1` を提出。
 2. Torii はレコードを `NameStatus::Frozen` に移動し、`NameFrozen` を発行。
-3. 修復後、council が override を発行; オペレーターは `GovernanceHookV1` を付けて DELETE `/v1/sns/registrations/{selector}/freeze` を送信。
+3. 修復後、council が override を発行; オペレーターは `GovernanceHookV1` を付けて DELETE `/v1/sns/names/{namespace}/{literal}/freeze` を送信。
 4. Torii が override を検証し、`NameUnfrozen` を発行。
 
 ## 7. 検証とエラーコード

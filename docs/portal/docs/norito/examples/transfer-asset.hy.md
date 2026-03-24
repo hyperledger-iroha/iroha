@@ -39,12 +39,12 @@ slug: /norito/examps/transfer-asset
 // Transfer example: uses typed pointer constructors and transfer_asset syscall
 
 seiyaku TransferDemo {
-  // Public entrypoint to transfer 10 units of rose#wonderland from alice to bob
+  // Public entrypoint to transfer 10 units of 62Fk4FPcMuLvW5QjDGNF2a4jAmjM from alice to bob
   kotoage fn do_transfer() permission(AssetTransferRole) {
     transfer_asset(
       account!("ih58..."),
       account!("ih58..."),
-      asset_definition!("rose#wonderland"),
+      asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );
   }
