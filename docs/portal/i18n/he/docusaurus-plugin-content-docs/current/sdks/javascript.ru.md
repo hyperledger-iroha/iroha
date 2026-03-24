@@ -190,7 +190,7 @@ console.log(balances.items, txs.items, holders.items);
 `deadline_ms_remaining`) מדגישים את המועד האחרון שפג תוקף (רענן → מדיניות
 → אישור) כך שתגי ממשק משתמש יכולים להזהיר מפעילים בכל פעם שיש קצבה
 נותרו פחות מ-24 שעות. ה-SDK
-משקף את מסנני REST שנחשפו על ידי `/v1/offline/allowances`:
+משקף את מסנני REST שנחשפו על ידי `/v1/offline/reserve/topup`:
 `certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
 `verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs`, וה-
 `requireVerdict` / `onlyMissingVerdict` בוליאני. שילובים לא חוקיים (עבור

@@ -187,7 +187,7 @@ console.log(balances.items, txs.items, holders.items);
 `deadline_ms_remaining`) 突出显示下一个即将到期的截止日期（刷新→政策
 → 证书），以便 UI 徽章可以在津贴出现时警告操作员
 剩余时间< 24 小时。软件开发工具包
-镜像 `/v1/offline/allowances` 暴露的 REST 过滤器：
+镜像 `/v1/offline/reserve/topup` 暴露的 REST 过滤器：
 `certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
 `verdictIdHex`、`attestationNonceHex`、`refreshBeforeMs/AfterMs` 和
 `requireVerdict` / `onlyMissingVerdict` 布尔值。无效组合（对于

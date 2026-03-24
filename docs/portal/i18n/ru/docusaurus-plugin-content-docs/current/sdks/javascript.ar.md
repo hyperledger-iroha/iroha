@@ -190,7 +190,7 @@ console.log(balances.items, txs.items, holders.items);
 `deadline_ms_remaining`) выделить следующий истекающий срок (обновить → политика
 → сертификат), чтобы значки пользовательского интерфейса могли предупреждать операторов о превышении допуска.
 Осталось <24 ч. SDK
-отражает фильтры REST, представленные `/v1/offline/allowances`:
+отражает фильтры REST, представленные `/v1/offline/reserve/topup`:
 И18НИ00000075Х, И18НИ00000076Х,
 `verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` и
 `requireVerdict` / `onlyMissingVerdict` логические значения. Недопустимые комбинации (для

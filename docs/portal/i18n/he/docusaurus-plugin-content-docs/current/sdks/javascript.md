@@ -178,68 +178,37 @@ const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
 console.log(balances.items, txs.items, holders.items);
 ```
 
-## Offline allowances & verdict metadata
+## Offline reserves
 
-Offline allowance responses expose the enriched ledger metadata up-front —
-`expires_at_ms`, `policy_expires_at_ms`, `refresh_at_ms`, `verdict_id_hex`,
-`attestation_nonce_hex`, and `remaining_amount` are returned alongside the raw
-record so dashboards don’t have to decode the embedded Norito payloads. The new
-countdown helpers (`deadline_kind`, `deadline_state`, `deadline_ms`,
-`deadline_ms_remaining`) highlight the next expiring deadline (refresh → policy
-→ certificate) so UI badges can warn operators whenever an allowance has
-<24 h remaining. The SDK
-mirrors the REST filters exposed by `/v1/offline/allowances`:
-`certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
-`verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs`, and the
-`requireVerdict` / `onlyMissingVerdict` booleans. Invalid combinations (for
-example `onlyMissingVerdict` + `verdictIdHex`) are rejected locally before Torii
-is called.
+The pre-release allowance/certificate flow was removed before launch. JavaScript integrations should
+use the reserve routes directly:
 
 ```ts
-const { items: allowances } = await torii.listOfflineAllowances({
-  limit: 25,
-  policyExpiresBeforeMs: Date.now() + 86_400_000,
-  requireVerdict: true,
-});
+const setup = await fetch(`${baseUrl}/v1/offline/reserve/setup`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    account_id: "i105:...",
+    device_id: "device-123",
+    offline_public_key: "ed25519:...",
+    operation_id: crypto.randomUUID(),
+  }),
+}).then((response) => response.json());
 
-for (const entry of allowances) {
-  console.log(
-    entry.controller_display,
-    entry.remaining_amount,
-    entry.verdict_id_hex,
-    entry.refresh_at_ms,
-  );
-}
+const topUp = await fetch(`${baseUrl}/v1/offline/reserve/topup`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    reserve_id: setup.reserve_state.reserve_id,
+    amount: "100.00",
+    operation_id: crypto.randomUUID(),
+  }),
+}).then((response) => response.json());
 ```
 
-## Offline top-ups (issue + register)
-
-Use the top-up helpers when you want to issue a certificate and immediately
-register it on-ledger. The SDK verifies the issued and registered certificate
-IDs match before returning, and the response includes both payloads. There is
-no dedicated top-up endpoint; the helper chains the issue + register calls. If
-you already have a signed certificate, call `registerOfflineAllowance` (or
-`renewOfflineAllowance`) directly.
-
-```ts
-const topUp = await torii.topUpOfflineAllowance({
-  authority: "<account_i105>",
-  privateKeyHex: alicePrivateKey,
-  certificate: draftCertificate,
-});
-console.log(topUp.certificate.certificate_id_hex);
-console.log(topUp.registration.certificate_id_hex);
-
-const renewed = await torii.topUpOfflineAllowanceRenewal(
-  topUp.registration.certificate_id_hex,
-  {
-    authority: "<account_i105>",
-    privateKeyHex: alicePrivateKey,
-    certificate: draftCertificate,
-  },
-);
-console.log(renewed.registration.certificate_id_hex);
-```
+Use `POST /v1/offline/reserve/renew`, `POST /v1/offline/reserve/sync`, `POST /v1/offline/reserve/defund`,
+and `GET /v1/offline/revocations` for the rest of the lifecycle. Transfer history remains under
+`/v1/offline/transfers`.
 
 ## Torii queries & streaming (WebSockets)
 

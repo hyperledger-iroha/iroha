@@ -620,10 +620,10 @@ pub struct UaidPortfolioTotals {
 /// Asset position grouped under a UAID-backed account.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UaidPortfolioAsset {
-    /// Fully-qualified asset identifier (`asset#domain#account`, or `asset##account` when domains match).
-    pub asset_id: String,
-    /// Asset definition identifier.
-    pub asset_definition_id: String,
+    /// Asset definition selector.
+    pub asset: String,
+    /// Balance scope selector (`global` or `dataspace:<id>`).
+    pub scope: String,
     /// Norito numeric quantity (string encoded to preserve precision).
     pub quantity: String,
 }
@@ -1004,18 +1004,13 @@ impl UaidPortfolioAsset {
         let JsonValue::Object(map) = value else {
             return Err(eyre!("{context} must be an object"));
         };
-        let asset_id =
-            require_string(map.get("asset_id"), &format!("{context}.asset_id"))?.to_owned();
-        let asset_definition_id = require_string(
-            map.get("asset_definition_id"),
-            &format!("{context}.asset_definition_id"),
-        )?
-        .to_owned();
+        let asset = require_string(map.get("asset"), &format!("{context}.asset"))?.to_owned();
+        let scope = require_string(map.get("scope"), &format!("{context}.scope"))?.to_owned();
         let quantity =
             require_string(map.get("quantity"), &format!("{context}.quantity"))?.to_owned();
         Ok(Self {
-            asset_id,
-            asset_definition_id,
+            asset,
+            scope,
             quantity,
         })
     }
@@ -13304,8 +13299,8 @@ mod tests {
           "label":"primary",
           "assets":[
             {{
-              "asset_id":"norito:4e52543000000002",
-              "asset_definition_id":"cash#nexus",
+              "asset":"cash#nexus",
+              "scope":"global",
               "quantity":"500"
             }}
           ]

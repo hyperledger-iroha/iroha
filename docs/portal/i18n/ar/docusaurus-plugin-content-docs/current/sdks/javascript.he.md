@@ -186,7 +186,7 @@ console.log(balances.items, txs.items, holders.items);
 `deadline_ms_remaining`) قم بتسليط الضوء على الموعد النهائي التالي لانتهاء الصلاحية (التحديث → السياسة
 → الشهادة) حتى تتمكن شارات واجهة المستخدم من تحذير المشغلين عند وجود بدل
 <24 ساعة متبقية. SDK
-يعكس مرشحات REST المكشوفة بواسطة `/v1/offline/allowances`:
+يعكس مرشحات REST المكشوفة بواسطة `/v1/offline/reserve/topup`:
 `certificateExpiresBeforeMs/AfterMs`، `policyExpiresBeforeMs/AfterMs`،
 `verdictIdHex`، `attestationNonceHex`، `refreshBeforeMs/AfterMs`، و
 `requireVerdict` / `onlyMissingVerdict` القيم المنطقية. مجموعات غير صالحة (ل

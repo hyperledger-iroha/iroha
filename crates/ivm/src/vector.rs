@@ -1271,6 +1271,170 @@ impl MetalState {
                 );
             }
 
+            let add64_ok = {
+                use core::ptr::NonNull;
+
+                use objc2_metal::*;
+
+                let a = [
+                    (0x0000_0000u64 << 32) | 0xffff_ffff,
+                    (0x8000_0000u64 << 32) | 0x0000_0001,
+                ];
+                let b = [
+                    (0x0000_0001u64 << 32) | 0x0000_0001,
+                    (0x7fff_ffffu64 << 32) | 0xffff_ffff,
+                ];
+                let expect = [a[0].wrapping_add(b[0]), a[1].wrapping_add(b[1])];
+                let buf_a = unsafe {
+                    device.newBufferWithBytes_length_options(
+                        NonNull::new_unchecked(a.as_ptr() as *mut core::ffi::c_void),
+                        a.len() * core::mem::size_of::<u64>(),
+                        MTLResourceOptions::CPUCacheModeDefaultCache,
+                    )?
+                };
+                let buf_b = unsafe {
+                    device.newBufferWithBytes_length_options(
+                        NonNull::new_unchecked(b.as_ptr() as *mut core::ffi::c_void),
+                        b.len() * core::mem::size_of::<u64>(),
+                        MTLResourceOptions::CPUCacheModeDefaultCache,
+                    )?
+                };
+                let buf_out = device.newBufferWithLength_options(
+                    a.len() * core::mem::size_of::<u64>(),
+                    MTLResourceOptions::StorageModeShared,
+                )?;
+                let cmd_buf = queue.commandBuffer()?;
+                let encoder = cmd_buf.computeCommandEncoder()?;
+                encoder.setComputePipelineState(&vadd64);
+                unsafe {
+                    encoder.setBuffer_offset_atIndex(Some(&buf_a), 0, 0);
+                    encoder.setBuffer_offset_atIndex(Some(&buf_b), 0, 1);
+                    encoder.setBuffer_offset_atIndex(Some(&buf_out), 0, 2);
+                }
+                let grid = MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                };
+                let threads = MTLSize {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                };
+                encoder.dispatchThreads_threadsPerThreadgroup(grid, threads);
+                encoder.endEncoding();
+                cmd_buf.commit();
+                if !finalize_command_buffer(&cmd_buf, "metal self-test vadd64") {
+                    return None;
+                }
+                let ptr = buf_out.contents().as_ptr() as *const u64;
+                let out_slice = unsafe { std::slice::from_raw_parts(ptr, 2) };
+                out_slice == expect
+            };
+            if debug_selftest {
+                eprintln!(
+                    "ivm: metal self-test vadd64 {}",
+                    if add64_ok { "ok" } else { "FAIL" }
+                );
+            }
+
+            let bit_ops_ok = {
+                use core::ptr::NonNull;
+
+                use objc2_metal::*;
+
+                let lhs = [0xffff_0000u32, 0x1234_5678, 0x0f0f_0f0f, 0xaaaa_5555];
+                let rhs = [0x00ff_ff00u32, 0xf0f0_f0f0, 0x3333_cccc, 0x5555_aaaa];
+                let run_bit = |pipeline, expect: [u32; 4], label: &str| -> Option<bool> {
+                    let buf_lhs = unsafe {
+                        device.newBufferWithBytes_length_options(
+                            NonNull::new_unchecked(lhs.as_ptr() as *mut core::ffi::c_void),
+                            lhs.len() * core::mem::size_of::<u32>(),
+                            MTLResourceOptions::CPUCacheModeDefaultCache,
+                        )?
+                    };
+                    let buf_rhs = unsafe {
+                        device.newBufferWithBytes_length_options(
+                            NonNull::new_unchecked(rhs.as_ptr() as *mut core::ffi::c_void),
+                            rhs.len() * core::mem::size_of::<u32>(),
+                            MTLResourceOptions::CPUCacheModeDefaultCache,
+                        )?
+                    };
+                    let buf_out = device.newBufferWithLength_options(
+                        lhs.len() * core::mem::size_of::<u32>(),
+                        MTLResourceOptions::StorageModeShared,
+                    )?;
+                    let cmd_buf = queue.commandBuffer()?;
+                    let encoder = cmd_buf.computeCommandEncoder()?;
+                    encoder.setComputePipelineState(pipeline);
+                    unsafe {
+                        encoder.setBuffer_offset_atIndex(Some(&buf_lhs), 0, 0);
+                        encoder.setBuffer_offset_atIndex(Some(&buf_rhs), 0, 1);
+                        encoder.setBuffer_offset_atIndex(Some(&buf_out), 0, 2);
+                    }
+                    let grid = MTLSize {
+                        width: 1,
+                        height: 1,
+                        depth: 1,
+                    };
+                    let threads = MTLSize {
+                        width: 1,
+                        height: 1,
+                        depth: 1,
+                    };
+                    encoder.dispatchThreads_threadsPerThreadgroup(grid, threads);
+                    encoder.endEncoding();
+                    cmd_buf.commit();
+                    if !finalize_command_buffer(&cmd_buf, label) {
+                        return None;
+                    }
+                    let ptr = buf_out.contents().as_ptr() as *const u32;
+                    let out_slice = unsafe { std::slice::from_raw_parts(ptr, 4) };
+                    Some(out_slice == expect)
+                };
+
+                let and_ok = run_bit(
+                    &vand,
+                    [
+                        lhs[0] & rhs[0],
+                        lhs[1] & rhs[1],
+                        lhs[2] & rhs[2],
+                        lhs[3] & rhs[3],
+                    ],
+                    "metal self-test vand",
+                )
+                .unwrap_or(false);
+                let xor_ok = run_bit(
+                    &vxor,
+                    [
+                        lhs[0] ^ rhs[0],
+                        lhs[1] ^ rhs[1],
+                        lhs[2] ^ rhs[2],
+                        lhs[3] ^ rhs[3],
+                    ],
+                    "metal self-test vxor",
+                )
+                .unwrap_or(false);
+                let or_ok = run_bit(
+                    &vor,
+                    [
+                        lhs[0] | rhs[0],
+                        lhs[1] | rhs[1],
+                        lhs[2] | rhs[2],
+                        lhs[3] | rhs[3],
+                    ],
+                    "metal self-test vor",
+                )
+                .unwrap_or(false);
+                and_ok && xor_ok && or_ok
+            };
+            if debug_selftest {
+                eprintln!(
+                    "ivm: metal self-test vector-bit {}",
+                    if bit_ops_ok { "ok" } else { "FAIL" }
+                );
+            }
+
             // sha256 compress quick check against local scalar
             let sha_ok = {
                 let mut st_scalar = [
@@ -1554,6 +1718,106 @@ impl MetalState {
                 eprintln!(
                     "ivm: metal self-test aes-round {}",
                     if aes_ok { "ok" } else { "FAIL" }
+                );
+            }
+
+            let aes_batch_ok = {
+                use core::ptr::NonNull;
+
+                use objc2_metal::*;
+
+                let states = [
+                    [
+                        0x00u8, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb,
+                        0xcc, 0xdd, 0xee, 0xff,
+                    ],
+                    [
+                        0xffu8, 0xee, 0xdd, 0xcc, 0xbb, 0xaa, 0x99, 0x88, 0x77, 0x66, 0x55, 0x44,
+                        0x33, 0x22, 0x11, 0x00,
+                    ],
+                ];
+                let rk = [
+                    0x0f, 0x15, 0x71, 0xc9, 0x47, 0xd9, 0xe8, 0x59, 0x0c, 0xb7, 0xad, 0xd6, 0xaf,
+                    0x7f, 0x67, 0x98,
+                ];
+                let flat_states: Vec<u8> = states
+                    .iter()
+                    .flat_map(|state| state.iter())
+                    .copied()
+                    .collect();
+                let run_batch = |pipeline, expected: [[u8; 16]; 2], label: &str| -> Option<bool> {
+                    let buf_states = unsafe {
+                        device.newBufferWithBytes_length_options(
+                            NonNull::new_unchecked(flat_states.as_ptr() as *mut core::ffi::c_void),
+                            flat_states.len(),
+                            MTLResourceOptions::CPUCacheModeDefaultCache,
+                        )?
+                    };
+                    let buf_rk = unsafe {
+                        device.newBufferWithBytes_length_options(
+                            NonNull::new_unchecked(rk.as_ptr() as *mut core::ffi::c_void),
+                            16,
+                            MTLResourceOptions::CPUCacheModeDefaultCache,
+                        )?
+                    };
+                    let buf_out = device.newBufferWithLength_options(
+                        flat_states.len(),
+                        MTLResourceOptions::StorageModeShared,
+                    )?;
+                    let cmd_buf = queue.commandBuffer()?;
+                    let encoder = cmd_buf.computeCommandEncoder()?;
+                    encoder.setComputePipelineState(pipeline);
+                    unsafe {
+                        encoder.setBuffer_offset_atIndex(Some(&buf_states), 0, 0);
+                        encoder.setBuffer_offset_atIndex(Some(&buf_rk), 0, 1);
+                        encoder.setBuffer_offset_atIndex(Some(&buf_out), 0, 2);
+                    }
+                    let grid = MTLSize {
+                        width: states.len() as NSUInteger,
+                        height: 1,
+                        depth: 1,
+                    };
+                    let threads = MTLSize {
+                        width: 1,
+                        height: 1,
+                        depth: 1,
+                    };
+                    encoder.dispatchThreads_threadsPerThreadgroup(grid, threads);
+                    encoder.endEncoding();
+                    cmd_buf.commit();
+                    if !finalize_command_buffer(&cmd_buf, label) {
+                        return None;
+                    }
+                    let ptr = buf_out.contents().as_ptr() as *const u8;
+                    let out_slice = unsafe { std::slice::from_raw_parts(ptr, flat_states.len()) };
+                    let actual: Vec<[u8; 16]> = out_slice
+                        .chunks_exact(16)
+                        .map(|chunk| {
+                            let mut block = [0u8; 16];
+                            block.copy_from_slice(chunk);
+                            block
+                        })
+                        .collect();
+                    Some(actual == expected)
+                };
+
+                let enc_expected = [
+                    crate::aes::aesenc_impl(states[0], rk),
+                    crate::aes::aesenc_impl(states[1], rk),
+                ];
+                let dec_expected = [
+                    crate::aes::aesdec_impl(states[0], rk),
+                    crate::aes::aesdec_impl(states[1], rk),
+                ];
+                run_batch(&aesenc_batch, enc_expected, "metal self-test aesenc batch")
+                    .unwrap_or(false)
+                    && run_batch(&aesdec_batch, dec_expected, "metal self-test aesdec batch")
+                        .unwrap_or(false)
+            };
+            if debug_selftest {
+                eprintln!(
+                    "ivm: metal self-test aes-batch {}",
+                    if aes_batch_ok { "ok" } else { "FAIL" }
                 );
             }
 
@@ -1871,19 +2135,14 @@ impl MetalState {
             let ed25519_ok = {
                 use core::ptr::NonNull;
 
-                use curve25519_dalek::scalar::Scalar;
                 use ed25519_dalek::{Signer, SigningKey};
-                use sha2::{Digest, Sha512};
 
                 let key = SigningKey::from_bytes(&[7u8; 32]);
                 let pk = key.verifying_key();
                 let msg = b"ivm-metal-ed25519";
                 let sig = key.sign(msg).to_bytes();
-                let mut hasher = Sha512::new();
-                hasher.update(&sig[..32]);
-                hasher.update(pk.as_bytes());
-                hasher.update(msg);
-                let hram = Scalar::from_hash(hasher).to_bytes();
+                let hram =
+                    crate::signature::ed25519_challenge_scalar_bytes(&sig, pk.as_bytes(), msg);
 
                 let mut sig_bad = sig;
                 sig_bad[0] ^= 0x80;
@@ -1984,7 +2243,16 @@ impl MetalState {
                 ));
             }
 
-            add_ok && sha_ok && sha_leaves_ok && aes_ok && aes_fused_ok && keccak_ok && sha_pairs_ok
+            add_ok
+                && add64_ok
+                && bit_ops_ok
+                && sha_ok
+                && sha_leaves_ok
+                && aes_ok
+                && aes_batch_ok
+                && aes_fused_ok
+                && keccak_ok
+                && sha_pairs_ok
         };
 
         if !self_test_ok {
@@ -3115,188 +3383,6 @@ fn metal_ed25519_point_decompress_for_tests(
                 })
                 .collect(),
         ))
-    })
-}
-
-#[cfg(all(target_os = "macos", feature = "metal", test))]
-fn metal_ed25519_point_trace_for_tests(inputs: &[[u8; 32]]) -> Option<Vec<[[u8; 32]; 7]>> {
-    if inputs.is_empty() {
-        return Some(Vec::new());
-    }
-
-    use core::ptr::NonNull;
-
-    use objc2::rc::autoreleasepool;
-    use objc2_foundation::NSString;
-    use objc2_metal::*;
-
-    autoreleasepool(|_| {
-        let device = discover_metal_device()?;
-        let queue = device.newCommandQueue()?;
-        let lib = device
-            .newLibraryWithSource_options_error(&NSString::from_str(METAL_ED25519_SHADER), None)
-            .ok()?;
-        let function_name = NSString::from_str("point_decompress_trace_kernel");
-        let func = lib.newFunctionWithName(&function_name)?;
-        let pipeline = device
-            .newComputePipelineStateWithFunction_error(&func)
-            .ok()?;
-
-        let n = inputs.len();
-        let flat_inputs: Vec<u8> = inputs
-            .iter()
-            .flat_map(|point| point.iter())
-            .copied()
-            .collect();
-        let count_buf = [n as u32];
-
-        let buf_inputs = unsafe {
-            device.newBufferWithBytes_length_options(
-                NonNull::new_unchecked(flat_inputs.as_ptr() as *mut core::ffi::c_void),
-                flat_inputs.len(),
-                MTLResourceOptions::CPUCacheModeDefaultCache,
-            )?
-        };
-        let buf_count = unsafe {
-            device.newBufferWithBytes_length_options(
-                NonNull::new_unchecked(count_buf.as_ptr() as *mut core::ffi::c_void),
-                core::mem::size_of::<u32>(),
-                MTLResourceOptions::CPUCacheModeDefaultCache,
-            )?
-        };
-        let buf_out = device
-            .newBufferWithLength_options(n * 7 * 32, MTLResourceOptions::StorageModeShared)?;
-
-        let cmd = queue.commandBuffer()?;
-        let enc = cmd.computeCommandEncoder()?;
-        enc.setComputePipelineState(&pipeline);
-        unsafe {
-            enc.setBuffer_offset_atIndex(Some(&buf_inputs), 0, 0);
-            enc.setBuffer_offset_atIndex(Some(&buf_count), 0, 1);
-            enc.setBuffer_offset_atIndex(Some(&buf_out), 0, 2);
-        }
-        let grid = MTLSize {
-            width: n as NSUInteger,
-            height: 1,
-            depth: 1,
-        };
-        let threads = MTLSize {
-            width: pipeline.threadExecutionWidth().max(1),
-            height: 1,
-            depth: 1,
-        };
-        enc.dispatchThreads_threadsPerThreadgroup(grid, threads);
-        enc.endEncoding();
-        cmd.commit();
-        if !finalize_command_buffer(&cmd, "metal ed25519 point trace direct") {
-            return None;
-        }
-        let out = unsafe {
-            std::slice::from_raw_parts(buf_out.contents().as_ptr() as *const u8, n * 7 * 32)
-        };
-        Some(
-            out.chunks_exact(7 * 32)
-                .map(|chunk| {
-                    let mut fields = [[0u8; 32]; 7];
-                    for (field, field_bytes) in fields.iter_mut().zip(chunk.chunks_exact(32)) {
-                        field.copy_from_slice(field_bytes);
-                    }
-                    fields
-                })
-                .collect(),
-        )
-    })
-}
-
-#[cfg(all(target_os = "macos", feature = "metal", test))]
-fn metal_ed25519_point_limb_trace_for_tests(inputs: &[[u8; 32]]) -> Option<Vec<[[i32; 10]; 9]>> {
-    if inputs.is_empty() {
-        return Some(Vec::new());
-    }
-
-    use core::ptr::NonNull;
-
-    use objc2::rc::autoreleasepool;
-    use objc2_foundation::NSString;
-    use objc2_metal::*;
-
-    autoreleasepool(|_| {
-        let device = discover_metal_device()?;
-        let queue = device.newCommandQueue()?;
-        let lib = device
-            .newLibraryWithSource_options_error(&NSString::from_str(METAL_ED25519_SHADER), None)
-            .ok()?;
-        let function_name = NSString::from_str("point_decompress_limb_trace_kernel");
-        let func = lib.newFunctionWithName(&function_name)?;
-        let pipeline = device
-            .newComputePipelineStateWithFunction_error(&func)
-            .ok()?;
-
-        let n = inputs.len();
-        let flat_inputs: Vec<u8> = inputs
-            .iter()
-            .flat_map(|point| point.iter())
-            .copied()
-            .collect();
-        let count_buf = [n as u32];
-
-        let buf_inputs = unsafe {
-            device.newBufferWithBytes_length_options(
-                NonNull::new_unchecked(flat_inputs.as_ptr() as *mut core::ffi::c_void),
-                flat_inputs.len(),
-                MTLResourceOptions::CPUCacheModeDefaultCache,
-            )?
-        };
-        let buf_count = unsafe {
-            device.newBufferWithBytes_length_options(
-                NonNull::new_unchecked(count_buf.as_ptr() as *mut core::ffi::c_void),
-                core::mem::size_of::<u32>(),
-                MTLResourceOptions::CPUCacheModeDefaultCache,
-            )?
-        };
-        let buf_out = device.newBufferWithLength_options(
-            n * 9 * 10 * core::mem::size_of::<i32>(),
-            MTLResourceOptions::StorageModeShared,
-        )?;
-
-        let cmd = queue.commandBuffer()?;
-        let enc = cmd.computeCommandEncoder()?;
-        enc.setComputePipelineState(&pipeline);
-        unsafe {
-            enc.setBuffer_offset_atIndex(Some(&buf_inputs), 0, 0);
-            enc.setBuffer_offset_atIndex(Some(&buf_count), 0, 1);
-            enc.setBuffer_offset_atIndex(Some(&buf_out), 0, 2);
-        }
-        let grid = MTLSize {
-            width: n as NSUInteger,
-            height: 1,
-            depth: 1,
-        };
-        let threads = MTLSize {
-            width: pipeline.threadExecutionWidth().max(1),
-            height: 1,
-            depth: 1,
-        };
-        enc.dispatchThreads_threadsPerThreadgroup(grid, threads);
-        enc.endEncoding();
-        cmd.commit();
-        if !finalize_command_buffer(&cmd, "metal ed25519 point limb trace direct") {
-            return None;
-        }
-        let out = unsafe {
-            std::slice::from_raw_parts(buf_out.contents().as_ptr() as *const i32, n * 9 * 10)
-        };
-        Some(
-            out.chunks_exact(9 * 10)
-                .map(|chunk| {
-                    let mut fields = [[0i32; 10]; 9];
-                    for (field, field_values) in fields.iter_mut().zip(chunk.chunks_exact(10)) {
-                        field.copy_from_slice(field_values);
-                    }
-                    fields
-                })
-                .collect(),
-        )
     })
 }
 
@@ -5291,9 +5377,12 @@ mod tests {
     #[cfg(all(target_os = "macos", feature = "metal"))]
     #[test]
     fn metal_ed25519_batch_matches_cpu() {
-        use curve25519_dalek::{constants::ED25519_BASEPOINT_COMPRESSED, scalar::Scalar};
+        use curve25519_dalek::{
+            constants::{ED25519_BASEPOINT_COMPRESSED, ED25519_BASEPOINT_POINT},
+            edwards::{CompressedEdwardsY, EdwardsPoint},
+            scalar::Scalar,
+        };
         use ed25519_dalek::{Signer, SigningKey};
-        use sha2::{Digest, Sha512};
 
         if !metal_available() {
             eprintln!("Metal unavailable; skipping ed25519 batch parity test");
@@ -5305,11 +5394,7 @@ mod tests {
         let pk = key.verifying_key();
         let msg = b"metal batch test";
         let sig = key.sign(msg).to_bytes();
-        let mut hasher = Sha512::new();
-        hasher.update(&sig[..32]);
-        hasher.update(pk.as_bytes());
-        hasher.update(msg);
-        let hram = Scalar::from_hash(hasher).to_bytes();
+        let hram = crate::signature::ed25519_challenge_scalar_bytes(&sig, pk.as_bytes(), msg);
 
         let mut bad_sig = sig;
         bad_sig[0] ^= 0x40;
@@ -5318,19 +5403,79 @@ mod tests {
         let pks = [pk.to_bytes(), pk.to_bytes()];
         let hrams = [hram, hram];
         let points = [pk.to_bytes(), *ED25519_BASEPOINT_COMPRESSED.as_bytes()];
+        let good_r: [u8; 32] = sig[..32]
+            .try_into()
+            .expect("signature R slice has 32 bytes");
+        let good_s: [u8; 32] = sig[32..]
+            .try_into()
+            .expect("signature S slice has 32 bytes");
+        let a_point = CompressedEdwardsY(pk.to_bytes())
+            .decompress()
+            .expect("public key should decompress on CPU");
+        let s_scalar =
+            Scalar::from_canonical_bytes(good_s).expect("signature scalar should be canonical");
+        let h_scalar =
+            Scalar::from_canonical_bytes(hram).expect("challenge scalar should be canonical");
+        let cpu_s_only = EdwardsPoint::vartime_double_scalar_mul_basepoint(
+            &Scalar::ZERO,
+            &(-a_point),
+            &s_scalar,
+        )
+        .compress()
+        .to_bytes();
+        let cpu_h_only = EdwardsPoint::vartime_double_scalar_mul_basepoint(
+            &h_scalar,
+            &(-a_point),
+            &Scalar::ZERO,
+        )
+        .compress()
+        .to_bytes();
+        let mut s_only_sig = [0u8; 64];
+        s_only_sig[32..].copy_from_slice(&good_s);
+        let h_only_sig = [0u8; 64];
+        let mut unit_sig = [0u8; 64];
+        unit_sig[32] = 1;
+        let mut double_sig = [0u8; 64];
+        double_sig[32] = 2;
+        let mut identity = [0u8; 32];
+        identity[0] = 1;
+        let metal_s_only =
+            metal_ed25519_check_bytes_for_tests(&[s_only_sig], &[identity], &[[0u8; 32]]);
+        let metal_h_only =
+            metal_ed25519_check_bytes_for_tests(&[h_only_sig], &[pk.to_bytes()], &[hram]);
+        let metal_b1 = metal_ed25519_check_bytes_for_tests(&[unit_sig], &[identity], &[[0u8; 32]]);
+        let metal_b2 =
+            metal_ed25519_check_bytes_for_tests(&[double_sig], &[identity], &[[0u8; 32]]);
+        let cpu_b1 = ED25519_BASEPOINT_COMPRESSED.to_bytes();
+        let cpu_b2 = (Scalar::from(2u64) * ED25519_BASEPOINT_POINT)
+            .compress()
+            .to_bytes();
+        let pow2_sigs: Vec<[u8; 64]> = (0..64)
+            .map(|bit| {
+                let mut sig_bytes = [0u8; 64];
+                sig_bytes[32 + bit / 8] = 1u8 << (bit % 8);
+                sig_bytes
+            })
+            .collect();
+        let pow2_pks = vec![identity; 64];
+        let pow2_hrams = vec![[0u8; 32]; 64];
+        let metal_pow2 = metal_ed25519_check_bytes_for_tests(&pow2_sigs, &pow2_pks, &pow2_hrams);
+        let pow2_first_mismatch = metal_pow2.as_ref().and_then(|metal_points| {
+            metal_points.iter().enumerate().find_map(|(bit, actual)| {
+                let mut scalar_bytes = [0u8; 32];
+                scalar_bytes[bit / 8] = 1u8 << (bit % 8);
+                let scalar = Scalar::from_canonical_bytes(scalar_bytes)
+                    .expect("power-of-two scalar should be canonical");
+                let expected = (scalar * ED25519_BASEPOINT_POINT).compress().to_bytes();
+                (expected != *actual).then_some((bit, expected, *actual))
+            })
+        });
 
         let direct = metal_ed25519_verify_batch_direct_for_tests(&sigs, &pks, &hrams);
         let status = metal_ed25519_status_batch_direct_for_tests(&sigs, &pks, &hrams);
         let check_bytes = metal_ed25519_check_bytes_for_tests(&sigs, &pks, &hrams);
         let field_roundtrip = metal_ed25519_field_roundtrip_for_tests(&points);
         let point_decompress = metal_ed25519_point_decompress_for_tests(&points);
-        let point_trace =
-            metal_ed25519_point_trace_for_tests(&[*ED25519_BASEPOINT_COMPRESSED.as_bytes()]);
-        let point_limb_trace =
-            metal_ed25519_point_limb_trace_for_tests(&[*ED25519_BASEPOINT_COMPRESSED.as_bytes()]);
-        eprintln!(
-            "metal ed25519 direct={direct:?} status={status:?} check_bytes={check_bytes:?} field_roundtrip={field_roundtrip:?} point_decompress={point_decompress:?} point_trace={point_trace:?} point_limb_trace={point_limb_trace:?}"
-        );
 
         let Some(field_roundtrip) = field_roundtrip else {
             panic!("Metal field roundtrip diagnostic kernel should return results");
@@ -5343,29 +5488,80 @@ mod tests {
                 "Metal fe_frombytes/fe_tobytes should preserve the encoded y-coordinate",
             );
         }
+        let Some((point_statuses, point_outputs)) = point_decompress else {
+            panic!("Metal point decompress diagnostic kernel should return results");
+        };
+        let expected_neg_points: Vec<[u8; 32]> = points
+            .iter()
+            .map(|point| {
+                let mut negated = *point;
+                negated[31] ^= 0x80;
+                negated
+            })
+            .collect();
+        assert_eq!(
+            point_statuses,
+            vec![5, 5],
+            "Metal point decompress should accept the public key and basepoint",
+        );
+        assert_eq!(
+            point_outputs, expected_neg_points,
+            "Metal ge_frombytes_negate_vartime should negate the encoded point sign",
+        );
+        assert_eq!(
+            direct,
+            Some(vec![true, false]),
+            "Metal signature kernel should match the CPU on good and bad signatures",
+        );
+        assert_eq!(
+            status,
+            Some(vec![5, 4]),
+            "Metal signature status kernel should accept the good signature and reject the tampered one",
+        );
+        assert_eq!(
+            check_bytes,
+            Some(vec![good_r, good_r]),
+            "Metal signature check-bytes kernel should reconstruct the canonical R value",
+        );
+        assert_eq!(
+            metal_s_only,
+            Some(vec![cpu_s_only]),
+            "Metal [s]B multiplication should match the CPU",
+        );
+        assert_eq!(
+            metal_h_only,
+            Some(vec![cpu_h_only]),
+            "Metal [h](-A) multiplication should match the CPU",
+        );
+        assert_eq!(
+            metal_b1,
+            Some(vec![cpu_b1]),
+            "Metal scalar-1 basepoint multiplication should produce the canonical basepoint",
+        );
+        assert_eq!(
+            metal_b2,
+            Some(vec![cpu_b2]),
+            "Metal scalar-2 basepoint multiplication should match the CPU",
+        );
+        assert_eq!(
+            pow2_first_mismatch, None,
+            "Metal power-of-two basepoint multiplications should match the CPU across the scalar bit range",
+        );
 
         reset_metal_backend_for_tests();
         assert!(
             metal_available(),
             "Metal backend should initialize on Metal-capable hosts",
         );
-
-        match metal_ed25519_verify_batch(&sigs, &pks, &hrams) {
-            Some(results) => assert_eq!(results, vec![true, false]),
-            None => {
-                let signature_pipeline_missing =
-                    with_metal_state_try(|ctx| Some(ctx.ed25519_signature.is_none()))
-                        .unwrap_or(false);
-                assert!(
-                    signature_pipeline_missing,
-                    "Metal ed25519 fallback should only disable the signature pipeline",
-                );
-                assert!(
-                    metal_available(),
-                    "Metal backend should remain available when ed25519 falls back to CPU",
-                );
-            }
-        }
+        assert!(
+            with_metal_state_try(|ctx| Some(ctx.ed25519_signature.is_some())).unwrap_or(false),
+            "Metal startup self-test should keep the ed25519 signature pipeline enabled",
+        );
+        assert_eq!(
+            metal_ed25519_verify_batch(&sigs, &pks, &hrams),
+            Some(vec![true, false]),
+            "Metal ed25519 batch verification should stay on the accelerator after the self-test passes",
+        );
     }
 
     #[cfg(target_os = "macos")]
@@ -5429,6 +5625,79 @@ mod tests {
             (lane1 >> 32) as u32,
         ];
         assert_eq!(metal_vadd64(a, b), Some(expected));
+    }
+
+    #[cfg(all(target_os = "macos", feature = "metal"))]
+    #[test]
+    fn metal_bitwise_single_vector_matches_scalar() {
+        if !metal_available() {
+            eprintln!("No Metal GPU available; skipping test");
+            return;
+        }
+        reset_metal_backend_for_tests();
+        let lhs = [0xffff_0000u32, 0x1234_5678, 0x0f0f_0f0f, 0xaaaa_5555];
+        let rhs = [0x00ff_ff00u32, 0xf0f0_f0f0, 0x3333_cccc, 0x5555_aaaa];
+        assert_eq!(
+            metal_vand(lhs, rhs),
+            Some([
+                lhs[0] & rhs[0],
+                lhs[1] & rhs[1],
+                lhs[2] & rhs[2],
+                lhs[3] & rhs[3],
+            ]),
+        );
+        assert_eq!(
+            metal_vxor(lhs, rhs),
+            Some([
+                lhs[0] ^ rhs[0],
+                lhs[1] ^ rhs[1],
+                lhs[2] ^ rhs[2],
+                lhs[3] ^ rhs[3],
+            ]),
+        );
+        assert_eq!(
+            metal_vor(lhs, rhs),
+            Some([
+                lhs[0] | rhs[0],
+                lhs[1] | rhs[1],
+                lhs[2] | rhs[2],
+                lhs[3] | rhs[3],
+            ]),
+        );
+    }
+
+    #[cfg(all(target_os = "macos", feature = "metal"))]
+    #[test]
+    fn metal_aes_batch_matches_scalar() {
+        if !metal_available() {
+            eprintln!("No Metal GPU available; skipping test");
+            return;
+        }
+        reset_metal_backend_for_tests();
+        let states = [
+            [
+                0x00u8, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc,
+                0xdd, 0xee, 0xff,
+            ],
+            [
+                0xffu8, 0xee, 0xdd, 0xcc, 0xbb, 0xaa, 0x99, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33,
+                0x22, 0x11, 0x00,
+            ],
+        ];
+        let rk = [
+            0x0f, 0x15, 0x71, 0xc9, 0x47, 0xd9, 0xe8, 0x59, 0x0c, 0xb7, 0xad, 0xd6, 0xaf, 0x7f,
+            0x67, 0x98,
+        ];
+        let expected_enc: Vec<[u8; 16]> = states
+            .iter()
+            .map(|&state| crate::aes::aesenc_impl(state, rk))
+            .collect();
+        let expected_dec: Vec<[u8; 16]> = states
+            .iter()
+            .map(|&state| crate::aes::aesdec_impl(state, rk))
+            .collect();
+        assert_eq!(metal_aesenc_batch(&states, rk), Some(expected_enc));
+        assert_eq!(metal_aesdec_batch(&states, rk), Some(expected_dec));
     }
 
     #[cfg(all(target_os = "macos", feature = "metal"))]

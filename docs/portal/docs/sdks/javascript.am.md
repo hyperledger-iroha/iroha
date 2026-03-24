@@ -189,7 +189,7 @@ console.log(balances.items, txs.items, holders.items);
 `deadline_ms_remaining`) የሚቀጥለውን የማለቂያ ቀነ-ገደብ ያደምቃል (አድስ → ፖሊሲ
 → ሰርተፍኬት) ስለዚህ የUI ባጆች አበል በሚኖርበት ጊዜ ኦፕሬተሮችን ሊያስጠነቅቁ ይችላሉ።
 <24 ሰአት ይቀራል። ኤስዲኬ
-በ `/v1/offline/allowances` የተጋለጡትን የ REST ማጣሪያዎች ያንጸባርቃል:
+በ `/v1/offline/reserve/topup` የተጋለጡትን የ REST ማጣሪያዎች ያንጸባርቃል:
 `certificateExpiresBeforeMs/AfterMs`፣ `policyExpiresBeforeMs/AfterMs`፣
 `verdictIdHex`፣ `attestationNonceHex`፣ `refreshBeforeMs/AfterMs`፣ እና እ.ኤ.አ.
 `requireVerdict` / `onlyMissingVerdict` ቡሊያንስ። ልክ ያልሆኑ ጥምሮች (ለ

@@ -68,22 +68,27 @@ inline void fe_copy_const(fe h, constant int f[10]) {
     }
 }
 
+inline void fe_normalize(fe h);
+
 inline void fe_add(fe h, const fe f, const fe g) {
     for (int i = 0; i < 10; ++i) {
         h[i] = f[i] + g[i];
     }
+    fe_normalize(h);
 }
 
 inline void fe_sub(fe h, const fe f, const fe g) {
     for (int i = 0; i < 10; ++i) {
         h[i] = f[i] - g[i];
     }
+    fe_normalize(h);
 }
 
 inline void fe_neg(fe h, const fe f) {
     for (int i = 0; i < 10; ++i) {
         h[i] = -f[i];
     }
+    fe_normalize(h);
 }
 
 inline void fe_cmov(fe f, const fe g, int b) {
@@ -492,6 +497,7 @@ inline void fe_sq(fe h, const fe f) {
     h[7] = (int)h7;
     h[8] = (int)h8;
     h[9] = (int)h9;
+    fe_normalize(h);
 }
 
 inline void fe_sq2(fe h, const fe f) {
@@ -652,6 +658,7 @@ inline void fe_sq2(fe h, const fe f) {
     h[7] = (int)h7;
     h[8] = (int)h8;
     h[9] = (int)h9;
+    fe_normalize(h);
 }
 
 inline void fe_mul121666(fe h, const fe f) {
@@ -696,6 +703,7 @@ inline void fe_mul121666(fe h, const fe f) {
     for (int i = 0; i < 10; ++i) {
         h[i] = (int)t[i];
     }
+    fe_normalize(h);
 }
 
 inline void fe_pow22523(fe out, const fe z) {
@@ -1341,153 +1349,5 @@ kernel void point_decompress_status_kernel(
     device uchar* output = outputs + idx * 32;
     for (uint i = 0; i < 32; ++i) {
         output[i] = local_out[i];
-    }
-}
-
-kernel void point_decompress_trace_kernel(
-    device const uchar* inputs [[buffer(0)]],
-    constant uint& count [[buffer(1)]],
-    device uchar* outputs [[buffer(2)]],
-    uint idx [[thread_position_in_grid]]
-) {
-    if (idx >= count) {
-        return;
-    }
-    const device uchar* input = inputs + idx * 32;
-    uchar local_in[32];
-    for (uint i = 0; i < 32; ++i) {
-        local_in[i] = input[i];
-    }
-
-    fe y;
-    fe z;
-    fe u;
-    fe v;
-    fe v2;
-    fe v3;
-    fe v6;
-    fe v7;
-    fe uv7;
-    fe pow_out;
-    fe x;
-    fe vxx;
-    fe check_minus;
-    fe check_plus;
-    fe fe_d;
-    uchar encoded[32];
-
-    fe_copy_const(fe_d, FE_D);
-    fe_frombytes(y, local_in);
-    fe_1(z);
-    fe_sq(u, y);
-    fe_mul(v, u, fe_d);
-    fe_sub(u, u, z);
-    fe_add(v, v, z);
-    fe_sq(v2, v);
-    fe_mul(v3, v2, v);
-    fe_sq(v6, v3);
-    fe_mul(v7, v6, v);
-    fe_mul(uv7, v7, u);
-    fe_pow22523(pow_out, uv7);
-    fe_mul(x, pow_out, v3);
-    fe_mul(x, x, u);
-    fe_sq(vxx, x);
-    fe_mul(vxx, vxx, v);
-    fe_sub(check_minus, vxx, u);
-    fe_add(check_plus, vxx, u);
-
-    device uchar* output = outputs + idx * (7 * 32);
-    fe_tobytes(encoded, u);
-    for (uint i = 0; i < 32; ++i) {
-        output[i] = encoded[i];
-    }
-    fe_tobytes(encoded, v);
-    for (uint i = 0; i < 32; ++i) {
-        output[32 + i] = encoded[i];
-    }
-    fe_tobytes(encoded, uv7);
-    for (uint i = 0; i < 32; ++i) {
-        output[64 + i] = encoded[i];
-    }
-    fe_tobytes(encoded, pow_out);
-    for (uint i = 0; i < 32; ++i) {
-        output[96 + i] = encoded[i];
-    }
-    fe_tobytes(encoded, x);
-    for (uint i = 0; i < 32; ++i) {
-        output[128 + i] = encoded[i];
-    }
-    fe_tobytes(encoded, check_minus);
-    for (uint i = 0; i < 32; ++i) {
-        output[160 + i] = encoded[i];
-    }
-    fe_tobytes(encoded, check_plus);
-    for (uint i = 0; i < 32; ++i) {
-        output[192 + i] = encoded[i];
-    }
-}
-
-kernel void point_decompress_limb_trace_kernel(
-    device const uchar* inputs [[buffer(0)]],
-    constant uint& count [[buffer(1)]],
-    device int* outputs [[buffer(2)]],
-    uint idx [[thread_position_in_grid]]
-) {
-    if (idx >= count) {
-        return;
-    }
-    const device uchar* input = inputs + idx * 32;
-    uchar local_in[32];
-    for (uint i = 0; i < 32; ++i) {
-        local_in[i] = input[i];
-    }
-
-    fe y;
-    fe z;
-    fe u;
-    fe v;
-    fe v2;
-    fe v3;
-    fe v6;
-    fe v7;
-    fe uv7;
-    fe pow_out;
-    fe x;
-    fe vxx;
-    fe check_minus;
-    fe check_plus;
-    fe fe_d;
-
-    fe_copy_const(fe_d, FE_D);
-    fe_frombytes(y, local_in);
-    fe_1(z);
-    fe_sq(u, y);
-    fe_mul(v, u, fe_d);
-    fe_sub(u, u, z);
-    fe_add(v, v, z);
-    fe_sq(v2, v);
-    fe_mul(v3, v2, v);
-    fe_sq(v6, v3);
-    fe_mul(v7, v6, v);
-    fe_mul(uv7, v7, u);
-    fe_pow22523(pow_out, uv7);
-    fe_mul(x, pow_out, v3);
-    fe_mul(x, x, u);
-    fe_sq(vxx, x);
-    fe_mul(vxx, vxx, v);
-    fe_sub(check_minus, vxx, u);
-    fe_add(check_plus, vxx, u);
-
-    device int* output = outputs + idx * (9 * 10);
-    for (uint i = 0; i < 10; ++i) {
-        output[i] = u[i];
-        output[10 + i] = v[i];
-        output[20 + i] = v2[i];
-        output[30 + i] = v3[i];
-        output[40 + i] = v6[i];
-        output[50 + i] = v7[i];
-        output[60 + i] = uv7[i];
-        output[70 + i] = pow_out[i];
-        output[80 + i] = check_minus[i];
     }
 }

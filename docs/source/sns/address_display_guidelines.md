@@ -116,13 +116,11 @@ Canonical I105 strings remain the wire format for manifests, telemetry, and QR
 payloads, so use `canonical I105 output` only for rendered output where the
 Sora alphabet offers material ergonomic wins.
 
-Offline reporting endpoints reuse the same contract. `/v1/offline/allowances{,/query}`,
-`/v1/offline/certificates{,/query}`, `/v1/offline/transfers{,/query}`,
-`/v1/offline/settlements{,/query}`, `/v1/offline/receipts{,/query}`, and
-`/v1/offline/summaries{,/query}` now
-canonicalize `controller_id`, `receiver_id`, and `deposit_account_id` filter literals, so GET and
-POST filters accept canonical I105 `AccountId` selectors (including `in`/`nin`
-arrays) without forcing operators to hand-normalize values ahead of time.
+Offline reserve endpoints use the same canonical account-literal rules. `/v1/offline/reserve/setup`,
+`/v1/offline/reserve/topup`, `/v1/offline/reserve/renew`, `/v1/offline/reserve/sync`,
+`/v1/offline/reserve/defund`, `/v1/offline/revocations`, and `/v1/offline/transfers{,/query}`
+accept canonical I105 `AccountId` selectors wherever account literals appear, so clients do not need
+to hand-normalize controller, receiver, or deposit-account values before submission.
 Canonical `AccountId` literals remain domainless even when a workflow also carries domain context;
 render or transport that context separately instead of appending `@<domain>` or relying on
 implicit default-domain reconstruction.

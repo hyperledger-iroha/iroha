@@ -281,42 +281,6 @@ public enum OfflineNorito {
         try decodeNoritoAssetIdLiteral(assetId)
     }
 
-    static func encodeAssetId(assetDefinitionId: String, accountId: String) throws -> Data {
-        let literal = try assetIdLiteral(assetDefinitionId: assetDefinitionId, accountId: accountId)
-        return try encodeAssetId(literal)
-    }
-
-    static func assetIdLiteral(assetDefinitionId: String, accountId: String) throws -> String {
-        let trimmedDefinition = assetDefinitionId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedDefinition.isEmpty else {
-            throw OfflineNoritoError.invalidAssetId(assetDefinitionId)
-        }
-        if trimmedDefinition.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
-            throw OfflineNoritoError.invalidAssetId(assetDefinitionId)
-        }
-        if trimmedDefinition.contains("@") {
-            throw OfflineNoritoError.invalidAssetId(trimmedDefinition)
-        }
-
-        let canonicalAccount = try canonicalizeEncodedAccountId(accountId)
-        let bridge = NoritoNativeBridge.shared
-        if let encoded = bridge.encodeAssetIdLiteral(
-            assetDefinition: trimmedDefinition,
-            accountId: canonicalAccount
-        ) {
-            let normalized = encoded.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !normalized.isEmpty {
-                return normalized
-            }
-        }
-
-        if bridge.canEncodeAssetIdLiteral {
-            throw OfflineNoritoError.invalidAssetId(trimmedDefinition)
-        }
-
-        throw OfflineNoritoError.nativeBridgeUnavailable("connect_norito_encode_asset_id_literal")
-    }
-
     static func encodeAssetDefinitionId(name: String, domain: String) throws -> Data {
         var writer = OfflineNoritoWriter()
         let domainPayload = try encodeDomainId(domain)

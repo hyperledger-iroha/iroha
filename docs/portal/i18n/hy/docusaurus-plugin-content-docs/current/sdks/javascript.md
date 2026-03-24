@@ -187,7 +187,7 @@ console.log(balances.items, txs.items, holders.items);
 `deadline_ms_remaining`) ընդգծում է հաջորդ ավարտվող ժամկետը (թարմացնել → քաղաքականություն
 → վկայագիր), այնպես որ UI կրծքանշանները կարող են նախազգուշացնել օպերատորներին, երբ որևէ արտոնություն կա
 Մնաց <24 ժամ։ SDK-ն
-արտացոլում է REST ֆիլտրերը, որոնք ենթարկվում են `/v1/offline/allowances`-ի կողմից.
+արտացոլում է REST ֆիլտրերը, որոնք ենթարկվում են `/v1/offline/reserve/topup`-ի կողմից.
 `certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
 `verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` և
 `requireVerdict` / `onlyMissingVerdict` բուլյաններ: Անվավեր համակցություններ (համար

@@ -2283,9 +2283,7 @@ impl IVM {
         if !self.use_metal || !crate::vector::metal_available() {
             return None;
         }
-        use curve25519_dalek::scalar::Scalar;
         use ed25519_dalek::{Signature, VerifyingKey};
-        use sha2::{Digest, Sha512};
 
         let mut sigs = Vec::with_capacity(request.entries.len());
         let mut pks = Vec::with_capacity(request.entries.len());
@@ -2304,11 +2302,11 @@ impl IVM {
                 Ok(pk) => pk,
                 Err(_) => return Some(Err(index)),
             };
-            let mut hasher = Sha512::new();
-            hasher.update(&sig_bytes[..32]);
-            hasher.update(pk.as_bytes());
-            hasher.update(entry.message.as_slice());
-            let hram = Scalar::from_hash(hasher).to_bytes();
+            let hram = crate::signature::ed25519_challenge_scalar_bytes(
+                &sig_bytes,
+                pk.as_bytes(),
+                entry.message.as_slice(),
+            );
 
             // Ensure signature parses to preserve canonical checks before GPU launch.
             if Signature::from_slice(&sig_bytes).is_err() {

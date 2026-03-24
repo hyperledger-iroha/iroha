@@ -48,11 +48,14 @@ __device__ __forceinline__ void fe_copy(fe h, const fe f) {
     }
 }
 
+__device__ void fe_normalize(fe h);
+
 __device__ __forceinline__ void fe_add(fe h, const fe f, const fe g) {
 #pragma unroll
     for (int i = 0; i < 10; ++i) {
         h[i] = f[i] + g[i];
     }
+    fe_normalize(h);
 }
 
 __device__ __forceinline__ void fe_sub(fe h, const fe f, const fe g) {
@@ -60,6 +63,7 @@ __device__ __forceinline__ void fe_sub(fe h, const fe f, const fe g) {
     for (int i = 0; i < 10; ++i) {
         h[i] = f[i] - g[i];
     }
+    fe_normalize(h);
 }
 
 __device__ __forceinline__ void fe_neg(fe h, const fe f) {
@@ -67,6 +71,7 @@ __device__ __forceinline__ void fe_neg(fe h, const fe f) {
     for (int i = 0; i < 10; ++i) {
         h[i] = -f[i];
     }
+    fe_normalize(h);
 }
 
 __device__ __forceinline__ void fe_cmov(fe f, const fe g, int b) {
@@ -76,6 +81,56 @@ __device__ __forceinline__ void fe_cmov(fe f, const fe g, int b) {
         int32_t t = f[i] ^ g[i];
         t &= mask;
         f[i] ^= t;
+    }
+}
+
+__device__ void fe_normalize(fe h) {
+    int64_t t[10];
+#pragma unroll
+    for (int i = 0; i < 10; ++i) {
+        t[i] = h[i];
+    }
+
+    int64_t carry0 = (t[0] + (int64_t)(1 << 25)) >> 26;
+    t[1] += carry0;
+    t[0] -= carry0 << 26;
+    int64_t carry4 = (t[4] + (int64_t)(1 << 25)) >> 26;
+    t[5] += carry4;
+    t[4] -= carry4 << 26;
+    int64_t carry1 = (t[1] + (int64_t)(1 << 24)) >> 25;
+    t[2] += carry1;
+    t[1] -= carry1 << 25;
+    int64_t carry5 = (t[5] + (int64_t)(1 << 24)) >> 25;
+    t[6] += carry5;
+    t[5] -= carry5 << 25;
+    int64_t carry2 = (t[2] + (int64_t)(1 << 25)) >> 26;
+    t[3] += carry2;
+    t[2] -= carry2 << 26;
+    int64_t carry6 = (t[6] + (int64_t)(1 << 25)) >> 26;
+    t[7] += carry6;
+    t[6] -= carry6 << 26;
+    int64_t carry3 = (t[3] + (int64_t)(1 << 24)) >> 25;
+    t[4] += carry3;
+    t[3] -= carry3 << 25;
+    int64_t carry7 = (t[7] + (int64_t)(1 << 24)) >> 25;
+    t[8] += carry7;
+    t[7] -= carry7 << 25;
+    carry4 = (t[4] + (int64_t)(1 << 25)) >> 26;
+    t[5] += carry4;
+    t[4] -= carry4 << 26;
+    int64_t carry8 = (t[8] + (int64_t)(1 << 25)) >> 26;
+    t[9] += carry8;
+    t[8] -= carry8 << 26;
+    int64_t carry9 = (t[9] + (int64_t)(1 << 24)) >> 25;
+    t[0] += carry9 * 19;
+    t[9] -= carry9 << 25;
+    carry0 = (t[0] + (int64_t)(1 << 25)) >> 26;
+    t[1] += carry0;
+    t[0] -= carry0 << 26;
+
+#pragma unroll
+    for (int i = 0; i < 10; ++i) {
+        h[i] = (int32_t)t[i];
     }
 }
 
@@ -196,6 +251,7 @@ __device__ void fe_mul(fe h, const fe f, const fe g) {
     h[7] = (int32_t)h7;
     h[8] = (int32_t)h8;
     h[9] = (int32_t)h9;
+    fe_normalize(h);
 }
 
 __device__ void fe_sq(fe h, const fe f) {
@@ -345,6 +401,7 @@ __device__ void fe_sq(fe h, const fe f) {
     h[7] = (int32_t)h7;
     h[8] = (int32_t)h8;
     h[9] = (int32_t)h9;
+    fe_normalize(h);
 }
 
 __device__ void fe_sq2(fe h, const fe f) {
@@ -505,6 +562,7 @@ __device__ void fe_sq2(fe h, const fe f) {
     h[7] = (int32_t)h7;
     h[8] = (int32_t)h8;
     h[9] = (int32_t)h9;
+    fe_normalize(h);
 }
 
 __device__ void fe_mul121666(fe h, const fe f) {
@@ -551,6 +609,7 @@ __device__ void fe_mul121666(fe h, const fe f) {
     for (int i = 0; i < 10; ++i) {
         h[i] = (int32_t)t[i];
     }
+    fe_normalize(h);
 }
 
 __device__ void fe_pow22523(fe out, const fe z) {

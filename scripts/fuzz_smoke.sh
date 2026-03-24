@@ -16,6 +16,12 @@ if ! command -v cargo-fuzz >/dev/null 2>&1; then
   echo "cargo-fuzz not installed; skipping fuzz smoke (install: cargo install cargo-fuzz)" >&2
   exit 0
 fi
+if ! command -v rustup >/dev/null 2>&1 || ! rustup toolchain list | grep -q '^nightly'; then
+  echo "nightly toolchain not installed; skipping fuzz smoke (install: rustup toolchain install nightly)" >&2
+  exit 0
+fi
+
+fuzz_run=(cargo +nightly fuzz run)
 
 pushd "$FUZZ_DIR" >/dev/null
 
@@ -29,7 +35,7 @@ targets=(
 for t in "${targets[@]}"; do
   echo "[fuzz-smoke] running $t for $RUNS runs"
   # Use UBSAN/ASAN defaults; libFuzzer will stop on crash. Limit to quick run count.
-  cargo fuzz run "$t" -- -runs="$RUNS" -rss_limit_mb=3072 -max_total_time=30 || {
+  "${fuzz_run[@]}" --fuzz-dir "$FUZZ_DIR" "$t" -- -runs="$RUNS" -rss_limit_mb=3072 -max_total_time=30 || {
     echo "[fuzz-smoke] target $t failed" >&2
     exit 1
   }
@@ -48,7 +54,7 @@ if [ -d "$IVM_FUZZ_DIR" ]; then
   )
   for t in "${ivm_targets[@]}"; do
     echo "[fuzz-smoke] running ivm::$t for $RUNS runs"
-    cargo fuzz run "$t" -- -runs="$RUNS" -rss_limit_mb=3072 -max_total_time=30 || {
+    "${fuzz_run[@]}" --fuzz-dir "$IVM_FUZZ_DIR" "$t" -- -runs="$RUNS" -rss_limit_mb=3072 -max_total_time=30 || {
       echo "[fuzz-smoke] ivm target $t failed" >&2
       exit 1
     }

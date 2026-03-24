@@ -637,6 +637,10 @@ fn offline_paths() -> Map {
         Value::Object(offline_revocations_operation()),
     );
     paths.insert(
+        "/v1/offline/revocations/bundle".to_owned(),
+        Value::Object(offline_revocations_bundle_operation()),
+    );
+    paths.insert(
         "/v1/offline/reserve/setup".to_owned(),
         Value::Object(json_post_operation(
             "Offline",
@@ -714,17 +718,18 @@ fn offline_revocations_operation() -> Map {
     );
     get_op.insert(
         "summary".into(),
-        Value::String("Fetch the signed offline revocation bundle.".to_owned()),
+        Value::String("List offline verdict revocations.".to_owned()),
     );
     get_op.insert(
         "description".into(),
         Value::String(
-            "Return the issuer-signed deny-list bundle used by offline wallets.".to_owned(),
+            "Return the human-readable list of currently revoked offline verdict identifiers."
+                .to_owned(),
         ),
     );
     get_op.insert(
         "operationId".into(),
-        Value::String("offlineRevocationsGet".to_owned()),
+        Value::String("offlineRevocationsList".to_owned()),
     );
     get_op.insert(
         "responses".into(),
@@ -1680,8 +1685,12 @@ fn explorer_instructions_query_parameters() -> Vec<Value> {
 fn account_assets_list_query_parameters() -> Vec<Value> {
     let mut params = pagination_query_parameters();
     params.push(string_query_param(
-        "asset_id",
-        "Filter assets by asset identifier.",
+        "asset",
+        "Filter assets by asset definition selector.",
+    ));
+    params.push(string_query_param(
+        "scope",
+        "Filter assets by balance scope (`global` or `dataspace:<id>`).",
     ));
     params
 }
@@ -3752,7 +3761,7 @@ fn account_paths() -> Map {
             json_get_operation(
                 "Accounts",
                 "List account assets.",
-                "List assets held by an account (supports pagination and optional asset_id filtering).",
+                "List assets held by an account (supports pagination plus optional `asset` and `scope` filtering).",
                 "#/components/schemas/JsonValue",
                 params,
             )
@@ -3798,13 +3807,17 @@ fn account_paths() -> Map {
         Value::Object({
             let mut params = vec![string_path_param("uaid", "User account identifier.")];
             params.push(string_query_param(
-                "asset_id",
-                "Filter portfolio positions by asset identifier.",
+                "asset",
+                "Filter portfolio positions by asset definition selector.",
+            ));
+            params.push(string_query_param(
+                "scope",
+                "Filter portfolio positions by balance scope (`global` or `dataspace:<id>`).",
             ));
             json_get_operation(
                 "Accounts",
                 "Fetch account portfolio.",
-                "Fetch the asset portfolio for an account identifier (supports optional asset_id filtering).",
+                "Fetch the asset portfolio for an account identifier (supports optional `asset` and `scope` filtering).",
                 "#/components/schemas/JsonValue",
                 params,
             )

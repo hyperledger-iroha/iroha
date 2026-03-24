@@ -20,9 +20,11 @@ use iroha_data_model::{
     asset::{AssetDefinition, AssetId},
     block::BlockHeader,
     isi::{Mint, Register},
+    metadata::Metadata,
     nexus::UniversalAccountId,
     peer::PeerId,
     prelude::*,
+    sns::{NameControllerV1, NameRecordV1},
 };
 use iroha_test_samples::ALICE_ID;
 use iroha_torii::Torii;
@@ -98,7 +100,7 @@ async fn accounts_portfolio_snapshot_matches_fixture() {
 }
 
 #[tokio::test]
-async fn accounts_portfolio_filters_by_asset_id() {
+async fn accounts_portfolio_filters_by_asset_and_scope() {
     let (app, uaid) = setup_portfolio_app(|state| {
         let (uaid, _accounts) = seed_portfolio_accounts(state);
         uaid
@@ -117,17 +119,22 @@ async fn accounts_portfolio_filters_by_asset_id() {
     assert_eq!(baseline.status(), StatusCode::OK);
     let baseline_body = baseline.into_body().collect().await.unwrap().to_bytes();
     let baseline_value: Value = json::from_slice(&baseline_body).expect("valid portfolio payload");
-    let asset_id = baseline_value["dataspaces"][0]["accounts"][0]["assets"][0]["asset_id"]
+    let asset = baseline_value["dataspaces"][0]["accounts"][0]["assets"][0]["asset"]
         .as_str()
-        .expect("baseline asset id")
+        .expect("baseline asset selector")
+        .to_owned();
+    let scope = baseline_value["dataspaces"][0]["accounts"][0]["assets"][0]["scope"]
+        .as_str()
+        .expect("baseline scope")
         .to_owned();
 
     let resp = app
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/v1/accounts/uaid:{uaid_hex}/portfolio?asset_id={}",
-                    urlencoding::encode(&asset_id)
+                    "/v1/accounts/uaid:{uaid_hex}/portfolio?asset={}&scope={}",
+                    urlencoding::encode(&asset),
+                    urlencoding::encode(&scope)
                 ))
                 .body(axum::body::Body::empty())
                 .unwrap(),
@@ -143,7 +150,8 @@ async fn accounts_portfolio_filters_by_asset_id() {
         .as_array()
         .expect("assets array");
     assert_eq!(assets.len(), 1);
-    assert_eq!(assets[0]["asset_id"], Value::from(asset_id));
+    assert_eq!(assets[0]["asset"], Value::from(asset));
+    assert_eq!(assets[0]["scope"], Value::from(scope));
 }
 
 fn setup_portfolio_app<SeedFn>(seed_fn: SeedFn) -> (Router, UniversalAccountId)
@@ -247,6 +255,27 @@ fn seed_portfolio_accounts(state: &Arc<State>) -> (UniversalAccountId, Vec<Accou
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut tx = block.transaction();
+    let selector =
+        iroha_core::sns::selector_for_domain(&domain_id).expect("domain selector for fixtures");
+    let address = iroha_data_model::account::AccountAddress::from_account_id(&ALICE_ID)
+        .expect("fixture authority address");
+    let record = NameRecordV1::new(
+        selector.clone(),
+        ALICE_ID.clone(),
+        vec![NameControllerV1::account(&address)],
+        0,
+        0,
+        4_000_000_000_000,
+        4_100_000_000_000,
+        4_200_000_000_000,
+        Metadata::default(),
+    );
+    tx.world_mut_for_testing()
+        .smart_contract_state_mut_for_testing()
+        .insert(
+            iroha_core::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&record),
+        );
     for instr in register {
         instr
             .execute(&ALICE_ID, &mut tx)
@@ -280,6 +309,27 @@ fn seed_fixture_portfolio_accounts(state: &Arc<State>) -> UniversalAccountId {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut tx = block.transaction();
+    let selector =
+        iroha_core::sns::selector_for_domain(&domain_id).expect("domain selector for fixtures");
+    let address = iroha_data_model::account::AccountAddress::from_account_id(&ALICE_ID)
+        .expect("fixture authority address");
+    let record = NameRecordV1::new(
+        selector.clone(),
+        ALICE_ID.clone(),
+        vec![NameControllerV1::account(&address)],
+        0,
+        0,
+        4_000_000_000_000,
+        4_100_000_000_000,
+        4_200_000_000_000,
+        Metadata::default(),
+    );
+    tx.world_mut_for_testing()
+        .smart_contract_state_mut_for_testing()
+        .insert(
+            iroha_core::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&record),
+        );
     for instr in register {
         instr
             .execute(&ALICE_ID, &mut tx)

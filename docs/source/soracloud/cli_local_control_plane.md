@@ -269,7 +269,13 @@ Soracloud v1 is an authoritative, IVM-only runtime.
     of failing immediately. Unassigned validators fail closed instead of acting
     as generic intermediary HF proxy hops, and the original ingress node still
     validates the returned runtime receipt against authoritative placement
-    state.
+    state. If that assigned-replica onward hop to the primary fails after the
+    request is actually dispatched, the receiver-side runtime reports the
+    remote primary health fault and hints authoritative
+    `ReconcileSoracloudModelHosts`; if the local assigned replica cannot even
+    attempt that onward hop because its own proxy transport/runtime is missing,
+    the failure is now treated as a local assigned-host fault instead of
+    blaming the primary.
   - reconcile now also emits `AdvertContradiction` automatically when the
     local validator's configured runtime peer id disagrees with the
     authoritative `model-host-advertise` peer id for that validator.

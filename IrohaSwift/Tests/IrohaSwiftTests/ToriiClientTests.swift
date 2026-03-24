@@ -500,6 +500,7 @@ fileprivate func tcMakeStubProofSummary() -> ToriiDaProofSummary {
 
 final class ToriiClientTests: XCTestCase {
     private let encodedRoseAssetID = "norito:4e52543000000001"
+    private let roseAssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
 
     override func tearDown() {
         StubURLProtocol.handler = nil
@@ -587,41 +588,42 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertTrue(request.url!.absoluteString.contains("/v1/accounts/6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn/assets"))
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
-            [{"asset_id":"norito:4e52543000000001","quantity":"10"}]
+            [{"asset":"66owaQmAQMuHxPzxUN3bqZ6FJfDa","account_id":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","scope":"global","quantity":"10"}]
             """.data(using: .utf8)!
             return (response, body)
         }
 
-        let balances = try await makeClient().getAssets(accountId: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+        let balances = try await makeClient().getAssets(
+            accountId: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+            asset: nil
+        )
         XCTAssertEqual(balances.count, 1)
-        XCTAssertEqual(balances.first?.asset_id, encodedRoseAssetID)
+        XCTAssertEqual(balances.first?.asset, roseAssetDefinitionId)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testGetAssetsAsyncDerivesReadableFieldsFromEncodedAssetId() async throws {
+    func testGetAssetsAsyncDecodesAssetFieldsDirectly() async throws {
         StubURLProtocol.handler = { request in
             XCTAssertTrue(request.url!.absoluteString.contains("/v1/accounts/6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn/assets"))
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
-            [{"asset_id":"norito:4e52543000000001","quantity":"10"}]
+            [{"asset":"66owaQmAQMuHxPzxUN3bqZ6FJfDa","account_id":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","scope":"global","quantity":"10"}]
             """.data(using: .utf8)!
             return (response, body)
         }
 
-        let balances = try await makeClient().getAssets(accountId: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+        let balances = try await makeClient().getAssets(
+            accountId: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+            asset: nil
+        )
         XCTAssertEqual(balances.count, 1)
         guard let item = balances.first else {
             XCTFail("missing asset balance")
             return
         }
-        if NoritoNativeBridge.shared.isAvailable {
-            XCTAssertTrue((item.asset_definition_id ?? "").count > 10)
-            XCTAssertFalse((item.asset_definition_id ?? "").contains(":"))
-            XCTAssertFalse((item.account_id ?? "").isEmpty)
-        } else {
-            XCTAssertNil(item.asset_definition_id)
-            XCTAssertNil(item.account_id)
-        }
+        XCTAssertEqual(item.asset, roseAssetDefinitionId)
+        XCTAssertEqual(item.accountId, "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+        XCTAssertEqual(item.scope, "global")
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -631,9 +633,9 @@ final class ToriiClientTests: XCTestCase {
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
             [{
-              "asset_id":"norito:4e52543000000001",
-              "asset_definition_id":"66owaQmAQMuHxPzxUN3bqZ6FJfDa",
+              "asset":"66owaQmAQMuHxPzxUN3bqZ6FJfDa",
               "account_id":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+              "scope":"global",
               "asset_name":"USD",
               "asset_alias":"usd#issuer.main",
               "quantity":"10"
@@ -642,12 +644,16 @@ final class ToriiClientTests: XCTestCase {
             return (response, body)
         }
 
-        let balances = try await makeClient().getAssets(accountId: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+        let balances = try await makeClient().getAssets(
+            accountId: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+            asset: nil
+        )
         XCTAssertEqual(balances.count, 1)
-        XCTAssertEqual(balances.first?.asset_definition_id, "66owaQmAQMuHxPzxUN3bqZ6FJfDa")
-        XCTAssertEqual(balances.first?.account_id, "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
-        XCTAssertEqual(balances.first?.asset_name, "USD")
-        XCTAssertEqual(balances.first?.asset_alias, "usd#issuer.main")
+        XCTAssertEqual(balances.first?.asset, roseAssetDefinitionId)
+        XCTAssertEqual(balances.first?.accountId, "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+        XCTAssertEqual(balances.first?.scope, "global")
+        XCTAssertEqual(balances.first?.assetName, "USD")
+        XCTAssertEqual(balances.first?.assetAlias, "usd#issuer.main")
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -663,7 +669,10 @@ final class ToriiClientTests: XCTestCase {
             return (response, body)
         }
 
-        let balances = try await client.getAssets(accountId: "6cmzPVPX4Vnjpp7MFrUdgoZ9scoVXwFPcp4U6r6yELFetMDx2taw8et")
+        let balances = try await client.getAssets(
+            accountId: "6cmzPVPX4Vnjpp7MFrUdgoZ9scoVXwFPcp4U6r6yELFetMDx2taw8et",
+            asset: nil
+        )
         XCTAssertEqual(balances.count, 0)
     }
 
@@ -732,7 +741,7 @@ final class ToriiClientTests: XCTestCase {
             let body = """
             {
               "alias":"alice",
-              "account_id":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+              "accountId":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
               "index":7,
               "source":"world_state"
             }
@@ -1127,7 +1136,7 @@ final class ToriiClientTests: XCTestCase {
               "opaque_id":"\(opaqueId)",
               "receipt_hash":"\(receiptHash)",
               "uaid":"\(uaid)",
-              "account_id":"\(accountId)",
+              "accountId":"\(accountId)",
               "resolved_at_ms":42,
               "expires_at_ms":142,
               "backend":"bfv-affine-sha3-256-v1",
@@ -1138,7 +1147,7 @@ final class ToriiClientTests: XCTestCase {
                 "opaque_id":"\(opaqueId)",
                 "receipt_hash":"\(receiptHash)",
                 "uaid":"\(uaid)",
-                "account_id":"\(accountId)",
+                "accountId":"\(accountId)",
                 "resolved_at_ms":42,
                 "expires_at_ms":142
               }
@@ -1219,7 +1228,7 @@ final class ToriiClientTests: XCTestCase {
               "opaque_id":"\(opaqueId)",
               "receipt_hash":"\(receiptHash)",
               "uaid":"\(uaid)",
-              "account_id":"\(accountId)",
+              "accountId":"\(accountId)",
               "resolved_at_ms":42,
               "expires_at_ms":142,
               "backend":"bfv-programmed-sha3-256-v1",
@@ -1252,7 +1261,7 @@ final class ToriiClientTests: XCTestCase {
                 "uaid":[
                   "hash:\(String(repeating: "99", count: 31).uppercased())9B#9ABC"
                 ],
-                "account_id":"\(accountId)"
+                "accountId":"\(accountId)"
               }
             }
             """.data(using: .utf8)!
@@ -1306,7 +1315,7 @@ final class ToriiClientTests: XCTestCase {
               "opaque_id":"\(opaqueId)",
               "receipt_hash":"\(receiptHash)",
               "uaid":"\(uaid)",
-              "account_id":"\(accountId)",
+              "accountId":"\(accountId)",
               "resolved_at_ms":7,
               "backend":"bfv-affine-sha3-256-v1",
               "signature":"\(signed.signatureHex)",
@@ -1316,7 +1325,7 @@ final class ToriiClientTests: XCTestCase {
                 "opaque_id":"\(opaqueId)",
                 "receipt_hash":"\(receiptHash)",
                 "uaid":"\(uaid)",
-                "account_id":"\(accountId)",
+                "accountId":"\(accountId)",
                 "resolved_at_ms":7
               }
             }
@@ -1360,7 +1369,7 @@ final class ToriiClientTests: XCTestCase {
               "opaque_id":"\(opaqueId)",
               "receipt_hash":"\(receiptHash)",
               "uaid":"\(uaid)",
-              "account_id":"\(accountId)",
+              "accountId":"\(accountId)",
               "resolved_at_ms":7,
               "expires_at_ms":77,
               "backend":"bfv-programmed-sha3-256-v1",
@@ -1393,7 +1402,7 @@ final class ToriiClientTests: XCTestCase {
                 "uaid":[
                   "hash:\(String(repeating: "cc", count: 31).uppercased())CD#2CDE"
                 ],
-                "account_id":"\(accountId)"
+                "accountId":"\(accountId)"
               }
             }
             """.data(using: .utf8)!
@@ -1439,7 +1448,7 @@ final class ToriiClientTests: XCTestCase {
               "opaque_id":"opaque:\(String(repeating: "44", count: 32))",
               "receipt_hash":"\(String(repeating: "55", count: 32))",
               "uaid":"uaid:\(String(repeating: "66", count: 31))67",
-              "account_id":"\(accountId)",
+              "accountId":"\(accountId)",
               "verified_at_ms":7
             }
             """.data(using: .utf8)!
@@ -1522,122 +1531,6 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(request.policyId, "string#retail")
         XCTAssertNil(request.input)
         XCTAssertEqual(request.encryptedInputHex, expected)
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testBuildAssetIdLiteralResolvingAliases() async throws {
-        let keypair = try Keypair(privateKeyBytes: Data(repeating: 3, count: 32))
-        let accountAddress = try AccountAddress.fromAccount(publicKey: keypair.publicKey)
-        let accountId = try accountAddress.toI105(networkPrefix: 0x02F1)
-        let client = makeClient()
-        let encodeCallsQueue = DispatchQueue(label: "ToriiClientTests.assetIdBuilder.calls.alias")
-        var encodeCalls: [(String, String)] = []
-        client.assetIdLiteralBuilder = { assetDefinitionId, account in
-            encodeCallsQueue.sync {
-                encodeCalls.append((assetDefinitionId, account))
-            }
-            return "norito:aa"
-        }
-        StubURLProtocol.handler = { request in
-            switch request.url?.path {
-            case "/v1/aliases/resolve":
-                let payload = self.bodyJSON(from: request)
-                XCTAssertEqual(payload["alias"] as? String, "alice")
-                let response = HTTPURLResponse(url: request.url!,
-                                               statusCode: 200,
-                                               httpVersion: nil,
-                                               headerFields: ["Content-Type": "application/json"])!
-                let body = """
-                {"alias":"alice","account_id":"\(accountId)","index":1}
-                """.data(using: .utf8)!
-                return (response, body)
-            case "/v1/assets/aliases/resolve":
-                let payload = self.bodyJSON(from: request)
-                XCTAssertEqual(payload["alias"] as? String, "usd#issuer.main")
-                let response = HTTPURLResponse(url: request.url!,
-                                               statusCode: 200,
-                                               httpVersion: nil,
-                                               headerFields: ["Content-Type": "application/json"])!
-                let body = """
-                {"alias":"usd#issuer.main","asset_definition_id":"66owaQmAQMuHxPzxUN3bqZ6FJfDa","asset_name":"USD"}
-                """.data(using: .utf8)!
-                return (response, body)
-            default:
-                XCTFail("unexpected request: \(request.url?.path ?? "")")
-                let response = HTTPURLResponse(url: request.url!,
-                                               statusCode: 404,
-                                               httpVersion: nil,
-                                               headerFields: nil)!
-                return (response, Data())
-            }
-        }
-
-        let literal = try await client.buildAssetIdLiteralResolvingAliases(
-            assetDefinitionIdOrAlias: "usd#issuer.main",
-            accountIdOrAlias: "alice"
-        )
-        XCTAssertEqual(literal, "norito:aa")
-        let observedCalls = encodeCallsQueue.sync { encodeCalls }
-        XCTAssertEqual(observedCalls.count, 1)
-        XCTAssertEqual(observedCalls.first?.0, "66owaQmAQMuHxPzxUN3bqZ6FJfDa")
-        XCTAssertEqual(observedCalls.first?.1, accountId)
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testAssetIdAliasFallbackForInvalidNonAliasDefinition() async throws {
-        let keypair = try Keypair(privateKeyBytes: Data(repeating: 4, count: 32))
-        let accountAddress = try AccountAddress.fromAccount(publicKey: keypair.publicKey)
-        let accountId = try accountAddress.toI105(networkPrefix: 0x02F1)
-        let client = makeClient()
-        let encodeCallsQueue = DispatchQueue(label: "ToriiClientTests.assetIdBuilder.calls.fallback")
-        var encodeCalls: [(String, String)] = []
-        client.assetIdLiteralBuilder = { assetDefinitionId, account in
-            encodeCallsQueue.sync {
-                encodeCalls.append((assetDefinitionId, account))
-            }
-            if assetDefinitionId == "symbol-without-domain" {
-                throw OfflineNoritoError.invalidAssetId(assetDefinitionId)
-            }
-            return "norito:bb"
-        }
-        StubURLProtocol.handler = { request in
-            switch request.url?.path {
-            case "/v1/assets/aliases/resolve":
-                let payload = self.bodyJSON(from: request)
-                XCTAssertEqual(payload["alias"] as? String, "symbol-without-domain")
-                let response = HTTPURLResponse(url: request.url!,
-                                               statusCode: 200,
-                                               httpVersion: nil,
-                                               headerFields: ["Content-Type": "application/json"])!
-                let body = """
-                {"alias":"symbol-without-domain","asset_definition_id":"66owaQmAQMuHxPzxUN3bqZ6FJfDa","asset_name":"USD"}
-                """.data(using: .utf8)!
-                return (response, body)
-            case "/v1/aliases/resolve":
-                XCTFail("account alias endpoint should not be called for canonical account ids")
-                let response = HTTPURLResponse(url: request.url!,
-                                               statusCode: 404,
-                                               httpVersion: nil,
-                                               headerFields: ["Content-Type": "application/json"])!
-                return (response, Data())
-            default:
-                XCTFail("unexpected request: \(request.url?.path ?? "")")
-                let response = HTTPURLResponse(url: request.url!,
-                                               statusCode: 404,
-                                               httpVersion: nil,
-                                               headerFields: nil)!
-                return (response, Data())
-            }
-        }
-
-        let literal = try await client.buildAssetIdLiteralResolvingAliases(
-            assetDefinitionIdOrAlias: "symbol-without-domain",
-            accountIdOrAlias: accountId
-        )
-        XCTAssertEqual(literal, "norito:bb")
-        let observedCalls = encodeCallsQueue.sync { encodeCalls }
-        XCTAssertEqual(observedCalls.map(\.0), ["symbol-without-domain", "66owaQmAQMuHxPzxUN3bqZ6FJfDa"])
-        XCTAssertEqual(observedCalls.map(\.1), [accountId, accountId])
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -2241,7 +2134,7 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertTrue(request.url!.absoluteString.contains("/v1/accounts/6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn/assets"))
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
-            [{"asset_id":"norito:4e52543000000001","quantity":"10"}]
+            [{"asset":"66owaQmAQMuHxPzxUN3bqZ6FJfDa","account_id":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","scope":"global","quantity":"10"}]
             """.data(using: .utf8)!
             return (response, body)
         }
@@ -2251,9 +2144,12 @@ final class ToriiClientTests: XCTestCase {
         let session = URLSession(configuration: configuration)
         let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!, session: session)
 
-        let balances = try await sdk.getAssets(accountId: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+        let balances = try await sdk.getAssets(
+            accountId: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+            asset: nil
+        )
         XCTAssertEqual(balances.count, 1)
-        XCTAssertEqual(balances.first?.asset_id, encodedRoseAssetID)
+        XCTAssertEqual(balances.first?.asset, roseAssetDefinitionId)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -2263,12 +2159,15 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertTrue(request.url!.absoluteString.contains("/v1/accounts/6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn/assets"))
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
-            [{"asset_id":"norito:4e52543000000001","quantity":"10"}]
+            [{"asset":"66owaQmAQMuHxPzxUN3bqZ6FJfDa","account_id":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","scope":"global","quantity":"10"}]
             """.data(using: .utf8)!
             return (response, body)
         }
 
-        let balances = try await makeClient().getAssets(accountId: "  6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn  ")
+        let balances = try await makeClient().getAssets(
+            accountId: "  6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn  ",
+            asset: nil
+        )
         XCTAssertEqual(balances.count, 1)
     }
 
@@ -2283,21 +2182,21 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testGetAssetsEncodesAssetIdFilter() async throws {
-        let assetId = encodedRoseAssetID
+    func testGetAssetsEncodesAssetSelectorFilter() async throws {
+        let assetId = roseAssetDefinitionId
         StubURLProtocol.handler = { request in
             XCTAssertTrue(request.url!.absoluteString.contains("/v1/accounts/6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn/assets"))
             let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            let assetFilter = components?.queryItems?.first(where: { $0.name == "asset_id" })?.value
+            let assetFilter = components?.queryItems?.first(where: { $0.name == "asset" })?.value
             XCTAssertEqual(assetFilter, assetId)
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
-            [{"asset_id":"\(assetId)","quantity":"10"}]
+            [{"asset":"\(assetId)","account_id":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","scope":"global","quantity":"10"}]
             """.data(using: .utf8)!
             return (response, body)
         }
 
-        let balances = try await makeClient().getAssets(accountId: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn", assetId: assetId)
+        let balances = try await makeClient().getAssets(accountId: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn", asset: assetId)
         XCTAssertEqual(balances.count, 1)
     }
 
@@ -2319,11 +2218,11 @@ final class ToriiClientTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testGetTransactionsEncodesAssetIdFilter() async throws {
-        let assetId = encodedRoseAssetID
+        let assetId = self.encodedRoseAssetID
         StubURLProtocol.handler = { request in
             XCTAssertTrue(request.url!.absoluteString.contains("/v1/accounts/6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn/transactions"))
             let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            let assetFilter = components?.queryItems?.first(where: { $0.name == "asset_id" })?.value
+            let assetFilter = components?.queryItems?.first(where: { $0.name == "asset" })?.value
             XCTAssertEqual(assetFilter, assetId)
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
             let body = """
@@ -2332,7 +2231,7 @@ final class ToriiClientTests: XCTestCase {
             return (response, body)
         }
 
-        let transactions = try await makeClient().getTransactions(accountId: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn", assetId: assetId)
+        let transactions = try await makeClient().getTransactions(accountId: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn", assetDefinitionId: assetId)
         XCTAssertEqual(transactions.total, 1)
     }
 
@@ -2409,7 +2308,7 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(query["transaction_status"], "Committed")
             XCTAssertEqual(query["block"], "5")
             XCTAssertEqual(query["kind"], "Transfer")
-            XCTAssertEqual(query["asset_id"], "norito:4e52543000000001")
+            XCTAssertEqual(query["asset"], "norito:4e52543000000001")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -2510,7 +2409,6 @@ final class ToriiClientTests: XCTestCase {
         }
         switch details {
         case .asset(let asset):
-            XCTAssertEqual(asset.sourceAssetId, "norito:4e52543000000011")
             XCTAssertEqual(asset.destinationAccountId, "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9")
             XCTAssertEqual(asset.amount, "10")
             XCTAssertNil(asset.senderAccountId)
@@ -2519,9 +2417,7 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(details.role(for: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"), .receiver)
             XCTAssertTrue(details.involvesAccount("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"))
             XCTAssertTrue(details.involvesAssetDefinition("norito:4e52543000000011"))
-            XCTAssertTrue(details.involvesAssetId("norito:4e52543000000011"))
             XCTAssertFalse(details.involvesAssetDefinition("norito:4e52543000000012"))
-            XCTAssertFalse(details.involvesAssetId("norito:4e52543000000012"))
         case .assetBatch:
             XCTFail("Expected asset transfer details.")
         }
@@ -2589,9 +2485,6 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertTrue(details.involvesAssetDefinition("norito:4e52543000000011"))
             XCTAssertTrue(details.involvesAssetDefinition("norito:4e52543000000012"))
             XCTAssertFalse(details.involvesAssetDefinition("norito:4e52543000000013"))
-            XCTAssertTrue(details.involvesAssetId("norito:4e52543000000011"))
-            XCTAssertTrue(details.involvesAssetId("norito:4e52543000000012"))
-            XCTAssertFalse(details.involvesAssetId("norito:4e52543000000013"))
         }
     }
 
@@ -2664,8 +2557,6 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(page.transferRecords(matchingAccount: "6cmzPVPX8kKbxWFadZoh6wnVFcy1Po6PtHt5KJ8i9j6ovCJWDM7rWN7").count, 1)
         XCTAssertEqual(page.transferRecords(assetDefinitionId: "norito:4e52543000000012").count, 1)
         XCTAssertEqual(page.transferRecords(assetDefinitionId: "norito:4e52543000000011").count, 1)
-        XCTAssertEqual(page.transferRecords(assetId: "norito:4e52543000000011").count, 1)
-        XCTAssertEqual(page.transferRecords(assetId: "norito:4e52543000000012").count, 1)
         XCTAssertEqual(page.transferRecords(matchingAccount: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
                                             assetDefinitionId: "norito:4e52543000000012").count, 0)
     }
@@ -2716,18 +2607,12 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertFalse(summary.isOutgoing)
         XCTAssertFalse(summary.isSelfTransfer)
         XCTAssertEqual(summary.transferIndex, 0)
-        XCTAssertEqual(summary.sourceAssetId, "norito:4e52543000000011")
-        XCTAssertEqual(summary.destinationAssetId, "norito:4e52543000000011")
         XCTAssertEqual(summary.id, "hash1|0|0")
         XCTAssertEqual(summary.direction(relativeTo: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"), .incoming)
         XCTAssertEqual(summary.counterpartyAccountId(relativeTo: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"), "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
         XCTAssertTrue(summary.isIncoming(relativeTo: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"))
         XCTAssertFalse(summary.isOutgoing(relativeTo: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"))
         XCTAssertFalse(summary.isSelfTransfer(relativeTo: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"))
-        XCTAssertEqual(summary.assetId(relativeTo: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"), "norito:4e52543000000011")
-        XCTAssertNil(summary.assetId(relativeTo: "6cmzPVPX7iXwUZwgBeaKv96unyGNU1Z5xSmzKApk6TUXv7bTs4t4wZm"))
-        XCTAssertEqual(summary.counterpartyAssetId(relativeTo: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"), "norito:4e52543000000011")
-        XCTAssertNil(summary.counterpartyAssetId(relativeTo: "6cmzPVPX7iXwUZwgBeaKv96unyGNU1Z5xSmzKApk6TUXv7bTs4t4wZm"))
         XCTAssertEqual(summary.signedAmount(relativeTo: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"), "+10")
         XCTAssertEqual(summary.signedAmount(relativeTo: "6cmzPVPX7iXwUZwgBeaKv96unyGNU1Z5xSmzKApk6TUXv7bTs4t4wZm"), "10")
     }
@@ -2779,9 +2664,6 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertTrue(summary.isSelfTransfer(relativeTo: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"))
         XCTAssertFalse(summary.isIncoming(relativeTo: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"))
         XCTAssertFalse(summary.isOutgoing(relativeTo: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"))
-        XCTAssertEqual(summary.assetId(relativeTo: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"), "norito:4e52543000000011")
-        XCTAssertEqual(summary.counterpartyAssetId(relativeTo: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"), "norito:4e52543000000011")
-        XCTAssertNil(summary.assetId(relativeTo: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"))
         XCTAssertEqual(summary.signedAmount(relativeTo: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"), "10")
     }
 
@@ -3154,7 +3036,7 @@ final class ToriiClientTests: XCTestCase {
             let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
             let queryItems = components?.queryItems ?? []
             let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
-            XCTAssertEqual(query["asset_id"], assetIdFilter)
+            XCTAssertEqual(query["asset"], assetIdFilter)
             XCTAssertEqual(query["kind"], "Transfer")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
@@ -3226,7 +3108,7 @@ final class ToriiClientTests: XCTestCase {
         }
 
         let transfers = try await makeClient().getExplorerTransfers(matchingAccount: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
-                                                                    assetId: assetIdFilter)
+                                                                    assetDefinitionId: assetIdFilter)
         XCTAssertEqual(transfers.count, 1)
         XCTAssertEqual(transfers.first?.instruction.transactionHash, "hash1")
     }
@@ -3243,7 +3125,7 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(query["authority"], "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
             XCTAssertEqual(query["block"], "5")
             XCTAssertEqual(query["status"], "Committed")
-            XCTAssertEqual(query["asset_id"], "norito:4e52543000000001")
+            XCTAssertEqual(query["asset"], "norito:4e52543000000001")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -3505,7 +3387,7 @@ final class ToriiClientTests: XCTestCase {
             let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
             XCTAssertEqual(query["transaction_hash"], "deadbeef")
             XCTAssertEqual(query["kind"], "Transfer")
-            XCTAssertEqual(query["asset_id"], assetIdFilter)
+            XCTAssertEqual(query["asset"], assetIdFilter)
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -3521,7 +3403,7 @@ final class ToriiClientTests: XCTestCase {
         }
 
         let records = try await makeClient().getExplorerTransactionTransfers(hashHex: "deadbeef",
-                                                                             assetId: assetIdFilter)
+                                                                             assetDefinitionId: assetIdFilter)
         XCTAssertEqual(records.count, 2)
         XCTAssertEqual(records.first?.instruction.index, 0)
         XCTAssertEqual(records.last?.instruction.index, 1)
@@ -3648,7 +3530,7 @@ final class ToriiClientTests: XCTestCase {
             let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
             XCTAssertEqual(query["transaction_hash"], "deadbeef")
             XCTAssertEqual(query["kind"], "Transfer")
-            XCTAssertEqual(query["asset_id"], "norito:4e52543000000011")
+            XCTAssertEqual(query["asset"], "norito:4e52543000000011")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -3657,7 +3539,7 @@ final class ToriiClientTests: XCTestCase {
         }
 
         let summaries = try await makeClient().getExplorerTransactionTransferSummaries(hashHex: "deadbeef",
-                                                                                        assetId: "norito:4e52543000000011")
+                                                                                        assetDefinitionId: "norito:4e52543000000011")
         XCTAssertEqual(summaries.count, 1)
         XCTAssertEqual(summaries.first?.assetDefinitionId, "norito:4e52543000000011")
     }
@@ -3720,7 +3602,7 @@ final class ToriiClientTests: XCTestCase {
             let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
             let queryItems = components?.queryItems ?? []
             let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
-            XCTAssertEqual(query["asset_id"], assetIdFilter)
+            XCTAssertEqual(query["asset"], assetIdFilter)
             XCTAssertEqual(query["kind"], "Transfer")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
@@ -3762,7 +3644,7 @@ final class ToriiClientTests: XCTestCase {
         }
 
         let summaries = try await makeClient().getExplorerTransferSummaries(matchingAccount: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
-                                                                            assetId: assetIdFilter)
+                                                                            assetDefinitionId: assetIdFilter)
         XCTAssertEqual(summaries.count, 1)
         XCTAssertEqual(summaries.first?.direction, .incoming)
     }
@@ -3808,7 +3690,7 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(query["kind"], "Transfer")
             XCTAssertEqual(query["page"], "3")
             XCTAssertEqual(query["per_page"], "20")
-            XCTAssertEqual(query["asset_id"], "norito:4e52543000000011")
+            XCTAssertEqual(query["asset"], "norito:4e52543000000011")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -3825,7 +3707,7 @@ final class ToriiClientTests: XCTestCase {
         let summaries = try await makeClient().getAccountTransferHistory(accountId: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
                                                                           page: 3,
                                                                           perPage: 20,
-                                                                          assetId: "norito:4e52543000000011")
+                                                                          assetDefinitionId: "norito:4e52543000000011")
         XCTAssertEqual(summaries.count, 0)
     }
 
@@ -4388,7 +4270,7 @@ final class ToriiClientTests: XCTestCase {
                 {
                   "account_id":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
                   "label":null,
-                  "assets":[{"asset_id":"norito:4e52543000000013","asset_definition_id":"cash#global","quantity":"500"}]
+                  "assets":[{"asset":"cash#global","scope":"global","quantity":"500"}]
                 }
               ]
             }
@@ -4415,7 +4297,7 @@ final class ToriiClientTests: XCTestCase {
     @available(iOS 15.0, macOS 12.0, *)
     func testGetUaidPortfolioIncludesAssetIdQuery() async throws {
         let uaidHex = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543211"
-        let assetId = "norito:4e52543000000013"
+        let assetId = "cash#global"
         let payload = """
         {
           "uaid":"uaid:\(uaidHex)",
@@ -4429,7 +4311,7 @@ final class ToriiClientTests: XCTestCase {
             let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
             let queryItems = components?.queryItems ?? []
             let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
-            XCTAssertEqual(query["asset_id"], assetId)
+            XCTAssertEqual(query["asset"], assetId)
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -4438,7 +4320,7 @@ final class ToriiClientTests: XCTestCase {
         }
 
         _ = try await makeClient().getUaidPortfolio(uaid: "uaid:\(uaidHex)",
-                                                    query: ToriiUaidPortfolioQuery(assetId: assetId))
+                                                    query: ToriiUaidPortfolioQuery(asset: assetId))
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -4847,7 +4729,7 @@ final class ToriiClientTests: XCTestCase {
     func testGetConfidentialAssetPolicyAsync() async throws {
         let payload = """
         {
-          "asset_id":"norito:4e52543000000001",
+          "asset":"norito:4e52543000000001",
           "block_height":1024,
           "current_mode":"Convertible",
           "effective_mode":"Convertible",
@@ -4895,7 +4777,7 @@ final class ToriiClientTests: XCTestCase {
         let expectation = expectation(description: "conf-policy")
         let payload = """
         {
-          "asset_id":"norito:4e52543000000001",
+          "asset":"norito:4e52543000000001",
           "block_height":42,
           "current_mode":"TransparentOnly",
           "effective_mode":"TransparentOnly",
@@ -5882,7 +5764,7 @@ data: {"authority":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","cr
 
 data: {"authority":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","created_at":"2025-01-01T00:00:00Z","kind":"Transfer","box":{"scale":"0x00","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"norito:4e52543000000012","object":"6","destination":"6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"}}}},"transaction_hash":"hash1","transaction_status":"Committed","block":10,"index":2}
 
-data: {"authority":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","created_at":"2025-01-01T00:00:01Z","kind":"Mint","box":{"scale":"0x01","json":{"kind":"Mint","payload":{"variant":"Asset","value":{"asset_id":"norito:4e52543000000001","quantity":"1"}}}},"transaction_hash":"hash2","transaction_status":"Committed","block":10,"index":1}
+data: {"authority":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","created_at":"2025-01-01T00:00:01Z","kind":"Mint","box":{"scale":"0x01","json":{"kind":"Mint","payload":{"variant":"Asset","value":{"asset":"norito:4e52543000000001","quantity":"1"}}}},"transaction_hash":"hash2","transaction_status":"Committed","block":10,"index":1}
 
 """
             .data(using: .utf8)!
@@ -5899,7 +5781,7 @@ data: {"authority":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","cr
         }
 
         let stream = makeClient().streamExplorerTransfers(matchingAccount: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
-                                                          assetId: "norito:4e52543000000011")
+                                                          assetDefinitionId: "norito:4e52543000000011")
         var iterator = stream.makeAsyncIterator()
 
         let first = try await iterator.next()
@@ -5940,7 +5822,7 @@ data: {"authority":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","cr
         }
 
         let stream = makeClient().streamExplorerTransferSummaries(matchingAccount: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
-                                                                  assetId: "norito:4e52543000000011")
+                                                                  assetDefinitionId: "norito:4e52543000000011")
         var iterator = stream.makeAsyncIterator()
 
         let summary = try await iterator.next()
@@ -6039,7 +5921,7 @@ data: {"authority":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","cr
                 XCTAssertEqual(query["page"], "1")
                 XCTAssertEqual(query["per_page"], "1")
                 XCTAssertEqual(query["kind"], "Transfer")
-                XCTAssertEqual(query["asset_id"], "norito:4e52543000000011")
+                XCTAssertEqual(query["asset"], "norito:4e52543000000011")
                 let response = HTTPURLResponse(url: url,
                                                statusCode: 200,
                                                httpVersion: nil,
@@ -6059,7 +5941,7 @@ data: {"authority":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","cr
 
         let stream = makeClient().streamAccountTransferHistory(accountId: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
                                                                perPage: 1,
-                                                               assetId: "norito:4e52543000000011",
+                                                               assetDefinitionId: "norito:4e52543000000011",
                                                                lastEventId: "5")
         var iterator = stream.makeAsyncIterator()
 
@@ -6159,8 +6041,8 @@ data: {"authority":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","cr
     func testAssetsPublisherDeliversBalances() throws {
         let payload = """
 [
-  {"asset_id":"norito:4e52543000000001","quantity":"10"},
-  {"asset_id":"norito:4e52543000000003","quantity":"20"}
+  {"asset":"norito:4e52543000000001","quantity":"10"},
+  {"asset":"norito:4e52543000000003","quantity":"20"}
 ]
 """
             .data(using: .utf8)!
@@ -6196,9 +6078,9 @@ data: {"authority":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","cr
 
         waitForExpectations(timeout: 2.0)
         XCTAssertEqual(balances.count, 2)
-        XCTAssertEqual(balances.first?.asset_id, "norito:4e52543000000001")
+        XCTAssertEqual(balances.first?.asset, "norito:4e52543000000001")
         XCTAssertEqual(balances.first?.quantity, "10")
-        XCTAssertEqual(balances.last?.asset_id, "norito:4e52543000000003")
+        XCTAssertEqual(balances.last?.asset, "norito:4e52543000000003")
         XCTAssertEqual(balances.last?.quantity, "20")
     }
 
@@ -6357,7 +6239,7 @@ data: {"authority":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","cr
 
 data: {"authority":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","created_at":"2025-01-01T00:00:00Z","kind":"Transfer","box":{"scale":"0x00","json":{"kind":"Transfer","payload":{"variant":"Asset","value":{"source":"norito:4e52543000000012","object":"6","destination":"6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"}}}},"transaction_hash":"hash1","transaction_status":"Committed","block":10,"index":1}
 
-data: {"authority":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","created_at":"2025-01-01T00:00:01Z","kind":"Mint","box":{"scale":"0x01","json":{"kind":"Mint","payload":{"variant":"Asset","value":{"asset_id":"norito:4e52543000000001","quantity":"1"}}}},"transaction_hash":"hash2","transaction_status":"Committed","block":10,"index":1}
+data: {"authority":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","created_at":"2025-01-01T00:00:01Z","kind":"Mint","box":{"scale":"0x01","json":{"kind":"Mint","payload":{"variant":"Asset","value":{"asset":"norito:4e52543000000001","quantity":"1"}}}},"transaction_hash":"hash2","transaction_status":"Committed","block":10,"index":1}
 
 """
             .data(using: .utf8)!
@@ -6525,7 +6407,7 @@ data: {"authority":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","cr
                 let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
                 let queryItems = components?.queryItems ?? []
                 let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
-                XCTAssertEqual(query["asset_id"], "norito:4e52543000000011")
+                XCTAssertEqual(query["asset"], "norito:4e52543000000011")
                 let response = HTTPURLResponse(url: url,
                                                statusCode: 200,
                                                httpVersion: nil,
@@ -6668,7 +6550,7 @@ data: {"authority":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","cr
 
         let stream = makeClient().streamTransactionTransferSummaries(hashHex: "deadbeef",
                                                                      matchingAccount: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
-                                                                     assetId: "norito:4e52543000000011",
+                                                                     assetDefinitionId: "norito:4e52543000000011",
                                                                      lastEventId: "12")
         var iterator = stream.makeAsyncIterator()
 
@@ -8111,7 +7993,7 @@ id: 88
             XCTAssertEqual(json["contract_id"] as? String, "mint")
             XCTAssertEqual(json["entrypoint"] as? String, "create")
             XCTAssertEqual(json["gas_limit"] as? Int, 7)
-            XCTAssertEqual(json["gas_asset_id"] as? String, "norito:4e52543000000011")
+            XCTAssertEqual(json["gas_asset"] as? String, "norito:4e52543000000011")
             XCTAssertEqual(json["fee_sponsor"] as? String, "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
@@ -8184,7 +8066,7 @@ id: 88
                 throw NSError(domain: "stub", code: -1)
             }
             XCTAssertEqual(json["multisig_account_alias"] as? String, "cbdc@hbl")
-            XCTAssertEqual(json["signer_account_id"] as? String, "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+            XCTAssertEqual(json["signer_accountId"] as? String, "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
             XCTAssertEqual(json["namespace"] as? String, "apps")
             XCTAssertEqual(json["contract_id"] as? String, "mint")
             XCTAssertEqual(json["entrypoint"] as? String, "execute")
@@ -8194,7 +8076,7 @@ id: 88
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let bodyData = """
-            {"ok":true,"resolved_multisig_account_id":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","submitted":false,"proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","creation_time_ms":123,"signing_message_b64":"AQ=="}
+            {"ok":true,"resolved_multisig_accountId":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","submitted":false,"proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","creation_time_ms":123,"signing_message_b64":"AQ=="}
             """.data(using: .utf8)!
             return (response, bodyData)
         }
@@ -8239,8 +8121,8 @@ id: 88
                 XCTFail("missing JSON body")
                 throw NSError(domain: "stub", code: -1)
             }
-            XCTAssertEqual(json["multisig_account_id"] as? String, "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
-            XCTAssertEqual(json["signer_account_id"] as? String, "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9")
+            XCTAssertEqual(json["multisig_accountId"] as? String, "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+            XCTAssertEqual(json["signer_accountId"] as? String, "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9")
             XCTAssertEqual(json["proposal_id"] as? String, proposalId)
             XCTAssertEqual(json["signature_b64"] as? String, "AQ==")
             let response = HTTPURLResponse(url: request.url!,
@@ -8248,7 +8130,7 @@ id: 88
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let bodyData = """
-            {"ok":true,"resolved_multisig_account_id":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","submitted":true,"proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","executed_tx_hash_hex":"\(txHash)"}
+            {"ok":true,"resolved_multisig_accountId":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","submitted":true,"proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","executed_tx_hash_hex":"\(txHash)"}
             """.data(using: .utf8)!
             return (response, bodyData)
         }
@@ -8288,7 +8170,7 @@ id: 88
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let bodyData = """
-            {"resolved_multisig_account_id":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","spec":{"quorum":2,"transaction_ttl_ms":60000}}
+            {"resolved_multisig_accountId":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","spec":{"quorum":2,"transaction_ttl_ms":60000}}
             """.data(using: .utf8)!
             return (response, bodyData)
         }
@@ -8319,7 +8201,7 @@ id: 88
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let bodyData = """
-            {"resolved_multisig_account_id":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","proposals":[{"proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","proposal":{"approvals":["operator1@hbl"]}}]}
+            {"resolved_multisig_accountId":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","proposals":[{"proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","proposal":{"approvals":["operator1@hbl"]}}]}
             """.data(using: .utf8)!
             return (response, bodyData)
         }
@@ -8356,7 +8238,7 @@ id: 88
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let bodyData = """
-            {"resolved_multisig_account_id":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","proposal":{"approvals":["operator1@hbl","operator2@hbl"]}}
+            {"resolved_multisig_accountId":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","proposal":{"approvals":["operator1@hbl","operator2@hbl"]}}
             """.data(using: .utf8)!
             return (response, bodyData)
         }

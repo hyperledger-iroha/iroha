@@ -189,7 +189,7 @@ geri sayım köməkçiləri (`deadline_kind`, `deadline_state`, `deadline_ms`,
 `deadline_ms_remaining`) növbəti bitən son tarixi vurğulayın (təzələyin → siyasət
 → sertifikat) beləliklə UI nişanları müavinət olduqda operatorları xəbərdar edə bilər
 <24 saat qalıb. SDK
-`/v1/offline/allowances` tərəfindən ifşa edilən REST filtrlərini əks etdirir:
+`/v1/offline/reserve/topup` tərəfindən ifşa edilən REST filtrlərini əks etdirir:
 `certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
 `verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` və
 `requireVerdict` / `onlyMissingVerdict` booleanları. Yanlış birləşmələr (üçün

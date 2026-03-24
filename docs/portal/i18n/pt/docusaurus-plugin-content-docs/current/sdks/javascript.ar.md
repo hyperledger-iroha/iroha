@@ -190,7 +190,7 @@ auxiliares de contagem regressiva (`deadline_kind`, `deadline_state`, `deadline_
 `deadline_ms_remaining`) destaque o próximo prazo de expiração (atualizar → política
 → certificado) para que os crachás da UI possam avisar os operadores sempre que uma permissão for
 <24h restantes. O SDK
-espelha os filtros REST expostos por `/v1/offline/allowances`:
+espelha os filtros REST expostos por `/v1/offline/reserve/topup`:
 `certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
 `verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` e o
 `requireVerdict` / `onlyMissingVerdict` booleanos. Combinações inválidas (para

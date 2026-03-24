@@ -190,7 +190,7 @@ console.log(balances.items, txs.items, holders.items);
 `deadline_ms_remaining`) 次に期限切れになる期限を強調表示します (更新 → ポリシー)
 → 証明書) を使用して、許容量が不足するたびに UI バッジがオペレーターに警告できるようにします。
 残り 24 時間未満。 SDK
-`/v1/offline/allowances` によって公開される REST フィルターをミラーリングします。
+`/v1/offline/reserve/topup` によって公開される REST フィルターをミラーリングします。
 `certificateExpiresBeforeMs/AfterMs`、`policyExpiresBeforeMs/AfterMs`、
 `verdictIdHex`、`attestationNonceHex`、`refreshBeforeMs/AfterMs`、および
 `requireVerdict` / `onlyMissingVerdict` ブール値。無効な組み合わせ (

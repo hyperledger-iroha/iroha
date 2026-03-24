@@ -187,7 +187,7 @@ console.log(balances.items, txs.items, holders.items);
 `deadline_ms_remaining`) နောက်သက်တမ်းကုန်ဆုံးမည့် နောက်ဆုံးရက်ကို မီးမောင်းထိုးပြပါ (ပြန်လည်စတင်ခြင်း → မူဝါဒ
 → လက်မှတ်) ထို့ကြောင့် UI တံဆိပ်များသည် ထောက်ပံ့ကြေးရရှိသည့်အခါတိုင်း အော်ပရေတာများအား သတိပေးနိုင်သည်။
 <24 နာရီ ကျန်သေးတယ်။ SDK
-`/v1/offline/allowances` မှ ဖော်ထုတ်ထားသော REST စစ်ထုတ်မှုများကို မှန်ကြည့်သည်-
+`/v1/offline/reserve/topup` မှ ဖော်ထုတ်ထားသော REST စစ်ထုတ်မှုများကို မှန်ကြည့်သည်-
 `certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`၊
 `verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` ရယ်၊
 `requireVerdict` / `onlyMissingVerdict` ဘူလီယံ။ မမှန်ကန်သော ပေါင်းစပ်မှုများ (အတွက်

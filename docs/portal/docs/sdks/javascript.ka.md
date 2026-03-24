@@ -189,7 +189,7 @@ console.log(balances.items, txs.items, holders.items);
 `deadline_ms_remaining`) მონიშნეთ შემდეგი ვადა (განახლება → პოლიტიკა
 → სერთიფიკატი) ასე რომ, UI სამკერდე ნიშნებს შეუძლიათ გააფრთხილონ ოპერატორები, როცა შემწეობა აქვს
 <24 საათი დარჩა. SDK
-ასახავს `/v1/offline/allowances`-ის მიერ გამოვლენილ REST ფილტრებს:
+ასახავს `/v1/offline/reserve/topup`-ის მიერ გამოვლენილ REST ფილტრებს:
 `certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
 `verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` და
 `requireVerdict` / `onlyMissingVerdict` ლოგინები. არასწორი კომბინაციები (ამისთვის

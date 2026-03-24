@@ -18889,14 +18889,14 @@ const ENDPOINT_ASSET_DEFINITION_GET: &str = "/v1/assets/definitions/{asset}";
 #[cfg(feature = "app_api")]
 const ENDPOINT_ASSET_DEFINITIONS_QUERY: &str = "/v1/assets/definitions/query";
 #[cfg(feature = "app_api")]
-const ENDPOINT_OFFLINE_ALLOWANCES_LIST: &str = "/v1/offline/allowances";
+const ENDPOINT_OFFLINE_ALLOWANCES_LIST: &str = "<deleted-offline-allowances>";
 #[cfg(feature = "app_api")]
-const ENDPOINT_OFFLINE_ALLOWANCES_QUERY: &str = "/v1/offline/allowances/query";
+const ENDPOINT_OFFLINE_ALLOWANCES_QUERY: &str = "<deleted-offline-allowances-query>";
 #[cfg(feature = "app_api")]
-const ENDPOINT_OFFLINE_CERTIFICATES_ISSUE: &str = "/v1/offline/certificates/issue";
+const ENDPOINT_OFFLINE_CERTIFICATES_ISSUE: &str = "<deleted-offline-certificates-issue>";
 #[cfg(feature = "app_api")]
 const ENDPOINT_OFFLINE_CERTIFICATES_RENEW_ISSUE: &str =
-    "/v1/offline/certificates/{certificate_id_hex}/renew/issue";
+    "<deleted-offline-certificates-renew-issue>";
 #[cfg(feature = "app_api")]
 const ENDPOINT_OFFLINE_TRANSFERS_LIST: &str = "/v1/offline/transfers";
 #[cfg(feature = "app_api")]
@@ -18904,19 +18904,19 @@ const ENDPOINT_OFFLINE_TRANSFERS_QUERY: &str = "/v1/offline/transfers/query";
 #[cfg(feature = "app_api")]
 const ENDPOINT_OFFLINE_TRANSFERS_DETAIL: &str = "/v1/offline/transfers/{bundle_id_hex}";
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
-const ENDPOINT_OFFLINE_REJECTIONS: &str = "/v1/offline/rejections";
+const ENDPOINT_OFFLINE_REJECTIONS: &str = "<deleted-offline-rejections>";
 #[cfg(feature = "app_api")]
-const ENDPOINT_OFFLINE_SUMMARIES_LIST: &str = "/v1/offline/summaries";
+const ENDPOINT_OFFLINE_SUMMARIES_LIST: &str = "<deleted-offline-summaries>";
 #[cfg(feature = "app_api")]
-const ENDPOINT_OFFLINE_SUMMARIES_QUERY: &str = "/v1/offline/summaries/query";
+const ENDPOINT_OFFLINE_SUMMARIES_QUERY: &str = "<deleted-offline-summaries-query>";
 #[cfg(feature = "app_api")]
 const ENDPOINT_OFFLINE_REVOCATIONS_LIST: &str = "/v1/offline/revocations";
 #[cfg(feature = "app_api")]
 const ENDPOINT_OFFLINE_REVOCATIONS_QUERY: &str = "/v1/offline/revocations/query";
 #[cfg(feature = "app_api")]
-const ENDPOINT_OFFLINE_RECEIPTS_LIST: &str = "/v1/offline/receipts";
+const ENDPOINT_OFFLINE_RECEIPTS_LIST: &str = "<deleted-offline-receipts>";
 #[cfg(feature = "app_api")]
-const ENDPOINT_OFFLINE_RECEIPTS_QUERY: &str = "/v1/offline/receipts/query";
+const ENDPOINT_OFFLINE_RECEIPTS_QUERY: &str = "<deleted-offline-receipts-query>";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_ASSET_HOLDERS: &str = "/v1/assets/{definition_id}/holders";
 #[cfg(feature = "app_api")]
@@ -25382,7 +25382,7 @@ mod app_api_integration_tests {
     }
 
     #[tokio::test]
-    async fn account_assets_get_filters_by_asset_id() {
+    async fn account_assets_get_filters_by_asset_and_scope() {
         let _guard = app_query_limits_guard();
         use iroha_crypto::KeyPair;
         let kp = KeyPair::random();
@@ -25426,13 +25426,13 @@ mod app_api_integration_tests {
             }),
         );
 
-        let asset_id = AssetId::new(rose_def, alice_id.clone()).to_string();
+        let asset = rose_def.to_string();
         let req = http::Request::builder()
             .method("GET")
             .uri(format!(
-                "/v1/accounts/{}/assets?asset_id={}",
+                "/v1/accounts/{}/assets?asset={}&scope=global",
                 alice_id,
-                urlencoding::encode(&asset_id)
+                urlencoding::encode(&asset)
             ))
             .body(axum::body::Body::empty())
             .unwrap();
@@ -25443,14 +25443,8 @@ mod app_api_integration_tests {
         assert_eq!(json["total"].as_u64(), Some(1));
         let items = json["items"].as_array().unwrap();
         assert_eq!(items.len(), 1);
-        assert_eq!(items[0]["asset_id"].as_str(), Some(asset_id.as_str()));
-        let definition_id = items[0]["asset_definition_id"]
-            .as_str()
-            .expect("asset_definition_id field");
-        assert!(
-            !definition_id.starts_with("aid:"),
-            "asset_definition_id should be canonical Base58: {definition_id}"
-        );
+        assert_eq!(items[0]["asset"].as_str(), Some(asset.as_str()));
+        assert_eq!(items[0]["scope"].as_str(), Some("global"));
         let account_literal = alice_id.to_string();
         assert_eq!(
             items[0]["account_id"].as_str(),
@@ -25487,7 +25481,8 @@ mod app_api_integration_tests {
         let params = AccountAssetsGetParams {
             limit: Some(cap + 1),
             offset: 0,
-            asset_id: None,
+            asset: None,
+            scope: None,
         };
 
         let err = handle_v1_account_assets(
@@ -33568,7 +33563,7 @@ pub struct ListFilterParams {
     pub sort: Option<String>,
 }
 
-/// GET parameters for `/v1/offline/allowances`.
+/// GET parameters for `<deleted-offline-allowances>`.
 ///
 /// Extends [`ListFilterParams`] with roadmap-required verdict/expiry filters while keeping the
 /// compact query string layout.
@@ -33757,7 +33752,7 @@ impl OfflineWalletCertificateDraft {
     }
 }
 
-/// Request payload for POST `/v1/offline/certificates/issue`.
+/// Request payload for POST `<deleted-offline-certificates-issue>`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
 pub struct OfflineCertificateIssueRequest {
@@ -33765,7 +33760,7 @@ pub struct OfflineCertificateIssueRequest {
     pub certificate: OfflineWalletCertificateDraft,
 }
 
-/// Response payload for POST `/v1/offline/certificates/issue`.
+/// Response payload for POST `<deleted-offline-certificates-issue>`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, Debug, Clone)]
 pub struct OfflineCertificateIssueResponse {
@@ -33809,7 +33804,7 @@ pub struct OfflineBuildClaimIssueResponse {
     pub build_claim: OfflineBuildClaim,
 }
 
-/// Request payload for POST `/v1/offline/allowances`.
+/// Request payload for POST `<deleted-offline-allowances>`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
 pub struct OfflineAllowanceIssueRequest {
@@ -33821,7 +33816,7 @@ pub struct OfflineAllowanceIssueRequest {
     pub certificate: OfflineWalletCertificate,
 }
 
-/// Response payload for POST `/v1/offline/allowances`.
+/// Response payload for POST `<deleted-offline-allowances>`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, Debug, Clone)]
 pub struct OfflineAllowanceIssueResponse {
@@ -33829,7 +33824,7 @@ pub struct OfflineAllowanceIssueResponse {
     pub certificate_id_hex: String,
 }
 
-/// Request payload for POST `/v1/offline/certificates/revoke`.
+/// Request payload for POST `<deleted-offline-certificates-revoke>`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
 pub struct OfflineCertificateRevokeRequest {
@@ -33850,7 +33845,7 @@ pub struct OfflineCertificateRevokeRequest {
     pub metadata: Metadata,
 }
 
-/// Response payload for POST `/v1/offline/certificates/revoke`.
+/// Response payload for POST `<deleted-offline-certificates-revoke>`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, Debug, Clone)]
 pub struct OfflineCertificateRevokeResponse {
@@ -33858,7 +33853,7 @@ pub struct OfflineCertificateRevokeResponse {
     pub verdict_id_hex: String,
 }
 
-/// Request payload for POST `/v1/offline/allowances/{certificate_id_hex}/renew`.
+/// Request payload for POST `<deleted-offline-allowances-renew>`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
 pub struct OfflineCertificateRenewRequest {
@@ -33870,7 +33865,7 @@ pub struct OfflineCertificateRenewRequest {
     pub certificate: OfflineWalletCertificate,
 }
 
-/// Response payload for POST `/v1/offline/allowances/{certificate_id_hex}/renew`.
+/// Response payload for POST `<deleted-offline-allowances-renew>`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, Debug, Clone)]
 pub struct OfflineCertificateRenewResponse {
@@ -33878,7 +33873,7 @@ pub struct OfflineCertificateRenewResponse {
     pub certificate_id_hex: String,
 }
 
-/// Request payload for POST `/v1/offline/settlements`.
+/// Request payload for POST `<deleted-offline-settlements>`.
 #[cfg(feature = "app_api")]
 #[derive(
     crate::json_macros::JsonSerialize,
@@ -33905,7 +33900,7 @@ pub struct OfflineSettlementBuildClaimOverride {
     pub expires_at_ms: Option<u64>,
 }
 
-/// Request payload for POST `/v1/offline/settlements`.
+/// Request payload for POST `<deleted-offline-settlements>`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
 pub struct OfflineSettlementSubmitRequest {
@@ -33923,7 +33918,7 @@ pub struct OfflineSettlementSubmitRequest {
     pub repair_existing_build_claims: bool,
 }
 
-/// Response payload for POST `/v1/offline/settlements`.
+/// Response payload for POST `<deleted-offline-settlements>`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, Debug, Clone)]
 pub struct OfflineSettlementSubmitResponse {
@@ -33933,7 +33928,7 @@ pub struct OfflineSettlementSubmitResponse {
     pub transaction_hash_hex: String,
 }
 
-/// Request payload for POST `/v1/offline/spend-receipts`.
+/// Request payload for POST `<deleted-offline-spend-receipts>`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
 pub struct OfflineSpendReceiptsSubmitRequest {
@@ -33941,7 +33936,7 @@ pub struct OfflineSpendReceiptsSubmitRequest {
     pub receipts: Vec<OfflineSpendReceipt>,
 }
 
-/// Response payload for POST `/v1/offline/spend-receipts`.
+/// Response payload for POST `<deleted-offline-spend-receipts>`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, Debug, Clone)]
 pub struct OfflineSpendReceiptsSubmitResponse {
@@ -33966,7 +33961,7 @@ pub struct OfflineTransferGetParams {
     pub reserved: Option<String>,
 }
 
-/// GET parameters for `/v1/offline/bundle/proof_status`.
+/// GET parameters for `<deleted-offline-bundle-proof-status>`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
 pub struct OfflineBundleProofStatusParams {
@@ -34019,7 +34014,7 @@ impl OfflineBundleProofSummary {
     }
 }
 
-/// Response payload for GET `/v1/offline/bundle/proof_status`.
+/// Response payload for GET `<deleted-offline-bundle-proof-status>`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, Debug, Clone)]
 pub struct OfflineBundleProofStatusResponse {
@@ -34040,7 +34035,7 @@ pub struct OfflineBundleProofStatusResponse {
     pub proof_summary: Option<OfflineBundleProofSummary>,
 }
 
-/// GET parameters for `/v1/offline/receipts`.
+/// GET parameters for `<deleted-offline-receipts>`.
 #[cfg(feature = "app_api")]
 #[derive(
     crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
@@ -34111,7 +34106,7 @@ pub struct OfflineReceiptListResponse {
     pub total: u64,
 }
 
-/// Response payload for GET `/v1/offline/state`.
+/// Response payload for GET `<deleted-offline-state>`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, Debug, Clone)]
 pub struct OfflineStateResponse {
@@ -34137,8 +34132,10 @@ pub struct AccountAssetsGetParams {
     /// Offset for pagination (default 0).
     #[norito(default)]
     pub offset: u64,
-    /// Filter assets by asset identifier.
-    pub asset_id: Option<String>,
+    /// Filter assets by asset definition selector.
+    pub asset: Option<String>,
+    /// Filter assets by balance scope (`global` or `dataspace:<id>`).
+    pub scope: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -34151,7 +34148,7 @@ pub struct AccountTransactionsGetParams {
     /// Offset for pagination (default 0).
     #[norito(default)]
     pub offset: u64,
-    /// Filter transactions by asset identifier.
+    /// Filter transactions by asset definition selector.
     pub asset_id: Option<String>,
 }
 
@@ -34601,9 +34598,9 @@ fn parse_sort_spec(spec: &str) -> Vec<crate::filter::SortKey> {
 #[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct AccountAssetListItem {
-    asset_id: String,
-    asset_definition_id: String,
+    asset: String,
     account_id: String,
+    scope: String,
     asset_name: String,
     asset_alias: Option<String>,
     quantity: iroha_primitives::numeric::Numeric,
@@ -34612,7 +34609,8 @@ struct AccountAssetListItem {
 #[cfg(feature = "app_api")]
 #[derive(Clone, Copy)]
 enum AccountAssetSortField {
-    AssetId,
+    Asset,
+    Scope,
     Quantity,
 }
 
@@ -34629,7 +34627,8 @@ fn compile_account_asset_sort_spec(
     let mut selectors = Vec::new();
     for sk in spec {
         let field = match sk.key.0.as_str() {
-            "asset_id" => AccountAssetSortField::AssetId,
+            "asset" => AccountAssetSortField::Asset,
+            "scope" => AccountAssetSortField::Scope,
             "quantity" => AccountAssetSortField::Quantity,
             _ => continue,
         };
@@ -34641,7 +34640,7 @@ fn compile_account_asset_sort_spec(
     if selectors.is_empty() {
         selectors.push(AccountAssetSortSelector {
             ascending: true,
-            field: AccountAssetSortField::AssetId,
+            field: AccountAssetSortField::Asset,
         });
     }
     selectors
@@ -34655,11 +34654,18 @@ fn account_asset_sort_key(
     let mut components = Vec::with_capacity(selectors.len());
     for selector in selectors {
         match selector.field {
-            AccountAssetSortField::AssetId => {
+            AccountAssetSortField::Asset => {
                 if selector.ascending {
-                    components.push(SortKeyComponent::asc(&proj.asset_id));
+                    components.push(SortKeyComponent::asc(&proj.asset));
                 } else {
-                    components.push(SortKeyComponent::desc(&proj.asset_id));
+                    components.push(SortKeyComponent::desc(&proj.asset));
+                }
+            }
+            AccountAssetSortField::Scope => {
+                if selector.ascending {
+                    components.push(SortKeyComponent::asc(&proj.scope));
+                } else {
+                    components.push(SortKeyComponent::desc(&proj.scope));
                 }
             }
             AccountAssetSortField::Quantity => {
@@ -34682,12 +34688,14 @@ fn filter_account_asset_item(expr: &crate::filter::FilterExpr, it: &AccountAsset
         F::Or(list) => list.iter().any(|e| filter_account_asset_item(e, it)),
         F::Not(inner) => !filter_account_asset_item(inner, it),
         F::Eq(f, v) => match f.0.as_str() {
-            "asset_id" => v.as_str().map(|s| s == it.asset_id).unwrap_or(false),
+            "asset" => v.as_str().map(|s| s == it.asset).unwrap_or(false),
+            "scope" => v.as_str().map(|s| s == it.scope).unwrap_or(false),
             "quantity" => v.as_u64().map(|n| it.quantity == n.into()).unwrap_or(false),
             _ => false,
         },
         F::Ne(f, v) => match f.0.as_str() {
-            "asset_id" => v.as_str().map(|s| s != it.asset_id).unwrap_or(false),
+            "asset" => v.as_str().map(|s| s != it.asset).unwrap_or(false),
+            "scope" => v.as_str().map(|s| s != it.scope).unwrap_or(false),
             "quantity" => v.as_u64().map(|n| it.quantity != n.into()).unwrap_or(false),
             _ => false,
         },
@@ -34708,10 +34716,14 @@ fn filter_account_asset_item(expr: &crate::filter::FilterExpr, it: &AccountAsset
             _ => false,
         },
         F::In(f, list) => match f.0.as_str() {
-            "asset_id" => list
+            "asset" => list
                 .iter()
                 .filter_map(|v| v.as_str())
-                .any(|s| s == it.asset_id),
+                .any(|s| s == it.asset),
+            "scope" => list
+                .iter()
+                .filter_map(|v| v.as_str())
+                .any(|s| s == it.scope),
             "quantity" => list
                 .iter()
                 .filter_map(norito::json::Value::as_u64)
@@ -34719,19 +34731,23 @@ fn filter_account_asset_item(expr: &crate::filter::FilterExpr, it: &AccountAsset
             _ => false,
         },
         F::Nin(f, list) => match f.0.as_str() {
-            "asset_id" => list
+            "asset" => list
                 .iter()
                 .filter_map(|v| v.as_str())
-                .all(|s| s != it.asset_id),
+                .all(|s| s != it.asset),
+            "scope" => list
+                .iter()
+                .filter_map(|v| v.as_str())
+                .all(|s| s != it.scope),
             "quantity" => list
                 .iter()
                 .filter_map(norito::json::Value::as_u64)
                 .all(|n| it.quantity != n.into()),
             _ => false,
         },
-        F::Exists(f) => matches!(f.0.as_str(), "asset_id" | "quantity"),
+        F::Exists(f) => matches!(f.0.as_str(), "asset" | "scope" | "quantity"),
         F::IsNull(f) => match f.0.as_str() {
-            "asset_id" | "quantity" => false,
+            "asset" | "scope" | "quantity" => false,
             _ => false,
         },
     }
@@ -34866,11 +34882,10 @@ pub async fn handle_v1_account_assets_with_policy(
     crate::NoritoQuery(p): crate::NoritoQuery<AccountAssetsGetParams>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
-    use iroha_data_model::asset::AssetId;
-
     let world = state.world_view();
     let cap = app_query_page_cap(&state);
     let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_ACCOUNTS_ASSETS)?;
+    let now_ms = asset_alias_observation_time_ms(&state);
     let (acct, _) = parse_account_path_segment_with_state(
         state.as_ref(),
         &account_id,
@@ -34878,16 +34893,18 @@ pub async fn handle_v1_account_assets_with_policy(
         ENDPOINT_ACCOUNTS_ASSETS,
     )?;
     let asset_filter = p
-        .asset_id
+        .asset
         .as_deref()
-        .map(|raw| {
-            AssetId::parse_encoded(raw).map_err(|err| {
-                conversion_error(format!(
-                    "asset_id must be a valid asset id `{raw}`: {}",
-                    err.reason()
-                ))
-            })
-        })
+        .map(str::trim)
+        .filter(|raw| !raw.is_empty())
+        .map(|raw| resolve_asset_definition_selector(&world, raw, now_ms))
+        .transpose()?;
+    let scope_filter = p
+        .scope
+        .as_deref()
+        .map(str::trim)
+        .filter(|raw| !raw.is_empty())
+        .map(parse_asset_balance_scope_literal)
         .transpose()?;
     let limits = app_query_limits();
     let page_limit = pagination.limit.unwrap_or(limits.default_page_limit);
@@ -34900,7 +34917,12 @@ pub async fn handle_v1_account_assets_with_policy(
     for account_id in &scoped_accounts {
         for asset in world.assets_in_account_iter(account_id) {
             if let Some(expected) = asset_filter.as_ref()
-                && asset.id() != expected
+                && asset.id().definition() != expected
+            {
+                continue;
+            }
+            if let Some(expected_scope) = scope_filter.as_ref()
+                && asset.id().scope() != expected_scope
             {
                 continue;
             }
@@ -34916,9 +34938,9 @@ pub async fn handle_v1_account_assets_with_policy(
                 Err(_) => (definition_id.to_string(), None),
             };
             projected_assets.push(AccountAssetListItem {
-                asset_id: asset.id().to_string(),
-                asset_definition_id: definition_id.to_string(),
+                asset: definition_id.to_string(),
                 account_id: account_id.to_string(),
+                scope: asset_balance_scope_literal(asset.id().scope()),
                 asset_name,
                 asset_alias,
                 quantity: asset.value().clone().into_inner(),
@@ -34938,18 +34960,12 @@ pub async fn handle_v1_account_assets_with_policy(
     let mut arr = Vec::with_capacity(items.len());
     for it in &items {
         let mut m = norito::json::Map::new();
-        m.insert(
-            "asset_id".into(),
-            norito::json::Value::from(it.asset_id.clone()),
-        );
-        m.insert(
-            "asset_definition_id".into(),
-            norito::json::Value::from(it.asset_definition_id.clone()),
-        );
+        m.insert("asset".into(), norito::json::Value::from(it.asset.clone()));
         m.insert(
             "account_id".into(),
             norito::json::Value::from(it.account_id.clone()),
         );
+        m.insert("scope".into(), norito::json::Value::from(it.scope.clone()));
         m.insert(
             "asset_name".into(),
             norito::json::Value::from(it.asset_name.clone()),
@@ -37191,22 +37207,24 @@ pub async fn handle_v1_accounts_query(
 pub async fn handle_v1_accounts_portfolio(
     state: Arc<CoreState>,
     axum::extract::Path(raw_uaid): axum::extract::Path<String>,
-    asset_id: Option<String>,
+    asset: Option<AssetDefinitionId>,
+    scope: Option<iroha_data_model::asset::AssetBalanceScope>,
     _telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     let uaid = parse_uaid_literal(&raw_uaid)?;
     let world = state.world_view();
     let nexus = state.nexus_snapshot();
     let mut snapshot = portfolio::collect_portfolio_from_world_and_nexus(&world, &nexus, uaid);
-    drop(world);
-    if let Some(expected) = asset_id.as_deref() {
-        filter_portfolio_by_asset_id(&mut snapshot, expected);
+    if let Some(expected) = asset.as_ref() {
+        filter_portfolio_by_asset_selector(&mut snapshot, expected, scope.as_ref());
     }
-    let body = norito::json::to_json_pretty(&snapshot).map_err(|err| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(
-            err.to_string(),
-        ))
-    })?;
+    drop(world);
+    let body =
+        norito::json::to_json_pretty(&portfolio_snapshot_to_json(&snapshot)).map_err(|err| {
+            Error::Query(iroha_data_model::ValidationFail::InternalError(
+                err.to_string(),
+            ))
+        })?;
 
     let mut resp = Response::new(Body::from(body));
     resp.headers_mut().insert(
@@ -37214,6 +37232,131 @@ pub async fn handle_v1_accounts_portfolio(
         header::HeaderValue::from_static("application/json"),
     );
     Ok(resp)
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) fn parse_asset_balance_scope_literal(
+    raw: &str,
+) -> Result<iroha_data_model::asset::AssetBalanceScope> {
+    let trimmed = raw.trim();
+    if trimmed.eq_ignore_ascii_case("global") {
+        return Ok(iroha_data_model::asset::AssetBalanceScope::Global);
+    }
+    if let Some(rest) = trimmed.strip_prefix("dataspace:") {
+        let dataspace = rest.parse::<u64>().map_err(|_| {
+            conversion_error("scope must be `global` or `dataspace:<id>`".to_owned())
+        })?;
+        return Ok(iroha_data_model::asset::AssetBalanceScope::Dataspace(
+            iroha_data_model::nexus::DataSpaceId::new(dataspace),
+        ));
+    }
+    Err(conversion_error(
+        "scope must be `global` or `dataspace:<id>`".to_owned(),
+    ))
+}
+
+#[cfg(feature = "app_api")]
+fn filter_portfolio_by_asset_selector(
+    snapshot: &mut iroha_data_model::nexus::portfolio::UniversalPortfolio,
+    asset_definition_id: &AssetDefinitionId,
+    scope_filter: Option<&iroha_data_model::asset::AssetBalanceScope>,
+) {
+    let mut accounts = 0u64;
+    let mut positions = 0u64;
+    for dataspace in &mut snapshot.dataspaces {
+        for account in &mut dataspace.accounts {
+            account.assets.retain(|asset| {
+                asset.asset_definition_id == *asset_definition_id
+                    && scope_filter.is_none_or(|scope| asset.asset_id.scope() == scope)
+            });
+            if !account.assets.is_empty() {
+                accounts = accounts.saturating_add(1);
+                positions = positions.saturating_add(account.assets.len() as u64);
+            }
+        }
+        dataspace
+            .accounts
+            .retain(|account| !account.assets.is_empty());
+    }
+    snapshot
+        .dataspaces
+        .retain(|dataspace| !dataspace.accounts.is_empty());
+    snapshot.totals.accounts = accounts;
+    snapshot.totals.positions = positions;
+}
+
+#[cfg(feature = "app_api")]
+fn portfolio_snapshot_to_json(
+    snapshot: &iroha_data_model::nexus::portfolio::UniversalPortfolio,
+) -> Value {
+    let dataspaces = snapshot
+        .dataspaces
+        .iter()
+        .map(|dataspace| {
+            let accounts = dataspaces_accounts_to_json(&dataspace.accounts);
+            json_object(vec![
+                json_entry("dataspace_id", dataspace.dataspace_id.as_u64()),
+                json_entry(
+                    "dataspace_alias",
+                    dataspace
+                        .dataspace_alias
+                        .clone()
+                        .map(Value::from)
+                        .unwrap_or(Value::Null),
+                ),
+                json_entry("accounts", Value::Array(accounts)),
+            ])
+        })
+        .collect();
+
+    json_object(vec![
+        json_entry("uaid", snapshot.uaid.to_string()),
+        json_entry(
+            "totals",
+            json_object(vec![
+                json_entry("accounts", snapshot.totals.accounts),
+                json_entry("positions", snapshot.totals.positions),
+            ]),
+        ),
+        json_entry("dataspaces", Value::Array(dataspaces)),
+    ])
+}
+
+#[cfg(feature = "app_api")]
+fn dataspaces_accounts_to_json(
+    accounts: &[iroha_data_model::nexus::portfolio::AccountPortfolio],
+) -> Vec<Value> {
+    accounts
+        .iter()
+        .map(|account| {
+            let assets = account
+                .assets
+                .iter()
+                .map(|asset| {
+                    json_object(vec![
+                        json_entry("asset", asset.asset_definition_id.to_string()),
+                        json_entry("scope", asset_balance_scope_literal(asset.asset_id.scope())),
+                        json_entry("quantity", asset.quantity.to_string()),
+                    ])
+                })
+                .collect();
+            json_object(vec![
+                json_entry(
+                    "account_id",
+                    crate::account_literal::display_literal(&account.account_id),
+                ),
+                json_entry(
+                    "label",
+                    account
+                        .label
+                        .as_ref()
+                        .map(|label| Value::from(label.label.as_ref().to_owned()))
+                        .unwrap_or(Value::Null),
+                ),
+                json_entry("assets", Value::Array(assets)),
+            ])
+        })
+        .collect()
 }
 
 #[cfg(feature = "app_api")]
@@ -37653,39 +37796,6 @@ pub async fn handle_v1_nexus_dataspaces_account_summary(
         header::HeaderValue::from_static("application/json"),
     );
     Ok(resp)
-}
-
-#[cfg(feature = "app_api")]
-fn filter_portfolio_by_asset_id(
-    snapshot: &mut iroha_data_model::nexus::portfolio::UniversalPortfolio,
-    asset_id_literal: &str,
-) {
-    let mut accounts = 0u64;
-    let mut positions = 0u64;
-    for dataspace in &mut snapshot.dataspaces {
-        for account in &mut dataspace.accounts {
-            account
-                .assets
-                .retain(|asset| portfolio_asset_id_literal(&asset.asset_id) == asset_id_literal);
-            if !account.assets.is_empty() {
-                accounts = accounts.saturating_add(1);
-                positions = positions.saturating_add(account.assets.len() as u64);
-            }
-        }
-        dataspace
-            .accounts
-            .retain(|account| !account.assets.is_empty());
-    }
-    snapshot
-        .dataspaces
-        .retain(|dataspace| !dataspace.accounts.is_empty());
-    snapshot.totals.accounts = accounts;
-    snapshot.totals.positions = positions;
-}
-
-#[cfg(feature = "app_api")]
-fn portfolio_asset_id_literal(asset_id: &iroha_data_model::asset::AssetId) -> String {
-    asset_id.canonical_encoded()
 }
 
 #[cfg(feature = "app_api")]
@@ -46320,7 +46430,7 @@ pub async fn handle_v1_offline_transfer_get(
     json_response(&value)
 }
 
-/// GET /v1/offline/receipts — list flattened offline receipts for auditing.
+/// GET <deleted-offline-receipts> — list flattened offline receipts for auditing.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_offline_receipts(
@@ -46483,7 +46593,7 @@ pub async fn handle_v1_offline_receipts(
     })
 }
 
-/// POST /v1/offline/receipts/query — list flattened receipts via QueryEnvelope.
+/// POST <deleted-offline-receipts-query> — list flattened receipts via QueryEnvelope.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_offline_receipts_query(
@@ -46591,7 +46701,7 @@ pub async fn handle_v1_offline_receipts_query(
     })
 }
 
-/// GET /v1/offline/bundle/proof_status — fetch lightweight proof status for an offline bundle.
+/// GET <deleted-offline-bundle-proof-status> — fetch lightweight proof status for an offline bundle.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_offline_bundle_proof_status(
@@ -46602,7 +46712,7 @@ pub async fn handle_v1_offline_bundle_proof_status(
     use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
 
     let bundle_id = parse_hash_hex(&p.bundle_id_hex, "bundle_id_hex")?;
-    record_account_literal_selection(&telemetry, "/v1/offline/bundle/proof_status");
+    record_account_literal_selection(&telemetry, "<deleted-offline-bundle-proof-status>");
 
     let world = state.world_view();
     let record = world
@@ -47276,7 +47386,7 @@ fn sign_offline_certificate(
     Ok(certificate)
 }
 
-/// POST /v1/offline/certificates/issue — issue a signed offline wallet certificate.
+/// POST <deleted-offline-certificates-issue> — issue a signed offline wallet certificate.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_v1_offline_certificates_issue(
@@ -47299,7 +47409,7 @@ pub async fn handle_post_v1_offline_certificates_issue(
     })
 }
 
-/// POST /v1/offline/certificates/{certificate_id_hex}/renew/issue — issue a renewed certificate.
+/// POST <deleted-offline-certificates-renew-issue> — issue a renewed certificate.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_v1_offline_certificates_renew_issue(
@@ -47404,7 +47514,7 @@ pub async fn handle_post_v1_offline_build_claims_issue(
     })
 }
 
-/// POST /v1/offline/allowances — register an offline wallet certificate on-ledger.
+/// POST <deleted-offline-allowances> — register an offline wallet certificate on-ledger.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_v1_offline_allowances_issue(
@@ -47438,7 +47548,7 @@ pub async fn handle_post_v1_offline_allowances_issue(
     json_response(&OfflineAllowanceIssueResponse { certificate_id_hex })
 }
 
-/// GET /v1/offline/allowances/{certificate_id_hex} — fetch a specific offline allowance record.
+/// GET <deleted-offline-allowances-detail> — fetch a specific offline allowance record.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_offline_allowance_get(
@@ -47502,7 +47612,7 @@ fn offline_allowance_verdict_id_or_error(
     Ok((verdict_id, verdict_id_hex))
 }
 
-/// POST /v1/offline/allowances/{certificate_id_hex}/renew — renew an offline allowance certificate.
+/// POST <deleted-offline-allowances-renew> — renew an offline allowance certificate.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_v1_offline_allowances_renew(
@@ -47544,7 +47654,7 @@ pub async fn handle_post_v1_offline_allowances_renew(
         state.clone(),
         tx,
         telemetry,
-        "/v1/offline/allowances/{certificate_id_hex}/renew",
+        "<deleted-offline-allowances-renew>",
     )
     .await?;
 
@@ -47553,7 +47663,7 @@ pub async fn handle_post_v1_offline_allowances_renew(
     })
 }
 
-/// POST /v1/offline/certificates/revoke — register a verdict revocation for an offline certificate.
+/// POST <deleted-offline-certificates-revoke> — register a verdict revocation for an offline certificate.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_v1_offline_certificates_revoke(
@@ -47600,14 +47710,14 @@ pub async fn handle_post_v1_offline_certificates_revoke(
         state.clone(),
         tx,
         telemetry,
-        "/v1/offline/certificates/revoke",
+        "<deleted-offline-certificates-revoke>",
     )
     .await?;
 
     json_response(&OfflineCertificateRevokeResponse { verdict_id_hex })
 }
 
-/// POST /v1/offline/settlements — submit an offline-to-online transfer bundle for settlement.
+/// POST <deleted-offline-settlements> — submit an offline-to-online transfer bundle for settlement.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_v1_offline_settlements_submit(
@@ -47654,7 +47764,7 @@ pub async fn handle_post_v1_offline_settlements_submit(
         state,
         tx,
         telemetry,
-        "/v1/offline/settlements",
+        "<deleted-offline-settlements>",
     )
     .await?;
 
@@ -47664,7 +47774,7 @@ pub async fn handle_post_v1_offline_settlements_submit(
     })
 }
 
-/// POST /v1/offline/spend-receipts — validate receipts and return their Poseidon root.
+/// POST <deleted-offline-spend-receipts> — validate receipts and return their Poseidon root.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_v1_offline_spend_receipts(
@@ -47743,7 +47853,7 @@ pub async fn handle_post_v1_offline_spend_receipts(
     })
 }
 
-/// GET /v1/offline/state — return a full offline state snapshot for wallet sync.
+/// GET <deleted-offline-state> — return a full offline state snapshot for wallet sync.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_offline_state(
@@ -51740,9 +51850,9 @@ pub async fn handle_v1_account_assets_query_with_policy(
                 Err(_) => (definition_id.to_string(), None),
             };
             projected_assets.push(AccountAssetListItem {
-                asset_id: asset.id().to_string(),
-                asset_definition_id: definition_id.to_string(),
+                asset: definition_id.to_string(),
                 account_id: account_id.to_string(),
+                scope: asset_balance_scope_literal(asset.id().scope()),
                 asset_name,
                 asset_alias,
                 quantity: asset.value().clone().into_inner(),
@@ -51812,18 +51922,12 @@ pub async fn handle_v1_account_assets_query_with_policy(
     let mut arr = Vec::with_capacity(items.len());
     for it in &items {
         let mut m = norito::json::Map::new();
-        m.insert(
-            "asset_id".into(),
-            norito::json::Value::from(it.asset_id.clone()),
-        );
-        m.insert(
-            "asset_definition_id".into(),
-            norito::json::Value::from(it.asset_definition_id.clone()),
-        );
+        m.insert("asset".into(), norito::json::Value::from(it.asset.clone()));
         m.insert(
             "account_id".into(),
             norito::json::Value::from(it.account_id.clone()),
         );
+        m.insert("scope".into(), norito::json::Value::from(it.scope.clone()));
         m.insert(
             "asset_name".into(),
             norito::json::Value::from(it.asset_name.clone()),
@@ -51870,7 +51974,7 @@ fn validate_asset_filter_adapter(expr: &FilterExpr) -> Result<()> {
         }
         F::Not(inner) => validate_asset_filter_adapter(inner),
         F::Eq(f, v) | F::Ne(f, v) => match f.0.as_str() {
-            "asset_id" => v
+            "asset" | "scope" => v
                 .is_string()
                 .then_some(())
                 .ok_or_else(|| Error::Query(iroha_data_model::ValidationFail::TooComplex)),
@@ -51888,7 +51992,7 @@ fn validate_asset_filter_adapter(expr: &FilterExpr) -> Result<()> {
             _ => Err(Error::Query(iroha_data_model::ValidationFail::TooComplex)),
         },
         F::In(f, list) | F::Nin(f, list) => match f.0.as_str() {
-            "asset_id" => list
+            "asset" | "scope" => list
                 .iter()
                 .all(norito::json::Value::is_string)
                 .then_some(())
@@ -51901,7 +52005,7 @@ fn validate_asset_filter_adapter(expr: &FilterExpr) -> Result<()> {
             _ => Err(Error::Query(iroha_data_model::ValidationFail::TooComplex)),
         },
         F::Exists(f) | F::IsNull(f) => match f.0.as_str() {
-            "asset_id" | "quantity" => Ok(()),
+            "asset" | "scope" | "quantity" => Ok(()),
             _ => Err(Error::Query(iroha_data_model::ValidationFail::TooComplex)),
         },
     }
@@ -52094,27 +52198,6 @@ fn asset_balance_scope_literal(scope: &iroha_data_model::asset::AssetBalanceScop
             format!("dataspace:{}", dataspace.as_u64())
         }
     }
-}
-
-#[cfg(feature = "app_api")]
-fn parse_asset_balance_scope_literal(
-    raw: &str,
-) -> Result<iroha_data_model::asset::AssetBalanceScope> {
-    let trimmed = raw.trim();
-    if trimmed.eq_ignore_ascii_case("global") {
-        return Ok(iroha_data_model::asset::AssetBalanceScope::Global);
-    }
-    if let Some(rest) = trimmed.strip_prefix("dataspace:") {
-        let dataspace = rest.parse::<u64>().map_err(|_| {
-            conversion_error("scope must be `global` or `dataspace:<id>`".to_owned())
-        })?;
-        return Ok(iroha_data_model::asset::AssetBalanceScope::Dataspace(
-            iroha_data_model::nexus::DataSpaceId::new(dataspace),
-        ));
-    }
-    Err(conversion_error(
-        "scope must be `global` or `dataspace:<id>`".to_owned(),
-    ))
 }
 
 #[iroha_futures::telemetry_future]

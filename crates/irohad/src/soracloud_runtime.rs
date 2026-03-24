@@ -470,6 +470,67 @@ impl SoracloudRuntimeManagerHandle {
         );
     }
 
+    fn report_generated_hf_local_proxy_failure(
+        &self,
+        request: &SoracloudLocalReadRequest,
+        error: &SoracloudRuntimeExecutionError,
+    ) {
+        if request.handler_name != "infer"
+            || error.kind == SoracloudRuntimeExecutionErrorKind::InvalidRequest
+        {
+            return;
+        }
+        let view = self.state.view();
+        let Some(bundle) = view.world().soracloud_service_revisions().get(&(
+            request.service_name.clone(),
+            request.service_version.clone(),
+        )) else {
+            return;
+        };
+        let Some(binding) = soracloud_hf_generated_source_binding(bundle) else {
+            return;
+        };
+        let Ok(Some(placement)) = resolve_active_hf_placement_for_service(
+            &view,
+            request.service_name.as_str(),
+            &binding.source_id,
+        ) else {
+            return;
+        };
+        let Some(local_assignment) = placement
+            .assigned_hosts
+            .iter()
+            .find(|assignment| hf_assignment_matches_local_host(&self.config, assignment))
+        else {
+            return;
+        };
+        let kind = match local_assignment.status {
+            SoraHfPlacementHostStatusV1::Warm => {
+                SoraModelHostViolationKindV1::AssignedHeartbeatMiss
+            }
+            SoraHfPlacementHostStatusV1::Warming => SoraModelHostViolationKindV1::WarmupNoShow,
+            SoraHfPlacementHostStatusV1::Unavailable | SoraHfPlacementHostStatusV1::Retired => {
+                return;
+            }
+        };
+        self.host_violation_reporter.report(
+            &view,
+            &local_assignment.validator_account_id,
+            kind,
+            Some(placement.placement_id),
+            Some(format!(
+                "local assigned {} peer `{}` failed to forward generated-HF proxy traffic for service `{}` before reaching the authoritative primary: {}",
+                match local_assignment.role {
+                    SoraHfPlacementHostRoleV1::Primary => "primary",
+                    SoraHfPlacementHostRoleV1::Replica => "replica",
+                },
+                local_assignment.peer_id,
+                request.service_name,
+                error.message
+            )),
+        );
+    }
+
     fn report_local_generated_hf_authority_failure(
         &self,
         view: &StateView<'_>,
@@ -671,6 +732,14 @@ impl SoracloudRuntimeReadHandle for SoracloudRuntimeManagerHandle {
         error: &SoracloudRuntimeExecutionError,
     ) {
         Self::report_generated_hf_proxy_failure(self, request, target_peer_id, error);
+    }
+
+    fn report_generated_hf_local_proxy_failure(
+        &self,
+        request: &SoracloudLocalReadRequest,
+        error: &SoracloudRuntimeExecutionError,
+    ) {
+        Self::report_generated_hf_local_proxy_failure(self, request, error);
     }
 
     fn request_generated_hf_reconcile(
@@ -11337,6 +11406,73 @@ mod tests {
                 .detail
                 .as_deref()
                 .is_some_and(|detail| detail.contains("targeting primary peer"))
+        );
+        assert_eq!(mutation_sink.submitted_model_host_reconciles(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn report_generated_hf_local_proxy_failure_reports_local_replica_violation() -> Result<()> {
+        let mut state = test_state()?;
+        let fixture = insert_generated_hf_service_fixture(
+            &mut state,
+            "hf_local_proxy_replica_failure_service",
+            "openai-community/gpt2",
+            "main",
+            "gpt2",
+        )?;
+        let local_peer_id = "12D3KooWLocalReplicaForwardingFailure";
+        let placement_id = insert_generated_hf_placement_fixture(
+            &mut state,
+            &fixture,
+            SoraHfPlacementHostRoleV1::Replica,
+            SoraHfPlacementHostStatusV1::Warm,
+            local_peer_id,
+        );
+        let mutation_sink = Arc::new(RecordingRuntimeMutationSink::default());
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(PathBuf::from("/tmp/test-soracloud-runtime"))
+                .with_local_host_identity(ALICE_ID.clone(), local_peer_id),
+            Arc::clone(&state),
+        )
+        .with_mutation_sink(mutation_sink.clone());
+        let handle = test_runtime_handle(&manager, Arc::clone(&state));
+
+        handle.report_generated_hf_local_proxy_failure(
+            &SoracloudLocalReadRequest {
+                observed_height: 0,
+                observed_block_hash: None,
+                service_name: fixture.bundle.service.service_name.to_string(),
+                service_version: fixture.bundle.service.service_version.clone(),
+                handler_name: "infer".to_owned(),
+                handler_class: iroha_core::soracloud_runtime::SoracloudLocalReadKind::Query,
+                request_method: "POST".to_owned(),
+                request_path: "/infer".to_owned(),
+                handler_path: "/infer".to_owned(),
+                request_query: None,
+                request_headers: BTreeMap::new(),
+                request_body: br#"{"inputs":"hello"}"#.to_vec(),
+                request_commitment: Hash::new(b"hf-local-replica-forwarding-failure"),
+            },
+            &SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Unavailable,
+                "Soracloud proxy routing requires an attached P2P network",
+            ),
+        );
+
+        let reports = mutation_sink.submitted_violation_reports();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].validator_account_id, *ALICE_ID);
+        assert_eq!(
+            reports[0].kind,
+            SoraModelHostViolationKindV1::AssignedHeartbeatMiss
+        );
+        assert_eq!(reports[0].placement_id, Some(placement_id));
+        assert!(
+            reports[0]
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("failed to forward generated-HF proxy traffic"))
         );
         assert_eq!(mutation_sink.submitted_model_host_reconciles(), 1);
         Ok(())

@@ -2,6 +2,111 @@
 
 Last updated: 2026-03-24
 
+## 2026-03-24 Follow-up: shared Ed25519 GPU challenge preparation is unified across the accelerator admission paths
+- Removed another accelerator drift point across
+  `crates/ivm/src/{signature.rs,cuda.rs,ivm.rs,vector.rs}`.
+- The shipped behavior in this slice:
+  - the reduced Ed25519 challenge scalar bytes `H(R || A || M)` used by the
+    GPU verification kernels now come from one shared helper in
+    `signature.rs` instead of being recomputed independently in the CUDA
+    self-test, CUDA verify path, Metal batch preparation, and Metal host
+    admission path;
+  - the helper is pinned by a fixed regression vector derived from the CUDA
+    Ed25519 self-test truth set, so future transcript drift trips a focused
+    unit test before it can fork the accelerator admission logic; and
+  - the touched CUDA code no longer emits the earlier wall of stale
+    `unused_mut` / dead-code warnings during
+    `cargo check -p ivm --features cuda --tests`, leaving only the expected
+    host-side `nvcc` build-script warnings on machines without a CUDA
+    toolchain.
+- Validation:
+  - `cargo test -p ivm --lib ed25519_challenge_scalar_bytes_matches_cuda_selftest_vector -- --nocapture` (pass)
+  - `cargo check -p ivm` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_ed25519_batch_matches_cpu -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-cuda-check cargo check -p ivm --features cuda --tests` (pass; only `build.rs` warnings remain because `nvcc` is absent on this host)
+- Remaining implementation gap:
+  - rerun the focused CUDA runtime/self-test slice on a host with live CUDA
+    driver libraries and toolchain support, so the shared challenge helper and
+    the earlier mirrored Ed25519 normalization fixes are exercised beyond
+    compile-only validation.
+
+## 2026-03-24 Follow-up: IVM startup truth sets now cover live vector and AES batch kernels
+- Hardened the sampled `ivm` accelerator admission path in
+  `crates/ivm/src/{vector.rs,cuda.rs}` so more production kernels are proven
+  directly before Metal/CUDA acceleration is trusted.
+- The shipped behavior in this slice:
+  - the Metal startup self-test now proves parity for the live `vadd64`,
+    `vand`, `vxor`, `vor`, `aesenc_batch`, and `aesdec_batch` kernels instead
+    of letting those paths inherit only the earlier scalar/vector/AES checks;
+  - the CUDA startup truth set now proves the same `vadd64`, vector bitwise,
+    and single-round AES batch kernels before the backend stays enabled; and
+  - the focused CUDA test graph compiles cleanly again after fixing the
+    branch-local `ed25519_challenge_scalar_bytes` argument drift in
+    `crates/ivm/src/cuda.rs`.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo check -p ivm --features metal --tests` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_bitwise_single_vector_matches_scalar -- --nocapture` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_aes_batch_matches_scalar -- --nocapture` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_ed25519_batch_matches_cpu -- --nocapture` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_sha256_leaves_matches_cpu -- --nocapture` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-cuda-check cargo check -p ivm --features cuda --tests` (pass; `nvcc` is still absent on this host, so build.rs warns while Rust-side CUDA admission logic still compiles)
+- Remaining implementation gap:
+  - the startup-admission coverage gaps for the sampled vector/AES kernels are
+    closed in code, but focused CUDA runtime/self-test execution still needs a
+    host with live CUDA driver symbols to validate the expanded truth set
+    beyond `cargo check`.
+
+## 2026-03-24 Follow-up: CUDA startup truth set now covers live Merkle kernels
+- Closed the next accelerator-admission gap in `crates/ivm/src/cuda.rs`.
+- The shipped behavior in this slice:
+  - CUDA startup now proves parity for both `sha256_leaves` and
+    `sha256_pairs_reduce` before Merkle acceleration is trusted, instead of
+    letting those live `byte_merkle_tree` kernels inherit only the broader
+    generic CUDA self-test;
+  - the new internal self-tests use the same canonical single-block leaf
+    digests and pair-reduction root logic as the CPU path, so mismatched CUDA
+    Merkle kernels now fail closed during backend admission; and
+  - focused regression coverage now includes
+    `sha256_merkle_selftest_covers_cuda_kernels` alongside the earlier
+    Ed25519/BN254 CUDA self-test checks.
+- Focused validation:
+  - `cargo fmt --all` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-cuda-check cargo check -p ivm --features cuda --tests` (pass; `nvcc` is absent on this host, so build.rs warns while Rust-side CUDA admission logic still compiles)
+- Remaining implementation gap:
+  - rerun the focused CUDA runtime/self-test slice on a host with live CUDA
+    driver libraries and toolchain support, so the new Merkle startup probes
+    and the earlier mirrored Ed25519 fix are exercised beyond `cargo check`.
+
+## 2026-03-24 Follow-up: Metal Ed25519 signature self-test now stays enabled under focused regression coverage
+- Tightened the focused Metal regression in `crates/ivm/src/vector.rs` now
+  that the sampled Ed25519 signature kernel is producing the correct result on
+  this host again.
+- The shipped behavior in this slice:
+  - `metal_ed25519_batch_matches_cpu` now asserts the direct signature-kernel
+    parity path (`signature_kernel`, `signature_status_kernel`, and
+    `signature_check_bytes_kernel`) instead of treating CPU fallback as an
+    acceptable outcome;
+  - the same regression now pins pure `[s]B`, pure `[h](-A)`, scalar-1,
+    scalar-2, and power-of-two basepoint multiplications against the CPU
+    reference so future Metal drift trips a focused test instead of silently
+    demoting to fallback; and
+  - the stale Rust-only point-trace diagnostic helpers were removed from
+    `vector.rs`, keeping the focused `ivm --features metal --tests` check
+    warning-free again.
+- Focused validation:
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_ed25519_batch_matches_cpu -- --nocapture` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_sha256_leaves_matches_cpu -- --nocapture` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo check -p ivm --features metal --tests` (pass)
+- Remaining implementation gap:
+  - the CUDA-side accelerator self-test slice is still only partially
+    validated here because this host does not have the CUDA driver libraries
+    needed to link the `cust`-backed tests; and
+  - the broader accelerator review across the remaining CUDA/Metal/determinism
+    boundaries is still open, but the specific Metal Ed25519 signature-kernel
+    mismatch tracked in the earlier note below is no longer reproducing under
+    the focused regression set above.
+
 ## 2026-03-24 Account-address first-release hard cut (JS/Swift/Android)
 - Removed the remaining compressed/sentinel/full-width account-address
   compatibility surface from the public JS, Swift, and Android SDKs so the
@@ -41,45 +146,34 @@ Last updated: 2026-03-24
   - `cargo test -p iroha_data_model --test account_address_vectors -- --nocapture` (pass)
   - `cargo test -p iroha_torii --test account_address_vectors -- --nocapture` currently stops on unrelated branch-local `norito::json!` macro errors in `crates/iroha_torii/src/offline_reserve.rs`
 
-## 2026-03-24 Follow-up: Metal now degrades per-pipeline instead of dropping the whole backend on Ed25519 mismatch
-- Hardened the Metal startup path in `crates/ivm/src/vector.rs` so this host
-  no longer loses the entire Metal backend when the sampled Ed25519
-  `signature_kernel` self-test fails.
+## 2026-03-24 Follow-up: Metal Ed25519 verification is restored on this host
+- Finished the sampled Metal Ed25519 correctness tranche in
+  `crates/ivm/src/{vector.rs,metal_ed25519.metal}` and mirrored the same
+  field-op normalization hardening into `crates/ivm/cuda/signature.cu`.
 - The shipped behavior in this slice:
-  - the startup truth set still probes the Ed25519 Metal signature kernel and
-    continues to fail closed on mismatch, but it now disables only the
-    `ed25519_signature` pipeline instead of tearing down the full Metal state;
-  - production batch verification already treats a missing Metal signature
-    pipeline as `None`, so Ed25519 verification now falls back to the CPU path
-    while SHA/AES/Keccak/Merkle-leaf Metal kernels stay live on this machine;
-  - the `metal_sha256_leaves_matches_cpu` regression now executes against a
-    live Metal backend on this host instead of passing only via the earlier
-    "backend disabled" skip path; and
-  - the sampled Ed25519 double-scalar routine in both
-    `crates/ivm/src/metal_ed25519.metal` and `crates/ivm/cuda/signature.cu`
-    now keeps the base point on the positive branch during verification, which
-    is the correct sign convention even though the remaining point-decode bug
-    still forces the Metal signature pipeline to stay fail-closed here.
-  - follow-up arithmetic cleanup also corrected two more ref10 drift points in
-    both accelerator ports: the precomputed `d2` constant now matches ref10,
-    `fe_sq2` now uses the exact ref10 reduction path instead of a simplified
-    `fe_sq` + `fe_add`, and the extra final `carry1` reduction has been
-    removed from `fe_mul`.
+  - the earlier per-pipeline fail-closed startup behavior remains in place, but
+    the sampled Metal `ed25519_signature` pipeline now passes its parity gate
+    again on this host instead of falling back to CPU;
+  - the fix was preserving ref10 limb bounds across the scalar ladder by
+    normalizing after `fe_add`, `fe_sub`, `fe_neg`, `fe_mul`, `fe_sq`,
+    `fe_sq2`, and `fe_mul121666`, alongside the earlier base-point sign, `d2`,
+    exact `fe_sq2`, and `fe_mul` carry corrections;
+  - the focused regression now confirms `[s]B`, `[h](-A)`, the power-of-two
+    basepoint ladder, direct status outputs, and full `[true, false]`
+    signature verification on Metal against the CPU reference path; and
+  - the temporary decompression trace kernels used to isolate the ladder drift
+    have been removed from the Metal shader now that the runtime regression is
+    green again.
 - Focused validation:
   - `cargo fmt --all` (pass)
-  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_ed25519_batch_matches_cpu -- --nocapture` (pass; verifies CPU fallback without disabling Metal)
-  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_sha256_leaves_matches_cpu -- --nocapture` (pass)
+  - `xcrun -sdk macosx metal -c crates/ivm/src/metal_ed25519.metal -o /tmp/metal_ed25519.air` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_ed25519_batch_matches_cpu -- --nocapture` (pass)
   - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo check -p ivm --features metal --tests` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-cuda-check cargo check -p ivm --features cuda --tests` (pass; runtime CUDA execution is still host-limited)
 - Remaining implementation gap:
-  - the raw Metal/CUDA Ed25519 point-decompression path is still wrong and
-    fails the sampled signature-kernel self-test on this host, so Ed25519
-    acceleration remains intentionally unavailable until that decompressor is
-    fixed and revalidated; and
-  - the new Metal-only decompression trace shows the divergence has narrowed:
-    `u = y^2 - 1` and `v = d y^2 + 1` match the CPU/ref10 reference for the
-    Ed25519 base point, but the first mismatch appears while building `uv^7`
-    ahead of `fe_pow22523`, so the remaining bug is inside the field
-    square/multiply chain rather than device discovery or request plumbing.
+  - rerun the focused CUDA runtime/self-test slice on a host with live CUDA
+    driver libraries and toolchain support, so the mirrored normalization fix
+    is exercised beyond `cargo check`.
 
 ## 2026-03-24 Follow-up: SNS-backed alias leases now resolve from ledger state and reserved `universal` ownership is seeded
 - Completed the next unified dataspace-aware alias ownership slice across
@@ -137,13 +231,12 @@ Last updated: 2026-03-24
   - `cargo fmt --all` (pass)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-cuda2 cargo check -p ivm --features cuda --tests` (pass)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo check -p ivm --features metal --tests` (pass)
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_sha256_leaves_matches_cpu -- --nocapture` (pass with explicit skip after backend disable)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_sha256_leaves_matches_cpu -- --nocapture` (pass)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-cuda2 cargo test -p ivm --features cuda --lib selftest_covers_ -- --nocapture` (blocked by host CUDA linker errors: unresolved `cu*` symbols)
 - Remaining implementation gap:
-  - the Metal backend still disables itself on this host because the existing
-    Ed25519 startup parity check fails before the new `sha256_leaves` path can
-    be exercised end-to-end; that fail-closed behavior is desirable, but the
-    underlying Metal Ed25519 mismatch remains open and should be fixed next.
+  - the remaining gap from this slice is now CUDA-runtime-only on this host:
+    the source/test graph compiles, but focused CUDA lib tests still need a
+    machine with live CUDA driver symbols to run end-to-end.
 
 ## 2026-03-24 Follow-up: domainless multisig home-domain optionality and signed multisig alias selectors are now live
 - Completed the next unified dataspace-aware alias follow-up across

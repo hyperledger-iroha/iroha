@@ -4741,7 +4741,7 @@
     },
     "/v1/accounts/{account_id}/assets": {
       "get": {
-        "description": "List assets held by an account (supports pagination and optional asset_id filtering).",
+        "description": "List assets held by an account (supports pagination plus optional `asset` and `scope` filtering).",
         "parameters": [
           {
             "description": "Account identifier.",
@@ -4773,9 +4773,18 @@
             }
           },
           {
-            "description": "Filter assets by asset identifier.",
+            "description": "Filter assets by asset definition selector.",
             "in": "query",
-            "name": "asset_id",
+            "name": "asset",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter assets by balance scope (`global` or `dataspace:<id>`).",
+            "in": "query",
+            "name": "scope",
             "required": false,
             "schema": {
               "type": "string"
@@ -5021,7 +5030,7 @@
     },
     "/v1/accounts/{uaid}/portfolio": {
       "get": {
-        "description": "Fetch the asset portfolio for an account identifier (supports optional asset_id filtering).",
+        "description": "Fetch the asset portfolio for an account identifier (supports optional `asset` and `scope` filtering).",
         "parameters": [
           {
             "description": "User account identifier.",
@@ -5033,9 +5042,18 @@
             }
           },
           {
-            "description": "Filter portfolio positions by asset identifier.",
+            "description": "Filter portfolio positions by asset definition selector.",
             "in": "query",
-            "name": "asset_id",
+            "name": "asset",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter portfolio positions by balance scope (`global` or `dataspace:<id>`).",
+            "in": "query",
+            "name": "scope",
             "required": false,
             "schema": {
               "type": "string"
@@ -9332,47 +9350,6 @@
         ]
       }
     },
-    "/v1/offline/rejections": {
-      "get": {
-        "description": "Returns aggregated counts grouped by platform and rejection reason so operators can monitor App Attest and KeyMint validation failures.",
-        "operationId": "offlineRejections",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OfflineRejectionListResponse"
-                }
-              }
-            },
-            "description": "Offline rejection counters retrieved."
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            },
-            "description": "Telemetry profile forbids exposing metrics.",
-            "headers": {
-              "x-iroha-reject-code": {
-                "description": "Stable offline rejection reason code (for example: certificate_expired, counter_conflict, allowance_exceeded, invoice_duplicate). Present only when the failure maps to an offline rejection.",
-                "schema": {
-                  "example": "certificate_expired",
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Report offline transfer rejection counters.",
-        "tags": [
-          "Offline"
-        ]
-      }
-    },
     "/v1/offline/reserve/defund": {
       "post": {
         "description": "Sync pending receipts, move reserve value back online, and return the updated reserve envelope.",
@@ -9530,8 +9507,8 @@
     },
     "/v1/offline/revocations": {
       "get": {
-        "description": "Return the issuer-signed deny-list bundle used by offline wallets.",
-        "operationId": "offlineRevocationsGet",
+        "description": "Return the human-readable list of currently revoked offline verdict identifiers.",
+        "operationId": "offlineRevocationsList",
         "responses": {
           "200": {
             "content": {
@@ -9544,7 +9521,7 @@
             "description": "Successful response"
           }
         },
-        "summary": "Fetch the signed offline revocation bundle.",
+        "summary": "List offline verdict revocations.",
         "tags": [
           "Offline"
         ]
@@ -9575,6 +9552,28 @@
           }
         },
         "summary": "Register an offline verdict revocation.",
+        "tags": [
+          "Offline"
+        ]
+      }
+    },
+    "/v1/offline/revocations/bundle": {
+      "get": {
+        "description": "Return the issuer-signed deny-list bundle used by offline wallets.",
+        "operationId": "offlineRevocationsBundleGet",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Fetch the signed offline revocation bundle.",
         "tags": [
           "Offline"
         ]

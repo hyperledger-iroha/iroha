@@ -55,14 +55,17 @@ public final class AccountLiteralHardCutTests {
   }
 
   @Test
-  public void uaidPortfolioQueryAcceptsEncodedAssetAndRejectsLegacyText() {
-    final String encoded = "norito:A1B2";
-    final UaidPortfolioQuery query = UaidPortfolioQuery.builder().setAssetId(encoded).build();
-    final String normalized = query.toQueryParameters().get("asset_id");
-    assert "norito:a1b2".equals(normalized) : "asset id must be canonicalized";
+  public void uaidPortfolioQueryAcceptsAssetSelectorsAndRejectsLegacyPrefixes() {
+    final String asset = "61CtjvNd9T3THAR65GsMVHr82Bjc";
+    final UaidPortfolioQuery query =
+        UaidPortfolioQuery.builder().setAsset(asset).setScope("global").build();
+    final String normalizedAsset = query.toQueryParameters().get("asset");
+    final String normalizedScope = query.toQueryParameters().get("scope");
+    assert asset.equals(normalizedAsset) : "asset selector must be preserved";
+    assert "global".equals(normalizedScope) : "scope must be preserved";
 
-    expectIllegalArgument(() -> UaidPortfolioQuery.builder().setAssetId("xor#sora"));
-    expectIllegalArgument(() -> UaidPortfolioQuery.builder().setAssetId("xor##alice"));
+    expectIllegalArgument(() -> UaidPortfolioQuery.builder().setAsset("norito:A1B2"));
+    expectIllegalArgument(() -> UaidPortfolioQuery.builder().setAsset("aid:deadbeef"));
   }
 
   @Test

@@ -3333,7 +3333,9 @@ async fn handler_accounts_onboard_multisig(
 #[derive(JsonDeserialize)]
 struct AccountsPortfolioQuery {
     #[norito(default)]
-    asset_id: Option<String>,
+    asset: Option<String>,
+    #[norito(default)]
+    scope: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -3344,18 +3346,22 @@ async fn handler_accounts_portfolio(
     AxPath(uaid_literal): AxPath<String>,
     AxQuery(query): AxQuery<AccountsPortfolioQuery>,
 ) -> Result<impl IntoResponse, Error> {
-    let asset_id = match query.asset_id {
-        Some(raw) => {
-            let parsed = parse_asset_id(&raw)?;
-            Some(parsed.canonical_encoded())
-        }
-        None => None,
-    };
+    let asset = query
+        .asset
+        .as_deref()
+        .map(|raw| parse_asset_definition_id(app.as_ref(), raw))
+        .transpose()?;
+    let scope = query
+        .scope
+        .as_deref()
+        .map(crate::routing::parse_asset_balance_scope_literal)
+        .transpose()?;
     if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
         return routing::handle_v1_accounts_portfolio(
             app.state.clone(),
             AxPath(uaid_literal),
-            asset_id,
+            asset,
+            scope,
             app.telemetry.clone(),
         )
         .await;
@@ -3375,7 +3381,8 @@ async fn handler_accounts_portfolio(
     routing::handle_v1_accounts_portfolio(
         app.state.clone(),
         AxPath(uaid_literal),
-        asset_id,
+        asset,
+        scope,
         app.telemetry.clone(),
     )
     .await
@@ -3940,6 +3947,28 @@ async fn handler_offline_reserve_revocations(
     }
 
     json_ok(crate::offline_reserve::revocation_list(app.as_ref())?)
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_reserve_revocations_bundle(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+) -> Result<impl IntoResponse, Error> {
+    if !limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        check_access_enforced(
+            &app,
+            &headers,
+            None,
+            "v1/offline/revocations/bundle",
+            enforce,
+        )
+        .await?;
+    }
+
+    json_ok(crate::offline_reserve::revocation_bundle(app.as_ref())?)
 }
 
 #[cfg(feature = "app_api")]
@@ -8005,6 +8034,17 @@ fn report_soracloud_local_read_proxy_failure(
 }
 
 #[cfg(feature = "app_api")]
+fn report_soracloud_local_read_local_proxy_failure(
+    app: &SharedAppState,
+    request: &SoracloudLocalReadRequest,
+    error: &SoracloudRuntimeExecutionError,
+) {
+    if let Some(runtime) = app.soracloud_runtime.as_ref() {
+        runtime.report_generated_hf_local_proxy_failure(request, error);
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn maybe_request_soracloud_generated_hf_reconcile(
     app: &SharedAppState,
     request: &SoracloudLocalReadRequest,
@@ -8039,6 +8079,16 @@ fn handle_soracloud_generated_hf_proxy_execution_failure(
     error: &SoracloudRuntimeExecutionError,
 ) {
     report_soracloud_local_read_proxy_failure(app, request, target_peer_id, error);
+    maybe_request_soracloud_generated_hf_reconcile(app, request, error);
+}
+
+#[cfg(feature = "app_api")]
+fn handle_soracloud_generated_hf_local_proxy_execution_failure(
+    app: &SharedAppState,
+    request: &SoracloudLocalReadRequest,
+    error: &SoracloudRuntimeExecutionError,
+) {
+    report_soracloud_local_read_local_proxy_failure(app, request, error);
     maybe_request_soracloud_generated_hf_reconcile(app, request, error);
 }
 
@@ -8241,20 +8291,24 @@ async fn execute_soracloud_local_read_via_proxy(
     request: SoracloudLocalReadRequest,
 ) -> Result<iroha_core::soracloud_runtime::SoracloudLocalReadResponse, SoracloudRuntimeExecutionError>
 {
+    let report_request = request.clone();
     let Some(runtime) = app.soracloud_runtime.as_ref() else {
-        return Err(SoracloudRuntimeExecutionError::new(
+        let error = SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
             "Soracloud runtime is unavailable on this ingress node",
-        ));
+        );
+        handle_soracloud_generated_hf_local_proxy_execution_failure(app, &report_request, &error);
+        return Err(error);
     };
     let Some(network) = app.p2p.as_ref() else {
-        return Err(SoracloudRuntimeExecutionError::new(
+        let error = SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
             "Soracloud proxy routing requires an attached P2P network",
-        ));
+        );
+        handle_soracloud_generated_hf_local_proxy_execution_failure(app, &report_request, &error);
+        return Err(error);
     };
 
-    let report_request = request.clone();
     let request_id = Hash::new(
         norito::to_bytes(&(
             "soracloud:local-read-proxy",
@@ -8505,20 +8559,16 @@ async fn process_incoming_soracloud_proxy_request(
                 ) {
                     match execute_soracloud_local_read_via_proxy(
                         &app,
-                        primary_peer_id,
+                        primary_peer_id.clone(),
                         proxy_request.request.clone(),
                     )
                     .await
                     {
                         Ok(response) => SoracloudLocalReadProxyOutcomeV1::Ok(response),
-                        Err(forward_error) => {
-                            handle_incoming_soracloud_generated_hf_proxy_authority_failure(
-                                &app,
-                                &proxy_request.request,
-                                &forward_error,
-                            );
-                            SoracloudLocalReadProxyOutcomeV1::Err(forward_error)
-                        }
+                        // `execute_soracloud_local_read_via_proxy()` already reports
+                        // generated-HF proxy validation and execution failures against the
+                        // authoritative primary before returning the error here.
+                        Err(forward_error) => SoracloudLocalReadProxyOutcomeV1::Err(forward_error),
                     }
                 } else {
                     handle_incoming_soracloud_generated_hf_proxy_authority_failure(
@@ -17201,6 +17251,10 @@ impl Torii {
                     get(handler_offline_reserve_revocations).post(handler_offline_reserve_revoke),
                 )
                 .route(
+                    "/v1/offline/revocations/bundle",
+                    get(handler_offline_reserve_revocations_bundle),
+                )
+                .route(
                     "/v1/offline/reserve/setup",
                     post(handler_offline_reserve_setup),
                 )
@@ -23759,6 +23813,118 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
+    async fn incoming_proxy_forward_failure_reports_remote_primary_health_and_requests_reconcile_once()
+     {
+        let primary_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
+        let (world, service_name, service_version) =
+            seed_generated_hf_public_world(&primary_peer_id);
+        let local_peer_id =
+            active_generated_hf_replica_peer_id(&world, &service_name, &service_version);
+        let captured_proxy_failures = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured_reconcile_requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut app = mk_app_state_for_tests_with_world(world);
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime {
+            snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
+            state_dir: PathBuf::from("/tmp/test-soracloud-runtime"),
+            local_peer_id: Some(local_peer_id),
+            result: Err(
+                iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Unavailable,
+                    "incoming forward failure test should not execute the runtime locally",
+                ),
+            ),
+            captured_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
+            captured_proxy_failures: Arc::clone(&captured_proxy_failures),
+            captured_reconcile_requests: Arc::clone(&captured_reconcile_requests),
+        }));
+        Arc::get_mut(&mut app).expect("unique app state").p2p =
+            Some(iroha_core::IrohaNetwork::closed_for_tests());
+
+        let request = sample_generated_hf_infer_request(service_name, service_version);
+        let incoming_request = SoracloudLocalReadProxyRequestV1 {
+            schema_version: SORACLOUD_LOCAL_READ_PROXY_REQUEST_VERSION_V1,
+            request_id: Hash::new(b"incoming-generated-hf-forward-failure"),
+            request: request.clone(),
+        };
+        let response_error = SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            "replica forwarding to primary timed out",
+        );
+        let app_for_response = app.clone();
+        let primary_peer_id_for_response: PeerId =
+            primary_peer_id.parse().expect("valid primary peer id");
+        let response_task = tokio::spawn(async move {
+            let request_id = tokio::time::timeout(Duration::from_secs(1), async {
+                loop {
+                    if let Some(request_id) = app_for_response
+                        .soracloud_proxy_pending
+                        .lock()
+                        .await
+                        .keys()
+                        .next()
+                        .copied()
+                    {
+                        break request_id;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("forwarded proxy request should be pending before timeout");
+            super::process_incoming_soracloud_proxy_response(
+                &app_for_response,
+                primary_peer_id_for_response,
+                SoracloudLocalReadProxyResponseV1 {
+                    schema_version: SORACLOUD_LOCAL_READ_PROXY_RESPONSE_VERSION_V1,
+                    request_id,
+                    outcome: SoracloudLocalReadProxyOutcomeV1::Err(response_error),
+                },
+            )
+            .await;
+        });
+
+        super::process_incoming_soracloud_proxy_request(
+            app.clone(),
+            iroha_core::IrohaNetwork::closed_for_tests(),
+            Peer::new(
+                "127.0.0.1:1337".parse().expect("valid peer address"),
+                KeyPair::random().public_key().clone(),
+            ),
+            incoming_request,
+        )
+        .await;
+        response_task
+            .await
+            .expect("proxy response task should succeed");
+
+        let proxy_failures = captured_proxy_failures
+            .lock()
+            .expect("proxy failure capture lock");
+        assert_eq!(proxy_failures.len(), 1);
+        assert_eq!(proxy_failures[0].0.service_name, request.service_name);
+        assert_eq!(proxy_failures[0].1, primary_peer_id);
+        assert_eq!(
+            proxy_failures[0].2.kind,
+            SoracloudRuntimeExecutionErrorKind::Unavailable
+        );
+        assert!(proxy_failures[0].2.message.contains("timed out"));
+
+        let captured = captured_reconcile_requests
+            .lock()
+            .expect("reconcile capture lock");
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].0.service_name, request.service_name);
+        assert_eq!(captured[0].0.service_version, request.service_version);
+        assert_eq!(
+            captured[0].1.kind,
+            SoracloudRuntimeExecutionErrorKind::Unavailable
+        );
+        assert!(captured[0].1.message.contains("timed out"));
+    }
+
+    #[tokio::test]
     async fn resolve_incoming_soracloud_proxy_forward_target_returns_primary() {
         let primary_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
         let (world, service_name, service_version) =
@@ -24226,6 +24392,70 @@ pub(crate) mod tests_runtime_handlers {
             SoracloudRuntimeExecutionErrorKind::Unavailable
         );
         assert!(reconcile_requests[0].1.message.contains("timed out"));
+    }
+
+    #[tokio::test]
+    async fn execute_soracloud_local_read_via_proxy_missing_p2p_does_not_blame_primary() {
+        let primary_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
+        let (world, service_name, service_version) =
+            seed_generated_hf_public_world(&primary_peer_id);
+        let local_peer_id =
+            active_generated_hf_replica_peer_id(&world, &service_name, &service_version);
+        let captured_proxy_failures = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured_reconcile_requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut app = mk_app_state_for_tests_with_world(world);
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime {
+            snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
+            state_dir: PathBuf::from("/tmp/test-soracloud-runtime"),
+            local_peer_id: Some(local_peer_id),
+            result: Err(
+                iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Unavailable,
+                    "missing-p2p proxy test should not execute the runtime locally",
+                ),
+            ),
+            captured_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
+            captured_proxy_failures: Arc::clone(&captured_proxy_failures),
+            captured_reconcile_requests: Arc::clone(&captured_reconcile_requests),
+        }));
+
+        let request = sample_generated_hf_infer_request(service_name, service_version);
+        let error = super::execute_soracloud_local_read_via_proxy(
+            &app,
+            primary_peer_id.parse().expect("valid peer id"),
+            request.clone(),
+        )
+        .await
+        .expect_err("missing P2P network must fail closed");
+
+        assert_eq!(error.kind, SoracloudRuntimeExecutionErrorKind::Unavailable);
+        assert!(error.message.contains("attached P2P network"));
+
+        let proxy_failures = captured_proxy_failures
+            .lock()
+            .expect("proxy failure capture lock");
+        assert!(
+            proxy_failures.is_empty(),
+            "local proxy transport failure must not blame the authoritative primary"
+        );
+
+        let reconcile_requests = captured_reconcile_requests
+            .lock()
+            .expect("reconcile capture lock");
+        assert_eq!(reconcile_requests.len(), 1);
+        assert_eq!(reconcile_requests[0].0.service_name, request.service_name);
+        assert_eq!(
+            reconcile_requests[0].1.kind,
+            SoracloudRuntimeExecutionErrorKind::Unavailable
+        );
+        assert!(
+            reconcile_requests[0]
+                .1
+                .message
+                .contains("attached P2P network")
+        );
     }
 
     #[tokio::test]

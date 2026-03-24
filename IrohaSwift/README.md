@@ -75,10 +75,10 @@ let sdk = IrohaSDK(baseURL: torii.baseURL)
 // Generate Ed25519 keypair (CryptoKit)
 let kp = try Keypair.generate()
 let accountId = AccountId.make(publicKey: kp.publicKey)
-let assetId = "norito:<hex-encoded-asset-id>"
+let asset = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
 
 // Fetch balances
-sdk.getAssets(accountId: accountId, assetId: assetId) { result in
+sdk.getAssets(accountId: accountId, asset: asset, scope: "global") { result in
     print(result)
 }
 
@@ -226,7 +226,7 @@ if #available(iOS 15.0, macOS 12.0, *) {
         switch record.details {
         case .asset(let asset):
             print("transfer:", asset.amount,
-                  asset.assetDefinitionId ?? asset.sourceAssetId,
+                  asset.assetDefinitionId ?? "unknown asset",
                   "from:", asset.senderAccountId ?? "unknown",
                   "to:", asset.destinationAccountId)
         case .assetBatch(let entries):
@@ -255,19 +255,15 @@ if #available(iOS 15.0, macOS 12.0, *) {
 }
 ```
 
-Transfer summaries also expose `sourceAssetId` and `destinationAssetId` when they can be
-constructed from the asset definition and account ids. For batch transfers, `transferIndex`
-tracks the entry position within the instruction payload. Convenience flags `isIncoming`,
-`isOutgoing`, and `isSelfTransfer` help with UI direction labels.
+For batch transfers, `transferIndex` tracks the entry position within the instruction payload.
+Convenience flags `isIncoming`, `isOutgoing`, and `isSelfTransfer` help with UI direction labels.
 If you need to recompute direction for another account or show counterparties, use
 `direction(relativeTo:)` and `counterpartyAccountId(relativeTo:)`. Direction helpers also accept
 `isIncoming(relativeTo:)`, `isOutgoing(relativeTo:)`, and `isSelfTransfer(relativeTo:)`.
-To resolve asset ids relative to a specific account, use `assetId(relativeTo:)` and
-`counterpartyAssetId(relativeTo:)`.
 Use `signedAmount(relativeTo:)` when you need a simple +/‑ string for UI totals.
 Summaries conform to `Identifiable`, using `transactionHash|instructionIndex|transferIndex` as the
 stable identifier.
-Use `matchingAccount`, `assetDefinitionId`, or `assetId` to filter transfer records and summaries.
+Use `matchingAccount` or `assetDefinitionId` to filter transfer records and summaries.
 
 For a one-shot transaction history helper, use `getTransactionHistory` (alias of
 `getAccountTransferHistory`):
@@ -411,7 +407,7 @@ Swift concurrency wrappers are available on iOS 15/macOS 12 and newer:
 ```swift
 if #available(iOS 15, macOS 12, *) {
     Task {
-        let balances = try await torii.getAssets(accountId: accountId, assetId: assetId)
+        let balances = try await torii.getAssets(accountId: accountId, asset: asset, scope: "global")
         print("balances:", balances)
 
         try await sdk.submit(transfer: transfer, keypair: kp)
@@ -503,31 +499,6 @@ SDK surfaces `IrohaSDKError.toriiRejected` and leaves the remaining entries unto
 apps can decide how to remediate.
 
 ### Offline receipts and bundles
-
-When you need a full `norito:<hex>` asset id from textual parts, use the new builders:
-
-```swift
-let canonicalAssetId = try ToriiClient.buildCanonicalAssetIdLiteralOffline(
-    assetDefinitionId: "66owaQmAQMuHxPzxUN3bqZ6FJfDa",
-    accountId: "<account_i105>"
-)
-```
-
-For alias inputs, resolve online and encode in one call:
-
-```swift
-if #available(iOS 15.0, macOS 12.0, *) {
-    let assetId = try await torii.buildAssetIdLiteralResolvingAliases(
-        assetDefinitionIdOrAlias: "usd#issuer.main",
-        accountIdOrAlias: "alice"
-    )
-    print(assetId) // norito:<hex>
-}
-```
-
-Offline-only encoding is canonical-only. Alias-shaped inputs are rejected unless you call the async resolver path above.
-The async resolver path also falls back to `/v1/assets/aliases/resolve` when a non-alias asset definition is invalid.
-Component-based asset-id building requires the native bridge symbol `connect_norito_encode_asset_id_literal`.
 
 Use `OfflineReceiptBuilder` to validate offline spend receipts and bundle submissions (spend-key
 signature verification, policy enforcement, platform snapshot binding, and aggregate proof root

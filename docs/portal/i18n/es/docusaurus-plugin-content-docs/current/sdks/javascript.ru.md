@@ -186,7 +186,7 @@ ayudantes de cuenta atrás (`deadline_kind`, `deadline_state`, `deadline_ms`,
 `deadline_ms_remaining`) resalta la próxima fecha límite de vencimiento (actualizar → política
 → certificado) para que las insignias de UI puedan advertir a los operadores cada vez que se haya asignado un permiso
 Quedan <24 h. El SDK
-refleja los filtros REST expuestos por `/v1/offline/allowances`:
+refleja los filtros REST expuestos por `/v1/offline/reserve/topup`:
 `certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
 `verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` y el
 `requireVerdict` / `onlyMissingVerdict` booleanos. Combinaciones no válidas (para
