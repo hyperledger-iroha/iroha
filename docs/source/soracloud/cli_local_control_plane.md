@@ -183,10 +183,18 @@ Soracloud v1 is an authoritative, IVM-only runtime.
     the embedded runtime still fails closed on direct replica/unassigned local
     execution and generated HF runtime receipts carry `placement_id`,
     validator, and peer attribution from the authoritative placement record.
+  - authoritative expired-host reconciliation now records persisted
+    model-host violation evidence, reuses the public-lane validator slash path,
+    and applies the default HF shared-lease penalty policy:
+    `warmup_no_show_slash_bps=500`,
+    `assigned_heartbeat_miss_slash_bps=250`,
+    `assigned_heartbeat_miss_strike_threshold=3`, and
+    `advert_contradiction_slash_bps=1000`.
   - remaining HF hosting work is now:
     - deterministic replica failover/backfill against live runtime health
       beyond the authoritative expired-host sweep, and
-    - slash-evidence emission for no-show / missed-heartbeat host violations.
+    - automatic advert-contradiction and runtime-worker-health violation
+      emission beyond the current operator/expiry-driven evidence path.
   - generated HF local execution now keeps a resident per-source Python worker
     alive under `irohad`, reuses the loaded model across repeated `/infer`
     calls, and restarts that worker deterministically if the local import

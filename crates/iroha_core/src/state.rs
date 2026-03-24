@@ -101,12 +101,12 @@ use iroha_data_model::{
         SoraDeploymentBundleV1, SoraHfPlacementRecordV1, SoraHfSharedLeaseAuditEventV1,
         SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1, SoraHfSourceRecordV1,
         SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1, SoraModelHostCapabilityRecordV1,
-        SoraModelRegistryV1, SoraModelWeightAuditEventV1, SoraModelWeightVersionRecordV1,
-        SoraPrivateCompileProfileV1, SoraPrivateInferenceCheckpointV1,
-        SoraPrivateInferenceSessionV1, SoraRuntimeReceiptV1, SoraServiceAuditEventV1,
-        SoraServiceDeploymentStateV1, SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1,
-        SoraServiceStateEntryV1, SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1,
-        SoraUploadedModelBundleV1, SoraUploadedModelChunkV1,
+        SoraModelHostViolationEvidenceRecordV1, SoraModelRegistryV1, SoraModelWeightAuditEventV1,
+        SoraModelWeightVersionRecordV1, SoraPrivateCompileProfileV1,
+        SoraPrivateInferenceCheckpointV1, SoraPrivateInferenceSessionV1, SoraRuntimeReceiptV1,
+        SoraServiceAuditEventV1, SoraServiceDeploymentStateV1, SoraServiceMailboxMessageV1,
+        SoraServiceRuntimeStateV1, SoraServiceStateEntryV1, SoraTrainingJobAuditEventV1,
+        SoraTrainingJobRecordV1, SoraUploadedModelBundleV1, SoraUploadedModelChunkV1,
     },
     soradns::{
         DirectoryId, DirectoryRotationPolicyV1, PendingDirectoryDraftV1, ResolverDirectoryRecordV1,
@@ -450,6 +450,9 @@ macro_rules! build_world_block {
             soracloud_hf_shared_lease_audit_events: $state
                 .soracloud_hf_shared_lease_audit_events
                 .$method(),
+            soracloud_model_host_violation_evidence: $state
+                .soracloud_model_host_violation_evidence
+                .$method(),
             soracloud_hf_placements: $state.soracloud_hf_placements.$method(),
             soracloud_mailbox_messages: $state.soracloud_mailbox_messages.$method(),
             soracloud_runtime_receipts: $state.soracloud_runtime_receipts.$method(),
@@ -630,6 +633,9 @@ macro_rules! build_world_transaction {
                 .transaction(),
             soracloud_hf_shared_lease_audit_events: $state
                 .soracloud_hf_shared_lease_audit_events
+                .transaction(),
+            soracloud_model_host_violation_evidence: $state
+                .soracloud_model_host_violation_evidence
                 .transaction(),
             soracloud_hf_placements: $state.soracloud_hf_placements.transaction(),
             soracloud_mailbox_messages: $state.soracloud_mailbox_messages.transaction(),
@@ -1607,6 +1613,9 @@ pub struct World {
         Storage<(String, String), SoraHfSharedLeaseMemberV1>,
     /// Shared lease audit events keyed by deterministic sequence.
     pub(crate) soracloud_hf_shared_lease_audit_events: Storage<u64, SoraHfSharedLeaseAuditEventV1>,
+    /// Host-violation evidence keyed by deterministic evidence identifier.
+    pub(crate) soracloud_model_host_violation_evidence:
+        Storage<Hash, SoraModelHostViolationEvidenceRecordV1>,
     /// Active HF placement records keyed by shared-lease pool identifier.
     pub(crate) soracloud_hf_placements: Storage<Hash, SoraHfPlacementRecordV1>,
     /// Ordered Soracloud mailbox messages keyed by deterministic message id.
@@ -2007,6 +2016,9 @@ pub struct WorldBlock<'world> {
     /// Shared lease audit events keyed by deterministic sequence.
     pub(crate) soracloud_hf_shared_lease_audit_events:
         StorageBlock<'world, u64, SoraHfSharedLeaseAuditEventV1>,
+    /// Host-violation evidence keyed by deterministic evidence identifier.
+    pub(crate) soracloud_model_host_violation_evidence:
+        StorageBlock<'world, Hash, SoraModelHostViolationEvidenceRecordV1>,
     /// Active HF placement records keyed by shared-lease pool identifier.
     pub(crate) soracloud_hf_placements: StorageBlock<'world, Hash, SoraHfPlacementRecordV1>,
     /// Ordered Soracloud mailbox messages keyed by message id.
@@ -2566,6 +2578,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// Shared lease audit events keyed by deterministic sequence.
     pub(crate) soracloud_hf_shared_lease_audit_events:
         StorageTransaction<'block, 'world, u64, SoraHfSharedLeaseAuditEventV1>,
+    /// Host-violation evidence keyed by deterministic evidence identifier.
+    pub(crate) soracloud_model_host_violation_evidence:
+        StorageTransaction<'block, 'world, Hash, SoraModelHostViolationEvidenceRecordV1>,
     /// Active HF placement records keyed by shared-lease pool identifier.
     pub(crate) soracloud_hf_placements:
         StorageTransaction<'block, 'world, Hash, SoraHfPlacementRecordV1>,
@@ -3186,6 +3201,9 @@ pub struct WorldView<'world> {
     /// Shared lease audit events keyed by deterministic sequence.
     pub(crate) soracloud_hf_shared_lease_audit_events:
         StorageView<'world, u64, SoraHfSharedLeaseAuditEventV1>,
+    /// Host-violation evidence keyed by deterministic evidence identifier.
+    pub(crate) soracloud_model_host_violation_evidence:
+        StorageView<'world, Hash, SoraModelHostViolationEvidenceRecordV1>,
     /// Active HF placement records keyed by shared-lease pool identifier.
     pub(crate) soracloud_hf_placements: StorageView<'world, Hash, SoraHfPlacementRecordV1>,
     /// Ordered Soracloud mailbox messages keyed by message id.
@@ -10188,6 +10206,13 @@ impl World {
         &mut self.soracloud_hf_shared_lease_audit_events
     }
 
+    /// Provides mutable access to model-host violation evidence for tests and API scaffolding.
+    pub fn soracloud_model_host_violation_evidence_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<Hash, SoraModelHostViolationEvidenceRecordV1> {
+        &mut self.soracloud_model_host_violation_evidence
+    }
+
     /// Provides mutable access to Soracloud mailbox messages for tests and API scaffolding.
     pub fn soracloud_mailbox_messages_mut_for_testing(
         &mut self,
@@ -10924,6 +10949,9 @@ impl World {
             soracloud_hf_shared_lease_audit_events: self
                 .soracloud_hf_shared_lease_audit_events
                 .view(),
+            soracloud_model_host_violation_evidence: self
+                .soracloud_model_host_violation_evidence
+                .view(),
             soracloud_hf_placements: self.soracloud_hf_placements.view(),
             soracloud_mailbox_messages: self.soracloud_mailbox_messages.view(),
             soracloud_runtime_receipts: self.soracloud_runtime_receipts.view(),
@@ -11341,6 +11369,10 @@ pub trait WorldReadOnly {
     fn soracloud_hf_shared_lease_audit_events(
         &self,
     ) -> &impl StorageReadOnly<u64, SoraHfSharedLeaseAuditEventV1>;
+    /// Model-host violation evidence keyed by deterministic evidence identifier (read-only).
+    fn soracloud_model_host_violation_evidence(
+        &self,
+    ) -> &impl StorageReadOnly<Hash, SoraModelHostViolationEvidenceRecordV1>;
     /// Active HF placement records keyed by shared-lease pool identifier (read-only).
     fn soracloud_hf_placements(&self) -> &impl StorageReadOnly<Hash, SoraHfPlacementRecordV1>;
     /// Ordered Soracloud mailbox messages keyed by message id (read-only).
@@ -12276,6 +12308,11 @@ macro_rules! impl_world_ro {
             ) -> &impl StorageReadOnly<u64, SoraHfSharedLeaseAuditEventV1> {
                 &self.soracloud_hf_shared_lease_audit_events
             }
+            fn soracloud_model_host_violation_evidence(
+                &self,
+            ) -> &impl StorageReadOnly<Hash, SoraModelHostViolationEvidenceRecordV1> {
+                &self.soracloud_model_host_violation_evidence
+            }
             fn soracloud_hf_placements(&self) -> &impl StorageReadOnly<Hash, SoraHfPlacementRecordV1> {
                 &self.soracloud_hf_placements
             }
@@ -12717,6 +12754,7 @@ impl<'world> WorldBlock<'world> {
             soracloud_hf_shared_lease_pools,
             soracloud_hf_shared_lease_members,
             soracloud_hf_shared_lease_audit_events,
+            soracloud_model_host_violation_evidence,
             soracloud_hf_placements,
             soracloud_mailbox_messages,
             soracloud_runtime_receipts,
@@ -12822,6 +12860,7 @@ impl<'world> WorldBlock<'world> {
         soracloud_hf_shared_lease_pools.commit();
         soracloud_hf_shared_lease_members.commit();
         soracloud_hf_shared_lease_audit_events.commit();
+        soracloud_model_host_violation_evidence.commit();
         soracloud_hf_placements.commit();
         soracloud_mailbox_messages.commit();
         soracloud_runtime_receipts.commit();
@@ -13762,6 +13801,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             soracloud_hf_shared_lease_pools,
             soracloud_hf_shared_lease_members,
             soracloud_hf_shared_lease_audit_events,
+            soracloud_model_host_violation_evidence,
             soracloud_hf_placements,
             soracloud_mailbox_messages,
             soracloud_runtime_receipts,
@@ -13853,6 +13893,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         soracloud_hf_shared_lease_pools.apply();
         soracloud_hf_shared_lease_members.apply();
         soracloud_hf_shared_lease_audit_events.apply();
+        soracloud_model_host_violation_evidence.apply();
         soracloud_hf_placements.apply();
         soracloud_mailbox_messages.apply();
         soracloud_runtime_receipts.apply();
@@ -26075,6 +26116,8 @@ pub(crate) mod deserialize {
             take_optional_default(&mut map, "soracloud_hf_shared_lease_members")?;
         let soracloud_hf_shared_lease_audit_events =
             take_optional_default(&mut map, "soracloud_hf_shared_lease_audit_events")?;
+        let soracloud_model_host_violation_evidence =
+            take_optional_default(&mut map, "soracloud_model_host_violation_evidence")?;
         let soracloud_hf_placements = take_optional_default(&mut map, "soracloud_hf_placements")?;
         let soracloud_mailbox_messages =
             take_optional_default(&mut map, "soracloud_mailbox_messages")?;
@@ -26205,6 +26248,7 @@ pub(crate) mod deserialize {
             soracloud_hf_shared_lease_pools,
             soracloud_hf_shared_lease_members,
             soracloud_hf_shared_lease_audit_events,
+            soracloud_model_host_violation_evidence,
             soracloud_hf_placements,
             soracloud_mailbox_messages,
             soracloud_runtime_receipts,

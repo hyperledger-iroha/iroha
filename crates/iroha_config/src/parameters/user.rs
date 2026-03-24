@@ -11228,6 +11228,20 @@ pub struct NexusHfSharedLeases {
         default = "DurationMs(std::time::Duration::from_millis(defaults::nexus::hf_shared_leases::DRAIN_GRACE_MS))"
     )]
     pub drain_grace_ms: DurationMs,
+    /// Slash ratio applied when an assigned host never finishes warmup before expiry.
+    #[config(default = "defaults::nexus::hf_shared_leases::WARMUP_NO_SHOW_SLASH_BPS")]
+    pub warmup_no_show_slash_bps: u16,
+    /// Slash ratio applied when repeated assigned-host heartbeat misses cross the threshold.
+    #[config(default = "defaults::nexus::hf_shared_leases::ASSIGNED_HEARTBEAT_MISS_SLASH_BPS")]
+    pub assigned_heartbeat_miss_slash_bps: u16,
+    /// Strike threshold for assigned-host heartbeat misses within one reservation window.
+    #[config(
+        default = "defaults::nexus::hf_shared_leases::ASSIGNED_HEARTBEAT_MISS_STRIKE_THRESHOLD"
+    )]
+    pub assigned_heartbeat_miss_strike_threshold: u32,
+    /// Slash ratio applied when a host advert is provably self-contradictory.
+    #[config(default = "defaults::nexus::hf_shared_leases::ADVERT_CONTRADICTION_SLASH_BPS")]
+    pub advert_contradiction_slash_bps: u16,
 }
 
 impl Default for NexusHfSharedLeases {
@@ -11236,14 +11250,52 @@ impl Default for NexusHfSharedLeases {
             drain_grace_ms: DurationMs(std::time::Duration::from_millis(
                 defaults::nexus::hf_shared_leases::DRAIN_GRACE_MS,
             )),
+            warmup_no_show_slash_bps: defaults::nexus::hf_shared_leases::WARMUP_NO_SHOW_SLASH_BPS,
+            assigned_heartbeat_miss_slash_bps:
+                defaults::nexus::hf_shared_leases::ASSIGNED_HEARTBEAT_MISS_SLASH_BPS,
+            assigned_heartbeat_miss_strike_threshold:
+                defaults::nexus::hf_shared_leases::ASSIGNED_HEARTBEAT_MISS_STRIKE_THRESHOLD,
+            advert_contradiction_slash_bps:
+                defaults::nexus::hf_shared_leases::ADVERT_CONTRADICTION_SLASH_BPS,
         }
     }
 }
 
 impl NexusHfSharedLeases {
-    fn parse(self, _emitter: &mut Emitter<ParseError>) -> Option<actual::NexusHfSharedLeases> {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusHfSharedLeases> {
+        for (field, value) in [
+            ("warmup_no_show_slash_bps", self.warmup_no_show_slash_bps),
+            (
+                "assigned_heartbeat_miss_slash_bps",
+                self.assigned_heartbeat_miss_slash_bps,
+            ),
+            (
+                "advert_contradiction_slash_bps",
+                self.advert_contradiction_slash_bps,
+            ),
+        ] {
+            if value > 10_000 {
+                emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                    "nexus.hf_shared_leases.{field} must be <= 10000 (found {value})"
+                )));
+                return None;
+            }
+        }
+        if self.assigned_heartbeat_miss_strike_threshold == 0 {
+            emitter.emit(
+                Report::new(ParseError::InvalidNexusConfig).attach(
+                    "nexus.hf_shared_leases.assigned_heartbeat_miss_strike_threshold must be greater than zero"
+                        .to_string(),
+                ),
+            );
+            return None;
+        }
         Some(actual::NexusHfSharedLeases {
             drain_grace: self.drain_grace_ms.get(),
+            warmup_no_show_slash_bps: self.warmup_no_show_slash_bps,
+            assigned_heartbeat_miss_slash_bps: self.assigned_heartbeat_miss_slash_bps,
+            assigned_heartbeat_miss_strike_threshold: self.assigned_heartbeat_miss_strike_threshold,
+            advert_contradiction_slash_bps: self.advert_contradiction_slash_bps,
         })
     }
 }
@@ -17807,6 +17859,28 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             actual.nexus.hf_shared_leases.drain_grace,
             StdDuration::from_millis(defaults::nexus::hf_shared_leases::DRAIN_GRACE_MS)
         );
+        assert_eq!(
+            actual.nexus.hf_shared_leases.warmup_no_show_slash_bps,
+            defaults::nexus::hf_shared_leases::WARMUP_NO_SHOW_SLASH_BPS
+        );
+        assert_eq!(
+            actual
+                .nexus
+                .hf_shared_leases
+                .assigned_heartbeat_miss_slash_bps,
+            defaults::nexus::hf_shared_leases::ASSIGNED_HEARTBEAT_MISS_SLASH_BPS
+        );
+        assert_eq!(
+            actual
+                .nexus
+                .hf_shared_leases
+                .assigned_heartbeat_miss_strike_threshold,
+            defaults::nexus::hf_shared_leases::ASSIGNED_HEARTBEAT_MISS_STRIKE_THRESHOLD
+        );
+        assert_eq!(
+            actual.nexus.hf_shared_leases.advert_contradiction_slash_bps,
+            defaults::nexus::hf_shared_leases::ADVERT_CONTRADICTION_SLASH_BPS
+        );
     }
 
     #[test]
@@ -17819,12 +17893,41 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .expect("nexus table");
         let mut hf_shared_leases = Table::new();
         hf_shared_leases.insert("drain_grace_ms".into(), Value::Integer(12_345));
+        hf_shared_leases.insert("warmup_no_show_slash_bps".into(), Value::Integer(777));
+        hf_shared_leases.insert(
+            "assigned_heartbeat_miss_slash_bps".into(),
+            Value::Integer(222),
+        );
+        hf_shared_leases.insert(
+            "assigned_heartbeat_miss_strike_threshold".into(),
+            Value::Integer(4),
+        );
+        hf_shared_leases.insert("advert_contradiction_slash_bps".into(), Value::Integer(999));
         nexus.insert("hf_shared_leases".into(), Value::Table(hf_shared_leases));
 
         let actual = load_root(table);
         assert_eq!(
             actual.nexus.hf_shared_leases.drain_grace,
             StdDuration::from_millis(12_345)
+        );
+        assert_eq!(actual.nexus.hf_shared_leases.warmup_no_show_slash_bps, 777);
+        assert_eq!(
+            actual
+                .nexus
+                .hf_shared_leases
+                .assigned_heartbeat_miss_slash_bps,
+            222
+        );
+        assert_eq!(
+            actual
+                .nexus
+                .hf_shared_leases
+                .assigned_heartbeat_miss_strike_threshold,
+            4
+        );
+        assert_eq!(
+            actual.nexus.hf_shared_leases.advert_contradiction_slash_bps,
+            999
         );
     }
 

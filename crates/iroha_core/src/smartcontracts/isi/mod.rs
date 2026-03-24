@@ -150,6 +150,8 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::soracloud::AdvertiseSoracloudModelHost>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::HeartbeatSoracloudModelHost>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::WithdrawSoracloudModelHost>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::ReconcileSoracloudModelHosts>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::ReportSoracloudModelHostViolation>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::DeploySoracloudAgentApartment>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::RenewSoracloudAgentLease>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::RestartSoracloudAgentApartment>,

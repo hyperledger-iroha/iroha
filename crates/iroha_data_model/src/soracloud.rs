@@ -100,6 +100,8 @@ pub const SORA_HF_SHARED_LEASE_POOL_VERSION_V1: u16 = 1;
 pub const SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraHfSharedLeaseAuditEventV1`].
 pub const SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraModelHostViolationEvidenceRecordV1`].
+pub const SORA_MODEL_HOST_VIOLATION_EVIDENCE_RECORD_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraAgentApartmentRecordV1`].
 pub const SORA_AGENT_APARTMENT_RECORD_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraAgentApartmentAuditEventV1`].
@@ -5466,6 +5468,167 @@ impl SoraHfPlacementRecordV1 {
     }
 }
 
+/// Canonical Soracloud model-host violation kinds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+pub enum SoraModelHostViolationKindV1 {
+    /// The host was assigned to warm a model but never became ready before its advert expired.
+    WarmupNoShow,
+    /// The host was already assigned and warm but later lost its assigned-host heartbeat.
+    AssignedHeartbeatMiss,
+    /// The host advert was provably self-contradictory.
+    AdvertContradiction,
+}
+
+/// Authoritative evidence record for a Soracloud model-host violation.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoraModelHostViolationEvidenceRecordV1 {
+    /// Schema version; must equal [`SORA_MODEL_HOST_VIOLATION_EVIDENCE_RECORD_VERSION_V1`].
+    pub schema_version: u16,
+    /// Stable evidence identifier.
+    pub evidence_id: Hash,
+    /// Deterministic Soracloud audit sequence.
+    pub sequence: u64,
+    /// Validator responsible for the violation.
+    pub validator_account_id: AccountId,
+    /// Violation class.
+    pub kind: SoraModelHostViolationKindV1,
+    /// Placement implicated in the violation when applicable.
+    #[norito(default)]
+    pub placement_id: Option<Hash>,
+    /// HF lease pool implicated in the violation when applicable.
+    #[norito(default)]
+    pub pool_id: Option<Hash>,
+    /// Canonical HF source implicated in the violation when applicable.
+    #[norito(default)]
+    pub source_id: Option<Hash>,
+    /// Reservation-window start timestamp used for strike counting when applicable.
+    #[norito(default)]
+    pub window_started_at_ms: Option<u64>,
+    /// Block timestamp when the evidence was recorded.
+    pub observed_at_ms: u64,
+    /// Optional explanatory detail attached to the evidence.
+    #[norito(default)]
+    pub detail: Option<String>,
+    /// Strike count for repeated heartbeat misses within one reservation window.
+    #[norito(default)]
+    pub strike_count: u32,
+    /// Whether the corresponding validator penalty was already applied.
+    #[norito(default)]
+    pub penalty_applied: bool,
+    /// Whether the host advert was evicted from future placement eligibility.
+    #[norito(default)]
+    pub host_evicted: bool,
+    /// Slash identifier applied through the public-lane validator slash path, if any.
+    #[norito(default)]
+    pub slash_id: Option<Hash>,
+}
+
+impl SoraModelHostViolationEvidenceRecordV1 {
+    /// Validate the authoritative host-violation evidence record.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when the version, sequence, timestamps, or
+    /// strike/penalty fields are inconsistent.
+    pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        if self.schema_version != SORA_MODEL_HOST_VIOLATION_EVIDENCE_RECORD_VERSION_V1 {
+            return Err(SoraCloudManifestError::UnsupportedVersion {
+                manifest: "sora model host violation evidence record",
+                expected: SORA_MODEL_HOST_VIOLATION_EVIDENCE_RECORD_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+        if self.sequence == 0 {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora model host violation evidence record",
+                field: "sequence",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        if self.observed_at_ms == 0 {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora model host violation evidence record",
+                field: "observed_at_ms",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        if matches!(
+            self.kind,
+            SoraModelHostViolationKindV1::WarmupNoShow
+                | SoraModelHostViolationKindV1::AssignedHeartbeatMiss
+        ) {
+            if self.placement_id.is_none() || self.pool_id.is_none() || self.source_id.is_none() {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "sora model host violation evidence record",
+                    field: "placement_id",
+                    reason: "placement-scoped violations must include placement_id, pool_id, and source_id"
+                        .to_string(),
+                });
+            }
+            if self.window_started_at_ms.is_none() {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "sora model host violation evidence record",
+                    field: "window_started_at_ms",
+                    reason: "placement-scoped violations must include the reservation-window start"
+                        .to_string(),
+                });
+            }
+        }
+        if self
+            .detail
+            .as_ref()
+            .is_some_and(|detail| detail.trim().is_empty())
+        {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora model host violation evidence record",
+                field: "detail",
+                reason: "must not be empty when provided".to_string(),
+            });
+        }
+        if self.penalty_applied && self.slash_id.is_none() {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora model host violation evidence record",
+                field: "slash_id",
+                reason: "must be present when penalty_applied is true".to_string(),
+            });
+        }
+        if !self.penalty_applied && self.slash_id.is_some() {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora model host violation evidence record",
+                field: "slash_id",
+                reason: "must be absent when penalty_applied is false".to_string(),
+            });
+        }
+        if self.kind != SoraModelHostViolationKindV1::AssignedHeartbeatMiss && self.strike_count > 1
+        {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora model host violation evidence record",
+                field: "strike_count",
+                reason: "only assigned heartbeat misses may accumulate multiple strikes"
+                    .to_string(),
+            });
+        }
+        if self.kind == SoraModelHostViolationKindV1::AssignedHeartbeatMiss
+            && self.strike_count == 0
+        {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora model host violation evidence record",
+                field: "strike_count",
+                reason: "assigned heartbeat misses must record a strike count".to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
 /// Import lifecycle state for a canonical Hugging Face source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -8656,6 +8819,28 @@ mod tests {
         }
     }
 
+    fn sample_model_host_violation_evidence_record() -> SoraModelHostViolationEvidenceRecordV1 {
+        let placement = sample_hf_placement_record();
+        let pool = sample_hf_shared_lease_pool();
+        SoraModelHostViolationEvidenceRecordV1 {
+            schema_version: SORA_MODEL_HOST_VIOLATION_EVIDENCE_RECORD_VERSION_V1,
+            evidence_id: sample_hash(26),
+            sequence: 45,
+            validator_account_id: sample_account_id(0xC3),
+            kind: SoraModelHostViolationKindV1::AssignedHeartbeatMiss,
+            placement_id: Some(placement.placement_id),
+            pool_id: Some(pool.pool_id),
+            source_id: Some(pool.source_id),
+            window_started_at_ms: Some(pool.window_started_at_ms),
+            observed_at_ms: 120_000,
+            detail: Some("assigned host heartbeat expired".to_string()),
+            strike_count: 2,
+            penalty_applied: true,
+            host_evicted: true,
+            slash_id: Some(sample_hash(27)),
+        }
+    }
+
     fn sample_hf_shared_lease_audit_event() -> SoraHfSharedLeaseAuditEventV1 {
         SoraHfSharedLeaseAuditEventV1 {
             schema_version: SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
@@ -11035,6 +11220,30 @@ mod tests {
         sample_hf_shared_lease_audit_event()
             .validate()
             .expect("valid shared lease audit event");
+    }
+
+    #[test]
+    fn model_host_violation_evidence_validation_accepts_consistent_state() {
+        sample_model_host_violation_evidence_record()
+            .validate()
+            .expect("valid model host violation evidence");
+    }
+
+    #[test]
+    fn model_host_violation_evidence_validation_rejects_missing_slash_id_when_penalized() {
+        let mut record = sample_model_host_violation_evidence_record();
+        record.slash_id = None;
+        let error = record
+            .validate()
+            .expect_err("must reject missing slash id for applied penalty");
+        assert!(matches!(
+            error,
+            SoraCloudManifestError::InvalidField {
+                manifest: "sora model host violation evidence record",
+                field: "slash_id",
+                ..
+            }
+        ));
     }
 
     #[test]

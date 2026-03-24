@@ -2036,6 +2036,14 @@ pub mod nexus {
     pub mod hf_shared_leases {
         /// Drain grace window after the last member leaves a shared HF lease pool (milliseconds).
         pub const DRAIN_GRACE_MS: u64 = 5_000;
+        /// Slash ratio applied when an assigned host never finishes warmup before expiry.
+        pub const WARMUP_NO_SHOW_SLASH_BPS: u16 = 500;
+        /// Slash ratio applied when repeated assigned-host heartbeat misses cross the threshold.
+        pub const ASSIGNED_HEARTBEAT_MISS_SLASH_BPS: u16 = 250;
+        /// Strike threshold for assigned-host heartbeat misses within one reservation window.
+        pub const ASSIGNED_HEARTBEAT_MISS_STRIKE_THRESHOLD: u32 = 3;
+        /// Slash ratio applied when a host advert is provably self-contradictory.
+        pub const ADVERT_CONTRADICTION_SLASH_BPS: u16 = 1_000;
     }
 
     /// Uploaded private-model admission defaults.

@@ -114,6 +114,7 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<soracloud::HeartbeatSoracloudModelHost>,
     InstructionRegistry::register::<soracloud::WithdrawSoracloudModelHost>,
     InstructionRegistry::register::<soracloud::ReconcileSoracloudModelHosts>,
+    InstructionRegistry::register::<soracloud::ReportSoracloudModelHostViolation>,
     InstructionRegistry::register::<soracloud::DeploySoracloudAgentApartment>,
     InstructionRegistry::register::<soracloud::RenewSoracloudAgentLease>,
     InstructionRegistry::register::<soracloud::RestartSoracloudAgentApartment>,

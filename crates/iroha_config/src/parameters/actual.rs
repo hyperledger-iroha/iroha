@@ -2272,12 +2272,27 @@ impl Default for NexusFees {
 pub struct NexusHfSharedLeases {
     /// Drain grace window applied after the last member leaves a shared lease pool.
     pub drain_grace: Duration,
+    /// Slash ratio applied when an assigned host never finishes warmup before expiry.
+    pub warmup_no_show_slash_bps: u16,
+    /// Slash ratio applied when repeated assigned-host heartbeat misses cross the threshold.
+    pub assigned_heartbeat_miss_slash_bps: u16,
+    /// Strike threshold for assigned-host heartbeat misses within one reservation window.
+    pub assigned_heartbeat_miss_strike_threshold: u32,
+    /// Slash ratio applied when a host advert is provably self-contradictory.
+    pub advert_contradiction_slash_bps: u16,
 }
 
 impl Default for NexusHfSharedLeases {
     fn default() -> Self {
         Self {
             drain_grace: Duration::from_millis(defaults::nexus::hf_shared_leases::DRAIN_GRACE_MS),
+            warmup_no_show_slash_bps: defaults::nexus::hf_shared_leases::WARMUP_NO_SHOW_SLASH_BPS,
+            assigned_heartbeat_miss_slash_bps:
+                defaults::nexus::hf_shared_leases::ASSIGNED_HEARTBEAT_MISS_SLASH_BPS,
+            assigned_heartbeat_miss_strike_threshold:
+                defaults::nexus::hf_shared_leases::ASSIGNED_HEARTBEAT_MISS_STRIKE_THRESHOLD,
+            advert_contradiction_slash_bps:
+                defaults::nexus::hf_shared_leases::ADVERT_CONTRADICTION_SLASH_BPS,
         }
     }
 }

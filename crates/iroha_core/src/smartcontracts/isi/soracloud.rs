@@ -20,17 +20,17 @@ use iroha_data_model::{
         SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1, SORA_HF_SHARED_LEASE_POOL_VERSION_V1,
         SORA_HF_SOURCE_RECORD_VERSION_V1, SORA_MODEL_ARTIFACT_AUDIT_EVENT_VERSION_V1,
         SORA_MODEL_ARTIFACT_RECORD_VERSION_V1, SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1,
-        SORA_MODEL_REGISTRY_VERSION_V1, SORA_MODEL_WEIGHT_AUDIT_EVENT_VERSION_V1,
-        SORA_MODEL_WEIGHT_VERSION_RECORD_VERSION_V1, SORA_PRIVATE_COMPILE_PROFILE_VERSION_V1,
-        SORA_PRIVATE_INFERENCE_CHECKPOINT_VERSION_V1, SORA_PRIVATE_INFERENCE_SESSION_VERSION_V1,
-        SORA_SERVICE_AUDIT_EVENT_VERSION_V1, SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
-        SORA_SERVICE_ROLLOUT_STATE_VERSION_V1, SORA_SERVICE_STATE_ENTRY_VERSION_V1,
-        SORA_TRAINING_JOB_AUDIT_EVENT_VERSION_V1, SORA_TRAINING_JOB_RECORD_VERSION_V1,
-        SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1, SORA_UPLOADED_MODEL_CHUNK_VERSION_V1,
-        SecretEnvelopeV1, SoraAgentApartmentActionV1, SoraAgentApartmentAuditEventV1,
-        SoraAgentApartmentRecordV1, SoraAgentArtifactAllowRuleV1, SoraAgentAutonomyRunRecordV1,
-        SoraAgentMailboxMessageV1, SoraAgentPersistentStateV1, SoraAgentRuntimeStatusV1,
-        SoraAgentWalletDailySpendEntryV1, SoraAgentWalletSpendRequestV1,
+        SORA_MODEL_HOST_VIOLATION_EVIDENCE_RECORD_VERSION_V1, SORA_MODEL_REGISTRY_VERSION_V1,
+        SORA_MODEL_WEIGHT_AUDIT_EVENT_VERSION_V1, SORA_MODEL_WEIGHT_VERSION_RECORD_VERSION_V1,
+        SORA_PRIVATE_COMPILE_PROFILE_VERSION_V1, SORA_PRIVATE_INFERENCE_CHECKPOINT_VERSION_V1,
+        SORA_PRIVATE_INFERENCE_SESSION_VERSION_V1, SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
+        SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1, SORA_SERVICE_ROLLOUT_STATE_VERSION_V1,
+        SORA_SERVICE_STATE_ENTRY_VERSION_V1, SORA_TRAINING_JOB_AUDIT_EVENT_VERSION_V1,
+        SORA_TRAINING_JOB_RECORD_VERSION_V1, SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
+        SORA_UPLOADED_MODEL_CHUNK_VERSION_V1, SecretEnvelopeV1, SoraAgentApartmentActionV1,
+        SoraAgentApartmentAuditEventV1, SoraAgentApartmentRecordV1, SoraAgentArtifactAllowRuleV1,
+        SoraAgentAutonomyRunRecordV1, SoraAgentMailboxMessageV1, SoraAgentPersistentStateV1,
+        SoraAgentRuntimeStatusV1, SoraAgentWalletDailySpendEntryV1, SoraAgentWalletSpendRequestV1,
         SoraDecryptionRequestRecordV1, SoraDeploymentBundleV1, SoraHfPlacementHostAssignmentV1,
         SoraHfPlacementHostRoleV1, SoraHfPlacementHostStatusV1, SoraHfPlacementRecordV1,
         SoraHfPlacementStatusV1, SoraHfResourceProfileV1, SoraHfSharedLeaseActionV1,
@@ -38,6 +38,7 @@ use iroha_data_model::{
         SoraHfSharedLeasePoolV1, SoraHfSharedLeaseQueuedWindowV1, SoraHfSharedLeaseStatusV1,
         SoraHfSourceRecordV1, SoraHfSourceStatusV1, SoraModelArtifactActionV1,
         SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1, SoraModelHostCapabilityRecordV1,
+        SoraModelHostViolationEvidenceRecordV1, SoraModelHostViolationKindV1,
         SoraModelPrivacyModeV1, SoraModelProvenanceKindV1, SoraModelProvenanceRefV1,
         SoraModelRegistryV1, SoraModelWeightActionV1, SoraModelWeightAuditEventV1,
         SoraModelWeightVersionRecordV1, SoraPrivateCompileProfileV1,
@@ -83,7 +84,10 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Numeric;
 use mv::storage::StorageReadOnly;
 
-use super::*;
+use super::{
+    staking::{apply_slash_to_validator, max_slash_amount},
+    *,
+};
 use crate::{
     smartcontracts::Execute, soracloud_runtime::soracloud_hf_generated_source_binding,
     state::StateTransaction,
@@ -96,6 +100,7 @@ const TRAINING_MAX_REASON_BYTES: usize = 512;
 const TRAINING_MAX_IDENTIFIER_BYTES: usize = 128;
 const MODEL_WEIGHT_MAX_DATASET_REF_BYTES: usize = 512;
 const MODEL_WEIGHT_MAX_REASON_BYTES: usize = 512;
+const MODEL_HOST_VIOLATION_MAX_DETAIL_BYTES: usize = 512;
 const HF_REPO_ID_MAX_BYTES: usize = 256;
 const HF_REVISION_MAX_BYTES: usize = 160;
 const HF_MODEL_NAME_MAX_BYTES: usize = 128;
@@ -1011,6 +1016,13 @@ pub(crate) fn next_soracloud_audit_sequence(state_transaction: &StateTransaction
             .unwrap_or(0),
         state_transaction
             .world
+            .soracloud_model_host_violation_evidence
+            .iter()
+            .map(|(_evidence_id, record)| record.sequence)
+            .max()
+            .unwrap_or(0),
+        state_transaction
+            .world
             .soracloud_agent_apartment_audit_events
             .iter()
             .map(|(sequence, _event)| *sequence)
@@ -1245,6 +1257,30 @@ fn normalize_model_weight_reason(reason: &str) -> Result<String, InstructionExec
         ));
     }
     Ok(normalized.to_owned())
+}
+
+fn normalize_model_host_violation_detail(
+    detail: Option<String>,
+) -> Result<Option<String>, InstructionExecutionError> {
+    detail
+        .map(|detail| {
+            let normalized = detail.trim();
+            if normalized.is_empty() {
+                return Err(invalid_parameter("detail must not be empty"));
+            }
+            if normalized.len() > MODEL_HOST_VIOLATION_MAX_DETAIL_BYTES {
+                return Err(invalid_parameter(format!(
+                    "detail exceeds max bytes ({MODEL_HOST_VIOLATION_MAX_DETAIL_BYTES})"
+                )));
+            }
+            if normalized.chars().any(char::is_control) {
+                return Err(invalid_parameter(
+                    "detail must not contain control characters",
+                ));
+            }
+            Ok(normalized.to_owned())
+        })
+        .transpose()
 }
 
 fn parse_agent_capability_name(capability: &str) -> Result<String, InstructionExecutionError> {
@@ -2351,6 +2387,345 @@ fn record_hf_placement(
     Ok(())
 }
 
+fn load_hf_placement_by_placement_id(
+    state_transaction: &StateTransaction<'_, '_>,
+    placement_id: &Hash,
+) -> Result<SoraHfPlacementRecordV1, InstructionExecutionError> {
+    let mut matches = state_transaction
+        .world
+        .soracloud_hf_placements
+        .iter()
+        .filter_map(|(_pool_id, placement)| {
+            (placement.placement_id == *placement_id).then_some(placement.clone())
+        })
+        .collect::<Vec<_>>();
+    match matches.len() {
+        1 => Ok(matches.pop().expect("one placement match")),
+        0 => Err(InstructionExecutionError::InvariantViolation(
+            format!("hf placement `{placement_id}` not found").into(),
+        )),
+        _ => Err(InstructionExecutionError::InvariantViolation(
+            format!("hf placement `{placement_id}` is duplicated in authoritative state").into(),
+        )),
+    }
+}
+
+fn load_hf_shared_lease_pool_record(
+    state_transaction: &StateTransaction<'_, '_>,
+    pool_id: &Hash,
+) -> Result<SoraHfSharedLeasePoolV1, InstructionExecutionError> {
+    state_transaction
+        .world
+        .soracloud_hf_shared_lease_pools
+        .get(pool_id)
+        .cloned()
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!("hf shared lease pool `{pool_id}` not found").into(),
+            )
+        })
+}
+
+fn model_host_violation_evidence_id(
+    validator_account_id: &AccountId,
+    kind: SoraModelHostViolationKindV1,
+    placement_id: Option<Hash>,
+    sequence: u64,
+    observed_at_ms: u64,
+) -> Result<Hash, InstructionExecutionError> {
+    let payload = norito::to_bytes(&(
+        "soracloud-model-host-violation",
+        validator_account_id.clone(),
+        kind,
+        placement_id,
+        sequence,
+        observed_at_ms,
+    ))
+    .map_err(|err| {
+        invalid_parameter(format!(
+            "failed to encode host-violation evidence id: {err}"
+        ))
+    })?;
+    Ok(Hash::new(payload))
+}
+
+fn model_host_violation_slash_id(
+    validator_account_id: &AccountId,
+    kind: SoraModelHostViolationKindV1,
+    placement_id: Option<Hash>,
+    sequence: u64,
+    observed_at_ms: u64,
+) -> Result<Hash, InstructionExecutionError> {
+    let payload = norito::to_bytes(&(
+        "soracloud-model-host-slash",
+        validator_account_id.clone(),
+        kind,
+        placement_id,
+        sequence,
+        observed_at_ms,
+    ))
+    .map_err(|err| invalid_parameter(format!("failed to encode host-violation slash id: {err}")))?;
+    Ok(Hash::new(payload))
+}
+
+fn record_model_host_violation_evidence(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    record: SoraModelHostViolationEvidenceRecordV1,
+) -> Result<(), InstructionExecutionError> {
+    record
+        .validate()
+        .map_err(|err| invalid_parameter(err.to_string()))?;
+    state_transaction
+        .world
+        .soracloud_model_host_violation_evidence
+        .insert(record.evidence_id, record);
+    Ok(())
+}
+
+fn assigned_heartbeat_miss_history(
+    state_transaction: &StateTransaction<'_, '_>,
+    validator_account_id: &AccountId,
+    placement_id: &Hash,
+    window_started_at_ms: u64,
+) -> (u32, bool) {
+    let mut max_strike_count = 0_u32;
+    let mut penalty_already_applied = false;
+    for (_evidence_id, record) in state_transaction
+        .world
+        .soracloud_model_host_violation_evidence
+        .iter()
+    {
+        if record.validator_account_id != *validator_account_id
+            || record.kind != SoraModelHostViolationKindV1::AssignedHeartbeatMiss
+            || record.placement_id.as_ref() != Some(placement_id)
+            || record.window_started_at_ms != Some(window_started_at_ms)
+        {
+            continue;
+        }
+        max_strike_count = max_strike_count.max(record.strike_count);
+        penalty_already_applied |= record.penalty_applied;
+    }
+    (max_strike_count, penalty_already_applied)
+}
+
+fn slash_validator_for_model_host_violation(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    validator_account_id: &AccountId,
+    slash_bps: u16,
+    slash_id: Hash,
+) -> Result<Option<Hash>, InstructionExecutionError> {
+    if slash_bps == 0 {
+        return Ok(None);
+    }
+    let effective_bps = slash_bps.min(state_transaction.nexus.staking.max_slash_bps);
+    if effective_bps == 0 {
+        return Ok(None);
+    }
+
+    let slashable_records = state_transaction
+        .world
+        .public_lane_validators
+        .iter()
+        .filter_map(|((lane_id, candidate_validator), record)| {
+            (candidate_validator == validator_account_id
+                && !matches!(
+                    record.status,
+                    PublicLaneValidatorStatus::Exited | PublicLaneValidatorStatus::Slashed(_)
+                ))
+            .then_some((lane_id.clone(), record.clone()))
+        })
+        .collect::<Vec<_>>();
+
+    let mut slashed_any = false;
+    for (lane_id, record) in slashable_records {
+        let amount = max_slash_amount(&record.total_stake, effective_bps).map_err(|err| {
+            InstructionExecutionError::InvariantViolation(
+                format!("failed to compute validator slash amount: {err}").into(),
+            )
+        })?;
+        if amount.is_zero() {
+            continue;
+        }
+        apply_slash_to_validator(
+            &mut state_transaction.world,
+            &state_transaction.nexus.staking,
+            lane_id,
+            validator_account_id,
+            slash_id,
+            &amount,
+            #[cfg(feature = "telemetry")]
+            Some(state_transaction.telemetry),
+            #[cfg(not(feature = "telemetry"))]
+            None,
+        )?;
+        slashed_any = true;
+    }
+
+    Ok(slashed_any.then_some(slash_id))
+}
+
+fn model_host_violation_reason(kind: SoraModelHostViolationKindV1, detail: Option<&str>) -> String {
+    detail.map(ToOwned::to_owned).unwrap_or_else(|| match kind {
+        SoraModelHostViolationKindV1::WarmupNoShow => {
+            "assigned host warmup expired before becoming ready".to_string()
+        }
+        SoraModelHostViolationKindV1::AssignedHeartbeatMiss => {
+            "assigned host heartbeat expired".to_string()
+        }
+        SoraModelHostViolationKindV1::AdvertContradiction => {
+            "assigned host advert contradicted authoritative placement requirements".to_string()
+        }
+    })
+}
+
+fn report_model_host_violation(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    validator_account_id: &AccountId,
+    kind: SoraModelHostViolationKindV1,
+    placement_id: Option<Hash>,
+    detail: Option<String>,
+    observed_at_ms: u64,
+) -> Result<(), InstructionExecutionError> {
+    let detail = normalize_model_host_violation_detail(detail)?;
+    let placement = placement_id
+        .as_ref()
+        .map(|placement_id| load_hf_placement_by_placement_id(state_transaction, placement_id))
+        .transpose()?;
+    if let Some(placement) = placement.as_ref() {
+        if !placement
+            .assigned_hosts
+            .iter()
+            .any(|assignment| assignment.validator_account_id == *validator_account_id)
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "validator `{validator_account_id}` is not assigned to placement `{}`",
+                    placement.placement_id
+                )
+                .into(),
+            ));
+        }
+    }
+    let pool = placement
+        .as_ref()
+        .map(|placement| load_hf_shared_lease_pool_record(state_transaction, &placement.pool_id))
+        .transpose()?;
+
+    let (strike_count, threshold_reached, penalty_already_applied) =
+        if let (SoraModelHostViolationKindV1::AssignedHeartbeatMiss, Some(placement), Some(pool)) =
+            (kind, placement.as_ref(), pool.as_ref())
+        {
+            let (prior_strikes, prior_penalty_applied) = assigned_heartbeat_miss_history(
+                state_transaction,
+                validator_account_id,
+                &placement.placement_id,
+                pool.window_started_at_ms,
+            );
+            let strike_count = prior_strikes.saturating_add(1);
+            let threshold_reached = strike_count
+                >= state_transaction
+                    .nexus
+                    .hf_shared_leases
+                    .assigned_heartbeat_miss_strike_threshold;
+            (strike_count, threshold_reached, prior_penalty_applied)
+        } else {
+            (1, true, false)
+        };
+
+    let should_apply_penalty = match kind {
+        SoraModelHostViolationKindV1::WarmupNoShow
+        | SoraModelHostViolationKindV1::AdvertContradiction => true,
+        SoraModelHostViolationKindV1::AssignedHeartbeatMiss => {
+            threshold_reached && !penalty_already_applied
+        }
+    };
+
+    let slash_bps = match kind {
+        SoraModelHostViolationKindV1::WarmupNoShow => {
+            state_transaction
+                .nexus
+                .hf_shared_leases
+                .warmup_no_show_slash_bps
+        }
+        SoraModelHostViolationKindV1::AssignedHeartbeatMiss => {
+            state_transaction
+                .nexus
+                .hf_shared_leases
+                .assigned_heartbeat_miss_slash_bps
+        }
+        SoraModelHostViolationKindV1::AdvertContradiction => {
+            state_transaction
+                .nexus
+                .hf_shared_leases
+                .advert_contradiction_slash_bps
+        }
+    };
+
+    let sequence = next_soracloud_audit_sequence(state_transaction);
+    let slash_id = if should_apply_penalty {
+        let slash_id = model_host_violation_slash_id(
+            validator_account_id,
+            kind,
+            placement_id.clone(),
+            sequence,
+            observed_at_ms,
+        )?;
+        slash_validator_for_model_host_violation(
+            state_transaction,
+            validator_account_id,
+            slash_bps,
+            slash_id,
+        )?
+    } else {
+        None
+    };
+    let host_evicted = should_apply_penalty;
+    if host_evicted {
+        state_transaction
+            .world
+            .soracloud_model_host_capabilities
+            .remove(validator_account_id.clone());
+    }
+
+    let evidence_id = model_host_violation_evidence_id(
+        validator_account_id,
+        kind,
+        placement_id.clone(),
+        sequence,
+        observed_at_ms,
+    )?;
+    let record = SoraModelHostViolationEvidenceRecordV1 {
+        schema_version: SORA_MODEL_HOST_VIOLATION_EVIDENCE_RECORD_VERSION_V1,
+        evidence_id,
+        sequence,
+        validator_account_id: validator_account_id.clone(),
+        kind,
+        placement_id: placement_id.clone(),
+        pool_id: placement.as_ref().map(|placement| placement.pool_id),
+        source_id: placement.as_ref().map(|placement| placement.source_id),
+        window_started_at_ms: pool.as_ref().map(|pool| pool.window_started_at_ms),
+        observed_at_ms,
+        detail: detail.clone(),
+        strike_count,
+        penalty_applied: slash_id.is_some(),
+        host_evicted,
+        slash_id,
+    };
+    record_model_host_violation_evidence(state_transaction, record)?;
+
+    if placement.is_some() || host_evicted {
+        let reason = model_host_violation_reason(kind, detail.as_deref());
+        refresh_hf_placements_for_host_status(
+            state_transaction,
+            validator_account_id,
+            SoraHfPlacementHostStatusV1::Unavailable,
+            observed_at_ms,
+            Some(&reason),
+        )?;
+    }
+    Ok(())
+}
+
 fn reconcile_expired_model_hosts(
     state_transaction: &mut StateTransaction<'_, '_>,
     now_ms: u64,
@@ -2364,13 +2739,55 @@ fn reconcile_expired_model_hosts(
         })
         .collect::<Vec<_>>();
     for validator_account_id in expired_validator_account_ids {
-        refresh_hf_placements_for_host_status(
-            state_transaction,
-            &validator_account_id,
-            SoraHfPlacementHostStatusV1::Unavailable,
-            now_ms,
-            Some("assigned host heartbeat expired"),
-        )?;
+        let impacted_placements = state_transaction
+            .world
+            .soracloud_hf_placements
+            .iter()
+            .filter_map(|(_pool_id, placement)| {
+                placement
+                    .assigned_hosts
+                    .iter()
+                    .find(|assignment| assignment.validator_account_id == validator_account_id)
+                    .map(|assignment| (placement.placement_id, assignment.status))
+            })
+            .collect::<Vec<_>>();
+        if impacted_placements.is_empty() {
+            refresh_hf_placements_for_host_status(
+                state_transaction,
+                &validator_account_id,
+                SoraHfPlacementHostStatusV1::Unavailable,
+                now_ms,
+                Some("assigned host heartbeat expired"),
+            )?;
+            continue;
+        }
+        for (placement_id, host_status) in impacted_placements {
+            match host_status {
+                SoraHfPlacementHostStatusV1::Warm => report_model_host_violation(
+                    state_transaction,
+                    &validator_account_id,
+                    SoraModelHostViolationKindV1::AssignedHeartbeatMiss,
+                    Some(placement_id),
+                    Some("assigned host heartbeat expired".to_string()),
+                    now_ms,
+                )?,
+                SoraHfPlacementHostStatusV1::Warming => report_model_host_violation(
+                    state_transaction,
+                    &validator_account_id,
+                    SoraModelHostViolationKindV1::WarmupNoShow,
+                    Some(placement_id),
+                    Some("assigned host warmup expired before becoming ready".to_string()),
+                    now_ms,
+                )?,
+                _ => refresh_hf_placements_for_host_status(
+                    state_transaction,
+                    &validator_account_id,
+                    SoraHfPlacementHostStatusV1::Unavailable,
+                    now_ms,
+                    Some("assigned host heartbeat expired"),
+                )?,
+            }
+        }
     }
     Ok(())
 }
@@ -5145,6 +5562,32 @@ impl Execute for isi::ReconcileSoracloudModelHosts {
         require_soracloud_permission(authority, state_transaction)?;
         let now_ms = state_transaction.block_unix_timestamp_ms().max(1);
         reconcile_expired_model_hosts(state_transaction, now_ms)
+    }
+}
+
+impl Execute for isi::ReportSoracloudModelHostViolation {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), InstructionExecutionError> {
+        let isi::ReportSoracloudModelHostViolation {
+            validator_account_id,
+            kind,
+            placement_id,
+            detail,
+        } = self;
+
+        require_soracloud_permission(authority, state_transaction)?;
+        let now_ms = state_transaction.block_unix_timestamp_ms().max(1);
+        report_model_host_violation(
+            state_transaction,
+            &validator_account_id,
+            kind,
+            placement_id,
+            detail,
+            now_ms,
+        )
     }
 }
 
@@ -9266,6 +9709,58 @@ mod tests {
         );
     }
 
+    fn configure_staking_assets_for_validator_slash_test(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        validator: &AccountId,
+        escrow_balance: u64,
+    ) -> Result<AssetDefinitionId, eyre::Report> {
+        let wonderland: iroha_data_model::domain::DomainId = "wonderland".parse()?;
+        Register::account(Account::new(validator.clone().to_account_id(wonderland)))
+            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, state_transaction)?;
+        let asset_definition_id = AssetDefinitionId::new(
+            "wonderland".parse().expect("domain"),
+            "stake".parse().expect("stake"),
+        );
+        Register::asset_definition(
+            AssetDefinition::numeric(asset_definition_id.clone())
+                .with_name(asset_definition_id.name().to_string()),
+        )
+        .execute(&SAMPLE_GENESIS_ACCOUNT_ID, state_transaction)?;
+        Mint::asset_numeric(
+            Numeric::new(escrow_balance, 0),
+            AssetId::new(asset_definition_id.clone(), ALICE_ID.clone()),
+        )
+        .execute(&SAMPLE_GENESIS_ACCOUNT_ID, state_transaction)?;
+        state_transaction.nexus.staking.stake_asset_id = asset_definition_id.to_string();
+        state_transaction.nexus.staking.stake_escrow_account_id = ALICE_ID.to_string();
+        state_transaction.nexus.staking.slash_sink_account_id = ALICE_ID.to_string();
+        Ok(asset_definition_id)
+    }
+
+    fn sample_hf_shared_lease_pool_record(
+        pool_id: Hash,
+        source_id: Hash,
+        window_started_at_ms: u64,
+    ) -> SoraHfSharedLeasePoolV1 {
+        SoraHfSharedLeasePoolV1 {
+            schema_version: SORA_HF_SHARED_LEASE_POOL_VERSION_V1,
+            pool_id,
+            source_id,
+            storage_class: StorageClass::Warm,
+            lease_asset_definition_id: AssetDefinitionId::new(
+                "wonderland".parse().expect("domain"),
+                "xor".parse().expect("asset"),
+            ),
+            base_fee_nanos: 10_000,
+            lease_term_ms: 60_000,
+            window_started_at_ms,
+            window_expires_at_ms: window_started_at_ms + 60_000,
+            active_member_count: 1,
+            status: SoraHfSharedLeaseStatusV1::Active,
+            queued_next_window: None,
+        }
+    }
+
     fn sample_bundle(
         service_name: &str,
         service_version: &str,
@@ -10172,6 +10667,10 @@ mod tests {
         record_model_host_capability(&mut initial_tx, alice_capability.clone())?;
         record_model_host_capability(&mut initial_tx, bob_capability.clone())?;
         record_model_host_capability(&mut initial_tx, charlie_capability.clone())?;
+        record_hf_shared_lease_pool(
+            &mut initial_tx,
+            sample_hf_shared_lease_pool_record(pool_id, Hash::new(b"source"), 100),
+        )?;
 
         record_hf_placement(
             &mut initial_tx,
@@ -10222,6 +10721,12 @@ mod tests {
         reconcile_block.commit()?;
 
         let view = state.view();
+        let host_violation_evidence = view
+            .world()
+            .soracloud_model_host_violation_evidence()
+            .iter()
+            .map(|(_evidence_id, record)| record.clone())
+            .collect::<Vec<_>>();
         let placement = view
             .world()
             .soracloud_hf_placements()
@@ -10262,6 +10767,13 @@ mod tests {
                 .iter()
                 .all(|assignment| assignment.validator_account_id != ALICE_ID.clone())
         );
+        assert_eq!(host_violation_evidence.len(), 1);
+        assert_eq!(
+            host_violation_evidence[0].kind,
+            SoraModelHostViolationKindV1::AssignedHeartbeatMiss
+        );
+        assert_eq!(host_violation_evidence[0].strike_count, 1);
+        assert!(!host_violation_evidence[0].penalty_applied);
         Ok(())
     }
 
@@ -10292,6 +10804,10 @@ mod tests {
         record_model_host_capability(&mut initial_tx, alice_capability.clone())?;
         record_model_host_capability(&mut initial_tx, bob_capability.clone())?;
         record_model_host_capability(&mut initial_tx, charlie_capability.clone())?;
+        record_hf_shared_lease_pool(
+            &mut initial_tx,
+            sample_hf_shared_lease_pool_record(pool_id, Hash::new(b"source"), 100),
+        )?;
 
         record_hf_placement(
             &mut initial_tx,
@@ -10368,6 +10884,262 @@ mod tests {
             .get(&pool_id)
             .expect("placement after second reconcile");
         assert_eq!(*placement_after_second, placement_after_first);
+        Ok(())
+    }
+
+    #[test]
+    fn report_model_host_violation_slashes_and_evicts_warmup_no_show() -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let mut state = state_with_soracloud_permission(&kura)?;
+        let placement_id = Hash::new(b"warmup-placement");
+        let pool_id = Hash::new(b"warmup-pool");
+        let source_id = Hash::new(b"warmup-source");
+        let stake_asset_definition_id = AssetDefinitionId::new(
+            "wonderland".parse().expect("domain"),
+            "stake".parse().expect("stake"),
+        );
+        state.nexus.get_mut().staking.stake_asset_id = stake_asset_definition_id.to_string();
+        state.nexus.get_mut().staking.stake_escrow_account_id = ALICE_ID.to_string();
+        state.nexus.get_mut().staking.slash_sink_account_id = ALICE_ID.to_string();
+
+        let setup_header =
+            ValidBlock::new_dummy_and_modify_header(&KeyPair::random().into_parts().1, |header| {
+                header.creation_time_ms = 100;
+            })
+            .as_ref()
+            .header();
+        let mut setup_block = state.block(setup_header);
+        let mut setup_tx = setup_block.transaction();
+        configure_staking_assets_for_validator_slash_test(&mut setup_tx, &BOB_ID, 1_000)?;
+        insert_active_public_lane_validator(&mut setup_tx, BOB_ID.clone(), 1_000);
+        let mut bob_capability = sample_model_host_capability(BOB_ID.clone(), 10, 1_000);
+        bob_capability.peer_id = "12D3KooWBobWarmupHost".to_string();
+        record_model_host_capability(&mut setup_tx, bob_capability.clone())?;
+        record_hf_shared_lease_pool(
+            &mut setup_tx,
+            sample_hf_shared_lease_pool_record(pool_id, source_id, 100),
+        )?;
+        record_hf_placement(
+            &mut setup_tx,
+            SoraHfPlacementRecordV1 {
+                schema_version: SORA_HF_PLACEMENT_RECORD_VERSION_V1,
+                placement_id,
+                source_id,
+                pool_id,
+                status: SoraHfPlacementStatusV1::Warming,
+                selection_seed_hash: Hash::new(b"warmup-seed"),
+                resource_profile: sample_hf_resource_profile(),
+                eligible_validator_count: 1,
+                adaptive_target_host_count: 1,
+                assigned_hosts: vec![SoraHfPlacementHostAssignmentV1 {
+                    validator_account_id: BOB_ID.clone(),
+                    peer_id: bob_capability.peer_id.clone(),
+                    role: SoraHfPlacementHostRoleV1::Primary,
+                    status: SoraHfPlacementHostStatusV1::Warming,
+                    host_class: bob_capability.host_class.clone(),
+                }],
+                total_reservation_fee_nanos: 1_000,
+                last_rebalance_at_ms: 100,
+                last_error: None,
+            },
+        )?;
+        setup_tx.apply();
+        setup_block.commit()?;
+
+        let report_header =
+            ValidBlock::new_dummy_and_modify_header(&KeyPair::random().into_parts().1, |header| {
+                header.creation_time_ms = 200;
+            })
+            .as_ref()
+            .header();
+        let mut report_block = state.block(report_header);
+        let mut report_tx = report_block.transaction();
+        isi::ReportSoracloudModelHostViolation {
+            validator_account_id: BOB_ID.clone(),
+            kind: SoraModelHostViolationKindV1::WarmupNoShow,
+            placement_id: Some(placement_id),
+            detail: Some("warmup deadline exceeded".to_string()),
+        }
+        .execute(&ALICE_ID, &mut report_tx)?;
+        report_tx.apply();
+        report_block.commit()?;
+
+        let view = state.view();
+        let evidence = view
+            .world()
+            .soracloud_model_host_violation_evidence()
+            .iter()
+            .map(|(_evidence_id, record)| record.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(evidence.len(), 1);
+        assert_eq!(evidence[0].kind, SoraModelHostViolationKindV1::WarmupNoShow);
+        assert_eq!(evidence[0].strike_count, 1);
+        assert!(evidence[0].penalty_applied);
+        assert!(evidence[0].host_evicted);
+        assert!(evidence[0].slash_id.is_some());
+        assert_eq!(evidence[0].pool_id, Some(pool_id));
+        assert_eq!(evidence[0].source_id, Some(source_id));
+        assert_eq!(evidence[0].window_started_at_ms, Some(100));
+        assert!(
+            view.world()
+                .soracloud_model_host_capabilities()
+                .get(&BOB_ID)
+                .is_none()
+        );
+        let bob_validator = view
+            .world()
+            .public_lane_validators()
+            .get(&(LaneId::SINGLE, BOB_ID.clone()))
+            .expect("bob validator after slash");
+        assert_eq!(bob_validator.total_stake, Numeric::new(950, 0));
+        assert_eq!(bob_validator.self_stake, Numeric::new(950, 0));
+        assert!(matches!(
+            bob_validator.status,
+            PublicLaneValidatorStatus::Slashed(_)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn report_model_host_violation_applies_slash_when_heartbeat_miss_reaches_threshold()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let mut state = state_with_soracloud_permission(&kura)?;
+        let placement_id = Hash::new(b"heartbeat-placement");
+        let pool_id = Hash::new(b"heartbeat-pool");
+        let source_id = Hash::new(b"heartbeat-source");
+        let stake_asset_definition_id = AssetDefinitionId::new(
+            "wonderland".parse().expect("domain"),
+            "stake".parse().expect("stake"),
+        );
+        state.nexus.get_mut().staking.stake_asset_id = stake_asset_definition_id.to_string();
+        state.nexus.get_mut().staking.stake_escrow_account_id = ALICE_ID.to_string();
+        state.nexus.get_mut().staking.slash_sink_account_id = ALICE_ID.to_string();
+        state
+            .nexus
+            .get_mut()
+            .hf_shared_leases
+            .assigned_heartbeat_miss_strike_threshold = 2;
+
+        let setup_header =
+            ValidBlock::new_dummy_and_modify_header(&KeyPair::random().into_parts().1, |header| {
+                header.creation_time_ms = 100;
+            })
+            .as_ref()
+            .header();
+        let mut setup_block = state.block(setup_header);
+        let mut setup_tx = setup_block.transaction();
+        configure_staking_assets_for_validator_slash_test(&mut setup_tx, &BOB_ID, 1_000)?;
+        insert_active_public_lane_validator(&mut setup_tx, BOB_ID.clone(), 1_000);
+        let mut bob_capability = sample_model_host_capability(BOB_ID.clone(), 10, 1_000);
+        bob_capability.peer_id = "12D3KooWBobHeartbeatHost".to_string();
+        record_model_host_capability(&mut setup_tx, bob_capability.clone())?;
+        record_hf_shared_lease_pool(
+            &mut setup_tx,
+            sample_hf_shared_lease_pool_record(pool_id, source_id, 100),
+        )?;
+        record_hf_placement(
+            &mut setup_tx,
+            SoraHfPlacementRecordV1 {
+                schema_version: SORA_HF_PLACEMENT_RECORD_VERSION_V1,
+                placement_id,
+                source_id,
+                pool_id,
+                status: SoraHfPlacementStatusV1::Ready,
+                selection_seed_hash: Hash::new(b"heartbeat-seed"),
+                resource_profile: sample_hf_resource_profile(),
+                eligible_validator_count: 1,
+                adaptive_target_host_count: 1,
+                assigned_hosts: vec![SoraHfPlacementHostAssignmentV1 {
+                    validator_account_id: BOB_ID.clone(),
+                    peer_id: bob_capability.peer_id.clone(),
+                    role: SoraHfPlacementHostRoleV1::Primary,
+                    status: SoraHfPlacementHostStatusV1::Warm,
+                    host_class: bob_capability.host_class.clone(),
+                }],
+                total_reservation_fee_nanos: 1_000,
+                last_rebalance_at_ms: 100,
+                last_error: None,
+            },
+        )?;
+        record_model_host_violation_evidence(
+            &mut setup_tx,
+            SoraModelHostViolationEvidenceRecordV1 {
+                schema_version: SORA_MODEL_HOST_VIOLATION_EVIDENCE_RECORD_VERSION_V1,
+                evidence_id: Hash::new(b"prior-heartbeat-evidence"),
+                sequence: 1,
+                validator_account_id: BOB_ID.clone(),
+                kind: SoraModelHostViolationKindV1::AssignedHeartbeatMiss,
+                placement_id: Some(placement_id),
+                pool_id: Some(pool_id),
+                source_id: Some(source_id),
+                window_started_at_ms: Some(100),
+                observed_at_ms: 150,
+                detail: Some("first missed heartbeat".to_string()),
+                strike_count: 1,
+                penalty_applied: false,
+                host_evicted: false,
+                slash_id: None,
+            },
+        )?;
+        setup_tx.apply();
+        setup_block.commit()?;
+
+        let report_header =
+            ValidBlock::new_dummy_and_modify_header(&KeyPair::random().into_parts().1, |header| {
+                header.creation_time_ms = 200;
+            })
+            .as_ref()
+            .header();
+        let mut report_block = state.block(report_header);
+        let mut report_tx = report_block.transaction();
+        isi::ReportSoracloudModelHostViolation {
+            validator_account_id: BOB_ID.clone(),
+            kind: SoraModelHostViolationKindV1::AssignedHeartbeatMiss,
+            placement_id: Some(placement_id),
+            detail: Some("second missed heartbeat".to_string()),
+        }
+        .execute(&ALICE_ID, &mut report_tx)?;
+        report_tx.apply();
+        report_block.commit()?;
+
+        let view = state.view();
+        let evidence = view
+            .world()
+            .soracloud_model_host_violation_evidence()
+            .iter()
+            .map(|(_evidence_id, record)| record.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(evidence.len(), 2);
+        let latest = evidence
+            .into_iter()
+            .max_by_key(|record| record.sequence)
+            .expect("latest heartbeat evidence");
+        assert_eq!(
+            latest.kind,
+            SoraModelHostViolationKindV1::AssignedHeartbeatMiss
+        );
+        assert_eq!(latest.strike_count, 2);
+        assert!(latest.penalty_applied);
+        assert!(latest.host_evicted);
+        assert!(latest.slash_id.is_some());
+        assert!(
+            view.world()
+                .soracloud_model_host_capabilities()
+                .get(&BOB_ID)
+                .is_none()
+        );
+        let bob_validator = view
+            .world()
+            .public_lane_validators()
+            .get(&(LaneId::SINGLE, BOB_ID.clone()))
+            .expect("bob validator after heartbeat slash");
+        assert_eq!(bob_validator.total_stake, Numeric::new(975, 0));
+        assert_eq!(bob_validator.self_stake, Numeric::new(975, 0));
+        assert!(matches!(
+            bob_validator.status,
+            PublicLaneValidatorStatus::Slashed(_)
+        ));
         Ok(())
     }
 

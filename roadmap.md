@@ -1,6 +1,39 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-03-23
+Last updated: 2026-03-24
+
+Latest sync (2026-03-24 Soracloud HF host-violation evidence + slash-path integration):
+`crates/iroha_data_model/src/{soracloud.rs,isi/{mod.rs,registry.rs,soracloud.rs}}`,
+`crates/iroha_core/src/{state.rs,smartcontracts/isi/{mod.rs,soracloud.rs}}`,
+and `crates/iroha_config/src/parameters/{defaults.rs,actual.rs,user.rs}`
+now carry the next HF hosting control-loop slice:
+
+- Soracloud now persists authoritative host-violation evidence records for
+  `WarmupNoShow`, `AssignedHeartbeatMiss`, and `AdvertContradiction`;
+- the new `ReportSoracloudModelHostViolation` instruction reuses the existing
+  public-lane staking slash path, evicts host adverts when policy requires it,
+  and counts assigned-heartbeat strikes per placement/window before applying
+  the configured thresholded penalty;
+- expired-host reconciliation now emits assigned-heartbeat / warmup-no-show
+  evidence before running the existing deterministic primary-promotion and
+  replica-backfill logic; and
+- HF shared-lease policy now exposes network-defined defaults for those slash
+  ratios and the assigned-heartbeat strike threshold.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p iroha_data_model soracloud --lib`
+- `cargo test -p iroha_config nexus_hf_shared_leases --lib`
+- `cargo check -p iroha_core --lib`
+- `cargo test -p iroha_core report_model_host_violation --lib -- --nocapture`
+- `cargo test -p iroha_core reconcile_soracloud_model_hosts --lib -- --nocapture`
+
+Open work for this slice now remains:
+- connect live resident-worker/runtime-health failures to
+  `ReportSoracloudModelHostViolation` instead of relying only on advert-expiry
+  sweeps; and
+- add automatic advert-contradiction evidence generation from capability/runtime
+  validation instead of leaving that evidence path operator-triggered.
 
 Latest sync (2026-03-23 Soracloud HF authoritative expiry reconciliation):
 `crates/iroha_data_model/src/isi/{mod.rs,registry.rs,soracloud.rs}` and
@@ -27,9 +60,47 @@ Validation:
 
 Open work for this slice now remains:
 - connect runtime health and missed-warmup detection to the new authoritative
-  reconciliation/slash path; and
-- add host-violation evidence/slash-path integration for warmup no-show,
-  repeated assigned-host heartbeat misses, and provable advert contradictions.
+  reconciliation/slash path beyond advert-expiry sweeps; and
+- add automatic advert-contradiction evidence generation from runtime/control
+  plane validation.
+
+Latest sync (2026-03-23 `scheduler_telemetry` `Nexus` fixture refresh):
+`crates/iroha_core/tests/scheduler_telemetry.rs` now initializes the current
+`iroha_config::parameters::actual::Nexus` shape again:
+
+- the telemetry test fixture now populates the recently added
+  `hf_shared_leases` and `uploaded_models` sections, restoring compilation for
+  the `scheduler_telemetry` integration test target.
+
+Validation completed so far:
+- `cargo fmt --all`
+- `cargo test -p iroha_core --test scheduler_telemetry --features telemetry --no-run`
+
+Open work for this slice now remains:
+- rerun the broader workspace sweep when the longer validation budget is
+  available.
+
+Latest sync (2026-03-23 offline allowance renewal lineage coverage):
+`crates/iroha_core/src/smartcontracts/isi/offline.rs`
+already collapses a `prev_certificate_id` renewal/reissue chain to a single
+active allowance head, and the focused renewal regression coverage now hits
+that real non-genesis path:
+
+- predecessor reserve is reused for the replacement allowance, any excess is
+  refunded from escrow back to the controller, and the superseded predecessor
+  allowance is zeroed so stale App Attest keys cannot strand a spendable
+  balance; and
+- `renewal_supersedes_previous_allowance_even_when_new_amount_can_be_fully_reserved`
+  now runs at block height `2`, avoiding the genesis registration fast path
+  that bypasses lineage rollover entirely.
+
+Validation completed so far:
+- `cargo test -p iroha_core --lib renewal_supersedes_previous_allowance_even_when_new_amount_can_be_fully_reserved -- --nocapture`
+
+Open work for this slice now remains:
+- add an end-to-end offline settlement regression that renews under a new App
+  Attest key and proves the superseded certificate no longer contributes any
+  spendable balance.
 
 Latest sync (2026-03-23 Soracloud request signer bundle-root hashing compiles again):
 `crates/connect_norito_bridge/src/bin/soracloud_request_signer.rs`

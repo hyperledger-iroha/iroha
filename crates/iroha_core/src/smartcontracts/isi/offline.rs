@@ -4685,7 +4685,9 @@ pub mod isi {
                 [controller_asset, escrow_asset],
                 [],
             );
-            world.offline_allowances.insert(previous_id, previous_record);
+            world
+                .offline_allowances
+                .insert(previous_id, previous_record);
             let controller_asset = AssetId::new(definition_id.clone(), controller.clone());
 
             let kura = Kura::blank_kura_for_testing();
@@ -4698,7 +4700,7 @@ pub mod isi {
                 .escrow_accounts
                 .insert(definition_id.clone(), escrow.clone());
 
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, now_ms, 0);
+            let header = BlockHeader::new(nonzero!(2_u64), None, None, None, now_ms, 0);
             let mut block = state.block(header);
             let mut transaction = block.transaction();
             register_allowance(

@@ -17,8 +17,8 @@ use crate::{
     soracloud::{
         AgentApartmentManifestV1, DecryptionAuthorityPolicyV1, DecryptionRequestV1,
         FheExecutionPolicyV1, FheJobSpecV1, FheParamSetV1, SoraDeploymentBundleV1,
-        SoraHfResourceProfileV1, SoraModelHostCapabilityRecordV1, SoraModelPrivacyModeV1,
-        SoraPrivateCompileProfileV1, SoraPrivateInferenceCheckpointV1,
+        SoraHfResourceProfileV1, SoraModelHostCapabilityRecordV1, SoraModelHostViolationKindV1,
+        SoraModelPrivacyModeV1, SoraPrivateCompileProfileV1, SoraPrivateInferenceCheckpointV1,
         SoraPrivateInferenceSessionStatusV1, SoraPrivateInferenceSessionV1, SoraRuntimeReceiptV1,
         SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1, SoraStateEncryptionV1,
         SoraStateMutationOperationV1, SoraUploadedModelBundleV1, SoraUploadedModelChunkV1,
@@ -377,6 +377,33 @@ pub struct ReconcileSoracloudModelHosts;
 impl crate::seal::Instruction for ReconcileSoracloudModelHosts {}
 
 impl PartialOrd for ReconcileSoracloudModelHosts {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(encoded_order(self, other))
+    }
+}
+
+/// Report authoritative evidence for a validator-host violation.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ReportSoracloudModelHostViolation {
+    /// Validator responsible for the violation.
+    pub validator_account_id: AccountId,
+    /// Violation class.
+    pub kind: SoraModelHostViolationKindV1,
+    /// Implicated placement when the violation is placement-scoped.
+    #[norito(default)]
+    pub placement_id: Option<Hash>,
+    /// Optional explanatory detail attached to the evidence.
+    #[norito(default)]
+    pub detail: Option<String>,
+}
+
+impl crate::seal::Instruction for ReportSoracloudModelHostViolation {}
+
+impl PartialOrd for ReportSoracloudModelHostViolation {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }

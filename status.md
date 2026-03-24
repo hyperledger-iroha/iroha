@@ -1,6 +1,48 @@
 # Status
 
-Last updated: 2026-03-23
+Last updated: 2026-03-24
+
+## 2026-03-24 Follow-up: Soracloud HF expiry reconciliation now emits authoritative host-violation evidence and staking slashes
+- Extended the Soracloud HF control loop across
+  `crates/iroha_data_model/src/{soracloud.rs,isi/{mod.rs,registry.rs,soracloud.rs}}`,
+  `crates/iroha_core/src/{state.rs,smartcontracts/isi/{mod.rs,soracloud.rs}}`,
+  and `crates/iroha_config/src/parameters/{defaults.rs,actual.rs,user.rs}`:
+  - added authoritative `SoraModelHostViolationEvidenceRecordV1` records plus
+    a `ReportSoracloudModelHostViolation` instruction and state storage for
+    persisted warmup-no-show / assigned-heartbeat-miss / advert-contradiction
+    evidence;
+  - expiry reconciliation now reports placement-scoped host violations before
+    rebalance, so expired warm primaries/replicas record deterministic evidence
+    instead of only mutating placement state;
+  - warmup no-shows now trigger immediate host eviction plus public-lane stake
+    slashing, while assigned-host heartbeat misses accumulate per
+    placement/window and slash+evict once the configured strike threshold is
+    reached; and
+  - Soracloud HF shared-lease config now carries explicit penalty defaults:
+    `warmup_no_show_slash_bps=500`,
+    `assigned_heartbeat_miss_slash_bps=250`,
+    `assigned_heartbeat_miss_strike_threshold=3`, and
+    `advert_contradiction_slash_bps=1000`.
+- Added focused coverage proving:
+  - explicit warmup-no-show reporting records evidence, evicts the host advert,
+    and slashes bonded validator stake;
+  - a repeated assigned-host heartbeat miss crosses the configured threshold,
+    records the incremented strike count, and applies the slash+evict policy;
+    and
+  - authoritative expired-host reconciliation now records assigned-heartbeat
+    miss evidence while preserving the previously added deterministic
+    promotion/backfill behavior.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_data_model soracloud --lib` (pass)
+  - `cargo test -p iroha_config nexus_hf_shared_leases --lib` (pass)
+  - `cargo check -p iroha_core --lib` (pass)
+  - `cargo test -p iroha_core report_model_host_violation --lib -- --nocapture` (pass)
+  - `cargo test -p iroha_core reconcile_soracloud_model_hosts --lib -- --nocapture` (pass)
+- Remaining implementation gap:
+  - Soracloud still needs runtime-worker-health reporting beyond advert expiry
+    sweeps and automatic advert-contradiction evidence generation from the
+    runtime/control plane.
 
 ## 2026-03-23 Follow-up: Soracloud HF placements now reconcile expired host adverts authoritatively
 - Extended the Soracloud HF host/placement control path across
@@ -32,6 +74,33 @@ Last updated: 2026-03-23
   - Soracloud still needs runtime-health-driven host violation reporting and
     slash-evidence integration for warmup no-show, repeated assigned-host
     heartbeat misses, and provable advert contradictions.
+
+## 2026-03-23 Follow-up: `scheduler_telemetry` compiles again with the current `Nexus` config shape
+- Fixed the `error[E0063]` regression in
+  `crates/iroha_core/tests/scheduler_telemetry.rs` by populating the newly
+  required `hf_shared_leases` and `uploaded_models` fields on the explicit
+  `iroha_config::parameters::actual::Nexus` test fixture.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_core --test scheduler_telemetry --features telemetry --no-run` (pass)
+- Remaining validation gap:
+  - the broader workspace sweep was not rerun for this targeted compile fix.
+
+## 2026-03-23 Follow-up: offline allowance renewal coverage now exercises non-genesis lineage rollover
+- Confirmed `crates/iroha_core/src/smartcontracts/isi/offline.rs` already
+  treats `prev_certificate_id` renewals/reissues as a single active lineage
+  head: predecessor reserve is reused for the new allowance, any excess is
+  refunded from escrow back to the controller, and the superseded predecessor
+  allowance is zeroed so stale App Attest keys cannot strand spendable balance.
+- Fixed the renewal regression coverage in
+  `renewal_supersedes_previous_allowance_even_when_new_amount_can_be_fully_reserved`
+  to run at block height `2` instead of genesis height `1`, so the test now
+  executes the real non-genesis lineage-validation and rollover path.
+- Validation:
+  - `cargo test -p iroha_core --lib renewal_supersedes_previous_allowance_even_when_new_amount_can_be_fully_reserved -- --nocapture` (pass)
+- Remaining validation gap:
+  - the broader `cargo test --workspace` sweep was not rerun for this targeted
+    offline-allowance regression check.
 
 ## 2026-03-23 Follow-up: Soracloud request signer bundle-root hashing no longer trips Norito tuple arity limits
 - Fixed the `error[E0277]` regression in
