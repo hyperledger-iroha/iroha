@@ -26,7 +26,7 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
         "wonder".parse().unwrap(),
         "coin".parse().unwrap(),
     );
-    let sample_asset_literal = asset_def_seed.canonical_literal();
+    let sample_asset_literal = asset_def_seed.canonical_address();
     let src = include_str!("../../kotodama_lang/src/samples/asset_ops.ko")
         .replace("coin#wonder", &sample_asset_literal);
     let compiler = KotodamaCompiler::new();

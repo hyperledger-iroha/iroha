@@ -472,6 +472,9 @@ Last updated: 2026-03-24
     receiving node is still the committed warm primary for that placement, so
     the P2P proxy path is no longer a generic remote public local-read tunnel,
     and
+  - that same receive-side gate now also recomputes the canonical generated-HF
+    request commitment on the authoritative primary and rejects forged or
+    mismatched proxy envelopes before execution, and
   - when an assigned replica or stale former primary rejects that incoming
     generated-HF proxy execution because it is no longer the authoritative
     warm primary, Torii now also hints
@@ -510,6 +513,7 @@ Last updated: 2026-03-24
   - `cargo check -p iroha_torii --tests` (pass)
   - `cargo check -p iroha_torii --lib` (pass)
   - `cargo test -p iroha_torii validate_incoming_soracloud_proxy_request_authority_accepts_generated_hf_primary --lib` (pass)
+  - `cargo test -p iroha_torii validate_incoming_soracloud_proxy_request_authority_rejects_commitment_mismatch --lib` (pass)
   - `cargo test -p iroha_torii validate_incoming_soracloud_proxy_request_authority_rejects_non_generated_hf --lib` (pass)
   - `cargo test -p iroha_torii validate_incoming_soracloud_proxy_request_authority_rejects_non_primary_peer --lib` (pass)
   - `cargo test -p iroha_torii incoming_proxy_authority_failure_requests_generated_hf_reconcile --lib` (pass)
@@ -694,6 +698,116 @@ Last updated: 2026-03-24
   - manual code review only; no build/test commands were run
 - Remaining implementation gap:
   - the report findings still need prioritization and remediation work.
+
+## 2026-03-24 Follow-up: Soracloud HF lease integration tests no longer crash peers during runtime reconciliation
+- Fixed `crates/irohad/src/soracloud_runtime.rs` so Soracloud runtime-manager
+  reconciliation no longer runs `reqwest::blocking` Hugging Face / remote
+  hydration work on Tokio async worker threads:
+  - startup reconciliation now runs on a dedicated OS thread before the
+    periodic loop is spawned, and
+  - interval-driven reconciliation now dispatches `reconcile_once()` through
+    `tokio::task::spawn_blocking`, preventing Tokio's
+    `Cannot drop a runtime in a context where blocking is not allowed` panic
+    when the blocking HTTP clients are dropped.
+- Added focused async regression coverage in
+  `crates/irohad/src/soracloud_runtime.rs` proving the background reconcile
+  task can import an assigned generated-HF source without panicking.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p irohad reconcile_task_imports_generated_hf_source_without_panicking -- --nocapture` (pass)
+  - `cargo test -p integration_tests --test iroha_cli soracloud_hf_shared_lease_commands_use_live_torii_control_plane -- --nocapture --test-threads=1` (pass)
+  - `cargo test -p integration_tests --test iroha_cli soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window -- --nocapture --test-threads=1` (pass)
+  - `cargo test -p integration_tests --test iroha_cli soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts -- --nocapture --test-threads=1` (pass)
+- Remaining validation gap:
+  - the broader workspace sweep is still pending.
+
+## 2026-03-24 Follow-up: Soracloud HF live CLI lease tests pass again against the authoritative control plane
+- Updated the live Soracloud HF lease integration coverage in
+  `integration_tests/tests/iroha_cli.rs` to use the small public
+  `hf-internal-testing/tiny-random-gpt2` safetensors fixture instead of
+  `openai/gpt-oss`, whose anonymous model-info endpoint now returns
+  `401 Unauthorized`.
+- Reworked the live HF fixture setup so the tests advertise a valid
+  `cpu.small` Soracloud model host from a real validator account on an NPoS
+  test network, including the `bls_normal` signing allowlist and class-floor
+  capacities required by authoritative `model-host-advertise`.
+- Fixed `crates/iroha_cli/src/soracloud.rs` so `model-host-advertise` emits the
+  supported schema version and a live `advertised_at_ms` timestamp instead of
+  relying on Torii-side normalization.
+- Fixed `crates/iroha_test_network/src/{config.rs,lib.rs}` so custom
+  `crypto.allowed_signing` overrides are propagated into the genesis crypto
+  manifest as well as the runtime config, keeping BLS admission consistent
+  during live-control-plane tests.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_test_network genesis_with_crypto_override_embeds_manifest_metadata -- --nocapture` (pass)
+  - `cargo test -p iroha_cli --bin iroha signed_model_host_advertise_request_uses_supported_schema_version -- --nocapture` (pass)
+  - `cargo test -p integration_tests --test iroha_cli soracloud_hf_ -- --nocapture --test-threads=1` (pass)
+- Remaining validation gap:
+  - the broader workspace sweep is still pending.
+
+## 2026-03-24 Follow-up: mobile migration verification is green on Kotlin, but the legacy Java Android baseline is still red
+- Ran the Kotlin SDK mobile-facing verification slice and confirmed the new
+  migration target currently builds/tests cleanly:
+  - `kotlin/:core-jvm:test` passed, and
+  - `kotlin/:client-android:assembleRelease` plus
+    `kotlin/:offline-wallet-android:assembleRelease` passed.
+- Ran the legacy Java Android verification slice to compare the migration
+  target against the existing baseline:
+  - `java/iroha_android/:android:test` passed,
+  - `java/iroha_android/:jvm:test` passed,
+  - `java/iroha_android/:samples-android:testDebugUnitTest` passed, and
+  - `java/iroha_android/:core:test` failed with 7 red tests.
+- Fixed one blocking compile regression in
+  `java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportTests.java`
+  so the Java baseline could run far enough to expose the real failing tests
+  instead of stopping in `:core:compileTestJava`.
+- Remaining failing Java baseline tests are:
+  - `GradleHarnessTests[org.hyperledger.iroha.android.address.AccountAddressTests]`
+    because the address compliance fixture loader now expects
+    `encodings.ih58` to be an object for
+    `addr-single-default-ed25519`,
+  - `GradleHarnessTests[org.hyperledger.iroha.android.client.OfflineToriiClientTests]`
+    because `listAllowancesParsesResponse()` still expects a different
+    `assetDefinitionId`, and
+  - 5 failing cases in
+    `org.hyperledger.iroha.android.model.instructions.AccountLiteralHardCutTests`
+    around strict encoded-only literal handling.
+- Validation:
+  - `cd kotlin && ./gradlew :core-jvm:test :client-android:assembleRelease :offline-wallet-android:assembleRelease --console=plain` (pass)
+  - `cd java/iroha_android && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ANDROID_HOME=/Users/sdi/Library/Android/sdk ANDROID_SDK_ROOT=/Users/sdi/Library/Android/sdk ./gradlew check --console=plain` (fails in `:core:test`)
+  - `cd java/iroha_android && JAVA_HOME=/opt/homebrew/opt/openjdk@21 ANDROID_HOME=/Users/sdi/Library/Android/sdk ANDROID_SDK_ROOT=/Users/sdi/Library/Android/sdk ./gradlew :jvm:test :samples-android:testDebugUnitTest --console=plain` (pass)
+- Remaining migration-confidence gap:
+  - the Kotlin SDK test suite is green, but some of the red Java baseline
+    behaviors above do not yet have direct Kotlin regression coverage, so the
+    repository cannot yet claim full Java→Kotlin migration parity on the
+    mobile surface.
+
+## 2026-03-24 Follow-up: Kotlin SDK parity guidance and Norito fixture checks now cover the new Kotlin SDK
+- Updated the repository agent guidance so the new `kotlin/` SDK is treated as
+  the default Android/JVM client surface, with the migration rule that Kotlin
+  SDK behavior changes must be mirrored in the corresponding `java/`
+  implementation until the Java Android SDK is retired.
+- Added the Kotlin SDK constraints from `kotlin/CLAUDE.md` to the shared agent
+  guidance: no reflection in the Kotlin SDK, keep `core-jvm` Android-free,
+  keep Android client code in `client-android`, and keep offline
+  wallet/JNI-specific code in `offline-wallet-android`.
+- Added focused Kotlin parity coverage under `kotlin/core-jvm` for the shared
+  Android fixture corpus and Norito wire-format checks, including direct
+  fixture-loader edge cases that previously only existed in the Java tests.
+- Extended `scripts/check_norito_bindings_sync.py` so Norito source changes now
+  require `kotlin/core-jvm` updates alongside Python and Java, the helper runs
+  the Kotlin parity tests, untracked files are inspected individually, and
+  repository-internal `AGENTS.md` updates do not trigger false Norito binding
+  drift failures.
+- Validation:
+  - `cd kotlin && ./gradlew :core-jvm:test --console=plain` (pass)
+  - `BASE_REF=HEAD python3 scripts/check_norito_bindings_sync.py` (pass)
+  - `python3 -m py_compile scripts/check_norito_bindings_sync.py scripts/tests/check_norito_bindings_sync_test.py` (pass)
+- Remaining validation gap:
+  - `python3 -m pytest scripts/tests/check_norito_bindings_sync_test.py` was
+    not runnable here because `pytest` is not installed in the current Python
+    environment.
 
 ## 2026-03-24 Follow-up: multisig integration tests compile against `iroha_torii`'s public API again
 - Fixed the `error[E0603]` regression in

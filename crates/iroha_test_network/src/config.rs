@@ -7,7 +7,7 @@ use std::{
 
 use color_eyre::{Report, eyre::eyre};
 use iroha_config::base::toml::WriteExt;
-use iroha_config::parameters::actual::Nexus as ActualNexus;
+use iroha_config::parameters::actual::{Crypto as ActualCrypto, Nexus as ActualNexus};
 use iroha_core::{
     block::ValidBlock,
     kura::Kura,
@@ -48,7 +48,7 @@ use iroha_executor_data_model::permission::{
     role::CanManageRoles,
     trigger::CanRegisterTrigger,
 };
-use iroha_genesis::{GenesisBlock, GenesisBuilder, GenesisTopologyEntry};
+use iroha_genesis::{GenesisBlock, GenesisBuilder, GenesisTopologyEntry, ManifestCrypto};
 use iroha_primitives::{json::Json, numeric::NumericSpec, time::TimeSource, unique_vec::UniqueVec};
 use iroha_test_samples::{
     ALICE_ID, ALICE_KEYPAIR, BOB_KEYPAIR, CARPENTER_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
@@ -136,6 +136,18 @@ pub fn base_iroha_config() -> Table {
         .write(["sumeragi", "debug", "rbc", "partial_chunk_mask"], 0i64)
 }
 
+#[must_use]
+pub(crate) fn manifest_crypto_from_actual(crypto: &ActualCrypto) -> ManifestCrypto {
+    ManifestCrypto {
+        sm_openssl_preview: crypto.enable_sm_openssl_preview,
+        sm_intrinsics: crypto.sm_intrinsics.as_str().to_owned(),
+        default_hash: crypto.default_hash.clone(),
+        allowed_signing: crypto.allowed_signing.clone(),
+        sm2_distid_default: crypto.sm2_distid_default.clone(),
+        allowed_curve_ids: crypto.allowed_curve_ids.clone(),
+    }
+}
+
 pub fn genesis(
     extra_transactions: Vec<Vec<InstructionBox>>,
     topology: UniqueVec<PeerId>,
@@ -188,6 +200,7 @@ pub fn genesis_with_keypair_and_post_topology(
         None,
         None,
         None,
+        None,
     )
 }
 
@@ -198,6 +211,7 @@ pub(crate) fn genesis_with_keypair_and_post_topology_with_policies(
     topology_entries: Vec<GenesisTopologyEntry>,
     genesis_key_pair: KeyPair,
     chain_id: ChainId,
+    genesis_crypto: Option<ManifestCrypto>,
     da_proof_policies: Option<DaProofPolicyBundle>,
     _nexus_config: Option<ActualNexus>,
     consensus_handshake_meta: Option<Parameter>,
@@ -210,6 +224,7 @@ pub(crate) fn genesis_with_keypair_and_post_topology_with_policies(
         topology_entries,
         genesis_key_pair,
         chain_id,
+        genesis_crypto,
         da_proof_policies,
         _nexus_config,
         consensus_handshake_meta,
@@ -249,6 +264,7 @@ fn build_minimal_genesis(
         None,
         None,
         None,
+        None,
     )
 }
 
@@ -259,6 +275,7 @@ fn build_minimal_genesis_with_post_topology(
     topology_entries: Vec<GenesisTopologyEntry>,
     genesis_key_pair: KeyPair,
     chain_id: ChainId,
+    genesis_crypto: Option<ManifestCrypto>,
     da_proof_policies: Option<DaProofPolicyBundle>,
     nexus_config: Option<ActualNexus>,
     consensus_handshake_meta: Option<Parameter>,
@@ -277,6 +294,7 @@ fn build_minimal_genesis_with_post_topology(
             topology_entries,
             genesis_key_pair,
             chain_id,
+            genesis_crypto,
             da_proof_policies,
             nexus_config.clone(),
             consensus_handshake_meta,
@@ -308,6 +326,7 @@ fn build_minimal_genesis_unexecuted(
         None,
         None,
         None,
+        None,
     )
 }
 
@@ -318,6 +337,7 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     topology_entries: Vec<GenesisTopologyEntry>,
     genesis_key_pair: KeyPair,
     chain_id: ChainId,
+    genesis_crypto: Option<ManifestCrypto>,
     da_proof_policies: Option<DaProofPolicyBundle>,
     _nexus_config: Option<ActualNexus>,
     consensus_handshake_meta: Option<Parameter>,
@@ -354,6 +374,9 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     } else {
         GenesisBuilder::new_without_executor(chain.clone(), ivm_dir.clone())
     };
+    if let Some(crypto) = genesis_crypto {
+        builder = builder.with_crypto(crypto);
+    }
     if let Some(policies) = da_proof_policies {
         builder = builder.with_da_proof_policies(policies);
     }
@@ -1727,6 +1750,7 @@ mod tests {
                 vec![entry],
                 SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
                 super::chain_id(),
+                None,
                 Some(policies),
                 None,
                 None,
@@ -1884,6 +1908,76 @@ mod tests {
             hsm_bound, register_pop,
             "consensus peers in genesis must carry softkey HSM bindings"
         );
+    }
+
+    #[test]
+    fn genesis_with_crypto_override_embeds_manifest_metadata() {
+        use iroha_data_model::{
+            isi::SetParameter,
+            parameter::{Parameter, system::crypto_metadata},
+            transaction::Executable,
+        };
+
+        fn embedded_manifest_crypto(block: &GenesisBlock) -> ManifestCrypto {
+            for tx in block.0.transactions_vec() {
+                let Executable::Instructions(instrs) = tx.instructions() else {
+                    continue;
+                };
+                for instr in instrs {
+                    let Some(set_param) = instr.as_any().downcast_ref::<SetParameter>() else {
+                        continue;
+                    };
+                    let Parameter::Custom(custom) = set_param.inner() else {
+                        continue;
+                    };
+                    if custom.id() == &crypto_metadata::manifest_meta_id() {
+                        return custom
+                            .payload()
+                            .try_into_any()
+                            .expect("decode embedded crypto manifest");
+                    }
+                }
+            }
+            panic!("crypto manifest metadata parameter not found in genesis");
+        }
+
+        let allowed_signing = vec![
+            Algorithm::Ed25519,
+            Algorithm::Secp256k1,
+            Algorithm::BlsNormal,
+        ];
+        let expected =
+            super::manifest_crypto_from_actual(&iroha_config::parameters::actual::Crypto {
+                allowed_curve_ids:
+                    iroha_config::parameters::defaults::crypto::derive_curve_ids_from_algorithms(
+                        &allowed_signing,
+                    ),
+                allowed_signing,
+                ..Default::default()
+            });
+
+        let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let topology = [PeerId::new(bls.public_key().clone())]
+            .into_iter()
+            .collect();
+        let entry = GenesisTopologyEntry::new(
+            PeerId::new(bls.public_key().clone()),
+            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
+        );
+        let block = super::genesis_with_keypair_and_post_topology_with_policies(
+            Vec::new(),
+            Vec::new(),
+            topology,
+            vec![entry],
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
+            super::chain_id(),
+            Some(expected.clone()),
+            None,
+            None,
+            None,
+        );
+
+        assert_eq!(embedded_manifest_crypto(&block), expected);
     }
 
     #[test]

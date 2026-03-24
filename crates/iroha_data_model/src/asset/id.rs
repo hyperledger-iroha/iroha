@@ -297,12 +297,6 @@ impl AssetDefinitionId {
         bs58::encode(payload).into_string()
     }
 
-    /// Backwards-compatible alias for [`Self::canonical_address`].
-    #[must_use]
-    pub fn canonical_literal(&self) -> String {
-        self.canonical_address()
-    }
-
     /// Returns `true` when this identifier is an opaque synthetic identifier
     /// literal rather than a domain-scoped asset definition synthesized from
     /// business domain/name components.

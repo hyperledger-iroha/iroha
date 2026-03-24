@@ -447,7 +447,7 @@ fn canonical_asset_definition_id(domain: &str, name: &str) -> AssetDefinitionId 
 }
 
 pub(crate) fn canonical_asset_definition_literal(domain: &str, name: &str) -> String {
-    canonical_asset_definition_id(domain, name).canonical_literal()
+    canonical_asset_definition_id(domain, name).canonical_address()
 }
 
 fn localnet_stake_asset_definition_id() -> AssetDefinitionId {

@@ -114,7 +114,7 @@ fn ivm_host_shadow_execute_matches_native_execute() {
         "wonderland".parse().unwrap(),
         "coin".parse().unwrap(),
     );
-    let asset_def = AssetDefinitionId::parse_address_literal(&asset_def_seed.canonical_literal())
+    let asset_def = AssetDefinitionId::parse_address_literal(&asset_def_seed.canonical_address())
         .expect("canonical asset definition literal");
     let key: Name = "parity_key".parse().unwrap();
     let value = iroha_primitives::json::Json::new("shadow");

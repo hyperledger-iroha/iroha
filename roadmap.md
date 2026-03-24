@@ -354,7 +354,10 @@ runtime-health path beyond warmup and primary `/infer` failures:
   and
 - incoming Soracloud proxy execution is now restricted to the generated-HF
   `infer` query case on the committed warm primary, so the P2P proxy receive
-  path is no longer a generic remote public local-read tunnel; and
+  path is no longer a generic remote public local-read tunnel, and the
+  authoritative primary now also recomputes the canonical generated-HF
+  request commitment before execution so forged proxy envelopes fail closed;
+  and
 - when an assigned replica or stale former primary rejects that incoming
   generated-HF proxy execution because it is no longer the authoritative warm
   primary, the runtime now also hints `ReconcileSoracloudModelHosts` from the
@@ -384,6 +387,7 @@ Validation:
 - `cargo check -p iroha_torii --tests`
 - `cargo check -p iroha_torii --lib`
 - `cargo test -p iroha_torii validate_incoming_soracloud_proxy_request_authority_accepts_generated_hf_primary --lib`
+- `cargo test -p iroha_torii validate_incoming_soracloud_proxy_request_authority_rejects_commitment_mismatch --lib`
 - `cargo test -p iroha_torii validate_incoming_soracloud_proxy_request_authority_rejects_non_generated_hf --lib`
 - `cargo test -p iroha_torii validate_incoming_soracloud_proxy_request_authority_rejects_non_primary_peer --lib`
 - `cargo test -p iroha_torii incoming_proxy_authority_failure_requests_generated_hf_reconcile --lib`
@@ -545,6 +549,84 @@ Validation completed so far:
 Open work for this slice now remains:
 - implement fixes for the four findings and add regression coverage proving the
   public/runtime/proxy boundaries and attachment tenancy rules cannot regress.
+
+Latest sync (2026-03-24 Soracloud runtime-manager async reconcile panic fix):
+`crates/irohad/src/soracloud_runtime.rs`
+now keeps HF-source reconciliation off Tokio async worker threads:
+
+- startup reconciliation now runs on a dedicated thread,
+- the periodic reconcile loop now uses `tokio::task::spawn_blocking`, so the
+  blocking Hugging Face / remote hydration clients can be created and dropped
+  without tripping Tokio's runtime-drop panic, and
+- a focused async regression test now proves the background reconcile task can
+  import an assigned generated-HF source without panicking.
+
+Validation completed so far:
+- `cargo fmt --all`
+- `cargo test -p irohad reconcile_task_imports_generated_hf_source_without_panicking -- --nocapture`
+- `cargo test -p integration_tests --test iroha_cli soracloud_hf_shared_lease_commands_use_live_torii_control_plane -- --nocapture --test-threads=1`
+- `cargo test -p integration_tests --test iroha_cli soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window -- --nocapture --test-threads=1`
+- `cargo test -p integration_tests --test iroha_cli soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts -- --nocapture --test-threads=1`
+
+Open work for this slice now remains:
+- rerun the broader workspace sweep when the longer validation budget is
+  available.
+
+Latest sync (2026-03-24 Soracloud HF live CLI lease fixture and advertise-path repair):
+`integration_tests/tests/iroha_cli.rs`,
+`crates/iroha_cli/src/soracloud.rs`, and
+`crates/iroha_test_network/src/{config.rs,lib.rs}` now align the live HF lease
+fixtures with the authoritative control-plane rules:
+
+- the live `hf-deploy` / `hf-lease-renew` / refund-proration integration tests
+  now use the public `hf-internal-testing/tiny-random-gpt2` safetensors
+  fixture instead of `openai/gpt-oss`;
+- the HF live fixtures now start NPoS validator networks, allow
+  `bls_normal` transaction signing, and advertise a valid `cpu.small`
+  host-capability record before exercising the lease commands;
+- `model-host-advertise` now signs the supported schema version and a live
+  `advertised_at_ms` value from the CLI; and
+- test-network genesis generation now carries custom crypto overrides into the
+  embedded manifest so runtime admission matches the configured signing policy.
+
+Validation completed so far:
+- `cargo fmt --all`
+- `cargo test -p iroha_test_network genesis_with_crypto_override_embeds_manifest_metadata -- --nocapture`
+- `cargo test -p iroha_cli --bin iroha signed_model_host_advertise_request_uses_supported_schema_version -- --nocapture`
+- `cargo test -p integration_tests --test iroha_cli soracloud_hf_ -- --nocapture --test-threads=1`
+
+Open work for this slice now remains:
+- rerun the broader workspace sweep when the longer validation budget is
+  available.
+
+Latest sync (2026-03-24 mobile Java→Kotlin migration verification):
+`kotlin/` currently passes its mobile-facing JVM/build slice, but the legacy
+Java Android baseline still has red tests after the compile blocker in
+`java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportTests.java`
+was fixed:
+
+- green so far:
+  - `kotlin/:core-jvm:test`
+  - `kotlin/:client-android:assembleRelease`
+  - `kotlin/:offline-wallet-android:assembleRelease`
+  - `java/iroha_android/:android:test`
+  - `java/iroha_android/:jvm:test`
+  - `java/iroha_android/:samples-android:testDebugUnitTest`
+- still red in the legacy baseline:
+  - `GradleHarnessTests[org.hyperledger.iroha.android.address.AccountAddressTests]`
+    because the checked-in address compliance fixture shape no longer matches
+    what the harness loader expects for `encodings.ih58`,
+  - `GradleHarnessTests[org.hyperledger.iroha.android.client.OfflineToriiClientTests]`
+    because `listAllowancesParsesResponse()` still expects a different
+    `assetDefinitionId`, and
+  - 5 failures in `AccountLiteralHardCutTests` around strict encoded-only
+    literal rejection.
+
+Open work for this slice now remains:
+- fix the 7 failing Java `:core:test` cases so the migration baseline is
+  actually green end to end; and
+- add direct Kotlin regression coverage for the Java-only red slices above
+  before claiming full mobile migration parity.
 
 Latest sync (2026-03-24 multisig integration DTO re-export compile fix):
 `crates/iroha_torii/src/{lib.rs,routing.rs}` and

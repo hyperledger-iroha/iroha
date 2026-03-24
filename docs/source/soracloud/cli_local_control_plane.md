@@ -249,7 +249,9 @@ Soracloud v1 is an authoritative, IVM-only runtime.
     generated-HF `infer` query case on the committed warm primary. Non-HF
     public local-read routes, and generated-HF requests delivered to a node
     that is no longer the authoritative warm primary, now fail closed instead
-    of executing over the P2P proxy path.
+    of executing over the P2P proxy path. The authoritative primary also now
+    recomputes the canonical generated-HF request commitment before execution,
+    so forged or mismatched proxy envelopes fail closed.
   - when an assigned replica or stale former primary rejects that incoming
     generated-HF proxy execution because it is no longer the authoritative
     warm primary, the receiver-side runtime now also hints

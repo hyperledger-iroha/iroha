@@ -668,9 +668,6 @@ inline void ge_double_scalarmult(
     if (ge_frombytes_negate_vartime(&base, base_bytes) != 0) {
         return;
     }
-    ge_p3 negA;
-    ge_neg(&negA, A);
-
     for (int bit = 255; bit >= 0; --bit) {
         ge_p3 tmp;
         ge_double(&tmp, r);
@@ -679,7 +676,7 @@ inline void ge_double_scalarmult(
         fe_copy(r->Z, tmp.Z);
         fe_copy(r->T, tmp.T);
         if (scalar_bit(a, bit)) {
-            ge_add(&tmp, r, &negA);
+            ge_add(&tmp, r, A);
             fe_copy(r->X, tmp.X);
             fe_copy(r->Y, tmp.Y);
             fe_copy(r->Z, tmp.Z);
