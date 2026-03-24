@@ -15,7 +15,7 @@ jobs:
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Set up Docker Buildx
         id: buildx
         if: always()
