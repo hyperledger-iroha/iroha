@@ -18837,6 +18837,8 @@ const ENDPOINT_ACCOUNTS_QUERY: &str = "/v1/accounts/query";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_ONBOARD: &str = "/v1/accounts/onboard";
 #[cfg(feature = "app_api")]
+pub const ENDPOINT_ACCOUNTS_FAUCET: &str = "/v1/accounts/faucet";
+#[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_ONBOARD_MULTISIG: &str = "/v1/accounts/onboard/multisig";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_CONTRACTS_CALL_MULTISIG_PROPOSE: &str = "/v1/contracts/call/multisig/propose";
@@ -36540,6 +36542,22 @@ pub struct AccountOnboardingResponseDto {
 
 #[cfg(feature = "app_api")]
 #[derive(Clone, Debug, crate::json_macros::JsonDeserialize)]
+pub struct AccountFaucetRequestDto {
+    pub account_id: String,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize)]
+pub struct AccountFaucetResponseDto {
+    pub account_id: String,
+    pub asset_definition_id: String,
+    pub amount: String,
+    pub tx_hash_hex: String,
+    pub status: &'static str,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Clone, Debug, crate::json_macros::JsonDeserialize)]
 pub struct MultisigAccountOnboardingRequestDto {
     pub alias: String,
     pub required_signers: u8,
@@ -36568,6 +36586,15 @@ impl crate::utils::extractors::SupportsNoritoDecode for AccountOnboardingRequest
 }
 
 #[cfg(feature = "app_api")]
+impl crate::utils::extractors::SupportsNoritoDecode for AccountFaucetRequestDto {
+    fn decode_norito(bytes: &[u8]) -> Result<Self, norito::Error> {
+        norito::json::from_slice::<Self>(bytes).map_err(|err| {
+            norito::Error::Message(format!("invalid AccountFaucetRequestDto: {err}"))
+        })
+    }
+}
+
+#[cfg(feature = "app_api")]
 impl crate::utils::extractors::SupportsNoritoDecode for MultisigAccountOnboardingRequestDto {
     fn decode_norito(bytes: &[u8]) -> Result<Self, norito::Error> {
         norito::json::from_slice::<Self>(bytes).map_err(|err| {
@@ -36581,6 +36608,14 @@ impl crate::utils::extractors::SupportsNoritoDecode for MultisigAccountOnboardin
 #[cfg(feature = "app_api")]
 fn onboarding_invalid_request(reason: &str) -> Error {
     iroha_logger::warn!(target: "torii.onboard", reason, "UAID onboarding request rejected");
+    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+        QueryExecutionFail::InvalidSingularParameters,
+    ))
+}
+
+#[cfg(feature = "app_api")]
+fn faucet_invalid_request(reason: &str) -> Error {
+    iroha_logger::warn!(target: "torii.faucet", reason, "Account faucet request rejected");
     Error::Query(iroha_data_model::ValidationFail::QueryFailed(
         QueryExecutionFail::InvalidSingularParameters,
     ))
@@ -36814,6 +36849,91 @@ pub async fn handle_v1_accounts_onboard(
     let response = AccountOnboardingResponseDto {
         account_id: account_id.to_string(),
         uaid: uaid.to_string(),
+        tx_hash_hex,
+        status: "QUEUED",
+    };
+
+    let mut resp = Response::new(Body::from(
+        norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into()),
+    ));
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("application/json"),
+    );
+    Ok((StatusCode::ACCEPTED, resp))
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_accounts_faucet(
+    app: crate::SharedAppState,
+    crate::NoritoJson(req): crate::NoritoJson<AccountFaucetRequestDto>,
+    telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    let Some(faucet) = app.account_faucet.as_ref() else {
+        return Err(Error::Query(
+            iroha_data_model::ValidationFail::NotPermitted("Account faucet disabled".into()),
+        ));
+    };
+
+    let account_literal = req.account_id.trim();
+    if account_literal.is_empty() {
+        return Err(faucet_invalid_request("account_id must not be empty"));
+    }
+    let account_id = AccountId::parse_encoded(account_literal)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .map_err(|_| faucet_invalid_request("invalid account id literal"))?;
+
+    let world = app.state.world_view();
+    if world.account(&account_id).is_err() {
+        return Err(faucet_invalid_request("account does not exist"));
+    }
+
+    let destination_asset_id = AssetId::new(faucet.asset_definition_id.clone(), account_id.clone());
+    let destination_balance = match world.asset(&destination_asset_id) {
+        Ok(entry) => entry.value().as_ref().clone(),
+        Err(_) => iroha_primitives::numeric::Numeric::zero(),
+    };
+    if destination_balance > iroha_primitives::numeric::Numeric::zero() {
+        return Err(faucet_invalid_request(
+            "account already has a positive faucet asset balance",
+        ));
+    }
+
+    let source_asset_id =
+        AssetId::new(faucet.asset_definition_id.clone(), faucet.authority.clone());
+    let source_balance = match world.asset(&source_asset_id) {
+        Ok(entry) => entry.value().as_ref().clone(),
+        Err(_) => iroha_primitives::numeric::Numeric::zero(),
+    };
+    if source_balance < faucet.amount.clone() {
+        return Err(faucet_invalid_request("faucet is out of funds"));
+    }
+
+    let mut builder = TransactionBuilder::new((*app.chain_id).clone(), faucet.authority.clone())
+        .with_instructions([InstructionBox::from(dm::Transfer::asset_numeric(
+            source_asset_id,
+            faucet.amount.clone(),
+            account_id.clone(),
+        ))]);
+    builder.set_ttl(Duration::from_secs(60));
+    let tx = builder.sign(&faucet.private_key.0);
+    let tx_hash_hex = hex::encode(tx.hash().as_ref());
+
+    handle_transaction_with_metrics(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        tx,
+        telemetry,
+        ENDPOINT_ACCOUNTS_FAUCET,
+    )
+    .await?;
+
+    let response = AccountFaucetResponseDto {
+        account_id: account_id.to_string(),
+        asset_definition_id: faucet.asset_definition_id.to_string(),
+        amount: faucet.amount.to_string(),
         tx_hash_hex,
         status: "QUEUED",
     };

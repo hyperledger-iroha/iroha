@@ -14203,6 +14203,8 @@ pub struct Torii {
     pub webhook_security: WebhookSecurity,
     /// Optional UAID onboarding authority wiring for app API endpoints.
     pub onboarding: Option<ToriiOnboarding>,
+    /// Optional faucet configuration for app API endpoints.
+    pub faucet: Option<ToriiFaucet>,
     /// Optional offline certificate issuer configuration for app API endpoints.
     pub offline_issuer: Option<ToriiOfflineIssuer>,
     /// Optional RAM-LFE runtime configuration for app API endpoints.
@@ -14663,6 +14665,7 @@ impl Torii {
             webhook_security,
             push,
             onboarding: self.onboarding.and_then(ToriiOnboarding::parse),
+            faucet: self.faucet.and_then(ToriiFaucet::parse),
             offline_issuer: self.offline_issuer.and_then(ToriiOfflineIssuer::parse),
             ram_lfe: self.ram_lfe.and_then(ToriiRamLfe::parse),
             tx_history: self.tx_history.map(ToriiTxHistory::parse),
@@ -15177,6 +15180,98 @@ impl ToriiOnboarding {
             allowed_permissions,
             fee_sponsor_account,
         })
+    }
+}
+
+/// Faucet configuration for app-facing onboarding helpers.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct ToriiFaucet {
+    /// Master enable switch (defaults to enabled).
+    #[config(default = "true")]
+    pub enabled: bool,
+    /// Account identifier that signs faucet transfers.
+    pub authority: String,
+    /// Private key corresponding to the faucet authority.
+    pub private_key: ExposedPrivateKey,
+    /// Asset definition distributed by the faucet.
+    pub asset_definition_id: String,
+    /// Fixed quantity transferred to each eligible account.
+    pub amount: String,
+}
+
+impl ToriiFaucet {
+    fn parse(self) -> Option<actual::ToriiFaucet> {
+        if !self.enabled {
+            return None;
+        }
+        let authority = AccountId::parse_encoded(&self.authority).map_or_else(
+            |err| panic!("invalid torii.faucet.authority `{}`: {err}", self.authority),
+            iroha_data_model::account::ParsedAccountId::into_account_id,
+        );
+        let asset_definition_id = AssetDefinitionId::parse_address_literal(
+            &self.asset_definition_id,
+        )
+        .unwrap_or_else(|err| {
+            panic!(
+                "invalid torii.faucet.asset_definition_id `{}`: {err}",
+                self.asset_definition_id
+            )
+        });
+        let amount = Numeric::from_str(self.amount.trim())
+            .unwrap_or_else(|err| panic!("invalid torii.faucet.amount `{}`: {err}", self.amount));
+        if amount <= Numeric::zero() {
+            panic!("torii.faucet.amount must be greater than zero");
+        }
+        Some(actual::ToriiFaucet {
+            authority,
+            private_key: self.private_key,
+            asset_definition_id,
+            amount,
+        })
+    }
+}
+
+#[cfg(test)]
+mod torii_faucet_tests {
+    use super::*;
+
+    fn sample_faucet() -> ToriiFaucet {
+        ToriiFaucet {
+            enabled: true,
+            authority: "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+                .to_owned(),
+            private_key: "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
+                .parse()
+                .expect("private key"),
+            asset_definition_id: "xor#sora".to_owned(),
+            amount: "25000".to_owned(),
+        }
+    }
+
+    #[test]
+    fn torii_faucet_parse_maps_enabled_config() {
+        let parsed = sample_faucet().parse().expect("enabled faucet");
+        assert_eq!(
+            parsed.authority.to_string(),
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+        );
+        assert_eq!(parsed.asset_definition_id.to_string(), "xor#sora");
+        assert_eq!(parsed.amount.to_string(), "25000");
+    }
+
+    #[test]
+    fn torii_faucet_parse_returns_none_when_disabled() {
+        let mut faucet = sample_faucet();
+        faucet.enabled = false;
+        assert!(faucet.parse().is_none());
+    }
+
+    #[test]
+    fn torii_faucet_parse_rejects_non_positive_amount() {
+        let mut faucet = sample_faucet();
+        faucet.amount = "0".to_owned();
+        let panic = std::panic::catch_unwind(|| faucet.parse());
+        assert!(panic.is_err(), "expected zero amount to panic");
     }
 }
 

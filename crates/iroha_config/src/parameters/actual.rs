@@ -5068,6 +5068,8 @@ pub struct Torii {
     pub proof_api: ProofApi,
     /// Optional UAID onboarding authority configuration.
     pub onboarding: Option<ToriiOnboarding>,
+    /// Optional app-facing faucet configuration.
+    pub faucet: Option<ToriiFaucet>,
     /// Optional offline certificate issuer configuration.
     pub offline_issuer: Option<ToriiOfflineIssuer>,
     /// Optional RAM-LFE runtime configuration.
@@ -5604,6 +5606,19 @@ pub struct ToriiOnboarding {
     pub allowed_permissions: Vec<String>,
     /// Optional sponsor account granted via `CanUseFeeSponsor`.
     pub fee_sponsor_account: Option<AccountId>,
+}
+
+/// App-facing faucet configuration exposed to Torii.
+#[derive(Debug, Clone)]
+pub struct ToriiFaucet {
+    /// Account identifier that signs faucet transfers.
+    pub authority: AccountId,
+    /// Private key corresponding to the faucet authority.
+    pub private_key: ExposedPrivateKey,
+    /// Asset definition distributed by the faucet.
+    pub asset_definition_id: AssetDefinitionId,
+    /// Fixed quantity transferred to each eligible account.
+    pub amount: Numeric,
 }
 
 /// Offline certificate issuer configuration exposed to Torii.

@@ -3709,6 +3709,17 @@ fn account_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/accounts/faucet".to_owned(),
+        Value::Object(json_post_operation(
+            "Accounts",
+            "Request faucet funds.",
+            "Transfer a fixed amount of testnet funds to an existing account when the configured faucet is enabled and the account has no positive balance for the configured asset.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
         "/v1/accounts/{account_id}/transactions/query".to_owned(),
         Value::Object(json_post_operation(
             "Accounts",

@@ -1096,6 +1096,8 @@ struct AppState {
     #[cfg(feature = "app_api")]
     offline_issuer: Option<OfflineIssuerSigner>,
     #[cfg(feature = "app_api")]
+    account_faucet: Option<iroha_config::parameters::actual::ToriiFaucet>,
+    #[cfg(feature = "app_api")]
     uaid_onboarding: Option<AccountOnboardingSigner>,
     soracloud_runtime: Option<SharedSoracloudRuntime>,
     #[cfg(feature = "app_api")]
@@ -3297,6 +3299,32 @@ async fn handler_accounts_onboard(
     .await?;
 
     routing::handle_v1_accounts_onboard(app.clone(), request, app.telemetry.clone()).await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_accounts_faucet(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    request: crate::utils::extractors::NoritoJson<crate::routing::AccountFaucetRequestDto>,
+) -> Result<impl IntoResponse, Error> {
+    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+        return routing::handle_v1_accounts_faucet(app.clone(), request, app.telemetry.clone())
+            .await;
+    }
+
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+    check_access_enforced(
+        &app,
+        &headers,
+        None,
+        routing::ENDPOINT_ACCOUNTS_FAUCET.trim_start_matches('/'),
+        enforce,
+    )
+    .await?;
+
+    routing::handle_v1_accounts_faucet(app.clone(), request, app.telemetry.clone()).await
 }
 
 #[cfg(feature = "app_api")]
@@ -16770,6 +16798,8 @@ pub struct Torii {
     #[cfg(feature = "app_api")]
     offline_issuer: Option<OfflineIssuerSigner>,
     #[cfg(feature = "app_api")]
+    account_faucet: Option<iroha_config::parameters::actual::ToriiFaucet>,
+    #[cfg(feature = "app_api")]
     uaid_onboarding: Option<AccountOnboardingSigner>,
     soracloud_runtime: Option<SharedSoracloudRuntime>,
 }
@@ -17683,6 +17713,7 @@ impl Torii {
                 .route("/v1/accounts", get(handler_accounts_list))
                 .route("/v1/accounts/query", post(handler_accounts_query))
                 .route("/v1/accounts/onboard", post(handler_accounts_onboard))
+                .route("/v1/accounts/faucet", post(handler_accounts_faucet))
                 .route(
                     "/v1/accounts/onboard/multisig",
                     post(handler_accounts_onboard_multisig),
@@ -19083,6 +19114,8 @@ impl Torii {
             }
         });
         #[cfg(feature = "app_api")]
+        let account_faucet = config.faucet.clone();
+        #[cfg(feature = "app_api")]
         let identifier_resolver = config.ram_lfe.as_ref().and_then(|cfg| {
             if cfg.programs.is_empty() {
                 iroha_logger::warn!("torii.ram_lfe is enabled but no programs are configured");
@@ -19222,6 +19255,8 @@ impl Torii {
             stream_token_issuer,
             #[cfg(feature = "app_api")]
             offline_issuer,
+            #[cfg(feature = "app_api")]
+            account_faucet,
             #[cfg(feature = "app_api")]
             uaid_onboarding,
             soracloud_runtime,
@@ -19514,6 +19549,8 @@ impl Torii {
             #[cfg(feature = "app_api")]
             offline_issuer: self.offline_issuer.clone(),
             #[cfg(feature = "app_api")]
+            account_faucet: self.account_faucet.clone(),
+            #[cfg(feature = "app_api")]
             uaid_onboarding: self.uaid_onboarding.clone(),
             soracloud_runtime: self.soracloud_runtime.clone(),
             #[cfg(feature = "app_api")]
@@ -19559,6 +19596,7 @@ impl Torii {
             &app_state.stream_token_concurrency,
             &app_state.sorafs_chunk_range_overrides,
             &app_state.offline_issuer,
+            &app_state.account_faucet,
             &app_state.uaid_onboarding,
             &app_state.soracloud_runtime,
             &app_state.sns_registry,
