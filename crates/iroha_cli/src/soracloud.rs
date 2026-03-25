@@ -8,7 +8,7 @@
 
 use std::{
     cell::RefCell,
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     num::{NonZeroU16, NonZeroU32, NonZeroU64},
     path::{Path, PathBuf},
@@ -35,10 +35,12 @@ use iroha::{
             SecretEnvelopeV1, SoraArtifactKindV1, SoraArtifactRefV1, SoraCertifiedResponsePolicyV1,
             SoraContainerManifestV1, SoraContainerRuntimeV1, SoraDeploymentBundleV1,
             SoraHfBackendFamilyV1, SoraHfModelFormatV1, SoraMailboxContractV1,
-            SoraModelHostCapabilityRecordV1, SoraNetworkPolicyV1, SoraRouteTargetV1,
+            SoraModelHostCapabilityRecordV1, SoraModelPrivacyModeV1, SoraNetworkPolicyV1,
+            SoraPrivateCompileProfileV1, SoraPrivateInferenceSessionV1, SoraRouteTargetV1,
             SoraRouteVisibilityV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
             SoraServiceManifestV1, SoraStateBindingV1, SoraStateEncryptionV1,
-            SoraStateMutabilityV1, SoraStateScopeV1, SoraTlsModeV1,
+            SoraStateMutabilityV1, SoraStateScopeV1, SoraTlsModeV1, SoraUploadedModelBundleV1,
+            SoraUploadedModelChunkV1, SoraUploadedModelEncryptionRecipientV1,
             encode_agent_artifact_allow_provenance_payload,
             encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
             encode_agent_lease_renew_provenance_payload,
@@ -58,12 +60,19 @@ use iroha::{
             encode_model_host_withdraw_provenance_payload,
             encode_model_weight_promote_provenance_payload,
             encode_model_weight_register_provenance_payload,
-            encode_model_weight_rollback_provenance_payload, encode_rollback_provenance_payload,
+            encode_model_weight_rollback_provenance_payload,
+            encode_private_compile_profile_provenance_payload,
+            encode_private_inference_output_release_provenance_payload,
+            encode_private_inference_start_provenance_payload, encode_rollback_provenance_payload,
             encode_rollout_provenance_payload, encode_set_service_config_provenance_payload,
             encode_set_service_secret_provenance_payload,
             encode_training_job_checkpoint_provenance_payload,
             encode_training_job_retry_provenance_payload,
             encode_training_job_start_provenance_payload,
+            encode_uploaded_model_allow_provenance_payload,
+            encode_uploaded_model_bundle_register_provenance_payload,
+            encode_uploaded_model_chunk_append_provenance_payload,
+            encode_uploaded_model_finalize_provenance_payload,
         },
         sorafs::pin_registry::StorageClass,
     },
@@ -72,7 +81,7 @@ use iroha_core::soracloud_runtime::{
     HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS, HF_GENERATED_AGENT_LEASE_TICKS,
     build_soracloud_hf_generated_agent_manifest, build_soracloud_hf_generated_service_bundle,
 };
-use iroha_crypto::{Hash, KeyPair, Signature};
+use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
 use iroha_primitives::json::Json;
 use norito::{
     decode_from_bytes,
@@ -83,6 +92,17 @@ use reqwest::{
     header::{self, HeaderValue},
 };
 use sha2::{Digest as _, Sha256};
+
+#[cfg(test)]
+use iroha::data_model::soracloud::{
+    SECRET_ENVELOPE_VERSION_V1, SORA_PRIVATE_COMPILE_PROFILE_VERSION_V1,
+    SORA_PRIVATE_INFERENCE_SESSION_VERSION_V1, SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
+    SORA_UPLOADED_MODEL_CHUNK_VERSION_V1, SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1,
+    SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1, SecretEnvelopeEncryptionV1,
+    SoraPrivateInferenceSessionStatusV1, SoraUploadedModelKeyEncapsulationV1,
+    SoraUploadedModelKeyWrapAeadV1, SoraUploadedModelRuntimeFormatV1,
+    SoraUploadedModelWrappedKeyV1,
+};
 
 use crate::{Run, RunContext};
 
@@ -177,6 +197,30 @@ pub enum Command {
     ModelWeightRollback(ModelWeightRollbackArgs),
     /// Query model weight status in live Torii control-plane mode.
     ModelWeightStatus(ModelWeightStatusArgs),
+    /// Fetch the active uploaded-model encryption recipient from Torii.
+    ModelUploadEncryptionRecipient(ModelUploadEncryptionRecipientArgs),
+    /// Register an uploaded-model bundle root in live Torii control-plane mode.
+    ModelUploadInit(ModelUploadInitArgs),
+    /// Append one uploaded-model encrypted chunk in live Torii control-plane mode.
+    ModelUploadChunk(ModelUploadChunkArgs),
+    /// Finalize an uploaded-model bundle into the model registry.
+    ModelUploadFinalize(ModelUploadFinalizeArgs),
+    /// Query uploaded-model bundle/chunk status in live Torii control-plane mode.
+    ModelUploadStatus(ModelUploadStatusArgs),
+    /// Admit a deterministic private compile profile for an uploaded model.
+    ModelCompile(ModelCompileArgs),
+    /// Query uploaded-model compile status in live Torii control-plane mode.
+    ModelCompileStatus(ModelCompileStatusArgs),
+    /// Bind an uploaded model to an apartment that already admits model inference.
+    ModelAllow(ModelAllowArgs),
+    /// Start and finalize a private uploaded-model inference session.
+    ModelRunPrivate(ModelRunPrivateArgs),
+    /// Query private uploaded-model inference session status.
+    ModelRunStatus(ModelRunStatusArgs),
+    /// Release governed output material for a private uploaded-model session.
+    ModelDecryptOutput(ModelDecryptOutputArgs),
+    /// Orchestrate uploaded-model publish/init/chunk/finalize/compile/allow from a plan file.
+    ModelPublishPrivate(ModelPublishPrivateArgs),
     /// Join or create a shared Hugging Face lease pool in live Torii control-plane mode.
     HfDeploy(HfDeployArgs),
     /// Query shared Hugging Face lease pool status in live Torii control-plane mode.
@@ -319,6 +363,42 @@ impl Run for Command {
                 context.print_data(&output)
             }
             Command::ModelWeightStatus(args) => context.print_data(&args.run()?),
+            Command::ModelUploadEncryptionRecipient(args) => context.print_data(&args.run()?),
+            Command::ModelUploadInit(args) => {
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Command::ModelUploadChunk(args) => {
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Command::ModelUploadFinalize(args) => {
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Command::ModelUploadStatus(args) => context.print_data(&args.run()?),
+            Command::ModelCompile(args) => {
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Command::ModelCompileStatus(args) => context.print_data(&args.run()?),
+            Command::ModelAllow(args) => {
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Command::ModelRunPrivate(args) => {
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Command::ModelRunStatus(args) => context.print_data(&args.run()?),
+            Command::ModelDecryptOutput(args) => {
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Command::ModelPublishPrivate(args) => {
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
+                context.print_data(&output)
+            }
             Command::HfDeploy(args) => {
                 let output = args.run(&context.config().account, &context.config().key_pair)?;
                 context.print_data(&output)
@@ -2104,6 +2184,428 @@ impl ModelWeightStatusArgs {
     }
 }
 
+/// Arguments for `app soracloud model-upload-encryption-recipient`.
+#[derive(clap::Args, Debug)]
+pub struct ModelUploadEncryptionRecipientArgs {
+    /// Torii base URL for authoritative `model/upload/encryption-recipient`.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when querying Torii.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane query.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl ModelUploadEncryptionRecipientArgs {
+    fn run(self) -> Result<norito::json::Value> {
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let (_, payload) = fetch_torii_soracloud_uploaded_model_encryption_recipient(
+            torii_url,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        Ok(payload)
+    }
+}
+
+/// Arguments for `app soracloud model-upload-init`.
+#[derive(clap::Args, Debug)]
+pub struct ModelUploadInitArgs {
+    /// Path to a `SoraUploadedModelBundleV1` JSON document.
+    #[arg(long, value_name = "PATH")]
+    bundle_file: PathBuf,
+    /// Torii base URL for authoritative `model/upload/init`.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token`.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane mutation.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl ModelUploadInitArgs {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let bundle: SoraUploadedModelBundleV1 = load_json(&self.bundle_file)?;
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let request = signed_uploaded_model_bundle_init_request(bundle, authority, key_pair)?;
+        let (_, payload) = post_torii_soracloud_mutation(
+            torii_url,
+            "v1/soracloud/model/upload/init",
+            &request,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        Ok(payload)
+    }
+}
+
+/// Arguments for `app soracloud model-upload-chunk`.
+#[derive(clap::Args, Debug)]
+pub struct ModelUploadChunkArgs {
+    /// Path to a `SoraUploadedModelChunkV1` JSON document.
+    #[arg(long, value_name = "PATH")]
+    chunk_file: PathBuf,
+    /// Torii base URL for authoritative `model/upload/chunk`.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token`.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane mutation.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl ModelUploadChunkArgs {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let chunk: SoraUploadedModelChunkV1 = load_json(&self.chunk_file)?;
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let request = signed_uploaded_model_chunk_request(chunk, authority, key_pair)?;
+        let (_, payload) = post_torii_soracloud_mutation(
+            torii_url,
+            "v1/soracloud/model/upload/chunk",
+            &request,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        Ok(payload)
+    }
+}
+
+/// Arguments for `app soracloud model-upload-finalize`.
+#[derive(clap::Args, Debug)]
+pub struct ModelUploadFinalizeArgs {
+    /// Path to an `UploadedModelFinalizePayload` JSON document.
+    #[arg(long, value_name = "PATH")]
+    request_file: PathBuf,
+    /// Torii base URL for authoritative `model/upload/finalize`.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token`.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane mutation.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl ModelUploadFinalizeArgs {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let payload: UploadedModelFinalizePayload = load_json(&self.request_file)?;
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let request = signed_uploaded_model_finalize_request(payload, authority, key_pair)?;
+        let (_, payload) = post_torii_soracloud_mutation(
+            torii_url,
+            "v1/soracloud/model/upload/finalize",
+            &request,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        Ok(payload)
+    }
+}
+
+/// Arguments for `app soracloud model-upload-status`.
+#[derive(clap::Args, Debug)]
+pub struct ModelUploadStatusArgs {
+    /// Service name that owns the uploaded model.
+    #[arg(long, value_name = "NAME")]
+    service_name: String,
+    /// Uploaded-model pinned weight version.
+    #[arg(long, value_name = "VERSION")]
+    weight_version: String,
+    /// Optional uploaded-model identifier.
+    #[arg(long, value_name = "ID", conflicts_with = "model_name")]
+    model_id: Option<String>,
+    /// Optional logical model name used to resolve the uploaded-model record.
+    #[arg(long, value_name = "NAME", conflicts_with = "model_id")]
+    model_name: Option<String>,
+    /// Optional bundle-root filter.
+    #[arg(long, value_name = "HASH")]
+    bundle_root: Option<Hash>,
+    /// Optional compile-profile hash filter.
+    #[arg(long, value_name = "HASH")]
+    compile_profile_hash: Option<Hash>,
+    /// Torii base URL for authoritative `model/upload/status`.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token`.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane query.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl ModelUploadStatusArgs {
+    fn run(self) -> Result<norito::json::Value> {
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let (_, payload) = fetch_torii_soracloud_uploaded_model_status(
+            torii_url,
+            "v1/soracloud/model/upload/status",
+            &self.service_name,
+            &self.weight_version,
+            self.model_id.as_deref(),
+            self.model_name.as_deref(),
+            self.bundle_root,
+            self.compile_profile_hash,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        Ok(payload)
+    }
+}
+
+/// Arguments for `app soracloud model-compile`.
+#[derive(clap::Args, Debug)]
+pub struct ModelCompileArgs {
+    /// Path to a `PrivateCompilePayload` JSON document.
+    #[arg(long, value_name = "PATH")]
+    request_file: PathBuf,
+    /// Torii base URL for authoritative `model/compile`.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token`.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane mutation.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl ModelCompileArgs {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let payload: PrivateCompilePayload = load_json(&self.request_file)?;
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let request = signed_private_compile_request(payload, authority, key_pair)?;
+        let (_, payload) = post_torii_soracloud_mutation(
+            torii_url,
+            "v1/soracloud/model/compile",
+            &request,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        Ok(payload)
+    }
+}
+
+/// Arguments for `app soracloud model-compile-status`.
+#[derive(clap::Args, Debug)]
+pub struct ModelCompileStatusArgs {
+    /// Service name that owns the uploaded model.
+    #[arg(long, value_name = "NAME")]
+    service_name: String,
+    /// Uploaded-model pinned weight version.
+    #[arg(long, value_name = "VERSION")]
+    weight_version: String,
+    /// Optional uploaded-model identifier.
+    #[arg(long, value_name = "ID", conflicts_with = "model_name")]
+    model_id: Option<String>,
+    /// Optional logical model name used to resolve the uploaded-model record.
+    #[arg(long, value_name = "NAME", conflicts_with = "model_id")]
+    model_name: Option<String>,
+    /// Optional bundle-root filter.
+    #[arg(long, value_name = "HASH")]
+    bundle_root: Option<Hash>,
+    /// Optional compile-profile hash filter.
+    #[arg(long, value_name = "HASH")]
+    compile_profile_hash: Option<Hash>,
+    /// Torii base URL for authoritative `model/compile/status`.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token`.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane query.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl ModelCompileStatusArgs {
+    fn run(self) -> Result<norito::json::Value> {
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let (_, payload) = fetch_torii_soracloud_uploaded_model_status(
+            torii_url,
+            "v1/soracloud/model/compile/status",
+            &self.service_name,
+            &self.weight_version,
+            self.model_id.as_deref(),
+            self.model_name.as_deref(),
+            self.bundle_root,
+            self.compile_profile_hash,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        Ok(payload)
+    }
+}
+
+/// Arguments for `app soracloud model-allow`.
+#[derive(clap::Args, Debug)]
+pub struct ModelAllowArgs {
+    /// Path to an `UploadedModelAllowPayload` JSON document.
+    #[arg(long, value_name = "PATH")]
+    request_file: PathBuf,
+    /// Torii base URL for authoritative `model/allow`.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token`.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane mutation.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl ModelAllowArgs {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let payload: UploadedModelAllowPayload = load_json(&self.request_file)?;
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let request = signed_uploaded_model_allow_request(payload, authority, key_pair)?;
+        let (_, payload) = post_torii_soracloud_mutation(
+            torii_url,
+            "v1/soracloud/model/allow",
+            &request,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        Ok(payload)
+    }
+}
+
+/// Arguments for `app soracloud model-run-private`.
+#[derive(clap::Args, Debug)]
+pub struct ModelRunPrivateArgs {
+    /// Path to a `SoraPrivateInferenceSessionV1` JSON document.
+    #[arg(long, value_name = "PATH")]
+    session_file: PathBuf,
+    /// Torii base URL for authoritative `model/run-private`.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token`.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane mutation.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl ModelRunPrivateArgs {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let session: SoraPrivateInferenceSessionV1 = load_json(&self.session_file)?;
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        execute_private_inference_start(
+            torii_url,
+            session,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+            authority,
+            key_pair,
+        )
+    }
+}
+
+/// Arguments for `app soracloud model-run-status`.
+#[derive(clap::Args, Debug)]
+pub struct ModelRunStatusArgs {
+    /// Private inference session identifier.
+    #[arg(long, value_name = "ID")]
+    session_id: String,
+    /// Torii base URL for authoritative `model/run-status`.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token`.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane query.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl ModelRunStatusArgs {
+    fn run(self) -> Result<norito::json::Value> {
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let (_, payload) = fetch_torii_soracloud_private_inference_status(
+            torii_url,
+            &self.session_id,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        Ok(payload)
+    }
+}
+
+/// Arguments for `app soracloud model-decrypt-output`.
+#[derive(clap::Args, Debug)]
+pub struct ModelDecryptOutputArgs {
+    /// Private inference session identifier.
+    #[arg(long, value_name = "ID")]
+    session_id: String,
+    /// Decryption request identifier to release.
+    #[arg(long, value_name = "ID")]
+    decrypt_request_id: String,
+    /// Torii base URL for authoritative `model/decrypt-output`.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token`.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane mutation.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl ModelDecryptOutputArgs {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        execute_private_inference_output_release(
+            torii_url,
+            &self.session_id,
+            &self.decrypt_request_id,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+            authority,
+            key_pair,
+        )
+    }
+}
+
+/// Arguments for `app soracloud model-publish-private`.
+#[derive(clap::Args, Debug)]
+pub struct ModelPublishPrivateArgs {
+    /// Path to a `PrivateModelPublishPlan` JSON document.
+    #[arg(long, value_name = "PATH")]
+    plan_file: PathBuf,
+    /// Torii base URL for authoritative uploaded-model control-plane routes.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token`.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane mutations and queries.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl ModelPublishPrivateArgs {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let plan: PrivateModelPublishPlan = load_json(&self.plan_file)?;
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        execute_private_model_publish_plan(
+            torii_url,
+            plan,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+            authority,
+            key_pair,
+        )
+    }
+}
+
 /// Arguments for `app soracloud hf-deploy`.
 #[derive(clap::Args, Debug)]
 pub struct HfDeployArgs {
@@ -3452,6 +3954,209 @@ struct SignedModelWeightRollbackRequest {
     authority: Option<AccountId>,
     #[norito(skip_serializing_if = "Option::is_none")]
     private_key: Option<ExposedPrivateKey>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct UploadedModelBundleInitPayload {
+    bundle: SoraUploadedModelBundleV1,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedUploadedModelBundleInitRequest {
+    payload: UploadedModelBundleInitPayload,
+    provenance: ManifestProvenance,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    authority: Option<AccountId>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    private_key: Option<ExposedPrivateKey>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct UploadedModelChunkPayload {
+    chunk: SoraUploadedModelChunkV1,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedUploadedModelChunkRequest {
+    payload: UploadedModelChunkPayload,
+    provenance: ManifestProvenance,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    authority: Option<AccountId>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    private_key: Option<ExposedPrivateKey>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct UploadedModelFinalizePayload {
+    service_name: String,
+    model_name: String,
+    model_id: String,
+    artifact_id: String,
+    weight_version: String,
+    bundle_root: Hash,
+    privacy_mode: SoraModelPrivacyModeV1,
+    weight_artifact_hash: Hash,
+    dataset_ref: String,
+    training_config_hash: Hash,
+    reproducibility_hash: Hash,
+    provenance_attestation_hash: Hash,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedUploadedModelFinalizeRequest {
+    payload: UploadedModelFinalizePayload,
+    provenance: ManifestProvenance,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    authority: Option<AccountId>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    private_key: Option<ExposedPrivateKey>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct PrivateCompilePayload {
+    service_name: String,
+    model_id: String,
+    weight_version: String,
+    bundle_root: Hash,
+    compile_profile: SoraPrivateCompileProfileV1,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedPrivateCompileRequest {
+    payload: PrivateCompilePayload,
+    provenance: ManifestProvenance,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    authority: Option<AccountId>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    private_key: Option<ExposedPrivateKey>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct UploadedModelAllowPayload {
+    apartment_name: String,
+    service_name: String,
+    model_name: String,
+    model_id: String,
+    artifact_id: String,
+    weight_version: String,
+    bundle_root: Hash,
+    compile_profile_hash: Hash,
+    privacy_mode: SoraModelPrivacyModeV1,
+    require_model_inference: bool,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedUploadedModelAllowRequest {
+    payload: UploadedModelAllowPayload,
+    provenance: ManifestProvenance,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    authority: Option<AccountId>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    private_key: Option<ExposedPrivateKey>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct PrivateInferenceRunPayload {
+    session: SoraPrivateInferenceSessionV1,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedPrivateInferenceRunRequest {
+    payload: PrivateInferenceRunPayload,
+    provenance: ManifestProvenance,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    authority: Option<AccountId>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    private_key: Option<ExposedPrivateKey>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct PrivateInferenceOutputReleasePayload {
+    session_id: String,
+    decrypt_request_id: String,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedPrivateInferenceOutputReleaseRequest {
+    payload: PrivateInferenceOutputReleasePayload,
+    provenance: ManifestProvenance,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    authority: Option<AccountId>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    private_key: Option<ExposedPrivateKey>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct PrivateInferenceFinalizeRequest {
+    session_id: String,
+}
+
+#[derive(Clone, Debug, JsonDeserialize)]
+struct PrivateModelPublishPlan {
+    bundle: SoraUploadedModelBundleV1,
+    #[norito(default)]
+    chunks: Vec<SoraUploadedModelChunkV1>,
+    finalize: UploadedModelFinalizePayload,
+    compile_profile: SoraPrivateCompileProfileV1,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    allow_model: Option<UploadedModelAllowPayload>,
 }
 
 fn signed_bundle_request(
@@ -4912,6 +5617,281 @@ fn signed_model_weight_rollback_request(
     })
 }
 
+fn encode_uploaded_model_bundle_init_signature_payload(
+    payload: &UploadedModelBundleInitPayload,
+) -> Result<Vec<u8>> {
+    encode_uploaded_model_bundle_register_provenance_payload(payload.bundle.clone())
+        .wrap_err("failed to encode uploaded model init signature payload")
+}
+
+fn signed_uploaded_model_bundle_init_request(
+    bundle: SoraUploadedModelBundleV1,
+    _authority: &AccountId,
+    key_pair: &KeyPair,
+) -> Result<SignedUploadedModelBundleInitRequest> {
+    bundle
+        .validate()
+        .wrap_err("invalid uploaded model bundle")?;
+    let payload = UploadedModelBundleInitPayload { bundle };
+    let encoded = encode_uploaded_model_bundle_init_signature_payload(&payload)?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedUploadedModelBundleInitRequest {
+        payload,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+        authority: None,
+        private_key: None,
+    })
+}
+
+fn encode_uploaded_model_chunk_signature_payload(
+    payload: &UploadedModelChunkPayload,
+) -> Result<Vec<u8>> {
+    encode_uploaded_model_chunk_append_provenance_payload(payload.chunk.clone())
+        .wrap_err("failed to encode uploaded model chunk signature payload")
+}
+
+fn signed_uploaded_model_chunk_request(
+    chunk: SoraUploadedModelChunkV1,
+    _authority: &AccountId,
+    key_pair: &KeyPair,
+) -> Result<SignedUploadedModelChunkRequest> {
+    chunk.validate().wrap_err("invalid uploaded model chunk")?;
+    let payload = UploadedModelChunkPayload { chunk };
+    let encoded = encode_uploaded_model_chunk_signature_payload(&payload)?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedUploadedModelChunkRequest {
+        payload,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+        authority: None,
+        private_key: None,
+    })
+}
+
+fn encode_uploaded_model_finalize_signature_payload(
+    payload: &UploadedModelFinalizePayload,
+) -> Result<Vec<u8>> {
+    encode_uploaded_model_finalize_provenance_payload(
+        payload.service_name.as_str(),
+        payload.model_name.as_str(),
+        payload.model_id.as_str(),
+        payload.artifact_id.as_str(),
+        payload.weight_version.as_str(),
+        payload.bundle_root,
+        payload.privacy_mode,
+        payload.weight_artifact_hash,
+        payload.dataset_ref.as_str(),
+        payload.training_config_hash,
+        payload.reproducibility_hash,
+        payload.provenance_attestation_hash,
+    )
+    .wrap_err("failed to encode uploaded model finalize signature payload")
+}
+
+fn signed_uploaded_model_finalize_request(
+    payload: UploadedModelFinalizePayload,
+    _authority: &AccountId,
+    key_pair: &KeyPair,
+) -> Result<SignedUploadedModelFinalizeRequest> {
+    if payload.service_name.trim().is_empty() {
+        return Err(eyre!("finalize service_name must not be empty"));
+    }
+    if payload.model_name.trim().is_empty() {
+        return Err(eyre!("finalize model_name must not be empty"));
+    }
+    if payload.model_id.trim().is_empty() {
+        return Err(eyre!("finalize model_id must not be empty"));
+    }
+    if payload.artifact_id.trim().is_empty() {
+        return Err(eyre!("finalize artifact_id must not be empty"));
+    }
+    if payload.weight_version.trim().is_empty() {
+        return Err(eyre!("finalize weight_version must not be empty"));
+    }
+    if payload.dataset_ref.trim().is_empty() {
+        return Err(eyre!("finalize dataset_ref must not be empty"));
+    }
+    let encoded = encode_uploaded_model_finalize_signature_payload(&payload)?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedUploadedModelFinalizeRequest {
+        payload,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+        authority: None,
+        private_key: None,
+    })
+}
+
+fn uploaded_model_compile_profile_hash(compile_profile: &SoraPrivateCompileProfileV1) -> Hash {
+    let hash_of: HashOf<SoraPrivateCompileProfileV1> = HashOf::new(compile_profile);
+    hash_of.into()
+}
+
+fn encode_private_compile_signature_payload(payload: &PrivateCompilePayload) -> Result<Vec<u8>> {
+    encode_private_compile_profile_provenance_payload(
+        payload.service_name.as_str(),
+        payload.model_id.as_str(),
+        payload.weight_version.as_str(),
+        payload.bundle_root,
+        payload.compile_profile.clone(),
+    )
+    .wrap_err("failed to encode private compile signature payload")
+}
+
+fn signed_private_compile_request(
+    payload: PrivateCompilePayload,
+    _authority: &AccountId,
+    key_pair: &KeyPair,
+) -> Result<SignedPrivateCompileRequest> {
+    if payload.service_name.trim().is_empty() {
+        return Err(eyre!("compile service_name must not be empty"));
+    }
+    if payload.model_id.trim().is_empty() {
+        return Err(eyre!("compile model_id must not be empty"));
+    }
+    if payload.weight_version.trim().is_empty() {
+        return Err(eyre!("compile weight_version must not be empty"));
+    }
+    payload
+        .compile_profile
+        .validate()
+        .wrap_err("invalid private compile profile")?;
+    let encoded = encode_private_compile_signature_payload(&payload)?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedPrivateCompileRequest {
+        payload,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+        authority: None,
+        private_key: None,
+    })
+}
+
+fn encode_uploaded_model_allow_signature_payload(
+    payload: &UploadedModelAllowPayload,
+) -> Result<Vec<u8>> {
+    encode_uploaded_model_allow_provenance_payload(
+        payload.apartment_name.as_str(),
+        payload.service_name.as_str(),
+        payload.model_name.as_str(),
+        payload.model_id.as_str(),
+        payload.artifact_id.as_str(),
+        payload.weight_version.as_str(),
+        payload.bundle_root,
+        payload.compile_profile_hash,
+        payload.privacy_mode,
+        payload.require_model_inference,
+    )
+    .wrap_err("failed to encode uploaded model allow signature payload")
+}
+
+fn signed_uploaded_model_allow_request(
+    payload: UploadedModelAllowPayload,
+    _authority: &AccountId,
+    key_pair: &KeyPair,
+) -> Result<SignedUploadedModelAllowRequest> {
+    for (field_name, value) in [
+        ("apartment_name", payload.apartment_name.as_str()),
+        ("service_name", payload.service_name.as_str()),
+        ("model_name", payload.model_name.as_str()),
+        ("model_id", payload.model_id.as_str()),
+        ("artifact_id", payload.artifact_id.as_str()),
+        ("weight_version", payload.weight_version.as_str()),
+    ] {
+        if value.trim().is_empty() {
+            return Err(eyre!("allow-model {field_name} must not be empty"));
+        }
+    }
+    let encoded = encode_uploaded_model_allow_signature_payload(&payload)?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedUploadedModelAllowRequest {
+        payload,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+        authority: None,
+        private_key: None,
+    })
+}
+
+fn encode_private_inference_run_signature_payload(
+    payload: &PrivateInferenceRunPayload,
+) -> Result<Vec<u8>> {
+    encode_private_inference_start_provenance_payload(payload.session.clone())
+        .wrap_err("failed to encode private inference start signature payload")
+}
+
+fn signed_private_inference_run_request(
+    session: SoraPrivateInferenceSessionV1,
+    _authority: &AccountId,
+    key_pair: &KeyPair,
+) -> Result<SignedPrivateInferenceRunRequest> {
+    session
+        .validate()
+        .wrap_err("invalid private inference session")?;
+    let payload = PrivateInferenceRunPayload { session };
+    let encoded = encode_private_inference_run_signature_payload(&payload)?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedPrivateInferenceRunRequest {
+        payload,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+        authority: None,
+        private_key: None,
+    })
+}
+
+fn encode_private_inference_output_release_signature_payload(
+    payload: &PrivateInferenceOutputReleasePayload,
+) -> Result<Vec<u8>> {
+    encode_private_inference_output_release_provenance_payload(
+        payload.session_id.as_str(),
+        payload.decrypt_request_id.as_str(),
+    )
+    .wrap_err("failed to encode private inference output release signature payload")
+}
+
+fn signed_private_inference_output_release_request(
+    session_id: &str,
+    decrypt_request_id: &str,
+    _authority: &AccountId,
+    key_pair: &KeyPair,
+) -> Result<SignedPrivateInferenceOutputReleaseRequest> {
+    if session_id.trim().is_empty() {
+        return Err(eyre!("--session-id must not be empty"));
+    }
+    if decrypt_request_id.trim().is_empty() {
+        return Err(eyre!("--decrypt-request-id must not be empty"));
+    }
+    let payload = PrivateInferenceOutputReleasePayload {
+        session_id: session_id.trim().to_owned(),
+        decrypt_request_id: decrypt_request_id.trim().to_owned(),
+    };
+    let encoded = encode_private_inference_output_release_signature_payload(&payload)?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedPrivateInferenceOutputReleaseRequest {
+        payload,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+        authority: None,
+        private_key: None,
+    })
+}
+
 fn encode_rollout_signature_payload(payload: &RolloutAdvancePayload) -> Result<Vec<u8>> {
     encode_rollout_provenance_payload(
         payload.service_name.as_str(),
@@ -5364,6 +6344,480 @@ where
         );
     }
     Ok((endpoint.to_string(), payload))
+}
+
+fn compute_uploaded_model_chunk_manifest_root(chunks: &[SoraUploadedModelChunkV1]) -> Result<Hash> {
+    let manifest = chunks
+        .iter()
+        .map(|chunk| {
+            (
+                chunk.ordinal,
+                chunk.offset_bytes,
+                chunk.plaintext_len,
+                chunk.ciphertext_len,
+                chunk.ciphertext_hash,
+            )
+        })
+        .collect::<Vec<_>>();
+    let encoded =
+        norito::to_bytes(&manifest).wrap_err("failed to encode uploaded-model chunk manifest")?;
+    Ok(Hash::new(encoded))
+}
+
+fn validate_private_model_publish_plan(plan: &PrivateModelPublishPlan) -> Result<Hash> {
+    plan.bundle
+        .validate()
+        .wrap_err("invalid uploaded-model bundle")?;
+    plan.compile_profile
+        .validate()
+        .wrap_err("invalid private compile profile")?;
+    if plan.chunks.is_empty() {
+        return Err(eyre!(
+            "publish plan must contain at least one uploaded-model chunk"
+        ));
+    }
+    if usize::try_from(plan.bundle.chunk_count).unwrap_or(usize::MAX) != plan.chunks.len() {
+        return Err(eyre!(
+            "publish plan chunk count ({}) does not match bundle.chunk_count ({})",
+            plan.chunks.len(),
+            plan.bundle.chunk_count
+        ));
+    }
+
+    let compile_profile_hash = uploaded_model_compile_profile_hash(&plan.compile_profile);
+    if plan.bundle.compile_profile_hash != compile_profile_hash {
+        return Err(eyre!(
+            "publish plan compile profile hash does not match bundle.compile_profile_hash"
+        ));
+    }
+
+    let mut seen_ordinals = BTreeSet::new();
+    let mut sorted_chunks = plan.chunks.clone();
+    sorted_chunks.sort_by_key(|chunk| chunk.ordinal);
+    let mut next_offset = 0_u64;
+    let mut plaintext_bytes = 0_u64;
+    let mut ciphertext_bytes = 0_u64;
+    for (expected_ordinal, chunk) in sorted_chunks.iter().enumerate() {
+        chunk.validate().wrap_err("invalid uploaded-model chunk")?;
+        if chunk.service_name != plan.bundle.service_name {
+            return Err(eyre!(
+                "chunk ordinal {} service_name does not match bundle service_name",
+                chunk.ordinal
+            ));
+        }
+        if chunk.model_id != plan.bundle.model_id {
+            return Err(eyre!(
+                "chunk ordinal {} model_id does not match bundle model_id",
+                chunk.ordinal
+            ));
+        }
+        if chunk.weight_version != plan.bundle.weight_version {
+            return Err(eyre!(
+                "chunk ordinal {} weight_version does not match bundle weight_version",
+                chunk.ordinal
+            ));
+        }
+        if chunk.bundle_root != plan.bundle.bundle_root {
+            return Err(eyre!(
+                "chunk ordinal {} bundle_root does not match bundle bundle_root",
+                chunk.ordinal
+            ));
+        }
+        if !seen_ordinals.insert(chunk.ordinal) {
+            return Err(eyre!(
+                "chunk ordinal {} is duplicated in the publish plan",
+                chunk.ordinal
+            ));
+        }
+        let expected_ordinal = u32::try_from(expected_ordinal).unwrap_or(u32::MAX);
+        if chunk.ordinal != expected_ordinal {
+            return Err(eyre!(
+                "chunk ordinals must be contiguous from zero; expected {}, found {}",
+                expected_ordinal,
+                chunk.ordinal
+            ));
+        }
+        if chunk.offset_bytes != next_offset {
+            return Err(eyre!(
+                "chunk ordinal {} offset {} does not match expected next offset {}",
+                chunk.ordinal,
+                chunk.offset_bytes,
+                next_offset
+            ));
+        }
+        let envelope_ciphertext_len =
+            u32::try_from(chunk.encrypted_payload.ciphertext.len()).unwrap_or(u32::MAX);
+        if chunk.ciphertext_len != envelope_ciphertext_len {
+            return Err(eyre!(
+                "chunk ordinal {} ciphertext_len does not match envelope ciphertext length",
+                chunk.ordinal
+            ));
+        }
+        if Hash::new(chunk.encrypted_payload.ciphertext.as_slice()) != chunk.ciphertext_hash {
+            return Err(eyre!(
+                "chunk ordinal {} ciphertext_hash does not match encrypted payload bytes",
+                chunk.ordinal
+            ));
+        }
+        next_offset = next_offset.saturating_add(u64::from(chunk.plaintext_len));
+        plaintext_bytes = plaintext_bytes.saturating_add(u64::from(chunk.plaintext_len));
+        ciphertext_bytes = ciphertext_bytes.saturating_add(u64::from(chunk.ciphertext_len));
+    }
+
+    if plaintext_bytes != plan.bundle.plaintext_bytes {
+        return Err(eyre!(
+            "publish plan plaintext byte sum {} does not match bundle.plaintext_bytes {}",
+            plaintext_bytes,
+            plan.bundle.plaintext_bytes
+        ));
+    }
+    if ciphertext_bytes != plan.bundle.ciphertext_bytes {
+        return Err(eyre!(
+            "publish plan ciphertext byte sum {} does not match bundle.ciphertext_bytes {}",
+            ciphertext_bytes,
+            plan.bundle.ciphertext_bytes
+        ));
+    }
+    let chunk_manifest_root = compute_uploaded_model_chunk_manifest_root(&sorted_chunks)?;
+    if chunk_manifest_root != plan.bundle.chunk_manifest_root {
+        return Err(eyre!(
+            "publish plan chunk manifest root does not match bundle.chunk_manifest_root"
+        ));
+    }
+
+    if plan.finalize.service_name.trim().is_empty()
+        || plan.finalize.model_name.trim().is_empty()
+        || plan.finalize.model_id.trim().is_empty()
+        || plan.finalize.artifact_id.trim().is_empty()
+        || plan.finalize.weight_version.trim().is_empty()
+        || plan.finalize.dataset_ref.trim().is_empty()
+    {
+        return Err(eyre!(
+            "publish plan finalize payload contains empty required fields"
+        ));
+    }
+    if plan.finalize.service_name != plan.bundle.service_name.to_string() {
+        return Err(eyre!(
+            "publish plan finalize service_name does not match bundle"
+        ));
+    }
+    if plan.finalize.model_id != plan.bundle.model_id {
+        return Err(eyre!(
+            "publish plan finalize model_id does not match bundle"
+        ));
+    }
+    if plan.finalize.weight_version != plan.bundle.weight_version {
+        return Err(eyre!(
+            "publish plan finalize weight_version does not match bundle"
+        ));
+    }
+    if plan.finalize.bundle_root != plan.bundle.bundle_root {
+        return Err(eyre!(
+            "publish plan finalize bundle_root does not match bundle"
+        ));
+    }
+
+    if let Some(allow_model) = plan.allow_model.as_ref() {
+        if allow_model.apartment_name.trim().is_empty()
+            || allow_model.service_name.trim().is_empty()
+            || allow_model.model_name.trim().is_empty()
+            || allow_model.model_id.trim().is_empty()
+            || allow_model.artifact_id.trim().is_empty()
+            || allow_model.weight_version.trim().is_empty()
+        {
+            return Err(eyre!(
+                "publish plan allow-model payload contains empty required fields"
+            ));
+        }
+        if allow_model.service_name != plan.finalize.service_name {
+            return Err(eyre!(
+                "publish plan allow-model service_name does not match finalize payload"
+            ));
+        }
+        if allow_model.model_name != plan.finalize.model_name {
+            return Err(eyre!(
+                "publish plan allow-model model_name does not match finalize payload"
+            ));
+        }
+        if allow_model.model_id != plan.finalize.model_id {
+            return Err(eyre!(
+                "publish plan allow-model model_id does not match finalize payload"
+            ));
+        }
+        if allow_model.artifact_id != plan.finalize.artifact_id {
+            return Err(eyre!(
+                "publish plan allow-model artifact_id does not match finalize payload"
+            ));
+        }
+        if allow_model.weight_version != plan.finalize.weight_version {
+            return Err(eyre!(
+                "publish plan allow-model weight_version does not match finalize payload"
+            ));
+        }
+        if allow_model.bundle_root != plan.finalize.bundle_root {
+            return Err(eyre!(
+                "publish plan allow-model bundle_root does not match finalize payload"
+            ));
+        }
+        if allow_model.compile_profile_hash != compile_profile_hash {
+            return Err(eyre!(
+                "publish plan allow-model compile_profile_hash does not match compile profile"
+            ));
+        }
+        if allow_model.privacy_mode != plan.finalize.privacy_mode {
+            return Err(eyre!(
+                "publish plan allow-model privacy_mode does not match finalize payload"
+            ));
+        }
+    }
+
+    Ok(compile_profile_hash)
+}
+
+fn execute_private_inference_start(
+    torii_url: &str,
+    session: SoraPrivateInferenceSessionV1,
+    api_token: Option<&str>,
+    timeout_secs: u64,
+    authority: &AccountId,
+    key_pair: &KeyPair,
+) -> Result<norito::json::Value> {
+    let session_id = session.session_id.clone();
+    let request = signed_private_inference_run_request(session, authority, key_pair)?;
+    let (_, initial_payload) = post_torii_soracloud_mutation(
+        torii_url,
+        "v1/soracloud/model/run-private",
+        &request,
+        api_token,
+        timeout_secs,
+    )?;
+    let finalize_request = PrivateInferenceFinalizeRequest {
+        session_id: session_id.clone(),
+    };
+    let (_, finalize_payload) = post_torii_soracloud_mutation(
+        torii_url,
+        "v1/soracloud/model/run-private/finalize",
+        &finalize_request,
+        api_token,
+        timeout_secs,
+    )?;
+    let (_, mut final_status) = fetch_torii_soracloud_private_inference_status(
+        torii_url,
+        &session_id,
+        api_token,
+        timeout_secs,
+    )?;
+    if let Some(root) = final_status.as_object_mut() {
+        if let Some(value) = extract_json_field(&initial_payload, "submitted_tx_hash")? {
+            root.insert("start_submitted_tx_hash".to_owned(), value);
+        }
+        if let Some(value) = extract_json_field(&finalize_payload, "submitted_tx_hash")? {
+            root.insert("finalize_submitted_tx_hash".to_owned(), value);
+        }
+        root.insert(
+            "submission_mode".to_owned(),
+            json::Value::String("client_signed".to_owned()),
+        );
+    }
+    Ok(final_status)
+}
+
+fn execute_private_inference_output_release(
+    torii_url: &str,
+    session_id: &str,
+    decrypt_request_id: &str,
+    api_token: Option<&str>,
+    timeout_secs: u64,
+    authority: &AccountId,
+    key_pair: &KeyPair,
+) -> Result<norito::json::Value> {
+    let request = signed_private_inference_output_release_request(
+        session_id,
+        decrypt_request_id,
+        authority,
+        key_pair,
+    )?;
+    let (_, release_payload) = post_torii_soracloud_mutation(
+        torii_url,
+        "v1/soracloud/model/decrypt-output",
+        &request,
+        api_token,
+        timeout_secs,
+    )?;
+    let (_, mut final_status) = fetch_torii_soracloud_private_inference_status(
+        torii_url,
+        session_id,
+        api_token,
+        timeout_secs,
+    )?;
+    if let Some(root) = final_status.as_object_mut() {
+        if let Some(value) = extract_json_field(&release_payload, "submitted_tx_hash")? {
+            root.insert("release_submitted_tx_hash".to_owned(), value);
+        }
+        root.insert(
+            "submission_mode".to_owned(),
+            json::Value::String("client_signed".to_owned()),
+        );
+    }
+    Ok(final_status)
+}
+
+fn execute_private_model_publish_plan(
+    torii_url: &str,
+    plan: PrivateModelPublishPlan,
+    api_token: Option<&str>,
+    timeout_secs: u64,
+    authority: &AccountId,
+    key_pair: &KeyPair,
+) -> Result<norito::json::Value> {
+    let compile_profile_hash = validate_private_model_publish_plan(&plan)?;
+    let (_, recipient_payload) = fetch_torii_soracloud_uploaded_model_encryption_recipient(
+        torii_url,
+        api_token,
+        timeout_secs,
+    )?;
+    let recipient_value = recipient_payload.get("recipient").cloned().ok_or_else(|| {
+        eyre!("uploaded-model encryption recipient response is missing `recipient`")
+    })?;
+    let recipient: SoraUploadedModelEncryptionRecipientV1 = json::from_value(recipient_value)
+        .wrap_err("failed to decode uploaded-model encryption recipient response")?;
+    if recipient != plan.bundle.upload_recipient {
+        return Err(eyre!(
+            "publish plan bundle upload_recipient does not match the authoritative Torii encryption recipient"
+        ));
+    }
+
+    let service_name = plan.bundle.service_name.to_string();
+    let model_id = plan.bundle.model_id.clone();
+    let weight_version = plan.bundle.weight_version.clone();
+    let chunk_count = plan.chunks.len();
+
+    let mut chunk_upload_hashes = Vec::with_capacity(chunk_count);
+    let init_request =
+        signed_uploaded_model_bundle_init_request(plan.bundle.clone(), authority, key_pair)?;
+    let (_, init_payload) = post_torii_soracloud_mutation(
+        torii_url,
+        "v1/soracloud/model/upload/init",
+        &init_request,
+        api_token,
+        timeout_secs,
+    )?;
+
+    let mut sorted_chunks = plan.chunks.clone();
+    sorted_chunks.sort_by_key(|chunk| chunk.ordinal);
+    for chunk in sorted_chunks {
+        let request = signed_uploaded_model_chunk_request(chunk, authority, key_pair)?;
+        let (_, payload) = post_torii_soracloud_mutation(
+            torii_url,
+            "v1/soracloud/model/upload/chunk",
+            &request,
+            api_token,
+            timeout_secs,
+        )?;
+        chunk_upload_hashes
+            .push(extract_json_field(&payload, "submitted_tx_hash")?.unwrap_or(json::Value::Null));
+    }
+
+    let finalize_request =
+        signed_uploaded_model_finalize_request(plan.finalize.clone(), authority, key_pair)?;
+    let (_, finalize_payload) = post_torii_soracloud_mutation(
+        torii_url,
+        "v1/soracloud/model/upload/finalize",
+        &finalize_request,
+        api_token,
+        timeout_secs,
+    )?;
+
+    let compile_request = signed_private_compile_request(
+        PrivateCompilePayload {
+            service_name: service_name.clone(),
+            model_id: model_id.clone(),
+            weight_version: weight_version.clone(),
+            bundle_root: plan.bundle.bundle_root,
+            compile_profile: plan.compile_profile.clone(),
+        },
+        authority,
+        key_pair,
+    )?;
+    let (_, compile_payload) = post_torii_soracloud_mutation(
+        torii_url,
+        "v1/soracloud/model/compile",
+        &compile_request,
+        api_token,
+        timeout_secs,
+    )?;
+
+    let allow_payload = if let Some(allow_model) = plan.allow_model.clone() {
+        let request = signed_uploaded_model_allow_request(allow_model, authority, key_pair)?;
+        let (_, payload) = post_torii_soracloud_mutation(
+            torii_url,
+            "v1/soracloud/model/allow",
+            &request,
+            api_token,
+            timeout_secs,
+        )?;
+        Some(payload)
+    } else {
+        None
+    };
+
+    let (_, upload_status) = fetch_torii_soracloud_uploaded_model_status(
+        torii_url,
+        "v1/soracloud/model/compile/status",
+        &service_name,
+        &weight_version,
+        Some(&model_id),
+        None,
+        Some(plan.bundle.bundle_root),
+        Some(compile_profile_hash),
+        api_token,
+        timeout_secs,
+    )?;
+
+    let mut root = norito::json::Map::new();
+    root.insert("service_name".to_owned(), json::Value::String(service_name));
+    root.insert("model_id".to_owned(), json::Value::String(model_id));
+    root.insert(
+        "weight_version".to_owned(),
+        json::Value::String(weight_version),
+    );
+    root.insert(
+        "bundle_root".to_owned(),
+        json::to_value(&plan.bundle.bundle_root)?,
+    );
+    root.insert(
+        "compile_profile_hash".to_owned(),
+        json::to_value(&compile_profile_hash)?,
+    );
+    root.insert(
+        "chunk_count".to_owned(),
+        json::to_value(&u64::try_from(chunk_count).unwrap_or(u64::MAX))?,
+    );
+    if let Some(value) = extract_json_field(&init_payload, "submitted_tx_hash")? {
+        root.insert("upload_init_submitted_tx_hash".to_owned(), value);
+    }
+    root.insert(
+        "chunk_submitted_tx_hashes".to_owned(),
+        json::Value::Array(chunk_upload_hashes),
+    );
+    if let Some(value) = extract_json_field(&finalize_payload, "submitted_tx_hash")? {
+        root.insert("upload_finalize_submitted_tx_hash".to_owned(), value);
+    }
+    if let Some(value) = extract_json_field(&compile_payload, "submitted_tx_hash")? {
+        root.insert("compile_submitted_tx_hash".to_owned(), value);
+    }
+    if let Some(allow_payload) = allow_payload.as_ref() {
+        if let Some(value) = extract_json_field(allow_payload, "submitted_tx_hash")? {
+            root.insert("allow_submitted_tx_hash".to_owned(), value);
+        }
+        root.insert("allow_response".to_owned(), allow_payload.clone());
+    }
+    root.insert(
+        "encryption_recipient_verified".to_owned(),
+        json::Value::Bool(true),
+    );
+    root.insert("upload_status".to_owned(), upload_status);
+    Ok(json::Value::Object(root))
 }
 
 fn find_agent_autonomy_run_id(
@@ -5934,6 +7388,175 @@ fn fetch_torii_soracloud_model_weight_status(
 
     let payload: norito::json::Value = json::from_slice(&body)
         .wrap_err("failed to decode Torii model weight status JSON payload")?;
+    Ok((endpoint.to_string(), payload))
+}
+
+fn fetch_torii_soracloud_uploaded_model_encryption_recipient(
+    torii_url: &str,
+    api_token: Option<&str>,
+    timeout_secs: u64,
+) -> Result<(String, norito::json::Value)> {
+    let endpoint = reqwest::Url::parse(torii_url)
+        .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
+        .join("v1/soracloud/model/upload/encryption-recipient")
+        .wrap_err(
+            "failed to derive /v1/soracloud/model/upload/encryption-recipient URL from --torii-url",
+        )?;
+    let timeout = Duration::from_secs(timeout_secs.max(1));
+    let client = BlockingHttpClient::builder()
+        .timeout(timeout)
+        .build()
+        .wrap_err("failed to build HTTP client for uploaded-model encryption recipient")?;
+    let mut request = client.get(endpoint.clone());
+    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
+    if let Some(token) = api_token {
+        request = request.header("x-api-token", token);
+    }
+    let response = request
+        .send()
+        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
+    let status = response.status();
+    let body = response
+        .bytes()
+        .wrap_err("failed to read Torii uploaded-model encryption recipient response body")?;
+    if !status.is_success() {
+        let body_text = String::from_utf8_lossy(&body);
+        return Err(eyre!(
+            "Torii /v1/soracloud/model/upload/encryption-recipient returned {}: {}",
+            status,
+            body_text
+        ));
+    }
+    let payload: norito::json::Value = json::from_slice(&body)
+        .wrap_err("failed to decode Torii uploaded-model encryption recipient JSON payload")?;
+    Ok((endpoint.to_string(), payload))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fetch_torii_soracloud_uploaded_model_status(
+    torii_url: &str,
+    endpoint_path: &str,
+    service_name: &str,
+    weight_version: &str,
+    model_id: Option<&str>,
+    model_name: Option<&str>,
+    bundle_root: Option<Hash>,
+    compile_profile_hash: Option<Hash>,
+    api_token: Option<&str>,
+    timeout_secs: u64,
+) -> Result<(String, norito::json::Value)> {
+    let service_name = service_name.trim();
+    let weight_version = weight_version.trim();
+    if service_name.is_empty() {
+        return Err(eyre!("--service-name must not be empty"));
+    }
+    if weight_version.is_empty() {
+        return Err(eyre!("--weight-version must not be empty"));
+    }
+    let model_id = model_id.map(str::trim).filter(|value| !value.is_empty());
+    let model_name = model_name.map(str::trim).filter(|value| !value.is_empty());
+    if model_id.is_none() && model_name.is_none() {
+        return Err(eyre!("--model-id or --model-name is required"));
+    }
+
+    let mut endpoint = reqwest::Url::parse(torii_url)
+        .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
+        .join(endpoint_path)
+        .wrap_err_with(|| format!("failed to derive /{endpoint_path} URL from --torii-url"))?;
+    {
+        let mut query = endpoint.query_pairs_mut();
+        query.append_pair("service_name", service_name);
+        query.append_pair("weight_version", weight_version);
+        if let Some(model_id) = model_id {
+            query.append_pair("model_id", model_id);
+        }
+        if let Some(model_name) = model_name {
+            query.append_pair("model_name", model_name);
+        }
+        if let Some(bundle_root) = bundle_root {
+            query.append_pair("bundle_root", &json::to_json(&bundle_root)?);
+        }
+        if let Some(compile_profile_hash) = compile_profile_hash {
+            query.append_pair(
+                "compile_profile_hash",
+                &json::to_json(&compile_profile_hash)?,
+            );
+        }
+    }
+    let timeout = Duration::from_secs(timeout_secs.max(1));
+    let client = BlockingHttpClient::builder()
+        .timeout(timeout)
+        .build()
+        .wrap_err("failed to build HTTP client for uploaded-model status")?;
+    let mut request = client.get(endpoint.clone());
+    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
+    if let Some(token) = api_token {
+        request = request.header("x-api-token", token);
+    }
+    let response = request
+        .send()
+        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
+    let status = response.status();
+    let body = response
+        .bytes()
+        .wrap_err("failed to read Torii uploaded-model status response body")?;
+    if !status.is_success() {
+        let body_text = String::from_utf8_lossy(&body);
+        return Err(eyre!(
+            "Torii /{endpoint_path} returned {}: {}",
+            status,
+            body_text
+        ));
+    }
+    let payload: norito::json::Value = json::from_slice(&body)
+        .wrap_err("failed to decode Torii uploaded-model status JSON payload")?;
+    Ok((endpoint.to_string(), payload))
+}
+
+fn fetch_torii_soracloud_private_inference_status(
+    torii_url: &str,
+    session_id: &str,
+    api_token: Option<&str>,
+    timeout_secs: u64,
+) -> Result<(String, norito::json::Value)> {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        return Err(eyre!("--session-id must not be empty"));
+    }
+    let mut endpoint = reqwest::Url::parse(torii_url)
+        .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
+        .join("v1/soracloud/model/run-status")
+        .wrap_err("failed to derive /v1/soracloud/model/run-status URL from --torii-url")?;
+    endpoint
+        .query_pairs_mut()
+        .append_pair("session_id", session_id);
+    let timeout = Duration::from_secs(timeout_secs.max(1));
+    let client = BlockingHttpClient::builder()
+        .timeout(timeout)
+        .build()
+        .wrap_err("failed to build HTTP client for private inference status")?;
+    let mut request = client.get(endpoint.clone());
+    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
+    if let Some(token) = api_token {
+        request = request.header("x-api-token", token);
+    }
+    let response = request
+        .send()
+        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
+    let status = response.status();
+    let body = response
+        .bytes()
+        .wrap_err("failed to read Torii private inference status response body")?;
+    if !status.is_success() {
+        let body_text = String::from_utf8_lossy(&body);
+        return Err(eyre!(
+            "Torii /v1/soracloud/model/run-status returned {}: {}",
+            status,
+            body_text
+        ));
+    }
+    let payload: norito::json::Value = json::from_slice(&body)
+        .wrap_err("failed to decode Torii private inference status JSON payload")?;
     Ok((endpoint.to_string(), payload))
 }
 
@@ -8581,6 +10204,186 @@ mod tests {
         )
     }
 
+    fn sample_secret_envelope(seed: u8) -> SecretEnvelopeV1 {
+        let ciphertext = vec![seed; 24];
+        SecretEnvelopeV1 {
+            schema_version: SECRET_ENVELOPE_VERSION_V1,
+            encryption: SecretEnvelopeEncryptionV1::ClientCiphertext,
+            key_id: format!("key-{seed}"),
+            key_version: NonZeroU32::new(1).expect("non-zero key version"),
+            nonce: vec![seed; 12],
+            commitment: Hash::new(ciphertext.as_slice()),
+            ciphertext,
+            aad_digest: Some(Hash::new([seed.wrapping_add(1)])),
+        }
+    }
+
+    fn sample_uploaded_model_encryption_recipient() -> SoraUploadedModelEncryptionRecipientV1 {
+        let public_key_bytes = vec![7_u8; 32];
+        SoraUploadedModelEncryptionRecipientV1 {
+            schema_version: SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1,
+            key_id: "soracloud-upload-x25519:test".to_owned(),
+            key_version: NonZeroU32::new(1).expect("non-zero key version"),
+            kem: SoraUploadedModelKeyEncapsulationV1::X25519HkdfSha256,
+            aead: SoraUploadedModelKeyWrapAeadV1::Aes256Gcm,
+            public_key_bytes: public_key_bytes.clone(),
+            public_key_fingerprint: Hash::new(public_key_bytes),
+        }
+    }
+
+    fn sample_uploaded_model_wrapped_key() -> SoraUploadedModelWrappedKeyV1 {
+        let wrapped_key_ciphertext = vec![8_u8; 48];
+        SoraUploadedModelWrappedKeyV1 {
+            schema_version: SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1,
+            recipient_key_id: "soracloud-upload-x25519:test".to_owned(),
+            recipient_key_version: NonZeroU32::new(1).expect("non-zero key version"),
+            kem: SoraUploadedModelKeyEncapsulationV1::X25519HkdfSha256,
+            aead: SoraUploadedModelKeyWrapAeadV1::Aes256Gcm,
+            ephemeral_public_key: vec![9_u8; 32],
+            nonce: vec![5_u8; 12],
+            ciphertext_hash: Hash::new(wrapped_key_ciphertext.as_slice()),
+            wrapped_key_ciphertext,
+            aad_digest: Hash::new([0xAA_u8]),
+        }
+    }
+
+    fn sample_private_compile_profile() -> SoraPrivateCompileProfileV1 {
+        SoraPrivateCompileProfileV1 {
+            schema_version: SORA_PRIVATE_COMPILE_PROFILE_VERSION_V1,
+            family: "hf-transformers".to_owned(),
+            quantization: "int8".to_owned(),
+            opset_version: "v1".to_owned(),
+            max_context: 4096,
+            max_images: 2,
+            vision_patch_policy: "224-square".to_owned(),
+            fhe_param_set: "fhe-1".to_owned(),
+            execution_policy: "policy-a".to_owned(),
+        }
+    }
+
+    fn sample_uploaded_model_chunks() -> Vec<SoraUploadedModelChunkV1> {
+        let chunk0 = sample_secret_envelope(0x10);
+        let chunk1 = sample_secret_envelope(0x20);
+        let bundle_root = Hash::new(b"bundle-root");
+        vec![
+            SoraUploadedModelChunkV1 {
+                schema_version: SORA_UPLOADED_MODEL_CHUNK_VERSION_V1,
+                service_name: "private_models".parse().expect("service name"),
+                model_id: "upload-1".to_owned(),
+                weight_version: "1.0.0".to_owned(),
+                bundle_root,
+                ordinal: 0,
+                offset_bytes: 0,
+                plaintext_len: 24,
+                ciphertext_len: u32::try_from(chunk0.ciphertext.len()).expect("ciphertext len"),
+                ciphertext_hash: Hash::new(chunk0.ciphertext.as_slice()),
+                encrypted_payload: chunk0,
+            },
+            SoraUploadedModelChunkV1 {
+                schema_version: SORA_UPLOADED_MODEL_CHUNK_VERSION_V1,
+                service_name: "private_models".parse().expect("service name"),
+                model_id: "upload-1".to_owned(),
+                weight_version: "1.0.0".to_owned(),
+                bundle_root,
+                ordinal: 1,
+                offset_bytes: 24,
+                plaintext_len: 24,
+                ciphertext_len: u32::try_from(chunk1.ciphertext.len()).expect("ciphertext len"),
+                ciphertext_hash: Hash::new(chunk1.ciphertext.as_slice()),
+                encrypted_payload: chunk1,
+            },
+        ]
+    }
+
+    fn sample_uploaded_model_bundle() -> SoraUploadedModelBundleV1 {
+        let chunks = sample_uploaded_model_chunks();
+        let compile_profile = sample_private_compile_profile();
+        let plaintext_bytes = chunks
+            .iter()
+            .map(|chunk| u64::from(chunk.plaintext_len))
+            .sum::<u64>();
+        let ciphertext_bytes = chunks
+            .iter()
+            .map(|chunk| u64::from(chunk.ciphertext_len))
+            .sum::<u64>();
+        SoraUploadedModelBundleV1 {
+            schema_version: SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
+            service_name: "private_models".parse().expect("service name"),
+            model_id: "upload-1".to_owned(),
+            weight_version: "1.0.0".to_owned(),
+            family: "hf-transformers".to_owned(),
+            modalities: vec!["text".to_owned()],
+            plaintext_root: Hash::new(b"plaintext-root"),
+            runtime_format: SoraUploadedModelRuntimeFormatV1::HuggingFaceSafetensors,
+            bundle_root: Hash::new(b"bundle-root"),
+            chunk_count: u32::try_from(chunks.len()).expect("chunk count"),
+            plaintext_bytes,
+            ciphertext_bytes,
+            compile_profile_hash: uploaded_model_compile_profile_hash(&compile_profile),
+            chunk_manifest_root: compute_uploaded_model_chunk_manifest_root(&chunks)
+                .expect("chunk manifest root"),
+            upload_recipient: sample_uploaded_model_encryption_recipient(),
+            wrapped_bundle_key: sample_uploaded_model_wrapped_key(),
+            pricing_policy: Default::default(),
+            decryption_policy_ref: "policy://release/default".to_owned(),
+        }
+    }
+
+    fn sample_uploaded_model_finalize_payload() -> UploadedModelFinalizePayload {
+        let bundle = sample_uploaded_model_bundle();
+        UploadedModelFinalizePayload {
+            service_name: bundle.service_name.to_string(),
+            model_name: "vision-model".to_owned(),
+            model_id: bundle.model_id,
+            artifact_id: "artifact-1".to_owned(),
+            weight_version: bundle.weight_version,
+            bundle_root: bundle.bundle_root,
+            privacy_mode: SoraModelPrivacyModeV1::PrivateExecution,
+            weight_artifact_hash: Hash::new(b"artifact-hash"),
+            dataset_ref: "dataset://synthetic/v1".to_owned(),
+            training_config_hash: Hash::new(b"train-config"),
+            reproducibility_hash: Hash::new(b"repro"),
+            provenance_attestation_hash: Hash::new(b"attestation"),
+        }
+    }
+
+    fn sample_uploaded_model_allow_payload() -> UploadedModelAllowPayload {
+        let finalize = sample_uploaded_model_finalize_payload();
+        UploadedModelAllowPayload {
+            apartment_name: "ops_agent".to_owned(),
+            service_name: finalize.service_name.clone(),
+            model_name: finalize.model_name.clone(),
+            model_id: finalize.model_id.clone(),
+            artifact_id: finalize.artifact_id.clone(),
+            weight_version: finalize.weight_version.clone(),
+            bundle_root: finalize.bundle_root,
+            compile_profile_hash: uploaded_model_compile_profile_hash(
+                &sample_private_compile_profile(),
+            ),
+            privacy_mode: finalize.privacy_mode,
+            require_model_inference: true,
+        }
+    }
+
+    fn sample_private_inference_session() -> SoraPrivateInferenceSessionV1 {
+        let bundle = sample_uploaded_model_bundle();
+        SoraPrivateInferenceSessionV1 {
+            schema_version: SORA_PRIVATE_INFERENCE_SESSION_VERSION_V1,
+            session_id: "session-1".to_owned(),
+            apartment: "ops_agent".parse().expect("apartment"),
+            service_name: bundle.service_name,
+            model_id: bundle.model_id,
+            weight_version: bundle.weight_version,
+            bundle_root: bundle.bundle_root,
+            input_commitments: vec![Hash::new(b"input-1")],
+            token_budget: 128,
+            image_budget: 1,
+            status: SoraPrivateInferenceSessionStatusV1::Admitted,
+            receipt_root: Hash::new(b"receipt-root"),
+            xor_cost_nanos: 0,
+        }
+    }
+
     fn node_available() -> bool {
         match Command::new("node").arg("--version").output() {
             Ok(output) => output.status.success(),
@@ -9925,6 +11728,214 @@ mod tests {
         ))
         .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn signed_uploaded_model_bundle_init_request_uses_verifiable_signature() {
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let bundle = sample_uploaded_model_bundle();
+        let request = signed_uploaded_model_bundle_init_request(bundle, &authority, &key_pair)
+            .expect("signed uploaded-model init request");
+        let payload = encode_uploaded_model_bundle_init_signature_payload(&request.payload)
+            .expect("encode payload");
+        request
+            .provenance
+            .signature
+            .verify(&request.provenance.signer, &payload)
+            .expect("signature should verify");
+        assert!(request.authority.is_none());
+        assert!(request.private_key.is_none());
+    }
+
+    #[test]
+    fn signed_uploaded_model_chunk_request_uses_verifiable_signature() {
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let chunk = sample_uploaded_model_chunks()
+            .into_iter()
+            .next()
+            .expect("sample chunk");
+        let request = signed_uploaded_model_chunk_request(chunk, &authority, &key_pair)
+            .expect("signed uploaded-model chunk request");
+        let payload = encode_uploaded_model_chunk_signature_payload(&request.payload)
+            .expect("encode payload");
+        request
+            .provenance
+            .signature
+            .verify(&request.provenance.signer, &payload)
+            .expect("signature should verify");
+        assert!(request.authority.is_none());
+        assert!(request.private_key.is_none());
+    }
+
+    #[test]
+    fn signed_uploaded_model_finalize_request_uses_verifiable_signature() {
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let payload = sample_uploaded_model_finalize_payload();
+        let request = signed_uploaded_model_finalize_request(payload, &authority, &key_pair)
+            .expect("signed uploaded-model finalize request");
+        let encoded = encode_uploaded_model_finalize_signature_payload(&request.payload)
+            .expect("encode payload");
+        request
+            .provenance
+            .signature
+            .verify(&request.provenance.signer, &encoded)
+            .expect("signature should verify");
+        assert!(request.authority.is_none());
+        assert!(request.private_key.is_none());
+    }
+
+    #[test]
+    fn signed_private_compile_request_uses_verifiable_signature() {
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let bundle = sample_uploaded_model_bundle();
+        let payload = PrivateCompilePayload {
+            service_name: bundle.service_name.to_string(),
+            model_id: bundle.model_id,
+            weight_version: bundle.weight_version,
+            bundle_root: bundle.bundle_root,
+            compile_profile: sample_private_compile_profile(),
+        };
+        let request = signed_private_compile_request(payload, &authority, &key_pair)
+            .expect("signed private compile request");
+        let encoded =
+            encode_private_compile_signature_payload(&request.payload).expect("encode payload");
+        request
+            .provenance
+            .signature
+            .verify(&request.provenance.signer, &encoded)
+            .expect("signature should verify");
+        assert!(request.authority.is_none());
+        assert!(request.private_key.is_none());
+    }
+
+    #[test]
+    fn signed_uploaded_model_allow_request_uses_verifiable_signature() {
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let payload = sample_uploaded_model_allow_payload();
+        let request = signed_uploaded_model_allow_request(payload, &authority, &key_pair)
+            .expect("signed uploaded-model allow request");
+        let encoded = encode_uploaded_model_allow_signature_payload(&request.payload)
+            .expect("encode payload");
+        request
+            .provenance
+            .signature
+            .verify(&request.provenance.signer, &encoded)
+            .expect("signature should verify");
+        assert!(request.authority.is_none());
+        assert!(request.private_key.is_none());
+    }
+
+    #[test]
+    fn signed_private_inference_run_request_uses_verifiable_signature() {
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let request = signed_private_inference_run_request(
+            sample_private_inference_session(),
+            &authority,
+            &key_pair,
+        )
+        .expect("signed private inference run request");
+        let encoded = encode_private_inference_run_signature_payload(&request.payload)
+            .expect("encode payload");
+        request
+            .provenance
+            .signature
+            .verify(&request.provenance.signer, &encoded)
+            .expect("signature should verify");
+        assert!(request.authority.is_none());
+        assert!(request.private_key.is_none());
+    }
+
+    #[test]
+    fn signed_private_inference_output_release_request_uses_verifiable_signature() {
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let request = signed_private_inference_output_release_request(
+            "session-1",
+            "decrypt-1",
+            &authority,
+            &key_pair,
+        )
+        .expect("signed private inference output release request");
+        let encoded = encode_private_inference_output_release_signature_payload(&request.payload)
+            .expect("encode payload");
+        request
+            .provenance
+            .signature
+            .verify(&request.provenance.signer, &encoded)
+            .expect("signature should verify");
+        assert!(request.authority.is_none());
+        assert!(request.private_key.is_none());
+    }
+
+    #[test]
+    fn validate_private_model_publish_plan_accepts_consistent_plan() {
+        let plan = PrivateModelPublishPlan {
+            bundle: sample_uploaded_model_bundle(),
+            chunks: sample_uploaded_model_chunks(),
+            finalize: sample_uploaded_model_finalize_payload(),
+            compile_profile: sample_private_compile_profile(),
+            allow_model: Some(sample_uploaded_model_allow_payload()),
+        };
+        let compile_profile_hash =
+            validate_private_model_publish_plan(&plan).expect("valid publish plan");
+        assert_eq!(
+            compile_profile_hash,
+            uploaded_model_compile_profile_hash(&plan.compile_profile)
+        );
+    }
+
+    #[test]
+    fn validate_private_model_publish_plan_rejects_gap_in_ordinals() {
+        let mut chunks = sample_uploaded_model_chunks();
+        chunks[1].ordinal = 2;
+        let plan = PrivateModelPublishPlan {
+            bundle: sample_uploaded_model_bundle(),
+            chunks,
+            finalize: sample_uploaded_model_finalize_payload(),
+            compile_profile: sample_private_compile_profile(),
+            allow_model: None,
+        };
+        let err = validate_private_model_publish_plan(&plan)
+            .expect_err("gap in chunk ordinals must fail");
+        assert!(err.to_string().contains("contiguous from zero"));
+    }
+
+    #[test]
+    fn fetch_uploaded_model_recipient_rejects_invalid_url() {
+        let err = fetch_torii_soracloud_uploaded_model_encryption_recipient("not-a-url", None, 5)
+            .expect_err("invalid URL must fail");
+        assert!(err.to_string().contains("invalid --torii-url"));
+    }
+
+    #[test]
+    fn fetch_uploaded_model_status_rejects_invalid_url() {
+        let err = fetch_torii_soracloud_uploaded_model_status(
+            "not-a-url",
+            "v1/soracloud/model/upload/status",
+            "private_models",
+            "1.0.0",
+            Some("upload-1"),
+            None,
+            None,
+            None,
+            None,
+            5,
+        )
+        .expect_err("invalid URL must fail");
+        assert!(err.to_string().contains("invalid --torii-url"));
+    }
+
+    #[test]
+    fn fetch_private_inference_status_rejects_invalid_url() {
+        let err = fetch_torii_soracloud_private_inference_status("not-a-url", "session-1", None, 5)
+            .expect_err("invalid URL must fail");
+        assert!(err.to_string().contains("invalid --torii-url"));
     }
 
     #[test]

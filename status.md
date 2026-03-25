@@ -2,6 +2,44 @@
 
 Last updated: 2026-03-25
 
+## 2026-03-25 Follow-up: Soracloud uploaded-model and private-runtime CLI surface is now wired through `iroha_cli`
+- Extended `crates/iroha_cli/src/soracloud.rs` and
+  `docs/source/soracloud/cli_local_control_plane.md` so the uploaded-model
+  and private-runtime Torii surface is reachable through the normal
+  `iroha app soracloud model-*` family instead of remaining a documented
+  follow-up.
+- The shipped behavior in this slice:
+  - `iroha app soracloud` now exposes `model-upload-encryption-recipient`,
+    `model-upload-init`, `model-upload-chunk`, `model-upload-finalize`,
+    `model-upload-status`, `model-compile`, `model-compile-status`,
+    `model-allow`, `model-run-private`, `model-run-status`,
+    `model-decrypt-output`, and `model-publish-private`;
+  - the CLI now signs and posts the uploaded-model bundle/chunk/finalize,
+    private compile, allow-model, run-private, and output-release requests
+    against the authoritative Torii control plane;
+  - `model-run-private` now hides the draft-then-finalize handshake and
+    returns the authoritative post-finalize session status; and
+  - `model-publish-private` now validates bundle/chunk/finalize/compile
+    consistency locally, checks that the plan still targets the active Torii
+    upload recipient, and then executes the full upload/finalize/compile/allow
+    sequence from one publish-plan document.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target_soracloud_uploaded_cli cargo check -p iroha_cli --tests` (pass)
+  - `cargo check -p iroha_core --tests` (pass)
+  - `cargo check -p iroha_torii --tests` (pass)
+  - `cargo test -p iroha_cli validate_private_model_publish_plan_ --bins` (pass)
+  - `cargo test -p iroha_cli signed_uploaded_model_ --bins` (pass)
+  - `cargo test -p iroha_cli signed_private_ --bins` (pass)
+  - `cargo test -p iroha_cli fetch_uploaded_model_recipient_rejects_invalid_url --bins` (pass)
+  - `cargo test -p iroha_cli fetch_uploaded_model_status_rejects_invalid_url --bins` (pass)
+  - `cargo test -p iroha_cli fetch_private_inference_status_rejects_invalid_url --bins` (pass)
+- Remaining implementation gap:
+  - the uploaded-model/private-runtime CLI is now present, but the
+    one-click wrapper still assumes an already encrypted deterministic
+    publish-plan document; local normalization, encryption, and chunking of a
+    raw admitted model directory are still follow-up work.
+
 ## 2026-03-25 Follow-up: strict workspace clippy is green after validation-driven cleanup
 - Continued the repo-level validation pass after closing the asset/mobile follow-up and fixed
   the next layer of compile/lint drift that strict workspace `clippy` exposed across unrelated

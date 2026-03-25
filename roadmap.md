@@ -2,6 +2,45 @@
 
 Last updated: 2026-03-25
 
+Latest sync (2026-03-25 Soracloud uploaded-model/private-runtime CLI):
+`crates/iroha_cli/src/soracloud.rs`
+and
+`docs/source/soracloud/cli_local_control_plane.md`
+now expose the uploaded-model/private-runtime Torii surface through the normal
+`iroha app soracloud model-*` family instead of leaving it as a documentation
+placeholder.
+
+- the CLI now signs and submits `model-upload-{encryption-recipient,init,chunk,
+  finalize,status}`, `model-{compile,compile-status,allow,run-private,
+  run-status,decrypt-output}`, and `model-publish-private`;
+- `model-run-private` now hides the draft-then-finalize handshake and returns
+  the authoritative post-finalize session status; and
+- `model-publish-private` now validates bundle/chunk/finalize/compile
+  consistency locally, confirms the plan still targets the active Torii upload
+  recipient, and then executes the upload/finalize/compile/allow sequence from
+  one publish-plan document.
+
+Validation:
+- `cargo fmt --all`
+- `CARGO_TARGET_DIR=target_soracloud_uploaded_cli cargo check -p iroha_cli --tests`
+- `cargo check -p iroha_core --tests`
+- `cargo check -p iroha_torii --tests`
+- `cargo test -p iroha_cli validate_private_model_publish_plan_ --bins`
+- `cargo test -p iroha_cli signed_uploaded_model_ --bins`
+- `cargo test -p iroha_cli signed_private_ --bins`
+- `cargo test -p iroha_cli fetch_uploaded_model_recipient_rejects_invalid_url --bins`
+- `cargo test -p iroha_cli fetch_uploaded_model_status_rejects_invalid_url --bins`
+- `cargo test -p iroha_cli fetch_private_inference_status_rejects_invalid_url --bins`
+
+Open work for this Soracloud slice now remains:
+- hide raw admitted-model preparation behind the one-click wrapper so
+  `model-publish-private` can normalize, encrypt, shard, and emit the publish
+  plan from a local model directory instead of requiring a pre-encrypted plan
+  document; and
+- keep extending end-to-end one-click Soracloud flows around budgets, domains,
+  and broader uploaded-model runtime coverage now that the low-level CLI
+  surface is present.
+
 Latest sync (2026-03-25 operator-auth effective-remote-IP hardening):
 `crates/iroha_torii/src/operator_auth.rs`
 now keys operator-auth lockout and rate limiting off Torii's effective caller

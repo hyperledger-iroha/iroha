@@ -132,8 +132,14 @@ fn account_role_suffix(account: &AccountId) -> String {
 fn multisig_role_for(home_domain: Option<&DomainId>, account: &AccountId) -> RoleId {
     let account_suffix = account_role_suffix(account);
     let literal = home_domain.map_or_else(
-        || format!("{MULTISIG_SIGNATORY}{DELIMITER}{DOMAINLESS_NAMESPACE}{DELIMITER}{account_suffix}"),
-        |home_domain| format!("{MULTISIG_SIGNATORY}{DELIMITER}{home_domain}{DELIMITER}{account_suffix}"),
+        || {
+            format!(
+                "{MULTISIG_SIGNATORY}{DELIMITER}{DOMAINLESS_NAMESPACE}{DELIMITER}{account_suffix}"
+            )
+        },
+        |home_domain| {
+            format!("{MULTISIG_SIGNATORY}{DELIMITER}{home_domain}{DELIMITER}{account_suffix}")
+        },
     );
     literal.parse().unwrap()
 }

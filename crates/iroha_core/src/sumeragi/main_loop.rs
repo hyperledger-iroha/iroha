@@ -4771,6 +4771,9 @@ impl Actor {
         {
             return Some("commit_qc");
         }
+        if self.pending_block_has_qc(block_hash, pending.height, pending.view) {
+            return Some("cached_qc");
+        }
         if self.pending_block_has_commit_votes(block_hash, pending.height, pending.view) {
             return Some("commit_votes");
         }
@@ -11811,6 +11814,37 @@ impl Actor {
             |hash, height| self.parent_hash_for(hash, height),
             |hash| self.block_known_for_lock(hash),
         )
+    }
+
+    fn promote_locked_qc_to_highest_if_needed(
+        &mut self,
+        context: &'static str,
+    ) -> Option<crate::sumeragi::consensus::QcHeaderRef> {
+        let lock = self.locked_qc?;
+        let should_promote = self.highest_qc.is_none_or(|highest| {
+            matches!(
+                ensure_locked_qc_allows(Some(lock), highest),
+                Err(LockedQcRejection::HeightRegressed { .. })
+                    | Err(LockedQcRejection::HashMismatch { .. })
+            )
+        });
+        if should_promote {
+            let previous = self.highest_qc;
+            self.highest_qc = Some(lock);
+            status::set_highest_qc(lock.height, lock.view);
+            status::set_highest_qc_hash(lock.subject_block_hash);
+            info!(
+                context,
+                locked_height = lock.height,
+                locked_view = lock.view,
+                locked_hash = %lock.subject_block_hash,
+                previous_height = previous.map(|qc| qc.height),
+                previous_view = previous.map(|qc| qc.view),
+                previous_hash = ?previous.map(|qc| qc.subject_block_hash),
+                "promoting locked QC into highest QC"
+            );
+        }
+        self.highest_qc
     }
 
     fn lock_lag_catchup_frontier_for_highest(
@@ -26678,6 +26712,7 @@ impl Actor {
                 }
             }
         }
+        self.promote_locked_qc_to_highest_if_needed("new_view_vote");
         if let Some(mut highest_qc) = self.highest_qc.or(committed_qc) {
             let valid_phase = matches!(
                 highest_qc.phase,

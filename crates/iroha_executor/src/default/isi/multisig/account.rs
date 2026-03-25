@@ -15,9 +15,12 @@ use crate::data_model::{
 
 impl VisitExecute for MultisigRegister {
     fn visit<V: Execute + Visit + ?Sized>(&self, executor: &mut V) {
-        if let Err(err) =
-            validate_registration(&self.account, self.home_domain.as_ref(), &self.spec, executor)
-        {
+        if let Err(err) = validate_registration(
+            &self.account,
+            self.home_domain.as_ref(),
+            &self.spec,
+            executor,
+        ) {
             deny!(executor, err);
         }
     }

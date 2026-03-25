@@ -94,10 +94,10 @@ impl AccountLabel {
             || format!("{label}@{dataspace_alias}"),
             |domain| {
                 format!(
-                "{label}@{}.{}",
-                domain.to_string().to_ascii_lowercase(),
-                dataspace_alias
-            )
+                    "{label}@{}.{}",
+                    domain.to_string().to_ascii_lowercase(),
+                    dataspace_alias
+                )
             },
         ))
     }

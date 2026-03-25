@@ -109,11 +109,23 @@ Soracloud v1 is an authoritative, IVM-only runtime.
 - `iroha app soracloud training-*`
   - all training job commands are Torii-backed only.
 - `iroha app soracloud model-*`
-  - all model artifact and weight commands are Torii-backed only.
-  - the next uploaded-model/private-runtime slice should extend this family
-    with `upload-init`, `upload-chunk`, `upload-finalize`, `compile`,
-    `allow-model`, `run-private`, `run-status`, and `decrypt-output`
-    operations rather than creating a separate control-plane namespace.
+  - all model artifact, weight, uploaded-model, and private-runtime commands
+    are Torii-backed only.
+  - the uploaded-model/private-runtime surface now lives in the same family:
+    `model-upload-encryption-recipient`, `model-upload-init`,
+    `model-upload-chunk`, `model-upload-finalize`, `model-upload-status`,
+    `model-compile`, `model-compile-status`, `model-allow`,
+    `model-run-private`, `model-run-status`, `model-decrypt-output`, and
+    `model-publish-private`.
+  - `model-run-private` now hides the draft-then-finalize runtime handshake in
+    the CLI and returns the authoritative post-finalize session status.
+  - `model-publish-private` orchestrates the already prepared
+    bundle/chunk/finalize/compile/allow sequence from a single publish-plan
+    document and fail-closes when the plan's upload recipient no longer matches
+    the authoritative Torii recipient.
+  - local normalization, encryption, and chunking of a raw model directory are
+    still follow-up work; the new wrapper assumes the publish plan already
+    contains a deterministic, encrypted bundle.
   - see `uploaded_private_models.md` for the design that layers those routes
     onto the existing model registry and artifact/weight records.
 - `model-host` control-plane routes

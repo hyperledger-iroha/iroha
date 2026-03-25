@@ -12679,6 +12679,67 @@ async fn commit_pipeline_defers_valid_pending_without_proposal_evidence() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn commit_pipeline_allows_tip_pending_with_cached_qc_without_proposal_evidence() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let block = sample_block(1, 0, None);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block, payload_hash, 1, 0);
+    pending.validation_status = ValidationStatus::Valid;
+    pending.parent_state_root = Some(zero_state_root());
+    pending.post_state_root = Some(zero_state_root());
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    let commit_topology = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(commit_topology.clone());
+    let epoch = actor.epoch_for_height(1);
+    let signers: BTreeSet<ValidatorIndex> = (0..commit_topology.len())
+        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, commit_topology.len());
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        1,
+        0,
+        epoch,
+        signers_bitmap,
+        Phase::Prepare,
+        &topology,
+        &harness.key_pairs,
+    );
+    actor
+        .qc_cache
+        .insert((Phase::Prepare, block_hash, 1, 0, epoch), qc);
+
+    actor.process_commit_candidates();
+
+    let has_vote = actor.vote_log.values().any(|vote| {
+        vote.phase == Phase::Commit
+            && vote.block_hash == block_hash
+            && vote.height == 1
+            && vote.view == 0
+    });
+    assert!(
+        has_vote,
+        "QC-backed tip pending should emit a precommit vote even after proposal evidence churn"
+    );
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained");
+    assert!(
+        pending_after.precommit_vote_sent,
+        "QC-backed tip pending should remain in the commit pipeline"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn commit_pipeline_reports_stage_timings() {
     let mut harness = test_actor_harness(4).await;
 
@@ -52214,9 +52275,10 @@ async fn trigger_view_change_prunes_proposals_seen_for_height() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn trigger_view_change_realigns_conflicting_committed_edge_qcs_before_new_view_vote() {
-    let mut harness =
-        test_actor_harness_with_config_and_height(4, test_sumeragi_config(), None, 2).await;
+    let mut harness = test_actor_harness(4).await;
     let _guard = super::status::view_change_proof_test_guard();
+    seed_genesis_block_for_state(&harness.actor.state);
+    while harness.background_rx.try_recv().is_ok() {}
     let actor = &mut harness.actor;
 
     let committed_height = actor.committed_height_snapshot();
@@ -52282,6 +52344,54 @@ async fn trigger_view_change_realigns_conflicting_committed_edge_qcs_before_new_
     assert_eq!(
         locked_after.height, committed_qc.height,
         "realigned locked QC should match committed height"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn trigger_view_change_promotes_locked_qc_before_new_view_vote() {
+    let mut harness = test_actor_harness(4).await;
+    let _guard = super::status::view_change_proof_test_guard();
+    seed_genesis_block_for_state(&harness.actor.state);
+    while harness.background_rx.try_recv().is_ok() {}
+    let actor = &mut harness.actor;
+
+    actor.vote_log.clear();
+    actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
+
+    let committed_qc = actor
+        .latest_committed_qc()
+        .expect("test setup should have committed QC at the tip");
+    actor.highest_qc = Some(committed_qc);
+    let lock = QcHeaderRef {
+        height: committed_qc.height.saturating_add(1),
+        view: committed_qc.view.saturating_add(1),
+        epoch: actor.epoch_for_height(committed_qc.height.saturating_add(1)),
+        subject_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [0xE4; Hash::LENGTH],
+        )),
+        phase: Phase::Commit,
+    };
+    actor.locked_qc = Some(lock);
+    super::status::set_locked_qc(lock.height, lock.view, Some(lock.subject_block_hash));
+
+    let height = lock.height.saturating_add(1);
+    let current_view = 2u64;
+    actor
+        .phase_tracker
+        .on_view_change(height, current_view, Instant::now());
+
+    actor.trigger_view_change_with_cause(
+        height,
+        current_view,
+        super::ViewChangeCause::QuorumTimeout,
+    );
+
+    assert_eq!(
+        actor.highest_qc,
+        Some(lock),
+        "view-change trigger should promote a newer locked QC before emitting NEW_VIEW votes"
     );
 
     harness.shutdown.send();
@@ -71432,6 +71542,52 @@ async fn pacemaker_updates_highest_qc_status_from_new_view() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn pacemaker_promotes_locked_qc_when_highest_lags() {
+    let _guard = super::status::qc_status_test_guard();
+    let mut harness = test_actor_harness(4).await;
+    seed_genesis_block_for_state(&harness.actor.state);
+    while harness.background_rx.try_recv().is_ok() {}
+    let actor = &mut harness.actor;
+
+    actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
+    actor.subsystems.propose.forced_view_after_timeout = None;
+
+    let committed_qc = actor
+        .latest_committed_qc()
+        .expect("test setup should have committed QC at the tip");
+    actor.highest_qc = Some(committed_qc);
+    super::status::set_highest_qc(committed_qc.height, committed_qc.view);
+    super::status::set_highest_qc_hash(committed_qc.subject_block_hash);
+
+    let lock = QcHeaderRef {
+        height: committed_qc.height.saturating_add(1),
+        view: committed_qc.view.saturating_add(1),
+        epoch: actor.epoch_for_height(committed_qc.height.saturating_add(1)),
+        subject_block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
+            [0x91; Hash::LENGTH],
+        )),
+        phase: Phase::Commit,
+    };
+    actor.locked_qc = Some(lock);
+    super::status::set_locked_qc(lock.height, lock.view, Some(lock.subject_block_hash));
+
+    let now = Instant::now();
+    let _ = actor.on_pacemaker_propose_ready(now);
+
+    assert_eq!(
+        actor.highest_qc,
+        Some(lock),
+        "pacemaker should promote a newer locked QC before selecting NEW_VIEW work"
+    );
+    let snapshot = super::status::snapshot();
+    assert_eq!(snapshot.highest_qc_height, lock.height);
+    assert_eq!(snapshot.highest_qc_view, lock.view);
+    assert_eq!(snapshot.highest_qc_subject, Some(lock.subject_block_hash));
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn pacemaker_clamps_live_height_to_local_commit_horizon() {
     let mut harness = test_actor_harness(1).await;
     let actor = &mut harness.actor;
@@ -88808,6 +88964,34 @@ async fn reschedule_stale_pending_blocks_skips_when_commit_qc_cached() {
     assert!(
         pending_after.last_quorum_reschedule.is_none(),
         "commit QC should prevent quorum reschedule"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn reschedule_stale_pending_blocks_retains_kura_persisted_pending() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let view = actor.state.view();
+    let height = view.height() as u64 + 1;
+    let parent = view.latest_block_hash();
+    drop(view);
+
+    let block = sample_block(height, 0, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    actor.kura.store_block(block.clone()).expect("store block");
+
+    let mut pending = PendingBlock::new(block, payload_hash, height, 0);
+    pending.mark_kura_persisted();
+    actor.pending.pending_blocks.insert(block_hash, pending);
+
+    actor.reschedule_stale_pending_blocks(None);
+
+    assert!(
+        actor.pending.pending_blocks.contains_key(&block_hash),
+        "kura-persisted pending block should be retained for state retry"
     );
 
     harness.shutdown.send();

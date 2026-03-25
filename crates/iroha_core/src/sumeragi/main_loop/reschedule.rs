@@ -309,14 +309,23 @@ impl Actor {
                 continue;
             }
             if self.kura.get_block_height_by_hash(*hash).is_some() {
-                info!(
-                    height = pending.height,
-                    view = pending.view,
-                    block = %hash,
-                    "dropping pending block already committed in kura"
-                );
-                stale_pending.push((*hash, pending.height));
-                continue;
+                if pending.kura_persisted {
+                    debug!(
+                        height = pending.height,
+                        view = pending.view,
+                        block = %hash,
+                        "retaining kura-persisted pending block until state commit catches up"
+                    );
+                } else {
+                    info!(
+                        height = pending.height,
+                        view = pending.view,
+                        block = %hash,
+                        "dropping pending block already committed in kura"
+                    );
+                    stale_pending.push((*hash, pending.height));
+                    continue;
+                }
             }
             if !pending_extends_tip(
                 pending.height,

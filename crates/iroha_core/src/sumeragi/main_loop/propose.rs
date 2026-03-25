@@ -2054,6 +2054,8 @@ impl Actor {
             .new_view_tracker
             .prune(committed_height);
 
+        self.promote_locked_qc_to_highest_if_needed("pacemaker");
+
         let da_enabled = self.runtime_da_enabled();
         let committed_qc = self.latest_committed_qc();
         let precommit_qc = precommit_qc_for_view_change(self.highest_qc, committed_qc);
@@ -2755,15 +2757,17 @@ impl Actor {
                     let Some(lock) = self.locked_qc else {
                         return false;
                     };
+                    self.promote_locked_qc_to_highest_if_needed("proposal");
                     iroha_logger::info!(
                         locked_height = locked,
                         highest_height = highest,
                         height,
                         view = view_idx,
                         queue_len = pending_queue_len,
-                        "deferring proposal: highest QC lags locked QC; retaining lock"
+                        lock_hash = %lock.subject_block_hash,
+                        "deferring proposal: highest QC lags locked QC; retrying after promotion"
                     );
-                    highest_qc = lock;
+                    return false;
                 }
                 LockedQcRejection::HashMismatch { .. } => {
                     let locked_hash = self.locked_qc.map(|qc| qc.subject_block_hash);

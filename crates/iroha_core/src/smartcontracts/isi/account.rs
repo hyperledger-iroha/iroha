@@ -21,6 +21,15 @@ pub mod isi {
     use super::*;
     use crate::{role::RoleIdWithOwner, state::StateTransaction};
 
+    fn is_idempotent_alias_permission(permission: &Permission) -> bool {
+        iroha_executor_data_model::permission::account::CanManageAccountAlias::try_from(permission)
+            .is_ok()
+            || iroha_executor_data_model::permission::account::CanResolveAccountAlias::try_from(
+                permission,
+            )
+            .is_ok()
+    }
+
     impl Execute for Transfer<Account, AssetDefinitionId, Account> {
         fn execute(
             self,
@@ -170,6 +179,9 @@ pub mod isi {
                 .world
                 .account_contains_inherent_permission(&account_id, &permission)
             {
+                if is_idempotent_alias_permission(&permission) {
+                    return Ok(());
+                }
                 return Err(RepetitionError {
                     instruction: InstructionType::Grant,
                     id: permission.into(),
@@ -324,10 +336,25 @@ pub mod isi {
 
     #[cfg(test)]
     mod test {
-        use iroha_data_model::{error::ParseError, prelude::AssetDefinition};
-        use iroha_test_samples::gen_account_in;
+        use core::num::NonZeroU64;
+
+        use iroha_data_model::{
+            domain::DomainId,
+            error::ParseError,
+            isi::error::InstructionExecutionError,
+            prelude::{Account, AssetDefinition, Domain, Grant, Permission, Register},
+        };
+        use iroha_primitives::json::Json;
+        use iroha_test_samples::{ALICE_ID, gen_account_in};
 
         use crate::smartcontracts::isi::Registrable as _;
+        use crate::{
+            block::ValidBlock,
+            kura::Kura,
+            query::store::LiveQueryStore,
+            smartcontracts::Execute,
+            state::{State, World, WorldReadOnly},
+        };
 
         #[test]
         fn cannot_forbid_minting_on_asset_mintable_infinitely() -> Result<(), ParseError> {
@@ -343,6 +370,92 @@ pub mod isi {
             .build(&authority);
             assert!(super::forbid_minting(&mut definition).is_err());
             Ok(())
+        }
+
+        fn new_dummy_block() -> crate::block::CommittedBlock {
+            let (leader_public_key, leader_private_key) =
+                iroha_crypto::KeyPair::random().into_parts();
+            let peer_id = crate::PeerId::new(leader_public_key);
+            let topology = crate::sumeragi::network_topology::Topology::new(vec![peer_id]);
+            ValidBlock::new_dummy_and_modify_header(&leader_private_key, |h| {
+                h.set_height(NonZeroU64::new(1).unwrap());
+            })
+            .commit(&topology)
+            .unpack(|_| {})
+            .unwrap()
+        }
+
+        #[test]
+        fn duplicate_alias_permission_grant_is_idempotent() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let wonderland: DomainId = "wonderland".parse().unwrap();
+
+            Register::domain(Domain::new(wonderland.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(Account::new(ALICE_ID.to_account_id(wonderland.clone())))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let permission = Permission::from(
+                iroha_executor_data_model::permission::account::CanManageAccountAlias {
+                    scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Dataspace(
+                        iroha_data_model::nexus::DataSpaceId::GLOBAL,
+                    ),
+                },
+            );
+
+            Grant::account_permission(permission.clone(), ALICE_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Grant::account_permission(permission.clone(), ALICE_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let permissions = stx
+                .world
+                .account_permissions_iter(&ALICE_ID)
+                .unwrap()
+                .cloned()
+                .collect::<Vec<_>>();
+            assert_eq!(permissions.len(), 1);
+            assert_eq!(permissions[0], permission);
+        }
+
+        #[test]
+        fn duplicate_non_alias_permission_grant_still_rejects() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let wonderland: DomainId = "wonderland".parse().unwrap();
+
+            Register::domain(Domain::new(wonderland.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(Account::new(ALICE_ID.to_account_id(wonderland.clone())))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let permission = Permission::new("custom_permission".into(), Json::new(()));
+
+            Grant::account_permission(permission.clone(), ALICE_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            let err = Grant::account_permission(permission.clone(), ALICE_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("duplicate non-alias grant must still fail");
+
+            assert!(matches!(err, InstructionExecutionError::Repetition(_)));
         }
     }
 }

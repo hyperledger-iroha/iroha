@@ -2949,7 +2949,10 @@ impl Actor {
             };
             let has_commit_qc = pending.commit_qc_seen
                 || self.pending_block_has_qc(hash, pending_height, pending_view);
-            if !has_commit_qc && !self.slot_has_proposal_evidence(pending_height, pending_view) {
+            let proposal_evidence_seen =
+                self.slot_has_proposal_evidence(pending_height, pending_view);
+            let priority_reason = self.pending_block_validation_priority_reason(hash, &pending);
+            if !has_commit_qc && !proposal_evidence_seen && priority_reason.is_none() {
                 debug!(
                     height = pending_height,
                     view = pending_view,
@@ -2959,6 +2962,15 @@ impl Actor {
                 );
                 self.pending.pending_blocks.insert(hash, pending);
                 continue;
+            }
+            if !proposal_evidence_seen && let Some(reason) = priority_reason {
+                debug!(
+                    height = pending_height,
+                    view = pending_view,
+                    block = %hash,
+                    reason,
+                    "allowing commit pipeline before proposal evidence due to near-tip consensus readiness"
+                );
             }
             if !pending.commit_qc_seen {
                 if let Some(qc) = qc_cache_for_subject(&self.qc_cache, hash).find(|qc| {
