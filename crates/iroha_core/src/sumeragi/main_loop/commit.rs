@@ -13,6 +13,7 @@ use iroha_logger::prelude::*;
 
 use super::locked_qc::qc_extends_locked_with_lookup;
 use super::pacing::{Pacemaker, PacemakerBackpressure, PacemakerBackpressureAction};
+use super::pending_block::ValidatedCommitArtifact;
 use super::propose::ProposalBackpressure;
 use super::*;
 
@@ -26,6 +27,7 @@ pub(super) enum EpochRefreshPhase {
 pub(super) struct CommitWork {
     pub(super) id: u64,
     pub(super) block: SignedBlock,
+    pub(super) validated_commit_artifact: Option<ValidatedCommitArtifact>,
     pub(super) commit_topology: Vec<PeerId>,
     pub(super) signature_topology: Vec<PeerId>,
     pub(super) consensus_mode: ConsensusMode,
@@ -148,6 +150,7 @@ pub(super) enum CommitOutcome {
         error: BlockValidationError,
         pipeline_events: Vec<PipelineEventBox>,
     },
+    #[allow(dead_code)]
     KuraStoreFailed {
         committed_block: crate::block::CommittedBlock,
         error: crate::kura::Error,
@@ -155,6 +158,7 @@ pub(super) enum CommitOutcome {
     StateCommitFailed {
         committed_block: crate::block::CommittedBlock,
         error: String,
+        error_kind: Option<crate::state::storage_transactions::TransactionsBlockError>,
     },
     Success {
         committed_block: crate::block::CommittedBlock,
@@ -267,6 +271,7 @@ pub(super) fn execute_commit_work(
     let CommitWork {
         block,
         id,
+        validated_commit_artifact,
         commit_topology,
         signature_topology,
         consensus_mode,
@@ -481,6 +486,17 @@ pub(super) fn execute_commit_work(
             let exec_witness = state_block.take_exec_witness();
             let persist_start = Instant::now();
             let pipeline_events = pipeline_events;
+            let _validated_commit_artifact = validated_commit_artifact.or_else(|| {
+                exec_witness
+                    .as_ref()
+                    .map(|witness| ValidatedCommitArtifact {
+                        block_hash,
+                        height: block_height,
+                        view: block_view,
+                        parent_state_root: parent_state_from_witness(witness),
+                        post_state_root: post_state_from_witness(witness),
+                    })
+            });
             if persist_required {
                 let committed_block_for_kura = committed_block.clone();
                 log_stage_start("kura_store");
@@ -533,6 +549,7 @@ pub(super) fn execute_commit_work(
                     CommitOutcome::StateCommitFailed {
                         committed_block,
                         error: err.to_string(),
+                        error_kind: Some(err),
                     },
                     timings,
                 );
@@ -951,9 +968,8 @@ impl Actor {
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    warn!("commit worker result channel closed; falling back to inline commit");
+                    warn!("commit result channel closed; falling back to inline commit");
                     self.subsystems.commit.result_rx = None;
-                    self.subsystems.commit.work_tx = None;
                     if let Some(inflight) = self.subsystems.commit.inflight.take() {
                         let persist_required = !inflight.pending.kura_persisted;
                         let local_outside_commit_topology = inflight
@@ -965,6 +981,7 @@ impl Actor {
                         let work = CommitWork {
                             id: inflight.id,
                             block: inflight.pending.block.clone(),
+                            validated_commit_artifact: inflight.pending.validated_commit_artifact,
                             commit_topology: inflight.commit_topology.clone(),
                             signature_topology: inflight.signature_topology.clone(),
                             consensus_mode: self
@@ -1020,52 +1037,13 @@ impl Actor {
                 .insert(block_hash, inflight.pending);
             return false;
         }
-
-        if let Some(work_tx) = self.subsystems.commit.work_tx.as_ref() {
-            match work_tx.try_send(work) {
-                Ok(()) => {
-                    super::status::record_commit_inflight_start(
-                        inflight.id,
-                        pending_height,
-                        pending_view,
-                        block_hash,
-                    );
-                    self.subsystems.commit.inflight = Some(inflight);
-                    return false;
-                }
-                Err(mpsc::TrySendError::Full(_work)) => {
-                    warn!(
-                        height = pending_height,
-                        view = pending_view,
-                        block = %block_hash,
-                        "commit worker queue full; deferring finalize"
-                    );
-                    self.pending
-                        .pending_blocks
-                        .insert(block_hash, inflight.pending);
-                    return false;
-                }
-                Err(mpsc::TrySendError::Disconnected(work)) => {
-                    warn!(
-                        height = pending_height,
-                        view = pending_view,
-                        block = %block_hash,
-                        "commit worker channel closed; running commit inline"
-                    );
-                    self.subsystems.commit.work_tx = None;
-                    self.subsystems.commit.result_rx = None;
-                    let (outcome, timings) = execute_commit_work(
-                        self.state.as_ref(),
-                        self.kura.as_ref(),
-                        &self.common_config.chain,
-                        &self.genesis_account,
-                        work,
-                    );
-                    return self.apply_commit_outcome(inflight, outcome, timings);
-                }
-            }
-        }
-
+        super::status::record_commit_inflight_start(
+            inflight.id,
+            pending_height,
+            pending_view,
+            block_hash,
+        );
+        self.subsystems.commit.inflight = Some(inflight);
         let (outcome, timings) = execute_commit_work(
             self.state.as_ref(),
             self.kura.as_ref(),
@@ -1073,6 +1051,12 @@ impl Actor {
             &self.genesis_account,
             work,
         );
+        let inflight = self
+            .subsystems
+            .commit
+            .inflight
+            .take()
+            .expect("inline commit must retain inflight marker");
         self.apply_commit_outcome(inflight, outcome, timings)
     }
 
@@ -1124,7 +1108,7 @@ impl Actor {
         let mut committed_mode_tag_tail: Option<&'static str> = None;
         let mut persist_required_tail = false;
 
-        let topology = super::network_topology::Topology::new(signature_topology);
+        let topology = super::network_topology::Topology::new(signature_topology.clone());
         let canonical_topology = super::network_topology::Topology::new(commit_topology.clone());
         let min_votes_for_commit = topology.min_votes_for_commit();
         let quorum_signer_count = qc_signers.as_ref().map(BTreeSet::len);
@@ -1199,7 +1183,7 @@ impl Actor {
                 state_events,
                 post_apply_snapshot,
             } => {
-                let mut pending = pending_opt.take().expect("pending present");
+                let pending = pending_opt.take().expect("pending present");
                 self.note_view_change_from_block(pending_height, pending_view);
                 let committed_tx_hashes = committed_block
                     .as_ref()
@@ -1212,8 +1196,7 @@ impl Actor {
                     pending_view,
                     block_hash,
                 );
-                let persist_required = !pending.kura_persisted;
-                pending.mark_kura_persisted();
+                persist_required_tail = !pending.kura_persisted;
                 let qc_key = (
                     crate::sumeragi::consensus::Phase::Commit,
                     block_hash,
@@ -1315,7 +1298,6 @@ impl Actor {
                 committed_block_tail = Some(committed_block);
                 committed_consensus_mode_tail = Some(consensus_mode);
                 committed_mode_tag_tail = Some(mode_tag);
-                persist_required_tail = persist_required;
                 trace!(
                     height = pending_height,
                     view = pending_view,
@@ -1388,6 +1370,7 @@ impl Actor {
             CommitOutcome::StateCommitFailed {
                 committed_block,
                 error,
+                error_kind,
             } => {
                 let mut pending = pending_opt.take().expect("pending present");
                 crate::sumeragi::status::record_kura_stage(
@@ -1408,9 +1391,72 @@ impl Actor {
                     block_hash,
                     kura::KURA_STAGE_ROLLBACK_REASON_STATE,
                 );
-                pending.mark_kura_persisted();
-                pending.block = committed_block.into();
-                self.pending.pending_blocks.insert(block_hash, pending);
+                let state_height = self.state.committed_height();
+                let state_tip_hash = self.state.latest_block_hash_fast();
+                let state_height_u64 = u64::try_from(state_height).unwrap_or(u64::MAX);
+                let state_aligned_with_block = state_tip_hash.is_some_and(|tip| tip == block_hash)
+                    && state_height_u64 >= pending_height;
+                if matches!(
+                    error_kind,
+                    Some(crate::state::storage_transactions::TransactionsBlockError::HeightMismatch { .. })
+                ) && state_height_u64 >= pending_height
+                {
+                    if state_aligned_with_block {
+                        info!(
+                            height = pending_height,
+                            view = pending_view,
+                            block = %block_hash,
+                            state_height,
+                            "state already reflects block after state-commit retry; dropping duplicate pending"
+                        );
+                        self.clean_rbc_sessions_for_committed_block_if_settled(
+                            block_hash,
+                            pending_height,
+                        );
+                        if let Some(parent) = pending.block.header().prev_block_hash() {
+                            self.qc_cache
+                                .retain(|(_, hash, _, _, _), _| hash != &parent);
+                            self.qc_signer_tally
+                                .retain(|(_, hash, _, _, _), _| hash != &parent);
+                        }
+                    } else {
+                        let txs = pending.block.transactions_vec().clone();
+                        let (requeued, failures, duplicate_failures, _) =
+                            requeue_block_transactions(self.queue.as_ref(), self.state.as_ref(), txs);
+                        warn!(
+                            height = pending_height,
+                            view = pending_view,
+                            block = %block_hash,
+                            state_height,
+                            state_tip_hash = ?state_tip_hash,
+                            requeued,
+                            failures,
+                            duplicate_failures,
+                            "state advanced to a different head after persisted commit failure; dropping stale pending block"
+                        );
+                        self.clean_rbc_sessions_for_block(block_hash, pending_height);
+                        self.qc_cache
+                            .retain(|(_, hash, _, _, _), _| hash != &block_hash);
+                        self.qc_signer_tally
+                            .retain(|(_, hash, _, _, _), _| hash != &block_hash);
+                        self.subsystems
+                            .propose
+                            .proposal_cache
+                            .pop_hint(pending_height, pending_view);
+                        self.subsystems
+                            .propose
+                            .proposal_cache
+                            .pop_proposal(pending_height, pending_view);
+                        self.trigger_view_change_after_commit_failure(
+                            pending_height,
+                            pending_view,
+                        );
+                    }
+                } else {
+                    pending.mark_kura_persisted();
+                    pending.block = committed_block.into();
+                    self.pending.pending_blocks.insert(block_hash, pending);
+                }
             }
             CommitOutcome::Rejected {
                 failed_block,
@@ -1457,10 +1503,10 @@ impl Actor {
                     matches!(pending.last_gate, Some(GateReason::MissingLocalData));
                 let quorum_reached = has_quorum_signers || vote_count >= min_votes_for_commit;
                 let fast_timeout = self.pending_fast_path_timeout_current();
-                let has_votes = pending.precommit_vote_sent
+                let has_votes = pending.local_commit_vote_emitted()
                     || vote_count > 0
                     || self.pending_block_has_votes(block_hash, pending_height, pending_view);
-                let has_qc = pending.commit_qc_seen
+                let has_qc = pending.commit_qc_observed()
                     || self.pending_block_has_qc(block_hash, pending_height, pending_view);
                 let validation_inflight = pending.validation_status == ValidationStatus::Pending
                     && self
@@ -1798,6 +1844,16 @@ impl Actor {
                 pending_view,
                 block_hash,
             );
+            self.record_round_trace_event(super::RoundTraceEvent {
+                key: super::RoundTraceKey {
+                    height: pending_height,
+                    view: pending_view,
+                },
+                phase: super::status::RoundPhaseTrace::Commit,
+                cause: super::status::RoundEventCauseTrace::CommitCompleted,
+                queue_latency_ms: None,
+                no_progress_wake: false,
+            });
             let backpressure = self.proposal_backpressure_at(Instant::now());
             let _ =
                 kickstart_pacemaker_after_commit(self.queue.queued_len(), backpressure, |now| {
@@ -1811,9 +1867,9 @@ impl Actor {
                 Some(consensus_mode),
                 Some(mode_tag),
             ) = (
-                committed_block_tail.as_ref(),
-                committed_pending_tail.as_ref(),
-                committed_post_apply_snapshot_tail.as_ref(),
+                committed_block_tail.take(),
+                committed_pending_tail.take(),
+                committed_post_apply_snapshot_tail.take(),
                 committed_consensus_mode_tail,
                 committed_mode_tag_tail,
             ) {
@@ -1922,7 +1978,6 @@ impl Actor {
                         crate::sumeragi::status::record_precommit_signers(record);
                     }
                 }
-
                 self.persist_roster_sidecar_for_commit(committed_block.as_ref(), &commit_topology);
                 if pending_height == 1 {
                     // Seed the genesis roster after the block is durably persisted.
@@ -2151,7 +2206,7 @@ impl Actor {
         let state_tip_hash = self.state.latest_block_hash_fast();
         if pending.aborted {
             let pending_parent = pending.block.header().prev_block_hash();
-            if pending.commit_qc_seen
+            if pending.commit_qc_observed()
                 && super::pending_extends_tip(
                     pending_height,
                     pending_parent,
@@ -2200,7 +2255,7 @@ impl Actor {
             }
             return true;
         }
-        if !pending.commit_qc_seen {
+        if !pending.commit_qc_observed() {
             debug!(
                 height = pending_height,
                 view = pending_view,
@@ -2403,6 +2458,18 @@ impl Actor {
 
         let id = self.subsystems.commit.next_id();
         let persist_required = !pending.kura_persisted;
+        if pending.validated_commit_artifact.is_none()
+            && let Some((parent_state_root, post_state_root)) =
+                pending.parent_state_root.zip(pending.post_state_root)
+        {
+            pending.note_validated_commit_artifact(
+                block_hash,
+                pending_height,
+                pending_view,
+                parent_state_root,
+                post_state_root,
+            );
+        }
         let local_outside_commit_topology = commit_topology
             .iter()
             .all(|peer| peer != self.common_config.peer.id());
@@ -2410,6 +2477,7 @@ impl Actor {
         let work = CommitWork {
             id,
             block: pending.block.clone(),
+            validated_commit_artifact: pending.validated_commit_artifact,
             commit_topology: commit_topology.clone(),
             signature_topology: signature_topology.clone(),
             consensus_mode,
@@ -2433,6 +2501,16 @@ impl Actor {
             post_commit_qc,
             enqueue_time: now,
         };
+        self.record_round_trace_event(super::RoundTraceEvent {
+            key: super::RoundTraceKey {
+                height: pending_height,
+                view: pending_view,
+            },
+            phase: super::status::RoundPhaseTrace::Commit,
+            cause: super::status::RoundEventCauseTrace::CommitRequested,
+            queue_latency_ms: None,
+            no_progress_wake: false,
+        });
         self.start_commit_job(inflight, work)
     }
 }
@@ -2496,7 +2574,6 @@ impl Actor {
             .propose
             .proposal_cache
             .pop_proposal(height, view);
-        // Keep proposals_seen so we don't re-propose in the same view after timeout.
         let session_key = Self::session_key(&block_hash, height, view);
         self.subsystems
             .da_rbc
@@ -2513,7 +2590,6 @@ impl Actor {
             .rbc
             .deliver_deferral
             .remove(&session_key);
-        // Retain the aborted payload so late commit QCs can still recover via block sync.
         self.pending.pending_blocks.insert(block_hash, pending);
         super::status::record_commit_inflight_timeout(height, view, block_hash, elapsed);
         super::status::record_commit_inflight_finish(inflight.id);
@@ -2947,12 +3023,17 @@ impl Actor {
                 Some(pending) => pending,
                 None => continue,
             };
-            let has_commit_qc = pending.commit_qc_seen
-                || self.pending_block_has_qc(hash, pending_height, pending_view);
+            if !pending.commit_qc_observed()
+                && let Some(qc) =
+                    self.cached_commit_qc_for_block(hash, pending_height, pending_view)
+            {
+                pending.note_commit_qc_observed(qc.epoch);
+            }
             let proposal_evidence_seen =
                 self.slot_has_proposal_evidence(pending_height, pending_view);
             let priority_reason = self.pending_block_validation_priority_reason(hash, &pending);
-            if !has_commit_qc && !proposal_evidence_seen && priority_reason.is_none() {
+            if !pending.commit_qc_observed() && !proposal_evidence_seen && priority_reason.is_none()
+            {
                 debug!(
                     height = pending_height,
                     view = pending_view,
@@ -2972,16 +3053,6 @@ impl Actor {
                     "allowing commit pipeline before proposal evidence due to near-tip consensus readiness"
                 );
             }
-            if !pending.commit_qc_seen {
-                if let Some(qc) = qc_cache_for_subject(&self.qc_cache, hash).find(|qc| {
-                    matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit)
-                        && qc.height == pending_height
-                        && qc.view == pending_view
-                }) {
-                    pending.commit_qc_seen = true;
-                    pending.commit_qc_epoch = Some(qc.epoch);
-                }
-            }
             self.pending.pending_processing.set(Some(hash));
             self.pending
                 .pending_processing_parent
@@ -2993,7 +3064,7 @@ impl Actor {
             let kura_ready = pending.kura_retry_due(now);
             let vote_epoch = self.epoch_for_height(pending_height);
             let commit_epoch = pending.commit_qc_epoch.unwrap_or(vote_epoch);
-            let ready_to_finalize = pending.commit_qc_seen && kura_ready;
+            let ready_to_finalize = pending.commit_qc_observed() && kura_ready;
             if pending.kura_aborted {
                 warn!(
                     ?hash,
@@ -3005,7 +3076,10 @@ impl Actor {
                 abort_due_to_kura = true;
                 precommit_action = Some("kura_aborted");
             } else if kura_ready {
-                if enable_qc_pipeline && !pending.precommit_vote_sent && !pending.commit_qc_seen {
+                if enable_qc_pipeline
+                    && !pending.local_commit_vote_emitted()
+                    && !pending.commit_qc_observed()
+                {
                     emit_precommit = true;
                 }
             } else {
@@ -3120,18 +3194,14 @@ impl Actor {
                     parent_hash,
                     pending_roots,
                 ) {
-                    pending.precommit_vote_sent = true;
-                    if let Some(vote) = self.local_precommit_vote_for(
+                    pending.note_local_commit_vote_emitted();
+                    let _ = self.maybe_replay_known_block_commit_evidence(
+                        hash,
                         pending_height,
                         pending_view,
-                        vote_epoch,
-                        &topology,
-                    ) {
-                        self.maybe_broadcast_block_sync_update_for_precommit_vote(
-                            &mut pending,
-                            &vote,
-                        );
-                    }
+                        topology.as_ref(),
+                        "local_commit_vote_emitted",
+                    );
                     precommit_action = Some("emitted");
                 } else {
                     precommit_action = Some("emit_failed");
@@ -3140,14 +3210,14 @@ impl Actor {
             if precommit_action.is_none() {
                 if !enable_qc_pipeline {
                     precommit_action = Some("qc_pipeline_disabled");
-                } else if pending.commit_qc_seen {
+                } else if pending.commit_qc_observed() {
                     precommit_action = Some("commit_qc_seen");
-                } else if pending.precommit_vote_sent {
+                } else if pending.local_commit_vote_emitted() {
                     precommit_action = Some("already_sent");
                 }
             }
             if let Some(action) = precommit_action {
-                if pending_age >= fast_timeout && !pending.commit_qc_seen {
+                if pending_age >= fast_timeout && !pending.commit_qc_observed() {
                     let rbc_log = {
                         let key: super::rbc_store::SessionKey =
                             (hash, pending_height, pending_view);
@@ -3177,8 +3247,8 @@ impl Actor {
                         fast_timeout_ms = fast_timeout.as_millis(),
                         kura_ready,
                         kura_attempts = pending.kura_retry_attempts,
-                        precommit_sent = pending.precommit_vote_sent,
-                        commit_qc_seen = pending.commit_qc_seen,
+                        precommit_sent = pending.local_commit_vote_emitted(),
+                        commit_qc_seen = pending.commit_qc_observed(),
                         gate = ?gate_reason,
                         gate_satisfied = ?gate.satisfaction,
                         delivered,
@@ -3250,6 +3320,13 @@ impl Actor {
             if self.commit_pipeline_budget_exhausted(tick_deadline, Instant::now()) {
                 break;
             }
+        }
+        if matches!(trigger, CommitPipelineTrigger::Event)
+            && !drain_summary.progress
+            && timings.blocks_processed == 0
+            && !self.pending.pending_blocks.is_empty()
+        {
+            self.record_round_no_progress_wake();
         }
         finish_timings(timings)
     }
@@ -3328,98 +3405,199 @@ impl Actor {
             .cloned()
     }
 
-    pub(super) fn maybe_broadcast_block_sync_update_for_precommit_vote(
+    fn broadcast_cached_commit_qc_to_targets(
         &mut self,
-        pending: &mut PendingBlock,
-        vote: &crate::sumeragi::consensus::Vote,
-    ) {
-        if pending.aborted {
+        qc: crate::sumeragi::consensus::Qc,
+        targets: &[PeerId],
+    ) -> usize {
+        if self.relay_backpressure_active(Instant::now(), self.control_plane_rebroadcast_cooldown())
+        {
             debug!(
-                height = vote.height,
-                view = vote.view,
-                block = %vote.block_hash,
-                "skipping block sync update for aborted pending block"
+                height = qc.height,
+                view = qc.view,
+                block = %qc.subject_block_hash,
+                "skipping cached commit QC replay due to relay backpressure"
             );
-            return;
+            return 0;
         }
+        let local_peer_id = self.common_config.peer.id().clone();
+        let mut replayed = 0usize;
+        let msg = Arc::new(BlockMessage::Qc(qc));
+        let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
+        for peer in targets {
+            if *peer == local_peer_id {
+                continue;
+            }
+            self.schedule_background_via_queue(BackgroundRequest::Post {
+                peer: peer.clone(),
+                msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
+            });
+            replayed = replayed.saturating_add(1);
+        }
+        replayed
+    }
+
+    pub(super) fn maybe_replay_known_block_commit_evidence(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        topology_peers: &[PeerId],
+        trigger: &'static str,
+    ) -> bool {
+        let Some(pending) = self.pending.pending_blocks.get(&block_hash) else {
+            return false;
+        };
+        if pending.height != height || pending.view != view || pending.aborted {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                "skipping known-block commit evidence replay for inactive pending block"
+            );
+            return false;
+        }
+        let commit_votes = self.pending_block_commit_votes_count(block_hash, height, view);
+        let commit_qc = self.cached_commit_qc_for_block(block_hash, height, view);
+        let has_commit_qc = commit_qc.is_some();
+
         let world = self.state.world_view();
         let block_time = self.block_time_for_mode_from_world(&world, self.consensus_mode);
         let cooldown = block_time.max(std::time::Duration::from_millis(200));
         let now = std::time::Instant::now();
-        if self
+        if !self
             .block_sync_rebroadcast_log
-            .allow(vote.block_hash, now, cooldown)
+            .allow(block_hash, now, cooldown)
         {
-            let mut update = self.block_sync_update_for_precommit_vote(
-                &pending.block,
-                self.state.as_ref(),
-                self.kura.as_ref(),
-                &self.qc_cache,
-                &self.vote_log,
-                vote,
-            );
-            let commit_votes = update.commit_votes.len();
-            let has_commit_qc = update.commit_qc.is_some();
-            if !pending.should_broadcast_block_sync_update(vote.view, commit_votes, has_commit_qc) {
-                iroha_logger::trace!(
-                    height = vote.height,
-                    view = vote.view,
-                    block = %vote.block_hash,
-                    commit_votes,
-                    has_commit_qc,
-                    "skipping block sync update broadcast: no new commit votes"
-                );
-                return;
-            }
-            let (consensus_mode, _, _) = self.consensus_context_for_height(vote.height);
-            let mut topology_peers = self.roster_for_vote_with_mode(
-                vote.block_hash,
-                vote.height,
-                vote.view,
-                consensus_mode,
-            );
-            if topology_peers.is_empty() {
-                topology_peers = self.effective_commit_topology();
-            }
-            if topology_peers.is_empty() {
-                return;
-            }
-            let has_verifiable_roster = self
-                .state
-                .commit_roster_snapshot_for_block(vote.height, vote.block_hash)
-                .is_some();
-            if has_verifiable_roster
-                && self.prepare_block_sync_update_for_broadcast(&mut update, consensus_mode)
-            {
-                self.broadcast_block_sync_update(update, &topology_peers);
-                iroha_logger::info!(
-                    height = vote.height,
-                    view = vote.view,
-                    block = %vote.block_hash,
-                    signer = vote.signer,
-                    targets = topology_peers.len(),
-                    "sending block sync update to commit topology after emitting local precommit vote"
-                );
-            } else {
-                iroha_logger::debug!(
-                    height = vote.height,
-                    view = vote.view,
-                    block = %vote.block_hash,
-                    signer = vote.signer,
-                    targets = topology_peers.len(),
-                    "skipping BlockCreated payload fallback after local precommit vote because roster proof is unavailable"
-                );
-            }
-        } else {
             iroha_logger::trace!(
-                height = vote.height,
-                view = vote.view,
-                block = %vote.block_hash,
-                signer = vote.signer,
+                height,
+                view,
+                block = %block_hash,
                 cooldown_ms = cooldown.as_millis(),
-                "skipping block sync update broadcast due to cooldown"
+                trigger,
+                "skipping known-block commit evidence replay due to cooldown"
             );
+            return false;
         }
+
+        let should_replay = {
+            let Some(pending) = self.pending.pending_blocks.get_mut(&block_hash) else {
+                return false;
+            };
+            pending.should_replay_commit_evidence(view, commit_votes, has_commit_qc)
+        };
+        if !should_replay {
+            iroha_logger::trace!(
+                height,
+                view,
+                block = %block_hash,
+                commit_votes,
+                has_commit_qc,
+                trigger,
+                "skipping known-block commit evidence replay: no new progress"
+            );
+            return false;
+        }
+
+        let mut targets = topology_peers.to_vec();
+        if targets.is_empty() {
+            let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+            targets = self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+            if targets.is_empty() {
+                targets = self.effective_commit_topology();
+            }
+        }
+        if targets.is_empty() {
+            return false;
+        }
+
+        let replayed = if let Some(commit_qc) = commit_qc {
+            self.broadcast_cached_commit_qc_to_targets(commit_qc, &targets)
+        } else {
+            self.rebroadcast_block_votes(
+                crate::sumeragi::consensus::Phase::Commit,
+                block_hash,
+                height,
+                view,
+                true,
+            )
+        };
+        if replayed == 0 {
+            return false;
+        }
+
+        iroha_logger::info!(
+            height,
+            view,
+            block = %block_hash,
+            replayed,
+            has_commit_qc,
+            trigger,
+            "replaying known-block commit evidence"
+        );
+        true
+    }
+
+    pub(super) fn maybe_emit_local_commit_vote_for_pending_event(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        commit_topology: &[PeerId],
+        trigger: &'static str,
+    ) -> bool {
+        let now = Instant::now();
+        let Some(pending) = self.pending.pending_blocks.get(&block_hash) else {
+            return false;
+        };
+        if pending.height != height
+            || pending.view != view
+            || pending.aborted
+            || pending.local_commit_vote_emitted()
+            || pending.commit_qc_observed()
+            || pending.validation_status != ValidationStatus::Valid
+            || !pending.kura_retry_due(now)
+        {
+            return false;
+        }
+        if commit_topology.is_empty() {
+            return false;
+        }
+
+        let topology = super::network_topology::Topology::new(commit_topology.to_vec());
+        let vote_epoch = self.epoch_for_height(height);
+        let parent_hash = pending.block.header().prev_block_hash();
+        let pending_roots = pending.parent_state_root.zip(pending.post_state_root);
+        let emitted = self.emit_precommit_vote(
+            block_hash,
+            height,
+            view,
+            vote_epoch,
+            pending.validation_status,
+            &topology,
+            parent_hash,
+            pending_roots,
+        );
+        if !emitted {
+            return false;
+        }
+
+        if let Some(pending) = self.pending.pending_blocks.get_mut(&block_hash) {
+            pending.note_local_commit_vote_emitted();
+        }
+        let _ = self.maybe_replay_known_block_commit_evidence(
+            block_hash,
+            height,
+            view,
+            topology.as_ref(),
+            trigger,
+        );
+        self.request_commit_pipeline_for_pending(
+            block_hash,
+            super::status::RoundEventCauseTrace::VoteReceived,
+            None,
+        );
+        true
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -4185,8 +4363,7 @@ impl Actor {
             .superseded_results
             .remove(&block_hash);
         let mut pending = pending;
-        pending.commit_qc_seen = true;
-        pending.commit_qc_epoch = Some(cert.epoch);
+        pending.note_commit_qc_observed(cert.epoch);
         let qc_header = crate::sumeragi::consensus::QcHeaderRef {
             phase: crate::sumeragi::consensus::Phase::Commit,
             subject_block_hash: block_hash,
@@ -4465,17 +4642,18 @@ impl Actor {
         }
     }
 
-    /// Check whether an RBC session has delivered a payload matching `payload_hash`.
-    /// Consults both in-memory sessions and the persisted status snapshot so restarts
-    /// and multi-view deliveries update availability status deterministically.
+    /// Check whether an RBC session already has authoritative local payload for this exact slot.
+    /// Consults both in-memory sessions and the persisted status snapshot so restarts and
+    /// multi-view recovery continue to expose availability deterministically.
     fn ensure_block_matches_rbc_payload(
         sessions: &BTreeMap<super::rbc_store::SessionKey, RbcSession>,
         handle: &rbc_status::Handle,
         block_hash: &HashOf<BlockHeader>,
         height: u64,
+        view: u64,
         payload_hash: &Hash,
     ) -> bool {
-        rbc_payload_matches(sessions, handle, block_hash, height, payload_hash)
+        rbc_payload_matches(sessions, handle, block_hash, height, view, payload_hash)
     }
 
     fn local_payload_matches_hash(block: &SignedBlock, payload_hash: &Hash) -> bool {
@@ -4497,6 +4675,7 @@ impl Actor {
             handle,
             &pending.block.hash(),
             pending.height,
+            pending.view,
             &pending.payload_hash,
         )
     }
@@ -4723,26 +4902,17 @@ impl Actor {
             );
             return;
         }
-        if let Some(hint) = self
+        let created = self
             .subsystems
             .propose
             .proposal_cache
-            .get_hint(height, view)
-            .copied()
-            .filter(|hint| hint.block_hash == block_hash)
-        {
-            let hint_msg = Arc::new(BlockMessage::ProposalHint(hint));
-            let hint_encoded = Arc::new(BlockMessageWire::encode_message(hint_msg.as_ref()));
-            for peer in &targets {
-                self.schedule_background(BackgroundRequest::Post {
-                    peer: peer.clone(),
-                    msg: BlockMessageWire::with_encoded(
-                        Arc::clone(&hint_msg),
-                        Arc::clone(&hint_encoded),
-                    ),
-                });
-            }
-        }
+            .get_proposal(height, view)
+            .and_then(|proposal| {
+                (block_hash == created.block.hash())
+                    .then(|| self.frontier_block_created_from_proposal(&created.block, proposal))
+                    .flatten()
+            })
+            .unwrap_or(created);
         let msg = Arc::new(BlockMessage::BlockCreated(created));
         let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
         for peer in targets {
@@ -6064,6 +6234,7 @@ impl Actor {
         if !preserve_proposals_seen {
             self.subsystems.propose.proposals_seen.clear();
         }
+        self.subsystems.propose.authoritative_block_slots.clear();
         self.subsystems.propose.proposal_cache =
             ProposalCache::new(self.recovery_pending_proposal_cap());
         self.reset_collector_state();
@@ -6412,6 +6583,7 @@ mod tests {
         let work = CommitWork {
             id: 1,
             block,
+            validated_commit_artifact: None,
             commit_topology: topology.clone(),
             signature_topology: topology,
             consensus_mode: ConsensusMode::Permissioned,
@@ -6539,6 +6711,7 @@ mod tests {
         let work = CommitWork {
             id: 7,
             block,
+            validated_commit_artifact: None,
             commit_topology: topology.clone(),
             signature_topology: topology,
             consensus_mode: ConsensusMode::Permissioned,
@@ -6574,7 +6747,7 @@ mod tests {
     }
 
     #[test]
-    fn execute_commit_work_reports_kura_store_failure() {
+    fn execute_commit_work_does_not_advance_state_when_kura_store_fails() {
         let genesis_key = KeyPair::random();
         let genesis_account_id = AccountId::new(genesis_key.public_key().clone());
         let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
@@ -6622,6 +6795,7 @@ mod tests {
         let work = CommitWork {
             id: 1,
             block,
+            validated_commit_artifact: None,
             commit_topology: topology.clone(),
             signature_topology: topology,
             consensus_mode: ConsensusMode::Permissioned,
@@ -6635,16 +6809,78 @@ mod tests {
 
         let (outcome, timings) =
             execute_commit_work(&state, kura.as_ref(), &chain_id, &genesis_account_id, work);
-        let CommitOutcome::KuraStoreFailed { error, .. } = outcome else {
-            panic!("expected kura store failure");
+        let CommitOutcome::KuraStoreFailed { error: _, .. } = outcome else {
+            panic!("expected Kura store failure");
         };
-        assert!(matches!(error, crate::kura::Error::IO(_, _)));
         assert!(timings.persist_ms.is_some());
         assert!(timings.kura_store_ms.is_some());
         assert!(timings.state_apply_ms.is_none());
         assert!(timings.state_commit_ms.is_none());
         assert_eq!(state.view().height(), 0);
         assert_eq!(kura.blocks_count(), 0);
+    }
+
+    #[test]
+    fn execute_commit_work_persists_block_before_exposing_committed_state() {
+        let genesis_key = KeyPair::random();
+        let genesis_account_id = AccountId::new(genesis_key.public_key().clone());
+        let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
+        let genesis_account = Account::new(
+            genesis_account_id
+                .clone()
+                .to_account_id(GENESIS_DOMAIN_ID.clone()),
+        )
+        .build(&genesis_account_id);
+        let world = World::with([genesis_domain], [genesis_account], []);
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, Arc::clone(&kura), query_handle);
+        let chain_id = state.view().chain_id().clone();
+
+        let (_handle, time_source) = TimeSource::new_mock(Duration::from_secs(0));
+        let tx = TransactionBuilder::new_with_time_source(
+            chain_id.clone(),
+            genesis_account_id.clone(),
+            &time_source,
+        )
+        .with_instructions([Log::new(Level::DEBUG, "kura ordering test".to_string())])
+        .sign(genesis_key.private_key());
+        let block = SignedBlock::genesis(vec![tx], genesis_key.private_key(), None, None);
+
+        let peer_key = KeyPair::random();
+        let peer_id = PeerId::new(peer_key.public_key().clone());
+        let topology = vec![peer_id];
+        let (events_sender, _events_rx) = tokio::sync::broadcast::channel(4);
+        let work = CommitWork {
+            id: 2,
+            block,
+            validated_commit_artifact: None,
+            commit_topology: topology.clone(),
+            signature_topology: topology,
+            consensus_mode: ConsensusMode::Permissioned,
+            qc_signers: None,
+            commit_qc: None,
+            allow_quorum_bypass: false,
+            allow_signature_index_recovery: false,
+            persist_required: true,
+            events_sender,
+        };
+
+        let (outcome, timings) =
+            execute_commit_work(&state, kura.as_ref(), &chain_id, &genesis_account_id, work);
+        let CommitOutcome::Success {
+            committed_block, ..
+        } = outcome
+        else {
+            panic!("expected commit success");
+        };
+        assert!(timings.kura_store_ms.is_some());
+        assert!(timings.state_apply_ms.is_some());
+        assert!(timings.state_commit_ms.is_some());
+        assert_eq!(state.view().height(), 1);
+        assert_eq!(kura.blocks_count(), 1);
+        let latest = state.view().latest_block().expect("latest committed block");
+        assert_eq!(latest.hash(), committed_block.as_ref().hash());
     }
 
     #[test]
@@ -6698,6 +6934,7 @@ mod tests {
         let work = CommitWork {
             id: 42,
             block,
+            validated_commit_artifact: None,
             commit_topology: topology.clone(),
             signature_topology: topology,
             consensus_mode: ConsensusMode::Permissioned,
@@ -6781,6 +7018,7 @@ mod tests {
         let work = CommitWork {
             id: 100,
             block: block.clone(),
+            validated_commit_artifact: None,
             commit_topology: topology.clone(),
             signature_topology: topology.clone(),
             consensus_mode: ConsensusMode::Permissioned,
@@ -6801,6 +7039,7 @@ mod tests {
         let work = CommitWork {
             id: 101,
             block,
+            validated_commit_artifact: None,
             commit_topology: topology.clone(),
             signature_topology: topology,
             consensus_mode: ConsensusMode::Permissioned,
@@ -6884,6 +7123,7 @@ mod tests {
         let work = CommitWork {
             id: 43,
             block,
+            validated_commit_artifact: None,
             commit_topology: topology.clone(),
             signature_topology: topology,
             consensus_mode: ConsensusMode::Permissioned,
@@ -7220,6 +7460,24 @@ mod tests {
             dataspace_backlog: Vec::new(),
         };
         handle.update(summary, std::time::SystemTime::now());
+
+        assert!(Actor::payload_available_for_da(
+            &sessions, &handle, &pending
+        ));
+    }
+
+    #[test]
+    fn payload_available_for_da_accepts_complete_rbc_payload_without_delivery() {
+        let block = sample_block(2, 0);
+        let payload = b"authoritative-rbc-payload".to_vec();
+        let payload_hash = Hash::new(&payload);
+        let pending = PendingBlock::new(block.clone(), payload_hash, 2, 0);
+        let mut sessions = BTreeMap::new();
+        let handle = rbc_status::Handle::new();
+
+        let session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, 0)
+            .expect("rbc session");
+        sessions.insert((block.hash(), 2, 0), session);
 
         assert!(Actor::payload_available_for_da(
             &sessions, &handle, &pending

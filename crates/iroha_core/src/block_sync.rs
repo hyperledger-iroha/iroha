@@ -348,6 +348,7 @@ const UNKNOWN_PREV_CACHE_RETENTION_HEIGHTS: u64 = 1024;
 const UNKNOWN_PREV_RESPONSE_COOLDOWN_FLOOR: Duration = Duration::from_millis(250);
 const UNKNOWN_PREV_RESPONSE_REPEAT_COOLDOWN_MULTIPLIER_CAP: u32 = 2;
 const UNKNOWN_PREV_INCREMENTAL_SHARE_MAX_BLOCKS: usize = 64;
+const UNKNOWN_PREV_FULL_SHARE_MIN_BLOCKS: usize = 128;
 const UNKNOWN_PREV_STUCK_KEY_REPEAT_REFRESH_THRESHOLD: u32 = 4;
 const UNKNOWN_PREV_RECENT_CHAIN_HASH_WINDOW: usize = 64;
 
@@ -380,10 +381,33 @@ fn unknown_prev_incremental_share_limit(gossip_size: usize) -> usize {
         .min(UNKNOWN_PREV_INCREMENTAL_SHARE_MAX_BLOCKS)
 }
 
+fn unknown_prev_full_share_limit(gossip_size: usize) -> usize {
+    // Unknown-prev fallback is a catch-up path, not normal gossip fanout. Allow a full refresh to
+    // stream a materially larger contiguous suffix so lagging peers can rejoin without looping on
+    // tiny `gossip_size` slices. Final wire size is still capped later.
+    gossip_size.max(UNKNOWN_PREV_FULL_SHARE_MIN_BLOCKS)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum UnknownPrevShareMode {
     Full,
     Incremental,
+}
+
+fn effective_unknown_prev_share_mode(
+    global_mode: UnknownPrevShareMode,
+    peer_mode: UnknownPrevShareMode,
+    should_request_latest: bool,
+) -> UnknownPrevShareMode {
+    if should_request_latest {
+        UnknownPrevShareMode::Full
+    } else if matches!(global_mode, UnknownPrevShareMode::Incremental)
+        || matches!(peer_mode, UnknownPrevShareMode::Incremental)
+    {
+        UnknownPrevShareMode::Incremental
+    } else {
+        UnknownPrevShareMode::Full
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1311,6 +1335,41 @@ mod unknown_prev_hash_tests {
         assert!(second.share);
         assert_eq!(second.mode, UnknownPrevShareMode::Incremental);
         assert_eq!(second.repeat_count, 1);
+    }
+
+    #[test]
+    fn unknown_prev_latest_probe_keeps_full_share_mode() {
+        assert_eq!(
+            effective_unknown_prev_share_mode(
+                UnknownPrevShareMode::Incremental,
+                UnknownPrevShareMode::Incremental,
+                true,
+            ),
+            UnknownPrevShareMode::Full,
+            "latest frontier repair should keep sharing the full contiguous suffix"
+        );
+        assert_eq!(
+            effective_unknown_prev_share_mode(
+                UnknownPrevShareMode::Full,
+                UnknownPrevShareMode::Incremental,
+                false,
+            ),
+            UnknownPrevShareMode::Incremental,
+            "non-latest repeats should still downgrade to incremental sharing"
+        );
+    }
+
+    #[test]
+    fn unknown_prev_full_share_limit_ignores_tiny_gossip_budget() {
+        assert_eq!(
+            unknown_prev_full_share_limit(1),
+            UNKNOWN_PREV_FULL_SHARE_MIN_BLOCKS
+        );
+        assert_eq!(
+            unknown_prev_full_share_limit(16),
+            UNKNOWN_PREV_FULL_SHARE_MIN_BLOCKS
+        );
+        assert_eq!(unknown_prev_full_share_limit(256), 256);
     }
 
     #[test]
@@ -4195,7 +4254,7 @@ pub mod message {
 
     // Derive Encode/Decode above
 
-    pub(super) fn roster_metadata_from_state(
+    pub(crate) fn roster_metadata_from_state(
         state: &State,
         kura: &Kura,
         block_height: u64,
@@ -5108,17 +5167,11 @@ pub mod message {
                             );
                             share_unknown_prev =
                                 global_share_decision.share && peer_share_decision.share;
-                            unknown_prev_share_mode = if matches!(
+                            unknown_prev_share_mode = effective_unknown_prev_share_mode(
                                 global_share_decision.mode,
-                                UnknownPrevShareMode::Incremental
-                            ) || matches!(
                                 peer_share_decision.mode,
-                                UnknownPrevShareMode::Incremental
-                            ) {
-                                UnknownPrevShareMode::Incremental
-                            } else {
-                                UnknownPrevShareMode::Full
-                            };
+                                should_request_latest,
+                            );
                             let unknown_prev_effective_cooldown = global_share_decision
                                 .effective_cooldown
                                 .max(peer_share_decision.effective_cooldown);
@@ -5172,7 +5225,9 @@ pub mod message {
                     let blocks = {
                         let tip_height = block_sync.state.committed_height();
                         let share_limit = match unknown_prev_share_mode {
-                            UnknownPrevShareMode::Full => block_sync.gossip_size.get() as usize,
+                            UnknownPrevShareMode::Full => {
+                                unknown_prev_full_share_limit(block_sync.gossip_size.get() as usize)
+                            }
                             UnknownPrevShareMode::Incremental => {
                                 unknown_prev_incremental_share_limit(
                                     block_sync.gossip_size.get() as usize

@@ -396,7 +396,7 @@ impl Actor {
                 continue;
             }
             let (vote_count, quorum_reached, stake_quorum_missing) =
-                if pending.commit_qc_seen || commit_qc_cached {
+                if pending.commit_qc_observed() || commit_qc_cached {
                     (0, true, false)
                 } else {
                     let status = self.commit_vote_quorum_status_for_block_detail(
@@ -410,7 +410,7 @@ impl Actor {
                         status.stake_quorum_missing,
                     )
                 };
-            let has_qc = pending.commit_qc_seen || commit_qc_cached || qc_any.is_some();
+            let has_qc = pending.commit_qc_observed() || commit_qc_cached || qc_any.is_some();
             let validation_inflight = pending.validation_status == ValidationStatus::Pending
                 && self.subsystems.validation.inflight.contains_key(hash);
             let payload_available = da_enabled
@@ -994,6 +994,7 @@ impl Actor {
                 } else {
                     let msg = Arc::new(BlockMessage::BlockCreated(super::message::BlockCreated {
                         block: pending.block.clone(),
+                        frontier: None,
                     }));
                     let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
                     for peer in &commit_roster {
@@ -1156,16 +1157,12 @@ impl Actor {
             return false;
         }
 
-        let precommit_vote_count = self
-            .vote_log
-            .values()
-            .filter(|vote| {
-                vote.phase == crate::sumeragi::consensus::Phase::Commit
-                    && vote.block_hash == block_hash
-                    && vote.height == height
-                    && vote.view == view
-            })
-            .count();
+        let mut precommit_vote_count =
+            self.pending_block_commit_votes_count(block_hash, height, view);
+        // Local commit votes are emitted before async vote verification drains into vote_log.
+        if precommit_vote_count == 0 && pending.local_commit_vote_emitted() {
+            precommit_vote_count = 1;
+        }
         let commit_vote_count = vote_count;
         let reschedule_vote_count = precommit_vote_count.max(commit_vote_count);
         let has_reschedule_votes = reschedule_vote_count > 0;
@@ -1173,7 +1170,32 @@ impl Actor {
         let last_reschedule_ms = pending
             .last_quorum_reschedule
             .map(|ts| now.saturating_duration_since(ts).as_millis());
+        let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+        let mut topology_peers =
+            self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+        if topology_peers.is_empty() {
+            topology_peers = self.effective_commit_topology();
+        }
+        let local_only_commit_topology =
+            topology_peers.len() == 1 && topology_peers[0] == *self.common_config.peer.id();
         let no_commit_evidence = reschedule_vote_count == 0;
+        if no_commit_evidence
+            && local_only_commit_topology
+            && !pending.local_commit_vote_emitted()
+            && matches!(pending.validation_status, ValidationStatus::Pending)
+        {
+            debug!(
+                block = %block_hash,
+                height,
+                view,
+                pending_age_ms = pending_age.as_millis(),
+                progress_age_ms = progress_age.as_millis(),
+                validation_status = ?pending.validation_status,
+                "deferring zero-vote quorum reschedule: local-only commit topology is still awaiting its first local vote"
+            );
+            self.pending.pending_blocks.insert(block_hash, pending);
+            return false;
+        }
         let zero_vote_progress_window = reschedule_backoff.max(Duration::from_millis(1));
         if no_commit_evidence && progress_age < zero_vote_progress_window {
             debug!(
@@ -1217,6 +1239,10 @@ impl Actor {
             );
         let frontier_same_slot_ingress_active = contiguous_frontier
             && self.frontier_recovery_same_slot_ingress_active(height, view, queue_depths);
+        let vote_backed_frontier_same_height_recovery_active = contiguous_frontier
+            && has_reschedule_votes
+            && !drop_pending
+            && self.frontier_recovery_same_slot_reassembly_active(height, view, now, queue_depths);
         let vote_backed_frontier_window_owned = contiguous_frontier
             && has_reschedule_votes
             && !drop_pending
@@ -1277,6 +1303,33 @@ impl Actor {
             self.pending.pending_blocks.insert(block_hash, pending);
             return false;
         }
+        if vote_backed_frontier_same_height_recovery_active {
+            let recovery_cause = self
+                .frontier_dependency_recovery_cause(height, view, now)
+                .unwrap_or("quorum_timeout");
+            let created_frontier_owner =
+                self.seed_frontier_recovery_for_quorum_timeout(height, view, now);
+            debug!(
+                block = %block_hash,
+                height,
+                view,
+                votes = vote_count,
+                min_votes = min_votes_for_commit,
+                pending_age_ms = pending_age.as_millis(),
+                quorum_stall_age_ms = quorum_stall_age.as_millis(),
+                block_payload_rx_depth = queue_depths.block_payload_rx,
+                rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                block_rx_depth = queue_depths.block_rx,
+                consensus_rx_depth = queue_depths.consensus_rx,
+                lane_relay_rx_depth = queue_depths.lane_relay_rx,
+                background_rx_depth = queue_depths.background_rx,
+                frontier_recovery_cause = recovery_cause,
+                created_frontier_owner,
+                "suppressing vote-backed quorum reschedule; same-slot frontier recovery is still converging"
+            );
+            self.pending.pending_blocks.insert(block_hash, pending);
+            return false;
+        }
         if vote_backed_frontier_window_owned {
             debug!(
                 block = %block_hash,
@@ -1302,12 +1355,6 @@ impl Actor {
             } else {
                 (0, 0, 0, Vec::new())
             };
-        let (consensus_mode, _, _) = self.consensus_context_for_height(height);
-        let mut topology_peers =
-            self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
-        if topology_peers.is_empty() {
-            topology_peers = self.effective_commit_topology();
-        }
         if !drop_pending
             && requeued == 0
             && self
@@ -1647,105 +1694,13 @@ impl Actor {
         );
         let mut block_sync = false;
         if !drop_pending && !retransmit_targets.is_empty() {
-            let near_commit_quorum = min_votes_for_commit > 0
-                && vote_count < min_votes_for_commit
-                && vote_count.saturating_add(1) >= min_votes_for_commit;
-            let mut update = block_sync_update_with_certified_roster(
-                &pending.block,
-                self.state.as_ref(),
-                self.kura.as_ref(),
-                self.config.consensus_mode,
-                &self.roster_validation_cache,
-            );
-            let expected_epoch = self.epoch_for_height(height);
-            Self::apply_cached_qcs_to_block_sync_update(
-                &mut update,
-                &self.qc_cache,
-                &self.vote_log,
+            block_sync = self.maybe_replay_known_block_commit_evidence(
                 block_hash,
                 height,
                 view,
-                expected_epoch,
-                self.state.as_ref(),
-                self.config.consensus_mode,
+                &retransmit_targets,
+                "quorum_reschedule",
             );
-            let commit_votes = update.commit_votes.len();
-            let has_commit_qc = update.commit_qc.is_some();
-            let block_sync_progressed =
-                pending.should_broadcast_block_sync_update(view, commit_votes, has_commit_qc);
-            let force_near_quorum_rebroadcast =
-                !block_sync_progressed && near_commit_quorum && commit_votes > 0 && !has_commit_qc;
-            if force_near_quorum_rebroadcast {
-                debug!(
-                    height,
-                    view,
-                    block = %block_hash,
-                    commit_votes,
-                    min_votes = min_votes_for_commit,
-                    vote_count,
-                    targets = retransmit_targets.len(),
-                    "forcing near-quorum block sync update rebroadcast without new commit evidence"
-                );
-            }
-            if block_sync_progressed || force_near_quorum_rebroadcast {
-                let (consensus_mode, _, _) = self.consensus_context_for_height(height);
-                if self.prepare_block_sync_update_for_broadcast(&mut update, consensus_mode) {
-                    self.broadcast_block_sync_update(update, &retransmit_targets);
-                    block_sync = true;
-                } else {
-                    let committed_height = self.committed_height_snapshot();
-                    let active_height = self.active_consensus_round_height();
-                    let allow_hintless_near_quorum = near_commit_quorum
-                        && commit_votes > 0
-                        && !has_commit_qc
-                        && height == committed_height.saturating_add(1)
-                        && height == active_height;
-                    if allow_hintless_near_quorum
-                        && self.trim_block_sync_update_for_frame_cap(&mut update)
-                    {
-                        debug!(
-                            height,
-                            view,
-                            block = %block_hash,
-                            commit_votes,
-                            min_votes = min_votes_for_commit,
-                            vote_count,
-                            targets = retransmit_targets.len(),
-                            "broadcasting near-quorum block sync update without certified roster evidence"
-                        );
-                        self.broadcast_block_sync_update(update, &retransmit_targets);
-                        block_sync = true;
-                    } else {
-                        self.note_round_recovery_bundle_source(
-                            height,
-                            super::RoundRecoveryBundleSource::RosterProofFallback,
-                            now,
-                        );
-                        let evidence =
-                            super::classify_block_sync_roster_evidence(&update, consensus_mode);
-                        warn!(
-                            height,
-                            view,
-                            block = %block_hash,
-                            commit_votes,
-                            targets = retransmit_targets.len(),
-                            active_height,
-                            allow_hintless_near_quorum,
-                            ?evidence,
-                            "roster proof unavailable for block sync update; skipping payload fallback during quorum reschedule"
-                        );
-                    }
-                }
-            } else {
-                debug!(
-                    height,
-                    view,
-                    block = %block_hash,
-                    commit_votes,
-                    has_commit_qc,
-                    "skipping block sync update rebroadcast: no new commit evidence"
-                );
-            }
         }
         // Keep quorum reschedule single-owner: retransmit votes and verifiable block-sync updates,
         // but do not switch back into BlockCreated payload broadcast from this late recovery path.

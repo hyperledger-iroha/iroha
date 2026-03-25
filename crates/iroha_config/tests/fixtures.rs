@@ -1328,14 +1328,29 @@ fn minimal_config_snapshot() {
                     slash_sink_account_id: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
                 },
                 fees: NexusFees {
-                    fee_asset_id: "xor#nexus",
+                    fee_asset_id: "xor#universal",
                     fee_sink_account_id: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
-                    base_fee: 0,
-                    per_byte_fee: 0,
-                    per_instruction_fee: 0,
-                    per_gas_unit_fee: 0,
+                    base_fee: Numeric {
+                        mantissa: 0,
+                        scale: 0,
+                    },
+                    per_byte_fee: Numeric {
+                        mantissa: 0,
+                        scale: 0,
+                    },
+                    per_instruction_fee: Numeric {
+                        mantissa: 1,
+                        scale: 3,
+                    },
+                    per_gas_unit_fee: Numeric {
+                        mantissa: 5,
+                        scale: 5,
+                    },
                     sponsorship_enabled: false,
-                    sponsor_max_fee: 0,
+                    sponsor_max_fee: Numeric {
+                        mantissa: 0,
+                        scale: 0,
+                    },
                 },
                 endorsement: NexusEndorsement {
                     committee_keys: [],

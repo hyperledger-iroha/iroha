@@ -219,7 +219,10 @@ impl Actor {
             return;
         }
         self.broadcast_block_created_for_block_sync(
-            super::message::BlockCreated { block },
+            super::message::BlockCreated {
+                block,
+                frontier: None,
+            },
             &topology_peers,
         );
         debug!(

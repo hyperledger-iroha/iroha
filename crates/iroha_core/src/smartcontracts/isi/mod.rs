@@ -593,11 +593,10 @@ mod tests {
     }
 
     #[test]
-    async fn register_contract_manifest_requires_permission_and_is_queryable() -> Result<()> {
+    async fn register_contract_manifest_is_queryable_without_permission() -> Result<()> {
         use iroha_crypto::Hash;
         use iroha_data_model::{
-            isi::smart_contract_code, permission, prelude as dm, query::smart_contract::prelude,
-            smart_contract::manifest,
+            isi::smart_contract_code, query::smart_contract::prelude, smart_contract::manifest,
         };
 
         let kura = Kura::blank_kura_for_testing();
@@ -622,22 +621,6 @@ mod tests {
             provenance: None,
         }
         .signed(&ALICE_KEYPAIR);
-
-        // Attempt to register without permission should fail
-        let res = smart_contract_code::RegisterSmartContractCode {
-            manifest: manifest.clone(),
-        }
-        .execute(&alice, &mut stx);
-        assert!(matches!(
-            res,
-            Err(Error::InvariantViolation(msg)) if msg.as_ref().contains("CanRegisterSmartContractCode")
-        ));
-
-        // Grant the permission to Alice and try again
-        let token =
-            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
-        let perm: permission::Permission = token.into();
-        dm::Grant::account_permission(perm, alice.clone()).execute(&alice, &mut stx)?;
 
         smart_contract_code::RegisterSmartContractCode {
             manifest: manifest.clone(),

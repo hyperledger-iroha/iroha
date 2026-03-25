@@ -75,6 +75,7 @@ derive_more = { workspace = true }
 tokio = { workspace = true, features = ["rt"] }
 futures = { workspace = true }
 base64 = { workspace = true }
+blake2 = { workspace = true }
 hex = { workspace = true }
 iroha_i18n = { workspace = true }
 rand = { version = "0.9.2", features = ["std"] }
@@ -90,6 +91,7 @@ reqwest = { workspace = true, features = ["blocking", "rustls-tls"] }
 toml = { workspace = true }
 tiny-keccak = { workspace = true }
 sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
+aes-gcm = { version = "0.10.3", default-features = false, features = ["aes", "alloc"] }
 qrcode = { version = "0.14.1", default-features = false, features = ["svg", "image"] }
 image = { version = "0.25.9", default-features = false, features = ["png", "gif"] }
 png = "0.18.0"

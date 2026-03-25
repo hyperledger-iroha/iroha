@@ -18,12 +18,12 @@ use iroha_core::{
 };
 use iroha_crypto::{KeyPair, SignatureOf};
 use iroha_data_model::{
-    ChainId,
+    ChainId, Registrable as _,
     account::{Account, AccountId},
     asset::{AssetDefinitionId, id::AssetId},
     consensus::HsmBinding,
     da::commitment::DaProofPolicyBundle,
-    domain::DomainId,
+    domain::{Domain, DomainId},
     isi::{Grant, InstructionBox, Mint, SetParameter, register::RegisterPeerWithPop},
     metadata::Metadata,
     name::Name,
@@ -714,19 +714,22 @@ fn populate_genesis_results(
 
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let genesis_account_entry = Account {
-        id: genesis_account.clone(),
-        metadata: Metadata::default(),
-        label: None,
-        uaid: None,
-        opaque_ids: Vec::new(),
-        linked_domains: BTreeSet::new(),
-    };
-    let world = World::with(
-        Vec::<iroha_data_model::domain::Domain>::new(),
-        vec![genesis_account_entry],
-        Vec::<iroha_data_model::asset::AssetDefinition>::new(),
-    );
+    let effective_genesis_account = block
+        .0
+        .transactions_vec()
+        .first()
+        .map(|tx| tx.authority().clone())
+        .unwrap_or_else(|| genesis_account.clone());
+    let genesis_domain =
+        Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&effective_genesis_account);
+    let genesis_account_entry = Account::new(
+        effective_genesis_account
+            .clone()
+            .to_account_id(iroha_genesis::GENESIS_DOMAIN_ID.clone()),
+    )
+    .build(&effective_genesis_account);
+    let mut world = World::with([genesis_domain], [genesis_account_entry], []);
+    iroha_core::sns::seed_genesis_alias_bootstrap(&mut world, &block.0);
     let mut state = State::with_telemetry(world, kura, query_handle, StateTelemetry::default());
     apply_preexec_nexus_overrides(
         &mut state,
@@ -744,12 +747,6 @@ fn populate_genesis_results(
 
     let mut voting_block = None;
     let time_source = TimeSource::new_system();
-    let effective_genesis_account = block
-        .0
-        .transactions_vec()
-        .first()
-        .map(|tx| tx.authority().clone())
-        .unwrap_or_else(|| genesis_account.clone());
     let validation = ValidBlock::validate_keep_voting_block(
         block.0.clone(),
         &core_topology,
@@ -1891,6 +1888,56 @@ mod tests {
         assert!(
             executed.results().all(|result| result.as_ref().is_ok()),
             "pre-executed custom staking genesis should succeed when the builder threads the resolved nexus config"
+        );
+    }
+
+    #[test]
+    fn populate_genesis_results_leases_genesis_account_labels() {
+        use iroha_data_model::{
+            account::rekey::AccountLabel,
+            block::SignedBlock,
+            isi::{InstructionBox, Register},
+            transaction::TransactionBuilder,
+        };
+
+        init_instruction_registry();
+        let chain_id = super::chain_id();
+        let genesis_key_pair = SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone();
+        let genesis_account = AccountId::new(genesis_key_pair.public_key().clone());
+        let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
+        let gas_label: Name = "gas".parse().expect("gas label");
+        let gas_account = Account::new(
+            AccountId::new(KeyPair::random().public_key().clone())
+                .to_account_id(ivm_domain.clone()),
+        )
+        .with_label(Some(AccountLabel::new(ivm_domain.clone(), gas_label)));
+        let tx = TransactionBuilder::new(chain_id, genesis_account.clone())
+            .with_instructions([
+                InstructionBox::from(Register::domain(Domain::new(ivm_domain))),
+                InstructionBox::from(Register::account(gas_account)),
+            ])
+            .sign(genesis_key_pair.private_key());
+        let block = GenesisBlock(SignedBlock::genesis(
+            vec![tx],
+            genesis_key_pair.private_key(),
+            None,
+            None,
+        ));
+
+        let bls = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let topology = vec![PeerId::new(bls.public_key().clone())];
+        let executed = super::populate_genesis_results(
+            &block,
+            &genesis_account,
+            &topology,
+            &genesis_key_pair,
+            None,
+        )
+        .expect("genesis pre-execution should lease aliases used by labeled genesis accounts");
+
+        assert!(
+            executed.results().all(|result| result.as_ref().is_ok()),
+            "labeled genesis accounts should not fail SNS lease checks"
         );
     }
 

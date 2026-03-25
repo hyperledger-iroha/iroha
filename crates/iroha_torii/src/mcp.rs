@@ -1431,31 +1431,31 @@ async fn handle_tools_call(
                 Err(err) => mcp_tool_error(err),
             }
         }
-        "iroha.offline.reserve.setup" => {
+        "iroha.offline.cash.setup" => {
             match dispatch_iroha_offline_reserve_setup(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
-        "iroha.offline.reserve.topup" => {
+        "iroha.offline.cash.load" => {
             match dispatch_iroha_offline_reserve_topup(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
-        "iroha.offline.reserve.renew" => {
+        "iroha.offline.cash.refresh" => {
             match dispatch_iroha_offline_reserve_renew(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
-        "iroha.offline.reserve.sync" => {
+        "iroha.offline.cash.sync" => {
             match dispatch_iroha_offline_reserve_sync(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
         }
-        "iroha.offline.reserve.defund" => {
+        "iroha.offline.cash.redeem" => {
             match dispatch_iroha_offline_reserve_defund(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
@@ -5452,13 +5452,8 @@ async fn dispatch_iroha_offline_reserve_setup(
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    dispatch_iroha_offline_reserve_post(
-        app,
-        inbound_headers,
-        arguments,
-        "/v1/offline/reserve/setup",
-    )
-    .await
+    dispatch_iroha_offline_reserve_post(app, inbound_headers, arguments, "/v1/offline/cash/setup")
+        .await
 }
 
 async fn dispatch_iroha_offline_reserve_topup(
@@ -5466,13 +5461,8 @@ async fn dispatch_iroha_offline_reserve_topup(
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    dispatch_iroha_offline_reserve_post(
-        app,
-        inbound_headers,
-        arguments,
-        "/v1/offline/reserve/topup",
-    )
-    .await
+    dispatch_iroha_offline_reserve_post(app, inbound_headers, arguments, "/v1/offline/cash/load")
+        .await
 }
 
 async fn dispatch_iroha_offline_reserve_renew(
@@ -5480,13 +5470,8 @@ async fn dispatch_iroha_offline_reserve_renew(
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    dispatch_iroha_offline_reserve_post(
-        app,
-        inbound_headers,
-        arguments,
-        "/v1/offline/reserve/renew",
-    )
-    .await
+    dispatch_iroha_offline_reserve_post(app, inbound_headers, arguments, "/v1/offline/cash/refresh")
+        .await
 }
 
 async fn dispatch_iroha_offline_reserve_sync(
@@ -5494,7 +5479,7 @@ async fn dispatch_iroha_offline_reserve_sync(
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    dispatch_iroha_offline_reserve_post(app, inbound_headers, arguments, "/v1/offline/reserve/sync")
+    dispatch_iroha_offline_reserve_post(app, inbound_headers, arguments, "/v1/offline/cash/sync")
         .await
 }
 
@@ -5503,13 +5488,8 @@ async fn dispatch_iroha_offline_reserve_defund(
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    dispatch_iroha_offline_reserve_post(
-        app,
-        inbound_headers,
-        arguments,
-        "/v1/offline/reserve/defund",
-    )
-    .await
+    dispatch_iroha_offline_reserve_post(app, inbound_headers, arguments, "/v1/offline/cash/redeem")
+        .await
 }
 
 async fn dispatch_iroha_offline_reserve_post(
@@ -11150,41 +11130,41 @@ fn iroha_offline_transfers_query_tool() -> ToolSpec {
 
 fn iroha_offline_reserve_setup_tool() -> ToolSpec {
     iroha_offline_reserve_post_tool(
-        "iroha.offline.reserve.setup",
-        "Create or fetch a device-bound offline reserve lineage.",
-        "/v1/offline/reserve/setup",
+        "iroha.offline.cash.setup",
+        "Create or fetch a device-bound offline cash lineage.",
+        "/v1/offline/cash/setup",
     )
 }
 
 fn iroha_offline_reserve_topup_tool() -> ToolSpec {
     iroha_offline_reserve_post_tool(
-        "iroha.offline.reserve.topup",
-        "Top up a device-bound offline reserve.",
-        "/v1/offline/reserve/topup",
+        "iroha.offline.cash.load",
+        "Load device-bound offline cash.",
+        "/v1/offline/cash/load",
     )
 }
 
 fn iroha_offline_reserve_renew_tool() -> ToolSpec {
     iroha_offline_reserve_post_tool(
-        "iroha.offline.reserve.renew",
-        "Renew the spend authorization for an offline reserve.",
-        "/v1/offline/reserve/renew",
+        "iroha.offline.cash.refresh",
+        "Refresh the spend authorization for offline cash.",
+        "/v1/offline/cash/refresh",
     )
 }
 
 fn iroha_offline_reserve_sync_tool() -> ToolSpec {
     iroha_offline_reserve_post_tool(
-        "iroha.offline.reserve.sync",
-        "Sync pending offline reserve receipts.",
-        "/v1/offline/reserve/sync",
+        "iroha.offline.cash.sync",
+        "Sync pending offline cash receipts.",
+        "/v1/offline/cash/sync",
     )
 }
 
 fn iroha_offline_reserve_defund_tool() -> ToolSpec {
     iroha_offline_reserve_post_tool(
-        "iroha.offline.reserve.defund",
-        "Defund a device-bound offline reserve back to the online wallet.",
-        "/v1/offline/reserve/defund",
+        "iroha.offline.cash.redeem",
+        "Redeem device-bound offline cash back to the online wallet.",
+        "/v1/offline/cash/redeem",
     )
 }
 
@@ -12857,27 +12837,27 @@ mod tests {
         assert!(
             tools
                 .iter()
-                .any(|tool| tool.name == "iroha.offline.reserve.setup")
+                .any(|tool| tool.name == "iroha.offline.cash.setup")
         );
         assert!(
             tools
                 .iter()
-                .any(|tool| tool.name == "iroha.offline.reserve.topup")
+                .any(|tool| tool.name == "iroha.offline.cash.load")
         );
         assert!(
             tools
                 .iter()
-                .any(|tool| tool.name == "iroha.offline.reserve.renew")
+                .any(|tool| tool.name == "iroha.offline.cash.refresh")
         );
         assert!(
             tools
                 .iter()
-                .any(|tool| tool.name == "iroha.offline.reserve.sync")
+                .any(|tool| tool.name == "iroha.offline.cash.sync")
         );
         assert!(
             tools
                 .iter()
-                .any(|tool| tool.name == "iroha.offline.reserve.defund")
+                .any(|tool| tool.name == "iroha.offline.cash.redeem")
         );
         assert!(
             tools

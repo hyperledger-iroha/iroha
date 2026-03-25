@@ -197,23 +197,14 @@ impl Run for DeployActivateArgs {
                 .wrap_err_with(|| format!("write manifest to {}", path.display()))?;
         }
 
-        let instructions: Vec<InstructionBox> = vec![
-            RegisterSmartContractBytes {
-                code_hash: verified.code_hash,
-                code: code.clone(),
-            }
-            .into(),
-            RegisterSmartContractCode {
-                manifest: manifest.clone(),
-            }
-            .into(),
-            ActivateContractInstance {
-                namespace: self.namespace.clone(),
-                contract_id: self.contract_id.clone(),
-                code_hash: verified.code_hash,
-            }
-            .into(),
-        ];
+        let instructions = deploy_activate_instructions(
+            &authority,
+            verified.code_hash,
+            code.clone(),
+            manifest.clone(),
+            self.namespace.clone(),
+            self.contract_id.clone(),
+        );
 
         let mut metadata = context
             .transaction_metadata()
@@ -319,6 +310,31 @@ fn load_code_bytes(code_file: Option<PathBuf>, code_b64: Option<String>) -> Resu
     }
 }
 
+fn self_register_authority_instruction(authority: &AccountId) -> InstructionBox {
+    Register::account(Account::new_domainless(authority.clone())).into()
+}
+
+fn deploy_activate_instructions(
+    authority: &AccountId,
+    code_hash: Hash,
+    code: Vec<u8>,
+    manifest: iroha_data_model::smart_contract::manifest::ContractManifest,
+    namespace: String,
+    contract_id: String,
+) -> Vec<InstructionBox> {
+    vec![
+        self_register_authority_instruction(authority),
+        RegisterSmartContractBytes { code_hash, code }.into(),
+        RegisterSmartContractCode { manifest }.into(),
+        ActivateContractInstance {
+            namespace,
+            contract_id,
+            code_hash,
+        }
+        .into(),
+    ]
+}
+
 fn verify_contract_from_bytes(bytes: &[u8]) -> Result<ivm::VerifiedContractArtifact> {
     ivm::verify_contract_artifact(bytes).map_err(|err| eyre!(err.to_string()))
 }
@@ -408,6 +424,38 @@ mod tests {
         assert!(
             has_gas_limit,
             "metadata_keys missing gas_limit: {metadata_keys:?}"
+        );
+    }
+
+    #[test]
+    fn deploy_activate_instructions_prepend_domainless_self_register() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let code = minimal_program();
+        let code_hash = Hash::new(code.as_slice());
+        let manifest = iroha_data_model::smart_contract::manifest::ContractManifest {
+            code_hash: Some(code_hash),
+            abi_hash: None,
+            compiler_fingerprint: None,
+            features_bitmap: None,
+            access_set_hints: None,
+            entrypoints: None,
+            kotoba: None,
+            provenance: None,
+        }
+        .signed(&KeyPair::random());
+        let instructions = deploy_activate_instructions(
+            &authority,
+            code_hash,
+            code,
+            manifest,
+            "apps".to_owned(),
+            "demo".to_owned(),
+        );
+
+        assert_eq!(
+            instructions[0],
+            self_register_authority_instruction(&authority),
+            "first instruction must self-register the domainless authority"
         );
     }
 

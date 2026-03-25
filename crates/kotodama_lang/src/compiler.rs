@@ -59,6 +59,8 @@ use crate::{
 const WIDE_IMM_MIN: i32 = -128;
 const WIDE_IMM_MAX: i32 = 127;
 const POINTER_STUB_LEN: usize = 24;
+const CONTROL_TRANSFER_STUB_WORDS: usize = POINTER_STUB_LEN + 1;
+const CONTROL_TRANSFER_SCRATCH_REG: u8 = regalloc::FP_REG as u8;
 const LITERAL_SHIFT_REG: u8 = 26;
 const DEFAULT_MAX_CYCLES: u64 = 1_000_000;
 const GLOBAL_WILDCARD_KEY: &str = "*";
@@ -296,6 +298,70 @@ fn patch_pointer_literal_stub(
         let offset = start + i * 4;
         code[offset..offset + 4].copy_from_slice(&word.to_le_bytes());
     }
+    Ok(())
+}
+
+fn encode_nop() -> u32 {
+    encode_addi(0, 0, 0).expect("ADDI x0, x0, 0 must always encode")
+}
+
+fn write_word(code: &mut [u8], at: usize, word: u32) {
+    code[at..at + 4].copy_from_slice(&word.to_le_bytes());
+}
+
+fn reserve_control_transfer_stub(code: &mut Vec<u8>) -> usize {
+    let start = code.len();
+    let nop = encode_nop();
+    for _ in 0..CONTROL_TRANSFER_STUB_WORDS {
+        push_word(code, nop);
+    }
+    start
+}
+
+fn patch_jump_transfer_stub(code: &mut [u8], start: usize, target: u64) -> Result<(), String> {
+    let off = (target as i64) - (start as i64);
+    if (off % 4) != 0 {
+        return Err(format!(
+            "unaligned jump offset {off} for control transfer at {start}"
+        ));
+    }
+    if let Ok(off32) = i32::try_from(off)
+        && encode_jal(0, off32).is_ok()
+    {
+        write_word(code, start, encode_jal(0, off32)?);
+        return Ok(());
+    }
+
+    patch_pointer_literal_stub(code, start, CONTROL_TRANSFER_SCRATCH_REG, target)?;
+    let jalr = encoding::wide::encode_ri(
+        instruction::wide::control::JALR,
+        0,
+        CONTROL_TRANSFER_SCRATCH_REG,
+        0,
+    );
+    write_word(code, start + POINTER_STUB_LEN * 4, jalr);
+    Ok(())
+}
+
+fn patch_call_transfer_stub(code: &mut [u8], start: usize, target: u64) -> Result<(), String> {
+    let off = (target as i64) - (start as i64);
+    if (off % 4) != 0 {
+        return Err(format!(
+            "unaligned call offset {off} for control transfer at {start}"
+        ));
+    }
+    if let Ok(off32) = i32::try_from(off)
+        && encode_jal(1, off32).is_ok()
+    {
+        write_word(code, start, encode_jal(1, off32)?);
+        let skip_padding = ((CONTROL_TRANSFER_STUB_WORDS - 1) * 4) as i32;
+        write_word(code, start + 4, encode_jal(0, skip_padding)?);
+        return Ok(());
+    }
+
+    patch_pointer_literal_stub(code, start, 1, target)?;
+    let jalr = encoding::wide::encode_ri(instruction::wide::control::JALR, 1, 1, 0);
+    write_word(code, start + POINTER_STUB_LEN * 4, jalr);
     Ok(())
 }
 
@@ -643,6 +709,46 @@ seiyaku MyC {
     }
 
     #[test]
+    fn far_jump_fixup_uses_literal_stub_and_jalr() {
+        let mut code = Vec::new();
+        let start = super::reserve_control_transfer_stub(&mut code);
+        super::patch_jump_transfer_stub(&mut code, start, 200_000).expect("patch far jump");
+        let final_word_at = start + super::POINTER_STUB_LEN * 4;
+        let final_word =
+            u32::from_le_bytes(code[final_word_at..final_word_at + 4].try_into().unwrap());
+        assert_eq!(
+            final_word,
+            encoding::wide::encode_ri(
+                instruction::wide::control::JALR,
+                0,
+                super::CONTROL_TRANSFER_SCRATCH_REG,
+                0,
+            )
+        );
+    }
+
+    #[test]
+    fn near_call_fixup_skips_stub_padding_on_return() {
+        let mut code = Vec::new();
+        let start = super::reserve_control_transfer_stub(&mut code);
+        super::patch_call_transfer_stub(&mut code, start, (start + 16) as u64)
+            .expect("patch near call");
+
+        let call_word = u32::from_le_bytes(code[start..start + 4].try_into().unwrap());
+        assert_eq!(
+            call_word,
+            super::encode_jal(1, 16).expect("encode short call")
+        );
+
+        let skip_word = u32::from_le_bytes(code[start + 4..start + 8].try_into().unwrap());
+        assert_eq!(
+            skip_word,
+            super::encode_jal(0, ((super::CONTROL_TRANSFER_STUB_WORDS - 1) * 4) as i32)
+                .expect("encode stub skip")
+        );
+    }
+
+    #[test]
     fn encode_addi_rejects_out_of_range_immediate() {
         let imm = (WIDE_IMM_MAX + 1) as i16;
         assert!(super::encode_addi(1, 1, imm).is_err());
@@ -745,6 +851,35 @@ seiyaku JsonNumericTest {
                 .windows(needle.len())
                 .any(|window| window == needle),
             "expected JSON_GET_NUMERIC syscall in compiled code"
+        );
+    }
+
+    #[test]
+    fn json_get_asset_definition_id_emits_asset_definition_syscall() {
+        let src = r#"
+seiyaku JsonAssetDefinitionTest {
+  meta { abi_version: 1; }
+  kotoage fn run() permission(Admin) {
+    let ev = trigger_event();
+    let _asset = json_get_asset_definition_id(ev, name("asset_definition_id"));
+  }
+}
+"#;
+        let compiler = Compiler::new();
+        let bytes = compiler
+            .compile_source(src)
+            .expect("compile json_get_asset_definition_id");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let needle = encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            ivm_abi::syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID as u8,
+        )
+        .to_le_bytes();
+        assert!(
+            bytes[parsed.code_offset..]
+                .windows(needle.len())
+                .any(|window| window == needle),
+            "expected JSON_GET_ASSET_DEFINITION_ID syscall in compiled code"
         );
     }
 
@@ -4772,10 +4907,9 @@ impl Compiler {
                                     push_word(&mut code, encode_addi(rd, rs, 0)?);
                                 }
                             }
-                            // Emit placeholder JAL to be patched later
-                            let at = code.len();
-                            let jal = encode_jal(1, 0)?;
-                            push_word(&mut code, jal);
+                            // Reserve a fixed-size control-transfer stub so call fixups can
+                            // choose between a direct JAL and a far JALR without shifting code.
+                            let at = reserve_control_transfer_stub(&mut code);
                             call_fixups.push((at, callee.clone(), func.name.clone()));
                             // Move return value if needed
                             if let Some(d) = dest {
@@ -4814,10 +4948,9 @@ impl Compiler {
                                     push_word(&mut code, encode_addi(rd, rs, 0)?);
                                 }
                             }
-                            // Emit JAL (placeholder) and record fixup
-                            let at = code.len();
-                            let jal = encode_jal(1, 0)?;
-                            push_word(&mut code, jal);
+                            // Reserve a fixed-size control-transfer stub so call fixups can
+                            // choose between a direct JAL and a far JALR without shifting code.
+                            let at = reserve_control_transfer_stub(&mut code);
                             call_fixups.push((at, callee.clone(), func.name.clone()));
                             // Move return values r10.. into dest regs
                             for (i, d) in dests.iter().enumerate() {
@@ -5871,7 +6004,13 @@ impl Compiler {
                                 let r = src_reg(key_blob, scratch1, &mut code)?;
                                 push_word(&mut code, encode_addi(11, r, 0)?);
                             }
-                            code.extend_from_slice(&pub_word.to_le_bytes()); // publish r11
+                            // INPUT_PUBLISH_TLV always operates on r10, so preserve the published
+                            // base pointer while mirroring the key blob through r10.
+                            push_word(&mut code, encode_addi(scratch2, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, 11, 0)?);
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, scratch2, 0)?);
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_BUILD_PATH_KEY_NORITO as u8,
@@ -6177,6 +6316,48 @@ impl Compiler {
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_JSON_GET_ACCOUNT_ID as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::JsonGetAssetDefinitionId { dest, json, key } => {
+                            if !durable_enabled {
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::UnsupportedBinaryOp(
+                                        "durable state requires ABI v1. Add `meta { abi_version: 1; }` or compile with `--abi 1`.",
+                                    ),
+                                ));
+                            }
+                            // r10=&Json; publish; r11=&Name key; SCALL JSON_GET_ASSET_DEFINITION_ID; move r10
+                            if let Some(s) = string_map.get(&(func_idx, *json)) {
+                                let key = DataKey(DataKind::Json, s.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let r = src_reg(json, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(scratch2, 10, 0)?);
+                            if let Some(s) = string_map.get(&(func_idx, *key)) {
+                                let kb = DataKey(DataKind::Name, s.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, kb);
+                            } else {
+                                let r = src_reg(key, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, scratch2, 0)?);
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
                             let (rd, spilled, imm) = dst_reg(dest);
@@ -6757,8 +6938,7 @@ impl Compiler {
                         }
                     }
                     Terminator::Jump(target) => {
-                        let at = code.len();
-                        push_word(&mut code, 0);
+                        let at = reserve_control_transfer_stub(&mut code);
                         jump_fixups.push(JumpFixup {
                             at,
                             target_label: target.0,
@@ -6770,13 +6950,16 @@ impl Compiler {
                         else_bb,
                     } => {
                         let rs_cond = src_reg(cond, scratch1, &mut code)?;
-                        // Branch skips the first JAL (else) and falls through to the second JAL (then).
-                        let skip_word = encode_branch_rv(0x1, rs_cond, 0, 8)?;
+                        // Branch skips the entire else-transfer stub and lands on the then-transfer stub.
+                        let skip_word = encode_branch_rv(
+                            0x1,
+                            rs_cond,
+                            0,
+                            (CONTROL_TRANSFER_STUB_WORDS * 4 + 4) as i16,
+                        )?;
                         push_word(&mut code, skip_word);
-                        let jal_else_at = code.len();
-                        push_word(&mut code, 0);
-                        let jal_then_at = code.len();
-                        push_word(&mut code, 0);
+                        let jal_else_at = reserve_control_transfer_stub(&mut code);
+                        let jal_then_at = reserve_control_transfer_stub(&mut code);
                         branch_fixups.push(BranchFixup {
                             jal_else_at,
                             else_label: else_bb.0,
@@ -6792,24 +6975,9 @@ impl Compiler {
                         "missing block offset for label {} in {}",
                         fix.target_label, func.name
                     )
-                })? as i64;
-                let cur_pc = (fix.at - func_base) as i64;
-                let off = target_off - cur_pc;
-                if off % 4 != 0 {
-                    return Err(format!(
-                        "unaligned jump offset {} for label {} in {} (requires 4-byte alignment)",
-                        off, fix.target_label, func.name
-                    ));
-                }
-                let offset_words = off / 4;
-                if !(i16::MIN as i64..=i16::MAX as i64).contains(&offset_words) {
-                    return Err(format!(
-                        "jump offset {} out of range for label {} in {}",
-                        off, fix.target_label, func.name
-                    ));
-                }
-                let word = encode_jal(0, off as i32)?;
-                code[fix.at..fix.at + 4].copy_from_slice(&word.to_le_bytes());
+                })?;
+                let target_pc = (func_base + target_off) as u64;
+                patch_jump_transfer_stub(&mut code, fix.at, target_pc)?;
             }
             for fix in branch_fixups {
                 let else_target = *block_offsets.get(&fix.else_label).ok_or_else(|| {
@@ -6817,41 +6985,18 @@ impl Compiler {
                         "missing else-block offset for label {} in {}",
                         fix.else_label, func.name
                     )
-                })? as i64;
+                })?;
                 let then_target = *block_offsets.get(&fix.then_label).ok_or_else(|| {
                     format!(
                         "missing then-block offset for label {} in {}",
                         fix.then_label, func.name
                     )
-                })? as i64;
+                })?;
+                let else_target_pc = (func_base + else_target) as u64;
+                let then_target_pc = (func_base + then_target) as u64;
 
-                let patch_jal = |at: usize,
-                                 target: i64,
-                                 desc: &str,
-                                 code: &mut Vec<u8>|
-                 -> Result<(), String> {
-                    let jal_pc = (at - func_base) as i64;
-                    let offset = target - jal_pc;
-                    if offset % 4 != 0 {
-                        return Err(format!(
-                            "unaligned jump offset {offset} when jumping to {desc} in {}",
-                            func.name
-                        ));
-                    }
-                    let offset_words = offset / 4;
-                    if !(i16::MIN as i64..=i16::MAX as i64).contains(&offset_words) {
-                        return Err(format!(
-                            "jump offset {offset} out of range when jumping to {desc} in {}",
-                            func.name
-                        ));
-                    }
-                    let word = encode_jal(0, offset as i32)?;
-                    code[at..at + 4].copy_from_slice(&word.to_le_bytes());
-                    Ok(())
-                };
-
-                patch_jal(fix.jal_else_at, else_target, "else", &mut code)?;
-                patch_jal(fix.jal_then_at, then_target, "then", &mut code)?;
+                patch_jump_transfer_stub(&mut code, fix.jal_else_at, else_target_pc)?;
+                patch_jump_transfer_stub(&mut code, fix.jal_then_at, then_target_pc)?;
             }
             uses_zk_global |= uses_zk;
         }
@@ -6860,12 +7005,8 @@ impl Compiler {
         for (at, callee, _caller) in &call_fixups {
             let target = *func_start_offsets.get(callee).ok_or_else(|| {
                 i18n::translate(self.lang, Message::SemanticError("unknown callee"))
-            })? as i64;
-            let cur_pc = *at as i64;
-            // JAL offset is relative to the current PC.
-            let off = (target - cur_pc) as i32;
-            let word = encode_jal(1, off)?;
-            code[*at..*at + 4].copy_from_slice(&word.to_le_bytes());
+            })? as u64;
+            patch_call_transfer_stub(&mut code, *at, target)?;
         }
 
         uses_vector_global |= detect_vector_usage(&code);

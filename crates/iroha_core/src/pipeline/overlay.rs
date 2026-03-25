@@ -35,6 +35,7 @@ use iroha_data_model::{
             ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
         },
     },
+    metadata::Metadata,
     name::Name,
     nexus::AxtRejectContext,
     prelude::{AccountId, ValidationFail},
@@ -45,6 +46,7 @@ use iroha_data_model::{
         BackendTag as ZkBackendTag, OpenVerifyEnvelope as ZkOpenVerifyEnvelope, StarkFriOpenProofV1,
     },
 };
+use iroha_primitives::json::Json;
 use ivm::{VMError as IvmError, analysis::ProgramAnalysisError};
 use mv::storage::StorageReadOnly;
 use norito::{codec::Encode as NoritoEncode, streaming::CapabilityFlags};
@@ -111,6 +113,100 @@ impl ProgramHashCache {
 #[cfg(test)]
 static PROGRAM_HASH_CACHE: LazyLock<Mutex<ProgramHashCache>> =
     LazyLock::new(|| Mutex::new(ProgramHashCache::new(ProgramHashCache::DEFAULT_CAP)));
+
+#[derive(Clone, Debug)]
+struct ContractCallExecutionContext {
+    entrypoint: Option<String>,
+    entrypoint_pc: Option<u64>,
+    args: Json,
+}
+
+fn parse_contract_call_execution_context(
+    metadata: &Metadata,
+    bytecode: &[u8],
+) -> Result<Option<ContractCallExecutionContext>, OverlayBuildError> {
+    let entrypoint = metadata
+        .get("contract_entrypoint")
+        .map(|raw| {
+            raw.try_into_any_norito::<String>().map_err(|err| {
+                OverlayBuildError::ContractCall(format!(
+                    "invalid contract_entrypoint metadata: {err}"
+                ))
+            })
+        })
+        .transpose()?
+        .map(|value| value.trim().to_owned());
+    if entrypoint.as_deref().is_some_and(str::is_empty) {
+        return Err(OverlayBuildError::ContractCall(
+            "contract_entrypoint must not be empty".to_owned(),
+        ));
+    }
+
+    let payload = metadata.get("contract_payload").cloned();
+    if entrypoint.is_none() && payload.is_none() {
+        return Ok(None);
+    }
+
+    let entrypoint_pc = if let Some(selector) = entrypoint.as_deref() {
+        let parsed = ivm::ProgramMetadata::parse(bytecode).map_err(|err| {
+            OverlayBuildError::ContractCall(format!(
+                "invalid contract artifact for contract call dispatch: {err}"
+            ))
+        })?;
+        let prefix_len = parsed.prefix_len() as u64;
+        let contract_interface = parsed.contract_interface.as_ref().ok_or_else(|| {
+            OverlayBuildError::ContractCall(
+                "contract call entrypoint metadata requires a self-describing contract artifact"
+                    .to_owned(),
+            )
+        })?;
+        let descriptor = contract_interface
+            .entrypoints
+            .iter()
+            .find(|candidate| candidate.name == selector)
+            .ok_or_else(|| {
+                OverlayBuildError::ContractCall(format!("unknown contract entrypoint `{selector}`"))
+            })?;
+        if !matches!(
+            descriptor.kind,
+            iroha_data_model::smart_contract::manifest::EntryPointKind::Public
+        ) {
+            return Err(OverlayBuildError::ContractCall(format!(
+                "contract entrypoint `{selector}` is not public"
+            )));
+        }
+        Some(prefix_len + descriptor.entry_pc)
+    } else {
+        None
+    };
+
+    Ok(Some(ContractCallExecutionContext {
+        entrypoint,
+        entrypoint_pc,
+        args: payload.unwrap_or_default(),
+    }))
+}
+
+fn apply_contract_call_execution_context(
+    vm: &mut ivm::IVM,
+    context: Option<&ContractCallExecutionContext>,
+) -> Result<(), OverlayBuildError> {
+    if let Some(context) = context
+        && let Some(entrypoint_pc) = context.entrypoint_pc
+    {
+        // Public by-call entrypoints are compiled as regular functions, not as
+        // the artifact's top-level `main`. Seed RA with the end-of-code
+        // sentinel so `return` exits execution instead of falling through to pc=0.
+        vm.set_register(1, vm.memory.code_len());
+        vm.set_program_counter(entrypoint_pc).map_err(|err| {
+            OverlayBuildError::ContractCall(format!(
+                "contract entrypoint `{}` resolved to invalid pc: {err}",
+                context.entrypoint.as_deref().unwrap_or("main")
+            ))
+        })?;
+    }
+    Ok(())
+}
 
 fn default_pipeline_config() -> iroha_config::parameters::actual::Pipeline {
     use iroha_config::parameters::{actual, defaults};
@@ -453,6 +549,7 @@ pub(crate) fn prune_redundant_contract_ops<R: StateReadOnly>(
 pub struct TxOverlay {
     instructions: Vec<InstructionBox>,
     ivm_gas_used: Option<u64>,
+    durable_state_overlay: BTreeMap<Name, Option<Vec<u8>>>,
 }
 
 impl TxOverlay {
@@ -461,6 +558,7 @@ impl TxOverlay {
         Self {
             instructions: instrs,
             ivm_gas_used: None,
+            durable_state_overlay: BTreeMap::new(),
         }
     }
 
@@ -469,17 +567,36 @@ impl TxOverlay {
         Self {
             instructions: instrs,
             ivm_gas_used: Some(ivm_gas_used),
+            durable_state_overlay: BTreeMap::new(),
+        }
+    }
+
+    /// Create an overlay from IVM-produced artifacts including durable state writes.
+    pub fn from_ivm_execution(
+        instrs: Vec<InstructionBox>,
+        ivm_gas_used: u64,
+        durable_state_overlay: BTreeMap<Name, Option<Vec<u8>>>,
+    ) -> Self {
+        Self {
+            instructions: instrs,
+            ivm_gas_used: Some(ivm_gas_used),
+            durable_state_overlay,
         }
     }
 
     /// Is this overlay empty?
     pub fn is_empty(&self) -> bool {
-        self.instructions.is_empty()
+        self.instructions.is_empty() && self.durable_state_overlay.is_empty()
     }
 
     /// Number of instructions in this overlay.
     pub fn instruction_count(&self) -> usize {
         self.instructions.len()
+    }
+
+    /// Whether this overlay carries durable smart-contract state changes.
+    pub fn has_durable_state_changes(&self) -> bool {
+        !self.durable_state_overlay.is_empty()
     }
 
     /// Iterate over instructions in this overlay.
@@ -537,6 +654,16 @@ impl TxOverlay {
                 executor.execute_instruction(state_tx, authority, instr.clone())?;
             }
         }
+        for (path, value) in &self.durable_state_overlay {
+            if let Some(stored) = value {
+                state_tx
+                    .world
+                    .smart_contract_state
+                    .insert(path.clone(), stored.clone());
+            } else {
+                state_tx.world.smart_contract_state.remove(path.clone());
+            }
+        }
         Ok(())
     }
 
@@ -570,6 +697,16 @@ impl TxOverlay {
                     )?;
                 }
                 executor.execute_instruction(state_tx, authority, instr.clone())?;
+            }
+        }
+        for (path, value) in &self.durable_state_overlay {
+            if let Some(stored) = value {
+                state_tx
+                    .world
+                    .smart_contract_state
+                    .insert(path.clone(), stored.clone());
+            } else {
+                state_tx.world.smart_contract_state.remove(path.clone());
             }
         }
         Ok(())
@@ -640,6 +777,8 @@ where
             let mut vm = ivm_cache
                 .clone_runtime(&summary, bytecode.as_ref(), gas_limit)
                 .map_err(OverlayBuildError::IvmLoad)?;
+            let contract_call_context =
+                parse_contract_call_execution_context(tx.metadata(), bytecode.as_ref())?;
 
             // Run CoreHost to collect queued ISIs
             // Snapshot of accounts for deterministic helpers
@@ -651,10 +790,18 @@ where
                     .collect::<Vec<_>>(),
             );
             let streaming_meta = resolve_streaming_metadata(state_ro, tx.authority());
-            let mut host = crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
-                tx.authority().clone(),
-                Arc::clone(&accounts),
-            );
+            let mut host = if let Some(context) = contract_call_context.as_ref() {
+                crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
+                    tx.authority().clone(),
+                    Arc::clone(&accounts),
+                    context.args.clone(),
+                )
+            } else {
+                crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
+                    tx.authority().clone(),
+                    Arc::clone(&accounts),
+                )
+            };
             let amx_analysis =
                 ivm::analysis::analyze_program(bytecode.as_ref()).map_err(|err| match err {
                     ProgramAnalysisError::Metadata(_) => OverlayBuildError::IvmHeaderParse,
@@ -684,11 +831,13 @@ where
             host.set_zk_snapshots_from_world(state_ro.world(), state_ro.zk())
                 .map_err(OverlayBuildError::IvmRun)?;
             vm.set_gas_limit(gas_limit);
+            apply_contract_call_execution_context(&mut vm, contract_call_context.as_ref())?;
             run_vm_with_host(&mut vm, &mut host)?;
             let ivm_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
             let transport_caps_snapshot = host.transport_caps_snapshot().copied();
             let negotiated_caps_snapshot = host.negotiated_caps_snapshot().copied();
             let mut queued = host.drain_instructions();
+            let durable_state_overlay = host.drain_durable_state_overlay();
             // Emit a ZK-lane job with the formal trace (non-forking background verification)
             if state_ro.zk().halo2.enabled && vm.zk_mode_enabled() {
                 let trace = vm.register_trace();
@@ -737,7 +886,11 @@ where
                     queued.push(InstructionBox::from(isi));
                 }
             }
-            Ok(TxOverlay::from_ivm_instructions(queued, ivm_gas_used))
+            Ok(TxOverlay::from_ivm_execution(
+                queued,
+                ivm_gas_used,
+                durable_state_overlay,
+            ))
         }
         Executable::IvmProved(proved) => {
             // Validate header against node policy (same checks as `Executable::Ivm`).
@@ -818,23 +971,37 @@ pub fn build_overlay_for_transaction_with_accounts(
             )?;
             let tx_gas_limit = require_tx_gas_limit(tx)?;
             let mut vm = ivm::IVM::new(tx_gas_limit);
-            let mut host = crate::smartcontracts::ivm::host::CoreHost::with_accounts(
-                tx.authority().clone(),
-                Arc::new(accounts.to_vec()),
-            );
+            let contract_call_context =
+                parse_contract_call_execution_context(tx.metadata(), bytecode.as_ref())?;
+            let mut host = if let Some(context) = contract_call_context.as_ref() {
+                crate::smartcontracts::ivm::host::CoreHost::with_accounts_and_args(
+                    tx.authority().clone(),
+                    Arc::new(accounts.to_vec()),
+                    context.args.clone(),
+                )
+            } else {
+                crate::smartcontracts::ivm::host::CoreHost::with_accounts(
+                    tx.authority().clone(),
+                    Arc::new(accounts.to_vec()),
+                )
+            };
             apply_streaming_metadata(&mut host, StreamingOverlayMetadata::default());
             vm.set_host(host);
             vm.load_program(bytecode.as_ref())
                 .map_err(OverlayBuildError::IvmLoad)?;
             vm.set_gas_limit(tx_gas_limit);
+            apply_contract_call_execution_context(&mut vm, contract_call_context.as_ref())?;
             run_vm(&mut vm)?;
             let ivm_gas_used = tx_gas_limit.saturating_sub(vm.remaining_gas());
-            let mut queued = if let Some(h) = vm.host_mut_any()
+            let (mut queued, durable_state_overlay) = if let Some(h) = vm.host_mut_any()
                 && let Some(host) = h.downcast_mut::<crate::smartcontracts::ivm::host::CoreHost>()
             {
-                host.drain_instructions()
+                (
+                    host.drain_instructions(),
+                    host.drain_durable_state_overlay(),
+                )
             } else {
-                Vec::new()
+                (Vec::new(), BTreeMap::new())
             };
             // Append manifest registration if attached in metadata
             if let Some(json) = tx
@@ -844,7 +1011,11 @@ pub fn build_overlay_for_transaction_with_accounts(
             {
                 queued.push(InstructionBox::from(RegisterSmartContractCode { manifest }));
             }
-            Ok(TxOverlay::from_ivm_instructions(queued, ivm_gas_used))
+            Ok(TxOverlay::from_ivm_execution(
+                queued,
+                ivm_gas_used,
+                durable_state_overlay,
+            ))
         }
         Executable::IvmProved(_) => Err(OverlayBuildError::ZkProof(
             "Executable::IvmProved requires a full state view for proof verification".to_owned(),
@@ -895,10 +1066,20 @@ where
             )?;
             let tx_gas_limit = require_tx_gas_limit(tx)?;
             let mut vm = ivm::IVM::new(tx_gas_limit);
-            let mut host = crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
-                tx.authority().clone(),
-                Arc::new(accounts.to_vec()),
-            );
+            let contract_call_context =
+                parse_contract_call_execution_context(tx.metadata(), bytecode.as_ref())?;
+            let mut host = if let Some(context) = contract_call_context.as_ref() {
+                crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
+                    tx.authority().clone(),
+                    Arc::new(accounts.to_vec()),
+                    context.args.clone(),
+                )
+            } else {
+                crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
+                    tx.authority().clone(),
+                    Arc::new(accounts.to_vec()),
+                )
+            };
             let amx_analysis =
                 ivm::analysis::analyze_program(bytecode.as_ref()).map_err(|err| match err {
                     ProgramAnalysisError::Metadata(_) => OverlayBuildError::IvmHeaderParse,
@@ -930,11 +1111,13 @@ where
             vm.load_program(bytecode.as_ref())
                 .map_err(OverlayBuildError::IvmLoad)?;
             vm.set_gas_limit(tx_gas_limit);
+            apply_contract_call_execution_context(&mut vm, contract_call_context.as_ref())?;
             run_vm_with_host(&mut vm, &mut host)?;
             let ivm_gas_used = tx_gas_limit.saturating_sub(vm.remaining_gas());
             let transport_caps_snapshot = host.transport_caps_snapshot().copied();
             let negotiated_caps_snapshot = host.negotiated_caps_snapshot().copied();
             let mut queued = host.drain_instructions();
+            let durable_state_overlay = host.drain_durable_state_overlay();
             if state_ro.zk().halo2.enabled && vm.zk_mode_enabled() {
                 let trace = vm.register_trace();
                 if !trace.is_empty() {
@@ -970,7 +1153,11 @@ where
                 let _ = code_hash;
             }
             prune_redundant_contract_ops(state_ro, &mut queued);
-            Ok(TxOverlay::from_ivm_instructions(queued, ivm_gas_used))
+            Ok(TxOverlay::from_ivm_execution(
+                queued,
+                ivm_gas_used,
+                durable_state_overlay,
+            ))
         }
         Executable::IvmProved(proved) => {
             let parsed = ivm::ProgramMetadata::parse(proved.bytecode.as_ref())
@@ -1069,10 +1256,20 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                 eff = 0; // no cap
             }
             let mut vm = ivm::IVM::new(tx_gas_limit);
-            let mut host = crate::smartcontracts::ivm::host::CoreHost::with_accounts(
-                tx.authority().clone(),
-                Arc::new(accounts.to_vec()),
-            );
+            let contract_call_context =
+                parse_contract_call_execution_context(tx.metadata(), bytecode.as_ref())?;
+            let mut host = if let Some(context) = contract_call_context.as_ref() {
+                crate::smartcontracts::ivm::host::CoreHost::with_accounts_and_args(
+                    tx.authority().clone(),
+                    Arc::new(accounts.to_vec()),
+                    context.args.clone(),
+                )
+            } else {
+                crate::smartcontracts::ivm::host::CoreHost::with_accounts(
+                    tx.authority().clone(),
+                    Arc::new(accounts.to_vec()),
+                )
+            };
             apply_streaming_metadata(&mut host, streaming_meta);
             vm.set_host(host);
             vm.load_program(bytecode.as_ref())
@@ -1081,6 +1278,7 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                 vm.set_max_cycles(eff);
             }
             vm.set_gas_limit(tx_gas_limit);
+            apply_contract_call_execution_context(&mut vm, contract_call_context.as_ref())?;
             // Run with a simple wall-clock budget check (post-hoc reject).
             #[cfg(feature = "telemetry")]
             let t_start = std::time::Instant::now();
@@ -1103,14 +1301,21 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             }
             res?;
             let ivm_gas_used = tx_gas_limit.saturating_sub(vm.remaining_gas());
-            let queued = if let Some(h) = vm.host_mut_any()
+            let (queued, durable_state_overlay) = if let Some(h) = vm.host_mut_any()
                 && let Some(host) = h.downcast_mut::<crate::smartcontracts::ivm::host::CoreHost>()
             {
-                host.drain_instructions()
+                (
+                    host.drain_instructions(),
+                    host.drain_durable_state_overlay(),
+                )
             } else {
-                Vec::new()
+                (Vec::new(), BTreeMap::new())
             };
-            Ok(TxOverlay::from_ivm_instructions(queued, ivm_gas_used))
+            Ok(TxOverlay::from_ivm_execution(
+                queued,
+                ivm_gas_used,
+                durable_state_overlay,
+            ))
         }
         Executable::IvmProved(_) => Err(OverlayBuildError::ZkProof(
             "Executable::IvmProved is not supported in quarantine overlay building".to_owned(),
@@ -3628,6 +3833,8 @@ pub enum OverlayBuildError {
     IvmHeaderParse,
     /// IVM header violated node policy (structured admission error).
     HeaderPolicy(IvmAdmissionError),
+    /// Contract-call metadata was malformed or could not be applied.
+    ContractCall(String),
     /// Missing or invalid `gas_limit` transaction metadata.
     GasLimit(String),
     /// Loading the program into the VM failed.
@@ -3649,6 +3856,7 @@ impl core::fmt::Display for OverlayBuildError {
         match self {
             OverlayBuildError::IvmHeaderParse => write!(f, "IVM header parse error"),
             OverlayBuildError::HeaderPolicy(e) => write!(f, "header policy: {e:?}"),
+            OverlayBuildError::ContractCall(msg) => write!(f, "{msg}"),
             OverlayBuildError::GasLimit(msg) => write!(f, "{msg}"),
             OverlayBuildError::IvmLoad(e) => write!(f, "ivm.load_program: {e}"),
             OverlayBuildError::IvmRun(e) => write!(f, "ivm.run: {e}"),

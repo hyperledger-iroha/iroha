@@ -354,6 +354,7 @@ static LAST_COMMIT_EMA_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_PIPELINE_TOTAL_EMA_MS: AtomicU64 = AtomicU64::new(0);
 static COMMIT_PIPELINE_STATUS: OnceLock<Mutex<CommitPipelineStatusState>> = OnceLock::new();
 static ROUND_GAP_STATUS: OnceLock<Mutex<RoundGapStatusState>> = OnceLock::new();
+static ROUND_TRACE_STATUS: OnceLock<Mutex<RoundTraceStatusState>> = OnceLock::new();
 static GOSSIP_FALLBACK_TOTAL: AtomicU64 = AtomicU64::new(0);
 static GOSSIP_DUPLICATE_KNOWN_SKIPPED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static QUORUM_STALL_AGE_ESCALATION_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -714,8 +715,8 @@ pub struct NexusFeeSnapshot {
     pub config_errors_total: u64,
     /// Failures while executing the fee transfer.
     pub transfer_failures_total: u64,
-    /// Last attempted fee amount (base units) if available.
-    pub last_amount: Option<u128>,
+    /// Last attempted fee amount if available.
+    pub last_amount: Option<Numeric>,
     /// Asset definition id used for the last attempt.
     pub last_asset_id: Option<String>,
     /// Payer classification for the last attempt.
@@ -735,8 +736,8 @@ pub enum NexusFeeEvent {
         payer_kind: NexusFeePayer,
         /// Account id that paid.
         payer_id: String,
-        /// Amount charged (base units).
-        amount: u128,
+        /// Amount charged.
+        amount: Numeric,
         /// Asset definition id string.
         asset_id: String,
     },
@@ -756,10 +757,10 @@ pub enum NexusFeeEvent {
     SponsorCapExceeded {
         /// Account that attempted to sponsor.
         payer_id: String,
-        /// Maximum allowed fee in base units.
-        max_fee: u64,
-        /// Attempted fee in base units.
-        attempted_fee: u128,
+        /// Maximum allowed fee.
+        max_fee: Numeric,
+        /// Attempted fee.
+        attempted_fee: Numeric,
     },
     /// Fee transfer failed to apply.
     TransferFailed {
@@ -767,8 +768,8 @@ pub enum NexusFeeEvent {
         payer_kind: NexusFeePayer,
         /// Account that attempted to pay.
         payer_id: String,
-        /// Amount attempted (base units).
-        amount: u128,
+        /// Amount attempted.
+        amount: Numeric,
         /// Asset definition id string.
         asset_id: String,
         /// Human-readable reason.
@@ -2462,6 +2463,10 @@ pub enum ConsensusMessageKind {
     BlockCreated,
     /// Block-sync update batches (`BlockSyncUpdate`).
     BlockSyncUpdate,
+    /// Exact frontier body fetch request (`FetchBlockBody`).
+    FetchBlockBody,
+    /// Exact frontier body fetch response (`BlockBodyResponse`).
+    BlockBodyResponse,
     /// Consensus-parameter advertisements (`ConsensusParams`).
     ConsensusParams,
     /// Proposal hints (`ProposalHint`).
@@ -2499,6 +2504,8 @@ impl ConsensusMessageKind {
         match self {
             ConsensusMessageKind::BlockCreated => "block_created",
             ConsensusMessageKind::BlockSyncUpdate => "block_sync_update",
+            ConsensusMessageKind::FetchBlockBody => "fetch_block_body",
+            ConsensusMessageKind::BlockBodyResponse => "block_body_response",
             ConsensusMessageKind::ConsensusParams => "consensus_params",
             ConsensusMessageKind::ProposalHint => "proposal_hint",
             ConsensusMessageKind::Proposal => "proposal",
@@ -2996,11 +3003,11 @@ pub enum WorkerLoopStage {
     Idle,
     /// Draining vote-related messages.
     DrainVotes,
-    /// Draining RBC chunk messages.
+    /// Draining the unified RBC session ingress lane.
     DrainRbcChunks,
     /// Draining block payload messages.
     DrainBlockPayloads,
-    /// Draining block messages.
+    /// Draining fallback block/control messages.
     DrainBlocks,
     /// Executing the consensus tick.
     Tick,
@@ -3065,9 +3072,9 @@ pub enum WorkerQueueKind {
     Votes,
     /// Block payload messages.
     BlockPayload,
-    /// RBC chunk messages.
+    /// Unified RBC session ingress messages.
     RbcChunks,
-    /// Block messages.
+    /// Fallback block/control messages.
     Blocks,
     /// Consensus control-flow messages.
     Consensus,
@@ -3084,9 +3091,9 @@ pub struct WorkerQueueDepthSnapshot {
     pub vote_rx: u64,
     /// Queue depth for block payload messages.
     pub block_payload_rx: u64,
-    /// Queue depth for RBC chunk messages.
+    /// Queue depth for the unified RBC session ingress lane.
     pub rbc_chunk_rx: u64,
-    /// Queue depth for block messages.
+    /// Queue depth for fallback block/control messages.
     pub block_rx: u64,
     /// Queue depth for consensus control-flow messages.
     pub consensus_rx: u64,
@@ -3103,9 +3110,9 @@ pub struct WorkerQueueTotalsSnapshot {
     pub vote_rx: u64,
     /// Total for block payload messages.
     pub block_payload_rx: u64,
-    /// Total for RBC chunk messages.
+    /// Total for the unified RBC session ingress lane.
     pub rbc_chunk_rx: u64,
-    /// Total for block messages.
+    /// Total for fallback block/control messages.
     pub block_rx: u64,
     /// Total for consensus control-flow messages.
     pub consensus_rx: u64,
@@ -3299,6 +3306,86 @@ pub struct RoundGapSnapshot {
     pub ema_deliver_to_next_propose_ms: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum RoundPhaseTrace {
+    #[default]
+    WaitProposal,
+    WaitBlock,
+    WaitValidation,
+    WaitDa,
+    WaitPrepareQc,
+    WaitCommitQc,
+    Commit,
+    AdvanceView,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum RoundEventCauseTrace {
+    #[default]
+    Tick,
+    ProposalObserved,
+    BlockAvailable,
+    RbcDelivered,
+    ValidationPassed,
+    VoteReceived,
+    QcReceived,
+    CommitRequested,
+    CommitCompleted,
+    BlockSyncUpdated,
+    NoProgressWake,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct RoundPhaseGapSnapshot {
+    pub wait_proposal_ms: u64,
+    pub wait_block_ms: u64,
+    pub wait_validation_ms: u64,
+    pub wait_da_ms: u64,
+    pub wait_prepare_qc_ms: u64,
+    pub wait_commit_qc_ms: u64,
+    pub commit_ms: u64,
+    pub advance_view_ms: u64,
+}
+
+impl RoundPhaseGapSnapshot {
+    pub(crate) fn set(&mut self, phase: RoundPhaseTrace, value_ms: u64) {
+        match phase {
+            RoundPhaseTrace::WaitProposal => self.wait_proposal_ms = value_ms,
+            RoundPhaseTrace::WaitBlock => self.wait_block_ms = value_ms,
+            RoundPhaseTrace::WaitValidation => self.wait_validation_ms = value_ms,
+            RoundPhaseTrace::WaitDa => self.wait_da_ms = value_ms,
+            RoundPhaseTrace::WaitPrepareQc => self.wait_prepare_qc_ms = value_ms,
+            RoundPhaseTrace::WaitCommitQc => self.wait_commit_qc_ms = value_ms,
+            RoundPhaseTrace::Commit => self.commit_ms = value_ms,
+            RoundPhaseTrace::AdvanceView => self.advance_view_ms = value_ms,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct RoundTraceEntry {
+    pub timestamp_ms: u64,
+    pub height: u64,
+    pub view: u64,
+    pub phase: RoundPhaseTrace,
+    pub previous_phase: Option<RoundPhaseTrace>,
+    pub cause: RoundEventCauseTrace,
+    pub queue_latency_ms: Option<u64>,
+    pub pending_blocks: u64,
+    pub blocking_pending_blocks: u64,
+    pub commit_inflight: bool,
+    pub queue_saturated: bool,
+    pub queue_depths: WorkerQueueDepthSnapshot,
+    pub no_progress_wake: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct RoundTraceSnapshot {
+    pub latest: Option<RoundTraceEntry>,
+    pub gaps: RoundPhaseGapSnapshot,
+    pub entries: Vec<RoundTraceEntry>,
+}
+
 /// Commit-pipeline sample published by the runtime.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CommitPipelineSample {
@@ -3378,6 +3465,12 @@ struct RoundGapStatusState {
     state_commit_to_next_propose_ema: TimingEma,
     deliver_to_next_propose_ema: TimingEma,
     markers: BTreeMap<RoundGapKey, RoundGapMarkers>,
+}
+
+#[derive(Debug, Default)]
+struct RoundTraceStatusState {
+    snapshot: RoundTraceSnapshot,
+    entries: VecDeque<RoundTraceEntry>,
 }
 
 /// Snapshot of dedup cache evictions for inbound consensus traffic.
@@ -3825,6 +3918,10 @@ fn commit_pipeline_status_slot() -> &'static Mutex<CommitPipelineStatusState> {
 
 fn round_gap_status_slot() -> &'static Mutex<RoundGapStatusState> {
     ROUND_GAP_STATUS.get_or_init(|| Mutex::new(RoundGapStatusState::default()))
+}
+
+fn round_trace_status_slot() -> &'static Mutex<RoundTraceStatusState> {
+    ROUND_TRACE_STATUS.get_or_init(|| Mutex::new(RoundTraceStatusState::default()))
 }
 
 fn round_ema_ms(value_ms: f64) -> u64 {
@@ -4831,6 +4928,10 @@ pub(crate) enum DedupEvictionKind {
     Vote,
     /// `BlockCreated` payload cache evictions.
     BlockCreated,
+    /// Exact `FetchBlockBody` payload cache evictions.
+    FetchBlockBody,
+    /// Exact `BlockBodyResponse` payload cache evictions.
+    BlockBodyResponse,
     /// Proposal payload cache evictions.
     Proposal,
     /// RBC INIT payload cache evictions.
@@ -4869,6 +4970,23 @@ pub(crate) fn record_dedup_evictions(kind: DedupEvictionKind, capacity: usize, e
             }
             if expired > 0 {
                 DEDUP_BLOCK_CREATED_EVICT_EXPIRED_TOTAL.fetch_add(expired, Ordering::Relaxed);
+            }
+        }
+        DedupEvictionKind::FetchBlockBody => {
+            if capacity > 0 {
+                DEDUP_FETCH_PENDING_BLOCK_EVICT_CAPACITY_TOTAL
+                    .fetch_add(capacity, Ordering::Relaxed);
+            }
+            if expired > 0 {
+                DEDUP_FETCH_PENDING_BLOCK_EVICT_EXPIRED_TOTAL.fetch_add(expired, Ordering::Relaxed);
+            }
+        }
+        DedupEvictionKind::BlockBodyResponse => {
+            if capacity > 0 {
+                DEDUP_BLOCK_SYNC_UPDATE_EVICT_CAPACITY_TOTAL.fetch_add(capacity, Ordering::Relaxed);
+            }
+            if expired > 0 {
+                DEDUP_BLOCK_SYNC_UPDATE_EVICT_EXPIRED_TOTAL.fetch_add(expired, Ordering::Relaxed);
             }
         }
         DedupEvictionKind::Proposal => {
@@ -6772,6 +6890,13 @@ fn round_gap_snapshot() -> RoundGapSnapshot {
         .unwrap_or_default()
 }
 
+pub(crate) fn round_trace_snapshot() -> RoundTraceSnapshot {
+    round_trace_status_slot()
+        .lock()
+        .map(|guard| guard.snapshot.clone())
+        .unwrap_or_default()
+}
+
 /// Publish the most recent commit-pipeline budget sample.
 pub fn record_commit_pipeline_sample(sample: CommitPipelineSample) {
     #[cfg(test)]
@@ -6925,6 +7050,28 @@ pub fn record_round_gap_unblocked(height: u64, view: u64, block_hash: HashOf<Blo
     note_round_gap_marker(height, view, block_hash, |markers, now| {
         markers.unblocked_at.get_or_insert(now);
     });
+}
+
+fn prune_round_trace_entries(entries: &mut VecDeque<RoundTraceEntry>) {
+    const ROUND_TRACE_CAP: usize = 32;
+    while entries.len() > ROUND_TRACE_CAP {
+        let _ = entries.pop_front();
+    }
+}
+
+pub(crate) fn record_round_trace(entry: RoundTraceEntry, gaps: RoundPhaseGapSnapshot) {
+    #[cfg(test)]
+    let Some(_guard) = try_reentrant_test_guard(&COMMIT_TIMING_TEST_LOCK) else {
+        return;
+    };
+    let Ok(mut guard) = round_trace_status_slot().lock() else {
+        return;
+    };
+    guard.entries.push_back(entry);
+    prune_round_trace_entries(&mut guard.entries);
+    guard.snapshot.latest = Some(entry);
+    guard.snapshot.gaps = gaps;
+    guard.snapshot.entries = guard.entries.iter().copied().collect();
 }
 
 fn now_timestamp_ms() -> u64 {
@@ -7498,6 +7645,14 @@ pub(crate) fn reset_round_gap_status_for_tests() {
     let _guard = commit_timing_test_guard();
     if let Ok(mut guard) = round_gap_status_slot().lock() {
         *guard = RoundGapStatusState::default();
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn reset_round_trace_for_tests() {
+    let _guard = commit_timing_test_guard();
+    if let Ok(mut guard) = round_trace_status_slot().lock() {
+        *guard = RoundTraceStatusState::default();
     }
 }
 
@@ -9635,7 +9790,7 @@ mod tests {
         super::record_nexus_fee_event(super::NexusFeeEvent::Charged {
             payer_kind: super::NexusFeePayer::Payer,
             payer_id: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".to_owned(),
-            amount: 10,
+            amount: Numeric::from(10_u32),
             asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_owned(),
         });
         super::record_nexus_fee_event(super::NexusFeeEvent::SponsorDisabled {

@@ -802,7 +802,6 @@ mod tests {
                 api_high_load_subscription_threshold: None,
                 ram_lfe: None,
                 tx_history: None,
-                faucet: None,
                 events_buffer_capacity: NonZeroUsize::new(
                     iroha_config::parameters::defaults::torii::EVENTS_BUFFER_CAPACITY,
                 )
@@ -887,6 +886,7 @@ mod tests {
                 transport: iroha_config::parameters::actual::ToriiTransport::default(),
                 mcp: iroha_config::parameters::actual::ToriiMcp::default(),
                 onboarding: None,
+                faucet: None,
                 offline_issuer: None,
                 proof_api: iroha_config::parameters::actual::ProofApi {
                     rate_per_minute: iroha_config::parameters::defaults::torii::PROOF_RATE_PER_MIN

@@ -342,6 +342,77 @@ impl EndpointHealthPool {
         self.run_with_failover_at(op_name, Instant::now(), operation)
     }
 
+    fn select_endpoint(&self, op_name: &'static str) -> Result<usize> {
+        self.select_endpoint_at(op_name, Instant::now())
+    }
+
+    fn select_endpoint_at(&self, op_name: &'static str, now: Instant) -> Result<usize> {
+        self.attempt_order_at(now)
+            .into_iter()
+            .next()
+            .ok_or_else(|| eyre!("no ingress endpoints available for operation `{op_name}`"))
+    }
+
+    fn run_on_endpoint<T, F>(
+        &self,
+        op_name: &'static str,
+        endpoint_idx: usize,
+        operation: F,
+    ) -> Result<T>
+    where
+        F: FnOnce(usize, &str) -> Result<T>,
+    {
+        self.run_on_endpoint_at(op_name, endpoint_idx, Instant::now(), operation)
+    }
+
+    fn run_on_endpoint_at<T, F>(
+        &self,
+        op_name: &'static str,
+        endpoint_idx: usize,
+        now: Instant,
+        operation: F,
+    ) -> Result<T>
+    where
+        F: FnOnce(usize, &str) -> Result<T>,
+    {
+        let label = self
+            .labels
+            .get(endpoint_idx)
+            .map(String::as_str)
+            .ok_or_else(|| eyre!("endpoint index {endpoint_idx} out of range"))?;
+        match operation(endpoint_idx, label) {
+            Ok(value) => {
+                self.mark_success_at(endpoint_idx, now);
+                Ok(value)
+            }
+            Err(err) => {
+                let failure_class = classify_ingress_failure(&err);
+                let retryable = failure_class.is_retryable();
+                let transitioned_unhealthy = self.mark_failure_at(endpoint_idx, now, failure_class);
+                if transitioned_unhealthy {
+                    self.ingress_stats.record_endpoint_unhealthy();
+                    warn!(
+                        target: "izanami::ingress",
+                        operation = op_name,
+                        endpoint = label,
+                        failure_class = failure_class.as_str(),
+                        "marking pinned ingress endpoint unhealthy"
+                    );
+                }
+                warn!(
+                    target: "izanami::ingress",
+                    ?err,
+                    operation = op_name,
+                    endpoint = label,
+                    failure_class = failure_class.as_str(),
+                    retryable,
+                    "pinned ingress endpoint request failed"
+                );
+                Err(err)
+            }
+        }
+    }
+
     fn run_with_failover_at<T, F>(
         &self,
         op_name: &'static str,
@@ -823,6 +894,29 @@ impl IngressEndpointPool {
                 let endpoint = endpoints
                     .get(endpoint_idx)
                     .ok_or_else(|| eyre!("endpoint index {endpoint_idx} out of range"))?;
+                operation(&endpoint.peer)
+            })
+    }
+
+    fn select_endpoint(&self, op_name: &'static str) -> Result<usize> {
+        self.health.select_endpoint(op_name)
+    }
+
+    fn run_on_endpoint<T, F>(
+        &self,
+        op_name: &'static str,
+        endpoint_idx: usize,
+        operation: F,
+    ) -> Result<T>
+    where
+        F: FnOnce(&NetworkPeer) -> Result<T>,
+    {
+        let endpoints = Arc::clone(&self.endpoints);
+        self.health
+            .run_on_endpoint(op_name, endpoint_idx, move |idx, _label| {
+                let endpoint = endpoints
+                    .get(idx)
+                    .ok_or_else(|| eyre!("endpoint index {idx} out of range"))?;
                 operation(&endpoint.peer)
             })
     }
@@ -2402,6 +2496,18 @@ fn effective_submission_confirmation(
     }
 }
 
+fn tracked_repeatable_trigger(state_updates: &[PlanUpdate]) -> Option<TriggerId> {
+    state_updates.iter().find_map(|update| match update {
+        PlanUpdate::TrackRepeatableTrigger(trigger_id) => Some(trigger_id.clone()),
+        _ => None,
+    })
+}
+
+fn is_trigger_not_found_error(error: &color_eyre::Report) -> bool {
+    let message = ingress_error_message(error);
+    message.contains("trigger with id") && message.contains("not found")
+}
+
 async fn wait_for_submission_capacity(
     submissions: &mut JoinSet<()>,
     backlog_limit: usize,
@@ -2511,7 +2617,9 @@ fn strict_divergence_reference_height_from_samples(
         return 0;
     }
     heights.sort_unstable();
-    let index = tolerated_failures.min(heights.len().saturating_sub(1));
+    let index = heights
+        .len()
+        .saturating_sub(tolerated_failures.saturating_add(1));
     heights[index]
 }
 
@@ -3225,14 +3333,56 @@ async fn submit_plan(
     let workload = Arc::clone(workload);
     let burn_target = plan.burn_trigger_repetitions();
     let mint_target = plan.mint_trigger_repetitions();
+    let register_target = tracked_repeatable_trigger(&plan.state_updates);
+    let repeatable_trigger_target = burn_target
+        .as_ref()
+        .map(|(trigger_id, _)| trigger_id.clone())
+        .or_else(|| {
+            mint_target
+                .as_ref()
+                .map(|(trigger_id, _)| trigger_id.clone())
+        })
+        .or(register_target);
     let effective_submission_confirmation =
         effective_submission_confirmation(submission_confirmation, &plan.state_updates);
     let run_trigger_precheck = should_run_trigger_precheck(effective_submission_confirmation);
+    let pinned_trigger_endpoint = if repeatable_trigger_target.is_some() {
+        match ingress_pool.select_endpoint("submit_repeatable_trigger_plan") {
+            Ok(endpoint_idx) => Some(endpoint_idx),
+            Err(err) => {
+                warn!(
+                    target: "izanami::workload",
+                    ?err,
+                    plan = plan_label,
+                    "failed to select pinned ingress endpoint for repeatable trigger plan"
+                );
+                if expect_success {
+                    metrics.record_failure();
+                } else {
+                    metrics.record_expected_failure();
+                }
+                if let Some(trigger_id) = repeatable_trigger_target {
+                    workload.mark_trigger_unknown(&trigger_id).await;
+                }
+                workload.record_result(&plan, false).await;
+                return;
+            }
+        }
+    } else {
+        None
+    };
 
     if run_trigger_precheck && let Some((trigger_id, burn_amount)) = burn_target.clone() {
+        let endpoint_idx =
+            pinned_trigger_endpoint.expect("repeatable trigger plan should pin ingress");
         let precheck = evaluate_burn_precheck(
-            query_trigger_repetitions_with_failover(&ingress_pool, &signer, trigger_id.clone())
-                .await,
+            query_trigger_repetitions_on_endpoint(
+                &ingress_pool,
+                endpoint_idx,
+                &signer,
+                trigger_id.clone(),
+            )
+            .await,
             burn_amount,
         );
         match precheck {
@@ -3266,6 +3416,14 @@ async fn submit_plan(
                 return;
             }
             BurnPrecheck::SkipQueryFailed => {
+                reconcile_repeatable_trigger_with_endpoint(
+                    &workload,
+                    &ingress_pool,
+                    endpoint_idx,
+                    &signer,
+                    &trigger_id,
+                )
+                .await;
                 record_plan_skip(
                     &metrics,
                     plan_label,
@@ -3279,9 +3437,16 @@ async fn submit_plan(
     }
 
     if run_trigger_precheck && let Some((trigger_id, _mint_amount)) = mint_target.clone() {
+        let endpoint_idx =
+            pinned_trigger_endpoint.expect("repeatable trigger plan should pin ingress");
         let precheck = evaluate_mint_precheck(
-            query_trigger_repetitions_with_failover(&ingress_pool, &signer, trigger_id.clone())
-                .await,
+            query_trigger_repetitions_on_endpoint(
+                &ingress_pool,
+                endpoint_idx,
+                &signer,
+                trigger_id.clone(),
+            )
+            .await,
         );
         match precheck {
             MintPrecheck::Proceed { on_chain } => {
@@ -3301,6 +3466,14 @@ async fn submit_plan(
                 return;
             }
             MintPrecheck::SkipQueryFailed => {
+                reconcile_repeatable_trigger_with_endpoint(
+                    &workload,
+                    &ingress_pool,
+                    endpoint_idx,
+                    &signer,
+                    &trigger_id,
+                )
+                .await;
                 record_plan_skip(
                     &metrics,
                     plan_label,
@@ -3331,23 +3504,20 @@ async fn submit_plan(
         }
     };
 
-    let ingress_pool_for_submit = Arc::clone(&ingress_pool);
-    let signer_for_submit = signer.clone();
-    let instructions_for_submit = instructions.clone();
-    let submission_counter_for_submit = Arc::clone(&submission_counter);
-    let succeeded = run_submission(
-        plan_label,
-        expect_success,
-        Arc::clone(&metrics),
-        move || {
-            let ingress_pool_for_retry_delay = Arc::clone(&ingress_pool_for_submit);
-            run_with_queue_timeout_retry_with_policy_and_delay(
-                plan_label,
-                IZANAMI_QUEUE_TIMEOUT_RETRY_ATTEMPTS,
-                Duration::from_millis(IZANAMI_QUEUE_TIMEOUT_RETRY_BACKOFF_MS),
-                move || ingress_pool_for_retry_delay.submission_backpressure_delay(Instant::now()),
-                || {
-                    ingress_pool_for_submit.run_with_failover("submit_transaction_plan", |peer| {
+    let submission_result = if let Some(endpoint_idx) = pinned_trigger_endpoint {
+        let ingress_pool_for_submit = Arc::clone(&ingress_pool);
+        let signer_for_submit = signer.clone();
+        let instructions_for_submit = instructions.clone();
+        let submission_counter_for_submit = Arc::clone(&submission_counter);
+        run_submission_result(
+            plan_label,
+            expect_success,
+            Arc::clone(&metrics),
+            move || {
+                ingress_pool_for_submit.run_on_endpoint(
+                    "submit_repeatable_trigger_plan",
+                    endpoint_idx,
+                    |peer| {
                         let client = tune_ingress_client(
                             peer.client_for(
                                 &signer_for_submit.id,
@@ -3367,46 +3537,114 @@ async fn submit_plan(
                                 .submit_all_with_metadata(instructions_for_submit.clone(), metadata)
                                 .map(|_| ()),
                         }
-                    })
-                },
-            )
-        },
-    )
-    .await;
+                    },
+                )
+            },
+        )
+        .await
+    } else {
+        let ingress_pool_for_submit = Arc::clone(&ingress_pool);
+        let signer_for_submit = signer.clone();
+        let instructions_for_submit = instructions.clone();
+        let submission_counter_for_submit = Arc::clone(&submission_counter);
+        run_submission_result(
+            plan_label,
+            expect_success,
+            Arc::clone(&metrics),
+            move || {
+                let ingress_pool_for_retry_delay = Arc::clone(&ingress_pool_for_submit);
+                run_with_queue_timeout_retry_with_policy_and_delay(
+                    plan_label,
+                    IZANAMI_QUEUE_TIMEOUT_RETRY_ATTEMPTS,
+                    Duration::from_millis(IZANAMI_QUEUE_TIMEOUT_RETRY_BACKOFF_MS),
+                    move || {
+                        ingress_pool_for_retry_delay.submission_backpressure_delay(Instant::now())
+                    },
+                    || {
+                        ingress_pool_for_submit.run_with_failover(
+                            "submit_transaction_plan",
+                            |peer| {
+                                let client = tune_ingress_client(
+                                    peer.client_for(
+                                        &signer_for_submit.id,
+                                        signer_for_submit.key_pair.private_key().clone(),
+                                    ),
+                                    effective_submission_confirmation,
+                                );
+                                let metadata =
+                                    submission_metadata(submission_counter_for_submit.as_ref());
+                                match effective_submission_confirmation {
+                                    SubmissionConfirmationMode::BlockingApplied => client
+                                        .submit_all_blocking_with_metadata(
+                                            instructions_for_submit.clone(),
+                                            metadata,
+                                        )
+                                        .map(|_| ()),
+                                    SubmissionConfirmationMode::AcceptedByIngress => client
+                                        .submit_all_with_metadata(
+                                            instructions_for_submit.clone(),
+                                            metadata,
+                                        )
+                                        .map(|_| ()),
+                                }
+                            },
+                        )
+                    },
+                )
+            },
+        )
+        .await
+    };
     drop(permit);
-    if !succeeded && run_trigger_precheck {
-        if let Some((trigger_id, _)) = mint_target {
-            match query_trigger_repetitions_with_failover(
-                &ingress_pool,
-                &signer,
-                trigger_id.clone(),
-            )
-            .await
+
+    match submission_result {
+        Ok(()) => {
+            workload.record_result(&plan, true).await;
+            if let (Some(endpoint_idx), Some(trigger_id)) =
+                (pinned_trigger_endpoint, repeatable_trigger_target.as_ref())
             {
-                Ok(Some(on_chain)) if on_chain > 0 => {
-                    workload
-                        .sync_trigger_repetitions(&trigger_id, Some(on_chain))
-                        .await;
+                reconcile_repeatable_trigger_with_endpoint(
+                    &workload,
+                    &ingress_pool,
+                    endpoint_idx,
+                    &signer,
+                    trigger_id,
+                )
+                .await;
+            }
+        }
+        Err(err) => {
+            workload.record_result(&plan, false).await;
+            if let Some(trigger_id) = repeatable_trigger_target.as_ref() {
+                if is_trigger_not_found_error(&err) {
+                    workload.sync_trigger_repetitions(trigger_id, None).await;
+                } else if let Some(endpoint_idx) = pinned_trigger_endpoint {
+                    reconcile_repeatable_trigger_with_endpoint(
+                        &workload,
+                        &ingress_pool,
+                        endpoint_idx,
+                        &signer,
+                        trigger_id,
+                    )
+                    .await;
+                } else {
+                    workload.mark_trigger_unknown(trigger_id).await;
                 }
-                Ok(Some(_)) | Ok(None) => {
-                    workload.sync_trigger_repetitions(&trigger_id, None).await;
-                }
-                _ => {}
             }
         }
     }
-    workload.record_result(&plan, succeeded).await;
 }
 
-async fn query_trigger_repetitions_with_failover(
+async fn query_trigger_repetitions_on_endpoint(
     ingress_pool: &Arc<IngressEndpointPool>,
+    endpoint_idx: usize,
     signer: &AccountRecord,
     trigger_id: TriggerId,
 ) -> Result<Option<u32>> {
     let ingress_pool = Arc::clone(ingress_pool);
     let signer = signer.clone();
     match spawn_blocking(move || {
-        ingress_pool.run_with_failover("query_trigger_repetitions", |peer| {
+        ingress_pool.run_on_endpoint("query_trigger_repetitions", endpoint_idx, |peer| {
             let client = tune_ingress_client(
                 peer.client_for(&signer.id, signer.key_pair.private_key().clone()),
                 SubmissionConfirmationMode::AcceptedByIngress,
@@ -3421,12 +3659,48 @@ async fn query_trigger_repetitions_with_failover(
     }
 }
 
-async fn run_submission<F>(
+async fn reconcile_repeatable_trigger_with_endpoint(
+    workload: &Arc<WorkloadEngine>,
+    ingress_pool: &Arc<IngressEndpointPool>,
+    endpoint_idx: usize,
+    signer: &AccountRecord,
+    trigger_id: &TriggerId,
+) {
+    match query_trigger_repetitions_on_endpoint(
+        ingress_pool,
+        endpoint_idx,
+        signer,
+        trigger_id.clone(),
+    )
+    .await
+    {
+        Ok(Some(on_chain)) if on_chain > 0 => {
+            workload
+                .sync_trigger_repetitions(trigger_id, Some(on_chain))
+                .await;
+        }
+        Ok(Some(_)) | Ok(None) => {
+            workload.sync_trigger_repetitions(trigger_id, None).await;
+        }
+        Err(err) => {
+            warn!(
+                target: "izanami::workload",
+                ?err,
+                trigger = %trigger_id,
+                endpoint_idx,
+                "failed to reconcile repeatable trigger state from pinned ingress endpoint"
+            );
+            workload.mark_trigger_unknown(trigger_id).await;
+        }
+    }
+}
+
+async fn run_submission_result<F>(
     plan_label: &'static str,
     expect_success: bool,
     metrics: Arc<Metrics>,
     blocking: F,
-) -> bool
+) -> Result<()>
 where
     F: FnOnce() -> Result<()> + Send + 'static,
 {
@@ -3448,7 +3722,7 @@ where
         (Err(_), true) => metrics.record_failure(),
         (Err(_), false) => metrics.record_expected_failure(),
     }
-    if let Err(err) = result {
+    if let Err(err) = &result {
         warn!(
             target: "izanami::workload",
             ?err,
@@ -3456,7 +3730,21 @@ where
             "plan submission failed"
         );
     }
-    succeeded
+    result
+}
+
+async fn run_submission<F>(
+    plan_label: &'static str,
+    expect_success: bool,
+    metrics: Arc<Metrics>,
+    blocking: F,
+) -> bool
+where
+    F: FnOnce() -> Result<()> + Send + 'static,
+{
+    run_submission_result(plan_label, expect_success, metrics, blocking)
+        .await
+        .is_ok()
 }
 
 #[derive(Default)]
@@ -4545,6 +4833,69 @@ mod tests {
                 &updates,
             ),
             SubmissionConfirmationMode::AcceptedByIngress
+        );
+    }
+
+    #[test]
+    fn tracked_repeatable_trigger_extracts_registration_target() {
+        let trigger_id: TriggerId = "repeat_trigger_test".parse().expect("valid trigger id");
+        let updates = vec![PlanUpdate::TrackRepeatableTrigger(trigger_id.clone())];
+        assert_eq!(tracked_repeatable_trigger(&updates), Some(trigger_id));
+    }
+
+    #[test]
+    fn trigger_not_found_error_is_detected() {
+        let err = eyre!("Trigger with id repeat_trigger_7 not found");
+        assert!(
+            is_trigger_not_found_error(&err),
+            "repeatable trigger drift should classify missing-trigger errors"
+        );
+    }
+
+    #[test]
+    fn endpoint_pool_can_pin_and_reuse_same_endpoint() {
+        let ingress_stats = Arc::new(IngressStats::default());
+        let pool = EndpointHealthPool::new(
+            vec![
+                "http://127.0.0.1:101".to_string(),
+                "http://127.0.0.1:102".to_string(),
+            ],
+            IngressEndpointPoolConfig {
+                max_attempts: 2,
+                unhealthy_failure_threshold: 1,
+                unhealthy_cooldown: Duration::from_secs(5),
+                reprobe_interval: Duration::from_millis(500),
+            },
+            ingress_stats,
+        );
+        let now = Instant::now();
+        let endpoint_idx = pool
+            .select_endpoint_at("repeatable_trigger_plan", now)
+            .expect("an endpoint should be selectable");
+        let mut attempts = Vec::new();
+        let precheck: Result<()> = pool.run_on_endpoint_at(
+            "repeatable_trigger_precheck",
+            endpoint_idx,
+            now,
+            |idx, _| {
+                attempts.push(idx);
+                Ok(())
+            },
+        );
+        assert!(precheck.is_ok(), "pinned precheck should succeed");
+        let submit: Result<()> =
+            pool.run_on_endpoint_at("repeatable_trigger_submit", endpoint_idx, now, |idx, _| {
+                attempts.push(idx);
+                Ok(())
+            });
+        assert!(
+            submit.is_ok(),
+            "pinned submit should reuse the same endpoint"
+        );
+        assert_eq!(
+            attempts,
+            vec![endpoint_idx, endpoint_idx],
+            "repeatable trigger precheck and submit must stay on the pinned endpoint"
         );
     }
 
@@ -5849,8 +6200,13 @@ mod tests {
         );
         assert_eq!(
             strict_divergence_reference_height_from_samples(vec![120, 149, 149, 149], 0),
-            120,
-            "healthy runs should include every peer in strict divergence reference"
+            149,
+            "zero tolerated failures should anchor the strict reference on the highest healthy sample"
+        );
+        assert_eq!(
+            strict_divergence_reference_height_from_samples(vec![120, 121, 149, 149], 1),
+            149,
+            "two lagging peers should keep the strict reference on the healthy quorum side"
         );
         assert_eq!(
             strict_divergence_reference_height_from_samples(vec![120, 120, 120, 149], 1),
@@ -5890,6 +6246,10 @@ mod tests {
         let heights_two_outliers = vec![120_u64, 121, 149, 149];
         let strict_reference_two =
             strict_divergence_reference_height_from_samples(heights_two_outliers.clone(), 1);
+        assert_eq!(
+            strict_reference_two, 149,
+            "strict reference should stay on the healthy quorum side for two lagging peers"
+        );
         let lagging_two =
             strict_divergence_lagging_peer_count(&heights_two_outliers, strict_reference_two, 16);
         assert_eq!(lagging_two, 2);

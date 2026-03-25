@@ -258,7 +258,7 @@ impl Actor {
 
         let validation_priority_reason =
             self.pending_block_validation_priority_reason(hash, &pending);
-        let has_commit_qc = pending.commit_qc_seen
+        let has_commit_qc = pending.commit_qc_observed()
             || self.pending_block_has_commit_qc(hash, pending.height, pending.view);
         if !has_commit_qc
             && !self.slot_has_proposal_evidence(pending.height, pending.view)
@@ -273,13 +273,14 @@ impl Actor {
             pending.validation_status = ValidationStatus::Pending;
             self.pending.pending_blocks.insert(hash, pending);
             return ValidationGateOutcome::Deferred;
-        } else if let Some(reason) = validation_priority_reason {
+        }
+        if let Some(reason) = validation_priority_reason {
             debug!(
                 height = pending.height,
                 view = pending.view,
                 block = %hash,
                 reason,
-                "allowing validation before proposal evidence due to near-tip commit readiness"
+                "allowing validation with priority due to near-tip commit readiness"
             );
         }
 
@@ -315,7 +316,7 @@ impl Actor {
                 && !other.aborted
                 && !matches!(other.validation_status, ValidationStatus::Invalid)
         });
-        if superseded_by_newer_view && !pending.commit_qc_seen {
+        if superseded_by_newer_view && !pending.commit_qc_observed() {
             debug!(
                 height = pending.height,
                 view = pending.view,
@@ -356,7 +357,19 @@ impl Actor {
             return ValidationGateOutcome::Deferred;
         }
 
+        let local_only_commit_topology =
+            commit_topology.len() == 1 && commit_topology[0] == *self.common_config.peer.id();
+        if local_only_commit_topology {
+            debug!(
+                height = pending.height,
+                view = pending.view,
+                block = %hash,
+                "running pre-vote validation inline for local-only commit topology"
+            );
+        }
+
         if matches!(dispatch, ValidationDispatch::TryWorker)
+            && !local_only_commit_topology
             && !self.subsystems.validation.work_txs.is_empty()
         {
             if self.subsystems.validation.inflight.contains_key(&hash) {
@@ -495,9 +508,17 @@ impl Actor {
                 if let Some(roots) = roots {
                     pending.parent_state_root = Some(roots.parent_state_root);
                     pending.post_state_root = Some(roots.post_state_root);
+                    pending.note_validated_commit_artifact(
+                        hash,
+                        pending.height,
+                        pending.view,
+                        roots.parent_state_root,
+                        roots.post_state_root,
+                    );
                 } else {
                     pending.parent_state_root = None;
                     pending.post_state_root = None;
+                    pending.validated_commit_artifact = None;
                 }
                 pending.validation_status = ValidationStatus::Valid;
                 self.pending.pending_blocks.insert(hash, pending);
@@ -530,7 +551,7 @@ impl Actor {
                         height = pending.height,
                         view = pending.view,
                         block = %hash,
-                        commit_qc_seen = pending.commit_qc_seen,
+                        commit_qc_seen = pending.commit_qc_observed(),
                         has_cached_qc = self.pending_block_has_qc(hash, pending.height, pending.view),
                         "accepting pending block for commit-only progression despite signature mismatch: local peer outside commit roster"
                     );
@@ -632,13 +653,32 @@ impl Actor {
                             if let Some(roots) = roots {
                                 pending.parent_state_root = Some(roots.parent_state_root);
                                 pending.post_state_root = Some(roots.post_state_root);
+                                pending.note_validated_commit_artifact(
+                                    hash,
+                                    pending.height,
+                                    pending.view,
+                                    roots.parent_state_root,
+                                    roots.post_state_root,
+                                );
                             } else {
                                 pending.parent_state_root = None;
                                 pending.post_state_root = None;
+                                pending.validated_commit_artifact = None;
                             }
                             pending.validation_status = ValidationStatus::Valid;
                             self.pending.pending_blocks.insert(hash, pending);
-                            self.request_commit_pipeline();
+                            let _ = self.maybe_emit_local_commit_vote_for_pending_event(
+                                hash,
+                                height,
+                                view,
+                                &commit_topology,
+                                "validation_passed",
+                            );
+                            self.request_commit_pipeline_for_pending(
+                                hash,
+                                super::status::RoundEventCauseTrace::ValidationPassed,
+                                None,
+                            );
                         }
                         Err(err) => {
                             if let BlockValidationError::PrevBlockHeightMismatch {
@@ -672,14 +712,25 @@ impl Actor {
                                     height = pending.height,
                                     view = pending.view,
                                     block = %hash,
-                                    commit_qc_seen = pending.commit_qc_seen,
+                                    commit_qc_seen = pending.commit_qc_observed(),
                                     has_cached_qc = self
                                         .pending_block_has_qc(hash, pending.height, pending.view),
                                     "accepting pending block for commit-only progression despite signature mismatch: local peer outside commit roster"
                                 );
                                 pending.validation_status = ValidationStatus::Valid;
                                 self.pending.pending_blocks.insert(hash, pending);
-                                self.request_commit_pipeline();
+                                let _ = self.maybe_emit_local_commit_vote_for_pending_event(
+                                    hash,
+                                    height,
+                                    view,
+                                    &commit_topology,
+                                    "validation_passed",
+                                );
+                                self.request_commit_pipeline_for_pending(
+                                    hash,
+                                    super::status::RoundEventCauseTrace::ValidationPassed,
+                                    None,
+                                );
                                 progress = true;
                                 continue;
                             }
@@ -757,8 +808,8 @@ impl Actor {
         if !signature_mismatch {
             return false;
         }
-        let has_commit_qc =
-            pending.commit_qc_seen || self.pending_block_has_qc(hash, pending.height, pending.view);
+        let has_commit_qc = pending.commit_qc_observed()
+            || self.pending_block_has_qc(hash, pending.height, pending.view);
         if !has_commit_qc {
             return false;
         }

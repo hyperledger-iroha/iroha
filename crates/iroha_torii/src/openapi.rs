@@ -641,55 +641,55 @@ fn offline_paths() -> Map {
         Value::Object(offline_revocations_bundle_operation()),
     );
     paths.insert(
-        "/v1/offline/reserve/setup".to_owned(),
+        "/v1/offline/cash/setup".to_owned(),
         Value::Object(json_post_operation(
             "Offline",
-            "Create or fetch an offline reserve lineage.",
-            "Create the zero-balance reserve lineage for a device or return the existing reserve envelope.",
+            "Create or fetch an offline cash lineage.",
+            "Create the zero-balance offline cash lineage for a device or return the existing authoritative lineage envelope.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
     );
     paths.insert(
-        "/v1/offline/reserve/topup".to_owned(),
+        "/v1/offline/cash/load".to_owned(),
         Value::Object(json_post_operation(
             "Offline",
-            "Top up an offline reserve.",
-            "Move online balance into the device-bound reserve and return the authoritative reserve envelope.",
+            "Load offline cash.",
+            "Move online balance into the device-bound offline cash lineage and return the authoritative lineage envelope.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
     );
     paths.insert(
-        "/v1/offline/reserve/renew".to_owned(),
+        "/v1/offline/cash/refresh".to_owned(),
         Value::Object(json_post_operation(
             "Offline",
-            "Renew an offline spend authorization.",
-            "Refresh the spend authorization for an existing reserve lineage without moving funds.",
+            "Refresh offline cash authorization.",
+            "Refresh the spend authorization for an existing offline cash lineage without moving funds.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
     );
     paths.insert(
-        "/v1/offline/reserve/sync".to_owned(),
+        "/v1/offline/cash/sync".to_owned(),
         Value::Object(json_post_operation(
             "Offline",
-            "Sync offline reserve receipts.",
-            "Submit pending offline transfer receipts and return the updated authoritative reserve envelope.",
+            "Sync offline cash receipts.",
+            "Submit pending offline cash receipts and return the updated authoritative lineage envelope.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
     );
     paths.insert(
-        "/v1/offline/reserve/defund".to_owned(),
+        "/v1/offline/cash/redeem".to_owned(),
         Value::Object(json_post_operation(
             "Offline",
-            "Defund an offline reserve.",
-            "Sync pending receipts, move reserve value back online, and return the updated reserve envelope.",
+            "Redeem offline cash.",
+            "Sync pending receipts, move offline cash value back online, and return the updated lineage envelope.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -10635,7 +10635,7 @@ mod tests {
             PathCase {
                 label: "offline",
                 builder: offline_paths,
-                expected: "/v1/offline/reserve/setup",
+                expected: "/v1/offline/cash/setup",
             },
             PathCase {
                 label: "system",
@@ -10826,12 +10826,6 @@ mod tests {
             "OfflineBuildClaimIssueResponse",
             "OfflineBundleProofStatusResponse",
             "OfflineBundleProofSummary",
-            "OfflineCertificateIssueRequest",
-            "OfflineCertificateIssueResponse",
-            "OfflineCertificateRenewRequest",
-            "OfflineCertificateRenewResponse",
-            "OfflineCertificateRevokeRequest",
-            "OfflineCertificateRevokeResponse",
             "OfflineReceiptListItem",
             "OfflineReceiptListResponse",
             "OfflineSettlementBuildClaimOverride",

@@ -462,6 +462,39 @@ impl Actor {
         self.enqueue_fetch_pending_block_response(peer, msg);
     }
 
+    fn send_block_body_response(&mut self, peer: PeerId, block: &SignedBlock) {
+        let response = super::message::BlockBodyResponse {
+            block_hash: block.hash(),
+            height: block.header().height().get(),
+            view: block.header().view_change_index(),
+            body: super::message::BlockBodyData::BlockCreated(super::message::BlockCreated::from(
+                block,
+            )),
+        };
+        self.dispatch_fetch_pending_block_response(
+            peer,
+            BlockMessage::BlockBodyResponse(response),
+            /*bypass_queue*/ true,
+        );
+    }
+
+    pub(super) fn flush_frontier_body_requesters(&mut self, block: &SignedBlock) {
+        let block_hash = block.hash();
+        let height = block.header().height().get();
+        let view = block.header().view_change_index();
+        let Some(slot) = self.frontier_slot.as_mut() else {
+            return;
+        };
+        if slot.block_hash != block_hash || slot.height != height || slot.view != view {
+            return;
+        }
+        slot.body_present = true;
+        let requesters = std::mem::take(&mut slot.pending_requesters);
+        for peer in requesters {
+            self.send_block_body_response(peer, block);
+        }
+    }
+
     fn fetch_response_targets_highest_qc(&self, msg: &BlockMessage) -> bool {
         let Some(highest) = self.highest_qc else {
             return false;
@@ -518,7 +551,7 @@ impl Actor {
         &mut self,
         peer: PeerId,
         mut msg: BlockMessage,
-        _priority: FetchPendingBlockPriority,
+        priority: FetchPendingBlockPriority,
         force_bypass_queue: bool,
         allow_highest_qc_bypass: bool,
         allow_hintless_block_sync_bypass: bool,
@@ -549,11 +582,13 @@ impl Actor {
                 );
                 msg = BlockMessage::BlockCreated(super::message::BlockCreated {
                     block: update.block.clone(),
+                    frontier: None,
                 });
             }
             hintless_block_sync = false;
         }
         let bypass_queue = force_bypass_queue
+            || matches!(priority, FetchPendingBlockPriority::Consensus)
             || self.fetch_response_should_bypass_queue(&msg, allow_highest_qc_bypass)
             || (allow_hintless_block_sync_bypass && hintless_block_sync);
         if let BlockMessage::BlockSyncUpdate(update) = &mut msg {
@@ -575,6 +610,7 @@ impl Actor {
             if !self.trim_block_sync_update_for_frame_cap(update) {
                 let fallback = BlockMessage::BlockCreated(super::message::BlockCreated {
                     block: update.block.clone(),
+                    frontier: None,
                 });
                 let fallback_len =
                     super::consensus_block_wire_len(self.common_config.peer.id(), &fallback);
@@ -602,107 +638,6 @@ impl Actor {
             }
         }
         self.dispatch_fetch_pending_block_response(peer, msg, bypass_queue);
-    }
-
-    fn send_fetch_pending_block_rbc_init(
-        &mut self,
-        peer: PeerId,
-        block: &SignedBlock,
-        priority: FetchPendingBlockPriority,
-        force_bypass_queue: bool,
-        allow_highest_qc_bypass: bool,
-        allow_hintless_block_sync_bypass: bool,
-        requester_roster_proof_known: bool,
-    ) {
-        if !self.runtime_da_enabled() {
-            return;
-        }
-        let block_hash = block.hash();
-        let height = block.header().height().get();
-        let view = block.header().view_change_index();
-        let key = Self::session_key(&block_hash, height, view);
-        let init = self
-            .rebuild_rbc_init(key)
-            .or_else(|| self.rebuild_rbc_init_from_block(block, key));
-        let Some(init) = init else {
-            return;
-        };
-        // Send RBC INIT alongside missing-block responses so peers can process READY/DELIVER.
-        let peer_clone = peer.clone();
-        self.send_fetch_pending_block_response(
-            peer,
-            BlockMessage::RbcInit(init),
-            priority,
-            force_bypass_queue,
-            allow_highest_qc_bypass,
-            allow_hintless_block_sync_bypass,
-            requester_roster_proof_known,
-        );
-        self.send_fetch_pending_block_rbc_chunks(
-            peer_clone,
-            block,
-            priority,
-            force_bypass_queue,
-            allow_highest_qc_bypass,
-            allow_hintless_block_sync_bypass,
-            requester_roster_proof_known,
-        );
-    }
-
-    fn send_fetch_pending_block_rbc_chunks(
-        &mut self,
-        peer: PeerId,
-        block: &SignedBlock,
-        priority: FetchPendingBlockPriority,
-        force_bypass_queue: bool,
-        allow_highest_qc_bypass: bool,
-        allow_hintless_block_sync_bypass: bool,
-        requester_roster_proof_known: bool,
-    ) {
-        if !self.runtime_da_enabled() {
-            return;
-        }
-        let block_hash = block.hash();
-        let height = block.header().height().get();
-        let view = block.header().view_change_index();
-        let epoch = self.epoch_for_height(height);
-        let payload_bytes = super::proposals::block_payload_bytes(block);
-        let chunk_bytes = rbc::chunk_payload_bytes(&payload_bytes, self.config.rbc.chunk_max_bytes);
-        let chunk_count = chunk_bytes.len();
-        if chunk_count == 0 {
-            return;
-        }
-        info!(
-            height,
-            view,
-            block = %block_hash,
-            peer = %peer,
-            chunk_count,
-            "sending RBC chunks to missing-block requester"
-        );
-        for (idx, bytes) in chunk_bytes.into_iter().enumerate() {
-            let idx = match u32::try_from(idx) {
-                Ok(idx) => idx,
-                Err(_) => break,
-            };
-            let chunk = crate::sumeragi::consensus::RbcChunk {
-                block_hash,
-                height,
-                view,
-                epoch,
-                idx,
-                bytes,
-            };
-            self.send_fetch_pending_block_response(
-                peer.clone(),
-                BlockMessage::RbcChunk(chunk),
-                priority,
-                force_bypass_queue,
-                allow_highest_qc_bypass,
-                allow_hintless_block_sync_bypass,
-                requester_roster_proof_known,
-            );
-        }
     }
 
     pub(super) fn build_fetch_pending_block_payload(&self, block: &SignedBlock) -> BlockMessage {
@@ -956,15 +891,6 @@ impl Actor {
                     allow_hintless_for_peer,
                     meta.requester_roster_proof_known,
                 );
-                self.send_fetch_pending_block_rbc_init(
-                    peer,
-                    block,
-                    meta.priority,
-                    force_bypass_queue || bypass_rosterless_created,
-                    allow_highest_qc_bypass,
-                    allow_hintless_for_peer,
-                    meta.requester_roster_proof_known,
-                );
             }
             return;
         }
@@ -1006,15 +932,6 @@ impl Actor {
             self.send_fetch_pending_block_response(
                 peer.clone(),
                 msg.clone(),
-                meta.priority,
-                force_bypass_queue || bypass_rosterless_created,
-                allow_highest_qc_bypass,
-                allow_hintless_block_sync_bypass,
-                meta.requester_roster_proof_known,
-            );
-            self.send_fetch_pending_block_rbc_init(
-                peer,
-                block,
                 meta.priority,
                 force_bypass_queue || bypass_rosterless_created,
                 allow_highest_qc_bypass,
@@ -2056,7 +1973,10 @@ impl Actor {
                             super::status::ConsensusMessageOutcome::Deferred,
                             super::status::ConsensusMessageReason::SignatureMismatchDeferred,
                         );
-                        let created = super::message::BlockCreated { block };
+                        let created = super::message::BlockCreated {
+                            block,
+                            frontier: None,
+                        };
                         let _ = self.handle_block_created_from_block_sync(
                             created,
                             sender.clone(),
@@ -2627,7 +2547,10 @@ impl Actor {
 
         let allow_frontier_owner_preserve_on_payload_mismatch =
             !incoming_qc_usable && !block_quorum_met && !commit_cert_present && !checkpoint_present;
-        let created = super::message::BlockCreated { block };
+        let created = super::message::BlockCreated {
+            block,
+            frontier: None,
+        };
         let block_apply_start = Instant::now();
         let creation_result = self.handle_block_created_from_block_sync(
             created,
@@ -2953,7 +2876,13 @@ impl Actor {
                             }
                             qc_apply_commit_ms = u64::try_from(commit_start.elapsed().as_millis())
                                 .unwrap_or(u64::MAX);
-                            self.request_commit_pipeline();
+                            self.request_commit_pipeline_for_round(
+                                block_height,
+                                block_view,
+                                super::status::RoundPhaseTrace::WaitCommitQc,
+                                super::status::RoundEventCauseTrace::BlockSyncUpdated,
+                                None,
+                            );
                         } else {
                             debug!(
                                 incoming_hash = %block_hash,
@@ -3308,8 +3237,6 @@ impl Actor {
         request: super::message::FetchPendingBlock,
     ) -> Result<()> {
         let block_hash = request.block_hash;
-        let request_height = request.height;
-        let request_view = request.view;
         let peer = request.requester;
         let request_priority = request
             .priority
@@ -3320,7 +3247,6 @@ impl Actor {
             requester_roster_proof_known,
         };
         let force_bypass_queue = false;
-        let mut responded_any = false;
         let mut invalid_payload = false;
 
         let inflight_response = if let Some(inflight) = self
@@ -3423,58 +3349,6 @@ impl Actor {
             }
         }
 
-        // If the block isn't available yet, still respond with RBC init/chunks when possible.
-        if self.runtime_da_enabled() {
-            let key = Self::session_key(&block_hash, request_height, request_view);
-            if let Some(init) = self.rebuild_rbc_init(key) {
-                let init_total_chunks = init.total_chunks;
-                let mut roster = self.rbc_session_roster(key);
-                if roster.is_empty() {
-                    roster = self.ensure_rbc_session_roster(key);
-                }
-                let chunks = self
-                    .subsystems
-                    .da_rbc
-                    .rbc
-                    .sessions
-                    .get(&key)
-                    .and_then(|session| Self::rbc_payload_bundle(key, session, &roster))
-                    .map(|(_, chunks)| chunks)
-                    .unwrap_or_default();
-                debug!(
-                    height = request_height,
-                    view = request_view,
-                    block = %block_hash,
-                    peer = %peer,
-                    roster_len = roster.len(),
-                    init_total_chunks,
-                    chunk_count = chunks.len(),
-                    "serving RBC INIT/chunks for missing-block fetch"
-                );
-                self.send_fetch_pending_block_response(
-                    peer.clone(),
-                    BlockMessage::RbcInit(init),
-                    request_priority,
-                    force_bypass_queue,
-                    /*allow_highest_qc_bypass*/ true,
-                    /*allow_hintless_block_sync_bypass*/ false,
-                    request_meta.requester_roster_proof_known,
-                );
-                for chunk in chunks {
-                    self.send_fetch_pending_block_response(
-                        peer.clone(),
-                        BlockMessage::RbcChunk(chunk),
-                        request_priority,
-                        force_bypass_queue,
-                        /*allow_highest_qc_bypass*/ true,
-                        /*allow_hintless_block_sync_bypass*/ false,
-                        request_meta.requester_roster_proof_known,
-                    );
-                }
-                responded_any = true;
-            }
-        }
-
         if !invalid_payload {
             self.stash_pending_fetch_request(
                 block_hash,
@@ -3484,14 +3358,85 @@ impl Actor {
             );
         }
 
-        if !responded_any {
-            self.record_consensus_message_handling(
-                super::status::ConsensusMessageKind::FetchPendingBlock,
-                super::status::ConsensusMessageOutcome::Deferred,
-                super::status::ConsensusMessageReason::NotFound,
-            );
-        }
+        self.record_consensus_message_handling(
+            super::status::ConsensusMessageKind::FetchPendingBlock,
+            super::status::ConsensusMessageOutcome::Deferred,
+            super::status::ConsensusMessageReason::NotFound,
+        );
         Ok(())
+    }
+
+    #[allow(clippy::unnecessary_wraps)]
+    pub(super) fn handle_fetch_block_body(
+        &mut self,
+        request: super::message::FetchBlockBody,
+    ) -> Result<()> {
+        let block_hash = request.block_hash;
+        let peer = request.requester;
+        if let Some(block) = self.local_signed_block_for_hash(block_hash) {
+            let header = block.header();
+            if header.height().get() == request.height && header.view_change_index() == request.view
+            {
+                self.send_block_body_response(peer, block.as_ref());
+                return Ok(());
+            }
+        }
+        if let Some(slot) = self.frontier_slot.as_mut()
+            && slot.block_hash == block_hash
+            && slot.height == request.height
+            && slot.view == request.view
+        {
+            slot.pending_requesters.insert(peer);
+        }
+        self.record_consensus_message_handling(
+            super::status::ConsensusMessageKind::FetchBlockBody,
+            super::status::ConsensusMessageOutcome::Deferred,
+            super::status::ConsensusMessageReason::NotFound,
+        );
+        Ok(())
+    }
+
+    #[allow(clippy::unnecessary_wraps)]
+    pub(super) fn handle_block_body_response(
+        &mut self,
+        response: super::message::BlockBodyResponse,
+        sender: Option<PeerId>,
+    ) -> Result<()> {
+        if !self.frontier_slot_is_exact_height(response.height) {
+            return Ok(());
+        }
+        let Some(slot) = self.frontier_slot.as_ref() else {
+            return Ok(());
+        };
+        if slot.block_hash != response.block_hash
+            || slot.height != response.height
+            || slot.view != response.view
+        {
+            return Ok(());
+        }
+        let super::message::BlockBodyData::BlockCreated(block_created) = response.body;
+        let header = block_created.block.header();
+        if block_created.block.hash() != response.block_hash
+            || header.height().get() != response.height
+            || header.view_change_index() != response.view
+        {
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::BlockBodyResponse,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::InvalidPayload,
+            );
+            return Ok(());
+        }
+        if let Some(slot) = self.frontier_slot.as_mut() {
+            if let Some(sender) = sender
+                .clone()
+                .filter(|peer| peer != self.common_config.peer.id())
+            {
+                slot.voters.insert(sender);
+            }
+            slot.body_present = true;
+        }
+        self.handle_block_created(block_created, sender)
     }
 
     fn prepare_known_block_qc_work(
@@ -4015,7 +3960,13 @@ impl Actor {
         );
         if block_known_for_commit {
             self.apply_commit_qc(&qc, topology.as_ref(), block_hash, block_height, block_view);
-            self.request_commit_pipeline();
+            self.request_commit_pipeline_for_round(
+                block_height,
+                block_view,
+                super::status::RoundPhaseTrace::WaitCommitQc,
+                super::status::RoundEventCauseTrace::BlockSyncUpdated,
+                None,
+            );
         } else {
             debug!(
                 incoming_hash = %block_hash,

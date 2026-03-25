@@ -1,9 +1,9 @@
 //! Contains message structures for p2p communication during consensus.
 use std::{io::Write, sync::Arc};
 
-use iroha_crypto::HashOf;
+use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
-    block::{BlockHeader, SignedBlock, consensus::SumeragiMembershipStatus},
+    block::{BlockHeader, BlockSignature, SignedBlock, consensus::SumeragiMembershipStatus},
     peer::PeerId,
 };
 use iroha_macro::*;
@@ -23,6 +23,10 @@ pub enum BlockMessage {
     BlockCreated(#[skip_try_from] BlockCreated),
     /// This message is sent by `BlockSync` when a new block is received.
     BlockSyncUpdate(#[skip_try_from] BlockSyncUpdate),
+    /// Exact frontier body request keyed by `(height, view, block_hash)`.
+    FetchBlockBody(#[skip_try_from] FetchBlockBody),
+    /// Exact frontier body response carrying the requested body.
+    BlockBodyResponse(#[skip_try_from] BlockBodyResponse),
     /// Broadcast periodically or at startup to pin consensus parameters across peers.
     ///
     /// Nodes verify that their local on-chain collector parameters match advertised values.
@@ -355,6 +359,34 @@ pub struct ConsensusParamsAdvert {
 pub struct BlockCreated {
     /// The corresponding block.
     pub block: SignedBlock,
+    /// Optional frontier metadata carried inline so `BlockCreated` can initialize the active slot
+    /// without a separate proposal or RBC INIT side message.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub frontier: Option<BlockCreatedFrontierInfo>,
+}
+
+/// Consensus metadata bundled into `BlockCreated` for frontier progression.
+#[derive(Debug, Clone, Decode, Encode)]
+pub struct BlockCreatedFrontierInfo {
+    /// Highest QC/lock reference known to the leader when the block was created.
+    pub highest_qc: super::consensus::QcRef,
+    /// Hash of the canonical block payload bytes.
+    pub payload_hash: Hash,
+    /// Proposer index within the validator set.
+    pub proposer: super::consensus::ValidatorIndex,
+    /// Epoch associated with this slot.
+    pub epoch: u64,
+    /// Hash of the roster snapshot used for vote validation and body transport checks.
+    pub roster_hash: Hash,
+    /// Total chunk count for the body transport manifest.
+    pub total_chunks: u32,
+    /// SHA-256 digest for each payload chunk.
+    pub chunk_digests: Vec<[u8; 32]>,
+    /// Merkle root for the chunk digest set.
+    pub chunk_root: Hash,
+    /// Leader signature over the block header.
+    pub leader_signature: BlockSignature,
 }
 
 impl From<&NewBlock> for BlockCreated {
@@ -372,7 +404,10 @@ impl From<&NewBlock> for BlockCreated {
         signed.set_da_proof_policies(block.da_proof_policies().cloned());
         signed.set_da_pin_intents(block.da_pin_intents().cloned());
         signed.set_previous_roster_evidence(block.previous_roster_evidence().cloned());
-        Self { block: signed }
+        Self {
+            block: signed,
+            frontier: None,
+        }
     }
 }
 
@@ -380,6 +415,7 @@ impl From<NewBlock> for BlockCreated {
     fn from(block: NewBlock) -> Self {
         Self {
             block: block.into(),
+            frontier: None,
         }
     }
 }
@@ -389,6 +425,37 @@ impl From<&SignedBlock> for BlockCreated {
         Self {
             // Clone is required to own the message payload when constructed from a borrowed block.
             block: block.clone(),
+            frontier: None,
+        }
+    }
+}
+
+impl BlockCreated {
+    /// Build a frontier-complete `BlockCreated`.
+    pub fn with_frontier(block: SignedBlock, frontier: BlockCreatedFrontierInfo) -> Self {
+        Self {
+            block,
+            frontier: Some(frontier),
+        }
+    }
+}
+
+impl BlockCreatedFrontierInfo {
+    /// Build inline frontier metadata from the proposal/RBC-init information for the slot.
+    pub fn from_proposal_and_rbc_init(
+        proposal: &super::consensus::Proposal,
+        init: &super::consensus::RbcInit,
+    ) -> Self {
+        Self {
+            highest_qc: proposal.header.highest_qc,
+            payload_hash: proposal.payload_hash,
+            proposer: proposal.header.proposer,
+            epoch: proposal.header.epoch,
+            roster_hash: init.roster_hash,
+            total_chunks: init.total_chunks,
+            chunk_digests: init.chunk_digests.clone(),
+            chunk_root: init.chunk_root,
+            leader_signature: init.leader_signature.clone(),
         }
     }
 }
@@ -420,6 +487,39 @@ impl From<&SignedBlock> for BlockSyncUpdate {
             stake_snapshot: None,
         }
     }
+}
+
+/// Request an exact frontier block body for a known `(height, view, block_hash)` slot.
+#[derive(Debug, Clone, Decode, Encode)]
+pub struct FetchBlockBody {
+    /// Peer requesting the body.
+    pub requester: PeerId,
+    /// Hash of the requested block body.
+    pub block_hash: HashOf<BlockHeader>,
+    /// Height hint for the requested body.
+    pub height: u64,
+    /// View hint for the requested body.
+    pub view: u64,
+}
+
+/// Exact block-body payload carried in a `BlockBodyResponse`.
+#[derive(Debug, Clone, Decode, Encode, FromVariant)]
+pub enum BlockBodyData {
+    /// Full authoritative body delivered as a `BlockCreated` payload.
+    BlockCreated(#[skip_try_from] BlockCreated),
+}
+
+/// Exact frontier block-body response keyed by `(height, view, block_hash)`.
+#[derive(Debug, Clone, Decode, Encode)]
+pub struct BlockBodyResponse {
+    /// Hash of the requested block body.
+    pub block_hash: HashOf<BlockHeader>,
+    /// Height of the requested block body.
+    pub height: u64,
+    /// View of the requested block body.
+    pub view: u64,
+    /// The returned authoritative body payload.
+    pub body: BlockBodyData,
 }
 
 // NOTE: Previously manual decoding validated signature uniqueness; Decode is now derived for simplicity.

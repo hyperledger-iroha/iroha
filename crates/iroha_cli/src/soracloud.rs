@@ -10,12 +10,21 @@ use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
     fs,
+    io::Read as _,
     num::{NonZeroU16, NonZeroU32, NonZeroU64},
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use aes_gcm::{
+    Aes256Gcm, Nonce,
+    aead::{Aead as _, KeyInit as _, Payload},
+};
 use base64::Engine as _;
+use blake2::{
+    Blake2bVar,
+    digest::{Update as _, VariableOutput as _},
+};
 use eyre::{Result, WrapErr, eyre};
 use iroha::{
     client::Client,
@@ -30,18 +39,22 @@ use iroha::{
         prelude::ExposedPrivateKey,
         smart_contract::manifest::ManifestProvenance,
         soracloud::{
-            AgentApartmentManifestV1, SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
-            SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1, SORA_STATE_BINDING_VERSION_V1,
-            SecretEnvelopeV1, SoraArtifactKindV1, SoraArtifactRefV1, SoraCertifiedResponsePolicyV1,
-            SoraContainerManifestV1, SoraContainerRuntimeV1, SoraDeploymentBundleV1,
-            SoraHfBackendFamilyV1, SoraHfModelFormatV1, SoraMailboxContractV1,
-            SoraModelHostCapabilityRecordV1, SoraModelPrivacyModeV1, SoraNetworkPolicyV1,
-            SoraPrivateCompileProfileV1, SoraPrivateInferenceSessionV1, SoraRouteTargetV1,
-            SoraRouteVisibilityV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
-            SoraServiceManifestV1, SoraStateBindingV1, SoraStateEncryptionV1,
+            AgentApartmentManifestV1, SECRET_ENVELOPE_VERSION_V1,
+            SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1,
+            SORA_STATE_BINDING_VERSION_V1, SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
+            SORA_UPLOADED_MODEL_CHUNK_VERSION_V1, SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1,
+            SecretEnvelopeEncryptionV1, SecretEnvelopeV1, SoraArtifactKindV1, SoraArtifactRefV1,
+            SoraCertifiedResponsePolicyV1, SoraContainerManifestV1, SoraContainerRuntimeV1,
+            SoraDeploymentBundleV1, SoraHfBackendFamilyV1, SoraHfModelFormatV1,
+            SoraMailboxContractV1, SoraModelHostCapabilityRecordV1, SoraModelPrivacyModeV1,
+            SoraNetworkPolicyV1, SoraPrivateCompileProfileV1, SoraPrivateInferenceSessionV1,
+            SoraRouteTargetV1, SoraRouteVisibilityV1, SoraServiceHandlerClassV1,
+            SoraServiceHandlerV1, SoraServiceManifestV1, SoraStateBindingV1, SoraStateEncryptionV1,
             SoraStateMutabilityV1, SoraStateScopeV1, SoraTlsModeV1, SoraUploadedModelBundleV1,
             SoraUploadedModelChunkV1, SoraUploadedModelEncryptionRecipientV1,
-            encode_agent_artifact_allow_provenance_payload,
+            SoraUploadedModelKeyEncapsulationV1, SoraUploadedModelKeyWrapAeadV1,
+            SoraUploadedModelPricingPolicyV1, SoraUploadedModelRuntimeFormatV1,
+            SoraUploadedModelWrappedKeyV1, encode_agent_artifact_allow_provenance_payload,
             encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
             encode_agent_lease_renew_provenance_payload,
             encode_agent_message_ack_provenance_payload,
@@ -77,15 +90,20 @@ use iroha::{
         sorafs::pin_registry::StorageClass,
     },
 };
+use iroha_config::parameters::defaults;
 use iroha_core::soracloud_runtime::{
     HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS, HF_GENERATED_AGENT_LEASE_TICKS,
     build_soracloud_hf_generated_agent_manifest, build_soracloud_hf_generated_service_bundle,
 };
-use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
+use iroha_crypto::{
+    Hash, HashOf, KeyGenOption, KeyPair, Signature,
+    kex::{KeyExchangeScheme as _, X25519Sha256},
+};
 use iroha_primitives::json::Json;
 use norito::{
     decode_from_bytes,
     json::{self, JsonDeserialize, JsonSerialize},
+    to_bytes,
 };
 use reqwest::{
     blocking::Client as BlockingHttpClient,
@@ -95,13 +113,8 @@ use sha2::{Digest as _, Sha256};
 
 #[cfg(test)]
 use iroha::data_model::soracloud::{
-    SECRET_ENVELOPE_VERSION_V1, SORA_PRIVATE_COMPILE_PROFILE_VERSION_V1,
-    SORA_PRIVATE_INFERENCE_SESSION_VERSION_V1, SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
-    SORA_UPLOADED_MODEL_CHUNK_VERSION_V1, SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1,
-    SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1, SecretEnvelopeEncryptionV1,
-    SoraPrivateInferenceSessionStatusV1, SoraUploadedModelKeyEncapsulationV1,
-    SoraUploadedModelKeyWrapAeadV1, SoraUploadedModelRuntimeFormatV1,
-    SoraUploadedModelWrappedKeyV1,
+    SORA_PRIVATE_COMPILE_PROFILE_VERSION_V1, SORA_PRIVATE_INFERENCE_SESSION_VERSION_V1,
+    SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1, SoraPrivateInferenceSessionStatusV1,
 };
 
 use crate::{Run, RunContext};
@@ -118,6 +131,11 @@ const HF_REPO_ID_MAX_BYTES: usize = 256;
 const HF_REVISION_MAX_BYTES: usize = 160;
 const HF_MODEL_NAME_MAX_BYTES: usize = 128;
 const HEADER_IROHA_ACCOUNT: &str = "X-Iroha-Account";
+const PRIVATE_MODEL_ARCHIVE_DOMAIN: &str = "soracloud.uploaded_model.archive.v1";
+const PRIVATE_MODEL_BUNDLE_KEY_AAD_DOMAIN: &str = "soracloud.uploaded_model.bundle_key_aad.v1";
+const PRIVATE_MODEL_CHUNK_AAD_DOMAIN: &str = "soracloud.uploaded_model.chunk_aad.v1";
+const PRIVATE_MODEL_WRAPPING_NONCE_BYTES: usize = 12;
+const PRIVATE_MODEL_CHUNK_NONCE_BYTES: usize = 12;
 const HEADER_IROHA_SIGNATURE: &str = "X-Iroha-Signature";
 
 thread_local! {
@@ -2577,9 +2595,15 @@ impl ModelDecryptOutputArgs {
 /// Arguments for `app soracloud model-publish-private`.
 #[derive(clap::Args, Debug)]
 pub struct ModelPublishPrivateArgs {
-    /// Path to a `PrivateModelPublishPlan` JSON document.
-    #[arg(long, value_name = "PATH")]
-    plan_file: PathBuf,
+    /// Path to a prepared `PrivateModelPublishPlan` JSON document.
+    #[arg(long, value_name = "PATH", conflicts_with = "draft_file")]
+    plan_file: Option<PathBuf>,
+    /// Path to a raw-directory `PrivateModelPublishDraft` JSON document.
+    #[arg(long, value_name = "PATH", conflicts_with = "plan_file")]
+    draft_file: Option<PathBuf>,
+    /// Optional path where the prepared publish plan should be written.
+    #[arg(long, value_name = "PATH", requires = "draft_file")]
+    emit_plan_file: Option<PathBuf>,
     /// Torii base URL for authoritative uploaded-model control-plane routes.
     #[arg(long, value_name = "URL")]
     torii_url: Option<String>,
@@ -2593,16 +2617,62 @@ pub struct ModelPublishPrivateArgs {
 
 impl ModelPublishPrivateArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
-        let plan: PrivateModelPublishPlan = load_json(&self.plan_file)?;
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
-        execute_private_model_publish_plan(
+        let (_, recipient_payload) = fetch_torii_soracloud_uploaded_model_encryption_recipient(
+            torii_url,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        let recipient_value = recipient_payload.get("recipient").cloned().ok_or_else(|| {
+            eyre!("uploaded-model encryption recipient response is missing `recipient`")
+        })?;
+        let recipient: SoraUploadedModelEncryptionRecipientV1 =
+            json::from_value(recipient_value)
+                .wrap_err("failed to decode uploaded-model encryption recipient response")?;
+
+        let mut prepared_plan_path = None;
+        let plan = match (self.plan_file.as_deref(), self.draft_file.as_deref()) {
+            (Some(plan_file), None) => load_json(plan_file)?,
+            (None, Some(draft_file)) => {
+                let draft: PrivateModelPublishDraft = load_json(draft_file)?;
+                let plan = prepare_private_model_publish_plan_from_draft(
+                    draft_file,
+                    draft,
+                    recipient.clone(),
+                )?;
+                if let Some(path) = self.emit_plan_file.as_deref() {
+                    write_json(path, &plan)?;
+                    prepared_plan_path = Some(path.display().to_string());
+                }
+                plan
+            }
+            (Some(_), Some(_)) => {
+                return Err(eyre!(
+                    "exactly one of --plan-file or --draft-file must be provided"
+                ));
+            }
+            (None, None) => {
+                return Err(eyre!(
+                    "one of --plan-file or --draft-file is required for model-publish-private"
+                ));
+            }
+        };
+
+        let mut output = execute_private_model_publish_plan(
             torii_url,
             plan,
+            Some(recipient),
             self.api_token.as_deref(),
             self.timeout_secs,
             authority,
             key_pair,
-        )
+        )?;
+        if let Some(path) = prepared_plan_path
+            && let Some(root) = output.as_object_mut()
+        {
+            root.insert("prepared_plan_file".to_owned(), json::Value::String(path));
+        }
+        Ok(output)
     }
 }
 
@@ -4147,7 +4217,7 @@ struct PrivateInferenceFinalizeRequest {
     session_id: String,
 }
 
-#[derive(Clone, Debug, JsonDeserialize)]
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct PrivateModelPublishPlan {
     bundle: SoraUploadedModelBundleV1,
     #[norito(default)]
@@ -4157,6 +4227,134 @@ struct PrivateModelPublishPlan {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     allow_model: Option<UploadedModelAllowPayload>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct PrivateModelPublishDraft {
+    source_dir: PathBuf,
+    service_name: String,
+    model_name: String,
+    model_id: String,
+    artifact_id: String,
+    weight_version: String,
+    family: String,
+    #[norito(default)]
+    modalities: Vec<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    runtime_format: Option<SoraUploadedModelRuntimeFormatV1>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    privacy_mode: Option<SoraModelPrivacyModeV1>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pricing_policy: Option<SoraUploadedModelPricingPolicyV1>,
+    decryption_policy_ref: String,
+    dataset_ref: String,
+    compile_profile: SoraPrivateCompileProfileV1,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    allow_model: Option<PrivateModelAllowDraft>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct PrivateModelAllowDraft {
+    apartment_name: String,
+    #[norito(default = "default_private_model_allow_inference")]
+    require_model_inference: bool,
+}
+
+fn default_private_model_allow_inference() -> bool {
+    true
+}
+
+#[derive(Clone, Debug)]
+struct PrivateModelSourceEntry {
+    relative_path: String,
+    absolute_path: PathBuf,
+    file_bytes: u64,
+}
+
+type UploadedModelBundleRootTuple<'a> = (
+    &'a str,
+    &'a str,
+    &'a str,
+    &'a str,
+    Vec<String>,
+    Hash,
+    SoraUploadedModelRuntimeFormatV1,
+    u64,
+    u64,
+    Hash,
+    Hash,
+    SoraUploadedModelEncryptionRecipientV1,
+    SoraUploadedModelWrappedKeyV1,
+    SoraUploadedModelPricingPolicyV1,
+    &'a str,
+);
+
+struct UploadedModelBundleRootPayload<'a> {
+    service_name: &'a str,
+    model_id: &'a str,
+    weight_version: &'a str,
+    family: &'a str,
+    modalities: &'a Vec<String>,
+    plaintext_root: Hash,
+    runtime_format: SoraUploadedModelRuntimeFormatV1,
+    plaintext_bytes: u64,
+    ciphertext_bytes: u64,
+    compile_profile_hash: Hash,
+    chunk_manifest_root: Hash,
+    upload_recipient: &'a SoraUploadedModelEncryptionRecipientV1,
+    wrapped_bundle_key: &'a SoraUploadedModelWrappedKeyV1,
+    pricing_policy: &'a SoraUploadedModelPricingPolicyV1,
+    decryption_policy_ref: &'a str,
+}
+
+impl norito::core::NoritoSerialize for UploadedModelBundleRootPayload<'_> {
+    fn schema_hash() -> [u8; 16]
+    where
+        Self: Sized,
+    {
+        norito::core::type_name_schema_hash::<UploadedModelBundleRootTuple<'static>>()
+    }
+
+    fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), norito::Error> {
+        let current = norito::core::get_decode_flags();
+        let defaults = norito::core::default_encode_flags();
+        let dynamic_mask = norito::core::header_flags::PACKED_SEQ;
+        let static_defaults = defaults & !dynamic_mask;
+        let merged = if current == 0 {
+            defaults
+        } else {
+            let current_dynamic = current & dynamic_mask;
+            let current_static = current & !dynamic_mask;
+            let effective_static = if current_static == 0 {
+                static_defaults
+            } else {
+                current_static | static_defaults
+            };
+            current_dynamic | effective_static
+        };
+        let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(merged, merged);
+
+        serialize_tuple_field(&mut writer, &self.service_name)?;
+        serialize_tuple_field(&mut writer, &self.model_id)?;
+        serialize_tuple_field(&mut writer, &self.weight_version)?;
+        serialize_tuple_field(&mut writer, &self.family)?;
+        serialize_tuple_field(&mut writer, self.modalities)?;
+        serialize_tuple_field(&mut writer, &self.plaintext_root)?;
+        serialize_tuple_field(&mut writer, &self.runtime_format)?;
+        serialize_tuple_field(&mut writer, &self.plaintext_bytes)?;
+        serialize_tuple_field(&mut writer, &self.ciphertext_bytes)?;
+        serialize_tuple_field(&mut writer, &self.compile_profile_hash)?;
+        serialize_tuple_field(&mut writer, &self.chunk_manifest_root)?;
+        serialize_tuple_field(&mut writer, self.upload_recipient)?;
+        serialize_tuple_field(&mut writer, self.wrapped_bundle_key)?;
+        serialize_tuple_field(&mut writer, self.pricing_policy)?;
+        serialize_tuple_field(&mut writer, &self.decryption_policy_ref)?;
+        Ok(())
+    }
 }
 
 fn signed_bundle_request(
@@ -6574,6 +6772,795 @@ fn validate_private_model_publish_plan(plan: &PrivateModelPublishPlan) -> Result
     Ok(compile_profile_hash)
 }
 
+fn serialize_tuple_field<W, T>(writer: &mut W, value: &T) -> Result<(), norito::Error>
+where
+    W: std::io::Write,
+    T: norito::core::NoritoSerialize + ?Sized,
+{
+    let mut payload = Vec::new();
+    value.serialize(&mut payload)?;
+    let len = u64::try_from(payload.len()).map_err(|_| norito::Error::LengthMismatch)?;
+    norito::core::write_len(writer, len)?;
+    writer.write_all(&payload)?;
+    Ok(())
+}
+
+fn hash_encoded<T>(value: &T) -> Result<Hash>
+where
+    T: norito::core::NoritoSerialize,
+{
+    let encoded = to_bytes(value).wrap_err("failed to encode deterministic hash payload")?;
+    Ok(Hash::new(encoded))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compute_uploaded_model_bundle_root(
+    service_name: &Name,
+    model_id: &str,
+    weight_version: &str,
+    family: &str,
+    modalities: &Vec<String>,
+    plaintext_root: Hash,
+    runtime_format: SoraUploadedModelRuntimeFormatV1,
+    plaintext_bytes: u64,
+    ciphertext_bytes: u64,
+    compile_profile_hash: Hash,
+    chunk_manifest_root: Hash,
+    upload_recipient: &SoraUploadedModelEncryptionRecipientV1,
+    wrapped_bundle_key: &SoraUploadedModelWrappedKeyV1,
+    pricing_policy: &SoraUploadedModelPricingPolicyV1,
+    decryption_policy_ref: &str,
+) -> Result<Hash> {
+    hash_encoded(&UploadedModelBundleRootPayload {
+        service_name: service_name.as_ref(),
+        model_id,
+        weight_version,
+        family,
+        modalities,
+        plaintext_root,
+        runtime_format,
+        plaintext_bytes,
+        ciphertext_bytes,
+        compile_profile_hash,
+        chunk_manifest_root,
+        upload_recipient,
+        wrapped_bundle_key,
+        pricing_policy,
+        decryption_policy_ref,
+    })
+}
+
+fn prepare_private_model_publish_plan_from_draft(
+    draft_path: &Path,
+    draft: PrivateModelPublishDraft,
+    recipient: SoraUploadedModelEncryptionRecipientV1,
+) -> Result<PrivateModelPublishPlan> {
+    let chunk_plaintext_bytes = defaults::nexus::uploaded_models::CHUNK_PLAINTEXT_BYTES;
+    let mut rng = rand::rng();
+    prepare_private_model_publish_plan_from_draft_with_rng(
+        draft_path,
+        draft,
+        recipient,
+        chunk_plaintext_bytes,
+        &mut rng,
+    )
+}
+
+fn prepare_private_model_publish_plan_from_draft_with_rng<R>(
+    draft_path: &Path,
+    draft: PrivateModelPublishDraft,
+    recipient: SoraUploadedModelEncryptionRecipientV1,
+    chunk_plaintext_bytes: u64,
+    rng: &mut R,
+) -> Result<PrivateModelPublishPlan>
+where
+    R: rand::CryptoRng + rand::RngCore,
+{
+    validate_private_model_publish_draft(&draft)?;
+    recipient
+        .validate()
+        .wrap_err("invalid uploaded-model encryption recipient")?;
+    if chunk_plaintext_bytes == 0 {
+        return Err(eyre!("uploaded-model chunk size must be greater than zero"));
+    }
+
+    let source_dir = resolve_private_model_source_dir(draft_path, &draft.source_dir)?;
+    let source_entries = collect_private_model_source_entries(&source_dir)?;
+    validate_private_model_source_entries(&draft, &source_entries)?;
+
+    let service_name: Name = draft
+        .service_name
+        .parse()
+        .wrap_err("invalid uploaded-model draft service_name")?;
+    let compile_profile = draft.compile_profile.clone();
+    let compile_profile_hash = uploaded_model_compile_profile_hash(&compile_profile);
+    let runtime_format = draft
+        .runtime_format
+        .unwrap_or(SoraUploadedModelRuntimeFormatV1::HuggingFaceSafetensors);
+    let privacy_mode = draft
+        .privacy_mode
+        .unwrap_or(SoraModelPrivacyModeV1::PrivateExecution);
+    let pricing_policy = draft.pricing_policy.unwrap_or_default();
+    let modalities = if draft.modalities.is_empty() {
+        vec!["text".to_owned()]
+    } else {
+        draft.modalities.clone()
+    };
+
+    let (wrapped_bundle_key, bundle_key) = wrap_uploaded_model_bundle_key(&recipient, &draft, rng)?;
+    let (plaintext_root, mut chunks, plaintext_bytes, ciphertext_bytes) =
+        build_private_model_chunks(
+            &service_name,
+            &draft.model_id,
+            &draft.weight_version,
+            &source_entries,
+            chunk_plaintext_bytes,
+            &bundle_key,
+            rng,
+        )?;
+    let chunk_manifest_root = compute_uploaded_model_chunk_manifest_root(&chunks)?;
+    let bundle_root = compute_uploaded_model_bundle_root(
+        &service_name,
+        &draft.model_id,
+        &draft.weight_version,
+        &draft.family,
+        &modalities,
+        plaintext_root,
+        runtime_format,
+        plaintext_bytes,
+        ciphertext_bytes,
+        compile_profile_hash,
+        chunk_manifest_root,
+        &recipient,
+        &wrapped_bundle_key,
+        &pricing_policy,
+        &draft.decryption_policy_ref,
+    )?;
+    for chunk in &mut chunks {
+        chunk.bundle_root = bundle_root;
+    }
+
+    let bundle = SoraUploadedModelBundleV1 {
+        schema_version: SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
+        service_name: service_name.clone(),
+        model_id: draft.model_id.clone(),
+        weight_version: draft.weight_version.clone(),
+        family: draft.family.clone(),
+        modalities: modalities.clone(),
+        plaintext_root,
+        runtime_format,
+        bundle_root,
+        chunk_count: u32::try_from(chunks.len()).unwrap_or(u32::MAX),
+        plaintext_bytes,
+        ciphertext_bytes,
+        compile_profile_hash,
+        chunk_manifest_root,
+        upload_recipient: recipient,
+        wrapped_bundle_key,
+        pricing_policy,
+        decryption_policy_ref: draft.decryption_policy_ref.clone(),
+    };
+
+    let weight_artifact_hash = hash_encoded(&(
+        "uploaded-model-weight",
+        draft.service_name.as_str(),
+        draft.model_name.as_str(),
+        draft.model_id.as_str(),
+        draft.artifact_id.as_str(),
+        draft.weight_version.as_str(),
+        bundle_root,
+    ))?;
+    let training_config_hash = hash_encoded(&(
+        "private-compile-profile",
+        compile_profile.clone(),
+        runtime_format,
+    ))?;
+    let reproducibility_hash = hash_encoded(&(
+        "chunk-reproducibility",
+        draft.service_name.as_str(),
+        draft.model_id.as_str(),
+        chunks
+            .iter()
+            .map(|chunk| {
+                (
+                    chunk.ordinal,
+                    chunk.offset_bytes,
+                    chunk.plaintext_len,
+                    chunk.ciphertext_len,
+                    chunk.ciphertext_hash,
+                )
+            })
+            .collect::<Vec<_>>(),
+    ))?;
+    let provenance_attestation_hash = hash_encoded(&(
+        "uploaded-model-attestation",
+        weight_artifact_hash,
+        training_config_hash,
+        reproducibility_hash,
+        draft.dataset_ref.as_str(),
+    ))?;
+    let finalize = UploadedModelFinalizePayload {
+        service_name: draft.service_name.clone(),
+        model_name: draft.model_name.clone(),
+        model_id: draft.model_id.clone(),
+        artifact_id: draft.artifact_id.clone(),
+        weight_version: draft.weight_version.clone(),
+        bundle_root,
+        privacy_mode,
+        weight_artifact_hash,
+        dataset_ref: draft.dataset_ref.clone(),
+        training_config_hash,
+        reproducibility_hash,
+        provenance_attestation_hash,
+    };
+    let allow_model = draft.allow_model.map(|allow| UploadedModelAllowPayload {
+        apartment_name: allow.apartment_name,
+        service_name: draft.service_name.clone(),
+        model_name: draft.model_name.clone(),
+        model_id: draft.model_id.clone(),
+        artifact_id: draft.artifact_id.clone(),
+        weight_version: draft.weight_version.clone(),
+        bundle_root,
+        compile_profile_hash,
+        privacy_mode,
+        require_model_inference: allow.require_model_inference,
+    });
+
+    let plan = PrivateModelPublishPlan {
+        bundle,
+        chunks,
+        finalize,
+        compile_profile,
+        allow_model,
+    };
+    validate_private_model_publish_plan(&plan)?;
+    Ok(plan)
+}
+
+fn validate_private_model_publish_draft(draft: &PrivateModelPublishDraft) -> Result<()> {
+    for (field, value) in [
+        ("service_name", draft.service_name.as_str()),
+        ("model_name", draft.model_name.as_str()),
+        ("model_id", draft.model_id.as_str()),
+        ("artifact_id", draft.artifact_id.as_str()),
+        ("weight_version", draft.weight_version.as_str()),
+        ("family", draft.family.as_str()),
+        (
+            "decryption_policy_ref",
+            draft.decryption_policy_ref.as_str(),
+        ),
+        ("dataset_ref", draft.dataset_ref.as_str()),
+    ] {
+        if value.trim().is_empty() {
+            return Err(eyre!("uploaded-model draft `{field}` must not be empty"));
+        }
+    }
+    if let Some(allow) = draft.allow_model.as_ref()
+        && allow.apartment_name.trim().is_empty()
+    {
+        return Err(eyre!(
+            "uploaded-model draft allow_model.apartment_name must not be empty"
+        ));
+    }
+    draft
+        .compile_profile
+        .validate()
+        .wrap_err("invalid uploaded-model draft compile profile")?;
+    if draft.compile_profile.family.trim() != draft.family.trim() {
+        return Err(eyre!(
+            "uploaded-model draft family must match compile_profile.family"
+        ));
+    }
+    Ok(())
+}
+
+fn resolve_private_model_source_dir(draft_path: &Path, source_dir: &Path) -> Result<PathBuf> {
+    let resolved = if source_dir.is_absolute() {
+        source_dir.to_path_buf()
+    } else {
+        draft_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(source_dir)
+    };
+    let metadata = fs::metadata(&resolved).wrap_err_with(|| {
+        format!(
+            "failed to read uploaded-model source directory `{}`",
+            resolved.display()
+        )
+    })?;
+    if !metadata.is_dir() {
+        return Err(eyre!(
+            "uploaded-model source `{}` is not a directory",
+            resolved.display()
+        ));
+    }
+    resolved
+        .canonicalize()
+        .wrap_err_with(|| format!("failed to canonicalize `{}`", resolved.display()))
+}
+
+fn collect_private_model_source_entries(source_dir: &Path) -> Result<Vec<PrivateModelSourceEntry>> {
+    let mut entries = Vec::new();
+    collect_private_model_source_entries_recursive(source_dir, source_dir, &mut entries)?;
+    entries.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    if entries.is_empty() {
+        return Err(eyre!(
+            "uploaded-model source directory `{}` does not contain any admitted files",
+            source_dir.display()
+        ));
+    }
+    Ok(entries)
+}
+
+fn collect_private_model_source_entries_recursive(
+    root: &Path,
+    current: &Path,
+    entries: &mut Vec<PrivateModelSourceEntry>,
+) -> Result<()> {
+    let mut children = fs::read_dir(current)
+        .wrap_err_with(|| format!("failed to read source directory `{}`", current.display()))?
+        .collect::<std::io::Result<Vec<_>>>()
+        .wrap_err_with(|| format!("failed to enumerate `{}`", current.display()))?;
+    children.sort_by(|left, right| left.file_name().cmp(&right.file_name()));
+
+    for child in children {
+        let file_type = child.file_type().wrap_err_with(|| {
+            format!("failed to read file type for `{}`", child.path().display())
+        })?;
+        let name = child
+            .file_name()
+            .into_string()
+            .map_err(|_| eyre!("uploaded-model source paths must be valid UTF-8"))?;
+        if should_skip_private_model_source_entry(&name) {
+            continue;
+        }
+        let path = child.path();
+        if file_type.is_symlink() {
+            return Err(eyre!(
+                "uploaded-model source path `{}` must not contain symlinks",
+                path.display()
+            ));
+        }
+        if file_type.is_dir() {
+            collect_private_model_source_entries_recursive(root, &path, entries)?;
+            continue;
+        }
+        if !file_type.is_file() {
+            continue;
+        }
+        let relative_path = normalize_private_model_source_relative_path(root, &path)?;
+        let metadata = child
+            .metadata()
+            .wrap_err_with(|| format!("failed to read file metadata for `{}`", path.display()))?;
+        entries.push(PrivateModelSourceEntry {
+            relative_path,
+            absolute_path: path,
+            file_bytes: metadata.len(),
+        });
+    }
+    Ok(())
+}
+
+fn should_skip_private_model_source_entry(name: &str) -> bool {
+    matches!(
+        name,
+        ".git" | ".hg" | ".svn" | "__MACOSX" | ".DS_Store" | "Thumbs.db"
+    ) || name.starts_with('.')
+}
+
+fn normalize_private_model_source_relative_path(root: &Path, path: &Path) -> Result<String> {
+    let relative = path.strip_prefix(root).wrap_err_with(|| {
+        format!(
+            "failed to compute uploaded-model relative path for `{}`",
+            path.display()
+        )
+    })?;
+    let mut components = Vec::new();
+    for component in relative.components() {
+        match component {
+            std::path::Component::Normal(value) => {
+                let component = value
+                    .to_str()
+                    .ok_or_else(|| eyre!("uploaded-model source paths must be valid UTF-8"))?;
+                components.push(component.to_owned());
+            }
+            std::path::Component::CurDir => {}
+            _ => {
+                return Err(eyre!(
+                    "uploaded-model source path `{}` is not normalized",
+                    path.display()
+                ));
+            }
+        }
+    }
+    if components.is_empty() {
+        return Err(eyre!(
+            "uploaded-model source path `{}` must not resolve to the root directory",
+            path.display()
+        ));
+    }
+    Ok(components.join("/"))
+}
+
+fn validate_private_model_source_entries(
+    draft: &PrivateModelPublishDraft,
+    entries: &[PrivateModelSourceEntry],
+) -> Result<()> {
+    let has_config = entries
+        .iter()
+        .any(|entry| entry.relative_path == "config.json");
+    if !has_config {
+        return Err(eyre!(
+            "uploaded-model source must include `config.json` at the repository root"
+        ));
+    }
+    let has_safetensors = entries
+        .iter()
+        .any(|entry| entry.relative_path.ends_with(".safetensors"));
+    if !has_safetensors {
+        return Err(eyre!(
+            "uploaded-model source must include at least one `.safetensors` weight shard"
+        ));
+    }
+    let has_tokenizer = entries.iter().any(|entry| {
+        matches!(
+            entry.relative_path.as_str(),
+            "tokenizer.json"
+                | "tokenizer.model"
+                | "tokenizer_config.json"
+                | "special_tokens_map.json"
+                | "vocab.json"
+                | "merges.txt"
+        ) || entry.relative_path.starts_with("tokenizer.")
+    });
+    if !has_tokenizer {
+        return Err(eyre!(
+            "uploaded-model source must include tokenizer assets such as `tokenizer.json` or `tokenizer.model`"
+        ));
+    }
+    let requires_processor = draft
+        .modalities
+        .iter()
+        .any(|modality| modality.eq_ignore_ascii_case("image"));
+    if requires_processor {
+        let has_processor = entries.iter().any(|entry| {
+            matches!(
+                entry.relative_path.as_str(),
+                "processor_config.json"
+                    | "preprocessor_config.json"
+                    | "image_processor_config.json"
+            )
+        });
+        if !has_processor {
+            return Err(eyre!(
+                "image-capable uploaded-model sources must include processor/preprocessor metadata"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn wrap_uploaded_model_bundle_key<R>(
+    recipient: &SoraUploadedModelEncryptionRecipientV1,
+    draft: &PrivateModelPublishDraft,
+    rng: &mut R,
+) -> Result<(SoraUploadedModelWrappedKeyV1, [u8; 32])>
+where
+    R: rand::CryptoRng + rand::RngCore,
+{
+    if recipient.kem != SoraUploadedModelKeyEncapsulationV1::X25519HkdfSha256 {
+        return Err(eyre!(
+            "unsupported uploaded-model recipient KEM {:?}",
+            recipient.kem
+        ));
+    }
+    if recipient.aead != SoraUploadedModelKeyWrapAeadV1::Aes256Gcm {
+        return Err(eyre!(
+            "unsupported uploaded-model recipient AEAD {:?}",
+            recipient.aead
+        ));
+    }
+
+    let mut bundle_key = [0_u8; 32];
+    rng.fill_bytes(&mut bundle_key);
+    let mut seed = [0_u8; 32];
+    rng.fill_bytes(&mut seed);
+
+    let scheme = X25519Sha256::new();
+    let (ephemeral_public, ephemeral_secret) = scheme.keypair(KeyGenOption::UseSeed(seed.to_vec()));
+    let remote_public = X25519Sha256::decode_public_key(&recipient.public_key_bytes)
+        .wrap_err("failed to decode uploaded-model recipient public key")?;
+    let wrapping_key = scheme
+        .compute_shared_secret(&ephemeral_secret, &remote_public)
+        .wrap_err("failed to derive uploaded-model bundle wrapping key")?;
+    let cipher = Aes256Gcm::new_from_slice(wrapping_key.payload())
+        .map_err(|_| eyre!("failed to construct uploaded-model bundle wrapper"))?;
+    let mut nonce = [0_u8; PRIVATE_MODEL_WRAPPING_NONCE_BYTES];
+    rng.fill_bytes(&mut nonce);
+    let ephemeral_public_key = X25519Sha256::encode_public_key(&ephemeral_public);
+    let aad = to_bytes(&(
+        PRIVATE_MODEL_BUNDLE_KEY_AAD_DOMAIN,
+        draft.service_name.as_str(),
+        draft.model_id.as_str(),
+        draft.weight_version.as_str(),
+        recipient.key_id.as_str(),
+        recipient.key_version.get(),
+        recipient.public_key_fingerprint,
+        ephemeral_public_key.clone(),
+    ))
+    .wrap_err("failed to encode uploaded-model bundle-key AAD")?;
+    let ciphertext = cipher
+        .encrypt(
+            Nonce::from_slice(&nonce),
+            Payload {
+                msg: &bundle_key,
+                aad: &aad,
+            },
+        )
+        .map_err(|_| eyre!("failed to wrap uploaded-model bundle key"))?;
+
+    Ok((
+        SoraUploadedModelWrappedKeyV1 {
+            schema_version: SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1,
+            recipient_key_id: recipient.key_id.clone(),
+            recipient_key_version: recipient.key_version,
+            kem: recipient.kem,
+            aead: recipient.aead,
+            ephemeral_public_key,
+            nonce: nonce.to_vec(),
+            ciphertext_hash: Hash::new(ciphertext.as_slice()),
+            wrapped_key_ciphertext: ciphertext,
+            aad_digest: Hash::new(aad),
+        },
+        bundle_key,
+    ))
+}
+
+fn build_private_model_chunks<R>(
+    service_name: &Name,
+    model_id: &str,
+    weight_version: &str,
+    entries: &[PrivateModelSourceEntry],
+    chunk_plaintext_bytes: u64,
+    bundle_key: &[u8; 32],
+    rng: &mut R,
+) -> Result<(Hash, Vec<SoraUploadedModelChunkV1>, u64, u64)>
+where
+    R: rand::CryptoRng + rand::RngCore,
+{
+    let manifest_entries = entries
+        .iter()
+        .map(|entry| (entry.relative_path.clone(), entry.file_bytes))
+        .collect::<Vec<_>>();
+    let archive_header = to_bytes(&(PRIVATE_MODEL_ARCHIVE_DOMAIN, manifest_entries))
+        .wrap_err("failed to encode uploaded-model plaintext archive header")?;
+    let chunk_plaintext_len =
+        usize::try_from(chunk_plaintext_bytes).wrap_err("chunk plaintext bytes exceed usize")?;
+    let mut hasher =
+        Blake2bVar::new(Hash::LENGTH).map_err(|_| eyre!("failed to construct plaintext hasher"))?;
+    let mut current_chunk = Vec::with_capacity(chunk_plaintext_len);
+    let mut chunks = Vec::new();
+    let mut plaintext_total = 0_u64;
+    let mut ciphertext_total = 0_u64;
+    let key_id = private_model_bundle_key_id(bundle_key);
+    let key_version = NonZeroU32::new(1).expect("non-zero uploaded-model bundle key version");
+
+    push_private_model_plaintext_bytes(
+        &archive_header,
+        chunk_plaintext_len,
+        &mut hasher,
+        &mut current_chunk,
+        &mut chunks,
+        &mut plaintext_total,
+        &mut ciphertext_total,
+        service_name,
+        model_id,
+        weight_version,
+        bundle_key,
+        &key_id,
+        key_version,
+        rng,
+    )?;
+
+    let mut read_buffer = vec![0_u8; 64 * 1024];
+    for entry in entries {
+        let mut file = fs::File::open(&entry.absolute_path).wrap_err_with(|| {
+            format!(
+                "failed to open uploaded-model source file `{}`",
+                entry.absolute_path.display()
+            )
+        })?;
+        loop {
+            let read = file.read(&mut read_buffer).wrap_err_with(|| {
+                format!(
+                    "failed to read uploaded-model source file `{}`",
+                    entry.absolute_path.display()
+                )
+            })?;
+            if read == 0 {
+                break;
+            }
+            push_private_model_plaintext_bytes(
+                &read_buffer[..read],
+                chunk_plaintext_len,
+                &mut hasher,
+                &mut current_chunk,
+                &mut chunks,
+                &mut plaintext_total,
+                &mut ciphertext_total,
+                service_name,
+                model_id,
+                weight_version,
+                bundle_key,
+                &key_id,
+                key_version,
+                rng,
+            )?;
+        }
+    }
+
+    if !current_chunk.is_empty() {
+        let chunk = encrypt_uploaded_model_chunk(
+            service_name,
+            model_id,
+            weight_version,
+            u32::try_from(chunks.len()).unwrap_or(u32::MAX),
+            chunk_plaintext_bytes,
+            &current_chunk,
+            bundle_key,
+            &key_id,
+            key_version,
+            rng,
+        )?;
+        ciphertext_total = ciphertext_total.saturating_add(u64::from(chunk.ciphertext_len));
+        chunks.push(chunk);
+    }
+
+    if chunks.is_empty() {
+        return Err(eyre!(
+            "uploaded-model source did not produce any encrypted chunk payloads"
+        ));
+    }
+
+    let mut hash_bytes = [0_u8; Hash::LENGTH];
+    hasher
+        .finalize_variable(&mut hash_bytes)
+        .map_err(|_| eyre!("failed to finalize uploaded-model plaintext hash"))?;
+    Ok((
+        Hash::prehashed(hash_bytes),
+        chunks,
+        plaintext_total,
+        ciphertext_total,
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_private_model_plaintext_bytes<R>(
+    bytes: &[u8],
+    chunk_plaintext_len: usize,
+    hasher: &mut Blake2bVar,
+    current_chunk: &mut Vec<u8>,
+    chunks: &mut Vec<SoraUploadedModelChunkV1>,
+    plaintext_total: &mut u64,
+    ciphertext_total: &mut u64,
+    service_name: &Name,
+    model_id: &str,
+    weight_version: &str,
+    bundle_key: &[u8; 32],
+    key_id: &str,
+    key_version: NonZeroU32,
+    rng: &mut R,
+) -> Result<()>
+where
+    R: rand::CryptoRng + rand::RngCore,
+{
+    hasher.update(bytes);
+    *plaintext_total =
+        plaintext_total.saturating_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
+    let mut remaining = bytes;
+    while !remaining.is_empty() {
+        let available = chunk_plaintext_len.saturating_sub(current_chunk.len());
+        let take = available.min(remaining.len());
+        current_chunk.extend_from_slice(&remaining[..take]);
+        remaining = &remaining[take..];
+        if current_chunk.len() == chunk_plaintext_len {
+            let chunk = encrypt_uploaded_model_chunk(
+                service_name,
+                model_id,
+                weight_version,
+                u32::try_from(chunks.len()).unwrap_or(u32::MAX),
+                u64::try_from(chunk_plaintext_len).unwrap_or(u64::MAX),
+                current_chunk,
+                bundle_key,
+                key_id,
+                key_version,
+                rng,
+            )?;
+            *ciphertext_total = ciphertext_total.saturating_add(u64::from(chunk.ciphertext_len));
+            chunks.push(chunk);
+            current_chunk.clear();
+        }
+    }
+    Ok(())
+}
+
+fn encrypt_uploaded_model_chunk<R>(
+    service_name: &Name,
+    model_id: &str,
+    weight_version: &str,
+    ordinal: u32,
+    chunk_plaintext_bytes: u64,
+    plaintext: &[u8],
+    bundle_key: &[u8; 32],
+    key_id: &str,
+    key_version: NonZeroU32,
+    rng: &mut R,
+) -> Result<SoraUploadedModelChunkV1>
+where
+    R: rand::CryptoRng + rand::RngCore,
+{
+    let cipher = Aes256Gcm::new_from_slice(bundle_key)
+        .map_err(|_| eyre!("failed to construct uploaded-model chunk encryptor"))?;
+    let offset_bytes = u64::from(ordinal).saturating_mul(chunk_plaintext_bytes);
+    let plaintext_len = u32::try_from(plaintext.len())
+        .wrap_err("uploaded-model chunk plaintext exceeds u32 length")?;
+    let aad = to_bytes(&(
+        PRIVATE_MODEL_CHUNK_AAD_DOMAIN,
+        service_name.as_ref(),
+        model_id,
+        weight_version,
+        ordinal,
+        offset_bytes,
+        plaintext_len,
+    ))
+    .wrap_err("failed to encode uploaded-model chunk AAD")?;
+    let mut nonce = [0_u8; PRIVATE_MODEL_CHUNK_NONCE_BYTES];
+    rng.fill_bytes(&mut nonce);
+    let ciphertext = cipher
+        .encrypt(
+            Nonce::from_slice(&nonce),
+            Payload {
+                msg: plaintext,
+                aad: &aad,
+            },
+        )
+        .map_err(|_| eyre!("failed to encrypt uploaded-model plaintext chunk"))?;
+    let ciphertext_len = u32::try_from(ciphertext.len())
+        .wrap_err("uploaded-model encrypted chunk exceeds u32 length")?;
+    let ciphertext_hash = Hash::new(ciphertext.as_slice());
+    Ok(SoraUploadedModelChunkV1 {
+        schema_version: SORA_UPLOADED_MODEL_CHUNK_VERSION_V1,
+        service_name: service_name.clone(),
+        model_id: model_id.to_owned(),
+        weight_version: weight_version.to_owned(),
+        bundle_root: Hash::new(b"pending-bundle-root"),
+        ordinal,
+        offset_bytes,
+        plaintext_len,
+        ciphertext_len,
+        ciphertext_hash,
+        encrypted_payload: SecretEnvelopeV1 {
+            schema_version: SECRET_ENVELOPE_VERSION_V1,
+            encryption: SecretEnvelopeEncryptionV1::ClientCiphertext,
+            key_id: key_id.to_owned(),
+            key_version,
+            nonce: nonce.to_vec(),
+            ciphertext,
+            commitment: ciphertext_hash,
+            aad_digest: Some(Hash::new(aad)),
+        },
+    })
+}
+
+fn private_model_bundle_key_id(bundle_key: &[u8; 32]) -> String {
+    let fingerprint = Hash::new(bundle_key);
+    format!(
+        "soracloud-upload-bundle:{}",
+        fingerprint.to_string().chars().take(16).collect::<String>()
+    )
+}
+
 fn execute_private_inference_start(
     torii_url: &str,
     session: SoraPrivateInferenceSessionV1,
@@ -6665,22 +7652,27 @@ fn execute_private_inference_output_release(
 fn execute_private_model_publish_plan(
     torii_url: &str,
     plan: PrivateModelPublishPlan,
+    authoritative_recipient: Option<SoraUploadedModelEncryptionRecipientV1>,
     api_token: Option<&str>,
     timeout_secs: u64,
     authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<norito::json::Value> {
     let compile_profile_hash = validate_private_model_publish_plan(&plan)?;
-    let (_, recipient_payload) = fetch_torii_soracloud_uploaded_model_encryption_recipient(
-        torii_url,
-        api_token,
-        timeout_secs,
-    )?;
-    let recipient_value = recipient_payload.get("recipient").cloned().ok_or_else(|| {
-        eyre!("uploaded-model encryption recipient response is missing `recipient`")
-    })?;
-    let recipient: SoraUploadedModelEncryptionRecipientV1 = json::from_value(recipient_value)
-        .wrap_err("failed to decode uploaded-model encryption recipient response")?;
+    let recipient = if let Some(recipient) = authoritative_recipient {
+        recipient
+    } else {
+        let (_, recipient_payload) = fetch_torii_soracloud_uploaded_model_encryption_recipient(
+            torii_url,
+            api_token,
+            timeout_secs,
+        )?;
+        let recipient_value = recipient_payload.get("recipient").cloned().ok_or_else(|| {
+            eyre!("uploaded-model encryption recipient response is missing `recipient`")
+        })?;
+        json::from_value(recipient_value)
+            .wrap_err("failed to decode uploaded-model encryption recipient response")?
+    };
     if recipient != plan.bundle.upload_recipient {
         return Err(eyre!(
             "publish plan bundle upload_recipient does not match the authoritative Torii encryption recipient"
@@ -10168,6 +11160,7 @@ iroha app sorafs toolkit pack ./frontend/dist \
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::SeedableRng as _;
     use std::{
         path::Path,
         process::Command,
@@ -10382,6 +11375,44 @@ mod tests {
             receipt_root: Hash::new(b"receipt-root"),
             xor_cost_nanos: 0,
         }
+    }
+
+    fn sample_private_model_publish_draft(source_dir: PathBuf) -> PrivateModelPublishDraft {
+        PrivateModelPublishDraft {
+            source_dir,
+            service_name: "private_models".to_owned(),
+            model_name: "vision-model".to_owned(),
+            model_id: "upload-1".to_owned(),
+            artifact_id: "artifact-1".to_owned(),
+            weight_version: "1.0.0".to_owned(),
+            family: "hf-transformers".to_owned(),
+            modalities: vec!["text".to_owned()],
+            runtime_format: Some(SoraUploadedModelRuntimeFormatV1::HuggingFaceSafetensors),
+            privacy_mode: Some(SoraModelPrivacyModeV1::PrivateExecution),
+            pricing_policy: Some(Default::default()),
+            decryption_policy_ref: "policy://release/default".to_owned(),
+            dataset_ref: "dataset://synthetic/v1".to_owned(),
+            compile_profile: sample_private_compile_profile(),
+            allow_model: Some(PrivateModelAllowDraft {
+                apartment_name: "ops_agent".to_owned(),
+                require_model_inference: true,
+            }),
+        }
+    }
+
+    fn write_sample_uploaded_model_source(dir: &Path) {
+        fs::create_dir_all(dir).expect("create uploaded-model source dir");
+        fs::write(
+            dir.join("config.json"),
+            br#"{"architectures":["TestModel"]}"#,
+        )
+        .expect("write config");
+        fs::write(dir.join("tokenizer.json"), br#"{"model":"test"}"#).expect("write tokenizer");
+        fs::write(
+            dir.join("model-00001-of-00001.safetensors"),
+            b"deterministic-safetensors-payload",
+        )
+        .expect("write weights");
     }
 
     fn node_available() -> bool {
@@ -11904,6 +12935,67 @@ mod tests {
         let err = validate_private_model_publish_plan(&plan)
             .expect_err("gap in chunk ordinals must fail");
         assert!(err.to_string().contains("contiguous from zero"));
+    }
+
+    #[test]
+    fn prepare_private_model_publish_plan_from_draft_builds_valid_plan() {
+        let tempdir = tempfile::tempdir().expect("create temp dir");
+        let source_dir = tempdir.path().join("model");
+        write_sample_uploaded_model_source(&source_dir);
+        let draft_path = tempdir.path().join("draft.json");
+        let draft = sample_private_model_publish_draft(PathBuf::from("model"));
+        let mut rng = rand::rngs::StdRng::from_seed([7_u8; 32]);
+
+        let plan = prepare_private_model_publish_plan_from_draft_with_rng(
+            &draft_path,
+            draft,
+            sample_uploaded_model_encryption_recipient(),
+            32,
+            &mut rng,
+        )
+        .expect("prepare publish plan");
+
+        assert!(plan.chunks.len() >= 2);
+        for (ordinal, chunk) in plan.chunks.iter().enumerate() {
+            let ordinal = u32::try_from(ordinal).expect("ordinal fits");
+            assert_eq!(chunk.ordinal, ordinal);
+            assert_eq!(chunk.offset_bytes, u64::from(ordinal) * 32);
+        }
+        assert_eq!(
+            plan.allow_model
+                .as_ref()
+                .expect("allow-model payload")
+                .compile_profile_hash,
+            plan.bundle.compile_profile_hash
+        );
+        validate_private_model_publish_plan(&plan).expect("generated plan validates");
+    }
+
+    #[test]
+    fn prepare_private_model_publish_plan_from_draft_rejects_missing_config() {
+        let tempdir = tempfile::tempdir().expect("create temp dir");
+        let source_dir = tempdir.path().join("model");
+        fs::create_dir_all(&source_dir).expect("create source dir");
+        fs::write(
+            source_dir.join("model-00001-of-00001.safetensors"),
+            b"weights-only",
+        )
+        .expect("write weights");
+        fs::write(source_dir.join("tokenizer.json"), br#"{"model":"test"}"#)
+            .expect("write tokenizer");
+        let draft_path = tempdir.path().join("draft.json");
+        let draft = sample_private_model_publish_draft(PathBuf::from("model"));
+        let mut rng = rand::rngs::StdRng::from_seed([9_u8; 32]);
+
+        let err = prepare_private_model_publish_plan_from_draft_with_rng(
+            &draft_path,
+            draft,
+            sample_uploaded_model_encryption_recipient(),
+            32,
+            &mut rng,
+        )
+        .expect_err("missing config must fail");
+        assert!(err.to_string().contains("config.json"));
     }
 
     #[test]

@@ -23,6 +23,7 @@ workspace = true
 default = ["telemetry", "schema-endpoint", "build-i3"]
 build-i2 = []
 build-i3 = []
+embedded-soracloud-runtime = []
 fastpq-gpu = ["fastpq_prover/fastpq-gpu"]
 zk-stark = ["iroha_core/zk-stark", "iroha_torii/zk-stark"]
 sm = [

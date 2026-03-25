@@ -83,6 +83,13 @@ impl Actor {
         if hash == locked_hash {
             return false;
         }
+        if height == locked_height && self.kura.get_block_height_by_hash(locked_hash).is_some() {
+            // Same-height recovery is disproven once the competing lock subject is already
+            // durable in local storage. If the lock subject only exists in pending/inflight
+            // state, keep the request alive until committed history or later local evidence
+            // settles the conflict.
+            return true;
+        }
         let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         let known_conflict = self
             .committed_block_hash_for_height(height)
@@ -885,6 +892,53 @@ impl Actor {
         Ok(())
     }
 
+    pub(super) fn authoritative_slot_owner_hash(
+        &self,
+        height: u64,
+        view: u64,
+    ) -> Option<HashOf<BlockHeader>> {
+        self.subsystems
+            .propose
+            .authoritative_block_slots
+            .get(&(height, view))
+            .copied()
+    }
+
+    pub(super) fn note_authoritative_slot_owner(
+        &mut self,
+        height: u64,
+        view: u64,
+        block_hash: HashOf<BlockHeader>,
+    ) {
+        self.subsystems
+            .propose
+            .authoritative_block_slots
+            .insert((height, view), block_hash);
+    }
+
+    fn note_frontier_block_created(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        sender: Option<&PeerId>,
+        now: Instant,
+    ) {
+        let leader = sender
+            .cloned()
+            .filter(|peer| peer != self.common_config.peer.id());
+        let voters = leader.iter().cloned().collect();
+        if self.update_frontier_slot(
+            block_hash, height, view, leader, voters, true, true, None, now,
+        ) {
+            self.clear_missing_block_request(
+                &block_hash,
+                MissingBlockClearReason::PayloadAvailable,
+            );
+            self.clear_missing_block_view_change(&block_hash);
+        }
+    }
+
     pub(super) fn note_proposal_seen(&mut self, height: u64, view: u64, payload_hash: Hash) {
         if self
             .subsystems
@@ -929,6 +983,26 @@ impl Actor {
                 .is_some()
     }
 
+    pub(super) fn frontier_block_created_from_proposal(
+        &self,
+        block: &SignedBlock,
+        proposal: &crate::sumeragi::consensus::Proposal,
+    ) -> Option<super::message::BlockCreated> {
+        let header = block.header();
+        let key = Self::session_key(
+            &block.hash(),
+            header.height().get(),
+            header.view_change_index(),
+        );
+        let init = self.rebuild_rbc_init_from_block(block, key)?;
+        let frontier =
+            super::message::BlockCreatedFrontierInfo::from_proposal_and_rbc_init(proposal, &init);
+        Some(super::message::BlockCreated::with_frontier(
+            block.clone(),
+            frontier,
+        ))
+    }
+
     pub(super) fn prune_proposals_seen_horizon(&mut self, committed_height: u64) {
         let highest_commit = self
             .highest_qc
@@ -965,6 +1039,10 @@ impl Actor {
                 }
                 true
             });
+        self.subsystems
+            .propose
+            .authoritative_block_slots
+            .retain(|(entry_height, _), _| *entry_height > committed_height);
     }
 
     pub(super) fn missing_proposal_context(
@@ -1018,6 +1096,9 @@ impl Actor {
 
     pub(super) fn assert_proposal_seen(&self, height: u64, view: u64, reason: &'static str) {
         if height <= 1 {
+            return;
+        }
+        if self.slot_has_authoritative_payload(height, view) {
             return;
         }
         if !self
@@ -1176,6 +1257,29 @@ impl Actor {
         )
     }
 
+    fn retry_rbc_progress_after_block_created_hydration(&mut self, session_key: SessionKey) {
+        // Duplicate/alternate BlockCreated paths can return before later RBC recovery passes.
+        // Retry READY/DELIVER immediately once the local payload has hydrated the session.
+        if let Err(err) = self.maybe_emit_rbc_ready(session_key) {
+            debug!(
+                height = session_key.1,
+                view = session_key.2,
+                block = %session_key.0,
+                ?err,
+                "failed to retry RBC READY after BlockCreated hydration"
+            );
+        }
+        if let Err(err) = self.maybe_emit_rbc_deliver(session_key) {
+            debug!(
+                height = session_key.1,
+                view = session_key.2,
+                block = %session_key.0,
+                ?err,
+                "failed to retry RBC DELIVER after BlockCreated hydration"
+            );
+        }
+    }
+
     #[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
     fn handle_block_created_with_preserve_policy(
         &mut self,
@@ -1195,11 +1299,13 @@ impl Actor {
             );
             return Ok(());
         }
+        let frontier = msg.frontier;
         let block = msg.block;
         let block_hash = block.hash();
         let header = block.header();
         let height = header.height().get();
         let view = header.view_change_index();
+        let session_key = Self::session_key(&block_hash, height, view);
         let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         let committed_hash = self.state.latest_block_hash_fast();
         let missing_request = self
@@ -1335,6 +1441,27 @@ impl Actor {
             );
             return Ok(());
         }
+        if allow_frontier_owner_preserve_on_payload_mismatch
+            && let Some(owner_hash) = self.authoritative_slot_owner_hash(height, view)
+            && owner_hash != block_hash
+        {
+            info!(
+                height,
+                view,
+                block = %block_hash,
+                owner = %owner_hash,
+                "dropping conflicting BlockCreated for an authoritative slot owner"
+            );
+            self.record_consensus_message_handling(
+                super::status::ConsensusMessageKind::BlockCreated,
+                super::status::ConsensusMessageOutcome::Dropped,
+                super::status::ConsensusMessageReason::PayloadMismatch,
+            );
+            self.clear_missing_block_request(&block_hash, MissingBlockClearReason::Obsolete);
+            self.clear_payload_mismatch_state(session_key, block_hash, height, view);
+            self.finalize_collector_plan(false);
+            return Ok(());
+        }
         let expected_height = committed_height.saturating_add(1);
         if height > expected_height {
             let active_commit_topology = self.effective_commit_topology();
@@ -1428,7 +1555,7 @@ impl Actor {
             (
                 pending.aborted,
                 pending.validation_status,
-                pending.commit_qc_seen,
+                pending.commit_qc_observed(),
             )
         });
         let revive_aborted = pending_status.is_some_and(|(aborted, status, commit_qc_seen)| {
@@ -1562,6 +1689,7 @@ impl Actor {
                         .seed_inflight
                         .remove(&session_key);
                     seed_inflight = false;
+                    self.retry_rbc_progress_after_block_created_hydration(session_key);
                     debug!(
                         height,
                         view,
@@ -1634,6 +1762,7 @@ impl Actor {
                         payload_hash,
                         sender.as_ref(),
                     )?;
+                    self.retry_rbc_progress_after_block_created_hydration(session_key);
                     if queued_seed {
                         self.subsystems
                             .da_rbc
@@ -1659,7 +1788,26 @@ impl Actor {
                         self.rebroadcast_rbc_payload_for_missing_init(session_key, &session);
                     }
                 }
+                let metadata_populated =
+                    self.populate_rbc_session_metadata_from_block(session_key, &block);
+                if metadata_populated
+                    || self
+                        .subsystems
+                        .da_rbc
+                        .rbc
+                        .sessions
+                        .contains_key(&session_key)
+                {
+                    self.retry_rbc_progress_after_block_created_hydration(session_key);
+                }
             }
+            self.note_frontier_block_created(
+                block_hash,
+                height,
+                view,
+                sender.as_ref(),
+                Instant::now(),
+            );
             debug!(
                 height,
                 view,
@@ -1700,18 +1848,38 @@ impl Actor {
             0
         };
         let hint_start = Instant::now();
-        let mut cached_hint = self
-            .subsystems
-            .propose
-            .proposal_cache
-            .get_hint(height, view)
-            .copied();
-        let cached_proposal = self
-            .subsystems
-            .propose
-            .proposal_cache
-            .get_proposal(height, view)
-            .copied();
+        let inline_hint = frontier
+            .as_ref()
+            .map(|frontier| super::message::ProposalHint {
+                block_hash,
+                height,
+                view,
+                highest_qc: frontier.highest_qc,
+            });
+        let inline_proposal = frontier.as_ref().map(|frontier| {
+            Self::build_consensus_proposal(
+                &block,
+                frontier.payload_hash,
+                frontier.highest_qc,
+                frontier.proposer,
+                view,
+                frontier.epoch,
+            )
+        });
+        let mut cached_hint = inline_hint.or_else(|| {
+            self.subsystems
+                .propose
+                .proposal_cache
+                .get_hint(height, view)
+                .copied()
+        });
+        let cached_proposal = inline_proposal.or_else(|| {
+            self.subsystems
+                .propose
+                .proposal_cache
+                .get_proposal(height, view)
+                .copied()
+        });
         let mut payload_bytes = None;
         let mut payload_hash = None;
         let mut payload_bytes_ms = 0u64;
@@ -2362,7 +2530,6 @@ impl Actor {
         let cached_proposal_mismatch = cached_proposal
             .as_ref()
             .and_then(|proposal| detect_proposal_mismatch(proposal, &header, &payload_hash));
-        let session_key = Self::session_key(&block_hash, height, view);
         if let Some(reason) = proposal_mismatch
             .or(cached_proposal_mismatch)
             .map(|mismatch| mismatch.reason())
@@ -2509,6 +2676,7 @@ impl Actor {
                             .rbc
                             .seed_inflight
                             .remove(&session_key);
+                        self.retry_rbc_progress_after_block_created_hydration(session_key);
                         debug!(
                             height,
                             view,
@@ -2580,6 +2748,7 @@ impl Actor {
                         payload_hash,
                         sender.as_ref(),
                     )?;
+                    self.retry_rbc_progress_after_block_created_hydration(session_key);
                     hydrate_ms =
                         u64::try_from(hydrate_start.elapsed().as_millis()).unwrap_or(u64::MAX);
                     if queued_seed {
@@ -2649,14 +2818,16 @@ impl Actor {
             );
             return Ok(());
         }
+        let _ = self.populate_rbc_session_metadata_from_block(session_key, &block);
         match self.pending.pending_blocks.entry(block_hash) {
             Entry::Occupied(mut occ) => {
                 if revive_aborted {
                     let commit_qc_epoch = occ.get().commit_qc_epoch;
                     let pending = occ.get_mut();
                     pending.revive_after_abort(block, payload_hash, height, view);
-                    pending.commit_qc_seen = true;
-                    pending.commit_qc_epoch = commit_qc_epoch;
+                    if let Some(epoch) = commit_qc_epoch {
+                        pending.note_commit_qc_observed(epoch);
+                    }
                 } else {
                     occ.get_mut()
                         .replace_block(block, payload_hash, height, view);
@@ -2666,16 +2837,22 @@ impl Actor {
                 vac.insert(PendingBlock::new(block, payload_hash, height, view));
             }
         }
-        if self
-            .subsystems
-            .propose
-            .proposals_seen
-            .contains(&(height, view))
-        {
-            // Only slots already observed through Proposal handling may update round metrics from
-            // payload collection. Payload-only BlockCreated must not become independent round state.
-            self.record_phase_sample(PipelinePhase::CollectDa, height, view);
+        if let Some(hint) = inline_hint {
+            self.subsystems.propose.proposal_cache.insert_hint(hint);
         }
+        if let Some(proposal) = inline_proposal {
+            self.subsystems
+                .propose
+                .proposal_cache
+                .insert_proposal(proposal);
+            self.note_proposal_seen(height, view, payload_hash);
+        }
+        self.note_authoritative_slot_owner(height, view, block_hash);
+        self.note_frontier_block_created(block_hash, height, view, sender.as_ref(), Instant::now());
+        if height == committed_height.saturating_add(1) {
+            self.note_view_change_from_block(height, view);
+        }
+        self.record_phase_sample(PipelinePhase::CollectDa, height, view);
         if let Some(qc) = qc_cache_for_subject(&self.qc_cache, block_hash)
             .filter(|qc| {
                 qc.phase == crate::sumeragi::consensus::Phase::Commit && qc.height == height
@@ -2806,6 +2983,7 @@ impl Actor {
             .get(&block_hash)
             .map(|pending| pending.block.clone())
         {
+            self.flush_frontier_body_requesters(&block);
             self.flush_pending_fetch_requests(&block);
         }
         self.clear_missing_block_request(&block_hash, MissingBlockClearReason::PayloadAvailable);
@@ -2876,7 +3054,11 @@ impl Actor {
             let _ = self.try_replay_deferred_missing_payload_qcs(Instant::now());
         }
         let qc_replay_ms = u64::try_from(qc_replay_start.elapsed().as_millis()).unwrap_or(u64::MAX);
-        self.request_commit_pipeline();
+        self.request_commit_pipeline_for_pending(
+            block_hash,
+            super::status::RoundEventCauseTrace::BlockAvailable,
+            None,
+        );
         debug!(
             height,
             view,

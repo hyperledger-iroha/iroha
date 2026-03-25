@@ -10,6 +10,10 @@ set -euo pipefail
 #   IROHAD_BIN       Path to the `irohad` binary (default: <IROHA_DIR>/target/<profile>/irohad).
 #   IROHA_CLI_BIN    Path to the `iroha` CLI binary (default: <IROHA_DIR>/target/<profile>/iroha).
 #   IROHA_LOCALNET_NOFILE_MIN Minimum RLIMIT_NOFILE for localnet peers (default: 4096).
+#   IROHA_LOCALNET_GUEST_STACK_BYTES Override [concurrency].guest_stack_bytes in generated peer configs.
+#   IROHA_LOCALNET_GAS_TO_STACK_MULTIPLIER Override [concurrency].gas_to_stack_multiplier in generated peer configs.
+#   IROHA_LOCALNET_MEMORY_BUDGET_PROFILE Override [ivm].memory_budget_profile in generated peer configs.
+#   IROHA_LOCALNET_MAX_STACK_BYTES Add/update a compute resource profile with this max_stack_bytes value.
 
 usage() {
   cat <<'EOF'
@@ -77,7 +81,12 @@ LOGGER_LEVEL=""
 LOGGER_FILTER=""
 CURL_TIMEOUT_SECS=2
 PORT_SCAN_MAX_TRIES=200
+SKIP_TOOL_BUILD="${SKIP_TOOL_BUILD:-false}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
+LOCALNET_GUEST_STACK_BYTES="${IROHA_LOCALNET_GUEST_STACK_BYTES:-}"
+LOCALNET_GAS_TO_STACK_MULTIPLIER="${IROHA_LOCALNET_GAS_TO_STACK_MULTIPLIER:-}"
+LOCALNET_MEMORY_BUDGET_PROFILE="${IROHA_LOCALNET_MEMORY_BUDGET_PROFILE:-}"
+LOCALNET_MAX_STACK_BYTES="${IROHA_LOCALNET_MAX_STACK_BYTES:-${LOCALNET_GUEST_STACK_BYTES:-}}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -320,7 +329,9 @@ fi
 
 echo "Building Iroha tools ($PROFILE)..."
 cd "$IROHA_DIR"
-if [[ "$PROFILE" == "release" ]]; then
+if [[ "$SKIP_TOOL_BUILD" == "true" ]]; then
+  echo "Skipping Iroha tool build; using existing binaries."
+elif [[ "$PROFILE" == "release" ]]; then
   cargo build --release --bin kagami --bin irohad --bin iroha
 else
   cargo build --bin kagami --bin irohad --bin iroha
@@ -525,6 +536,39 @@ if [[ -n "$LOGGER_LEVEL" || -n "$LOGGER_FILTER" ]]; then
         flush_logger()
       }
     ' "$cfg" > "${cfg}.tmp" && mv "${cfg}.tmp" "$cfg"
+  done
+fi
+
+if [[ -n "$LOCALNET_GUEST_STACK_BYTES" || -n "$LOCALNET_GAS_TO_STACK_MULTIPLIER" || -n "$LOCALNET_MEMORY_BUDGET_PROFILE" || -n "$LOCALNET_MAX_STACK_BYTES" ]]; then
+  if [[ -z "$LOCALNET_GUEST_STACK_BYTES" || -z "$LOCALNET_GAS_TO_STACK_MULTIPLIER" || -z "$LOCALNET_MEMORY_BUDGET_PROFILE" || -z "$LOCALNET_MAX_STACK_BYTES" ]]; then
+    echo "IROHA localnet stack overrides require guest stack bytes, gas-to-stack multiplier, memory budget profile, and max stack bytes together." >&2
+    exit 2
+  fi
+
+  echo "Applying IVM stack overrides in peer configs..."
+  for cfg in "$OUT_DIR"/peer*.toml; do
+    [[ -f "$cfg" ]] || continue
+    cat >> "$cfg" <<EOF
+
+[ivm]
+memory_budget_profile = "$LOCALNET_MEMORY_BUDGET_PROFILE"
+
+[concurrency]
+guest_stack_bytes = $LOCALNET_GUEST_STACK_BYTES
+gas_to_stack_multiplier = $LOCALNET_GAS_TO_STACK_MULTIPLIER
+
+[compute]
+default_resource_profile = "$LOCALNET_MEMORY_BUDGET_PROFILE"
+
+[compute.resource_profiles."$LOCALNET_MEMORY_BUDGET_PROFILE"]
+max_cycles = 10000000
+max_memory_bytes = 268435456
+max_stack_bytes = $LOCALNET_MAX_STACK_BYTES
+max_io_bytes = 25165824
+max_egress_bytes = 12582912
+allow_gpu_hints = true
+allow_wasi = true
+EOF
   done
 fi
 

@@ -474,17 +474,42 @@ fn is_time_sensitive_executable(executable: &Executable) -> bool {
     }
 }
 
-fn allows_unregistered_authority(executable: &Executable) -> bool {
+fn instruction_self_registers_authority(
+    instruction: &InstructionBox,
+    authority: &AccountId,
+) -> bool {
+    let Some(register) = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::Register<Account>>()
+    else {
+        return false;
+    };
+
+    let registration = register.object();
+    if registration.domain().is_some() {
+        return false;
+    }
+
+    registration.clone().build(authority).id == *authority
+}
+
+fn allows_unregistered_authority(executable: &Executable, authority: &AccountId) -> bool {
     match executable {
         Executable::Instructions(instructions) => {
-            !instructions.is_empty()
-                && instructions.iter().all(|instruction| {
-                    matches!(
-                        MultisigInstructionBox::try_from(instruction),
-                        Ok(MultisigInstructionBox::Propose(_))
-                            | Ok(MultisigInstructionBox::Approve(_))
-                    )
-                })
+            let Some((first, _rest)) = instructions.split_first() else {
+                return false;
+            };
+
+            if instruction_self_registers_authority(first, authority) {
+                return true;
+            }
+
+            instructions.iter().all(|instruction| {
+                matches!(
+                    MultisigInstructionBox::try_from(instruction),
+                    Ok(MultisigInstructionBox::Propose(_)) | Ok(MultisigInstructionBox::Approve(_))
+                )
+            })
         }
         Executable::IvmProved(_) | Executable::Ivm(_) => false,
     }
@@ -1555,7 +1580,7 @@ impl StateBlock<'_> {
         let authority_exists = state_transaction.world.accounts.get(&authority).is_some();
         let allow_unregistered_authority = !is_heartbeat
             && !authority_exists
-            && allows_unregistered_authority(tx.as_ref().instructions());
+            && allows_unregistered_authority(tx.as_ref().instructions(), &authority);
 
         // Heartbeat transactions may be signed by ephemeral identities.
         // Multisig propose/approve envelopes are also allowed from unregistered authorities,
@@ -4223,6 +4248,76 @@ pub mod tests {
             }
             other => panic!("expected AccountDoesNotExist rejection, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn missing_authority_self_register_allows_transaction() {
+        let chain: ChainId = "missing-authority-self-register".parse().unwrap();
+        let (authority, keypair) = gen_account_in("wonderland");
+        let world = World::new();
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+
+        let tx = TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_instructions([
+                InstructionBox::from(Register::account(Account::new_domainless(
+                    authority.clone(),
+                ))),
+                InstructionBox::from(Log::new(Level::INFO, "self-register".into())),
+            ])
+            .sign(keypair.private_key());
+
+        let limits = TransactionParameters::default();
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let accepted = AcceptedTransaction::accept(tx, &chain, Duration::ZERO, limits, &crypto_cfg)
+            .expect("admission should accept transaction shape");
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut ivm_cache = IvmCache::new();
+        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+
+        assert!(result.is_ok(), "self-register flow should pass: {result:?}");
+        assert!(
+            block.world.accounts.get(&authority).is_some(),
+            "authority account should be created by the first transaction"
+        );
+    }
+
+    #[test]
+    fn existing_authority_self_register_is_idempotent() {
+        let chain: ChainId = "existing-authority-self-register".parse().unwrap();
+        let (authority, keypair) = gen_account_in("wonderland");
+        let existing = Account::new_domainless(authority.clone()).build(&authority);
+        let world = World::with([], [existing], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+
+        let tx = TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_instructions([
+                InstructionBox::from(Register::account(Account::new_domainless(
+                    authority.clone(),
+                ))),
+                InstructionBox::from(Log::new(Level::INFO, "self-register-again".into())),
+            ])
+            .sign(keypair.private_key());
+
+        let limits = TransactionParameters::default();
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let accepted = AcceptedTransaction::accept(tx, &chain, Duration::ZERO, limits, &crypto_cfg)
+            .expect("admission should accept transaction shape");
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut ivm_cache = IvmCache::new();
+        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+
+        assert!(
+            result.is_ok(),
+            "duplicate self-register should remain a no-op: {result:?}"
+        );
     }
 
     #[test]

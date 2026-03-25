@@ -185,7 +185,7 @@ use axum::{
         DefaultBodyLimit, Extension, State, WebSocketUpgrade,
         connect_info::IntoMakeServiceWithConnectInfo,
     },
-    http::{HeaderMap, HeaderValue, Request, StatusCode, header::HeaderName},
+    http::{HeaderMap, HeaderValue, Method as HttpMethod, Request, StatusCode, header::HeaderName},
     middleware::Next,
     response::{IntoResponse, Json, Response},
     routing::{any, delete, get, post},
@@ -193,7 +193,9 @@ use axum::{
 #[allow(unused_imports)]
 use base64::Engine;
 #[cfg(feature = "app_api")]
-use base64::engine::general_purpose::{URL_SAFE as BASE64_URL_SAFE, URL_SAFE_NO_PAD};
+use base64::engine::general_purpose::{
+    STANDARD as BASE64_STANDARD, URL_SAFE as BASE64_URL_SAFE, URL_SAFE_NO_PAD,
+};
 use blake3::hash as blake3_hash;
 use dashmap::DashMap;
 use error_stack::{Report, ResultExt};
@@ -271,8 +273,10 @@ use ivm::iso20022::{MsgError, parse_message};
 #[cfg(feature = "app_api")]
 use jsonwebtoken::{Algorithm as JwtAlgorithm, DecodingKey, Validation, decode};
 use mv::storage::StorageReadOnly;
+#[cfg(feature = "app_api")]
+use norito::json::Value;
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
-use norito::json::{self, Value};
+use norito::json::{self};
 use norito::json::{JsonDeserialize, JsonSerialize};
 #[cfg(feature = "app_api")]
 use sorafs_manifest::provider_advert::CapabilityType;
@@ -287,6 +291,7 @@ use tokio::{
 };
 use tower::ServiceExt as _;
 use tower_http::{
+    cors::{Any, CorsLayer},
     timeout::TimeoutLayer,
     trace::{DefaultMakeSpan, TraceLayer},
 };
@@ -2730,6 +2735,9 @@ use axum::{extract::Path as AxPath, response::Response as AxResponse};
 
 use crate::NoritoQuery as AxQuery;
 
+#[cfg(feature = "app_api")]
+const OFFLINE_TRANSFER_PREFIX: &str = "wallet-offline-transfer:";
+
 async fn handler_contracts_instances_by_ns(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3847,6 +3855,332 @@ async fn handler_repo_agreements_query(
         app.telemetry.clone(),
     )
     .await
+}
+
+#[cfg(feature = "app_api")]
+fn offline_cash_invalid_payload(message: impl Into<String>) -> Error {
+    Error::AppQueryValidation {
+        code: "invalid_payload",
+        message: message.into(),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn rename_offline_json_key(map: &mut norito::json::Map, from: &str, to: &str) {
+    if let Some(value) = map.remove(from) {
+        map.insert(to.to_owned(), value);
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn translate_cash_authorization_to_reserve_json(value: &mut Value) -> Result<(), Error> {
+    let Some(map) = value.as_object_mut() else {
+        return Err(offline_cash_invalid_payload(
+            "offline cash authorization must be an object",
+        ));
+    };
+    rename_offline_json_key(map, "lineage_id", "reserve_id");
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
+fn translate_reserve_authorization_to_cash_json(value: &mut Value) -> Result<(), Error> {
+    let Some(map) = value.as_object_mut() else {
+        return Err(offline_cash_invalid_payload(
+            "offline cash authorization must be an object",
+        ));
+    };
+    rename_offline_json_key(map, "reserve_id", "lineage_id");
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
+fn translate_cash_state_to_reserve_json(value: &mut Value) -> Result<(), Error> {
+    let Some(map) = value.as_object_mut() else {
+        return Err(offline_cash_invalid_payload(
+            "offline cash state must be an object",
+        ));
+    };
+    rename_offline_json_key(map, "lineage_id", "reserve_id");
+    rename_offline_json_key(map, "locked_balance", "parked_balance");
+    if let Some(authorization) = map.get_mut("authorization") {
+        translate_cash_authorization_to_reserve_json(authorization)?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
+fn translate_reserve_state_to_cash_json(value: &mut Value) -> Result<(), Error> {
+    let Some(map) = value.as_object_mut() else {
+        return Err(offline_cash_invalid_payload(
+            "offline cash state must be an object",
+        ));
+    };
+    rename_offline_json_key(map, "reserve_id", "lineage_id");
+    rename_offline_json_key(map, "parked_balance", "locked_balance");
+    if let Some(authorization) = map.get_mut("authorization") {
+        translate_reserve_authorization_to_cash_json(authorization)?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
+fn decode_offline_transfer_payload_value(raw_payload: &str) -> Result<Value, Error> {
+    let trimmed = raw_payload.trim();
+    let payload = trimmed
+        .strip_prefix(OFFLINE_TRANSFER_PREFIX)
+        .unwrap_or(trimmed)
+        .trim();
+    if payload.is_empty() {
+        return Err(offline_cash_invalid_payload(
+            "offline transfer payload is empty",
+        ));
+    }
+    if let Ok(value) = norito::json::from_str::<Value>(payload) {
+        return Ok(value);
+    }
+    if let Ok(decoded) = URL_SAFE_NO_PAD.decode(payload.as_bytes()) {
+        if let Ok(value) = norito::json::from_slice::<Value>(&decoded) {
+            return Ok(value);
+        }
+    }
+    if let Ok(decoded) = BASE64_STANDARD.decode(payload.as_bytes()) {
+        if let Ok(value) = norito::json::from_slice::<Value>(&decoded) {
+            return Ok(value);
+        }
+    }
+    Err(offline_cash_invalid_payload(
+        "offline transfer payload is not valid json or base64url json",
+    ))
+}
+
+#[cfg(feature = "app_api")]
+fn translate_cash_receipt_to_reserve_json(value: &mut Value) -> Result<(), Error> {
+    let Some(map) = value.as_object_mut() else {
+        return Err(offline_cash_invalid_payload(
+            "offline cash receipt must be an object",
+        ));
+    };
+    rename_offline_json_key(map, "lineage_id", "reserve_id");
+    rename_offline_json_key(map, "pre_locked_balance", "pre_parked_balance");
+    rename_offline_json_key(map, "post_locked_balance", "post_parked_balance");
+    rename_offline_json_key(map, "counterparty_lineage_id", "counterparty_reserve_id");
+    if let Some(authorization) = map.get_mut("authorization") {
+        translate_cash_authorization_to_reserve_json(authorization)?;
+    }
+    if let Some(Value::String(source_payload)) = map.get_mut("source_payload") {
+        let mut payload_value = decode_offline_transfer_payload_value(source_payload)?;
+        translate_cash_outgoing_payload_to_reserve_json(&mut payload_value)?;
+        *source_payload = norito::json::to_string(&payload_value).map_err(|err| {
+            offline_cash_invalid_payload(format!(
+                "failed to encode translated source payload: {err}"
+            ))
+        })?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
+fn translate_cash_outgoing_payload_to_reserve_json(value: &mut Value) -> Result<(), Error> {
+    let Some(map) = value.as_object_mut() else {
+        return Err(offline_cash_invalid_payload(
+            "offline transfer payload must be an object",
+        ));
+    };
+    if let Some(anchor) = map.get_mut("anchor") {
+        translate_cash_state_to_reserve_json(anchor)?;
+    }
+    if let Some(Value::Array(items)) = map.get_mut("ancestry_receipts") {
+        for item in items {
+            translate_cash_receipt_to_reserve_json(item)?;
+        }
+    }
+    if let Some(receipt) = map.get_mut("receipt") {
+        translate_cash_receipt_to_reserve_json(receipt)?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
+fn translate_cash_request_to_reserve_json(value: &mut Value) -> Result<(), Error> {
+    let Some(map) = value.as_object_mut() else {
+        return Err(offline_cash_invalid_payload(
+            "offline cash request must be an object",
+        ));
+    };
+    rename_offline_json_key(map, "lineage_id", "reserve_id");
+    if let Some(Value::Array(receipts)) = map.get_mut("receipts") {
+        for receipt in receipts {
+            translate_cash_receipt_to_reserve_json(receipt)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
+fn translate_reserve_envelope_to_cash_json(mut value: Value) -> Result<Value, Error> {
+    let Some(map) = value.as_object_mut() else {
+        return Err(offline_cash_invalid_payload(
+            "offline cash envelope must be an object",
+        ));
+    };
+    if let Some(mut reserve_state) = map.remove("reserve_state") {
+        translate_reserve_state_to_cash_json(&mut reserve_state)?;
+        map.insert("lineage_state".to_owned(), reserve_state);
+        return Ok(value);
+    }
+    if let Some(lineage_state) = map.get_mut("lineage_state") {
+        translate_reserve_state_to_cash_json(lineage_state)?;
+        return Ok(value);
+    }
+    Err(offline_cash_invalid_payload(
+        "offline cash envelope missing reserve_state",
+    ))
+}
+
+#[cfg(feature = "app_api")]
+fn decode_offline_cash_request<T>(
+    mut request_body: Value,
+    context: &'static str,
+) -> Result<T, Error>
+where
+    T: JsonDeserialize,
+{
+    translate_cash_request_to_reserve_json(&mut request_body)?;
+    norito::json::from_value(request_body).map_err(|err| {
+        offline_cash_invalid_payload(format!("failed to decode {context} request: {err}"))
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn decode_offline_cash_request_body(body: &Bytes, context: &'static str) -> Result<Value, Error> {
+    norito::json::from_slice::<Value>(body).map_err(|err| {
+        offline_cash_invalid_payload(format!("failed to decode {context} json body: {err}"))
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn offline_cash_response<T>(envelope: &T) -> Result<AxResponse, Error>
+where
+    T: JsonSerialize,
+{
+    let reserve_value =
+        norito::json::to_value(envelope).map_err(|source| Error::SerializationFailure {
+            context: "offline cash response",
+            source,
+        })?;
+    let cash_value = translate_reserve_envelope_to_cash_json(reserve_value)?;
+    json_ok(cash_value)
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_cash_setup(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    body: Bytes,
+) -> Result<impl IntoResponse, Error> {
+    if !limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        check_access_enforced(&app, &headers, None, "v1/offline/cash/setup", enforce).await?;
+    }
+
+    let request_body = decode_offline_cash_request_body(&body, "offline cash setup")?;
+    let req = decode_offline_cash_request::<crate::offline_reserve::OfflineReserveSetupRequest>(
+        request_body,
+        "offline cash setup",
+    )?;
+    let envelope = crate::offline_reserve::setup_reserve(app.as_ref(), req).await?;
+    offline_cash_response(&envelope)
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_cash_load(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    body: Bytes,
+) -> Result<impl IntoResponse, Error> {
+    if !limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        check_access_enforced(&app, &headers, None, "v1/offline/cash/load", enforce).await?;
+    }
+
+    let request_body = decode_offline_cash_request_body(&body, "offline cash load")?;
+    let req = decode_offline_cash_request::<crate::offline_reserve::OfflineReserveTopUpRequest>(
+        request_body,
+        "offline cash load",
+    )?;
+    let envelope = crate::offline_reserve::top_up_reserve(app.as_ref(), req).await?;
+    offline_cash_response(&envelope)
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_cash_refresh(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    body: Bytes,
+) -> Result<impl IntoResponse, Error> {
+    if !limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        check_access_enforced(&app, &headers, None, "v1/offline/cash/refresh", enforce).await?;
+    }
+
+    let request_body = decode_offline_cash_request_body(&body, "offline cash refresh")?;
+    let req = decode_offline_cash_request::<crate::offline_reserve::OfflineReserveRenewRequest>(
+        request_body,
+        "offline cash refresh",
+    )?;
+    let envelope = crate::offline_reserve::renew_reserve(app.as_ref(), req).await?;
+    offline_cash_response(&envelope)
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_cash_sync(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    body: Bytes,
+) -> Result<impl IntoResponse, Error> {
+    if !limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        check_access_enforced(&app, &headers, None, "v1/offline/cash/sync", enforce).await?;
+    }
+
+    let request_body = decode_offline_cash_request_body(&body, "offline cash sync")?;
+    let req = decode_offline_cash_request::<crate::offline_reserve::OfflineReserveSyncRequest>(
+        request_body,
+        "offline cash sync",
+    )?;
+    let envelope = crate::offline_reserve::sync_reserve(app.as_ref(), req).await?;
+    offline_cash_response(&envelope)
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_cash_redeem(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    body: Bytes,
+) -> Result<impl IntoResponse, Error> {
+    if !limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        check_access_enforced(&app, &headers, None, "v1/offline/cash/redeem", enforce).await?;
+    }
+
+    let request_body = decode_offline_cash_request_body(&body, "offline cash redeem")?;
+    let req = decode_offline_cash_request::<crate::offline_reserve::OfflineReserveDefundRequest>(
+        request_body,
+        "offline cash redeem",
+    )?;
+    let envelope = crate::offline_reserve::defund_reserve(app.as_ref(), req).await?;
+    offline_cash_response(&envelope)
 }
 
 #[cfg(feature = "app_api")]
@@ -17332,26 +17666,14 @@ impl Torii {
                     "/v1/offline/revocations/bundle",
                     get(handler_offline_reserve_revocations_bundle),
                 )
+                .route("/v1/offline/cash/setup", post(handler_offline_cash_setup))
+                .route("/v1/offline/cash/load", post(handler_offline_cash_load))
                 .route(
-                    "/v1/offline/reserve/setup",
-                    post(handler_offline_reserve_setup),
+                    "/v1/offline/cash/refresh",
+                    post(handler_offline_cash_refresh),
                 )
-                .route(
-                    "/v1/offline/reserve/topup",
-                    post(handler_offline_reserve_topup),
-                )
-                .route(
-                    "/v1/offline/reserve/renew",
-                    post(handler_offline_reserve_renew),
-                )
-                .route(
-                    "/v1/offline/reserve/sync",
-                    post(handler_offline_reserve_sync),
-                )
-                .route(
-                    "/v1/offline/reserve/defund",
-                    post(handler_offline_reserve_defund),
-                )
+                .route("/v1/offline/cash/sync", post(handler_offline_cash_sync))
+                .route("/v1/offline/cash/redeem", post(handler_offline_cash_redeem))
                 .route("/v1/offline/transfers", get(handler_offline_transfers_list))
                 .route(
                     "/v1/offline/transfers/{bundle_id_hex}",
@@ -19152,6 +19474,18 @@ impl Torii {
         #[cfg(feature = "app_api")]
         self.add_soracloud_public_runtime_routes(&mut builder);
 
+        let cors_layer = CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods([
+                HttpMethod::GET,
+                HttpMethod::POST,
+                HttpMethod::DELETE,
+                HttpMethod::OPTIONS,
+            ])
+            .allow_headers(Any)
+            .expose_headers(Any)
+            .max_age(Duration::from_secs(60 * 60));
+
         let router = builder
             .finish()
             .layer((
@@ -19186,7 +19520,8 @@ impl Torii {
             .layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
                 record_http_metrics,
-            ));
+            ))
+            .layer(cors_layer);
 
         {
             let mut guard = app_state

@@ -6111,9 +6111,9 @@ pub struct StateTransaction<'block, 'state> {
         BTreeMap<HashOf<SignedTransaction>, crate::settlement::PendingSettlement>,
     /// Charged Nexus fee event staged until the transaction is committed.
     pending_nexus_fee_event: Option<crate::sumeragi::status::NexusFeeEvent>,
-    /// Block fee units staged until the transaction is committed.
+    /// Block fee amount staged until the transaction is committed.
     #[cfg(feature = "telemetry")]
-    pending_block_fee_units: u64,
+    pending_block_fee_amount: Numeric,
     /// Confidential operations executed so far within this transaction.
     pub zk_confidential_ops_in_tx: u32,
     /// Confidential proof verifications executed so far within this transaction.
@@ -6295,13 +6295,18 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
         self.pending_nexus_fee_event = Some(event);
     }
 
-    /// Stage block fee units so telemetry only reflects committed transactions.
+    /// Stage block fee amount so telemetry only reflects committed transactions.
     #[cfg(feature = "telemetry")]
-    pub(crate) fn stage_block_fee_units(&mut self, delta_units: u64) {
-        if delta_units == 0 {
+    pub(crate) fn stage_block_fee_amount(&mut self, delta_amount: Numeric) {
+        if delta_amount <= Numeric::zero() {
             return;
         }
-        self.pending_block_fee_units = self.pending_block_fee_units.saturating_add(delta_units);
+        self.pending_block_fee_amount = self
+            .pending_block_fee_amount
+            .clone()
+            .checked_add(delta_amount)
+            .expect("block fee amount exceeds supported numeric bounds")
+            .trim_trailing_zeros();
     }
 }
 
@@ -20671,7 +20676,7 @@ impl<'state> StateBlock<'state> {
             pending_settlement_records: BTreeMap::new(),
             pending_nexus_fee_event: None,
             #[cfg(feature = "telemetry")]
-            pending_block_fee_units: 0,
+            pending_block_fee_amount: Numeric::zero(),
             zk_confidential_ops_in_tx: 0,
             zk_verify_calls_in_tx: 0,
             zk_proof_bytes_in_tx: 0,
@@ -25059,7 +25064,7 @@ impl StateTransaction<'_, '_> {
             pending_settlement_records,
             pending_nexus_fee_event,
             #[cfg(feature = "telemetry")]
-            pending_block_fee_units,
+            pending_block_fee_amount,
             fastpq_transcripts,
             mut pending_transfer_transcripts,
             block_axt_envelopes,
@@ -25101,7 +25106,7 @@ impl StateTransaction<'_, '_> {
                         target: "economics",
                         payer_kind = payer_kind_label,
                         payer = %payer_id,
-                        fee_amount = amount,
+                        fee_amount = %amount,
                         asset = %asset_id,
                         sink = %nexus.fees.fee_sink_account_id,
                         "nexus fee charged"
@@ -25124,8 +25129,8 @@ impl StateTransaction<'_, '_> {
         {
             let cumulative = gas_used_in_block_so_far.saturating_add(last_tx_gas_used);
             telemetry.set_block_gas_used(cumulative);
-            if pending_block_fee_units > 0 {
-                telemetry.add_block_fee_units(pending_block_fee_units);
+            if pending_block_fee_amount > Numeric::zero() {
+                telemetry.add_block_fee_amount(&pending_block_fee_amount);
             }
         }
         if !pending_transfer_transcripts.is_empty() {

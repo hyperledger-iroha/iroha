@@ -3913,6 +3913,23 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         ty: Type::AccountId,
                     })
                 }
+                "json_get_asset_definition_id" => {
+                    if arg_typed.len() != 2
+                        || arg_typed[0].ty != Type::Json
+                        || arg_typed[1].ty != Type::Name
+                    {
+                        return Err(SemanticError {
+                            message: "json_get_asset_definition_id expects (Json, Name)".into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::AssetDefinitionId,
+                    })
+                }
                 "json_get_nft_id" => {
                     if arg_typed.len() != 2
                         || arg_typed[0].ty != Type::Json
@@ -6231,6 +6248,15 @@ mod tests {
         )
         .expect("parse account equality");
         analyze(&program).expect("account-id equality should type-check");
+    }
+
+    #[test]
+    fn json_get_asset_definition_id_accepts_trigger_payloads() {
+        let program = parse(
+            "fn f() { let ev = trigger_event(); let _asset = json_get_asset_definition_id(ev, name(\"asset_definition_id\")); }",
+        )
+        .expect("parse json_get_asset_definition_id");
+        analyze(&program).expect("json_get_asset_definition_id should type-check");
     }
 
     #[test]

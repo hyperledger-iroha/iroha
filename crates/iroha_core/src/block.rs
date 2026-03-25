@@ -8242,10 +8242,10 @@ pub(crate) mod valid {
                             }
                             if state_block.nexus.enabled {
                                 let fees = &state_block.nexus.fees;
-                                if fees.base_fee > 0
-                                    || fees.per_byte_fee > 0
-                                    || fees.per_instruction_fee > 0
-                                    || fees.per_gas_unit_fee > 0
+                                if fees.base_fee > Numeric::zero()
+                                    || fees.per_byte_fee > Numeric::zero()
+                                    || fees.per_instruction_fee > Numeric::zero()
+                                    || fees.per_gas_unit_fee > Numeric::zero()
                                 {
                                     return true;
                                 }
@@ -8262,6 +8262,9 @@ pub(crate) mod valid {
                                 return (p.idx, None);
                             }
                             if requires_fee_postprocessing(tx) {
+                                return (p.idx, None);
+                            }
+                            if ovl.has_durable_state_changes() {
                                 return (p.idx, None);
                             }
                             let mut delta = DetachedStateTransactionDelta::default();
@@ -15777,6 +15780,57 @@ mod tests {
             "genesis asset-definition registration should not require domain-owner authorization",
         );
         state_block.commit().unwrap();
+    }
+
+    #[tokio::test]
+    async fn genesis_domain_registration_bootstraps_domain_name_lease() {
+        let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
+
+        let genesis_key_pair = KeyPair::random();
+        let genesis_account_id = AccountId::new(genesis_key_pair.public_key().clone());
+        let wonderland_domain_id: DomainId = "wonderland".parse().expect("valid domain id");
+
+        let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
+        let genesis_account = Account::new(
+            genesis_account_id
+                .clone()
+                .to_account_id(GENESIS_DOMAIN_ID.clone()),
+        )
+        .build(&genesis_account_id);
+
+        let world = World::with([genesis_domain], [genesis_account], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(world, kura, query_handle);
+
+        let instruction = Register::domain(Domain::new(wonderland_domain_id.clone()));
+
+        let tx = TransactionBuilder::new(chain_id.clone(), genesis_account_id.clone())
+            .with_instructions([instruction])
+            .sign(genesis_key_pair.private_key());
+        let block = SignedBlock::genesis(vec![tx], genesis_key_pair.private_key(), None, None);
+
+        let topology = test_topology(1);
+        let mut state_block = state.block(block.header());
+        let (_handle, time_source) = TimeSource::new_mock(block.header().creation_time());
+        let _valid = ValidBlock::validate(
+            block,
+            &topology,
+            &chain_id,
+            &genesis_account_id,
+            &time_source,
+            &mut state_block,
+        )
+        .unpack(|_| {})
+        .expect("genesis domain registration should bootstrap the SNS lease");
+        state_block.commit().unwrap();
+
+        let view = state.view();
+        assert_eq!(
+            crate::sns::active_domain_owner(view.world(), &wonderland_domain_id, 0),
+            Some(genesis_account_id),
+            "genesis registration should leave an active domain-name record behind"
+        );
     }
 
     #[test]

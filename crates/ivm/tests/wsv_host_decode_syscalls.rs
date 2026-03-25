@@ -4,7 +4,7 @@
 use std::str::FromStr;
 
 use iroha_crypto::PublicKey;
-use iroha_data_model::prelude::Name;
+use iroha_data_model::prelude::{AssetDefinitionId, Name};
 use iroha_primitives::json::Json;
 use ivm::{
     IVM, PointerType,
@@ -88,6 +88,35 @@ fn wsv_host_json_decode_accepts_blob() {
     assert_eq!(tlv.type_id, PointerType::Json);
     let parsed: Json = norito::decode_from_bytes(tlv.payload).expect("decode json");
     assert_eq!(parsed.get(), r#"{"a":1,"b":[2,3]}"#);
+}
+
+#[test]
+fn wsv_host_json_get_asset_definition_id_reads_address_literals() {
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(wsv_host());
+
+    let json = br#"{"asset_definition_id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM"}"#;
+    let p_json = vm
+        .alloc_input_tlv(&make_tlv(PointerType::Json, json))
+        .expect("alloc json");
+    let p_key = vm
+        .alloc_input_tlv(&make_tlv(PointerType::Name, b"asset_definition_id"))
+        .expect("alloc key");
+
+    let prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID as u8]);
+    vm.set_register(10, p_json);
+    vm.set_register(11, p_key);
+    vm.load_program(&prog).expect("load program");
+    vm.run().expect("json get asset definition id");
+
+    let out_ptr = vm.register(10);
+    let tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
+    assert_eq!(tlv.type_id, PointerType::AssetDefinitionId);
+    let asset: AssetDefinitionId = norito::decode_from_bytes(tlv.payload).expect("decode asset");
+    assert_eq!(
+        asset,
+        AssetDefinitionId::parse_address_literal("62Fk4FPcMuLvW5QjDGNF2a4jAmjM").unwrap()
+    );
 }
 
 #[test]

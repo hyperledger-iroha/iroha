@@ -8,6 +8,7 @@ use core::num::{NonZeroU64, NonZeroUsize};
 use iroha_data_model::consensus::{
     CommitStakeSnapshot as ModelCommitStakeSnapshot,
     CommitStakeSnapshotEntry as ModelCommitStakeSnapshotEntry, PreviousRosterEvidence,
+    ValidatorSetCheckpoint,
 };
 use iroha_data_model::events::EventFilter;
 use iroha_data_model::prelude::Repeats;
@@ -78,16 +79,40 @@ fn model_stake_snapshot(
 
 fn previous_roster_evidence_for_parent(
     state: &State,
+    kura: &Kura,
+    fallback_consensus_mode: ConsensusMode,
     parent_block: &SignedBlock,
 ) -> Option<PreviousRosterEvidence> {
     let parent_height = parent_block.header().height().get();
     let parent_hash = parent_block.hash();
-    let snapshot = state.commit_roster_snapshot_for_block(parent_height, parent_hash)?;
+    let metadata = crate::block_sync::message::roster_metadata_from_state(
+        state,
+        kura,
+        parent_height,
+        parent_hash,
+        fallback_consensus_mode,
+    )?;
+    let checkpoint = metadata.validator_checkpoint.or_else(|| {
+        metadata.commit_qc.as_ref().map(|qc| {
+            ValidatorSetCheckpoint::new(
+                qc.height,
+                qc.view,
+                qc.subject_block_hash,
+                qc.parent_state_root,
+                qc.post_state_root,
+                qc.validator_set.clone(),
+                qc.aggregate.signers_bitmap.clone(),
+                qc.aggregate.bls_aggregate_signature.clone(),
+                qc.validator_set_hash_version,
+                None,
+            )
+        })
+    })?;
     Some(PreviousRosterEvidence {
         height: parent_height,
         block_hash: parent_hash,
-        validator_checkpoint: snapshot.validator_checkpoint,
-        stake_snapshot: snapshot.stake_snapshot.map(model_stake_snapshot),
+        validator_checkpoint: checkpoint,
+        stake_snapshot: metadata.stake_snapshot.map(model_stake_snapshot),
     })
 }
 
@@ -970,9 +995,15 @@ impl Actor {
             .cloned()
             .zip(routing_batch.iter().copied())
             .collect();
-        let previous_roster_evidence = prev_block
-            .as_deref()
-            .and_then(|parent| previous_roster_evidence_for_parent(self.state.as_ref(), parent));
+        let previous_roster_evidence = prev_block.as_deref().and_then(|parent| {
+            previous_roster_evidence_for_parent(
+                self.state.as_ref(),
+                self.kura.as_ref(),
+                self.consensus_context_for_height(parent.header().height().get())
+                    .0,
+                parent,
+            )
+        });
         let mut removed_for_chunk_cap: Vec<(AcceptedTransaction<'static>, RoutingDecision)> =
             Vec::new();
         let mut removed_for_frame_cap: Vec<(AcceptedTransaction<'static>, RoutingDecision)> =
@@ -1265,8 +1296,6 @@ impl Actor {
                         u64::from(local_validator_index),
                     )
                     .unpack(|event| self.emit_pipeline_event(event));
-                let block_created_msg =
-                    BlockMessage::BlockCreated(super::message::BlockCreated::from(&new_block));
                 let signed_block: SignedBlock = new_block.into();
                 let built_height = signed_block.header().height().get();
                 if built_height != proposal_height {
@@ -1306,7 +1335,38 @@ impl Actor {
                         }
                     }
                 }
+                let payload_hash = Hash::new(&payload_bytes);
+                let proposal = Self::build_consensus_proposal(
+                    &signed_block,
+                    payload_hash,
+                    highest_qc,
+                    local_validator_index,
+                    view,
+                    proposal_epoch,
+                );
+                self.subsystems
+                    .propose
+                    .proposal_cache
+                    .insert_proposal(proposal);
 
+                let proposal_hint = super::message::ProposalHint {
+                    block_hash,
+                    height: proposal_height,
+                    view,
+                    highest_qc,
+                };
+                self.subsystems
+                    .propose
+                    .proposal_cache
+                    .insert_hint(proposal_hint);
+                let block_created_msg = self
+                    .frontier_block_created_from_proposal(&signed_block, &proposal)
+                    .map(BlockMessage::BlockCreated)
+                    .unwrap_or_else(|| {
+                        BlockMessage::BlockCreated(super::message::BlockCreated::from(
+                            &signed_block,
+                        ))
+                    });
                 let frame_len = super::consensus_block_wire_len(
                     self.common_config.peer.id(),
                     &block_created_msg,
@@ -1346,30 +1406,6 @@ impl Actor {
                     }
                     continue;
                 }
-                let payload_hash = Hash::new(&payload_bytes);
-                let proposal = Self::build_consensus_proposal(
-                    &signed_block,
-                    payload_hash,
-                    highest_qc,
-                    local_validator_index,
-                    view,
-                    proposal_epoch,
-                );
-                self.subsystems
-                    .propose
-                    .proposal_cache
-                    .insert_proposal(proposal);
-
-                let proposal_hint = super::message::ProposalHint {
-                    block_hash,
-                    height: proposal_height,
-                    view,
-                    highest_qc,
-                };
-                self.subsystems
-                    .propose
-                    .proposal_cache
-                    .insert_hint(proposal_hint);
 
                 break (
                     signed_block,
@@ -1397,8 +1433,8 @@ impl Actor {
             drop(payload_bytes);
 
             if let Some(plan) = rbc_plan.as_ref() {
-                // Install RBC sessions up front so local proposal handling sees the session,
-                // but defer RBC network traffic until proposal messages are enqueued.
+                // Install RBC sessions up front so local slot handling sees the transport state,
+                // but defer RBC network traffic until the frontier advertisement is enqueued.
                 self.install_rbc_session_plan(&plan.primary)?;
                 if let Some(dup) = plan.duplicate.as_ref() {
                     self.install_rbc_session_plan(dup)?;
@@ -1407,40 +1443,33 @@ impl Actor {
             }
 
             // Loop back consensus messages locally so the leader participates immediately.
-            self.handle_proposal_hint(proposal_hint)?;
-            self.handle_proposal(proposal)?;
-            // Local loopback consumes the cache entries; keep the proposal/hint cached so
-            // pacemaker rebroadcast can recover lagging peers in the same view.
-            self.subsystems
-                .propose
-                .proposal_cache
-                .insert_hint(proposal_hint);
-            self.subsystems
-                .propose
-                .proposal_cache
-                .insert_proposal(proposal);
-
-            let topology_peers = topology.as_ref();
-            let local_peer_id = self.common_config.peer.id().clone();
-            let proposal_msg = Arc::new(BlockMessage::Proposal(proposal));
-            let proposal_encoded =
-                Arc::new(BlockMessageWire::encode_message(proposal_msg.as_ref()));
-            for peer in topology_peers {
-                if peer == &local_peer_id {
-                    continue;
-                }
-                self.schedule_background(BackgroundRequest::Post {
-                    peer: peer.clone(),
-                    msg: BlockMessageWire::with_encoded(
-                        Arc::clone(&proposal_msg),
-                        Arc::clone(&proposal_encoded),
-                    ),
-                });
-            }
+            let frontier_block_created_ready = matches!(
+                &block_created_msg,
+                BlockMessage::BlockCreated(created) if created.frontier.is_some()
+            );
             let block_created_wire = Arc::new(block_created_msg.clone());
             let block_created_encoded = Arc::new(BlockMessageWire::encode_message(
                 block_created_wire.as_ref(),
             ));
+            if let BlockMessage::BlockCreated(block_msg) = block_created_msg.clone() {
+                self.handle_block_created(block_msg, None)?;
+            }
+            if !frontier_block_created_ready {
+                self.handle_proposal(proposal)?;
+                // Local handling can consume cache entries while validating or finalizing the slot.
+                // Reinsert the advisory metadata so same-view rebroadcast and recovery remain intact.
+                self.subsystems
+                    .propose
+                    .proposal_cache
+                    .insert_hint(proposal_hint);
+                self.subsystems
+                    .propose
+                    .proposal_cache
+                    .insert_proposal(proposal);
+            }
+
+            let topology_peers = topology.as_ref();
+            let local_peer_id = self.common_config.peer.id().clone();
             for peer in topology_peers {
                 if peer == &local_peer_id {
                     continue;
@@ -1453,30 +1482,31 @@ impl Actor {
                     ),
                 });
             }
+            if !frontier_block_created_ready {
+                let proposal_msg = Arc::new(BlockMessage::Proposal(proposal));
+                let proposal_encoded =
+                    Arc::new(BlockMessageWire::encode_message(proposal_msg.as_ref()));
+                for peer in topology_peers {
+                    if peer == &local_peer_id {
+                        continue;
+                    }
+                    self.schedule_background(BackgroundRequest::Post {
+                        peer: peer.clone(),
+                        msg: BlockMessageWire::with_encoded(
+                            Arc::clone(&proposal_msg),
+                            Arc::clone(&proposal_encoded),
+                        ),
+                    });
+                }
+            }
 
             if let Some(plan) = rbc_plan.take() {
-                // Start RBC payload dissemination immediately after Proposal/BlockCreated posts.
-                // Running local BlockCreated handling first adds avoidable delay before peers can
-                // receive chunks and emit READY, which inflates localnet quorum latencies.
+                // Start body transport immediately after the frontier advertisement posts.
                 self.broadcast_rbc_session_plan(plan.primary)?;
                 if let Some(dup) = plan.duplicate {
                     self.broadcast_rbc_session_plan(dup)?;
                 }
             }
-
-            if let BlockMessage::BlockCreated(block_msg) = block_created_msg.clone() {
-                self.handle_block_created(block_msg, None)?;
-            }
-            // `handle_block_created` can clear the slot cache while finalizing local state.
-            // Keep the proposal/hint cached for same-view pacemaker rebroadcast checks.
-            self.subsystems
-                .propose
-                .proposal_cache
-                .insert_hint(proposal_hint);
-            self.subsystems
-                .propose
-                .proposal_cache
-                .insert_proposal(proposal);
 
             let relay_envelopes = crate::sumeragi::status::lane_relay_envelopes_snapshot();
             if !relay_envelopes.is_empty() {
@@ -1704,8 +1734,8 @@ impl Actor {
                 return false;
             }
             let block_hash = pending.block.hash();
-            pending.precommit_vote_sent
-                || pending.commit_qc_seen
+            pending.local_commit_vote_emitted()
+                || pending.commit_qc_observed()
                 || self.pending_block_has_votes(block_hash, pending.height, pending.view)
                 || self.pending_block_has_qc(block_hash, pending.height, pending.view)
         });
@@ -1891,24 +1921,10 @@ impl Actor {
         }
 
         let local_peer_id = self.common_config.peer.id().clone();
-        let proposal_msg = Arc::new(BlockMessage::Proposal(proposal));
-        let proposal_encoded = Arc::new(BlockMessageWire::encode_message(proposal_msg.as_ref()));
-        for peer in topology.iter() {
-            if peer == &local_peer_id {
-                continue;
-            }
-            self.schedule_background(BackgroundRequest::Post {
-                peer: peer.clone(),
-                msg: BlockMessageWire::with_encoded(
-                    Arc::clone(&proposal_msg),
-                    Arc::clone(&proposal_encoded),
-                ),
-            });
-        }
-
-        let block_created = super::message::BlockCreated {
-            block: pending_block,
-        };
+        let block_created = self
+            .frontier_block_created_from_proposal(&pending_block, &proposal)
+            .unwrap_or_else(|| super::message::BlockCreated::from(&pending_block));
+        let frontier_block_created_ready = block_created.frontier.is_some();
         let block_msg = Arc::new(BlockMessage::BlockCreated(block_created));
         let block_encoded = Arc::new(BlockMessageWire::encode_message(block_msg.as_ref()));
         for peer in topology.iter() {
@@ -1922,6 +1938,23 @@ impl Actor {
                     Arc::clone(&block_encoded),
                 ),
             });
+        }
+        if !frontier_block_created_ready {
+            let proposal_msg = Arc::new(BlockMessage::Proposal(proposal));
+            let proposal_encoded =
+                Arc::new(BlockMessageWire::encode_message(proposal_msg.as_ref()));
+            for peer in topology.iter() {
+                if peer == &local_peer_id {
+                    continue;
+                }
+                self.schedule_background(BackgroundRequest::Post {
+                    peer: peer.clone(),
+                    msg: BlockMessageWire::with_encoded(
+                        Arc::clone(&proposal_msg),
+                        Arc::clone(&proposal_encoded),
+                    ),
+                });
+            }
         }
 
         if pending_queue_len > 0 {
@@ -2647,6 +2680,26 @@ impl Actor {
                 queue_len = pending_queue_len,
                 "deferring proposal: precommit votes already observed for this view"
             );
+            return false;
+        }
+
+        if let Some(block_hash) = self.authoritative_slot_owner_hash(height, view_idx) {
+            if pending_queue_len > 0 {
+                debug!(
+                    height,
+                    view = view_idx,
+                    queue_len = pending_queue_len,
+                    block = %block_hash,
+                    "authoritative BlockCreated already owns this slot; waiting for progress"
+                );
+            } else {
+                trace!(
+                    height,
+                    view = view_idx,
+                    block = %block_hash,
+                    "authoritative BlockCreated already owns this slot; deferring reassembly"
+                );
+            }
             return false;
         }
 

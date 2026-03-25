@@ -57,6 +57,33 @@ import { generateKeyPair } from "@iroha/iroha-js/crypto";
 import { buildOfflineEnvelope } from "@iroha/iroha-js/offline";
 ```
 
+For browser-only Connect bootstrap without importing the Node-first `ToriiClient`
+surface, use the dedicated browser subpath:
+
+```js
+import {
+  createConnectSessionPreview,
+  registerConnectSession,
+  openConnectWebSocket,
+} from "@iroha/iroha-js/connect-browser";
+
+const preview = createConnectSessionPreview({
+  chainId: "809574f5-fee7-5e69-bfcf-52451e42d50f",
+  node: "https://taira.sora.org",
+});
+
+const session = await registerConnectSession("https://taira.sora.org", preview.sidBase64Url, {
+  node: "https://taira.sora.org",
+});
+
+const socket = openConnectWebSocket(
+  "https://taira.sora.org",
+  preview.sidBase64Url,
+  session.token_app,
+  "app",
+);
+```
+
 You can also use namespaced exports when you prefer grouped imports:
 
 ```js

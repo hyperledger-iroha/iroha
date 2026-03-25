@@ -770,7 +770,7 @@ pub(crate) async fn setup_reserve(
         InstructionBox::from(RegisterOfflineReserve {
             reserve: shared_record_from_local(issuer, &record)?,
         }),
-        "/v1/offline/reserve/setup",
+        "/v1/offline/cash/setup",
     )
     .await?;
     Ok(envelope)
@@ -788,7 +788,7 @@ pub(crate) async fn top_up_reserve(
     if let Some(existing) = load_operation_result(app, &operation_key) {
         if existing.request_hash_hex != request_hash_hex {
             return Err(conversion_error(
-                "offline reserve operation_id is already bound to a different request".to_owned(),
+                "offline cash operation_id is already bound to a different request".to_owned(),
             ));
         }
         return Ok(local_envelope_from_shared(&existing.envelope));
@@ -796,7 +796,7 @@ pub(crate) async fn top_up_reserve(
 
     let mut reserve = if let Some(reserve_id) = req.reserve_id.as_ref() {
         load_shared_reserve(app, reserve_id)?
-            .ok_or_else(|| conversion_error("offline reserve not found".to_owned()))?
+            .ok_or_else(|| conversion_error("offline cash lineage not found".to_owned()))?
     } else {
         load_shared_reserve_by_lineage(
             app,
@@ -845,7 +845,7 @@ pub(crate) async fn top_up_reserve(
         .balance
         .clone()
         .checked_add(amount.clone())
-        .ok_or_else(|| conversion_error("reserve balance overflow".to_owned()))?;
+        .ok_or_else(|| conversion_error("offline cash balance overflow".to_owned()))?;
     reserve.parked_balance = parse_numeric(&minimum_required_parked_balance(
         &canonical_amount_string(&reserve.balance),
         Some(&reserve.authorization),
@@ -888,7 +888,7 @@ pub(crate) async fn top_up_reserve(
                 },
             }),
         ],
-        "/v1/offline/reserve/topup",
+        "/v1/offline/cash/load",
     )
     .await?;
     Ok(envelope)
@@ -904,14 +904,14 @@ pub(crate) async fn renew_reserve(
     if let Some(existing) = load_operation_result(app, &operation_key) {
         if existing.request_hash_hex != request_hash_hex {
             return Err(conversion_error(
-                "offline reserve operation_id is already bound to a different request".to_owned(),
+                "offline cash operation_id is already bound to a different request".to_owned(),
             ));
         }
         return Ok(local_envelope_from_shared(&existing.envelope));
     }
 
     let mut reserve = load_shared_reserve(app, &req.reserve_id)?
-        .ok_or_else(|| conversion_error("offline reserve not found".to_owned()))?;
+        .ok_or_else(|| conversion_error("offline cash lineage not found".to_owned()))?;
     validate_reserve_request(
         &reserve,
         &req.account_id,
@@ -983,7 +983,7 @@ pub(crate) async fn renew_reserve(
                 completed_at_ms: now_ms(),
             },
         }),
-        "/v1/offline/reserve/renew",
+        "/v1/offline/cash/refresh",
     )
     .await?;
     Ok(envelope)
@@ -999,14 +999,14 @@ pub(crate) async fn sync_reserve(
     if let Some(existing) = load_operation_result(app, &operation_key) {
         if existing.request_hash_hex != request_hash_hex {
             return Err(conversion_error(
-                "offline reserve operation_id is already bound to a different request".to_owned(),
+                "offline cash operation_id is already bound to a different request".to_owned(),
             ));
         }
         return Ok(local_envelope_from_shared(&existing.envelope));
     }
 
     let mut reserve = load_shared_reserve(app, &req.reserve_id)?
-        .ok_or_else(|| conversion_error("offline reserve not found".to_owned()))?;
+        .ok_or_else(|| conversion_error("offline cash lineage not found".to_owned()))?;
     validate_reserve_request(
         &reserve,
         &req.account_id,
@@ -1043,7 +1043,7 @@ pub(crate) async fn sync_reserve(
                 completed_at_ms: now_ms(),
             },
         }),
-        "/v1/offline/reserve/sync",
+        "/v1/offline/cash/sync",
     )
     .await?;
     Ok(envelope)
@@ -1060,14 +1060,14 @@ pub(crate) async fn defund_reserve(
     if let Some(existing) = load_operation_result(app, &operation_key) {
         if existing.request_hash_hex != request_hash_hex {
             return Err(conversion_error(
-                "offline reserve operation_id is already bound to a different request".to_owned(),
+                "offline cash operation_id is already bound to a different request".to_owned(),
             ));
         }
         return Ok(local_envelope_from_shared(&existing.envelope));
     }
 
     let mut reserve = load_shared_reserve(app, &req.reserve_id)?
-        .ok_or_else(|| conversion_error("offline reserve not found".to_owned()))?;
+        .ok_or_else(|| conversion_error("offline cash lineage not found".to_owned()))?;
     validate_reserve_request(
         &reserve,
         &req.account_id,
@@ -1083,7 +1083,9 @@ pub(crate) async fn defund_reserve(
         .balance
         .clone()
         .checked_sub(amount.clone())
-        .ok_or_else(|| conversion_error("insufficient reserve balance for defund".to_owned()))?;
+        .ok_or_else(|| {
+            conversion_error("insufficient offline cash balance for redeem".to_owned())
+        })?;
     reserve.parked_balance = parse_numeric(&minimum_required_parked_balance(
         &canonical_amount_string(&reserve.balance),
         Some(&reserve.authorization),
@@ -1126,7 +1128,7 @@ pub(crate) async fn defund_reserve(
                 },
             }),
         ],
-        "/v1/offline/reserve/defund",
+        "/v1/offline/cash/redeem",
     )
     .await?;
     Ok(envelope)
@@ -1262,20 +1264,20 @@ fn validate_reserve_request(
         || reserve.offline_public_key != offline_public_key
     {
         return Err(conversion_error(
-            "offline reserve lineage does not match the request".to_owned(),
+            "offline cash lineage does not match the request".to_owned(),
         ));
     }
     if let Some(definition_id) = asset_definition_id {
         if reserve.asset_definition_id != definition_id {
             return Err(conversion_error(
-                "asset_definition_id does not match the reserve lineage".to_owned(),
+                "asset_definition_id does not match the offline cash lineage".to_owned(),
             ));
         }
     }
     if let Some(key_id) = app_attest_key_id {
         if reserve.app_attest_key_id != key_id {
             return Err(conversion_error(
-                "app_attest_key_id does not match the reserve lineage".to_owned(),
+                "app_attest_key_id does not match the offline cash lineage".to_owned(),
             ));
         }
     }
@@ -1325,7 +1327,7 @@ fn apply_receipts(
             .insert(receipt.transfer_id.clone())
         {
             return Err(conversion_error(
-                "duplicate transfer_id in reserve sync".to_owned(),
+                "duplicate transfer_id in offline cash sync".to_owned(),
             ));
         }
         if !reserve.seen_sender_states.insert(sender_state_key(
@@ -1333,7 +1335,7 @@ fn apply_receipts(
             receipt.local_revision,
         )) {
             return Err(conversion_error(
-                "duplicate sender state in reserve sync".to_owned(),
+                "duplicate sender state in offline cash sync".to_owned(),
             ));
         }
         current_balance = expected_post_balance;
@@ -1373,7 +1375,7 @@ fn validate_local_continuity(
         || receipt.pre_state_hash != current_hash
     {
         return Err(conversion_error(
-            "offline reserve continuity proof is invalid".to_owned(),
+            "offline cash continuity proof is invalid".to_owned(),
         ));
     }
 
@@ -1435,7 +1437,7 @@ fn validate_local_continuity(
         || receipt.post_state_hash != expected_post_hash
     {
         return Err(conversion_error(
-            "offline reserve continuity proof is invalid".to_owned(),
+            "offline cash continuity proof is invalid".to_owned(),
         ));
     }
     Ok(expected_post_balance)
@@ -1533,7 +1535,7 @@ fn validate_source_payload(
             != canonical_amount_string(&parse_amount(amount)?)
     {
         return Err(conversion_error(
-            "source payload does not target the expected reserve".to_owned(),
+            "source payload does not target the expected offline cash lineage".to_owned(),
         ));
     }
     Ok(())
@@ -1826,14 +1828,16 @@ fn reserve_anchor_hash(
 
 fn issuer(app: &AppState) -> Result<&OfflineIssuerSigner, Error> {
     app.offline_issuer.as_ref().ok_or_else(|| {
-        conversion_error("torii.offline_issuer must be configured for reserve routes".to_owned())
+        conversion_error(
+            "torii.offline_issuer must be configured for offline cash routes".to_owned(),
+        )
     })
 }
 
 fn operator_authority(issuer: &OfflineIssuerSigner) -> Result<AccountId, Error> {
     issuer.operator_authority.clone().ok_or_else(|| {
         conversion_error(
-            "torii.offline_issuer.operator_authority must be configured for reserve routes"
+            "torii.offline_issuer.operator_authority must be configured for offline cash routes"
                 .to_owned(),
         )
     })
@@ -1928,7 +1932,7 @@ fn parse_amount(raw: &str) -> Result<Numeric, Error> {
     let amount = parse_numeric(raw)?;
     if amount <= Numeric::zero() {
         return Err(conversion_error(
-            "offline reserve amount must be greater than zero".to_owned(),
+            "offline cash amount must be greater than zero".to_owned(),
         ));
     }
     Ok(amount)
@@ -1938,12 +1942,12 @@ fn parse_numeric(raw: &str) -> Result<Numeric, Error> {
     let normalized = raw.trim().replace(',', "");
     if normalized.is_empty() {
         return Err(conversion_error(
-            "offline reserve amount is required".to_owned(),
+            "offline cash amount is required".to_owned(),
         ));
     }
     normalized
         .parse::<Numeric>()
-        .map_err(|err| conversion_error(format!("invalid offline reserve amount: {err}")))
+        .map_err(|err| conversion_error(format!("invalid offline cash amount: {err}")))
 }
 
 fn add_amounts(lhs: &str, rhs: &str) -> Result<String, Error> {
@@ -1952,7 +1956,7 @@ fn add_amounts(lhs: &str, rhs: &str) -> Result<String, Error> {
     Ok(canonical_amount_string(
         &left
             .checked_add(right)
-            .ok_or_else(|| conversion_error("offline reserve amount overflow".to_owned()))?,
+            .ok_or_else(|| conversion_error("offline cash amount overflow".to_owned()))?,
     ))
 }
 
@@ -1962,7 +1966,7 @@ fn subtract_amounts(lhs: &str, rhs: &str) -> Result<String, Error> {
     Ok(canonical_amount_string(
         &left
             .checked_sub(right)
-            .ok_or_else(|| conversion_error("insufficient offline reserve balance".to_owned()))?,
+            .ok_or_else(|| conversion_error("insufficient offline cash balance".to_owned()))?,
     ))
 }
 
@@ -2013,7 +2017,7 @@ fn validate_parked_continuity(
                 || receipt.post_parked_balance != minimum_post_parked
             {
                 return Err(conversion_error(
-                    "offline reserve parked-balance continuity is invalid".to_owned(),
+                    "offline cash locked-balance continuity is invalid".to_owned(),
                 ));
             }
         }
@@ -2024,7 +2028,7 @@ fn validate_parked_continuity(
                 || compare_amounts(&receipt.post_parked_balance, expected_post_balance)?.is_gt()
             {
                 return Err(conversion_error(
-                    "offline reserve parked-balance continuity is invalid".to_owned(),
+                    "offline cash locked-balance continuity is invalid".to_owned(),
                 ));
             }
         }
@@ -2058,7 +2062,8 @@ fn validate_receipt_authorization(
         || authorization.app_attest_key_id != receipt.attestation.key_id
     {
         return Err(conversion_error(
-            "offline transfer authorization does not match the sender reserve lineage".to_owned(),
+            "offline transfer authorization does not match the sender offline cash lineage"
+                .to_owned(),
         ));
     }
     if revoked_verdict_ids.contains(&authorization.verdict_id.to_lowercase()) {
@@ -2101,7 +2106,7 @@ fn latest_block_timestamp_ms(app: &AppState) -> u64 {
 fn metadata_insert_string(metadata: &mut Metadata, key: &str, value: &str) -> Result<(), Error> {
     let name = Name::from_str(key).map_err(|err| {
         conversion_error(format!(
-            "invalid reserve attestation metadata key `{key}`: {err}"
+            "invalid offline cash attestation metadata key `{key}`: {err}"
         ))
     })?;
     metadata.insert(
@@ -2160,7 +2165,7 @@ fn apple_app_attest_binding_from_request(
     }
     let report = report.ok_or_else(|| {
         conversion_error(
-            "ios attestation report is required when reserve attestation metadata is provided"
+            "ios attestation report is required when offline cash attestation metadata is provided"
                 .to_owned(),
         )
     })?;
@@ -2190,11 +2195,13 @@ fn apple_app_attest_binding_from_request(
 fn decode_challenge_hash_hex(challenge_hash_hex: &str) -> Result<[u8; 32], Error> {
     let normalized = challenge_hash_hex.trim().trim_start_matches("0x");
     let bytes = hex::decode(normalized).map_err(|err| {
-        conversion_error(format!("invalid reserve attestation challenge hash: {err}"))
+        conversion_error(format!(
+            "invalid offline cash attestation challenge hash: {err}"
+        ))
     })?;
     if bytes.len() != Hash::LENGTH {
         return Err(conversion_error(
-            "reserve attestation challenge hash must be 32 bytes".to_owned(),
+            "offline cash attestation challenge hash must be 32 bytes".to_owned(),
         ));
     }
     let mut hash = [0u8; Hash::LENGTH];
@@ -2245,7 +2252,7 @@ fn validate_reserve_attestation(
     })?;
     if attestation.challenge_hash_hex != sha256_hex(&challenge_seed) {
         return Err(conversion_error(
-            "offline reserve attestation challenge hash is invalid".to_owned(),
+            "offline cash attestation challenge hash is invalid".to_owned(),
         ));
     }
     let request_binding = apple_app_attest_binding_from_request(attestation)?;
@@ -2254,13 +2261,15 @@ fn validate_reserve_attestation(
         let attestation_report = BASE64_STANDARD
             .decode(binding.attestation_report_base64.as_bytes())
             .map_err(|err| {
-                conversion_error(format!("invalid base64 reserve attestation report: {err}"))
+                conversion_error(format!(
+                    "invalid base64 offline cash attestation report: {err}"
+                ))
             })?;
         let assertion = BASE64_STANDARD
             .decode(attestation.assertion_base64.as_bytes())
             .map_err(|err| {
                 conversion_error(format!(
-                    "invalid base64 reserve attestation assertion: {err}"
+                    "invalid base64 offline cash attestation assertion: {err}"
                 ))
             })?;
         let settlement_cfg = &app.state.settlement().offline;
@@ -2278,12 +2287,12 @@ fn validate_reserve_attestation(
         )
         .map_err(|err| {
             conversion_error(format!(
-                "offline reserve app attest verification failed: {err}"
+                "offline cash app attest verification failed: {err}"
             ))
         })?;
     } else if extract_assertion_counter(&attestation.assertion_base64)? != attestation.counter {
         return Err(conversion_error(
-            "offline reserve attestation counter does not match assertion data".to_owned(),
+            "offline cash attestation counter does not match assertion data".to_owned(),
         ));
     }
     validate_counter(attestation, counter_book)?;

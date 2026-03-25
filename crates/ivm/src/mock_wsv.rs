@@ -3484,6 +3484,7 @@ impl IVMHost for WsvHost {
             | crate::syscalls::SYSCALL_JSON_GET_ACCOUNT_ID
             | crate::syscalls::SYSCALL_JSON_GET_NFT_ID
             | crate::syscalls::SYSCALL_JSON_GET_BLOB_HEX
+            | crate::syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID
             | crate::syscalls::SYSCALL_JSON_GET_NUMERIC => {
                 let json_tlv = vm.memory.validate_tlv(vm.register(10))?;
                 let key_tlv = vm.memory.validate_tlv(vm.register(11))?;
@@ -3602,6 +3603,24 @@ impl IVMHost for WsvHost {
                         out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
                         out.extend_from_slice(&bytes);
                         let h: [u8; 32] = CryptoHash::new(&bytes).into();
+                        out.extend_from_slice(&h);
+                        let p = vm.alloc_input_tlv(&out)?;
+                        vm.set_register(10, p);
+                        Ok(0)
+                    }
+                    crate::syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID => {
+                        let raw = field.as_str().ok_or(VMError::DecodeError)?;
+                        let asset = AssetDefinitionId::parse_address_literal(raw)
+                            .map_err(|_| VMError::DecodeError)?;
+                        let body = norito::to_bytes(&asset).map_err(|_| VMError::NoritoInvalid)?;
+                        let mut out = Vec::with_capacity(7 + body.len() + 32);
+                        out.extend_from_slice(
+                            &(PointerType::AssetDefinitionId as u16).to_be_bytes(),
+                        );
+                        out.push(1);
+                        out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+                        out.extend_from_slice(&body);
+                        let h: [u8; 32] = CryptoHash::new(&body).into();
                         out.extend_from_slice(&h);
                         let p = vm.alloc_input_tlv(&out)?;
                         vm.set_register(10, p);

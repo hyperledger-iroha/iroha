@@ -5,15 +5,20 @@
 //! HTTP API. SNS records and policies are stored in `World.smart_contract_state`
 //! so the ledger-backed lifecycle model remains deterministic across peers.
 
-use std::{num::NonZeroUsize, str::FromStr};
+use std::{str::FromStr, time::SystemTime};
 
 use iroha_data_model::{
-    account::{AccountId, rekey::AccountLabel},
+    account::{AccountAddress, AccountId, rekey::AccountLabel},
     block::BlockHeader,
     domain::DomainId,
+    isi::{
+        domain_link::{BindAccountAlias, SetAccountLabel},
+        register::RegisterBox,
+    },
     metadata::Metadata,
     name::Name,
     nexus::{DataSpaceCatalog, DataSpaceId},
+    permission::Permission,
     sns::{
         AuctionKind, FreezeNameRequestV1, GovernanceHookV1, NameAuctionStateV1, NameControllerV1,
         NameFrozenStateV1, NameRecordV1, NameSelectorError, NameSelectorV1, NameStatus,
@@ -21,6 +26,10 @@ use iroha_data_model::{
         RenewNameRequestV1, SuffixFeeSplitV1, SuffixId, SuffixPolicyV1, SuffixStatus, TokenValue,
         TransferNameRequestV1, UpdateControllersRequestV1, fixtures,
     },
+    transaction::Executable,
+};
+use iroha_executor_data_model::permission::account::{
+    AccountAliasPermissionScope, CanManageAccountAlias,
 };
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode as _, Encode as _};
@@ -240,6 +249,123 @@ fn bootstrap_steward_for_world(world: &World) -> AccountId {
         .get(&*iroha_genesis::GENESIS_DOMAIN_ID)
         .map(|domain| domain.owned_by().clone())
         .unwrap_or_else(fixtures::steward_account)
+}
+
+fn seed_name_record_if_missing(world: &mut World, owner: &AccountId, selector: NameSelectorV1) {
+    let storage_key = record_storage_key(&selector);
+    if world
+        .smart_contract_state
+        .view()
+        .get(&storage_key)
+        .is_some()
+    {
+        return;
+    }
+
+    let address = AccountAddress::from_account_id(owner)
+        .expect("account id should convert to account address");
+    let record = NameRecordV1::new(
+        selector,
+        owner.clone(),
+        vec![NameControllerV1::account(&address)],
+        0,
+        0,
+        u64::MAX,
+        u64::MAX,
+        u64::MAX,
+        Metadata::default(),
+    );
+    world
+        .smart_contract_state
+        .insert(storage_key, record.encode());
+}
+
+fn seed_alias_manage_permissions_if_missing(
+    world: &mut World,
+    authority: &AccountId,
+    label: &AccountLabel,
+) {
+    let mut permissions = world
+        .account_permissions
+        .view()
+        .get(authority)
+        .cloned()
+        .unwrap_or_default();
+    let dataspace_permission = Permission::from(CanManageAccountAlias {
+        scope: AccountAliasPermissionScope::Dataspace(label.dataspace),
+    });
+    permissions.insert(dataspace_permission);
+    if let Some(domain) = &label.domain {
+        let domain_permission = Permission::from(CanManageAccountAlias {
+            scope: AccountAliasPermissionScope::Domain(domain.clone()),
+        });
+        permissions.insert(domain_permission);
+    }
+    world
+        .account_permissions
+        .insert(authority.clone(), permissions);
+}
+
+/// Seed bootstrap alias state required by aliases referenced directly in genesis instructions.
+///
+/// Genesis cannot rely on the normal registrar flow because the namespace policies and
+/// bootstrap authority are only coming online while the block executes. This helper
+/// pre-seeds the leases and alias-management permissions that the first block itself
+/// consumes, mirroring how operators would pre-register those names before normal
+/// operation.
+pub fn seed_genesis_alias_bootstrap(
+    world: &mut World,
+    block: &iroha_data_model::block::SignedBlock,
+) {
+    let dataspace_catalog = DataSpaceCatalog::default();
+
+    for transaction in block.external_transactions() {
+        let authority = transaction.authority();
+        let Executable::Instructions(instructions) = transaction.instructions() else {
+            continue;
+        };
+
+        for instruction in instructions {
+            if let Some(register) = instruction.as_any().downcast_ref::<RegisterBox>() {
+                match register {
+                    RegisterBox::Domain(register) => {
+                        let selector = selector_for_domain(&register.object().id)
+                            .expect("genesis domain ids should be canonical");
+                        seed_name_record_if_missing(world, authority, selector);
+                    }
+                    RegisterBox::Account(register) => {
+                        if let Some(label) = register.object().label() {
+                            seed_alias_manage_permissions_if_missing(world, authority, label);
+                            if let Ok(selector) =
+                                selector_for_account_alias(label, &dataspace_catalog)
+                            {
+                                seed_name_record_if_missing(world, authority, selector);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            if let Some(set_label) = instruction.as_any().downcast_ref::<SetAccountLabel>() {
+                seed_alias_manage_permissions_if_missing(world, authority, &set_label.label);
+                if let Ok(selector) =
+                    selector_for_account_alias(&set_label.label, &dataspace_catalog)
+                {
+                    seed_name_record_if_missing(world, authority, selector);
+                }
+            }
+
+            if let Some(bind_alias) = instruction.as_any().downcast_ref::<BindAccountAlias>() {
+                seed_alias_manage_permissions_if_missing(world, authority, &bind_alias.label);
+                if let Ok(selector) =
+                    selector_for_account_alias(&bind_alias.label, &dataspace_catalog)
+                {
+                    seed_name_record_if_missing(world, authority, selector);
+                }
+            }
+        }
+    }
 }
 
 fn default_namespace_policy(namespace: SnsNamespace, steward: &AccountId) -> SuffixPolicyV1 {
@@ -862,6 +988,12 @@ pub fn unfreeze_name(
 /// This helper is used by Torii's HTTP adapter to keep SNS mutations in core
 /// state instead of a separate in-memory registry.
 ///
+/// SNS HTTP mutations are world-state side effects, not canonical chain
+/// blocks. The helper therefore commits the `StateBlock` without registering a
+/// synthetic entry in the transactions index; doing so would advance the
+/// in-memory committed transaction height without a matching Kura block and
+/// poison the next real block commit.
+///
 /// # Errors
 ///
 /// Returns [`SnsError`] when the mutation fails or the state block cannot be
@@ -876,10 +1008,15 @@ pub fn apply_with_state_block<T>(
         .map(|block| block.header().height().get().saturating_add(1))
         .unwrap_or(1);
     let prev_hash = latest_block.as_ref().map(|block| block.as_ref().hash());
-    let creation_time_ms = latest_block
+    let ledger_time_ms = latest_block
         .as_ref()
         .map(|block| u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX))
         .unwrap_or(0);
+    let wall_clock_ms = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| u64::try_from(duration.as_millis()).ok())
+        .unwrap_or(ledger_time_ms);
     let header = BlockHeader::new(
         next_height
             .try_into()
@@ -887,17 +1024,13 @@ pub fn apply_with_state_block<T>(
         prev_hash,
         None,
         None,
-        creation_time_ms,
+        wall_clock_ms.max(ledger_time_ms),
         0,
     );
     let mut block = state.block(header);
     let mut transaction = block.transaction();
     let out = mutation(&mut transaction)?;
     transaction.apply();
-    block.transactions.insert_block(
-        std::collections::HashSet::new(),
-        NonZeroUsize::new(next_height as usize).expect("block height must be non-zero"),
-    );
     block
         .commit()
         .map_err(|err| SnsError::Internal(format!("failed to commit SNS state block: {err}")))?;
@@ -988,14 +1121,19 @@ pub fn active_dataspace_owner_by_id(
 
 #[cfg(test)]
 mod tests {
+    use iroha_crypto::KeyPair;
     use iroha_data_model::{
-        account::{AccountAddress, AccountId},
+        account::{Account, AccountAddress, AccountId, rekey::AccountLabel},
+        block::SignedBlock,
+        domain::Domain,
+        isi::{InstructionBox, Register, domain_link::SetAccountLabel},
         metadata::Metadata,
         nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata},
         sns::{
             FreezeNameRequestV1, GovernanceHookV1, NameControllerV1, NameRecordV1, NameSelectorV1,
             NameStatus, PaymentProofV1, RegisterNameRequestV1, TransferNameRequestV1,
         },
+        transaction::TransactionBuilder,
     };
     use iroha_primitives::json::Json;
 
@@ -1105,6 +1243,80 @@ mod tests {
     }
 
     #[test]
+    fn seed_genesis_alias_bootstrap_covers_domains_and_account_labels() {
+        let chain_id = iroha_data_model::ChainId::from("sns-genesis-alias-bootstrap");
+        let genesis_key = KeyPair::random();
+        let genesis_account = AccountId::new(genesis_key.public_key().clone());
+        let domain_id: DomainId = "ivm".parse().expect("domain");
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let label = AccountLabel::new(domain_id.clone(), "gas".parse().expect("label"));
+        let tx = TransactionBuilder::new(chain_id, genesis_account.clone())
+            .with_instructions([
+                InstructionBox::from(Register::domain(Domain::new(domain_id.clone()))),
+                InstructionBox::from(Register::account(
+                    Account::new(account_id.to_account_id(domain_id.clone()))
+                        .with_label(Some(label.clone())),
+                )),
+                InstructionBox::from(SetAccountLabel {
+                    account: genesis_account.clone(),
+                    label: AccountLabel::new(domain_id.clone(), "ops".parse().expect("label")),
+                }),
+            ])
+            .sign(genesis_key.private_key());
+        let block = SignedBlock::genesis(vec![tx], genesis_key.private_key(), None, None);
+        let bootstrap_authority = block
+            .transactions_vec()
+            .first()
+            .expect("genesis transaction")
+            .authority()
+            .clone();
+        let mut world = World::default();
+
+        seed_genesis_alias_bootstrap(&mut world, &block);
+
+        let view = world.view();
+        let domain_selector = selector_for_domain(&domain_id).expect("selector");
+        let label_selector =
+            selector_for_account_alias(&label, &DataSpaceCatalog::default()).expect("selector");
+        let relabel_selector = selector_for_account_alias(
+            &AccountLabel::new(domain_id.clone(), "ops".parse().expect("label")),
+            &DataSpaceCatalog::default(),
+        )
+        .expect("selector");
+
+        assert!(
+            record_by_selector(&view, &domain_selector).is_some(),
+            "genesis domain names must be leased before validation"
+        );
+        assert!(
+            record_by_selector(&view, &label_selector).is_some(),
+            "genesis account labels must be leased before validation"
+        );
+        assert!(
+            record_by_selector(&view, &relabel_selector).is_some(),
+            "explicit label-setting instructions must also seed leases"
+        );
+        let permissions = world
+            .account_permissions
+            .view()
+            .get(&bootstrap_authority)
+            .cloned()
+            .expect("genesis authority permissions");
+        assert!(
+            permissions.contains(&Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(label.dataspace),
+            })),
+            "genesis authority must be able to manage the alias dataspace used at genesis"
+        );
+        assert!(
+            permissions.contains(&Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(domain_id),
+            })),
+            "genesis authority must be able to manage the alias domain used at genesis"
+        );
+    }
+
+    #[test]
     fn register_name_persists_account_alias_record_in_state() {
         let state = State::new_for_testing(
             World::default(),
@@ -1140,6 +1352,113 @@ mod tests {
 
         assert_eq!(fetched.owner, owner);
         assert_eq!(fetched.selector.label, "treasury@banking");
+    }
+
+    #[test]
+    fn sns_state_block_does_not_advance_transaction_height() {
+        use std::collections::HashSet;
+
+        use iroha_data_model::block::BlockHeader;
+        use nonzero_ext::nonzero;
+
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        state.nexus.write().dataspace_catalog = dataspace_catalog();
+        let owner = owner();
+
+        assert_eq!(state.transactions_latest_height_for_testing(), 0);
+
+        apply_with_state_block(&state, |tx| {
+            register_name(
+                tx,
+                RegisterNameRequestV1 {
+                    selector: NameSelectorV1 {
+                        version: NameSelectorV1::VERSION,
+                        suffix_id: ACCOUNT_ALIAS_SUFFIX_ID,
+                        label: "ops@banking".to_owned(),
+                    },
+                    owner: owner.clone(),
+                    controllers: vec![controller(&owner)],
+                    term_years: 1,
+                    pricing_class_hint: None,
+                    payment: payment(&owner, 120),
+                    governance: None,
+                    metadata: Metadata::default(),
+                },
+            )
+        })
+        .expect("register name");
+
+        assert_eq!(
+            state.transactions_latest_height_for_testing(),
+            0,
+            "SNS state-only mutations must not advance committed transaction height"
+        );
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        {
+            let tx = block.transaction();
+            tx.apply();
+        }
+        block
+            .transactions
+            .insert_block(HashSet::new(), nonzero!(1_usize));
+        block
+            .commit()
+            .expect("real block commit after SNS mutation should succeed");
+
+        assert_eq!(state.transactions_latest_height_for_testing(), 1);
+    }
+
+    #[test]
+    fn sns_state_block_uses_wall_clock_lifecycle_time() {
+        use std::time::SystemTime;
+
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        state.nexus.write().dataspace_catalog = dataspace_catalog();
+        let owner = owner();
+        let before_ms = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("system clock after unix epoch")
+            .as_millis() as u64;
+
+        let record = apply_with_state_block(&state, |tx| {
+            register_name(
+                tx,
+                RegisterNameRequestV1 {
+                    selector: NameSelectorV1 {
+                        version: NameSelectorV1::VERSION,
+                        suffix_id: DOMAIN_NAME_SUFFIX_ID,
+                        label: "soraswap".to_owned(),
+                    },
+                    owner: owner.clone(),
+                    controllers: vec![controller(&owner)],
+                    term_years: 1,
+                    pricing_class_hint: None,
+                    payment: payment(&owner, 120),
+                    governance: None,
+                    metadata: Metadata::default(),
+                },
+            )
+        })
+        .expect("register name");
+
+        assert!(
+            record.registered_at_ms >= before_ms.saturating_sub(1_000),
+            "SNS lifecycle timestamps should track wall clock time"
+        );
+        assert!(
+            record.expires_at_ms > before_ms + MS_PER_DAY,
+            "one-year registration should not appear expired immediately"
+        );
     }
 
     #[test]
