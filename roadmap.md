@@ -2,6 +2,99 @@
 
 Last updated: 2026-03-25
 
+Latest sync (2026-03-25 `BlockCreated` now seeds the exact frontier slot and contiguous RBC rescue no longer re-enters generic missing-block fetch):
+this cut transfers `committed + 1` ownership another step toward the intended single frontier state machine: accepted `BlockCreated` now marks the exact slot authoritative directly, and RBC-side “missing BlockCreated” rescue at the contiguous frontier now stays inside that slot instead of scheduling generic `FetchPendingBlock` recovery.
+
+- implementation on this sync:
+  - `crates/iroha_core/src/sumeragi/main_loop/proposal_handlers.rs` now seeds the exact `FrontierSlot` from accepted `BlockCreated` traffic instead of relying on later pending-block state to imply frontier identity,
+  - `crates/iroha_core/src/sumeragi/main_loop/rbc.rs` now diverts contiguous-frontier RBC recovery back into the exact slot so missing `BlockCreated` / post-delivery repair cannot take over the frontier with generic missing-block rescue, and
+  - `crates/iroha_core/src/sumeragi/main_loop.rs` now lets the frontier helper retry `FetchBlockBody` whenever the slot is already authoritative, even if the newest caller only contributes passive topology evidence.
+
+- focused validation passed:
+  - `cargo fmt --all`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo check -p iroha_core --lib --message-format short`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_core block_created_initializes_exact_frontier_slot --lib -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_core request_missing_block_for_pending_rbc_holds_initial_frontier_fetch_within_ingress_grace --lib -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_core handle_rbc_init_preserves_rotated_leader_preference_for_late_missing_block_recovery --lib -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_core frontier_body_repair_fetches_leader_before_voter_fallback --lib -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_core frontier_vote_placeholder_skips_generic_missing_block_request --lib -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_core defer_qc_if_block_missing_with_commit_quorum_hint_seeds_contiguous_frontier_owner_create_only --lib -- --nocapture`
+
+- open work after this sync:
+  - rerun the preserved-peer permissioned and NPoS stable soaks on this cut and require the frontier logs to show nonzero `FetchBlockBody` / `BlockBodyResponse` plus zero `requested missing BlockCreated while awaiting RBC INIT` on the contiguous frontier,
+  - delete the remaining near-tip call sites that can still share fallback-anchor / block-sync repair with `committed + 1`, and
+  - finish the protocol deletion so `BlockCreated` is the only frontier advertisement and RBC transport cannot keep ownership of old slots alive.
+
+Latest sync (2026-03-25 full permissioned + NPoS preserved-peer stable soaks still miss on legacy frontier repair):
+the first full preserved-peer rerun on the exact-body tranche shows that the live frontier path is still not using `FetchBlockBody` / `BlockBodyResponse`; both one-hour 4-peer stable envelopes stayed safe, but both failed the duration-deadline p95 gate because legacy fallback-anchor recovery continued to dominate the frontier.
+
+- preserved-peer soak outcome on this sync:
+  - permissioned finished the full `3600s` envelope at strict/quorum height `1430` and failed with `quorum p95 block interval 5003ms exceeded threshold 1000ms`
+  - NPoS finished the full `3600s` envelope at strict/quorum height `1387` and failed with the same `quorum p95 block interval 5003ms exceeded threshold 1000ms`
+  - both runs kept all peers alive and aligned, so the regression is throughput/frontier churn rather than quorum loss, divergence, or a `no block height progress` stall
+
+- preserved-peer log critique on this sync:
+  - exact frontier repair never appeared on the wire in either run: `FetchBlockBody=0`, `BlockBodyResponse=0`
+  - legacy frontier recovery remained hot:
+    - permissioned: `fallback anchor=1260`, `requested missing BlockCreated while awaiting RBC INIT=90`
+    - NPoS: `fallback anchor=1079`, `requested missing BlockCreated while awaiting RBC INIT=70`
+  - the churn clustered on one peer per run (`just_quagga` in permissioned, `cuddly_grunt` in NPoS), which still points at shared frontier-owner / fallback-anchor behavior rather than a symmetric workload ceiling
+
+- open work after this sync:
+  - remove the remaining live call sites that let contiguous-frontier misses fall back into fallback-anchor sharing and RBC-era `requested missing BlockCreated while awaiting RBC INIT` rescue,
+  - finish the `BlockCreated`-only frontier protocol deletion so near-tip repair can be observed as nonzero `FetchBlockBody` / `BlockBodyResponse` traffic in preserved-peer logs,
+  - retire the remaining frontier lib tests that still encode the old shared-window / range-pull behavior, then rerun the full preserved-peer stable envelopes and require zero fallback-anchor / missing-`BlockCreated` churn on the frontier path before treating the redesign as validated.
+
+Latest sync (2026-03-25 exact frontier body lane now routes `committed + 1` through `FetchBlockBody` / `BlockBodyResponse`):
+this cut installs the dedicated frontier slot and the exact body request/response pair, so the current-slot body miss can stop living inside the generic hash-based missing-block machine. It is still a tranche, not the final `BlockCreated`-only protocol deletion.
+
+- implementation on this cut:
+  - `crates/iroha_core/src/sumeragi/message.rs`, `status.rs`, and `mod.rs` add the exact frontier body wire pair and thread it through message classification / dedup bookkeeping,
+  - `crates/iroha_core/src/sumeragi/main_loop.rs` adds `FrontierSlot` / `next_slot_prefetch`, leader-first retry scheduling, and active-round tracking for the exact frontier lane,
+  - `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` now answers exact body requests with `BlockBodyResponse` carrying `BlockCreated`, can hydrate the local slot from that response, and flushes any stashed exact-body requesters once the authoritative body arrives,
+  - `crates/iroha_core/src/sumeragi/main_loop/votes.rs` and `qc.rs` now keep frontier vote observations passive and route highest-QC / unknown-body frontier repair onto the exact slot instead of re-entering `missing_block_requests`,
+  - `crates/iroha_core/src/sumeragi/main_loop/tests.rs` adds focused checks for exact body responses, passive frontier placeholders, and leader-first then voter-fallback retry ordering.
+
+- focused validation passed:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo check -p iroha_core --lib --message-format short`
+
+- focused validation now reaches the new frontier cases:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_core frontier_body_repair_fetches_leader_before_voter_fallback --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_core frontier_catchup_target_keeps_contiguous_frontier_with_pending_frontier_block --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_core frontier --lib -- --nocapture`
+    now runs to completion (`112` passed, `19` failed, `1` ignored) and the remaining failures are concentrated in legacy frontier-recovery/shared-window/range-pull tests rather than unrelated compile drift.
+
+- open work after this sync:
+  - finish removing standalone `Proposal` / `ProposalHint` and the remaining `RbcReady` / `RbcDeliver` wire paths so `BlockCreated` becomes the only hot-path frontier advertisement,
+  - keep `BlockSyncUpdate` and range-pull logic on deep catch-up only; remove the remaining legacy frontier branches that can still reach those paths,
+  - replace the remaining RBC-named frontier transport/state with explicit body transport naming and retire old-slot rescue/rebroadcast state,
+  - retire or rewrite the remaining `19` frontier lib tests that still encode legacy frontier-recovery/shared-window/range-pull behavior removed by the exact-slot design, and
+  - rerun the full frontier filter after that test cleanup, then rerun short localnet probes and the preserved-peer stable soak matrix on this exact-body tranche.
+
+Latest sync (2026-03-25 exact frontier-fetch tranche removed RBC sidecars from `FetchPendingBlock`):
+this cut finally stops `FetchPendingBlock` from reintroducing RBC transport into the frontier lane and removes the post-commit carry-over that kept delivered sessions hot, but it is still only a tranche of the full `BlockCreated`-only redesign.
+
+- implementation on this cut:
+  - `crates/iroha_core/src/sumeragi/main_loop.rs` adds `MissingBlockFetchMode::StrictSigners` and removes the delivered-session `RBC_REBROADCAST_COMMITTED_DEPTH` rebroadcast carry-over,
+  - `crates/iroha_core/src/sumeragi/main_loop/rbc.rs` now keeps pending / post-delivery missing-block recovery on exact signer targets, normalizing rotated-view proposer indices back into canonical roster slots before fetch planning,
+  - `crates/iroha_core/src/sumeragi/main_loop/votes.rs` now uses the unresolved vote signer as the exact missing-block target instead of falling straight back to topology-wide repair, and
+  - `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` no longer emits `RbcInit` / `RbcChunk` sidecars on `FetchPendingBlock` responses and no longer serves RBC transport as the fallback when the block body is not yet authoritative.
+
+- focused validation passed:
+  - `cargo fmt --all`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core --lib fetch_pending_block_ -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core --lib plan_missing_block_fetch_ -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core --lib request_missing_block_for_pending_rbc_ -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core --lib handle_rbc_init_preserves_rotated_leader_preference_for_late_missing_block_recovery -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core --lib delivered_rbc_session_ -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core --lib handle_vote_defers_until_roster_available -- --nocapture`
+
+- open work after this sync:
+  - replace `FetchPendingBlock` with the requested exact frontier pair (`FetchBlockBody` / `BlockBodyResponse`) so contiguous-frontier repair is explicit and no longer shares semantics with legacy missing-block fetch,
+  - stop returning `BlockSyncUpdate` for contiguous frontier repair so `committed + 1` stays on the exact body lane and deep catch-up stays on the block-sync lane,
+  - remove `RbcReady` / `RbcDeliver`, the stash-driven READY/DELIVER rescue paths, and the remaining worker-loop session scans that still keep RBC state alive after the slot is decided,
+  - rerun short localnet probes and then the full permissioned / NPoS preserved-peer stable soaks to see whether the missing-`BlockCreated` churn and `~2.5s / 3.3s / 5s` cadence collapse after the exact-body message split is complete.
+
 Latest sync (2026-03-25 TAIRA faucet adaptive PoW hardening):
 the TAIRA faucet now requires a deterministic, chain-anchored, memory-hard
 scrypt proof-of-work before Torii will enqueue the starter-funds transfer; the
@@ -40,6 +133,1929 @@ Open work for this slice now remains:
   SNS lease requirement does not abort 4-peer startup; and
 - rerun the targeted multisig cancel integration test after that harness
   blocker is cleared.
+
+Latest sync (2026-03-24 alias-bootstrap fix restored soak readiness, but both full stable reruns are still red):
+the Izanami/test-network genesis contract now satisfies the alias-leasing bootstrap rules again, so both permissioned and NPoS re-entered block production; however, the actual frontier redesign still has not removed the old RBC-era recovery behavior or reached the `<1000ms` stable-soak target.
+
+- implementation on this cut:
+  - `crates/iroha_core/src/sns.rs` adds `seed_genesis_alias_bootstrap(...)`, which pre-seeds genesis-time SNS leases plus `CanManageAccountAlias` permissions for any domains, labeled accounts, `SetAccountLabel`, and `BindAccountAlias` instructions present in the genesis block,
+  - `crates/iroha_test_network/src/config.rs` now validates generated genesis against a pre-exec world that already contains the `genesis` domain/account bootstrap state and the alias bootstrap records/permissions consumed by that genesis,
+  - `crates/irohad/src/main.rs` now seeds the same alias bootstrap state on empty-state and snapshot-rebuild startup paths, and fixes `genesis_domain(...)` ownership so the bootstrap domain is owned by the raw genesis authority.
+
+- focused validation passed:
+  - `cargo fmt --all`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core --lib seed_genesis_alias_bootstrap_covers_domains_and_account_labels -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_test_network --lib populate_genesis_results_leases_genesis_account_labels -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p irohad genesis_domain_owner_matches_genesis_authority -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`
+
+- full-soak verdict on this cut:
+  - permissioned log:
+    `/tmp/izanami_permissioned_aliasbootstrap_20260324T205028Z.log`,
+    peer dirs:
+    `/tmp/iroha-soak-permissioned-aliasbootstrap_20260324T205028Z/irohad_test_network_9tW8sv/*`,
+    failed at the one-hour duration checkpoint after `1391` strict/quorum blocks in
+    `3599.99381175s` (`~2.588s/block`) with
+    `quorum p95 block interval 5003ms > 1000ms`;
+    final distribution:
+    `median=2503ms`, `p95=5017ms`, `max=10390ms`;
+    aggregate markers:
+    `requested missing BlockCreated while awaiting RBC INIT=214`,
+    `FetchBlockBody=0`,
+    dominant lagging peer:
+    `untouched_roller=114` missing-`BlockCreated` requests.
+  - NPoS log:
+    `/tmp/izanami_npos_aliasbootstrap_20260324T215301Z.log`,
+    peer dirs:
+    `/tmp/iroha-soak-npos-aliasbootstrap_20260324T215301Z/irohad_test_network_lZOryH/*`,
+    failed earlier on divergence after about `2664.424966s`
+    (`quorum_min=989`, `strict_reference=1017`, divergence `28` > threshold `16`,
+    `~2.694s/block` at the last quorum height);
+    final distribution:
+    `median=2503ms`, `p95=5157ms`, `max=30125ms`;
+    aggregate markers:
+    `requested missing BlockCreated while awaiting RBC INIT=145`,
+    `FetchBlockBody=0`,
+    dominant lagging peer:
+    `renewing_nightjar=95` missing-`BlockCreated` requests.
+
+- open work after this sync:
+  - keep the alias-bootstrap fix, but stop treating it as a consensus fix; it only restored soak readiness,
+  - implement exact contiguous-frontier repair (`FetchBlockBody` / `BlockBodyResponse`) and thread it into the happy path, because both full reruns still show zero exact-body pulls and sustained RBC-side missing-`BlockCreated` repair,
+  - remove the remaining RBC hot-path recovery / stash-driven rescue behavior that is still visible as `rbc_chunk_stash`, `rbc_ready_stash`, `rbc_deliver_stash`, and `rbc_*_single_chunk_frontier_body` contexts with multi-second dwell,
+  - trace the late laggards `untouched_roller` and `renewing_nightjar` around the failing windows (`~1376-1391` permissioned, `~989-1017` NPoS) to confirm why frontier repair still peels one peer off instead of collapsing onto exact body pull.
+
+Latest sync (2026-03-24 full preserved-peer soak attempt on current tree is blocked at genesis):
+the intended permissioned and NPoS one-hour stable reruns did not reach block
+production. Both modes failed during peer startup because the Izanami-generated
+genesis now violates runtime invariants enforced by the current executor.
+
+- execution/artifacts:
+  - rebuilt current binaries with
+    `NORITO_SKIP_BINDINGS_SYNC=1 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`
+    because the dirty tree currently fails unrelated Norito Kotlin parity checks
+    during release build,
+  - permissioned run:
+    `/tmp/izanami_permissioned_inline_frontier_20260324T192726Z.log`,
+    peers under
+    `/tmp/iroha-soak-permissioned-inline_frontier_20260324T192726Z/irohad_test_network_1AKX9T/*`,
+  - NPoS run:
+    `/tmp/izanami_npos_inline_frontier_20260324T192911Z.log`,
+    peers under
+    `/tmp/iroha-soak-npos-inline_frontier_20260324T192911Z/irohad_test_network_OQ2Rdr/*`.
+
+- observed blocker:
+  - both modes fail genesis validation before block 1 with the same SNS/account
+    bootstrap errors:
+    `active SNS domain-name lease is required before registering wonderland`,
+    `active SNS domain-name lease is required before registering chaosnet`,
+    and a missing-account `GrantBox`,
+  - NPoS also fails `RegisterPublicLaneValidator` because the referenced asset
+    definition is absent in the generated genesis.
+
+- open work after this sync:
+  - fix Izanami / test-network genesis generation so it satisfies the current
+    SNS and staking/runtime bootstrap invariants before attempting any more
+    consensus soak comparisons,
+  - only after the cluster reaches block 1 again should the permissioned/NPoS
+    `3600s / 2000 blocks / progress-timeout 600s` envelope be rerun to critique
+    frontier cadence or late-peer peel-off on this branch.
+
+Latest sync (2026-03-24 `BlockCreated` inline-frontier metadata tranche):
+this cut starts the protocol simplification by making `BlockCreated` capable of
+carrying the frontier metadata the leader previously split across proposal-side
+messages, while deliberately stopping short of the full exact-pull and RBC
+message removal.
+
+- implementation on this cut:
+  - `crates/iroha_core/src/sumeragi/message.rs` adds optional
+    `BlockCreatedFrontierInfo` so a single `BlockCreated` can advertise the
+    highest QC, payload hash, proposer/epoch, roster hash, chunk manifest,
+    chunk root, and leader signature for the slot,
+  - `crates/iroha_core/src/sumeragi/main_loop/proposal_handlers.rs` now treats
+    that inline metadata as sufficient to seed proposal/hint cache state and to
+    mark `(height, view)` as observed once the body is accepted,
+  - `crates/iroha_core/src/sumeragi/main_loop/propose.rs` now prefers enriched
+    `BlockCreated` emission on both fresh proposal assembly and cached-slot
+    rebroadcast, skipping standalone `Proposal` posts when the frontier
+    metadata is embedded, and
+  - `crates/iroha_core/src/sumeragi/main_loop/commit.rs` upgrades payload gossip
+    to the enriched `BlockCreated` form instead of separately reposting
+    `ProposalHint`.
+
+- focused validation passed:
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core --lib assemble_proposal_schedules_block_created_before_rbc_without_frontier_proposal_posts -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core --lib pacemaker_rebroadcasts_cached_frontier_block_when_leader -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core --lib block_created_with_frontier_metadata_marks_view_seen_without_proposal_message -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core --lib proposal_after_block_created_is_safe_and_marks_metadata -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core --lib proposal_does_not_wake_commit_pipeline_without_block_created -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core --lib block_created_without_cached_proposal_advances_active_view -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p iroha_core --lib block_created_with_matching_proposal_advances_active_view -- --nocapture`
+
+- open work after this sync:
+  - remove standalone `Proposal` / `ProposalHint` receive-side dependencies so
+    `BlockCreated` is not just richer, but truly the only frontier
+    advertisement on the hot path,
+  - replace contiguous-frontier repair with exact
+    `FetchBlockBody` / `BlockBodyResponse` instead of `FetchPendingBlock` /
+    block-sync fallback,
+  - delete `RbcReady` / `RbcDeliver` and the worker-loop near-tip repair /
+    rebroadcast scans that keep old sessions hot, and
+  - rerun short stable probes, then the preserved-peer one-hour envelope, only
+    after the exact-pull path and READY/DELIVER removal are both in place.
+
+Latest sync (2026-03-24 full preserved-peer soak rerun on signer-first frontier repair):
+this cut is still not acceptable. It reduced some recovery chatter, but
+permissioned regressed and NPoS still ended in late one-peer divergence.
+
+- full-soak verdict on this cut:
+  - permissioned log:
+    `/tmp/izanami_permissioned_signerfirst_20260324T150450Z.log`,
+    peer dirs:
+    `/tmp/iroha-soak-permissioned-signerfirst_20260324T150450Z/irohad_test_network_S4WDKa/*`,
+    failed at the duration checkpoint after `1402` strict/quorum blocks in
+    `3599.9948775s` (`~2.57s/block`) with
+    `quorum p95 block interval 5003ms > 1000ms`;
+    aggregate markers:
+    `requested missing block payload from fetch targets=126`,
+    `requested missing BlockCreated while awaiting RBC INIT=127`,
+    `deferring local RBC READY: authoritative payload unavailable=157`.
+  - NPoS log:
+    `/tmp/izanami_npos_signerfirst_20260324T160631Z.log`,
+    peer dirs:
+    `/tmp/iroha-soak-npos-signerfirst_20260324T160631Z/irohad_test_network_4GU655/*`,
+    failed on divergence after `1182` strict/quorum blocks in `3218.652414s`
+    (`~2.72s/block`) with
+    `height divergence exceeded safety window (divergence 29, threshold 16)`;
+    aggregate markers:
+    `requested missing block payload from fetch targets=105`,
+    `requested missing BlockCreated while awaiting RBC INIT=109`,
+    `deferring local RBC READY: authoritative payload unavailable=75`.
+  - the late NPoS laggard was `educated_sparrow`
+    (`ea0130A685FD8C5A...`), which carried the highest missing-`BlockCreated`
+    and READY-deferral counts before divergence.
+
+- next work after this rerun:
+  - stop treating signer-first frontier fetch plus self-target filtering as
+    sufficient; they reduce some noise, but they do not restore a 1-second
+    hot path or prevent late peer peel-off,
+  - trace the late `educated_sparrow` failure window around heights
+    `1182-1183`: the peer was still receiving targeted READY/DELIVER traffic,
+    but it did not turn that into committed progress before divergence fired,
+  - explain why exact frontier repair still leaves the cluster in repeated
+    `2500ms` / `3335ms` / `5000ms` cadence even when no peer is yet lagging,
+  - separately explain the permissioned regression from `1459` to `1402`
+    blocks/hour on the same stable envelope before making another repair-path
+    semantics change.
+
+Latest sync (2026-03-24 signer-first frontier repair + full latest unknown-prev refresh):
+this cut narrows the remaining recovery trigger without changing wire/config
+semantics:
+
+- implementation on this cut:
+  - `crates/iroha_core/src/sumeragi/main_loop/rbc.rs` keeps metadata-only
+    frontier `BlockCreated` recovery signer-first whenever INIT already names a
+    proposer, instead of immediately blasting the whole topology,
+  - `crates/iroha_core/src/sumeragi/main_loop.rs` drops the local peer from
+    missing-block request target sets before posting `FetchPendingBlock`,
+  - `crates/iroha_core/src/block_sync.rs` keeps unknown-prev fallback in
+    full-share mode when the requester is asking for the latest frontier so
+    exact repair is not downgraded to tiny incremental slices.
+
+- next verification / follow-up:
+  - rerun the full preserved-peer permissioned and NPoS stable soaks on this
+    cut and compare `s/block`, divergence, `requested missing block payload`,
+    `requested missing BlockCreated while awaiting RBC INIT`, READY deferrals,
+    and fallback-anchor shares against the previous frontier-repair soak,
+  - if one-peer divergence still persists in NPoS, inspect whether exact
+    missing-block responses are still falling back to anchor sharing on the
+    lagging peer before changing pacemaker behavior again.
+
+Latest sync (2026-03-24 frontier repair + single-chunk authoritative-body fast path):
+this cut keeps `BlockCreated` authoritative but closes two remaining slow-path
+regressions and one catch-up bottleneck:
+
+- implementation on this cut:
+  - `crates/iroha_core/src/block_sync.rs` now treats unknown-prev full fallback
+    as contiguous catch-up instead of tiny-fanout gossip, serving a materially
+    larger suffix per response before frame-cap trimming,
+  - `crates/iroha_core/src/sumeragi/main_loop.rs` now suppresses
+    `QuorumTimeout` / `StakeQuorumTimeout` view rotation while same-slot
+    contiguous-frontier repair is still active,
+  - `crates/iroha_core/src/sumeragi/main_loop/rbc.rs` now tracks missing
+    `BlockCreated` immediately for near-frontier single-chunk RBC sessions even
+    when INIT metadata is complete.
+
+- next verification / follow-up:
+  - rerun the full preserved-peer permissioned and NPoS stable soaks on this
+    cut and compare divergence, missing-payload fetch volume, READY deferrals,
+    and effective `s/block` against the ingress-grace soak,
+  - if `trigger_view_change_` becomes a gating slice again, repair the fixture
+    setup in
+    `trigger_view_change_realigns_conflicting_committed_edge_qcs_before_new_view_vote`
+    so it deterministically seeds a committed QC before the trigger path runs.
+
+Latest sync (2026-03-24 contiguous-frontier authoritative-body ingress grace):
+the next cut after the slot-owner fix now directly addresses the remaining hot
+path regression: contiguous-frontier votes / READY that briefly arrive before
+`BlockCreated` are no longer allowed to open missing-payload recovery at
+`dwell_ms=0`.
+
+- implementation on this cut:
+  - `crates/iroha_core/src/sumeragi/main_loop.rs` now tracks contiguous-frontier
+    missing bodies immediately but holds the first fetch for a short bounded
+    `AUTHORITATIVE_BODY_INGRESS_FETCH_GRACE`, then forces the first fetch once
+    that grace expires,
+  - `crates/iroha_core/src/sumeragi/main_loop/qc.rs` applies that gate before
+    QC-first, locked-QC, and retry-loop missing-block fetch planning,
+  - `crates/iroha_core/src/sumeragi/main_loop/rbc.rs` applies the same gate
+    before pending-RBC missing-`BlockCreated` recovery,
+  - RBC READY / DELIVER now recompute authoritative payload availability after
+    local hydration in the same pass.
+- focused validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib missing_block_ingress_fetch_gate -- --nocapture`
+  - `cargo test -p iroha_core --lib defer_qc_for_missing_block_force_retry_now_bypasses_retry_window -- --nocapture`
+  - `cargo test -p iroha_core --lib request_missing_block_for_pending_rbc_ -- --nocapture`
+  - `cargo test -p iroha_core --lib maybe_emit_rbc_ready_missing_chunks_requests_missing_block_for_metadata_only_session -- --nocapture`
+  - `cargo test -p iroha_core --lib block_created_ -- --nocapture`
+
+Open work after this sync:
+- rerun short permissioned and NPoS stable probes on this exact ingress-grace
+  cut and compare `requested missing block payload from fetch targets`,
+  `requested missing BlockCreated while awaiting RBC INIT`, and
+  `deferring local RBC READY: authoritative payload unavailable` directly
+  against the slot-owner-only soak,
+- only rerun the full preserved-peer one-hour envelope after those shorter
+  probes show the eager `dwell_ms=0` recovery chatter materially collapsing,
+- if READY / DELIVER deferrals remain high after the grace cut, isolate the
+  residual path to true RBC session convergence instead of reopening proposal
+  ownership or same-slot owner logic.
+
+Latest sync (2026-03-24 full preserved-peer soak rerun on the authoritative slot-owner cut):
+the slot-owner fix removed the earlier catastrophic same-view reentry failure,
+but both preserved-peer one-hour stable soaks still miss the acceptance
+envelope because the hot path keeps falling back into payload fetch and
+authoritative-payload READY deferral.
+
+- full soak verdict on this cut:
+  - permissioned log:
+    `/tmp/izanami_permissioned_slotowner_20260323T201533Z.log`,
+    peer dirs:
+    `/tmp/iroha-soak-permissioned-slotowner_20260323T201533Z/irohad_test_network_boTLxS/*`,
+    failed at the duration checkpoint with `quorum p95 block interval 5003ms
+    exceeded threshold 1000ms` after `1377` strict blocks in `3599.994s`
+    (`~2.61s/block`);
+    aggregate markers:
+    `requested missing block payload from fetch targets=515`,
+    `requested missing BlockCreated while awaiting RBC INIT=36`,
+    `quorum of votes observed but block payload missing; deferring QC aggregation=26`,
+    `commit quorum missing past timeout=13`,
+    `deferring local RBC READY: authoritative payload unavailable=33`,
+    `same-view double-vote evidence=0`.
+  - NPoS log:
+    `/tmp/izanami_npos_slotowner_20260323T211623Z.log`,
+    peer dirs:
+    `/tmp/iroha-soak-npos-slotowner_20260323T211623Z/irohad_test_network_beoSN2/*`,
+    failed at the duration checkpoint with `quorum p95 block interval 5005ms
+    exceeded threshold 1000ms` after `1305` strict blocks in `3599.994s`
+    (`~2.76s/block`);
+    aggregate markers:
+    `requested missing block payload from fetch targets=602`,
+    `requested missing BlockCreated while awaiting RBC INIT=40`,
+    `commit quorum missing past timeout=11`,
+    `deferring local RBC READY: authoritative payload unavailable=158`,
+    `same-view double-vote evidence=0`.
+  - top-level soak symptoms:
+    permissioned:
+    `strict block height is stalled with no lagging peers=2`,
+    `transaction queued for too long=3`,
+    `haven't got tx confirmation within 20s=1`;
+    NPoS:
+    `strict block height is stalled with no lagging peers=2`,
+    `transaction queued for too long=2`,
+    `haven't got tx confirmation within 20s=1`.
+
+Open work after this sync:
+- stop spending time proving the same-slot ownership bug; the rerun removed the
+  height-`400/401` NPoS collapse and the same-view double-vote signature in
+  both modes,
+- trace why authoritative local payload still degrades into missing-payload
+  fetch plus `deferring local RBC READY: authoritative payload unavailable`,
+  especially in NPoS where those counters reached `602` and `158`,
+- explain the shared `~2.6-2.8s/block` plateau and `~5000ms` p95 in both
+  permissioned and NPoS without reintroducing proposal-led hot-path ownership,
+  and
+- do not rerun another full preserved-peer stable soak until the next cut
+  materially reduces missing-payload fetches and authoritative-payload READY
+  deferrals on shorter validation windows.
+
+Latest sync (2026-03-23 authoritative slot-owner fix for `BlockCreated` happy-path reentry):
+the primary regression on the `BlockCreated`-authoritative cut is no longer
+"find the cause". The cause was same-slot ownership reopening after cleanup:
+once a `BlockCreated` body had claimed `(height, view)`, later cleanup and
+pacemaker paths could admit a second body or locally re-propose the same view.
+
+- implementation on this cut:
+  - Sumeragi now keeps an internal authoritative `(height, view) -> block_hash`
+    map populated only by accepted `BlockCreated` bodies,
+  - normal `handle_block_created(...)` drops conflicting same-slot bodies when
+    an authoritative owner already exists, while block-sync
+    commit-evidence-import paths still retain the explicit override path, and
+  - pacemaker proposal assembly now refuses same-view reassembly once an
+    authoritative `BlockCreated` already owns the slot; frontier cleanup keeps
+    the active frontier slot closed while pruning future authoritative slots.
+- focused validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib block_created_without_proposal_does_not_replace_authoritative_same_slot_owner -- --nocapture`
+  - `cargo test -p iroha_core --lib frontier_cleanup_preserves_frontier_authoritative_slot_and_prunes_future_slots -- --nocapture`
+  - `cargo test -p iroha_core --lib pacemaker_defers_reproposal_when_authoritative_block_already_owns_slot -- --nocapture`
+  - `cargo test -p iroha_core --lib block_sync_payload_mismatch_with_commit_evidence_replaces_stale_frontier_owner -- --nocapture`
+  - `cargo test -p iroha_core --lib block_created_payload_mismatch_preserves_active_frontier_owner -- --nocapture`
+  - `cargo test -p iroha_core --lib block_created_ -- --nocapture`
+  - `cargo test -p iroha_core --lib proposal_does_not_wake_commit_pipeline_without_block_created -- --nocapture`
+
+Open work after this sync:
+- rerun the preserved-peer permissioned and NPoS stable soaks on this exact
+  authoritative-slot-owner cut and compare them directly against the earlier
+  failing `blockcreated_authoritative` artifacts,
+- confirm that the height-`400/401` same-view reentry / double-vote pattern is
+  gone before spending more time on secondary READY or missing-payload churn,
+  and
+- only if the rerun still misses the envelope, critique the remaining
+  permissioned/NPoS tail strictly after removing this same-slot ownership bug
+  from the picture.
+
+Latest sync (2026-03-23 full preserved-peer soak verdict on the `BlockCreated` authoritative cut):
+the full stable-envelope rerun on this exact cut failed in both modes, so the
+remaining work is now about removing hot-path recovery churn rather than
+debating whether `Proposal` should re-enter the happy path.
+
+- full soak verdict on this cut:
+  - permissioned log:
+    `/tmp/izanami_permissioned_blockcreated_authoritative_20260323T171744Z.log`,
+    peer dirs:
+    `/tmp/iroha-soak-permissioned-blockcreated_authoritative_20260323T171744Z/irohad_test_network_OOmODU/*`,
+    failed at the duration checkpoint with `quorum p95 block interval 5001ms
+    exceeded threshold 1000ms` after `1333` strict blocks in `3599.995s`;
+    aggregate markers:
+    `requested missing block payload from fetch targets=514`,
+    `requested missing BlockCreated while awaiting RBC INIT=33`,
+    `sending targeted RBC READY set to peers missing READY=18404`,
+    `quorum of votes observed but block payload missing; deferring QC aggregation=29`.
+  - NPoS log:
+    `/tmp/izanami_npos_blockcreated_authoritative_20260323T181928Z.log`,
+    peer dirs:
+    `/tmp/iroha-soak-npos-blockcreated_authoritative_20260323T181928Z/irohad_test_network_SaURZU/*`,
+    failed earlier on `no strict block height progress for 600s` at strict
+    height `400`;
+    aggregate markers:
+    `requested missing block payload from fetch targets=115`,
+    `requested missing BlockCreated while awaiting RBC INIT=10`,
+    `sending targeted RBC READY set to peers missing READY=123545`,
+    `commit quorum missing past timeout=6`.
+  - top-level soak symptoms:
+    permissioned:
+    `strict block height is stalled with no lagging peers=5`,
+    `transaction queued for too long=32`,
+    `haven't got tx confirmation within 20s=32`;
+    NPoS:
+    `strict block height is stalled with no lagging peers=116`,
+    `transaction queued for too long=416`,
+    `haven't got tx confirmation within 20s=238`.
+
+Open work after this sync:
+- trace why targeted READY repair still dominates the hot path on this cut,
+  especially the NPoS height-`400` stall where peers report no laggards but
+  liveness still dies for `600s`,
+- narrow the remaining cases where permissioned still falls back to missing
+  payload fetch + QC deferral instead of staying on the authoritative local
+  body path, and
+- rerun the unchanged preserved-peer permissioned/NPoS stable soaks only after
+  the next fix materially reduces missing-payload fetches, targeted READY
+  chatter, and strict-stall/no-progress warnings on sampled windows.
+
+Latest sync (2026-03-23 `BlockCreated` authoritative happy path cut):
+the internal Sumeragi happy path now treats `BlockCreated` as the only
+authoritative payload ingress while keeping `Proposal` and `ProposalHint` on
+the wire for compatibility and liveness metadata only.
+
+- implementation on this cut:
+  - proposal assembly now caches metadata but handles/posts `BlockCreated`
+    before `Proposal` and before RBC follow-on traffic,
+  - `handle_proposal(...)` still performs stateless and highest-QC/lock checks
+    plus cache/liveness bookkeeping, but it no longer wakes the payload
+    pipeline or starts missing-payload recovery on its own,
+  - payload-dependent gating now keys off authoritative local body presence
+    instead of proposal evidence, and duplicate / block-sync `BlockCreated`
+    hydration now re-stamps RBC metadata and retries READY/DELIVER immediately.
+- focused validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib block_created_ -- --nocapture`
+  - `cargo test -p iroha_core --lib proposal_does_not_wake_commit_pipeline_without_block_created -- --nocapture`
+  - `cargo test -p iroha_core --lib proposal_hint_does_not_wake_commit_pipeline_without_block_created -- --nocapture`
+  - `cargo test -p iroha_core --lib proposal_after_block_created_is_safe_and_marks_metadata -- --nocapture`
+  - `cargo test -p iroha_core --lib proposal_gated_by_missing_dependencies_clears_authoritative_local_payload -- --nocapture`
+
+Open work after this sync:
+- use the newer full-soak verdict above as the runtime acceptance source for
+  this cut instead of rerunning the same commands again without another
+  consensus change,
+- if payload fetch churn remains visible, keep narrowing the remaining
+  authoritative-payload / recovery interaction rather than reintroducing
+  proposal-led progression, and
+- finish broader repository validation (`cargo test --workspace`,
+  `cargo clippy --workspace --all-targets -- -D warnings`) once the consensus
+  runtime verdict on the next cut is worth keeping.
+
+Latest sync (2026-03-23 READY repair soak rerun on permissioned and NPoS):
+reran both preserved-peer stable soak commands on the READY-repair cut using
+the rebuilt release binaries and the unchanged stable envelope
+(`--duration 3600s --target-blocks 2000 --tps 5 --max-inflight 8 --workload-profile stable`,
+`--progress-timeout 600s`). Both sampled windows recovered to the nominal
+localnet band while targeted DELIVER rescue dropped to zero and the repair load
+shifted onto targeted READY sets instead.
+
+- permissioned sampled window:
+  - log: `/tmp/izanami_permissioned_readyfix_20260323T122248Z.log`,
+    peer dirs:
+    `/tmp/iroha-soak-permissioned-readyfix_20260323T122248Z/irohad_test_network_huYDkZ/*`,
+  - strict height `1 -> 152` over `270.063s`, projected one-hour height
+    `~2013`,
+  - `sending targeted RBC DELIVER to peers missing READY=0`,
+    `sending targeted RBC READY set to peers missing READY=2133`,
+    `requested missing BlockCreated while awaiting RBC INIT=1`,
+    `requested missing block payload from fetch targets=29`.
+- NPoS sampled window:
+  - log: `/tmp/izanami_npos_readyfix_20260323T122746Z.log`,
+    peer dirs:
+    `/tmp/iroha-soak-npos-readyfix_20260323T122746Z/irohad_test_network_7dZ3s3/*`,
+  - strict height `1 -> 133` over `240.050s`, projected one-hour height
+    `~1980`,
+  - `sending targeted RBC DELIVER to peers missing READY=0`,
+    `sending targeted RBC READY set to peers missing READY=2046`,
+    `requested missing BlockCreated while awaiting RBC INIT=2`,
+    `requested missing block payload from fetch targets=19`.
+- critique from this cut:
+  - the READY-convergence bottleneck is no longer dominated by DELIVER rescue;
+    both modes converged through targeted READY repair instead,
+  - throughput recovered from the old `~1350/h` plateau to the target band on
+    these sampled windows, and
+  - the remaining visible follow-up is secondary payload fetch churn plus a
+    small permissioned `qc_missing_payload` tail, so the next validation step
+    is a full-length confirmation soak rather than another hot-path refactor.
+
+Baseline motivating soak data (2026-03-23 real preserved-peer soak commands on the unified RBC ingress cut):
+reran the unchanged preserved-peer permissioned and NPoS stable soak commands
+on the current unified-RBC-ingress build and stopped both once the steady-state
+shape was already clearly below the `2000/3600s` target envelope:
+
+- permissioned log:
+  `/tmp/izanami_permissioned_full_unified_rbc_lane_20260323T082628Z.log`,
+  peer dirs:
+  `/tmp/iroha-soak-permissioned-full-unified_rbc_lane_20260323T082628Z/irohad_test_network_yDFUFU/*`,
+  strict height `1 -> 127` over `333.462s`, projected one-hour height `~1360`,
+  interval buckets:
+  `>=5000ms=2`, `3334-4999ms=8`, `2501-3333ms=17`, `<=2500ms=6`,
+- NPoS log:
+  `/tmp/izanami_npos_full_unified_rbc_lane_20260323T083322Z.log`,
+  peer dirs:
+  `/tmp/iroha-soak-npos-full-unified_rbc_lane_20260323T083322Z/irohad_test_network_41SBkC/*`,
+  strict height `1 -> 99` over `260.951s`, projected one-hour height `~1352`,
+  interval buckets:
+  `>=5000ms=2`, `3334-4999ms=8`, `2501-3333ms=11`, `<=2500ms=5`,
+- common peer-log read from these real soak commands:
+  - `deferring local RBC READY: authoritative payload unavailable=0`,
+    `deferring RBC DELIVER: READY quorum not yet satisfied=0`, and
+    `deferring RBC DELIVER: authoritative payload unavailable=0` in both
+    modes,
+  - `requested missing BlockCreated while awaiting RBC INIT` stayed near zero
+    (`permissioned=7`, `NPoS=1`),
+  - `sending targeted RBC DELIVER to peers missing READY` remained high and
+    continued to dominate the control-plane churn
+    (`permissioned=530`, `NPoS=408`),
+  - missing-block payload fetch still appears behind that READY lag
+    (`permissioned=31`, `NPoS=16`).
+
+Open work after this sync:
+- stop treating the old `BlockCreated` / INIT split as the primary blocker on
+  this cut; the real soak commands say that part is mostly fixed now,
+- instrument and reduce the READY convergence lag that keeps driving targeted
+  DELIVER rescue on both permissioned and NPoS,
+- explain the residual missing-block payload fetch that still follows those
+  READY gaps even after the ingress lane was unified, and
+- do not spend another full-length rerun until the next cut moves the
+  projection materially above the current `~1350-1360/h` band.
+
+Latest sync (2026-03-23 unified RBC session ingress lane plus sampled preserved-peer reruns):
+the `RbcChunks` lane now carries the full healthy-path RBC session ingress
+chain (`BlockCreated`, `RbcInit`, `RbcChunk*`, `RbcReady`, `RbcDeliver`) while
+`Blocks` is left for fallback block/control traffic, and sampled preserved-peer
+stable reruns show the INIT-side metadata split collapsing without curing the
+remaining READY convergence lag:
+
+- implementation on this cut:
+  - `crates/iroha_core/src/sumeragi/mod.rs` now routes
+    `BlockCreated` / `RbcReady` / `RbcDeliver` through `self.rbc_chunks`
+    alongside `RbcInit` and `RbcChunk*`,
+  - `crates/iroha_core/src/sumeragi/status.rs` keeps the existing field names
+    for compatibility but re-documents `rbc_chunk_rx` as the unified RBC
+    session ingress depth and `block_rx` as fallback block/control depth, and
+  - the queue-routing / capacity / worker-loop regressions in
+    `crates/iroha_core/src/sumeragi/mod.rs` now treat that widened lane as the
+    protected non-vote payload path.
+- focused validation passed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib incoming_block_message_routes_ -- --nocapture`
+  - `cargo test -p iroha_core --lib rbc_ingress_queue_full -- --nocapture`
+  - `cargo test -p iroha_core --lib run_worker_iteration_ -- --nocapture`
+  - `cargo test -p iroha_core --lib run_parallel_worker_ -- --nocapture`
+  - `cargo test -p iroha_core --lib broadcast_rbc_session_plan_ -- --nocapture`
+  - `cargo test -p iroha_core --lib flush_rbc_outbound_chunks_ -- --nocapture`
+  - `cargo test -p iroha_core --lib maybe_emit_rbc_ready_ -- --nocapture`
+  - `cargo test -p iroha_core --lib rebroadcast_stalled_rbc_payloads_ -- --nocapture`
+  - `cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`
+- remaining focused red slice:
+  - `cargo test -p iroha_core --lib handle_rbc_chunk_ -- --nocapture` still
+    fails in the pre-existing mismatch tests
+    `handle_rbc_chunk_rejects_digest_mismatch` and
+    `handle_rbc_chunk_stash_attributes_mismatch_on_flush`; this ingress-lane
+    refactor does not touch `handle_rbc_chunk(...)`.
+- sampled preserved-peer stable reruns on the rebuilt release binaries:
+  - permissioned log:
+    `/tmp/izanami_permissioned_unified_rbc_lane_20260323T080613Z.log`,
+    peer dirs:
+    `/tmp/iroha-soak-permissioned-unified_rbc_lane_20260323T080613Z/irohad_test_network_lWSP5h/*`,
+    strict height `1 -> 104` over `293.589s`, projected one-hour height
+    `~1263`, interval buckets:
+    `>=5000ms=4`, `3334-4999ms=8`, `2501-3333ms=14`, `<=2500ms=3`,
+  - NPoS log:
+    `/tmp/izanami_npos_unified_rbc_lane_20260323T081620Z.log`,
+    peer dirs:
+    `/tmp/iroha-soak-npos-unified_rbc_lane_20260323T081620Z/irohad_test_network_jr9Oyu/*`,
+    strict height `1 -> 108` over `294.094s`, projected one-hour height
+    `~1310`, interval buckets:
+    `>=5000ms=1`, `3334-4999ms=12`, `2501-3333ms=11`, `<=2500ms=5`,
+- common peer-log read from this window:
+  - `deferring local RBC READY: authoritative payload unavailable=0`,
+    `deferring RBC DELIVER: READY quorum not yet satisfied=0`, and
+    `deferring RBC DELIVER: authoritative payload unavailable=0` in both modes,
+  - `requested missing BlockCreated while awaiting RBC INIT` collapsed to
+    `permissioned=2`, `NPoS=3`, which is the intended effect of unifying the
+    healthy-path ingress chain,
+  - `sending targeted RBC DELIVER to peers missing READY` did not improve and
+    instead rose to `permissioned=379`, `NPoS=441`,
+  - missing-block payload fetch remains visible
+    (`permissioned=17`, `NPoS=27`) even though the earlier INIT-side metadata
+    miss is mostly gone.
+
+Open work after this sync:
+- explain why READY convergence still needs so many targeted DELIVER rescues
+  after `BlockCreated`, `RbcInit`, `RbcChunk*`, and `RbcReady` now share the
+  same ingress lane,
+- reduce the remaining `requested missing block payload from fetch targets`
+  band, especially on NPoS, before spending more time on longer reruns,
+- rerun longer preserved-peer stable samples / full soaks only after the
+  projected height climbs materially closer to the `2000/3600s` envelope and
+  the targeted-DELIVER band drops, and
+- keep the unrelated `handle_rbc_chunk_` mismatch tests on the cleanup list so
+  the requested focused RBC matrix can go fully green.
+
+Latest sync (2026-03-22 RBC worker scheduling fix plus sampled preserved-peer reruns):
+the RBC worker path now keeps adjacent `RbcInit` / `RbcChunk` messages together
+at the actor and treats `RbcChunks` as payload backlog in the single-thread
+fallback, but sampled preserved-peer stable reruns are still below the
+`2000/3600s` acceptance slope:
+
+- permissioned log:
+  `/tmp/izanami_permissioned_fix_sched_20260322T195454Z.log`,
+  peer dirs:
+  `/tmp/iroha-soak-permissioned-fix_sched_20260322T195454Z/irohad_test_network_tmv5iZ/*`,
+  strict height `1 -> 66`, projected one-hour height `~1124`,
+  interval buckets:
+  `>=5000ms=3`, `3334-4999ms=6`, `2501-3333ms=9`, `<=2500ms=1`,
+- NPoS log:
+  `/tmp/izanami_npos_fix_sched_20260322T195454Z.log`,
+  peer dirs:
+  `/tmp/iroha-soak-npos-fix_sched_20260322T195454Z/irohad_test_network_XqVfnD/*`,
+  strict height `1 -> 57`, projected one-hour height `~968`,
+  interval buckets:
+  `>=5000ms=5`, `3334-4999ms=9`, `2501-3333ms=5`, `<=2500ms=0`,
+- common peer-log read from this window:
+  - `deferring local RBC READY: authoritative payload unavailable=0` in both
+    modes, and the old single-chunk
+    `received: 0, total_chunks: 1`
+    signature collapsed to `0/0`,
+  - missing-block payload fetch is reduced but still present
+    (`permissioned=18`, `NPoS=12`),
+  - the new heavy recovery signatures are
+    `requested missing BlockCreated while awaiting RBC INIT`
+    (`permissioned=134`, `NPoS=96`) and
+    `sending targeted RBC DELIVER to peers missing READY`
+    (`permissioned=268`, `NPoS=232`),
+  - targeted payload / READY rescue still never fires (`0` in both modes).
+
+Open work after this sync:
+- treat the payload-arrival hot path as fixed enough for now and shift
+  investigation to the remaining control-plane lag:
+  `BlockCreated` / `RbcInit` ordering and READY convergence,
+- explain why peers still request missing `BlockCreated` while awaiting RBC INIT
+  on a supposedly healthy path,
+- reduce the sustained `sending targeted RBC DELIVER to peers missing READY`
+  band before rerunning the unchanged full preserved-peer stable soaks, and
+- keep sampled permissioned / NPoS reruns as the gate until both modes climb
+  materially above the current `~1124/h` / `~968/h` projection band.
+
+Latest sync (2026-03-22 initial RBC chunk dispatch hot-path fix plus sampled preserved-peer reruns):
+`broadcast_rbc_session_plan()` now drains the full initial RBC chunk set in the
+same call that posts `RbcInit`, while `flush_rbc_outbound_chunks()` is left to
+handle deferred leftovers / retries only:
+
+- implementation on this cut:
+  - `crates/iroha_core/src/sumeragi/main_loop.rs` now routes target selection,
+    outbound entry storage, per-session chunk posting, cursor advance, and
+    exhausted-entry cleanup through shared `dispatch_rbc_outbound_chunks(...)`,
+  - `crates/iroha_core/src/sumeragi/main_loop/rbc.rs` now uses that helper to
+    post the initial chunk wave immediately instead of leaving the first chunk
+    delivery to a later flush pass, and
+  - `crates/iroha_core/src/sumeragi/main_loop/tests.rs` now verifies immediate
+    single-chunk and multi-chunk first delivery plus deferred-only flush
+    behavior.
+- focused validation passed:
+  - `cargo test -p iroha_core --lib broadcast_rbc_session_plan_ -- --nocapture`
+  - `cargo test -p iroha_core --lib flush_rbc_outbound_chunks_ -- --nocapture`
+  - `cargo test -p iroha_core --lib maybe_emit_rbc_ready_ -- --nocapture`
+  - `cargo test -p iroha_core --lib rebroadcast_stalled_rbc_payloads_ -- --nocapture`
+  - `cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`
+  - `cargo fmt --all`
+- remaining focused red slice:
+  - `cargo test -p iroha_core --lib handle_rbc_chunk_ -- --nocapture` still
+    fails in the pre-existing mismatch tests
+    `handle_rbc_chunk_rejects_digest_mismatch` and
+    `handle_rbc_chunk_stash_attributes_mismatch_on_flush`; this hot-path fix
+    does not modify `handle_rbc_chunk(...)`.
+- sampled preserved-peer stable reruns on the rebuilt release binaries:
+  - permissioned log:
+    `/tmp/izanami_permissioned_initial_chunk_dispatch_20260322T165523Z.log`,
+    peer dirs:
+    `/tmp/iroha-soak-permissioned-initial_chunk_dispatch_20260322T165523Z/irohad_test_network_ELjPTB/*`,
+    strict height `1 -> 98` over `191.746s`, projected one-hour height `~1821`,
+    interval buckets:
+    `>=5000ms=0`, `3334-4999ms=4`, `2501-3333ms=14`, `<=2500ms=21`,
+    peer-log markers:
+    `deferring local RBC READY: authoritative payload unavailable=365`,
+    `requested missing block payload from fetch targets=61`,
+    `sending targeted RBC READY set to peers missing READY=0`,
+    `sending targeted RBC payload to peers missing READY=0`,
+  - NPoS log:
+    `/tmp/izanami_npos_initial_chunk_dispatch_20260322T165921Z.log`,
+    peer dirs:
+    `/tmp/iroha-soak-npos-initial_chunk_dispatch_20260322T165921Z/irohad_test_network_FzGnKW/*`,
+    strict height `1 -> 82` over `191.035s`, projected one-hour height `~1526`,
+    interval buckets:
+    `>=5000ms=1`, `3334-4999ms=3`, `2501-3333ms=9`, `<=2500ms=6`,
+    peer-log markers:
+    `deferring local RBC READY: authoritative payload unavailable=358`,
+    `requested missing block payload from fetch targets=26`,
+    `sending targeted RBC READY set to peers missing READY=0`,
+    `sending targeted RBC payload to peers missing READY=0`,
+- the important sampled shift is that the original hot-path symptom collapsed
+  materially on both modes versus the prior sampled cut
+  (`permissioned 923 -> 365`, `NPoS 1009 -> 358`) and missing-block fetch also
+  dropped (`permissioned 102 -> 61`, `NPoS 64 -> 26`), even though both modes
+  are still below the full `2000/3600s` acceptance slope.
+
+Open work after this sync:
+- rerun the full unchanged preserved-peer permissioned and NPoS stable soaks on
+  this exact cut now that the sampled shape moved in the intended direction,
+- use the new peer dirs above to explain the remaining
+  `deferring local RBC READY: authoritative payload unavailable` and residual
+  missing-block fetch churn that still remains after the hot-path fix, and
+- triage the unrelated red `handle_rbc_chunk_` mismatch tests so the entire
+  requested focused RBC matrix is green again before calling the regression
+  closed.
+
+Latest sync (2026-03-22 targeted payload-rescue wiring plus preserved-peer sampled reruns):
+wired `rescue_rbc_missing_ready_peers(...)` into
+`rebroadcast_stalled_rbc_payloads()` and reran both preserved-peer shared-host
+stable commands on rebuilt release binaries to check whether the real soak path
+finally exercised the new rescue branch:
+
+- focused validation passed:
+  - `cargo test -p iroha_core --lib rebroadcast_stalled_rbc_payloads_uses_targeted_payload_and_ready_rescue_for_local_kura_authority -- --nocapture`
+  - `cargo test -p iroha_core --lib rebroadcast_stalled_rbc_payloads_skips_payload_recovery_once_authoritative -- --nocapture`
+  - `cargo test -p iroha_core --lib rebroadcast_stalled_rbc_payloads_ -- --nocapture`
+  - `cargo fmt --all`
+  - `cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`
+- permissioned sampled rerun:
+  `/tmp/izanami_permissioned_targeted_payload_rescue_20260322T070321Z.log`,
+  peer dirs:
+  `/tmp/iroha-soak-permissioned-targeted_payload_rescue_20260322T070321Z/irohad_test_network_7oRfDw/*`,
+  strict height `1 -> 88` over `190.737s`, projected one-hour height `~1642`,
+  interval buckets:
+  `>=5000ms=1`, `3334-4999ms=3`, `2501-3333ms=5`, `<=2500ms=11`,
+- NPoS sampled rerun:
+  `/tmp/izanami_npos_targeted_payload_rescue_20260322T070321Z.log`,
+  peer dirs:
+  `/tmp/iroha-soak-npos-targeted_payload_rescue_20260322T070321Z/irohad_test_network_vUNCYg/*`,
+  strict height `1 -> 75` over `191.623s`, projected one-hour height `~1390`,
+  interval buckets:
+  `>=5000ms=3`, `3334-4999ms=5`, `2501-3333ms=4`, `<=2500ms=8`,
+- the old payload-first win still holds:
+  `deferring RBC DELIVER: READY quorum not yet satisfied=0` in both runs,
+- but the new rescue branch still did not show up in the real preserved-peer
+  logs:
+  `sending targeted RBC READY set to peers missing READY=0`,
+  `sending targeted RBC payload to peers missing READY=0` in both runs,
+- the real hot-path symptom is still
+  `deferring local RBC READY: authoritative payload unavailable`
+  (`permissioned=923`, `NPoS=1009`) followed by missing-block fallback
+  (`requested missing block payload from fetch targets`:
+  `permissioned=102`, `NPoS=64`).
+
+Open work after this sync:
+- stop assuming the stalled-rebroadcast rescue helper is the missing production
+  fix; the soak path still is not taking it,
+- trace why real soak sessions still fail the authoritative-payload predicate
+  before local READY emission and before rescue would be eligible,
+- instrument or log the rescue preconditions directly on the shared-host path so
+  the next cut can explain why those counters stay at zero,
+- keep the full unchanged `2000/3600s` preserved-peer soaks as the acceptance
+  bar, but do not spend another hour-long rerun until the sampled path shows the
+  rescue branch or otherwise materially reduces the READY-missing-payload churn.
+
+Latest sync (2026-03-22 fresh sampled shared-host reruns on the payload-first cut):
+reran both real preserved-peer shared-host stable soak commands on the current
+payload-first build to validate the actual steady-state effect on the real
+`2000/3600s` envelope:
+
+- permissioned log:
+  `/tmp/izanami_permissioned_payload_first_20260321T201834Z.log`,
+  peer dirs:
+  `/tmp/iroha-soak-permissioned-20260321T201834Z/irohad_test_network_MhAjsi/*`,
+- NPoS log:
+  `/tmp/izanami_npos_payload_first_20260321T202110Z.log`,
+  peer dirs:
+  `/tmp/iroha-soak-npos-20260321T202110Z/irohad_test_network_MKKPeH/*`,
+- both runs were sampled on the real
+  `--duration 3600s --target-blocks 2000` stable-soak envelope and stopped
+  once the current slope was clearly below target,
+- permissioned reached only `height 54 in 110.031s`
+  (`median=2003ms`, `p95=3334ms`, projected one-hour height `~1767`),
+- NPoS reached only `height 43 in 100.019s`
+  (`median=2500.5ms`, `p95=3334ms`, projected one-hour height `~1548`),
+- the requested hot-path signature is gone in both runs:
+  `deferring RBC DELIVER: READY quorum not yet satisfied=0`,
+- the new dominant steady-state symptom is local READY still waiting on
+  payload authority rather than DELIVER waiting on READY quorum:
+  `deferring local RBC READY: authoritative payload unavailable`
+  (`permissioned=419`, `NPoS=378`),
+- permissioned stayed free of commit-timeout and transport noise, while NPoS
+  still showed `commit quorum missing past timeout=3` and
+  `Connection refused=6` in the sampled window.
+
+Open work after this sync:
+- stop treating DELIVER quorum-gate removal as the next lever; that part of
+  the happy path is behaving as intended on these samples,
+- trace why authoritative payload is still late on so many single-chunk
+  sessions even after metadata is already valid enough to identify the slot,
+- explain and then eliminate the repeated
+  `deferring local RBC READY: authoritative payload unavailable` churn before
+  spending more time on longer soaks,
+- keep NPoS-specific transport / commit-timeout noise in scope, but treat it
+  as secondary to the now-dominant payload-availability lag.
+
+Latest sync (2026-03-21 payload-first RBC local progression):
+implemented the requested payload-first RBC hot-path simplification without any
+wire-format or public API change:
+
+- `crates/iroha_core/src/sumeragi/main_loop.rs` now exposes one
+  authoritative-payload predicate for local DA / round progression,
+- `crates/iroha_core/src/sumeragi/main_loop/commit.rs` now lets
+  `payload_available_for_da(...)` accept authoritative local RBC payload before
+  DELIVER,
+- `crates/iroha_core/src/sumeragi/main_loop/rbc.rs` now wakes block recovery /
+  commit progression as soon as authoritative payload is present, emits local
+  `READY` immediately on that condition, and treats local `DELIVER` as a
+  sidecar after local `READY` instead of as the steady-state gate,
+- focused RBC regressions passed:
+  - `cargo test -p iroha_core --lib maybe_emit_rbc_ready_ -- --nocapture`
+  - `cargo test -p iroha_core --lib maybe_emit_rbc_deliver_ -- --nocapture`
+  - `cargo test -p iroha_core --lib handle_rbc_deliver_ -- --nocapture`
+  - `cargo test -p iroha_core --lib handle_rbc_init_ -- --nocapture`
+  - `cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`
+  - `cargo fmt --all`
+
+Open work after this sync:
+- rerun the preserved-peer permissioned and NPoS stable soaks on the real
+  `2000/3600s` envelope for this exact cut,
+- verify from those peer logs that healthy steady-state no longer produces the
+  repeated `deferring RBC DELIVER: READY quorum not yet satisfied` signature as
+  a local progression gate,
+- if sampled p95 is still above target after this payload-first cut, treat the
+  next problem as a post-payload convergence / pacing issue rather than as an
+  RBC availability-gate bug.
+
+Latest sync (2026-03-21 fresh sampled shared-host reruns after the INIT-side recovery fix):
+reran both real preserved-peer shared-host stable soak commands again on the
+current rebuilt binaries to check whether removing the bogus INIT-side
+missing-`BlockCreated` recovery changed the actual stable-soak envelope:
+
+- permissioned log:
+  `/tmp/izanami_permissioned_post_init_fix_20260321T231453.log`,
+  peer dirs:
+  `/tmp/iroha-soak-permissioned-post_init_fix_20260321T231453/irohad_test_network_hPuMnX/*`,
+- NPoS log:
+  `/tmp/izanami_npos_post_init_fix_20260321T231711.log`,
+  peer dirs:
+  `/tmp/iroha-soak-npos-post_init_fix_20260321T231711/irohad_test_network_WyT7Hq/*`,
+- both runs were sampled on the real
+  `--duration 3600s --target-blocks 2000` stable-soak envelope and stopped
+  once enough windows had accumulated to judge the current tail,
+- permissioned reached only `height 50 in 110.023s`
+  (`median=2001ms`, `p95=5001ms`, projected one-hour height `~1636`),
+- NPoS reached only `height 49 in 120.034s`
+  (`median=2501ms`, `p95=3335ms`, projected one-hour height `~1470`),
+- the old INIT-side missing-`BlockCreated` path is no longer the main problem:
+  permissioned logged only `1` such marker and NPoS logged `0`,
+- the dominant remaining churn is still
+  `deferring RBC DELIVER: READY quorum not yet satisfied`
+  (`permissioned=552`, `NPoS=558`),
+- the regression is not proposal/commit collapse or transport panic on these
+  samples:
+  `no proposal observed=0`, `commit quorum missing past timeout=0`, `panic=0`
+  in both runs.
+
+Open work after this sync:
+- stop treating INIT-side recovery as the next performance lever; that cut is
+  no longer where the time is going,
+- simplify the actual RBC happy path so DELIVER does not keep waiting on READY
+  quorum in localnet steady state,
+- use the preserved peer dirs above to trace why READY quorum is still late
+  even after INIT metadata is complete,
+- rerun the longer preserved-peer shared-host stable soaks only after the
+  READY/DELIVER path is simplified, because the current branch is still below
+  the `2000/3600s` target in both modes.
+
+Latest sync (2026-03-21 INIT-side missing-`BlockCreated` recovery fix):
+removed the bogus same-slot missing-`BlockCreated` fetch that was still being
+seeded after RBC INIT even when INIT metadata was already sufficient to
+rebuild the signed block after payload delivery:
+
+- `crates/iroha_core/src/sumeragi/main_loop/rbc.rs` now only requests
+  `BlockCreated` on INIT/READY when the RBC session is genuinely missing
+  payload hash, block header, leader signature, or is already invalid,
+- `crates/iroha_core/src/sumeragi/main_loop.rs` now checks that invariant
+  against the in-flight session inside `maybe_emit_rbc_ready()` instead of
+  consulting the map after the session has been removed for local processing,
+- focused RBC regressions passed:
+  - `cargo test -p iroha_core --lib handle_rbc_init_existing_session_without_local_payload_defers_missing_block_recovery -- --nocapture`
+  - `cargo test -p iroha_core --lib handle_rbc_init_new_session_without_local_payload_defers_missing_block_recovery -- --nocapture`
+  - `cargo test -p iroha_core --lib maybe_emit_rbc_ready_missing_chunks_requests_missing_block_for_metadata_only_session -- --nocapture`
+  - `cargo test -p iroha_core --lib handle_rbc_init_missing_roster_requests_missing_block_permissioned -- --nocapture`
+  - `cargo test -p iroha_core --lib handle_rbc_init_ -- --nocapture`
+  - `cargo test -p iroha_core --lib maybe_emit_rbc_ready_ -- --nocapture`
+- `cargo fmt --all`, `git diff --check`, and
+  `cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`
+  passed,
+- fresh sampled shared-host stable reruns on the rebuilt binaries:
+  - permissioned log:
+    `/tmp/izanami_permissioned_rbc_init_recovery_fix_20260321T230747.log`,
+    peer dirs:
+    `/tmp/iroha-soak-permissioned-rbc_init_recovery_fix_20260321T230747/irohad_test_network_2ytcak/*`,
+  - NPoS log:
+    `/tmp/izanami_npos_rbc_init_recovery_fix_20260321T231037.log`,
+    peer dirs:
+    `/tmp/iroha-soak-npos-rbc_init_recovery_fix_20260321T231037/irohad_test_network_i8WHU3/*`,
+  - both runs eliminated the targeted churn completely:
+    `requested missing BlockCreated while awaiting RBC INIT=0`,
+  - but overall tail latency did not improve enough:
+    permissioned sampled `median=2001ms p95=2501ms`,
+    NPoS sampled `median=2501ms p95=5001ms`,
+    so the remaining limiter is still READY/DELIVER churn rather than
+    INIT-side recovery.
+
+Open work after this sync:
+- target the remaining RBC DELIVER / READY-quorum churn directly; that is now
+  the dominant steady-state path after INIT-side missing-block recovery was
+  removed,
+- prove from the preserved peer dirs why DELIVER keeps waiting on READY quorum
+  in localnet even after INIT metadata is complete,
+- rerun longer preserved-peer shared-host stable soaks only after that next cut
+  lands; the current short reruns already show that removing bogus INIT-side
+  recovery alone does not recover the `<1s` target,
+- keep the dead-code cleanup item open, but do it after the DELIVER/READY path
+  is simplified so the cleanup does not obscure the next performance cut.
+
+Latest sync (2026-03-21 second sampled shared-host rerun on the RBC/quorum ownership fix):
+reran both real preserved-peer shared-host stable soak commands again on the
+same rebuilt release binaries to check whether the recovered `~1.5s/block`
+envelope reproduces on a fresh sample:
+
+- permissioned log:
+  `/tmp/izanami_permissioned_rbc_overlap_fix_rerun_20260321T214215.log`,
+  peer dirs:
+  `/tmp/iroha-soak-permissioned-rbc_overlap_fix_rerun_20260321T214215/irohad_test_network_NNgdGd/*`,
+- NPoS log:
+  `/tmp/izanami_npos_rbc_overlap_fix_rerun_20260321T214557.log`,
+  peer dirs:
+  `/tmp/iroha-soak-npos-rbc_overlap_fix_rerun_20260321T214557/irohad_test_network_646KlX/*`,
+- both runs were again sampled on the real
+  `--duration 3600s --target-blocks 2000` stable-soak envelope and stopped
+  once enough windows had accumulated to judge the slope,
+- permissioned held `height 122 in 180.089s`
+  (`avg=1.476s/block`, `median=1429ms`, `p95=2001ms`, `max=2001ms`,
+  projected one-hour height `~2438`),
+- NPoS held `height 96 in 150.074s`
+  (`avg=1.563s/block`, `median=1548ms`, `p95=2501ms`, `max=2501ms`,
+  projected one-hour height `~2302`),
+- the bad consensus-path signatures stayed collapsed in sampled steady state:
+  `commit quorum missing past timeout` stayed at `0` for NPoS and only `1` for
+  permissioned, `no proposal observed=0` in both runs, no panic markers, no
+  strict-stall warnings, and only startup-only `Connection refused` handshake
+  noise on one NPoS peer.
+
+Open work after this sync:
+- the recovered slope now looks repeatable, but the `<1s` acceptance target is
+  still not met because sampled p95 remains about `2.0s` permissioned and
+  `2.5s` NPoS,
+- run a longer preserved-peer shared-host stable soak on this exact cut before
+  calling the pacing regression closed; the short reruns say the first
+  `150-180s` are healthy, not that the full hour stays clean,
+- use the round trace and peer dirs from these reruns to prove whether the
+  remaining RBC INIT/READY/DELIVER churn is harmless steady-state noise or the
+  next limiter to target,
+- once the longer soak verdict is in, clean up the dead-code residue surfaced
+  by the current release build warnings (`RosterProofFallback`,
+  `CommitWorkerHandle`, `spawn_commit_worker`, `local_precommit_vote_for`,
+  `round_trace_snapshot`, and `izanami::chaos::run_submission`).
+
+Latest sync (2026-03-21 sampled shared-host soaks after the RBC/quorum ownership fix):
+implemented the narrow ownership fix that makes vote-backed quorum reschedule
+yield while same-slot reassembly recovery is still active, then reran fresh
+sampled shared-host stable envelopes on rebuilt release binaries after clearing
+stale temp-network peers that were still consuming CPU:
+
+- `cargo fmt --all` passed,
+- focused `iroha_core` regressions passed:
+  - `cargo test -p iroha_core --lib reschedule_skips_repeated_vote_backed_quorum_timeout_without_new_progress -- --nocapture`
+  - `cargo test -p iroha_core --lib reschedule_skips_vote_backed_retransmit_while_frontier_quorum_timeout_window_owned -- --nocapture`
+  - `cargo test -p iroha_core --lib reschedule_skips_vote_backed_retransmit_while_same_height_rbc_sender_activity_is_recent -- --nocapture`
+  - `cargo test -p iroha_core --lib frontier_recovery_suppresses_rotation_while_same_height_rbc_sender_activity_remains_recent -- --nocapture`
+- `cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`
+  passed,
+- permissioned log:
+  `/tmp/izanami_permissioned_rbc_overlap_fix_20260321T213116.log`,
+  peer dirs:
+  `/tmp/iroha-soak-permissioned-rbc_overlap_fix_20260321T213116/irohad_test_network_kE02cw/*`,
+- NPoS log:
+  `/tmp/izanami_npos_rbc_overlap_fix_20260321T213455.log`,
+  peer dirs:
+  `/tmp/iroha-soak-npos-rbc_overlap_fix_20260321T213455/irohad_test_network_I8MdYS/*`,
+- both runs were sampled on the real `--duration 3600s --target-blocks 2000`
+  stable-soak envelope and stopped manually once the height slope was already
+  clear,
+- permissioned improved to `height 135 in 190.729s`
+  (`avg=1.423s/block`, `median=1430ms`, `p95=2003ms`, `max=2003ms`,
+  projected one-hour height `~2530`),
+- NPoS improved to `height 115 in 181.869s`
+  (`avg=1.595s/block`, `median=1482ms`, `p95=2502ms`, `max=2502ms`,
+  projected one-hour height `~2256`),
+- the old blocking churn signatures collapsed in both samples:
+  `commit quorum missing past timeout=0`, `no proposal observed=0`,
+  no panic markers, and no recurring ingress failure,
+- RBC rescue traffic is still heavy (`deferring RBC DELIVER`,
+  `requested missing BlockCreated` remain high), but it no longer turns into
+  quorum-timeout / no-proposal collapse in these sampled windows.
+
+Open work after this sync:
+- do not claim full acceptance yet; sampled p95 is materially better but still
+  above the `<1s` target (`permissioned ~2.0s`, `NPoS ~2.5s`),
+- rerun longer preserved-peer shared-host stable soaks on this exact cut to
+  prove the `~1.4-1.6s/block` slope holds beyond the first `~3` minutes and to
+  confirm the one-hour target stays on track without late regressions,
+- query the new round trace and peer dirs from these reruns to prove whether
+  the remaining RBC INIT/READY/DELIVER churn is merely noisy or still a latent
+  limiter at longer horizons,
+- clean up the now-unused split-era/dead-code residue surfaced by the current
+  release build warnings (`RosterProofFallback`, `CommitWorkerHandle`,
+  `spawn_commit_worker`, `local_precommit_vote_for`, `round_trace_snapshot`,
+  and `izanami::chaos::run_submission`) once the longer soak verdict is in.
+
+Latest sync (2026-03-21 sampled shared-host soaks on the diagnose-first actor-path refactor):
+reran both actual preserved-peer shared-host stable soak commands on the current
+trace + inline-commit actor-path refactor:
+
+- `cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`
+  passed,
+- permissioned log:
+  `/tmp/izanami_permissioned_diagnose_first_20260321T195930.log`,
+  peer dirs:
+  `/tmp/iroha-soak-permissioned-20260321T195930/irohad_test_network_78JXxR/*`,
+- NPoS log:
+  `/tmp/izanami_npos_diagnose_first_20260321T200130.log`,
+  peer dirs:
+  `/tmp/iroha-soak-npos-20260321T200130/irohad_test_network_WubjBt/*`,
+- both runs were sampled on the real `--duration 3600s --target-blocks 2000`
+  stable-soak envelope and stopped early once the target miss was already
+  obvious,
+- permissioned improved relative to the recent `~10s p95` permissioned reruns,
+  but it is still far off target:
+  `height 129 in 392.185s`, `median=3341ms`, `p95=5012ms`,
+  projected one-hour height `~1174`,
+- NPoS is still materially worse on this refactor:
+  `height 66 in 272.491s`, `median=3523ms`, `p95=10016ms`, `max=10105ms`,
+  `16` workload submission failures, `1` strict-stall warning, projected
+  one-hour height `~858`,
+- neither run hit the old transport failure signatures:
+  no `high plaintext batch must track its scheduling class`,
+  no `Connection refused`, and no panic markers.
+
+Open work after this sync:
+- do not claim this actor-path simplification recovered the soak envelope yet;
+  permissioned is still around `3-5s` windows and NPoS still falls into
+  repeated `~10s` windows,
+- use the new round trace against the preserved peer dirs from these runs to
+  prove which phase is dominating the remaining latency before changing timing
+  formulas again,
+- treat NPoS as the immediate pacing blocker on this refactor because it now
+  shows both `~10s` tails and workload confirmation/backlog failures under the
+  stable profile,
+- once the dominant phase is proven, keep collapsing handler-local progression
+  into the explicit actor-owned FSM and remove the remaining compatibility-only
+  commit-result drain path.
+
+Latest sync (2026-03-21 diagnose-first Sumeragi simplification):
+landed the first actor-path simplification tranche on the current tree:
+
+- added an internal round trace keyed by `(height, view)` so the actor now
+  records explicit phase/cause transitions for proposal, block/RBC, validation,
+  votes, QC, commit request/completion, and no-progress wakes,
+- removed the runtime commit worker attachment; commit work now runs inline from
+  `finalize_pending_block()` while retaining only the synchronous `commit.inflight`
+  marker for guard/status compatibility,
+- switched the happy-path wakeups to cause-aware actor nudges across proposal,
+  validation, votes, QCs, RBC, block sync, and commit completion,
+- focused `iroha_core` validation passed, but preserved-peer soaks have not been
+  rerun on this refactor yet.
+
+Open work after this sync:
+- rerun both actual preserved-peer shared-host stable soaks on this refactor
+  before claiming any pacing win; current soak numbers still refer to the
+  pre-trace / pre-inline-commit actor path,
+- use the new round trace to identify which phase dominates the remaining
+  `5-10s` windows before changing any timing formulas again,
+- continue collapsing Sumeragi progression into one explicit actor-owned FSM;
+  the trace/cause plumbing is in place, but some handler-local progression and
+  compatibility shims still remain,
+- once the dominant phase is proven, remove the remaining compatibility-only
+  commit-result drain path and any stale split-era tests that are no longer
+  exercising real runtime behavior.
+
+Latest sync (2026-03-21 sampled shared-host soak reruns after the transport fix):
+reran both actual preserved-peer shared-host stable soak commands on rebuilt
+release binaries after fixing the `iroha_p2p` batching panic:
+
+- `cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`
+  passed,
+- permissioned log:
+  `/tmp/izanami_permissioned_sync_commit_rerun_20260321T164800.log`,
+  peer dirs:
+  `/tmp/iroha-soak-permissioned-sync_commit_rerun_20260321T164800/irohad_test_network_bE1SEu/*`,
+- NPoS log:
+  `/tmp/izanami_npos_sync_commit_rerun_20260321T164800.log`,
+  peer dirs:
+  `/tmp/iroha-soak-npos-sync_commit_rerun_20260321T164800/irohad_test_network_us3XPs/*`,
+- both runs stayed free of the old transport failure:
+  no `high plaintext batch must track its scheduling class`,
+  no pinned-ingress `Connection refused`, and no strict-stall warnings,
+- both runs were still stopped early as sampled reruns because they were far
+  off the `target_blocks=2000` trajectory under the real `--duration 3600s`
+  soak profile:
+  - permissioned reached only height `117` after `430.111s`,
+    with sampled `median=3334ms p95=10002ms max=10003ms`,
+    `20` windows at `>=5000ms`, and a simple one-hour projection of about
+    height `972`,
+  - NPoS reached only height `113` after `430.111s`,
+    with sampled `median=3334ms p95=5001ms max=10001ms`,
+    `20` windows at `>=5000ms`, and a simple one-hour projection of about
+    height `938`.
+
+Open work after this sync:
+- stop treating the old `~3.3s` target-height sample as the current ceiling;
+  the sampled preserved-peer reruns on this cut are materially worse,
+  especially permissioned,
+- investigate why permissioned is producing repeated `10002-10003ms`
+  single-advance windows even after the transport panic is fixed,
+- investigate the shared `>=5000ms` window frequency in both modes; that now
+  dominates the observed envelope more than the earlier commit-tail / transport
+  regressions,
+- keep the `iroha_p2p` regression in place, but shift the next performance pass
+  back to actor-path pacing and any remaining queueing / backpressure source
+  between `Propose`, `CollectDa`, and `CollectCommit`,
+- do not claim the soak issue is merely “stable at ~3.3s” anymore; the current
+  reruns show a deeper throughput miss against the preserved-peer target.
+
+Latest sync (2026-03-21 fixed high-priority plaintext batch class loss in `iroha_p2p`):
+the permissioned preserved-peer crash was a transport batching bug, not a
+consensus commit bug:
+
+- `crates/iroha_p2p/src/peer.rs` now restores `plain_high_class` after a
+  cap-triggered high-priority plaintext flush before appending the next
+  message,
+- root cause was the overflow path clearing `plain_high_class` inside
+  `flush_plain_high()` and then reusing `plain_high` for the next message
+  without restoring its scheduling class, which later panicked on
+  `high plaintext batch must track its scheduling class`,
+- new regression coverage:
+  `message_sender_restores_high_batch_class_after_msg_cap_flush`,
+- focused validation passed:
+  - `cargo fmt --all`,
+  - `cargo test -p iroha_p2p message_sender_ -- --nocapture`,
+- post-fix permissioned smoke log:
+  `/tmp/izanami_permissioned_p2p_fix_smoke_20260321T163931.log`,
+  peer dirs:
+  `/tmp/iroha-smoke-permissioned-p2p_fix_20260321T163931/irohad_test_network_Z5LEV5/*`,
+  and the smoke reached target cleanly at quorum/strict height `133` without
+  the prior panic, `Connection refused`, or strict-stall signature.
+
+Open work after this sync:
+- rerun the full preserved-peer permissioned soak on the current tree now that
+  the transport panic is fixed, so permissioned can be compared fairly against
+  the prior `~3.3-3.5s` plateau,
+- keep treating the remaining latency issue separately from the transport fix:
+  the post-fix permissioned smoke still reported `interval_p95_ms=3335`,
+- keep the new `iroha_p2p` regression test in the regular focused suite so the
+  high-priority batching invariant stays covered while consensus pacing work
+  continues.
+
+Latest sync (2026-03-21 preserved-peer reruns on the synchronous commit cut):
+reran the permissioned and NPoS Izanami shared-host stable soaks on rebuilt
+release binaries from the current tree:
+
+- `cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`
+  passed,
+- permissioned log:
+  `/tmp/izanami_permissioned_sync_commit_20260321T154256.log`,
+  peer dirs:
+  `/tmp/iroha-soak-permissioned-sync_commit_20260321T154256/irohad_test_network_prtV00/*`,
+- NPoS log:
+  `/tmp/izanami_npos_sync_commit_20260321T154839.log`,
+  peer dirs:
+  `/tmp/iroha-soak-npos-sync_commit_20260321T154839/irohad_test_network_7rXK0x/*`,
+- permissioned did not reach a useful acceptance checkpoint:
+  two `iroha_p2p` worker threads panicked with
+  `high plaintext batch must track its scheduling class`, the workload then
+  started seeing pinned-ingress `Connection refused (os error 61)` failures,
+  and the soak stalled at quorum/strict height `112`,
+- NPoS stayed healthy in the sampled window and reached
+  quorum/strict height `261`, but its sampled interval envelope stayed in the
+  same band:
+  `median=2501ms p95=3345ms max=5001ms` over `65` quorum samples,
+- because these shared-host stable soaks are duration-based in Izanami, the
+  NPoS run was sampled and then stopped once the latency verdict was already
+  clear; the current cut did not show evidence that it can reach the `<1s`
+  target on preserved peers.
+
+Open work after this sync:
+- debug and fix the new `iroha_p2p` batching / scheduling-class panic first;
+  permissioned soak results are currently dominated by that transport failure,
+  not by a clean consensus pacing measurement,
+- after the transport panic is fixed, rerun the permissioned preserved-peer
+  soak before drawing any throughput conclusion about the synchronous commit
+  change on that mode,
+- keep treating NPoS as evidence that the timing retune alone was insufficient:
+  the shared-host p95 still sits around `~3.3s` with repeated `5000ms`
+  outliers,
+- instrument the wall-clock gaps between `Propose`, `CollectDa`, and
+  `CollectCommit` on the actor path and focus the next optimization pass there
+  instead of adding new commit-state machinery,
+- preserve the current RBC and commit invariant regression suite while
+  investigating the transport panic and the remaining pacing plateau.
+
+Latest sync (2026-03-21 synchronous commit visibility restore + event-driven pacing retune):
+the commit-path simplification reverted the split publish/persist design and
+shifted the next optimization step back to wall-clock pacing:
+
+- `crates/iroha_core/src/sumeragi/main_loop/commit.rs`,
+  `crates/iroha_core/src/sumeragi/main_loop/pending_block.rs`,
+  `crates/iroha_core/src/sumeragi/main_loop.rs`, and
+  `crates/iroha_core/src/sumeragi/mod.rs` now remove the split-only commit
+  machinery:
+  - `CommitJournal*`, `CommitPersist*`, persist workers, publish/persist
+    inflight tracking, and split-specific lifecycle publication phases are
+    gone,
+  - `ValidatedCommitArtifact` stays only as cached immutable validation/root
+    data on `PendingBlock`, and
+  - the only successful commit path is again synchronous:
+    `commit_with_certificate()` ->
+    `kura.store_block()` ->
+    `state_block.apply_without_execution()` ->
+    `state_block.commit()` ->
+    `on_block_commit()` / cleanup / telemetry.
+- failure semantics now match the intended invariant:
+  - Kura failure leaves the block pending and does not advance visible
+    committed state,
+  - state-commit failure after a successful Kura store may leave Kura ahead,
+    but `committed_height` remains authoritative and no partial head becomes
+    visible.
+- `crates/iroha_core/src/sumeragi/main_loop.rs`,
+  `crates/iroha_core/src/sumeragi/main_loop/proposal_handlers.rs`,
+  `crates/iroha_core/src/sumeragi/main_loop/rbc.rs`, and
+  `crates/iroha_core/src/sumeragi/main_loop/votes.rs` now wake the actor
+  immediately on proposal / `BlockCreated` / RBC delivery / vote / QC progress
+  and keep successful round-critical proposal, block, RBC, vote, and QC posts
+  on the bypass path.
+- timing derivation was simplified without changing config or protocol shape:
+  - pacemaker base interval now uses only the propose-timeout RTT floor capped
+    by `max_backoff`,
+  - DA commit quorum timeout now derives from
+    `max(block_time, 2 * commit_time)` before the existing multiplier.
+- focused validation passed:
+  - `cargo fmt --all`,
+  - `cargo test -p iroha_core --no-run`,
+  - `cargo test -p iroha_core --lib successful_commit_keeps_latest_block_aligned_with_committed_height -- --nocapture`,
+  - `cargo test -p iroha_core --lib state_commit_failure_after_kura_store_keeps_partial_head_hidden -- --nocapture`,
+  - `cargo test -p iroha_core --lib commit_quorum_timeout_tracks_block_time -- --nocapture`,
+  - `cargo test -p iroha_core --lib pacemaker_interval_respects_rtt_floor_and_cap -- --nocapture`,
+  - `cargo test -p iroha_core --lib proposal_post_bypasses_background_queue -- --nocapture`,
+  - `cargo test -p iroha_core --lib qc_post_bypasses_background_queue -- --nocapture`,
+  - `cargo test -p iroha_core --lib block_created_post_bypasses_background_queue -- --nocapture`,
+  - `cargo test -p iroha_core --lib execute_commit_work_does_not_advance_state_when_kura_store_fails -- --nocapture`,
+  - `cargo test -p iroha_core --lib execute_commit_work_persists_block_before_exposing_committed_state -- --nocapture`,
+  - `cargo test -p iroha_core --lib duplicate_block_created_ -- --nocapture`,
+  - `cargo test -p iroha_core --lib handle_rbc_init_ -- --nocapture`,
+  - `cargo test -p iroha_core --lib maybe_emit_rbc_ready_ -- --nocapture`,
+  - `cargo test -p iroha_core --lib maybe_emit_rbc_deliver_ -- --nocapture`.
+
+Open work after this sync:
+- rerun the sampled permissioned and NPoS preserved-peer soaks on this simpler
+  cut and verify the real acceptance criteria on current binaries:
+  no `Genesis not committed`, no actor-gate poison, and sampled p95 materially
+  below the current `~3.4s` band with the stated `<1s` target,
+- if the preserved-peer plateau remains, instrument the wall-clock gaps between
+  `Propose`, `CollectDa`, and `CollectCommit` on the existing actor path rather
+  than reintroducing more commit-state machinery,
+- keep the new commit invariants in the regular focused suite:
+  committed height implies readable / hash-aligned `latest_block()`, Kura
+  failure does not advance the head, and state-commit failure after Kura
+  success keeps the partial head hidden,
+- keep the existing RBC INIT / missing-payload / duplicate `BlockCreated`
+  regressions green while iterating on wakeups and timing,
+- do not reintroduce split publish/persist lanes, journals, or extra long-lived
+  round state unless preserved-peer measurements show a concrete need that the
+  synchronous invariant cannot satisfy.
+
+Latest sync (2026-03-21 session-authority invariant fix + sampled reruns):
+the next cut fixed the RBC state-model bug where a session could be treated as
+authoritative merely because matching payload bytes existed in local stores:
+
+- `crates/iroha_core/src/sumeragi/main_loop.rs` and
+  `crates/iroha_core/src/sumeragi/main_loop/rbc.rs` now require the RBC session
+  itself to own a complete verified payload before progressing to
+  `AuthoritativePayload`,
+- READY / DELIVER no longer skip hydration based only on INIT metadata plus
+  external local payload availability,
+- payload recovery now stays enabled while chunks are still missing, and
+  targeted READY rescue no longer fires from metadata-only sessions,
+- focused RBC regressions and the rebuilt release binaries all passed:
+  - `cargo fmt --all`,
+  - `cargo test -p iroha_core --lib known_near_tip_rbc_session_stays_collecting_until_chunks_hydrate -- --nocapture`,
+  - `cargo test -p iroha_core --lib known_local_kura_rbc_session_stays_collecting_until_chunks_hydrate -- --nocapture`,
+  - `cargo test -p iroha_core --lib known_local_kura_payload_with_slot_mismatch_stays_non_authoritative -- --nocapture`,
+  - `cargo test -p iroha_core --lib maybe_emit_rbc_ready_for_local_kura_payload_hydrates_before_ready -- --nocapture`,
+  - `cargo test -p iroha_core --lib partial_rbc_session_keeps_payload_recovery_even_after_authoritative_stage_marker -- --nocapture`,
+  - `cargo test -p iroha_core --lib maybe_emit_rbc_ready_ -- --nocapture`,
+  - `cargo test -p iroha_core --lib maybe_emit_rbc_deliver_ -- --nocapture`,
+  - `cargo test -p iroha_core --lib rescue_rbc_missing_ready_peers_ -- --nocapture`,
+  - `cargo test -p iroha_core --lib known_ -- --nocapture`,
+  - `cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`,
+- sampled preserved-peer reruns on this cut:
+  - permissioned log:
+    `/tmp/izanami_permissioned_session_authority_fix_20260321T114324.log`,
+    peer dirs:
+    `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_qo9VSq/*`,
+  - NPoS log:
+    `/tmp/izanami_npos_session_authority_fix_20260321T115451.log`,
+    peer dirs:
+    `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_RLhh0J/*`,
+  - permissioned stayed flat at sampled `3334ms` p95 / `170.029s` elapsed,
+  - NPoS also stayed flat at sampled `3344ms` p95 / `190.075s` elapsed,
+  - this cut fixed a correctness bug but did not move the current steady-state
+    `~3.3s` preserved-peer plateau.
+
+Open work after this sync:
+- keep the session-authority invariant fix; it closes a real correctness hole
+  and the new regressions should remain as the baseline,
+- stop treating the false `AuthoritativePayload` transition as the primary
+  explanation for the current soak slowdown,
+- focus the next cut on the shared steady-state cadence / queueing tail that
+  keeps both permissioned and NPoS near `~3.3s` p95 even after the RBC
+  correctness fixes,
+- capture and preserve the per-peer stdout / metrics needed to tie that common
+  plateau back to concrete consensus pacing or background-post bottlenecks,
+- do not spend a full unchanged 2000-block acceptance rerun on this cut; the
+  next candidate should first explain or reduce the common sampled plateau.
+
+Latest sync (2026-03-21 targeted missing-READY payload rescue + sampled reruns):
+the next cut moved targeted payload rescue earlier and made it independent from
+the broad payload subset cooldown:
+
+- `crates/iroha_core/src/sumeragi/main_loop.rs` now hydrates a local session
+  copy from pending / inflight / Kura bytes inside
+  `rescue_rbc_missing_ready_peers(...)` before sending targeted `RbcInit` +
+  chunks to peers still missing READY,
+- the targeted payload rescue path now has its own cooldown state, so a prior
+  broad payload rebroadcast no longer suppresses the later precise rescue,
+- focused RBC regressions and the rebuilt release binaries all passed:
+  - `cargo fmt --all`,
+  - `cargo test -p iroha_core --lib rebroadcast_stalled_rbc_payloads_uses_targeted_ready_rescue_for_local_kura_authority -- --nocapture`,
+  - `cargo test -p iroha_core --lib maybe_emit_rbc_deliver_targets_payload_and_ready_when_subset_skips_local -- --nocapture`,
+  - `cargo test -p iroha_core --lib rescue_rbc_missing_ready_peers_ -- --nocapture`,
+  - `cargo test -p iroha_core --lib rebroadcast_stalled_rbc_payloads_skips_payload_recovery_once_authoritative -- --nocapture`,
+  - `cargo test -p iroha_core --lib maybe_emit_rbc_deliver_targets_missing_ready_peers_with_unverified_roster -- --nocapture`,
+  - `cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`,
+- sampled preserved-peer reruns on this cut:
+  - permissioned log:
+    `/tmp/izanami_permissioned_targeted_payload_20260321T104921.log`,
+    peer dirs:
+    `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_SQwqB5/*`,
+  - NPoS log:
+    `/tmp/izanami_npos_targeted_payload_20260321T105858.log`,
+    peer dirs:
+    `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_XFCfHr/*`,
+  - permissioned improved from sampled `3481ms` p95 / `192.241s` elapsed to
+    `3334ms` / `170.034s`,
+  - NPoS improved from sampled `3565ms` p95 / `203.610s` elapsed to
+    `3334ms` / `190.046s`,
+  - both still failed red at `checkpoint target_reached`, so the cut helped but
+    did not clear the harness target.
+
+Open work after this sync:
+- treat the targeted payload rescue change as a real improvement and keep it,
+  because it improved both sampled envelopes rather than only one,
+- stop treating the remaining failure as primarily the old metadata-only
+  frontier stall; the current preserved samples now converge on the same
+  `3334ms` p95 band in both permissioned and NPoS,
+- capture preserved peer stdout before cleanup on the next sampled rerun so the
+  remaining tail can be tied back to concrete RBC / READY / DELIVER log
+  signatures instead of only the top-level harness summary,
+- investigate the shared steady-state `~3.3s` block-interval tail that survives
+  after the RBC targeted-rescue fixes; that now looks more important than INIT
+  timing or passive metadata-only sessions,
+- do not spend a full unchanged 2000-block acceptance rerun on this cut yet;
+  the next candidate should explain or reduce the common `3334ms` p95 plateau
+  first.
+
+Latest sync (2026-03-20 sampled reruns on the immediate INIT missing-payload recovery cut):
+reran both preserved stable envelopes on rebuilt release binaries and stopped
+each run after the first `interval_ms >= 5000` breach:
+
+- permissioned log:
+  `/tmp/izanami_permissioned_init_missing_payload_20260320T211331.log`,
+  peer dirs:
+  `/tmp/iroha-soak-permissioned-20260320T211331/irohad_test_network_7euo4G`,
+- NPoS log:
+  `/tmp/izanami_npos_init_missing_payload_20260320T212947.log`,
+  peer dirs:
+  `/tmp/iroha-soak-npos-20260320T212947/irohad_test_network_inkyuH`,
+- permissioned improved materially but still failed:
+  the first red window moved out to `height 466 -> 5001`, then hit
+  `467 -> 10001` and `468 -> 10025` before recovering,
+- NPoS regressed materially:
+  the first red window moved earlier to `height 365 -> 10001`,
+- both top-level logs stayed clean on the workload side:
+  `plan submission failed=0` and
+  `Trigger with id \`repeat_trigger_*\` not found=0`,
+- both preserved peer trees still show the same late local-READY / DELIVER
+  stall shape:
+  permissioned still shows
+  `deferring local RBC READY: awaiting chunks or READY quorum` at
+  `height 466-467` with `received=0`, `total_chunks=1`,
+  while NPoS shows the same signature at `height 365-367`;
+  both modes still hit
+  `deferring RBC DELIVER: READY quorum not yet satisfied`
+  immediately afterward on the same frontier band.
+
+Open work after this sync:
+- treat the INIT-timing improvement as real but incomplete:
+  permissioned moved later, so do not throw away the cut,
+- stop treating the soak failure as primarily “INIT exists before payload bytes
+  exist”; that timing issue is narrower now, but the preserved peer trees still
+  show the same zero-chunk single-chunk READY tail,
+- explain why NPoS regressed to `height 365` while permissioned improved to
+  `height 466`; the same code change is interacting differently with the two
+  topologies,
+- focus the next investigation on payload lifetime / store residency and stub
+  session retention after proposal creation, because that still matches the
+  observed `received=0`, `total_chunks=1` frontier signature better than
+  missing-`INIT` handling does,
+- do not spend a full unchanged 2000-block acceptance rerun on this cut; the
+  next candidate should change the preserved-tail signature first.
+
+Latest sync (2026-03-20 immediate INIT missing-block recovery cut):
+`RbcInit` now stops leaving metadata-only sessions passive until a later READY
+deferral loop notices them:
+
+- `crates/iroha_core/src/sumeragi/main_loop/rbc.rs` now uses a shared
+  post-INIT helper in both `handle_rbc_init` branches that attempts local
+  hydration first and, if the session still has `received=0`, immediately calls
+  `request_missing_block_for_pending_rbc(..., "rbc_init_missing_payload", None)`
+  before continuing through the existing flush / READY / DELIVER path,
+- `crates/iroha_core/src/sumeragi/main_loop/tests.rs` now covers:
+  existing-session and new-session INIT-triggered missing-block recovery, plus
+  inline INIT hydration from pending, commit-inflight, and Kura payload
+  sources, and
+- protocol surface remains unchanged: no ambient payload gossip, no new wire
+  fields, no config additions, and no quorum / timeout changes.
+
+Open work after this sync:
+- keep the focused validation on this cut as the current green baseline:
+  `cargo fmt --all`,
+  `cargo test -p iroha_core --lib handle_rbc_init_ -- --nocapture`,
+  `cargo test -p iroha_core --lib duplicate_block_created_ -- --nocapture`,
+  `cargo test -p iroha_core --lib block_sync_block_created_retries_ready_after_existing_session_hydration -- --nocapture`,
+- rerun the sampled permissioned and NPoS preserved-peer soaks on this cut and
+  compare whether the late
+  `received=0`, `total_chunks=1`, `ready=0`
+  READY signature around the old breach bands actually drops, and
+- if the preserved peer trees still show the same signature after this timing
+  change, move the investigation away from INIT timing and toward payload
+  lifetime / store residency after proposal creation.
+
+Latest sync (2026-03-20 sampled reruns on the single-source-of-truth payload cut):
+reran both preserved stable envelopes on rebuilt release binaries and stopped
+each run at the first `interval_ms >= 5000` breach:
+
+- permissioned log:
+  `/tmp/izanami_permissioned_single_source_payload_20260320T182514.log`,
+  peer dirs:
+  `/tmp/iroha-soak-permissioned-20260320T182514/irohad_test_network_AVP7Tt`,
+- NPoS log:
+  `/tmp/izanami_npos_single_source_payload_20260320T183531.log`,
+  peer dirs:
+  `/tmp/iroha-soak-npos-20260320T183531/irohad_test_network_2WXIIN`,
+- permissioned still failed and regressed again on first breach height:
+  `height 367 -> 5002`,
+- NPoS also stayed red and moved earlier on first breach height:
+  `height 434 -> 10001`,
+- both top-level logs stayed clean on the workload side:
+  `plan submission failed=0` and
+  `Trigger with id \`repeat_trigger_*\` not found=0`,
+- both peer trees still show the same late local-READY / DELIVER tail:
+  permissioned
+  `deferring local RBC READY: awaiting chunks or READY quorum=2139`,
+  `deferring RBC DELIVER: READY quorum not yet satisfied=3884`,
+  `queued RBC INIT and chunk rebroadcast while awaiting READY quorum=0`;
+  NPoS
+  `deferring local RBC READY: awaiting chunks or READY quorum=2303`,
+  `deferring RBC DELIVER: READY quorum not yet satisfied=4381`,
+  `queued RBC INIT and chunk rebroadcast while awaiting READY quorum=0`,
+- the preserved-tail samples matter more than the new helper itself:
+  permissioned still shows the
+  `received=0`, `total_chunks=1`, `ready=0`
+  READY stall at `height 373-376`, while NPoS still shows the same signature at
+  `height 433-439`; both then immediately fall into
+  `deferring RBC DELIVER: READY quorum not yet satisfied`.
+
+Open work after this sync:
+- treat the local-payload mismatch as closed: the code now has one payload
+  resolver for READY/DELIVER progress and hydration, so do not keep debugging
+  boolean-vs-loader drift,
+- focus instead on why these frontier sessions still have no bytes in the
+  shared pending / inflight / Kura sources when READY tries to progress them,
+- inspect where single-chunk stub sessions are being created or retained after
+  the local block payload has already moved on, because that now looks like the
+  simpler remaining explanation for the `received=0`, `total_chunks=1` tail,
+- keep `commit roster unavailable` in view (`42` permissioned, `91` NPoS), but
+  only as secondary signal unless it directly explains why the payload bytes are
+  absent for those late sessions,
+- do not spend a full unchanged 2000-block acceptance rerun on this cut; the
+  next candidate should change the preserved-tail signature, not just simplify
+  the local-payload predicate.
+
+Latest sync (2026-03-20 single-source-of-truth payload fix):
+the RBC local-payload detection and hydration paths now share one helper
+instead of using separate definitions of “local payload”:
+
+- `crates/iroha_core/src/sumeragi/main_loop.rs` now uses
+  `with_local_payload_for_progress(...)` as the common resolver behind
+  `block_payload_available_for_progress(...)` and
+  `rbc_session_has_local_payload_for_progress(...)`,
+- `crates/iroha_core/src/sumeragi/main_loop/rbc.rs` now hydrates through
+  `maybe_hydrate_rbc_session_from_local_payload(...)` instead of reading only
+  `pending.pending_blocks`,
+- hash-only `pending_processing` no longer counts as local payload for READY /
+  DELIVER progress, because it does not provide bytes, and
+- focused validation passed:
+  `cargo fmt --all`,
+  `cargo test -p iroha_core --lib block_payload_available_for_progress_ -- --nocapture`,
+  `cargo test -p iroha_core --lib hydrates_rbc_session_for_init -- --nocapture`,
+  `cargo test -p iroha_core --lib duplicate_block_created_ -- --nocapture`,
+  `cargo test -p iroha_core --lib block_sync_block_created_retries_ready_after_existing_session_hydration -- --nocapture`,
+  `cargo test -p iroha_core --lib local_kura_authoritative_session_skips_bootstrap_gate -- --nocapture`.
+
+Open work after this sync:
+- rerun the sampled permissioned and NPoS preserved-peer soaks on this cut and
+  compare whether the old local-READY frontier signature actually changes once
+  the helper is shared, and
+- if the frontier still shows `received=0`, `total_chunks=1`, stop treating the
+  issue as detection/hydration drift and move the investigation to stub-session
+  retention or payload-lifetime timing instead.
+
+Latest sync (2026-03-20 sampled reruns on the duplicate-`BlockCreated` READY-retry cut):
+reran both preserved stable envelopes on rebuilt release binaries and stopped
+each run at the first `interval_ms >= 5000` breach:
+
+- permissioned log:
+  `/tmp/izanami_permissioned_blockcreated_ready_retry_20260320T154553.log`,
+  peer dirs:
+  `/tmp/iroha-soak-permissioned-20260320T154553/irohad_test_network_5wgyb6`,
+- NPoS log:
+  `/tmp/izanami_npos_blockcreated_ready_retry_20260320T155755.log`,
+  peer dirs:
+  `/tmp/iroha-soak-npos-20260320T155755/irohad_test_network_3TNt8p`,
+- permissioned regressed materially:
+  the first red window moved earlier to `height 388 -> 10002`,
+- NPoS stayed red with only a marginal frontier change:
+  the first red window was `height 448 -> 10001`,
+- both top-level logs stayed clean on the workload side:
+  `plan submission failed=0` and
+  `Trigger with id \`repeat_trigger_*\` not found=0`,
+- both peer trees still show the same late local-READY / DELIVER tail:
+  permissioned
+  `deferring local RBC READY: awaiting chunks or READY quorum=2426`,
+  `deferring RBC DELIVER: READY quorum not yet satisfied=4089`,
+  `queued RBC INIT and chunk rebroadcast while awaiting READY quorum=0`;
+  NPoS
+  `deferring local RBC READY: awaiting chunks or READY quorum=2617`,
+  `deferring RBC DELIVER: READY quorum not yet satisfied=4626`,
+  `queued RBC INIT and chunk rebroadcast while awaiting READY quorum=0`,
+- the preserved-tail samples are the important result:
+  permissioned still shows
+  `deferring local RBC READY: awaiting chunks or READY quorum` at
+  `height 387-390` with `received=0`, `total_chunks=1`,
+  while NPoS still shows the same signature at `height 453/459`;
+  both modes still hit `deferring RBC DELIVER: READY quorum not yet satisfied`
+  immediately afterward on the same frontier.
+
+Open work after this sync:
+- keep the focus on local READY emission / session-state closure for hydrated
+  single-chunk stubs; the duplicate-`BlockCreated` retry exists now, but the
+  preserved peer trees prove that it still leaves the same
+  `received=0`, `total_chunks=1`, `ready=0` stall at the frontier,
+- explain why permissioned regressed all the way to `height 388` while NPoS
+  only stayed roughly flat at `height 448`,
+- inspect whether the remaining gap is in which duplicate/existing-session
+  branches actually mark the session READY-eligible versus merely storing the
+  payload, rather than in DELIVER rescue or missing-`INIT` fallback,
+- keep `commit roster unavailable` in view for NPoS (`118` vs permissioned
+  `24`), but treat it as secondary unless it directly explains the stalled
+  READY closure,
+- do not spend a full unchanged 2000-block acceptance rerun on this cut; the
+  next candidate needs to reduce the frontier local-READY / DELIVER deferral
+  density first.
+
+Latest sync (2026-03-20 duplicate `BlockCreated` READY retry cut):
+the duplicate / alternate-preserve-policy `BlockCreated` hydration branches now
+rerun READY/DELIVER immediately before returning, without changing quorum math,
+bootstrap thresholds, cooldowns, timeouts, roster-source semantics, or any
+public API / config / wire surface:
+
+- `crates/iroha_core/src/sumeragi/main_loop/proposal_handlers.rs` now uses an
+  explicit post-hydration retry helper in the duplicate-session branches so the
+  handler does not wait for a later periodic RBC pass after local payload
+  hydration,
+- `crates/iroha_core/src/sumeragi/main_loop/tests.rs` now covers same-call
+  READY on duplicate hydration, same-call DELIVER when local READY closes
+  quorum, the seed-queue inline-hydration duplicate path, and the block-sync
+  preserve-policy entrypoint, and
+- focused validation passed:
+  `cargo fmt --all`,
+  `cargo test -p iroha_core --lib duplicate_block_created_ -- --nocapture`,
+  `cargo test -p iroha_core --lib block_sync_block_created_retries_ready_after_existing_session_hydration -- --nocapture`.
+
+Open work after this sync:
+- rerun the sampled permissioned and NPoS preserved-peer soaks on this cut and
+  compare whether
+  `deferring local RBC READY: awaiting chunks or READY quorum`
+  and
+  `deferring RBC DELIVER: READY quorum not yet satisfied`
+  fall around the previously bad breach heights,
+- verify whether READY quorum now closes earlier on the old breach bands before
+  spending a full unchanged 2000-block acceptance rerun, and
+- if the tail is still red, keep the next investigation focused on the
+  remaining READY/DELIVER closure path rather than on payload hydration.
+
+Latest sync (2026-03-20 sampled reruns on the targeted-RBC-DELIVER cut):
+reran both stable envelopes on rebuilt release binaries with preserved peer
+dirs:
+
+- permissioned log:
+  `/tmp/izanami_permissioned_deliver_fix_20260320T134652.log`,
+  peer dirs:
+  `/tmp/iroha-soak-permissioned-20260320T134652/irohad_test_network_P9oKh3`,
+- NPoS log:
+  `/tmp/izanami_npos_deliver_fix_20260320T140300.log`,
+  peer dirs:
+  `/tmp/iroha-soak-npos-20260320T140300/irohad_test_network_vjCuap`,
+- permissioned improved, but did not go green:
+  the first red window moved from `height 437 -> 10003` to
+  `height 469 -> 10236`; the run then recovered and was manually stopped at
+  `strict_min_height=578`,
+- NPoS stayed red and actually regressed on first breach:
+  the first red window moved earlier to `height 450 -> 10044`, followed by
+  `height 451 -> 10006` and later `height 530 -> 5005`,
+- both top-level logs again stayed clean on the workload side:
+  `plan submission failed=0` and
+  `Trigger with id \`repeat_trigger_*\` not found=0`,
+- both peer trees prove the new DELIVER rescue path is live:
+  permissioned
+  `sending targeted RBC DELIVER to peers missing READY=5855`,
+  `deferring RBC DELIVER: READY quorum not yet satisfied=6039`,
+  `queued RBC INIT and chunk rebroadcast while awaiting READY quorum=0`;
+  NPoS
+  `sending targeted RBC DELIVER to peers missing READY=6086`,
+  `deferring RBC DELIVER: READY quorum not yet satisfied=5642`,
+  `queued RBC INIT and chunk rebroadcast while awaiting READY quorum=0`.
+
+Open work after this sync:
+- keep the focus on late READY/DELIVER closure and commit-tail convergence:
+  the DELIVER rescue exists now, but it still does not reduce the tail enough
+  to make the envelopes green,
+- inspect why permissioned still hits a single-block `10236ms` stall around
+  `height 469` even though it then recovers cleanly past `height 578`,
+- inspect why NPoS now shows an earlier pair of `10s` stalls around
+  `height 450-451` before later recovering and then re-breaching at
+  `height 530/535`,
+- compare the READY-deferral / targeted-DELIVER rates around those breach bands
+  rather than around the later recovered windows,
+- do not spend a full unchanged 2000-block acceptance rerun on this cut yet;
+  the next candidate should first show a real reduction in READY deferral /
+  commit-timeout density, not just active DELIVER rescue traffic.
+
+Latest sync (2026-03-20 sampled permissioned + NPoS reruns on the authoritative-local-payload cut):
+reran both preserved stable envelopes on the new local-authority build and
+stopped each run at the first `interval_ms >= 5000` breach:
+
+- permissioned sampled rerun reached `strict_min_height=437`; first breach was
+  `height 437 -> interval_ms=10003`; preserved logs live at
+  `/tmp/izanami_permissioned_authority_fix_20260320T123237.log` and
+  `/tmp/iroha-soak-permissioned-20260320T123237/irohad_test_network_mBsX1N`,
+- NPoS sampled rerun reached `strict_min_height=523`; first breach was
+  `height 523 -> interval_ms=5001`; preserved logs live at
+  `/tmp/izanami_npos_authority_fix_20260320T124406.log` and
+  `/tmp/iroha-soak-npos-20260320T124406/irohad_test_network_xLkg3Q`,
+- both top-level logs stayed clean on the workload side:
+  `plan submission failed=0` and
+  `Trigger with id \`repeat_trigger_*\` not found=0`,
+- both peer trees still show the same late consensus signature:
+  permissioned
+  `commit quorum missing past timeout; rescheduling block for reassembly=15`,
+  `deferring RBC DELIVER: READY quorum not yet satisfied=4503`,
+  `queued RBC INIT and chunk rebroadcast while awaiting READY quorum=0`;
+  NPoS
+  `commit quorum missing past timeout; rescheduling block for reassembly=19`,
+  `deferring RBC DELIVER: READY quorum not yet satisfied=5312`,
+  `queued RBC INIT and chunk rebroadcast while awaiting READY quorum=0`,
+- the most important split is by mode:
+  NPoS improved materially relative to the prior sampled rerun, while
+  permissioned still breached earlier than the previous sampled baseline.
+
+Open work after this sync:
+- keep treating the remaining issue as late READY-quorum closure, not chunk or
+  bootstrap recovery; the new authority predicate appears to have removed the
+  old INIT/chunk churn again, but sessions still stall at `ready=2/required=3`
+  on the frontier,
+- inspect why permissioned still times out around `height 437-438` even though
+  the same cut materially helps NPoS reach `height 523-524`,
+- include `commit quorum missing past timeout` and `commit roster unavailable`
+  in that inspection, but keep READY/DELIVER completion as the primary suspect,
+- do not spend a full unchanged 2000-block acceptance rerun on this cut yet;
+  wait for a candidate that improves permissioned as well as NPoS.
+
+Latest sync (2026-03-20 authoritative-local-payload RBC predicate fix):
+the RBC authority/payload-progress cut is now in place without changing public
+APIs, config, wire formats, or status surfaces:
+
+- `crates/iroha_core/src/sumeragi/main_loop.rs` and
+  `crates/iroha_core/src/sumeragi/main_loop/rbc.rs` now treat RBC
+  `AuthoritativePayload`, local `READY` eligibility, `READY`/`DELIVER` ingest
+  recovery, and stalled-rebroadcast stage syncing as
+  `authoritative roster` + `block_payload_available_for_progress(hash)` +
+  exact `(hash, height, view)` slot match from `session.block_header` or
+  `local_block_height_view(hash)`,
+- the old frontier/near-tip filters, quorum math, timeout constants, and
+  targeted READY rescue behavior remain unchanged; only the payload-authority
+  predicate moved off active `pending_blocks` / `commit.inflight` membership,
+- focused validation passed for the new Kura-backed authority tests, the old
+  unknown-session chunk/bootstrap regression, the active authoritative READY
+  shortcut, and the existing round-gap/status regressions.
+
+Open work after this sync:
+- rerun the sampled permissioned and NPoS stable envelopes on this exact cut to
+  see whether late `READY`/`DELIVER` deferrals change now that authoritative
+  payload no longer depends on active-pending membership,
+- if the soak tail persists, inspect the remaining late READY-quorum closure
+  path with the new authority semantics in mind rather than revisiting payload
+  hydration/rebroadcast,
+- keep the full unchanged 2000-block permissioned/NPoS soaks as the acceptance
+  gate only after the next sampled rerun looks materially different.
+
+Latest sync (2026-03-20 sampled permissioned + NPoS critique reruns):
+reran both stable envelopes again on the warmed release binaries and stopped
+each run immediately after the first soak-gate breach so the comparison reflects
+fresh data on this tree:
+
+- permissioned sampled rerun reached `strict_min_height=499`; first late window
+  was `height 444 -> interval_ms=10003`; preserved logs live at
+  `/tmp/izanami_permissioned_full_soak_20260320T011121.log` and
+  `/tmp/iroha-soak-permissioned-20260320T011121/irohad_test_network_mMNefV`,
+- NPoS sampled rerun reached `strict_min_height=425`; first late window was
+  `height 336 -> interval_ms=5001`; preserved logs live at
+  `/tmp/izanami_npos_full_soak_20260320T012514.log` and
+  `/tmp/iroha-soak-npos-20260320T012514/irohad_test_network_vvnlJq`,
+- permissioned still outperformed NPoS in the same envelope, but both runs are
+  still non-accepting because the configured soak gate rejects any
+  `interval_ms >= 5000`,
+- peer-log counts stayed directionally the same as the prior sampled reruns:
+  permissioned
+  `commit quorum missing past timeout; rescheduling block for reassembly=19`,
+  `deferring RBC DELIVER: READY quorum not yet satisfied=5242`,
+  `queued RBC INIT and chunk rebroadcast while awaiting READY quorum=0`;
+  NPoS
+  `commit quorum missing past timeout; rescheduling block for reassembly=12`,
+  `deferring RBC DELIVER: READY quorum not yet satisfied=4393`,
+  `queued RBC INIT and chunk rebroadcast while awaiting READY quorum=0`,
+- fresh NPoS top-level log again contained zero
+  `plan submission failed` / `Trigger with id \`repeat_trigger_*\` not found`
+  lines, so the trigger-state reconciliation still looks good in this envelope.
+
+Open work after this sync:
+- continue treating the remaining issue as a late READY/DELIVER completion bug:
+  the old `RbcInit`/chunk churn remains gone, but READY quorum still fails to
+  close at high heights in both modes,
+- inspect the commit-quorum reschedule path together with the late
+  `deferring RBC DELIVER: READY quorum not yet satisfied` bursts around
+  permissioned `~444-499` and NPoS `~336-429`,
+- keep using sampled soak reruns for fast critique while iterating, but reserve
+  the full 2000-block unchanged-envelope runs for the next candidate that looks
+  materially different in these sampled logs.
+
+Latest sync (2026-03-20 monotone RBC-stage + trigger-state reconciliation soak replay):
+the planned internal-only fixes are now in place, but the stable-soak
+acceptance gate is still red even though the old hydration churn has been
+reduced materially:
+
+- `crates/iroha_core/src/sumeragi/main_loop.rs` and
+  `crates/iroha_core/src/sumeragi/main_loop/rbc.rs` now keep RBC sessions on an
+  explicit monotone `RbcProgressStage`
+  (`CollectingChunks -> AuthoritativePayload -> LocalReadySent ->
+  ReadyQuorumMet -> Delivered`), allow known near-tip authoritative sessions to
+  emit local `READY` without the old chunk/bootstrap dependency, and suppress
+  `RbcInit`/chunk rebuild traffic after payload authority exists,
+- `crates/izanami/src/instructions.rs` now uses explicit
+  `RepeatableTriggerState` (`Unknown`, `Known { repetitions }`, `Missing`)
+  instead of optimistic local trigger vectors/counts, and
+  `crates/izanami/src/chaos.rs` now pins trigger precheck + submit + reconcile
+  to one ingress endpoint and resyncs the exact on-chain repetition count after
+  submit,
+- targeted validation passed:
+  `cargo fmt --all`,
+  the four new/updated RBC regressions,
+  `cargo test -p izanami`,
+  `cargo test -p iroha_core --lib round_gap_snapshot_records_markers_in_order -- --nocapture`,
+  `cargo test -p iroha_core --lib commit_outcome_kickstarts_next_proposal_and_records_round_gap -- --nocapture`,
+  and
+  `cargo build --release -p irohad --bin iroha3d -p izanami`,
+- broad `cargo test -p iroha_core --lib` still aborts on unrelated queue/state
+  failures + `state::permission_cache_tests::permission_cache_rebuilds_after_restart`
+  stack overflow, so it remains outside this slice’s acceptance signal,
+- permissioned sampled rerun (stopped immediately after the first acceptance
+  breach) reached `strict_min_height=521`; first slow windows were
+  `height 410 -> interval_ms=5001`, `height 411 -> 10003`,
+  `height 412 -> 10003`; preserved peer logs under
+  `/tmp/iroha-soak-permissioned-20260320T003845/irohad_test_network_36F0rH`
+  still show
+  `commit quorum missing past timeout; rescheduling block for reassembly=23`
+  and
+  `deferring RBC DELIVER: READY quorum not yet satisfied=5459`,
+  but
+  `queued RBC INIT and chunk rebroadcast while awaiting READY quorum=0`,
+- NPoS sampled rerun (also stopped immediately after the first acceptance
+  breach) reached `strict_min_height=452`; first slow windows were
+  `height 286 -> interval_ms=10002`, `height 288 -> 5002`,
+  `height 289 -> 10002`; preserved peer logs under
+  `/tmp/iroha-soak-npos-20260320T005348/irohad_test_network_3FLWW1`
+  still show
+  `commit quorum missing past timeout; rescheduling block for reassembly=18`
+  and
+  `deferring RBC DELIVER: READY quorum not yet satisfied=4716`,
+  but
+  `queued RBC INIT and chunk rebroadcast while awaiting READY quorum=0`,
+- the sampled NPoS rerun produced zero
+  `Trigger with id \`repeat_trigger_*\` not found` failures, so the trigger
+  tracking/ingress-pinning work appears to have removed that workload-side
+  contamination from this envelope.
+
+Open work after this sync:
+- treat the remaining tail as a high-height `READY`/`DELIVER` completion problem
+  rather than a hydration/rebroadcast problem: the logs still show thousands of
+  `deferring RBC DELIVER: READY quorum not yet satisfied` lines after the
+  monotone-stage cut, but the old `RbcInit`/chunk churn is now gone,
+- inspect why authoritatively hydrated sessions still miss late `READY` quorum
+  at heights like `410-412` (permissioned) and `286-289` (NPoS) even when
+  payload recovery stays suppressed,
+- keep the Izanami trigger-state changes in place unless a later long soak
+  disproves them; the sampled NPoS rerun no longer loses
+  `repeat_trigger_*` on-chain,
+- rerun the full unchanged permissioned and NPoS 2000-block stable soaks after
+  the next consensus-side cut and keep the same preserved-peer workflow so the
+  before/after comparison remains apples-to-apples.
+
+Latest sync (2026-03-19 fresh permissioned + NPoS stable soak replay):
+the new shared-host stable soaks on the current release build still tail in
+both modes, and the fresh logs show the old RBC `READY`-quorum loop is still
+live:
+
+- permissioned sample on `/tmp/izanami_permissioned_soak_20260319T185928Z.log`
+  reached `strict_min_height=429` in `700.2s` (`2205.8 blocks/hour`
+  projected), but still hit `height 420 -> 10003ms` and
+  `height 422 -> 5002ms`,
+- NPoS sample on `/tmp/izanami_npos_soak_20260319T191521Z.log` reached
+  `strict_min_height=522` in `970.2s` (`1936.9 blocks/hour` projected), but
+  still hit `height 379 -> 10003ms`, `height 405 -> 5001ms`, and
+  `height 514 -> 5002ms`,
+- preserved peer dirs
+  (`/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_1OvLdX`
+  and
+  `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_XJVUGf`)
+  still show thousands of `deferring RBC DELIVER: READY quorum not yet
+  satisfied` and `queued RBC INIT and chunk rebroadcast while awaiting READY
+  quorum` warnings in both modes, alongside smaller but real
+  `commit quorum missing past timeout; rescheduling block for reassembly`
+  counts,
+- `dropping block sync update missing commit-role quorum` stayed `0` in both
+  runs,
+- NPoS is still not a clean signal because the workload layer lost
+  `repeat_trigger_0` twice (`plan submission failed` / `Trigger with id
+  \`repeat_trigger_0\` not found`).
+
+Open work after this sync:
+- target the remaining RBC `READY` bootstrap/backpressure loop directly; do not
+  treat the soak tail as a commit-quorum-only problem yet,
+- isolate and fix the `izanami` trigger lifecycle bug so NPoS stable-soak
+  results are trustworthy again,
+- rerun the permissioned and NPoS stable soaks after the next narrow RBC fix
+  with the same preserved-peer workflow so the next comparison stays
+  apples-to-apples.
+
+Latest sync (2026-03-19 Sumeragi known-block commit-evidence state-machine simplification):
+`crates/iroha_core/src/sumeragi/main_loop/{pending_block.rs,commit.rs,votes.rs,reschedule.rs,validation.rs,proposal_handlers.rs,propose.rs}`,
+`crates/iroha_core/src/sumeragi/main_loop.rs`,
+`crates/kotodama_lang/src/samples/asset_ops.ko`,
+and
+`crates/izanami/src/chaos.rs`
+now keep late known-block recovery on a simpler, better-defined path:
+
+- tracked pending blocks now advance through an explicit monotone commit stage
+  (`AwaitingLocalVote -> LocalVoteEmitted -> CommitQcObserved`) instead of
+  scattered `precommit_vote_sent` / `commit_qc_seen` booleans,
+- known-block recovery/reschedule no longer rebuilds `BlockSyncUpdate`; it
+  replays only `QcVote` / cached `Qc` evidence for already-known blocks,
+- local commit-vote emission is reevaluated directly on validation success and
+  inbound commit-vote acceptance events,
+- the stale `block_sync_update_for_precommit_vote` sender helper is gone,
+- the baseline `izanami` package blockers are also cleared again (`asset_ops`
+  canonical `aid:` literal and healthy-quorum strict-divergence anchor).
+
+Targeted validation passed:
+- `cargo fmt --all`
+- `cargo test -p iroha_core --lib pending_commit_stage_is_monotone -- --nocapture`
+- `cargo test -p iroha_core --lib commit_evidence_replay -- --nocapture`
+- `cargo test -p iroha_core --lib quorum_reschedule_rebroadcasts_votes_without_block_created_without_roster -- --nocapture`
+- `cargo test -p iroha_core --lib quorum_reschedule_skips_block_created_fallback_when_roster_proof_missing -- --nocapture`
+- `cargo test -p iroha_core --lib quorum_reschedule_near_quorum -- --nocapture`
+- `cargo test -p iroha_core --lib known_block_commit_qc_replay_targets_snapshot_roster -- --nocapture`
+- `cargo test -p iroha_core --lib proposal_backpressure_ignores_committed_tip_rbc_cleanup_backlog -- --nocapture`
+- `cargo test -p iroha_core --lib commit_pipeline_snapshot_tracks_last_and_ema_fields -- --nocapture`
+- `cargo test -p iroha_core --lib round_gap_snapshot_records_markers_in_order -- --nocapture`
+- `cargo test -p iroha_core --lib commit_outcome_kickstarts_next_proposal_and_records_round_gap -- --nocapture`
+- `cargo test -p izanami`
+- `cargo build --release -p irohad --bin iroha3d -p izanami`
+
+Open work after this sync:
+- rerun the warmed healthy probe and the longer permissioned/NPoS soaks on this
+  exact build to verify whether the remaining late tail is now purely
+  commit-quorum completion / reassembly rather than known-block hydration,
+- decide whether the next simplification should remove one of the remaining
+  warning-only dead-code surfaces in `iroha_core`
+  (`VoteProcessingContext.consensus_mode`,
+  `RoundRecoveryBundleSource::RosterProofFallback`,
+  test-only `local_precommit_vote_for`) or leave that cleanup for a later
+  warning-hygiene pass,
+- keep the broader workspace execution sweep (`cargo test --workspace`) as a
+  separate validation-budget item rather than folding it into this narrow cut.
 
 Latest sync (2026-03-24 TAIRA faucet/testus profile enablement):
 the TAIRA-only faucet path is implemented across Torii config/routing and the
@@ -218,6 +2234,48 @@ Open work for this slice now remains:
 - rerun the focused CUDA lib-test self-test slice on a host with the CUDA
   driver libraries available, since this environment still cannot execute the
   `cust`-backed runtime self-tests end to end; and
+- continue the deeper `ivm` accelerator review across the remaining
+  CUDA/Metal/determinism boundaries once the live startup truth sets are fully
+  stable.
+
+Latest sync (2026-03-24 Metal per-pipeline fail-closed fallback):
+`crates/ivm/src/{vector.rs,metal_ed25519.metal}` and
+`crates/ivm/cuda/signature.cu`
+now keep this host's Metal backend live even though the sampled Ed25519
+signature kernel still fails its startup parity check:
+
+- required Metal startup probes still fail closed, but the Ed25519 signature
+  pipeline is now treated as an optional sub-pipeline that can be disabled
+  individually instead of forcing the whole backend offline;
+- production Ed25519 batch verification already falls back to CPU when the
+  Metal signature pipeline is absent, so SHA/AES/Keccak/Merkle-leaf Metal
+  acceleration now remains active on this machine despite the sampled
+  Ed25519 mismatch; and
+- the focused Metal regressions now validate that behavior directly, so
+  `metal_sha256_leaves_matches_cpu` no longer relies on the earlier
+  "backend disabled" skip path.
+- follow-up arithmetic cleanup already landed in both accelerator ports:
+  ref10 `d2`, exact `fe_sq2`, and the trailing `fe_mul` carry bug are fixed,
+  so the remaining mismatch is narrower than the earlier full-port drift.
+
+Validation:
+- `cargo fmt --all`
+- `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_ed25519_batch_matches_cpu -- --nocapture`
+- `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_sha256_leaves_matches_cpu -- --nocapture`
+- `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo check -p ivm --features metal --tests`
+
+Open work for this slice now remains:
+- fix the raw Metal/CUDA Ed25519 point-decompression/signature-kernel mismatch
+  so sampled signature verification can run on the accelerator instead of the
+  current fail-closed CPU fallback.
+  The latest Metal trace shows `u` and `v` already match ref10 for the
+  Ed25519 base point, and the first divergence appears while constructing
+  `uv^7` before `fe_pow22523`, so the next pass should stay focused on the
+  field square/multiply chain rather than backend discovery or pipeline
+  plumbing;
+- rerun the focused CUDA lib-test self-test slice on a host with the CUDA
+  driver libraries available, since this environment still cannot link the
+  `cust`-backed tests; and
 - continue the deeper `ivm` accelerator review across the remaining
   CUDA/Metal/determinism boundaries once the live startup truth sets are fully
   stable.

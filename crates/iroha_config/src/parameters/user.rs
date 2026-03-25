@@ -11199,24 +11199,24 @@ pub struct NexusFees {
         default = "defaults::nexus::fees::FEE_SINK_ACCOUNT_ID.to_string()"
     )]
     pub fee_sink_account_id: String,
-    /// Base fee charged per transaction (asset base units).
-    #[config(default = "defaults::nexus::fees::BASE_FEE")]
-    pub base_fee: u64,
-    /// Per-byte fee charged over the signed transaction payload (asset base units).
-    #[config(default = "defaults::nexus::fees::PER_BYTE_FEE")]
-    pub per_byte_fee: u64,
-    /// Per-instruction fee charged for native ISI batches (asset base units).
-    #[config(default = "defaults::nexus::fees::PER_INSTRUCTION_FEE")]
-    pub per_instruction_fee: u64,
-    /// Per-gas-unit fee multiplier applied to measured gas usage (asset base units).
-    #[config(default = "defaults::nexus::fees::PER_GAS_UNIT_FEE")]
-    pub per_gas_unit_fee: u64,
+    /// Base fee charged per transaction.
+    #[config(default = "defaults::nexus::fees::base_fee()")]
+    pub base_fee: Numeric,
+    /// Per-byte fee charged over the signed transaction payload.
+    #[config(default = "defaults::nexus::fees::per_byte_fee()")]
+    pub per_byte_fee: Numeric,
+    /// Per-instruction fee charged for native ISI batches.
+    #[config(default = "defaults::nexus::fees::per_instruction_fee()")]
+    pub per_instruction_fee: Numeric,
+    /// Per-gas-unit fee multiplier applied to measured gas usage.
+    #[config(default = "defaults::nexus::fees::per_gas_unit_fee()")]
+    pub per_gas_unit_fee: Numeric,
     /// Whether fee sponsorship is permitted.
     #[config(default = "defaults::nexus::fees::SPONSORSHIP_ENABLED")]
     pub sponsorship_enabled: bool,
-    /// Maximum fee a sponsor can cover per transaction (asset base units, 0 = unlimited).
-    #[config(default = "defaults::nexus::fees::SPONSOR_MAX_FEE")]
-    pub sponsor_max_fee: u64,
+    /// Maximum fee a sponsor can cover per transaction (0 = unlimited).
+    #[config(default = "defaults::nexus::fees::sponsor_max_fee()")]
+    pub sponsor_max_fee: Numeric,
 }
 
 /// User-level configuration container for shared Hugging Face lease policy.
@@ -11395,12 +11395,12 @@ impl Default for NexusFees {
         Self {
             fee_asset_id: defaults::nexus::fees::fee_asset_id(),
             fee_sink_account_id: defaults::nexus::fees::FEE_SINK_ACCOUNT_ID.to_string(),
-            base_fee: defaults::nexus::fees::BASE_FEE,
-            per_byte_fee: defaults::nexus::fees::PER_BYTE_FEE,
-            per_instruction_fee: defaults::nexus::fees::PER_INSTRUCTION_FEE,
-            per_gas_unit_fee: defaults::nexus::fees::PER_GAS_UNIT_FEE,
+            base_fee: defaults::nexus::fees::base_fee(),
+            per_byte_fee: defaults::nexus::fees::per_byte_fee(),
+            per_instruction_fee: defaults::nexus::fees::per_instruction_fee(),
+            per_gas_unit_fee: defaults::nexus::fees::per_gas_unit_fee(),
             sponsorship_enabled: defaults::nexus::fees::SPONSORSHIP_ENABLED,
-            sponsor_max_fee: defaults::nexus::fees::SPONSOR_MAX_FEE,
+            sponsor_max_fee: defaults::nexus::fees::sponsor_max_fee(),
         }
     }
 }

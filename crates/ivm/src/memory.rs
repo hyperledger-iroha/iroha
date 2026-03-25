@@ -83,9 +83,14 @@ static STACK_BUDGET_LIMIT: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new
 impl Memory {
     /// Define static addresses for memory regions
     pub const HEAP_START: u64 = 0x0010_0000;
-    pub const HEAP_SIZE: u64 = 0x0001_0000; // 64 KB heap
     /// Maximum heap size allowed (from HEAP_START up to INPUT_START).
     pub const HEAP_MAX_SIZE: u64 = Self::INPUT_START - Self::HEAP_START;
+    /// Default heap limit exposed to guest programs.
+    ///
+    /// Kotodama contracts currently do not auto-grow the heap, so starting at
+    /// the full pre-input window avoids spurious `OutOfMemory` traps for
+    /// larger but still bounded contracts such as SoraSwap DLMM.
+    pub const HEAP_SIZE: u64 = Self::HEAP_MAX_SIZE;
 
     pub const INPUT_START: u64 = 0x0020_0000;
     pub const INPUT_SIZE: u64 = 0x0001_0000; // 64 KB input
@@ -393,6 +398,15 @@ impl Memory {
     /// Current heap limit in bytes.
     pub fn heap_limit(&self) -> u64 {
         self.heap_limit
+    }
+
+    /// Override the active heap limit, keeping the already-allocated region valid.
+    pub fn set_heap_limit(&mut self, limit: u64) -> Result<(), VMError> {
+        if limit < self.heap_alloc || limit > Memory::HEAP_MAX_SIZE {
+            return Err(VMError::OutOfMemory);
+        }
+        self.heap_limit = limit;
+        Ok(())
     }
 
     /// Update the code region length after loading a program.

@@ -3068,7 +3068,7 @@ test("getDaManifest fetches manifest bundle", async () => {
     `${BASE_URL}/v1/da/manifests/${ticketHex.slice(2).toLowerCase()}?block_hash=${blockHashHex.toLowerCase()}`,
   );
   assert.equal(
-    captured?.init?.headers?.get("accept"),
+    captured?.init?.headers?.Accept,
     "application/json",
   );
   assert.equal(result.storage_ticket_hex, ticketHex.slice(2).toLowerCase());
@@ -3868,10 +3868,10 @@ nativeTest("submitDaBlob builds ingest payload and normalizes response", async (
   assert.equal(captured?.url, `${BASE_URL}/v1/da/ingest`);
   assert.equal(captured?.init?.method, "POST");
   assert.equal(
-    captured?.init?.headers?.get("content-type"),
+    captured?.init?.headers?.["Content-Type"],
     "application/json",
   );
-  assert.equal(captured?.init?.headers?.get("accept"), "application/json");
+  assert.equal(captured?.init?.headers?.Accept, "application/json");
   const submitted = JSON.parse(captured?.init?.body ?? "{}");
   assert.equal(submitted.blob_class.class, "TaikaiSegment");
   assert.equal(submitted.codec[0], "nexus_lane_sidecar");
@@ -6494,6 +6494,36 @@ test("waitForTransactionStatusTyped normalises payload", async () => {
   const typed = await client.waitForTransactionStatusTyped(txHash, { intervalMs: 0 });
   assert.equal(typed?.hashHex, txHash);
   assert.equal(typed?.status?.kind, "Committed");
+});
+
+test("getTransactionStatus uses a fresh header bag on each retry", async () => {
+  const observedHeaders = [];
+  let attempts = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (_url, init) => {
+      attempts += 1;
+      observedHeaders.push(init.headers);
+      assert.equal(init.headers.Accept, "application/json");
+      assert.deepEqual(
+        Object.keys(init.headers).sort(),
+        ["Accept"],
+      );
+      assert.deepEqual(
+        Object.getOwnPropertyNames(init.headers).sort(),
+        ["Accept"],
+      );
+      if (attempts < 3) {
+        throw new TypeError("fetch failed");
+      }
+      return createResponse({ status: 404 });
+    },
+  });
+
+  const result = await client.getTransactionStatus("aa".repeat(32));
+  assert.equal(result, null);
+  assert.equal(observedHeaders.length, 3);
+  assert.notEqual(observedHeaders[0], observedHeaders[1]);
+  assert.notEqual(observedHeaders[1], observedHeaders[2]);
 });
 
 test("waitForTransactionStatus rejects on failure status", async () => {

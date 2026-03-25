@@ -7098,6 +7098,8 @@ pub struct Metrics {
     pub confidential_gas_total: IntCounter,
     /// Total fee units charged in the latest validated block
     pub block_fee_total_units: GenericGauge<AtomicU64>,
+    /// Scale associated with `block_fee_total_units`
+    pub block_fee_total_scale: GenericGauge<AtomicU64>,
     /// Merge ledger: total entries appended (cumulative)
     pub merge_ledger_entries_total: IntCounter,
     /// Merge ledger: latest committed epoch id
@@ -13239,6 +13241,11 @@ impl Default for Metrics {
             "Total fee units charged in the latest validated block",
         )
         .expect("Infallible");
+        let block_fee_total_scale = GenericGauge::new(
+            "block_fee_total_scale",
+            "Scale for block_fee_total_units so the exact latest-block fee amount can be reconstructed",
+        )
+        .expect("Infallible");
 
         // Network Time Service (basic gauges)
         let nts_offset_ms = IntGauge::new(
@@ -13841,6 +13848,7 @@ impl Default for Metrics {
         );
         register!(registry, confidential_gas_total);
         register!(registry, block_fee_total_units);
+        register!(registry, block_fee_total_scale);
         register!(
             registry,
             torii_filter_depth,
@@ -14436,6 +14444,7 @@ impl Default for Metrics {
             confidential_gas_block_used,
             confidential_gas_total,
             block_fee_total_units,
+            block_fee_total_scale,
             torii_filter_depth,
             torii_filter_match_count,
             torii_scan_ms,

@@ -103,6 +103,32 @@
               }
             }
           }
+        },
+        {
+          "Register": {
+            "Domain": {
+              "id": "universal",
+              "logo": null,
+              "metadata": {
+                
+              }
+            }
+          }
+        },
+        {
+          "Register": {
+            "AssetDefinition": {
+              "id": "xor#universal",
+              "logo": null,
+              "metadata": {
+                
+              },
+              "mintable": "Infinitely",
+              "spec": {
+                "scale": null
+              }
+            }
+          }
         }
       ],
       "ivm_triggers": [

@@ -106,7 +106,7 @@ thiserror = { workspace = true }
 displaydoc = { workspace = true }
 futures = { workspace = true, features = ["std", "async-await"] }
 axum = { workspace = true, features = ["ws", "query", "json", "tokio", "http1", "macros"] }
-tower-http = { version = "0.6.6", features = ["trace", "timeout"] }
+tower-http = { version = "0.6.6", features = ["cors", "trace", "timeout"] }
 tower = "0.5.2"
 tokio = { workspace = true, features = ["sync", "time", "macros"] }
 tokio-stream = { workspace = true }

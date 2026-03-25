@@ -6659,13 +6659,22 @@ pub async fn handle_post_contract_instance_activate(
     let mut arr = [0u8; 32];
     arr.copy_from_slice(&bytes);
     let code_hash = iroha_crypto::Hash::prehashed(arr);
+    let authority: dm::AccountId = req.authority.into();
     let isi = ActivateContractInstance {
         namespace: req.namespace,
         contract_id: req.contract_id,
         code_hash,
     };
-    let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.into())
-        .with_instructions(core::iter::once(Box::new(isi).into_instruction_box()))
+    let tx = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone())
+        .with_instructions(
+            [
+                dm::InstructionBox::from(dm::Register::account(dm::Account::new_domainless(
+                    authority.clone(),
+                ))),
+                Box::new(isi).into_instruction_box(),
+            ]
+            .into_iter(),
+        )
         .sign(&req.private_key.0);
     handle_transaction_with_metrics(
         chain_id,
@@ -6708,11 +6717,15 @@ pub async fn handle_post_contract_instance(
         contract_id,
         code_b64,
     } = req;
+    let authority: dm::AccountId = authority.into();
 
     let signer = KeyPair::from(private_key.0.clone());
     let prepared = prepare_contract_deployment(&code_b64, &signer)?;
 
     let instructions = [
+        dm::InstructionBox::from(dm::Register::account(dm::Account::new_domainless(
+            authority.clone(),
+        ))),
         dm::InstructionBox::from(smart_contract_code::RegisterSmartContractCode {
             manifest: prepared.manifest.clone(),
         }),
@@ -6727,7 +6740,7 @@ pub async fn handle_post_contract_instance(
         }),
     ];
 
-    let tx = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone().into())
+    let tx = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone())
         .with_instructions(instructions.into_iter())
         .sign(&private_key.0);
 
@@ -6844,6 +6857,7 @@ pub async fn handle_post_contract_call(
                 abi_hash_hex,
                 creation_time_ms,
                 tx_hash_hex: Some(tx_hash_hex),
+                transaction_scaffold_b64: None,
                 signed_transaction_b64: None,
                 signing_message_b64: None,
                 entrypoint: response_entrypoint.clone(),
@@ -6911,6 +6925,7 @@ pub async fn handle_post_contract_call(
                 abi_hash_hex,
                 creation_time_ms,
                 tx_hash_hex: Some(tx_hash_hex),
+                transaction_scaffold_b64: None,
                 signed_transaction_b64: None,
                 signing_message_b64: None,
                 entrypoint: response_entrypoint.clone(),
@@ -6934,6 +6949,7 @@ pub async fn handle_post_contract_call(
                 abi_hash_hex,
                 creation_time_ms,
                 tx_hash_hex: None,
+                transaction_scaffold_b64: Some(signed_transaction_b64.clone()),
                 signed_transaction_b64: Some(signed_transaction_b64),
                 signing_message_b64: Some(signing_message_b64),
                 entrypoint: response_entrypoint,
@@ -11923,6 +11939,9 @@ pub struct ContractCallResponseDto {
     /// Hex-encoded transaction hash submitted to the queue.
     #[norito(default)]
     pub tx_hash_hex: Option<String>,
+    /// Base64-encoded transaction scaffold for wallet `SIGN_REQUEST_TX` flows.
+    #[norito(default)]
+    pub transaction_scaffold_b64: Option<String>,
     /// Base64-encoded transaction scaffold for client-side re-signing and submission.
     #[norito(default)]
     pub signed_transaction_b64: Option<String>,
@@ -13475,6 +13494,7 @@ pub async fn handle_post_contract_deploy(
     use iroha_data_model::{isi::smart_contract_code, prelude as dm};
     let signer = KeyPair::from(req.private_key.0.clone());
     let prepared = prepare_contract_deployment(&req.code_b64, &signer)?;
+    let authority: dm::AccountId = req.authority.clone().into();
 
     // Construct transaction: RegisterSmartContractCode + RegisterSmartContractBytes (store manifest + code)
     let isi_code = smart_contract_code::RegisterSmartContractCode {
@@ -13484,9 +13504,12 @@ pub async fn handle_post_contract_deploy(
         code_hash: prepared.code_hash,
         code: prepared.code_bytes.clone(),
     };
-    let tx = dm::TransactionBuilder::new((*chain_id).clone(), req.authority.clone().into())
+    let tx = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone())
         .with_instructions(
             [
+                dm::InstructionBox::from(dm::Register::account(dm::Account::new_domainless(
+                    authority.clone(),
+                ))),
                 dm::InstructionBox::from(isi_code),
                 dm::InstructionBox::from(isi_bytes),
             ]

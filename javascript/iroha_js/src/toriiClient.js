@@ -8048,6 +8048,9 @@ export class ToriiClient {
       try {
         const response = await this._fetch(url.toString(), {
           ...init,
+          // Give fetch a fresh header bag for each retry attempt. Reusing the
+          // same object across retries can break native fetch implementations.
+          headers: cloneHeadersForFetch(initHeaders),
           signal: signal ?? undefined,
         });
         if (timeoutId) {
@@ -15306,6 +15309,16 @@ function deleteHeader(headers, name) {
 
 function hasHeader(headers, name) {
   return findHeaderKey(headers, name) !== null;
+}
+
+function cloneHeadersForFetch(headers) {
+  const clone = {};
+  if (headers && typeof headers === "object") {
+    for (const [key, value] of Object.entries(headers)) {
+      clone[key] = value;
+    }
+  }
+  return clone;
 }
 
 function headersContainCredentials(headers) {

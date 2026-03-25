@@ -48,8 +48,9 @@ pub struct ContractCodeRecord {
 
 /// Register a smart contract manifest on-chain via the canonical ISI.
 ///
-/// The caller must hold `CanRegisterSmartContractCode`. The manifest must
-/// include `code_hash`; other fields are optional.
+/// Manifest registration is public. Networks can still protect specific
+/// namespaces at activation time via `gov_protected_namespaces`. The manifest
+/// must include `code_hash`; other fields are optional.
 ///
 /// # Errors
 ///
@@ -70,8 +71,9 @@ pub fn register_manifest(
 /// Register compiled contract bytecode on-chain and return its `code_hash`.
 ///
 /// The helper computes the canonical hash (bytes after the IVM header) and
-/// submits the [`RegisterSmartContractBytes`] instruction. Callers must hold
-/// `CanRegisterSmartContractCode`.
+/// submits the [`RegisterSmartContractBytes`] instruction. Bytecode
+/// registration is public; namespace protection applies when instances are
+/// activated.
 ///
 /// # Errors
 ///
@@ -252,21 +254,7 @@ mod tests {
         let mut block = state.block(default_header(1));
         let mut stx = block.transaction();
 
-        // Grant permissions required to register artifacts and activate an instance.
-        let token =
-            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
-        let perm: permission::Permission = token.into();
-        Grant::account_permission(perm, authority.clone())
-            .execute(&authority, &mut stx)
-            .expect("grant CanRegisterSmartContractCode");
-
-        let token = iroha_executor_data_model::permission::governance::CanEnactGovernance;
-        let perm: permission::Permission = token.into();
-        Grant::account_permission(perm, authority.clone())
-            .execute(&authority, &mut stx)
-            .expect("grant CanEnactGovernance");
-
-        // Register bytecode and manifest, then activate a namespace binding.
+        // Register bytecode and manifest, then activate a public namespace binding.
         let code = minimal_ivm_program(1);
         let code_hash =
             register_code_bytes(&authority, code.clone(), &mut stx).expect("register bytecode");
@@ -312,13 +300,7 @@ mod tests {
         let mut block = state.block(default_header(1));
         let mut stx = block.transaction();
 
-        // Grant permissions required to register artifacts, set parameters, and activate.
-        let reg: permission::Permission =
-            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
-                .into();
-        Grant::account_permission(reg, authority.clone())
-            .execute(&authority, &mut stx)
-            .expect("grant CanRegisterSmartContractCode");
+        // Grant only the governance/parameter permissions needed to protect a namespace.
         let enact: permission::Permission =
             iroha_executor_data_model::permission::governance::CanEnactGovernance.into();
         Grant::account_permission(enact, authority.clone())
@@ -382,14 +364,6 @@ mod tests {
         let (state, authority, _kp) = test_state();
         let mut block = state.block(default_header(1));
         let mut stx = block.transaction();
-
-        // Grant permission.
-        let token =
-            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
-        let perm: permission::Permission = token.into();
-        Grant::account_permission(perm, authority.clone())
-            .execute(&authority, &mut stx)
-            .expect("grant permission");
 
         // Set very small cap via custom parameter to ensure registration fails.
         let id = CustomParameterId("max_contract_code_bytes".parse().unwrap());

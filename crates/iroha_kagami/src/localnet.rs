@@ -22,9 +22,7 @@ use iroha_data_model::{
     peer::PeerId,
     prelude::*,
 };
-use iroha_executor_data_model::permission::{
-    governance::CanEnactGovernance, smart_contract::CanRegisterSmartContractCode,
-};
+use iroha_executor_data_model::permission::governance::CanEnactGovernance;
 use iroha_genesis::{
     GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction, init_instruction_registry,
 };
@@ -407,6 +405,7 @@ const LOCALNET_BLOCK_MAX_TRANSACTIONS: u64 = 10_000;
 const LOCALNET_STAKE_AMOUNT: u64 = 10_000;
 const LOCALNET_NEXUS_DOMAIN: &str = "nexus";
 const LOCALNET_IVM_DOMAIN: &str = "ivm";
+const LOCALNET_UNIVERSAL_DOMAIN: &str = "universal";
 const LOCALNET_STAKE_ASSET_NAME: &str = "xor";
 const LOCALNET_SAMPLE_ASSET_DOMAIN: &str = "wonderland";
 pub(crate) const LOCALNET_SAMPLE_ASSET_NAME: &str = "sample";
@@ -456,6 +455,14 @@ fn localnet_stake_asset_definition_id() -> AssetDefinitionId {
 
 fn localnet_stake_asset_literal() -> String {
     canonical_asset_definition_literal(LOCALNET_NEXUS_DOMAIN, LOCALNET_STAKE_ASSET_NAME)
+}
+
+fn localnet_fee_asset_definition_id() -> AssetDefinitionId {
+    canonical_asset_definition_id(LOCALNET_UNIVERSAL_DOMAIN, LOCALNET_STAKE_ASSET_NAME)
+}
+
+fn localnet_fee_asset_literal() -> String {
+    canonical_asset_definition_literal(LOCALNET_UNIVERSAL_DOMAIN, LOCALNET_STAKE_ASSET_NAME)
 }
 
 fn localnet_sample_asset_literal() -> String {
@@ -1322,6 +1329,7 @@ fn render_peer_config(
     if npos_bootstrap {
         let gas_account_id = gas_account_id.expect("localnet gas account id required");
         let stake_asset_id = localnet_stake_asset_literal();
+        let fee_asset_id = localnet_fee_asset_literal();
         let mut staking = Table::new();
         staking.insert(
             "stake_asset_id".into(),
@@ -1338,7 +1346,19 @@ fn render_peer_config(
         nexus.insert("staking".into(), Value::Table(staking));
 
         let mut fees = Table::new();
-        fees.insert("fee_asset_id".into(), Value::String(stake_asset_id));
+        fees.insert("fee_asset_id".into(), Value::String(fee_asset_id));
+        fees.insert("base_fee".into(), Value::String("0".to_owned()));
+        fees.insert("per_byte_fee".into(), Value::String("0".to_owned()));
+        fees.insert(
+            "per_instruction_fee".into(),
+            Value::String("0.001".to_owned()),
+        );
+        fees.insert(
+            "per_gas_unit_fee".into(),
+            Value::String("0.00005".to_owned()),
+        );
+        fees.insert("sponsorship_enabled".into(), Value::Boolean(false));
+        fees.insert("sponsor_max_fee".into(), Value::String("0".to_owned()));
         fees.insert(
             "fee_sink_account_id".into(),
             Value::String(gas_account_id.to_owned()),
@@ -1839,16 +1859,11 @@ fn append_peer_pop(genesis: RawGenesisTransaction, peers: &[Peer]) -> RawGenesis
 
 fn append_localnet_contract_permissions(genesis: RawGenesisTransaction) -> RawGenesisTransaction {
     let enact_governance: Permission = CanEnactGovernance.into();
-    let register_contract_code: Permission = CanRegisterSmartContractCode.into();
     genesis
         .into_builder()
         .next_transaction()
         .append_instruction(Grant::account_permission(
             enact_governance,
-            ALICE_ID.clone(),
-        ))
-        .append_instruction(Grant::account_permission(
-            register_contract_code,
             ALICE_ID.clone(),
         ))
         .build_raw()
@@ -1897,7 +1912,9 @@ fn append_localnet_npos_bootstrap(
 ) -> Result<RawGenesisTransaction> {
     let nexus_domain: DomainId = LOCALNET_NEXUS_DOMAIN.parse()?;
     let ivm_domain: DomainId = LOCALNET_IVM_DOMAIN.parse()?;
+    let universal_domain: DomainId = LOCALNET_UNIVERSAL_DOMAIN.parse()?;
     let stake_asset_id = localnet_stake_asset_definition_id();
+    let fee_asset_id = localnet_fee_asset_definition_id();
     let mut registrations = BootstrapRegistrations::from_manifest(&genesis);
 
     let mut builder = genesis.into_builder().next_transaction();
@@ -1908,6 +1925,11 @@ fn append_localnet_npos_bootstrap(
     if !registrations.domains.contains(&ivm_domain) {
         builder = builder.append_instruction(Register::domain(Domain::new(ivm_domain.clone())));
         registrations.domains.insert(ivm_domain.clone());
+    }
+    if !registrations.domains.contains(&universal_domain) {
+        builder =
+            builder.append_instruction(Register::domain(Domain::new(universal_domain.clone())));
+        registrations.domains.insert(universal_domain.clone());
     }
     if !registrations.accounts.contains(gas_account_id) {
         builder = builder.append_instruction(Register::account(Account::new(
@@ -1923,6 +1945,13 @@ fn append_localnet_npos_bootstrap(
         builder = builder.append_instruction(Register::asset_definition(definition));
         registrations.asset_defs.insert(stake_asset_id.clone());
     }
+    if !registrations.asset_defs.contains(&fee_asset_id) {
+        let definition = AssetDefinition::new(fee_asset_id.clone(), NumericSpec::default())
+            .with_name("Localnet Fee".to_owned())
+            .with_metadata(Metadata::default());
+        builder = builder.append_instruction(Register::asset_definition(definition));
+        registrations.asset_defs.insert(fee_asset_id.clone());
+    }
 
     for peer in peers {
         let validator_id = AccountId::new(peer.public_key.clone());
@@ -1935,6 +1964,16 @@ fn append_localnet_npos_bootstrap(
         builder = builder.append_instruction(Mint::asset_numeric(
             stake_amount,
             AssetId::new(stake_asset_id.clone(), validator_id.clone()),
+        ));
+        builder = builder.append_instruction(Mint::asset_numeric(
+            stake_amount,
+            AssetId::new(fee_asset_id.clone(), validator_id.clone()),
+        ));
+    }
+    if registrations.accounts.contains(&ALICE_ID) {
+        builder = builder.append_instruction(Mint::asset_numeric(
+            stake_amount,
+            AssetId::new(fee_asset_id, ALICE_ID.clone()),
         ));
     }
 
@@ -2126,7 +2165,7 @@ fn write_scripts(out_dir: &Path, peers: u16, build_line: BuildLine, sora_mode: b
     writeln!(start_file, "  mkdir -p \"$SNAPSHOT_STORE_DIR\"")?;
     writeln!(
         start_file,
-        "  SNAPSHOT_STORE_DIR=\"$SNAPSHOT_STORE_DIR\" RUST_LOG=${{RUST_LOG:-info}} \"$IROHAD_BIN\" {sora_flag}--config \"$DIR/peer${{i}}.toml\" > \"$DIR/peer${{i}}.log\" 2>&1 &"
+        "  nohup env SNAPSHOT_STORE_DIR=\"$SNAPSHOT_STORE_DIR\" RUST_LOG=${{RUST_LOG:-info}} \"$IROHAD_BIN\" {sora_flag}--config \"$DIR/peer${{i}}.toml\" > \"$DIR/peer${{i}}.log\" 2>&1 &"
     )?;
     writeln!(start_file, "  echo $! > \"$DIR/peer${{i}}.pid\"")?;
     writeln!(
@@ -4354,6 +4393,7 @@ mod tests {
             .and_then(toml::Value::as_table)
             .expect("nexus staking table");
         let expected_stake_asset_id = localnet_stake_asset_literal();
+        let expected_fee_asset_id = localnet_fee_asset_literal();
         assert_eq!(
             staking.get("stake_asset_id").and_then(toml::Value::as_str),
             Some(expected_stake_asset_id.as_str())
@@ -4376,7 +4416,20 @@ mod tests {
             .expect("nexus fees table");
         assert_eq!(
             fees.get("fee_asset_id").and_then(toml::Value::as_str),
-            Some(expected_stake_asset_id.as_str())
+            Some(expected_fee_asset_id.as_str())
+        );
+        assert_eq!(
+            fees.get("base_fee").and_then(toml::Value::as_str),
+            Some("0")
+        );
+        assert_eq!(
+            fees.get("per_instruction_fee")
+                .and_then(toml::Value::as_str),
+            Some("0.001")
+        );
+        assert_eq!(
+            fees.get("per_gas_unit_fee").and_then(toml::Value::as_str),
+            Some("0.00005")
         );
         assert_eq!(
             fees.get("fee_sink_account_id")
@@ -4629,6 +4682,10 @@ mod tests {
                 .lines()
                 .any(|line| line == "export IROHA_BUILD_LINE=\"iroha3\""),
             "start script should export build line"
+        );
+        assert!(
+            start_contents.contains("nohup env SNAPSHOT_STORE_DIR="),
+            "start script should launch peers under nohup so they survive wrapper exit"
         );
     }
 

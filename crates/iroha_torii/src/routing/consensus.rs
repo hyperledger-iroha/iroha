@@ -1774,7 +1774,8 @@ fn nexus_fee_snapshot_value(fee: &sumeragi::status::NexusFeeSnapshot) -> Value {
         json_entry(
             "last_amount",
             fee.last_amount
-                .map(|amount| Value::from(format!("{amount}")))
+                .as_ref()
+                .map(|amount| Value::from(amount.to_string()))
                 .unwrap_or(Value::Null),
         ),
         json_entry(
@@ -3528,7 +3529,7 @@ mod status_tests {
             sponsor_cap_exceeded_total: 1,
             config_errors_total: 1,
             transfer_failures_total: 1,
-            last_amount: Some(42),
+            last_amount: Some(Numeric::from(42_u32)),
             last_asset_id: Some("61CtjvNd9T3THAR65GsMVHr82Bjc".to_owned()),
             last_payer: Some(sumeragi::status::NexusFeePayer::Sponsor),
             last_payer_id: Some(

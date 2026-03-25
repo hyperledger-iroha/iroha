@@ -1,6 +1,7 @@
 //! CoreHost JSON encode/decode and schema encode/decode helpers.
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use iroha_data_model::prelude::AssetDefinitionId;
 use iroha_primitives::numeric::Numeric;
 use ivm::{CoreHost, IVM, PointerType, encoding, instruction::wide, syscalls};
 mod common;
@@ -88,6 +89,33 @@ fn json_decode_rejects_blob() {
     vm.load_program(&dec_prog).unwrap();
     let err = vm.run().unwrap_err();
     assert!(matches!(err, ivm::VMError::NoritoInvalid));
+}
+
+#[test]
+fn json_get_asset_definition_id_reads_address_literals() {
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(CoreHost::new());
+
+    let json = br#"{"asset_definition_id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM"}"#;
+    let p_json = vm.alloc_input_tlv(&tlv(PointerType::Json, json)).unwrap();
+    let p_key = vm
+        .alloc_input_tlv(&tlv(PointerType::Name, b"asset_definition_id"))
+        .unwrap();
+
+    let prog = common::assemble_syscalls(&[syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID as u8]);
+    vm.set_register(10, p_json);
+    vm.set_register(11, p_key);
+    vm.load_program(&prog).unwrap();
+    vm.run().unwrap();
+
+    let out_ptr = vm.register(10);
+    let tlv_out = vm.memory.validate_tlv(out_ptr).unwrap();
+    assert_eq!(tlv_out.type_id, PointerType::AssetDefinitionId);
+    let asset: AssetDefinitionId = norito::decode_from_bytes(tlv_out.payload).unwrap();
+    assert_eq!(
+        asset,
+        AssetDefinitionId::parse_address_literal("62Fk4FPcMuLvW5QjDGNF2a4jAmjM").unwrap()
+    );
 }
 
 #[test]

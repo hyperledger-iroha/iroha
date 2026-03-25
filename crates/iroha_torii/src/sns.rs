@@ -73,9 +73,15 @@ fn record_registrar_status<T>(
 }
 
 fn current_ledger_time_ms(app: &SharedAppState) -> u64 {
-    app.state.view().latest_block().map_or(0, |block| {
+    let latest_block_ms = app.state.view().latest_block().map_or(0, |block| {
         u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
-    })
+    });
+    let wall_clock_ms = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| u64::try_from(duration.as_millis()).ok())
+        .unwrap_or(latest_block_ms);
+    wall_clock_ms.max(latest_block_ms)
 }
 
 /// Handle `POST /v1/sns/names`.

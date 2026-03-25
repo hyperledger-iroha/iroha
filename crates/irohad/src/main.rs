@@ -14,6 +14,12 @@ mod genesis_bootstrap;
 /// Iroha server command-line interface and node bootstrap entrypoint.
 mod i18n;
 /// Embedded Soracloud runtime-manager reconciliation.
+#[cfg(feature = "embedded-soracloud-runtime")]
+#[path = "soracloud_runtime.rs"]
+mod soracloud_runtime;
+/// No-op Soracloud runtime used when the full embedded runtime is disabled.
+#[cfg(not(feature = "embedded-soracloud-runtime"))]
+#[path = "soracloud_runtime_stub.rs"]
 mod soracloud_runtime;
 
 use std::{
@@ -925,6 +931,7 @@ impl ConsensusIngressLimiter {
                 | BlockMessage::Qc(_)
                 | BlockMessage::VrfCommit(_)
                 | BlockMessage::VrfReveal(_)
+                | BlockMessage::FetchBlockBody(_)
                 | BlockMessage::FetchPendingBlock(_)
                 | BlockMessage::ProposalHint(_)
                 | BlockMessage::Proposal(_)
@@ -932,7 +939,9 @@ impl ConsensusIngressLimiter {
                 BlockMessage::RbcInit(_)
                 | BlockMessage::RbcReady(_)
                 | BlockMessage::RbcDeliver(_) => IngressPolicy::critical_with_rbc_sessions(),
-                BlockMessage::RbcChunk(_) | BlockMessage::RbcChunkCompact(_) => {
+                BlockMessage::RbcChunk(_)
+                | BlockMessage::RbcChunkCompact(_)
+                | BlockMessage::BlockBodyResponse(_) => {
                     IngressPolicy::bulk()
                 }
                 BlockMessage::ConsensusParams(_) => IngressPolicy::limited(),
@@ -1981,6 +1990,12 @@ impl NetworkRelayShared {
             ),
             RbcReady(ready) => ("RbcReady", Some(ready.height), Some(ready.view)),
             RbcDeliver(deliver) => ("RbcDeliver", Some(deliver.height), Some(deliver.view)),
+            FetchBlockBody(request) => ("FetchBlockBody", Some(request.height), Some(request.view)),
+            BlockBodyResponse(response) => (
+                "BlockBodyResponse",
+                Some(response.height),
+                Some(response.view),
+            ),
             FetchPendingBlock(_request) => ("FetchPendingBlock", None, None),
             ProposalHint(hint) => ("ProposalHint", Some(hint.height), Some(hint.view)),
             Proposal(proposal) => (
@@ -3542,11 +3557,14 @@ impl Iroha {
             Err(TryReadSnapshotError::NotFound) => {
                 iroha_logger::info!("Didn't find a state snapshot; creating an empty state");
                 let genesis_public_key = effective_genesis_public_key.clone();
-                let world = World::with(
+                let mut world = World::with(
                     [genesis_domain(genesis_public_key.clone())],
                     [genesis_account(genesis_public_key)],
                     [],
                 );
+                if let Some(genesis_block) = stored_genesis_block.as_ref().or(genesis.as_ref()) {
+                    iroha_core::sns::seed_genesis_alias_bootstrap(&mut world, &genesis_block.0);
+                }
                 State::new(
                     world,
                     Arc::clone(&kura),
@@ -3561,11 +3579,14 @@ impl Iroha {
                     "Failed to load state snapshot; rebuilding state by replaying Kura blocks"
                 );
                 let genesis_public_key = effective_genesis_public_key.clone();
-                let world = World::with(
+                let mut world = World::with(
                     [genesis_domain(genesis_public_key.clone())],
                     [genesis_account(genesis_public_key)],
                     [],
                 );
+                if let Some(genesis_block) = stored_genesis_block.as_ref().or(genesis.as_ref()) {
+                    iroha_core::sns::seed_genesis_alias_bootstrap(&mut world, &genesis_block.0);
+                }
                 State::new(
                     world,
                     Arc::clone(&kura),
@@ -5291,8 +5312,8 @@ fn genesis_account(public_key: PublicKey) -> Account {
 }
 
 fn genesis_domain(public_key: PublicKey) -> Domain {
-    let genesis_account = genesis_account(public_key);
-    Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_account.id)
+    let genesis_account_id = AccountId::new(public_key);
+    Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id)
 }
 
 #[cfg(test)]
@@ -5312,6 +5333,15 @@ mod genesis_key_tests {
         let derived =
             genesis_public_key_from_genesis_block(&genesis_block).expect("derive genesis pubkey");
         assert_eq!(&derived, keypair.public_key());
+    }
+
+    #[test]
+    fn genesis_domain_owner_matches_genesis_authority() {
+        let keypair = iroha_crypto::KeyPair::random();
+        let expected_owner = AccountId::new(keypair.public_key().clone());
+        let domain = genesis_domain(keypair.public_key().clone());
+
+        assert_eq!(domain.owned_by(), &expected_owner);
     }
 }
 

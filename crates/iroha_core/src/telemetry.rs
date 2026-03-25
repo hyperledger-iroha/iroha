@@ -119,6 +119,14 @@ const PHASE_COMMIT: &str = "commit";
 const PHASE_NEW_VIEW: &str = "new_view";
 const PIPELINE_BUCKET_LABELS: [&str; 8] = ["1", "2", "4", "8", "16", "32", "64", "128"];
 
+fn numeric_metric_parts(amount: &Numeric) -> (u64, u64) {
+    let units = amount
+        .try_mantissa_u128()
+        .map(|value| u64::try_from(value).unwrap_or(u64::MAX))
+        .unwrap_or(u64::MAX);
+    (units, u64::from(amount.scale()))
+}
+
 #[cfg(feature = "telemetry")]
 fn json_value<T: norito::json::JsonSerialize + ?Sized>(value: &T) -> norito::json::Value {
     match norito::json::to_value(value) {
@@ -4380,13 +4388,20 @@ impl StateTelemetry {
         }
     }
 
-    /// Add to the total fee units for the current (latest) block.
-    pub fn add_block_fee_units(&self, delta_units: u64) {
+    /// Add to the total fee amount for the current (latest) block.
+    pub fn add_block_fee_amount(&self, delta_amount: &Numeric) {
         if self.is_enabled() {
-            let cur = self.metrics.block_fee_total_units.get();
-            self.metrics
-                .block_fee_total_units
-                .set(cur.saturating_add(delta_units));
+            let current = Numeric::new(
+                self.metrics.block_fee_total_units.get(),
+                u32::try_from(self.metrics.block_fee_total_scale.get()).unwrap_or(u32::MAX),
+            );
+            let updated = current
+                .checked_add(delta_amount.clone())
+                .expect("block fee metric exceeds supported numeric bounds")
+                .trim_trailing_zeros();
+            let (units, scale) = numeric_metric_parts(&updated);
+            self.metrics.block_fee_total_units.set(units);
+            self.metrics.block_fee_total_scale.set(scale);
         }
     }
 
@@ -4394,6 +4409,7 @@ impl StateTelemetry {
     pub fn reset_block_fee_units(&self) {
         if self.is_enabled() {
             self.metrics.block_fee_total_units.set(0);
+            self.metrics.block_fee_total_scale.set(0);
         }
     }
 
@@ -10883,10 +10899,12 @@ mod tests {
     fn block_fee_units_reset_clears_gauge() {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
-        telemetry.add_block_fee_units(42);
+        telemetry.add_block_fee_amount(&Numeric::new(42, 3));
         assert_eq!(metrics.block_fee_total_units.get(), 42);
+        assert_eq!(metrics.block_fee_total_scale.get(), 3);
         telemetry.reset_block_fee_units();
         assert_eq!(metrics.block_fee_total_units.get(), 0);
+        assert_eq!(metrics.block_fee_total_scale.get(), 0);
     }
 
     #[test]

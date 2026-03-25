@@ -55,6 +55,25 @@ function resolveNativeBinding() {
   return globalThis.__IROHA_NATIVE_BINDING__ ?? getNativeBinding();
 }
 
+function encodeAssetIdFromDefinitionAndAccount(assetDefinitionId, accountId, context) {
+  const definition = String(assetDefinitionId ?? "").trim();
+  if (!definition) {
+    throw new TypeError(`${context}.assetDefinitionId must be a non-empty string`);
+  }
+  const normalizedAccountId = normalizeAccountId(accountId, `${context}.accountId`);
+  const native = resolveNativeBinding();
+  if (!native || typeof native.encodeAssetId !== "function") {
+    throw new Error("native binding 'encodeAssetId' is unavailable");
+  }
+  try {
+    return native.encodeAssetId(definition, normalizedAccountId);
+  } catch (error) {
+    throw new TypeError(
+      `${context}.assetDefinitionId must be a canonical Base58 asset definition id`,
+    );
+  }
+}
+
 function serializeInstructionPayloads(instructions, context) {
   if (!Array.isArray(instructions) || instructions.length === 0) {
     throw new Error(`${context ?? "instructions"} must be a non-empty array`);
@@ -624,16 +643,26 @@ function buildRegisterAssetDefinitionInstructions({ assetDefinition, mints = [] 
   return instructions;
 }
 
-function resolveAssetIdForMint(assetDefinitionId, mint) {
+function resolveAssetIdForMint(assetDefinitionId, mint, context = "mint") {
   if (mint.assetId) {
-    return ToriiClient._normalizeAssetId(mint.assetId, "mint.assetId");
+    const normalizedAssetId = ToriiClient._normalizeAssetId(mint.assetId, `${context}.assetId`);
+    if (!mint.accountId) {
+      return normalizedAssetId;
+    }
+    const derivedAssetId = encodeAssetIdFromDefinitionAndAccount(
+      assetDefinitionId,
+      mint.accountId,
+      context,
+    );
+    if (normalizedAssetId !== derivedAssetId) {
+      throw new TypeError(`${context}.assetId must match ${context}.assetDefinitionId + ${context}.accountId`);
+    }
+    return normalizedAssetId;
   }
   if (!mint.accountId) {
-    throw new TypeError("mint.assetId is required");
+    throw new TypeError(`${context}.assetId or ${context}.accountId must be provided`);
   }
-  throw new TypeError(
-    "mint.accountId is no longer supported; provide an encoded mint.assetId",
-  );
+  return encodeAssetIdFromDefinitionAndAccount(assetDefinitionId, mint.accountId, context);
 }
 
 function normalizeDomainMintSpec(value, context) {
@@ -661,20 +690,13 @@ function normalizeAssetDefinitionMintSpec(assetDefinitionId, value, context) {
   if (!value || typeof value !== "object") {
     throw new TypeError(`${context} must be an object`);
   }
-  const assetIdValue = value.assetId;
-  const accountIdValue = value.accountId;
-  if (accountIdValue !== undefined && accountIdValue !== null) {
-    throw new TypeError(
-      `${context}.accountId is no longer supported; provide encoded ${context}.assetId`,
-    );
-  }
-  if (assetIdValue === undefined || assetIdValue === null) {
-    throw new TypeError(`${context}.assetId must be provided`);
-  }
-  const assetId = ToriiClient._normalizeAssetId(assetIdValue, `${context}.assetId`);
+  const assetId = resolveAssetIdForMint(assetDefinitionId, value, context);
   return {
     assetId,
-    accountId: null,
+    accountId:
+      value.accountId === undefined || value.accountId === null
+        ? null
+        : normalizeAccountId(value.accountId, `${context}.accountId`),
     quantity: value.quantity,
   };
 }
