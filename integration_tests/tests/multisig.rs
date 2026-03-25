@@ -4,10 +4,10 @@
 use std::{
     collections::BTreeMap,
     num::{NonZeroU16, NonZeroU64},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
-use eyre::{Result, WrapErr};
+use eyre::{Result, WrapErr, eyre};
 use integration_tests::sandbox;
 use iroha::{
     client::Client,
@@ -94,6 +94,62 @@ fn post_torii_app_json<T: norito::json::JsonSerialize + ?Sized>(
             .await
     })?;
     norito::json::from_str(&response_body).map_err(Into::into)
+}
+
+fn wait_for_multisig_proposal_status(
+    rt: &Runtime,
+    torii_base: &str,
+    selector: &MultisigAccountSelectorDto,
+    proposal_id: &str,
+    expected_status: &str,
+) -> Result<JsonValue> {
+    let endpoint = format!("{torii_base}/v1/multisig/proposals/get");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut last_status = None;
+    let mut last_error = None;
+
+    while Instant::now() < deadline {
+        match post_torii_app_json(
+            rt,
+            &endpoint,
+            &MultisigProposalsGetRequestDto {
+                selector: selector.clone(),
+                proposal_id: Some(proposal_id.to_owned()),
+                instructions_hash: None,
+            },
+        ) {
+            Ok(payload) => {
+                let status = payload
+                    .get("status")
+                    .and_then(JsonValue::as_str)
+                    .map(ToOwned::to_owned);
+                if status.as_deref() == Some(expected_status) {
+                    return Ok(payload);
+                }
+                last_status = status;
+                last_error = None;
+            }
+            Err(err) => last_error = Some(err),
+        }
+
+        std::thread::sleep(Duration::from_millis(250));
+    }
+
+    if let Some(status) = last_status {
+        Err(eyre!(
+            "timed out waiting for multisig proposal `{proposal_id}` status `{expected_status}`; last status `{status}`"
+        ))
+    } else if let Some(err) = last_error {
+        Err(err).wrap_err_with(|| {
+            format!(
+                "timed out waiting for multisig proposal `{proposal_id}` status `{expected_status}`"
+            )
+        })
+    } else {
+        Err(eyre!(
+            "timed out waiting for multisig proposal `{proposal_id}` status `{expected_status}`"
+        ))
+    }
 }
 
 #[test]
@@ -211,6 +267,21 @@ fn multisig_cancel_route_persists_canceled_terminal_state() -> Result<()> {
             .and_then(JsonValue::as_str),
         Some(instructions_hash.as_str())
     );
+    let cancel_proposal_id = propose_cancel
+        .get("cancel_proposal_id")
+        .and_then(JsonValue::as_str)
+        .expect("cancel proposal id should be returned")
+        .to_owned();
+    // The Torii endpoint returns after queue admission, so wait for the cancel wrapper
+    // proposal to commit before sending the approval request that should observe it.
+    wait_for_multisig_proposal_status(
+        &rt,
+        &torii_base,
+        &selector,
+        &cancel_proposal_id,
+        "COLLECTING_SIGNATURES",
+    )
+    .wrap_err("wait for cancel wrapper proposal to commit")?;
 
     let approve_cancel = post_torii_app_json(
         &rt,
@@ -240,15 +311,14 @@ fn multisig_cancel_route_persists_canceled_terminal_state() -> Result<()> {
         "cancel approval should execute the target cancellation"
     );
 
-    let canceled = post_torii_app_json(
+    let canceled = wait_for_multisig_proposal_status(
         &rt,
-        &format!("{torii_base}/v1/multisig/proposals/get"),
-        &MultisigProposalsGetRequestDto {
-            selector: selector.clone(),
-            proposal_id: Some(instructions_hash.clone()),
-            instructions_hash: None,
-        },
-    )?;
+        &torii_base,
+        &selector,
+        &instructions_hash,
+        "CANCELED",
+    )
+    .wrap_err("wait for canceled terminal state")?;
     assert_eq!(
         canceled.get("status").and_then(JsonValue::as_str),
         Some("CANCELED")

@@ -1,6 +1,31 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-03-24
+Last updated: 2026-03-25
+
+Latest sync (2026-03-25 multisig cancel integration stabilization):
+`integration_tests/tests/multisig.rs`
+now waits for committed multisig proposal state before assuming the cancel
+route can see a prior cancel wrapper:
+
+- the test polls `/v1/multisig/proposals/get` until the first cancel request
+  becomes a committed `COLLECTING_SIGNATURES` proposal before sending the
+  second cancel request that should return `APPROVE`; and
+- the test also waits for the target proposal to become `CANCELED` before it
+  asserts `terminal_at_ms` and terminal listing visibility, matching Torii's
+  enqueue-first behavior.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p integration_tests multisig_cancel_route_persists_canceled_terminal_state -- --nocapture`
+  (build/test launch reached the target test, but runtime verification is
+  currently blocked by an unrelated peer-startup failure:
+  `active SNS domain-name lease is required before registering \`wonderland\``)
+
+Open work for this slice now remains:
+- fix the default integration-test network genesis/bootstrap path so the new
+  SNS lease requirement does not abort 4-peer startup; and
+- rerun the targeted multisig cancel integration test after that harness
+  blocker is cleared.
 
 Latest sync (2026-03-24 shared Ed25519 GPU challenge preparation):
 `crates/ivm/src/{signature.rs,cuda.rs,ivm.rs,vector.rs}`
