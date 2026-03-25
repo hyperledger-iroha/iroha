@@ -5619,6 +5619,10 @@ pub struct ToriiFaucet {
     pub asset_definition_id: AssetDefinitionId,
     /// Fixed quantity transferred to each eligible account.
     pub amount: Numeric,
+    /// Difficulty in leading zero bits for faucet proof-of-work (0 disables PoW).
+    pub pow_difficulty_bits: u8,
+    /// Maximum age of an accepted faucet PoW anchor, measured in committed blocks.
+    pub pow_max_anchor_age_blocks: NonZeroU64,
 }
 
 /// Offline certificate issuer configuration exposed to Torii.

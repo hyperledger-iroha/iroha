@@ -1645,6 +1645,16 @@ pub mod torii {
     // API tokens are disabled by default.
     /// Whether Torii requires API tokens for authentication.
     pub const REQUIRE_API_TOKEN: bool = false;
+    /// Faucet defaults.
+    pub mod faucet {
+        use super::*;
+        use std::num::NonZeroU64;
+
+        /// Leading-zero-bit difficulty for faucet proof-of-work (0 disables PoW).
+        pub const POW_DIFFICULTY_BITS: u8 = 0;
+        /// Maximum committed-block age for accepted faucet PoW anchors.
+        pub const POW_MAX_ANCHOR_AGE_BLOCKS: NonZeroU64 = nonzero!(6u64);
+    }
     /// Steady-state rate for pre-authorization attempts per IP.
     pub const PREAUTH_RATE_PER_IP_PER_SEC: Option<u32> = Some(20);
     /// Burst tokens allowed for pre-authorization attempts per IP.

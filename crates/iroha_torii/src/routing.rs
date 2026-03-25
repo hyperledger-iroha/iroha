@@ -149,6 +149,7 @@ use norito::{
 };
 #[cfg(feature = "telemetry")]
 use prometheus::core::Collector;
+use sha2::{Digest as _, Sha256};
 use tokio::task;
 
 // use tokio::task; // not currently used
@@ -18839,6 +18840,8 @@ pub const ENDPOINT_ACCOUNTS_ONBOARD: &str = "/v1/accounts/onboard";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_FAUCET: &str = "/v1/accounts/faucet";
 #[cfg(feature = "app_api")]
+pub const ENDPOINT_ACCOUNTS_FAUCET_PUZZLE: &str = "/v1/accounts/faucet/puzzle";
+#[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_ONBOARD_MULTISIG: &str = "/v1/accounts/onboard/multisig";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_CONTRACTS_CALL_MULTISIG_PROPOSE: &str = "/v1/contracts/call/multisig/propose";
@@ -36560,6 +36563,10 @@ pub struct AccountOnboardingResponseDto {
 #[derive(Clone, Debug, crate::json_macros::JsonDeserialize)]
 pub struct AccountFaucetRequestDto {
     pub account_id: String,
+    #[norito(default)]
+    pub pow_anchor_height: Option<u64>,
+    #[norito(default)]
+    pub pow_nonce_hex: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -36571,6 +36578,16 @@ pub struct AccountFaucetResponseDto {
     pub amount: String,
     pub tx_hash_hex: String,
     pub status: &'static str,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize)]
+pub struct AccountFaucetPuzzleDto {
+    pub algorithm: &'static str,
+    pub difficulty_bits: u8,
+    pub anchor_height: u64,
+    pub anchor_block_hash_hex: String,
+    pub max_anchor_age_blocks: u64,
 }
 
 #[cfg(feature = "app_api")]
@@ -36636,6 +36653,100 @@ fn faucet_invalid_request(reason: &str) -> Error {
     Error::Query(iroha_data_model::ValidationFail::QueryFailed(
         QueryExecutionFail::InvalidSingularParameters,
     ))
+}
+
+#[cfg(feature = "app_api")]
+const FAUCET_POW_ALGORITHM: &str = "sha256-leading-zero-bits-v1";
+#[cfg(feature = "app_api")]
+const FAUCET_POW_DOMAIN_SEPARATOR: &[u8] = b"iroha:accounts:faucet:pow:v1";
+
+#[cfg(feature = "app_api")]
+fn leading_zero_bits(bytes: &[u8]) -> u32 {
+    let mut total = 0u32;
+    for byte in bytes {
+        if *byte == 0 {
+            total += 8;
+            continue;
+        }
+        total += byte.leading_zeros();
+        break;
+    }
+    total
+}
+
+#[cfg(feature = "app_api")]
+fn faucet_pow_anchor_hash(
+    app: &crate::SharedAppState,
+    anchor_height: u64,
+) -> Result<HashOf<BlockHeader>> {
+    let height = usize::try_from(anchor_height)
+        .ok()
+        .and_then(NonZeroUsize::new)
+        .ok_or_else(|| faucet_invalid_request("invalid faucet pow anchor height"))?;
+    let block = app
+        .state
+        .block_by_height(height)
+        .ok_or_else(|| faucet_invalid_request("unknown faucet pow anchor height"))?;
+    Ok(block.hash())
+}
+
+#[cfg(feature = "app_api")]
+fn faucet_pow_digest(
+    account_id: &AccountId,
+    anchor_height: u64,
+    anchor_hash: &HashOf<BlockHeader>,
+    nonce_bytes: &[u8],
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(FAUCET_POW_DOMAIN_SEPARATOR);
+    hasher.update(account_id.to_string().as_bytes());
+    hasher.update(anchor_height.to_be_bytes());
+    hasher.update(anchor_hash.as_ref());
+    hasher.update(nonce_bytes);
+    hasher.finalize().into()
+}
+
+#[cfg(feature = "app_api")]
+fn verify_faucet_pow(
+    app: &crate::SharedAppState,
+    faucet: &iroha_config::parameters::actual::ToriiFaucet,
+    account_id: &AccountId,
+    anchor_height: Option<u64>,
+    nonce_hex: Option<&str>,
+) -> Result<()> {
+    if faucet.pow_difficulty_bits == 0 {
+        return Ok(());
+    }
+
+    let anchor_height =
+        anchor_height.ok_or_else(|| faucet_invalid_request("faucet pow anchor height required"))?;
+    let current_height = u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
+    if anchor_height == 0 || anchor_height > current_height {
+        return Err(faucet_invalid_request(
+            "faucet pow anchor height out of range",
+        ));
+    }
+    if current_height.saturating_sub(anchor_height) > faucet.pow_max_anchor_age_blocks.get() {
+        return Err(faucet_invalid_request("faucet pow anchor is stale"));
+    }
+
+    let nonce_hex = nonce_hex
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| faucet_invalid_request("faucet pow nonce required"))?;
+    let nonce_bytes =
+        hex::decode(nonce_hex).map_err(|_| faucet_invalid_request("invalid faucet pow nonce"))?;
+    if nonce_bytes.is_empty() || nonce_bytes.len() > 32 {
+        return Err(faucet_invalid_request("invalid faucet pow nonce"));
+    }
+
+    let anchor_hash = faucet_pow_anchor_hash(app, anchor_height)?;
+    let digest = faucet_pow_digest(account_id, anchor_height, &anchor_hash, &nonce_bytes);
+    if leading_zero_bits(&digest) < u32::from(faucet.pow_difficulty_bits) {
+        return Err(faucet_invalid_request("invalid faucet pow solution"));
+    }
+
+    Ok(())
 }
 
 #[cfg(feature = "app_api")]
@@ -36882,6 +36993,42 @@ pub async fn handle_v1_accounts_onboard(
 
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
+pub async fn handle_v1_accounts_faucet_puzzle(
+    app: crate::SharedAppState,
+) -> Result<impl IntoResponse> {
+    let Some(faucet) = app.account_faucet.as_ref() else {
+        return Err(Error::Query(
+            iroha_data_model::ValidationFail::NotPermitted("Account faucet disabled".into()),
+        ));
+    };
+
+    let anchor_height = u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
+    if anchor_height == 0 {
+        return Err(faucet_invalid_request(
+            "faucet pow puzzle is unavailable before genesis",
+        ));
+    }
+    let anchor_hash = faucet_pow_anchor_hash(&app, anchor_height)?;
+    let response = AccountFaucetPuzzleDto {
+        algorithm: FAUCET_POW_ALGORITHM,
+        difficulty_bits: faucet.pow_difficulty_bits,
+        anchor_height,
+        anchor_block_hash_hex: hex::encode(anchor_hash.as_ref()),
+        max_anchor_age_blocks: faucet.pow_max_anchor_age_blocks.get(),
+    };
+
+    let mut resp = Response::new(Body::from(
+        norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into()),
+    ));
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("application/json"),
+    );
+    Ok((StatusCode::OK, resp))
+}
+
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
 pub async fn handle_v1_accounts_faucet(
     app: crate::SharedAppState,
     crate::NoritoJson(req): crate::NoritoJson<AccountFaucetRequestDto>,
@@ -36893,7 +37040,13 @@ pub async fn handle_v1_accounts_faucet(
         ));
     };
 
-    let account_literal = req.account_id.trim();
+    let AccountFaucetRequestDto {
+        account_id,
+        pow_anchor_height,
+        pow_nonce_hex,
+    } = req;
+
+    let account_literal = account_id.trim();
     if account_literal.is_empty() {
         return Err(faucet_invalid_request("account_id must not be empty"));
     }
@@ -36901,34 +37054,44 @@ pub async fn handle_v1_accounts_faucet(
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .map_err(|_| faucet_invalid_request("invalid account id literal"))?;
 
-    let world = app.state.world_view();
-    if world.account(&account_id).is_err() {
-        return Err(faucet_invalid_request("account does not exist"));
-    }
+    verify_faucet_pow(
+        &app,
+        faucet,
+        &account_id,
+        pow_anchor_height,
+        pow_nonce_hex.as_deref(),
+    )?;
 
     let destination_asset_id = AssetId::new(faucet.asset_definition_id.clone(), account_id.clone());
-    let destination_balance = match world.asset(&destination_asset_id) {
-        Ok(entry) => entry.value().as_ref().clone(),
-        Err(_) => iroha_primitives::numeric::Numeric::zero(),
+    let source_asset_id =
+        AssetId::new(faucet.asset_definition_id.clone(), faucet.authority.clone());
+    let (destination_balance, source_balance) = {
+        let world = app.state.world_view();
+        if world.account(&account_id).is_err() {
+            return Err(faucet_invalid_request("account does not exist"));
+        }
+
+        let destination_balance = match world.asset(&destination_asset_id) {
+            Ok(entry) => entry.value().as_ref().clone(),
+            Err(_) => iroha_primitives::numeric::Numeric::zero(),
+        };
+        let source_balance = match world.asset(&source_asset_id) {
+            Ok(entry) => entry.value().as_ref().clone(),
+            Err(_) => iroha_primitives::numeric::Numeric::zero(),
+        };
+        (destination_balance, source_balance)
     };
     if destination_balance > iroha_primitives::numeric::Numeric::zero() {
         return Err(faucet_invalid_request(
             "account already has a positive faucet asset balance",
         ));
     }
-
-    let source_asset_id =
-        AssetId::new(faucet.asset_definition_id.clone(), faucet.authority.clone());
-    let source_balance = match world.asset(&source_asset_id) {
-        Ok(entry) => entry.value().as_ref().clone(),
-        Err(_) => iroha_primitives::numeric::Numeric::zero(),
-    };
     if source_balance < faucet.amount.clone() {
         return Err(faucet_invalid_request("faucet is out of funds"));
     }
 
     let mut builder = TransactionBuilder::new((*app.chain_id).clone(), faucet.authority.clone())
-        .with_instructions([InstructionBox::from(dm::Transfer::asset_numeric(
+        .with_instructions([InstructionBox::from(Transfer::asset_numeric(
             source_asset_id,
             faucet.amount.clone(),
             account_id.clone(),

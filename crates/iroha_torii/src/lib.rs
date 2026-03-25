@@ -3301,6 +3301,14 @@ async fn handler_accounts_onboard(
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
+async fn handler_accounts_faucet_puzzle(
+    State(app): State<SharedAppState>,
+) -> Result<impl IntoResponse, Error> {
+    routing::handle_v1_accounts_faucet_puzzle(app.clone()).await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
 async fn handler_accounts_faucet(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -17208,6 +17216,10 @@ impl Torii {
                 .route("/v1/accounts", get(handler_accounts_list))
                 .route("/v1/accounts/query", post(handler_accounts_query))
                 .route("/v1/accounts/onboard", post(handler_accounts_onboard))
+                .route(
+                    "/v1/accounts/faucet/puzzle",
+                    get(handler_accounts_faucet_puzzle),
+                )
                 .route("/v1/accounts/faucet", post(handler_accounts_faucet))
                 .route(
                     "/v1/accounts/onboard/multisig",
@@ -21026,6 +21038,8 @@ pub(crate) mod tests_runtime_handlers {
             offline_reserves: Arc::new(offline_reserve::OfflineReserveStore::default()),
             #[cfg(feature = "app_api")]
             offline_issuer: None,
+            #[cfg(feature = "app_api")]
+            account_faucet: None,
             #[cfg(feature = "app_api")]
             uaid_onboarding: None,
             soracloud_runtime: None,

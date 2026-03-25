@@ -31,6 +31,8 @@ authority = "testuﾛ1NrpｽﾓaMﾒﾌNhziﾙZfvWn9ﾙﾘvFqxｾmUﾓﾏ2ﾊｷ
 private_key = "8026207E82135F0CF3DA3F85DDF07E2FB797E0FBB62BCE789034DCE3A7D76C78106938"
 asset_definition_id = "xor#sora"
 amount = "25000"
+pow_difficulty_bits = 20
+pow_max_anchor_age_blocks = 6
 
 [torii.sorafs]
 discovery_enabled = true

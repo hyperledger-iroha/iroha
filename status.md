@@ -2,6 +2,23 @@
 
 Last updated: 2026-03-25
 
+## 2026-03-25 Follow-up: TAIRA faucet now requires decentralized proof-of-work
+- Hardened the TAIRA faucet slice across
+  `crates/iroha_config/src/parameters/{actual.rs,defaults.rs,user.rs}`,
+  `crates/iroha_torii/src/{lib.rs,openapi.rs,routing.rs}`,
+  `crates/iroha_torii/tests/accounts_faucet.rs`,
+  `configs/soranexus/testus/config.toml`,
+  and `defaults/kagami/iroha3-testus/config.toml`.
+- The shipped behavior in this slice:
+  - Torii now exposes `GET /v1/accounts/faucet/puzzle`, which returns a deterministic SHA-256 puzzle anchored to a recent committed block hash plus an acceptance window in blocks;
+  - `POST /v1/accounts/faucet` now rejects requests that do not include a valid PoW solution when faucet PoW difficulty is non-zero, while still preserving the existing starter-funds transfer flow and balance checks; and
+  - the TAIRA/testus profile now enables faucet PoW explicitly (`pow_difficulty_bits = 20`, `pow_max_anchor_age_blocks = 6`) without changing non-TAIRA profiles.
+- Validation:
+  - `cargo test -p iroha_config torii_faucet_tests -- --nocapture` (pending rerun after current focused Torii build settles)
+  - `cargo test -p iroha_torii --features app_api accounts_faucet -- --nocapture` (build currently in progress in this workspace)
+- Remaining implementation gap:
+  - the faucet still uses a balance-based eligibility check rather than a durable on-chain claim marker, so PoW now slows Sybil drain but does not by itself create permanent one-claim semantics.
+
 ## 2026-03-25 Follow-up: multisig cancel integration test now waits for committed proposal state
 - Hardened `integration_tests/tests/multisig.rs` so the cancel-route coverage
   matches Torii's queue-admission semantics instead of assuming immediate

@@ -34,6 +34,8 @@ authority = "testuﾛ1NrpｽﾓaMﾒﾌNhziﾙZfvWn9ﾙﾘvFqxｾmUﾓﾏ2ﾊｷ
 private_key = "8026207E82135F0CF3DA3F85DDF07E2FB797E0FBB62BCE789034DCE3A7D76C78106938"
 asset_definition_id = "xor#sora"
 amount = "25000"
+pow_difficulty_bits = 20
+pow_max_anchor_age_blocks = 6
 
 [streaming]
 identity_public_key = "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B"

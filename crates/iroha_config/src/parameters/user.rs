@@ -15197,6 +15197,12 @@ pub struct ToriiFaucet {
     pub asset_definition_id: String,
     /// Fixed quantity transferred to each eligible account.
     pub amount: String,
+    /// Leading-zero-bit difficulty for faucet proof-of-work (0 disables PoW).
+    #[config(default = "defaults::torii::faucet::POW_DIFFICULTY_BITS")]
+    pub pow_difficulty_bits: u8,
+    /// Maximum committed-block age for accepted faucet PoW anchors.
+    #[config(default = "defaults::torii::faucet::POW_MAX_ANCHOR_AGE_BLOCKS.get()")]
+    pub pow_max_anchor_age_blocks: u64,
 }
 
 impl ToriiFaucet {
@@ -15236,11 +15242,17 @@ impl ToriiFaucet {
         if amount <= Numeric::zero() {
             panic!("torii.faucet.amount must be greater than zero");
         }
+        let pow_max_anchor_age_blocks = NonZeroU64::new(self.pow_max_anchor_age_blocks)
+            .unwrap_or_else(|| {
+                panic!("torii.faucet.pow_max_anchor_age_blocks must be greater than zero")
+            });
         Some(actual::ToriiFaucet {
             authority,
             private_key: self.private_key,
             asset_definition_id,
             amount,
+            pow_difficulty_bits: self.pow_difficulty_bits,
+            pow_max_anchor_age_blocks,
         })
     }
 }
@@ -15263,6 +15275,8 @@ mod torii_faucet_tests {
                 .expect("private key"),
             asset_definition_id: "xor#sora".to_owned(),
             amount: "25000".to_owned(),
+            pow_difficulty_bits: 18,
+            pow_max_anchor_age_blocks: 4,
         }
     }
 
@@ -15278,6 +15292,8 @@ mod torii_faucet_tests {
             )
         );
         assert_eq!(parsed.amount.to_string(), "25000");
+        assert_eq!(parsed.pow_difficulty_bits, 18);
+        assert_eq!(parsed.pow_max_anchor_age_blocks.get(), 4);
     }
 
     #[test]
@@ -15293,6 +15309,14 @@ mod torii_faucet_tests {
         faucet.amount = "0".to_owned();
         let panic = std::panic::catch_unwind(|| faucet.parse());
         assert!(panic.is_err(), "expected zero amount to panic");
+    }
+
+    #[test]
+    fn torii_faucet_parse_rejects_non_positive_pow_anchor_age() {
+        let mut faucet = sample_faucet();
+        faucet.pow_max_anchor_age_blocks = 0;
+        let panic = std::panic::catch_unwind(|| faucet.parse());
+        assert!(panic.is_err(), "expected zero pow anchor age to panic");
     }
 }
 
