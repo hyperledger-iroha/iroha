@@ -2,6 +2,17 @@
 
 Last updated: 2026-03-25
 
+## 2026-03-25 Follow-up: FASTPQ stage2 balanced fixtures refreshed again for current canonical proof bytes
+- Refreshed the checked-in FASTPQ Stage 2 backend regression artifacts after the
+  current CPU prover output drifted from the previously committed golden files
+  while keeping the same encoded sizes:
+  - `crates/fastpq_prover/tests/fixtures/stage2_balanced_1k.bin`
+  - `crates/fastpq_prover/tests/fixtures/stage2_balanced_5k.bin`
+- Validation:
+  - `FASTPQ_UPDATE_FIXTURES=1 cargo test -p fastpq_prover --test backend_regression stage2_artifact_balanced_ -- --nocapture` (pass)
+  - `cargo test -p fastpq_prover --test backend_regression stage2_artifact_balanced_ -- --nocapture` (pass)
+  - `cargo test -p fastpq_prover --test proof_fixture golden_stage2_proof_matches_fixture -- --nocapture` (pass)
+
 ## 2026-03-25 Follow-up: `model-publish-private` now prepares encrypted upload plans from raw admitted model directories
 - Extended `crates/iroha_cli/src/soracloud.rs`,
   `crates/iroha_cli/Cargo.toml`, and
