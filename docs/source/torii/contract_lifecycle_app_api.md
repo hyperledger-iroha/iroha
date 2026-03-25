@@ -20,6 +20,9 @@ tooling can depend on stable Norito DTOs.
   private key, then queues it through `handle_transaction_with_metrics`, which
   records `torii_lane_admission_latency_seconds{lane_id,endpoint}` when
   telemetry is enabled.【crates/iroha_torii/src/routing.rs:3293】
+- Contract lifecycle write endpoints prepend a domainless self-registration for
+  the supplied authority before the requested deploy/activate instructions, so
+  public networks can admit a fresh signer without a separate bootstrap step.
 - DTOs embed full Norito types: `AccountId`, `ExposedPrivateKey`, and plain
   strings for namespace/contract identifiers. The stored manifest schema is
   defined in `iroha_data_model::smart_contract::manifest::ContractManifest` and
@@ -33,7 +36,8 @@ tooling can depend on stable Norito DTOs.
 
 Accepts compiled `.to` bytecode, derives the manifest and hashes, and queues a
 transaction containing `RegisterSmartContractCode` + `RegisterSmartContractBytes`
-instructions so the bytecode is stored on-chain.【crates/iroha_torii/src/routing.rs:5892】
+instructions so the bytecode is stored on-chain. Torii prepends a domainless
+self-registration for the authority before those instructions.【crates/iroha_torii/src/routing.rs:5892】
 
 ### Request (`DeployContractDto`)
 
@@ -76,7 +80,10 @@ round-trip and asserts the stored base64 matches the uploaded bytes.【crates/ir
 
 Registers a logical contract instance within a namespace, binding it to a
 previously deployed code hash via `ActivateContractInstance`. The route expects
-the bytecode to be present on-chain (e.g., via the deploy endpoint above).【crates/iroha_torii/src/routing.rs:3806】
+the bytecode to be present on-chain (e.g., via the deploy endpoint above).
+Activation is public for namespaces not listed in `gov_protected_namespaces`;
+Torii prepends a domainless self-registration for the authority before the
+activation instruction.【crates/iroha_torii/src/routing.rs:3806】
 
 ### Request (`ActivateInstanceDto`)
 

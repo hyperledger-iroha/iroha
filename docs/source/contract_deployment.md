@@ -56,16 +56,21 @@ Status: implemented and exercised by Torii, CLI, and core admission tests (Nov 
 - `POST /v1/contracts/deploy`
   - Request body: `DeployContractDto` (see `docs/source/torii_contracts_api.md` for field details).
   - Torii decodes the base64 payload, verifies the embedded `CNTR` interface,
-    derives the manifest from the artifact itself, and submits `RegisterSmartContractCode` plus
-    `RegisterSmartContractBytes` in a signed transaction on behalf of the
-    caller.
+    derives the manifest from the artifact itself, prepends a domainless
+    self-registration for the authority, and submits
+    `RegisterSmartContractCode` plus `RegisterSmartContractBytes` in a signed
+    transaction on behalf of the caller.
   - Response: `{ ok, code_hash_hex, abi_hash_hex }`.
-  - Errors: invalid base64, invalid contract artifact, missing permission
-    (`CanRegisterSmartContractCode`), size cap exceeded, governance gating.
+  - Errors: invalid base64, invalid contract artifact, size cap exceeded,
+    governance gating for protected namespaces, or fee/balance failures.
 - `POST /v1/contracts/instance`
   - Accepts `DeployAndActivateInstanceDto` (authority, private key, namespace/contract_id, `code_b64`) and deploys + activates atomically.
+  - Torii prepends a domainless self-registration for the authority before the
+    deploy + activate instructions.
 - `POST /v1/contracts/instance/activate`
   - Accepts `ActivateInstanceDto` (authority, private key, namespace, contract_id, `code_hash`) and submits only the activation instruction.
+  - Torii prepends a domainless self-registration for the authority before the
+    activation instruction.
 - `GET /v1/contracts/code/{code_hash}`
   - Returns `{ manifest: { code_hash, abi_hash } }`.
     Additional manifest fields are preserved internally but omitted here for a
@@ -89,6 +94,8 @@ returns HTTP 429; any handler error increments
   strings) to enable admission gating. Torii exposes helpers under
   `/v1/gov/protected-namespaces` and the CLI mirrors them via
   `iroha_cli app gov protected set` / `iroha_cli app gov protected get`.
+- Unprotected namespaces are public: any signer may register code bytes,
+  register manifests, and activate/deactivate contract instances there.
 - Proposals created with `ProposeDeployContract` (or the Torii
   `/v1/gov/proposals/deploy-contract` endpoint) capture
   `(namespace, contract_id, code_hash, abi_hash, abi_version)`.
@@ -113,10 +120,11 @@ returns HTTP 429; any handler error increments
   submits the Torii deploy request (computing hashes on the fly).
 - `iroha_cli app contracts deploy-activate --authority <id> --private-key <hex> --namespace <ns> --contract-id <id> --code-file <path>`
   verifies the embedded `CNTR`, derives the canonical manifest, registers bytes
-  + manifest, and activates the `(namespace, contract_id)` binding in one
-  transaction. Use `--dry-run` to print the computed hashes and instruction
-  count without submitting, and `--manifest-out` to save the signed manifest
-  JSON for inspection.
+  + manifest, prepends a domainless self-registration for the authority, and
+  activates the `(namespace, contract_id)` binding in one transaction. Use
+  `--dry-run` to print the computed hashes and instruction count without
+  submitting, and `--manifest-out` to save the signed manifest JSON for
+  inspection.
 - `iroha_cli app contracts manifest build --code-file <path> [--sign-with <hex>]` computes
   `code_hash`/`abi_hash` for compiled `.to`, derives the manifest from the
   embedded `CNTR`, and optionally signs it for inspection, printing JSON or

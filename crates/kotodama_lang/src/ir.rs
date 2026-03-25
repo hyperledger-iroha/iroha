@@ -623,6 +623,12 @@ pub enum Instr {
         json: Temp,
         key: Temp,
     },
+    /// JSON getters: (&Json, &Name key) -> &AssetDefinitionId
+    JsonGetAssetDefinitionId {
+        dest: Temp,
+        json: Temp,
+        key: Temp,
+    },
     /// JSON getters: (&Json, &Name key) -> &NftId
     JsonGetNftId {
         dest: Temp,
@@ -1930,6 +1936,17 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     let k = lower_expr(ctx, &args[1], vars);
                     let d = ctx.new_temp();
                     ctx.current_instr(Instr::JsonGetAccountId {
+                        dest: d,
+                        json: j,
+                        key: k,
+                    });
+                    d
+                }
+                "json_get_asset_definition_id" => {
+                    let j = lower_expr(ctx, &args[0], vars);
+                    let k = lower_expr(ctx, &args[1], vars);
+                    let d = ctx.new_temp();
+                    ctx.current_instr(Instr::JsonGetAssetDefinitionId {
                         dest: d,
                         json: j,
                         key: k,
@@ -4077,6 +4094,27 @@ mod tests {
         assert!(
             saw_json_get_numeric,
             "expected JsonGetNumeric instruction in lowered IR"
+        );
+    }
+
+    #[test]
+    fn lower_json_get_asset_definition_id_builtin() {
+        let src = "fn main() { let ev = trigger_event(); let _asset = json_get_asset_definition_id(ev, name(\"asset_definition_id\")); }";
+        let prog = parse(src).unwrap();
+        let typed = analyze(&prog).unwrap();
+        let ir = lower(&typed).expect("lower");
+        let f = &ir.functions[0];
+        let mut saw_json_get_asset_definition_id = false;
+        for bb in &f.blocks {
+            for instr in &bb.instrs {
+                if let Instr::JsonGetAssetDefinitionId { .. } = instr {
+                    saw_json_get_asset_definition_id = true;
+                }
+            }
+        }
+        assert!(
+            saw_json_get_asset_definition_id,
+            "expected JsonGetAssetDefinitionId instruction in lowered IR"
         );
     }
 

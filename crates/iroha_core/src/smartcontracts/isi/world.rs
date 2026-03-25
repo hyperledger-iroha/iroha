@@ -209,6 +209,52 @@ pub mod isi {
             .is_some_and(|perms| perms.iter().any(|p| p.name() == name))
     }
 
+    fn protected_contract_namespaces(
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> BTreeSet<String> {
+        let Ok(name) = core::str::FromStr::from_str("gov_protected_namespaces") else {
+            return BTreeSet::new();
+        };
+        let id = iroha_data_model::parameter::CustomParameterId(name);
+        let params = state_transaction.world.parameters.get();
+        params
+            .custom()
+            .get(&id)
+            .and_then(|custom| custom.payload().try_into_any_norito::<Vec<String>>().ok())
+            .map(|namespaces| {
+                namespaces
+                    .into_iter()
+                    .map(|namespace| namespace.trim().to_owned())
+                    .filter(|namespace| !namespace.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn contract_namespace_requires_governance(
+        state_transaction: &StateTransaction<'_, '_>,
+        namespace: &str,
+    ) -> bool {
+        let namespace = namespace.trim();
+        !namespace.is_empty()
+            && protected_contract_namespaces(state_transaction).contains(namespace)
+    }
+
+    fn ensure_contract_namespace_governance(
+        authority: &AccountId,
+        state_transaction: &StateTransaction<'_, '_>,
+        namespace: &str,
+    ) -> Result<(), Error> {
+        if contract_namespace_requires_governance(state_transaction, namespace)
+            && !has_permission(&state_transaction.world, authority, "CanEnactGovernance")
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "not permitted: CanEnactGovernance".into(),
+            ));
+        }
+        Ok(())
+    }
+
     #[allow(clippy::too_many_lines)]
     fn validate_consensus_key_record(
         record: &ConsensusKeyRecord,
@@ -3793,27 +3839,13 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            // Require governance authority to activate instances
-            if !has_permission(&state_transaction.world, authority, "CanEnactGovernance") {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: CanEnactGovernance".into(),
-                ));
-            }
+            ensure_contract_namespace_governance(authority, state_transaction, self.namespace())?;
             let key = *self.code_hash();
             let ns = self.namespace().clone();
             let cid = self.contract_id().clone();
             let ns_key = (ns, cid);
             // Enforce namespace uniqueness when governance protects namespaces to prevent cross-namespace rebinding.
-            let mut protected = Vec::new();
-            if let Ok(name) = core::str::FromStr::from_str("gov_protected_namespaces") {
-                let id = iroha_data_model::parameter::CustomParameterId(name);
-                let params = state_transaction.world.parameters.get();
-                if let Some(custom) = params.custom().get(&id)
-                    && let Ok(v) = custom.payload().try_into_any_norito::<Vec<String>>()
-                {
-                    protected = v;
-                }
-            }
+            let protected = protected_contract_namespaces(state_transaction);
             if !protected.is_empty() {
                 if let Some(conflict) = state_transaction
                     .world
@@ -3906,11 +3938,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !has_permission(&state_transaction.world, authority, "CanEnactGovernance") {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: CanEnactGovernance".into(),
-                ));
-            }
+            ensure_contract_namespace_governance(authority, state_transaction, self.namespace())?;
             let namespace = self.namespace().trim();
             if namespace.is_empty() {
                 return Err(InstructionExecutionError::InvalidParameter(
@@ -3990,16 +4018,6 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            // Permission gate: same as manifest registration
-            if !has_permission(
-                &state_transaction.world,
-                authority,
-                "CanRegisterSmartContractCode",
-            ) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: CanRegisterSmartContractCode".into(),
-                ));
-            }
             let code = self.code().clone();
             // Parse IVM header and verify code_hash over program body
             let parsed = ivm::ProgramMetadata::parse(&code).map_err(|e| {
@@ -9049,16 +9067,6 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            // Enforce permission to register smart contract code/manifests
-            if !has_permission(
-                &state_transaction.world,
-                authority,
-                "CanRegisterSmartContractCode",
-            ) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: CanRegisterSmartContractCode".into(),
-                ));
-            }
             let manifest = self.manifest().clone();
             let Some(key @ Hash { .. }) = manifest.code_hash else {
                 return Err(InstructionExecutionError::InvalidParameter(
@@ -9472,9 +9480,19 @@ pub mod isi {
                 .into());
             }
             let now_ms = state_transaction.block_unix_timestamp_ms();
-            match crate::sns::active_domain_owner(state_transaction.world(), &canonical_id, now_ms)
-            {
-                Some(owner) if owner == *authority => {}
+            let bootstrap_domain_name_lease = state_transaction._curr_block.is_genesis()
+                && state_transaction.block_hashes.is_empty()
+                && state_transaction
+                    .world
+                    .domain(&iroha_genesis::GENESIS_DOMAIN_ID)
+                    .map(|domain| domain.owned_by() == authority)
+                    .unwrap_or(false);
+            let should_seed_domain_name_lease = match crate::sns::active_domain_owner(
+                state_transaction.world(),
+                &canonical_id,
+                now_ms,
+            ) {
+                Some(owner) if owner == *authority => false,
                 Some(owner) => {
                     return Err(InstructionExecutionError::InvariantViolation(
                         format!(
@@ -9483,6 +9501,7 @@ pub mod isi {
                         .into(),
                     ));
                 }
+                None if bootstrap_domain_name_lease => true,
                 None => {
                     return Err(InstructionExecutionError::InvariantViolation(
                         format!(
@@ -9491,7 +9510,7 @@ pub mod isi {
                         .into(),
                     ));
                 }
-            }
+            };
             let selector =
                 iroha_data_model::account::AccountDomainSelector::from_domain(&canonical_id)
                     .map_err(|err| {
@@ -9540,6 +9559,38 @@ pub mod isi {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "Domain selector already registered".to_owned().into(),
                 ));
+            }
+            if should_seed_domain_name_lease {
+                let lease_selector =
+                    crate::sns::selector_for_domain(&canonical_id).map_err(|err| {
+                        InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(err.to_string()),
+                        )
+                    })?;
+                let address = iroha_data_model::account::AccountAddress::from_account_id(authority)
+                    .map_err(|err| {
+                        InstructionExecutionError::InvariantViolation(
+                            format!(
+                                "failed to derive genesis account address for SNS bootstrap: {err}"
+                            )
+                            .into(),
+                        )
+                    })?;
+                let record = iroha_data_model::sns::NameRecordV1::new(
+                    lease_selector.clone(),
+                    authority.clone(),
+                    vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+                    0,
+                    0,
+                    u64::MAX,
+                    u64::MAX,
+                    u64::MAX,
+                    Metadata::default(),
+                );
+                world.smart_contract_state.insert(
+                    crate::sns::record_storage_key(&lease_selector),
+                    norito::codec::Encode::encode(&record),
+                );
             }
 
             world.emit_events(Some(DomainEvent::Created(event_domain)));
@@ -16786,6 +16837,110 @@ pub mod isi {
                 });
             }
             endorsement
+        }
+
+        #[test]
+        fn activate_contract_instance_is_public_for_unprotected_namespace() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let mut state = State::new_for_testing(World::default(), kura, query_handle);
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            Register::account(Account::new_domainless(ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("seed authority");
+
+            let code_hash = Hash::new(b"public-contract");
+            let manifest = ContractManifest {
+                code_hash: Some(code_hash),
+                abi_hash: None,
+                compiler_fingerprint: None,
+                features_bitmap: None,
+                access_set_hints: None,
+                entrypoints: None,
+                kotoba: None,
+                provenance: None,
+            };
+            stx.world.contract_manifests.insert(code_hash, manifest);
+
+            scode::ActivateContractInstance {
+                namespace: "public".to_owned(),
+                contract_id: "demo".to_owned(),
+                code_hash,
+            }
+            .execute(&ALICE_ID, &mut stx)
+            .expect("unprotected namespace should not require governance");
+
+            let binding = ("public".to_owned(), "demo".to_owned());
+            assert_eq!(stx.world.contract_instances.get(&binding), Some(&code_hash));
+        }
+
+        #[test]
+        fn activate_contract_instance_requires_governance_for_protected_namespace() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let mut state = State::new_for_testing(World::default(), kura, query_handle);
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            Register::account(Account::new_domainless(ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("seed authority");
+
+            let protected = iroha_data_model::parameter::custom::CustomParameter::new(
+                iroha_data_model::parameter::custom::CustomParameterId(
+                    "gov_protected_namespaces".parse().expect("parameter id"),
+                ),
+                Json::new(vec!["protected".to_owned()]),
+            );
+            stx.world
+                .parameters
+                .get_mut()
+                .set_parameter(Parameter::Custom(protected));
+
+            let code_hash = Hash::new(b"protected-contract");
+            let manifest = ContractManifest {
+                code_hash: Some(code_hash),
+                abi_hash: None,
+                compiler_fingerprint: None,
+                features_bitmap: None,
+                access_set_hints: None,
+                entrypoints: None,
+                kotoba: None,
+                provenance: None,
+            };
+            stx.world.contract_manifests.insert(code_hash, manifest);
+
+            let err = scode::ActivateContractInstance {
+                namespace: "protected".to_owned(),
+                contract_id: "demo".to_owned(),
+                code_hash,
+            }
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("protected namespace must remain governance-gated");
+
+            let msg = smart_contract_error_message(
+                iroha_data_model::ValidationFail::InstructionFailed(err),
+            );
+            assert!(
+                msg.contains("CanEnactGovernance"),
+                "unexpected protected-namespace error: {msg}"
+            );
         }
 
         #[test]

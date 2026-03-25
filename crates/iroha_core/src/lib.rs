@@ -286,6 +286,7 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
         match self {
             NetworkMessage::SumeragiBlock(msg) => match msg.as_ref().as_ref() {
                 BlockMessage::BlockCreated(_)
+                | BlockMessage::FetchBlockBody(_)
                 | BlockMessage::FetchPendingBlock(_)
                 | BlockMessage::RbcInit(_)
                 | BlockMessage::RbcReady(_)
@@ -297,7 +298,9 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                 | BlockMessage::QcVote(_)
                 | BlockMessage::VrfCommit(_)
                 | BlockMessage::VrfReveal(_) => T::Consensus,
-                BlockMessage::BlockSyncUpdate(_) | BlockMessage::Proposal(_) => T::ConsensusPayload,
+                BlockMessage::BlockSyncUpdate(_)
+                | BlockMessage::BlockBodyResponse(_)
+                | BlockMessage::Proposal(_) => T::ConsensusPayload,
                 BlockMessage::RbcChunk(_) | BlockMessage::RbcChunkCompact(_) => T::ConsensusChunk,
             },
             NetworkMessage::SumeragiControlFlow(_)
@@ -614,6 +617,7 @@ mod tests {
         let created = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
             BlockMessage::BlockCreated(BlockCreated {
                 block: block.clone(),
+                frontier: None,
             }),
         )));
         assert_eq!(created.topic(), NetworkTopic::Consensus);

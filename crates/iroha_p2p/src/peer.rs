@@ -3373,9 +3373,10 @@ mod run {
                     }
 
                     if self.plain_high.is_empty() {
+                        // A cap-triggered flush clears the current class; restore it for the
+                        // new plaintext batch before appending more high-priority bytes.
                         self.plain_high_class = Some(class);
                     }
-
                     self.plain_high.extend_from_slice(&self.buffer);
                     self.plain_high_msgs = self.plain_high_msgs.saturating_add(1);
                 }
@@ -4219,6 +4220,53 @@ mod run {
                     RoutedMsg::ConsensusChunk(11),
                     RoutedMsg::Consensus(9),
                 ]
+            );
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn message_sender_restores_high_batch_class_after_msg_cap_flush() {
+            let buffer = Arc::new(Mutex::new(Vec::new()));
+            let writer = CollectingWrite {
+                buffer: Arc::clone(&buffer),
+            };
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[12u8; 32])
+                    .expect("valid key length");
+            let reader_cryptographer = cryptographer.clone();
+            let mut sender = MessageSender::new(Box::new(writer), cryptographer, 1024);
+            let max_msgs_hi =
+                u8::try_from(MessageSender::<ChaCha20Poly1305>::MAX_PLAINTEXT_MSGS_HI)
+                    .expect("high-priority plaintext cap fits in u8");
+
+            for id in 1..=max_msgs_hi.saturating_add(1) {
+                sender
+                    .prepare_message(&Message::Data(RoutedMsg::Consensus(id)), Priority::High)
+                    .expect("prepare consensus");
+            }
+
+            while sender.ready() {
+                sender.send().await.expect("send");
+            }
+
+            let data = {
+                let buffer = buffer.lock().expect("buffer lock");
+                Bytes::from(buffer.clone())
+            };
+            let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead { data, pos: 0 });
+            let mut reader: MessageReader<ChaCha20Poly1305, Message<RoutedMsg>> =
+                MessageReader::new(read, reader_cryptographer, 1024);
+
+            let mut delivered = Vec::new();
+            while let Some((msg, _)) = reader.read_message().await.expect("read message") {
+                match msg {
+                    Message::Data(RoutedMsg::Consensus(id)) => delivered.push(id),
+                    other => panic!("expected consensus frame, got {other:?}"),
+                }
+            }
+
+            assert_eq!(
+                delivered,
+                (1..=max_msgs_hi.saturating_add(1)).collect::<Vec<_>>()
             );
         }
 

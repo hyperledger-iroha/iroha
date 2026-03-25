@@ -287,6 +287,27 @@ impl Handle {
         })
     }
 
+    /// Check whether a specific session key has a complete local chunk set that matches the
+    /// provided payload, regardless of whether DELIVER has been observed yet.
+    pub fn complete_payload_matches(
+        &self,
+        block_hash: &HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        payload_hash: &Hash,
+    ) -> bool {
+        let inner = self.store.inner.lock().expect("rbc status lock poisoned");
+        inner
+            .map
+            .get(&(*block_hash, height, view))
+            .is_some_and(|entry| {
+                let summary = &entry.summary;
+                !summary.invalid
+                    && summary.received_chunks == summary.total_chunks
+                    && matches!(summary.payload_hash, Some(hash) if &hash == payload_hash)
+            })
+    }
+
     /// Test-only helper that overwrites the in-memory summary for a given
     /// `(block_hash, height, view)` tuple without touching the persisted store.
     #[cfg(test)]

@@ -17,7 +17,11 @@
       "import": "./dist/crypto.js",
       "types": "./index.d.ts"
     },
-    "./offline": "./dist/offlineEnvelope.js"
+    "./offline": "./dist/offlineEnvelope.js",
+    "./connect-browser": {
+      "import": "./dist/connect.browser.js",
+      "types": "./connect.browser.d.ts"
+    }
   },
   "typesVersions": {
     "*": {
@@ -32,10 +36,14 @@
       ],
       "offline": [
         "./index.d.ts"
+      ],
+      "connect-browser": [
+        "./connect.browser.d.ts"
       ]
     }
   },
   "scripts": {
+    "prepare": "npm run build:dist",
     "lint": "eslint --max-warnings=0 src scripts recipes test --ext .js,.mjs",
     "lint:test": "npm run lint && npm run build:native && npm test",
     "build:native": "node ./scripts/build-native.mjs && node ./scripts/copy-native.mjs",
@@ -79,6 +87,7 @@
   "files": [
     "README.md",
     "index.d.ts",
+    "connect.browser.d.ts",
     "package.json",
     "native/iroha_js_host.checksums.json",
     "dist",

@@ -747,6 +747,14 @@ pub mod isi {
                 let _domain = state_transaction.world.domain_mut(domain_id)?;
             }
             if state_transaction.world.account(&account_id).is_ok() {
+                let plain_domainless_self_registration = domain_id.is_none()
+                    && self.object().metadata().is_empty()
+                    && self.object().label().is_none()
+                    && self.object().uaid.is_none()
+                    && self.object().opaque_ids.is_empty();
+                if plain_domainless_self_registration {
+                    return Ok(());
+                }
                 return Err(RepetitionError {
                     instruction: InstructionType::Register,
                     id: IdBox::AccountId(account_id),

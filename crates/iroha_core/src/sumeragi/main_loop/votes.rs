@@ -672,104 +672,30 @@ impl Actor {
                                 height = vote.height,
                                 view = vote.view,
                                 block = %vote.block_hash,
-                                "skipping block sync update for aborted pending block"
+                                "skipping known-block commit evidence replay for aborted pending block"
                             );
                             return;
                         }
                     }
-                    let block = match self.pending.pending_blocks.get(&vote.block_hash) {
-                        Some(pending) => pending.block.clone(),
-                        None => return,
-                    };
-                    let world = self.state.world_view();
-                    let block_time =
-                        self.block_time_for_mode_from_world(&world, context.consensus_mode);
-                    let cooldown = block_time.max(REBROADCAST_COOLDOWN_FLOOR);
-                    if self.block_sync_rebroadcast_log.allow(
+                    let local_signer =
+                        self.local_validator_index_for_topology(&context.signature_topology);
+                    let vote_is_local = local_signer.is_some_and(|idx| idx == vote.signer);
+                    if !vote_is_local {
+                        let _ = self.maybe_emit_local_commit_vote_for_pending_event(
+                            vote.block_hash,
+                            vote.height,
+                            vote.view,
+                            context.topology.as_ref(),
+                            "commit_vote_accepted",
+                        );
+                    }
+                    let _ = self.maybe_replay_known_block_commit_evidence(
                         vote.block_hash,
-                        std::time::Instant::now(),
-                        cooldown,
-                    ) {
-                        let mut update = self.block_sync_update_for_precommit_vote(
-                            &block,
-                            self.state.as_ref(),
-                            self.kura.as_ref(),
-                            &self.qc_cache,
-                            &self.vote_log,
-                            &vote,
-                        );
-                        let commit_votes = update.commit_votes.len();
-                        let has_commit_qc = update.commit_qc.is_some();
-                        let should_broadcast =
-                            match self.pending.pending_blocks.get_mut(&vote.block_hash) {
-                                Some(pending) => pending.should_broadcast_block_sync_update(
-                                    vote.view,
-                                    commit_votes,
-                                    has_commit_qc,
-                                ),
-                                None => false,
-                            };
-                        if !should_broadcast {
-                            iroha_logger::trace!(
-                                height = vote.height,
-                                view = vote.view,
-                                block = %vote.block_hash,
-                                signer = vote.signer,
-                                commit_votes,
-                                has_commit_qc,
-                                "skipping block sync update broadcast: no new commit votes"
-                            );
-                            return;
-                        }
-                        if self.prepare_block_sync_update_for_broadcast(
-                            &mut update,
-                            context.consensus_mode,
-                        ) {
-                            self.broadcast_block_sync_update(update, &topology_peers);
-                            iroha_logger::info!(
-                                height = vote.height,
-                                view = vote.view,
-                                block = %vote.block_hash,
-                                signer = vote.signer,
-                                targets = topology_peers.len(),
-                                "sending block sync update with cached precommit votes to commit topology after recording vote"
-                            );
-                        } else if topology_peers.is_empty() {
-                            let _ = self.handle_roster_unavailable_recovery(
-                                vote.height,
-                                vote.view,
-                                Some(vote.block_hash),
-                                self.queue.queued_len(),
-                                std::time::Instant::now(),
-                                ProposalDeferWarningKind::EmptyCommitTopologyProposal,
-                                "precommit_vote_roster_unavailable",
-                            );
-                            iroha_logger::debug!(
-                                height = vote.height,
-                                view = vote.view,
-                                block = %vote.block_hash,
-                                "deferring payload rebroadcast while waiting for roster-unavailability recovery"
-                            );
-                        } else {
-                            iroha_logger::debug!(
-                                height = vote.height,
-                                view = vote.view,
-                                block = %vote.block_hash,
-                                signer = vote.signer,
-                                targets = topology_peers.len(),
-                                "skipping BlockCreated payload fallback after precommit vote because roster proof is unavailable"
-                            );
-                        }
-                    } else {
-                        iroha_logger::trace!(
-                            height = vote.height,
-                            view = vote.view,
-                            block = %vote.block_hash,
-                            signer = vote.signer,
-                            cooldown_ms = cooldown.as_millis(),
-                            "skipping block sync update broadcast due to cooldown"
-                        );
-                    }
+                        vote.height,
+                        vote.view,
+                        &topology_peers,
+                        "commit_vote_accepted",
+                    );
                 }
             }
             Phase::NewView => {
@@ -842,6 +768,11 @@ impl Actor {
                 );
             }
         }
+        self.request_commit_pipeline_for_pending(
+            vote.block_hash,
+            super::status::RoundEventCauseTrace::VoteReceived,
+            None,
+        );
     }
 
     fn try_dispatch_vote_verification(
@@ -1385,7 +1316,7 @@ impl Actor {
         true
     }
 
-    fn consensus_missing_block_retry_window(
+    pub(super) fn consensus_missing_block_retry_window(
         &self,
         block_hash: HashOf<BlockHeader>,
         height: u64,
@@ -1592,13 +1523,32 @@ impl Actor {
             );
         }
         let topology = super::network_topology::Topology::new(roster);
+        let now = Instant::now();
+        if self.handle_frontier_body_gap_with_topology(
+            highest.subject_block_hash,
+            highest.height,
+            highest.view,
+            &signers,
+            &topology,
+            true,
+            now,
+        ) {
+            debug!(
+                height = highest.height,
+                view = highest.view,
+                block = %highest.subject_block_hash,
+                roster_source,
+                source,
+                "routed highest-QC frontier body miss through exact body repair"
+            );
+            return true;
+        }
         let retry_window = self.consensus_missing_block_retry_window(
             highest.subject_block_hash,
             highest.height,
             highest.view,
         );
         let signer_fallback_attempts = self.recovery_signer_fallback_attempts();
-        let now = Instant::now();
         let force_retry_now = force_fetch
             && self.allow_highest_qc_force_fetch_retry(
                 highest.height,
@@ -2330,8 +2280,37 @@ impl Actor {
             self.consensus_missing_block_retry_window(vote.block_hash, vote.height, vote.view);
         let signer_fallback_attempts = self.recovery_signer_fallback_attempts();
         let now = Instant::now();
-        let signers = BTreeSet::new();
-        let decision = plan_missing_block_fetch(
+        let (_, mode_tag, prf_seed) = self.consensus_context_for_height(vote.height);
+        let signature_topology =
+            super::topology_for_view(&topology, vote.height, vote.view, mode_tag, prf_seed);
+        let signers = super::normalize_signer_indices_to_canonical(
+            &BTreeSet::from([vote.signer]),
+            &signature_topology,
+            &topology,
+        );
+        let frontier_voter = signers
+            .iter()
+            .next()
+            .and_then(|signer| usize::try_from(*signer).ok())
+            .and_then(|idx| topology.as_ref().get(idx).cloned());
+        if self.note_frontier_vote_placeholder(
+            vote.block_hash,
+            vote.height,
+            vote.view,
+            frontier_voter,
+            now,
+        ) {
+            debug!(
+                height = vote.height,
+                view = vote.view,
+                phase = ?vote.phase,
+                block = %vote.block_hash,
+                roster_source,
+                "recorded passive frontier vote placeholder without generic missing-block fetch"
+            );
+            return;
+        }
+        let decision = plan_missing_block_fetch_with_mode(
             &mut self.pending.missing_block_requests,
             vote.block_hash,
             vote.height,
@@ -2344,6 +2323,8 @@ impl Actor {
             retry_window,
             None,
             signer_fallback_attempts,
+            MissingBlockFetchMode::StrictSigners,
+            false,
         );
         let dwell = self
             .pending
@@ -2551,45 +2532,6 @@ impl Actor {
                 "double vote detected; storing evidence"
             );
         }
-    }
-
-    pub(super) fn block_sync_update_for_precommit_vote(
-        &self,
-        block: &SignedBlock,
-        state: &State,
-        kura: &Kura,
-        qc_cache: &BTreeMap<QcVoteKey, crate::sumeragi::consensus::Qc>,
-        vote_log: &BTreeMap<
-            (
-                crate::sumeragi::consensus::Phase,
-                u64,
-                u64,
-                u64,
-                crate::sumeragi::consensus::ValidatorIndex,
-            ),
-            crate::sumeragi::consensus::Vote,
-        >,
-        vote: &crate::sumeragi::consensus::Vote,
-    ) -> super::message::BlockSyncUpdate {
-        let mut update = super::block_sync_update_with_certified_roster(
-            block,
-            state,
-            kura,
-            self.config.consensus_mode,
-            &self.roster_validation_cache,
-        );
-        Self::apply_cached_qcs_to_block_sync_update(
-            &mut update,
-            qc_cache,
-            vote_log,
-            vote.block_hash,
-            vote.height,
-            vote.view,
-            vote.epoch,
-            state,
-            self.config.consensus_mode,
-        );
-        update
     }
 
     // Prefer the roster tied to a committed block to keep signatures valid across roster changes.

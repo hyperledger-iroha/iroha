@@ -40,7 +40,10 @@ use iroha_executor_data_model::{
     isi::multisig::MultisigInstructionBox, permission as executor_permission,
 };
 use iroha_logger::{debug, trace, warn};
-use iroha_primitives::{json::Json, numeric::Numeric};
+use iroha_primitives::{
+    json::Json,
+    numeric::{Numeric, NumericSpec},
+};
 use ivm::runtime::IvmConfig;
 use ivm::{IVM, Memory, VMError};
 use mv::storage::StorageReadOnly;
@@ -470,6 +473,77 @@ pub(crate) fn parse_gas_limit(metadata: &Metadata) -> Result<Option<u64>, Valida
     Ok(Some(value))
 }
 
+#[derive(Clone, Debug)]
+struct ContractCallExecutionContext {
+    entrypoint: Option<String>,
+    entrypoint_pc: Option<u64>,
+    args: Json,
+}
+
+fn parse_contract_call_execution_context(
+    metadata: &Metadata,
+    bytecode: &[u8],
+) -> Result<Option<ContractCallExecutionContext>, ValidationFail> {
+    let entrypoint = metadata
+        .get("contract_entrypoint")
+        .map(|raw| {
+            raw.try_into_any_norito::<String>().map_err(|err| {
+                ValidationFail::NotPermitted(format!("invalid contract_entrypoint metadata: {err}"))
+            })
+        })
+        .transpose()?
+        .map(|value| value.trim().to_owned());
+    if entrypoint.as_deref().is_some_and(str::is_empty) {
+        return Err(ValidationFail::NotPermitted(
+            "contract_entrypoint must not be empty".to_owned(),
+        ));
+    }
+
+    let payload = metadata.get("contract_payload").cloned();
+    if entrypoint.is_none() && payload.is_none() {
+        return Ok(None);
+    }
+
+    let entrypoint_pc = if let Some(selector) = entrypoint.as_deref() {
+        let parsed = ivm::ProgramMetadata::parse(bytecode).map_err(|err| {
+            ValidationFail::NotPermitted(format!(
+                "invalid contract artifact for contract call dispatch: {err}"
+            ))
+        })?;
+        let prefix_len = parsed.prefix_len() as u64;
+        let contract_interface = parsed.contract_interface.as_ref().ok_or_else(|| {
+            ValidationFail::NotPermitted(
+                "contract call entrypoint metadata requires a self-describing contract artifact"
+                    .to_owned(),
+            )
+        })?;
+        let descriptor = contract_interface
+            .entrypoints
+            .iter()
+            .find(|candidate| candidate.name == selector)
+            .ok_or_else(|| {
+                ValidationFail::NotPermitted(format!("unknown contract entrypoint `{selector}`"))
+            })?;
+        if !matches!(
+            descriptor.kind,
+            iroha_data_model::smart_contract::manifest::EntryPointKind::Public
+        ) {
+            return Err(ValidationFail::NotPermitted(format!(
+                "contract entrypoint `{selector}` is not public"
+            )));
+        }
+        Some(prefix_len + descriptor.entry_pc)
+    } else {
+        None
+    };
+
+    Ok(Some(ContractCallExecutionContext {
+        entrypoint,
+        entrypoint_pc,
+        args: payload.unwrap_or_default(),
+    }))
+}
+
 fn parse_executor_additional_fuel(metadata: &Metadata) -> Result<u64, ValidationFail> {
     let Some(raw) = metadata.get(EXECUTOR_ADDITIONAL_FUEL_KEY) else {
         return Ok(0);
@@ -688,7 +762,7 @@ pub(crate) fn charge_fees_for_applied_overlay(
                 {
                     let delta =
                         u64::try_from(fee_u128.min(u128::from(u64::MAX))).unwrap_or(u64::MAX);
-                    state_transaction.stage_block_fee_units(delta);
+                    state_transaction.stage_block_fee_amount(Numeric::from(delta));
                 }
 
                 let block_timestamp_ms_u128 =
@@ -775,6 +849,29 @@ impl Executor {
             .map_err(|_| ValidationFail::InternalError(format!("{context} exceeds u128 bounds")))
     }
 
+    fn checked_numeric_add(
+        lhs: Numeric,
+        rhs: Numeric,
+        context: &'static str,
+    ) -> Result<Numeric, ValidationFail> {
+        lhs.checked_add(rhs).ok_or_else(|| {
+            ValidationFail::NotPermitted(format!("{context} exceeds supported numeric bounds"))
+        })
+    }
+
+    fn checked_numeric_mul_u64(
+        value: &Numeric,
+        multiplier: u64,
+        context: &'static str,
+    ) -> Result<Numeric, ValidationFail> {
+        value
+            .clone()
+            .checked_mul(Numeric::from(multiplier), NumericSpec::unconstrained())
+            .ok_or_else(|| {
+                ValidationFail::NotPermitted(format!("{context} exceeds supported numeric bounds"))
+            })
+    }
+
     #[allow(clippy::too_many_lines)]
     fn charge_nexus_fees(
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -788,32 +885,33 @@ impl Executor {
             return Ok(());
         }
         let cfg = state_transaction.nexus.fees.clone();
-        let tx_bytes_u128 = u128::try_from(tx_bytes_len).map_err(|_| {
+        let tx_bytes_u64 = u64::try_from(tx_bytes_len).map_err(|_| {
             ValidationFail::InternalError("transaction too large for fee accounting".to_owned())
         })?;
-        let instr_u128 = u128::try_from(instruction_count).map_err(|_| {
+        let instr_u64 = u64::try_from(instruction_count).map_err(|_| {
             ValidationFail::InternalError(
                 "instruction count too large for fee accounting".to_owned(),
             )
         })?;
-        let mut fee_u128 = u128::from(cfg.base_fee);
-        fee_u128 = fee_u128
-            .checked_add(u128::from(cfg.per_byte_fee).saturating_mul(tx_bytes_u128))
-            .ok_or_else(|| {
-                ValidationFail::NotPermitted("fee amount exceeds supported numeric bounds".into())
-            })?;
-        fee_u128 = fee_u128
-            .checked_add(u128::from(cfg.per_instruction_fee).saturating_mul(instr_u128))
-            .ok_or_else(|| {
-                ValidationFail::NotPermitted("fee amount exceeds supported numeric bounds".into())
-            })?;
-        fee_u128 = fee_u128
-            .checked_add(u128::from(cfg.per_gas_unit_fee).saturating_mul(u128::from(gas_used)))
-            .ok_or_else(|| {
-                ValidationFail::NotPermitted("fee amount exceeds supported numeric bounds".into())
-            })?;
+        let mut fee = cfg.base_fee.clone();
+        fee = Self::checked_numeric_add(
+            fee,
+            Self::checked_numeric_mul_u64(&cfg.per_byte_fee, tx_bytes_u64, "fee amount")?,
+            "fee amount",
+        )?;
+        fee = Self::checked_numeric_add(
+            fee,
+            Self::checked_numeric_mul_u64(&cfg.per_instruction_fee, instr_u64, "fee amount")?,
+            "fee amount",
+        )?;
+        fee = Self::checked_numeric_add(
+            fee,
+            Self::checked_numeric_mul_u64(&cfg.per_gas_unit_fee, gas_used, "fee amount")?,
+            "fee amount",
+        )?
+        .trim_trailing_zeros();
 
-        if fee_u128 == 0 {
+        if fee <= Numeric::zero() {
             return Ok(());
         }
 
@@ -831,7 +929,7 @@ impl Executor {
                 warn!(
                     target: "economics",
                     payer = %payer_id,
-                    fee_amount = fee_u128,
+                    fee_amount = %fee,
                     "nexus fee sponsor rejected: sponsorship disabled"
                 );
                 return Err(ValidationFail::NotPermitted(
@@ -849,25 +947,25 @@ impl Executor {
                     target: "economics",
                     sponsor = %sponsor_id,
                     authority = %authority_id,
-                    fee_amount = fee_u128,
+                    fee_amount = %fee,
                     "nexus fee sponsor rejected: missing permission"
                 );
                 return Err(ValidationFail::NotPermitted(
                     "fee sponsor is not authorized".to_owned(),
                 ));
             }
-            if cfg.sponsor_max_fee > 0 && fee_u128 > u128::from(cfg.sponsor_max_fee) {
+            if cfg.sponsor_max_fee > Numeric::zero() && fee > cfg.sponsor_max_fee {
                 let payer_id = sponsor.to_string();
                 sumeragi_status::record_nexus_fee_event(NexusFeeEvent::SponsorCapExceeded {
                     payer_id: payer_id.clone(),
-                    max_fee: cfg.sponsor_max_fee,
-                    attempted_fee: fee_u128,
+                    max_fee: cfg.sponsor_max_fee.clone(),
+                    attempted_fee: fee.clone(),
                 });
                 warn!(
                     target: "economics",
                     payer = %payer_id,
-                    fee_amount = fee_u128,
-                    max_fee = cfg.sponsor_max_fee,
+                    fee_amount = %fee,
+                    max_fee = %cfg.sponsor_max_fee,
                     "nexus fee sponsor rejected: exceeds sponsor_max_fee"
                 );
                 return Err(ValidationFail::NotPermitted(
@@ -912,25 +1010,18 @@ impl Executor {
         let payer_id = payer.to_string();
         let asset_label = payer_asset.definition().to_string();
         let sink_label = sink_account.to_string();
-        let qty = Numeric::try_new(fee_u128, 0).map_err(|_| {
-            let reason = "fee amount exceeds supported numeric bounds".to_owned();
-            sumeragi_status::record_nexus_fee_event(NexusFeeEvent::ConfigInvalid {
-                reason: reason.clone(),
-            });
-            ValidationFail::NotPermitted(reason)
-        })?;
         let transfer = iroha_data_model::isi::Transfer::<
             Asset,
             Numeric,
             iroha_data_model::account::Account,
-        >::asset_numeric(payer_asset, qty, sink_account);
+        >::asset_numeric(payer_asset, fee.clone(), sink_account);
         let instr: DMInstructionBox = transfer.into();
         instr.execute(authority, state_transaction).map_err(|err| {
             let reason = format!("nexus fee transfer failed to apply: {err}");
             sumeragi_status::record_nexus_fee_event(NexusFeeEvent::TransferFailed {
                 payer_kind,
                 payer_id: payer_id.clone(),
-                amount: fee_u128,
+                amount: fee.clone(),
                 asset_id: asset_label.clone(),
                 reason: reason.clone(),
             });
@@ -939,7 +1030,7 @@ impl Executor {
                 ?err,
                 payer = %payer_id,
                 payer_kind = payer_kind_label,
-                fee_amount = fee_u128,
+                fee_amount = %fee,
                 asset = %asset_label,
                 sink = %sink_label,
                 "nexus fee transfer failed"
@@ -951,7 +1042,7 @@ impl Executor {
         state_transaction.stage_nexus_fee_event(NexusFeeEvent::Charged {
             payer_kind,
             payer_id,
-            amount: fee_u128,
+            amount: fee,
             asset_id: asset_label,
         });
         Ok(())
@@ -1180,7 +1271,7 @@ impl Executor {
                     {
                         let delta =
                             u64::try_from(fee_u128.min(u128::from(u64::MAX))).unwrap_or(u64::MAX);
-                        state_transaction.stage_block_fee_units(delta);
+                        state_transaction.stage_block_fee_amount(Numeric::from(delta));
                     }
 
                     // Capture deterministic settlement receipt once the transfer succeeds.
@@ -1323,11 +1414,11 @@ impl Executor {
         // Gas asset admission: if an allowlist is configured, require the tx metadata to specify
         // a `gas_asset_id` present in the allowlist. The value must be a valid
         // unprefixed Base58 `AssetDefinitionId` string.
-        let md = transaction.metadata();
+        let md = transaction.metadata().clone();
         let gas_asset_opt = md.get("gas_asset_id").map(|j| j.as_ref().to_string());
         // Payer-provided gas limit (optional for non-VM transactions); used to cap fee exposure
-        let gas_limit_md = parse_gas_limit(md)?;
-        configure_executor_fuel_budget(self, state_transaction, md)?;
+        let gas_limit_md = parse_gas_limit(&md)?;
+        configure_executor_fuel_budget(self, state_transaction, &md)?;
         let pipeline_gas = &state_transaction.pipeline.gas;
         if !pipeline_gas.accepted_assets.is_empty() {
             let Some(ref gas_asset_id_str) = gas_asset_opt else {
@@ -1635,6 +1726,22 @@ impl Executor {
                 let mut runtime = ivm_cache
                     .take_or_create_cached_runtime(bytes.as_ref(), effective_limit)
                     .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+                let contract_call_context =
+                    parse_contract_call_execution_context(&md, bytes.as_ref())?;
+                if let Some(context) = contract_call_context.as_ref()
+                    && let Some(entrypoint_pc) = context.entrypoint_pc
+                {
+                    runtime.vm.set_register(1, runtime.vm.memory.code_len());
+                    runtime
+                        .vm
+                        .set_program_counter(entrypoint_pc)
+                        .map_err(|err| {
+                            let selector = context.entrypoint.as_deref().unwrap_or("main");
+                            ValidationFail::NotPermitted(format!(
+                                "contract entrypoint `{selector}` resolved to invalid pc: {err}"
+                            ))
+                        })?;
+                }
                 // Attach host with a snapshot of known accounts for vendor helpers when present.
                 let accounts = Arc::new(
                     state_transaction
@@ -1644,8 +1751,15 @@ impl Executor {
                         .map(|(id, _)| id.clone())
                         .collect::<Vec<_>>(),
                 );
-                let mut host =
-                    CoreCoreHost::with_accounts(authority.clone(), Arc::clone(&accounts));
+                let mut host = if let Some(context) = contract_call_context {
+                    CoreCoreHost::with_accounts_and_args(
+                        authority.clone(),
+                        Arc::clone(&accounts),
+                        context.args,
+                    )
+                } else {
+                    CoreCoreHost::with_accounts(authority.clone(), Arc::clone(&accounts))
+                };
                 host.set_crypto_config(Arc::clone(&state_transaction.crypto));
                 host.set_halo2_config(&state_transaction.zk.halo2);
                 host.set_durable_state_snapshot_from_world(&state_transaction.world);
@@ -1761,7 +1875,7 @@ impl Executor {
                             {
                                 let delta = u64::try_from(fee_u128.min(u128::from(u64::MAX)))
                                     .unwrap_or(u64::MAX);
-                                state_transaction.stage_block_fee_units(delta);
+                                state_transaction.stage_block_fee_amount(Numeric::from(delta));
                             }
 
                             let source_id = settlement_source_id;
@@ -4979,7 +5093,7 @@ mod tests {
         let mut state = State::new(world, kura, query_handle);
         let nexus = state.nexus.get_mut();
         nexus.enabled = true;
-        nexus.fees.base_fee = 1;
+        nexus.fees.base_fee = Numeric::from(1_u32);
         nexus.fees.sponsorship_enabled = false;
         nexus.fees.fee_asset_id = "4cuvDVPuLBKJyN6dPbRQhmLh68sU".to_string();
         nexus.fees.fee_sink_account_id = sink_id.to_string();
@@ -5028,7 +5142,7 @@ mod tests {
         let mut state = State::new(world, kura, query_handle);
         let nexus = state.nexus.get_mut();
         nexus.enabled = true;
-        nexus.fees.base_fee = 1;
+        nexus.fees.base_fee = Numeric::from(1_u32);
         nexus.fees.sponsorship_enabled = true;
         nexus.fees.fee_asset_id = "4cuvDVPuLBKJyN6dPbRQhmLh68sU".to_string();
         nexus.fees.fee_sink_account_id = sink_id.to_string();
@@ -5108,10 +5222,10 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = 1;
-            nexus.fees.per_byte_fee = 0;
-            nexus.fees.per_instruction_fee = 0;
-            nexus.fees.per_gas_unit_fee = 0;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
             nexus.fees.sponsorship_enabled = true;
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
@@ -5212,7 +5326,7 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = 1;
+            nexus.fees.base_fee = Numeric::from(1_u32);
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
         }
@@ -5250,6 +5364,194 @@ mod tests {
             snap.last_payer,
             Some(crate::sumeragi::status::NexusFeePayer::Payer)
         );
+    }
+
+    #[test]
+    fn nexus_fee_transfer_cost_is_exactly_one_cent_xor() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+
+        let (payer_id, payer_kp) = gen_account_in("wonderland");
+        let (recipient_id, _recipient_kp) = gen_account_in("wonderland");
+        let (sink_id, _sink_kp) = gen_account_in("wonderland");
+        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let dom: Domain = Domain::new(domain_id.clone()).build(&payer_id);
+        let payer: Account =
+            Account::new(payer_id.to_account_id(domain_id.clone())).build(&payer_id);
+        let recipient: Account =
+            Account::new(recipient_id.to_account_id(domain_id.clone())).build(&recipient_id);
+        let sink: Account = Account::new(sink_id.to_account_id(domain_id.clone())).build(&sink_id);
+        let asset_def_id: AssetDefinitionId =
+            AssetDefinitionId::new("wonderland".parse().unwrap(), "xor".parse().unwrap());
+        let ad: AssetDefinition =
+            AssetDefinition::new(asset_def_id.clone(), NumericSpec::default())
+                .with_name("xor".to_owned())
+                .build(&payer_id);
+        let payer_asset = Asset::new(
+            AssetId::of(asset_def_id.clone(), payer_id.clone()),
+            Numeric::from_str("10").unwrap(),
+        );
+        let recipient_asset = Asset::new(
+            AssetId::of(asset_def_id.clone(), recipient_id.clone()),
+            Numeric::zero(),
+        );
+        let sink_asset = Asset::new(
+            AssetId::of(asset_def_id.clone(), sink_id.clone()),
+            Numeric::zero(),
+        );
+        let world = World::with_assets(
+            [dom],
+            [payer, recipient, sink],
+            [ad],
+            [payer_asset, recipient_asset, sink_asset],
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let mut state = State::new(world, kura, query_handle);
+
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::zero();
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::new(1, 3);
+            nexus.fees.per_gas_unit_fee = Numeric::new(5, 5);
+            nexus.fees.sponsorship_enabled = false;
+            nexus.fees.fee_asset_id = asset_def_id.to_string();
+            nexus.fees.fee_sink_account_id = sink_id.to_string();
+        }
+
+        let instruction: InstructionBox = Transfer::asset_numeric(
+            AssetId::of(asset_def_id.clone(), payer_id.clone()),
+            Numeric::from(1_u32),
+            recipient_id.clone(),
+        )
+        .into();
+        assert_eq!(
+            crate::gas::meter_instructions(std::slice::from_ref(&instruction)),
+            180
+        );
+        let chain: ChainId = "test-chain".parse().unwrap();
+        let tx = TransactionBuilder::new(chain, payer_id.clone())
+            .with_executable(Executable::from(core::iter::once(instruction)))
+            .sign(payer_kp.private_key());
+
+        let executor = super::Executor::default();
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut stx = block.transaction();
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        executor
+            .execute_transaction(&mut stx, &payer_id, tx, &mut ivm_cache)
+            .expect("execution");
+
+        let sink_balance = stx
+            .world
+            .assets()
+            .get(&AssetId::of(asset_def_id.clone(), sink_id.clone()))
+            .expect("sink asset exists")
+            .0
+            .to_string();
+        let payer_balance = stx
+            .world
+            .assets()
+            .get(&AssetId::of(asset_def_id.clone(), payer_id.clone()))
+            .expect("payer asset exists")
+            .0
+            .to_string();
+        let recipient_balance = stx
+            .world
+            .assets()
+            .get(&AssetId::of(asset_def_id, recipient_id))
+            .expect("recipient asset exists")
+            .0
+            .to_string();
+
+        assert_eq!(sink_balance, "0.01");
+        assert_eq!(payer_balance, "8.99");
+        assert_eq!(recipient_balance, "1");
+    }
+
+    #[test]
+    fn nexus_fee_set_account_kv_cost_is_scaled_from_transfer_anchor() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+
+        let (payer_id, payer_kp) = gen_account_in("wonderland");
+        let (sink_id, _sink_kp) = gen_account_in("wonderland");
+        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let dom: Domain = Domain::new(domain_id.clone()).build(&payer_id);
+        let payer: Account =
+            Account::new(payer_id.to_account_id(domain_id.clone())).build(&payer_id);
+        let sink: Account = Account::new(sink_id.to_account_id(domain_id.clone())).build(&sink_id);
+        let asset_def_id: AssetDefinitionId =
+            AssetDefinitionId::new("wonderland".parse().unwrap(), "xor".parse().unwrap());
+        let ad: AssetDefinition =
+            AssetDefinition::new(asset_def_id.clone(), NumericSpec::default())
+                .with_name("xor".to_owned())
+                .build(&payer_id);
+        let payer_asset = Asset::new(
+            AssetId::of(asset_def_id.clone(), payer_id.clone()),
+            Numeric::from_str("10").unwrap(),
+        );
+        let sink_asset = Asset::new(
+            AssetId::of(asset_def_id.clone(), sink_id.clone()),
+            Numeric::zero(),
+        );
+        let world = World::with_assets([dom], [payer, sink], [ad], [payer_asset, sink_asset], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let mut state = State::new(world, kura, query_handle);
+
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::zero();
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::new(1, 3);
+            nexus.fees.per_gas_unit_fee = Numeric::new(5, 5);
+            nexus.fees.sponsorship_enabled = false;
+            nexus.fees.fee_asset_id = asset_def_id.to_string();
+            nexus.fees.fee_sink_account_id = sink_id.to_string();
+        }
+
+        let instruction: InstructionBox = iroha_data_model::isi::SetKeyValue::account(
+            payer_id.clone(),
+            "k".parse().unwrap(),
+            Json::new("v"),
+        )
+        .into();
+        assert_eq!(
+            crate::gas::meter_instructions(std::slice::from_ref(&instruction)),
+            67
+        );
+        let chain: ChainId = "test-chain".parse().unwrap();
+        let tx = TransactionBuilder::new(chain, payer_id.clone())
+            .with_executable(Executable::from(core::iter::once(instruction)))
+            .sign(payer_kp.private_key());
+
+        let executor = super::Executor::default();
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut stx = block.transaction();
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        executor
+            .execute_transaction(&mut stx, &payer_id, tx, &mut ivm_cache)
+            .expect("execution");
+
+        let sink_balance = stx
+            .world
+            .assets()
+            .get(&AssetId::of(asset_def_id, sink_id))
+            .expect("sink asset exists")
+            .0
+            .to_string();
+        assert_eq!(sink_balance, "0.00435");
     }
 
     #[cfg(feature = "telemetry")]

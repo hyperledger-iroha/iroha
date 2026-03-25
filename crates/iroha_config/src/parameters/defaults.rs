@@ -297,9 +297,10 @@ pub mod transaction {
 
     /// Maximum instructions allowed in a transaction payload.
     pub const fn max_instructions() -> NonZeroU64 {
-        // `v1/contracts/call` wrapper transactions for dpn_sora_nexus can exceed 20k
-        // decoded IVM instructions; keep a conservative margin above current payloads.
-        nonzero!(50_000_u64)
+        // `v1/contracts/call` wrapper transactions for Nexus contract flows can exceed 59k
+        // decoded IVM instructions (for example local DLMM pool bootstrap), so keep a wider
+        // margin above currently observed payloads.
+        nonzero!(100_000_u64)
     }
 
     /// Maximum Kotodama bytecode length (bytes) allowed during admission.
@@ -2187,9 +2188,9 @@ pub mod nexus {
         /// Account that receives slashed stake (treasury/burn sink).
         pub const SLASH_SINK_ACCOUNT_ID: &str = super::fees::FEE_SINK_ACCOUNT_ID;
 
-        /// Asset definition used for staking bonds (defaults to the Nexus fee asset).
+        /// Asset definition used for staking bonds.
         pub fn stake_asset_id() -> String {
-            super::fees::fee_asset_id()
+            super::super::canonical_asset_definition_literal("nexus", "xor")
         }
 
         /// Escrow account that custodies bonded stake.
@@ -2205,24 +2206,36 @@ pub mod nexus {
 
     /// Universal fee schedule defaults.
     pub mod fees {
+        use iroha_primitives::numeric::Numeric;
+
         /// Account that receives collected fees (string form).
         pub const FEE_SINK_ACCOUNT_ID: &str = super::pipeline::GAS_TECH_ACCOUNT_ID;
-        /// Base fee charged per transaction (asset base units).
-        pub const BASE_FEE: u64 = 0;
-        /// Per-byte fee charged over the signed transaction payload (asset base units).
-        pub const PER_BYTE_FEE: u64 = 0;
-        /// Per-instruction fee charged for native ISI batches (asset base units).
-        pub const PER_INSTRUCTION_FEE: u64 = 0;
-        /// Per-gas-unit fee multiplier applied to measured gas usage (asset base units).
-        pub const PER_GAS_UNIT_FEE: u64 = 0;
         /// Whether fee sponsorship is allowed.
         pub const SPONSORSHIP_ENABLED: bool = false;
-        /// Maximum fee a sponsor can cover (asset base units, 0 = unlimited).
-        pub const SPONSOR_MAX_FEE: u64 = 0;
+        /// Base fee charged per transaction.
+        pub fn base_fee() -> Numeric {
+            Numeric::from(0_u64)
+        }
+        /// Additional fee charged per serialized transaction byte.
+        pub fn per_byte_fee() -> Numeric {
+            Numeric::from(0_u64)
+        }
+        /// Additional fee charged per instruction.
+        pub fn per_instruction_fee() -> Numeric {
+            Numeric::new(1, 3)
+        }
+        /// Additional fee charged per gas unit.
+        pub fn per_gas_unit_fee() -> Numeric {
+            Numeric::new(5, 5)
+        }
+        /// Maximum fee a sponsor can cover (0 = unlimited).
+        pub fn sponsor_max_fee() -> Numeric {
+            Numeric::from(0_u64)
+        }
 
         /// Fee asset definition identifier (string form).
         pub fn fee_asset_id() -> String {
-            super::super::canonical_asset_definition_literal("nexus", "xor")
+            super::super::canonical_asset_definition_literal("universal", "xor")
         }
     }
 

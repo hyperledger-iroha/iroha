@@ -216,5 +216,9 @@ The command prints a 32‑byte hex digest. Embed this value in `manifest.abi_has
 
 ## Security and governance
 
-- Only accounts with `CanRegisterSmartContractCode` may submit manifests; by default, granting this permission is restricted to genesis. Networks may customize governance to expand who can grant it.
+- Manifest and bytecode registration are public. Torii prepends a domainless
+  self-registration for contract lifecycle writes so a signer can materialize
+  its authority account in the same transaction when the network allows it.
+- Activation and deactivation are public for namespaces not listed in
+  `gov_protected_namespaces`; protected namespaces still require governance.
 - GET is read-only and content‑addressed by `code_hash`. Nodes may still apply access controls consistent with their governance policies.

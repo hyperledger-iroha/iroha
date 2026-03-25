@@ -886,6 +886,7 @@ mod tests {
                 transport: iroha_config::parameters::actual::ToriiTransport::default(),
                 mcp: iroha_config::parameters::actual::ToriiMcp::default(),
                 onboarding: None,
+                faucet: None,
                 offline_issuer: None,
                 proof_api: iroha_config::parameters::actual::ProofApi {
                     rate_per_minute: iroha_config::parameters::defaults::torii::PROOF_RATE_PER_MIN

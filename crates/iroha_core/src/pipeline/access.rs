@@ -19,6 +19,7 @@ use iroha_data_model::{
         BurnBox, GrantBox, InstructionBox, Log, MintBox, RegisterBox, RemoveKeyValueBox, RevokeBox,
         SetKeyValueBox, TransferBox, UnregisterBox, zk,
     },
+    metadata::Metadata,
     nexus::LaneId,
     nft::NftId,
     permission,
@@ -32,6 +33,7 @@ use iroha_data_model::{
     },
     transaction::SignedTransaction,
 };
+use iroha_primitives::json::Json;
 use ivm::host::IVMHost;
 use mv::storage::StorageReadOnly; // bring trait into scope for .get()
 use parking_lot::RwLock;
@@ -157,11 +159,89 @@ fn manifest_from_metadata(tx: &SignedTransaction) -> Option<ContractManifest> {
         .and_then(|json| json.clone().try_into_any_norito::<ContractManifest>().ok())
 }
 
+#[derive(Clone, Debug)]
+struct ContractCallExecutionContext {
+    entrypoint: Option<String>,
+    entrypoint_pc: Option<u64>,
+    args: Json,
+}
+
+fn requested_contract_entrypoint(metadata: &Metadata) -> Option<String> {
+    metadata
+        .get("contract_entrypoint")
+        .and_then(|raw| raw.clone().try_into_any_norito::<String>().ok())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+fn parse_contract_call_execution_context(
+    metadata: &Metadata,
+    bytecode: &[u8],
+) -> Result<Option<ContractCallExecutionContext>, String> {
+    let entrypoint = requested_contract_entrypoint(metadata);
+    let payload = metadata.get("contract_payload").cloned();
+    if entrypoint.is_none() && payload.is_none() {
+        return Ok(None);
+    }
+
+    let entrypoint_pc = if let Some(selector) = entrypoint.as_deref() {
+        let parsed = ivm::ProgramMetadata::parse(bytecode).map_err(|err| {
+            format!("invalid contract artifact for contract call dispatch: {err}")
+        })?;
+        let prefix_len = parsed.prefix_len() as u64;
+        let contract_interface = parsed.contract_interface.as_ref().ok_or_else(|| {
+            "contract call entrypoint metadata requires a self-describing contract artifact"
+                .to_owned()
+        })?;
+        let descriptor = contract_interface
+            .entrypoints
+            .iter()
+            .find(|candidate| candidate.name == selector)
+            .ok_or_else(|| format!("unknown contract entrypoint `{selector}`"))?;
+        if !matches!(
+            descriptor.kind,
+            iroha_data_model::smart_contract::manifest::EntryPointKind::Public
+        ) {
+            return Err(format!("contract entrypoint `{selector}` is not public"));
+        }
+        Some(prefix_len + descriptor.entry_pc)
+    } else {
+        None
+    };
+
+    Ok(Some(ContractCallExecutionContext {
+        entrypoint,
+        entrypoint_pc,
+        args: payload.unwrap_or_default(),
+    }))
+}
+
+fn apply_contract_call_execution_context(
+    vm: &mut ivm::IVM,
+    context: Option<&ContractCallExecutionContext>,
+) -> Result<(), String> {
+    if let Some(context) = context
+        && let Some(entrypoint_pc) = context.entrypoint_pc
+    {
+        // Match runtime contract-call semantics during access derivation so
+        // non-`main` entrypoints can return cleanly to the VM end-of-stream.
+        vm.set_register(1, vm.memory.code_len());
+        vm.set_program_counter(entrypoint_pc).map_err(|err| {
+            format!(
+                "contract entrypoint `{}` resolved to invalid pc: {err}",
+                context.entrypoint.as_deref().unwrap_or("main")
+            )
+        })?;
+    }
+    Ok(())
+}
+
 fn manifest_access_set(
     manifest: &ContractManifest,
     code_hash: IrohaHash,
     bytecode: &[u8],
     cache_enabled: bool,
+    requested_entrypoint: Option<&str>,
 ) -> Option<(AccessSet, AccessSetSource)> {
     let manifest_hash = cache_enabled.then(|| manifest_signature_hash(manifest));
     if let Some(hints) = manifest.access_set_hints.as_ref() {
@@ -182,7 +262,7 @@ fn manifest_access_set(
         }
     }
     if let Some(entrypoints) = manifest.entrypoints.as_deref()
-        && let Some(entrypoint) = select_entrypoint(entrypoints)
+        && let Some(entrypoint) = select_entrypoint(entrypoints, requested_entrypoint)
     {
         let key = AccessSetCacheKey {
             code_hash,
@@ -249,6 +329,7 @@ where
         ),
         Executable::Ivm(bytecode) => {
             let bytecode_ref = bytecode.as_ref();
+            let requested_entrypoint = requested_contract_entrypoint(tx.metadata());
             if let Ok(parsed) = ivm::ProgramMetadata::parse(bytecode_ref) {
                 let code_hash = IrohaHash::new(&bytecode_ref[parsed.header_len..]);
                 // 1) Try static hints from on-chain manifest (by code_hash)
@@ -259,6 +340,7 @@ where
                             code_hash,
                             bytecode_ref,
                             view.pipeline().access_set_cache_enabled,
+                            requested_entrypoint.as_deref(),
                         ) {
                             return (set, Some(source));
                         }
@@ -267,9 +349,13 @@ where
                 // 1b) Fallback to manifest provided in transaction metadata.
                 if let Some(manifest) = manifest_from_metadata(tx) {
                     if manifest.code_hash == Some(code_hash) {
-                        if let Some((set, source)) =
-                            manifest_access_set(&manifest, code_hash, bytecode_ref, false)
-                        {
+                        if let Some((set, source)) = manifest_access_set(
+                            &manifest,
+                            code_hash,
+                            bytecode_ref,
+                            false,
+                            requested_entrypoint.as_deref(),
+                        ) {
                             return (set, Some(source));
                         }
                     }
@@ -280,7 +366,13 @@ where
                 (IvmStrategy::DynamicThenConservative, Some(view)) => {
                     let set = tx_gas_limit(tx)
                         .and_then(|gas_limit| {
-                            derive_from_ivm_dynamic(bytecode_ref, tx.authority(), view, gas_limit)
+                            derive_from_ivm_dynamic(
+                                bytecode_ref,
+                                tx.authority(),
+                                tx.metadata(),
+                                view,
+                                gas_limit,
+                            )
                         })
                         .unwrap_or_else(|_| AccessSet::global());
                     let source = if set.read_keys.is_empty()
@@ -330,9 +422,15 @@ fn entrypoint_access_set_if_safe(
     access_set_from_hint_keys(&entrypoint.read_keys, &entrypoint.write_keys)
 }
 
-fn select_entrypoint(entrypoints: &[EntrypointDescriptor]) -> Option<&EntrypointDescriptor> {
+fn select_entrypoint<'a>(
+    entrypoints: &'a [EntrypointDescriptor],
+    requested_entrypoint: Option<&str>,
+) -> Option<&'a EntrypointDescriptor> {
     if entrypoints.is_empty() {
         return None;
+    }
+    if let Some(requested) = requested_entrypoint {
+        return entrypoints.iter().find(|entry| entry.name == requested);
     }
     if let Some(entrypoint) = entrypoints.iter().find(|entry| entry.name == "main") {
         return Some(entrypoint);
@@ -1067,6 +1165,7 @@ where
         code_hash,
         bytecode_ref,
         state_ro.pipeline().access_set_cache_enabled,
+        None,
     )
     .map(|(set, _source)| set)
 }
@@ -1212,6 +1311,7 @@ fn tx_gas_limit(tx: &SignedTransaction) -> Result<u64, String> {
 fn derive_from_ivm_dynamic<R>(
     bytecode: &[u8],
     authority: &AccountId,
+    metadata: &Metadata,
     state_ro: &R,
     gas_limit: u64,
 ) -> Result<AccessSet, String>
@@ -1221,12 +1321,21 @@ where
     // Execute VM with CoreHost to collect queued ISIs; do not apply.
     ivm::ProgramMetadata::parse(bytecode).map_err(|e| format!("ivm.metadata: {e}"))?;
     let mut vm = ivm::IVM::new(gas_limit);
+    let contract_call_context = parse_contract_call_execution_context(metadata, bytecode)?;
     // Supply accounts snapshot for vendor helpers to become deterministic.
     let accounts = state_ro.accounts_snapshot();
-    let mut host = crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
-        authority.clone(),
-        Arc::clone(&accounts),
-    )
+    let mut host = if let Some(context) = contract_call_context.as_ref() {
+        crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
+            authority.clone(),
+            Arc::clone(&accounts),
+            context.args.clone(),
+        )
+    } else {
+        crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
+            authority.clone(),
+            Arc::clone(&accounts),
+        )
+    }
     .with_access_logging();
     #[cfg(feature = "telemetry")]
     host.set_telemetry(state_ro.metrics().clone());
@@ -1244,6 +1353,8 @@ where
     vm.load_program(bytecode)
         .map_err(|e| format!("ivm.load_program: {e}"))?;
     vm.set_gas_limit(gas_limit);
+    apply_contract_call_execution_context(&mut vm, contract_call_context.as_ref())
+        .map_err(|e| format!("ivm.contract_call: {e}"))?;
     vm.run_with_host(&mut host)
         .map_err(|e| format!("ivm.run: {e}"))?;
     let mut set = AccessSet::new();

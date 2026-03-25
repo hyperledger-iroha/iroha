@@ -185,7 +185,7 @@ use axum::{
         DefaultBodyLimit, Extension, State, WebSocketUpgrade,
         connect_info::IntoMakeServiceWithConnectInfo,
     },
-    http::{HeaderMap, HeaderValue, Request, StatusCode, header::HeaderName},
+    http::{HeaderMap, HeaderValue, Method as HttpMethod, Request, StatusCode, header::HeaderName},
     middleware::Next,
     response::{IntoResponse, Json, Response},
     routing::{any, delete, get, post},
@@ -287,6 +287,7 @@ use tokio::{
 };
 use tower::ServiceExt as _;
 use tower_http::{
+    cors::{Any, CorsLayer},
     timeout::TimeoutLayer,
     trace::{DefaultMakeSpan, TraceLayer},
 };
@@ -19091,6 +19092,18 @@ impl Torii {
         #[cfg(feature = "app_api")]
         self.add_soracloud_public_runtime_routes(&mut builder);
 
+        let cors_layer = CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods([
+                HttpMethod::GET,
+                HttpMethod::POST,
+                HttpMethod::DELETE,
+                HttpMethod::OPTIONS,
+            ])
+            .allow_headers(Any)
+            .expose_headers(Any)
+            .max_age(Duration::from_secs(60 * 60));
+
         let router = builder
             .finish()
             .layer((
@@ -19122,7 +19135,8 @@ impl Torii {
             .layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
                 record_http_metrics,
-            ));
+            ))
+            .layer(cors_layer);
 
         {
             let mut guard = app_state

@@ -101,6 +101,56 @@ pub(super) fn select_commit_root_signers(
 }
 
 impl Actor {
+    fn try_recover_missing_block_from_local_rbc_session(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+    ) -> bool {
+        if self.block_known_locally(block_hash) {
+            return true;
+        }
+
+        let key = Self::session_key(&block_hash, height, view);
+        let authoritative_payload =
+            self.subsystems
+                .da_rbc
+                .rbc
+                .sessions
+                .get(&key)
+                .is_some_and(|session| {
+                    !session.is_invalid()
+                        && self.rbc_session_has_authoritative_payload_for_progress(key, session)
+                });
+        if !authoritative_payload {
+            return false;
+        }
+
+        self.recover_block_from_rbc_session(key);
+        let recovered = self.block_known_locally(block_hash);
+        if recovered {
+            self.clear_missing_block_request(
+                &block_hash,
+                MissingBlockClearReason::PayloadAvailable,
+            );
+        }
+        recovered
+    }
+
+    fn try_recover_block_for_qc(&mut self, qc: &crate::sumeragi::consensus::Qc) -> bool {
+        if self.block_known_locally(qc.subject_block_hash) {
+            return true;
+        }
+        if self.rehydrate_pending_from_kura_for_qc(qc) {
+            return true;
+        }
+        self.try_recover_missing_block_from_local_rbc_session(
+            qc.subject_block_hash,
+            qc.height,
+            qc.view,
+        )
+    }
+
     pub(super) fn missing_block_retry_window_with_rbc_progress(
         &self,
         block_hash: HashOf<BlockHeader>,
@@ -769,7 +819,7 @@ impl Actor {
                     now,
                 )
                 .map(|snapshot| snapshot.stall_window);
-            if self.block_known_locally(entry.qc.subject_block_hash) {
+            if self.try_recover_block_for_qc(&entry.qc) {
                 actions.push(ReplayAction::Replay {
                     key,
                     qc: entry.qc.clone(),
@@ -1263,6 +1313,11 @@ impl Actor {
             )
         };
         let now = Instant::now();
+        if self.handle_frontier_body_gap_with_topology(
+            block_hash, height, view, signers, topology, true, now,
+        ) {
+            return true;
+        }
         let committed_height = self.committed_height_snapshot();
         let subject_height = Self::missing_dependency_subject_height_for_phase(phase, height);
         if self.missing_hash_is_non_actionable_dependency(
@@ -1328,8 +1383,6 @@ impl Actor {
         let network = self.network.clone();
         let requester_roster_proof_known =
             self.requester_has_local_roster_proof(block_hash, height, view);
-        let mut requests = core::mem::take(&mut self.pending.missing_block_requests);
-        let telemetry = self.telemetry_handle();
         let fetch_mode = if aggressive_qc_fetch {
             if aggressive_retry_floor {
                 crate::sumeragi::status::inc_qc_missing_payload_aggressive_fetch();
@@ -1338,35 +1391,63 @@ impl Actor {
         } else {
             super::MissingBlockFetchMode::Default
         };
-        let deferred = super::defer_qc_for_missing_block_with_mode(
-            self.block_payload_available_locally(block_hash),
-            retry_window,
-            view_change_window,
-            now,
+        let deferred = match self.missing_block_ingress_fetch_gate(
             block_hash,
             height,
             view,
             phase,
-            signers,
-            topology,
-            self.recovery_signer_fallback_attempts(),
-            &mut requests,
-            telemetry,
-            fetch_mode,
-            move |targets| {
-                send_missing_block_request(
-                    &network,
-                    &peer_id,
+            super::MissingBlockPriority::Consensus,
+            now,
+            retry_window,
+            view_change_window,
+        ) {
+            super::MissingBlockIngressFetchGate::Hold => {
+                debug!(
+                    height,
+                    view,
+                    phase = ?phase,
+                    block = %block_hash,
+                    grace_ms = self.authoritative_body_ingress_fetch_grace().as_millis(),
+                    "deferring QC aggregation while authoritative body ingress grace is active"
+                );
+                true
+            }
+            super::MissingBlockIngressFetchGate::Fetch { force_retry_now } => {
+                let mut requests = core::mem::take(&mut self.pending.missing_block_requests);
+                let telemetry = self.telemetry_handle();
+                let deferred = super::defer_qc_for_missing_block_with_mode(
+                    self.block_payload_available_locally(block_hash),
+                    retry_window,
+                    view_change_window,
+                    now,
                     block_hash,
                     height,
                     view,
-                    super::MissingBlockPriority::Consensus,
-                    requester_roster_proof_known,
-                    targets,
+                    phase,
+                    signers,
+                    topology,
+                    self.recovery_signer_fallback_attempts(),
+                    &mut requests,
+                    telemetry,
+                    fetch_mode,
+                    force_retry_now,
+                    move |targets| {
+                        send_missing_block_request(
+                            &network,
+                            &peer_id,
+                            block_hash,
+                            height,
+                            view,
+                            super::MissingBlockPriority::Consensus,
+                            requester_roster_proof_known,
+                            targets,
+                        );
+                    },
                 );
-            },
-        );
-        self.pending.missing_block_requests = requests;
+                self.pending.missing_block_requests = requests;
+                deferred
+            }
+        };
         if defer_view_change {
             self.clear_missing_block_view_change(&block_hash);
         }
@@ -1625,6 +1706,17 @@ impl Actor {
                 Some(stats) => stats.clone(),
                 None => continue,
             };
+            if self.frontier_slot.as_ref().is_some_and(|slot| {
+                slot.block_hash == block_hash
+                    && slot.height == stats_snapshot.height
+                    && slot.view == stats_snapshot.view
+            }) && self.frontier_slot_is_exact_height(stats_snapshot.height)
+            {
+                self.clear_missing_block_request(&block_hash, MissingBlockClearReason::Obsolete);
+                self.clear_missing_block_view_change(&block_hash);
+                progress = true;
+                continue;
+            }
             let expected_epoch = self.epoch_for_height(stats_snapshot.height);
             let mut signers = BTreeSet::new();
             let mut roster: Option<Vec<PeerId>> = None;
@@ -1756,16 +1848,32 @@ impl Actor {
             {
                 view_change_window = Some(self.quorum_timeout(self.runtime_da_enabled()));
             }
+            let fetch_gate = self.missing_block_ingress_fetch_gate(
+                block_hash,
+                stats_snapshot.height,
+                stats_snapshot.view,
+                stats_snapshot.phase,
+                stats_snapshot.priority,
+                now,
+                retry_window,
+                view_change_window,
+            );
+            let force_retry_now = match fetch_gate {
+                super::MissingBlockIngressFetchGate::Hold => false,
+                super::MissingBlockIngressFetchGate::Fetch { force_retry_now } => force_retry_now,
+            };
             let decision = if far_ahead_retry_suppressed {
+                MissingBlockFetchDecision::Backoff
+            } else if matches!(fetch_gate, super::MissingBlockIngressFetchGate::Hold) {
                 MissingBlockFetchDecision::Backoff
             } else if let Some(ref topology) = topology {
                 let since_last_request =
                     now.saturating_duration_since(stats_snapshot.last_requested);
-                if since_last_request < effective_retry_window {
+                if !force_retry_now && since_last_request < effective_retry_window {
                     MissingBlockFetchDecision::Backoff
                 } else {
                     let signer_fallback_attempts = self.recovery_signer_fallback_attempts();
-                    super::plan_missing_block_fetch(
+                    super::plan_missing_block_fetch_with_mode(
                         &mut self.pending.missing_block_requests,
                         block_hash,
                         stats_snapshot.height,
@@ -1778,12 +1886,14 @@ impl Actor {
                         retry_window,
                         view_change_window,
                         signer_fallback_attempts,
+                        super::MissingBlockFetchMode::Default,
+                        force_retry_now,
                     )
                 }
             } else {
                 let since_last_request =
                     now.saturating_duration_since(stats_snapshot.last_requested);
-                if since_last_request < effective_retry_window {
+                if !force_retry_now && since_last_request < effective_retry_window {
                     MissingBlockFetchDecision::Backoff
                 } else {
                     let retry_due = super::touch_missing_block_request(
@@ -1797,7 +1907,7 @@ impl Actor {
                         retry_window,
                         view_change_window,
                     );
-                    if retry_due {
+                    if force_retry_now || retry_due {
                         MissingBlockFetchDecision::NoTargets
                     } else {
                         MissingBlockFetchDecision::Backoff
@@ -2980,6 +3090,12 @@ impl Actor {
             targets
         }
 
+        let block_known = if block_known {
+            true
+        } else {
+            self.try_recover_missing_block_from_local_rbc_session(block_hash, height, view)
+        };
+
         if !block_known
             && self.should_suppress_lock_rejected_block_fetch(
                 height,
@@ -3077,7 +3193,10 @@ impl Actor {
                         && !targets.is_empty()
                     {
                         self.broadcast_block_created_for_block_sync(
-                            super::message::BlockCreated { block },
+                            super::message::BlockCreated {
+                                block,
+                                frontier: None,
+                            },
                             &targets,
                         );
                         payload_rebroadcasted = true;
@@ -3549,35 +3668,60 @@ impl Actor {
                     let network = self.network.clone();
                     let requester_roster_proof_known =
                         self.requester_has_local_roster_proof(locked_hash, lock.height, lock.view);
-                    let mut requests = core::mem::take(&mut self.pending.missing_block_requests);
-                    let _ = super::defer_qc_for_missing_block(
-                        false,
-                        retry_window,
-                        view_change_window,
-                        now,
+                    match self.missing_block_ingress_fetch_gate(
                         locked_hash,
                         lock.height,
                         lock.view,
                         lock.phase,
-                        &signers,
-                        &topology,
-                        self.recovery_signer_fallback_attempts(),
-                        &mut requests,
-                        self.telemetry_handle(),
-                        move |targets| {
-                            send_missing_block_request(
-                                &network,
-                                &peer_id,
+                        super::MissingBlockPriority::Consensus,
+                        now,
+                        retry_window,
+                        view_change_window,
+                    ) {
+                        super::MissingBlockIngressFetchGate::Hold => {
+                            debug!(
+                                height = lock.height,
+                                view = lock.view,
+                                block = %locked_hash,
+                                grace_ms = self.authoritative_body_ingress_fetch_grace().as_millis(),
+                                "holding locked-QC missing payload recovery within authoritative body ingress grace"
+                            );
+                        }
+                        super::MissingBlockIngressFetchGate::Fetch { force_retry_now } => {
+                            let mut requests =
+                                core::mem::take(&mut self.pending.missing_block_requests);
+                            let _ = super::defer_qc_for_missing_block_with_mode(
+                                false,
+                                retry_window,
+                                view_change_window,
+                                now,
                                 locked_hash,
                                 lock.height,
                                 lock.view,
-                                super::MissingBlockPriority::Consensus,
-                                requester_roster_proof_known,
-                                targets,
-                            )
-                        },
-                    );
-                    self.pending.missing_block_requests = requests;
+                                lock.phase,
+                                &signers,
+                                &topology,
+                                self.recovery_signer_fallback_attempts(),
+                                &mut requests,
+                                self.telemetry_handle(),
+                                super::MissingBlockFetchMode::Default,
+                                force_retry_now,
+                                move |targets| {
+                                    send_missing_block_request(
+                                        &network,
+                                        &peer_id,
+                                        locked_hash,
+                                        lock.height,
+                                        lock.view,
+                                        super::MissingBlockPriority::Consensus,
+                                        requester_roster_proof_known,
+                                        targets,
+                                    )
+                                },
+                            );
+                            self.pending.missing_block_requests = requests;
+                        }
+                    }
                 }
                 return;
             }
@@ -4017,8 +4161,7 @@ impl Actor {
         let mut pending =
             PendingBlock::new(block.as_ref().clone(), payload_hash, qc.height, qc.view);
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
-            pending.commit_qc_seen = true;
-            pending.commit_qc_epoch = Some(qc.epoch);
+            pending.note_commit_qc_observed(qc.epoch);
         }
         pending.mark_kura_persisted();
         self.pending
@@ -4469,8 +4612,7 @@ impl Actor {
                     let height = pending.height;
                     let view = pending.view;
                     pending.revive_after_abort(block, payload_hash, height, view);
-                    pending.commit_qc_seen = true;
-                    pending.commit_qc_epoch = Some(qc.epoch);
+                    pending.note_commit_qc_observed(qc.epoch);
                     info!(
                         height = qc.height,
                         view = qc.view,
@@ -4528,27 +4670,8 @@ impl Actor {
             CommittedQcDecision::Drop => return Ok(()),
         }
 
-        let block_known_locally = self.block_known_locally(qc.subject_block_hash);
+        let mut block_known_locally = self.block_known_locally(qc.subject_block_hash);
         let qc_key = Self::qc_tally_key(&qc);
-        if block_known_locally {
-            self.deferred_missing_payload_qcs.remove(&qc_key);
-        }
-        let mut block_known_for_lock = self.block_known_for_lock(qc.subject_block_hash);
-        if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
-            iroha_logger::debug!(
-                height = qc.height,
-                view = qc.view,
-                block = %qc.subject_block_hash,
-                signers = signer_indices.len(),
-                block_known = block_known_locally,
-                block_validated = block_known_for_lock,
-                pending = self.pending.pending_blocks.contains_key(&qc.subject_block_hash),
-                "processing precommit QC"
-            );
-        }
-        if self.should_drop_qc_on_empty_block(&qc, block_known_locally) {
-            return Ok(());
-        }
 
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
             // Persist roster artifacts on QC arrival so block sync can validate missing payloads.
@@ -4566,6 +4689,29 @@ impl Actor {
             );
             self.state
                 .record_commit_roster(&qc, &checkpoint, stake_snapshot.clone());
+        }
+
+        if !block_known_locally {
+            block_known_locally = self.try_recover_block_for_qc(&qc);
+        }
+        if block_known_locally {
+            self.deferred_missing_payload_qcs.remove(&qc_key);
+        }
+        let mut block_known_for_lock = self.block_known_for_lock(qc.subject_block_hash);
+        if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
+            debug!(
+                height = qc.height,
+                view = qc.view,
+                block = %qc.subject_block_hash,
+                signers = signer_indices.len(),
+                block_known = block_known_locally,
+                block_validated = block_known_for_lock,
+                pending = self.pending.pending_blocks.contains_key(&qc.subject_block_hash),
+                "processing precommit QC"
+            );
+        }
+        if self.should_drop_qc_on_empty_block(&qc, block_known_locally) {
+            return Ok(());
         }
 
         if !block_known_locally {
@@ -4611,6 +4757,25 @@ impl Actor {
                 hash = %qc.subject_block_hash,
                 "received QC for unknown block; caching without updating locks/highest"
             );
+            let signer_set: BTreeSet<_> = signer_indices.iter().copied().collect();
+            if self.handle_frontier_body_gap_with_topology(
+                qc.subject_block_hash,
+                qc.height,
+                qc.view,
+                &signer_set,
+                &topology,
+                true,
+                now,
+            ) {
+                debug!(
+                    height = qc.height,
+                    view = qc.view,
+                    phase = ?qc.phase,
+                    hash = %qc.subject_block_hash,
+                    "routed frontier QC payload miss through exact body repair"
+                );
+                return Ok(());
+            }
             let view_change_window = self.quorum_timeout(self.runtime_da_enabled());
             let base_retry_window = self.rebroadcast_cooldown();
             let aggressive_qc_fetch = matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit);
@@ -4644,7 +4809,6 @@ impl Actor {
                     stats.retry_window = retry_window;
                 }
             }
-            let signer_set: BTreeSet<_> = signer_indices.iter().copied().collect();
             let fetch_mode = if aggressive_qc_fetch {
                 super::MissingBlockFetchMode::AggressiveTopology
             } else {
@@ -4812,8 +4976,7 @@ impl Actor {
                 } else if let Some(pending) =
                     self.pending.pending_blocks.get_mut(&qc.subject_block_hash)
                 {
-                    pending.commit_qc_seen = true;
-                    pending.commit_qc_epoch = Some(qc.epoch);
+                    pending.note_commit_qc_observed(qc.epoch);
                     info!(
                         height = qc.height,
                         view = qc.view,
@@ -4824,8 +4987,7 @@ impl Actor {
             } else if let Some(pending) =
                 self.pending.pending_blocks.get_mut(&qc.subject_block_hash)
             {
-                pending.commit_qc_seen = true;
-                pending.commit_qc_epoch = Some(qc.epoch);
+                pending.note_commit_qc_observed(qc.epoch);
                 info!(
                     height = qc.height,
                     view = qc.view,
@@ -4840,7 +5002,11 @@ impl Actor {
                 super::status::set_locked_qc(lock.height, lock.view, Some(lock.subject_block_hash));
             }
         }
-        self.request_commit_pipeline();
+        self.request_commit_pipeline_for_pending(
+            qc.subject_block_hash,
+            super::status::RoundEventCauseTrace::QcReceived,
+            None,
+        );
         Ok(())
     }
 

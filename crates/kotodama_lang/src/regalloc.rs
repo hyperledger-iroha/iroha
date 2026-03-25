@@ -636,6 +636,7 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         | JsonGetJson { json, key, .. }
         | JsonGetName { json, key, .. }
         | JsonGetAccountId { json, key, .. }
+        | JsonGetAssetDefinitionId { json, key, .. }
         | JsonGetNftId { json, key, .. }
         | JsonGetBlobHex { json, key, .. } => {
             f(*json);
@@ -817,6 +818,7 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::JsonGetJson { dest, .. }
         | Instr::JsonGetName { dest, .. }
         | Instr::JsonGetAccountId { dest, .. }
+        | Instr::JsonGetAssetDefinitionId { dest, .. }
         | Instr::JsonGetNftId { dest, .. }
         | Instr::JsonGetBlobHex { dest, .. } => Some(*dest),
         Instr::NameDecode { dest, .. } => Some(*dest),

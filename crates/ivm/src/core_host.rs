@@ -12,7 +12,7 @@ use iroha_data_model::{
     account::{AccountId, ScopedAccountId},
     isi::transfer::TransferAssetBatch,
     nexus::{AxtPolicyEntry, AxtPolicySnapshot, DataSpaceId},
-    prelude::{Name, NftId},
+    prelude::{AssetDefinitionId, Name, NftId},
 };
 use iroha_primitives::{
     json::Json,
@@ -1388,6 +1388,7 @@ impl IVMHost for CoreHost {
             | syscalls::SYSCALL_JSON_GET_ACCOUNT_ID
             | syscalls::SYSCALL_JSON_GET_NFT_ID
             | syscalls::SYSCALL_JSON_GET_BLOB_HEX
+            | syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID
             | syscalls::SYSCALL_JSON_GET_NUMERIC => {
                 // r10=&Json, r11=&Name key -> r10=value
                 let json_tlv = vm.memory.validate_tlv(vm.register(10))?;
@@ -1506,6 +1507,24 @@ impl IVMHost for CoreHost {
                         out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
                         out.extend_from_slice(&bytes);
                         let h: [u8; 32] = IrohaHash::new(&bytes).into();
+                        out.extend_from_slice(&h);
+                        let p = vm.alloc_input_tlv(&out)?;
+                        vm.set_register(10, p);
+                        Ok(0)
+                    }
+                    syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID => {
+                        let raw = field.as_str().ok_or(VMError::DecodeError)?;
+                        let asset = AssetDefinitionId::parse_address_literal(raw)
+                            .map_err(|_| VMError::DecodeError)?;
+                        let body = to_bytes(&asset).map_err(|_| VMError::NoritoInvalid)?;
+                        let mut out = Vec::with_capacity(7 + body.len() + 32);
+                        out.extend_from_slice(
+                            &(PointerType::AssetDefinitionId as u16).to_be_bytes(),
+                        );
+                        out.push(1);
+                        out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+                        out.extend_from_slice(&body);
+                        let h: [u8; 32] = IrohaHash::new(&body).into();
                         out.extend_from_slice(&h);
                         let p = vm.alloc_input_tlv(&out)?;
                         vm.set_register(10, p);

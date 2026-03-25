@@ -2146,6 +2146,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         mem::take(&mut self.queued)
     }
 
+    /// Drain durable contract-state writes collected during the last VM run.
+    pub fn drain_durable_state_overlay(&mut self) -> BTreeMap<Name, Option<Vec<u8>>> {
+        mem::take(&mut self.durable_state_overlay)
+    }
+
     /// Test helper: seed the transfer verification latch with a known envelope hash.
     #[cfg(test)]
     pub fn __test_seed_transfer_latch(&mut self, hash: [u8; 32]) {
@@ -5746,6 +5751,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             | ivm::syscalls::SYSCALL_JSON_GET_ACCOUNT_ID
             | ivm::syscalls::SYSCALL_JSON_GET_NFT_ID
             | ivm::syscalls::SYSCALL_JSON_GET_BLOB_HEX
+            | ivm::syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID
             | ivm::syscalls::SYSCALL_JSON_GET_NUMERIC
             | ivm::syscalls::SYSCALL_SCHEMA_ENCODE
             | ivm::syscalls::SYSCALL_SCHEMA_DECODE
@@ -6011,6 +6017,56 @@ mod pointer_abi_tests {
             matches!(res, Err(ivm::VMError::NoritoInvalid)),
             "expected NoritoInvalid for mismatched pointer type, got {res:?}"
         );
+    }
+
+    #[test]
+    fn load_state_value_roundtrips_wrapped_account_pointer_via_pointer_from_norito() {
+        crate::test_alias::ensure();
+        let mut vm = ivm::IVM::new(10_000);
+        let authority = ALICE_ID.clone();
+        let mut host = CoreHost::new(authority);
+        let account: AccountId = fixture_account("alice");
+        let inner = make_tlv(
+            PointerType::AccountId as u16,
+            &norito::to_bytes(&account).expect("encode account"),
+        );
+        let stored = make_tlv(PointerType::NoritoBytes as u16, &inner);
+
+        CoreHost::load_state_value(&mut vm, &stored).expect("load wrapped state value");
+        vm.set_register(11, u64::from(PointerType::AccountId as u16));
+        host.syscall(ivm::syscalls::SYSCALL_POINTER_FROM_NORITO, &mut vm)
+            .expect("pointer_from_norito");
+
+        let decoded: AccountId =
+            CoreHost::decode_tlv_typed(&vm, vm.register(10), PointerType::AccountId)
+                .expect("decode account pointer from state");
+        assert_eq!(decoded, account);
+    }
+
+    #[test]
+    fn load_state_value_roundtrips_wrapped_asset_pointer_via_pointer_from_norito() {
+        crate::test_alias::ensure();
+        let mut vm = ivm::IVM::new(10_000);
+        let authority = ALICE_ID.clone();
+        let mut host = CoreHost::new(authority);
+        let asset: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+            .parse()
+            .expect("asset definition literal");
+        let inner = make_tlv(
+            PointerType::AssetDefinitionId as u16,
+            &norito::to_bytes(&asset).expect("encode asset definition"),
+        );
+        let stored = make_tlv(PointerType::NoritoBytes as u16, &inner);
+
+        CoreHost::load_state_value(&mut vm, &stored).expect("load wrapped state value");
+        vm.set_register(11, u64::from(PointerType::AssetDefinitionId as u16));
+        host.syscall(ivm::syscalls::SYSCALL_POINTER_FROM_NORITO, &mut vm)
+            .expect("pointer_from_norito");
+
+        let decoded: AssetDefinitionId =
+            CoreHost::decode_tlv_typed(&vm, vm.register(10), PointerType::AssetDefinitionId)
+                .expect("decode asset definition pointer from state");
+        assert_eq!(decoded, asset);
     }
 
     #[test]

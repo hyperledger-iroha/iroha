@@ -2237,24 +2237,25 @@ impl NexusStaking {
 }
 
 /// Nexus fee schedule for universal XOR-denominated charges.
+/// The default anchor is `1 TransferAsset = 1 TEU = 0.01 XOR`.
 #[derive(Debug, Clone)]
 pub struct NexusFees {
     /// Asset definition used to collect fees (e.g., `61CtjvNd9T3THAR65GsMVHr82Bjc`).
     pub fee_asset_id: String,
     /// Account that receives collected fees.
     pub fee_sink_account_id: String,
-    /// Base fee charged per transaction (asset base units).
-    pub base_fee: u64,
-    /// Per-byte fee charged over the signed transaction payload (asset base units).
-    pub per_byte_fee: u64,
-    /// Per-instruction fee charged for native ISI batches (asset base units).
-    pub per_instruction_fee: u64,
-    /// Per-gas-unit fee multiplier applied to measured gas usage (asset base units).
-    pub per_gas_unit_fee: u64,
+    /// Base fee charged per transaction.
+    pub base_fee: Numeric,
+    /// Per-byte fee charged over the signed transaction payload.
+    pub per_byte_fee: Numeric,
+    /// Per-instruction fee charged for native ISI batches.
+    pub per_instruction_fee: Numeric,
+    /// Per-gas-unit fee multiplier applied to measured gas usage.
+    pub per_gas_unit_fee: Numeric,
     /// Whether fee sponsorship is permitted.
     pub sponsorship_enabled: bool,
-    /// Maximum fee a sponsor can cover per transaction (asset base units, 0 = unlimited).
-    pub sponsor_max_fee: u64,
+    /// Maximum fee a sponsor can cover per transaction (0 = unlimited).
+    pub sponsor_max_fee: Numeric,
 }
 
 impl Default for NexusFees {
@@ -2262,12 +2263,12 @@ impl Default for NexusFees {
         Self {
             fee_asset_id: defaults::nexus::fees::fee_asset_id(),
             fee_sink_account_id: defaults::nexus::fees::FEE_SINK_ACCOUNT_ID.to_string(),
-            base_fee: defaults::nexus::fees::BASE_FEE,
-            per_byte_fee: defaults::nexus::fees::PER_BYTE_FEE,
-            per_instruction_fee: defaults::nexus::fees::PER_INSTRUCTION_FEE,
-            per_gas_unit_fee: defaults::nexus::fees::PER_GAS_UNIT_FEE,
+            base_fee: defaults::nexus::fees::base_fee(),
+            per_byte_fee: defaults::nexus::fees::per_byte_fee(),
+            per_instruction_fee: defaults::nexus::fees::per_instruction_fee(),
+            per_gas_unit_fee: defaults::nexus::fees::per_gas_unit_fee(),
             sponsorship_enabled: defaults::nexus::fees::SPONSORSHIP_ENABLED,
-            sponsor_max_fee: defaults::nexus::fees::SPONSOR_MAX_FEE,
+            sponsor_max_fee: defaults::nexus::fees::sponsor_max_fee(),
         }
     }
 }
