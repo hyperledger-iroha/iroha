@@ -7,7 +7,7 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.11"
-requests = "^2.32.4"
+requests = "^2.33.0"
 pytest = "^9.0.2"
 websocket-client = "^1.8.0"
 allure-pytest = "^2.15.3"
@@ -20,7 +20,7 @@ black = "^26.3.1"
 mypy = "^1.19.1"
 flake8 = "^7.1.1"
 types-toml = "^0.10.8.20240310"
-types-requests = "^2.32.4.20260107"
+types-requests = "^2.32.4.20260324"
 
 [build-system]
 requires = ["poetry-core"]
