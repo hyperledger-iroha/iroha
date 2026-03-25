@@ -8640,7 +8640,8 @@ pub(crate) mod valid {
                                 // ensure authority exists
                                 let missing_authority = {
                                     let st = state_block.transaction();
-                                    st.world.accounts.get(&p.authority).is_none()
+                                    !block.header().is_genesis()
+                                        && st.world.accounts.get(&p.authority).is_none()
                                 };
                                 if missing_authority {
                                     record_amx_abort(state_block, p.idx, "commit");
@@ -8823,6 +8824,7 @@ pub(crate) mod valid {
                                 Some(routing_decisions[idx].dataspace_id);
                             state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(hash));
                             let missing_authority = overlay.instruction_count() > 0
+                                && !block.header().is_genesis()
                                 && state_tx.world.accounts.get(&authority).is_none();
                             if missing_authority {
                                 Err(
@@ -8972,6 +8974,7 @@ pub(crate) mod valid {
                             Some(routing_decisions[idx].dataspace_id);
                         state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(hash));
                         let missing_authority = overlay.instruction_count() > 0
+                            && !block.header().is_genesis()
                             && state_tx.world.accounts.get(&authority).is_none();
                         if missing_authority {
                             Err(
@@ -12495,6 +12498,69 @@ pub(crate) mod valid {
             );
 
             assert!(check_genesis_block(&block, &genesis_account, &chain_id).is_ok());
+        }
+
+        #[test]
+        fn validate_keep_voting_block_accepts_ordered_genesis_parameter_transactions() {
+            use iroha_data_model::{
+                parameter::{Parameter, system::SumeragiParameter},
+                peer::PeerId,
+                prelude::*,
+            };
+            use iroha_genesis::GenesisBuilder;
+
+            use crate::{
+                kura::Kura, query::store::LiveQueryStore, sumeragi::network_topology::Topology,
+            };
+
+            iroha_genesis::init_instruction_registry();
+
+            let chain_id = ChainId::from("00000000-0000-0000-0000-000000000001");
+            let genesis_keypair = KeyPair::random();
+            let genesis_account = AccountId::new(genesis_keypair.public_key().clone());
+
+            let manifest = GenesisBuilder::new_without_executor(chain_id.clone(), ".")
+                .append_parameter(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(100)))
+                .append_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(100)))
+                .append_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(100)))
+                .next_transaction()
+                .append_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(667)))
+                .append_parameter(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(100)))
+                .append_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(333)))
+                .build_raw();
+
+            let genesis = manifest
+                .build_and_sign(&genesis_keypair)
+                .expect("ordered genesis parameters should build");
+
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+            let topology = Topology::new(vec![PeerId::new(KeyPair::random().public_key().clone())]);
+            let time_source = TimeSource::new_system();
+            let mut voting_block = None;
+
+            let result = ValidBlock::validate_keep_voting_block(
+                genesis.0,
+                &topology,
+                &chain_id,
+                &genesis_account,
+                &time_source,
+                &state,
+                &mut voting_block,
+                false,
+            )
+            .unpack(|_| {});
+
+            if let Err((failed_block, err)) = result {
+                let results = failed_block
+                    .results()
+                    .map(|result| format!("{result:?}"))
+                    .collect::<Vec<_>>();
+                panic!(
+                    "ordered genesis parameter transactions should validate: {err}; results={results:?}"
+                );
+            }
         }
 
         #[test]

@@ -36,7 +36,7 @@ translator: machine-google-reviewed
 - AEAD/Symmetric: `aes-gcm`, `chacha20poly1305`, `aead` шинж чанарууд (RustCrypto) — каноник.
 - Гарын үсэг/ECC: `ed25519-dalek`, `x25519-dalek` (далек төсөл), `k256` (RustCrypto), `secp256k1` (libsecp холболтууд) - бүгд хууль ёсны; Гадаргууг багасгахын тулд нэг secp256k1 стекийг (цэвэр Rust-ийн хувьд `k256` эсвэл libsecp-ийн хувьд `secp256k1`) илүүд үздэг.
 - BLS12-381/ZK: `blstrs`, `halo2_*` — үйлдвэрлэлийн ZK экосистемд өргөн хэрэглэгддэг; хууль ёсны.
-- PQ: `pqcrypto-dilithium`, `pqcrypto-traits` - хууль ёсны лавлагааны хайрцаг.
+- PQ: `pqcrypto-mldsa`, `pqcrypto-mlkem`, `pqcrypto-traits` - хууль ёсны лавлагааны хайрцаг.
 - TLS: `rustls`, `tokio-rustls`, `hyper-rustls` — каноник орчин үеийн Rust TLS стек.
 - Дуу чимээ: `snow` — каноник хэрэгжилт.
 - Цувралчлал: `parity-scale-codec` SCALE-д зориулсан каноник. Serde нь ажлын талбар дээрх үйлдвэрлэлийн хамаарлаас хасагдсан; Norito үүсэлтэй/бичигчүүд нь ажиллах цагийн зам бүрийг хамардаг. Аливаа үлдэгдэл Сэрдийн лавлагаа нь түүхэн баримт бичиг, хашлага скрипт эсвэл зөвхөн туршилтын зөвшөөрөгдсөн жагсаалтад байдаг.

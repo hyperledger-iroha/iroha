@@ -7,6 +7,7 @@
 //! - `X-Iroha-Timestamp-Ms`: unix timestamp in milliseconds included in the
 //!   signed payload.
 //! - `X-Iroha-Nonce`: caller-chosen nonce included in the signed payload.
+//! - `X-Iroha-Witness`: base64 Norito witness for multisig-controlled accounts.
 //!
 //! The canonical request bytes are:
 //! ```text
@@ -24,7 +25,7 @@
 //! - Freshness validation rejects stale timestamps and replayed nonces.
 
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, BTreeSet, VecDeque},
     num::NonZeroUsize,
     sync::{Arc, Mutex, OnceLock, RwLock},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -35,7 +36,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use dashmap::{DashMap, mapref::entry::Entry};
 use iroha_config::parameters::{actual::AppApi as AppApiConfig, defaults};
 use iroha_core::state::{State as CoreState, WorldReadOnly};
-use iroha_crypto::{PublicKey, Signature};
+use iroha_crypto::{Hash, PublicKey, Signature};
 use iroha_data_model::{
     ValidationFail,
     account::{AccountController, AccountId},
@@ -45,7 +46,12 @@ use iroha_data_model::{
         error::{FindError, QueryExecutionFail},
         parameters::QueryParams,
     },
+    soracloud::{
+        CANONICAL_REQUEST_WITNESS_VERSION_V1, CanonicalRequestSignatureWitnessV1,
+        CanonicalRequestWitnessV1,
+    },
 };
+use norito::codec::Encode;
 use sha2::{Digest as _, Sha256};
 
 /// Header carrying the authorising account id.
@@ -56,6 +62,8 @@ pub const HEADER_SIGNATURE: &str = "X-Iroha-Signature";
 pub const HEADER_TIMESTAMP_MS: &str = "X-Iroha-Timestamp-Ms";
 /// Header carrying the caller-chosen replay nonce.
 pub const HEADER_NONCE: &str = "X-Iroha-Nonce";
+/// Header carrying the base64 Norito-encoded multisig witness.
+pub const HEADER_WITNESS: &str = "X-Iroha-Witness";
 /// HTTP request types used for canonical signing.
 pub use axum::http::{Method, Uri};
 
@@ -195,6 +203,8 @@ pub struct VerifiedCanonicalRequest {
     pub account: AccountId,
     /// Exact account controller key that verified the request signature.
     pub signer: PublicKey,
+    /// Full signer set that satisfied the request authorisation.
+    pub verified_signers: Vec<PublicKey>,
 }
 
 /// Canonicalise a raw query string by decoding, sorting, and re-encoding.
@@ -235,6 +245,12 @@ pub fn canonical_request_message(method: &Method, uri: &Uri, body: &[u8]) -> Vec
     .into_bytes()
 }
 
+/// Hash the canonical request bytes used by witness verification.
+#[must_use]
+pub fn canonical_request_hash(method: &Method, uri: &Uri, body: &[u8]) -> Hash {
+    Hash::new(canonical_request_message(method, uri, body))
+}
+
 /// Construct canonical request bytes for signature verification with freshness metadata.
 #[must_use]
 pub fn canonical_request_signature_message(
@@ -256,6 +272,43 @@ pub fn canonical_request_signature_message(
 #[must_use]
 pub fn signature_header_value(signature: &Signature) -> String {
     BASE64_STANDARD.encode(signature.payload())
+}
+
+#[derive(Encode)]
+struct CanonicalRequestWitnessPayloadV1 {
+    schema_version: u16,
+    subject_account: AccountId,
+    timestamp_ms: u64,
+    nonce: String,
+    canonical_request_hash: Hash,
+}
+
+/// Construct the signed payload for a canonical request witness.
+///
+/// The payload binds the witness to the subject account, freshness fields, and
+/// reconstructed canonical request hash. Individual signatures are supplied
+/// separately in [`CanonicalRequestWitnessV1::signatures`].
+///
+/// # Errors
+/// Returns [`norito::Error`] when witness encoding fails.
+pub fn canonical_request_witness_message(
+    witness: &CanonicalRequestWitnessV1,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(&CanonicalRequestWitnessPayloadV1 {
+        schema_version: witness.schema_version,
+        subject_account: witness.subject_account.clone(),
+        timestamp_ms: witness.timestamp_ms,
+        nonce: witness.nonce.clone(),
+        canonical_request_hash: witness.canonical_request_hash,
+    })
+}
+
+/// Encode a multisig witness payload for use in `X-Iroha-Witness` headers.
+///
+/// # Errors
+/// Returns [`norito::Error`] when witness encoding fails.
+pub fn witness_header_value(witness: &CanonicalRequestWitnessV1) -> Result<String, norito::Error> {
+    norito::to_bytes(witness).map(|bytes| BASE64_STANDARD.encode(bytes))
 }
 
 fn now_unix_ms() -> u64 {
@@ -290,6 +343,16 @@ fn parse_required_header_text(
     } else {
         Ok(value.to_owned())
     }
+}
+
+fn parse_account_header_value(account_literal: &str) -> Result<AccountId, crate::Error> {
+    AccountId::parse_encoded(account_literal.trim())
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .map_err(|_| {
+            crate::Error::Query(ValidationFail::NotPermitted(
+                "invalid X-Iroha-Account value".to_owned(),
+            ))
+        })
 }
 
 fn validate_freshness(
@@ -371,13 +434,157 @@ pub fn verify_canonical_request(
     let signature_hdr = headers.get(HEADER_SIGNATURE);
     let timestamp_hdr = headers.get(HEADER_TIMESTAMP_MS);
     let nonce_hdr = headers.get(HEADER_NONCE);
+    let witness_hdr = headers.get(HEADER_WITNESS);
     let all_missing = account_hdr.is_none()
         && signature_hdr.is_none()
         && timestamp_hdr.is_none()
-        && nonce_hdr.is_none();
+        && nonce_hdr.is_none()
+        && witness_hdr.is_none();
     if all_missing {
         return Ok(None);
     }
+    if witness_hdr.is_some() {
+        if signature_hdr.is_some() || timestamp_hdr.is_some() || nonce_hdr.is_some() {
+            return Err(crate::Error::Query(ValidationFail::NotPermitted(
+                "X-Iroha-Witness must not be combined with X-Iroha-Signature, X-Iroha-Timestamp-Ms, or X-Iroha-Nonce".to_owned(),
+            )));
+        }
+
+        let witness_b64 = parse_required_header_text(headers, HEADER_WITNESS)?;
+        let witness_bytes = BASE64_STANDARD.decode(witness_b64.trim()).map_err(|_| {
+            crate::Error::Query(ValidationFail::NotPermitted(
+                "invalid base64 in X-Iroha-Witness".to_owned(),
+            ))
+        })?;
+        let witness: CanonicalRequestWitnessV1 = norito::decode_from_bytes(&witness_bytes)
+            .map_err(|_| {
+                crate::Error::Query(ValidationFail::NotPermitted(
+                    "invalid X-Iroha-Witness payload".to_owned(),
+                ))
+            })?;
+        if witness.schema_version != CANONICAL_REQUEST_WITNESS_VERSION_V1 {
+            return Err(crate::Error::Query(ValidationFail::NotPermitted(format!(
+                "unsupported X-Iroha-Witness schema_version `{}`",
+                witness.schema_version
+            ))));
+        }
+        let account = if let Some(account_hdr) = account_hdr {
+            let account_literal = std::str::from_utf8(account_hdr.as_bytes())
+                .map(str::trim)
+                .map_err(|_| {
+                    crate::Error::Query(ValidationFail::NotPermitted(
+                        "invalid X-Iroha-Account value".to_owned(),
+                    ))
+                })?;
+            let account = parse_account_header_value(account_literal)?;
+            if account != witness.subject_account {
+                return Err(crate::Error::Query(ValidationFail::NotPermitted(
+                    "X-Iroha-Account does not match X-Iroha-Witness subject_account".to_owned(),
+                )));
+            }
+            account
+        } else {
+            witness.subject_account.clone()
+        };
+
+        if let Some(expected) = expected_account
+            && expected != &account
+        {
+            return Err(crate::Error::Query(ValidationFail::NotPermitted(
+                "signed account does not match request path".to_owned(),
+            )));
+        }
+
+        let (auth_config, replay_cache) = auth_runtime_snapshot();
+        validate_freshness(&auth_config, witness.timestamp_ms, &witness.nonce)?;
+
+        let expected_hash = canonical_request_hash(method, uri, body);
+        if witness.canonical_request_hash != expected_hash {
+            return Err(crate::Error::Query(ValidationFail::NotPermitted(
+                "X-Iroha-Witness canonical request hash mismatch".to_owned(),
+            )));
+        }
+        let message = canonical_request_witness_message(&witness).map_err(|_| {
+            crate::Error::Query(ValidationFail::NotPermitted(
+                "invalid X-Iroha-Witness payload".to_owned(),
+            ))
+        })?;
+
+        let world = state.world_view();
+        let account_entry = world.account(&account).map_err(|_| {
+            crate::Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Find(
+                FindError::Account(account.clone()),
+            )))
+        })?;
+        let verified_signers = match account_entry.id.controller() {
+            AccountController::Single(_) => {
+                return Err(crate::Error::Query(ValidationFail::NotPermitted(
+                    "single-signature accounts must use X-Iroha-Signature".to_owned(),
+                )));
+            }
+            AccountController::Multisig(policy) => {
+                if witness.signatures.is_empty() {
+                    return Err(crate::Error::Query(ValidationFail::NotPermitted(
+                        "X-Iroha-Witness must include at least one signature".to_owned(),
+                    )));
+                }
+
+                let member_weights: BTreeMap<PublicKey, u16> = policy
+                    .members()
+                    .iter()
+                    .map(|member| (member.public_key().clone(), member.weight()))
+                    .collect();
+                let mut seen = BTreeSet::new();
+                let mut total_weight = 0_u32;
+                let mut verified_signers = Vec::with_capacity(witness.signatures.len());
+
+                for CanonicalRequestSignatureWitnessV1 { signer, signature } in &witness.signatures
+                {
+                    if !seen.insert(signer.clone()) {
+                        return Err(crate::Error::Query(ValidationFail::NotPermitted(
+                            "X-Iroha-Witness contains duplicate signer keys".to_owned(),
+                        )));
+                    }
+                    let Some(weight) = member_weights.get(signer) else {
+                        return Err(crate::Error::Query(ValidationFail::NotPermitted(
+                            "X-Iroha-Witness includes a signer outside the account multisig policy"
+                                .to_owned(),
+                        )));
+                    };
+                    signature.verify(signer, &message).map_err(|_| {
+                        crate::Error::Query(ValidationFail::NotPermitted(
+                            "query signature failed verification".to_owned(),
+                        ))
+                    })?;
+                    total_weight = total_weight.saturating_add(u32::from(*weight));
+                    verified_signers.push(signer.clone());
+                }
+                if total_weight < u32::from(policy.threshold()) {
+                    return Err(crate::Error::Query(ValidationFail::NotPermitted(
+                        "X-Iroha-Witness signatures do not satisfy multisig threshold".to_owned(),
+                    )));
+                }
+                verified_signers
+            }
+        };
+
+        let replay_key = format!("{account}:{}", witness.nonce);
+        if !replay_cache.check_and_insert(replay_key) {
+            return Err(crate::Error::Query(ValidationFail::NotPermitted(
+                "request nonce already used".to_owned(),
+            )));
+        }
+        let signer = verified_signers
+            .first()
+            .cloned()
+            .expect("non-empty witness signer set");
+        return Ok(Some(VerifiedCanonicalRequest {
+            account,
+            signer,
+            verified_signers,
+        }));
+    }
+
     if account_hdr.is_none()
         || signature_hdr.is_none()
         || timestamp_hdr.is_none()
@@ -389,20 +596,14 @@ pub fn verify_canonical_request(
     };
 
     let account_literal = parse_required_header_text(headers, HEADER_ACCOUNT)?;
-    let account: AccountId = AccountId::parse_encoded(account_literal.trim())
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .map_err(|_| {
-            crate::Error::Query(ValidationFail::NotPermitted(
-                "invalid X-Iroha-Account value".to_owned(),
-            ))
-        })?;
+    let account = parse_account_header_value(&account_literal)?;
 
-    if let Some(expected) = expected_account {
-        if expected != &account {
-            return Err(crate::Error::Query(ValidationFail::NotPermitted(
-                "signed account does not match request path".to_owned(),
-            )));
-        }
+    if let Some(expected) = expected_account
+        && expected != &account
+    {
+        return Err(crate::Error::Query(ValidationFail::NotPermitted(
+            "signed account does not match request path".to_owned(),
+        )));
     }
 
     let timestamp_ms = parse_required_header_text(headers, HEADER_TIMESTAMP_MS)?
@@ -444,7 +645,7 @@ pub fn verify_canonical_request(
         }
         AccountController::Multisig(_) => {
             return Err(crate::Error::Query(ValidationFail::NotPermitted(
-                "multisig accounts are not supported by app request signing".to_owned(),
+                "multisig accounts must use X-Iroha-Witness".to_owned(),
             )));
         }
     };
@@ -455,7 +656,11 @@ pub fn verify_canonical_request(
         )));
     }
 
-    Ok(Some(VerifiedCanonicalRequest { account, signer }))
+    Ok(Some(VerifiedCanonicalRequest {
+        account,
+        signer: signer.clone(),
+        verified_signers: vec![signer],
+    }))
 }
 
 #[cfg(all(test, feature = "app_api"))]
@@ -570,6 +775,7 @@ mod tests {
             Some(VerifiedCanonicalRequest {
                 account,
                 signer: ALICE_KEYPAIR.public_key().clone(),
+                verified_signers: vec![ALICE_KEYPAIR.public_key().clone()],
             })
         );
     }
@@ -816,7 +1022,218 @@ mod tests {
             .expect_err("multisig app-auth must fail closed");
         match err {
             crate::Error::Query(ValidationFail::NotPermitted(msg)) => {
-                assert!(msg.contains("multisig accounts are not supported"));
+                assert!(msg.contains("X-Iroha-Witness"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    fn multisig_witness(
+        account: &AccountId,
+        method: &Method,
+        uri: &Uri,
+        body: &[u8],
+        timestamp_ms: u64,
+        nonce: &str,
+        signers: &[&KeyPair],
+    ) -> CanonicalRequestWitnessV1 {
+        let mut witness = CanonicalRequestWitnessV1 {
+            schema_version: CANONICAL_REQUEST_WITNESS_VERSION_V1,
+            subject_account: account.clone(),
+            timestamp_ms,
+            nonce: nonce.to_owned(),
+            canonical_request_hash: canonical_request_hash(method, uri, body),
+            signatures: Vec::new(),
+        };
+        let message = canonical_request_witness_message(&witness).expect("witness payload");
+        witness.signatures = signers
+            .iter()
+            .map(|signer| CanonicalRequestSignatureWitnessV1 {
+                signer: signer.public_key().clone(),
+                signature: Signature::new(signer.private_key(), &message),
+            })
+            .collect();
+        witness
+    }
+
+    fn witness_headers(account: &AccountId, witness: &CanonicalRequestWitnessV1) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HEADER_ACCOUNT,
+            axum::http::HeaderValue::from_str(&account.canonical_i105().expect("i105 account"))
+                .expect("valid account header"),
+        );
+        headers.insert(
+            HEADER_WITNESS,
+            axum::http::HeaderValue::from_str(
+                &witness_header_value(witness).expect("encode witness header"),
+            )
+            .expect("valid witness header"),
+        );
+        headers
+    }
+
+    #[test]
+    fn verify_accepts_valid_multisig_witness() {
+        let _guard = test_guard(CanonicalRequestAuthConfig::default());
+        let signer_one = KeyPair::random();
+        let signer_two = KeyPair::random();
+        let policy = MultisigPolicy::new(
+            2,
+            vec![
+                MultisigMember::new(signer_one.public_key().clone(), 1).expect("member"),
+                MultisigMember::new(signer_two.public_key().clone(), 1).expect("member"),
+            ],
+        )
+        .expect("policy");
+        let account = AccountId::new_multisig(policy);
+        let state = minimal_state_with_account(&account);
+        let method = Method::POST;
+        let uri: Uri = "/v1/soracloud/deploy?view=full".parse().expect("uri");
+        let timestamp_ms = now_unix_ms();
+        let nonce = "valid-multisig-witness";
+        let witness = multisig_witness(
+            &account,
+            &method,
+            &uri,
+            b"{\"deploy\":true}",
+            timestamp_ms,
+            nonce,
+            &[&signer_one, &signer_two],
+        );
+        let headers = witness_headers(&account, &witness);
+
+        let verified =
+            verify_canonical_request(&state, &headers, &method, &uri, b"{\"deploy\":true}", None)
+                .expect("verify")
+                .expect("witness auth must be present");
+        assert_eq!(verified.account, account);
+        assert_eq!(verified.signer, signer_one.public_key().clone());
+        assert_eq!(
+            verified.verified_signers,
+            vec![
+                signer_one.public_key().clone(),
+                signer_two.public_key().clone()
+            ]
+        );
+    }
+
+    #[test]
+    fn verify_rejects_duplicate_multisig_witness_signers() {
+        let _guard = test_guard(CanonicalRequestAuthConfig::default());
+        let signer_one = KeyPair::random();
+        let signer_two = KeyPair::random();
+        let policy = MultisigPolicy::new(
+            2,
+            vec![
+                MultisigMember::new(signer_one.public_key().clone(), 1).expect("member"),
+                MultisigMember::new(signer_two.public_key().clone(), 1).expect("member"),
+            ],
+        )
+        .expect("policy");
+        let account = AccountId::new_multisig(policy);
+        let state = minimal_state_with_account(&account);
+        let method = Method::POST;
+        let uri: Uri = "/v1/soracloud/deploy".parse().expect("uri");
+        let timestamp_ms = now_unix_ms();
+        let witness = multisig_witness(
+            &account,
+            &method,
+            &uri,
+            b"{}",
+            timestamp_ms,
+            "duplicate-multisig-witness",
+            &[&signer_one],
+        );
+        let mut duplicate = witness.clone();
+        duplicate.signatures.push(duplicate.signatures[0].clone());
+        let headers = witness_headers(&account, &duplicate);
+
+        let err = verify_canonical_request(&state, &headers, &method, &uri, b"{}", None)
+            .expect_err("duplicate witness signers must fail");
+        match err {
+            crate::Error::Query(ValidationFail::NotPermitted(msg)) => {
+                assert!(msg.contains("duplicate signer"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verify_rejects_multisig_witness_below_threshold() {
+        let _guard = test_guard(CanonicalRequestAuthConfig::default());
+        let signer_one = KeyPair::random();
+        let signer_two = KeyPair::random();
+        let signer_three = KeyPair::random();
+        let policy = MultisigPolicy::new(
+            3,
+            vec![
+                MultisigMember::new(signer_one.public_key().clone(), 1).expect("member"),
+                MultisigMember::new(signer_two.public_key().clone(), 1).expect("member"),
+                MultisigMember::new(signer_three.public_key().clone(), 1).expect("member"),
+            ],
+        )
+        .expect("policy");
+        let account = AccountId::new_multisig(policy);
+        let state = minimal_state_with_account(&account);
+        let method = Method::POST;
+        let uri: Uri = "/v1/soracloud/deploy".parse().expect("uri");
+        let witness = multisig_witness(
+            &account,
+            &method,
+            &uri,
+            b"{}",
+            now_unix_ms(),
+            "threshold-multisig-witness",
+            &[&signer_one, &signer_two],
+        );
+        let headers = witness_headers(&account, &witness);
+
+        let err = verify_canonical_request(&state, &headers, &method, &uri, b"{}", None)
+            .expect_err("threshold failure must reject witness");
+        match err {
+            crate::Error::Query(ValidationFail::NotPermitted(msg)) => {
+                assert!(msg.contains("threshold"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn verify_rejects_replayed_multisig_witness_nonce() {
+        let _guard = test_guard(CanonicalRequestAuthConfig::default());
+        let signer_one = KeyPair::random();
+        let signer_two = KeyPair::random();
+        let policy = MultisigPolicy::new(
+            2,
+            vec![
+                MultisigMember::new(signer_one.public_key().clone(), 1).expect("member"),
+                MultisigMember::new(signer_two.public_key().clone(), 1).expect("member"),
+            ],
+        )
+        .expect("policy");
+        let account = AccountId::new_multisig(policy);
+        let state = minimal_state_with_account(&account);
+        let method = Method::POST;
+        let uri: Uri = "/v1/soracloud/deploy".parse().expect("uri");
+        let witness = multisig_witness(
+            &account,
+            &method,
+            &uri,
+            b"{}",
+            now_unix_ms(),
+            "replayed-multisig-witness",
+            &[&signer_one, &signer_two],
+        );
+        let headers = witness_headers(&account, &witness);
+
+        verify_canonical_request(&state, &headers, &method, &uri, b"{}", None)
+            .expect("first multisig witness must pass");
+        let err = verify_canonical_request(&state, &headers, &method, &uri, b"{}", None)
+            .expect_err("replayed multisig witness must fail");
+        match err {
+            crate::Error::Query(ValidationFail::NotPermitted(msg)) => {
+                assert!(msg.contains("nonce already used"));
             }
             other => panic!("unexpected error: {other:?}"),
         }

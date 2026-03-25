@@ -1761,10 +1761,40 @@ fn has_set_parameter(instructions: &[InstructionBox], parameter: &Parameter) -> 
     })
 }
 
+fn parameter_generation_priority(parameter: &Parameter, current: &Parameters) -> u8 {
+    match parameter {
+        // Preserve Sumeragi timing invariants while structured parameter blocks are
+        // expanded into sequential `SetParameter` instructions.
+        Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(value)) => {
+            if *value > current.sumeragi().commit_time_ms() {
+                0
+            } else {
+                50
+            }
+        }
+        Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(value)) => {
+            if *value > current.sumeragi().min_finality_ms() {
+                40
+            } else {
+                10
+            }
+        }
+        Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(value)) => {
+            if *value > current.sumeragi().block_time_ms() {
+                20
+            } else {
+                30
+            }
+        }
+        _ => 25,
+    }
+}
+
 fn collect_parameter_instructions(
     parameters: &Parameters,
     existing: &[InstructionBox],
     manual: &[Parameter],
+    current: &Parameters,
 ) -> Vec<InstructionBox> {
     let mut generated = Vec::new();
     for parameter in parameters_with_staging(parameters) {
@@ -1777,14 +1807,22 @@ fn collect_parameter_instructions(
                 {
                     continue;
                 }
-                if has_set_parameter(existing, &other) || has_set_parameter(&generated, &other) {
+                if has_set_parameter(existing, &other)
+                    || generated
+                        .iter()
+                        .any(|existing| parameter_targets_same_slot(existing, &other))
+                {
                     continue;
                 }
-                generated.push(InstructionBox::from(SetParameter::new(other)));
+                generated.push(other);
             }
         }
     }
+    generated.sort_by_key(|parameter| parameter_generation_priority(parameter, current));
     generated
+        .into_iter()
+        .map(|parameter| InstructionBox::from(SetParameter::new(parameter)))
+        .collect()
 }
 
 fn collect_manual_set_parameters(transactions: &[RawGenesisTx]) -> Vec<Parameter> {
@@ -2104,9 +2142,12 @@ impl RawGenesisTransaction {
         let mut aggregated = Parameters::default();
         for tx in &self.transactions {
             if let Some(params) = &tx.parameters {
-                for instruction in
-                    collect_parameter_instructions(params, &tx.instructions, &manual_parameters)
-                {
+                for instruction in collect_parameter_instructions(
+                    params,
+                    &tx.instructions,
+                    &manual_parameters,
+                    &aggregated,
+                ) {
                     if let Some(set_param) = instruction.as_any().downcast_ref::<SetParameter>() {
                         aggregated.set_parameter(set_param.inner().clone());
                     }
@@ -2717,7 +2758,8 @@ mod tests2 {
 
         let parameters = Parameters::default();
         let manual = vec![Parameter::Sumeragi(SumeragiParameter::DaEnabled(true))];
-        let generated = collect_parameter_instructions(&parameters, &[], &manual);
+        let generated =
+            collect_parameter_instructions(&parameters, &[], &manual, &Parameters::default());
         let has_conflict = generated.iter().any(|instruction| {
             instruction
                 .as_any()
@@ -2732,6 +2774,44 @@ mod tests2 {
         assert!(
             !has_conflict,
             "manual Sumeragi overrides must suppress default value reinsertion"
+        );
+    }
+
+    #[test]
+    fn collect_parameter_instructions_orders_sumeragi_timing_updates_safely() {
+        use iroha_data_model::parameter::{Parameters, system::SumeragiParameter};
+
+        let mut current = Parameters::default();
+        current.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(100)));
+        current.set_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(100)));
+        current.set_parameter(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(100)));
+
+        let mut target = current.clone();
+        target.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(333)));
+        target.set_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(667)));
+
+        let generated = collect_parameter_instructions(&target, &[], &[], &current);
+        let mut commit_idx = None;
+        let mut block_idx = None;
+
+        for (idx, instruction) in generated.iter().enumerate() {
+            let Some(set_param) = instruction.as_any().downcast_ref::<SetParameter>() else {
+                continue;
+            };
+            match set_param.inner() {
+                Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(667)) => commit_idx = Some(idx),
+                Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(333)) => block_idx = Some(idx),
+                _ => {}
+            }
+        }
+
+        assert!(
+            commit_idx.is_some() && block_idx.is_some(),
+            "generated instructions must contain the requested Sumeragi timing overrides"
+        );
+        assert!(
+            commit_idx < block_idx,
+            "commit_time_ms must be emitted before block_time_ms when both are raised"
         );
     }
 
@@ -2904,6 +2984,200 @@ mod tests2 {
         let effective = manifest.effective_parameters();
         assert_eq!(effective.sumeragi().block_time_ms(), 333);
         assert_eq!(effective.sumeragi().commit_time_ms(), 667);
+    }
+
+    #[test]
+    fn parse_orders_structured_sumeragi_timing_updates_across_transactions() -> Result<()> {
+        init_instruction_registry();
+        use iroha_data_model::parameter::{Parameters, system::SumeragiParameter};
+
+        let chain = ChainId::from("iroha:test:paramparse-order");
+
+        let mut base = Parameters::default();
+        base.set_parameter(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(100)));
+        base.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(100)));
+        base.set_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(100)));
+
+        let mut updated = base.clone();
+        updated.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(333)));
+        updated.set_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(667)));
+
+        let manifest = RawGenesisTransaction {
+            chain,
+            executor: None,
+            ivm_dir: IvmPath::default(),
+            transactions: vec![
+                RawGenesisTx {
+                    parameters: Some(base),
+                    ..RawGenesisTx::default()
+                },
+                RawGenesisTx::default(),
+                RawGenesisTx {
+                    parameters: Some(updated),
+                    ..RawGenesisTx::default()
+                },
+            ],
+            consensus_mode: None,
+            bls_domain: None,
+            wire_proto_versions: vec![],
+            consensus_fingerprint: None,
+            crypto: ManifestCrypto::default(),
+        };
+
+        let batches = manifest.parse()?;
+        let (commit_idx, block_idx) = batches
+            .iter()
+            .find_map(|batch| {
+                let mut commit = None;
+                let mut block = None;
+                for (idx, instruction) in batch.iter().enumerate() {
+                    let Some(set_parameter) = instruction.as_any().downcast_ref::<SetParameter>()
+                    else {
+                        continue;
+                    };
+                    match set_parameter.inner() {
+                        Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(667)) => {
+                            commit = Some(idx);
+                        }
+                        Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(333)) => {
+                            block = Some(idx);
+                        }
+                        _ => {}
+                    }
+                }
+                commit.zip(block)
+            })
+            .expect("parsed batches should contain the updated Sumeragi timing instructions");
+
+        assert!(
+            commit_idx < block_idx,
+            "parse() must emit commit_time_ms before block_time_ms when a later structured section raises both"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "debug helper for inspecting parsed genesis instruction order"]
+    fn debug_dump_set_parameter_order_for_manifest_path() -> Result<()> {
+        use std::env;
+
+        init_instruction_registry();
+
+        let path = env::var("IROHA_DEBUG_GENESIS_PATH")
+            .wrap_err("IROHA_DEBUG_GENESIS_PATH must point to a genesis manifest JSON")?;
+        let manifest = RawGenesisTransaction::from_path(&path)?;
+        let batches = manifest.parse()?;
+
+        eprintln!("manifest={path}");
+        for (batch_idx, batch) in batches.iter().enumerate() {
+            eprintln!("BATCH {batch_idx}");
+            for (instr_idx, instruction) in batch.iter().enumerate() {
+                let Some(set_parameter) = instruction.as_any().downcast_ref::<SetParameter>()
+                else {
+                    continue;
+                };
+                eprintln!("  {instr_idx}: {:?}", set_parameter.inner());
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "debug helper for inspecting signed genesis instruction order"]
+    fn debug_dump_set_parameter_order_for_signed_genesis_path() -> Result<()> {
+        use std::{env, fs};
+
+        use iroha_data_model::{block::decode_framed_signed_block, transaction::Executable};
+
+        init_instruction_registry();
+
+        let path = env::var("IROHA_DEBUG_SIGNED_GENESIS_PATH")
+            .wrap_err("IROHA_DEBUG_SIGNED_GENESIS_PATH must point to a signed genesis .nrt")?;
+        let bytes = fs::read(&path).wrap_err_with(|| format!("read signed genesis {path}"))?;
+        let block = decode_framed_signed_block(&bytes)
+            .wrap_err_with(|| format!("decode signed genesis {path}"))?;
+
+        eprintln!("signed_genesis={path}");
+        for (batch_idx, tx) in block.external_transactions().enumerate() {
+            let Executable::Instructions(batch) = tx.instructions() else {
+                eprintln!("BATCH {batch_idx} <non-instruction-executable>");
+                continue;
+            };
+            eprintln!("BATCH {batch_idx}");
+            for (instr_idx, instruction) in batch.iter().enumerate() {
+                if let Some(set_parameter) = instruction.as_any().downcast_ref::<SetParameter>() {
+                    eprintln!("  {instr_idx}: {:?}", set_parameter.inner());
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "debug helper for inspecting build_and_sign instruction order before encoding"]
+    fn debug_dump_set_parameter_order_for_built_manifest_path() -> Result<()> {
+        use std::env;
+
+        use iroha_data_model::transaction::Executable;
+
+        init_instruction_registry();
+
+        let path = env::var("IROHA_DEBUG_GENESIS_PATH")
+            .wrap_err("IROHA_DEBUG_GENESIS_PATH must point to a genesis manifest JSON")?;
+        let manifest = RawGenesisTransaction::from_path(&path)?;
+        let block = manifest.build_and_sign(&KeyPair::random())?;
+
+        eprintln!("built_manifest={path}");
+        for (batch_idx, tx) in block.0.external_transactions().enumerate() {
+            let Executable::Instructions(batch) = tx.instructions() else {
+                eprintln!("BATCH {batch_idx} <non-instruction-executable>");
+                continue;
+            };
+            eprintln!("BATCH {batch_idx}");
+            for (instr_idx, instruction) in batch.iter().enumerate() {
+                if let Some(set_parameter) = instruction.as_any().downcast_ref::<SetParameter>() {
+                    eprintln!("  {instr_idx}: {:?}", set_parameter.inner());
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "debug helper for inspecting build_and_sign instruction order after encode_wire roundtrip"]
+    fn debug_dump_set_parameter_order_for_encoded_manifest_path() -> Result<()> {
+        use std::env;
+
+        use iroha_data_model::{block::decode_framed_signed_block, transaction::Executable};
+
+        init_instruction_registry();
+
+        let path = env::var("IROHA_DEBUG_GENESIS_PATH")
+            .wrap_err("IROHA_DEBUG_GENESIS_PATH must point to a genesis manifest JSON")?;
+        let manifest = RawGenesisTransaction::from_path(&path)?;
+        let block = manifest.build_and_sign(&KeyPair::random())?;
+        let encoded = block.0.encode_wire()?;
+        let decoded = decode_framed_signed_block(&encoded)?;
+
+        eprintln!("encoded_manifest={path}");
+        for (batch_idx, tx) in decoded.external_transactions().enumerate() {
+            let Executable::Instructions(batch) = tx.instructions() else {
+                eprintln!("BATCH {batch_idx} <non-instruction-executable>");
+                continue;
+            };
+            eprintln!("BATCH {batch_idx}");
+            for (instr_idx, instruction) in batch.iter().enumerate() {
+                if let Some(set_parameter) = instruction.as_any().downcast_ref::<SetParameter>() {
+                    eprintln!("  {instr_idx}: {:?}", set_parameter.inner());
+                }
+            }
+        }
+
+        Ok(())
     }
 
     #[test]
@@ -3775,6 +4049,7 @@ impl RawGenesisTransaction {
         };
 
         let mut instructions_list = Vec::new();
+        let mut aggregated_parameters = Parameters::default();
 
         if let Some(executor_path) = executor {
             let upgrade_executor = Upgrade::new(Executor::new(executor_path.try_into()?)).into();
@@ -3785,14 +4060,26 @@ impl RawGenesisTransaction {
             let mut instructions = Vec::new();
 
             if let Some(parameters) = tx.parameters {
-                instructions.extend(collect_parameter_instructions(
+                let generated = collect_parameter_instructions(
                     &parameters,
                     &tx.instructions,
                     &manual_parameters,
-                ));
+                    &aggregated_parameters,
+                );
+                for instruction in &generated {
+                    if let Some(set_param) = instruction.as_any().downcast_ref::<SetParameter>() {
+                        aggregated_parameters.set_parameter(set_param.inner().clone());
+                    }
+                }
+                instructions.extend(generated);
             }
 
             if !tx.instructions.is_empty() {
+                for instruction in &tx.instructions {
+                    if let Some(set_param) = instruction.as_any().downcast_ref::<SetParameter>() {
+                        aggregated_parameters.set_parameter(set_param.inner().clone());
+                    }
+                }
                 instructions.extend(tx.instructions);
             }
 
@@ -4297,12 +4584,19 @@ impl GenesisBuilder {
 
     /// Finish building and produce a [`RawGenesisTransaction`].
     pub fn build_raw(self) -> RawGenesisTransaction {
+        let mut parameter_snapshot = Parameters::default();
         let transactions = self
             .transactions
             .into_iter()
             .map(|tx| {
-                let parameters =
-                    (!tx.parameters.is_empty()).then(|| tx.parameters.into_iter().collect());
+                let parameters = if tx.parameters.is_empty() {
+                    None
+                } else {
+                    for parameter in &tx.parameters {
+                        parameter_snapshot.set_parameter(parameter.clone());
+                    }
+                    Some(parameter_snapshot.clone())
+                };
                 RawGenesisTx {
                     parameters,
                     instructions: tx.instructions,
@@ -5456,6 +5750,56 @@ mod tests {
         let de: RawGenesisTransaction = norito::json::from_str(&json)?;
         let json2 = norito::json::to_json(&de)?;
         assert_eq!(json, json2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn build_raw_carries_forward_parameter_snapshots() -> Result<()> {
+        use iroha_data_model::parameter::system::SumeragiParameter;
+
+        let raw = GenesisBuilder::new_without_executor(
+            ChainId::from("iroha:test:build-raw-cumulative"),
+            ".",
+        )
+        .append_parameter(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(100)))
+        .append_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(100)))
+        .append_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(100)))
+        .next_transaction()
+        .append_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(667)))
+        .next_transaction()
+        .append_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(333)))
+        .build_raw()
+        .with_consensus_mode(SumeragiConsensusMode::Permissioned);
+
+        let transactions = &raw.transactions;
+        assert_eq!(transactions.len(), 3);
+
+        let tx1_params = transactions[1]
+            .parameters
+            .as_ref()
+            .expect("second transaction should carry cumulative params");
+        assert_eq!(tx1_params.sumeragi().block_time_ms(), 100);
+        assert_eq!(tx1_params.sumeragi().commit_time_ms(), 667);
+
+        let tx2_params = transactions[2]
+            .parameters
+            .as_ref()
+            .expect("third transaction should carry cumulative params");
+        assert_eq!(tx2_params.sumeragi().block_time_ms(), 333);
+        assert_eq!(tx2_params.sumeragi().commit_time_ms(), 667);
+
+        let json = norito::json::to_json(&raw)?;
+        let decoded: RawGenesisTransaction = norito::json::from_str(&json)?;
+        assert_eq!(
+            decoded.transactions[2]
+                .parameters
+                .as_ref()
+                .expect("decoded third transaction should carry params")
+                .sumeragi()
+                .commit_time_ms(),
+            667
+        );
 
         Ok(())
     }

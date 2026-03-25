@@ -158,7 +158,7 @@ impl Signature {
                 secp256k1::EcdsaSecp256k1Sha256::verify(payload, &self.payload, pk)
             }
             PublicKeyFull::MlDsa(pk_bytes) => {
-                use pqcrypto_dilithium::dilithium3 as dilithium;
+                use pqcrypto_mldsa::mldsa65 as dilithium;
                 use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _};
                 if self.payload.len() != dilithium::signature_bytes() {
                     return Err(Error::BadSignature);

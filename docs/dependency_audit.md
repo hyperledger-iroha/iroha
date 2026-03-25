@@ -24,7 +24,7 @@ Legitimacy and “main crate” assessment (spotlight):
 - AEAD/Symmetric: `aes-gcm`, `chacha20poly1305`, `aead` traits (RustCrypto) — canonical.
 - Signatures/ECC: `ed25519-dalek`, `x25519-dalek` (dalek project), `k256` (RustCrypto), `secp256k1` (libsecp bindings) — all legitimate; prefer a single secp256k1 stack (`k256` for pure Rust or `secp256k1` for libsecp) to reduce surface area.
 - BLS12-381/ZK: `blstrs`, `halo2_*` — widely used in production ZK ecosystems; legitimate.
-- PQ: `pqcrypto-dilithium`, `pqcrypto-traits` — legit reference crates.
+- PQ: `pqcrypto-mldsa`, `pqcrypto-mlkem`, `pqcrypto-traits` — legit reference crates.
 - TLS: `rustls`, `tokio-rustls`, `hyper-rustls` — canonical modern Rust TLS stack.
 - Noise: `snow` — canonical implementation.
 - Serialization: `parity-scale-codec` is canonical for SCALE. Serde has been removed from production dependencies across the workspace; Norito derives/writers cover every runtime path. Any residual Serde references live in historical documentation, guardrail scripts, or test-only allowlists.

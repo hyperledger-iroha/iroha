@@ -11180,11 +11180,15 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         _ requestBody: ToriiOfflineCashSetupRequest
     ) async throws -> ToriiOfflineCashEnvelope {
         let body = try JSONEncoder().encode(requestBody)
+        let idempotencyKey = offlineCashIdempotencyKey(action: "setup", body: body)
         let request = try makeRequest(
             path: "/v1/offline/cash/setup",
             method: .post,
             body: body,
-            headers: ["Content-Type": "application/json"]
+            headers: [
+                "Content-Type": "application/json",
+                "Idempotency-Key": idempotencyKey,
+            ]
         )
         let data = try await data(for: request)
         return try decodeJSON(ToriiOfflineCashEnvelope.self, from: data)
@@ -11194,11 +11198,15 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         _ requestBody: ToriiOfflineCashLoadRequest
     ) async throws -> ToriiOfflineCashEnvelope {
         let body = try JSONEncoder().encode(requestBody)
+        let idempotencyKey = offlineCashIdempotencyKey(action: "load", body: body)
         let request = try makeRequest(
             path: "/v1/offline/cash/load",
             method: .post,
             body: body,
-            headers: ["Content-Type": "application/json"]
+            headers: [
+                "Content-Type": "application/json",
+                "Idempotency-Key": idempotencyKey,
+            ]
         )
         let data = try await data(for: request)
         return try decodeJSON(ToriiOfflineCashEnvelope.self, from: data)
@@ -11208,11 +11216,15 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         _ requestBody: ToriiOfflineCashRefreshRequest
     ) async throws -> ToriiOfflineCashEnvelope {
         let body = try JSONEncoder().encode(requestBody)
+        let idempotencyKey = offlineCashIdempotencyKey(action: "refresh", body: body)
         let request = try makeRequest(
             path: "/v1/offline/cash/refresh",
             method: .post,
             body: body,
-            headers: ["Content-Type": "application/json"]
+            headers: [
+                "Content-Type": "application/json",
+                "Idempotency-Key": idempotencyKey,
+            ]
         )
         let data = try await data(for: request)
         return try decodeJSON(ToriiOfflineCashEnvelope.self, from: data)
@@ -11222,11 +11234,15 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         _ requestBody: ToriiOfflineCashSyncRequest
     ) async throws -> ToriiOfflineCashEnvelope {
         let body = try JSONEncoder().encode(requestBody)
+        let idempotencyKey = offlineCashIdempotencyKey(action: "sync", body: body)
         let request = try makeRequest(
             path: "/v1/offline/cash/sync",
             method: .post,
             body: body,
-            headers: ["Content-Type": "application/json"]
+            headers: [
+                "Content-Type": "application/json",
+                "Idempotency-Key": idempotencyKey,
+            ]
         )
         let data = try await data(for: request)
         return try decodeJSON(ToriiOfflineCashEnvelope.self, from: data)
@@ -11236,11 +11252,15 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         _ requestBody: ToriiOfflineCashRedeemRequest
     ) async throws -> ToriiOfflineCashEnvelope {
         let body = try JSONEncoder().encode(requestBody)
+        let idempotencyKey = offlineCashIdempotencyKey(action: "redeem", body: body)
         let request = try makeRequest(
             path: "/v1/offline/cash/redeem",
             method: .post,
             body: body,
-            headers: ["Content-Type": "application/json"]
+            headers: [
+                "Content-Type": "application/json",
+                "Idempotency-Key": idempotencyKey,
+            ]
         )
         let data = try await data(for: request)
         return try decodeJSON(ToriiOfflineCashEnvelope.self, from: data)
@@ -12802,6 +12822,12 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         try ensureStatus(response, in: 200..<300, responseBody: data)
         guard !data.isEmpty else { return nil }
         return try decodeJSON(ToriiPipelineTransactionStatus.self, from: data)
+    }
+
+    private func offlineCashIdempotencyKey(action: String, body: Data) -> String {
+        let digest = SHA256.hash(data: body)
+        let hex = digest.map { String(format: "%02x", $0) }.joined()
+        return "offline-cash.\(action).\(hex)"
     }
 
     @available(iOS 15.0, macOS 12.0, *)

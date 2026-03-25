@@ -7,8 +7,10 @@ use std::{
 
 use clap::Parser;
 use color_eyre::eyre::{WrapErr, eyre};
+use iroha_config::{base::toml::TomlSource, parameters::actual};
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey};
 use iroha_data_model::{
+    da::commitment::DaProofPolicyBundle,
     isi::RegisterPublicLaneValidator,
     parameter::{SumeragiParameter, system::SumeragiConsensusMode},
     prelude::*,
@@ -46,6 +48,9 @@ pub struct Args {
     /// Algorithm of the genesis key (must match the genesis public key).
     #[clap(long, default_value = "ed25519", value_name = "ALGORITHM")]
     algorithm: Algorithm,
+    /// Optional peer config TOML used to derive the DA proof-policy bundle embedded into genesis.
+    #[clap(long, value_name = "PATH")]
+    config: Option<PathBuf>,
     /// Select the consensus mode to stamp into the manifest (optional override).
     #[clap(long, value_enum, value_name = "MODE")]
     consensus_mode: Option<ConsensusModeArg>,
@@ -300,27 +305,9 @@ impl<T: Write> RunArgs<T> for Args {
                 asset_defs: BTreeSet::new(),
             }
         };
-        let mut builder = genesis.into_builder();
-
         if self.topology.is_none() && !self.peer_pops.is_empty() {
             return Err(eyre!(
                 "--peer-pop requires --topology to align PoPs with peers"
-            ));
-        }
-
-        if let Some(topology) = topology_override.as_ref() {
-            // Put topology into a dedicated transaction so it remains separate
-            // from other genesis instructions.
-            let entries = build_topology_entries(topology, &self.peer_pops)?;
-            builder = builder.next_transaction().set_topology(entries);
-        }
-        if let Some(mode) = next_consensus_mode {
-            builder =
-                builder.append_parameter(Parameter::Sumeragi(SumeragiParameter::NextMode(mode)));
-        }
-        if let (Some(height), Some(_)) = (self.mode_activation_height, self.next_consensus_mode) {
-            builder = builder.append_parameter(Parameter::Sumeragi(
-                SumeragiParameter::ModeActivationHeight(height),
             ));
         }
         let genesis_key_pair = load_genesis_key(
@@ -328,22 +315,52 @@ impl<T: Write> RunArgs<T> for Args {
             self.seed.as_deref(),
             self.algorithm,
         )?;
-        if needs_npos_bootstrap {
-            let ivm_domain: DomainId = DEFAULT_NPOS_BOOTSTRAP_IVM_DOMAIN.parse()?;
-            let escrow_account_id = bootstrap_escrow_account_id(genesis_key_pair.public_key());
-            builder = append_npos_bootstrap(
-                builder,
-                &mut bootstrap_registrations,
-                &topology_peers,
-                &ivm_domain,
-                &escrow_account_id,
-            )?;
-        }
-        let genesis_block = builder
-            .build_raw()
-            .with_consensus_mode(consensus_mode)
-            .with_consensus_meta()
-            .build_and_sign(&genesis_key_pair)?;
+        let da_proof_policies = resolve_da_proof_policies(self.config.as_deref())?;
+        let direct_sign_safe = topology_override.is_none()
+            && next_consensus_mode.is_none()
+            && self.mode_activation_height.is_none()
+            && !needs_npos_bootstrap;
+        let genesis_block = if direct_sign_safe {
+            genesis
+                .with_consensus_mode(consensus_mode)
+                .build_and_sign_with_da_proof_policies(&genesis_key_pair, da_proof_policies)?
+        } else {
+            let mut builder = genesis.into_builder();
+
+            if let Some(topology) = topology_override.as_ref() {
+                // Put topology into a dedicated transaction so it remains separate
+                // from other genesis instructions.
+                let entries = build_topology_entries(topology, &self.peer_pops)?;
+                builder = builder.next_transaction().set_topology(entries);
+            }
+            if let Some(mode) = next_consensus_mode {
+                builder = builder
+                    .append_parameter(Parameter::Sumeragi(SumeragiParameter::NextMode(mode)));
+            }
+            if let (Some(height), Some(_)) = (self.mode_activation_height, self.next_consensus_mode)
+            {
+                builder = builder.append_parameter(Parameter::Sumeragi(
+                    SumeragiParameter::ModeActivationHeight(height),
+                ));
+            }
+            if needs_npos_bootstrap {
+                let ivm_domain: DomainId = DEFAULT_NPOS_BOOTSTRAP_IVM_DOMAIN.parse()?;
+                let escrow_account_id = bootstrap_escrow_account_id(genesis_key_pair.public_key());
+                builder = append_npos_bootstrap(
+                    builder,
+                    &mut bootstrap_registrations,
+                    &topology_peers,
+                    &ivm_domain,
+                    &escrow_account_id,
+                )?;
+            }
+
+            builder
+                .build_raw()
+                .with_consensus_mode(consensus_mode)
+                .with_consensus_meta()
+                .build_and_sign_with_da_proof_policies(&genesis_key_pair, da_proof_policies)?
+        };
 
         eprintln!("Genesis public key: {}", genesis_key_pair.public_key());
 
@@ -457,6 +474,31 @@ fn build_topology_entries(
         .collect())
 }
 
+fn resolve_da_proof_policies(
+    config_path: Option<&Path>,
+) -> Result<Option<DaProofPolicyBundle>, color_eyre::eyre::Error> {
+    let Some(config_path) = config_path else {
+        return Ok(None);
+    };
+
+    let source = TomlSource::from_file(config_path).map_err(|err| {
+        eyre!(
+            "failed to read peer config at {}: {err}",
+            config_path.display()
+        )
+    })?;
+    let config = actual::Root::from_toml_source(source).map_err(|err| {
+        eyre!(
+            "failed to parse peer config for DA proof policies at {}: {err}",
+            config_path.display()
+        )
+    })?;
+
+    Ok(Some(iroha_core::da::proof_policy_bundle(
+        &config.nexus.lane_config,
+    )))
+}
+
 fn decode_hex(s: &str) -> Result<Vec<u8>, color_eyre::eyre::Error> {
     let s = s.trim_start_matches("0x");
     if !s.len().is_multiple_of(2) {
@@ -489,6 +531,7 @@ mod tests {
         path::PathBuf,
     };
 
+    use super::*;
     use iroha_crypto::KeyPair as CryptoKeyPair;
     use iroha_data_model::{
         ChainId,
@@ -502,8 +545,6 @@ mod tests {
     };
     use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
 
-    use super::*;
-
     #[test]
     fn peer_pops_without_topology_is_rejected() {
         let args = Args {
@@ -514,6 +555,7 @@ mod tests {
             private_key: Some(test_private_key_hex()),
             seed: None,
             algorithm: Algorithm::Ed25519,
+            config: None,
             consensus_mode: None,
             next_consensus_mode: None,
             mode_activation_height: None,
@@ -543,6 +585,7 @@ mod tests {
             private_key: Some(test_private_key_hex()),
             seed: None,
             algorithm: Algorithm::Ed25519,
+            config: None,
             consensus_mode: None,
             next_consensus_mode: None,
             mode_activation_height: None,
@@ -591,6 +634,7 @@ mod tests {
             private_key: Some(test_private_key_hex()),
             seed: None,
             algorithm: Algorithm::Ed25519,
+            config: None,
             consensus_mode: None,
             next_consensus_mode: None,
             mode_activation_height: None,
@@ -623,6 +667,7 @@ mod tests {
             private_key: Some(test_private_key_hex()),
             seed: None,
             algorithm: Algorithm::Ed25519,
+            config: None,
             consensus_mode: None,
             next_consensus_mode: None,
             mode_activation_height: None,
@@ -644,6 +689,7 @@ mod tests {
             private_key: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
+            config: None,
             consensus_mode: None,
             next_consensus_mode: None,
             mode_activation_height: None,
@@ -664,6 +710,7 @@ mod tests {
             private_key: Some(test_private_key_hex()),
             seed: None,
             algorithm: Algorithm::Ed25519,
+            config: None,
             consensus_mode: None,
             next_consensus_mode: None,
             mode_activation_height: None,
@@ -689,6 +736,7 @@ mod tests {
             private_key: Some(test_private_key_hex()),
             seed: None,
             algorithm: Algorithm::Ed25519,
+            config: None,
             consensus_mode: Some(ConsensusModeArg::Permissioned),
             next_consensus_mode: None,
             mode_activation_height: None,
@@ -724,6 +772,7 @@ mod tests {
             private_key: Some(test_private_key_hex()),
             seed: None,
             algorithm: Algorithm::Ed25519,
+            config: None,
             consensus_mode: None,
             next_consensus_mode: None,
             mode_activation_height: None,
@@ -771,6 +820,7 @@ mod tests {
             private_key: Some(test_private_key_hex()),
             seed: None,
             algorithm: Algorithm::Ed25519,
+            config: None,
             consensus_mode: None,
             next_consensus_mode: None,
             mode_activation_height: None,
@@ -803,6 +853,66 @@ mod tests {
     }
 
     #[test]
+    fn sign_without_manifest_mutations_matches_direct_manifest_signing() {
+        use std::num::NonZeroU64;
+
+        use iroha_crypto::{Algorithm, KeyPair};
+        use iroha_data_model::parameter::BlockParameter;
+
+        let manifest = GenesisBuilder::new_without_executor(
+            ChainId::from("sign-direct-manifest-regression"),
+            ".",
+        )
+        .append_parameter(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(100)))
+        .append_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(100)))
+        .append_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(100)))
+        .append_parameter(Parameter::Block(BlockParameter::MaxTransactions(
+            NonZeroU64::new(512).expect("non-zero"),
+        )))
+        .next_transaction()
+        .append_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(333)))
+        .append_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(667)))
+        .build_raw()
+        .with_consensus_mode(SumeragiConsensusMode::Permissioned);
+
+        let genesis_file = tempfile::NamedTempFile::new().expect("create temp genesis file");
+        let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
+        fs::write(genesis_file.path(), json).expect("write genesis json");
+
+        let seed = "sign-direct-manifest-regression";
+        let key_pair = KeyPair::from_seed(seed.as_bytes().to_vec(), Algorithm::Ed25519);
+        let expected = manifest
+            .clone()
+            .build_and_sign(&key_pair)
+            .expect("direct manifest signing should succeed");
+
+        let args = Args {
+            genesis_file: genesis_file.path().to_path_buf(),
+            out_file: None,
+            topology: None,
+            peer_pops: vec![],
+            private_key: None,
+            seed: Some(seed.to_owned()),
+            algorithm: Algorithm::Ed25519,
+            config: None,
+            consensus_mode: None,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        let mut writer = BufWriter::new(Vec::new());
+        args.run(&mut writer).expect("sign should succeed");
+        writer.flush().expect("flush output");
+        let bytes = writer.into_inner().expect("extract buffer");
+        let actual = decode_framed_signed_block(&bytes).expect("decode signed block");
+
+        assert_eq!(
+            actual, expected.0,
+            "signing an unchanged manifest should match direct RawGenesisTransaction signing"
+        );
+    }
+
+    #[test]
     fn sign_auto_bootstraps_npos_validators_for_topology() {
         let peer = PeerId::new(
             CryptoKeyPair::random_with_algorithm(Algorithm::BlsNormal)
@@ -818,6 +928,7 @@ mod tests {
             private_key: Some(test_private_key_hex()),
             seed: None,
             algorithm: Algorithm::Ed25519,
+            config: None,
             consensus_mode: None,
             next_consensus_mode: None,
             mode_activation_height: None,
@@ -866,6 +977,7 @@ mod tests {
             private_key: Some(test_private_key_hex()),
             seed: None,
             algorithm: Algorithm::Ed25519,
+            config: None,
             consensus_mode: None,
             next_consensus_mode: None,
             mode_activation_height: None,
@@ -916,6 +1028,7 @@ mod tests {
             private_key: Some(test_private_key_hex()),
             seed: None,
             algorithm: Algorithm::Ed25519,
+            config: None,
             consensus_mode: None,
             next_consensus_mode: None,
             mode_activation_height: Some(5),
@@ -941,6 +1054,7 @@ mod tests {
             private_key: Some(test_private_key_hex()),
             seed: None,
             algorithm: Algorithm::Ed25519,
+            config: None,
             consensus_mode: None,
             next_consensus_mode: Some(ConsensusModeArg::Npos),
             mode_activation_height: Some(10),
@@ -966,6 +1080,7 @@ mod tests {
             private_key: Some(test_private_key_hex()),
             seed: None,
             algorithm: Algorithm::Ed25519,
+            config: None,
             consensus_mode: Some(ConsensusModeArg::Npos),
             next_consensus_mode: None,
             mode_activation_height: None,
@@ -991,6 +1106,7 @@ mod tests {
             private_key: Some(test_private_key_hex()),
             seed: None,
             algorithm: Algorithm::Ed25519,
+            config: None,
             consensus_mode: None,
             next_consensus_mode: None,
             mode_activation_height: None,
@@ -999,6 +1115,47 @@ mod tests {
         let mut writer = BufWriter::new(Vec::new());
         args.run(&mut writer)
             .expect("NPoS genesis with parameters should sign");
+    }
+
+    fn nexus_profile_config_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|path| path.parent())
+            .expect("workspace root")
+            .join("defaults/nexus/config.toml")
+    }
+
+    #[test]
+    fn sign_embeds_da_proof_policies_from_peer_config() {
+        let args = Args {
+            genesis_file: minimal_genesis_file(),
+            out_file: None,
+            topology: None,
+            peer_pops: Vec::new(),
+            private_key: Some(test_private_key_hex()),
+            seed: None,
+            algorithm: Algorithm::Ed25519,
+            config: Some(nexus_profile_config_path()),
+            consensus_mode: None,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        let mut writer = BufWriter::new(Vec::new());
+        args.run(&mut writer).expect("sign should succeed");
+        writer.flush().expect("flush output");
+        let bytes = writer.into_inner().expect("extract buffer");
+        let block = decode_framed_signed_block(&bytes).expect("decode signed block");
+        let bundle = block
+            .da_proof_policies()
+            .expect("expected genesis to embed configured DA proof policies");
+        let aliases: Vec<_> = bundle
+            .policies
+            .iter()
+            .map(|policy| policy.alias.as_str())
+            .collect();
+
+        assert_eq!(aliases, vec!["core", "governance", "zk"]);
     }
 
     #[test]
@@ -1011,6 +1168,7 @@ mod tests {
             private_key: Some(test_private_key_hex()),
             seed: None,
             algorithm: Algorithm::Ed25519,
+            config: None,
             consensus_mode: None,
             next_consensus_mode: None,
             mode_activation_height: None,
@@ -1031,6 +1189,7 @@ mod tests {
             private_key: Some(test_private_key_hex()),
             seed: None,
             algorithm: Algorithm::Ed25519,
+            config: None,
             consensus_mode: None,
             next_consensus_mode: None,
             mode_activation_height: None,

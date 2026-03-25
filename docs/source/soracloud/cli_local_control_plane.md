@@ -71,11 +71,14 @@ Soracloud v1 is an authoritative, IVM-only runtime.
   - `--initial-configs <path>` and `--initial-secrets <path>` may now attach
     authoritative inline service config / secret maps atomically with the
     first deploy so required bindings can be satisfied on first admission.
-  - the CLI now signs the HTTP request canonically with
+  - the CLI now signs the HTTP request canonically with either
     `X-Iroha-Account`, `X-Iroha-Signature`, `X-Iroha-Timestamp-Ms`, and
-    `X-Iroha-Nonce`, receives a deterministic draft transaction instruction set
-    from Torii, then submits the real transaction itself through the normal
-    Iroha client lane.
+    `X-Iroha-Nonce` for ordinary single-signature accounts, or
+    `X-Iroha-Account` plus `X-Iroha-Witness` when
+    `soracloud.http_witness_file` points at a multisig witness JSON payload;
+    Torii returns a deterministic draft transaction instruction set and the
+    CLI then submits the real transaction through the normal Iroha client
+    lane.
   - Torii also enforces SCR-host admission caps and fail-closed capability
     checks before the mutation is accepted.
 - `iroha app soracloud upgrade`
@@ -129,19 +132,25 @@ Soracloud v1 is an authoritative, IVM-only runtime.
     the CLI and returns the authoritative post-finalize session status.
   - `model-publish-private` now supports both a prepared
     bundle/chunk/finalize/compile/allow publish plan and a higher-level
-    draft document. When called with `--draft-file`, the CLI walks a local
-    admitted HF-style source directory, validates the required files,
+    draft document. The draft now carries `source: PrivateModelSourceV1`,
+    which accepts either `LocalDir { path }` or
+    `HuggingFaceSnapshot { repo, revision }`.
+  - when called with `--draft-file`, the CLI normalizes the declared source
+    into a deterministic temp tree, validates the v1 HF safetensors contract,
     deterministically serializes and encrypts the bundle against the active
     Torii upload recipient, shards it into fixed-size encrypted chunks,
     optionally writes the prepared plan via `--emit-plan-file`, and then
-    executes the upload/finalize/compile/allow sequence. When called with
-    `--plan-file`, it still consumes an already prepared publish-plan
-    document and fail-closes when the plan's upload recipient no longer
-    matches the authoritative Torii recipient.
-  - the remaining one-click gap in this area is higher-level model
-    normalization: `model-publish-private --draft-file` expects an already
-    admitted HF-style directory layout rather than importing or converting an
-    arbitrary upstream repository for the user.
+    executes the upload/finalize/compile/allow sequence.
+  - `HuggingFaceSnapshot` revisions are mandatory and must be pinned commit
+    SHAs; branch-like refs are rejected fail-closed.
+  - the admitted source layout is intentionally narrow in v1: `config.json`,
+    tokenizer assets, one or more `*.safetensors` shards, and optional
+    processor/preprocessor metadata for image-capable models. GGUF, ONNX,
+    other non-safetensors weights, and arbitrary nested custom layouts are
+    rejected.
+  - when called with `--plan-file`, the CLI still consumes an already
+    prepared publish-plan document and fail-closes when the plan's upload
+    recipient no longer matches the authoritative Torii recipient.
   - see `uploaded_private_models.md` for the design that layers those routes
     onto the existing model registry and artifact/weight records.
 - `model-host` control-plane routes
@@ -437,6 +446,10 @@ iroha app soracloud deploy \
   `private_key` JSON fields for deploy, upgrade, rollback, rollout, agent
   lifecycle, training, model-host, and model-weight paths; Torii authenticates
   those requests from the canonical HTTP signature headers instead.
+- Multisig-controlled Soracloud owners now use `X-Iroha-Witness`; point
+  `soracloud.http_witness_file` at the exact witness JSON you want the CLI to
+  replay for the next mutation request, and Torii will fail closed if the
+  witness subject account or canonical request hash does not match.
 - `hf-deploy` and `hf-lease-renew` now include client-signed auxiliary
   provenance for the deterministic generated HF service/apartment artifacts,
   so Torii no longer needs caller private keys to admit those follow-up

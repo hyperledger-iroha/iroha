@@ -15,7 +15,7 @@ use std::{
     num::{NonZeroU16, NonZeroU32, NonZeroU64},
 };
 
-use iroha_crypto::{Hash, PublicKey};
+use iroha_crypto::{Hash, PublicKey, Signature};
 use iroha_primitives::json::Json;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -117,6 +117,8 @@ pub const SORA_SERVICE_RUNTIME_STATE_VERSION_V1: u16 = 1;
 pub const SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraRuntimeReceiptV1`].
 pub const SORA_RUNTIME_RECEIPT_VERSION_V1: u16 = 1;
+/// Schema version for [`CanonicalRequestWitnessV1`].
+pub const CANONICAL_REQUEST_WITNESS_VERSION_V1: u16 = 1;
 /// Schema version for [`SoracloudHostRequestEnvelopeV1`].
 pub const SORACLOUD_HOST_REQUEST_VERSION_V1: u16 = 1;
 /// Schema version for [`SoracloudHostResponseEnvelopeV1`].
@@ -318,6 +320,41 @@ pub enum SoraConfigExportTargetV1 {
     Env(String),
     /// Export the canonical JSON payload into a mounted relative file path.
     File(String),
+}
+
+/// One verified signature entry in a multisig canonical request witness.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct CanonicalRequestSignatureWitnessV1 {
+    /// Public key that produced this signature.
+    pub signer: PublicKey,
+    /// Signature over the canonical request witness payload.
+    pub signature: Signature,
+}
+
+/// Multisignature witness for app-auth canonical HTTP requests.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct CanonicalRequestWitnessV1 {
+    /// Schema version; must equal [`CANONICAL_REQUEST_WITNESS_VERSION_V1`].
+    pub schema_version: u16,
+    /// Multisig account authorising the canonical request.
+    pub subject_account: AccountId,
+    /// Unix timestamp in milliseconds used for freshness checks.
+    pub timestamp_ms: u64,
+    /// Replay nonce bound to the witness payload.
+    pub nonce: String,
+    /// Hash of the canonical request bytes reconstructed by the verifier.
+    pub canonical_request_hash: Hash,
+    /// Verified signature witnesses supplied by multisig participants.
+    #[norito(default)]
+    pub signatures: Vec<CanonicalRequestSignatureWitnessV1>,
 }
 
 /// Canonical executable bundle manifest for `SoraCloud` workloads.
@@ -4393,6 +4430,44 @@ pub enum SoraUploadedModelRuntimeFormatV1 {
     SoracloudPrivateIr,
     /// Hugging Face style safetensors layout before private compile admission.
     HuggingFaceSafetensors,
+}
+
+/// Source material used to normalize a private uploaded-model publish draft.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct PrivateModelLocalDirSourceV1 {
+    /// Relative or absolute filesystem path to the source directory.
+    pub path: String,
+}
+
+/// Hugging Face snapshot source used to normalize a private uploaded-model publish draft.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct PrivateModelHuggingFaceSnapshotSourceV1 {
+    /// Hub repository identifier such as `org/model`.
+    pub repo: String,
+    /// Immutable pinned revision string, expected to be a commit SHA.
+    pub revision: String,
+}
+
+/// Source material used to normalize a private uploaded-model publish draft.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+pub enum PrivateModelSourceV1 {
+    /// Normalize an admitted local directory into the deterministic publish tree.
+    LocalDir(PrivateModelLocalDirSourceV1),
+    /// Fetch a pinned Hugging Face snapshot before deterministic packaging.
+    HuggingFaceSnapshot(PrivateModelHuggingFaceSnapshotSourceV1),
 }
 
 /// Policy pricing for uploaded-model storage and private execution.
@@ -9194,9 +9269,10 @@ pub fn encode_ciphertext_query_provenance_payload(
 pub mod prelude {
     pub use super::{
         AGENT_APARTMENT_MANIFEST_VERSION_V1, AgentApartmentManifestV1, AgentSpendLimitV1,
-        AgentToolCapabilityV1, AgentUpgradePolicyV1, CIPHERTEXT_QUERY_PROOF_VERSION_V1,
-        CIPHERTEXT_QUERY_RESPONSE_VERSION_V1, CIPHERTEXT_QUERY_SPEC_VERSION_V1,
-        CIPHERTEXT_STATE_RECORD_VERSION_V1, CiphertextInclusionProofV1,
+        AgentToolCapabilityV1, AgentUpgradePolicyV1, CANONICAL_REQUEST_WITNESS_VERSION_V1,
+        CIPHERTEXT_QUERY_PROOF_VERSION_V1, CIPHERTEXT_QUERY_RESPONSE_VERSION_V1,
+        CIPHERTEXT_QUERY_SPEC_VERSION_V1, CIPHERTEXT_STATE_RECORD_VERSION_V1,
+        CanonicalRequestSignatureWitnessV1, CanonicalRequestWitnessV1, CiphertextInclusionProofV1,
         CiphertextQueryMetadataLevelV1, CiphertextQueryResponseV1, CiphertextQueryResultItemV1,
         CiphertextQuerySpecV1, CiphertextStateMetadataV1, CiphertextStateRecordV1,
         DECRYPTION_AUTHORITY_POLICY_VERSION_V1, DECRYPTION_REQUEST_VERSION_V1,
@@ -9204,7 +9280,8 @@ pub mod prelude {
         FHE_EXECUTION_POLICY_VERSION_V1, FHE_GOVERNANCE_BUNDLE_VERSION_V1, FHE_JOB_SPEC_VERSION_V1,
         FHE_PARAM_SET_VERSION_V1, FheDeterministicRoundingModeV1, FheExecutionPolicyV1,
         FheGovernanceBundleV1, FheJobInputRefV1, FheJobOperationV1, FheJobSpecV1,
-        FheParamLifecycleV1, FheParamSetV1, FheSchemeV1, SECRET_ENVELOPE_VERSION_V1,
+        FheParamLifecycleV1, FheParamSetV1, FheSchemeV1, PrivateModelHuggingFaceSnapshotSourceV1,
+        PrivateModelLocalDirSourceV1, PrivateModelSourceV1, SECRET_ENVELOPE_VERSION_V1,
         SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1, SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
         SORA_CONTAINER_MANIFEST_VERSION_V1, SORA_DECRYPTION_REQUEST_RECORD_VERSION_V1,
         SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SORA_HF_PLACEMENT_RECORD_VERSION_V1,
@@ -10840,6 +10917,41 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn canonical_request_witness_roundtrips_through_norito() {
+        let signer = KeyPair::random();
+        let witness = CanonicalRequestWitnessV1 {
+            schema_version: CANONICAL_REQUEST_WITNESS_VERSION_V1,
+            subject_account: sample_account_id(9),
+            timestamp_ms: 1_717_171_717,
+            nonce: "witness-roundtrip".to_owned(),
+            canonical_request_hash: sample_hash(61),
+            signatures: vec![CanonicalRequestSignatureWitnessV1 {
+                signer: signer.public_key().clone(),
+                signature: Signature::new(signer.private_key(), b"canonical-request-witness"),
+            }],
+        };
+
+        let encoded = norito::to_bytes(&witness).expect("encode witness");
+        let decoded: CanonicalRequestWitnessV1 =
+            norito::decode_from_bytes(&encoded).expect("decode witness");
+        assert_eq!(decoded, witness);
+    }
+
+    #[test]
+    fn private_model_source_roundtrips_through_norito() {
+        let source =
+            PrivateModelSourceV1::HuggingFaceSnapshot(PrivateModelHuggingFaceSnapshotSourceV1 {
+                repo: "openai-community/gpt2".to_owned(),
+                revision: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+            });
+
+        let encoded = norito::to_bytes(&source).expect("encode source");
+        let decoded: PrivateModelSourceV1 =
+            norito::decode_from_bytes(&encoded).expect("decode source");
+        assert_eq!(decoded, source);
     }
 
     #[test]

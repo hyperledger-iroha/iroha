@@ -154,8 +154,9 @@ pub mod json_utils {
 pub use json_utils::{json_array, json_entry, json_object, json_value};
 
 pub use crate::app_auth::{
-    HEADER_ACCOUNT, HEADER_NONCE, HEADER_SIGNATURE, HEADER_TIMESTAMP_MS, Method, Uri,
-    canonical_request_message, canonical_request_signature_message, signature_header_value,
+    HEADER_ACCOUNT, HEADER_NONCE, HEADER_SIGNATURE, HEADER_TIMESTAMP_MS, HEADER_WITNESS, Method,
+    Uri, canonical_request_hash, canonical_request_message, canonical_request_signature_message,
+    canonical_request_witness_message, signature_header_value, witness_header_value,
 };
 
 pub mod openapi;
@@ -2197,6 +2198,15 @@ async fn enforce_soracloud_signed_mutation_request(
             value,
         );
     }
+    if let Ok(encoded) =
+        norito::to_bytes(&verified.verified_signers).map(|bytes| BASE64_STANDARD.encode(bytes))
+        && let Ok(value) = HeaderValue::from_str(&encoded)
+    {
+        parts.headers.insert(
+            HeaderName::from_static(soracloud::VERIFIED_SIGNERS_HEADER),
+            value,
+        );
+    }
 
     Ok(next
         .run(axum::http::Request::from_parts(parts, Body::from(body)))
@@ -2456,6 +2466,11 @@ async fn rate_limit_requests(app: &SharedAppState, key: &str) -> Result<(), Erro
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+fn loopback_connect_info() -> axum::extract::ConnectInfo<std::net::SocketAddr> {
+    axum::extract::ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
 }
 
 const SORANET_PRIVACY_TOKEN_HEADER: &str = "x-soranet-privacy-token";
@@ -2741,29 +2756,41 @@ const OFFLINE_TRANSFER_PREFIX: &str = "wallet-offline-transfer:";
 async fn handler_contracts_instances_by_ns(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(ns): AxPath<String>,
     AxQuery(q): AxQuery<crate::gov::InstancesQuery>,
 ) -> Result<JsonBody<crate::gov::InstancesByNamespaceResponse>, Error> {
-    check_access(&app, &headers, None, "v1/contracts/instances/{ns}").await?;
+    let remote_ip = remote.ip();
+    check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/contracts/instances/{ns}",
+    )
+    .await?;
     crate::gov::handle_gov_instances_by_ns(app.state.clone(), AxPath(ns), AxQuery(q)).await
 }
 
 async fn handler_gov_instances_ns(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(ns): AxPath<String>,
     AxQuery(q): AxQuery<crate::gov::InstancesQuery>,
 ) -> Result<JsonBody<crate::gov::InstancesByNamespaceResponse>, Error> {
-    check_access(&app, &headers, None, "v1/gov/instances/{ns}").await?;
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/gov/instances/{ns}").await?;
     crate::gov::handle_gov_instances_by_ns(app.state.clone(), AxPath(ns), AxQuery(q)).await
 }
 
 async fn handler_gov_enact(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: crate::utils::extractors::NoritoJson<crate::gov::EnactDto>,
 ) -> Result<JsonBody<crate::gov::EnactResponse>, Error> {
-    check_access(&app, &headers, None, "v1/gov/enact").await?;
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/gov/enact").await?;
     crate::gov::handle_gov_enact(
         app.chain_id.clone(),
         app.queue.clone(),
@@ -2777,35 +2804,43 @@ async fn handler_gov_enact(
 async fn handler_gov_council_current(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<JsonBody<crate::gov::CouncilCurrentResponse>, Error> {
-    check_access(&app, &headers, None, "v1/gov/council/current").await?;
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/gov/council/current").await?;
     crate::gov::handle_gov_council_current(app.state.clone()).await
 }
 
 async fn handler_gov_proposal_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     id: AxPath<String>,
 ) -> Result<JsonBody<crate::gov::ProposalGetResponse>, Error> {
-    check_access(&app, &headers, None, "v1/gov/proposals/{id}").await?;
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/gov/proposals/{id}").await?;
     crate::gov::handle_gov_get_proposal(app.state.clone(), id).await
 }
 
 async fn handler_gov_locks_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     rid: AxPath<String>,
 ) -> Result<JsonBody<crate::gov::LocksGetResponse>, Error> {
-    check_access(&app, &headers, None, "v1/gov/locks/{rid}").await?;
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/gov/locks/{rid}").await?;
     crate::gov::handle_gov_get_locks(app.state.clone(), rid).await
 }
 
 async fn handler_gov_referendum_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     id: AxPath<String>,
 ) -> Result<JsonBody<crate::gov::ReferendumGetResponse>, Error> {
-    check_access(&app, &headers, None, "v1/gov/referenda/{id}").await?;
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/gov/referenda/{id}").await?;
     crate::gov::handle_gov_get_referendum(app.state.clone(), id).await
 }
 
@@ -2813,9 +2848,17 @@ async fn handler_gov_referendum_get(
 async fn handler_gov_propose_deploy(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: crate::utils::extractors::NoritoJson<crate::gov::ProposeDeployContractDto>,
 ) -> Result<JsonBody<crate::gov::ProposeDeployContractResponse>, Error> {
-    check_access(&app, &headers, None, "v1/gov/proposals/deploy-contract").await?;
+    let remote_ip = remote.ip();
+    check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/gov/proposals/deploy-contract",
+    )
+    .await?;
     crate::gov::handle_gov_propose_deploy(
         app.chain_id.clone(),
         app.queue.clone(),
@@ -2829,11 +2872,13 @@ async fn handler_gov_propose_deploy(
 async fn handler_gov_protected_set(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(body): crate::utils::extractors::NoritoJson<
         crate::gov::ProtectedNamespacesDto,
     >,
 ) -> Result<JsonBody<crate::gov::ProtectedNamespacesApplyResponse>, Error> {
-    check_access(&app, &headers, None, "v1/gov/protected").await?;
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/gov/protected").await?;
     crate::gov::handle_gov_protected_set(
         app.state.clone(),
         crate::utils::extractors::NoritoJson(body),
@@ -2844,25 +2889,31 @@ async fn handler_gov_protected_set(
 async fn handler_gov_protected_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<JsonBody<crate::gov::ProtectedNamespacesGetResponse>, Error> {
-    check_access(&app, &headers, None, "v1/gov/protected").await?;
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/gov/protected").await?;
     crate::gov::handle_gov_protected_get(app.state.clone()).await
 }
 
 async fn handler_gov_tally_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     id: AxPath<String>,
 ) -> Result<JsonBody<crate::gov::TallyGetResponse>, Error> {
-    check_access(&app, &headers, None, "v1/gov/tally/{id}").await?;
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/gov/tally/{id}").await?;
     crate::gov::handle_gov_get_tally(app.state.clone(), id).await
 }
 
 async fn handler_gov_unlock_stats(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<JsonBody<crate::gov::UnlockStatsResponse>, Error> {
-    check_access(&app, &headers, None, "v1/gov/unlocks/stats").await?;
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/gov/unlocks/stats").await?;
     crate::gov::handle_gov_unlock_stats(app.state.clone()).await
 }
 
@@ -2870,11 +2921,13 @@ async fn handler_gov_unlock_stats(
 async fn handler_account_transactions_query(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(account_id): AxPath<String>,
     crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
         crate::filter::QueryEnvelope,
     >,
 ) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
     let tel = app.telemetry.clone();
     let key_hint = account_id.clone();
     let limits = crate::routing::app_query_limits();
@@ -2883,7 +2936,7 @@ async fn handler_account_transactions_query(
     env.pagination.limit = Some(page_limit);
     env.fetch_size = limits.clamp_fetch_size(env.fetch_size)?;
     let payload = crate::utils::extractors::NoritoJson(env);
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_account_transactions_with_policy(
             app.state.clone(),
             AxPath(account_id),
@@ -2900,7 +2953,8 @@ async fn handler_account_transactions_query(
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     let cost = limits.rate_limit_cost(page_limit);
-    check_access_enforced_with_cost(&app, &headers, None, &key_hint, enforce, cost).await?;
+    check_access_enforced_with_cost(&app, &headers, Some(remote_ip), &key_hint, enforce, cost)
+        .await?;
 
     routing::handle_v1_account_transactions_with_policy(
         app.state.clone(),
@@ -2919,16 +2973,18 @@ async fn handler_account_transactions_query(
 async fn handler_account_assets(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(account_id): AxPath<String>,
     AxQuery(p): AxQuery<crate::routing::AccountAssetsGetParams>,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     let tel = app.telemetry_handle();
     let key_hint = account_id.clone();
     let limits = crate::routing::app_query_limits();
     let page_limit = limits.clamp_page_limit(p.limit)?;
     let mut p = p;
     p.limit = Some(page_limit);
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_account_assets_with_policy(
             app.state.clone(),
             AxPath(account_id),
@@ -2941,7 +2997,8 @@ async fn handler_account_assets(
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     let cost = limits.rate_limit_cost(page_limit);
-    check_access_enforced_with_cost(&app, &headers, None, &key_hint, enforce, cost).await?;
+    check_access_enforced_with_cost(&app, &headers, Some(remote_ip), &key_hint, enforce, cost)
+        .await?;
 
     routing::handle_v1_account_assets_with_policy(
         app.state.clone(),
@@ -2956,12 +3013,14 @@ async fn handler_account_assets(
 async fn handler_account_permissions(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(account_id): AxPath<String>,
     AxQuery(p): AxQuery<crate::filter::Pagination>,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     let key_hint = account_id.clone();
     let tel = app.telemetry_handle();
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_account_permissions_with_policy(
             app.state.clone(),
             AxPath(account_id),
@@ -2973,7 +3032,7 @@ async fn handler_account_permissions(
 
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, &key_hint, enforce).await?;
+    check_access_enforced(&app, &headers, Some(remote_ip), &key_hint, enforce).await?;
 
     routing::handle_v1_account_permissions_with_policy(
         app.state.clone(),
@@ -2988,11 +3047,13 @@ async fn handler_account_permissions(
 async fn handler_account_assets_query(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(account_id): AxPath<String>,
     crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
         crate::filter::QueryEnvelope,
     >,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     let tel = app.telemetry_handle();
     let key_hint = account_id.clone();
     let limits = crate::routing::app_query_limits();
@@ -3001,7 +3062,7 @@ async fn handler_account_assets_query(
     env.pagination.limit = Some(page_limit);
     env.fetch_size = limits.clamp_fetch_size(env.fetch_size)?;
     let payload = crate::utils::extractors::NoritoJson(env);
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_account_assets_query_with_policy(
             app.state.clone(),
             AxPath(account_id),
@@ -3014,7 +3075,8 @@ async fn handler_account_assets_query(
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     let cost = limits.rate_limit_cost(page_limit);
-    check_access_enforced_with_cost(&app, &headers, None, &key_hint, enforce, cost).await?;
+    check_access_enforced_with_cost(&app, &headers, Some(remote_ip), &key_hint, enforce, cost)
+        .await?;
 
     routing::handle_v1_account_assets_query_with_policy(
         app.state.clone(),
@@ -3029,16 +3091,18 @@ async fn handler_account_assets_query(
 async fn handler_account_transactions_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(account_id): AxPath<String>,
     AxQuery(params): AxQuery<crate::routing::AccountTransactionsGetParams>,
 ) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
     let tel = app.telemetry.clone();
     let key_hint = account_id.clone();
     let limits = crate::routing::app_query_limits();
     let mut params = params;
     let page_limit = limits.clamp_page_limit(params.limit)?;
     params.limit = Some(page_limit);
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_account_transactions_get_with_policy(
             app.state.clone(),
             AxPath(account_id),
@@ -3055,7 +3119,8 @@ async fn handler_account_transactions_get(
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     let cost = limits.rate_limit_cost(page_limit);
-    check_access_enforced_with_cost(&app, &headers, None, &key_hint, enforce, cost).await?;
+    check_access_enforced_with_cost(&app, &headers, Some(remote_ip), &key_hint, enforce, cost)
+        .await?;
 
     routing::handle_v1_account_transactions_get_with_policy(
         app.state.clone(),
@@ -3119,9 +3184,11 @@ async fn handler_proofs_query(
     State(app): State<SharedAppState>,
     Extension(negotiated): Extension<api_version::NegotiatedVersion>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
     NoritoJson(dto): NoritoJson<crate::routing::ProofFindByIdQueryDto>,
 ) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
     let tel = app.telemetry.clone();
     let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
         Ok(fmt) => fmt,
@@ -3129,7 +3196,7 @@ async fn handler_proofs_query(
     };
 
     ensure_proof_api_version(&app, negotiated, "v1/proofs/query")?;
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         let signed = crate::routing::signed_find_proof_by_id(&dto)?;
         return routing::handle_queries_with_opts(
             app.query_service.clone(),
@@ -3144,7 +3211,7 @@ async fn handler_proofs_query(
 
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, "v1/proofs/query", enforce).await?;
+    check_access_enforced(&app, &headers, Some(remote_ip), "v1/proofs/query", enforce).await?;
 
     let signed = crate::routing::signed_find_proof_by_id(&dto)?;
     routing::handle_queries_with_opts(
@@ -3163,10 +3230,12 @@ async fn handler_proof_tags(
     State(app): State<SharedAppState>,
     Extension(negotiated): Extension<api_version::NegotiatedVersion>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath((backend, hash)): AxPath<(String, String)>,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     ensure_proof_api_version(&app, negotiated, "v1/zk/proof-tags/{backend}/{hash}")?;
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_get_proof_tags(app.state.clone(), AxPath((backend, hash))).await;
     }
 
@@ -3186,7 +3255,7 @@ async fn handler_proof_tags(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/zk/proof-tags/{backend}/{hash}",
         app.api_token_enforced(),
     );
@@ -3243,16 +3312,18 @@ pub async fn handle_v1_zk_verify_batch(
 async fn handler_accounts_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(p): AxQuery<crate::routing::ListFilterParams>,
 ) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_accounts(app.state.clone(), AxQuery(p), app.telemetry.clone())
             .await;
     }
 
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, "v1/accounts", enforce).await?;
+    check_access_enforced(&app, &headers, Some(remote_ip), "v1/accounts", enforce).await?;
 
     routing::handle_v1_accounts(app.state.clone(), AxQuery(p), app.telemetry.clone()).await
 }
@@ -3262,11 +3333,13 @@ async fn handler_accounts_list(
 async fn handler_accounts_query(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
         crate::filter::QueryEnvelope,
     >,
 ) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_accounts_query(
             app.state.clone(),
             crate::utils::extractors::NoritoJson(env),
@@ -3277,7 +3350,14 @@ async fn handler_accounts_query(
 
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, "v1/accounts/query", enforce).await?;
+    check_access_enforced(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/accounts/query",
+        enforce,
+    )
+    .await?;
 
     routing::handle_v1_accounts_query(
         app.state.clone(),
@@ -3292,9 +3372,11 @@ async fn handler_accounts_query(
 async fn handler_accounts_onboard(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: crate::utils::extractors::NoritoJson<crate::routing::AccountOnboardingRequestDto>,
 ) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_accounts_onboard(app.clone(), request, app.telemetry.clone())
             .await;
     }
@@ -3304,7 +3386,7 @@ async fn handler_accounts_onboard(
     check_access_enforced(
         &app,
         &headers,
-        None,
+        Some(remote_ip),
         routing::ENDPOINT_ACCOUNTS_ONBOARD.trim_start_matches('/'),
         enforce,
     )
@@ -3326,9 +3408,11 @@ async fn handler_accounts_faucet_puzzle(
 async fn handler_accounts_faucet(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: crate::utils::extractors::NoritoJson<crate::routing::AccountFaucetRequestDto>,
 ) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_accounts_faucet(app.clone(), request, app.telemetry.clone())
             .await;
     }
@@ -3338,7 +3422,7 @@ async fn handler_accounts_faucet(
     check_access_enforced(
         &app,
         &headers,
-        None,
+        Some(remote_ip),
         routing::ENDPOINT_ACCOUNTS_FAUCET.trim_start_matches('/'),
         enforce,
     )
@@ -3352,11 +3436,13 @@ async fn handler_accounts_faucet(
 async fn handler_accounts_onboard_multisig(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: crate::utils::extractors::NoritoJson<
         crate::routing::MultisigAccountOnboardingRequestDto,
     >,
 ) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_accounts_onboard_multisig(
             app.clone(),
             request,
@@ -3370,7 +3456,7 @@ async fn handler_accounts_onboard_multisig(
     check_access_enforced(
         &app,
         &headers,
-        None,
+        Some(remote_ip),
         routing::ENDPOINT_ACCOUNTS_ONBOARD_MULTISIG.trim_start_matches('/'),
         enforce,
     )
@@ -3393,9 +3479,11 @@ struct AccountsPortfolioQuery {
 async fn handler_accounts_portfolio(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(uaid_literal): AxPath<String>,
     AxQuery(query): AxQuery<AccountsPortfolioQuery>,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     let asset = query
         .asset
         .as_deref()
@@ -3406,7 +3494,7 @@ async fn handler_accounts_portfolio(
         .as_deref()
         .map(crate::routing::parse_asset_balance_scope_literal)
         .transpose()?;
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_accounts_portfolio(
             app.state.clone(),
             AxPath(uaid_literal),
@@ -3422,7 +3510,7 @@ async fn handler_accounts_portfolio(
     check_access_enforced(
         &app,
         &headers,
-        None,
+        Some(remote_ip),
         "v1/accounts/{uaid}/portfolio",
         enforce,
     )
@@ -3487,16 +3575,18 @@ mod nexus_lane_boundary_tests {
 async fn handler_nexus_public_lane_validators(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(lane_literal): AxPath<String>,
     crate::NoritoQuery(params): crate::NoritoQuery<routing::PublicLaneValidatorsQueryParams>,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     let nexus_enabled = app.state.nexus_snapshot().enabled;
     ensure_nexus_lanes_enabled(
         nexus_enabled,
         routing::ENDPOINT_NEXUS_PUBLIC_LANE_VALIDATORS,
     )?;
     let lane_id = routing::parse_lane_id_literal(&lane_literal)?;
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_nexus_public_lane_validators(
             app.state.clone(),
             lane_id,
@@ -3510,7 +3600,7 @@ async fn handler_nexus_public_lane_validators(
     check_access_enforced(
         &app,
         &headers,
-        None,
+        Some(remote_ip),
         routing::ENDPOINT_NEXUS_PUBLIC_LANE_VALIDATORS.trim_start_matches('/'),
         enforce,
     )
@@ -3529,13 +3619,15 @@ async fn handler_nexus_public_lane_validators(
 async fn handler_nexus_public_lane_stake(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(lane_literal): AxPath<String>,
     crate::NoritoQuery(params): crate::NoritoQuery<routing::PublicLaneStakeQueryParams>,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     let nexus_enabled = app.state.nexus_snapshot().enabled;
     ensure_nexus_lanes_enabled(nexus_enabled, routing::ENDPOINT_NEXUS_PUBLIC_LANE_STAKE)?;
     let lane_id = routing::parse_lane_id_literal(&lane_literal)?;
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_nexus_public_lane_stake(
             app.state.clone(),
             lane_id,
@@ -3549,7 +3641,7 @@ async fn handler_nexus_public_lane_stake(
     check_access_enforced(
         &app,
         &headers,
-        None,
+        Some(remote_ip),
         routing::ENDPOINT_NEXUS_PUBLIC_LANE_STAKE.trim_start_matches('/'),
         enforce,
     )
@@ -3568,13 +3660,15 @@ async fn handler_nexus_public_lane_stake(
 async fn handler_nexus_public_lane_rewards(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(lane_literal): AxPath<String>,
     crate::NoritoQuery(params): crate::NoritoQuery<routing::PublicLaneRewardsQueryParams>,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     let nexus_enabled = app.state.nexus_snapshot().enabled;
     ensure_nexus_lanes_enabled(nexus_enabled, routing::ENDPOINT_NEXUS_PUBLIC_LANE_REWARDS)?;
     let lane_id = routing::parse_lane_id_literal(&lane_literal)?;
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_nexus_public_lane_rewards(
             app.state.clone(),
             lane_id,
@@ -3588,7 +3682,7 @@ async fn handler_nexus_public_lane_rewards(
     check_access_enforced(
         &app,
         &headers,
-        None,
+        Some(remote_ip),
         routing::ENDPOINT_NEXUS_PUBLIC_LANE_REWARDS.trim_start_matches('/'),
         enforce,
     )
@@ -3607,17 +3701,19 @@ async fn handler_nexus_public_lane_rewards(
 async fn handler_nexus_dataspaces_account_summary(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(literal): AxPath<String>,
     crate::NoritoQuery(params): crate::NoritoQuery<
         routing::NexusDataspacesAccountSummaryQueryParams,
     >,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     let nexus_enabled = app.state.nexus_snapshot().enabled;
     ensure_nexus_lanes_enabled(
         nexus_enabled,
         routing::ENDPOINT_NEXUS_DATASPACES_ACCOUNT_SUMMARY,
     )?;
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_nexus_dataspaces_account_summary(
             app.state.clone(),
             AxPath(literal),
@@ -3632,7 +3728,7 @@ async fn handler_nexus_dataspaces_account_summary(
     check_access_enforced(
         &app,
         &headers,
-        None,
+        Some(remote_ip),
         routing::ENDPOINT_NEXUS_DATASPACES_ACCOUNT_SUMMARY.trim_start_matches('/'),
         enforce,
     )
@@ -3651,10 +3747,12 @@ async fn handler_nexus_dataspaces_account_summary(
 async fn handler_space_directory_bindings(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(uaid_literal): AxPath<String>,
     AxQuery(query): AxQuery<crate::routing::SpaceDirectoryBindingsQuery>,
 ) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_space_directory_bindings(
             app.state.clone(),
             AxPath(uaid_literal),
@@ -3669,7 +3767,7 @@ async fn handler_space_directory_bindings(
     check_access_enforced(
         &app,
         &headers,
-        None,
+        Some(remote_ip),
         routing::ENDPOINT_SPACE_DIRECTORY_BINDINGS.trim_start_matches('/'),
         enforce,
     )
@@ -3689,10 +3787,12 @@ async fn handler_space_directory_bindings(
 async fn handler_space_directory_manifests(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(uaid_literal): AxPath<String>,
     AxQuery(query): AxQuery<crate::routing::SpaceDirectoryManifestQuery>,
 ) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_space_directory_manifests(
             app.state.clone(),
             AxPath(uaid_literal),
@@ -3707,7 +3807,7 @@ async fn handler_space_directory_manifests(
     check_access_enforced(
         &app,
         &headers,
-        None,
+        Some(remote_ip),
         routing::ENDPOINT_SPACE_DIRECTORY_MANIFESTS.trim_start_matches('/'),
         enforce,
     )
@@ -3727,9 +3827,11 @@ async fn handler_space_directory_manifests(
 async fn handler_space_directory_manifest_publish(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: crate::utils::extractors::NoritoJson<crate::routing::SpaceDirectoryManifestPublishDto>,
 ) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return crate::routing::handle_post_space_directory_manifest_publish(
             app.chain_id.clone(),
             app.queue.clone(),
@@ -3746,7 +3848,7 @@ async fn handler_space_directory_manifest_publish(
     check_access_enforced(
         &app,
         &headers,
-        None,
+        Some(remote_ip),
         routing::ENDPOINT_SPACE_DIRECTORY_MANIFEST_PUBLISH.trim_start_matches('/'),
         enforce,
     )
@@ -3768,9 +3870,11 @@ async fn handler_space_directory_manifest_publish(
 async fn handler_space_directory_manifest_revoke(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: crate::utils::extractors::NoritoJson<crate::routing::SpaceDirectoryManifestRevokeDto>,
 ) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return crate::routing::handle_post_space_directory_manifest_revoke(
             app.chain_id.clone(),
             app.queue.clone(),
@@ -3787,7 +3891,7 @@ async fn handler_space_directory_manifest_revoke(
     check_access_enforced(
         &app,
         &headers,
-        None,
+        Some(remote_ip),
         routing::ENDPOINT_SPACE_DIRECTORY_MANIFEST_REVOKE.trim_start_matches('/'),
         enforce,
     )
@@ -3809,9 +3913,11 @@ async fn handler_space_directory_manifest_revoke(
 async fn handler_repo_agreements(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(p): AxQuery<crate::routing::ListFilterParams>,
 ) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_repo_agreements(
             app.state.clone(),
             AxQuery(p),
@@ -3822,7 +3928,14 @@ async fn handler_repo_agreements(
 
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, "v1/repo/agreements", enforce).await?;
+    check_access_enforced(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/repo/agreements",
+        enforce,
+    )
+    .await?;
 
     routing::handle_v1_repo_agreements(app.state.clone(), AxQuery(p), app.telemetry.clone()).await
 }
@@ -3832,11 +3945,13 @@ async fn handler_repo_agreements(
 async fn handler_repo_agreements_query(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
         crate::filter::QueryEnvelope,
     >,
 ) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_repo_agreements_query(
             app.state.clone(),
             crate::utils::extractors::NoritoJson(env),
@@ -3847,7 +3962,14 @@ async fn handler_repo_agreements_query(
 
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, "v1/repo/agreements/query", enforce).await?;
+    check_access_enforced(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/repo/agreements/query",
+        enforce,
+    )
+    .await?;
 
     routing::handle_v1_repo_agreements_query(
         app.state.clone(),
@@ -3880,6 +4002,18 @@ fn translate_cash_authorization_to_reserve_json(value: &mut Value) -> Result<(),
         ));
     };
     rename_offline_json_key(map, "lineage_id", "reserve_id");
+    if let Some(device_binding_value) = map.remove("device_binding") {
+        let binding = decode_offline_cash_device_binding(
+            device_binding_value,
+            "authorization device_binding",
+        )?;
+        map.entry("device_id".to_owned())
+            .or_insert(Value::String(binding.device_id));
+        map.entry("offline_public_key".to_owned())
+            .or_insert(Value::String(binding.offline_public_key));
+        map.entry("app_attest_key_id".to_owned())
+            .or_insert(Value::String(binding.attestation_key_id));
+    }
     Ok(())
 }
 
@@ -3955,6 +4089,28 @@ fn decode_offline_transfer_payload_value(raw_payload: &str) -> Result<Value, Err
 }
 
 #[cfg(feature = "app_api")]
+fn decode_offline_cash_device_binding(
+    value: Value,
+    context: &'static str,
+) -> Result<crate::offline_reserve::OfflineCashAndroidDeviceBinding, Error> {
+    norito::json::from_value::<crate::offline_reserve::OfflineCashAndroidDeviceBinding>(value)
+        .map_err(|err| {
+            offline_cash_invalid_payload(format!("failed to decode offline cash {context}: {err}"))
+        })
+}
+
+#[cfg(feature = "app_api")]
+fn decode_offline_cash_device_proof(
+    value: Value,
+    context: &'static str,
+) -> Result<crate::offline_reserve::OfflineCashAndroidDeviceProof, Error> {
+    norito::json::from_value::<crate::offline_reserve::OfflineCashAndroidDeviceProof>(value)
+        .map_err(|err| {
+            offline_cash_invalid_payload(format!("failed to decode offline cash {context}: {err}"))
+        })
+}
+
+#[cfg(feature = "app_api")]
 fn translate_cash_receipt_to_reserve_json(value: &mut Value) -> Result<(), Error> {
     let Some(map) = value.as_object_mut() else {
         return Err(offline_cash_invalid_payload(
@@ -3965,17 +4121,28 @@ fn translate_cash_receipt_to_reserve_json(value: &mut Value) -> Result<(), Error
     rename_offline_json_key(map, "pre_locked_balance", "pre_parked_balance");
     rename_offline_json_key(map, "post_locked_balance", "post_parked_balance");
     rename_offline_json_key(map, "counterparty_lineage_id", "counterparty_reserve_id");
+    if let Some(device_proof_value) = map.remove("device_proof") {
+        let proof = decode_offline_cash_device_proof(device_proof_value, "receipt device_proof")?;
+        let attestation =
+            norito::json::to_value(&crate::offline_reserve::OfflineDeviceAttestation {
+                key_id: proof.attestation_key_id,
+                counter: proof.counter.unwrap_or(0),
+                assertion_base64: proof.assertion_base64,
+                challenge_hash_hex: proof.challenge_hash_hex,
+                attestation_report_base64: None,
+                ios_team_id: None,
+                ios_bundle_id: None,
+                ios_environment: None,
+            })
+            .map_err(|err| {
+                offline_cash_invalid_payload(format!(
+                    "failed to encode translated offline cash receipt attestation: {err}"
+                ))
+            })?;
+        map.entry("attestation".to_owned()).or_insert(attestation);
+    }
     if let Some(authorization) = map.get_mut("authorization") {
         translate_cash_authorization_to_reserve_json(authorization)?;
-    }
-    if let Some(Value::String(source_payload)) = map.get_mut("source_payload") {
-        let mut payload_value = decode_offline_transfer_payload_value(source_payload)?;
-        translate_cash_outgoing_payload_to_reserve_json(&mut payload_value)?;
-        *source_payload = norito::json::to_string(&payload_value).map_err(|err| {
-            offline_cash_invalid_payload(format!(
-                "failed to encode translated source payload: {err}"
-            ))
-        })?;
     }
     Ok(())
 }
@@ -4002,15 +4169,9 @@ fn translate_cash_outgoing_payload_to_reserve_json(value: &mut Value) -> Result<
 }
 
 #[cfg(feature = "app_api")]
-fn extract_android_cash_mode(
+fn extract_offline_cash_mode(
     value: &Value,
-) -> Result<
-    Option<(
-        crate::offline_reserve::OfflineCashAndroidDeviceBinding,
-        crate::offline_reserve::OfflineCashAndroidDeviceProof,
-    )>,
-    Error,
-> {
+) -> Result<crate::offline_reserve::OfflineCashAttestationMode, Error> {
     let Some(map) = value.as_object() else {
         return Err(offline_cash_invalid_payload(
             "offline cash request must be an object",
@@ -4019,55 +4180,55 @@ fn extract_android_cash_mode(
     let binding_value = map.get("device_binding").cloned();
     let proof_value = map.get("device_proof").cloned();
     match (binding_value, proof_value) {
-        (None, None) => Ok(None),
         (Some(_), None) | (None, Some(_)) => Err(offline_cash_invalid_payload(
-            "offline cash android requests require both device_binding and device_proof",
+            "offline cash requests require both device_binding and device_proof",
+        )),
+        (None, None) => Err(offline_cash_invalid_payload(
+            "offline cash requests require both device_binding and device_proof",
         )),
         (Some(binding_value), Some(proof_value)) => {
-            let binding = norito::json::from_value::<
-                crate::offline_reserve::OfflineCashAndroidDeviceBinding,
-            >(binding_value)
-            .map_err(|err| {
-                offline_cash_invalid_payload(format!(
-                    "failed to decode offline cash device_binding: {err}"
-                ))
-            })?;
-            let proof = norito::json::from_value::<
-                crate::offline_reserve::OfflineCashAndroidDeviceProof,
-            >(proof_value)
-            .map_err(|err| {
-                offline_cash_invalid_payload(format!(
-                    "failed to decode offline cash device_proof: {err}"
-                ))
-            })?;
-            Ok(Some((binding, proof)))
+            let binding = decode_offline_cash_device_binding(binding_value, "device_binding")?;
+            let proof = decode_offline_cash_device_proof(proof_value, "device_proof")?;
+            if !binding.platform.eq_ignore_ascii_case(&proof.platform) {
+                return Err(offline_cash_invalid_payload(
+                    "device_binding.platform must match device_proof.platform",
+                ));
+            }
+            if binding.platform.eq_ignore_ascii_case("android") {
+                return Ok(
+                    crate::offline_reserve::OfflineCashAttestationMode::Android { binding, proof },
+                );
+            }
+            if binding.platform.eq_ignore_ascii_case("ios") {
+                return Ok(
+                    crate::offline_reserve::OfflineCashAttestationMode::AppleAttest {
+                        binding,
+                        proof,
+                    },
+                );
+            }
+            Err(offline_cash_invalid_payload(
+                "device_binding.platform must be android or ios",
+            ))
         }
     }
 }
 
-fn android_cash_attestation_value(
+fn offline_cash_attestation_value(
+    binding: &crate::offline_reserve::OfflineCashAndroidDeviceBinding,
     proof: &crate::offline_reserve::OfflineCashAndroidDeviceProof,
 ) -> Result<Value, Error> {
-    norito::json::to_value(&crate::offline_reserve::OfflineDeviceAttestation {
-        key_id: proof.attestation_key_id.clone(),
-        counter: 0,
-        assertion_base64: proof.assertion_base64.clone(),
-        challenge_hash_hex: proof.challenge_hash_hex.clone(),
-        attestation_report_base64: None,
-        ios_team_id: None,
-        ios_bundle_id: None,
-        ios_environment: None,
-    })
-    .map_err(|err| {
+    let attestation = crate::offline_reserve::offline_cash_device_attestation(binding, proof)?;
+    norito::json::to_value(&attestation).map_err(|err| {
         offline_cash_invalid_payload(format!(
-            "failed to encode offline cash android attestation: {err}"
+            "failed to encode translated offline cash attestation: {err}"
         ))
     })
 }
 
 fn translate_cash_request_to_reserve_json(
     value: &mut Value,
-    include_android_attestation: bool,
+    include_device_attestation: bool,
 ) -> Result<(), Error> {
     let Some(map) = value.as_object_mut() else {
         return Err(offline_cash_invalid_payload(
@@ -4075,43 +4236,32 @@ fn translate_cash_request_to_reserve_json(
         ));
     };
     rename_offline_json_key(map, "lineage_id", "reserve_id");
-    let android_binding = map.remove("device_binding");
-    let android_proof = map.remove("device_proof");
-    match (android_binding, android_proof) {
-        (None, None) => {}
-        (Some(_), None) | (None, Some(_)) => {
-            return Err(offline_cash_invalid_payload(
-                "offline cash android requests require both device_binding and device_proof",
-            ));
-        }
-        (Some(binding_value), Some(proof_value)) => {
-            let binding = norito::json::from_value::<
-                crate::offline_reserve::OfflineCashAndroidDeviceBinding,
-            >(binding_value)
-            .map_err(|err| {
-                offline_cash_invalid_payload(format!(
-                    "failed to decode offline cash device_binding: {err}"
-                ))
-            })?;
-            let proof = norito::json::from_value::<
-                crate::offline_reserve::OfflineCashAndroidDeviceProof,
-            >(proof_value)
-            .map_err(|err| {
-                offline_cash_invalid_payload(format!(
-                    "failed to decode offline cash device_proof: {err}"
-                ))
-            })?;
-            map.entry("device_id".to_owned())
-                .or_insert(Value::String(binding.device_id.clone()));
-            map.entry("offline_public_key".to_owned())
-                .or_insert(Value::String(binding.offline_public_key.clone()));
-            map.entry("app_attest_key_id".to_owned())
-                .or_insert(Value::String(binding.attestation_key_id.clone()));
-            if include_android_attestation {
-                map.entry("attestation".to_owned())
-                    .or_insert(android_cash_attestation_value(&proof)?);
-            }
-        }
+    let binding_value = map.remove("device_binding").ok_or_else(|| {
+        offline_cash_invalid_payload(
+            "offline cash requests require both device_binding and device_proof",
+        )
+    })?;
+    let proof_value = map.remove("device_proof").ok_or_else(|| {
+        offline_cash_invalid_payload(
+            "offline cash requests require both device_binding and device_proof",
+        )
+    })?;
+    let binding = decode_offline_cash_device_binding(binding_value, "device_binding")?;
+    let proof = decode_offline_cash_device_proof(proof_value, "device_proof")?;
+    if !binding.platform.eq_ignore_ascii_case(&proof.platform) {
+        return Err(offline_cash_invalid_payload(
+            "device_binding.platform must match device_proof.platform",
+        ));
+    }
+    map.entry("device_id".to_owned())
+        .or_insert(Value::String(binding.device_id.clone()));
+    map.entry("offline_public_key".to_owned())
+        .or_insert(Value::String(binding.offline_public_key.clone()));
+    map.entry("app_attest_key_id".to_owned())
+        .or_insert(Value::String(binding.attestation_key_id.clone()));
+    if include_device_attestation {
+        map.entry("attestation".to_owned())
+            .or_insert(offline_cash_attestation_value(&binding, &proof)?);
     }
     if let Some(Value::Array(receipts)) = map.get_mut("receipts") {
         for receipt in receipts {
@@ -4146,12 +4296,12 @@ fn translate_reserve_envelope_to_cash_json(mut value: Value) -> Result<Value, Er
 fn decode_offline_cash_request<T>(
     mut request_body: Value,
     context: &'static str,
-    include_android_attestation: bool,
+    include_device_attestation: bool,
 ) -> Result<T, Error>
 where
     T: JsonDeserialize,
 {
-    translate_cash_request_to_reserve_json(&mut request_body, include_android_attestation)?;
+    translate_cash_request_to_reserve_json(&mut request_body, include_device_attestation)?;
     norito::json::from_value(request_body).map_err(|err| {
         offline_cash_invalid_payload(format!("failed to decode {context} request: {err}"))
     })
@@ -4183,32 +4333,31 @@ where
 async fn handler_offline_cash_setup(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: Bytes,
 ) -> Result<impl IntoResponse, Error> {
-    if !limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-        check_access_enforced(&app, &headers, None, "v1/offline/cash/setup", enforce).await?;
+        check_access_enforced(
+            &app,
+            &headers,
+            Some(remote_ip),
+            "v1/offline/cash/setup",
+            enforce,
+        )
+        .await?;
     }
 
     let request_body = decode_offline_cash_request_body(&body, "offline cash setup")?;
-    let android_mode = extract_android_cash_mode(&request_body)?;
+    let mode = extract_offline_cash_mode(&request_body)?;
     let req = decode_offline_cash_request::<crate::offline_reserve::OfflineReserveSetupRequest>(
         request_body,
         "offline cash setup",
         true,
     )?;
-    let envelope = crate::offline_reserve::setup_cash(
-        app.as_ref(),
-        req,
-        match android_mode {
-            Some((binding, proof)) => {
-                crate::offline_reserve::OfflineCashAttestationMode::Android { binding, proof }
-            }
-            None => crate::offline_reserve::OfflineCashAttestationMode::AppleAttest,
-        },
-    )
-    .await?;
+    let envelope = crate::offline_reserve::setup_cash(app.as_ref(), req, mode).await?;
     offline_cash_response(&envelope)
 }
 
@@ -4217,32 +4366,31 @@ async fn handler_offline_cash_setup(
 async fn handler_offline_cash_load(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: Bytes,
 ) -> Result<impl IntoResponse, Error> {
-    if !limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-        check_access_enforced(&app, &headers, None, "v1/offline/cash/load", enforce).await?;
+        check_access_enforced(
+            &app,
+            &headers,
+            Some(remote_ip),
+            "v1/offline/cash/load",
+            enforce,
+        )
+        .await?;
     }
 
     let request_body = decode_offline_cash_request_body(&body, "offline cash load")?;
-    let android_mode = extract_android_cash_mode(&request_body)?;
+    let mode = extract_offline_cash_mode(&request_body)?;
     let req = decode_offline_cash_request::<crate::offline_reserve::OfflineReserveTopUpRequest>(
         request_body,
         "offline cash load",
         true,
     )?;
-    let envelope = crate::offline_reserve::load_cash(
-        app.as_ref(),
-        req,
-        match android_mode {
-            Some((binding, proof)) => {
-                crate::offline_reserve::OfflineCashAttestationMode::Android { binding, proof }
-            }
-            None => crate::offline_reserve::OfflineCashAttestationMode::AppleAttest,
-        },
-    )
-    .await?;
+    let envelope = crate::offline_reserve::load_cash(app.as_ref(), req, mode).await?;
     offline_cash_response(&envelope)
 }
 
@@ -4251,32 +4399,31 @@ async fn handler_offline_cash_load(
 async fn handler_offline_cash_refresh(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: Bytes,
 ) -> Result<impl IntoResponse, Error> {
-    if !limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-        check_access_enforced(&app, &headers, None, "v1/offline/cash/refresh", enforce).await?;
+        check_access_enforced(
+            &app,
+            &headers,
+            Some(remote_ip),
+            "v1/offline/cash/refresh",
+            enforce,
+        )
+        .await?;
     }
 
     let request_body = decode_offline_cash_request_body(&body, "offline cash refresh")?;
-    let android_mode = extract_android_cash_mode(&request_body)?;
+    let mode = extract_offline_cash_mode(&request_body)?;
     let req = decode_offline_cash_request::<crate::offline_reserve::OfflineReserveRenewRequest>(
         request_body,
         "offline cash refresh",
         true,
     )?;
-    let envelope = crate::offline_reserve::refresh_cash(
-        app.as_ref(),
-        req,
-        match android_mode {
-            Some((binding, proof)) => {
-                crate::offline_reserve::OfflineCashAttestationMode::Android { binding, proof }
-            }
-            None => crate::offline_reserve::OfflineCashAttestationMode::AppleAttest,
-        },
-    )
-    .await?;
+    let envelope = crate::offline_reserve::refresh_cash(app.as_ref(), req, mode).await?;
     offline_cash_response(&envelope)
 }
 
@@ -4285,22 +4432,31 @@ async fn handler_offline_cash_refresh(
 async fn handler_offline_cash_sync(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: Bytes,
 ) -> Result<impl IntoResponse, Error> {
-    if !limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-        check_access_enforced(&app, &headers, None, "v1/offline/cash/sync", enforce).await?;
+        check_access_enforced(
+            &app,
+            &headers,
+            Some(remote_ip),
+            "v1/offline/cash/sync",
+            enforce,
+        )
+        .await?;
     }
 
     let request_body = decode_offline_cash_request_body(&body, "offline cash sync")?;
-    let android_mode = extract_android_cash_mode(&request_body)?;
+    let mode = extract_offline_cash_mode(&request_body)?;
     let req = decode_offline_cash_request::<crate::offline_reserve::OfflineReserveSyncRequest>(
         request_body,
         "offline cash sync",
         false,
     )?;
-    let envelope = crate::offline_reserve::sync_cash(app.as_ref(), req, android_mode).await?;
+    let envelope = crate::offline_reserve::sync_cash(app.as_ref(), req, mode).await?;
     offline_cash_response(&envelope)
 }
 
@@ -4309,22 +4465,31 @@ async fn handler_offline_cash_sync(
 async fn handler_offline_cash_redeem(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: Bytes,
 ) -> Result<impl IntoResponse, Error> {
-    if !limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-        check_access_enforced(&app, &headers, None, "v1/offline/cash/redeem", enforce).await?;
+        check_access_enforced(
+            &app,
+            &headers,
+            Some(remote_ip),
+            "v1/offline/cash/redeem",
+            enforce,
+        )
+        .await?;
     }
 
     let request_body = decode_offline_cash_request_body(&body, "offline cash redeem")?;
-    let android_mode = extract_android_cash_mode(&request_body)?;
+    let mode = extract_offline_cash_mode(&request_body)?;
     let req = decode_offline_cash_request::<crate::offline_reserve::OfflineReserveDefundRequest>(
         request_body,
         "offline cash redeem",
         false,
     )?;
-    let envelope = crate::offline_reserve::redeem_cash(app.as_ref(), req, android_mode).await?;
+    let envelope = crate::offline_reserve::redeem_cash(app.as_ref(), req, mode).await?;
     offline_cash_response(&envelope)
 }
 
@@ -4333,14 +4498,23 @@ async fn handler_offline_cash_redeem(
 async fn handler_offline_reserve_setup(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
         crate::offline_reserve::OfflineReserveSetupRequest,
     >,
 ) -> Result<impl IntoResponse, Error> {
-    if !limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-        check_access_enforced(&app, &headers, None, "v1/offline/reserve/setup", enforce).await?;
+        check_access_enforced(
+            &app,
+            &headers,
+            Some(remote_ip),
+            "v1/offline/reserve/setup",
+            enforce,
+        )
+        .await?;
     }
 
     json_ok(crate::offline_reserve::setup_reserve(app.as_ref(), req).await?)
@@ -4351,14 +4525,23 @@ async fn handler_offline_reserve_setup(
 async fn handler_offline_reserve_topup(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
         crate::offline_reserve::OfflineReserveTopUpRequest,
     >,
 ) -> Result<impl IntoResponse, Error> {
-    if !limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-        check_access_enforced(&app, &headers, None, "v1/offline/reserve/topup", enforce).await?;
+        check_access_enforced(
+            &app,
+            &headers,
+            Some(remote_ip),
+            "v1/offline/reserve/topup",
+            enforce,
+        )
+        .await?;
     }
 
     json_ok(crate::offline_reserve::top_up_reserve(app.as_ref(), req).await?)
@@ -4369,14 +4552,23 @@ async fn handler_offline_reserve_topup(
 async fn handler_offline_reserve_renew(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
         crate::offline_reserve::OfflineReserveRenewRequest,
     >,
 ) -> Result<impl IntoResponse, Error> {
-    if !limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-        check_access_enforced(&app, &headers, None, "v1/offline/reserve/renew", enforce).await?;
+        check_access_enforced(
+            &app,
+            &headers,
+            Some(remote_ip),
+            "v1/offline/reserve/renew",
+            enforce,
+        )
+        .await?;
     }
 
     json_ok(crate::offline_reserve::renew_reserve(app.as_ref(), req).await?)
@@ -4387,14 +4579,23 @@ async fn handler_offline_reserve_renew(
 async fn handler_offline_reserve_sync(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
         crate::offline_reserve::OfflineReserveSyncRequest,
     >,
 ) -> Result<impl IntoResponse, Error> {
-    if !limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-        check_access_enforced(&app, &headers, None, "v1/offline/reserve/sync", enforce).await?;
+        check_access_enforced(
+            &app,
+            &headers,
+            Some(remote_ip),
+            "v1/offline/reserve/sync",
+            enforce,
+        )
+        .await?;
     }
 
     json_ok(crate::offline_reserve::sync_reserve(app.as_ref(), req).await?)
@@ -4405,14 +4606,23 @@ async fn handler_offline_reserve_sync(
 async fn handler_offline_reserve_defund(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
         crate::offline_reserve::OfflineReserveDefundRequest,
     >,
 ) -> Result<impl IntoResponse, Error> {
-    if !limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-        check_access_enforced(&app, &headers, None, "v1/offline/reserve/defund", enforce).await?;
+        check_access_enforced(
+            &app,
+            &headers,
+            Some(remote_ip),
+            "v1/offline/reserve/defund",
+            enforce,
+        )
+        .await?;
     }
 
     json_ok(crate::offline_reserve::defund_reserve(app.as_ref(), req).await?)
@@ -4423,11 +4633,20 @@ async fn handler_offline_reserve_defund(
 async fn handler_offline_reserve_revocations(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<impl IntoResponse, Error> {
-    if !limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-        check_access_enforced(&app, &headers, None, "v1/offline/revocations", enforce).await?;
+        check_access_enforced(
+            &app,
+            &headers,
+            Some(remote_ip),
+            "v1/offline/revocations",
+            enforce,
+        )
+        .await?;
     }
 
     json_ok(crate::offline_reserve::revocation_list(app.as_ref())?)
@@ -4438,14 +4657,16 @@ async fn handler_offline_reserve_revocations(
 async fn handler_offline_reserve_revocations_bundle(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<impl IntoResponse, Error> {
-    if !limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(
             &app,
             &headers,
-            None,
+            Some(remote_ip),
             "v1/offline/revocations/bundle",
             enforce,
         )
@@ -4460,14 +4681,23 @@ async fn handler_offline_reserve_revocations_bundle(
 async fn handler_offline_reserve_revoke(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
         crate::offline_reserve::OfflineReserveRevocationRequest,
     >,
 ) -> Result<impl IntoResponse, Error> {
-    if !limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-        check_access_enforced(&app, &headers, None, "v1/offline/revocations", enforce).await?;
+        check_access_enforced(
+            &app,
+            &headers,
+            Some(remote_ip),
+            "v1/offline/revocations",
+            enforce,
+        )
+        .await?;
     }
 
     json_ok(crate::offline_reserve::register_revocation(app.as_ref(), req).await?)
@@ -4478,9 +4708,11 @@ async fn handler_offline_reserve_revoke(
 async fn handler_offline_transfers_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(p): AxQuery<crate::routing::OfflineTransferListParams>,
 ) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_offline_transfers(
             app.state.clone(),
             AxQuery(p),
@@ -4491,7 +4723,14 @@ async fn handler_offline_transfers_list(
 
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, "v1/offline/transfers", enforce).await?;
+    check_access_enforced(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/offline/transfers",
+        enforce,
+    )
+    .await?;
 
     routing::handle_v1_offline_transfers(app.state.clone(), AxQuery(p), app.telemetry.clone()).await
 }
@@ -4501,10 +4740,12 @@ async fn handler_offline_transfers_list(
 async fn handler_offline_transfer_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(bundle_id_hex): AxPath<String>,
     AxQuery(p): AxQuery<crate::routing::OfflineTransferGetParams>,
 ) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_offline_transfer_get(
             app.state.clone(),
             bundle_id_hex,
@@ -4519,7 +4760,7 @@ async fn handler_offline_transfer_get(
     check_access_enforced(
         &app,
         &headers,
-        None,
+        Some(remote_ip),
         "v1/offline/transfers/{bundle_id_hex}",
         enforce,
     )
@@ -4539,11 +4780,13 @@ async fn handler_offline_transfer_get(
 async fn handler_offline_transfers_query(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
         crate::filter::QueryEnvelope,
     >,
 ) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_offline_transfers_query(
             app.state.clone(),
             crate::utils::extractors::NoritoJson(env),
@@ -4554,7 +4797,14 @@ async fn handler_offline_transfers_query(
 
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, "v1/offline/transfers/query", enforce).await?;
+    check_access_enforced(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/offline/transfers/query",
+        enforce,
+    )
+    .await?;
 
     routing::handle_v1_offline_transfers_query(
         app.state.clone(),
@@ -5068,8 +5318,10 @@ fn parse_nft_id(raw: &str) -> Result<NftId, Error> {
 async fn handler_explorer_accounts_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(query): AxQuery<ExplorerAccountsQuery>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let ExplorerAccountsQuery {
         pagination,
         domain,
@@ -5083,9 +5335,9 @@ async fn handler_explorer_accounts_list(
         Some(raw) => Some(parse_asset_definition_id(app.as_ref(), &raw)?),
         None => None,
     };
-    let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     if !allowed {
-        check_access(&app, &headers, None, "v1/explorer/accounts").await?;
+        check_access(&app, &headers, Some(remote_ip), "v1/explorer/accounts").await?;
     }
     routing::handle_v1_explorer_accounts(app.state.clone(), pagination, domain, asset_filter).await
 }
@@ -5095,8 +5347,10 @@ async fn handler_explorer_accounts_list(
 async fn handler_explorer_domains_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(query): AxQuery<ExplorerDomainsQuery>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let ExplorerDomainsQuery {
         pagination,
         owned_by,
@@ -5109,9 +5363,9 @@ async fn handler_explorer_domains_list(
         )?),
         None => None,
     };
-    let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     if !allowed {
-        check_access(&app, &headers, None, "v1/explorer/domains").await?;
+        check_access(&app, &headers, Some(remote_ip), "v1/explorer/domains").await?;
     }
     routing::handle_v1_explorer_domains(app.state.clone(), pagination, owned_by).await
 }
@@ -5121,8 +5375,10 @@ async fn handler_explorer_domains_list(
 async fn handler_explorer_asset_definitions_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(query): AxQuery<ExplorerAssetDefinitionsQuery>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let ExplorerAssetDefinitionsQuery {
         pagination,
         domain,
@@ -5140,9 +5396,15 @@ async fn handler_explorer_asset_definitions_list(
         )?),
         None => None,
     };
-    let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     if !allowed {
-        check_access(&app, &headers, None, "v1/explorer/asset-definitions").await?;
+        check_access(
+            &app,
+            &headers,
+            Some(remote_ip),
+            "v1/explorer/asset-definitions",
+        )
+        .await?;
     }
     routing::handle_v1_explorer_asset_definitions(app.state.clone(), pagination, domain, owned_by)
         .await
@@ -5153,8 +5415,10 @@ async fn handler_explorer_asset_definitions_list(
 async fn handler_explorer_assets_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(query): AxQuery<ExplorerAssetsQuery>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let ExplorerAssetsQuery {
         pagination,
         owned_by,
@@ -5177,9 +5441,9 @@ async fn handler_explorer_assets_list(
         Some(raw) => Some(parse_asset_id(&raw)?),
         None => None,
     };
-    let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     if !allowed {
-        check_access(&app, &headers, None, "v1/explorer/assets").await?;
+        check_access(&app, &headers, Some(remote_ip), "v1/explorer/assets").await?;
     }
     routing::handle_v1_explorer_assets(
         app.state.clone(),
@@ -5196,8 +5460,10 @@ async fn handler_explorer_assets_list(
 async fn handler_explorer_nfts_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(query): AxQuery<ExplorerNftsQuery>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let ExplorerNftsQuery {
         pagination,
         owned_by,
@@ -5215,9 +5481,9 @@ async fn handler_explorer_nfts_list(
         Some(raw) => Some(parse_domain_id(&raw)?),
         None => None,
     };
-    let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     if !allowed {
-        check_access(&app, &headers, None, "v1/explorer/nfts").await?;
+        check_access(&app, &headers, Some(remote_ip), "v1/explorer/nfts").await?;
     }
     routing::handle_v1_explorer_nfts(app.state.clone(), pagination, owned_by, domain).await
 }
@@ -5227,11 +5493,13 @@ async fn handler_explorer_nfts_list(
 async fn handler_explorer_blocks_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(query): AxQuery<ExplorerPaginationOnly>,
 ) -> Result<AxResponse, Error> {
-    let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
+    let remote_ip = remote.ip();
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     if !allowed {
-        check_access(&app, &headers, None, "v1/explorer/blocks").await?;
+        check_access(&app, &headers, Some(remote_ip), "v1/explorer/blocks").await?;
     }
     routing::handle_v1_explorer_blocks(app.state.clone(), app.telemetry.clone(), query.pagination)
         .await
@@ -5242,10 +5510,12 @@ async fn handler_explorer_blocks_list(
 async fn handler_explorer_health(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
-    let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
+    let remote_ip = remote.ip();
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     if !allowed {
-        check_access(&app, &headers, None, "v1/explorer/health").await?;
+        check_access(&app, &headers, Some(remote_ip), "v1/explorer/health").await?;
     }
     routing::handle_v1_explorer_health(app.state.clone(), app.kura.clone(), app.telemetry.clone())
         .await
@@ -5256,8 +5526,10 @@ async fn handler_explorer_health(
 async fn handler_explorer_transactions_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(query): AxQuery<ExplorerTransactionsQuery>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let ExplorerTransactionsQuery {
         pagination,
         authority,
@@ -5287,9 +5559,9 @@ async fn handler_explorer_transactions_list(
         Some(raw) => Some(parse_asset_id(&raw)?),
         None => None,
     };
-    let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     if !allowed {
-        check_access(&app, &headers, None, "v1/explorer/transactions").await?;
+        check_access(&app, &headers, Some(remote_ip), "v1/explorer/transactions").await?;
     }
     crate::routing::handle_v1_explorer_transactions(
         app.state.clone(),
@@ -5308,8 +5580,10 @@ async fn handler_explorer_transactions_list(
 async fn handler_explorer_transactions_latest(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(query): AxQuery<ExplorerTransactionsQuery>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let ExplorerTransactionsQuery {
         pagination,
         authority,
@@ -5339,9 +5613,15 @@ async fn handler_explorer_transactions_latest(
         Some(raw) => Some(parse_asset_id(&raw)?),
         None => None,
     };
-    let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     if !allowed {
-        check_access(&app, &headers, None, "v1/explorer/transactions/latest").await?;
+        check_access(
+            &app,
+            &headers,
+            Some(remote_ip),
+            "v1/explorer/transactions/latest",
+        )
+        .await?;
     }
     crate::routing::handle_v1_explorer_transactions_latest(
         app.state.clone(),
@@ -5360,8 +5640,10 @@ async fn handler_explorer_transactions_latest(
 async fn handler_explorer_instructions_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(query): AxQuery<ExplorerInstructionsQuery>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let ExplorerInstructionsQuery {
         pagination,
         account,
@@ -5415,9 +5697,9 @@ async fn handler_explorer_instructions_list(
         Some(raw) => Some(parse_asset_id(&raw)?),
         None => None,
     };
-    let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     if !allowed {
-        check_access(&app, &headers, None, "v1/explorer/instructions").await?;
+        check_access(&app, &headers, Some(remote_ip), "v1/explorer/instructions").await?;
     }
     crate::routing::handle_v1_explorer_instructions(
         app.state.clone(),
@@ -5441,8 +5723,10 @@ async fn handler_explorer_instructions_list(
 async fn handler_explorer_instructions_latest(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(query): AxQuery<ExplorerInstructionsQuery>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let ExplorerInstructionsQuery {
         pagination,
         account,
@@ -5496,9 +5780,15 @@ async fn handler_explorer_instructions_latest(
         Some(raw) => Some(parse_asset_id(&raw)?),
         None => None,
     };
-    let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     if !allowed {
-        check_access(&app, &headers, None, "v1/explorer/instructions/latest").await?;
+        check_access(
+            &app,
+            &headers,
+            Some(remote_ip),
+            "v1/explorer/instructions/latest",
+        )
+        .await?;
     }
     crate::routing::handle_v1_explorer_instructions_latest(
         app.state.clone(),
@@ -5522,10 +5812,12 @@ async fn handler_explorer_instructions_latest(
 async fn handler_explorer_metrics(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
-    let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
+    let remote_ip = remote.ip();
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     if !allowed {
-        check_access(&app, &headers, None, "v1/explorer/metrics").await?;
+        check_access(&app, &headers, Some(remote_ip), "v1/explorer/metrics").await?;
     }
     routing::handle_v1_explorer_metrics(app.state.clone(), app.kura.clone(), app.telemetry.clone())
         .await
@@ -5536,10 +5828,12 @@ async fn handler_explorer_metrics(
 async fn handler_telemetry_peers_info(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
-    let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
+    let remote_ip = remote.ip();
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     if !allowed {
-        check_access(&app, &headers, None, "v1/telemetry/peers-info").await?;
+        check_access(&app, &headers, Some(remote_ip), "v1/telemetry/peers-info").await?;
     }
     let peers = app.peer_telemetry.peers_info().await;
     Ok(JsonBody(peers).into_response())
@@ -5550,10 +5844,12 @@ async fn handler_telemetry_peers_info(
 async fn handler_telemetry_propagation(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
-    let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
+    let remote_ip = remote.ip();
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     if !allowed {
-        check_access(&app, &headers, None, "v1/telemetry/propagation").await?;
+        check_access(&app, &headers, Some(remote_ip), "v1/telemetry/propagation").await?;
     }
     let propagation = app.peer_telemetry.propagation(64).await;
     Ok(JsonBody(propagation).into_response())
@@ -5564,11 +5860,13 @@ async fn handler_telemetry_propagation(
 async fn handler_explorer_account_detail(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(account_raw): AxPath<String>,
 ) -> Result<AxResponse, Error> {
-    let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
+    let remote_ip = remote.ip();
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     if !allowed {
-        check_access(&app, &headers, None, "v1/explorer/accounts/{id}").await?;
+        check_access(&app, &headers, Some(remote_ip), "v1/explorer/accounts/{id}").await?;
     }
     let account_id =
         parse_account_id_for_endpoint(&app, &account_raw, CONTEXT_EXPLORER_ACCOUNT_DETAIL)?;
@@ -5580,11 +5878,19 @@ async fn handler_explorer_account_detail(
 async fn handler_explorer_account_qr(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(account_raw): AxPath<String>,
 ) -> Result<AxResponse, Error> {
-    let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
+    let remote_ip = remote.ip();
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     if !allowed {
-        check_access(&app, &headers, None, "v1/explorer/accounts/{account_id}/qr").await?;
+        check_access(
+            &app,
+            &headers,
+            Some(remote_ip),
+            "v1/explorer/accounts/{account_id}/qr",
+        )
+        .await?;
     }
     let account_id =
         parse_account_id_for_endpoint(&app, &account_raw, CONTEXT_EXPLORER_ACCOUNT_QR)?;
@@ -5597,11 +5903,13 @@ async fn handler_explorer_account_qr(
 async fn handler_explorer_domain_detail(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(domain_raw): AxPath<String>,
 ) -> Result<AxResponse, Error> {
-    let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
+    let remote_ip = remote.ip();
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     if !allowed {
-        check_access(&app, &headers, None, "v1/explorer/domains/{id}").await?;
+        check_access(&app, &headers, Some(remote_ip), "v1/explorer/domains/{id}").await?;
     }
     let domain_id = parse_domain_id(&domain_raw)?;
     routing::handle_v1_explorer_domain_detail(app.state.clone(), domain_id).await
@@ -5612,11 +5920,19 @@ async fn handler_explorer_domain_detail(
 async fn handler_explorer_asset_definition_detail(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(def_raw): AxPath<String>,
 ) -> Result<AxResponse, Error> {
-    let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
+    let remote_ip = remote.ip();
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     if !allowed {
-        check_access(&app, &headers, None, "v1/explorer/asset-definitions/{id}").await?;
+        check_access(
+            &app,
+            &headers,
+            Some(remote_ip),
+            "v1/explorer/asset-definitions/{id}",
+        )
+        .await?;
     }
     let definition_id = parse_asset_definition_id(app.as_ref(), &def_raw)?;
     routing::handle_v1_explorer_asset_definition_detail(app.state.clone(), definition_id).await
@@ -5627,14 +5943,16 @@ async fn handler_explorer_asset_definition_detail(
 async fn handler_explorer_asset_definition_econometrics(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(def_raw): AxPath<String>,
 ) -> Result<AxResponse, Error> {
-    let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
+    let remote_ip = remote.ip();
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     if !allowed {
         check_access(
             &app,
             &headers,
-            None,
+            Some(remote_ip),
             "v1/explorer/asset-definitions/{id}/econometrics",
         )
         .await?;
@@ -5649,14 +5967,16 @@ async fn handler_explorer_asset_definition_econometrics(
 async fn handler_explorer_asset_definition_snapshot(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(def_raw): AxPath<String>,
 ) -> Result<AxResponse, Error> {
-    let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
+    let remote_ip = remote.ip();
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     if !allowed {
         check_access(
             &app,
             &headers,
-            None,
+            Some(remote_ip),
             "v1/explorer/asset-definitions/{id}/snapshot",
         )
         .await?;
@@ -5670,11 +5990,13 @@ async fn handler_explorer_asset_definition_snapshot(
 async fn handler_explorer_asset_detail(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(asset_raw): AxPath<String>,
 ) -> Result<AxResponse, Error> {
-    let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
+    let remote_ip = remote.ip();
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     if !allowed {
-        check_access(&app, &headers, None, "v1/explorer/assets/{id}").await?;
+        check_access(&app, &headers, Some(remote_ip), "v1/explorer/assets/{id}").await?;
     }
     let asset_id = parse_asset_id(&asset_raw)?;
     routing::handle_v1_explorer_asset_detail(app.state.clone(), asset_id).await
@@ -5685,11 +6007,13 @@ async fn handler_explorer_asset_detail(
 async fn handler_explorer_nft_detail(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(nft_raw): AxPath<String>,
 ) -> Result<AxResponse, Error> {
-    let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
+    let remote_ip = remote.ip();
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     if !allowed {
-        check_access(&app, &headers, None, "v1/explorer/nfts/{id}").await?;
+        check_access(&app, &headers, Some(remote_ip), "v1/explorer/nfts/{id}").await?;
     }
     let nft_id = parse_nft_id(&nft_raw)?;
     routing::handle_v1_explorer_nft_detail(app.state.clone(), nft_id).await
@@ -5700,11 +6024,13 @@ async fn handler_explorer_nft_detail(
 async fn handler_explorer_block_detail(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(identifier): AxPath<String>,
 ) -> Result<AxResponse, Error> {
-    let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
+    let remote_ip = remote.ip();
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     if !allowed {
-        check_access(&app, &headers, None, "v1/explorer/blocks/{id}").await?;
+        check_access(&app, &headers, Some(remote_ip), "v1/explorer/blocks/{id}").await?;
     }
     routing::handle_v1_explorer_block_detail(app.state.clone(), app.telemetry.clone(), identifier)
         .await
@@ -5715,11 +6041,19 @@ async fn handler_explorer_block_detail(
 async fn handler_explorer_transaction_detail(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(hash): AxPath<String>,
 ) -> Result<AxResponse, Error> {
-    let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
+    let remote_ip = remote.ip();
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     if !allowed {
-        check_access(&app, &headers, None, "v1/explorer/transactions/{hash}").await?;
+        check_access(
+            &app,
+            &headers,
+            Some(remote_ip),
+            "v1/explorer/transactions/{hash}",
+        )
+        .await?;
     }
     match crate::routing::handle_v1_explorer_transaction_detail(
         app.state.clone(),
@@ -5738,14 +6072,16 @@ async fn handler_explorer_transaction_detail(
 async fn handler_explorer_instruction_detail(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath((hash, index)): AxPath<(String, u64)>,
 ) -> Result<AxResponse, Error> {
-    let allowed = limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
+    let remote_ip = remote.ip();
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     if !allowed {
         check_access(
             &app,
             &headers,
-            None,
+            Some(remote_ip),
             "v1/explorer/instructions/{hash}/{index}",
         )
         .await?;
@@ -5781,15 +6117,24 @@ fn explorer_json_error_response(error: Error) -> AxResponse {
 async fn handler_assets_definitions_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(p): AxQuery<crate::routing::ListFilterParams>,
 ) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_assets_definitions(app.state.clone(), AxQuery(p)).await;
     }
 
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, "v1/assets/definitions", enforce).await?;
+    check_access_enforced(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/assets/definitions",
+        enforce,
+    )
+    .await?;
 
     routing::handle_v1_assets_definitions(app.state.clone(), AxQuery(p)).await
 }
@@ -5798,11 +6143,13 @@ async fn handler_assets_definitions_list(
 async fn handler_assets_definitions_query(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
         crate::filter::QueryEnvelope,
     >,
 ) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_assets_definitions_query(
             app.state.clone(),
             crate::utils::extractors::NoritoJson(env),
@@ -5812,7 +6159,14 @@ async fn handler_assets_definitions_query(
 
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, "v1/assets/definitions/query", enforce).await?;
+    check_access_enforced(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/assets/definitions/query",
+        enforce,
+    )
+    .await?;
 
     routing::handle_v1_assets_definitions_query(
         app.state.clone(),
@@ -5825,9 +6179,11 @@ async fn handler_assets_definitions_query(
 async fn handler_asset_definition_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(asset): AxPath<String>,
 ) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_asset_definition(app.state.clone(), AxPath(asset)).await;
     }
 
@@ -5836,7 +6192,7 @@ async fn handler_asset_definition_get(
     check_access_enforced(
         &app,
         &headers,
-        None,
+        Some(remote_ip),
         "v1/assets/definitions/{asset}",
         enforce,
     )
@@ -5848,16 +6204,18 @@ async fn handler_asset_definition_get(
 async fn handler_asset_holders(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(def_id): AxPath<String>,
     AxQuery(p): AxQuery<routing::AssetHolderGetParams>,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     let limits = crate::routing::app_query_limits();
     let page_limit = limits.clamp_page_limit(p.limit)?;
     let mut p = p;
     p.limit = Some(page_limit);
     let query: AxQuery<routing::AssetHolderGetParams> = AxQuery(p.clone());
 
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_asset_holders(
             app.state.clone(),
             AxPath(def_id.clone()),
@@ -5869,7 +6227,8 @@ async fn handler_asset_holders(
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     let cost = limits.rate_limit_cost(page_limit);
-    check_access_enforced_with_cost(&app, &headers, None, &def_id, enforce, cost).await?;
+    check_access_enforced_with_cost(&app, &headers, Some(remote_ip), &def_id, enforce, cost)
+        .await?;
     routing::handle_v1_asset_holders(
         app.state.clone(),
         AxPath(def_id),
@@ -5883,18 +6242,20 @@ async fn handler_asset_holders(
 async fn handler_asset_holders_query(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(def_id): AxPath<String>,
     crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
         crate::filter::QueryEnvelope,
     >,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     let limits = crate::routing::app_query_limits();
     let mut env = env;
     let page_limit = limits.clamp_page_limit(env.pagination.limit)?;
     env.pagination.limit = Some(page_limit);
     env.fetch_size = limits.clamp_fetch_size(env.fetch_size)?;
     let payload = crate::utils::extractors::NoritoJson(env);
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_asset_holders_query(
             app.state.clone(),
             AxPath(def_id.clone()),
@@ -5906,7 +6267,8 @@ async fn handler_asset_holders_query(
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     let cost = limits.rate_limit_cost(page_limit);
-    check_access_enforced_with_cost(&app, &headers, None, &def_id, enforce, cost).await?;
+    check_access_enforced_with_cost(&app, &headers, Some(remote_ip), &def_id, enforce, cost)
+        .await?;
     routing::handle_v1_asset_holders_query(
         app.state.clone(),
         AxPath(def_id),
@@ -5920,16 +6282,18 @@ async fn handler_asset_holders_query(
 async fn handler_confidential_asset_transitions(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(def_id): AxPath<String>,
 ) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_confidential_asset_transitions(
             app.state.clone(),
             AxPath(def_id.clone()),
         )
         .await;
     }
-    check_access(&app, &headers, None, &def_id).await?;
+    check_access(&app, &headers, Some(remote_ip), &def_id).await?;
     routing::handle_v1_confidential_asset_transitions(app.state.clone(), AxPath(def_id)).await
 }
 
@@ -5937,15 +6301,17 @@ async fn handler_confidential_asset_transitions(
 async fn handler_domains_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(p): AxQuery<crate::filter::Pagination>,
 ) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_domains(app.state.clone(), AxQuery(p)).await;
     }
 
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, "v1/domains", enforce).await?;
+    check_access_enforced(&app, &headers, Some(remote_ip), "v1/domains", enforce).await?;
 
     routing::handle_v1_domains(app.state.clone(), AxQuery(p)).await
 }
@@ -5954,18 +6320,20 @@ async fn handler_domains_list(
 async fn handler_domains_query(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
         crate::filter::QueryEnvelope,
     >,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     let payload = crate::utils::extractors::NoritoJson(env);
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_domains_query(app.state.clone(), payload).await;
     }
 
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, "v1/domains/query", enforce).await?;
+    check_access_enforced(&app, &headers, Some(remote_ip), "v1/domains/query", enforce).await?;
 
     routing::handle_v1_domains_query(app.state.clone(), payload).await
 }
@@ -5974,15 +6342,17 @@ async fn handler_domains_query(
 async fn handler_nfts_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(p): AxQuery<crate::routing::ListFilterParams>,
 ) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_nfts(app.state.clone(), AxQuery(p)).await;
     }
 
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, "v1/nfts", enforce).await?;
+    check_access_enforced(&app, &headers, Some(remote_ip), "v1/nfts", enforce).await?;
 
     routing::handle_v1_nfts(app.state.clone(), AxQuery(p)).await
 }
@@ -5992,17 +6362,19 @@ async fn handler_nfts_list(
 async fn handler_nfts_query(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
         crate::filter::QueryEnvelope,
     >,
 ) -> Result<axum::response::Response, Error> {
+    let remote_ip = remote.ip();
     let payload = crate::utils::extractors::NoritoJson(env);
-    let response = if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let response = if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         routing::handle_v1_nfts_query(app.state.clone(), payload).await?
     } else {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-        check_access_enforced(&app, &headers, None, "v1/nfts/query", enforce).await?;
+        check_access_enforced(&app, &headers, Some(remote_ip), "v1/nfts/query", enforce).await?;
         routing::handle_v1_nfts_query(app.state.clone(), payload).await?
     };
 
@@ -6013,15 +6385,24 @@ async fn handler_nfts_query(
 async fn handler_subscription_plans_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(p): AxQuery<crate::routing::SubscriptionPlanListParams>,
 ) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_subscription_plans(app.state.clone(), AxQuery(p)).await;
     }
 
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, "v1/subscriptions/plans", enforce).await?;
+    check_access_enforced(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/subscriptions/plans",
+        enforce,
+    )
+    .await?;
 
     routing::handle_v1_subscription_plans(app.state.clone(), AxQuery(p)).await
 }
@@ -6030,11 +6411,13 @@ async fn handler_subscription_plans_list(
 async fn handler_subscription_plans_create(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
         crate::routing::SubscriptionPlanCreateDto,
     >,
 ) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_post_v1_subscription_plan(
             app.chain_id.clone(),
             app.queue.clone(),
@@ -6047,7 +6430,14 @@ async fn handler_subscription_plans_create(
 
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, "v1/subscriptions/plans", enforce).await?;
+    check_access_enforced(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/subscriptions/plans",
+        enforce,
+    )
+    .await?;
 
     routing::handle_post_v1_subscription_plan(
         app.chain_id.clone(),
@@ -6063,15 +6453,17 @@ async fn handler_subscription_plans_create(
 async fn handler_subscriptions_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(p): AxQuery<crate::routing::SubscriptionListParams>,
 ) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_subscriptions(app.state.clone(), AxQuery(p)).await;
     }
 
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, "v1/subscriptions", enforce).await?;
+    check_access_enforced(&app, &headers, Some(remote_ip), "v1/subscriptions", enforce).await?;
 
     routing::handle_v1_subscriptions(app.state.clone(), AxQuery(p)).await
 }
@@ -6080,11 +6472,13 @@ async fn handler_subscriptions_list(
 async fn handler_subscriptions_create(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
         crate::routing::SubscriptionCreateDto,
     >,
 ) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_post_v1_subscription_create(
             app.chain_id.clone(),
             app.queue.clone(),
@@ -6097,7 +6491,7 @@ async fn handler_subscriptions_create(
 
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(&app, &headers, None, "v1/subscriptions", enforce).await?;
+    check_access_enforced(&app, &headers, Some(remote_ip), "v1/subscriptions", enforce).await?;
 
     routing::handle_post_v1_subscription_create(
         app.chain_id.clone(),
@@ -6113,10 +6507,12 @@ async fn handler_subscriptions_create(
 async fn handler_subscription_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(subscription_raw): AxPath<String>,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     let subscription_id = parse_nft_id(&subscription_raw)?;
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_subscription_get(app.state.clone(), subscription_id).await;
     }
 
@@ -6125,7 +6521,7 @@ async fn handler_subscription_get(
     check_access_enforced(
         &app,
         &headers,
-        None,
+        Some(remote_ip),
         "v1/subscriptions/{subscription_id}",
         enforce,
     )
@@ -6138,13 +6534,15 @@ async fn handler_subscription_get(
 async fn handler_subscription_pause(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(subscription_raw): AxPath<String>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
         crate::routing::SubscriptionActionDto,
     >,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     let subscription_id = parse_nft_id(&subscription_raw)?;
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_post_v1_subscription_pause(
             app.chain_id.clone(),
             app.queue.clone(),
@@ -6161,7 +6559,7 @@ async fn handler_subscription_pause(
     check_access_enforced(
         &app,
         &headers,
-        None,
+        Some(remote_ip),
         "v1/subscriptions/{subscription_id}/pause",
         enforce,
     )
@@ -6182,13 +6580,15 @@ async fn handler_subscription_pause(
 async fn handler_subscription_resume(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(subscription_raw): AxPath<String>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
         crate::routing::SubscriptionActionDto,
     >,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     let subscription_id = parse_nft_id(&subscription_raw)?;
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_post_v1_subscription_resume(
             app.chain_id.clone(),
             app.queue.clone(),
@@ -6205,7 +6605,7 @@ async fn handler_subscription_resume(
     check_access_enforced(
         &app,
         &headers,
-        None,
+        Some(remote_ip),
         "v1/subscriptions/{subscription_id}/resume",
         enforce,
     )
@@ -6226,13 +6626,15 @@ async fn handler_subscription_resume(
 async fn handler_subscription_cancel(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(subscription_raw): AxPath<String>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
         crate::routing::SubscriptionActionDto,
     >,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     let subscription_id = parse_nft_id(&subscription_raw)?;
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_post_v1_subscription_cancel(
             app.chain_id.clone(),
             app.queue.clone(),
@@ -6249,7 +6651,7 @@ async fn handler_subscription_cancel(
     check_access_enforced(
         &app,
         &headers,
-        None,
+        Some(remote_ip),
         "v1/subscriptions/{subscription_id}/cancel",
         enforce,
     )
@@ -6270,13 +6672,15 @@ async fn handler_subscription_cancel(
 async fn handler_subscription_keep(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(subscription_raw): AxPath<String>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
         crate::routing::SubscriptionActionDto,
     >,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     let subscription_id = parse_nft_id(&subscription_raw)?;
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_post_v1_subscription_keep(
             app.chain_id.clone(),
             app.queue.clone(),
@@ -6293,7 +6697,7 @@ async fn handler_subscription_keep(
     check_access_enforced(
         &app,
         &headers,
-        None,
+        Some(remote_ip),
         "v1/subscriptions/{subscription_id}/keep",
         enforce,
     )
@@ -6314,13 +6718,15 @@ async fn handler_subscription_keep(
 async fn handler_subscription_usage(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(subscription_raw): AxPath<String>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
         crate::routing::SubscriptionUsageRequestDto,
     >,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     let subscription_id = parse_nft_id(&subscription_raw)?;
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_post_v1_subscription_usage(
             app.chain_id.clone(),
             app.queue.clone(),
@@ -6337,7 +6743,7 @@ async fn handler_subscription_usage(
     check_access_enforced(
         &app,
         &headers,
-        None,
+        Some(remote_ip),
         "v1/subscriptions/{subscription_id}/usage",
         enforce,
     )
@@ -6358,13 +6764,15 @@ async fn handler_subscription_usage(
 async fn handler_subscription_charge_now(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(subscription_raw): AxPath<String>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
         crate::routing::SubscriptionActionDto,
     >,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     let subscription_id = parse_nft_id(&subscription_raw)?;
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_post_v1_subscription_charge_now(
             app.chain_id.clone(),
             app.queue.clone(),
@@ -6381,7 +6789,7 @@ async fn handler_subscription_charge_now(
     check_access_enforced(
         &app,
         &headers,
-        None,
+        Some(remote_ip),
         "v1/subscriptions/{subscription_id}/charge-now",
         enforce,
     )
@@ -6420,13 +6828,15 @@ async fn handler_parameters(
 async fn handler_webhooks_create(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: crate::utils::extractors::JsonOnly<crate::webhook::WebhookCreate>,
 ) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return Ok(webhook::handle_create_webhook(body).await);
     }
 
-    check_access_enforced(&app, &headers, None, "v1/webhooks", true).await?;
+    check_access_enforced(&app, &headers, Some(remote_ip), "v1/webhooks", true).await?;
 
     Ok(webhook::handle_create_webhook(body).await)
 }
@@ -6435,12 +6845,14 @@ async fn handler_webhooks_create(
 async fn handler_webhooks_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return Ok(webhook::handle_list_webhooks().await);
     }
 
-    check_access_enforced(&app, &headers, None, "v1/webhooks", true).await?;
+    check_access_enforced(&app, &headers, Some(remote_ip), "v1/webhooks", true).await?;
 
     Ok(webhook::handle_list_webhooks().await)
 }
@@ -6449,13 +6861,15 @@ async fn handler_webhooks_list(
 async fn handler_webhooks_delete(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(id): AxPath<u64>,
 ) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return Ok(webhook::handle_delete_webhook(axum::extract::Path(id)).await);
     }
 
-    check_access_enforced(&app, &headers, None, "v1/webhooks", true).await?;
+    check_access_enforced(&app, &headers, Some(remote_ip), "v1/webhooks", true).await?;
 
     Ok(webhook::handle_delete_webhook(axum::extract::Path(id)).await)
 }
@@ -6464,9 +6878,11 @@ async fn handler_webhooks_delete(
 async fn handler_gov_ballot_zk(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: crate::utils::extractors::NoritoJson<crate::gov::ZkBallotDto>,
 ) -> Result<JsonBody<crate::gov::BallotSubmitResponse>, Error> {
-    check_access_enforced(&app, &headers, None, "v1/gov/ballots/zk", true).await?;
+    let remote_ip = remote.ip();
+    check_access_enforced(&app, &headers, Some(remote_ip), "v1/gov/ballots/zk", true).await?;
     crate::gov::handle_gov_ballot_zk(
         app.chain_id.clone(),
         app.queue.clone(),
@@ -6481,13 +6897,22 @@ async fn handler_gov_ballot_zk(
 async fn handler_gov_ballot_zk_v1(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::JsonOnly(value): crate::utils::extractors::JsonOnly<
         norito::json::Value,
     >,
 ) -> Result<JsonBody<crate::gov::BallotSubmitResponse>, Error> {
+    let remote_ip = remote.ip();
     #[cfg(feature = "zk-ballot")]
     {
-        check_access_enforced(&app, &headers, None, "v1/gov/ballots/zk-v1", true).await?;
+        check_access_enforced(
+            &app,
+            &headers,
+            Some(remote_ip),
+            "v1/gov/ballots/zk-v1",
+            true,
+        )
+        .await?;
         let raw = norito::json::to_vec(&value).map_err(|e| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
@@ -6516,7 +6941,7 @@ async fn handler_gov_ballot_zk_v1(
     }
     #[cfg(not(feature = "zk-ballot"))]
     {
-        let _ = (app, headers, value);
+        let _ = (app, headers, value, remote_ip);
         Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::NotFound,
         )))
@@ -6527,16 +6952,18 @@ async fn handler_gov_ballot_zk_v1(
 async fn handler_gov_ballot_zk_v1_ballot_proof(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::JsonOnly(value): crate::utils::extractors::JsonOnly<
         norito::json::Value,
     >,
 ) -> Result<JsonBody<crate::gov::BallotSubmitResponse>, Error> {
+    let remote_ip = remote.ip();
     #[cfg(feature = "zk-ballot")]
     {
         check_access_enforced(
             &app,
             &headers,
-            None,
+            Some(remote_ip),
             "v1/gov/ballots/zk-v1/ballot-proof",
             true,
         )
@@ -6570,7 +6997,7 @@ async fn handler_gov_ballot_zk_v1_ballot_proof(
     }
     #[cfg(not(feature = "zk-ballot"))]
     {
-        let _ = (app, headers, value);
+        let _ = (app, headers, value, remote_ip);
         Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::NotFound,
         )))
@@ -6581,9 +7008,18 @@ async fn handler_gov_ballot_zk_v1_ballot_proof(
 async fn handler_gov_ballot_plain(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: crate::utils::extractors::NoritoJson<crate::gov::PlainBallotDto>,
 ) -> Result<JsonBody<crate::gov::BallotSubmitResponse>, Error> {
-    check_access_enforced(&app, &headers, None, "v1/gov/ballots/plain", true).await?;
+    let remote_ip = remote.ip();
+    check_access_enforced(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/gov/ballots/plain",
+        true,
+    )
+    .await?;
     crate::gov::handle_gov_ballot_plain_with_policy(
         app.chain_id.clone(),
         app.queue.clone(),
@@ -6597,9 +7033,11 @@ async fn handler_gov_ballot_plain(
 async fn handler_gov_finalize(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: crate::utils::extractors::NoritoJson<crate::gov::FinalizeDto>,
 ) -> Result<JsonBody<crate::gov::FinalizeResponse>, Error> {
-    check_access_enforced(&app, &headers, None, "v1/gov/finalize", true).await?;
+    let remote_ip = remote.ip();
+    check_access_enforced(&app, &headers, Some(remote_ip), "v1/gov/finalize", true).await?;
     crate::gov::handle_gov_finalize(
         app.chain_id.clone(),
         app.queue.clone(),
@@ -6667,11 +7105,13 @@ async fn handler_gov_council_replace(
 async fn handler_gov_council_derive_vrf(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: crate::utils::extractors::NoritoJson<crate::gov::CouncilDeriveVrfRequest>,
 ) -> Result<crate::utils::JsonBody<crate::gov::CouncilDeriveVrfResponse>, Error> {
+    let remote_ip = remote.ip();
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/gov/council/derive-vrf",
         app.api_token_enforced(),
     );
@@ -6680,7 +7120,7 @@ async fn handler_gov_council_derive_vrf(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    check_access(&app, &headers, None, "v1/gov/council/derive-vrf").await?;
+    check_access(&app, &headers, Some(remote_ip), "v1/gov/council/derive-vrf").await?;
     crate::gov::handle_gov_council_derive_vrf(app.state.clone(), body).await
 }
 
@@ -6688,11 +7128,13 @@ async fn handler_gov_council_derive_vrf(
 async fn handler_gov_council_derive_vrf(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     _body: crate::utils::extractors::NoritoJson<crate::gov::CouncilDeriveVrfRequest>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/gov/council/derive-vrf",
         app.api_token_enforced(),
     );
@@ -6701,7 +7143,7 @@ async fn handler_gov_council_derive_vrf(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    check_access(&app, &headers, None, "v1/gov/council/derive-vrf").await?;
+    check_access(&app, &headers, Some(remote_ip), "v1/gov/council/derive-vrf").await?;
     Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
         iroha_data_model::query::error::QueryExecutionFail::Conversion(
             "not implemented".to_string(),
@@ -6715,9 +7157,11 @@ async fn handler_gov_council_derive_vrf(
 async fn handler_runtime_abi_active(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
 ) -> Result<Response, Error> {
-    check_access(&app, &headers, None, "v1/runtime/abi/active").await?;
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/runtime/abi/active").await?;
     let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
@@ -6730,9 +7174,11 @@ async fn handler_runtime_abi_active(
 async fn handler_runtime_abi_hash(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
 ) -> Result<Response, Error> {
-    check_access(&app, &headers, None, "v1/runtime/abi/hash").await?;
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/runtime/abi/hash").await?;
     let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
@@ -6747,8 +7193,10 @@ async fn handler_runtime_abi_hash(
 async fn handler_get_configuration(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<impl IntoResponse, Error> {
-    check_access(&app, &headers, None, "v1/configuration").await?;
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/configuration").await?;
     routing::handle_get_configuration(app.kiso.clone()).await
 }
 
@@ -6756,9 +7204,11 @@ async fn handler_get_configuration(
 async fn handler_post_configuration(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::JsonOnly(dto): crate::utils::extractors::JsonOnly<ConfigUpdateDTO>,
 ) -> Result<impl IntoResponse, Error> {
-    check_access(&app, &headers, None, "v1/configuration").await?;
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/configuration").await?;
     routing::handle_post_configuration(app.kiso.clone(), dto).await
 }
 
@@ -6766,9 +7216,11 @@ async fn handler_post_configuration(
 async fn handler_post_nexus_lane_lifecycle(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::NoritoJson(plan): crate::NoritoJson<routing::LaneLifecyclePlanDto>,
 ) -> Result<impl IntoResponse, Error> {
-    check_access(&app, &headers, None, "v1/nexus/lifecycle").await?;
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/nexus/lifecycle").await?;
     routing::handle_post_nexus_lane_lifecycle(app.state.clone(), app.queue.clone(), plan).await
 }
 
@@ -6776,8 +7228,10 @@ async fn handler_post_nexus_lane_lifecycle(
 async fn handler_peers(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
-    check_access(&app, &headers, None, "v1/peers").await?;
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/peers").await?;
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(fmt) => fmt,
@@ -6808,8 +7262,10 @@ async fn handler_api_versions(State(app): State<SharedAppState>) -> impl IntoRes
 async fn handler_time_now(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<impl IntoResponse, Error> {
-    check_access(&app, &headers, None, "v1/time/now").await?;
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/time/now").await?;
     Ok(routing::handle_time_now().await.into_response())
 }
 
@@ -6817,8 +7273,10 @@ async fn handler_time_now(
 async fn handler_time_status(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<impl IntoResponse, Error> {
-    check_access(&app, &headers, None, "v1/time/status").await?;
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/time/status").await?;
     Ok(routing::handle_time_status().await.into_response())
 }
 
@@ -6886,9 +7344,11 @@ async fn handler_profile(
 async fn handler_runtime_metrics(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
 ) -> Result<Response, Error> {
-    check_access(&app, &headers, None, "v1/runtime/metrics").await?;
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/runtime/metrics").await?;
     let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
@@ -6901,9 +7361,11 @@ async fn handler_runtime_metrics(
 async fn handler_node_capabilities(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
 ) -> Result<Response, Error> {
-    check_access(&app, &headers, None, "v1/node/capabilities").await?;
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/node/capabilities").await?;
     let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
@@ -6915,9 +7377,11 @@ async fn handler_node_capabilities(
 async fn handler_runtime_upgrades_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
 ) -> Result<Response, Error> {
-    check_access_enforced(&app, &headers, None, "v1/runtime/upgrades", true).await?;
+    let remote_ip = remote.ip();
+    check_access_enforced(&app, &headers, Some(remote_ip), "v1/runtime/upgrades", true).await?;
     let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
@@ -6929,10 +7393,19 @@ async fn handler_runtime_upgrades_list(
 async fn handler_runtime_propose_upgrade(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
     body: crate::utils::extractors::NoritoJson<crate::runtime::ProposeUpgradeDto>,
 ) -> Result<Response, Error> {
-    check_access_enforced(&app, &headers, None, "v1/runtime/upgrades/propose", true).await?;
+    let remote_ip = remote.ip();
+    check_access_enforced(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/runtime/upgrades/propose",
+        true,
+    )
+    .await?;
     let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
@@ -6944,10 +7417,19 @@ async fn handler_runtime_propose_upgrade(
 async fn handler_runtime_activate_upgrade(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     id: AxPath<String>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
 ) -> Result<Response, Error> {
-    check_access_enforced(&app, &headers, None, "v1/runtime/upgrades/activate", true).await?;
+    let remote_ip = remote.ip();
+    check_access_enforced(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/runtime/upgrades/activate",
+        true,
+    )
+    .await?;
     let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
@@ -6959,10 +7441,19 @@ async fn handler_runtime_activate_upgrade(
 async fn handler_runtime_cancel_upgrade(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     id: AxPath<String>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
 ) -> Result<Response, Error> {
-    check_access_enforced(&app, &headers, None, "v1/runtime/upgrades/cancel", true).await?;
+    let remote_ip = remote.ip();
+    check_access_enforced(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/runtime/upgrades/cancel",
+        true,
+    )
+    .await?;
     let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
@@ -6974,12 +7465,14 @@ async fn handler_runtime_cancel_upgrade(
 async fn handler_zk_roots(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
         routing::ZkRootsGetRequestDto,
     >,
 ) -> Result<impl IntoResponse, Error> {
-    check_access_enforced(&app, &headers, None, "v1/zk/roots", true).await?;
+    let remote_ip = remote.ip();
+    check_access_enforced(&app, &headers, Some(remote_ip), "v1/zk/roots", true).await?;
     routing::handle_v1_zk_roots(
         app.state.clone(),
         accept.map(|value| value.0),
@@ -6992,14 +7485,25 @@ async fn handler_zk_verify(
     State(app): State<SharedAppState>,
     Extension(negotiated): Extension<api_version::NegotiatedVersion>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: axum::body::Bytes,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     let cost = (body.len() as u64)
         .saturating_div(4 * 1024)
         .saturating_add(1);
     ensure_proof_api_version(&app, negotiated, "v1/zk/verify")?;
     enforce_proof_body_limit(&app, body.len(), "v1/zk/verify")?;
-    check_proof_access(&app, negotiated, &headers, None, "v1/zk/verify", cost, true).await?;
+    check_proof_access(
+        &app,
+        negotiated,
+        &headers,
+        Some(remote_ip),
+        "v1/zk/verify",
+        cost,
+        true,
+    )
+    .await?;
     routing::handle_v1_zk_verify(headers, body).await
 }
 
@@ -7007,8 +7511,10 @@ async fn handler_zk_submit_proof(
     State(app): State<SharedAppState>,
     Extension(negotiated): Extension<api_version::NegotiatedVersion>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: axum::body::Bytes,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     let cost = (body.len() as u64)
         .saturating_div(4 * 1024)
         .saturating_add(1);
@@ -7018,7 +7524,7 @@ async fn handler_zk_submit_proof(
         &app,
         negotiated,
         &headers,
-        None,
+        Some(remote_ip),
         "v1/zk/submit-proof",
         cost,
         true,
@@ -7348,8 +7854,10 @@ async fn handler_zk_ivm_derive(
     State(app): State<SharedAppState>,
     Extension(negotiated): Extension<api_version::NegotiatedVersion>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: axum::body::Bytes,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     let cost = (body.len() as u64)
         .saturating_div(4 * 1024)
         .saturating_add(1);
@@ -7359,7 +7867,7 @@ async fn handler_zk_ivm_derive(
         &app,
         negotiated,
         &headers,
-        None,
+        Some(remote_ip),
         "v1/zk/ivm/derive",
         cost,
         true,
@@ -7501,8 +8009,10 @@ async fn handler_zk_ivm_prove(
     State(app): State<SharedAppState>,
     Extension(negotiated): Extension<api_version::NegotiatedVersion>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: axum::body::Bytes,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     zk_ivm_prove_gc_jobs(&app);
     let cost = (body.len() as u64)
         .saturating_div(4 * 1024)
@@ -7513,7 +8023,7 @@ async fn handler_zk_ivm_prove(
         &app,
         negotiated,
         &headers,
-        None,
+        Some(remote_ip),
         "v1/zk/ivm/prove",
         cost,
         true,
@@ -7866,14 +8376,16 @@ async fn handler_zk_ivm_prove_get(
     State(app): State<SharedAppState>,
     Extension(negotiated): Extension<api_version::NegotiatedVersion>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     job_id: axum::extract::Path<String>,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     zk_ivm_prove_gc_jobs(&app);
     check_proof_access(
         &app,
         negotiated,
         &headers,
-        None,
+        Some(remote_ip),
         "v1/zk/ivm/prove/{job_id}",
         1,
         true,
@@ -7910,14 +8422,16 @@ async fn handler_zk_ivm_prove_delete(
     State(app): State<SharedAppState>,
     Extension(negotiated): Extension<api_version::NegotiatedVersion>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     job_id: axum::extract::Path<String>,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     zk_ivm_prove_gc_jobs(&app);
     check_proof_access(
         &app,
         negotiated,
         &headers,
-        None,
+        Some(remote_ip),
         "v1/zk/ivm/prove/{job_id}",
         1,
         true,
@@ -7958,9 +8472,11 @@ async fn handler_zk_attachments_create(
     method: axum::http::Method,
     uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: axum::body::Bytes,
 ) -> Result<impl IntoResponse, Error> {
-    check_access_enforced(&app, &headers, None, "v1/zk/attachments", true).await?;
+    let remote_ip = remote.ip();
+    check_access_enforced(&app, &headers, Some(remote_ip), "v1/zk/attachments", true).await?;
     let tenant = zk_attachments_tenant(&app, &method, &uri, &headers, body.as_ref())?;
     Ok(crate::zk_attachments::handle_post_attachment(tenant, headers, body).await)
 }
@@ -7970,8 +8486,10 @@ async fn handler_zk_attachments_list(
     method: axum::http::Method,
     uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<impl IntoResponse, Error> {
-    check_access_enforced(&app, &headers, None, "v1/zk/attachments", true).await?;
+    let remote_ip = remote.ip();
+    check_access_enforced(&app, &headers, Some(remote_ip), "v1/zk/attachments", true).await?;
     let tenant = zk_attachments_tenant(&app, &method, &uri, &headers, &[])?;
     Ok(crate::zk_attachments::handle_list_attachments(tenant).await)
 }
@@ -7981,9 +8499,11 @@ async fn handler_zk_attachments_filtered(
     method: axum::http::Method,
     uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(q): AxQuery<crate::zk_attachments::AttachmentListQuery>,
 ) -> Result<impl IntoResponse, Error> {
-    check_access_enforced(&app, &headers, None, "v1/zk/attachments", true).await?;
+    let remote_ip = remote.ip();
+    check_access_enforced(&app, &headers, Some(remote_ip), "v1/zk/attachments", true).await?;
     let tenant = zk_attachments_tenant(&app, &method, &uri, &headers, &[])?;
     Ok(crate::zk_attachments::handle_list_attachments_filtered(tenant, AxQuery(q)).await)
 }
@@ -7993,9 +8513,18 @@ async fn handler_zk_attachments_count(
     method: axum::http::Method,
     uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(q): AxQuery<crate::zk_attachments::AttachmentListQuery>,
 ) -> Result<impl IntoResponse, Error> {
-    check_access_enforced(&app, &headers, None, "v1/zk/attachments/count", true).await?;
+    let remote_ip = remote.ip();
+    check_access_enforced(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/zk/attachments/count",
+        true,
+    )
+    .await?;
     let tenant = zk_attachments_tenant(&app, &method, &uri, &headers, &[])?;
     Ok(crate::zk_attachments::handle_count_attachments(tenant, AxQuery(q)).await)
 }
@@ -8005,9 +8534,18 @@ async fn handler_zk_attachment_get(
     method: axum::http::Method,
     uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     id: axum::extract::Path<String>,
 ) -> Result<impl IntoResponse, Error> {
-    check_access_enforced(&app, &headers, None, "v1/zk/attachments/{id}", true).await?;
+    let remote_ip = remote.ip();
+    check_access_enforced(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/zk/attachments/{id}",
+        true,
+    )
+    .await?;
     let tenant = zk_attachments_tenant(&app, &method, &uri, &headers, &[])?;
     Ok(crate::zk_attachments::handle_get_attachment(tenant, id).await)
 }
@@ -8017,9 +8555,18 @@ async fn handler_zk_attachment_delete(
     method: axum::http::Method,
     uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     id: axum::extract::Path<String>,
 ) -> Result<impl IntoResponse, Error> {
-    check_access_enforced(&app, &headers, None, "v1/zk/attachments/{id}", true).await?;
+    let remote_ip = remote.ip();
+    check_access_enforced(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/zk/attachments/{id}",
+        true,
+    )
+    .await?;
     let tenant = zk_attachments_tenant(&app, &method, &uri, &headers, &[])?;
     Ok(crate::zk_attachments::handle_delete_attachment(tenant, id).await)
 }
@@ -8027,12 +8574,14 @@ async fn handler_zk_attachment_delete(
 async fn handler_zk_vote_tally(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
         crate::routing::ZkVoteGetTallyRequestDto,
     >,
 ) -> Result<impl IntoResponse, Error> {
-    check_access_enforced(&app, &headers, None, "v1/zk/vote/tally", true).await?;
+    let remote_ip = remote.ip();
+    check_access_enforced(&app, &headers, Some(remote_ip), "v1/zk/vote/tally", true).await?;
     routing::handle_v1_zk_vote_tally(
         State(app.state.clone()),
         accept.map(|value| value.0),
@@ -9292,10 +9841,16 @@ async fn handler_soracloud_public_local_read(
     method: axum::http::Method,
     uri: axum::http::Uri,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: Bytes,
 ) -> Response {
-    let rate_key =
-        limits::key_from_headers(&headers, None, Some("v1/soracloud/public-runtime"), false);
+    let remote_ip = remote.ip();
+    let rate_key = limits::key_from_headers(
+        &headers,
+        Some(remote_ip),
+        Some("v1/soracloud/public-runtime"),
+        false,
+    );
     if !app.soracloud_public_rate_limiter.allow(&rate_key).await {
         return Response::builder()
             .status(StatusCode::TOO_MANY_REQUESTS)
@@ -9376,8 +9931,10 @@ async fn handler_soracloud_public_local_read(
 async fn handler_soracloud_status(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<utils::extractors::ExtractAccept>,
 ) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -9395,7 +9952,7 @@ async fn handler_soracloud_status(
 
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/soracloud/status",
         app.api_token_enforced(),
     );
@@ -9510,7 +10067,9 @@ async fn handler_post_soranet_privacy_share(
 async fn handler_sumeragi_collectors(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -9527,7 +10086,7 @@ async fn handler_sumeragi_collectors(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sumeragi/collectors",
         app.api_token_enforced(),
     );
@@ -9544,7 +10103,9 @@ async fn handler_sumeragi_collectors(
 async fn handler_new_view_sse(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -9561,7 +10122,7 @@ async fn handler_new_view_sse(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sumeragi/new_view/sse",
         app.api_token_enforced(),
     );
@@ -9583,7 +10144,9 @@ async fn handler_new_view_sse(
 async fn handler_new_view_json(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -9600,7 +10163,7 @@ async fn handler_new_view_json(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sumeragi/new_view/json",
         app.api_token_enforced(),
     );
@@ -9624,10 +10187,17 @@ async fn handler_new_view_json(
 async fn handler_kaigi_relays(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
     AxQuery(params): AxQuery<routing::KaigiRelayFormatParams>,
 ) -> Result<Response, Error> {
-    let key = rate_limit_key(&headers, None, "v1/kaigi/relays", app.api_token_enforced());
+    let remote_ip = remote.ip();
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "v1/kaigi/relays",
+        app.api_token_enforced(),
+    );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -9651,13 +10221,15 @@ async fn handler_kaigi_relays(
 async fn handler_kaigi_relay_detail(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
     AxPath(relay_id): AxPath<String>,
     AxQuery(params): AxQuery<routing::KaigiRelayFormatParams>,
 ) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/kaigi/relays/{relay_id}",
         app.api_token_enforced(),
     );
@@ -9685,11 +10257,13 @@ async fn handler_kaigi_relay_detail(
 async fn handler_kaigi_relays_health(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
 ) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/kaigi/relays/health",
         app.api_token_enforced(),
     );
@@ -9711,8 +10285,10 @@ async fn handler_kaigi_relays_health(
 async fn handler_kaigi_relays_sse(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(mut params): AxQuery<routing::KaigiRelayEventsParams>,
 ) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
     if let Some(ref relay_literal) = params.relay {
         let parsed = routing::parse_account_literal(
             relay_literal,
@@ -9730,7 +10306,7 @@ async fn handler_kaigi_relays_sse(
         params.relay = Some(parsed.canonical().to_string());
     }
 
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return Ok(
             routing::handle_v1_kaigi_relays_sse(app.events.clone(), AxQuery(params))
                 .into_response(),
@@ -9754,7 +10330,7 @@ async fn handler_kaigi_relays_sse(
 
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/kaigi/relays/events",
         app.api_token_enforced(),
     );
@@ -9771,10 +10347,12 @@ async fn handler_kaigi_relays_sse(
 async fn handler_soradns_directory_latest(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/soradns/directory/latest",
         app.api_token_enforced(),
     );
@@ -9791,8 +10369,10 @@ async fn handler_soradns_directory_latest(
 async fn handler_soradns_directory_events(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<Response, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return Ok(
             routing::handle_v1_soradns_directory_events_sse(app.events.clone()).into_response(),
         );
@@ -9813,7 +10393,7 @@ async fn handler_soradns_directory_events(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/soradns/directory/events",
         app.api_token_enforced(),
     );
@@ -9831,9 +10411,11 @@ async fn handler_soradns_directory_events(
 async fn handler_events_sse(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(params): AxQuery<routing::EventsSseParams>,
 ) -> Result<Response, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return Ok(
             routing::handle_v1_events_sse(app.events.clone(), AxQuery(params))?.into_response(),
         );
@@ -9852,7 +10434,12 @@ async fn handler_events_sse(
             )));
         }
     }
-    let key = rate_limit_key(&headers, None, "v1/events/sse", app.api_token_enforced());
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "v1/events/sse",
+        app.api_token_enforced(),
+    );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -9865,8 +10452,10 @@ async fn handler_events_sse(
 async fn handler_gov_stream(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<Response, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return Ok(routing::handle_v1_gov_stream(app.events.clone()).into_response());
     }
     let token_hdr = headers
@@ -9883,7 +10472,12 @@ async fn handler_gov_stream(
             )));
         }
     }
-    let key = rate_limit_key(&headers, None, "v1/gov/stream", app.api_token_enforced());
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "v1/gov/stream",
+        app.api_token_enforced(),
+    );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -9896,8 +10490,10 @@ async fn handler_gov_stream(
 async fn handler_telemetry_live(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<Response, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return Ok(routing::handle_v1_telemetry_live(
             app.state.clone(),
             app.kura.clone(),
@@ -9923,7 +10519,7 @@ async fn handler_telemetry_live(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/telemetry/live",
         app.api_token_enforced(),
     );
@@ -9946,8 +10542,10 @@ async fn handler_telemetry_live(
 async fn handler_explorer_transactions_stream(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<Response, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return Ok(routing::handle_v1_explorer_transactions_stream(
             app.kura.clone(),
             app.events.clone(),
@@ -9970,7 +10568,7 @@ async fn handler_explorer_transactions_stream(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/explorer/transactions/stream",
         app.api_token_enforced(),
     );
@@ -9989,8 +10587,10 @@ async fn handler_explorer_transactions_stream(
 async fn handler_explorer_blocks_stream(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<Response, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return Ok(
             routing::handle_v1_explorer_blocks_stream(app.kura.clone(), app.events.clone())
                 .into_response(),
@@ -10012,7 +10612,7 @@ async fn handler_explorer_blocks_stream(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/explorer/blocks/stream",
         app.api_token_enforced(),
     );
@@ -10031,8 +10631,10 @@ async fn handler_explorer_blocks_stream(
 async fn handler_explorer_instructions_stream(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<Response, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return Ok(routing::handle_v1_explorer_instructions_stream(
             app.kura.clone(),
             app.events.clone(),
@@ -10055,7 +10657,7 @@ async fn handler_explorer_instructions_stream(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/explorer/instructions/stream",
         app.api_token_enforced(),
     );
@@ -10105,9 +10707,11 @@ mod ws_disconnect_classification_tests {
 async fn handler_subscription_ws(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     ws: WebSocketUpgrade,
 ) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         // Subscribe before upgrade to buffer events emitted during the WS handshake.
         let events_rx = app.events.subscribe();
         return Ok(core::future::ready(ws.on_upgrade(move |ws| async move {
@@ -10143,7 +10747,7 @@ async fn handler_subscription_ws(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "subscription/stream",
         app.api_token_enforced(),
     );
@@ -10178,9 +10782,11 @@ async fn handler_subscription_ws(
 async fn handler_blocks_stream_ws(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     ws: WebSocketUpgrade,
 ) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         let kura = app.kura.clone();
         return Ok(core::future::ready(ws.on_upgrade(move |ws| async move {
             if let Err(error) =
@@ -10205,7 +10811,12 @@ async fn handler_blocks_stream_ws(
             )));
         }
     }
-    let key = rate_limit_key(&headers, None, "blocks/stream", app.api_token_enforced());
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "blocks/stream",
+        app.api_token_enforced(),
+    );
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     if !limits::allow_conditionally(&app.rate_limiter, &key, enforce).await {
@@ -10239,7 +10850,9 @@ async fn handler_p2p_ws(
 async fn handler_sumeragi_params(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -10256,7 +10869,7 @@ async fn handler_sumeragi_params(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sumeragi/params",
         app.api_token_enforced(),
     );
@@ -10279,7 +10892,9 @@ async fn handler_sumeragi_params(
 async fn handler_sumeragi_bls_keys(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -10296,7 +10911,7 @@ async fn handler_sumeragi_bls_keys(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sumeragi/bls_keys",
         app.api_token_enforced(),
     );
@@ -10321,11 +10936,13 @@ async fn handler_sumeragi_bls_keys(
 async fn handler_get_contract_code_bytes(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     axum::extract::Path(code_hash): axum::extract::Path<String>,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/contracts/code-bytes/{code_hash}",
         app.api_token_enforced(),
     );
@@ -10347,9 +10964,11 @@ async fn handler_get_contract_code_bytes(
 async fn handler_get_contract_code(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     axum::extract::Path(code_hash): axum::extract::Path<String>,
 ) -> Result<AxResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return crate::routing::handle_get_contract_code(
             app.state.clone(),
             axum::extract::Path(code_hash),
@@ -10373,7 +10992,7 @@ async fn handler_get_contract_code(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/contracts/code:get",
         app.api_token_enforced(),
     );
@@ -10402,9 +11021,11 @@ async fn handler_get_contract_code(
 async fn handler_get_contract_state(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(q): AxQuery<crate::routing::ContractStateQuery>,
 ) -> Result<JsonBody<crate::routing::ContractStateResponse>, Error> {
-    check_access(&app, &headers, None, "v1/contracts/state").await?;
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/contracts/state").await?;
     crate::routing::handle_get_contract_state(app.state.clone(), crate::NoritoQuery(q)).await
 }
 
@@ -10412,9 +11033,11 @@ async fn handler_get_contract_state(
 async fn handler_get_vk_by_backend_name(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     axum::extract::Path((backend, name)): axum::extract::Path<(String, String)>,
 ) -> Result<AxResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return crate::routing::handle_get_vk(
             app.state.clone(),
             axum::extract::Path((backend, name)),
@@ -10438,7 +11061,7 @@ async fn handler_get_vk_by_backend_name(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/zk/vk/{backend}/{name}",
         app.api_token_enforced(),
     );
@@ -10463,15 +11086,17 @@ async fn handler_get_proof_by_backend_hash(
     State(app): State<SharedAppState>,
     Extension(negotiated): Extension<api_version::NegotiatedVersion>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     axum::extract::Path((backend, hash)): axum::extract::Path<(String, String)>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     ensure_proof_api_version(&app, negotiated, "v1/zk/proof/{backend}/{hash}")?;
-    let enforce = !limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
+    let enforce = !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     check_proof_access(
         &app,
         negotiated,
         &headers,
-        None,
+        Some(remote_ip),
         "v1/zk/proof/{backend}/{hash}",
         1,
         enforce,
@@ -10487,7 +11112,15 @@ async fn handler_get_proof_by_backend_hash(
     .await
     {
         Ok(resp) => {
-            enforce_proof_egress(&app, &headers, None, "v1/zk/proof", resp.bytes, enforce).await?;
+            enforce_proof_egress(
+                &app,
+                &headers,
+                Some(remote_ip),
+                "v1/zk/proof",
+                resp.bytes,
+                enforce,
+            )
+            .await?;
             Ok(resp.into_response())
         }
         Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -10500,9 +11133,11 @@ async fn handler_get_proof_by_backend_hash(
 async fn handler_list_vk(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(q): AxQuery<crate::routing::VkListQuery>,
 ) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return crate::routing::handle_list_vk(app.state.clone(), AxQuery(q)).await;
     }
     let token_hdr = headers
@@ -10519,7 +11154,12 @@ async fn handler_list_vk(
             )));
         }
     }
-    let key = rate_limit_key(&headers, None, "v1/zk/vk", app.api_token_enforced());
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "v1/zk/vk",
+        app.api_token_enforced(),
+    );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -10533,10 +11173,12 @@ async fn handler_list_proofs(
     State(app): State<SharedAppState>,
     Extension(negotiated): Extension<api_version::NegotiatedVersion>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(q): AxQuery<crate::routing::ProofListQuery>,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     ensure_proof_api_version(&app, negotiated, "v1/zk/proofs")?;
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return crate::routing::handle_list_proofs(
             app.state.clone(),
             app.proof_limits,
@@ -10561,7 +11203,7 @@ async fn handler_list_proofs(
         &app,
         negotiated,
         &headers,
-        None,
+        Some(remote_ip),
         "v1/zk/proofs",
         cost.max(1),
         true,
@@ -10581,10 +11223,12 @@ async fn handler_count_proofs(
     State(app): State<SharedAppState>,
     Extension(negotiated): Extension<api_version::NegotiatedVersion>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(q): AxQuery<crate::routing::ProofListQuery>,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     ensure_proof_api_version(&app, negotiated, "v1/zk/proofs/count")?;
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return crate::routing::handle_count_proofs(
             app.state.clone(),
             app.proof_limits,
@@ -10597,7 +11241,7 @@ async fn handler_count_proofs(
         &app,
         negotiated,
         &headers,
-        None,
+        Some(remote_ip),
         "v1/zk/proofs/count",
         1,
         true,
@@ -10615,7 +11259,9 @@ async fn handler_count_proofs(
 async fn handler_rbc_status(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -10630,7 +11276,12 @@ async fn handler_rbc_status(
             )));
         }
     }
-    let key = rate_limit_key(&headers, None, "v1/sumeragi/rbc", app.api_token_enforced());
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "v1/sumeragi/rbc",
+        app.api_token_enforced(),
+    );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -10651,7 +11302,9 @@ async fn handler_rbc_status(
 async fn handler_debug_axt_cache(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -10668,7 +11321,7 @@ async fn handler_debug_axt_cache(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/debug/axt/cache",
         app.api_token_enforced(),
     );
@@ -10763,8 +11416,10 @@ async fn handler_debug_axt_cache(
 async fn handler_debug_witness(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -10779,7 +11434,12 @@ async fn handler_debug_witness(
             )));
         }
     }
-    let key = rate_limit_key(&headers, None, "v1/debug/witness", app.api_token_enforced());
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "v1/debug/witness",
+        app.api_token_enforced(),
+    );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -10809,9 +11469,11 @@ async fn handler_debug_witness(
 async fn handler_sumeragi_evidence(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<utils::extractors::ExtractAccept>,
     AxQuery(q): AxQuery<routing::EvidenceListQuery>,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -10828,7 +11490,7 @@ async fn handler_sumeragi_evidence(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sumeragi/evidence",
         app.api_token_enforced(),
     );
@@ -10855,8 +11517,10 @@ async fn handler_sumeragi_evidence(
 async fn handler_sumeragi_evidence_submit(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<routing::EvidenceSubmitRequestDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     use axum::response::IntoResponse;
 
     let Some(handle) = app.sumeragi.clone() else {
@@ -10875,7 +11539,7 @@ async fn handler_sumeragi_evidence_submit(
 
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sumeragi/evidence/submit",
         app.api_token_enforced(),
     );
@@ -10905,7 +11569,9 @@ async fn handler_sumeragi_evidence_count(
 async fn handler_sumeragi_status(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -10922,7 +11588,7 @@ async fn handler_sumeragi_status(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sumeragi/status",
         app.api_token_enforced(),
     );
@@ -10948,7 +11614,9 @@ async fn handler_sumeragi_status(
 async fn handler_sumeragi_status_sse(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -10965,7 +11633,7 @@ async fn handler_sumeragi_status_sse(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sumeragi/status/sse",
         app.api_token_enforced(),
     );
@@ -10991,7 +11659,9 @@ async fn handler_sumeragi_status_sse(
 async fn handler_sumeragi_telemetry(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -11008,7 +11678,7 @@ async fn handler_sumeragi_telemetry(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sumeragi/telemetry",
         app.api_token_enforced(),
     );
@@ -11031,8 +11701,10 @@ async fn handler_sumeragi_telemetry(
 async fn handler_sumeragi_vrf_penalties(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(epoch): AxPath<String>,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -11049,7 +11721,7 @@ async fn handler_sumeragi_vrf_penalties(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sumeragi/vrf/penalties",
         app.api_token_enforced(),
     );
@@ -11072,8 +11744,10 @@ async fn handler_sumeragi_vrf_penalties(
 async fn handler_sumeragi_vrf_epoch(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(epoch): AxPath<String>,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -11090,7 +11764,7 @@ async fn handler_sumeragi_vrf_epoch(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sumeragi/vrf/epoch",
         app.api_token_enforced(),
     );
@@ -11133,8 +11807,10 @@ async fn handler_sumeragi_vrf_epoch(
 async fn handler_rbc_delivered_height_view(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath((height, view)): AxPath<(u64, u64)>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -11151,7 +11827,7 @@ async fn handler_rbc_delivered_height_view(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sumeragi/rbc/delivered",
         app.api_token_enforced(),
     );
@@ -11176,7 +11852,9 @@ async fn handler_rbc_delivered_height_view(
 async fn handler_pacemaker_status(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -11193,7 +11871,7 @@ async fn handler_pacemaker_status(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sumeragi/pacemaker",
         app.api_token_enforced(),
     );
@@ -11216,7 +11894,9 @@ async fn handler_pacemaker_status(
 async fn handler_sumeragi_phases(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -11233,7 +11913,7 @@ async fn handler_sumeragi_phases(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sumeragi/phases",
         app.api_token_enforced(),
     );
@@ -11256,7 +11936,9 @@ async fn handler_sumeragi_phases(
 async fn handler_sumeragi_leader(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -11273,7 +11955,7 @@ async fn handler_sumeragi_leader(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sumeragi/leader",
         app.api_token_enforced(),
     );
@@ -11296,7 +11978,9 @@ async fn handler_sumeragi_leader(
 async fn handler_sumeragi_qc(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -11311,7 +11995,12 @@ async fn handler_sumeragi_qc(
             )));
         }
     }
-    let key = rate_limit_key(&headers, None, "v1/sumeragi/qc", app.api_token_enforced());
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "v1/sumeragi/qc",
+        app.api_token_enforced(),
+    );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -11333,7 +12022,9 @@ async fn handler_sumeragi_qc(
 async fn handler_sumeragi_checkpoints(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -11350,7 +12041,7 @@ async fn handler_sumeragi_checkpoints(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sumeragi/checkpoints",
         app.api_token_enforced(),
     );
@@ -11376,7 +12067,9 @@ async fn handler_sumeragi_commit_qcs(
     State(app): State<SharedAppState>,
     window: crate::NoritoQuery<routing::HistoryWindowQuery>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -11393,7 +12086,7 @@ async fn handler_sumeragi_commit_qcs(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "/v1/sumeragi/commit-certificates",
         app.api_token_enforced(),
     );
@@ -11416,7 +12109,9 @@ async fn handler_bridge_finality_proof(
     State(app): State<SharedAppState>,
     axum::extract::Path(height): axum::extract::Path<u64>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -11433,7 +12128,7 @@ async fn handler_bridge_finality_proof(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "/v1/bridge/finality/{height}",
         app.api_token_enforced(),
     );
@@ -11454,7 +12149,9 @@ async fn handler_bridge_finality_bundle(
     State(app): State<SharedAppState>,
     axum::extract::Path(height): axum::extract::Path<u64>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -11471,7 +12168,7 @@ async fn handler_bridge_finality_bundle(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "/v1/bridge/finality/bundle/{height}",
         app.api_token_enforced(),
     );
@@ -11496,7 +12193,9 @@ async fn handler_sumeragi_validator_sets(
     State(app): State<SharedAppState>,
     window: crate::NoritoQuery<routing::HistoryWindowQuery>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -11513,7 +12212,7 @@ async fn handler_sumeragi_validator_sets(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         iroha_torii_shared::uri::SUMERAGI_VALIDATOR_SETS,
         app.api_token_enforced(),
     );
@@ -11536,7 +12235,9 @@ async fn handler_sumeragi_validator_set_by_height(
     State(app): State<SharedAppState>,
     AxPath(height): AxPath<u64>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -11553,7 +12254,7 @@ async fn handler_sumeragi_validator_set_by_height(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         iroha_torii_shared::uri::SUMERAGI_VALIDATOR_SET_BY_HEIGHT,
         app.api_token_enforced(),
     );
@@ -11577,7 +12278,9 @@ async fn handler_sumeragi_validator_set_by_height(
 async fn handler_sumeragi_consensus_keys(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -11594,7 +12297,7 @@ async fn handler_sumeragi_consensus_keys(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "/v1/sumeragi/consensus-keys",
         app.api_token_enforced(),
     );
@@ -11616,7 +12319,9 @@ async fn handler_sumeragi_consensus_keys(
 async fn handler_sumeragi_key_lifecycle(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -11633,7 +12338,7 @@ async fn handler_sumeragi_key_lifecycle(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "/v1/sumeragi/key-lifecycle",
         app.api_token_enforced(),
     );
@@ -11655,9 +12360,11 @@ async fn handler_sumeragi_key_lifecycle(
 async fn handler_commit_qc(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<utils::extractors::ExtractAccept>,
     AxPath(hash): AxPath<String>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -11674,7 +12381,7 @@ async fn handler_commit_qc(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sumeragi/commit_qc",
         app.api_token_enforced(),
     );
@@ -11697,8 +12404,10 @@ async fn handler_commit_qc(
 async fn handler_post_contract_deploy(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: NoritoJson<crate::routing::DeployContractDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -11717,7 +12426,7 @@ async fn handler_post_contract_deploy(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/contracts/deploy",
         app.api_token_enforced(),
     );
@@ -11750,8 +12459,10 @@ async fn handler_post_contract_deploy(
 async fn handler_post_contract_instance(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: NoritoJson<crate::routing::DeployAndActivateInstanceDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -11770,7 +12481,7 @@ async fn handler_post_contract_instance(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/contracts/instance",
         app.api_token_enforced(),
     );
@@ -11803,8 +12514,10 @@ async fn handler_post_contract_instance(
 async fn handler_post_contract_instance_activate(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: NoritoJson<crate::routing::ActivateInstanceDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -11823,7 +12536,7 @@ async fn handler_post_contract_instance_activate(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/contracts/instance/activate",
         app.api_token_enforced(),
     );
@@ -11856,8 +12569,10 @@ async fn handler_post_contract_instance_activate(
 async fn handler_post_contract_call(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: NoritoJson<crate::routing::ContractCallDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -11876,7 +12591,7 @@ async fn handler_post_contract_call(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/contracts/call",
         app.api_token_enforced(),
     );
@@ -11909,8 +12624,10 @@ async fn handler_post_contract_call(
 async fn handler_post_contract_call_multisig_propose(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: NoritoJson<crate::routing::MultisigContractCallProposeDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -11929,7 +12646,7 @@ async fn handler_post_contract_call_multisig_propose(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/contracts/call/multisig/propose",
         app.api_token_enforced(),
     );
@@ -11962,8 +12679,10 @@ async fn handler_post_contract_call_multisig_propose(
 async fn handler_post_contract_call_multisig_approve(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: NoritoJson<crate::routing::MultisigContractCallApproveDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -11982,7 +12701,7 @@ async fn handler_post_contract_call_multisig_approve(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/contracts/call/multisig/approve",
         app.api_token_enforced(),
     );
@@ -12017,8 +12736,10 @@ async fn handler_post_multisig_spec(
     method: axum::http::Method,
     uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: axum::body::Bytes,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -12035,7 +12756,12 @@ async fn handler_post_multisig_spec(
             )));
         }
     }
-    let key = rate_limit_key(&headers, None, "v1/multisig/spec", app.api_token_enforced());
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "v1/multisig/spec",
+        app.api_token_enforced(),
+    );
     if !app.deploy_rate_limiter.allow(&key).await {
         app.telemetry
             .with_metrics(|tel| tel.inc_torii_contract_throttle("multisig_spec"));
@@ -12081,8 +12807,10 @@ async fn handler_post_multisig_spec(
 async fn handler_post_multisig_propose(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: NoritoJson<crate::routing::MultisigProposeDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -12101,7 +12829,7 @@ async fn handler_post_multisig_propose(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/multisig/propose",
         app.api_token_enforced(),
     );
@@ -12134,8 +12862,10 @@ async fn handler_post_multisig_propose(
 async fn handler_post_multisig_approve(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: NoritoJson<crate::routing::MultisigApproveDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -12154,7 +12884,7 @@ async fn handler_post_multisig_approve(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/multisig/approve",
         app.api_token_enforced(),
     );
@@ -12187,8 +12917,10 @@ async fn handler_post_multisig_approve(
 async fn handler_post_multisig_cancel(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: NoritoJson<crate::routing::MultisigCancelRequestDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -12207,7 +12939,7 @@ async fn handler_post_multisig_cancel(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/multisig/cancel",
         app.api_token_enforced(),
     );
@@ -12242,8 +12974,10 @@ async fn handler_post_multisig_proposals_list(
     method: axum::http::Method,
     uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: axum::body::Bytes,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -12262,7 +12996,7 @@ async fn handler_post_multisig_proposals_list(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/multisig/proposals/list",
         app.api_token_enforced(),
     );
@@ -12314,8 +13048,10 @@ async fn handler_post_multisig_proposals_get(
     method: axum::http::Method,
     uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: axum::body::Bytes,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -12334,7 +13070,7 @@ async fn handler_post_multisig_proposals_get(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/multisig/proposals/get",
         app.api_token_enforced(),
     );
@@ -12384,8 +13120,10 @@ async fn handler_post_multisig_proposals_get(
 async fn handler_post_multisig_approvals_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<crate::routing::MultisigApprovalsListRequestDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     validate_api_token(&app, &headers)?;
     let viewer = match tx_history_viewer_from_headers(&app, &headers) {
         Ok(viewer) => viewer,
@@ -12393,7 +13131,7 @@ async fn handler_post_multisig_approvals_list(
     };
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         &format!("v1/multisig/approvals/list:{}", viewer.subject),
         app.api_token_enforced(),
     );
@@ -12426,8 +13164,10 @@ async fn handler_post_multisig_approvals_list(
 async fn handler_post_multisig_approvals_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<crate::routing::MultisigApprovalsGetRequestDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     validate_api_token(&app, &headers)?;
     let viewer = match tx_history_viewer_from_headers(&app, &headers) {
         Ok(viewer) => viewer,
@@ -12435,7 +13175,7 @@ async fn handler_post_multisig_approvals_get(
     };
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         &format!("v1/multisig/approvals/get:{}", viewer.subject),
         app.api_token_enforced(),
     );
@@ -12468,8 +13208,10 @@ async fn handler_post_multisig_approvals_get(
 async fn handler_post_sorafs_register_manifest(
     State(app): State<SharedAppState>,
     headers: HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<crate::routing::RegisterPinManifestDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -12488,7 +13230,7 @@ async fn handler_post_sorafs_register_manifest(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sorafs/pin/register",
         app.api_token_enforced(),
     );
@@ -12523,8 +13265,10 @@ async fn handler_post_sorafs_register_manifest(
 async fn handler_post_sorafs_capacity_declare(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: NoritoJson<crate::routing::RegisterCapacityDeclarationDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -12543,7 +13287,7 @@ async fn handler_post_sorafs_capacity_declare(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sorafs/capacity/declare",
         app.api_token_enforced(),
     );
@@ -12578,8 +13322,10 @@ async fn handler_post_sorafs_capacity_declare(
 async fn handler_post_sorafs_capacity_telemetry(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: NoritoJson<crate::routing::RecordCapacityTelemetryDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -12598,7 +13344,7 @@ async fn handler_post_sorafs_capacity_telemetry(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sorafs/capacity/telemetry",
         app.api_token_enforced(),
     );
@@ -12633,8 +13379,10 @@ async fn handler_post_sorafs_capacity_telemetry(
 async fn handler_post_sorafs_capacity_dispute(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: NoritoJson<crate::routing::RegisterCapacityDisputeDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -12653,7 +13401,7 @@ async fn handler_post_sorafs_capacity_dispute(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sorafs/capacity/dispute",
         app.api_token_enforced(),
     );
@@ -12687,8 +13435,10 @@ async fn handler_post_sorafs_capacity_dispute(
 async fn handler_post_sorafs_capacity_schedule(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: NoritoJson<crate::routing::ScheduleReplicationOrderDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -12707,7 +13457,7 @@ async fn handler_post_sorafs_capacity_schedule(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sorafs/capacity/schedule",
         app.api_token_enforced(),
     );
@@ -12738,8 +13488,10 @@ async fn handler_post_sorafs_capacity_schedule(
 async fn handler_post_sorafs_capacity_complete(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: NoritoJson<crate::routing::CompleteReplicationOrderDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -12758,7 +13510,7 @@ async fn handler_post_sorafs_capacity_complete(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sorafs/capacity/complete",
         app.api_token_enforced(),
     );
@@ -12789,8 +13541,10 @@ async fn handler_post_sorafs_capacity_complete(
 async fn handler_post_sorafs_deal_usage(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: NoritoJson<routing::RecordDealUsageDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -12809,7 +13563,7 @@ async fn handler_post_sorafs_deal_usage(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sorafs/deal/usage",
         app.api_token_enforced(),
     );
@@ -12840,8 +13594,10 @@ async fn handler_post_sorafs_deal_usage(
 async fn handler_post_sorafs_deal_settle(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: NoritoJson<routing::SettleDealDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -12860,7 +13616,7 @@ async fn handler_post_sorafs_deal_settle(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sorafs/deal/settle",
         app.api_token_enforced(),
     );
@@ -12891,8 +13647,10 @@ async fn handler_post_sorafs_deal_settle(
 async fn handler_post_sorafs_capacity_uptime(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: NoritoJson<crate::routing::RecordUptimeObservationDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -12911,7 +13669,7 @@ async fn handler_post_sorafs_capacity_uptime(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sorafs/capacity/uptime",
         app.api_token_enforced(),
     );
@@ -12942,8 +13700,10 @@ async fn handler_post_sorafs_capacity_uptime(
 async fn handler_post_sorafs_capacity_por(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: NoritoJson<crate::routing::RecordPorObservationDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -12962,7 +13722,7 @@ async fn handler_post_sorafs_capacity_por(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sorafs/capacity/por",
         app.api_token_enforced(),
     );
@@ -12993,8 +13753,10 @@ async fn handler_post_sorafs_capacity_por(
 async fn handler_post_sorafs_capacity_por_challenge(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: NoritoJson<crate::routing::RecordPorChallengeDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -13013,7 +13775,7 @@ async fn handler_post_sorafs_capacity_por_challenge(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sorafs/capacity/por-challenge",
         app.api_token_enforced(),
     );
@@ -13046,8 +13808,10 @@ async fn handler_post_sorafs_capacity_por_challenge(
 async fn handler_post_sorafs_capacity_por_proof(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: NoritoJson<crate::routing::RecordPorProofDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -13066,7 +13830,7 @@ async fn handler_post_sorafs_capacity_por_proof(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sorafs/capacity/por-proof",
         app.api_token_enforced(),
     );
@@ -13099,8 +13863,10 @@ async fn handler_post_sorafs_capacity_por_proof(
 async fn handler_post_sorafs_capacity_por_verdict(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: NoritoJson<crate::routing::RecordPorVerdictDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -13119,7 +13885,7 @@ async fn handler_post_sorafs_capacity_por_verdict(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sorafs/capacity/por-verdict",
         app.api_token_enforced(),
     );
@@ -13202,8 +13968,10 @@ async fn handler_get_sorafs_por_report(
 async fn handler_post_sorafs_capacity_failure(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: NoritoJson<crate::routing::RecordReplicationFailureDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -13222,7 +13990,7 @@ async fn handler_post_sorafs_capacity_failure(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sorafs/capacity/failure",
         app.api_token_enforced(),
     );
@@ -13253,8 +14021,10 @@ async fn handler_post_sorafs_capacity_failure(
 async fn handler_post_sorafs_repair_report(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(report): NoritoJson<RepairReportV1>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -13273,7 +14043,7 @@ async fn handler_post_sorafs_repair_report(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sorafs/audit/repair/report",
         app.api_token_enforced(),
     );
@@ -13304,8 +14074,10 @@ async fn handler_post_sorafs_repair_report(
 async fn handler_post_sorafs_repair_slash(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(proposal): NoritoJson<RepairSlashProposalV1>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -13324,7 +14096,7 @@ async fn handler_post_sorafs_repair_slash(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sorafs/audit/repair/slash",
         app.api_token_enforced(),
     );
@@ -13433,8 +14205,10 @@ fn enforce_sorafs_repair_worker_auth(
 async fn handler_post_sorafs_repair_claim(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(req): NoritoJson<crate::routing::RepairWorkerClaimDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let action = RepairWorkerActionV1::Claim {
         claimed_at_unix: req.claimed_at_unix,
     };
@@ -13453,7 +14227,7 @@ async fn handler_post_sorafs_repair_claim(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sorafs/audit/repair/claim",
         app.api_token_enforced(),
     );
@@ -13484,8 +14258,10 @@ async fn handler_post_sorafs_repair_claim(
 async fn handler_post_sorafs_repair_heartbeat(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(req): NoritoJson<crate::routing::RepairWorkerHeartbeatDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let action = RepairWorkerActionV1::Heartbeat {
         heartbeat_at_unix: req.heartbeat_at_unix,
     };
@@ -13504,7 +14280,7 @@ async fn handler_post_sorafs_repair_heartbeat(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sorafs/audit/repair/heartbeat",
         app.api_token_enforced(),
     );
@@ -13535,8 +14311,10 @@ async fn handler_post_sorafs_repair_heartbeat(
 async fn handler_post_sorafs_repair_complete(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(req): NoritoJson<crate::routing::RepairWorkerCompleteDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let action = RepairWorkerActionV1::Complete {
         completed_at_unix: req.completed_at_unix,
         resolution_notes: req.resolution_notes.clone(),
@@ -13556,7 +14334,7 @@ async fn handler_post_sorafs_repair_complete(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sorafs/audit/repair/complete",
         app.api_token_enforced(),
     );
@@ -13587,8 +14365,10 @@ async fn handler_post_sorafs_repair_complete(
 async fn handler_post_sorafs_repair_fail(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(req): NoritoJson<crate::routing::RepairWorkerFailDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let action = RepairWorkerActionV1::Fail {
         failed_at_unix: req.failed_at_unix,
         reason: req.reason.clone(),
@@ -13608,7 +14388,7 @@ async fn handler_post_sorafs_repair_fail(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sorafs/audit/repair/fail",
         app.api_token_enforced(),
     );
@@ -13639,12 +14419,14 @@ async fn handler_post_sorafs_repair_fail(
 async fn handler_get_sorafs_repair_status(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     axum::extract::Path(manifest_hex): axum::extract::Path<String>,
     AxQuery(query): AxQuery<crate::routing::RepairStatusQueryDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sorafs/audit/repair/status",
         app.api_token_enforced(),
     );
@@ -13675,11 +14457,13 @@ async fn handler_get_sorafs_repair_status(
 async fn handler_get_sorafs_repair_status_all(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxQuery(query): AxQuery<crate::routing::RepairStatusQueryDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sorafs/audit/repair/status",
         app.api_token_enforced(),
     );
@@ -13708,9 +14492,11 @@ async fn handler_get_sorafs_repair_status_all(
 async fn handler_iso_pacs008(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: axum::body::Bytes,
 ) -> Result<(StatusCode, JsonBody<norito::json::native::Value>), Error> {
-    check_access(&app, &headers, None, "v1/iso20022/pacs008").await?;
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/iso20022/pacs008").await?;
     let runtime = match &app.iso_bridge {
         Some(rt) => rt.clone(),
         None => {
@@ -13860,9 +14646,11 @@ async fn handler_iso_pacs008(
 async fn handler_iso_pacs009(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: axum::body::Bytes,
 ) -> Result<(StatusCode, JsonBody<norito::json::native::Value>), Error> {
-    check_access(&app, &headers, None, "v1/iso20022/pacs009").await?;
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/iso20022/pacs009").await?;
     let runtime = match &app.iso_bridge {
         Some(rt) => rt.clone(),
         None => {
@@ -14012,9 +14800,11 @@ async fn handler_iso_pacs009(
 async fn handler_iso_status(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     axum::extract::Path(msg_id): axum::extract::Path<String>,
 ) -> Result<(StatusCode, JsonBody<norito::json::native::Value>), Error> {
-    check_access(&app, &headers, None, "v1/iso20022/status").await?;
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/iso20022/status").await?;
     let runtime = match &app.iso_bridge {
         Some(rt) => rt.clone(),
         None => {
@@ -14170,9 +14960,11 @@ fn map_iso_error(err: MsgError) -> iroha_data_model::ValidationFail {
 async fn handler_post_vk_register(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: NoritoJson<crate::routing::ZkVkRegisterDto>,
 ) -> Result<AxResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return crate::routing::handle_post_vk_register(
             app.chain_id.clone(),
             app.queue.clone(),
@@ -14199,7 +14991,7 @@ async fn handler_post_vk_register(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/zk/vk/register",
         app.api_token_enforced(),
     );
@@ -14225,9 +15017,11 @@ async fn handler_post_vk_register(
 async fn handler_post_vk_update(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: NoritoJson<crate::routing::ZkVkUpdateDto>,
 ) -> Result<AxResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return crate::routing::handle_post_vk_update(
             app.chain_id.clone(),
             app.queue.clone(),
@@ -14252,7 +15046,12 @@ async fn handler_post_vk_update(
             )));
         }
     }
-    let key = rate_limit_key(&headers, None, "v1/zk/vk/update", app.api_token_enforced());
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "v1/zk/vk/update",
+        app.api_token_enforced(),
+    );
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     if !limits::allow_conditionally(&app.rate_limiter, &key, enforce).await {
@@ -14345,16 +15144,18 @@ async fn handler_proof_record_get(
     State(app): State<SharedAppState>,
     Extension(negotiated): Extension<api_version::NegotiatedVersion>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(id): AxPath<String>,
 ) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
     ensure_proof_api_version(&app, negotiated, "/v1/proofs/{id}")?;
-    let enforce = !limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
+    let enforce = !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     let start = std::time::Instant::now();
     check_proof_access(
         &app,
         negotiated,
         &headers,
-        None,
+        Some(remote_ip),
         "/v1/proofs/{id}",
         1,
         enforce,
@@ -14409,7 +15210,15 @@ async fn handler_proof_record_get(
         ))
     })?;
     let body_len = bytes.len() as u64;
-    enforce_proof_egress(&app, &headers, None, "/v1/proofs/{id}", body_len, enforce).await?;
+    enforce_proof_egress(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "/v1/proofs/{id}",
+        body_len,
+        enforce,
+    )
+    .await?;
     let mut resp = axum::response::Response::new(axum::body::Body::from(bytes));
     resp.headers_mut().insert(
         axum::http::header::CONTENT_TYPE,
@@ -14432,8 +15241,10 @@ async fn handler_proof_retention_status(
     State(app): State<SharedAppState>,
     Extension(negotiated): Extension<api_version::NegotiatedVersion>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
 ) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
     let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
@@ -14443,12 +15254,12 @@ async fn handler_proof_retention_status(
         negotiated,
         iroha_torii_shared::uri::PROOF_RETENTION_STATUS,
     )?;
-    let enforce = !limits::is_allowed_by_cidr(&headers, None, &app.allow_nets);
+    let enforce = !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     check_proof_access(
         &app,
         negotiated,
         &headers,
-        None,
+        Some(remote_ip),
         iroha_torii_shared::uri::PROOF_RETENTION_STATUS,
         1,
         enforce,
@@ -14639,10 +15450,18 @@ fn pipeline_status_from_state(
 async fn handler_pipeline_transaction_status(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
     AxQuery(query): AxQuery<PipelineStatusQuery>,
 ) -> Result<Response, Error> {
-    check_access(&app, &headers, None, "v1/pipeline/transactions/status").await?;
+    let remote_ip = remote.ip();
+    check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/pipeline/transactions/status",
+    )
+    .await?;
     let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
         Ok(format) => format,
         Err(resp) => return Ok(resp),
@@ -14808,7 +15627,12 @@ async fn handler_policy(
             )));
         }
     }
-    let key = rate_limit_key(&headers, None, "v1/policy", app.api_token_enforced());
+    let key = rate_limit_key(
+        &headers,
+        Some(remote.ip()),
+        "v1/policy",
+        app.api_token_enforced(),
+    );
     if !app.rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -15558,8 +16382,16 @@ async fn handler_asset_alias_resolve(
 async fn handler_ram_lfe_program_policies(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
-    check_access(&app, &headers, None, "v1/ram-lfe/program-policies").await?;
+    let remote_ip = remote.ip();
+    check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/ram-lfe/program-policies",
+    )
+    .await?;
     let world = app.state.world_view();
     let items = world
         .ram_lfe_program_policies_iter()
@@ -15575,13 +16407,15 @@ async fn handler_ram_lfe_program_policies(
 async fn handler_ram_lfe_execute(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(program_id_literal): AxPath<String>,
     NoritoJson(request): NoritoJson<routing::RamLfeExecuteRequestDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     check_access(
         &app,
         &headers,
-        None,
+        Some(remote_ip),
         "v1/ram-lfe/programs/{program_id}/execute",
     )
     .await?;
@@ -15614,9 +16448,17 @@ async fn handler_ram_lfe_execute(
 async fn handler_ram_lfe_receipt_verify(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<routing::RamLfeReceiptVerifyRequestDto>,
 ) -> Result<AxResponse, Error> {
-    check_access(&app, &headers, None, "v1/ram-lfe/receipts/verify").await?;
+    let remote_ip = remote.ip();
+    check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/ram-lfe/receipts/verify",
+    )
+    .await?;
     let output_hash_matches = match request.output_hex.as_deref() {
         Some(output_hex) => match parse_hex_bytes(output_hex, "output_hex") {
             Ok(output) => Some(
@@ -15669,8 +16511,10 @@ async fn handler_ram_lfe_receipt_verify(
 async fn handler_identifier_policies(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
-    check_access(&app, &headers, None, "v1/identifier-policies").await?;
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/identifier-policies").await?;
     let world = app.state.world_view();
     let items = world
         .identifier_policies_iter()
@@ -15691,9 +16535,11 @@ async fn handler_identifier_policies(
 async fn handler_identifier_resolve(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<routing::IdentifierResolveRequestDto>,
 ) -> Result<AxResponse, Error> {
-    check_access(&app, &headers, None, "v1/identifiers/resolve").await?;
+    let remote_ip = remote.ip();
+    check_access(&app, &headers, Some(remote_ip), "v1/identifiers/resolve").await?;
     let policy_id =
         iroha_data_model::identifier::IdentifierPolicyId::from_str(request.policy_id.trim())
             .map_err(|err| {
@@ -15749,13 +16595,15 @@ async fn handler_identifier_resolve(
 async fn handler_identifier_claim_receipt(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(account_literal): AxPath<String>,
     NoritoJson(request): NoritoJson<routing::IdentifierResolveRequestDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     check_access(
         &app,
         &headers,
-        None,
+        Some(remote_ip),
         "v1/accounts/{account_id}/identifiers/claim-receipt",
     )
     .await?;
@@ -15815,12 +16663,14 @@ async fn handler_identifier_claim_receipt(
 async fn handler_identifier_receipt_lookup(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(receipt_hash_literal): AxPath<String>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     check_access(
         &app,
         &headers,
-        None,
+        Some(remote_ip),
         "v1/identifiers/receipts/{receipt_hash}",
     )
     .await?;
@@ -16059,7 +16909,9 @@ fn tx_history_viewer_from_headers(
 async fn handler_rbc_sessions(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     let token_hdr = headers
         .get("x-api-token")
         .and_then(|v| v.to_str().ok())
@@ -16076,7 +16928,7 @@ async fn handler_rbc_sessions(
     }
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sumeragi/rbc/sessions",
         app.api_token_enforced(),
     );
@@ -16099,8 +16951,10 @@ async fn handler_rbc_sessions(
 async fn handler_rbc_sample(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<routing::RbcSampleRequestDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     use axum::response::IntoResponse;
 
     if !app.rbc_sampling_enabled {
@@ -16126,7 +16980,7 @@ async fn handler_rbc_sample(
 
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sumeragi/rbc/sample",
         app.api_token_enforced(),
     );
@@ -16533,8 +17387,10 @@ async fn handler_block_proof(
 async fn handler_sumeragi_vrf_commit(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<routing::VrfCommitRequestDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     use axum::response::IntoResponse;
 
     let Some(handle) = app.sumeragi.clone() else {
@@ -16553,7 +17409,7 @@ async fn handler_sumeragi_vrf_commit(
 
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sumeragi/vrf/commit",
         app.api_token_enforced(),
     );
@@ -16569,8 +17425,10 @@ async fn handler_sumeragi_vrf_commit(
 async fn handler_sumeragi_vrf_reveal(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<routing::VrfRevealRequestDto>,
 ) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
     use axum::response::IntoResponse;
 
     let Some(handle) = app.sumeragi.clone() else {
@@ -16589,7 +17447,7 @@ async fn handler_sumeragi_vrf_reveal(
 
     let key = rate_limit_key(
         &headers,
-        None,
+        Some(remote_ip),
         "v1/sumeragi/vrf/reveal",
         app.api_token_enforced(),
     );
@@ -19913,9 +20771,16 @@ async fn handler_mcp_capabilities(
 async fn handler_mcp_jsonrpc(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     request: axum::http::Request<Body>,
 ) -> (StatusCode, JsonBody<norito::json::Value>) {
-    let rate_key = limits::key_from_headers(&headers, None, Some("mcp"), app.require_api_token);
+    let remote_ip = remote.ip();
+    let rate_key = limits::key_from_headers(
+        &headers,
+        Some(remote_ip),
+        Some("mcp"),
+        app.require_api_token,
+    );
     if !app.mcp_rate_limiter.allow(&rate_key).await {
         return (
             StatusCode::TOO_MANY_REQUESTS,
@@ -21633,9 +22498,14 @@ pub(crate) mod tests_runtime_handlers {
         let headers = HeaderMap::new();
 
         // Active ABI version
-        let resp = super::handler_runtime_abi_active(State(app.clone()), headers.clone(), None)
-            .await
-            .expect("ok");
+        let resp = super::handler_runtime_abi_active(
+            State(app.clone()),
+            headers.clone(),
+            crate::loopback_connect_info(),
+            None,
+        )
+        .await
+        .expect("ok");
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
         let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
@@ -21645,9 +22515,14 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(active.abi_version, 1);
 
         // ABI hash
-        let resp = super::handler_runtime_abi_hash(State(app), headers, None)
-            .await
-            .expect("ok");
+        let resp = super::handler_runtime_abi_hash(
+            State(app),
+            headers,
+            crate::loopback_connect_info(),
+            None,
+        )
+        .await
+        .expect("ok");
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
         let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
@@ -21668,6 +22543,7 @@ pub(crate) mod tests_runtime_handlers {
         let response = super::handler_explorer_transaction_detail(
             State(app),
             headers,
+            crate::loopback_connect_info(),
             axum::extract::Path(missing_hash),
         )
         .await
@@ -21699,6 +22575,7 @@ pub(crate) mod tests_runtime_handlers {
         let response = super::handler_explorer_instruction_detail(
             State(app),
             headers,
+            crate::loopback_connect_info(),
             axum::extract::Path((missing_hash, 0)),
         )
         .await
@@ -21729,9 +22606,14 @@ pub(crate) mod tests_runtime_handlers {
             HeaderValue::from_static("application/json"),
         ));
 
-        let resp = super::handler_debug_witness(State(app), headers, accept)
-            .await
-            .expect("debug witness response");
+        let resp = super::handler_debug_witness(
+            State(app),
+            headers,
+            crate::loopback_connect_info(),
+            accept,
+        )
+        .await
+        .expect("debug witness response");
 
         assert_eq!(resp.status(), StatusCode::OK);
         let content_type = resp
@@ -22268,10 +23150,14 @@ pub(crate) mod tests_runtime_handlers {
         let app = mk_app_state_for_tests();
         let headers = HeaderMap::new();
 
-        let metrics_resp =
-            super::handler_runtime_metrics(State(app.clone()), headers.clone(), None)
-                .await
-                .expect("ok");
+        let metrics_resp = super::handler_runtime_metrics(
+            State(app.clone()),
+            headers.clone(),
+            crate::loopback_connect_info(),
+            None,
+        )
+        .await
+        .expect("ok");
         assert_eq!(metrics_resp.status(), axum::http::StatusCode::OK);
         let metrics_bytes = axum::body::to_bytes(metrics_resp.into_body(), usize::MAX)
             .await
@@ -22280,9 +23166,14 @@ pub(crate) mod tests_runtime_handlers {
             norito::json::from_slice(&metrics_bytes).expect("decode json");
         assert_eq!(metrics.abi_version, 1);
 
-        let caps_resp = super::handler_node_capabilities(State(app), headers, None)
-            .await
-            .expect("ok");
+        let caps_resp = super::handler_node_capabilities(
+            State(app),
+            headers,
+            crate::loopback_connect_info(),
+            None,
+        )
+        .await
+        .expect("ok");
         assert_eq!(caps_resp.status(), axum::http::StatusCode::OK);
         let caps_bytes = axum::body::to_bytes(caps_resp.into_body(), usize::MAX)
             .await
@@ -22307,10 +23198,14 @@ pub(crate) mod tests_runtime_handlers {
         let headers = HeaderMap::new();
 
         // configuration
-        let resp = super::handler_get_configuration(State(app.clone()), headers.clone())
-            .await
-            .expect("ok")
-            .into_response();
+        let resp = super::handler_get_configuration(
+            State(app.clone()),
+            headers.clone(),
+            crate::loopback_connect_info(),
+        )
+        .await
+        .expect("ok")
+        .into_response();
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
         let config_bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
@@ -22331,10 +23226,14 @@ pub(crate) mod tests_runtime_handlers {
         );
 
         // peers
-        let resp = super::handler_peers(State(app.clone()), headers.clone())
-            .await
-            .expect("ok")
-            .into_response();
+        let resp = super::handler_peers(
+            State(app.clone()),
+            headers.clone(),
+            crate::loopback_connect_info(),
+        )
+        .await
+        .expect("ok")
+        .into_response();
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
 
         // health
@@ -22356,13 +23255,17 @@ pub(crate) mod tests_runtime_handlers {
         let app = mk_app_state_for_tests();
         let headers = HeaderMap::new();
 
-        let resp = super::handler_time_now(State(app.clone()), headers.clone())
-            .await
-            .expect("ok")
-            .into_response();
+        let resp = super::handler_time_now(
+            State(app.clone()),
+            headers.clone(),
+            crate::loopback_connect_info(),
+        )
+        .await
+        .expect("ok")
+        .into_response();
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
 
-        let resp = super::handler_time_status(State(app), headers)
+        let resp = super::handler_time_status(State(app), headers, crate::loopback_connect_info())
             .await
             .expect("ok")
             .into_response();
@@ -22652,6 +23555,7 @@ pub(crate) mod tests_runtime_handlers {
         let resp = super::handler_pipeline_transaction_status(
             State(app.clone()),
             HeaderMap::new(),
+            crate::loopback_connect_info(),
             None,
             crate::NoritoQuery(PipelineStatusQuery {
                 hash: Some(tx.hash().to_string()),
@@ -22675,6 +23579,7 @@ pub(crate) mod tests_runtime_handlers {
         let resp_entry = super::handler_pipeline_transaction_status(
             State(app.clone()),
             HeaderMap::new(),
+            crate::loopback_connect_info(),
             None,
             crate::NoritoQuery(PipelineStatusQuery {
                 hash: Some(tx.hash_as_entrypoint().to_string()),
@@ -22718,6 +23623,7 @@ pub(crate) mod tests_runtime_handlers {
         let resp = super::handler_pipeline_transaction_status(
             State(app.clone()),
             HeaderMap::new(),
+            crate::loopback_connect_info(),
             None,
             crate::NoritoQuery(PipelineStatusQuery {
                 hash: Some(tx_hash.to_string()),
@@ -22741,6 +23647,7 @@ pub(crate) mod tests_runtime_handlers {
         let resp_entry = super::handler_pipeline_transaction_status(
             State(app.clone()),
             HeaderMap::new(),
+            crate::loopback_connect_info(),
             None,
             crate::NoritoQuery(PipelineStatusQuery {
                 hash: Some(tx_entry_hash.to_string()),
@@ -22777,6 +23684,7 @@ pub(crate) mod tests_runtime_handlers {
         let resp = super::handler_pipeline_transaction_status(
             State(app.clone()),
             HeaderMap::new(),
+            crate::loopback_connect_info(),
             None,
             crate::NoritoQuery(PipelineStatusQuery {
                 hash: Some(tx_hash.to_string()),
@@ -25300,6 +26208,7 @@ pub(crate) mod tests_runtime_handlers {
     async fn contract_deploy_rate_limit_throttles_after_burst() {
         let app = mk_app_state_for_tests_with_options(None, Some((1, 1)), None, None);
         let headers = HeaderMap::new();
+        let remote_ip = std::net::IpAddr::from([127, 0, 0, 1]);
         let creds = crate::test_utils::random_authority();
         let program = crate::test_utils::minimal_ivm_program(1);
         let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
@@ -25309,23 +26218,25 @@ pub(crate) mod tests_runtime_handlers {
             private_key: clone_private_key(&creds.private_key),
             code_b64: code_b64.clone(),
         };
-        let dto2 = DeployContractDto {
-            authority: creds.account.clone(),
-            private_key: clone_private_key(&creds.private_key),
-            code_b64,
-        };
 
-        let first = super::handler_post_contract_deploy(
+        // Exhaust the exact handler key up front so this regression does not depend
+        // on how quickly the first deploy request completes on the current host.
+        let key = super::rate_limit_key(
+            &headers,
+            Some(remote_ip),
+            "v1/contracts/deploy",
+            app.api_token_enforced(),
+        );
+        assert!(app.deploy_rate_limiter.allow(&key).await);
+        assert!(!app.deploy_rate_limiter.allow(&key).await);
+
+        let second = super::handler_post_contract_deploy(
             State(app.clone()),
-            headers.clone(),
+            headers,
+            crate::loopback_connect_info(),
             NoritoJson(dto1),
         )
         .await;
-        assert!(first.is_ok(), "first deploy should pass: {first:?}");
-
-        let second =
-            super::handler_post_contract_deploy(State(app.clone()), headers, NoritoJson(dto2))
-                .await;
         assert!(matches!(
             second,
             Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -25338,6 +26249,7 @@ pub(crate) mod tests_runtime_handlers {
     async fn contract_activate_rate_limit_throttles_after_burst() {
         let app = mk_app_state_for_tests_with_options(None, Some((1, 1)), None, None);
         let headers = HeaderMap::new();
+        let remote_ip = std::net::IpAddr::from([127, 0, 0, 1]);
         let creds = crate::test_utils::random_authority();
         let code_hash = "ab".repeat(32);
 
@@ -25348,26 +26260,23 @@ pub(crate) mod tests_runtime_handlers {
             contract_id: "contract".into(),
             code_hash: code_hash.clone(),
         };
-        let dto2 = ActivateInstanceDto {
-            authority: creds.account.clone(),
-            private_key: clone_private_key(&creds.private_key),
-            namespace: "ns".into(),
-            contract_id: "contract".into(),
-            code_hash,
-        };
 
-        let first = super::handler_post_contract_instance_activate(
-            State(app.clone()),
-            headers.clone(),
-            NoritoJson(dto1),
-        )
-        .await;
-        assert!(first.is_ok(), "first activate should pass: {first:?}");
+        // Exhaust the exact handler key up front so this regression does not depend
+        // on how quickly the first activation request completes on the current host.
+        let key = super::rate_limit_key(
+            &headers,
+            Some(remote_ip),
+            "v1/contracts/instance/activate",
+            app.api_token_enforced(),
+        );
+        assert!(app.deploy_rate_limiter.allow(&key).await);
+        assert!(!app.deploy_rate_limiter.allow(&key).await);
 
         let second = super::handler_post_contract_instance_activate(
             State(app.clone()),
             headers,
-            NoritoJson(dto2),
+            crate::loopback_connect_info(),
+            NoritoJson(dto1),
         )
         .await;
         assert!(matches!(
@@ -25453,9 +26362,14 @@ pub(crate) mod tests_runtime_handlers {
             local_peer_id: None,
         }));
 
-        let response = super::handler_soracloud_status(State(app), HeaderMap::new(), None)
-            .await
-            .expect("soracloud status should succeed");
+        let response = super::handler_soracloud_status(
+            State(app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            None,
+        )
+        .await
+        .expect("soracloud status should succeed");
         assert_eq!(response.status(), StatusCode::OK);
 
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
@@ -25611,6 +26525,7 @@ pub(crate) mod tests_runtime_handlers {
             State(app.clone()),
             negotiated(&app),
             headers.clone(),
+            crate::loopback_connect_info(),
             q.clone(),
         )
         .await
@@ -25622,6 +26537,7 @@ pub(crate) mod tests_runtime_handlers {
             State(app.clone()),
             negotiated(&app),
             headers,
+            crate::loopback_connect_info(),
             q,
         )
         .await
@@ -25632,6 +26548,34 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(resp.status(), axum::http::StatusCode::TOO_MANY_REQUESTS);
         let retry_after = resp.headers().get(axum::http::header::RETRY_AFTER);
         assert_eq!(retry_after.and_then(|h| h.to_str().ok()), Some("3"));
+    }
+
+    #[tokio::test]
+    async fn policy_rate_limit_keys_transport_remote_when_internal_header_missing() {
+        let mut app = mk_app_state_for_tests();
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
+
+        let first = super::handler_policy(
+            State(app.clone()),
+            HeaderMap::new(),
+            axum::extract::ConnectInfo(SocketAddr::from(([198, 51, 100, 10], 0))),
+        )
+        .await
+        .expect("first policy request should be allowed")
+        .into_response();
+        assert_eq!(first.status(), StatusCode::OK);
+
+        let second = super::handler_policy(
+            State(app),
+            HeaderMap::new(),
+            axum::extract::ConnectInfo(SocketAddr::from(([198, 51, 100, 11], 0))),
+        )
+        .await
+        .expect("second policy request from a different remote should use a separate bucket")
+        .into_response();
+        assert_eq!(second.status(), StatusCode::OK);
     }
 
     #[cfg(feature = "profiling")]
@@ -25735,21 +26679,30 @@ pub(crate) mod tests_runtime_handlers {
         assert!(!text.is_empty());
 
         // RBC endpoints (status, sessions, delivered)
-        let resp = super::handler_rbc_status(State(app.clone()), headers.clone())
-            .await
-            .expect("ok")
-            .into_response();
+        let resp = super::handler_rbc_status(
+            State(app.clone()),
+            headers.clone(),
+            crate::loopback_connect_info(),
+        )
+        .await
+        .expect("ok")
+        .into_response();
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
 
-        let resp = super::handler_rbc_sessions(State(app.clone()), headers.clone())
-            .await
-            .expect("ok")
-            .into_response();
+        let resp = super::handler_rbc_sessions(
+            State(app.clone()),
+            headers.clone(),
+            crate::loopback_connect_info(),
+        )
+        .await
+        .expect("ok")
+        .into_response();
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
 
         let resp = super::handler_rbc_delivered_height_view(
             State(app.clone()),
             headers.clone(),
+            crate::loopback_connect_info(),
             axum::extract::Path((0u64, 0u64)),
         )
         .await
@@ -25757,17 +26710,25 @@ pub(crate) mod tests_runtime_handlers {
         .into_response();
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
 
-        let resp = super::handler_sumeragi_phases(State(app.clone()), headers.clone())
-            .await
-            .expect("ok")
-            .into_response();
+        let resp = super::handler_sumeragi_phases(
+            State(app.clone()),
+            headers.clone(),
+            crate::loopback_connect_info(),
+        )
+        .await
+        .expect("ok")
+        .into_response();
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
 
         // QC and leader endpoints
-        let resp = super::handler_sumeragi_qc(State(app.clone()), headers.clone())
-            .await
-            .expect("ok")
-            .into_response();
+        let resp = super::handler_sumeragi_qc(
+            State(app.clone()),
+            headers.clone(),
+            crate::loopback_connect_info(),
+        )
+        .await
+        .expect("ok")
+        .into_response();
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
 
         app.state.metrics().set_axt_proof_cache_state(
@@ -25784,10 +26745,14 @@ pub(crate) mod tests_runtime_handlers {
             2,
             AxtRejectReason::HandleEra,
         );
-        let resp = super::handler_debug_axt_cache(State(app.clone()), headers.clone())
-            .await
-            .expect("ok")
-            .into_response();
+        let resp = super::handler_debug_axt_cache(
+            State(app.clone()),
+            headers.clone(),
+            crate::loopback_connect_info(),
+        )
+        .await
+        .expect("ok")
+        .into_response();
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
@@ -25842,10 +26807,11 @@ pub(crate) mod tests_runtime_handlers {
             Some(AxtRejectReason::HandleEra.label())
         );
 
-        let resp = super::handler_sumeragi_leader(State(app), headers)
-            .await
-            .expect("ok")
-            .into_response();
+        let resp =
+            super::handler_sumeragi_leader(State(app), headers, crate::loopback_connect_info())
+                .await
+                .expect("ok")
+                .into_response();
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
     }
 
@@ -25855,16 +26821,21 @@ pub(crate) mod tests_runtime_handlers {
         let app = mk_app_state_for_tests();
         let headers = HeaderMap::new();
 
-        let resp = super::handler_new_view_json(State(app.clone()), headers.clone())
-            .await
-            .expect("ok")
-            .into_response();
+        let resp = super::handler_new_view_json(
+            State(app.clone()),
+            headers.clone(),
+            crate::loopback_connect_info(),
+        )
+        .await
+        .expect("ok")
+        .into_response();
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
 
-        let resp = super::handler_sumeragi_collectors(State(app), headers)
-            .await
-            .expect("ok")
-            .into_response();
+        let resp =
+            super::handler_sumeragi_collectors(State(app), headers, crate::loopback_connect_info())
+                .await
+                .expect("ok")
+                .into_response();
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
     }
 
@@ -25878,6 +26849,7 @@ pub(crate) mod tests_runtime_handlers {
         let resp = super::handler_commit_qc(
             State(app.clone()),
             headers,
+            crate::loopback_connect_info(),
             None,
             axum::extract::Path(sample_hash),
         )
@@ -25895,6 +26867,7 @@ pub(crate) mod tests_runtime_handlers {
         let resp = super::handler_commit_qc(
             State(app),
             HeaderMap::new(),
+            crate::loopback_connect_info(),
             Some(crate::utils::extractors::ExtractAccept(
                 HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE),
             )),
@@ -25922,16 +26895,21 @@ pub(crate) mod tests_runtime_handlers {
         let app = mk_app_state_for_tests();
         let headers = HeaderMap::new();
 
-        let resp = super::handler_sumeragi_params(State(app.clone()), headers.clone())
-            .await
-            .expect("ok")
-            .into_response();
+        let resp = super::handler_sumeragi_params(
+            State(app.clone()),
+            headers.clone(),
+            crate::loopback_connect_info(),
+        )
+        .await
+        .expect("ok")
+        .into_response();
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
 
-        let resp = super::handler_sumeragi_bls_keys(State(app), headers)
-            .await
-            .expect("ok")
-            .into_response();
+        let resp =
+            super::handler_sumeragi_bls_keys(State(app), headers, crate::loopback_connect_info())
+                .await
+                .expect("ok")
+                .into_response();
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
     }
 
@@ -25944,6 +26922,7 @@ pub(crate) mod tests_runtime_handlers {
         let resp = super::handler_list_vk(
             State(app.clone()),
             headers.clone(),
+            crate::loopback_connect_info(),
             AxQuery(crate::routing::VkListQuery::default()),
         )
         .await
@@ -25956,6 +26935,7 @@ pub(crate) mod tests_runtime_handlers {
             State(app.clone()),
             negotiated(&app),
             headers.clone(),
+            crate::loopback_connect_info(),
             AxQuery(crate::routing::ProofListQuery::default()),
         )
         .await
@@ -25968,6 +26948,7 @@ pub(crate) mod tests_runtime_handlers {
             State(app.clone()),
             negotiated(&app),
             headers,
+            crate::loopback_connect_info(),
             AxQuery(crate::routing::ProofListQuery::default()),
         )
         .await
@@ -25985,6 +26966,7 @@ pub(crate) mod tests_runtime_handlers {
         let resp = super::handler_get_contract_code(
             State(app.clone()),
             headers.clone(),
+            crate::loopback_connect_info(),
             axum::extract::Path(
                 "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
             ),
@@ -25998,6 +26980,7 @@ pub(crate) mod tests_runtime_handlers {
         let resp = super::handler_get_vk_by_backend_name(
             State(app.clone()),
             headers.clone(),
+            crate::loopback_connect_info(),
             axum::extract::Path(("halo2/ipa".to_string(), "demo".to_string())),
         )
         .await
@@ -26010,6 +26993,7 @@ pub(crate) mod tests_runtime_handlers {
             State(app.clone()),
             negotiated(&app),
             headers,
+            crate::loopback_connect_info(),
             axum::extract::Path((
                 "halo2/ipa".to_string(),
                 "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
@@ -26067,10 +27051,15 @@ pub(crate) mod tests_runtime_handlers {
             private_key: clone_private_key(&creds.private_key),
             code_b64,
         };
-        let resp = super::handler_post_contract_deploy(State(app), headers, NoritoJson(dto))
-            .await
-            .expect("ok")
-            .into_response();
+        let resp = super::handler_post_contract_deploy(
+            State(app),
+            headers,
+            crate::loopback_connect_info(),
+            NoritoJson(dto),
+        )
+        .await
+        .expect("ok")
+        .into_response();
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
         let body = http_body_util::BodyExt::collect(resp.into_body())
             .await
@@ -26109,11 +27098,15 @@ pub(crate) mod tests_runtime_handlers {
             code_hash: "0000000000000000000000000000000000000000000000000000000000000000"
                 .to_string(),
         };
-        let resp =
-            super::handler_post_contract_instance_activate(State(app), headers, NoritoJson(dto))
-                .await
-                .expect("ok")
-                .into_response();
+        let resp = super::handler_post_contract_instance_activate(
+            State(app),
+            headers,
+            crate::loopback_connect_info(),
+            NoritoJson(dto),
+        )
+        .await
+        .expect("ok")
+        .into_response();
         assert_eq!(resp.status(), axum::http::StatusCode::OK);
     }
 
@@ -26759,6 +27752,7 @@ mod tests {
     // for `collect`
     use std::{
         collections::HashSet,
+        net::SocketAddr,
         num::{NonZeroU64, NonZeroUsize},
         str::FromStr,
         sync::Arc,
@@ -27175,6 +28169,104 @@ mod tests {
         let err = decode_tx_history_jwt_claims(&format!("Bearer {token}"), &jwt)
             .expect_err("mismatched secret must fail");
         assert_eq!(err, "invalid JWT");
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn offline_cash_mode_extraction_accepts_ios_binding_and_proof() {
+        let request = json!({
+            "account_id": "alice@users",
+            "device_binding": {
+                "platform": "ios",
+                "attestation_key_id": "att-key",
+                "device_id": "device-1",
+                "offline_public_key": "offline-pub",
+                "attestation_report_base64": "report",
+                "ios_team_id": "TEAM123",
+                "ios_bundle_id": "wallet.ios",
+                "ios_environment": "production"
+            },
+            "device_proof": {
+                "platform": "ios",
+                "attestation_key_id": "att-key",
+                "challenge_hash_hex": "deadbeef",
+                "assertion_base64": "assertion",
+                "counter": 7
+            }
+        });
+
+        let mode = extract_offline_cash_mode(&request).expect("ios offline cash mode");
+        match mode {
+            crate::offline_reserve::OfflineCashAttestationMode::AppleAttest { binding, proof } => {
+                assert_eq!(binding.platform, "ios");
+                assert_eq!(binding.device_id, "device-1");
+                assert_eq!(proof.platform, "ios");
+                assert_eq!(proof.counter, Some(7));
+            }
+            other => panic!("unexpected offline cash mode: {other:?}"),
+        }
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn translate_cash_request_to_reserve_json_injects_canonical_attestation_fields() {
+        let mut request = json!({
+            "account_id": "alice@users",
+            "lineage_id": "lineage-1",
+            "amount": "25",
+            "device_binding": {
+                "platform": "ios",
+                "attestation_key_id": "att-key",
+                "device_id": "device-1",
+                "offline_public_key": "offline-pub",
+                "attestation_report_base64": "report",
+                "ios_team_id": "TEAM123",
+                "ios_bundle_id": "wallet.ios",
+                "ios_environment": "production"
+            },
+            "device_proof": {
+                "platform": "ios",
+                "attestation_key_id": "att-key",
+                "challenge_hash_hex": "deadbeef",
+                "assertion_base64": "assertion",
+                "counter": 7
+            }
+        });
+
+        translate_cash_request_to_reserve_json(&mut request, true)
+            .expect("translate offline cash request");
+
+        assert_eq!(
+            request.get("reserve_id").and_then(Value::as_str),
+            Some("lineage-1")
+        );
+        assert_eq!(request.get("lineage_id"), None);
+        assert_eq!(
+            request.get("device_id").and_then(Value::as_str),
+            Some("device-1")
+        );
+        assert_eq!(
+            request.get("offline_public_key").and_then(Value::as_str),
+            Some("offline-pub")
+        );
+        assert_eq!(
+            request.get("app_attest_key_id").and_then(Value::as_str),
+            Some("att-key")
+        );
+        let attestation = request
+            .get("attestation")
+            .and_then(Value::as_object)
+            .expect("translated attestation");
+        assert_eq!(
+            attestation.get("key_id").and_then(Value::as_str),
+            Some("att-key")
+        );
+        assert_eq!(
+            attestation
+                .get("attestation_report_base64")
+                .and_then(Value::as_str),
+            Some("report")
+        );
     }
 
     #[cfg(feature = "zk-stark")]
@@ -27673,10 +28765,14 @@ mod tests {
         tx.apply();
         block.commit().expect("commit block");
 
-        let response = handler_ram_lfe_program_policies(State(app), HeaderMap::new())
-            .await
-            .expect("handler should succeed")
-            .into_response();
+        let response = handler_ram_lfe_program_policies(
+            State(app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+        )
+        .await
+        .expect("handler should succeed")
+        .into_response();
 
         assert_eq!(response.status(), StatusCode::OK);
         let body = http_body_util::BodyExt::collect(response.into_body())
@@ -27729,6 +28825,7 @@ mod tests {
         let response = handler_ram_lfe_execute(
             State(app),
             HeaderMap::new(),
+            crate::loopback_connect_info(),
             AxPath(program_policy.program_id.to_string()),
             NoritoJson(routing::RamLfeExecuteRequestDto {
                 input_hex: Some(hex::encode("identifier-input")),
@@ -27797,6 +28894,7 @@ mod tests {
         let response = handler_ram_lfe_receipt_verify(
             State(app),
             HeaderMap::new(),
+            crate::loopback_connect_info(),
             NoritoJson(routing::RamLfeReceiptVerifyRequestDto {
                 receipt,
                 output_hex: Some(hex::encode(&draft.output)),
@@ -27861,10 +28959,14 @@ mod tests {
         tx.apply();
         block.commit().expect("commit block");
 
-        let response = handler_identifier_policies(State(app), HeaderMap::new())
-            .await
-            .expect("handler should succeed")
-            .into_response();
+        let response = handler_identifier_policies(
+            State(app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+        )
+        .await
+        .expect("handler should succeed")
+        .into_response();
 
         assert_eq!(response.status(), StatusCode::OK);
         let body = http_body_util::BodyExt::collect(response.into_body())
@@ -27930,10 +29032,14 @@ mod tests {
         tx.apply();
         block.commit().expect("commit block");
 
-        let response = handler_identifier_policies(State(app), HeaderMap::new())
-            .await
-            .expect("handler should succeed")
-            .into_response();
+        let response = handler_identifier_policies(
+            State(app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+        )
+        .await
+        .expect("handler should succeed")
+        .into_response();
 
         assert_eq!(response.status(), StatusCode::OK);
         let body = http_body_util::BodyExt::collect(response.into_body())
@@ -27970,7 +29076,12 @@ mod tests {
             state.api_tokens_set = Arc::new(tokens);
         }
 
-        let missing = handler_identifier_policies(State(app.clone()), HeaderMap::new()).await;
+        let missing = handler_identifier_policies(
+            State(app.clone()),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+        )
+        .await;
         assert!(matches!(
             missing,
             Err(Error::Query(ValidationFail::NotPermitted(_)))
@@ -27978,10 +29089,11 @@ mod tests {
 
         let mut headers = HeaderMap::new();
         headers.insert("x-api-token", HeaderValue::from_static("token-identifier"));
-        let response = handler_identifier_policies(State(app), headers)
-            .await
-            .expect("token accepted")
-            .into_response();
+        let response =
+            handler_identifier_policies(State(app), headers, crate::loopback_connect_info())
+                .await
+                .expect("token accepted")
+                .into_response();
         assert_eq!(response.status(), StatusCode::OK);
     }
 
@@ -28049,6 +29161,7 @@ mod tests {
         let response = handler_identifier_resolve(
             State(app),
             HeaderMap::new(),
+            crate::loopback_connect_info(),
             NoritoJson(routing::IdentifierResolveRequestDto {
                 policy_id: policy_id.to_string(),
                 input: Some(" +1 (555) 123-4567 ".to_string()),
@@ -28154,6 +29267,7 @@ mod tests {
         let response = handler_identifier_resolve(
             State(app),
             HeaderMap::new(),
+            crate::loopback_connect_info(),
             NoritoJson(routing::IdentifierResolveRequestDto {
                 policy_id: policy_id.to_string(),
                 input: Some(" +1 (555) 123-4567 ".to_string()),
@@ -28259,6 +29373,7 @@ mod tests {
         let response = handler_identifier_resolve(
             State(app),
             HeaderMap::new(),
+            crate::loopback_connect_info(),
             NoritoJson(routing::IdentifierResolveRequestDto {
                 policy_id: policy_id.to_string(),
                 input: None,
@@ -28303,6 +29418,7 @@ mod tests {
         let missing = handler_identifier_resolve(
             State(app),
             HeaderMap::new(),
+            crate::loopback_connect_info(),
             NoritoJson(routing::IdentifierResolveRequestDto {
                 policy_id: "phone#retail".to_owned(),
                 input: Some("+15551234567".to_owned()),
@@ -28359,6 +29475,7 @@ mod tests {
         let response = handler_identifier_claim_receipt(
             State(app.clone()),
             HeaderMap::new(),
+            crate::loopback_connect_info(),
             AxPath(authority.to_string()),
             NoritoJson(routing::IdentifierResolveRequestDto {
                 policy_id: policy_id.to_string(),
@@ -28447,11 +29564,15 @@ mod tests {
         tx.apply();
         block.commit().expect("commit block");
 
-        let response =
-            handler_identifier_receipt_lookup(State(app), HeaderMap::new(), AxPath(receipt_hash))
-                .await
-                .expect("handler should succeed")
-                .into_response();
+        let response = handler_identifier_receipt_lookup(
+            State(app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            AxPath(receipt_hash),
+        )
+        .await
+        .expect("handler should succeed")
+        .into_response();
 
         assert_eq!(response.status(), StatusCode::OK);
         let body = http_body_util::BodyExt::collect(response.into_body())
@@ -28482,6 +29603,7 @@ mod tests {
         let missing = handler_identifier_claim_receipt(
             State(app),
             HeaderMap::new(),
+            crate::loopback_connect_info(),
             AxPath("ed0120deadbeef".to_owned()),
             NoritoJson(routing::IdentifierResolveRequestDto {
                 policy_id: "phone#retail".to_owned(),
@@ -28626,6 +29748,7 @@ mod tests {
         let response = handler_asset_definition_get(
             State(app),
             HeaderMap::new(),
+            crate::loopback_connect_info(),
             AxPath(definition_id.to_string()),
         )
         .await
@@ -28752,6 +29875,7 @@ mod tests {
         let response = handler_asset_definition_get(
             State(app),
             HeaderMap::new(),
+            crate::loopback_connect_info(),
             AxPath(definition_id.to_string()),
         )
         .await
@@ -28938,6 +30062,7 @@ mod tests {
             State(app.clone()),
             negotiated(&app),
             HeaderMap::new(),
+            crate::loopback_connect_info(),
             axum::extract::Path(id.clone()),
         )
         .await
@@ -28970,6 +30095,7 @@ mod tests {
             State(app.clone()),
             negotiated(&app),
             conditional_headers,
+            crate::loopback_connect_info(),
             axum::extract::Path(id),
         )
         .await
@@ -29053,6 +30179,7 @@ mod tests {
             State(app.clone()),
             negotiated(&app),
             HeaderMap::new(),
+            crate::loopback_connect_info(),
             None,
         )
         .await
@@ -29223,6 +30350,7 @@ mod tests {
             State(app.clone()),
             negotiated(&app),
             HeaderMap::new(),
+            crate::loopback_connect_info(),
             axum::extract::Path(("debug-proof".to_string(), hex::encode([0xBB; 32]))),
         )
         .await
@@ -29248,6 +30376,7 @@ mod tests {
             State(app.clone()),
             negotiated(&app),
             HeaderMap::new(),
+            crate::loopback_connect_info(),
             axum::body::Bytes::from_static(&[0x11; 16]),
         )
         .await
@@ -29348,6 +30477,7 @@ mod tests {
             State(app.clone()),
             negotiated(&app),
             HeaderMap::new(),
+            crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
         )
         .await
@@ -29368,6 +30498,7 @@ mod tests {
                 State(app.clone()),
                 negotiated(&app),
                 HeaderMap::new(),
+                crate::loopback_connect_info(),
                 axum::extract::Path(job_id.clone()),
             )
             .await
@@ -29404,6 +30535,7 @@ mod tests {
             State(app.clone()),
             negotiated(&app),
             HeaderMap::new(),
+            crate::loopback_connect_info(),
             axum::extract::Path(job_id.clone()),
         )
         .await
@@ -29486,6 +30618,7 @@ mod tests {
             State(app.clone()),
             negotiated(&app),
             HeaderMap::new(),
+            crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
         )
         .await
@@ -29506,6 +30639,7 @@ mod tests {
                 State(app.clone()),
                 negotiated(&app),
                 HeaderMap::new(),
+                crate::loopback_connect_info(),
                 axum::extract::Path(job_id.clone()),
             )
             .await
@@ -29626,6 +30760,7 @@ mod tests {
             State(app.clone()),
             negotiated(&app),
             HeaderMap::new(),
+            crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
         )
         .await
@@ -29646,6 +30781,7 @@ mod tests {
                 State(app.clone()),
                 negotiated(&app),
                 HeaderMap::new(),
+                crate::loopback_connect_info(),
                 axum::extract::Path(job_id.clone()),
             )
             .await
@@ -29767,6 +30903,7 @@ mod tests {
             State(app.clone()),
             negotiated(&app),
             HeaderMap::new(),
+            crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
         )
         .await
@@ -29787,6 +30924,7 @@ mod tests {
                 State(app.clone()),
                 negotiated(&app),
                 HeaderMap::new(),
+                crate::loopback_connect_info(),
                 axum::extract::Path(job_id.clone()),
             )
             .await
@@ -29895,6 +31033,7 @@ mod tests {
             State(app.clone()),
             negotiated(&app),
             HeaderMap::new(),
+            crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
         )
         .await
@@ -30030,6 +31169,7 @@ mod tests {
             State(app.clone()),
             negotiated(&app),
             HeaderMap::new(),
+            crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
         )
         .await
@@ -30130,6 +31270,7 @@ mod tests {
             State(app.clone()),
             negotiated(&app),
             HeaderMap::new(),
+            crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
         )
         .await
@@ -30223,6 +31364,7 @@ mod tests {
             State(app.clone()),
             negotiated(&app),
             HeaderMap::new(),
+            crate::loopback_connect_info(),
             axum::body::Bytes::from(req_body.clone()),
         )
         .await
@@ -30241,6 +31383,7 @@ mod tests {
             State(app.clone()),
             negotiated(&app),
             HeaderMap::new(),
+            crate::loopback_connect_info(),
             axum::body::Bytes::from(req_body.clone()),
         )
         .await
@@ -30256,6 +31399,7 @@ mod tests {
             State(app.clone()),
             negotiated(&app),
             HeaderMap::new(),
+            crate::loopback_connect_info(),
             axum::extract::Path(job_id),
         )
         .await
@@ -30366,6 +31510,7 @@ mod tests {
             axum::http::Method::POST,
             "/v1/multisig/spec".parse().expect("uri"),
             HeaderMap::new(),
+            crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
         )
         .await
@@ -30390,6 +31535,7 @@ mod tests {
             axum::http::Method::POST,
             "/v1/multisig/proposals/list".parse().expect("uri"),
             HeaderMap::new(),
+            crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
         )
         .await
@@ -30415,6 +31561,7 @@ mod tests {
             axum::http::Method::POST,
             "/v1/multisig/proposals/get".parse().expect("uri"),
             HeaderMap::new(),
+            crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
         )
         .await

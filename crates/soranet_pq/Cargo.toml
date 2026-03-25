@@ -17,8 +17,8 @@ workspace = true
 [dependencies]
 blake3 = { workspace = true }
 hkdf = { version = "0.12.4", default-features = false, features = ["std"] }
-pqcrypto-dilithium = { version = "0.5" }
-pqcrypto-kyber = { version = "0.8.1" }
+pqcrypto-mldsa = { version = "0.1.2" }
+pqcrypto-mlkem = { version = "0.1.1" }
 pqcrypto-traits = { version = "0.3.5" }
 rand = { workspace = true, default-features = false, features = ["std_rng", "std"] }
 rand_chacha = { version = "0.9.0", default-features = false, features = ["std"] }

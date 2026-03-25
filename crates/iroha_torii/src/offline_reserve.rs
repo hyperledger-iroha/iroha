@@ -4,7 +4,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     str::FromStr,
     sync::LazyLock,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
@@ -21,6 +21,10 @@ use iroha_crypto::{Hash, PrivateKey, Signature};
 use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
+    events::{
+        EventBox,
+        pipeline::{PipelineEventBox, TransactionStatus},
+    },
     isi::offline::{
         CommitOfflineReserveOperation, RefundOfflineEscrowBalance, RegisterOfflineReserve,
         RegisterOfflineVerdictRevocation, ReserveOfflineEscrowBalance,
@@ -60,6 +64,7 @@ static GOOGLE_ATTESTATION_ROOT_ECDSA: &[u8] = include_bytes!(concat!(
 ));
 static ANDROID_ROOT_ANCHORS: LazyLock<Box<[&'static [u8]]>> =
     LazyLock::new(|| Box::new([GOOGLE_ATTESTATION_ROOT_RSA, GOOGLE_ATTESTATION_ROOT_ECDSA]));
+const OFFLINE_CASH_TX_COMMIT_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize)]
 struct StoredReserve {
@@ -110,15 +115,19 @@ pub struct OfflineDeviceAttestation {
     pub challenge_hash_hex: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub attestation_report_base64: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub ios_team_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub ios_bundle_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub ios_environment: Option<String>,
 }
 
@@ -371,6 +380,12 @@ pub struct OfflineCashAndroidDeviceBinding {
     pub device_id: String,
     pub offline_public_key: String,
     pub attestation_report_base64: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ios_team_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ios_bundle_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ios_environment: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, crate::json_macros::JsonDeserialize)]
@@ -385,11 +400,67 @@ pub struct OfflineCashAndroidDeviceProof {
 
 #[derive(Debug, Clone)]
 pub enum OfflineCashAttestationMode {
-    AppleAttest,
+    AppleAttest {
+        binding: OfflineCashAndroidDeviceBinding,
+        proof: OfflineCashAndroidDeviceProof,
+    },
     Android {
         binding: OfflineCashAndroidDeviceBinding,
         proof: OfflineCashAndroidDeviceProof,
     },
+}
+
+pub(crate) fn offline_cash_device_attestation(
+    binding: &OfflineCashAndroidDeviceBinding,
+    proof: &OfflineCashAndroidDeviceProof,
+) -> Result<OfflineDeviceAttestation, Error> {
+    ensure_non_empty(&binding.platform, "device_binding.platform")?;
+    ensure_non_empty(
+        &binding.attestation_key_id,
+        "device_binding.attestation_key_id",
+    )?;
+    ensure_non_empty(&binding.device_id, "device_binding.device_id")?;
+    ensure_non_empty(
+        &binding.offline_public_key,
+        "device_binding.offline_public_key",
+    )?;
+    ensure_non_empty(&proof.platform, "device_proof.platform")?;
+    ensure_non_empty(&proof.attestation_key_id, "device_proof.attestation_key_id")?;
+    ensure_non_empty(&proof.challenge_hash_hex, "device_proof.challenge_hash_hex")?;
+    ensure_non_empty(&proof.assertion_base64, "device_proof.assertion_base64")?;
+    if binding.attestation_key_id != proof.attestation_key_id {
+        return Err(conversion_error(
+            "device_proof does not match device_binding".to_owned(),
+        ));
+    }
+    Ok(OfflineDeviceAttestation {
+        key_id: proof.attestation_key_id.clone(),
+        counter: proof.counter.unwrap_or(0),
+        assertion_base64: proof.assertion_base64.clone(),
+        challenge_hash_hex: proof.challenge_hash_hex.clone(),
+        attestation_report_base64: match binding.attestation_report_base64.trim() {
+            "" => None,
+            value => Some(value.to_owned()),
+        },
+        ios_team_id: binding
+            .ios_team_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
+        ios_bundle_id: binding
+            .ios_bundle_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
+        ios_environment: binding
+            .ios_environment
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
+    })
 }
 
 #[derive(
@@ -515,6 +586,52 @@ struct TransferReceiptUnsignedPayload {
     created_at_ms: u64,
 }
 
+#[derive(Clone, crate::json_macros::JsonSerialize)]
+struct CashTransferReceiptAuthorizationPayload {
+    authorization_id: String,
+    lineage_id: String,
+    account_id: String,
+    device_id: String,
+    offline_public_key: String,
+    verdict_id: String,
+    max_balance: String,
+    max_tx_value: String,
+    issued_at_ms: u64,
+    refresh_at_ms: u64,
+    expires_at_ms: u64,
+    app_attest_key_id: String,
+    issuer_signature_base64: String,
+}
+
+#[derive(crate::json_macros::JsonSerialize)]
+struct CashTransferReceiptUnsignedPayload {
+    version: i32,
+    transfer_id: String,
+    direction: String,
+    lineage_id: String,
+    account_id: String,
+    device_id: String,
+    offline_public_key: String,
+    pre_balance: String,
+    post_balance: String,
+    pre_locked_balance: String,
+    post_locked_balance: String,
+    pre_state_hash: String,
+    post_state_hash: String,
+    local_revision: u64,
+    counterparty_lineage_id: String,
+    counterparty_account_id: String,
+    counterparty_device_id: String,
+    counterparty_offline_public_key: String,
+    amount: String,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    authorization: Option<CashTransferReceiptAuthorizationPayload>,
+    attestation: OfflineDeviceAttestation,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    source_payload: Option<String>,
+    created_at_ms: u64,
+}
+
 #[derive(crate::json_macros::JsonSerialize)]
 struct LocalStateHashPayload<'a> {
     reserve_id: &'a str,
@@ -529,11 +646,32 @@ struct LocalStateHashPayload<'a> {
 }
 
 #[derive(crate::json_macros::JsonSerialize)]
+struct CashLocalStateHashPayload<'a> {
+    lineage_id: &'a str,
+    previous_state_hash: &'a str,
+    transfer_id: &'a str,
+    direction: &'a str,
+    counterparty_lineage_id: &'a str,
+    amount: &'a str,
+    local_revision: u64,
+    post_balance: &'a str,
+    post_locked_balance: &'a str,
+}
+
+#[derive(crate::json_macros::JsonSerialize)]
 struct AttestationSendPayload<'a> {
     reserve_id: &'a str,
     transfer_id: &'a str,
     amount: &'a str,
     receiver_reserve_id: &'a str,
+}
+
+#[derive(crate::json_macros::JsonSerialize)]
+struct CashAttestationSendPayload<'a> {
+    lineage_id: &'a str,
+    transfer_id: &'a str,
+    amount: &'a str,
+    receiver_lineage_id: &'a str,
 }
 
 #[derive(crate::json_macros::JsonSerialize)]
@@ -545,9 +683,25 @@ struct AttestationReceivePayload<'a> {
 }
 
 #[derive(crate::json_macros::JsonSerialize)]
+struct CashAttestationReceivePayload<'a> {
+    lineage_id: &'a str,
+    transfer_id: &'a str,
+    amount: &'a str,
+    sender_lineage_id: &'a str,
+}
+
+#[derive(crate::json_macros::JsonSerialize)]
 struct AttestationChallengePayload<'a> {
     account_id: &'a str,
     reserve_id: &'a str,
+    operation: &'a str,
+    payload_hash: &'a str,
+}
+
+#[derive(crate::json_macros::JsonSerialize)]
+struct CashAttestationChallengePayload<'a> {
+    account_id: &'a str,
+    lineage_id: &'a str,
     operation: &'a str,
     payload_hash: &'a str,
 }
@@ -747,6 +901,36 @@ fn load_shared_reserve_by_lineage(
     )
 }
 
+fn reserve_has_active_lineage_state(reserve: &StoredReserve) -> bool {
+    !reserve.balance.is_zero()
+        || !reserve.parked_balance.is_zero()
+        || reserve.pending_local_revision != 0
+}
+
+fn ensure_no_conflicting_active_reserve(
+    app: &AppState,
+    account_id: &str,
+    device_id: &str,
+    offline_public_key: &str,
+) -> Result<(), Error> {
+    for (_, shared) in app.state.world_view().offline_reserves().iter() {
+        let reserve = local_record_from_shared(shared)?;
+        if reserve.account_id != account_id {
+            continue;
+        }
+        if reserve.device_id == device_id && reserve.offline_public_key == offline_public_key {
+            continue;
+        }
+        if reserve_has_active_lineage_state(&reserve) {
+            return Err(conversion_error(
+                "lineage_conflict: offline cash lineage is already bound to a different device"
+                    .to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn load_operation_result(
     app: &AppState,
     operation_key: &str,
@@ -788,6 +972,12 @@ pub(crate) async fn setup_reserve(
             validate_setup_attestation(app, &req, &mut counter_book, &existing.app_attest_key_id)?;
         return envelope_from_record(issuer, &existing);
     }
+    ensure_no_conflicting_active_reserve(
+        app,
+        &req.account_id,
+        &req.device_id,
+        &req.offline_public_key,
+    )?;
 
     let mut record = new_local_reserve(
         issuer,
@@ -839,20 +1029,30 @@ pub(crate) async fn top_up_reserve(
         load_shared_reserve(app, reserve_id)?
             .ok_or_else(|| conversion_error("offline cash lineage not found".to_owned()))?
     } else {
-        load_shared_reserve_by_lineage(
+        match load_shared_reserve_by_lineage(
             app,
             &req.account_id,
             &req.device_id,
             &req.offline_public_key,
-        )?
-        .unwrap_or(new_local_reserve(
-            issuer,
-            &req.account_id,
-            &req.device_id,
-            &req.offline_public_key,
-            &req.asset_definition_id,
-            &req.app_attest_key_id,
-        )?)
+        )? {
+            Some(existing) => existing,
+            None => {
+                ensure_no_conflicting_active_reserve(
+                    app,
+                    &req.account_id,
+                    &req.device_id,
+                    &req.offline_public_key,
+                )?;
+                new_local_reserve(
+                    issuer,
+                    &req.account_id,
+                    &req.device_id,
+                    &req.offline_public_key,
+                    &req.asset_definition_id,
+                    &req.app_attest_key_id,
+                )?
+            }
+        }
     };
     validate_reserve_request(
         &reserve,
@@ -863,11 +1063,7 @@ pub(crate) async fn top_up_reserve(
         Some(&req.app_attest_key_id),
     )?;
     let expected_server_revision = reserve.server_revision;
-    let expected_state_hash = if expected_server_revision == 0 {
-        String::new()
-    } else {
-        reserve.server_state_hash.clone()
-    };
+    let expected_state_hash = reserve.server_state_hash.clone();
     validate_reserve_attestation(
         app,
         &req.account_id,
@@ -892,7 +1088,7 @@ pub(crate) async fn top_up_reserve(
         Some(&reserve.authorization),
         now_ms(),
     )?)?;
-    reserve.server_revision = reserve.server_revision.saturating_add(1);
+    reserve.server_revision = committed_server_revision(expected_server_revision);
     reserve.server_state_hash = reserve_anchor_hash(
         &reserve.reserve_id,
         &reserve.account_id,
@@ -993,7 +1189,7 @@ pub(crate) async fn renew_reserve(
         Some(&reserve.authorization),
         now_ms(),
     )?)?;
-    reserve.server_revision = reserve.server_revision.saturating_add(1);
+    reserve.server_revision = committed_server_revision(expected_server_revision);
     reserve.server_state_hash = reserve_anchor_hash(
         &reserve.reserve_id,
         &reserve.account_id,
@@ -1132,7 +1328,7 @@ pub(crate) async fn defund_reserve(
         Some(&reserve.authorization),
         now_ms(),
     )?)?;
-    reserve.server_revision = reserve.server_revision.saturating_add(1);
+    reserve.server_revision = committed_server_revision(expected_server_revision);
     reserve.server_state_hash = reserve_anchor_hash(
         &reserve.reserve_id,
         &reserve.account_id,
@@ -1203,7 +1399,8 @@ pub(crate) async fn setup_cash(
         )?;
         let mut counter_book = existing.counter_book.clone();
         match &mode {
-            OfflineCashAttestationMode::AppleAttest => {
+            OfflineCashAttestationMode::AppleAttest { binding, proof } => {
+                let attestation = offline_cash_device_attestation(binding, proof)?;
                 let _ = validate_cash_attestation(
                     app,
                     &req.account_id,
@@ -1211,7 +1408,7 @@ pub(crate) async fn setup_cash(
                     "setup",
                     setup_challenge_payload(&req)?,
                     &existing.app_attest_key_id,
-                    &req.attestation,
+                    &attestation,
                     &mut counter_book,
                     existing.apple_app_attest_binding.as_ref(),
                 )?;
@@ -1236,6 +1433,12 @@ pub(crate) async fn setup_cash(
         }
         return envelope_from_record(issuer, &existing);
     }
+    ensure_no_conflicting_active_reserve(
+        app,
+        &req.account_id,
+        &req.device_id,
+        &req.offline_public_key,
+    )?;
 
     let mut record = new_local_reserve(
         issuer,
@@ -1246,17 +1449,20 @@ pub(crate) async fn setup_cash(
         &req.app_attest_key_id,
     )?;
     record.apple_app_attest_binding = match &mode {
-        OfflineCashAttestationMode::AppleAttest => validate_cash_attestation(
-            app,
-            &req.account_id,
-            "setup",
-            "setup",
-            setup_challenge_payload(&req)?,
-            &record.app_attest_key_id,
-            &req.attestation,
-            &mut record.counter_book,
-            None,
-        )?,
+        OfflineCashAttestationMode::AppleAttest { binding, proof } => {
+            let attestation = offline_cash_device_attestation(binding, proof)?;
+            validate_cash_attestation(
+                app,
+                &req.account_id,
+                "setup",
+                "setup",
+                setup_challenge_payload(&req)?,
+                &record.app_attest_key_id,
+                &attestation,
+                &mut record.counter_book,
+                None,
+            )?
+        }
         OfflineCashAttestationMode::Android { binding, proof } => {
             validate_android_cash_device_binding(
                 app,
@@ -1313,20 +1519,30 @@ pub(crate) async fn load_cash(
         load_shared_reserve(app, reserve_id)?
             .ok_or_else(|| conversion_error("offline cash lineage not found".to_owned()))?
     } else {
-        load_shared_reserve_by_lineage(
+        match load_shared_reserve_by_lineage(
             app,
             &req.account_id,
             &req.device_id,
             &req.offline_public_key,
-        )?
-        .unwrap_or(new_local_reserve(
-            issuer,
-            &req.account_id,
-            &req.device_id,
-            &req.offline_public_key,
-            &req.asset_definition_id,
-            &req.app_attest_key_id,
-        )?)
+        )? {
+            Some(existing) => existing,
+            None => {
+                ensure_no_conflicting_active_reserve(
+                    app,
+                    &req.account_id,
+                    &req.device_id,
+                    &req.offline_public_key,
+                )?;
+                new_local_reserve(
+                    issuer,
+                    &req.account_id,
+                    &req.device_id,
+                    &req.offline_public_key,
+                    &req.asset_definition_id,
+                    &req.app_attest_key_id,
+                )?
+            }
+        }
     };
     validate_reserve_request(
         &reserve,
@@ -1337,11 +1553,7 @@ pub(crate) async fn load_cash(
         Some(&req.app_attest_key_id),
     )?;
     let expected_server_revision = reserve.server_revision;
-    let expected_state_hash = if expected_server_revision == 0 {
-        String::new()
-    } else {
-        reserve.server_state_hash.clone()
-    };
+    let expected_state_hash = reserve.server_state_hash.clone();
     let lineage_id = req
         .reserve_id
         .as_deref()
@@ -1352,7 +1564,8 @@ pub(crate) async fn load_cash(
         amount: &amount_string,
     })?;
     match &mode {
-        OfflineCashAttestationMode::AppleAttest => {
+        OfflineCashAttestationMode::AppleAttest { binding, proof } => {
+            let attestation = offline_cash_device_attestation(binding, proof)?;
             validate_cash_attestation(
                 app,
                 &req.account_id,
@@ -1360,7 +1573,7 @@ pub(crate) async fn load_cash(
                 "load",
                 payload,
                 &req.app_attest_key_id,
-                &req.attestation,
+                &attestation,
                 &mut reserve.counter_book,
                 reserve.apple_app_attest_binding.as_ref(),
             )?;
@@ -1393,7 +1606,7 @@ pub(crate) async fn load_cash(
         Some(&reserve.authorization),
         now_ms(),
     )?)?;
-    reserve.server_revision = reserve.server_revision.saturating_add(1);
+    reserve.server_revision = committed_server_revision(expected_server_revision);
     reserve.server_state_hash = reserve_anchor_hash(
         &reserve.reserve_id,
         &reserve.account_id,
@@ -1469,7 +1682,8 @@ pub(crate) async fn refresh_cash(
         lineage_id: &req.reserve_id,
     })?;
     match &mode {
-        OfflineCashAttestationMode::AppleAttest => {
+        OfflineCashAttestationMode::AppleAttest { binding, proof } => {
+            let attestation = offline_cash_device_attestation(binding, proof)?;
             validate_cash_attestation(
                 app,
                 &req.account_id,
@@ -1477,7 +1691,7 @@ pub(crate) async fn refresh_cash(
                 "refresh",
                 payload,
                 &req.app_attest_key_id,
-                &req.attestation,
+                &attestation,
                 &mut reserve.counter_book,
                 reserve.apple_app_attest_binding.as_ref(),
             )?;
@@ -1517,7 +1731,7 @@ pub(crate) async fn refresh_cash(
         Some(&reserve.authorization),
         now_ms(),
     )?)?;
-    reserve.server_revision = reserve.server_revision.saturating_add(1);
+    reserve.server_revision = committed_server_revision(expected_server_revision);
     reserve.server_state_hash = reserve_anchor_hash(
         &reserve.reserve_id,
         &reserve.account_id,
@@ -1557,29 +1771,54 @@ pub(crate) async fn refresh_cash(
 pub(crate) async fn sync_cash(
     app: &AppState,
     req: OfflineReserveSyncRequest,
-    mode: Option<(
-        OfflineCashAndroidDeviceBinding,
-        OfflineCashAndroidDeviceProof,
-    )>,
+    mode: OfflineCashAttestationMode,
 ) -> Result<OfflineReserveEnvelope, Error> {
-    if let Some((binding, proof)) = mode.as_ref() {
-        validate_android_cash_device_binding(
-            app,
-            &req.account_id,
-            binding,
-            &req.device_id,
-            &req.offline_public_key,
-        )?;
-        validate_android_cash_operation_proof(
-            &req.account_id,
-            &req.reserve_id,
-            "sync",
-            canonical_json_bytes(&CashLineagePayload {
-                lineage_id: &req.reserve_id,
-            })?,
-            binding,
-            proof,
-        )?;
+    match &mode {
+        OfflineCashAttestationMode::AppleAttest { binding, proof } => {
+            let mut reserve = load_shared_reserve(app, &req.reserve_id)?
+                .ok_or_else(|| conversion_error("offline cash lineage not found".to_owned()))?;
+            validate_reserve_request(
+                &reserve,
+                &req.account_id,
+                &req.device_id,
+                &req.offline_public_key,
+                None,
+                Some(&binding.attestation_key_id),
+            )?;
+            let attestation = offline_cash_device_attestation(binding, proof)?;
+            validate_cash_attestation(
+                app,
+                &req.account_id,
+                &req.reserve_id,
+                "sync",
+                canonical_json_bytes(&CashLineagePayload {
+                    lineage_id: &req.reserve_id,
+                })?,
+                &reserve.app_attest_key_id,
+                &attestation,
+                &mut reserve.counter_book,
+                reserve.apple_app_attest_binding.as_ref(),
+            )?;
+        }
+        OfflineCashAttestationMode::Android { binding, proof } => {
+            validate_android_cash_device_binding(
+                app,
+                &req.account_id,
+                binding,
+                &req.device_id,
+                &req.offline_public_key,
+            )?;
+            validate_android_cash_operation_proof(
+                &req.account_id,
+                &req.reserve_id,
+                "sync",
+                canonical_json_bytes(&CashLineagePayload {
+                    lineage_id: &req.reserve_id,
+                })?,
+                binding,
+                proof,
+            )?;
+        }
     }
     sync_reserve(app, req).await
 }
@@ -1587,30 +1826,56 @@ pub(crate) async fn sync_cash(
 pub(crate) async fn redeem_cash(
     app: &AppState,
     req: OfflineReserveDefundRequest,
-    mode: Option<(
-        OfflineCashAndroidDeviceBinding,
-        OfflineCashAndroidDeviceProof,
-    )>,
+    mode: OfflineCashAttestationMode,
 ) -> Result<OfflineReserveEnvelope, Error> {
-    if let Some((binding, proof)) = mode.as_ref() {
-        validate_android_cash_device_binding(
-            app,
-            &req.account_id,
-            binding,
-            &req.device_id,
-            &req.offline_public_key,
-        )?;
-        validate_android_cash_operation_proof(
-            &req.account_id,
-            &req.reserve_id,
-            "redeem",
-            canonical_json_bytes(&CashLineageAmountPayload {
-                lineage_id: &req.reserve_id,
-                amount: &req.amount,
-            })?,
-            binding,
-            proof,
-        )?;
+    match &mode {
+        OfflineCashAttestationMode::AppleAttest { binding, proof } => {
+            let mut reserve = load_shared_reserve(app, &req.reserve_id)?
+                .ok_or_else(|| conversion_error("offline cash lineage not found".to_owned()))?;
+            validate_reserve_request(
+                &reserve,
+                &req.account_id,
+                &req.device_id,
+                &req.offline_public_key,
+                None,
+                Some(&binding.attestation_key_id),
+            )?;
+            let attestation = offline_cash_device_attestation(binding, proof)?;
+            validate_cash_attestation(
+                app,
+                &req.account_id,
+                &req.reserve_id,
+                "redeem",
+                canonical_json_bytes(&CashLineageAmountPayload {
+                    lineage_id: &req.reserve_id,
+                    amount: &req.amount,
+                })?,
+                &reserve.app_attest_key_id,
+                &attestation,
+                &mut reserve.counter_book,
+                reserve.apple_app_attest_binding.as_ref(),
+            )?;
+        }
+        OfflineCashAttestationMode::Android { binding, proof } => {
+            validate_android_cash_device_binding(
+                app,
+                &req.account_id,
+                binding,
+                &req.device_id,
+                &req.offline_public_key,
+            )?;
+            validate_android_cash_operation_proof(
+                &req.account_id,
+                &req.reserve_id,
+                "redeem",
+                canonical_json_bytes(&CashLineageAmountPayload {
+                    lineage_id: &req.reserve_id,
+                    amount: &req.amount,
+                })?,
+                binding,
+                proof,
+            )?;
+        }
     }
     defund_reserve(app, req).await
 }
@@ -1745,7 +2010,7 @@ fn validate_reserve_request(
         || reserve.offline_public_key != offline_public_key
     {
         return Err(conversion_error(
-            "offline cash lineage does not match the request".to_owned(),
+            "lineage_conflict: offline cash lineage does not match the request".to_owned(),
         ));
     }
     if let Some(definition_id) = asset_definition_id {
@@ -1758,7 +2023,8 @@ fn validate_reserve_request(
     if let Some(key_id) = app_attest_key_id {
         if reserve.app_attest_key_id != key_id {
             return Err(conversion_error(
-                "app_attest_key_id does not match the offline cash lineage".to_owned(),
+                "lineage_conflict: app_attest_key_id does not match the offline cash lineage"
+                    .to_owned(),
             ));
         }
     }
@@ -1827,7 +2093,7 @@ fn apply_receipts(
     }
 
     if applied_any {
-        reserve.balance = parse_amount(&current_balance)?;
+        reserve.balance = parse_numeric(&current_balance)?;
         reserve.parked_balance = parse_numeric(&current_parked)?;
         reserve.pending_local_revision = current_revision;
         reserve.server_revision = reserve.server_revision.saturating_add(1);
@@ -1914,8 +2180,20 @@ fn validate_local_continuity(
         &expected_post_balance,
         &receipt.post_parked_balance,
     )?;
+    let expected_cash_post_hash = cash_next_local_state_hash(
+        &receipt.reserve_id,
+        current_hash,
+        &receipt.transfer_id,
+        &receipt.direction,
+        &receipt.counterparty_reserve_id,
+        &receipt.amount,
+        receipt.local_revision,
+        &expected_post_balance,
+        &receipt.post_parked_balance,
+    )?;
     if receipt.post_balance != expected_post_balance
-        || receipt.post_state_hash != expected_post_hash
+        || (receipt.post_state_hash != expected_post_hash
+            && receipt.post_state_hash != expected_cash_post_hash)
     {
         return Err(conversion_error(
             "offline cash continuity proof is invalid".to_owned(),
@@ -2032,7 +2310,7 @@ fn validate_attestation_hash(receipt: &OfflineTransferReceipt) -> Result<(), Err
             ));
         }
     };
-    let transfer_payload = if receipt.direction == "incoming" {
+    let reserve_transfer_payload = if receipt.direction == "incoming" {
         canonical_json_bytes(&AttestationReceivePayload {
             reserve_id: &receipt.reserve_id,
             transfer_id: &receipt.transfer_id,
@@ -2047,15 +2325,38 @@ fn validate_attestation_hash(receipt: &OfflineTransferReceipt) -> Result<(), Err
             receiver_reserve_id: &receipt.counterparty_reserve_id,
         })?
     };
-    let payload_hash = sha256_hex(&transfer_payload);
-    let challenge_seed = canonical_json_bytes(&AttestationChallengePayload {
+    let reserve_expected = sha256_hex(&canonical_json_bytes(&AttestationChallengePayload {
         account_id: &receipt.account_id,
         reserve_id: &receipt.reserve_id,
         operation,
-        payload_hash: &payload_hash,
-    })?;
-    let expected = sha256_hex(&challenge_seed);
-    if receipt.attestation.challenge_hash_hex != expected {
+        payload_hash: &sha256_hex(&reserve_transfer_payload),
+    })?);
+
+    let cash_transfer_payload = if receipt.direction == "incoming" {
+        canonical_json_bytes(&CashAttestationReceivePayload {
+            lineage_id: &receipt.reserve_id,
+            transfer_id: &receipt.transfer_id,
+            amount: &receipt.amount,
+            sender_lineage_id: &receipt.counterparty_reserve_id,
+        })?
+    } else {
+        canonical_json_bytes(&CashAttestationSendPayload {
+            lineage_id: &receipt.reserve_id,
+            transfer_id: &receipt.transfer_id,
+            amount: &receipt.amount,
+            receiver_lineage_id: &receipt.counterparty_reserve_id,
+        })?
+    };
+    let cash_expected = sha256_hex(&canonical_json_bytes(&CashAttestationChallengePayload {
+        account_id: &receipt.account_id,
+        lineage_id: &receipt.reserve_id,
+        operation,
+        payload_hash: &sha256_hex(&cash_transfer_payload),
+    })?);
+
+    if receipt.attestation.challenge_hash_hex != reserve_expected
+        && receipt.attestation.challenge_hash_hex != cash_expected
+    {
         return Err(conversion_error(
             "offline transfer attestation challenge hash is invalid".to_owned(),
         ));
@@ -2078,15 +2379,38 @@ fn validate_counter(
 }
 
 fn validate_receipt_signature(receipt: &OfflineTransferReceipt) -> Result<(), Error> {
-    let payload = transfer_receipt_unsigned_payload(receipt)?;
-    validate_signature(
-        &payload,
+    let reserve_payload = transfer_receipt_unsigned_payload(receipt)?;
+    if validate_signature(
+        "offline receipt sender signature",
+        &reserve_payload,
         &receipt.sender_signature_base64,
         &receipt.offline_public_key,
     )
+    .is_ok()
+    {
+        return Ok(());
+    }
+    let cash_payload = cash_transfer_receipt_unsigned_payload(receipt)?;
+    match validate_signature(
+        "offline receipt sender signature",
+        &cash_payload,
+        &receipt.sender_signature_base64,
+        &receipt.offline_public_key,
+    ) {
+        Ok(()) => Ok(()),
+        Err(err) => Err(conversion_error(format!(
+            "invalid offline receipt sender signature: transfer_id={} direction={} local_revision={} reserve_payload_hash={} cash_payload_hash={} reason={err}",
+            receipt.transfer_id,
+            receipt.direction,
+            receipt.local_revision,
+            sha256_hex(&reserve_payload),
+            sha256_hex(&cash_payload),
+        ))),
+    }
 }
 
 fn validate_signature(
+    label: &str,
     payload: &[u8],
     signature_base64: &str,
     public_key_base64: &str,
@@ -2108,7 +2432,7 @@ fn validate_signature(
         .map_err(|err| conversion_error(format!("invalid ed25519 signature: {err}")))?;
     verifying_key
         .verify(payload, &signature)
-        .map_err(|err| conversion_error(format!("invalid offline transfer signature: {err}")))?;
+        .map_err(|err| conversion_error(format!("invalid {label}: {err}")))?;
     Ok(())
 }
 
@@ -2117,7 +2441,12 @@ fn validate_issuer_signature(
     signature_base64: &str,
     public_key_base64: &str,
 ) -> Result<(), Error> {
-    validate_signature(&payload, signature_base64, public_key_base64)
+    validate_signature(
+        "offline issuer signature",
+        &payload,
+        signature_base64,
+        public_key_base64,
+    )
 }
 
 fn transfer_receipt_unsigned_payload(receipt: &OfflineTransferReceipt) -> Result<Vec<u8>, Error> {
@@ -2142,6 +2471,63 @@ fn transfer_receipt_unsigned_payload(receipt: &OfflineTransferReceipt) -> Result
         counterparty_offline_public_key: receipt.counterparty_offline_public_key.clone(),
         amount: canonical_amount_string(&parse_numeric(&receipt.amount)?),
         authorization: receipt.authorization.clone(),
+        attestation: receipt.attestation.clone(),
+        source_payload: receipt.source_payload.clone(),
+        created_at_ms: receipt.created_at_ms,
+    })
+}
+
+fn cash_transfer_receipt_unsigned_payload(
+    receipt: &OfflineTransferReceipt,
+) -> Result<Vec<u8>, Error> {
+    let authorization = receipt
+        .authorization
+        .as_ref()
+        .map(
+            |authorization| -> Result<CashTransferReceiptAuthorizationPayload, Error> {
+                Ok(CashTransferReceiptAuthorizationPayload {
+                    authorization_id: authorization.authorization_id.clone(),
+                    lineage_id: authorization.reserve_id.clone(),
+                    account_id: authorization.account_id.clone(),
+                    device_id: authorization.device_id.clone(),
+                    offline_public_key: authorization.offline_public_key.clone(),
+                    verdict_id: authorization.verdict_id.clone(),
+                    max_balance: canonical_amount_string(&parse_amount(
+                        &authorization.max_balance,
+                    )?),
+                    max_tx_value: canonical_amount_string(&parse_amount(
+                        &authorization.max_tx_value,
+                    )?),
+                    issued_at_ms: authorization.issued_at_ms,
+                    refresh_at_ms: authorization.refresh_at_ms,
+                    expires_at_ms: authorization.expires_at_ms,
+                    app_attest_key_id: authorization.app_attest_key_id.clone(),
+                    issuer_signature_base64: authorization.issuer_signature_base64.clone(),
+                })
+            },
+        )
+        .transpose()?;
+    canonical_json_bytes(&CashTransferReceiptUnsignedPayload {
+        version: receipt.version,
+        transfer_id: receipt.transfer_id.clone(),
+        direction: receipt.direction.clone(),
+        lineage_id: receipt.reserve_id.clone(),
+        account_id: receipt.account_id.clone(),
+        device_id: receipt.device_id.clone(),
+        offline_public_key: receipt.offline_public_key.clone(),
+        pre_balance: canonical_amount_string(&parse_numeric(&receipt.pre_balance)?),
+        post_balance: canonical_amount_string(&parse_numeric(&receipt.post_balance)?),
+        pre_locked_balance: canonical_amount_string(&parse_numeric(&receipt.pre_parked_balance)?),
+        post_locked_balance: canonical_amount_string(&parse_numeric(&receipt.post_parked_balance)?),
+        pre_state_hash: receipt.pre_state_hash.clone(),
+        post_state_hash: receipt.post_state_hash.clone(),
+        local_revision: receipt.local_revision,
+        counterparty_lineage_id: receipt.counterparty_reserve_id.clone(),
+        counterparty_account_id: receipt.counterparty_account_id.clone(),
+        counterparty_device_id: receipt.counterparty_device_id.clone(),
+        counterparty_offline_public_key: receipt.counterparty_offline_public_key.clone(),
+        amount: canonical_amount_string(&parse_amount(&receipt.amount)?),
+        authorization,
         attestation: receipt.attestation.clone(),
         source_payload: receipt.source_payload.clone(),
         created_at_ms: receipt.created_at_ms,
@@ -2202,9 +2588,35 @@ fn next_local_state_hash(
         counterparty_reserve_id,
         amount: &canonical_amount_string(&parse_amount(amount)?),
         local_revision,
-        post_balance: &canonical_amount_string(&parse_amount(post_balance)?),
+        post_balance: &canonical_amount_string(&parse_numeric(post_balance)?),
         post_parked_balance: &canonical_amount_string(&parse_numeric(post_parked_balance)?),
     })?))
+}
+
+fn cash_next_local_state_hash(
+    lineage_id: &str,
+    previous_state_hash: &str,
+    transfer_id: &str,
+    direction: &str,
+    counterparty_lineage_id: &str,
+    amount: &str,
+    local_revision: u64,
+    post_balance: &str,
+    post_locked_balance: &str,
+) -> Result<String, Error> {
+    Ok(sha256_hex(&canonical_json_bytes(
+        &CashLocalStateHashPayload {
+            lineage_id,
+            previous_state_hash,
+            transfer_id,
+            direction,
+            counterparty_lineage_id,
+            amount: &canonical_amount_string(&parse_amount(amount)?),
+            local_revision,
+            post_balance: &canonical_amount_string(&parse_numeric(post_balance)?),
+            post_locked_balance: &canonical_amount_string(&parse_numeric(post_locked_balance)?),
+        },
+    )?))
 }
 
 fn envelope_from_record(
@@ -2376,7 +2788,9 @@ async fn submit_prebuilt_transaction(
     tx: SignedTransaction,
     endpoint: &'static str,
 ) -> Result<(), Error> {
-    match routing::handle_transaction_with_metrics(
+    let tx_hash = tx.hash();
+    let mut events_rx = app.events.subscribe();
+    let duplicate_submission = match routing::handle_transaction_with_metrics(
         app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
@@ -2386,16 +2800,95 @@ async fn submit_prebuilt_transaction(
     )
     .await
     {
-        Ok(_) => Ok(()),
+        Ok(_) => false,
         Err(Error::PushIntoQueue { source, .. })
             if matches!(
                 *source,
                 queue::Error::InBlockchain | queue::Error::IsInQueue
             ) =>
         {
-            Ok(())
+            // Treat duplicate submissions as success, but still wait until the
+            // transaction emits an authoritative approved/rejected pipeline status
+            // before returning an offline-cash envelope to the client.
+            true
         }
-        Err(err) => Err(err),
+        Err(err) => return Err(err),
+    };
+    wait_for_transaction_approval(app, &mut events_rx, tx_hash, endpoint, duplicate_submission)
+        .await
+}
+
+fn matching_transaction_status<'a>(
+    event_box: &'a EventBox,
+    tx_hash: &iroha_crypto::HashOf<SignedTransaction>,
+) -> Option<&'a TransactionStatus> {
+    match event_box {
+        EventBox::Pipeline(PipelineEventBox::Transaction(event)) if event.hash() == tx_hash => {
+            Some(event.status())
+        }
+        EventBox::PipelineBatch(events) => events.iter().find_map(|event| match event {
+            PipelineEventBox::Transaction(event) if event.hash() == tx_hash => Some(event.status()),
+            _ => None,
+        }),
+        _ => None,
+    }
+}
+
+async fn wait_for_transaction_approval(
+    app: &AppState,
+    events_rx: &mut tokio::sync::broadcast::Receiver<EventBox>,
+    tx_hash: iroha_crypto::HashOf<SignedTransaction>,
+    endpoint: &'static str,
+    duplicate_submission: bool,
+) -> Result<(), Error> {
+    let start = tokio::time::Instant::now();
+    let mut saw_committed = false;
+    loop {
+        if !saw_committed && app.state.has_committed_transaction(tx_hash.clone()) {
+            saw_committed = true;
+        }
+        let remaining = OFFLINE_CASH_TX_COMMIT_TIMEOUT.saturating_sub(start.elapsed());
+        if remaining.is_zero() {
+            let timeout_context = if saw_committed || duplicate_submission {
+                "committed without an approved pipeline event"
+            } else {
+                "did not reach an approved pipeline event"
+            };
+            return Err(conversion_error(format!(
+                "offline cash transaction {timeout_context} within {}ms for {endpoint}: {tx_hash}",
+                OFFLINE_CASH_TX_COMMIT_TIMEOUT.as_millis(),
+            )));
+        }
+        match tokio::time::timeout(remaining, events_rx.recv()).await {
+            Ok(Ok(event_box)) => {
+                let Some(status) = matching_transaction_status(&event_box, &tx_hash) else {
+                    continue;
+                };
+                match status {
+                    TransactionStatus::Approved => return Ok(()),
+                    TransactionStatus::Rejected(reason) => {
+                        return Err(conversion_error(format!(
+                            "offline cash transaction rejected for {endpoint}: hash={tx_hash} display={reason} debug={reason:?}"
+                        )));
+                    }
+                    TransactionStatus::Expired => {
+                        return Err(conversion_error(format!(
+                            "offline cash transaction expired for {endpoint}: {tx_hash}"
+                        )));
+                    }
+                    TransactionStatus::Queued => {}
+                }
+            }
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {
+                continue;
+            }
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+                return Err(conversion_error(format!(
+                    "offline cash transaction event stream closed while waiting for {endpoint}: {tx_hash}"
+                )));
+            }
+            Err(_) => continue,
+        }
     }
 }
 
@@ -2710,14 +3203,6 @@ fn validate_setup_attestation(
 }
 
 #[derive(crate::json_macros::JsonSerialize)]
-struct CashAttestationChallengePayload<'a> {
-    account_id: &'a str,
-    lineage_id: &'a str,
-    operation: &'a str,
-    payload_hash: &'a str,
-}
-
-#[derive(crate::json_macros::JsonSerialize)]
 struct CashLineageAmountPayload<'a> {
     lineage_id: &'a str,
     amount: &'a str,
@@ -2934,6 +3419,7 @@ fn validate_android_cash_operation_proof(
         ));
     }
     validate_signature(
+        "offline cash device proof assertion",
         &decode_challenge_hash_hex(&proof.challenge_hash_hex)?,
         &proof.assertion_base64,
         &binding.offline_public_key,
@@ -3548,6 +4034,110 @@ mod tests {
         let right = sync_request_hash_hex(&rhs).expect("right hash");
         assert_eq!(left, right);
     }
+
+    #[test]
+    fn cash_receipt_payload_omits_empty_attestation_option_fields() {
+        let receipt = OfflineTransferReceipt {
+            version: 1,
+            transfer_id: "transfer-1".to_owned(),
+            direction: "outgoing".to_owned(),
+            reserve_id: "reserve-1".to_owned(),
+            account_id: "alice@users".to_owned(),
+            device_id: "device-1".to_owned(),
+            offline_public_key: BASE64_STANDARD.encode([7u8; 32]),
+            pre_balance: "25".to_owned(),
+            post_balance: "15".to_owned(),
+            pre_parked_balance: "0".to_owned(),
+            post_parked_balance: "0".to_owned(),
+            pre_state_hash: "pre".to_owned(),
+            post_state_hash: "post".to_owned(),
+            local_revision: 1,
+            counterparty_reserve_id: "reserve-2".to_owned(),
+            counterparty_account_id: "bob@users".to_owned(),
+            counterparty_device_id: "device-2".to_owned(),
+            counterparty_offline_public_key: BASE64_STANDARD.encode([8u8; 32]),
+            amount: "10".to_owned(),
+            authorization: None,
+            attestation: OfflineDeviceAttestation {
+                key_id: "key-1".to_owned(),
+                counter: 3,
+                assertion_base64: BASE64_STANDARD.encode(b"assertion"),
+                challenge_hash_hex: "challenge".to_owned(),
+                attestation_report_base64: None,
+                ios_team_id: None,
+                ios_bundle_id: None,
+                ios_environment: None,
+            },
+            source_payload: None,
+            sender_signature_base64: BASE64_STANDARD.encode([9u8; 64]),
+            created_at_ms: 1,
+        };
+
+        let payload = cash_transfer_receipt_unsigned_payload(&receipt).expect("cash payload");
+        let value = json::from_slice::<json::Value>(&payload).expect("json value");
+        let attestation = value
+            .as_object()
+            .and_then(|object| object.get("attestation"))
+            .and_then(json::Value::as_object)
+            .expect("attestation object");
+
+        assert_eq!(attestation.len(), 4);
+        assert!(attestation.get("key_id").is_some());
+        assert!(attestation.get("counter").is_some());
+        assert!(attestation.get("assertion_base64").is_some());
+        assert!(attestation.get("challenge_hash_hex").is_some());
+        assert!(attestation.get("attestation_report_base64").is_none());
+        assert!(attestation.get("ios_team_id").is_none());
+        assert!(attestation.get("ios_bundle_id").is_none());
+        assert!(attestation.get("ios_environment").is_none());
+    }
+
+    #[test]
+    fn cash_local_state_hash_uses_lineage_shape() {
+        let hash = cash_next_local_state_hash(
+            "lineage-1",
+            "previous-hash",
+            "transfer-1",
+            "outgoing",
+            "lineage-2",
+            "10",
+            1,
+            "15",
+            "0",
+        )
+        .expect("cash state hash");
+
+        let expected = sha256_hex(
+            &canonical_json_bytes(&norito::json!({
+                "amount": "10",
+                "counterparty_lineage_id": "lineage-2",
+                "direction": "outgoing",
+                "lineage_id": "lineage-1",
+                "local_revision": 1,
+                "post_balance": "15",
+                "post_locked_balance": "0",
+                "previous_state_hash": "previous-hash",
+                "transfer_id": "transfer-1",
+            }))
+            .expect("expected json"),
+        );
+
+        assert_eq!(hash, expected);
+    }
+
+    #[test]
+    fn defund_with_receipts_still_commits_single_server_revision_advance() {
+        let expected_server_revision = 5u64;
+        let server_revision_after_receipts = 6u64;
+
+        let committed_revision = committed_server_revision(expected_server_revision);
+
+        assert_eq!(
+            committed_revision,
+            expected_server_revision.saturating_add(1)
+        );
+        assert_eq!(committed_revision, server_revision_after_receipts);
+    }
 }
 
 fn now_ms() -> u64 {
@@ -3568,9 +4158,96 @@ fn decode_transfer_payload(raw_payload: &str) -> Result<OfflineOutgoingTransferP
         if let Ok(payload) = json::from_slice::<OfflineOutgoingTransferPayload>(&decoded) {
             return Ok(payload);
         }
+        if let Ok(mut value) = json::from_slice::<json::Value>(&decoded) {
+            translate_cash_outgoing_payload_value_to_reserve(&mut value)?;
+            return json::from_value::<OfflineOutgoingTransferPayload>(value).map_err(|err| {
+                conversion_error(format!(
+                    "invalid offline cash transfer payload after translation: {err}"
+                ))
+            });
+        }
     }
-    json::from_str::<OfflineOutgoingTransferPayload>(encoded)
-        .map_err(|err| conversion_error(format!("invalid offline transfer payload: {err}")))
+    if let Ok(payload) = json::from_str::<OfflineOutgoingTransferPayload>(encoded) {
+        return Ok(payload);
+    }
+    let mut value = json::from_str::<json::Value>(encoded)
+        .map_err(|err| conversion_error(format!("invalid offline transfer payload: {err}")))?;
+    translate_cash_outgoing_payload_value_to_reserve(&mut value)?;
+    json::from_value::<OfflineOutgoingTransferPayload>(value).map_err(|err| {
+        conversion_error(format!(
+            "invalid offline cash transfer payload after translation: {err}"
+        ))
+    })
+}
+
+fn committed_server_revision(expected_server_revision: u64) -> u64 {
+    expected_server_revision.saturating_add(1)
+}
+
+fn rename_transfer_payload_json_key(map: &mut json::Map, from: &str, to: &str) {
+    if let Some(value) = map.remove(from) {
+        map.insert(to.to_owned(), value);
+    }
+}
+
+fn translate_cash_authorization_value_to_reserve(value: &mut json::Value) -> Result<(), Error> {
+    let Some(map) = value.as_object_mut() else {
+        return Err(conversion_error(
+            "offline cash authorization payload must be an object".to_owned(),
+        ));
+    };
+    rename_transfer_payload_json_key(map, "lineage_id", "reserve_id");
+    Ok(())
+}
+
+fn translate_cash_state_value_to_reserve(value: &mut json::Value) -> Result<(), Error> {
+    let Some(map) = value.as_object_mut() else {
+        return Err(conversion_error(
+            "offline cash lineage anchor must be an object".to_owned(),
+        ));
+    };
+    rename_transfer_payload_json_key(map, "lineage_id", "reserve_id");
+    rename_transfer_payload_json_key(map, "locked_balance", "parked_balance");
+    if let Some(authorization) = map.get_mut("authorization") {
+        translate_cash_authorization_value_to_reserve(authorization)?;
+    }
+    Ok(())
+}
+
+fn translate_cash_receipt_value_to_reserve(value: &mut json::Value) -> Result<(), Error> {
+    let Some(map) = value.as_object_mut() else {
+        return Err(conversion_error(
+            "offline cash receipt payload must be an object".to_owned(),
+        ));
+    };
+    rename_transfer_payload_json_key(map, "lineage_id", "reserve_id");
+    rename_transfer_payload_json_key(map, "pre_locked_balance", "pre_parked_balance");
+    rename_transfer_payload_json_key(map, "post_locked_balance", "post_parked_balance");
+    rename_transfer_payload_json_key(map, "counterparty_lineage_id", "counterparty_reserve_id");
+    if let Some(authorization) = map.get_mut("authorization") {
+        translate_cash_authorization_value_to_reserve(authorization)?;
+    }
+    Ok(())
+}
+
+fn translate_cash_outgoing_payload_value_to_reserve(value: &mut json::Value) -> Result<(), Error> {
+    let Some(map) = value.as_object_mut() else {
+        return Err(conversion_error(
+            "offline transfer payload must be an object".to_owned(),
+        ));
+    };
+    if let Some(anchor) = map.get_mut("anchor") {
+        translate_cash_state_value_to_reserve(anchor)?;
+    }
+    if let Some(json::Value::Array(items)) = map.get_mut("ancestry_receipts") {
+        for item in items {
+            translate_cash_receipt_value_to_reserve(item)?;
+        }
+    }
+    if let Some(receipt) = map.get_mut("receipt") {
+        translate_cash_receipt_value_to_reserve(receipt)?;
+    }
+    Ok(())
 }
 
 fn decode_base64url(raw: &str) -> Result<Vec<u8>, Error> {

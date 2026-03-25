@@ -2,7 +2,7 @@
 
 mod mldsa_tests {
     use iroha_crypto::{Algorithm, Error, KeyPair, PrivateKey, PublicKey, Signature};
-    use pqcrypto_dilithium::dilithium3 as dilithium;
+    use pqcrypto_mldsa::mldsa65 as dilithium;
     use pqcrypto_traits::sign::{PublicKey as _, SecretKey as _};
 
     fn seeded_pair(label: &[u8]) -> (dilithium::PublicKey, dilithium::SecretKey) {

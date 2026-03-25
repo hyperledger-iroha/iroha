@@ -12326,6 +12326,7 @@ mod tests {
                 transaction_status_timeout: config::DEFAULT_TRANSACTION_STATUS_TIMEOUT,
                 transaction_add_nonce: config::DEFAULT_TRANSACTION_NONCE,
                 connect_queue_root: config::default_connect_queue_root(),
+                soracloud_http_witness_file: None,
                 sorafs_alias_cache: crate::config_utils::default_alias_cache_policy(),
                 sorafs_anonymity_policy: crate::config_utils::default_anonymity_policy(),
                 sorafs_rollout_phase: crate::config_utils::default_rollout_phase(),

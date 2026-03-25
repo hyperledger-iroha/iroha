@@ -39,13 +39,15 @@ use iroha::{
         prelude::ExposedPrivateKey,
         smart_contract::manifest::ManifestProvenance,
         soracloud::{
-            AgentApartmentManifestV1, SECRET_ENVELOPE_VERSION_V1,
+            AgentApartmentManifestV1, CANONICAL_REQUEST_WITNESS_VERSION_V1,
+            SECRET_ENVELOPE_VERSION_V1,
             SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1,
             SORA_STATE_BINDING_VERSION_V1, SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
             SORA_UPLOADED_MODEL_CHUNK_VERSION_V1, SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1,
-            SecretEnvelopeEncryptionV1, SecretEnvelopeV1, SoraArtifactKindV1, SoraArtifactRefV1,
-            SoraCertifiedResponsePolicyV1, SoraContainerManifestV1, SoraContainerRuntimeV1,
-            SoraDeploymentBundleV1, SoraHfBackendFamilyV1, SoraHfModelFormatV1,
+            CanonicalRequestWitnessV1, SecretEnvelopeEncryptionV1, SecretEnvelopeV1,
+            SoraArtifactKindV1, SoraArtifactRefV1, SoraCertifiedResponsePolicyV1,
+            SoraContainerManifestV1, SoraContainerRuntimeV1, SoraDeploymentBundleV1,
+            SoraHfBackendFamilyV1, SoraHfModelFormatV1,
             SoraMailboxContractV1, SoraModelHostCapabilityRecordV1, SoraModelPrivacyModeV1,
             SoraNetworkPolicyV1, SoraPrivateCompileProfileV1, SoraPrivateInferenceSessionV1,
             SoraRouteTargetV1, SoraRouteVisibilityV1, SoraServiceHandlerClassV1,
@@ -86,6 +88,7 @@ use iroha::{
             encode_uploaded_model_bundle_register_provenance_payload,
             encode_uploaded_model_chunk_append_provenance_payload,
             encode_uploaded_model_finalize_provenance_payload,
+            PrivateModelSourceV1,
         },
         sorafs::pin_registry::StorageClass,
     },
@@ -109,6 +112,7 @@ use reqwest::{
     blocking::Client as BlockingHttpClient,
     header::{self, HeaderValue},
 };
+use rand::RngCore as _;
 use sha2::{Digest as _, Sha256};
 
 #[cfg(test)]
@@ -131,12 +135,15 @@ const HF_REPO_ID_MAX_BYTES: usize = 256;
 const HF_REVISION_MAX_BYTES: usize = 160;
 const HF_MODEL_NAME_MAX_BYTES: usize = 128;
 const HEADER_IROHA_ACCOUNT: &str = "X-Iroha-Account";
+const HEADER_IROHA_TIMESTAMP_MS: &str = "X-Iroha-Timestamp-Ms";
+const HEADER_IROHA_NONCE: &str = "X-Iroha-Nonce";
 const PRIVATE_MODEL_ARCHIVE_DOMAIN: &str = "soracloud.uploaded_model.archive.v1";
 const PRIVATE_MODEL_BUNDLE_KEY_AAD_DOMAIN: &str = "soracloud.uploaded_model.bundle_key_aad.v1";
 const PRIVATE_MODEL_CHUNK_AAD_DOMAIN: &str = "soracloud.uploaded_model.chunk_aad.v1";
 const PRIVATE_MODEL_WRAPPING_NONCE_BYTES: usize = 12;
 const PRIVATE_MODEL_CHUNK_NONCE_BYTES: usize = 12;
 const HEADER_IROHA_SIGNATURE: &str = "X-Iroha-Signature";
+const HEADER_IROHA_WITNESS: &str = "X-Iroha-Witness";
 
 thread_local! {
     static SORACLOUD_SUBMISSION_CONFIG: RefCell<Option<ClientConfig>> = const { RefCell::new(None) };
@@ -2598,7 +2605,7 @@ pub struct ModelPublishPrivateArgs {
     /// Path to a prepared `PrivateModelPublishPlan` JSON document.
     #[arg(long, value_name = "PATH", conflicts_with = "draft_file")]
     plan_file: Option<PathBuf>,
-    /// Path to a raw-directory `PrivateModelPublishDraft` JSON document.
+    /// Path to a source-backed `PrivateModelPublishDraft` JSON document.
     #[arg(long, value_name = "PATH", conflicts_with = "plan_file")]
     draft_file: Option<PathBuf>,
     /// Optional path where the prepared publish plan should be written.
@@ -4231,7 +4238,7 @@ struct PrivateModelPublishPlan {
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct PrivateModelPublishDraft {
-    source_dir: PathBuf,
+    source: PrivateModelSourceV1,
     service_name: String,
     model_name: String,
     model_id: String,
@@ -4273,6 +4280,55 @@ struct PrivateModelSourceEntry {
     relative_path: String,
     absolute_path: PathBuf,
     file_bytes: u64,
+}
+
+struct ResolvedPrivateModelSource {
+    source_dir: PathBuf,
+    _tempdir: Option<PrivateModelSourceTempDir>,
+}
+
+#[derive(Clone, Copy)]
+struct PrivateModelHfSourceConfig<'a> {
+    api_base_url: &'a str,
+    hub_base_url: &'a str,
+    max_files: u32,
+    max_file_bytes: u64,
+    max_total_bytes: u64,
+}
+
+struct PrivateModelSourceTempDir {
+    path: PathBuf,
+}
+
+impl PrivateModelSourceTempDir {
+    fn new(prefix: &str) -> Result<Self> {
+        for _ in 0..8 {
+            let mut suffix = [0_u8; 8];
+            rand::rng().fill_bytes(&mut suffix);
+            let path = std::env::temp_dir().join(format!("{prefix}-{}", hex::encode(suffix)));
+            match fs::create_dir(&path) {
+                Ok(()) => return Ok(Self { path }),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => {
+                    return Err(error)
+                        .wrap_err_with(|| format!("failed to create `{}`", path.display()));
+                }
+            }
+        }
+        Err(eyre!(
+            "failed to allocate a unique temporary directory for private-model source normalization"
+        ))
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for PrivateModelSourceTempDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
 }
 
 type UploadedModelBundleRootTuple<'a> = (
@@ -4736,6 +4792,16 @@ fn parse_hf_repo_id_arg(repo_id: &str) -> Result<String> {
 
 fn parse_hf_revision_arg(revision: &str) -> Result<String> {
     normalize_hf_token("--revision", revision, HF_REVISION_MAX_BYTES)
+}
+
+fn validate_private_model_hf_revision(revision: &str) -> Result<String> {
+    let normalized = parse_hf_revision_arg(revision)?;
+    if normalized.len() != 40 || !normalized.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(eyre!(
+            "uploaded-model Hugging Face snapshot revision must be a pinned 40-character commit SHA"
+        ));
+    }
+    Ok(normalized)
 }
 
 fn resolve_hf_revision_arg(revision: Option<&str>) -> Result<String> {
@@ -6412,6 +6478,95 @@ fn canonical_request_message(method: &str, endpoint: &reqwest::Url, body: &[u8])
     .into_bytes()
 }
 
+fn canonical_request_hash(method: &str, endpoint: &reqwest::Url, body: &[u8]) -> Hash {
+    Hash::new(canonical_request_message(method, endpoint, body))
+}
+
+fn canonical_request_signature_message(
+    method: &str,
+    endpoint: &reqwest::Url,
+    body: &[u8],
+    timestamp_ms: u64,
+    nonce: &str,
+) -> Vec<u8> {
+    let mut message = canonical_request_message(method, endpoint, body);
+    message.push(b'\n');
+    message.extend_from_slice(timestamp_ms.to_string().as_bytes());
+    message.push(b'\n');
+    message.extend_from_slice(nonce.as_bytes());
+    message
+}
+
+fn load_soracloud_http_witness(path: &Path) -> Result<CanonicalRequestWitnessV1> {
+    let bytes = fs::read(path)
+        .wrap_err_with(|| format!("failed to read Soracloud witness file `{}`", path.display()))?;
+    let witness: CanonicalRequestWitnessV1 = json::from_slice(&bytes)
+        .wrap_err_with(|| format!("failed to decode Soracloud witness file `{}`", path.display()))?;
+    if witness.schema_version != CANONICAL_REQUEST_WITNESS_VERSION_V1 {
+        return Err(eyre!(
+            "unsupported Soracloud witness schema_version `{}` in `{}`",
+            witness.schema_version,
+            path.display()
+        ));
+    }
+    Ok(witness)
+}
+
+fn build_soracloud_mutation_auth_headers(
+    submission_config: &ClientConfig,
+    endpoint: &reqwest::Url,
+    body: &[u8],
+) -> Result<Vec<(&'static str, String)>> {
+    if let Some(witness_file) = submission_config.soracloud_http_witness_file.as_deref() {
+        let witness = load_soracloud_http_witness(witness_file)?;
+        if witness.subject_account != submission_config.account {
+            return Err(eyre!(
+                "Soracloud witness subject_account `{}` does not match configured account `{}`",
+                witness.subject_account,
+                submission_config.account
+            ));
+        }
+        let expected_hash = canonical_request_hash("POST", endpoint, body);
+        if witness.canonical_request_hash != expected_hash {
+            return Err(eyre!(
+                "Soracloud witness canonical_request_hash does not match the POST {} request",
+                endpoint.path()
+            ));
+        }
+        return Ok(vec![
+            (HEADER_IROHA_ACCOUNT, submission_config.account.to_string()),
+            (
+                HEADER_IROHA_WITNESS,
+                base64::engine::general_purpose::STANDARD
+                    .encode(to_bytes(&witness).wrap_err("failed to encode Soracloud witness")?),
+            ),
+        ]);
+    }
+
+    let timestamp_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX);
+    let mut nonce_bytes = [0_u8; 16];
+    rand::rng().fill_bytes(&mut nonce_bytes);
+    let nonce = hex::encode(nonce_bytes);
+    let message =
+        canonical_request_signature_message("POST", endpoint, body, timestamp_ms, &nonce);
+    let signature = Signature::new(submission_config.key_pair.private_key(), &message);
+
+    Ok(vec![
+        (HEADER_IROHA_ACCOUNT, submission_config.account.to_string()),
+        (
+            HEADER_IROHA_SIGNATURE,
+            base64::engine::general_purpose::STANDARD.encode(signature.payload()),
+        ),
+        (HEADER_IROHA_TIMESTAMP_MS, timestamp_ms.to_string()),
+        (HEADER_IROHA_NONCE, nonce),
+    ])
+}
+
 fn decode_soracloud_tx_instructions(payload: &json::Value) -> Result<Vec<InstructionBox>> {
     let instructions = payload
         .get("tx_instructions")
@@ -6477,9 +6632,7 @@ where
     let body = json::to_vec(request_payload)
         .wrap_err("failed to encode soracloud mutation request payload")?;
     let submission_config = soracloud_submission_config()?;
-    let canonical_message = canonical_request_message("POST", &endpoint, &body);
-    let canonical_signature =
-        Signature::new(submission_config.key_pair.private_key(), &canonical_message);
+    let auth_headers = build_soracloud_mutation_auth_headers(&submission_config, &endpoint, &body)?;
 
     let timeout = Duration::from_secs(timeout_secs.max(1));
     let client = BlockingHttpClient::builder()
@@ -6494,12 +6647,10 @@ where
             header::CONTENT_TYPE,
             HeaderValue::from_static("application/json"),
         )
-        .header(HEADER_IROHA_ACCOUNT, submission_config.account.to_string())
-        .header(
-            HEADER_IROHA_SIGNATURE,
-            base64::engine::general_purpose::STANDARD.encode(canonical_signature.payload()),
-        )
         .body(body);
+    for (name, value) in auth_headers {
+        request = request.header(name, value);
+    }
     if let Some(token) = api_token {
         request = request.header("x-api-token", token);
     }
@@ -6836,20 +6987,55 @@ fn prepare_private_model_publish_plan_from_draft(
     recipient: SoraUploadedModelEncryptionRecipientV1,
 ) -> Result<PrivateModelPublishPlan> {
     let chunk_plaintext_bytes = defaults::nexus::uploaded_models::CHUNK_PLAINTEXT_BYTES;
+    let hf_source_config = default_private_model_hf_source_config();
     let mut rng = rand::rng();
-    prepare_private_model_publish_plan_from_draft_with_rng(
+    prepare_private_model_publish_plan_from_draft_with_source_config_and_rng(
         draft_path,
         draft,
         recipient,
+        hf_source_config,
         chunk_plaintext_bytes,
         &mut rng,
     )
 }
 
+fn default_private_model_hf_source_config() -> PrivateModelHfSourceConfig<'static> {
+    PrivateModelHfSourceConfig {
+        api_base_url: defaults::soracloud_runtime::hf::API_BASE_URL,
+        hub_base_url: defaults::soracloud_runtime::hf::HUB_BASE_URL,
+        max_files: defaults::soracloud_runtime::hf::IMPORT_MAX_FILES,
+        max_file_bytes: defaults::soracloud_runtime::hf::IMPORT_MAX_FILE_BYTES,
+        max_total_bytes: defaults::soracloud_runtime::hf::IMPORT_MAX_TOTAL_BYTES,
+    }
+}
+
+#[cfg(test)]
 fn prepare_private_model_publish_plan_from_draft_with_rng<R>(
     draft_path: &Path,
     draft: PrivateModelPublishDraft,
     recipient: SoraUploadedModelEncryptionRecipientV1,
+    chunk_plaintext_bytes: u64,
+    rng: &mut R,
+) -> Result<PrivateModelPublishPlan>
+where
+    R: rand::CryptoRng + rand::RngCore,
+{
+    let hf_source_config = default_private_model_hf_source_config();
+    prepare_private_model_publish_plan_from_draft_with_source_config_and_rng(
+        draft_path,
+        draft,
+        recipient,
+        hf_source_config,
+        chunk_plaintext_bytes,
+        rng,
+    )
+}
+
+fn prepare_private_model_publish_plan_from_draft_with_source_config_and_rng<R>(
+    draft_path: &Path,
+    draft: PrivateModelPublishDraft,
+    recipient: SoraUploadedModelEncryptionRecipientV1,
+    hf_source_config: PrivateModelHfSourceConfig<'_>,
     chunk_plaintext_bytes: u64,
     rng: &mut R,
 ) -> Result<PrivateModelPublishPlan>
@@ -6864,9 +7050,11 @@ where
         return Err(eyre!("uploaded-model chunk size must be greater than zero"));
     }
 
-    let source_dir = resolve_private_model_source_dir(draft_path, &draft.source_dir)?;
-    let source_entries = collect_private_model_source_entries(&source_dir)?;
+    let resolved_source =
+        resolve_private_model_source(draft_path, &draft.source, hf_source_config)?;
+    let source_entries = collect_private_model_source_entries(&resolved_source.source_dir)?;
     validate_private_model_source_entries(&draft, &source_entries)?;
+    let source_entries = admitted_private_model_source_entries(&source_entries);
 
     let service_name: Name = draft
         .service_name
@@ -7035,6 +7223,17 @@ fn validate_private_model_publish_draft(draft: &PrivateModelPublishDraft) -> Res
             return Err(eyre!("uploaded-model draft `{field}` must not be empty"));
         }
     }
+    match &draft.source {
+        PrivateModelSourceV1::LocalDir(source) => {
+            if source.path.trim().is_empty() {
+                return Err(eyre!("uploaded-model draft source.path must not be empty"));
+            }
+        }
+        PrivateModelSourceV1::HuggingFaceSnapshot(source) => {
+            parse_hf_repo_id_arg(&source.repo)?;
+            validate_private_model_hf_revision(&source.revision)?;
+        }
+    }
     if let Some(allow) = draft.allow_model.as_ref()
         && allow.apartment_name.trim().is_empty()
     {
@@ -7051,10 +7250,45 @@ fn validate_private_model_publish_draft(draft: &PrivateModelPublishDraft) -> Res
             "uploaded-model draft family must match compile_profile.family"
         ));
     }
+    if let Some(runtime_format) = draft.runtime_format
+        && runtime_format != SoraUploadedModelRuntimeFormatV1::HuggingFaceSafetensors
+    {
+        return Err(eyre!(
+            "uploaded-model draft runtime_format must be `HuggingFaceSafetensors` in v1"
+        ));
+    }
     Ok(())
 }
 
-fn resolve_private_model_source_dir(draft_path: &Path, source_dir: &Path) -> Result<PathBuf> {
+fn resolve_private_model_source(
+    draft_path: &Path,
+    source: &PrivateModelSourceV1,
+    hf_source_config: PrivateModelHfSourceConfig<'_>,
+) -> Result<ResolvedPrivateModelSource> {
+    match source {
+        PrivateModelSourceV1::LocalDir(source) => Ok(ResolvedPrivateModelSource {
+            source_dir: resolve_private_model_local_source_dir(draft_path, &source.path)?,
+            _tempdir: None,
+        }),
+        PrivateModelSourceV1::HuggingFaceSnapshot(source) => {
+            let repo = parse_hf_repo_id_arg(&source.repo)?;
+            let revision = validate_private_model_hf_revision(&source.revision)?;
+            let tempdir = PrivateModelSourceTempDir::new("iroha-private-model-source")
+                .wrap_err("failed to create temporary Hugging Face snapshot directory")?;
+            let source_dir = tempdir.path().join("snapshot");
+            fs::create_dir_all(&source_dir)
+                .wrap_err_with(|| format!("failed to create `{}`", source_dir.display()))?;
+            download_private_model_hf_snapshot(&source_dir, &repo, &revision, hf_source_config)?;
+            Ok(ResolvedPrivateModelSource {
+                source_dir,
+                _tempdir: Some(tempdir),
+            })
+        }
+    }
+}
+
+fn resolve_private_model_local_source_dir(draft_path: &Path, source_dir: &str) -> Result<PathBuf> {
+    let source_dir = Path::new(source_dir);
     let resolved = if source_dir.is_absolute() {
         source_dir.to_path_buf()
     } else {
@@ -7078,6 +7312,127 @@ fn resolve_private_model_source_dir(draft_path: &Path, source_dir: &Path) -> Res
     resolved
         .canonicalize()
         .wrap_err_with(|| format!("failed to canonicalize `{}`", resolved.display()))
+}
+
+enum PrivateModelSourcePathDisposition {
+    Admitted,
+    Ignorable,
+    Unsupported(&'static str),
+}
+
+fn download_private_model_hf_snapshot(
+    destination_root: &Path,
+    repo_id: &str,
+    revision: &str,
+    config: PrivateModelHfSourceConfig<'_>,
+) -> Result<()> {
+    let client = BlockingHttpClient::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .wrap_err("failed to build Hugging Face snapshot HTTP client")?;
+    let info_url = hf_model_info_url(config.api_base_url, repo_id, revision)?;
+    let response = client
+        .get(info_url.clone())
+        .send()
+        .wrap_err_with(|| format!("fetch Hugging Face model info from {info_url}"))?;
+    if !response.status().is_success() {
+        return Err(eyre!(
+            "Hugging Face model info request for `{repo_id}` revision `{revision}` returned {}",
+            response.status()
+        ));
+    }
+    let model_info_bytes = response
+        .bytes()
+        .wrap_err_with(|| format!("read Hugging Face model info response from {info_url}"))?
+        .to_vec();
+    let model_info: norito::json::Value =
+        norito::json::from_slice(&model_info_bytes).wrap_err("decode Hugging Face model info")?;
+    let resolved_commit = model_info
+        .get("sha")
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| eyre!("Hugging Face model info is missing `sha`"))?;
+    if !resolved_commit.eq_ignore_ascii_case(revision) {
+        return Err(eyre!(
+            "Hugging Face revision `{revision}` resolved to `{resolved_commit}`; provide a pinned commit SHA"
+        ));
+    }
+
+    let mut sibling_paths = model_info
+        .get("siblings")
+        .and_then(norito::json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.get("rfilename").and_then(norito::json::Value::as_str))
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    sibling_paths.sort();
+    sibling_paths.dedup();
+    if sibling_paths.is_empty() {
+        return Err(eyre!(
+            "Hugging Face snapshot `{repo_id}` revision `{revision}` did not expose any files"
+        ));
+    }
+
+    let mut admitted_paths = Vec::new();
+    for path in sibling_paths {
+        match classify_private_model_source_path(&path) {
+            PrivateModelSourcePathDisposition::Admitted => admitted_paths.push(path),
+            PrivateModelSourcePathDisposition::Ignorable => {}
+            PrivateModelSourcePathDisposition::Unsupported(reason) => {
+                return Err(eyre!(
+                    "Hugging Face snapshot file `{path}` is not admitted for private-model publish v1: {reason}"
+                ));
+            }
+        }
+    }
+    if admitted_paths.is_empty() {
+        return Err(eyre!(
+            "Hugging Face snapshot `{repo_id}` revision `{revision}` does not contain admitted model files"
+        ));
+    }
+    if admitted_paths.len() > usize::try_from(config.max_files).unwrap_or(usize::MAX) {
+        return Err(eyre!(
+            "Hugging Face snapshot `{repo_id}` exceeds the admitted file limit ({})",
+            config.max_files
+        ));
+    }
+
+    let mut total_bytes = 0_u64;
+    for relative_path in admitted_paths {
+        let file_url = hf_repo_file_url(config.hub_base_url, repo_id, revision, &relative_path)?;
+        let response = client
+            .get(file_url.clone())
+            .send()
+            .wrap_err_with(|| format!("fetch Hugging Face snapshot file from {file_url}"))?;
+        if !response.status().is_success() {
+            return Err(eyre!(
+                "Hugging Face snapshot file `{relative_path}` returned {}",
+                response.status()
+            ));
+        }
+        let file_bytes = response
+            .bytes()
+            .wrap_err_with(|| format!("read Hugging Face snapshot file from {file_url}"))?
+            .to_vec();
+        let file_bytes_len = u64::try_from(file_bytes.len()).unwrap_or(u64::MAX);
+        if file_bytes_len > config.max_file_bytes {
+            return Err(eyre!(
+                "Hugging Face snapshot file `{relative_path}` exceeds the per-file limit ({})",
+                config.max_file_bytes
+            ));
+        }
+        total_bytes = total_bytes.saturating_add(file_bytes_len);
+        if total_bytes > config.max_total_bytes {
+            return Err(eyre!(
+                "Hugging Face snapshot `{repo_id}` exceeds the total admitted byte limit ({})",
+                config.max_total_bytes
+            ));
+        }
+        fs::write(destination_root.join(&relative_path), file_bytes)
+            .wrap_err_with(|| format!("write `{}`", destination_root.join(&relative_path).display()))?;
+    }
+
+    Ok(())
 }
 
 fn collect_private_model_source_entries(source_dir: &Path) -> Result<Vec<PrivateModelSourceEntry>> {
@@ -7183,11 +7538,169 @@ fn normalize_private_model_source_relative_path(root: &Path, path: &Path) -> Res
     Ok(components.join("/"))
 }
 
+fn normalize_hf_base_url(raw: &str) -> Result<reqwest::Url> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(eyre!("empty Hugging Face base URL"));
+    }
+    let with_scheme = if trimmed.contains("://") {
+        trimmed.to_owned()
+    } else {
+        format!("https://{trimmed}")
+    };
+    let mut url = reqwest::Url::parse(&with_scheme).wrap_err("parse Hugging Face base URL")?;
+    let normalized_path = match url.path().trim_end_matches('/') {
+        "" => "/".to_owned(),
+        path => path.to_owned(),
+    };
+    url.set_path(&normalized_path);
+    Ok(url)
+}
+
+fn hf_model_info_url(
+    api_base_url: &str,
+    repo_id: &str,
+    requested_revision: &str,
+) -> Result<reqwest::Url> {
+    let mut url = normalize_hf_base_url(api_base_url)?;
+    {
+        let mut segments = url
+            .path_segments_mut()
+            .map_err(|_| eyre!("Hugging Face API base URL cannot be a base"))?;
+        for component in ["models"]
+            .into_iter()
+            .chain(repo_id.split('/'))
+            .chain(["revision", requested_revision].into_iter())
+        {
+            segments.push(component);
+        }
+    }
+    Ok(url)
+}
+
+fn hf_repo_file_url(
+    hub_base_url: &str,
+    repo_id: &str,
+    requested_revision: &str,
+    file_path: &str,
+) -> Result<reqwest::Url> {
+    let mut url = normalize_hf_base_url(hub_base_url)?;
+    {
+        let mut segments = url
+            .path_segments_mut()
+            .map_err(|_| eyre!("Hugging Face Hub base URL cannot be a base"))?;
+        for component in repo_id
+            .split('/')
+            .chain(["resolve", requested_revision].into_iter())
+            .chain(file_path.split('/'))
+        {
+            segments.push(component);
+        }
+    }
+    Ok(url)
+}
+
+fn classify_private_model_source_path(path: &str) -> PrivateModelSourcePathDisposition {
+    let normalized = path.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return PrivateModelSourcePathDisposition::Unsupported("empty file paths are not admitted");
+    }
+    if normalized.contains('/') {
+        return PrivateModelSourcePathDisposition::Unsupported(
+            "nested directories are not admitted in the v1 Hugging Face safetensors layout",
+        );
+    }
+    if matches!(
+        normalized.as_str(),
+        "readme.md"
+            | "license"
+            | "license.txt"
+            | "license.md"
+            | "copying"
+            | "copying.txt"
+            | "notice"
+            | "notice.txt"
+    ) {
+        return PrivateModelSourcePathDisposition::Ignorable;
+    }
+    if matches!(
+        normalized.as_str(),
+        "config.json"
+            | "generation_config.json"
+            | "tokenizer.json"
+            | "tokenizer_config.json"
+            | "special_tokens_map.json"
+            | "vocab.json"
+            | "vocab.txt"
+            | "merges.txt"
+            | "tokenizer.model"
+            | "sentencepiece.bpe.model"
+            | "added_tokens.json"
+            | "processor_config.json"
+            | "preprocessor_config.json"
+            | "image_processor_config.json"
+            | "chat_template.jinja"
+    ) || normalized.ends_with(".safetensors")
+        || normalized.ends_with(".safetensors.index.json")
+    {
+        return PrivateModelSourcePathDisposition::Admitted;
+    }
+    if normalized.ends_with(".gguf") {
+        return PrivateModelSourcePathDisposition::Unsupported(
+            "GGUF weights are not supported by private-model publish v1",
+        );
+    }
+    if normalized.ends_with(".onnx") {
+        return PrivateModelSourcePathDisposition::Unsupported(
+            "ONNX weights are not supported by private-model publish v1",
+        );
+    }
+    if matches!(
+        normalized.as_str(),
+        "pytorch_model.bin" | "pytorch_model.bin.index.json" | "rust_model.ot"
+    ) {
+        return PrivateModelSourcePathDisposition::Unsupported(
+            "non-safetensors weight layouts are not supported by private-model publish v1",
+        );
+    }
+    PrivateModelSourcePathDisposition::Unsupported(
+        "only the root-level Hugging Face safetensors layout is admitted in v1",
+    )
+}
+
+fn admitted_private_model_source_entries(
+    entries: &[PrivateModelSourceEntry],
+) -> Vec<PrivateModelSourceEntry> {
+    entries
+        .iter()
+        .filter(|entry| {
+            matches!(
+                classify_private_model_source_path(&entry.relative_path),
+                PrivateModelSourcePathDisposition::Admitted
+            )
+        })
+        .cloned()
+        .collect()
+}
+
 fn validate_private_model_source_entries(
     draft: &PrivateModelPublishDraft,
     entries: &[PrivateModelSourceEntry],
 ) -> Result<()> {
-    let has_config = entries
+    let mut admitted_entries = Vec::new();
+    for entry in entries {
+        match classify_private_model_source_path(&entry.relative_path) {
+            PrivateModelSourcePathDisposition::Admitted => admitted_entries.push(entry),
+            PrivateModelSourcePathDisposition::Ignorable => {}
+            PrivateModelSourcePathDisposition::Unsupported(reason) => {
+                return Err(eyre!(
+                    "uploaded-model source file `{}` is not admitted for private-model publish v1: {reason}",
+                    entry.relative_path
+                ));
+            }
+        }
+    }
+    let has_config = admitted_entries
         .iter()
         .any(|entry| entry.relative_path == "config.json");
     if !has_config {
@@ -7195,7 +7708,7 @@ fn validate_private_model_source_entries(
             "uploaded-model source must include `config.json` at the repository root"
         ));
     }
-    let has_safetensors = entries
+    let has_safetensors = admitted_entries
         .iter()
         .any(|entry| entry.relative_path.ends_with(".safetensors"));
     if !has_safetensors {
@@ -7203,7 +7716,7 @@ fn validate_private_model_source_entries(
             "uploaded-model source must include at least one `.safetensors` weight shard"
         ));
     }
-    let has_tokenizer = entries.iter().any(|entry| {
+    let has_tokenizer = admitted_entries.iter().any(|entry| {
         matches!(
             entry.relative_path.as_str(),
             "tokenizer.json"
@@ -7211,8 +7724,11 @@ fn validate_private_model_source_entries(
                 | "tokenizer_config.json"
                 | "special_tokens_map.json"
                 | "vocab.json"
+                | "vocab.txt"
                 | "merges.txt"
-        ) || entry.relative_path.starts_with("tokenizer.")
+                | "sentencepiece.bpe.model"
+                | "added_tokens.json"
+        )
     });
     if !has_tokenizer {
         return Err(eyre!(
@@ -7224,7 +7740,7 @@ fn validate_private_model_source_entries(
         .iter()
         .any(|modality| modality.eq_ignore_ascii_case("image"));
     if requires_processor {
-        let has_processor = entries.iter().any(|entry| {
+        let has_processor = admitted_entries.iter().any(|entry| {
             matches!(
                 entry.relative_path.as_str(),
                 "processor_config.json"
@@ -11160,10 +11676,22 @@ iroha app sorafs toolkit pack ./frontend/dist \
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha::data_model::soracloud::{
+        PrivateModelHuggingFaceSnapshotSourceV1, PrivateModelLocalDirSourceV1,
+    };
     use rand::SeedableRng as _;
     use std::{
+        collections::BTreeMap,
+        io::Write as _,
+        net::{TcpListener, TcpStream},
         path::Path,
         process::Command,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        thread,
+        time::Duration,
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -11377,9 +11905,9 @@ mod tests {
         }
     }
 
-    fn sample_private_model_publish_draft(source_dir: PathBuf) -> PrivateModelPublishDraft {
+    fn sample_private_model_publish_draft(source: PrivateModelSourceV1) -> PrivateModelPublishDraft {
         PrivateModelPublishDraft {
-            source_dir,
+            source,
             service_name: "private_models".to_owned(),
             model_name: "vision-model".to_owned(),
             model_id: "upload-1".to_owned(),
@@ -11413,6 +11941,116 @@ mod tests {
             b"deterministic-safetensors-payload",
         )
         .expect("write weights");
+    }
+
+    #[derive(Clone)]
+    struct MockHttpResponse {
+        content_type: &'static str,
+        body: Vec<u8>,
+    }
+
+    struct MockHttpServer {
+        base_url: String,
+        address: String,
+        stop: Arc<AtomicBool>,
+        handle: Option<thread::JoinHandle<()>>,
+    }
+
+    impl MockHttpServer {
+        fn start(routes: BTreeMap<String, MockHttpResponse>) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock HTTP server");
+            listener
+                .set_nonblocking(true)
+                .expect("set mock listener nonblocking");
+            let address = listener.local_addr().expect("mock listener address").to_string();
+            let base_url = format!("http://{address}");
+            let stop = Arc::new(AtomicBool::new(false));
+            let stop_flag = Arc::clone(&stop);
+            let handle = thread::spawn(move || {
+                while !stop_flag.load(Ordering::SeqCst) {
+                    match listener.accept() {
+                        Ok((mut stream, _)) => {
+                            let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                            let path = read_mock_http_request_path(&mut stream);
+                            if stop_flag.load(Ordering::SeqCst) && path.is_empty() {
+                                continue;
+                            }
+                            let response = routes.get(&path).cloned().unwrap_or(MockHttpResponse {
+                                content_type: "text/plain",
+                                body: b"not found".to_vec(),
+                            });
+                            let status = if routes.contains_key(&path) {
+                                "200 OK"
+                            } else {
+                                "404 Not Found"
+                            };
+                            write!(
+                                stream,
+                                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: {}\r\nConnection: close\r\n\r\n",
+                                response.body.len(),
+                                response.content_type
+                            )
+                            .expect("write mock HTTP headers");
+                            stream
+                                .write_all(&response.body)
+                                .expect("write mock HTTP body");
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(error) => panic!("mock HTTP server accept failed: {error}"),
+                    }
+                }
+            });
+            Self {
+                base_url,
+                address,
+                stop,
+                handle: Some(handle),
+            }
+        }
+    }
+
+    impl Drop for MockHttpServer {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::SeqCst);
+            let _ = TcpStream::connect(&self.address);
+            if let Some(handle) = self.handle.take() {
+                handle.join().expect("join mock HTTP server");
+            }
+        }
+    }
+
+    fn read_mock_http_request_path(stream: &mut TcpStream) -> String {
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        loop {
+            match std::io::Read::read(stream, &mut buffer) {
+                Ok(0) => break,
+                Ok(read) => {
+                    request.extend_from_slice(&buffer[..read]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    break;
+                }
+                Err(error) => panic!("read mock HTTP request failed: {error}"),
+            }
+        }
+
+        String::from_utf8_lossy(&request)
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .unwrap_or_default()
+            .to_owned()
     }
 
     fn node_available() -> bool {
@@ -12943,7 +13581,11 @@ mod tests {
         let source_dir = tempdir.path().join("model");
         write_sample_uploaded_model_source(&source_dir);
         let draft_path = tempdir.path().join("draft.json");
-        let draft = sample_private_model_publish_draft(PathBuf::from("model"));
+        let draft = sample_private_model_publish_draft(PrivateModelSourceV1::LocalDir(
+            PrivateModelLocalDirSourceV1 {
+                path: "model".to_owned(),
+            },
+        ));
         let mut rng = rand::rngs::StdRng::from_seed([7_u8; 32]);
 
         let plan = prepare_private_model_publish_plan_from_draft_with_rng(
@@ -12984,7 +13626,11 @@ mod tests {
         fs::write(source_dir.join("tokenizer.json"), br#"{"model":"test"}"#)
             .expect("write tokenizer");
         let draft_path = tempdir.path().join("draft.json");
-        let draft = sample_private_model_publish_draft(PathBuf::from("model"));
+        let draft = sample_private_model_publish_draft(PrivateModelSourceV1::LocalDir(
+            PrivateModelLocalDirSourceV1 {
+                path: "model".to_owned(),
+            },
+        ));
         let mut rng = rand::rngs::StdRng::from_seed([9_u8; 32]);
 
         let err = prepare_private_model_publish_plan_from_draft_with_rng(
@@ -12996,6 +13642,122 @@ mod tests {
         )
         .expect_err("missing config must fail");
         assert!(err.to_string().contains("config.json"));
+    }
+
+    #[test]
+    fn validate_private_model_publish_draft_rejects_unpinned_hf_revision() {
+        let draft = sample_private_model_publish_draft(PrivateModelSourceV1::HuggingFaceSnapshot(
+            PrivateModelHuggingFaceSnapshotSourceV1 {
+                repo: "openai-community/gpt2".to_owned(),
+                revision: "main".to_owned(),
+            },
+        ));
+
+        let err = validate_private_model_publish_draft(&draft)
+            .expect_err("unpinned Hugging Face revision must fail");
+        assert!(err.to_string().contains("pinned 40-character commit SHA"));
+    }
+
+    #[test]
+    fn prepare_private_model_publish_plan_from_draft_rejects_unsupported_extra_layout_file() {
+        let tempdir = tempfile::tempdir().expect("create temp dir");
+        let source_dir = tempdir.path().join("model");
+        write_sample_uploaded_model_source(&source_dir);
+        fs::write(source_dir.join("weights.gguf"), b"unsupported").expect("write gguf");
+        let draft_path = tempdir.path().join("draft.json");
+        let draft = sample_private_model_publish_draft(PrivateModelSourceV1::LocalDir(
+            PrivateModelLocalDirSourceV1 {
+                path: "model".to_owned(),
+            },
+        ));
+        let mut rng = rand::rngs::StdRng::from_seed([11_u8; 32]);
+
+        let err = prepare_private_model_publish_plan_from_draft_with_rng(
+            &draft_path,
+            draft,
+            sample_uploaded_model_encryption_recipient(),
+            32,
+            &mut rng,
+        )
+        .expect_err("unsupported extra layout must fail");
+        assert!(err.to_string().contains("weights.gguf"));
+        assert!(err.to_string().contains("GGUF"));
+    }
+
+    #[test]
+    fn prepare_private_model_publish_plan_from_pinned_hf_snapshot_builds_valid_plan() {
+        let revision = "0123456789abcdef0123456789abcdef01234567";
+        let mock_info = norito::json!({
+            "sha": revision,
+            "siblings": [
+                { "rfilename": "README.md" },
+                { "rfilename": "config.json" },
+                { "rfilename": "tokenizer.json" },
+                { "rfilename": "model-00001-of-00001.safetensors" }
+            ]
+        });
+        let server = MockHttpServer::start(BTreeMap::from([
+            (
+                format!("/api/models/openai-community/gpt2/revision/{revision}"),
+                MockHttpResponse {
+                    content_type: "application/json",
+                    body: json::to_vec(&mock_info).expect("encode mock model info"),
+                },
+            ),
+            (
+                format!("/openai-community/gpt2/resolve/{revision}/config.json"),
+                MockHttpResponse {
+                    content_type: "application/json",
+                    body: br#"{"architectures":["TestModel"]}"#.to_vec(),
+                },
+            ),
+            (
+                format!("/openai-community/gpt2/resolve/{revision}/tokenizer.json"),
+                MockHttpResponse {
+                    content_type: "application/json",
+                    body: br#"{"model":"test"}"#.to_vec(),
+                },
+            ),
+            (
+                format!("/openai-community/gpt2/resolve/{revision}/model-00001-of-00001.safetensors"),
+                MockHttpResponse {
+                    content_type: "application/octet-stream",
+                    body: b"deterministic-safetensors-payload".to_vec(),
+                },
+            ),
+        ]));
+        let draft_path = Path::new("/tmp/private-model-draft.json");
+        let draft = sample_private_model_publish_draft(PrivateModelSourceV1::HuggingFaceSnapshot(
+            PrivateModelHuggingFaceSnapshotSourceV1 {
+                repo: "openai-community/gpt2".to_owned(),
+                revision: revision.to_owned(),
+            },
+        ));
+        let mut rng = rand::rngs::StdRng::from_seed([13_u8; 32]);
+        let api_base_url = format!("{}/api", server.base_url);
+        let hf_source_config = PrivateModelHfSourceConfig {
+            api_base_url: &api_base_url,
+            hub_base_url: &server.base_url,
+            max_files: 8,
+            max_file_bytes: 1024,
+            max_total_bytes: 4096,
+        };
+
+        let plan = prepare_private_model_publish_plan_from_draft_with_source_config_and_rng(
+            draft_path,
+            draft,
+            sample_uploaded_model_encryption_recipient(),
+            hf_source_config,
+            32,
+            &mut rng,
+        )
+        .expect("prepare publish plan from pinned HF snapshot");
+
+        assert_eq!(
+            plan.bundle.runtime_format,
+            SoraUploadedModelRuntimeFormatV1::HuggingFaceSafetensors
+        );
+        validate_private_model_publish_plan(&plan).expect("generated plan validates");
     }
 
     #[test]
@@ -13037,6 +13799,111 @@ mod tests {
             post_torii_soracloud_mutation("not-a-url", "v1/soracloud/deploy", &payload, None, 5)
                 .expect_err("invalid URL must fail");
         assert!(err.to_string().contains("invalid --torii-url"));
+    }
+
+    #[test]
+    fn build_soracloud_mutation_auth_headers_adds_single_sig_freshness_headers() {
+        let config = crate::fallback_config();
+        let endpoint = reqwest::Url::parse("http://127.0.0.1:8080/v1/soracloud/deploy")
+            .expect("endpoint");
+        let headers =
+            build_soracloud_mutation_auth_headers(&config, &endpoint, br#"{"noop":true}"#)
+                .expect("single-sig headers");
+        let header_map: BTreeMap<_, _> = headers.into_iter().collect();
+
+        assert_eq!(
+            header_map.get(HEADER_IROHA_ACCOUNT),
+            Some(&config.account.to_string())
+        );
+        assert!(header_map.contains_key(HEADER_IROHA_SIGNATURE));
+        assert!(header_map.contains_key(HEADER_IROHA_TIMESTAMP_MS));
+        assert!(header_map.contains_key(HEADER_IROHA_NONCE));
+        assert!(!header_map.contains_key(HEADER_IROHA_WITNESS));
+    }
+
+    #[test]
+    fn build_soracloud_mutation_auth_headers_uses_witness_file_when_configured() {
+        let mut config = crate::fallback_config();
+        let endpoint = reqwest::Url::parse("http://127.0.0.1:8080/v1/soracloud/deploy")
+            .expect("endpoint");
+        let body = br#"{"noop":true}"#;
+        let witness = CanonicalRequestWitnessV1 {
+            schema_version: CANONICAL_REQUEST_WITNESS_VERSION_V1,
+            subject_account: config.account.clone(),
+            timestamp_ms: 42,
+            nonce: "fixture-witness".to_owned(),
+            canonical_request_hash: canonical_request_hash("POST", &endpoint, body),
+            signatures: Vec::new(),
+        };
+        let dir = temp_dir("witness_headers");
+        let witness_path = dir.join("witness.json");
+        fs::write(&witness_path, json::to_vec(&witness).expect("encode witness json"))
+            .expect("write witness file");
+        config.soracloud_http_witness_file = Some(witness_path);
+
+        let headers =
+            build_soracloud_mutation_auth_headers(&config, &endpoint, body).expect("headers");
+        let header_map: BTreeMap<_, _> = headers.into_iter().collect();
+
+        assert_eq!(
+            header_map.get(HEADER_IROHA_ACCOUNT),
+            Some(&config.account.to_string())
+        );
+        assert!(header_map.contains_key(HEADER_IROHA_WITNESS));
+        assert!(!header_map.contains_key(HEADER_IROHA_SIGNATURE));
+        assert!(!header_map.contains_key(HEADER_IROHA_TIMESTAMP_MS));
+        assert!(!header_map.contains_key(HEADER_IROHA_NONCE));
+    }
+
+    #[test]
+    fn build_soracloud_mutation_auth_headers_rejects_witness_account_mismatch() {
+        let mut config = crate::fallback_config();
+        let endpoint = reqwest::Url::parse("http://127.0.0.1:8080/v1/soracloud/deploy")
+            .expect("endpoint");
+        let body = br#"{"noop":true}"#;
+        let other_account = AccountId::new(KeyPair::random().public_key().clone());
+        let witness = CanonicalRequestWitnessV1 {
+            schema_version: CANONICAL_REQUEST_WITNESS_VERSION_V1,
+            subject_account: other_account,
+            timestamp_ms: 42,
+            nonce: "fixture-witness".to_owned(),
+            canonical_request_hash: canonical_request_hash("POST", &endpoint, body),
+            signatures: Vec::new(),
+        };
+        let dir = temp_dir("witness_account_mismatch");
+        let witness_path = dir.join("witness.json");
+        fs::write(&witness_path, json::to_vec(&witness).expect("encode witness json"))
+            .expect("write witness file");
+        config.soracloud_http_witness_file = Some(witness_path);
+
+        let err = build_soracloud_mutation_auth_headers(&config, &endpoint, body)
+            .expect_err("mismatched witness account must fail");
+        assert!(err.to_string().contains("subject_account"));
+    }
+
+    #[test]
+    fn build_soracloud_mutation_auth_headers_rejects_witness_hash_mismatch() {
+        let mut config = crate::fallback_config();
+        let endpoint = reqwest::Url::parse("http://127.0.0.1:8080/v1/soracloud/deploy")
+            .expect("endpoint");
+        let body = br#"{"noop":true}"#;
+        let witness = CanonicalRequestWitnessV1 {
+            schema_version: CANONICAL_REQUEST_WITNESS_VERSION_V1,
+            subject_account: config.account.clone(),
+            timestamp_ms: 42,
+            nonce: "fixture-witness".to_owned(),
+            canonical_request_hash: Hash::new(b"wrong-hash"),
+            signatures: Vec::new(),
+        };
+        let dir = temp_dir("witness_hash_mismatch");
+        let witness_path = dir.join("witness.json");
+        fs::write(&witness_path, json::to_vec(&witness).expect("encode witness json"))
+            .expect("write witness file");
+        config.soracloud_http_witness_file = Some(witness_path);
+
+        let err = build_soracloud_mutation_auth_headers(&config, &endpoint, body)
+            .expect_err("mismatched witness hash must fail");
+        assert!(err.to_string().contains("canonical_request_hash"));
     }
 
     #[test]

@@ -329,7 +329,7 @@ fn ed25519_verify_instruction() {
 
 #[test]
 fn dilithium_verify_instruction() {
-    use pqcrypto_dilithium::dilithium2;
+    use pqcrypto_mldsa::mldsa44 as dilithium2;
     use pqcrypto_traits::sign::{DetachedSignature, PublicKey};
 
     let (pk, sk) = dilithium2::keypair();

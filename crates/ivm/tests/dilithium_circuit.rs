@@ -2,7 +2,7 @@
 
 #![cfg(feature = "ivm_zk_tests")]
 use ivm::halo2::{DilithiumLevel, DilithiumVerifyCircuit};
-use pqcrypto_dilithium::{dilithium2, dilithium3};
+use pqcrypto_mldsa::{mldsa44 as dilithium2, mldsa65 as dilithium3};
 use pqcrypto_traits::sign::{DetachedSignature, PublicKey, SecretKey};
 
 #[test]
@@ -28,7 +28,7 @@ fn dilithium3_circuit_bad_sig() {
     // Corrupt signature
     let mut bytes = sig.as_bytes().to_vec();
     bytes[0] ^= 1;
-    sig = pqcrypto_dilithium::dilithium3::DetachedSignature::from_bytes(&bytes).unwrap();
+    sig = pqcrypto_mldsa::mldsa65::DetachedSignature::from_bytes(&bytes).unwrap();
     let circuit = DilithiumVerifyCircuit {
         level: DilithiumLevel::Level3,
         public_key: pk.as_bytes(),

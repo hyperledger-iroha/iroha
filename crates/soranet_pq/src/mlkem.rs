@@ -1,6 +1,6 @@
 use core::{fmt, str::FromStr};
 
-use pqcrypto_kyber::{kyber512, kyber768, kyber1024};
+use pqcrypto_mlkem::{mlkem512 as kyber512, mlkem768 as kyber768, mlkem1024 as kyber1024};
 use pqcrypto_traits::{
     Error as PqError,
     kem::{

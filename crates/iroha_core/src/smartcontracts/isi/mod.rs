@@ -133,6 +133,8 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::ram_lfe::ActivateRamLfeProgramPolicy>,
     dispatch_instruction::<iroha_data_model::isi::ram_lfe::DeactivateRamLfeProgramPolicy>,
     dispatch_instruction::<iroha_data_model::isi::SetAssetDefinitionAlias>,
+    dispatch_instruction::<iroha_data_model::isi::offline::RegisterOfflineReserve>,
+    dispatch_instruction::<iroha_data_model::isi::offline::CommitOfflineReserveOperation>,
     dispatch_instruction::<iroha_data_model::isi::offline::RegisterOfflineAllowance>,
     dispatch_instruction::<iroha_data_model::isi::offline::SubmitOfflineToOnlineTransfer>,
     dispatch_instruction::<iroha_data_model::isi::offline::RegisterOfflineVerdictRevocation>,

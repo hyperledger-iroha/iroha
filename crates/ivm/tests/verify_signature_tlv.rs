@@ -66,7 +66,7 @@ fn syscall_verify_signature_secp256k1_via_tlv() {
 
 #[test]
 fn syscall_verify_signature_dilithium_via_tlv() {
-    use pqcrypto_dilithium::dilithium3 as dilithium;
+    use pqcrypto_mldsa::mldsa65 as dilithium;
     use pqcrypto_traits::sign::{DetachedSignature, PublicKey};
     let (pk, sk) = dilithium::keypair();
     let msg = b"ivm-dilithium";
@@ -281,7 +281,7 @@ fn secp256k1_verify_rejects_high_s_signature() {
 
 #[test]
 fn opcode_verify_dilithium_via_tlv() {
-    use pqcrypto_dilithium::dilithium3 as dilithium;
+    use pqcrypto_mldsa::mldsa65 as dilithium;
     use pqcrypto_traits::sign::{DetachedSignature, PublicKey};
     let (pk, sk) = dilithium::keypair();
     let msg = b"ivm-op-dilithium";

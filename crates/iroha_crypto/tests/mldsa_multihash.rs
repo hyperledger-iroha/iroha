@@ -1,7 +1,7 @@
 //! End-to-end multihash roundtrip tests for `MlDsa` (Dilithium3) keys.
 
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PublicKey};
-use pqcrypto_dilithium::dilithium3 as dilithium;
+use pqcrypto_mldsa::mldsa65 as dilithium;
 use pqcrypto_traits::sign::{PublicKey as _, SecretKey as _};
 
 #[test]
