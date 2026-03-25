@@ -2,6 +2,37 @@
 
 Last updated: 2026-03-25
 
+## 2026-03-25 Follow-up: `model-publish-private` now prepares encrypted upload plans from raw admitted model directories
+- Extended `crates/iroha_cli/src/soracloud.rs`,
+  `crates/iroha_cli/Cargo.toml`, and
+  `docs/source/soracloud/cli_local_control_plane.md` so the Soracloud private
+  model publish wrapper no longer requires a prebuilt encrypted publish plan.
+- The shipped behavior in this slice:
+  - `iroha app soracloud model-publish-private` now accepts either
+    `--plan-file` for an already prepared deterministic publish plan or
+    `--draft-file` for a higher-level local source description;
+  - the new draft path walks a local admitted HF-style source directory,
+    validates required files such as `config.json`, tokenizer assets, and
+    `*.safetensors`, deterministically serializes the bundle, encrypts it
+    against the active Torii upload recipient, shards it into fixed-size
+    encrypted chunks, and then executes the existing
+    upload/finalize/compile/allow sequence;
+  - the wrapper can now persist the prepared publish plan through
+    `--emit-plan-file`, so operators can inspect or reuse the exact encrypted
+    bundle plan before submission; and
+  - focused regressions now cover both the happy path and the missing-config
+    failure path for draft-driven preparation.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target_soracloud_prepare_cli cargo check -p iroha_cli --tests` (pass)
+  - `cargo check -p iroha_core --tests` (pass)
+  - `CARGO_TARGET_DIR=target_soracloud_prepare_cli cargo test -p iroha_cli prepare_private_model_publish_plan_from_draft_ --bins` (pass)
+- Remaining implementation gap:
+  - the one-click private-model wrapper now handles deterministic local
+    encryption and chunking, but it still expects an already admitted
+    HF-style directory layout rather than importing or normalizing an
+    arbitrary upstream repository for the user.
+
 ## 2026-03-25 Follow-up: Soracloud uploaded-model and private-runtime CLI surface is now wired through `iroha_cli`
 - Extended `crates/iroha_cli/src/soracloud.rs` and
   `docs/source/soracloud/cli_local_control_plane.md` so the uploaded-model

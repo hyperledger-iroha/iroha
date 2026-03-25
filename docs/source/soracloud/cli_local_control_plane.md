@@ -119,13 +119,21 @@ Soracloud v1 is an authoritative, IVM-only runtime.
     `model-publish-private`.
   - `model-run-private` now hides the draft-then-finalize runtime handshake in
     the CLI and returns the authoritative post-finalize session status.
-  - `model-publish-private` orchestrates the already prepared
-    bundle/chunk/finalize/compile/allow sequence from a single publish-plan
-    document and fail-closes when the plan's upload recipient no longer matches
-    the authoritative Torii recipient.
-  - local normalization, encryption, and chunking of a raw model directory are
-    still follow-up work; the new wrapper assumes the publish plan already
-    contains a deterministic, encrypted bundle.
+  - `model-publish-private` now supports both a prepared
+    bundle/chunk/finalize/compile/allow publish plan and a higher-level
+    draft document. When called with `--draft-file`, the CLI walks a local
+    admitted HF-style source directory, validates the required files,
+    deterministically serializes and encrypts the bundle against the active
+    Torii upload recipient, shards it into fixed-size encrypted chunks,
+    optionally writes the prepared plan via `--emit-plan-file`, and then
+    executes the upload/finalize/compile/allow sequence. When called with
+    `--plan-file`, it still consumes an already prepared publish-plan
+    document and fail-closes when the plan's upload recipient no longer
+    matches the authoritative Torii recipient.
+  - the remaining one-click gap in this area is higher-level model
+    normalization: `model-publish-private --draft-file` expects an already
+    admitted HF-style directory layout rather than importing or converting an
+    arbitrary upstream repository for the user.
   - see `uploaded_private_models.md` for the design that layers those routes
     onto the existing model registry and artifact/weight records.
 - `model-host` control-plane routes

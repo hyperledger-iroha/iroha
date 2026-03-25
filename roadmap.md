@@ -2,6 +2,41 @@
 
 Last updated: 2026-03-25
 
+Latest sync (2026-03-25 Soracloud private-model publish drafts now prepare encrypted bundle plans locally):
+`crates/iroha_cli/src/soracloud.rs`,
+`crates/iroha_cli/Cargo.toml`,
+and
+`docs/source/soracloud/cli_local_control_plane.md`
+now let `iroha app soracloud model-publish-private` prepare its own encrypted
+bundle/chunk/finalize/compile/allow plan from a local admitted HF-style model
+directory instead of requiring a prebuilt encrypted plan document.
+
+- the new wrapper now accepts `--draft-file`, validates the local source
+  directory, derives deterministic bundle metadata, encrypts the bundle
+  against the active Torii upload recipient, shards it into fixed-size
+  encrypted chunks, and then executes the existing
+  upload/finalize/compile/allow flow;
+- `--plan-file` still works for already prepared publish plans, and
+  `--emit-plan-file` can now persist the prepared encrypted plan before
+  submission; and
+- focused CLI regressions now cover both the happy path and the missing-config
+  rejection path for draft-driven plan preparation.
+
+Validation:
+- `cargo fmt --all`
+- `CARGO_TARGET_DIR=target_soracloud_prepare_cli cargo check -p iroha_cli --tests`
+- `cargo check -p iroha_core --tests`
+- `CARGO_TARGET_DIR=target_soracloud_prepare_cli cargo test -p iroha_cli prepare_private_model_publish_plan_from_draft_ --bins`
+
+Open work for this Soracloud slice now remains:
+- hide the remaining admitted-model normalization/import work behind the same
+  one-click wrapper so `model-publish-private --draft-file` can ingest a wider
+  class of upstream model directories instead of expecting an already admitted
+  HF-style layout; and
+- keep extending end-to-end one-click Soracloud flows around budgets, domains,
+  and broader uploaded-model runtime coverage now that low-level and
+  draft-driven private-model publish flows are both present.
+
 Latest sync (2026-03-25 Soracloud uploaded-model/private-runtime CLI):
 `crates/iroha_cli/src/soracloud.rs`
 and
