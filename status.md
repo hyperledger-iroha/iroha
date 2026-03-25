@@ -2,6 +2,17 @@
 
 Last updated: 2026-03-25
 
+## 2026-03-25 Follow-up: FASTPQ transfer golden fixtures refreshed for canonical asset/account identifiers
+- Refreshed the checked-in transfer regression fixture and its derived golden
+  hashes after canonical asset/account identifier rendering changed the
+  serialized transfer-row keys used by `fastpq_prover`:
+  - `crates/fastpq_prover/tests/fixtures/transfer.norito`
+  - `crates/fastpq_prover/tests/fixtures/ordering_hash.json`
+  - `crates/fastpq_prover/tests/trace_commitment.rs`
+- Validation:
+  - `FASTPQ_UPDATE_FIXTURES=1 cargo test -p fastpq_prover ordering_hash_matches_golden_vectors -- --nocapture` (pass)
+  - `cargo test -p fastpq_prover --test trace_commitment -- --nocapture` (pass)
+
 ## 2026-03-25 Follow-up: FASTPQ stage2 balanced fixtures refreshed again for current canonical proof bytes
 - Refreshed the checked-in FASTPQ Stage 2 backend regression artifacts after the
   current CPU prover output drifted from the previously committed golden files

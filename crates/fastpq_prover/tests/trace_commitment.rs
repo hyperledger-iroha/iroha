@@ -232,7 +232,7 @@ fn trace_commitment_matches_golden_vectors() {
     let expectations: [(&str, &str); 3] = [
         (
             "transfer",
-            "ea8efb5c8a48603577f4686172bcf5f220bdf16827657fc22bb1f79b94390c8d",
+            "4e49d8e7788361107cb779d6ae1671e9a705fda33f000d7c2b3f73e4cb4f7bed",
         ),
         (
             "mint",
