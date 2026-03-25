@@ -1,7 +1,32 @@
 use super::*;
-use crate::offline::{OfflineToOnlineTransfer, OfflineVerdictRevocation, OfflineWalletCertificate};
+use crate::offline::{
+    OfflineReserveOperationResult, OfflineReserveRecord, OfflineToOnlineTransfer,
+    OfflineVerdictRevocation, OfflineWalletCertificate,
+};
 use crate::{asset::AssetId, prelude::Numeric};
 use iroha_crypto::Hash;
+
+isi! {
+    /// Register a zero-balance offline reserve lineage in shared Iroha state.
+    pub struct RegisterOfflineReserve {
+        /// Shared reserve record to persist.
+        pub reserve: OfflineReserveRecord,
+    }
+}
+
+isi! {
+    /// Commit a reserve mutation and its replay result into shared Iroha state.
+    pub struct CommitOfflineReserveOperation {
+        /// Expected authoritative server revision before applying the mutation.
+        pub expected_server_revision: u64,
+        /// Expected authoritative state hash before applying the mutation.
+        pub expected_state_hash: String,
+        /// Updated shared reserve record to persist.
+        pub reserve: OfflineReserveRecord,
+        /// Replayable result snapshot keyed by `kind:operation_id`.
+        pub result: OfflineReserveOperationResult,
+    }
+}
 
 isi! {
     /// Register an operator-issued offline allowance certificate on-ledger.
@@ -55,12 +80,40 @@ isi! {
     }
 }
 
+impl crate::seal::Instruction for RegisterOfflineReserve {}
+impl crate::seal::Instruction for CommitOfflineReserveOperation {}
 impl crate::seal::Instruction for RegisterOfflineAllowance {}
 impl crate::seal::Instruction for SubmitOfflineToOnlineTransfer {}
 impl crate::seal::Instruction for RegisterOfflineVerdictRevocation {}
 impl crate::seal::Instruction for ReclaimExpiredOfflineAllowance {}
 impl crate::seal::Instruction for ReserveOfflineEscrowBalance {}
 impl crate::seal::Instruction for RefundOfflineEscrowBalance {}
+
+impl RegisterOfflineReserve {
+    /// Construct a reserve-registration instruction for the supplied lineage record.
+    #[must_use]
+    pub fn new(reserve: OfflineReserveRecord) -> Self {
+        Self { reserve }
+    }
+}
+
+impl CommitOfflineReserveOperation {
+    /// Construct a reserve-mutation instruction for the supplied authoritative result.
+    #[must_use]
+    pub fn new(
+        expected_server_revision: u64,
+        expected_state_hash: String,
+        reserve: OfflineReserveRecord,
+        result: OfflineReserveOperationResult,
+    ) -> Self {
+        Self {
+            expected_server_revision,
+            expected_state_hash,
+            reserve,
+            result,
+        }
+    }
+}
 
 impl SubmitOfflineToOnlineTransfer {
     /// Construct a submission instruction from a prepared transfer bundle.

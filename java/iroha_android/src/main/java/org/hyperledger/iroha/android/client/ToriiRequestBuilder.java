@@ -30,6 +30,8 @@ final class ToriiRequestBuilder {
     } catch (final NoritoException ex) {
       throw new IllegalStateException("Failed to encode signed transaction", ex);
     }
+    TransportSecurity.requireHttpRequestAllowed(
+        "HttpClientTransport", baseUri, target, extraHeaders, norito);
     final TransportRequest.Builder builder =
         TransportRequest.builder()
             .setUri(target)
@@ -54,6 +56,8 @@ final class ToriiRequestBuilder {
       throw new IllegalArgumentException("hashHex must not be blank");
     }
     final URI target = resolve(baseUri, STATUS_PATH + "?hash=" + normalizedHash);
+    TransportSecurity.requireHttpRequestAllowed(
+        "HttpClientTransport", baseUri, target, extraHeaders, null);
     final TransportRequest.Builder builder =
         TransportRequest.builder().setUri(target).setMethod("GET").addHeader("Accept", "application/json");
     applyHeaders(builder, extraHeaders);

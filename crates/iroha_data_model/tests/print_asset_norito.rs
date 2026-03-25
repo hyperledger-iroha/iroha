@@ -12,5 +12,5 @@ fn print_usd_asset_norito() {
         .parse()
         .expect("parse asset def");
     let asset_id = AssetId::new(def, account);
-    println!("\n\nNORITO_ASSET_ID={}\n\n", asset_id.canonical_encoded());
+    println!("\n\nNORITO_ASSET_ID={}\n\n", asset_id.canonical_literal());
 }

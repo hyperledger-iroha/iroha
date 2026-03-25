@@ -16,6 +16,7 @@ use std::{
 };
 
 use iroha_crypto::{Hash, PublicKey};
+use iroha_primitives::json::Json;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
@@ -58,6 +59,10 @@ pub const CIPHERTEXT_QUERY_RESPONSE_VERSION_V1: u16 = 1;
 pub const CIPHERTEXT_QUERY_PROOF_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraServiceStateEntryV1`].
 pub const SORA_SERVICE_STATE_ENTRY_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraServiceConfigEntryV1`].
+pub const SORA_SERVICE_CONFIG_ENTRY_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraServiceSecretEntryV1`].
+pub const SORA_SERVICE_SECRET_ENTRY_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraDecryptionRequestRecordV1`].
 pub const SORA_DECRYPTION_REQUEST_RECORD_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraTrainingJobRecordV1`].
@@ -293,6 +298,12 @@ pub struct SoraContainerManifestV1 {
     /// Environment variables supplied at launch.
     #[norito(default)]
     pub env: std::collections::BTreeMap<String, String>,
+    /// Service-scoped config entries that must exist before this revision may start.
+    #[norito(default)]
+    pub required_config_names: Vec<String>,
+    /// Service-scoped secret entries that must exist before this revision may start.
+    #[norito(default)]
+    pub required_secret_names: Vec<String>,
     /// Capability policy enforced by SCR.
     pub capabilities: SoraCapabilityPolicyV1,
     /// Resource limits used at admission/runtime.
@@ -339,6 +350,38 @@ impl SoraContainerManifestV1 {
                 manifest: "sora container manifest",
                 field: "entrypoint",
             });
+        }
+
+        let mut required_configs = BTreeSet::new();
+        for config_name in &self.required_config_names {
+            validate_service_material_name(
+                "sora container manifest",
+                "required_config_names",
+                config_name,
+            )?;
+            if !required_configs.insert(config_name.clone()) {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "sora container manifest",
+                    field: "required_config_names",
+                    reason: format!("duplicate required config `{config_name}`"),
+                });
+            }
+        }
+
+        let mut required_secrets = BTreeSet::new();
+        for secret_name in &self.required_secret_names {
+            validate_service_material_name(
+                "sora container manifest",
+                "required_secret_names",
+                secret_name,
+            )?;
+            if !required_secrets.insert(secret_name.clone()) {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "sora container manifest",
+                    field: "required_secret_names",
+                    reason: format!("duplicate required secret `{secret_name}`"),
+                });
+            }
         }
 
         if let Some(path) = self.lifecycle.healthcheck_path.as_ref()
@@ -2963,6 +3006,40 @@ impl SoraDeploymentBundleV1 {
 
         Ok(())
     }
+
+    /// Validate that the effective service-scoped config and secret maps satisfy this revision.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when a required config or secret is absent.
+    pub fn validate_required_service_materials(
+        &self,
+        service_configs: &BTreeMap<String, SoraServiceConfigEntryV1>,
+        service_secrets: &BTreeMap<String, SoraServiceSecretEntryV1>,
+    ) -> Result<(), SoraCloudManifestError> {
+        for config_name in &self.container.required_config_names {
+            if !service_configs.contains_key(config_name) {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "sora deployment bundle",
+                    field: "container.required_config_names",
+                    reason: format!(
+                        "required service config `{config_name}` is missing from the effective deployment materials"
+                    ),
+                });
+            }
+        }
+        for secret_name in &self.container.required_secret_names {
+            if !service_secrets.contains_key(secret_name) {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "sora deployment bundle",
+                    field: "container.required_secret_names",
+                    reason: format!(
+                        "required service secret `{secret_name}` is missing from the effective deployment materials"
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Soracloud action recorded in authoritative service audit history.
@@ -2977,6 +3054,10 @@ pub enum SoraServiceLifecycleActionV1 {
     Deploy,
     /// Admission of a new candidate revision.
     Upgrade,
+    /// Deterministic config mutation against the active service deployment.
+    ConfigMutation,
+    /// Deterministic secret mutation against the active service deployment.
+    SecretMutation,
     /// Deterministic state mutation against a declared binding.
     StateMutation,
     /// Deterministic FHE execution that materialized a ciphertext result.
@@ -3194,6 +3275,18 @@ pub struct SoraServiceDeploymentStateV1 {
     pub process_generation: u64,
     /// Audit sequence that started the current process generation.
     pub process_started_sequence: u64,
+    /// Monotonic generation of service config updates.
+    #[norito(default)]
+    pub config_generation: u64,
+    /// Monotonic generation of service secret updates.
+    #[norito(default)]
+    pub secret_generation: u64,
+    /// Authoritative config entries scoped to the active service deployment.
+    #[norito(default)]
+    pub service_configs: BTreeMap<String, SoraServiceConfigEntryV1>,
+    /// Authoritative encrypted secret entries scoped to the active service deployment.
+    #[norito(default)]
+    pub service_secrets: BTreeMap<String, SoraServiceSecretEntryV1>,
     /// Active rollout, when the candidate is still under evaluation.
     #[norito(default)]
     pub active_rollout: Option<SoraServiceRolloutStateV1>,
@@ -3248,6 +3341,34 @@ impl SoraServiceDeploymentStateV1 {
             });
         }
 
+        for (config_name, entry) in &self.service_configs {
+            entry.validate()?;
+            if entry.config_name != *config_name {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "sora service deployment state",
+                    field: "service_configs",
+                    reason: format!(
+                        "map key `{config_name}` must match embedded config_name `{}`",
+                        entry.config_name
+                    ),
+                });
+            }
+        }
+
+        for (secret_name, entry) in &self.service_secrets {
+            entry.validate()?;
+            if entry.secret_name != *secret_name {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "sora service deployment state",
+                    field: "service_secrets",
+                    reason: format!(
+                        "map key `{secret_name}` must match embedded secret_name `{}`",
+                        entry.secret_name
+                    ),
+                });
+            }
+        }
+
         if let Some(active_rollout) = self.active_rollout.as_ref() {
             active_rollout.validate()?;
             if active_rollout.stage != SoraRolloutStageV1::Canary {
@@ -3264,6 +3385,186 @@ impl SoraServiceDeploymentStateV1 {
         }
 
         Ok(())
+    }
+}
+
+fn validate_service_material_name(
+    manifest: &'static str,
+    field: &'static str,
+    value: &str,
+) -> Result<(), SoraCloudManifestError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(SoraCloudManifestError::EmptyField { manifest, field });
+    }
+    if trimmed.len() != value.len() {
+        return Err(SoraCloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: "must not include leading or trailing whitespace".to_string(),
+        });
+    }
+    if value.starts_with('/') {
+        return Err(SoraCloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: "must not start with '/'".to_string(),
+        });
+    }
+    if value.contains("..") {
+        return Err(SoraCloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: "must not contain '..' path traversal segments".to_string(),
+        });
+    }
+    if value.len() > 256 {
+        return Err(SoraCloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: "must not exceed 256 bytes".to_string(),
+        });
+    }
+    if value.chars().any(|ch| ch.is_control()) {
+        return Err(SoraCloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: "must not contain control characters".to_string(),
+        });
+    }
+    Ok(())
+}
+
+/// Authoritative config entry tracked for one Soracloud service deployment.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoraServiceConfigEntryV1 {
+    /// Schema version; must equal [`SORA_SERVICE_CONFIG_ENTRY_VERSION_V1`].
+    pub schema_version: u16,
+    /// Stable service-scoped config identifier.
+    pub config_name: String,
+    /// Canonical typed config value encoded as canonical JSON text.
+    pub value_json: Json,
+    /// Deterministic hash of the canonical JSON value.
+    pub value_hash: Hash,
+    /// Audit sequence of the last update affecting this config entry.
+    pub last_update_sequence: u64,
+}
+
+impl SoraServiceConfigEntryV1 {
+    /// Return the deterministic hash of the canonical JSON value.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when the value cannot be encoded canonically.
+    pub fn canonical_value_hash(&self) -> Result<Hash, SoraCloudManifestError> {
+        let payload = canonical_service_config_json_payload(&self.value_json)?;
+        Ok(Hash::new(payload))
+    }
+
+    /// Validate config entry metadata and hash linkage.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when schema versions mismatch or the
+    /// canonical JSON value hash does not match the stored commitment.
+    pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        if self.schema_version != SORA_SERVICE_CONFIG_ENTRY_VERSION_V1 {
+            return Err(SoraCloudManifestError::UnsupportedVersion {
+                manifest: "sora service config entry",
+                expected: SORA_SERVICE_CONFIG_ENTRY_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+        validate_service_material_name(
+            "sora service config entry",
+            "config_name",
+            &self.config_name,
+        )?;
+        if self.last_update_sequence == 0 {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora service config entry",
+                field: "last_update_sequence",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        let expected = self.canonical_value_hash()?;
+        if self.value_hash != expected {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora service config entry",
+                field: "value_hash",
+                reason: "must equal the canonical hash of value_json".to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
+fn canonical_service_config_json_payload(
+    value_json: &Json,
+) -> Result<Vec<u8>, SoraCloudManifestError> {
+    let canonical = Json::from_str_norito(value_json.get()).map_err(|err| {
+        SoraCloudManifestError::InvalidField {
+            manifest: "sora service config entry",
+            field: "value_json",
+            reason: format!("failed to decode canonical json: {err}"),
+        }
+    })?;
+    if canonical.get() != value_json.get() {
+        return Err(SoraCloudManifestError::InvalidField {
+            manifest: "sora service config entry",
+            field: "value_json",
+            reason: "must use canonical Norito JSON encoding".to_string(),
+        });
+    }
+    Ok(canonical.get().as_bytes().to_vec())
+}
+
+/// Authoritative encrypted secret entry tracked for one Soracloud service deployment.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoraServiceSecretEntryV1 {
+    /// Schema version; must equal [`SORA_SERVICE_SECRET_ENTRY_VERSION_V1`].
+    pub schema_version: u16,
+    /// Stable service-scoped secret identifier.
+    pub secret_name: String,
+    /// Encrypted secret envelope admitted for this service.
+    pub envelope: SecretEnvelopeV1,
+    /// Audit sequence of the last update affecting this secret entry.
+    pub last_update_sequence: u64,
+}
+
+impl SoraServiceSecretEntryV1 {
+    /// Validate secret-entry metadata and envelope bounds.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when schema versions mismatch or the
+    /// embedded secret envelope fails validation.
+    pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        if self.schema_version != SORA_SERVICE_SECRET_ENTRY_VERSION_V1 {
+            return Err(SoraCloudManifestError::UnsupportedVersion {
+                manifest: "sora service secret entry",
+                expected: SORA_SERVICE_SECRET_ENTRY_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+        validate_service_material_name(
+            "sora service secret entry",
+            "secret_name",
+            &self.secret_name,
+        )?;
+        if self.last_update_sequence == 0 {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora service secret entry",
+                field: "last_update_sequence",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        self.envelope.validate()
     }
 }
 
@@ -6953,6 +7254,12 @@ pub struct SoraServiceAuditEventV1 {
     /// Optional state key associated with this audit event.
     #[norito(default)]
     pub state_key: Option<String>,
+    /// Optional service config entry associated with this audit event.
+    #[norito(default)]
+    pub config_name: Option<String>,
+    /// Optional service secret entry associated with this audit event.
+    #[norito(default)]
+    pub secret_name: Option<String>,
     /// Optional rollout handle associated with the transition.
     #[norito(default)]
     pub rollout_handle: Option<String>,
@@ -7062,6 +7369,12 @@ impl SoraServiceAuditEventV1 {
                 field: "state_key",
                 reason: "must start with '/' when provided".to_string(),
             });
+        }
+        if let Some(config_name) = self.config_name.as_deref() {
+            validate_service_material_name("sora service audit event", "config_name", config_name)?;
+        }
+        if let Some(secret_name) = self.secret_name.as_deref() {
+            validate_service_material_name("sora service audit event", "secret_name", secret_name)?;
         }
         if self
             .jurisdiction_tag
@@ -7418,6 +7731,8 @@ pub enum SoracloudHostOperationV1 {
     AppendJournal,
     /// Publish a checkpoint artifact and return its content-addressed digest.
     PublishCheckpoint,
+    /// Read authoritative service config material for the active service revision.
+    ReadConfig,
     /// Read node-local secret material exposed only through the runtime host.
     ReadSecret,
     /// Read node-local credential material exposed only through the runtime host.
@@ -7476,6 +7791,8 @@ pub enum SoracloudHostRequestPayloadV1 {
     AppendJournal(SoracloudAppendJournalRequestV1),
     /// Request to publish a checkpoint artifact.
     PublishCheckpoint(SoracloudPublishCheckpointRequestV1),
+    /// Request to read an authoritative service config payload.
+    ReadConfig(SoracloudReadConfigRequestV1),
     /// Request to read a node-local secret.
     ReadSecret(SoracloudReadSecretRequestV1),
     /// Request to read a node-local credential.
@@ -7534,6 +7851,8 @@ pub enum SoracloudHostResponsePayloadV1 {
     AppendJournal(SoracloudAppendJournalResponseV1),
     /// Response to published checkpoint material.
     PublishCheckpoint(SoracloudPublishCheckpointResponseV1),
+    /// Response to service config lookups.
+    ReadConfig(SoracloudReadConfigResponseV1),
     /// Response to secret lookups.
     ReadSecret(SoracloudReadSecretResponseV1),
     /// Response to credential lookups.
@@ -7685,6 +8004,31 @@ pub struct SoracloudPublishCheckpointResponseV1 {
     pub artifact_hash: Hash,
 }
 
+/// Read authoritative service config material for the active service revision.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoracloudReadConfigRequestV1 {
+    /// Stable config identifier relative to the authoritative service-config set.
+    pub config_name: String,
+}
+
+/// Response to an authoritative service config lookup.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoracloudReadConfigResponseV1 {
+    /// Whether the requested config was found for the active service revision.
+    pub found: bool,
+    /// Canonical JSON payload bytes when the lookup succeeds.
+    #[norito(default)]
+    pub payload_bytes: Vec<u8>,
+}
+
 /// Read node-local secret material for the active service revision.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -7783,6 +8127,25 @@ pub fn encode_bundle_provenance_payload(
     norito::to_bytes(bundle)
 }
 
+/// Encode the canonical provenance signature payload for deployment bundles plus inline materials.
+///
+/// The payload layout is a Norito tuple in this exact field order:
+/// `(bundle, initial_service_configs, initial_service_secrets)`.
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+pub fn encode_bundle_with_materials_provenance_payload(
+    bundle: &SoraDeploymentBundleV1,
+    initial_service_configs: &BTreeMap<String, Json>,
+    initial_service_secrets: &BTreeMap<String, SecretEnvelopeV1>,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(&(
+        bundle.clone(),
+        initial_service_configs.clone(),
+        initial_service_secrets.clone(),
+    ))
+}
+
 /// Encode the canonical provenance signature payload for service rollback.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
@@ -7795,6 +8158,64 @@ pub fn encode_rollback_provenance_payload(
     target_version: Option<&str>,
 ) -> Result<Vec<u8>, norito::Error> {
     norito::to_bytes(&(service_name, target_version))
+}
+
+/// Encode the canonical provenance signature payload for service config upserts.
+///
+/// The payload layout is a Norito tuple in this exact field order:
+/// `(service_name, config_name, value_json)`.
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+pub fn encode_set_service_config_provenance_payload(
+    service_name: &str,
+    config_name: &str,
+    value_json: &Json,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(&(service_name, config_name, value_json.clone()))
+}
+
+/// Encode the canonical provenance signature payload for service config deletions.
+///
+/// The payload layout is a Norito tuple in this exact field order:
+/// `(service_name, config_name)`.
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+pub fn encode_delete_service_config_provenance_payload(
+    service_name: &str,
+    config_name: &str,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(&(service_name, config_name))
+}
+
+/// Encode the canonical provenance signature payload for service secret upserts.
+///
+/// The payload layout is a Norito tuple in this exact field order:
+/// `(service_name, secret_name, secret_envelope)`.
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+pub fn encode_set_service_secret_provenance_payload(
+    service_name: &str,
+    secret_name: &str,
+    secret: &SecretEnvelopeV1,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(&(service_name, secret_name, secret.clone()))
+}
+
+/// Encode the canonical provenance signature payload for service secret deletions.
+///
+/// The payload layout is a Norito tuple in this exact field order:
+/// `(service_name, secret_name)`.
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+pub fn encode_delete_service_secret_provenance_payload(
+    service_name: &str,
+    secret_name: &str,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(&(service_name, secret_name))
 }
 
 /// Encode the canonical provenance signature payload for state mutations.
@@ -9670,6 +10091,8 @@ mod tests {
             entrypoint: "main".to_string(),
             args: vec!["--http".to_string()],
             env: BTreeMap::from([("APP_ENV".to_string(), "prod".to_string())]),
+            required_config_names: Vec::new(),
+            required_secret_names: Vec::new(),
             capabilities: SoraCapabilityPolicyV1 {
                 network: SoraNetworkPolicyV1::Allowlist(vec![
                     "api.sora.internal".to_string(),
@@ -10385,6 +10808,84 @@ mod tests {
     }
 
     #[test]
+    fn deployment_bundle_validate_rejects_missing_required_service_config() {
+        let mut container = sample_container();
+        container.required_config_names = vec!["runtime/feature_flag".to_string()];
+        let container_hash = Hash::new(Encode::encode(&container));
+        let mut service = sample_service(vec![sample_binding("session")]);
+        service.container.manifest_hash = container_hash;
+        let bundle = SoraDeploymentBundleV1 {
+            schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+            container,
+            service,
+        };
+        let error = bundle
+            .validate_required_service_materials(&BTreeMap::new(), &BTreeMap::new())
+            .expect_err("missing required config must fail");
+        assert!(matches!(
+            error,
+            SoraCloudManifestError::InvalidField {
+                field: "container.required_config_names",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn deployment_bundle_validate_accepts_present_required_service_materials() {
+        let mut container = sample_container();
+        container.required_config_names = vec!["runtime/feature_flag".to_string()];
+        container.required_secret_names = vec!["db/password".to_string()];
+        let container_hash = Hash::new(Encode::encode(&container));
+        let mut service = sample_service(vec![sample_binding("session")]);
+        service.container.manifest_hash = container_hash;
+        let bundle = SoraDeploymentBundleV1 {
+            schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+            container,
+            service,
+        };
+        let config_value_json = Json::from(norito::json!(true));
+        let service_configs = BTreeMap::from([(
+            "runtime/feature_flag".to_string(),
+            SoraServiceConfigEntryV1 {
+                schema_version: SORA_SERVICE_CONFIG_ENTRY_VERSION_V1,
+                config_name: "runtime/feature_flag".to_string(),
+                value_hash: Hash::new(
+                    canonical_service_config_json_payload(&config_value_json)
+                        .expect("canonical payload"),
+                ),
+                value_json: config_value_json,
+                last_update_sequence: 1,
+            },
+        )]);
+        let secret_envelope = SecretEnvelopeV1 {
+            schema_version: SECRET_ENVELOPE_VERSION_V1,
+            encryption: SecretEnvelopeEncryptionV1::ClientCiphertext,
+            key_id: "kms://tenant/db".to_string(),
+            key_version: NonZeroU32::new(1).expect("nonzero"),
+            nonce: vec![1, 2, 3],
+            ciphertext: vec![4, 5, 6],
+            commitment: sample_hash(201),
+            aad_digest: None,
+        };
+        let service_secrets = BTreeMap::from([(
+            "db/password".to_string(),
+            SoraServiceSecretEntryV1 {
+                schema_version: SORA_SERVICE_SECRET_ENTRY_VERSION_V1,
+                secret_name: "db/password".to_string(),
+                envelope: secret_envelope,
+                last_update_sequence: 1,
+            },
+        )]);
+        assert!(
+            bundle
+                .validate_required_service_materials(&service_configs, &service_secrets)
+                .is_ok(),
+            "required materials present in the effective deployment state must pass"
+        );
+    }
+
+    #[test]
     fn service_runtime_state_validate_rejects_load_out_of_range() {
         let runtime_state = SoraServiceRuntimeStateV1 {
             schema_version: SORA_SERVICE_RUNTIME_STATE_VERSION_V1,
@@ -10465,6 +10966,10 @@ mod tests {
                 updated_sequence: 7,
             }),
             last_rollout: None,
+            config_generation: 0,
+            secret_generation: 0,
+            service_configs: BTreeMap::new(),
+            service_secrets: BTreeMap::new(),
         };
 
         let error = deployment
@@ -10493,6 +10998,8 @@ mod tests {
             governance_tx_hash: None,
             binding_name: None,
             state_key: None,
+            config_name: None,
+            secret_name: None,
             rollout_handle: None,
             policy_name: None,
             policy_snapshot_hash: None,
@@ -10548,6 +11055,8 @@ mod tests {
             governance_tx_hash: Some(sample_hash(176)),
             binding_name: Some("private_state".parse().expect("valid name")),
             state_key: Some("/state/private/patient-1".to_string()),
+            config_name: None,
+            secret_name: None,
             rollout_handle: None,
             policy_name: Some("phi_threshold_policy".parse().expect("valid name")),
             policy_snapshot_hash: Some(sample_hash(177)),

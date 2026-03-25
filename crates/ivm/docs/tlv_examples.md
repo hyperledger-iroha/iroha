@@ -33,7 +33,8 @@ Examples (hex, spaces added for readability)
 
 - AssetId (0x0007, v1)
   - Payload: Norito-encoded `AssetId { definition, account }` bytes.
-  - Textual API representation is canonical encoded form: `norito:<hex>`.
+  - Textual API representation is the public form:
+    `<asset-definition-id>#<account-id>` with optional `#dataspace:<id>` suffix.
   - TLV: `00 07 01 <len:be u32> <payload bytes> <hash:32>`
 
 - DomainId (0x0008, v1)

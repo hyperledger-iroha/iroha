@@ -531,7 +531,6 @@ This document contains the help content for the `iroha` command-line program.
 * [`iroha tools address audit`↴](#iroha-tools-address-audit)
 * [`iroha tools address normalize`↴](#iroha-tools-address-normalize)
 * [`iroha tools encode`↴](#iroha-tools-encode)
-* [`iroha tools encode asset-id`↴](#iroha-tools-encode-asset-id)
 * [`iroha tools crypto`↴](#iroha-tools-crypto)
 * [`iroha tools crypto sm2`↴](#iroha-tools-crypto-sm2)
 * [`iroha tools crypto sm2 keygen`↴](#iroha-tools-crypto-sm2-keygen)
@@ -1312,9 +1311,10 @@ Retrieve details of a specific asset
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Encoded asset identifier (`norito:<hex>`)
+* `--definition <DEFINITION>` — Canonical asset definition id (unprefixed Base58 address) used with `--account`
 * `--definition-alias <DEFINITION_ALIAS>` — Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`) used with `--account`
 * `--account <ACCOUNT>` — Account identifier (canonical I105), required with `--definition-alias`
+* `--scope <SCOPE>` — Optional balance scope (`global` or `dataspace:<id>`)
 
 
 
@@ -1388,9 +1388,10 @@ Increase the quantity of an asset
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Encoded asset identifier (`norito:<hex>`)
+* `--definition <DEFINITION>` — Canonical asset definition id (unprefixed Base58 address) used with `--account`
 * `--definition-alias <DEFINITION_ALIAS>` — Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`) used with `--account`
 * `--account <ACCOUNT>` — Account identifier (canonical I105), required with `--definition-alias`
+* `--scope <SCOPE>` — Optional balance scope (`global` or `dataspace:<id>`)
 * `-q`, `--quantity <QUANTITY>` — Amount of change (integer or decimal)
 
 
@@ -1403,9 +1404,10 @@ Decrease the quantity of an asset
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Encoded asset identifier (`norito:<hex>`)
+* `--definition <DEFINITION>` — Canonical asset definition id (unprefixed Base58 address) used with `--account`
 * `--definition-alias <DEFINITION_ALIAS>` — Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`) used with `--account`
 * `--account <ACCOUNT>` — Account identifier (canonical I105), required with `--definition-alias`
+* `--scope <SCOPE>` — Optional balance scope (`global` or `dataspace:<id>`)
 * `-q`, `--quantity <QUANTITY>` — Amount of change (integer or decimal)
 
 
@@ -1418,9 +1420,10 @@ Transfer an asset between accounts
 
 ###### **Options:**
 
-* `-i`, `--id <ID>` — Encoded asset identifier (`norito:<hex>`)
+* `--definition <DEFINITION>` — Canonical asset definition id (unprefixed Base58 address) used with `--account`
 * `--definition-alias <DEFINITION_ALIAS>` — Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`) used with `--account`
 * `--account <ACCOUNT>` — Source account identifier (canonical I105), required with `--definition-alias`
+* `--scope <SCOPE>` — Optional balance scope (`global` or `dataspace:<id>`)
 * `-t`, `--to <TO>` — Destination account identifier (canonical I105 literal)
 * `-q`, `--quantity <QUANTITY>` — Transfer amount (integer or decimal)
 * `--ensure-destination` — Attempt to register the destination when implicit receive is disabled
@@ -1928,7 +1931,9 @@ Register a trigger
 * `--data-filter <JSON>` — JSON for a `DataEventFilter` to use as filter
 * `--data-domain <DATA_DOMAIN>` — Data filter preset: events within a domain
 * `--data-account <DATA_ACCOUNT>` — Data filter preset: events for an account (canonical I105 literal)
-* `--data-asset <DATA_ASSET>` — Data filter preset: events for an encoded asset (`norito:<hex>`)
+* `--data-asset <DATA_ASSET>` — Data filter preset: asset definition id for a concrete asset bucket; use with `--data-asset-account`
+* `--data-asset-account <DATA_ASSET_ACCOUNT>` — Data filter preset: account owning the selected asset bucket
+* `--data-asset-scope <DATA_ASSET_SCOPE>` — Data filter preset: optional balance scope (`global` or `dataspace:<id>`) for `--data-asset`
 * `--data-asset-definition <DATA_ASSET_DEFINITION>` — Data filter preset: events for an asset definition
 * `--data-role <DATA_ROLE>` — Data filter preset: events for a role
 * `--data-trigger <DATA_TRIGGER>` — Data filter preset: events for a trigger
@@ -9813,32 +9818,6 @@ Rewrite newline-separated addresses into canonical encodings
   Possible values: `i105`, `canonical-hex`, `json`
 
 * `--allow-errors` — Succeed even if parse errors were encountered (allow auditing large dumps)
-
-
-
-## `iroha tools encode`
-
-Canonical ID encoders
-
-**Usage:** `iroha tools encode <COMMAND>`
-
-###### **Subcommands:**
-
-* `asset-id` — Encode a canonical asset id (`norito:<hex>`)
-
-
-
-## `iroha tools encode asset-id`
-
-Encode a canonical asset id (`norito:<hex>`)
-
-**Usage:** `iroha tools encode asset-id [OPTIONS] --account <ACCOUNT>`
-
-###### **Options:**
-
-* `--definition <DEFINITION>` — Canonical asset definition id (unprefixed Base58)
-* `--alias <ALIAS>` — Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`)
-* `--account <ACCOUNT>` — Canonical I105 account literal receiving the asset bucket
 
 
 

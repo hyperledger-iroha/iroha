@@ -67,11 +67,11 @@ function loadInstructionBytes(name) {
   return Buffer.from(fixture.instruction, "base64");
 }
 
-function loadEncodedAssetIdFromFixture(name) {
+function loadAssetIdFromFixture(name) {
   const decoded = noritoDecodeInstruction(loadInstructionBytes(name));
   const destination = decoded?.Mint?.Asset?.destination ?? decoded?.Burn?.Asset?.destination;
-  if (typeof destination !== "string" || !destination.startsWith("norito:")) {
-    throw new Error(`fixture ${name} did not decode to encoded AssetId literal`);
+  if (typeof destination !== "string" || !destination.includes("#")) {
+    throw new Error(`fixture ${name} did not decode to canonical public AssetId literal`);
   }
   return destination;
 }
@@ -105,7 +105,7 @@ test("norito encode/decode supports mint asset instructions", () => {
     Mint: {
       Asset: {
         object: "42",
-        destination: loadEncodedAssetIdFromFixture("mint_asset_numeric.json"),
+        destination: loadAssetIdFromFixture("mint_asset_numeric.json"),
       },
     },
   };
@@ -118,7 +118,7 @@ test("norito encode/decode supports transfer asset instructions", () => {
   const instruction = {
     Transfer: {
       Asset: {
-        source: loadEncodedAssetIdFromFixture("mint_asset_numeric.json"),
+        source: loadAssetIdFromFixture("mint_asset_numeric.json"),
         object: "10",
         destination: ACCOUNT_ID,
       },
@@ -129,21 +129,21 @@ test("norito encode/decode supports transfer asset instructions", () => {
   assert.deepEqual(decoded, instruction);
 });
 
-test("noritoDecodeInstruction keeps encoded asset ids without @domain rewrites", () => {
+test("noritoDecodeInstruction keeps canonical public asset ids without @domain rewrites", () => {
   const bytes = loadInstructionBytes("mint_asset_numeric.json");
   const decoded = noritoDecodeInstruction(bytes);
   const assetId = decoded?.Mint?.Asset?.destination;
   assert.equal(typeof assetId, "string");
-  assert.equal(assetId.startsWith("norito:"), true);
+  assert.equal(assetId.includes("#"), true);
   assert.equal(assetId.includes("@"), false);
 });
 
-test("noritoDecodeInstruction preserves encoded nested asset identifiers", () => {
+test("noritoDecodeInstruction preserves nested public asset identifiers", () => {
   const bytes = loadInstructionBytes("burn_asset_numeric.json");
   const decoded = noritoDecodeInstruction(bytes);
   const assetId = decoded?.Burn?.Asset?.destination;
   assert.equal(typeof assetId, "string");
-  assert.equal(assetId.startsWith("norito:"), true);
+  assert.equal(assetId.includes("#"), true);
   assert.equal(assetId.includes("@"), false);
 });
 

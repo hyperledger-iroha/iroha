@@ -136,6 +136,13 @@ pub enum Error {
     HandshakeConfidentialMismatch,
     /// Peer crypto handshake mismatch (`sm_enabled/sm_openssl_preview`)
     HandshakeCryptoMismatch,
+    /// Unexpected peer identity during handshake (expected {expected}, found {found})
+    HandshakePeerMismatch {
+        /// Peer identifier the outbound dial expected to authenticate.
+        expected: iroha_data_model::prelude::PeerId,
+        /// Peer identifier actually authenticated by the signed handshake.
+        found: iroha_data_model::prelude::PeerId,
+    },
     /// Handshake metadata exceeds the maximum supported length (`u16::MAX` bytes)
     HandshakeMessageTooLarge,
     /// `SoraNet` handshake negotiation failed.

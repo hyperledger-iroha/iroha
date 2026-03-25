@@ -584,7 +584,7 @@ fn parse_metadata_target(kind: u8, object: String) -> BridgeResult<MetadataTarge
             .map_err(|_| BridgeError::MetadataTarget),
         1 => parse_account_id(object).map(MetadataTarget::Account),
         2 => parse_asset_definition(object).map(MetadataTarget::AssetDefinition),
-        3 => AssetId::parse_encoded(&object)
+        3 => AssetId::parse_literal(&object)
             .map(MetadataTarget::Asset)
             .map_err(|_| BridgeError::MetadataTarget),
         _ => Err(BridgeError::MetadataTarget),
@@ -947,7 +947,7 @@ fn compute_offline_receipt_challenge(
     let receiver = AccountId::parse_encoded(&receiver_raw)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .map_err(|_| BridgeError::OfflineReceiver)?;
-    let asset = AssetId::parse_encoded(&asset_raw).map_err(|_| BridgeError::OfflineAsset)?;
+    let asset = AssetId::parse_literal(&asset_raw).map_err(|_| BridgeError::OfflineAsset)?;
     let amount = Numeric::from_str(&amount_raw).map_err(|_| BridgeError::Quantity)?;
     let sender_certificate_id =
         Hash::from_str(&sender_certificate_id_raw).map_err(|_| BridgeError::OfflineNonce)?;
@@ -988,7 +988,7 @@ fn encode_offline_spend_receipt_payload(
     let to = AccountId::parse_encoded(&to_raw)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .map_err(|_| BridgeError::Destination)?;
-    let asset = AssetId::parse_encoded(&asset_raw).map_err(|_| BridgeError::OfflineAsset)?;
+    let asset = AssetId::parse_literal(&asset_raw).map_err(|_| BridgeError::OfflineAsset)?;
     let amount = Numeric::from_str(&amount_raw).map_err(|_| BridgeError::Quantity)?;
     let platform_proof: OfflinePlatformProof =
         norito::json::from_str(&platform_proof_json).map_err(|_| BridgeError::OfflineSerialize)?;
@@ -7424,7 +7424,7 @@ mod accel_tests {
             "usd".parse().expect("asset name"),
         );
         let asset = AssetId::new(definition.clone(), account_id.clone());
-        let asset_literal = cstring(&asset.canonical_encoded());
+        let asset_literal = cstring(&asset.canonical_literal());
 
         let mut out_json_ptr: *mut u8 = ptr::null_mut();
         let mut out_json_len: c_ulong = 0;
@@ -7449,7 +7449,7 @@ mod accel_tests {
         let object = parsed.as_object().expect("json object");
         assert_eq!(
             object.get("asset_id").and_then(JsonValue::as_str),
-            Some(asset.canonical_encoded().as_str())
+            Some(asset.canonical_literal().as_str())
         );
         assert_eq!(
             object
@@ -8424,7 +8424,7 @@ mod offline_challenge_tests {
     }
 
     fn asset_literal(asset: &AssetId) -> String {
-        asset.canonical_encoded()
+        asset.canonical_literal()
     }
 
     fn account_with_cstring(_domain: &str, seed: u8) -> (AccountId, CString) {
@@ -8452,7 +8452,7 @@ mod offline_challenge_tests {
         );
         let asset_id = AssetId::new(asset_definition, controller_account.clone());
         let asset_literal = asset_literal(&asset_id);
-        let reparsed_asset = AssetId::parse_encoded(&asset_literal).expect("asset literal parse");
+        let reparsed_asset = AssetId::parse_literal(&asset_literal).expect("asset literal parse");
         assert_eq!(reparsed_asset, asset_id);
         let asset_cstr = CString::new(asset_literal).expect("asset identifier string");
         let amount = CString::new("500").expect("amount");
@@ -9397,10 +9397,10 @@ pub unsafe extern "C" fn connect_norito_decode_signed_transaction_json(
     }
 }
 
-/// Decode an encoded `AssetId` (`norito:<hex>`) into canonical readable JSON fields.
+/// Decode a canonical public `AssetId` literal into canonical readable JSON fields.
 ///
 /// Response JSON object fields:
-/// - `asset_id`: canonical encoded asset id (`norito:<hex>`)
+/// - `asset_id`: canonical public asset id (`<asset-definition-id>#<account-id>`)
 /// - `asset_definition_id`: canonical asset definition id (unprefixed Base58 address)
 /// - `account_id`: canonical account id (I105 literal)
 ///
@@ -9419,11 +9419,11 @@ pub unsafe extern "C" fn connect_norito_decode_asset_id_json(
         }
         let asset_literal = unsafe { read_string_bridge(asset_ptr, asset_len) }?;
         let asset =
-            AssetId::parse_encoded(&asset_literal).map_err(|_| BridgeError::OfflineAsset)?;
+            AssetId::parse_literal(&asset_literal).map_err(|_| BridgeError::OfflineAsset)?;
         let payload = JsonValue::Object(JsonMap::from_iter([
             (
                 "asset_id".to_owned(),
-                JsonValue::String(asset.canonical_encoded()),
+                JsonValue::String(asset.canonical_literal()),
             ),
             (
                 "asset_definition_id".to_owned(),
@@ -10033,7 +10033,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Offline
     target_os = "macos",
     target_os = "windows"
 ))]
-
 #[cfg(any(
     target_os = "android",
     target_os = "linux",
@@ -10446,7 +10445,7 @@ mod offline_receipt_challenge_tests {
     }
 
     fn asset_literal(asset: &AssetId) -> String {
-        asset.canonical_encoded()
+        asset.canonical_literal()
     }
 
     #[test]
@@ -10455,7 +10454,7 @@ mod offline_receipt_challenge_tests {
         let receiver = sample_account_id();
         let asset = sample_asset_id(&receiver);
         let asset_literal = asset_literal(&asset);
-        let reparsed_asset = AssetId::parse_encoded(&asset_literal).expect("asset literal parse");
+        let reparsed_asset = AssetId::parse_literal(&asset_literal).expect("asset literal parse");
         assert_eq!(reparsed_asset, asset);
         let sender_certificate_id = Hash::new(b"receipt-certificate").to_string();
         let nonce = Hash::new(b"receipt-nonce").to_string();
@@ -10478,7 +10477,7 @@ mod offline_receipt_challenge_tests {
         let receiver = sample_account_id();
         let asset = sample_asset_id(&receiver);
         let asset_literal = asset_literal(&asset);
-        let reparsed_asset = AssetId::parse_encoded(&asset_literal).expect("asset literal parse");
+        let reparsed_asset = AssetId::parse_literal(&asset_literal).expect("asset literal parse");
         assert_eq!(reparsed_asset, asset);
         let sender_certificate_id = Hash::new(b"receipt-certificate").to_string();
         let nonce = Hash::new(b"receipt-nonce").to_string();
@@ -13139,8 +13138,8 @@ mod sorafs_tests {
         let platform_proof_json =
             norito::json::to_json(&platform_proof).expect("platform proof json");
         let certificate_id_hex = hex::encode(certificate.certificate_id().as_ref());
-        let asset_literal = asset.canonical_encoded();
-        let reparsed_asset = AssetId::parse_encoded(&asset_literal).expect("asset literal parse");
+        let asset_literal = asset.canonical_literal();
+        let reparsed_asset = AssetId::parse_literal(&asset_literal).expect("asset literal parse");
         assert_eq!(reparsed_asset, asset);
 
         let jni_bytes = encode_offline_spend_receipt_payload(

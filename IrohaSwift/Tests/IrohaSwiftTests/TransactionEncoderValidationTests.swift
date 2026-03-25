@@ -110,14 +110,14 @@ final class TransactionEncoderValidationTests: XCTestCase {
         }
     }
 
-    func testMetadataTargetAcceptsNoritoAssetId() throws {
+    func testMetadataTargetAcceptsCanonicalAssetId() throws {
         let target = try TransactionInputValidator.sanitizeMetadataTarget(
-            .asset("norito:ABcd")
+            .asset("62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
         )
         guard case let .asset(assetId) = target else {
             return XCTFail("expected asset target")
         }
-        XCTAssertEqual(assetId, "norito:abcd")
+        XCTAssertEqual(assetId, "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
     }
 
     func testCastZkBallotRejectsIncompleteLockHints() throws {

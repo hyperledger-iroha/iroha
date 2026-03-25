@@ -72,12 +72,12 @@ import {
 } from "@iroha/iroha-js";
 
 const mintInstruction = buildMintAssetInstruction({
-  assetId: "norito:4e52543000000001",
+  assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
   quantity: "10",
 });
 
 const transferInstruction = buildTransferAssetInstruction({
-  sourceAssetId: "norito:4e52543000000001",
+  sourceAssetId: "<base58-asset-definition-id>#<i105-account-id>",
   destinationAccountId: "i105...",
   quantity: "5",
 });
@@ -85,7 +85,7 @@ const transferInstruction = buildTransferAssetInstruction({
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
   authority: "i105...",
-  mint: { assetId: "norito:4e52543000000001", quantity: "10" },
+  mint: { assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", quantity: "10" },
   transfers: [{ destinationAccountId: "i105...", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
@@ -111,7 +111,7 @@ const registerDomain = noritoEncodeInstruction(
 );
 const registerAccount = buildRegisterAccountInstruction({ accountId: "i105..." });
 const transfer = buildTransferAssetInstruction({
-  sourceAssetId: "norito:4e52543000000001",
+  sourceAssetId: "<base58-asset-definition-id>#<i105-account-id>",
   destinationAccountId: "i105...",
   quantity: "5",
 });
@@ -343,17 +343,17 @@ for await (const perm of torii.iterateAccountPermissions("i105...", {
 }
 const holdings = await torii.listAccountAssets("i105...", {
   limit: 5,
-  assetId: "norito:4e52543000000001",
+  assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
 });
 console.log("asset holdings", holdings.items);
 const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 5,
-  assetId: "norito:4e52543000000001",
+  assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
 });
 console.log("top holders", holders.items.map((entry) => entry.account_id));
 const txs = await torii.listAccountTransactions("i105...", {
   limit: 3,
-  assetId: "norito:4e52543000000001",
+  assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
 });
 console.log("recent hashes", txs.items.map((tx) => tx.entrypoint_hash));
 

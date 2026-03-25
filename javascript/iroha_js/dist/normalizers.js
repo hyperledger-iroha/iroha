@@ -343,28 +343,40 @@ export function normalizeAssetId(value, name) {
   if (raw.length === 0) {
     fail(ValidationErrorCode.INVALID_ASSET_ID, `${name} must be a non-empty string`, name);
   }
-  if (raw.includes("#")) {
+  const parts = raw.split("#");
+  if (parts.length < 2 || parts.length > 3) {
     fail(
       ValidationErrorCode.INVALID_ASSET_ID,
-      `${name} must use encoded AssetId form 'norito:<hex>'; legacy 'asset#domain#account' and 'asset##account' forms are not supported`,
+      `${name} must use '<asset-definition-id>#<account-id>' with optional '#dataspace:<id>' suffix`,
       name,
     );
   }
-  const prefix = "norito:";
-  if (!raw.startsWith(prefix)) {
+  const [assetDefinitionId, accountId, scope] = parts;
+  if (
+    assetDefinitionId.length === 0 ||
+    /\s/.test(assetDefinitionId) ||
+    assetDefinitionId.includes("%") ||
+    assetDefinitionId.includes("/") ||
+    assetDefinitionId.includes("?") ||
+    assetDefinitionId.includes(":")
+  ) {
     fail(
       ValidationErrorCode.INVALID_ASSET_ID,
-      `${name} must use encoded AssetId form 'norito:<hex>'`,
+      `${name}.assetDefinitionId must be a canonical unprefixed Base58 asset definition id`,
       name,
     );
   }
-  const body = raw.slice(prefix.length).trim();
-  if (body.length === 0 || body.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(body)) {
+  const normalizedAccountId = normalizeAccountId(accountId, `${name}.accountId`);
+  if (scope === undefined) {
+    return `${assetDefinitionId}#${normalizedAccountId}`;
+  }
+  const scopeMatch = /^dataspace:(\d+)$/.exec(scope);
+  if (!scopeMatch) {
     fail(
       ValidationErrorCode.INVALID_ASSET_ID,
-      `${name} must use encoded AssetId form 'norito:<hex>'`,
+      `${name}.scope must use 'dataspace:<id>' when present`,
       name,
     );
   }
-  return `${prefix}${body.toLowerCase()}`;
+  return `${assetDefinitionId}#${normalizedAccountId}#dataspace:${scopeMatch[1]}`;
 }

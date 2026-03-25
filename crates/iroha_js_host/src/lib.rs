@@ -480,7 +480,7 @@ fn parse_account_id(input: &str, label: &str) -> napi::Result<AccountId> {
         })
 }
 
-/// Build a canonical encoded `AssetId` literal (`norito:<hex>`) from definition/account parts.
+/// Build a canonical public `AssetId` literal from definition/account parts.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // napi-rs requires owned `String` inputs at the boundary
 pub fn encode_asset_id(asset_definition_id: String, account_id: String) -> napi::Result<String> {
@@ -492,7 +492,7 @@ pub fn encode_asset_id(asset_definition_id: String, account_id: String) -> napi:
             )
         })?;
     let account = parse_account_id(&account_id, "account id")?;
-    Ok(AssetId::new(definition, account).canonical_encoded())
+    Ok(AssetId::new(definition, account).canonical_literal())
 }
 
 #[napi(js_name = "blake3Hash")]
@@ -6125,7 +6125,7 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         if let MintBox::Asset(mint) = mint_box {
             let mut asset_fields = json::Map::new();
             let object = json::to_value(mint.object()).map_err(norito_to_napi)?;
-            let destination = json::Value::String(mint.destination().canonical_encoded());
+            let destination = json::Value::String(mint.destination().canonical_literal());
             asset_fields.insert("object".to_owned(), object);
             asset_fields.insert("destination".to_owned(), destination);
             mint_map.insert("Asset".to_owned(), json::Value::Object(asset_fields));
@@ -6152,7 +6152,7 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         let mut transfer_map = json::Map::new();
         if let TransferBox::Asset(transfer) = transfer_box {
             let mut asset_fields = json::Map::new();
-            let source = json::Value::String(transfer.source().canonical_encoded());
+            let source = json::Value::String(transfer.source().canonical_literal());
             let quantity = json::to_value(transfer.object()).map_err(norito_to_napi)?;
             let destination = json::to_value(transfer.destination()).map_err(norito_to_napi)?;
             asset_fields.insert("source".to_owned(), source);
@@ -6205,7 +6205,7 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         if let BurnBox::Asset(burn) = burn_box {
             let mut asset_fields = json::Map::new();
             let object = json::to_value(burn.object()).map_err(norito_to_napi)?;
-            let destination = json::Value::String(burn.destination().canonical_encoded());
+            let destination = json::Value::String(burn.destination().canonical_literal());
             asset_fields.insert("object".to_owned(), object);
             asset_fields.insert("destination".to_owned(), destination);
             burn_map.insert("Asset".to_owned(), json::Value::Object(asset_fields));

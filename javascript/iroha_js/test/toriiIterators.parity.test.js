@@ -73,8 +73,8 @@ test("listNfts forwards pagination/sort/filter and validates filter payloads", a
 test("iterateAccountAssets paginates with maxItems", async () => {
   let callCount = 0;
   const expectedPath = `/v1/accounts/${encodeURIComponent(FIXTURE_ACCOUNT_ID)}/assets`;
-  const firstAssetId = "norito:deadbeef";
-  const secondAssetId = "norito:cafebabe";
+  const firstAssetId = `62Fk4FPcMuLvW5QjDGNF2a4jAmjM#${FIXTURE_ACCOUNT_ID}`;
+  const secondAssetId = `61CtjvNd9T3THAR65GsMVHr82Bjc#${FIXTURE_ACCOUNT_ID}#dataspace:9`;
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
     assert.equal(parsed.pathname, expectedPath);

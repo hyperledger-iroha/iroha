@@ -131,7 +131,6 @@ proptest = { version = "1.9.0", default-features = false, features = ["std"] }
 # but to test some of the primitives against them
 amcl = { version = "0.2.0", default-features = false, features = ["secp256k1"] }
 secp256k1 = { version = "0.31.1", features = ["rand"] }
-libsodium-sys-stable = "1.22.4"
 openssl = { version = "0.10.75", features = ["vendored"] }
 criterion = { version = "0.7.0" }
 num-bigint = "0.4.6"

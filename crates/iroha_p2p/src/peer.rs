@@ -5515,6 +5515,7 @@ mod state {
                 {
                     return Ok(ConnectedTo {
                         our_public_address,
+                        expected_peer_id: peer_id.clone(),
                         key_pair,
                         connection: conn,
                         chain_id,
@@ -5537,6 +5538,7 @@ mod state {
                             crate::network::inc_scion_outbound();
                             return Ok(ConnectedTo {
                                 our_public_address,
+                                expected_peer_id: peer_id.clone(),
                                 key_pair,
                                 connection,
                                 chain_id,
@@ -5659,6 +5661,7 @@ mod state {
                             {
                                 return Ok(ConnectedTo {
                                     our_public_address,
+                                    expected_peer_id: peer_id.clone(),
                                     key_pair,
                                     connection: conn,
                                     chain_id,
@@ -5680,6 +5683,7 @@ mod state {
             };
             Ok(ConnectedTo {
                 our_public_address,
+                expected_peer_id: peer_id,
                 key_pair,
                 connection,
                 chain_id,
@@ -5811,6 +5815,7 @@ mod state {
     /// Peer that is being connected to.
     pub(super) struct ConnectedTo {
         our_public_address: SocketAddr,
+        expected_peer_id: iroha_data_model::prelude::PeerId,
         key_pair: KeyPair,
         connection: Connection,
         chain_id: Option<iroha_data_model::ChainId>,
@@ -5828,6 +5833,7 @@ mod state {
         pub(super) async fn send_client_hello<K: Kex, E: Enc>(
             Self {
                 our_public_address,
+                expected_peer_id,
                 key_pair,
                 mut connection,
                 chain_id,
@@ -5944,6 +5950,7 @@ mod state {
             let kx_remote_pk = K::new().keypair(KeyGenOption::Random).0;
             Ok(SendKey {
                 our_public_address,
+                expected_peer_id: Some(expected_peer_id),
                 key_pair,
                 kx_local_pk,
                 kx_remote_pk,
@@ -6092,6 +6099,7 @@ mod state {
             let kx_remote_pk = K::new().keypair(KeyGenOption::Random).0;
             Ok(SendKey {
                 our_public_address,
+                expected_peer_id: None,
                 key_pair,
                 kx_local_pk,
                 kx_remote_pk,
@@ -6111,6 +6119,7 @@ mod state {
     #[cfg(test)]
     pub(super) struct SendKeyInit<K: Kex, E: Enc> {
         pub(super) our_public_address: SocketAddr,
+        pub(super) expected_peer_id: Option<iroha_data_model::prelude::PeerId>,
         pub(super) key_pair: KeyPair,
         pub(super) kx_local_pk: K::PublicKey,
         pub(super) kx_remote_pk: K::PublicKey,
@@ -6128,6 +6137,7 @@ mod state {
     /// Peer that needs to send key.
     pub(super) struct SendKey<K: Kex, E: Enc> {
         pub(super) our_public_address: SocketAddr,
+        pub(super) expected_peer_id: Option<iroha_data_model::prelude::PeerId>,
         pub(super) key_pair: KeyPair,
         pub(super) kx_local_pk: K::PublicKey,
         pub(super) kx_remote_pk: K::PublicKey,
@@ -6147,6 +6157,7 @@ mod state {
         pub(super) fn new(init: SendKeyInit<K, E>) -> Self {
             let SendKeyInit {
                 our_public_address,
+                expected_peer_id,
                 key_pair,
                 kx_local_pk,
                 kx_remote_pk,
@@ -6162,6 +6173,7 @@ mod state {
             } = init;
             Self {
                 our_public_address,
+                expected_peer_id,
                 key_pair,
                 kx_local_pk,
                 kx_remote_pk,
@@ -6180,6 +6192,7 @@ mod state {
         pub(super) async fn send_our_public_key(
             Self {
                 our_public_address,
+                expected_peer_id,
                 key_pair,
                 kx_local_pk,
                 kx_remote_pk,
@@ -6234,6 +6247,7 @@ mod state {
             write_half.flush().await?;
             Ok(GetKey {
                 connection,
+                expected_peer_id,
                 kx_local_pk,
                 kx_remote_pk,
                 cryptographer,
@@ -6251,6 +6265,7 @@ mod state {
     /// Peer that needs to get key.
     pub struct GetKey<K: Kex, E: Enc> {
         pub(super) connection: Connection,
+        pub(super) expected_peer_id: Option<iroha_data_model::prelude::PeerId>,
         pub(super) kx_local_pk: K::PublicKey,
         pub(super) kx_remote_pk: K::PublicKey,
         pub(super) cryptographer: Cryptographer<E>,
@@ -6268,6 +6283,7 @@ mod state {
         pub(super) async fn read_their_public_key(
             Self {
                 mut connection,
+                expected_peer_id,
                 kx_local_pk,
                 kx_remote_pk,
                 cryptographer,
@@ -6337,6 +6353,16 @@ mod state {
                 chain_id.as_ref(),
             );
             signature.verify(&remote_pub_key, &payload)?;
+
+            if let Some(expected_peer_id) = expected_peer_id {
+                let found_peer_id = iroha_data_model::prelude::PeerId::from(remote_pub_key.clone());
+                if found_peer_id != expected_peer_id {
+                    return Err(crate::Error::HandshakePeerMismatch {
+                        expected: expected_peer_id,
+                        found: found_peer_id,
+                    });
+                }
+            }
 
             enforce_consensus_caps(consensus_caps.as_ref(), &consensus)?;
             enforce_confidential_caps(
@@ -6429,6 +6455,9 @@ mod state {
 
             let outbound = ConnectedTo {
                 our_public_address: addr_a,
+                expected_peer_id: iroha_data_model::prelude::PeerId::from(
+                    key_pair_b.public_key().clone(),
+                ),
                 key_pair: key_pair_a,
                 connection: Connection::from_split(1, read_a, write_a),
                 chain_id: None,
@@ -6704,6 +6733,7 @@ mod tests {
         };
         let send_key = SendKey::<KexAlgo, ChaCha20Poly1305>::new(SendKeyInit {
             our_public_address: addr,
+            expected_peer_id: None,
             key_pair,
             kx_local_pk,
             kx_remote_pk,
@@ -6743,6 +6773,7 @@ mod tests {
 
         let send_key = SendKey::<KexAlgo, ChaCha20Poly1305>::new(SendKeyInit {
             our_public_address: addr.clone(),
+            expected_peer_id: None,
             key_pair,
             kx_local_pk: sender_kx.clone(),
             kx_remote_pk: receiver_kx.clone(),
@@ -6759,6 +6790,7 @@ mod tests {
 
         let get_key = GetKey::<KexAlgo, ChaCha20Poly1305> {
             connection: Connection::from_split(2, receiver_read, receiver_write),
+            expected_peer_id: None,
             kx_local_pk: receiver_kx,
             kx_remote_pk: sender_kx,
             cryptographer,
@@ -6789,6 +6821,77 @@ mod tests {
             ready.scion_supported,
             "handshake should propagate SCION support flag"
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn outgoing_handshake_rejects_unexpected_peer_identity() {
+        let kx = KexAlgo::new();
+        let (sender_kx, _sender_sk) = kx.keypair(KeyGenOption::Random);
+        let (receiver_kx, _receiver_sk) = kx.keypair(KeyGenOption::Random);
+        let addr: SocketAddr = "127.0.0.1:1445".parse().unwrap();
+        let actual_key_pair = KeyPair::random();
+        let expected_peer_id =
+            iroha_data_model::prelude::PeerId::from(KeyPair::random().public_key().clone());
+        let cryptographer =
+            Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[8u8; 32]).unwrap();
+
+        let (stream_a, stream_b) = tokio::io::duplex(256);
+        let (sender_read, sender_write) = tokio::io::split(stream_a);
+        let (receiver_read, receiver_write) = tokio::io::split(stream_b);
+
+        let send_key = SendKey::<KexAlgo, ChaCha20Poly1305>::new(SendKeyInit {
+            our_public_address: addr.clone(),
+            expected_peer_id: None,
+            key_pair: actual_key_pair,
+            kx_local_pk: sender_kx.clone(),
+            kx_remote_pk: receiver_kx.clone(),
+            connection: Connection::from_split(3, sender_read, sender_write),
+            cryptographer: cryptographer.clone(),
+            chain_id: None,
+            consensus_caps: None,
+            confidential_caps: None,
+            crypto_caps: None,
+            relay_role: RelayRole::Disabled,
+            local_scion_supported: true,
+            trust_gossip: true,
+        });
+
+        let get_key = GetKey::<KexAlgo, ChaCha20Poly1305> {
+            connection: Connection::from_split(4, receiver_read, receiver_write),
+            expected_peer_id: Some(expected_peer_id.clone()),
+            kx_local_pk: receiver_kx,
+            kx_remote_pk: sender_kx,
+            cryptographer,
+            chain_id: None,
+            consensus_caps: None,
+            confidential_caps: None,
+            crypto_caps: None,
+            relay_role: RelayRole::Disabled,
+            local_scion_supported: true,
+            trust_gossip: true,
+        };
+
+        let sender = tokio::spawn(async move {
+            let _ = SendKey::send_our_public_key(send_key).await?;
+            Result::<(), crate::Error>::Ok(())
+        });
+
+        let err = match GetKey::read_their_public_key(get_key).await {
+            Ok(_) => panic!("unexpected peer identity must be rejected"),
+            Err(err) => err,
+        };
+        sender
+            .await
+            .expect("sender task panicked")
+            .expect("sending handshake should succeed");
+
+        match err {
+            crate::Error::HandshakePeerMismatch { expected, found } => {
+                assert_eq!(expected, expected_peer_id);
+                assert_ne!(expected, found);
+            }
+            other => panic!("expected HandshakePeerMismatch, got {other:?}"),
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]

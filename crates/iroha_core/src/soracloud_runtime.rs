@@ -149,6 +149,8 @@ pub fn build_soracloud_hf_generated_service_bundle(
         entrypoint: HF_GENERATED_ENTRYPOINT_INFER.to_owned(),
         args: Vec::new(),
         env,
+        required_config_names: Vec::new(),
+        required_secret_names: Vec::new(),
         capabilities: SoraCapabilityPolicyV1 {
             network: SoraNetworkPolicyV1::Isolated,
             allow_wallet_signing: false,
@@ -471,8 +473,22 @@ pub struct SoracloudRuntimeServicePlan {
     pub authoritative_pending_mailbox_messages: u32,
     /// Active rollout handle when this revision is part of a canary rollout.
     pub rollout_handle: Option<String>,
+    /// Monotonic generation of committed service config updates.
+    pub config_generation: u64,
+    /// Monotonic generation of committed service secret updates.
+    pub secret_generation: u64,
+    /// Number of committed service config entries projected into runtime materialization.
+    pub config_entry_count: u32,
+    /// Number of committed service secret entries projected into runtime materialization.
+    pub secret_entry_count: u32,
     /// Local directory where the revision plan is materialized.
     pub materialization_dir: String,
+    /// Local directory containing canonical JSON config files for this revision.
+    pub config_materialization_dir: String,
+    /// Local directory containing committed secret-envelope files for this revision.
+    pub secret_envelopes_materialization_dir: String,
+    /// Local directory containing the legacy raw secret payload tree for this revision.
+    pub secret_payload_materialization_dir: String,
     /// Declared replicated handler mailboxes.
     pub mailboxes: Vec<SoracloudRuntimeMailboxPlan>,
     /// Referenced artifacts that still need local hydration.
@@ -753,6 +769,19 @@ pub trait SoracloudRuntimeReadHandle: Send + Sync {
         &self,
         _request: &SoracloudLocalReadRequest,
         _error: &SoracloudRuntimeExecutionError,
+    ) {
+    }
+
+    /// Request authoritative HF host reconciliation after ingress observes an assigned
+    /// non-primary host answer a proxy request that targeted a different authoritative primary.
+    ///
+    /// Runtime implementations may also turn that authority drift into a model-host health
+    /// signal for the unexpected responder before enqueuing reconciliation.
+    fn request_generated_hf_proxy_responder_reconcile(
+        &self,
+        _request: &SoracloudLocalReadRequest,
+        _responder_peer_id: &str,
+        _expected_peer_id: &str,
     ) {
     }
 }
@@ -1196,6 +1225,10 @@ mod tests {
                     process_started_sequence: 1,
                     active_rollout: None,
                     last_rollout: None,
+                    config_generation: 0,
+                    secret_generation: 0,
+                    service_configs: BTreeMap::new(),
+                    service_secrets: BTreeMap::new(),
                     service_name: bundle.service.service_name.clone(),
                 },
             );

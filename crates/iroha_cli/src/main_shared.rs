@@ -7311,7 +7311,7 @@ mod tests {
 
     #[test]
     fn parse_asset_balance_scope_literal_rejects_invalid_literal() {
-        let err = parse_asset_balance_scope_literal("norito:not-supported")
+        let err = parse_asset_balance_scope_literal("scope:not-supported")
             .expect_err("invalid asset balance scope must fail");
         assert!(
             err.to_string()

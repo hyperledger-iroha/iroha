@@ -1861,7 +1861,7 @@ seiyaku Test {{
             "rose".parse().expect("name"),
         );
         let asset = AssetId::new(asset_definition.clone(), account.clone());
-        let asset_literal = asset.canonical_encoded();
+        let asset_literal = asset.canonical_literal();
         let nft: NftId = "n0$wonderland".parse().expect("nft");
         let trigger_id: TriggerId = "wake".parse().expect("trigger");
         let role_id: RoleId = "auditor".parse().expect("role");

@@ -404,7 +404,7 @@ fn minimal_config_snapshot() {
                     routes: {},
                 },
                 tls_enabled: false,
-                tls_fallback_to_plain: true,
+                tls_fallback_to_plain: false,
                 tls_listen_address: None,
                 tls_inbound_only: false,
                 prefer_ws_fallback: false,
@@ -3592,6 +3592,45 @@ fn logger_level_env_accepts_lowercase() {
         .expect("actual config with lowercase log level env");
 
     assert_eq!(cfg.logger.level, Level::INFO);
+}
+
+#[test]
+fn tls_fallback_defaults_to_tls_only() {
+    use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
+    use iroha_config_base::read::ConfigReader;
+
+    let cfg: Actual = ConfigReader::new()
+        .read_toml_with_extends(fixtures_dir().join("base.toml"))
+        .expect("base file should be valid")
+        .read_and_complete::<User>()
+        .expect("user config")
+        .parse()
+        .expect("actual config");
+
+    assert!(!cfg.network.tls_enabled);
+    assert!(
+        !cfg.network.tls_fallback_to_plain,
+        "plaintext fallback must stay opt-in when TLS-over-TCP is enabled"
+    );
+}
+
+#[test]
+fn torii_transport_trusted_proxy_cidrs_default_to_empty() {
+    use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
+    use iroha_config_base::read::ConfigReader;
+
+    let cfg: Actual = ConfigReader::new()
+        .read_toml_with_extends(fixtures_dir().join("base.toml"))
+        .expect("base file should be valid")
+        .read_and_complete::<User>()
+        .expect("user config")
+        .parse()
+        .expect("actual config");
+
+    assert!(
+        cfg.torii.transport.trusted_proxy_cidrs.is_empty(),
+        "trusted proxy CIDRs should default to empty until operators opt in"
+    );
 }
 
 #[test]

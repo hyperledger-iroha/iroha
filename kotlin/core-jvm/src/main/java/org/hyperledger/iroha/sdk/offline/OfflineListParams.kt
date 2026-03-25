@@ -6,7 +6,6 @@ class OfflineListParams(
     limit: Long? = null,
     offset: Long? = null,
     val sort: String? = null,
-    val addressFormat: String? = null,
     val assetId: String? = null,
     certificateExpiresBeforeMs: Long? = null,
     certificateExpiresAfterMs: Long? = null,
@@ -60,7 +59,6 @@ class OfflineListParams(
         if (this.limit != null) params["limit"] = this.limit.toString()
         if (this.offset != null) params["offset"] = this.offset.toString()
         if (!sort.isNullOrBlank()) params["sort"] = sort
-        if (!addressFormat.isNullOrBlank()) params["address_format"] = addressFormat
         if (!assetId.isNullOrBlank()) params["asset_id"] = assetId.trim()
         if (this.certificateExpiresBeforeMs != null)
             params["certificate_expires_before_ms"] = this.certificateExpiresBeforeMs.toString()

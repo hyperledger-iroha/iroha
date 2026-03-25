@@ -10,6 +10,7 @@ import org.hyperledger.iroha.sdk.address.PublicKeyPayload
 import org.hyperledger.iroha.sdk.address.algorithmForCurveId
 import org.hyperledger.iroha.sdk.address.decodePublicKeyLiteral
 import org.hyperledger.iroha.sdk.address.encodePublicKeyMultihash
+import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
@@ -86,13 +87,7 @@ internal class TransactionPayloadAdapter : TypeAdapter<TransactionPayload> {
 
     private class AccountIdAdapter : TypeAdapter<String> {
         override fun encode(encoder: NoritoEncoder, value: String) {
-            val payload = parseAuthority(value)
-            if (payload == null) {
-                STRING_ADAPTER.encode(encoder, value)
-                return
-            }
-            encodeSizedField(encoder, DOMAIN_ID_ADAPTER, payload.domain)
-            encodeSizedField(encoder, CONTROLLER_ADAPTER, payload.controller)
+            CONTROLLER_ADAPTER.encode(encoder, parseAuthority(value))
         }
 
         override fun decode(decoder: NoritoDecoder): String {
@@ -110,120 +105,91 @@ internal class TransactionPayloadAdapter : TypeAdapter<TransactionPayload> {
                 NoritoAdapters.sequence(MULTISIG_MEMBER_ADAPTER)
 
             fun decodePayload(payload: ByteArray, flags: Int, flagsHint: Int): String {
-                try {
-                    return decodeAccountIdStruct(payload, flags, flagsHint)
-                } catch (_: IllegalArgumentException) {
-                    val stringDecoder = NoritoDecoder(payload, flags, flagsHint)
-                    val literal = STRING_ADAPTER.decode(stringDecoder)
-                    require(stringDecoder.remaining() == 0) { "Trailing bytes after authority payload" }
-                    return literal
-                }
-            }
-
-            private fun decodeAccountIdStruct(payload: ByteArray, flags: Int, flagsHint: Int): String {
-                try {
-                    return decodeAccountIdSized(payload, flags, flagsHint)
-                } catch (_: IllegalArgumentException) {
-                    return decodeAccountIdLegacy(payload, flags, flagsHint)
-                }
-            }
-
-            private fun decodeAccountIdSized(payload: ByteArray, flags: Int, flagsHint: Int): String {
                 val decoder = NoritoDecoder(payload, flags, flagsHint)
-                val domain = decodeSizedField(decoder, DOMAIN_ID_ADAPTER)
-                val controller = decodeSizedField(decoder, CONTROLLER_ADAPTER)
-                require(decoder.remaining() == 0) { "Trailing bytes after AccountId payload" }
-                return renderAuthority(domain, controller)
+                val controller = decodeControllerPayload(decoder)
+                require(decoder.remaining() == 0) { "Trailing bytes after authority payload" }
+                return renderAuthority(controller)
             }
 
-            private fun decodeAccountIdLegacy(payload: ByteArray, flags: Int, flagsHint: Int): String {
-                val decoder = NoritoDecoder(payload, flags, flagsHint)
-                val domain = STRING_ADAPTER.decode(decoder)
+            private fun decodeControllerPayload(decoder: NoritoDecoder): ControllerPayload {
                 val controllerTag = ENUM_TAG_ADAPTER.decode(decoder)
-                val controller = when (controllerTag) {
+                return when (controllerTag) {
                     SINGLE_CONTROLLER_TAG -> {
-                        val publicKeyLiteral = STRING_ADAPTER.decode(decoder)
+                        val publicKeyLiteral = decodeSizedField(decoder, STRING_ADAPTER)
                         ControllerPayload.single(publicKeyLiteral)
                     }
                     MULTISIG_CONTROLLER_TAG -> {
-                        val policy = MULTISIG_POLICY_ADAPTER.decode(decoder)
+                        val policy = decodeSizedField(decoder, MULTISIG_POLICY_ADAPTER)
                         ControllerPayload.multisig(policy)
                     }
                     else -> throw IllegalArgumentException("Unsupported AccountController tag: $controllerTag")
                 }
-                require(decoder.remaining() == 0) { "Trailing bytes after AccountId payload" }
-                return renderAuthority(domain, controller)
             }
 
-            private fun parseAuthority(authority: String): AccountIdPayload? {
-                require(authority.isNotBlank()) { "authority must not be blank" }
-                val trimmed = authority.trim()
-                val atIndex = trimmed.lastIndexOf('@')
-                if (atIndex <= 0 || atIndex == trimmed.length - 1) return null
-                val identifier = trimmed.substring(0, atIndex)
-                val domain = trimmed.substring(atIndex + 1).trim()
-                if (domain.isBlank()) return null
-                val controller = parseIdentifierToController(identifier) ?: return null
-                return AccountIdPayload(domain, controller)
+            private fun parseAuthority(authority: String): ControllerPayload {
+                val canonicalAuthority = requireCanonicalI105Address(authority, "authority")
+                val parsed = try {
+                    AccountAddress.parseEncodedIgnoringCurveSupport(canonicalAuthority, null)
+                } catch (e: AccountAddressException) {
+                    throw IllegalArgumentException("authority must use canonical I105 encoding", e)
+                }
+                return parseAddressToController(parsed.address)
             }
 
-            private fun parseIdentifierToController(identifier: String): ControllerPayload? {
+            private fun parseAddressToController(address: AccountAddress): ControllerPayload {
                 try {
-                    val parsed = AccountAddress.parseAny(identifier, null)
-                    val singlePayload = parsed.address.singleKeyPayload()
+                    val singlePayload = address.singleKeyPayloadIgnoringCurveSupport()
                     if (singlePayload != null) {
                         val publicKey = encodePublicKeyMultihash(singlePayload.curveId, singlePayload.publicKey)
                         return ControllerPayload.single(publicKey)
                     }
-                    val multisigPayload = parsed.address.multisigPolicyPayload()
+                    val multisigPayload = address.multisigPolicyPayloadIgnoringCurveSupport()
                     if (multisigPayload != null) {
                         return ControllerPayload.multisig(multisigPayload)
                     }
-                } catch (_: AccountAddressException) {
-                    // Fall through to multihash parsing.
+                } catch (e: AccountAddressException) {
+                    throw IllegalArgumentException(
+                        "Failed to extract controller from canonical I105 account id",
+                        e,
+                    )
                 }
-                val payload = decodePublicKeyLiteral(identifier) ?: return null
-                val publicKey = encodePublicKeyMultihash(payload.curveId, payload.keyBytes)
-                return ControllerPayload.single(publicKey)
+                throw IllegalArgumentException(
+                    "Address contains neither single-key nor multisig controller"
+                )
             }
 
-            private fun renderAuthority(domain: String, controller: ControllerPayload): String {
+            private fun renderAuthority(controller: ControllerPayload): String {
                 if (controller.isSingle) {
                     val publicKeyLiteral = controller.publicKeyLiteral!!
                     val payload = decodePublicKeyLiteral(publicKeyLiteral)
-                    if (payload != null) {
-                        val ih58 = toIh58(domain, payload)
-                        if (ih58 != null) {
-                            return "$ih58@$domain"
-                        }
-                    }
-                    return "$publicKeyLiteral@$domain"
+                        ?: throw IllegalArgumentException("Invalid single-key AccountController payload")
+                    return renderSingleAuthority(payload)
                 }
-                val ih58 = toMultisigIh58(domain, controller.multisigPolicy!!)
-                return "$ih58@$domain"
+                return renderMultisigAuthority(controller.multisigPolicy!!)
             }
 
-            private fun toIh58(domain: String, payload: PublicKeyPayload): String? {
-                val algorithm = algorithmForCurveId(payload.curveId) ?: return null
+            private fun renderSingleAuthority(payload: PublicKeyPayload): String {
+                val algorithm = algorithmForCurveId(payload.curveId)
+                    ?: throw IllegalArgumentException(
+                        "Unsupported curve id in AccountController payload: ${payload.curveId}"
+                    )
                 return try {
-                    val address = AccountAddress.fromAccount(domain, payload.keyBytes, algorithm)
-                    address.toIH58(AccountAddress.DEFAULT_IH58_PREFIX)
-                } catch (_: AccountAddressException) {
-                    null
+                    val address = AccountAddress.fromAccount(payload.keyBytes, algorithm)
+                    address.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+                } catch (e: AccountAddressException) {
+                    throw IllegalArgumentException("Invalid single-key AccountController payload", e)
                 }
             }
 
-            private fun toMultisigIh58(domain: String, policy: MultisigPolicyPayload): String {
+            private fun renderMultisigAuthority(policy: MultisigPolicyPayload): String {
                 try {
-                    val address = AccountAddress.fromMultisigPolicy(domain, policy)
-                    return address.toIH58(AccountAddress.DEFAULT_IH58_PREFIX)
+                    val address = AccountAddress.fromMultisigPolicy(policy)
+                    return address.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
                 } catch (ex: AccountAddressException) {
                     throw IllegalArgumentException("Invalid multisig policy for AccountId", ex)
                 }
             }
         }
-
-        private class AccountIdPayload(val domain: String, val controller: ControllerPayload)
 
         private class ControllerPayload private constructor(
             val publicKeyLiteral: String?,

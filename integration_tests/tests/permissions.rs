@@ -641,9 +641,9 @@ fn permissions_are_unified() {
     };
     let allow_alice_to_transfer_rose_1 = Grant::account_permission(permission1, alice_id.clone());
 
-    let encoded_uppercase = rose_asset.canonical_encoded().to_ascii_uppercase();
+    let encoded_uppercase = rose_asset.to_string();
     let permission2 = CanTransferAsset {
-        asset: encoded_uppercase.parse().expect("valid encoded asset id"),
+        asset: encoded_uppercase.parse().expect("valid asset id"),
     };
     let allow_alice_to_transfer_rose_2 = Grant::account_permission(permission2, alice_id);
 

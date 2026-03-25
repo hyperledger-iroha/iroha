@@ -2707,7 +2707,9 @@ pub(crate) async fn handle_post_sorafs_storage_pin(
     if !state.sorafs_node.is_enabled() {
         return storage_disabled_response();
     }
-    if let Err(err) = state.sorafs_pin_policy.enforce(&headers, Some(remote.ip())) {
+    let canonical_remote =
+        crate::limits::ingress_remote_ip(&headers, Some(remote.ip()), &state.trusted_proxy_nets);
+    if let Err(err) = state.sorafs_pin_policy.enforce(&headers, canonical_remote) {
         return pin_auth_error_response(err);
     }
     let provider_id = state
@@ -3666,8 +3668,15 @@ fn resolve_manifest_storage_id(
     ))
 }
 
-fn gateway_client_fingerprint(remote: SocketAddr, headers: &HeaderMap) -> ClientFingerprint {
-    let mut identifier = remote.ip().to_string();
+fn gateway_client_fingerprint(
+    remote: SocketAddr,
+    headers: &HeaderMap,
+    trusted_proxies: &[crate::limits::IpNet],
+) -> ClientFingerprint {
+    let effective_ip =
+        crate::limits::ingress_remote_ip(headers, Some(remote.ip()), trusted_proxies)
+            .unwrap_or_else(|| remote.ip());
+    let mut identifier = effective_ip.to_string();
     if let Some(client_header) = headers
         .get(HEADER_SORA_CLIENT)
         .and_then(|value| value.to_str().ok())
@@ -3689,7 +3698,7 @@ fn enforce_gateway_policy_for_request(
     provider_id: Option<[u8; 32]>,
     remote: SocketAddr,
 ) -> Result<(), Response> {
-    let fingerprint = gateway_client_fingerprint(remote, headers);
+    let fingerprint = gateway_client_fingerprint(remote, headers, &state.trusted_proxy_nets);
     let now = SystemTime::now();
     let monotonic_now = Instant::now();
     let mut context = RequestContext::new(&fingerprint, now, monotonic_now)
@@ -9227,6 +9236,126 @@ mod advert_tests {
     }
 
     #[tokio::test]
+    async fn storage_pin_rate_limit_uses_forwarded_client_ip_from_trusted_proxy() {
+        use std::num::NonZeroU32;
+
+        use iroha_config::parameters::actual::{
+            SorafsGatewayRateLimit as GatewayRateLimitCfg, SorafsStoragePin as PinCfg,
+        };
+
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app)
+            .unwrap_or_else(|_| panic!("unique app state for pin policy mutation"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+        inner.trusted_proxy_nets = Arc::new(crate::limits::parse_cidrs(&["127.0.0.0/8".into()]));
+
+        let mut pin_cfg = PinCfg {
+            require_token: true,
+            ..Default::default()
+        };
+        pin_cfg.tokens.insert("secret-token".to_string());
+        pin_cfg.allow_cidrs = vec!["203.0.113.0/24".to_string()];
+        pin_cfg.rate_limit = GatewayRateLimitCfg {
+            max_requests: Some(NonZeroU32::new(1).expect("non-zero max_requests")),
+            window: Duration::from_secs(60),
+            ban: None,
+        };
+        inner.sorafs_pin_policy =
+            PinSubmissionPolicy::from_config(&pin_cfg).expect("valid pin policy");
+
+        let make_request = |seed: u8| StoragePinRequestDto {
+            manifest_b64: {
+                let payload = vec![seed; 64];
+                let manifest = manifest_for_payload(seed, &payload);
+                base64::engine::general_purpose::STANDARD
+                    .encode(norito::to_bytes(&manifest).expect("encode manifest"))
+            },
+            payload_b64: {
+                let payload = vec![seed; 64];
+                base64::engine::general_purpose::STANDARD.encode(payload)
+            },
+            ..Default::default()
+        };
+        let request_a = make_request(0x44);
+        let request_b = make_request(0x45);
+        let request_c = make_request(0x46);
+        let request_d = make_request(0x47);
+
+        let app = Arc::new(inner);
+        let trusted_proxy = ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080)));
+        let untrusted_remote = ConnectInfo(SocketAddr::from(([198, 51, 100, 10], 8080)));
+
+        let mut forwarded_a = HeaderMap::new();
+        forwarded_a.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer secret-token"),
+        );
+        forwarded_a.insert(
+            HeaderName::from_static(crate::limits::REMOTE_ADDR_HEADER),
+            HeaderValue::from_static("203.0.113.10"),
+        );
+
+        let mut forwarded_b = HeaderMap::new();
+        forwarded_b.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer secret-token"),
+        );
+        forwarded_b.insert(
+            HeaderName::from_static(crate::limits::REMOTE_ADDR_HEADER),
+            HeaderValue::from_static("203.0.113.11"),
+        );
+
+        let response = handle_post_sorafs_storage_pin(
+            State(app.clone()),
+            forwarded_a.clone(),
+            trusted_proxy.clone(),
+            JsonOnly(request_a),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = handle_post_sorafs_storage_pin(
+            State(app.clone()),
+            forwarded_b,
+            trusted_proxy.clone(),
+            JsonOnly(request_b),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "distinct forwarded client IPs should not share one rate-limit bucket"
+        );
+
+        let response = handle_post_sorafs_storage_pin(
+            State(app.clone()),
+            forwarded_a.clone(),
+            trusted_proxy,
+            JsonOnly(request_c),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "reusing the same forwarded client IP should hit the same bucket"
+        );
+
+        let response = handle_post_sorafs_storage_pin(
+            State(app),
+            forwarded_a,
+            untrusted_remote,
+            JsonOnly(request_d),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::FORBIDDEN,
+            "untrusted peers must not spoof the forwarded client IP header"
+        );
+    }
+
+    #[tokio::test]
     async fn storage_pin_and_fetch_roundtrip() {
         let app = mk_app_state_for_tests();
         let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
@@ -12703,6 +12832,130 @@ mod advert_tests {
         assert_eq!(
             value.get("error"),
             Some(&Value::String("rate_limited".into()))
+        );
+    }
+
+    #[tokio::test]
+    async fn car_range_rate_limit_uses_forwarded_client_ip_from_trusted_proxy() {
+        let mut context = token_test_context();
+        let mut app_inner = Arc::try_unwrap(context.app)
+            .unwrap_or_else(|_| panic!("token test context should hold unique app state"));
+        let mut gateway_config = app_inner.sorafs_gateway_config.clone();
+        gateway_config.enforce_admission = false;
+        gateway_config.rate_limit.max_requests = Some(NonZeroU32::new(1).expect("non-zero"));
+        gateway_config.rate_limit.window = Duration::from_mins(1);
+        gateway_config.rate_limit.ban = None;
+        let components =
+            build_sorafs_gateway_security(&gateway_config, app_inner.sorafs_admission.clone());
+        app_inner.sorafs_gateway_config = gateway_config;
+        app_inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
+        app_inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
+        app_inner.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
+        app_inner.trusted_proxy_nets =
+            Arc::new(crate::limits::parse_cidrs(&["127.0.0.0/8".into()]));
+        context.app = Arc::new(app_inner);
+
+        let manifest = context
+            .app
+            .sorafs_node
+            .manifest_metadata(&context.manifest_id_hex)
+            .expect("manifest");
+        let end = manifest.content_length().saturating_sub(1);
+        let trusted_token_base64 = issue_token_base64(&context, TokenOverrides::default()).await;
+        let untrusted_token_base64 = issue_token_base64(&context, TokenOverrides::default()).await;
+        let trusted_proxy = ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8093)));
+        let untrusted_remote = ConnectInfo(SocketAddr::from(([198, 51, 100, 10], 8093)));
+
+        let build_headers =
+            |nonce: &'static str, forwarded_ip: Option<&'static str>, token_base64: &str| {
+                let mut headers = HeaderMap::new();
+                headers.insert(
+                    header::RANGE,
+                    HeaderValue::from_str(&format!("bytes=0-{end}")).expect("range header"),
+                );
+                headers.insert(
+                    header::HeaderName::from_static(HEADER_DAG_SCOPE),
+                    HeaderValue::from_static("block"),
+                );
+                headers.insert(
+                    header::HeaderName::from_static(HEADER_SORA_CHUNKER),
+                    header_value(manifest.chunk_profile_handle(), "X-SoraFS-Chunker"),
+                );
+                headers.insert(
+                    header::HeaderName::from_static(HEADER_SORA_NONCE),
+                    HeaderValue::from_static(nonce),
+                );
+                headers.insert(
+                    header::HeaderName::from_static(HEADER_SORA_STREAM_TOKEN),
+                    header_value(token_base64, "X-SoraFS-Stream-Token"),
+                );
+                headers.insert(
+                    header::HeaderName::from_static(HEADER_SORA_MANIFEST_ENVELOPE),
+                    HeaderValue::from_static("dummy"),
+                );
+                headers.insert(
+                    header::HeaderName::from_static(HEADER_SORA_CLIENT),
+                    HeaderValue::from_static("gateway-alpha"),
+                );
+                if let Some(ip) = forwarded_ip {
+                    headers.insert(
+                        header::HeaderName::from_static(crate::limits::REMOTE_ADDR_HEADER),
+                        HeaderValue::from_static(ip),
+                    );
+                }
+                headers
+            };
+
+        let response = handle_get_sorafs_storage_car_range(
+            State(context.app.clone()),
+            Path(context.manifest_id_hex.clone()),
+            build_headers("nonce-fwd-a-0", Some("203.0.113.10"), &trusted_token_base64),
+            trusted_proxy.clone(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+
+        let response = handle_get_sorafs_storage_car_range(
+            State(context.app.clone()),
+            Path(context.manifest_id_hex.clone()),
+            build_headers("nonce-fwd-b-0", Some("203.0.113.11"), &trusted_token_base64),
+            trusted_proxy.clone(),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::PARTIAL_CONTENT,
+            "distinct forwarded client IPs should not share one gateway bucket"
+        );
+
+        let response = handle_get_sorafs_storage_car_range(
+            State(context.app.clone()),
+            Path(context.manifest_id_hex.clone()),
+            build_headers("nonce-fwd-a-1", Some("203.0.113.10"), &trusted_token_base64),
+            trusted_proxy,
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "reusing the same trusted forwarded client IP should hit the same gateway bucket"
+        );
+
+        let response = handle_get_sorafs_storage_car_range(
+            State(context.app),
+            Path(context.manifest_id_hex),
+            build_headers(
+                "nonce-untrusted-0",
+                Some("203.0.113.10"),
+                &untrusted_token_base64,
+            ),
+            untrusted_remote,
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::PARTIAL_CONTENT,
+            "untrusted peers must not inherit the trusted client's forwarded-IP bucket"
         );
     }
 

@@ -2,6 +2,7 @@ package org.hyperledger.iroha.sdk.tx.norito
 
 import java.nio.file.Files
 import java.util.Base64
+import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.WirePayload
@@ -174,11 +175,11 @@ class TransactionFixtureParityTest {
             mapOf(
                 "name" to "wire-instruction-fixture",
                 "chain" to "00000001",
-                "authority" to "alice@wonderland",
+                "authority" to sampleAuthority(0x51),
                 "creation_time_ms" to 0L,
                 "payload" to mapOf(
                     "chain" to "00000001",
-                    "authority" to "alice@wonderland",
+                    "authority" to sampleAuthority(0x51),
                     "creation_time_ms" to 0L,
                     "metadata" to emptyMap<String, String>(),
                     "executable" to mapOf(
@@ -212,11 +213,11 @@ class TransactionFixtureParityTest {
             mapOf(
                 "name" to "wire-instruction-arguments-fixture",
                 "chain" to "00000001",
-                "authority" to "alice@wonderland",
+                "authority" to sampleAuthority(0x52),
                 "creation_time_ms" to 0L,
                 "payload" to mapOf(
                     "chain" to "00000001",
-                    "authority" to "alice@wonderland",
+                    "authority" to sampleAuthority(0x52),
                     "creation_time_ms" to 0L,
                     "metadata" to emptyMap<String, String>(),
                     "executable" to mapOf(
@@ -244,13 +245,13 @@ class TransactionFixtureParityTest {
             mapOf(
                 "name" to "missing-wire-fields",
                 "chain" to "00000002",
-                "authority" to "alice@wonderland",
+                "authority" to sampleAuthority(0x53),
                 "creation_time_ms" to 1_735_000_000_000L,
                 "time_to_live_ms" to null,
                 "nonce" to null,
                 "payload" to mapOf(
                     "chain" to "00000002",
-                    "authority" to "alice@wonderland",
+                    "authority" to sampleAuthority(0x53),
                     "creation_time_ms" to 1_735_000_000_000L,
                     "metadata" to emptyMap<String, String>(),
                     "executable" to mapOf(
@@ -330,6 +331,10 @@ class TransactionFixtureParityTest {
             append("%02x".format(byte.toInt() and 0xFF))
         }
     }
+
+    private fun sampleAuthority(fill: Int): String = AccountAddress
+        .fromAccount(ByteArray(32) { fill.toByte() }, "ed25519")
+        .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
 
     private data class SignedParts(
         val signature: ByteArray,

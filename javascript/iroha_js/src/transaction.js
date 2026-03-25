@@ -55,23 +55,24 @@ function resolveNativeBinding() {
   return globalThis.__IROHA_NATIVE_BINDING__ ?? getNativeBinding();
 }
 
-function encodeAssetIdFromDefinitionAndAccount(assetDefinitionId, accountId, context) {
+function composeAssetIdFromDefinitionAndAccount(assetDefinitionId, accountId, context) {
   const definition = String(assetDefinitionId ?? "").trim();
   if (!definition) {
     throw new TypeError(`${context}.assetDefinitionId must be a non-empty string`);
   }
-  const normalizedAccountId = normalizeAccountId(accountId, `${context}.accountId`);
-  const native = resolveNativeBinding();
-  if (!native || typeof native.encodeAssetId !== "function") {
-    throw new Error("native binding 'encodeAssetId' is unavailable");
-  }
-  try {
-    return native.encodeAssetId(definition, normalizedAccountId);
-  } catch (error) {
+  if (
+    /\s/.test(definition) ||
+    definition.includes("%") ||
+    definition.includes("/") ||
+    definition.includes("?") ||
+    definition.includes(":")
+  ) {
     throw new TypeError(
-      `${context}.assetDefinitionId must be a canonical Base58 asset definition id`,
+      `${context}.assetDefinitionId must be a canonical unprefixed Base58 asset definition id`,
     );
   }
+  const normalizedAccountId = normalizeAccountId(accountId, `${context}.accountId`);
+  return `${definition}#${normalizedAccountId}`;
 }
 
 function serializeInstructionPayloads(instructions, context) {
@@ -649,7 +650,7 @@ function resolveAssetIdForMint(assetDefinitionId, mint, context = "mint") {
     if (!mint.accountId) {
       return normalizedAssetId;
     }
-    const derivedAssetId = encodeAssetIdFromDefinitionAndAccount(
+    const derivedAssetId = composeAssetIdFromDefinitionAndAccount(
       assetDefinitionId,
       mint.accountId,
       context,
@@ -662,7 +663,7 @@ function resolveAssetIdForMint(assetDefinitionId, mint, context = "mint") {
   if (!mint.accountId) {
     throw new TypeError(`${context}.assetId or ${context}.accountId must be provided`);
   }
-  return encodeAssetIdFromDefinitionAndAccount(assetDefinitionId, mint.accountId, context);
+  return composeAssetIdFromDefinitionAndAccount(assetDefinitionId, mint.accountId, context);
 }
 
 function normalizeDomainMintSpec(value, context) {

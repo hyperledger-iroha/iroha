@@ -30,7 +30,7 @@ ID-ууд нь `Display`/`FromStr` хоёр талын аялалтай тогт
 - `AssetDefinitionId` — каноник `unprefixed Base58 address with versioning and checksum` (UUID-v4 байт). Тодорхойлолт: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. `alias` литерал нь `<name>#<domain>.<dataspace>` эсвэл `<name>#<dataspace>` байх ёстой бөгөөд `<name>` нь хөрөнгийн тодорхойлолтын нэртэй тэнцүү байх ёстой. Код: `crates/iroha_data_model/src/asset/definition.rs`.
 
   - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`, where `status` is `permanent`, `leased_active`, `leased_grace`, or `expired_pending_cleanup`. Alias selectors resolve against the latest committed block creation time and stop resolving after grace even before sweep removes stale bindings.
-- `AssetId`: каноник кодлогдсон literal `norito:<hex>` (эхний хувилбар дээр хуучин текст хэлбэрийг дэмждэггүй).- `NftId` — `nft$domain`. NFT: `{ id, content: Metadata, owned_by }`. Код: `crates/iroha_data_model/src/nft.rs`.
+- `AssetId`: каноник кодлогдсон literal `<asset-definition-id>#<account-id>` (эхний хувилбар дээр хуучин текст хэлбэрийг дэмждэггүй).- `NftId` — `nft$domain`. NFT: `{ id, content: Metadata, owned_by }`. Код: `crates/iroha_data_model/src/nft.rs`.
 - `RoleId` — `name`. Үүрэг: `{ id, permissions: BTreeSet<Permission> }` барилгачин `NewRole { inner: Role, grant_to }`. Код: `crates/iroha_data_model/src/role.rs`.
 - `Permission` — `{ name: Ident, payload: Json }`. Код: `crates/iroha_data_model/src/permission.rs`.
 - `PeerId`/`Peer` — үе тэнгийн таних тэмдэг (нийтийн түлхүүр) болон хаяг. Код: `crates/iroha_data_model/src/peer.rs`.
@@ -206,7 +206,7 @@ ID-ууд нь `Display`/`FromStr` хоёр талын аялалтай тогт
 
 Шилжилтийн тэмдэглэл:
 - `name#domain` текстийн хөрөнгийн тодорхойлолтын ID-г эхний хувилбар дээр санаатайгаар дэмждэггүй.
-- Үнэлэх/шатаах/шилжүүлэх хил хязгаар дахь хөрөнгийн ID-ууд `norito:<hex>` стандартад нийцдэг; `iroha tools encode asset-id`-г `--definition <base58-asset-definition-id>` эсвэл `--alias ...` дээр нэмэх нь `--account` ашиглана уу.
+- Үнэлэх/шатаах/шилжүүлэх хил хязгаар дахь хөрөнгийн ID-ууд `<asset-definition-id>#<account-id>` стандартад нийцдэг; `iroha tools encode asset-id`-г `--definition <base58-asset-definition-id>` эсвэл `--alias ...` дээр нэмэх нь `--account` ашиглана уу.
 
 ---
 

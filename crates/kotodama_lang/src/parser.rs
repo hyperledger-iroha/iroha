@@ -2614,7 +2614,7 @@ mod tests {
                 .expect("account");
             let definition_id: iroha_data_model::asset::AssetDefinitionId =
                 asset_definition.parse().expect("asset definition");
-            iroha_data_model::asset::AssetId::new(definition_id, account_id).canonical_encoded()
+            iroha_data_model::asset::AssetId::new(definition_id, account_id).canonical_literal()
         };
 
         let cases = vec![

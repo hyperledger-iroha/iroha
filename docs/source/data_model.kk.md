@@ -33,7 +33,7 @@ translator: machine-google-reviewed
 - `DomainId`: `name` (мысалы, `wonderland`).
 - `AccountId`: `AccountAddress` арқылы тек I105 ретінде кодталған канондық доменсіз тіркелгі идентификаторы. Талдаушы кірістері канондық I105 болуы керек; домен жұрнақтары (`@domain`), канондық I105 литералдары, лақап ат литералдары, канондық он алтылық талдаушы кірісі, бұрынғы `norito:` пайдалы жүктемелері және `uaid:`/`opaque:` есептік жазбасы қабылданбайды.
 - `AssetDefinitionId`: канондық `unprefixed Base58 address with versioning and checksum` (UUID-v4 байт).
-- `AssetId`: канондық кодталған литерал `norito:<hex>` (бұрынғы мәтіндік пішіндерге бірінші шығарылымда қолдау көрсетілмейді).
+- `AssetId`: канондық кодталған литерал `<asset-definition-id>#<account-id>` (бұрынғы мәтіндік пішіндерге бірінші шығарылымда қолдау көрсетілмейді).
 - `NftId`: `nft$domain` (мысалы, `rose$garden`).
 - `PeerId`: `public_key` (тең теңдік ашық кілт арқылы жүзеге асырылады).
 
@@ -259,7 +259,7 @@ curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -d '{"alias":"pkr#ubl.sbp"}'
 ```Көшіру жазбасы:
 - Ескі `name#domain` актив анықтамасының идентификаторлары v1 нұсқасында қабылданбайды.
-- Жалға беру/жазу/тасымалдау үшін актив идентификаторлары канондық `norito:<hex>` болып қалады; оларды құру:
+- Жалға беру/жазу/тасымалдау үшін актив идентификаторлары канондық `<asset-definition-id>#<account-id>` болып қалады; оларды құру:
   - `iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
   - немесе `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`.
 

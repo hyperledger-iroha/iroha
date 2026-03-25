@@ -78,15 +78,31 @@ class SubscriptionToriiClient private constructor(builder: Builder) {
 
     private fun buildGetRequest(path: String, query: Map<String, String>): TransportRequest {
         val target = appendQuery(resolvePath(path), query)
+        val headers = mergeHeaders()
+        TransportSecurity.requireHttpRequestAllowed(
+            "SubscriptionToriiClient",
+            baseUri,
+            target,
+            headers,
+            null,
+        )
         val builder = TransportRequest.builder().setUri(target).setMethod("GET").setTimeout(timeout)
-        mergeHeaders().forEach { (k, v) -> builder.addHeader(k, v) }
+        headers.forEach { (k, v) -> builder.addHeader(k, v) }
         return builder.build()
     }
 
     private fun buildPostRequest(path: String, body: ByteArray): TransportRequest {
         val target = resolvePath(path)
+        val headers = mergeHeaders()
+        TransportSecurity.requireHttpRequestAllowed(
+            "SubscriptionToriiClient",
+            baseUri,
+            target,
+            headers,
+            body,
+        )
         val builder = TransportRequest.builder().setUri(target).setMethod("POST").setTimeout(timeout).setBody(body)
-        mergeHeaders().forEach { (k, v) -> builder.addHeader(k, v) }
+        headers.forEach { (k, v) -> builder.addHeader(k, v) }
         builder.addHeader("Content-Type", "application/json")
         return builder.build()
     }

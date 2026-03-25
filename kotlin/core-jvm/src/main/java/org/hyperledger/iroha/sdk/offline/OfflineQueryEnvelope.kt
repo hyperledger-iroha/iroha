@@ -9,7 +9,6 @@ class OfflineQueryEnvelope private constructor(
     private val sort: Any?,
     private val limit: Long?,
     private val offset: Long?,
-    private val addressFormat: String?,
 ) {
     fun toJsonBytes(): ByteArray {
         val json = LinkedHashMap<String, Any>()
@@ -17,7 +16,6 @@ class OfflineQueryEnvelope private constructor(
         if (sort != null) json["sort"] = sort
         if (limit != null) json["limit"] = limit
         if (offset != null) json["offset"] = offset
-        if (!addressFormat.isNullOrBlank()) json["address_format"] = addressFormat
         return JsonEncoder.encode(json).toByteArray(Charsets.UTF_8)
     }
 
@@ -26,7 +24,6 @@ class OfflineQueryEnvelope private constructor(
         private var sort: Any? = null
         private var limit: Long? = null
         private var offset: Long? = null
-        private var addressFormat: String? = null
 
         fun filterJson(json: String?) = apply { this.filter = parseJson(json) }
         fun sortJson(json: String?) = apply { this.sort = parseJson(json) }
@@ -43,12 +40,8 @@ class OfflineQueryEnvelope private constructor(
             this.offset = offset
         }
 
-        fun setAddressFormat(addressFormat: String?) = apply {
-            this.addressFormat = addressFormat
-        }
-
         fun build(): OfflineQueryEnvelope =
-            OfflineQueryEnvelope(filter, sort, limit, offset, addressFormat)
+            OfflineQueryEnvelope(filter, sort, limit, offset)
     }
 
     companion object {
@@ -63,7 +56,6 @@ class OfflineQueryEnvelope private constructor(
             params.sort?.let { parseJson(it) }?.let { b.setSortNode(it) }
             params.limit?.let { b.setLimit(it) }
             params.offset?.let { b.setOffset(it) }
-            params.addressFormat?.let { b.setAddressFormat(it) }
             return b.build()
         }
 

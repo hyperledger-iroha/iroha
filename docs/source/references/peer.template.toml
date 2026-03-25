@@ -231,7 +231,7 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 
 [torii.peer_geo]
 # enabled = false
-# endpoint = "http://ip-api.com/json" # Optional ip-api compatible endpoint for peer geo lookups.
+# endpoint = "https://geo.example/api" # Required HTTPS ip-api compatible endpoint when peer geo lookups are enabled.
 
 [torii.operator_auth]
 # enabled = false

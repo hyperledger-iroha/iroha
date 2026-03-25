@@ -1170,7 +1170,7 @@ impl ComposerTemplate {
                         (fallback.account_id(), fallback.label())
                     });
                 app.composer_asset_id = template_asset_id("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", owner)
-                    .unwrap_or_else(|| "norito:4e52543000000001".to_owned());
+                    .unwrap_or_else(|| "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_owned());
                 app.composer_quantity = "10".to_owned();
                 app.composer_destination_account.clear();
                 app.last_info = Some(format!("Loaded rose mint template for {label}."));
@@ -1186,7 +1186,7 @@ impl ComposerTemplate {
                         (fallback.account_id(), fallback.label())
                     });
                 app.composer_asset_id = template_asset_id("5CJ6HCMxWw9xhuHmxDrzEfWGeE7M", owner)
-                    .unwrap_or_else(|| "norito:4e52543000000002".to_owned());
+                    .unwrap_or_else(|| "61CtjvNd9T3THAR65GsMVHr82Bjc#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_owned());
                 app.composer_quantity = "5".to_owned();
                 app.composer_destination_account.clear();
                 app.last_info = Some(format!("Loaded cabbage mint template for {label}."));
@@ -1202,7 +1202,7 @@ impl ComposerTemplate {
                         (fallback.account_id(), fallback.label())
                     });
                 app.composer_asset_id = template_asset_id("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", owner)
-                    .unwrap_or_else(|| "norito:4e52543000000001".to_owned());
+                    .unwrap_or_else(|| "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_owned());
                 app.composer_quantity = "1".to_owned();
                 app.composer_destination_account.clear();
                 app.last_info = Some(format!("Loaded rose burn template for {label}."));
@@ -1216,7 +1216,7 @@ impl ComposerTemplate {
                 });
                 app.composer_asset_id =
                     template_asset_id("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", signer.account_id())
-                        .unwrap_or_else(|| "norito:4e52543000000001".to_owned());
+                        .unwrap_or_else(|| "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_owned());
                 app.composer_quantity = "2".to_owned();
                 let destination = signers
                     .iter()
@@ -1238,7 +1238,7 @@ impl ComposerTemplate {
                 });
                 app.composer_asset_id =
                     template_asset_id("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", signer.account_id())
-                        .unwrap_or_else(|| "norito:4e52543000000001".to_owned());
+                        .unwrap_or_else(|| "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_owned());
                 app.composer_quantity = "1".to_owned();
                 app.composer_destination_account = sample_account_id(SAMPLE_OTHER_PUBLIC_KEY);
                 app.last_info = Some("Loaded implicit receive transfer template.".to_owned());
@@ -9918,7 +9918,7 @@ impl MochiApp {
             ui.add(
                 egui::TextEdit::multiline(&mut self.composer_multisig_instructions)
                     .desired_rows(6)
-                    .hint_text("[ { \"kind\": \"mint_asset\", \"asset\": \"norito:4e52543000000001\", \"quantity\": \"1\" } ]"),
+                    .hint_text("[ { \"kind\": \"mint_asset\", \"asset\": \"62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9\", \"quantity\": \"1\" } ]"),
             );
             ui.horizontal(|ui| {
                 ui.checkbox(

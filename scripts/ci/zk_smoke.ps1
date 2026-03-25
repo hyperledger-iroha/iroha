@@ -13,8 +13,9 @@ Require-Cmd iroha
 $ConfigArg = @()
 if ($env:CLI_CONFIG) { $ConfigArg = @('--config', $env:CLI_CONFIG) }
 
-$ASSET_ID = if ($env:ASSET_ID) { $env:ASSET_ID } else { 'norito:4e52543000000001' }
 $FROM = if ($env:FROM) { $env:FROM } else { '6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9' }
+$ASSET_DEFINITION_ID = if ($env:ASSET_DEFINITION_ID) { $env:ASSET_DEFINITION_ID } else { '62Fk4FPcMuLvW5QjDGNF2a4jAmjM' }
+$ASSET_ID = if ($env:ASSET_ID) { $env:ASSET_ID } else { "$ASSET_DEFINITION_ID#$FROM" }
 $AMOUNT = if ($env:AMOUNT) { [uint64]$env:AMOUNT } else { 1 }
 $NOTE_COMMITMENT_HEX = if ($env:NOTE_COMMITMENT_HEX) { $env:NOTE_COMMITMENT_HEX } else { '0000000000000000000000000000000000000000000000000000000000000000' }
 

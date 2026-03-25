@@ -135,6 +135,35 @@ final class NoritoRpcClientTests: XCTestCase {
         }
     }
 
+    func testCallRejectsInsecureAuthorizationHeader() async {
+        let session = makeSession()
+        let client = NoritoRpcClient(baseURL: URL(string: "http://example.org")!,
+                                     session: session,
+                                     defaultHeaders: ["Authorization": "Bearer token"])
+
+        await assertThrowsErrorAsync(try await client.call(path: "/v1/rpc", payload: Data())) { error in
+            guard case let NoritoRpcClientError.insecureTransport(reason) = error else {
+                return XCTFail("Expected insecureTransport, got \(error)")
+            }
+            XCTAssertTrue(reason.contains("refuses insecure transport"))
+        }
+    }
+
+    func testCallRejectsCredentialedAbsoluteHostOverride() async {
+        let session = makeSession()
+        let client = NoritoRpcClient(baseURL: URL(string: "https://example.org")!,
+                                     session: session,
+                                     defaultHeaders: ["Authorization": "Bearer token"])
+
+        await assertThrowsErrorAsync(try await client.call(path: "https://evil.example/v1/rpc",
+                                                           payload: Data())) { error in
+            guard case let NoritoRpcClientError.insecureTransport(reason) = error else {
+                return XCTFail("Expected insecureTransport, got \(error)")
+            }
+            XCTAssertTrue(reason.contains("mismatched host"))
+        }
+    }
+
     private func makeSession() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [NoritoRpcURLProtocol.self]

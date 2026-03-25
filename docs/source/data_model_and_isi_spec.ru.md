@@ -30,7 +30,7 @@ translator: machine-google-reviewed
 - `AssetDefinitionId` — канонический `unprefixed Base58 address with versioning and checksum` (UUID-v4 байта). Определение: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. Литералы `alias` должны быть `<name>#<domain>.<dataspace>` или `<name>#<dataspace>`, где `<name>` соответствует имени определения актива. Код: `crates/iroha_data_model/src/asset/definition.rs`.
 
   - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`, where `status` is `permanent`, `leased_active`, `leased_grace`, or `expired_pending_cleanup`. Alias selectors resolve against the latest committed block creation time and stop resolving after grace even before sweep removes stale bindings.
-- `AssetId`: канонический литерал `norito:<hex>` (устаревшие текстовые формы не поддерживаются в первом выпуске).- `NftId` — `nft$domain`. НФТ: `{ id, content: Metadata, owned_by }`. Код: `crates/iroha_data_model/src/nft.rs`.
+- `AssetId`: канонический литерал `<asset-definition-id>#<account-id>` (устаревшие текстовые формы не поддерживаются в первом выпуске).- `NftId` — `nft$domain`. НФТ: `{ id, content: Metadata, owned_by }`. Код: `crates/iroha_data_model/src/nft.rs`.
 - `RoleId` — `name`. Роль: `{ id, permissions: BTreeSet<Permission> }` со строителем `NewRole { inner: Role, grant_to }`. Код: `crates/iroha_data_model/src/role.rs`.
 - `Permission` — `{ name: Ident, payload: Json }`. Код: `crates/iroha_data_model/src/permission.rs`.
 - `PeerId`/`Peer` — идентификатор узла (открытый ключ) и адрес. Код: `crates/iroha_data_model/src/peer.rs`.
@@ -206,7 +206,7 @@ translator: machine-google-reviewed
 
 Примечание по миграции:
 — Текстовые идентификаторы определения активов `name#domain` намеренно не поддерживаются в первом выпуске.
-— Идентификаторы активов на границах выпуска/сжигания/передачи остаются каноническими `norito:<hex>`; используйте `iroha tools encode asset-id` с `--definition <base58-asset-definition-id>` или `--alias ...` плюс `--account`.
+— Идентификаторы активов на границах выпуска/сжигания/передачи остаются каноническими `<asset-definition-id>#<account-id>`; используйте `iroha tools encode asset-id` с `--definition <base58-asset-definition-id>` или `--alias ...` плюс `--account`.
 
 ---
 

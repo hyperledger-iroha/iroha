@@ -13,7 +13,8 @@ use crate::{
             AdvanceSoracloudRollout, AdvertiseSoracloudModelHost,
             AllowSoracloudAgentAutonomyArtifact, AllowSoracloudUploadedModel,
             AppendSoracloudUploadedModelChunk, ApproveSoracloudAgentWalletSpend,
-            CheckpointSoracloudTrainingJob, DeploySoracloudAgentApartment, DeploySoracloudService,
+            CheckpointSoracloudTrainingJob, DeleteSoracloudServiceConfig,
+            DeleteSoracloudServiceSecret, DeploySoracloudAgentApartment, DeploySoracloudService,
             EnqueueSoracloudAgentMessage, FinalizeSoracloudUploadedModelBundle,
             HeartbeatSoracloudModelHost, JoinSoracloudHfSharedLease, LeaveSoracloudHfSharedLease,
             MutateSoracloudState, PromoteSoracloudModelWeight,
@@ -25,8 +26,9 @@ use crate::{
             RequestSoracloudAgentWalletSpend, RestartSoracloudAgentApartment,
             RetrySoracloudTrainingJob, RevokeSoracloudAgentPolicy, RollbackSoracloudModelWeight,
             RollbackSoracloudService, RunSoracloudAgentAutonomy, RunSoracloudFheJob,
-            SetSoracloudRuntimeState, StartSoracloudPrivateInference, StartSoracloudTrainingJob,
-            UpgradeSoracloudService, WithdrawSoracloudModelHost,
+            SetSoracloudRuntimeState, SetSoracloudServiceConfig, SetSoracloudServiceSecret,
+            StartSoracloudPrivateInference, StartSoracloudTrainingJob, UpgradeSoracloudService,
+            WithdrawSoracloudModelHost,
         },
         staking::{
             ActivatePublicLaneValidator, ExitPublicLaneValidator, RegisterPublicLaneValidator,
@@ -135,6 +137,14 @@ fn visit_soracloud_service_instruction<V: Visit + ?Sized>(
         visitor.visit_upgrade_soracloud_service(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<RollbackSoracloudService>() {
         visitor.visit_rollback_soracloud_service(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<SetSoracloudServiceConfig>() {
+        visitor.visit_set_soracloud_service_config(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<DeleteSoracloudServiceConfig>() {
+        visitor.visit_delete_soracloud_service_config(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<SetSoracloudServiceSecret>() {
+        visitor.visit_set_soracloud_service_secret(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<DeleteSoracloudServiceSecret>() {
+        visitor.visit_delete_soracloud_service_secret(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<MutateSoracloudState>() {
         visitor.visit_mutate_soracloud_state(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<RunSoracloudFheJob>() {
@@ -442,6 +452,10 @@ macro_rules! instruction_visitors {
             visit_deploy_soracloud_service(&DeploySoracloudService),
             visit_upgrade_soracloud_service(&UpgradeSoracloudService),
             visit_rollback_soracloud_service(&RollbackSoracloudService),
+            visit_set_soracloud_service_config(&SetSoracloudServiceConfig),
+            visit_delete_soracloud_service_config(&DeleteSoracloudServiceConfig),
+            visit_set_soracloud_service_secret(&SetSoracloudServiceSecret),
+            visit_delete_soracloud_service_secret(&DeleteSoracloudServiceSecret),
             visit_mutate_soracloud_state(&MutateSoracloudState),
             visit_run_soracloud_fhe_job(&RunSoracloudFheJob),
             visit_record_soracloud_decryption_request(&RecordSoracloudDecryptionRequest),

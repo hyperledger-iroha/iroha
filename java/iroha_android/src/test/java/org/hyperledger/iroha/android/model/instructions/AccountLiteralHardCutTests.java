@@ -55,7 +55,7 @@ public final class AccountLiteralHardCutTests {
   }
 
   @Test
-  public void uaidPortfolioQueryAcceptsAssetSelectorsAndRejectsLegacyPrefixes() {
+  public void uaidPortfolioQueryAcceptsAssetSelectorsAndRejectsMalformedSelectors() {
     final String asset = "61CtjvNd9T3THAR65GsMVHr82Bjc";
     final UaidPortfolioQuery query =
         UaidPortfolioQuery.builder().setAsset(asset).setScope("global").build();
@@ -64,8 +64,7 @@ public final class AccountLiteralHardCutTests {
     assert asset.equals(normalizedAsset) : "asset selector must be preserved";
     assert "global".equals(normalizedScope) : "scope must be preserved";
 
-    expectIllegalArgument(() -> UaidPortfolioQuery.builder().setAsset("norito:A1B2"));
-    expectIllegalArgument(() -> UaidPortfolioQuery.builder().setAsset("aid:deadbeef"));
+    expectIllegalArgument(() -> UaidPortfolioQuery.builder().setAsset("not:an-asset"));
   }
 
   @Test

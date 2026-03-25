@@ -229,7 +229,7 @@ fn role_permissions_are_deduplicated() {
     let rose_definition =
         AssetDefinitionId::new(wonderland.clone(), "rose".parse().expect("valid rose name"));
     let rose_asset = AssetId::new(rose_definition, ALICE_ID.clone());
-    let rose_asset_lower = rose_asset.canonical_encoded();
+    let rose_asset_lower = rose_asset.canonical_literal();
     let rose_asset_upper = rose_asset_lower.to_ascii_uppercase();
 
     let allow_alice_to_transfer_rose_1 = Permission::new(

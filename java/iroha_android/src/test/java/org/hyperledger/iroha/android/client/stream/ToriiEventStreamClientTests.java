@@ -40,6 +40,7 @@ public final class ToriiEventStreamClientTests {
     closingBeforeResponseDoesNotEmitError();
     unwrapsCompletionExceptionFailures();
     observersReceiveLifecycleCallbacks();
+    sseRejectsInsecureAuthorizationHeader();
     sseRequestPropagatesTimeout();
     System.out.println("[IrohaAndroid] Torii SSE client tests passed.");
   }
@@ -228,6 +229,27 @@ public final class ToriiEventStreamClientTests {
     if (listener.events.isEmpty() || !"ok".equals(listener.events.get(0).data())) {
       throw new AssertionError("expected SSE payload to be parsed");
     }
+  }
+
+  private static void sseRejectsInsecureAuthorizationHeader() {
+    final TransportExecutor executor =
+        request ->
+            CompletableFuture.completedFuture(
+                TransportResponse.builder().setStatusCode(200).setBody(new byte[0]).build());
+    final ToriiEventStreamClient client =
+        ToriiEventStreamClient.builder()
+            .setBaseUri(URI.create("http://example.com/base"))
+            .setTransportExecutor(executor)
+            .putDefaultHeader("Authorization", "Bearer token")
+            .build();
+    try {
+      client.openSseStream("/events", ToriiEventStreamOptions.defaultOptions(), event -> {});
+    } catch (final IllegalArgumentException expected) {
+      assert expected.getMessage().contains("refuses insecure transport")
+          : "expected insecure transport rejection";
+      return;
+    }
+    throw new AssertionError("Expected insecure credentialed SSE request to be rejected");
   }
 
   private static void sseRequestPropagatesTimeout() throws Exception {

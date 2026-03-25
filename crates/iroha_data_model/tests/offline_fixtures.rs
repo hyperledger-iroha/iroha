@@ -279,7 +279,7 @@ fn parse_account_literal_strict(account_literal: &str, label: &str, field: &str)
 }
 
 fn parse_asset_literal_strict(asset_literal: &str, label: &str, field: &str) -> AssetId {
-    AssetId::parse_encoded(asset_literal)
+    AssetId::parse_literal(asset_literal)
         .unwrap_or_else(|err| panic!("parse {field} `{asset_literal}` for `{label}` failed: {err}"))
 }
 
@@ -308,7 +308,7 @@ fn normalize_certificate_json(mut value: JsonValue) -> JsonValue {
         }
         if let Some(JsonValue::Object(allowance)) = root.get_mut("allowance") {
             if let Some(JsonValue::String(asset)) = allowance.get_mut("asset")
-                && let Ok(parsed_asset) = AssetId::parse_encoded(asset)
+                && let Ok(parsed_asset) = AssetId::parse_literal(asset)
             {
                 *asset = parsed_asset.to_string();
             }

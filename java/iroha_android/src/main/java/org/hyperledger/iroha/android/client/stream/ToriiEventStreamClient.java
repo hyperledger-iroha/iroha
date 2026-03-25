@@ -24,6 +24,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.hyperledger.iroha.android.client.ClientObserver;
 import org.hyperledger.iroha.android.client.ClientResponse;
 import org.hyperledger.iroha.android.client.PlatformHttpTransportExecutor;
+import org.hyperledger.iroha.android.client.TransportSecurity;
 import org.hyperledger.iroha.android.client.transport.StreamingTransportExecutor;
 import org.hyperledger.iroha.android.client.transport.TransportExecutor;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
@@ -91,16 +92,18 @@ public final class ToriiEventStreamClient {
 
   private TransportRequest buildRequest(final String path, final ToriiEventStreamOptions options) {
     final URI target = appendQueryParameters(resolvePath(path), options.queryParameters());
-    final TransportRequest.Builder builder = TransportRequest.builder().setUri(target).setMethod("GET");
-    Duration timeout = options.timeout();
-    if (timeout != null) {
-      builder.setTimeout(timeout);
-    }
     final Map<String, String> headers = new LinkedHashMap<>(defaultHeaders);
     headers.putIfAbsent("Accept", EVENT_STREAM_CONTENT_TYPE);
     headers.putIfAbsent("Cache-Control", "no-cache");
     headers.putIfAbsent("Connection", "keep-alive");
     options.headers().forEach(headers::put);
+    TransportSecurity.requireHttpRequestAllowed(
+        "ToriiEventStreamClient", baseUri, target, headers, null);
+    final TransportRequest.Builder builder = TransportRequest.builder().setUri(target).setMethod("GET");
+    Duration timeout = options.timeout();
+    if (timeout != null) {
+      builder.setTimeout(timeout);
+    }
     headers.forEach(builder::addHeader);
     return builder.build();
   }

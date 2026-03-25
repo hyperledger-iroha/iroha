@@ -19,6 +19,31 @@ Soracloud v1 is an authoritative, IVM-only runtime.
 - Ordered mailbox execution runs admitted IVM handlers directly.
 - Hydration and materialization come from committed SoraFS/DA content rather
   than synthetic local snapshots.
+- `SoraContainerManifestV1` now carries `required_config_names` and
+  `required_secret_names`. Deploy, upgrade, and rollback fail closed when the
+  effective authoritative material set would not satisfy those declared
+  bindings.
+- Committed service config entries are now materialized under
+  `services/<service>/<version>/configs/<config_name>` as canonical JSON
+  payload files.
+- Soracloud IVM handlers can now read those authoritative config payloads
+  directly through the runtime host `ReadConfig` surface, so ordinary
+  `query`/`update` handlers do not need to guess node-local file paths just to
+  consume committed service config.
+- Committed service secret envelopes are now materialized under
+  `services/<service>/<version>/secret_envelopes/<secret_name>` as
+  authoritative envelope files.
+- The legacy private-runtime fallback tree is now synchronized from committed
+  deployment state under `secrets/<service>/<version>/<secret_name>` so the
+  older raw secret read path and the authoritative control plane point at the
+  same bytes.
+- Private-runtime `ReadSecret` now resolves authoritative deployment
+  `service_secrets` first and only falls back to the legacy node-local
+  `secrets/<service>/<version>/...` materialized file tree when no committed
+  service secret entry exists for the requested key.
+- Secret ingestion is still intentionally narrower than config ingestion:
+  `ReadSecret` remains private-runtime-only and still returns the committed
+  envelope ciphertext bytes rather than a plaintext mount contract.
 
 ## CLI Commands
 
@@ -28,6 +53,9 @@ Soracloud v1 is an authoritative, IVM-only runtime.
 - `iroha app soracloud deploy`
   - validates `SoraDeploymentBundleV1` admission rules locally, signs the
     request, and calls `POST /v1/soracloud/deploy`.
+  - `--initial-configs <path>` and `--initial-secrets <path>` may now attach
+    authoritative inline service config / secret maps atomically with the
+    first deploy so required bindings can be satisfied on first admission.
   - the CLI now signs the HTTP request canonically with
     `X-Iroha-Account`, `X-Iroha-Signature`, `X-Iroha-Timestamp-Ms`, and
     `X-Iroha-Nonce`, receives a deterministic draft transaction instruction set
@@ -38,10 +66,32 @@ Soracloud v1 is an authoritative, IVM-only runtime.
 - `iroha app soracloud upgrade`
   - validates and signs a new bundle revision, then calls
     `POST /v1/soracloud/upgrade`.
+  - the same `--initial-configs <path>` / `--initial-secrets <path>` flow is
+    available for atomic material updates during upgrade.
   - The same SCR-host admission checks run server-side before the upgrade is
     admitted.
 - `iroha app soracloud status`
   - queries authoritative service status from `GET /v1/soracloud/status`.
+- `iroha app soracloud config-*`
+  - `config-set`, `config-delete`, and `config-status` are Torii-backed only.
+  - the CLI signs canonical service-config provenance payloads and calls
+    `POST /v1/soracloud/service/config/set`,
+    `POST /v1/soracloud/service/config/delete`, and
+    `GET /v1/soracloud/service/config/status`.
+  - config entries are persisted in authoritative deployment state and remain
+    attached across deploy/upgrade/rollback revision changes.
+  - `config-delete` now fails closed when the active revision still declares
+    the named config in `container.required_config_names`.
+- `iroha app soracloud secret-*`
+  - `secret-set`, `secret-delete`, and `secret-status` are Torii-backed only.
+  - the CLI signs canonical service-secret provenance payloads and calls
+    `POST /v1/soracloud/service/secret/set`,
+    `POST /v1/soracloud/service/secret/delete`, and
+    `GET /v1/soracloud/service/secret/status`.
+  - secret entries are persisted as authoritative `SecretEnvelopeV1` records
+    in deployment state and survive normal service revision changes.
+  - `secret-delete` now fails closed when the active revision still declares
+    the named secret in `container.required_secret_names`.
 - `iroha app soracloud rollback`
   - signs rollback metadata and calls `POST /v1/soracloud/rollback`.
 - `iroha app soracloud rollout`
@@ -242,9 +292,17 @@ Soracloud v1 is an authoritative, IVM-only runtime.
     sweep.
   - Torii now binds each pending generated-HF proxy request to the
     authoritative primary peer it targeted. A proxy response from the wrong
-    peer, or with an unsupported proxy response schema version, now fails
-    closed instead of being accepted only because its `request_id` matched a
-    pending request.
+    peer is now ignored instead of poisoning that pending request, so only
+    the authoritative primary can complete or fail the request. A proxy
+    response from the expected peer with an unsupported proxy response schema
+    version still fails closed instead of being accepted only because its
+    `request_id` matched a pending request. If the wrong peer that answered
+    is itself still an assigned generated-HF host for that placement, the
+    runtime now reports that host through the existing
+    `WarmupNoShow` / `AssignedHeartbeatMiss` evidence path based on its
+    authoritative assignment status and also hints authoritative
+    `ReconcileSoracloudModelHosts`, so stale primary/replica authority drift
+    feeds the control loop instead of only being ignored at ingress.
   - incoming Soracloud proxy execution is also now restricted to the intended
     generated-HF `infer` query case on the committed warm primary. Non-HF
     public local-read routes, and generated-HF requests delivered to a node

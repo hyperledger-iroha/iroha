@@ -32,7 +32,9 @@ public final class OfflineSpendReceiptPayloadEncoder {
    * @param txIdHex 32-byte transaction ID as hex (64 chars)
    * @param fromAccountId sender canonical I105 AccountId
    * @param toAccountId receiver canonical I105 AccountId
-   * @param assetId full encoded asset ID (e.g., {@code norito:<hex>})
+   * @param assetId canonical public asset ID
+   *     ({@code <asset-definition-id>#<account-id>} with an optional
+   *     {@code #dataspace:<id>} suffix)
    * @param amount decimal amount string
    * @param issuedAtMs timestamp in milliseconds
    * @param invoiceId invoice identifier

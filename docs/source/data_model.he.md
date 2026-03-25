@@ -34,7 +34,7 @@ translation_last_reviewed: 2026-03-12
 - `DomainId`: `name` (לדוגמה, `wonderland`).
 - `AccountId`: מזהה חשבון קנוני ללא דומיין מקודד באמצעות `AccountAddress` כ-I105 בלבד. כניסות מנתח חייבות להיות קנוניות I105; סיומות תחום (`@domain`), מילוליות I105 קנוניות, מילוליות כינוי, קלט קנוני של מנתח hex, מטענים מדור קודם של `norito:` ו-`uaid:`/Norito הם טפסי חשבונות נדחים.
 - `AssetDefinitionId`: `unprefixed Base58 address with versioning and checksum` קנוני (UUID-v4 בתים).
-- `AssetId`: מילולית מקודדת קנונית `norito:<hex>` (טפסים טקסטואליים מדור קודם אינם נתמכים במהדורה הראשונה).
+- `AssetId`: מילולית מקודדת קנונית `<asset-definition-id>#<account-id>` (טפסים טקסטואליים מדור קודם אינם נתמכים במהדורה הראשונה).
 - `NftId`: `nft$domain` (לדוגמה, `rose$garden`).
 - `PeerId`: `public_key` (שוויון עמיתים הוא לפי מפתח ציבורי).
 
@@ -260,7 +260,7 @@ curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -d '{"alias":"pkr#ubl.sbp"}'
 ```הערת הגירה:
 - מזהי `name#domain` ישנים בהגדרת נכס אינם מתקבלים בגרסה 1.
-- מזהי נכסים עבור טביעה/צריבה/העברה נשארים קנוניים `norito:<hex>`; בנה אותם עם:
+- מזהי נכסים עבור טביעה/צריבה/העברה נשארים קנוניים `<asset-definition-id>#<account-id>`; בנה אותם עם:
   - `iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
   - או `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`.
 

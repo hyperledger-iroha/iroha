@@ -35,14 +35,14 @@ final class ToriiOfflineListParamsTests: XCTestCase {
             controllerId: " 6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn ",
             receiverId: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
             depositAccountId: "  6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw ",
-            assetId: " norito:4e52543000000001 "
+            assetId: " 62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9 "
         )
         let items = try XCTUnwrap(params.queryItems())
         let map = Self.map(from: items)
         XCTAssertEqual(map["controller_id"], "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
         XCTAssertEqual(map["receiver_id"], "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9")
         XCTAssertEqual(map["deposit_account_id"], "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw")
-        XCTAssertEqual(map["asset_id"], "norito:4e52543000000001")
+        XCTAssertEqual(map["asset_id"], "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9")
     }
 
     func testOnlyMissingVerdictFlag() throws {
@@ -108,40 +108,6 @@ final class ToriiOfflineListParamsTests: XCTestCase {
         }
     }
 
-    func testOfflineBundleProofStatusParams() throws {
-        let params = ToriiOfflineBundleProofStatusParams(bundleIdHex: "0xDEADBEEF")
-        let items = try params.queryItems()
-        let map = Self.map(from: items)
-        XCTAssertEqual(map["bundle_id_hex"], "deadbeef")
-    }
-
-    func testOfflineBundleProofStatusParamsRejectsInvalidHex() {
-        let params = ToriiOfflineBundleProofStatusParams(bundleIdHex: "not-hex")
-        XCTAssertThrowsError(try params.queryItems())
-    }
-
-    func testOfflineBundleProofStatusDecodesTypedFields() throws {
-        let payload = """
-        {
-          "proof_status": "fresh",
-          "receipts_root_hex": "abcd",
-          "aggregate_proof_root_hex": "dcba",
-          "receipts_root_matches": true,
-          "proof_summary": { "version": 1 }
-        }
-        """.data(using: .utf8)!
-        let status = try JSONDecoder().decode(ToriiOfflineBundleProofStatus.self, from: payload)
-        XCTAssertEqual(status.proofStatus, "fresh")
-        XCTAssertEqual(status.receiptsRootHex, "abcd")
-        XCTAssertEqual(status.aggregateProofRootHex, "dcba")
-        XCTAssertEqual(status.receiptsRootMatches, true)
-        XCTAssertEqual(status.proofSummary?["version"], .number(1))
-        let typed = try status.decodeProofSummary()
-        XCTAssertEqual(typed?.version, 1)
-        XCTAssertEqual(typed?.proofSumBytes, nil)
-        XCTAssertEqual(typed?.metadataKeys, nil)
-    }
-
     func testOfflineTransferDecodesPlatformSnapshot() throws {
         let payload = """
         {
@@ -153,7 +119,7 @@ final class ToriiOfflineListParamsTests: XCTestCase {
             "receiver_display": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
             "deposit_account_id": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
             "deposit_account_display": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
-            "asset_id": "norito:4e52543000000001",
+            "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
             "receipt_count": 1,
             "total_amount": "10",
             "claimed_delta": "10",
@@ -182,51 +148,24 @@ final class ToriiOfflineListParamsTests: XCTestCase {
         XCTAssertEqual(item.platformTokenSnapshot?.attestationJwsB64, "dG9rZW4=")
     }
 
-    func testOfflineReceiptListParamsQueryItems() throws {
-        let params = ToriiOfflineReceiptListParams(
-            filter: "{\"op\":\"eq\",\"args\":[\"asset_id\",\"norito:4e52543000000001\"]}",
-            limit: 20,
-            offset: 5,
-            sort: "recorded_at_ms:desc",
-            controllerId: " 6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn ",
-            receiverId: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
-            bundleIdHex: "0xDEADBEEF",
-            certificateIdHex: "AAFF",
-            invoiceId: "inv-1",
-            assetId: "norito:4e52543000000001"
-        )
-        let items = try XCTUnwrap(params.queryItems())
-        let map = Self.map(from: items)
-        XCTAssertEqual(map["filter"], "{\"op\":\"eq\",\"args\":[\"asset_id\",\"norito:4e52543000000001\"]}")
-        XCTAssertEqual(map["limit"], "20")
-        XCTAssertEqual(map["offset"], "5")
-        XCTAssertEqual(map["sort"], "recorded_at_ms:desc")
-        XCTAssertEqual(map["controller_id"], "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
-        XCTAssertEqual(map["receiver_id"], "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9")
-        XCTAssertEqual(map["bundle_id_hex"], "deadbeef")
-        XCTAssertEqual(map["certificate_id_hex"], "aaff")
-        XCTAssertEqual(map["invoice_id"], "inv-1")
-        XCTAssertEqual(map["asset_id"], "norito:4e52543000000001")
-    }
-
     func testQueryEnvelopeEncodesPaginationAndSort() throws {
         let filter = ToriiJSONValue.object([
             "op": .string("eq"),
             "args": .array([.string("bundle_id_hex"), .string("abc")])
         ])
         let envelope = ToriiQueryEnvelope(
-            query: "offline_receipts",
+            query: "offline_transfers",
             filter: filter,
-            select: ["bundle_id_hex", "tx_id_hex"],
+            select: ["bundle_id_hex", "status"],
             sort: [ToriiQuerySortKey(key: "recorded_at_ms", order: .desc)],
             pagination: ToriiQueryPagination(limit: 5, offset: 10),
             fetchSize: 50
         )
         let data = try JSONEncoder().encode(envelope)
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
-        XCTAssertEqual(json["query"] as? String, "offline_receipts")
+        XCTAssertEqual(json["query"] as? String, "offline_transfers")
         XCTAssertNotNil(json["filter"] as? [String: Any])
-        XCTAssertEqual(json["select"] as? [String], ["bundle_id_hex", "tx_id_hex"])
+        XCTAssertEqual(json["select"] as? [String], ["bundle_id_hex", "status"])
         XCTAssertEqual((json["sort"] as? [[String: Any]])?.first?["key"] as? String, "recorded_at_ms")
         XCTAssertEqual((json["sort"] as? [[String: Any]])?.first?["order"] as? String, "desc")
         let pagination = json["pagination"] as? [String: Any]

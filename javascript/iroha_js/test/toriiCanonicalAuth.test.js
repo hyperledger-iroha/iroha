@@ -11,7 +11,7 @@ import { AccountAddress } from "../src/address.js";
 
 test("ToriiClient attaches canonical signing headers for app endpoints", async () => {
   const captured = [];
-  const client = new ToriiClient("http://localhost:8080", {
+  const client = new ToriiClient("https://localhost:8080", {
     fetchImpl: async (url, init) => {
       captured.push({ url, init });
       return new Response(JSON.stringify({ items: [], total: 0 }), {
@@ -56,7 +56,7 @@ test("ToriiClient attaches canonical signing headers for app endpoints", async (
 
 test("ToriiClient canonical auth accepts byte-array private keys", async () => {
   const captured = [];
-  const client = new ToriiClient("http://localhost:8080", {
+  const client = new ToriiClient("https://localhost:8080", {
     fetchImpl: async (url, init) => {
       captured.push({ url, init });
       return new Response(JSON.stringify({ items: [], total: 0 }), {
@@ -96,7 +96,7 @@ test("ToriiClient canonical auth accepts byte-array private keys", async () => {
 });
 
 test("ToriiClient canonical auth rejects non-byte private key arrays", async () => {
-  const client = new ToriiClient("http://localhost:8080", {
+  const client = new ToriiClient("https://localhost:8080", {
     fetchImpl: async () =>
       new Response(JSON.stringify({ items: [], total: 0 }), {
         status: 200,

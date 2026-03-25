@@ -6,6 +6,7 @@
 
 use std::{
     fmt::Write as _,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::LazyLock,
     time::{Duration, Instant},
 };
@@ -298,7 +299,8 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_offline_reserve_renew_tool());
     tools.push(iroha_offline_reserve_sync_tool());
     tools.push(iroha_offline_reserve_defund_tool());
-    tools.push(iroha_offline_revocations_get_tool());
+    tools.push(iroha_offline_revocations_list_tool());
+    tools.push(iroha_offline_revocations_bundle_tool());
     tools.push(iroha_offline_revocations_register_tool());
     tools.push(iroha_iso20022_pacs008_submit_tool());
     tools.push(iroha_iso20022_pacs009_submit_tool());
@@ -1452,8 +1454,15 @@ async fn handle_tools_call(
                 Err(err) => mcp_tool_error(err),
             }
         }
-        "iroha.offline.revocations.get" => {
-            match dispatch_iroha_offline_revocations_get(&app, inbound_headers, &arguments).await {
+        "iroha.offline.revocations.list" => {
+            match dispatch_iroha_offline_revocations_list(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.offline.revocations.bundle" => {
+            match dispatch_iroha_offline_revocations_bundle(&app, inbound_headers, &arguments).await
+            {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -5497,7 +5506,30 @@ async fn dispatch_iroha_offline_reserve_post(
     .await
 }
 
-async fn dispatch_iroha_offline_revocations_get(
+async fn dispatch_iroha_offline_revocations_list(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
+    let route = append_query("/v1/offline/revocations".to_owned(), query.as_ref())?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        route.as_str(),
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_offline_revocations_bundle(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
     arguments: &Map,
@@ -5506,7 +5538,7 @@ async fn dispatch_iroha_offline_revocations_get(
         app,
         inbound_headers,
         Method::GET,
-        "/v1/offline/revocations",
+        "/v1/offline/revocations/bundle",
         arguments.get("headers"),
         Vec::new(),
         None,
@@ -6879,6 +6911,8 @@ async fn dispatch_route(
     content_type: Option<String>,
     accept: Option<String>,
 ) -> Result<Value, String> {
+    let dispatched_remote_ip = dispatched_remote_ip(inbound_headers);
+    let dispatched_connect_addr = dispatched_connect_addr(dispatched_remote_ip);
     let mut request = Request::builder()
         .method(method)
         .uri(path_and_query)
@@ -6899,18 +6933,18 @@ async fn dispatch_route(
                 .map_err(|err| format!("invalid content_type header: {err}"))?;
             headers.insert(header::CONTENT_TYPE, value);
         }
-        headers.insert(
-            HeaderName::from_static(limits::REMOTE_ADDR_HEADER),
-            HeaderValue::from_static("127.0.0.1"),
-        );
+        let remote_addr_header = HeaderName::from_static(limits::REMOTE_ADDR_HEADER);
+        headers.remove(&remote_addr_header);
+        if let Some(remote_ip) = dispatched_remote_ip {
+            let value = HeaderValue::from_str(&remote_ip.to_string())
+                .map_err(|err| format!("invalid remote addr header: {err}"))?;
+            headers.insert(remote_addr_header, value);
+        }
     }
 
     request
         .extensions_mut()
-        .insert(axum::extract::ConnectInfo(std::net::SocketAddr::from((
-            [127, 0, 0, 1],
-            0,
-        ))));
+        .insert(axum::extract::ConnectInfo(dispatched_connect_addr));
 
     let router = {
         let guard = app
@@ -6928,6 +6962,17 @@ async fn dispatch_route(
         .await
         .map_err(|err| format!("dispatch failed: {err}"))?;
     response_to_value(response).await
+}
+
+fn dispatched_remote_ip(inbound_headers: &HeaderMap) -> Option<IpAddr> {
+    inbound_headers
+        .get(limits::REMOTE_ADDR_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse().ok())
+}
+
+fn dispatched_connect_addr(remote_ip: Option<IpAddr>) -> SocketAddr {
+    SocketAddr::new(remote_ip.unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED)), 0)
 }
 
 fn build_request_body(arguments: &Map) -> Result<(Vec<u8>, Option<String>), String> {
@@ -7066,7 +7111,12 @@ fn apply_extra_headers(out: &mut HeaderMap, value: Option<&Value>) -> Result<(),
 
     for (raw_name, raw_value) in headers_obj {
         let lowered = raw_name.to_ascii_lowercase();
-        if lowered == "content-length" || lowered == "host" || lowered == "connection" {
+        if lowered == "content-length"
+            || lowered == "host"
+            || lowered == "connection"
+            || lowered == limits::REMOTE_ADDR_HEADER
+            || lowered == "x-forwarded-client-cert"
+        {
             continue;
         }
         let header_name: HeaderName = raw_name
@@ -11081,12 +11131,40 @@ fn iroha_offline_reserve_post_tool(name: &str, description: &str, path_template:
     }
 }
 
-fn iroha_offline_revocations_get_tool() -> ToolSpec {
+fn iroha_offline_revocations_list_tool() -> ToolSpec {
     ToolSpec {
-        name: "iroha.offline.revocations.get".to_owned(),
-        description: "Fetch the signed offline revocation bundle.".to_owned(),
+        name: "iroha.offline.revocations.list".to_owned(),
+        description: "List offline verdict revocations for inspection.".to_owned(),
         method: Method::GET,
         path_template: "/v1/offline/revocations".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+                "query": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "limit": { "type": "integer" },
+                "offset": { "type": "integer" },
+                "filter": { "type": "string" },
+                "sort": { "type": "string" },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_offline_revocations_bundle_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.offline.revocations.bundle".to_owned(),
+        description: "Fetch the signed offline revocation bundle for wallets.".to_owned(),
+        method: Method::GET,
+        path_template: "/v1/offline/revocations/bundle".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
@@ -11806,7 +11884,8 @@ mod tests {
         LazyLock::new(|| std::sync::Mutex::new(()));
 
     const TEST_ACCOUNT_I105: &str = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
-    const TEST_ASSET_ID: &str = "norito:deadbeef";
+    const TEST_ASSET_ID: &str =
+        "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
 
     fn sample_tool(name: &str, method: Method) -> ToolSpec {
         ToolSpec {
@@ -11816,6 +11895,71 @@ mod tests {
             path_template: "/v1/sample".to_owned(),
             input_schema: norito::json!({ "type": "object" }),
         }
+    }
+
+    fn remote_addr_probe_payload(
+        headers: &HeaderMap,
+        remote: SocketAddr,
+        allow: &[crate::limits::IpNet],
+    ) -> Value {
+        let header_remote = headers
+            .get(crate::limits::REMOTE_ADDR_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned)
+            .map(Value::String)
+            .unwrap_or(Value::Null);
+        let mut payload = Map::new();
+        payload.insert(
+            "allowed_header_only".into(),
+            Value::Bool(crate::limits::is_allowed_by_cidr(headers, None, allow)),
+        );
+        payload.insert(
+            "allowed_with_remote".into(),
+            Value::Bool(crate::limits::is_allowed_by_cidr(
+                headers,
+                Some(remote.ip()),
+                allow,
+            )),
+        );
+        payload.insert("remote".into(), Value::String(remote.ip().to_string()));
+        payload.insert("header".into(), header_remote);
+        Value::Object(payload)
+    }
+
+    fn install_remote_addr_probe_router(app: &mut SharedAppState) {
+        let allow = vec![crate::limits::parse_cidr("127.0.0.0/8").expect("loopback cidr")];
+        let router: axum::Router<SharedAppState> = axum::Router::new().route(
+            "/v1/remote-probe",
+            axum::routing::get_service(tower::service_fn(move |req: Request<Body>| {
+                let allow = allow.clone();
+                async move {
+                    let headers = req.headers().clone();
+                    let remote = req
+                        .extensions()
+                        .get::<axum::extract::ConnectInfo<SocketAddr>>()
+                        .map(|connect| connect.0)
+                        .unwrap_or_else(|| SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0));
+                    let payload = remote_addr_probe_payload(&headers, remote, &allow);
+                    let body = Body::from(
+                        norito::json::to_string(&payload).expect("encode probe payload"),
+                    );
+                    Ok::<_, std::convert::Infallible>(
+                        Response::builder()
+                            .status(StatusCode::OK)
+                            .header(header::CONTENT_TYPE, "application/json")
+                            .body(body)
+                            .expect("response"),
+                    )
+                }
+            })),
+        );
+
+        let app = std::sync::Arc::get_mut(app).expect("unique app state");
+        let mut guard = app
+            .mcp_dispatch_router
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *guard = Some(router);
     }
 
     #[test]
@@ -11876,6 +12020,25 @@ mod tests {
         assert!(body.contains_key("id"));
         assert!(body.contains_key("name"));
         assert!(!body.contains_key("extra"));
+    }
+
+    #[test]
+    fn apply_extra_headers_blocks_reserved_internal_headers() {
+        let mut out = HeaderMap::new();
+        let headers = norito::json!({
+            "x-test": "1",
+            "x-iroha-remote-addr": "127.0.0.1",
+            "x-forwarded-client-cert": "present"
+        });
+
+        apply_extra_headers(&mut out, Some(&headers)).expect("headers accepted");
+
+        assert_eq!(
+            out.get("x-test").and_then(|value| value.to_str().ok()),
+            Some("1")
+        );
+        assert!(!out.contains_key("x-iroha-remote-addr"));
+        assert!(!out.contains_key("x-forwarded-client-cert"));
     }
 
     #[tokio::test]
@@ -12637,7 +12800,12 @@ mod tests {
         assert!(
             tools
                 .iter()
-                .any(|tool| tool.name == "iroha.offline.revocations.get")
+                .any(|tool| tool.name == "iroha.offline.revocations.list")
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool.name == "iroha.offline.revocations.bundle")
         );
         assert!(
             tools
@@ -12682,6 +12850,95 @@ mod tests {
         );
         assert!(tools.iter().any(|tool| tool.name == "iroha.blocks.list"));
         assert!(tools.iter().any(|tool| tool.name == "iroha.blocks.get"));
+    }
+
+    #[tokio::test]
+    async fn dispatch_route_preserves_inbound_remote_addr_for_internal_allowlist_checks() {
+        let mut app = mk_app_state_for_tests();
+        install_remote_addr_probe_router(&mut app);
+
+        let mut inbound_headers = HeaderMap::new();
+        inbound_headers.insert(
+            HeaderName::from_static(crate::limits::REMOTE_ADDR_HEADER),
+            HeaderValue::from_static("198.51.100.23"),
+        );
+
+        let result = dispatch_route(
+            &app,
+            &inbound_headers,
+            Method::GET,
+            "/v1/remote-probe",
+            None,
+            Vec::new(),
+            None,
+            None,
+        )
+        .await
+        .expect("dispatch succeeds");
+
+        assert_eq!(result.get("status").and_then(Value::as_u64), Some(200));
+        let body = result
+            .get("body")
+            .and_then(Value::as_object)
+            .expect("response body");
+        assert_eq!(
+            body.get("allowed_header_only").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            body.get("allowed_with_remote").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            body.get("remote").and_then(Value::as_str),
+            Some("198.51.100.23")
+        );
+        assert_eq!(
+            body.get("header").and_then(Value::as_str),
+            Some("198.51.100.23")
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_route_blocks_remote_addr_spoofing_from_extra_headers() {
+        let mut app = mk_app_state_for_tests();
+        install_remote_addr_probe_router(&mut app);
+
+        let mut extra_headers = Map::new();
+        extra_headers.insert(
+            crate::limits::REMOTE_ADDR_HEADER.to_owned(),
+            Value::String("127.0.0.1".to_owned()),
+        );
+        let extra_headers = Value::Object(extra_headers);
+
+        let result = dispatch_route(
+            &app,
+            &HeaderMap::new(),
+            Method::GET,
+            "/v1/remote-probe",
+            Some(&extra_headers),
+            Vec::new(),
+            None,
+            None,
+        )
+        .await
+        .expect("dispatch succeeds");
+
+        assert_eq!(result.get("status").and_then(Value::as_u64), Some(200));
+        let body = result
+            .get("body")
+            .and_then(Value::as_object)
+            .expect("response body");
+        assert_eq!(
+            body.get("allowed_header_only").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            body.get("allowed_with_remote").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(body.get("remote").and_then(Value::as_str), Some("0.0.0.0"));
+        assert!(body.get("header").is_some_and(Value::is_null));
     }
 
     #[test]

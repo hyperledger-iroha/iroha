@@ -33,7 +33,7 @@ Este documento explica las estructuras, identificadores, rasgos y protocolos que
 - `DomainId`: `name` (por ejemplo, `wonderland`).
 - `AccountId`: identificador de cuenta canónica sin dominio codificado mediante `AccountAddress` como I105 únicamente. Las entradas del analizador deben ser canónicas I105; se rechazan los sufijos de dominio (`@domain`), los literales I105 canónicos, los literales de alias, la entrada del analizador hexadecimal canónico, las cargas útiles `norito:` heredadas y los formularios del analizador de cuentas `uaid:`/`opaque:`.
 - `AssetDefinitionId`: canónico `unprefixed Base58 address with versioning and checksum` (UUID-v4 bytes).
-- `AssetId`: literal codificado canónico `norito:<hex>` (las formas textuales heredadas no se admiten en la primera versión).
+- `AssetId`: literal codificado canónico `<asset-definition-id>#<account-id>` (las formas textuales heredadas no se admiten en la primera versión).
 - `NftId`: `nft$domain` (por ejemplo, `rose$garden`).
 - `PeerId`: `public_key` (la igualdad entre pares es por clave pública).
 
@@ -259,7 +259,7 @@ curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -d '{"alias":"pkr#ubl.sbp"}'
 ```Nota de migración:
 - Los ID de definición de activos antiguos `name#domain` no se aceptan en v1.
-- Los ID de activos para acuñación/quema/transferencia siguen siendo canónicos `norito:<hex>`; construirlos con:
+- Los ID de activos para acuñación/quema/transferencia siguen siendo canónicos `<asset-definition-id>#<account-id>`; construirlos con:
   - `iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
   - o `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`.
 

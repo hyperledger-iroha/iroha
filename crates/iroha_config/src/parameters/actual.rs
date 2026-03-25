@@ -5343,7 +5343,7 @@ impl OperatorWebAuthnAlgorithm {
 pub struct ToriiPeerGeo {
     /// Enable geo lookups for peer telemetry.
     pub enabled: bool,
-    /// Optional geo endpoint (ip-api compatible).
+    /// Optional geo endpoint; required and HTTPS-only when lookups are enabled.
     pub endpoint: Option<Url>,
 }
 
@@ -5391,6 +5391,8 @@ impl Default for SoranetPrivacyIngest {
 /// Transport-specific configuration exposed by Torii.
 #[derive(Debug, Clone, Default)]
 pub struct ToriiTransport {
+    /// Trusted proxy CIDRs allowed to assert the canonical remote IP header.
+    pub trusted_proxy_cidrs: Vec<String>,
     /// Norito-RPC rollout settings.
     pub norito_rpc: NoritoRpcTransport,
 }
@@ -5522,6 +5524,7 @@ impl Default for NoritoRpcTransport {
 impl From<user::ToriiTransport> for ToriiTransport {
     fn from(value: user::ToriiTransport) -> Self {
         Self {
+            trusted_proxy_cidrs: value.trusted_proxy_cidrs,
             norito_rpc: value.norito_rpc.into(),
         }
     }

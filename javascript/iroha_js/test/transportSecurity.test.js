@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ToriiClient } from "../src/toriiClient.js";
 import { NoritoRpcClient } from "../src/noritoRpcClient.js";
+import { generateKeyPair } from "../src/index.js";
+import { AccountAddress } from "../src/address.js";
 
 test("ToriiClient rejects cross-host absolute URLs when credentials are attached", async () => {
   const client = new ToriiClient("https://torii.primary.example", {
@@ -22,6 +24,56 @@ test("ToriiClient rejects scheme overrides when credentials are attached", async
   await assert.rejects(
     () => client._request("GET", "http://torii.primary.example/v1/accounts"),
     /mismatched scheme/i,
+  );
+});
+
+test("ToriiClient rejects insecure transport when body contains private_key material", async () => {
+  const client = new ToriiClient("http://torii.primary.example", {
+    fetchImpl: async () => ({ status: 200 }),
+  });
+  await assert.rejects(
+    () =>
+      client._request("POST", "/v1/subscriptions/plans", {
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ authority: "i105:test", private_key: "ed25519:deadbeef" }),
+      }),
+    /sensitive request material/i,
+  );
+});
+
+test("ToriiClient rejects cross-host absolute URLs when body contains private_key material", async () => {
+  const client = new ToriiClient("https://torii.primary.example", {
+    fetchImpl: async () => ({ status: 200 }),
+  });
+  await assert.rejects(
+    () =>
+      client._request("POST", "https://torii.other.example/v1/subscriptions/plans", {
+        allowAbsoluteUrl: true,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ authority: "i105:test", private_key: "ed25519:deadbeef" }),
+      }),
+    /mismatched host/i,
+  );
+});
+
+test("ToriiClient rejects insecure transport when canonicalAuth is present", async () => {
+  const client = new ToriiClient("http://torii.primary.example", {
+    fetchImpl: async () => ({ status: 200 }),
+  });
+  const { publicKey } = generateKeyPair({ seed: Buffer.alloc(32, 0x21) });
+  const accountId = AccountAddress.fromAccount({
+    domain: "wonderland",
+    publicKey,
+  }).toI105();
+  await assert.rejects(
+    () =>
+      client._request("GET", "/v1/accounts", {
+        canonicalAuth: {
+          accountId,
+          privateKey: Buffer.alloc(32, 0x11),
+        },
+      }),
+    /sensitive request material/i,
   );
 });
 
@@ -62,6 +114,27 @@ test("ToriiClient emits telemetry when allowInsecure is used with credentials", 
   assert.equal(event.method, "GET");
   assert(event.allowInsecure);
   assert(event.hasCredentials);
+});
+
+test("ToriiClient emits telemetry when allowInsecure is used with private_key request bodies", async () => {
+  const events = [];
+  const client = new ToriiClient("http://localhost:8080", {
+    allowInsecure: true,
+    insecureTransportTelemetryHook: (event) => events.push(event),
+    fetchImpl: async () => ({ status: 200 }),
+  });
+  await client._request("POST", "/v1/subscriptions/plans", {
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ authority: "i105:test", private_key: "ed25519:deadbeef" }),
+  });
+  assert.equal(events.length, 1);
+  const event = events[0];
+  assert.equal(event.client, "torii");
+  assert.equal(event.protocol, "http:");
+  assert.equal(event.method, "POST");
+  assert.equal(event.hasCredentials, false);
+  assert.equal(event.hasSensitiveBody, true);
+  assert.equal(event.hasCanonicalAuth, false);
 });
 
 test("NoritoRpcClient rejects insecure base URLs when credentials are configured", () => {

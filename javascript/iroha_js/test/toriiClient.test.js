@@ -138,10 +138,12 @@ const FIXTURE_MERCHANT_ID = fixtureAccountId("merchant");
 const FIXTURE_ISSUER_ID = fixtureAccountId("issuer");
 const FIXTURE_AUTHORITY_ID = fixtureAccountId("authority");
 const FIXTURE_COUNCIL_TEST_ID = fixtureAccountId("council", "test");
-const FIXTURE_ASSET_ID_A = "norito:01020304deadbeef";
-const FIXTURE_ASSET_ID_B = "norito:01020304cafebabe";
-const FIXTURE_ASSET_ID_C = "norito:01020304feedface";
-const FIXTURE_ASSET_ID_D = "norito:01020304aabbccdd";
+const FIXTURE_ALICE_FORMS = fixtureAccountForms("alice");
+const FIXTURE_BOB_FORMS = fixtureAccountForms("bob");
+const FIXTURE_ASSET_ID_A = `62Fk4FPcMuLvW5QjDGNF2a4jAmjM#${FIXTURE_ALICE_ID}`;
+const FIXTURE_ASSET_ID_B = `61CtjvNd9T3THAR65GsMVHr82Bjc#${FIXTURE_BOB_ID}`;
+const FIXTURE_ASSET_ID_C = `5Pz9SwdN9eXPbiXPX9HRCpzCcE3o#${FIXTURE_CAROL_ID}#dataspace:7`;
+const FIXTURE_ASSET_ID_D = `62Fk4FPcMuLvW5QjDGNF2a4jAmjM#${FIXTURE_AUTHORITY_ID}`;
 
 function expectValidationErrorFixture(error, key) {
   assert(error instanceof ValidationError);
@@ -11968,8 +11970,8 @@ test("listAccountAssets encodes pagination params", async () => {
 });
 
 test("listAccountAssets encodes assetId filters", async () => {
-  const assetId = "norito:DEADBEEF";
-  const normalizedAssetId = "norito:deadbeef";
+  const assetId = `62Fk4FPcMuLvW5QjDGNF2a4jAmjM#${FIXTURE_ALICE_FORMS.i105Default}`;
+  const normalizedAssetId = FIXTURE_ASSET_ID_A;
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
     assert.equal(parsed.pathname, accountPath(FIXTURE_ALICE_ID, "/assets"));
@@ -11985,8 +11987,8 @@ test("listAccountAssets encodes assetId filters", async () => {
   assert.equal(payload.items[0].asset_id, normalizedAssetId);
 });
 
-test("listAccountAssets rejects unsupported asset#domain#account filters", async () => {
-  const invalidAssetId = `62Fk4FPcMuLvW5QjDGNF2a4jAmjM#${FIXTURE_ALICE_ID}`;
+test("listAccountAssets rejects malformed asset filters", async () => {
+  const invalidAssetId = "not:an-asset";
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {
       throw new Error("fetch should not be called");
@@ -11995,7 +11997,7 @@ test("listAccountAssets rejects unsupported asset#domain#account filters", async
 
   await assert.rejects(
     () => client.listAccountAssets(FIXTURE_ALICE_ID, { assetId: invalidAssetId }),
-    /must use encoded AssetId form 'norito:<hex>'; legacy 'asset#domain#account' and 'asset##account' forms are not supported/,
+    /must use '<asset-definition-id>#<account-id>' with optional '#dataspace:<id>' suffix/,
   );
 });
 
@@ -12283,8 +12285,8 @@ test("listAccountTransactions encodes pagination params", async () => {
 });
 
 test("listAccountTransactions encodes assetId filters", async () => {
-  const assetId = "norito:DEADBEEF";
-  const normalizedAssetId = "norito:deadbeef";
+  const assetId = `62Fk4FPcMuLvW5QjDGNF2a4jAmjM#${FIXTURE_ALICE_FORMS.i105Default}`;
+  const normalizedAssetId = FIXTURE_ASSET_ID_A;
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
     assert.equal(parsed.pathname, accountPath(FIXTURE_ALICE_ID, "/transactions"));
@@ -12483,8 +12485,8 @@ test("listAssetHolders encodes definition id", async () => {
 });
 
 test("listAssetHolders encodes assetId filters", async () => {
-  const assetId = "norito:DEADBEEF";
-  const normalizedAssetId = "norito:deadbeef";
+  const assetId = `62Fk4FPcMuLvW5QjDGNF2a4jAmjM#${FIXTURE_ALICE_FORMS.i105Default}`;
+  const normalizedAssetId = FIXTURE_ASSET_ID_A;
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
     assert.equal(parsed.pathname, "/v1/assets/62Fk4FPcMuLvW5QjDGNF2a4jAmjM/holders");
@@ -15882,8 +15884,8 @@ test("listOfflineAllowances captures hms safety detect metadata", async () => {
 
 test("listOfflineTransfers normalizes payloads and metadata", async () => {
   let capturedUrl = null;
-  const assetId = "norito:DEADBEEF";
-  const normalizedAssetId = "norito:deadbeef";
+  const assetId = `62Fk4FPcMuLvW5QjDGNF2a4jAmjM#${FIXTURE_ALICE_FORMS.i105Default}`;
+  const normalizedAssetId = FIXTURE_ASSET_ID_A;
   const receiverId = normalizeAccountId(
     FIXTURE_VAULT_ID,
     "listOfflineTransfers.receiver_id",
@@ -16745,8 +16747,8 @@ test("topUpOfflineAllowanceRenewal chains issue and renew", async () => {
 
 test("listOfflineAllowances encodes convenience query params", async () => {
   let capturedUrl = null;
-  const assetId = "norito:DEADBEEF";
-  const normalizedAssetId = "norito:deadbeef";
+  const assetId = `62Fk4FPcMuLvW5QjDGNF2a4jAmjM#${FIXTURE_ALICE_FORMS.i105Default}`;
+  const normalizedAssetId = FIXTURE_ASSET_ID_A;
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async (url) => {
       capturedUrl = url;

@@ -2513,163 +2513,51 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
     assert!(
         names
             .iter()
-            .any(|name| name == "iroha.offline.settlements.list"),
-        "expected agent-friendly offline settlement list MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.offline.settlements.get"),
-        "expected agent-friendly offline settlement detail MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.offline.settlements.query"),
-        "expected agent-friendly offline settlement query MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.offline.settlements.submit"),
-        "expected agent-friendly offline settlement submit MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.offline.certificates.list"),
-        "expected agent-friendly offline certificate list MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.offline.certificates.get"),
-        "expected agent-friendly offline certificate detail MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.offline.certificates.query"),
-        "expected agent-friendly offline certificate query MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.offline.certificates.issue"),
-        "expected agent-friendly offline certificate issue MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.offline.certificates.renew"),
-        "expected agent-friendly offline certificate renew MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.offline.certificates.renew_issue"),
-        "expected agent-friendly offline certificate renew-issue MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.offline.certificates.revoke"),
-        "expected agent-friendly offline certificate revoke MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.offline.allowances.get"),
-        "expected agent-friendly offline allowance detail MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.offline.allowances.issue"),
-        "expected agent-friendly offline allowance issue MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.offline.allowances.renew"),
-        "expected agent-friendly offline allowance renew MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.offline.allowances.list"),
-        "expected agent-friendly offline allowance list MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.offline.allowances.query"),
-        "expected agent-friendly offline allowance query MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.offline.receipts.list"),
-        "expected agent-friendly offline receipt list MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.offline.receipts.query"),
-        "expected agent-friendly offline receipt query MCP tool"
-    );
-    assert!(
-        names
-            .iter()
             .any(|name| name == "iroha.offline.revocations.list"),
         "expected agent-friendly offline revocations list MCP tool"
     );
     assert!(
         names
             .iter()
-            .any(|name| name == "iroha.offline.revocations.query"),
-        "expected agent-friendly offline revocations query MCP tool"
+            .any(|name| name == "iroha.offline.revocations.bundle"),
+        "expected agent-friendly offline revocations bundle MCP tool"
     );
     assert!(
         names
             .iter()
-            .any(|name| name == "iroha.offline.transfers.proof"),
-        "expected agent-friendly offline transfer proof MCP tool"
+            .any(|name| name == "iroha.offline.revocations.register"),
+        "expected agent-friendly offline revocations register MCP tool"
     );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.offline.spend_receipts.submit"),
-        "expected agent-friendly offline spend receipts submit MCP tool"
-    );
-    assert!(
-        names.iter().any(|name| name == "iroha.offline.state"),
-        "expected agent-friendly offline state MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.offline.bundle.proof_status"),
-        "expected agent-friendly offline bundle proof status MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.offline.rejections.list"),
-        "expected agent-friendly offline rejections MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.offline.summaries.list"),
-        "expected agent-friendly offline summaries list MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.offline.summaries.query"),
-        "expected agent-friendly offline summaries query MCP tool"
-    );
+    for legacy_name in [
+        "iroha.offline.allowances.get",
+        "iroha.offline.allowances.issue",
+        "iroha.offline.allowances.list",
+        "iroha.offline.allowances.query",
+        "iroha.offline.allowances.renew",
+        "iroha.offline.bundle.proof_status",
+        "iroha.offline.certificates.get",
+        "iroha.offline.certificates.issue",
+        "iroha.offline.certificates.list",
+        "iroha.offline.certificates.query",
+        "iroha.offline.certificates.renew",
+        "iroha.offline.certificates.renew_issue",
+        "iroha.offline.certificates.revoke",
+        "iroha.offline.receipts.list",
+        "iroha.offline.receipts.query",
+        "iroha.offline.revocations.query",
+        "iroha.offline.settlements.get",
+        "iroha.offline.settlements.list",
+        "iroha.offline.settlements.query",
+        "iroha.offline.settlements.submit",
+        "iroha.offline.spend_receipts.submit",
+        "iroha.offline.state",
+        "iroha.offline.transfers.proof",
+    ] {
+        assert!(
+            !names.iter().any(|name| name == legacy_name),
+            "legacy offline MCP alias should be absent: {legacy_name}"
+        );
+    }
     assert!(
         names
             .iter()
@@ -3686,656 +3574,6 @@ async fn mcp_jsonrpc_tools_call_agent_alias_offline_transfers_query_accepts_flat
 }
 
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_settlements_list_accepts_flat_query_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106174,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.offline.settlements.list",
-                "arguments": {
-                    "limit": 2
-                }
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&call),
-        "offline settlement list alias with flat query fields should dispatch successfully"
-    );
-    let structured = structured_content(&call);
-    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_settlements_get_accepts_bundle_shortcut() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106175,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.offline.settlements.get",
-                "arguments": {
-                    "bundle_id": "not-a-hex-bundle-id"
-                }
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "invalid bundle id should be marked as MCP tool error for offline settlement detail alias"
-    );
-    let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected invalid offline settlement bundle id to be rejected by detail alias"
-    );
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_settlements_query_accepts_flat_envelope_fields()
-{
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106176,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.offline.settlements.query",
-                "arguments": {
-                    "query": "FindAll",
-                    "limit": 2
-                }
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&call),
-        "offline settlement query alias with flat envelope fields should dispatch successfully"
-    );
-    let structured = structured_content(&call);
-    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_settlements_submit_accepts_flat_body_shortcuts()
-{
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106177,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.offline.settlements.submit",
-                "arguments": {
-                    "authority": TEST_ACCOUNT_I105
-                }
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "invalid settlement submit payload should be marked as MCP tool error"
-    );
-    let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected settlement submit alias to surface HTTP validation errors"
-    );
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_certificates_list_accepts_flat_query_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106185,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.offline.certificates.list",
-                "arguments": {
-                    "limit": 2
-                }
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&call),
-        "offline certificate list alias with flat query fields should dispatch successfully"
-    );
-    let structured = structured_content(&call);
-    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_certificates_get_accepts_certificate_shortcut()
-{
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106186,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.offline.certificates.get",
-                "arguments": {
-                    "certificate_id": "not-a-certificate-id"
-                }
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "invalid certificate id should be marked as MCP tool error for offline certificate detail alias"
-    );
-    let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected invalid certificate id to be rejected by offline certificate detail alias"
-    );
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_certificates_query_accepts_flat_envelope_fields()
- {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106187,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.offline.certificates.query",
-                "arguments": {
-                    "query": "FindAll",
-                    "limit": 2
-                }
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&call),
-        "offline certificate query alias with flat envelope fields should dispatch successfully"
-    );
-    let structured = structured_content(&call);
-    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_certificates_issue_accepts_flat_body_shortcuts()
-{
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106188,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.offline.certificates.issue",
-                "arguments": {
-                    "authority": TEST_ACCOUNT_I105
-                }
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "invalid certificate issue payload should be marked as MCP tool error"
-    );
-    let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected certificate issue alias to surface HTTP validation errors"
-    );
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_certificates_renew_accepts_shortcuts() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106189,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.offline.certificates.renew",
-                "arguments": {
-                    "certificate_id": "not-a-certificate-id",
-                    "authority": TEST_ACCOUNT_I105
-                }
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "invalid certificate renew payload should be marked as MCP tool error"
-    );
-    let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected certificate renew alias to surface HTTP validation errors"
-    );
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_certificates_renew_issue_accepts_shortcuts() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106190,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.offline.certificates.renew_issue",
-                "arguments": {
-                    "certificate_id": "not-a-certificate-id",
-                    "authority": TEST_ACCOUNT_I105
-                }
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "invalid certificate renew-issue payload should be marked as MCP tool error"
-    );
-    let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected certificate renew-issue alias to surface HTTP validation errors"
-    );
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_certificates_revoke_accepts_flat_body_shortcuts()
- {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106191,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.offline.certificates.revoke",
-                "arguments": {
-                    "certificate_id": "not-a-certificate-id"
-                }
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "invalid certificate revoke payload should be marked as MCP tool error"
-    );
-    let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected certificate revoke alias to surface HTTP validation errors"
-    );
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_allowances_list_accepts_flat_query_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106178,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.offline.allowances.list",
-                "arguments": {
-                    "limit": 2
-                }
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&call),
-        "offline allowance list alias with flat query fields should dispatch successfully"
-    );
-    let structured = structured_content(&call);
-    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_allowances_get_accepts_certificate_shortcut() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106182,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.offline.allowances.get",
-                "arguments": {
-                    "certificate_id": "not-a-certificate-id"
-                }
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "invalid certificate id should be marked as MCP tool error for offline allowance detail alias"
-    );
-    let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected invalid certificate id to be rejected by offline allowance detail alias"
-    );
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_allowances_issue_accepts_flat_body_shortcuts() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106183,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.offline.allowances.issue",
-                "arguments": {
-                    "authority": TEST_ACCOUNT_I105
-                }
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "invalid allowance issue payload should be marked as MCP tool error"
-    );
-    let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected allowance issue alias to surface HTTP validation errors"
-    );
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_allowances_renew_accepts_shortcuts() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106184,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.offline.allowances.renew",
-                "arguments": {
-                    "certificate_id": "not-a-certificate-id",
-                    "authority": TEST_ACCOUNT_I105
-                }
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "invalid allowance renew payload should be marked as MCP tool error"
-    );
-    let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected allowance renew alias to surface HTTP validation errors"
-    );
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_allowances_query_accepts_flat_envelope_fields()
-{
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106179,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.offline.allowances.query",
-                "arguments": {
-                    "query": "FindAll",
-                    "limit": 2
-                }
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&call),
-        "offline allowance query alias with flat envelope fields should dispatch successfully"
-    );
-    let structured = structured_content(&call);
-    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_receipts_list_accepts_flat_query_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106180,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.offline.receipts.list",
-                "arguments": {
-                    "limit": 2
-                }
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&call),
-        "offline receipt list alias with flat query fields should dispatch successfully"
-    );
-    let structured = structured_content(&call);
-    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_receipts_query_accepts_flat_envelope_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106181,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.offline.receipts.query",
-                "arguments": {
-                    "query": "FindAll",
-                    "limit": 2
-                }
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&call),
-        "offline receipt query alias with flat envelope fields should dispatch successfully"
-    );
-    let structured = structured_content(&call);
-    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
-}
-
-#[tokio::test]
 async fn mcp_jsonrpc_tools_call_agent_alias_offline_revocations_list_accepts_flat_query_fields() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
@@ -4368,8 +3606,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_offline_revocations_list_accepts_fla
 }
 
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_revocations_query_accepts_flat_envelope_fields()
-{
+async fn mcp_jsonrpc_tools_call_agent_alias_offline_revocations_bundle_dispatches_route() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -4382,27 +3619,36 @@ async fn mcp_jsonrpc_tools_call_agent_alias_offline_revocations_query_accepts_fl
             "id": 106193,
             "method": "tools/call",
             "params": {
-                "name": "iroha.offline.revocations.query",
-                "arguments": {
-                    "query": "FindAll",
-                    "limit": 2
-                }
+                "name": "iroha.offline.revocations.bundle"
             }
         }),
     )
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&call),
-        "offline revocations query alias with flat envelope fields should dispatch successfully"
-    );
     let structured = structured_content(&call);
-    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
+    let http_status = structured.get("status").and_then(Value::as_u64);
+    assert!(
+        http_status.is_some(),
+        "offline revocations bundle alias should return an HTTP status"
+    );
+    if tool_is_error(&call) {
+        assert!(
+            http_status.is_some_and(|status| status >= 400),
+            "offline revocations bundle alias should surface an error HTTP status when unavailable"
+        );
+    } else {
+        assert_eq!(
+            http_status,
+            Some(200),
+            "offline revocations bundle alias should return HTTP 200 when available"
+        );
+    }
 }
 
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_transfers_proof_accepts_flat_body_shortcuts() {
+async fn mcp_jsonrpc_tools_call_agent_alias_offline_revocations_register_accepts_flat_body_shortcuts()
+ {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -4415,9 +3661,9 @@ async fn mcp_jsonrpc_tools_call_agent_alias_offline_transfers_proof_accepts_flat
             "id": 106194,
             "method": "tools/call",
             "params": {
-                "name": "iroha.offline.transfers.proof",
+                "name": "iroha.offline.revocations.register",
                 "arguments": {
-                    "kind": "sum"
+                    "verdict_id": "not-a-verdict-id"
                 }
             }
         }),
@@ -4425,230 +3671,25 @@ async fn mcp_jsonrpc_tools_call_agent_alias_offline_transfers_proof_accepts_flat
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "invalid transfer proof payload should be marked as MCP tool error"
-    );
-    let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected transfer proof alias to surface HTTP validation errors"
-    );
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_spend_receipts_submit_accepts_flat_body_shortcuts()
- {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106195,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.offline.spend_receipts.submit",
-                "arguments": {
-                    "receipts": "not-an-array"
-                }
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "invalid spend receipts payload should be marked as MCP tool error"
-    );
-    let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected spend receipts alias to surface HTTP validation errors"
-    );
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_state_dispatches_route() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106196,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.offline.state"
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&call),
-        "offline state alias should dispatch successfully"
-    );
-    let structured = structured_content(&call);
-    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_bundle_proof_status_accepts_bundle_shortcut() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106197,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.offline.bundle.proof_status",
-                "arguments": {
-                    "bundle_id": "not-a-bundle-id"
-                }
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "invalid bundle id should be marked as MCP tool error for bundle proof status alias"
-    );
-    let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected invalid bundle id to be rejected by bundle proof status alias"
-    );
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_rejections_list_dispatches_route() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106198,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.offline.rejections.list"
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    let structured = structured_content(&call);
-    let http_status = structured.get("status").and_then(Value::as_u64);
-    assert!(
-        http_status.is_some(),
-        "offline rejections alias should return an HTTP status"
-    );
-    if tool_is_error(&call) {
+    if call.get("result").is_some() {
         assert!(
-            http_status.is_some_and(|status| status >= 400),
-            "offline rejections alias should report an error HTTP status when unavailable"
+            tool_is_error(&call),
+            "invalid revocation registration payload should be marked as MCP tool error"
+        );
+        let structured = structured_content(&call);
+        assert!(
+            structured
+                .get("status")
+                .and_then(Value::as_u64)
+                .is_some_and(|status| status >= 400),
+            "expected revocation registration alias to surface HTTP validation errors"
         );
     } else {
-        assert_eq!(
-            http_status,
-            Some(200),
-            "offline rejections alias should return HTTP 200 when available"
+        assert!(
+            call.get("error").is_some(),
+            "invalid revocation registration payload should surface either an MCP tool error or a JSON-RPC error"
         );
     }
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_summaries_list_accepts_flat_query_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106199,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.offline.summaries.list",
-                "arguments": {
-                    "limit": 2
-                }
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&call),
-        "offline summaries list alias with flat query fields should dispatch successfully"
-    );
-    let structured = structured_content(&call);
-    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_offline_summaries_query_accepts_flat_envelope_fields() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 106200,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.offline.summaries.query",
-                "arguments": {
-                    "query": "FindAll",
-                    "limit": 2
-                }
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !tool_is_error(&call),
-        "offline summaries query alias with flat envelope fields should dispatch successfully"
-    );
-    let structured = structured_content(&call);
-    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
 }
 
 #[tokio::test]

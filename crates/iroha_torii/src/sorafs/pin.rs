@@ -199,13 +199,12 @@ impl GatewayRateLimiter {
 }
 
 fn rate_key(token: Option<&str>, remote: Option<IpAddr>) -> String {
-    if let Some(tok) = token {
-        return format!("token:{tok}");
+    match (token, remote) {
+        (Some(tok), Some(ip)) => format!("token:{tok}|ip:{ip}"),
+        (Some(tok), None) => format!("token:{tok}"),
+        (None, Some(ip)) => format!("ip:{ip}"),
+        (None, None) => "unknown".to_owned(),
     }
-    if let Some(ip) = remote {
-        return format!("ip:{ip}");
-    }
-    "unknown".to_owned()
 }
 
 fn extract_token(headers: &HeaderMap) -> Option<String> {
@@ -226,4 +225,35 @@ fn extract_token(headers: &HeaderMap) -> Option<String> {
         .map(str::trim)
         .filter(|v| !v.is_empty())
         .map(str::to_owned)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rate_key;
+
+    #[test]
+    fn rate_key_scopes_shared_tokens_by_ip() {
+        let key_a = rate_key(
+            Some("shared-token"),
+            Some("203.0.113.10".parse().expect("valid ip")),
+        );
+        let key_b = rate_key(
+            Some("shared-token"),
+            Some("203.0.113.11".parse().expect("valid ip")),
+        );
+
+        assert_ne!(key_a, key_b);
+        assert_eq!(key_a, "token:shared-token|ip:203.0.113.10");
+        assert_eq!(key_b, "token:shared-token|ip:203.0.113.11");
+    }
+
+    #[test]
+    fn rate_key_preserves_single_dimension_fallbacks() {
+        assert_eq!(rate_key(Some("token-only"), None), "token:token-only");
+        assert_eq!(
+            rate_key(None, Some("198.51.100.5".parse().expect("valid ip"))),
+            "ip:198.51.100.5"
+        );
+        assert_eq!(rate_key(None, None), "unknown");
+    }
 }

@@ -1,58 +1,23 @@
 package org.hyperledger.iroha.sdk.address
 
 import java.io.ByteArrayOutputStream
-import java.math.BigInteger
 import java.nio.charset.StandardCharsets
 import org.hyperledger.iroha.sdk.crypto.Blake2b
-import org.hyperledger.iroha.sdk.crypto.Blake2s
 
-private val LOCAL_DOMAIN_KEY = "SORA-LOCAL-K:v1".toByteArray(StandardCharsets.UTF_8)
-private val IH58_CHECKSUM_PREFIX = "IH58PRE".toByteArray(StandardCharsets.UTF_8)
-private const val COMPRESSED_SENTINEL = "sora"
-private const val COMPRESSED_CHECKSUM_LEN = 6
-private const val BECH32M_CONST = 0x2bc830a3
+private val I105_CHECKSUM_PREFIX = "I105PRE".toByteArray(StandardCharsets.UTF_8)
+private const val I105_WARNING =
+    "I105 addresses are the canonical Base58 account literal encoding. " +
+        "Render and validate them with the intended chain discriminant."
 
-private const val COMPRESSED_WARNING =
-    "Compressed Sora addresses rely on half-width kana and are only interoperable inside " +
-        "Sora-aware apps. Prefer IH58 when sharing with explorers, wallets, or QR codes."
-
-private val IH58_ALPHABET = arrayOf(
+private val I105_ALPHABET = arrayOf(
     "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F", "G", "H",
     "J", "K", "L", "M", "N", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "a", "b",
     "c", "d", "e", "f", "g", "h", "i", "j", "k", "m", "n", "o", "p", "q", "r", "s", "t",
     "u", "v", "w", "x", "y", "z",
 )
 
-private val SORA_KANA = arrayOf(
-    "\uFF72", "\uFF9B", "\uFF8A", "\uFF86", "\uFF8E", "\uFF8D", "\uFF84", "\uFF81",
-    "\uFF98", "\uFF87", "\uFF99", "\uFF66", "\uFF9C", "\uFF76", "\uFF96", "\uFF80",
-    "\uFF9A", "\uFF7F", "\uFF82", "\uFF88", "\uFF85", "\uFF97", "\uFF91", "\uFF73",
-    "\u30F0", "\uFF89", "\uFF75", "\uFF78", "\uFF94", "\uFF8F", "\uFF79", "\uFF8C",
-    "\uFF7A", "\uFF74", "\uFF83", "\uFF71", "\uFF7B", "\uFF77", "\uFF95", "\uFF92",
-    "\uFF90", "\uFF7C", "\u30F1", "\uFF8B", "\uFF93", "\uFF7E", "\uFF7D",
-)
-
-private val SORA_KANA_FULLWIDTH = arrayOf(
-    "\u30A4", "\u30ED", "\u30CF", "\u30CB", "\u30DB", "\u30D8", "\u30C8", "\u30C1",
-    "\u30EA", "\u30CC", "\u30EB", "\u30F2", "\u30EF", "\u30AB", "\u30E8", "\u30BF",
-    "\u30EC", "\u30BD", "\u30C4", "\u30CD", "\u30CA", "\u30E9", "\u30E0", "\u30A6",
-    "\u30F0", "\u30CE", "\u30AA", "\u30AF", "\u30E4", "\u30DE", "\u30B1", "\u30D5",
-    "\u30B3", "\u30A8", "\u30C6", "\u30A2", "\u30B5", "\u30AD", "\u30E6", "\u30E1",
-    "\u30DF", "\u30B7", "\u30F1", "\u30D2", "\u30E2", "\u30BB", "\u30B9",
-)
-
-private val COMPRESSED_ALPHABET: Array<String> = IH58_ALPHABET + SORA_KANA
-private val COMPRESSED_ALPHABET_FULLWIDTH: Array<String> = IH58_ALPHABET + SORA_KANA_FULLWIDTH
-private val COMPRESSED_BASE: Int = COMPRESSED_ALPHABET.size
-private val BASE_58: BigInteger = BigInteger.valueOf(58L)
-
-private val COMPRESSED_INDEX: Map<String, Int> = buildMap {
-    for (i in COMPRESSED_ALPHABET.indices) put(COMPRESSED_ALPHABET[i], i)
-    for (i in COMPRESSED_ALPHABET_FULLWIDTH.indices) put(COMPRESSED_ALPHABET_FULLWIDTH[i], i)
-}
-
-private val IH58_INDEX: Map<String, Int> = buildMap {
-    for (i in IH58_ALPHABET.indices) put(IH58_ALPHABET[i], i)
+private val I105_INDEX: Map<String, Int> = buildMap {
+    for (i in I105_ALPHABET.indices) put(I105_ALPHABET[i], i)
 }
 
 @Volatile
@@ -82,52 +47,26 @@ class AccountAddress private constructor(canonicalBytes: ByteArray) {
      */
     @Throws(AccountAddressException::class)
     fun rebasedFromDefaultDomain(domainLabel: String): AccountAddress {
+        require(domainLabel.isNotBlank()) { "domainLabel must not be blank" }
         parseCanonical(_canonicalBytes)
-        if (_canonicalBytes.size < 2) return this
-
-        val tag = _canonicalBytes[1].toInt() and 0xFF
-        if (tag != 0x00) return this
-
-        val canonicalLabel = domainLabel.trim().lowercase()
-        if (canonicalLabel.isBlank() || canonicalLabel.equals(DEFAULT_DOMAIN_NAME, ignoreCase = true)) {
-            return this
-        }
-
-        val out = ByteArrayOutputStream()
-        out.write(_canonicalBytes[0].toInt())
-        out.write(0x01)
-        val digest = computeLocalDigest(canonicalLabel)
-        out.write(digest, 0, digest.size)
-        out.write(_canonicalBytes, 2, _canonicalBytes.size - 2)
-        return fromCanonicalBytes(out.toByteArray())
+        return this
     }
 
     fun canonicalHex(): String = "0x${bytesToHex(_canonicalBytes)}"
 
     @Throws(AccountAddressException::class)
-    fun toIH58(networkPrefix: Int): String = encodeIh58(networkPrefix, _canonicalBytes)
+    fun toI105(prefix: Int): String = encodeI105(prefix, _canonicalBytes)
 
     @Throws(AccountAddressException::class)
-    fun toI105(prefix: Int): String = toIH58(prefix)
+    fun toI105Default(): String = toI105(DEFAULT_I105_DISCRIMINANT)
 
     @Throws(AccountAddressException::class)
-    fun toI105Default(): String = toCompressedSora()
+    fun displayFormats(): DisplayFormats = displayFormats(DEFAULT_I105_DISCRIMINANT)
 
     @Throws(AccountAddressException::class)
-    fun toCompressedSora(): String = encodeCompressed(_canonicalBytes, COMPRESSED_ALPHABET)
-
-    @Throws(AccountAddressException::class)
-    fun toCompressedSoraFullWidth(): String =
-        encodeCompressed(_canonicalBytes, COMPRESSED_ALPHABET_FULLWIDTH)
-
-    @Throws(AccountAddressException::class)
-    fun displayFormats(): DisplayFormats = displayFormats(DEFAULT_IH58_PREFIX)
-
-    @Throws(AccountAddressException::class)
-    fun displayFormats(networkPrefix: Int): DisplayFormats {
-        val ih58 = toIH58(networkPrefix)
-        val compressed = toCompressedSora()
-        return DisplayFormats(ih58, compressed, networkPrefix, COMPRESSED_WARNING)
+    fun displayFormats(discriminant: Int): DisplayFormats {
+        val i105 = toI105(discriminant)
+        return DisplayFormats(i105, discriminant, I105_WARNING)
     }
 
     /**
@@ -166,11 +105,10 @@ class AccountAddress private constructor(canonicalBytes: ByteArray) {
 
     companion object {
         const val DEFAULT_DOMAIN_NAME = "default"
-        const val DEFAULT_IH58_PREFIX = 753
-        const val DEFAULT_I105_DISCRIMINANT = DEFAULT_IH58_PREFIX
+        const val DEFAULT_I105_DISCRIMINANT = 753
 
         @JvmStatic
-        fun compressedWarningMessage(): String = COMPRESSED_WARNING
+        fun i105WarningMessage(): String = I105_WARNING
 
         @JvmStatic
         @Throws(AccountAddressException::class)
@@ -189,15 +127,6 @@ class AccountAddress private constructor(canonicalBytes: ByteArray) {
 
             val out = ByteArrayOutputStream()
             out.write(header.toInt())
-
-            if (domain.equals(DEFAULT_DOMAIN_NAME, ignoreCase = true)) {
-                out.write(0x00)
-            } else {
-                out.write(0x01)
-                val digest = computeLocalDigest(domain)
-                out.write(digest, 0, digest.size)
-            }
-
             out.write(0x00)
             out.write(curveIdForAlgorithm(algorithm).toInt())
             out.write(publicKey.size)
@@ -219,12 +148,6 @@ class AccountAddress private constructor(canonicalBytes: ByteArray) {
         @JvmStatic
         @Throws(AccountAddressException::class)
         fun fromMultisigPolicy(domain: String, policy: MultisigPolicyPayload): AccountAddress {
-            if (domain.isBlank()) {
-                throw AccountAddressException(
-                    AccountAddressErrorCode.INVALID_LENGTH, "domain must not be blank",
-                )
-            }
-
             val members = policy.members
             if (members.isEmpty()) {
                 throw AccountAddressException(
@@ -232,7 +155,7 @@ class AccountAddress private constructor(canonicalBytes: ByteArray) {
                     "InvalidMultisigPolicy: zero members",
                 )
             }
-            if (members.size > 0xFF) {
+            if (members.size > 0xFFFF) {
                 throw AccountAddressException(
                     AccountAddressErrorCode.MULTISIG_MEMBER_OVERFLOW,
                     "InvalidMultisigPolicy: too many members (${members.size})",
@@ -285,18 +208,11 @@ class AccountAddress private constructor(canonicalBytes: ByteArray) {
             val out = ByteArrayOutputStream()
             out.write(header.toInt())
 
-            if (domain.equals(DEFAULT_DOMAIN_NAME, ignoreCase = true)) {
-                out.write(0x00)
-            } else {
-                out.write(0x01)
-                val digest = computeLocalDigest(domain)
-                out.write(digest, 0, digest.size)
-            }
-
             out.write(0x01) // multisig controller tag
             out.write(policy.version and 0xFF)
             out.write((policy.threshold shr 8) and 0xFF)
             out.write(policy.threshold and 0xFF)
+            out.write((members.size shr 8) and 0xFF)
             out.write(members.size and 0xFF)
 
             for (member in members) {
@@ -335,28 +251,8 @@ class AccountAddress private constructor(canonicalBytes: ByteArray) {
 
         @JvmStatic
         @Throws(AccountAddressException::class)
-        fun fromIH58(encoded: String, expectedPrefix: Int?): AccountAddress {
-            val decode = decodeIh58(encoded)
-            if (expectedPrefix != null && decode.networkPrefix != expectedPrefix) {
-                throw AccountAddressException(
-                    AccountAddressErrorCode.UNEXPECTED_NETWORK_PREFIX,
-                    "unexpected IH58 network prefix: expected $expectedPrefix, found ${decode.networkPrefix}",
-                )
-            }
-            val address = fromCanonicalBytes(decode.canonical)
-            val reencoded = address.toIH58(decode.networkPrefix)
-            if (reencoded != encoded) {
-                throw AccountAddressException(
-                    AccountAddressErrorCode.CHECKSUM_MISMATCH, "IH58 checksum mismatch",
-                )
-            }
-            return address
-        }
-
-        @JvmStatic
-        @Throws(AccountAddressException::class)
-        fun fromCompressedSora(encoded: String): AccountAddress {
-            val canonical = decodeCompressed(encoded)
+        fun fromI105(encoded: String, expectedDiscriminant: Int?): AccountAddress {
+            val canonical = decodeI105(encoded, expectedDiscriminant)
             return fromCanonicalBytes(canonical)
         }
 
@@ -369,31 +265,19 @@ class AccountAddress private constructor(canonicalBytes: ByteArray) {
                     AccountAddressErrorCode.INVALID_LENGTH, "address string is empty",
                 )
             }
-            if (trimmed.startsWith(COMPRESSED_SENTINEL)) {
-                return ParseResult(fromCompressedSora(trimmed), AccountAddressFormat.COMPRESSED)
-            }
-            if (containsCompressedGlyph(trimmed)) {
+            if (trimmed.contains("@")) {
                 throw AccountAddressException(
-                    AccountAddressErrorCode.MISSING_COMPRESSED_SENTINEL,
-                    "compressed address must start with sora sentinel",
+                    AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+                    "account address literals must not include @domain; use canonical I105 form",
                 )
             }
             if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
-                return ParseResult(fromCanonicalHex(trimmed), AccountAddressFormat.CANONICAL_HEX)
+                throw AccountAddressException(
+                    AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+                    "canonical hex account addresses are not accepted; use canonical I105 form",
+                )
             }
-            try {
-                return ParseResult(fromIH58(trimmed, expectedPrefix), AccountAddressFormat.IH58)
-            } catch (ex: AccountAddressException) {
-                val message = ex.message
-                if (message != null &&
-                    (message.startsWith("unexpected IH58 network prefix") || message.contains("IH58"))
-                ) {
-                    throw ex
-                }
-            }
-            throw AccountAddressException(
-                AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT, "unsupported address format",
-            )
+            return ParseResult(fromI105(trimmed, expectedPrefix), AccountAddressFormat.I105)
         }
 
         @JvmStatic
@@ -410,44 +294,21 @@ class AccountAddress private constructor(canonicalBytes: ByteArray) {
                     AccountAddressErrorCode.INVALID_LENGTH, "address string is empty",
                 )
             }
-            if (trimmed.startsWith(COMPRESSED_SENTINEL)) {
-                val canonical = decodeCompressed(trimmed)
-                parseCanonical(canonical, true)
-                return ParseResult(AccountAddress(canonical), AccountAddressFormat.COMPRESSED)
-            }
-            if (containsCompressedGlyph(trimmed)) {
+            if (trimmed.contains("@")) {
                 throw AccountAddressException(
-                    AccountAddressErrorCode.MISSING_COMPRESSED_SENTINEL,
-                    "compressed address must start with sora sentinel",
+                    AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+                    "account address literals must not include @domain; use canonical I105 form",
                 )
             }
             if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
-                val body = trimmed.substring(2)
-                val canonical = hexToBytes(body)
-                parseCanonical(canonical, true)
-                return ParseResult(AccountAddress(canonical), AccountAddressFormat.CANONICAL_HEX)
+                throw AccountAddressException(
+                    AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+                    "canonical hex account addresses are not accepted; use canonical I105 form",
+                )
             }
-            try {
-                val decode = decodeIh58(trimmed)
-                if (expectedPrefix != null && decode.networkPrefix != expectedPrefix) {
-                    throw AccountAddressException(
-                        AccountAddressErrorCode.UNEXPECTED_NETWORK_PREFIX,
-                        "unexpected IH58 network prefix: expected $expectedPrefix, found ${decode.networkPrefix}",
-                    )
-                }
-                parseCanonical(decode.canonical, true)
-                return ParseResult(AccountAddress(decode.canonical), AccountAddressFormat.IH58)
-            } catch (ex: AccountAddressException) {
-                val message = ex.message
-                if (message != null &&
-                    (message.startsWith("unexpected IH58 network prefix") || message.contains("IH58"))
-                ) {
-                    throw ex
-                }
-            }
-            throw AccountAddressException(
-                AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT, "unsupported address format",
-            )
+            val canonical = decodeI105(trimmed, expectedPrefix)
+            parseCanonical(canonical, true)
+            return ParseResult(AccountAddress(canonical), AccountAddressFormat.I105)
         }
 
         @JvmStatic
@@ -461,9 +322,7 @@ class AccountAddress private constructor(canonicalBytes: ByteArray) {
 
 // -- Private helper classes --
 
-private class Ih58DecodeResult(val networkPrefix: Int, val canonical: ByteArray)
-
-private class PrefixResult(val networkPrefix: Int, val prefixLength: Int)
+private class I105PrefixResult(val discriminant: Int, val prefixLength: Int)
 
 // -- Canonical decoding helpers --
 
@@ -474,26 +333,6 @@ private fun parseCanonical(canonical: ByteArray, ignoreCurveSupport: Boolean = f
     }
     decodeHeader(canonical[0])
     var cursor = 1
-
-    val domainTag = canonical[cursor++]
-    when (domainTag.toInt()) {
-        0x00 -> {}
-        0x01 -> {
-            if (cursor + 12 > canonical.size) {
-                throw AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length")
-            }
-            cursor += 12
-        }
-        0x02 -> {
-            if (cursor + 4 > canonical.size) {
-                throw AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length")
-            }
-            cursor += 4
-        }
-        else -> throw AccountAddressException(
-            AccountAddressErrorCode.UNKNOWN_DOMAIN_TAG, "unknown domain selector tag: $domainTag",
-        )
-    }
 
     if (cursor >= canonical.size) {
         throw AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length")
@@ -521,14 +360,16 @@ private fun parseCanonical(canonical: ByteArray, ignoreCurveSupport: Boolean = f
             }
         }
         0x01 -> {
-            if (cursor + 4 > canonical.size) {
+            if (cursor + 5 > canonical.size) {
                 throw AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length")
             }
             cursor++ // version
             val threshold = ((canonical[cursor].toInt() and 0xFF) shl 8) or
                 (canonical[cursor + 1].toInt() and 0xFF)
             cursor += 2
-            val memberCount = canonical[cursor++].toInt() and 0xFF
+            val memberCount = ((canonical[cursor].toInt() and 0xFF) shl 8) or
+                (canonical[cursor + 1].toInt() and 0xFF)
+            cursor += 2
             if (memberCount == 0) {
                 throw AccountAddressException(
                     AccountAddressErrorCode.INVALID_MULTISIG_POLICY,
@@ -614,26 +455,6 @@ private fun extractSingleKeyPayload(
     var cursor = 0
     decodeHeader(canonical[cursor++])
 
-    val domainTag = canonical[cursor++]
-    when (domainTag.toInt()) {
-        0x00 -> {}
-        0x01 -> {
-            if (cursor + 12 > canonical.size) {
-                throw AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length")
-            }
-            cursor += 12
-        }
-        0x02 -> {
-            if (cursor + 4 > canonical.size) {
-                throw AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length")
-            }
-            cursor += 4
-        }
-        else -> throw AccountAddressException(
-            AccountAddressErrorCode.UNKNOWN_DOMAIN_TAG, "unknown domain selector tag: $domainTag",
-        )
-    }
-
     if (cursor >= canonical.size) {
         throw AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length")
     }
@@ -672,39 +493,21 @@ private fun extractMultisigPayload(
     var cursor = 0
     decodeHeader(canonical[cursor++])
 
-    val domainTag = canonical[cursor++]
-    when (domainTag.toInt()) {
-        0x00 -> {}
-        0x01 -> {
-            if (cursor + 12 > canonical.size) {
-                throw AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length")
-            }
-            cursor += 12
-        }
-        0x02 -> {
-            if (cursor + 4 > canonical.size) {
-                throw AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length")
-            }
-            cursor += 4
-        }
-        else -> throw AccountAddressException(
-            AccountAddressErrorCode.UNKNOWN_DOMAIN_TAG, "unknown domain selector tag: $domainTag",
-        )
-    }
-
     if (cursor >= canonical.size) {
         throw AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length")
     }
     val controllerTag = canonical[cursor++]
     if (controllerTag.toInt() != 0x01) return null
-    if (cursor + 4 > canonical.size) {
+    if (cursor + 5 > canonical.size) {
         throw AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length")
     }
     val version = canonical[cursor++].toInt() and 0xFF
     val threshold = ((canonical[cursor].toInt() and 0xFF) shl 8) or
         (canonical[cursor + 1].toInt() and 0xFF)
     cursor += 2
-    val memberCount = canonical[cursor++].toInt() and 0xFF
+    val memberCount = ((canonical[cursor].toInt() and 0xFF) shl 8) or
+        (canonical[cursor + 1].toInt() and 0xFF)
+    cursor += 2
     if (memberCount == 0) {
         throw AccountAddressException(
             AccountAddressErrorCode.INVALID_MULTISIG_POLICY,
@@ -846,62 +649,65 @@ private fun curveName(curveId: Int): String = when (curveId and 0xFF) {
     else -> "0x${Integer.toHexString(curveId and 0xFF)}"
 }
 
-private fun computeLocalDigest(label: String): ByteArray {
-    val digest = Blake2s.digest(label.toByteArray(StandardCharsets.UTF_8), LOCAL_DOMAIN_KEY, 32)
-    return digest.copyOf(12)
-}
-
 @Throws(AccountAddressException::class)
-private fun encodeIh58(prefix: Int, canonical: ByteArray): String {
-    val prefixBytes = encodeIh58Prefix(prefix)
+private fun encodeI105(prefix: Int, canonical: ByteArray): String {
+    val prefixBytes = encodeI105Prefix(prefix)
     val body = ByteArray(prefixBytes.size + canonical.size)
     prefixBytes.copyInto(body)
     canonical.copyInto(body, prefixBytes.size)
-
-    val checksumInput = ByteArray(IH58_CHECKSUM_PREFIX.size + body.size)
-    IH58_CHECKSUM_PREFIX.copyInto(checksumInput)
-    body.copyInto(checksumInput, IH58_CHECKSUM_PREFIX.size)
-
-    val checksum = Blake2b.digest512(checksumInput)
-    val payload = ByteArray(body.size + 2)
+    val checksum = i105ChecksumBytes(body)
+    val payload = ByteArray(body.size + checksum.size)
     body.copyInto(payload)
-    payload[payload.size - 2] = checksum[0]
-    payload[payload.size - 1] = checksum[1]
-
-    return encodeBase58(payload)
+    checksum.copyInto(payload, body.size)
+    val digits = encodeBaseN(payload, I105_ALPHABET.size)
+    return buildString(digits.size) {
+        for (digit in digits) append(I105_ALPHABET[digit])
+    }
 }
 
 @Throws(AccountAddressException::class)
-private fun decodeIh58(encoded: String): Ih58DecodeResult {
-    val body = decodeBase58(encoded)
-    if (body.size < 3) {
+private fun decodeI105(encoded: String, expectedDiscriminant: Int?): ByteArray {
+    val digits = IntArray(encoded.length)
+    for (i in encoded.indices) {
+        val symbol = encoded[i].toString()
+        val value = I105_INDEX[symbol]
+            ?: throw AccountAddressException(
+                AccountAddressErrorCode.INVALID_I105_CHAR,
+                "invalid I105 alphabet symbol: $symbol",
+            )
+        digits[i] = value
+    }
+    val payload = decodeBaseN(digits, I105_ALPHABET.size)
+    if (payload.size < 3) {
         throw AccountAddressException(
-            AccountAddressErrorCode.INVALID_LENGTH, "invalid length for IH58 payload",
+            AccountAddressErrorCode.I105_TOO_SHORT, "I105 address is too short",
         )
     }
-    val payload = body.copyOf(body.size - 2)
-    val checksumBytes = body.copyOfRange(body.size - 2, body.size)
-    val prefixResult = decodeIh58Prefix(payload)
-
-    val checksumInput = ByteArray(IH58_CHECKSUM_PREFIX.size + payload.size)
-    IH58_CHECKSUM_PREFIX.copyInto(checksumInput)
-    payload.copyInto(checksumInput, IH58_CHECKSUM_PREFIX.size)
-    val expected = Blake2b.digest512(checksumInput).copyOf(2)
+    val splitAt = payload.size - 2
+    val body = payload.copyOf(splitAt)
+    val checksumBytes = payload.copyOfRange(splitAt, payload.size)
+    val prefixResult = decodeI105Prefix(body)
+    val expected = i105ChecksumBytes(body)
     if (!checksumBytes.contentEquals(expected)) {
         throw AccountAddressException(
-            AccountAddressErrorCode.CHECKSUM_MISMATCH, "IH58 checksum mismatch",
+            AccountAddressErrorCode.CHECKSUM_MISMATCH, "I105 checksum mismatch",
         )
     }
-
-    val canonical = payload.copyOfRange(prefixResult.prefixLength, payload.size)
-    return Ih58DecodeResult(prefixResult.networkPrefix, canonical)
+    if (expectedDiscriminant != null && prefixResult.discriminant != expectedDiscriminant) {
+        throw AccountAddressException(
+            AccountAddressErrorCode.UNEXPECTED_NETWORK_PREFIX,
+            "unexpected I105 discriminant: expected $expectedDiscriminant, found ${prefixResult.discriminant}",
+        )
+    }
+    return body.copyOfRange(prefixResult.prefixLength, body.size)
 }
 
 @Throws(AccountAddressException::class)
-private fun encodeIh58Prefix(prefix: Int): ByteArray {
+private fun encodeI105Prefix(prefix: Int): ByteArray {
     if (prefix < 0 || prefix > 0x3FFF) {
         throw AccountAddressException(
-            AccountAddressErrorCode.INVALID_IH58_PREFIX, "invalid IH58 prefix: $prefix",
+            AccountAddressErrorCode.INVALID_I105_PREFIX,
+            "invalid I105 discriminant: $prefix",
         )
     }
     if (prefix <= 63) return byteArrayOf(prefix.toByte())
@@ -911,84 +717,39 @@ private fun encodeIh58Prefix(prefix: Int): ByteArray {
 }
 
 @Throws(AccountAddressException::class)
-private fun decodeIh58Prefix(payload: ByteArray): PrefixResult {
+private fun decodeI105Prefix(payload: ByteArray): I105PrefixResult {
     if (payload.isEmpty()) {
         throw AccountAddressException(
-            AccountAddressErrorCode.INVALID_LENGTH, "invalid length for IH58 payload",
+            AccountAddressErrorCode.INVALID_LENGTH, "invalid length for address payload",
         )
     }
     val first = payload[0].toInt() and 0xFF
-    if (first <= 63) return PrefixResult(first, 1)
+    if (first <= 63) return I105PrefixResult(first, 1)
     if ((first and 0b0100_0000) != 0) {
         if (payload.size < 2) {
             throw AccountAddressException(
-                AccountAddressErrorCode.INVALID_LENGTH, "invalid length for IH58 payload",
+                AccountAddressErrorCode.INVALID_LENGTH, "invalid length for address payload",
             )
         }
         val value = ((payload[1].toInt() and 0xFF) shl 6) or (first and 0x3F)
-        return PrefixResult(value, 2)
+        return I105PrefixResult(value, 2)
     }
     throw AccountAddressException(
-        AccountAddressErrorCode.INVALID_IH58_PREFIX_ENCODING,
-        "invalid IH58 prefix encoding: $first",
+        AccountAddressErrorCode.INVALID_I105_PREFIX_ENCODING,
+        "unsupported I105 prefix encoding",
     )
 }
 
-@Throws(AccountAddressException::class)
-private fun encodeCompressed(canonical: ByteArray, alphabet: Array<String>): String {
-    val digits = encodeBaseN(canonical, COMPRESSED_BASE)
-    val checksum = compressedChecksumDigits(canonical)
-    val sb = StringBuilder()
-    sb.append(COMPRESSED_SENTINEL)
-    for (digit in digits) sb.append(alphabet[digit])
-    for (digit in checksum) sb.append(alphabet[digit])
-    return sb.toString()
-}
-
-@Throws(AccountAddressException::class)
-private fun decodeCompressed(encoded: String): ByteArray {
-    if (!encoded.startsWith(COMPRESSED_SENTINEL)) {
-        throw AccountAddressException(
-            AccountAddressErrorCode.MISSING_COMPRESSED_SENTINEL,
-            "compressed address must start with sora sentinel",
-        )
-    }
-    val payload = encoded.substring(COMPRESSED_SENTINEL.length)
-    if (payload.length <= COMPRESSED_CHECKSUM_LEN) {
-        throw AccountAddressException(
-            AccountAddressErrorCode.COMPRESSED_TOO_SHORT,
-            "compressed address is too short",
-        )
-    }
-    val digits = IntArray(payload.length)
-    for (i in payload.indices) {
-        val symbol = payload[i].toString()
-        val value = COMPRESSED_INDEX[symbol]
-            ?: throw AccountAddressException(
-                AccountAddressErrorCode.INVALID_COMPRESSED_CHAR,
-                "invalid compressed alphabet symbol: $symbol",
-            )
-        digits[i] = value
-    }
-    val dataDigits = digits.copyOf(digits.size - COMPRESSED_CHECKSUM_LEN)
-    val checksumDigits = digits.copyOfRange(digits.size - COMPRESSED_CHECKSUM_LEN, digits.size)
-    val canonical = decodeBaseN(dataDigits, COMPRESSED_BASE)
-    val expected = compressedChecksumDigits(canonical)
-    if (!checksumDigits.contentEquals(expected)) {
-        throw AccountAddressException(
-            AccountAddressErrorCode.CHECKSUM_MISMATCH, "compressed checksum mismatch",
-        )
-    }
-    return canonical
+private fun i105ChecksumBytes(body: ByteArray): ByteArray {
+    val input = ByteArray(I105_CHECKSUM_PREFIX.size + body.size)
+    I105_CHECKSUM_PREFIX.copyInto(input)
+    body.copyInto(input, I105_CHECKSUM_PREFIX.size)
+    return Blake2b.digest512(input).copyOf(2)
 }
 
 @Throws(AccountAddressException::class)
 private fun encodeBaseN(input: ByteArray, base: Int): IntArray {
-    if (base < 2) {
-        throw AccountAddressException(
-            AccountAddressErrorCode.INVALID_COMPRESSED_BASE, "invalid base for encoding",
-        )
-    }
+    require(base >= 2) { "invalid base for encoding: $base" }
     if (input.isEmpty()) return intArrayOf(0)
     val value = IntArray(input.size) { input[it].toInt() and 0xFF }
     var leadingZeros = 0
@@ -1012,58 +773,8 @@ private fun encodeBaseN(input: ByteArray, base: Int): IntArray {
 }
 
 @Throws(AccountAddressException::class)
-private fun encodeBase58(input: ByteArray): String {
-    if (input.isEmpty()) return IH58_ALPHABET[0]
-    var value = BigInteger(1, input)
-    val builder = StringBuilder()
-    while (value > BigInteger.ZERO) {
-        val (div, rem) = value.divideAndRemainder(BASE_58)
-        builder.append(IH58_ALPHABET[rem.toInt()])
-        value = div
-    }
-    val zeroSymbol = IH58_ALPHABET[0]
-    for (i in input.indices) {
-        if (input[i] != 0.toByte()) break
-        builder.append(zeroSymbol)
-    }
-    if (builder.isEmpty()) builder.append(zeroSymbol)
-    return builder.reverse().toString()
-}
-
-@Throws(AccountAddressException::class)
-private fun decodeBase58(encoded: String): ByteArray {
-    if (encoded.isEmpty()) {
-        throw AccountAddressException(
-            AccountAddressErrorCode.INVALID_LENGTH, "invalid IH58 payload length",
-        )
-    }
-    var value = BigInteger.ZERO
-    for (ch in encoded) {
-        val digit = IH58_INDEX[ch.toString()]
-            ?: throw AccountAddressException(
-                AccountAddressErrorCode.INVALID_IH58_ENCODING, "invalid IH58 base58 encoding",
-            )
-        value = value.multiply(BASE_58).add(BigInteger.valueOf(digit.toLong()))
-    }
-    var decoded = value.toByteArray()
-    if (decoded.isNotEmpty() && decoded[0] == 0.toByte()) {
-        decoded = decoded.copyOfRange(1, decoded.size)
-    }
-    val zeroChar = IH58_ALPHABET[0][0]
-    var leadingZeros = 0
-    while (leadingZeros < encoded.length && encoded[leadingZeros] == zeroChar) leadingZeros++
-    val result = ByteArray(leadingZeros + decoded.size)
-    decoded.copyInto(result, leadingZeros)
-    return result
-}
-
-@Throws(AccountAddressException::class)
 private fun decodeBaseN(digits: IntArray, base: Int): ByteArray {
-    if (base < 2) {
-        throw AccountAddressException(
-            AccountAddressErrorCode.INVALID_COMPRESSED_BASE, "invalid base for decoding",
-        )
-    }
+    require(base >= 2) { "invalid base for decoding: $base" }
     if (digits.isEmpty()) {
         throw AccountAddressException(
             AccountAddressErrorCode.INVALID_LENGTH, "invalid length for address payload",
@@ -1071,10 +782,7 @@ private fun decodeBaseN(digits: IntArray, base: Int): ByteArray {
     }
     for (digit in digits) {
         if (digit < 0 || digit >= base) {
-            throw AccountAddressException(
-                AccountAddressErrorCode.INVALID_COMPRESSED_DIGIT,
-                "invalid digit $digit for base $base",
-            )
+            throw IllegalArgumentException("invalid digit $digit for base $base")
         }
     }
     val value = digits.copyOf()
@@ -1096,71 +804,6 @@ private fun decodeBaseN(digits: IntArray, base: Int): ByteArray {
     if (bytes.isEmpty()) bytes.add(0)
     bytes.reverse()
     return bytes.toByteArray()
-}
-
-private fun compressedChecksumDigits(canonical: ByteArray): IntArray {
-    val values = convertToBase32(canonical)
-    val expanded = expandHrp("snx", values, COMPRESSED_CHECKSUM_LEN)
-    val polymod = bech32Polymod(expanded) xor BECH32M_CONST
-    return IntArray(COMPRESSED_CHECKSUM_LEN) { i ->
-        val shift = 5 * (COMPRESSED_CHECKSUM_LEN - 1 - i)
-        (polymod shr shift) and 0x1F
-    }
-}
-
-private fun convertToBase32(data: ByteArray): IntArray {
-    var acc = 0
-    var bits = 0
-    val out = ArrayList<Int>()
-    for (b in data) {
-        acc = (acc shl 8) or (b.toInt() and 0xFF)
-        bits += 8
-        while (bits >= 5) {
-            bits -= 5
-            out.add((acc shr bits) and 0x1F)
-        }
-    }
-    if (bits > 0) {
-        out.add((acc shl (5 - bits)) and 0x1F)
-    }
-    return out.toIntArray()
-}
-
-private fun expandHrp(hrp: String, data: IntArray, checksumLen: Int): IntArray {
-    val values = IntArray(hrp.length * 2 + 1 + data.size + checksumLen)
-    var idx = 0
-    for (ch in hrp) {
-        values[idx++] = ch.code shr 5
-    }
-    values[idx++] = 0
-    for (ch in hrp) {
-        values[idx++] = ch.code and 0x1F
-    }
-    data.copyInto(values, idx)
-    return values
-}
-
-private fun bech32Polymod(values: IntArray): Int {
-    val generators = intArrayOf(0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3)
-    var chk = 1
-    for (v in values) {
-        val top = chk shr 25
-        chk = ((chk and 0x1ffffff) shl 5) xor v
-        for (i in generators.indices) {
-            if (((top shr i) and 1) == 1) {
-                chk = chk xor generators[i]
-            }
-        }
-    }
-    return chk
-}
-
-private fun containsCompressedGlyph(value: String): Boolean {
-    for (ch in value) {
-        val symbol = ch.toString()
-        if (COMPRESSED_INDEX.containsKey(symbol) && !IH58_INDEX.containsKey(symbol)) return true
-    }
-    return false
 }
 
 private fun bytesToHex(bytes: ByteArray): String = buildString(bytes.size * 2) {

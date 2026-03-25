@@ -222,6 +222,15 @@ tasks.register("checkAndroidFixtures") {
     }
 }
 
+tasks.register<JavaExec>("exportTransactionFixtures") {
+    description = "Regenerates shared Android/Swift/Python transaction fixtures from the canonical signing seed."
+    group = "verification"
+    dependsOn("testClasses")
+    classpath = sourceSets["main"].runtimeClasspath + sourceSets["test"].runtimeClasspath
+    mainClass.set("org.hyperledger.iroha.android.tx.TransactionFixtureResourceExporter")
+    workingDir = rootProject.layout.projectDirectory.dir("..").asFile
+}
+
 tasks.named("check") {
     dependsOn("verifyNoritoSchemas", "checkAndroidFixtures")
 }

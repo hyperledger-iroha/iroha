@@ -278,8 +278,10 @@ Enable the proxy through the new `local_proxy` block in the orchestrator JSON:
 }
 ```
 
-- `bind_addr` controls where the proxy listens (use `0` port to request an
-  ephemeral port).
+- `bind_addr` controls which loopback address the proxy listens on (use `0`
+  port to request an ephemeral port). Non-loopback bind addresses are
+  rejected so the local proxy cannot be exposed as a remotely reachable
+  bridge.
 - `telemetry_label` propagates into metrics so dashboards can distinguish
   proxies from fetch sessions.
 - `guard_cache_key_hex` (optional) lets the proxy surface the same keyed guard

@@ -692,9 +692,9 @@ mod tests {
     }
 
     fn fixture_asset(value: &str) -> AssetId {
-        AssetId::parse_encoded(value).unwrap_or_else(|err| {
+        AssetId::parse_literal(value).unwrap_or_else(|err| {
             panic!(
-                "fixture asset `{value}` must be an encoded asset literal (`norito:<hex>`): {err}"
+                "fixture asset `{value}` must use `<asset-definition-id>#<account-id>` with optional `#dataspace:<id>` suffix: {err}"
             )
         })
     }

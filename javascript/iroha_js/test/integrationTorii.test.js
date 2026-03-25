@@ -57,6 +57,12 @@ const ISO_MAX_ATTEMPTS = parsePositiveIntegerEnv(
   process.env.IROHA_TORII_INTEGRATION_ISO_MAX_ATTEMPTS,
   5,
 );
+const INTEGRATION_ASSET_DEFINITION_IDS = Object.freeze([
+  "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+  "61CtjvNd9T3THAR65GsMVHr82Bjc",
+  "5Pz9SwdN9eXPbiXPX9HRCpzCcE3o",
+]);
+let randomAssetDefinitionCounter = 0;
 const SORAFS_ENABLED = parseBooleanEnv(
   process.env.IROHA_TORII_INTEGRATION_SORAFS_ENABLED ?? "0",
 );
@@ -1095,7 +1101,7 @@ test(
     assertSuccessfulStatus(accountStatus, accountId);
 
     const assetDefinitionId = randomAssetDefinitionId(domainId);
-    const assetId = randomEncodedAssetId("mintasset");
+    const assetId = composeAssetId(assetDefinitionId, AUTHORITY_ACCOUNT_ID);
     const { signedTransaction: assetTx, hash: assetHash } =
       buildRegisterAssetDefinitionAndMintTransaction({
         chainId: CHAIN_ID,
@@ -1246,8 +1252,8 @@ test(
     const senderAccountId = randomAccountId(domainId);
     const receiverAccountId = randomAccountId(domainId);
     const assetDefinitionId = randomAssetDefinitionId(domainId);
-    const senderAssetId = randomEncodedAssetId("senderasset");
-    const receiverAssetId = randomEncodedAssetId("receiverasset");
+    const senderAssetId = composeAssetId(assetDefinitionId, senderAccountId);
+    const receiverAssetId = composeAssetId(assetDefinitionId, receiverAccountId);
     const mintedQuantity = "15";
     const transferQuantity = "6";
     const remainingQuantity = (BigInt(mintedQuantity) - BigInt(transferQuantity)).toString();
@@ -1886,7 +1892,7 @@ test(
     });
     const triggerId = randomTriggerId();
     const namespace = "apps";
-    const assetId = randomEncodedAssetId("triggerasset");
+    const assetId = composeAssetId(INTEGRATION_ASSET_DEFINITION_IDS[0], AUTHORITY_ACCOUNT_ID);
     const action = buildTimeTriggerAction({
       authority: AUTHORITY_ACCOUNT_ID,
       instructions: [
@@ -5492,16 +5498,18 @@ function randomAccountId(domainId) {
 }
 
 function randomAssetDefinitionId(domainId) {
-  const assetName = randomIdentifier("jsasset");
-  return `${assetName}#${domainId}`;
+  void domainId;
+  const value =
+    INTEGRATION_ASSET_DEFINITION_IDS[
+      randomAssetDefinitionCounter % INTEGRATION_ASSET_DEFINITION_IDS.length
+    ];
+  randomAssetDefinitionCounter += 1;
+  return value;
 }
 
-function randomEncodedAssetId(label) {
-  const payload = crypto
-    .createHash("sha256")
-    .update(randomIdentifier(label))
-    .digest("hex");
-  return `norito:${payload}`;
+function composeAssetId(assetDefinitionId, accountId, dataspaceId = null) {
+  const base = `${assetDefinitionId}#${accountId}`;
+  return dataspaceId === null ? base : `${base}#dataspace:${dataspaceId}`;
 }
 
 function randomTriggerId(namespace = "apps") {

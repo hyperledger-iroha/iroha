@@ -2258,6 +2258,121 @@ mod imp {
         }
 
         #[test]
+        fn public_sha256_pairs_reduce_matches_scalar_when_cuda_available() {
+            fn cpu_pair(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
+                let mut state = [
+                    0x6a09e667u32,
+                    0xbb67ae85,
+                    0x3c6ef372,
+                    0xa54ff53a,
+                    0x510e527f,
+                    0x9b05688c,
+                    0x1f83d9ab,
+                    0x5be0cd19,
+                ];
+                let mut block = [0u8; 64];
+                block[..32].copy_from_slice(left);
+                block[32..].copy_from_slice(right);
+                sha256_scalar_ref(&mut state, &block);
+                let mut pad = [0u8; 64];
+                pad[0] = 0x80;
+                pad[62] = 0x02;
+                pad[63] = 0x00;
+                sha256_scalar_ref(&mut state, &pad);
+                let mut out = [0u8; 32];
+                for (index, word) in state.iter().enumerate() {
+                    out[index * 4..index * 4 + 4].copy_from_slice(&word.to_be_bytes());
+                }
+                out
+            }
+
+            if !ensure_cuda_selftest() {
+                eprintln!("CUDA unavailable; skipping public sha256-pairs parity regression");
+                return;
+            }
+
+            let mut d0 = [0u8; 32];
+            let mut d1 = [0u8; 32];
+            let mut d2 = [0u8; 32];
+            for (index, byte) in d0.iter_mut().enumerate() {
+                *byte = index as u8;
+            }
+            for (index, byte) in d1.iter_mut().enumerate() {
+                *byte = 0x40 + index as u8;
+            }
+            for (index, byte) in d2.iter_mut().enumerate() {
+                *byte = 0x80 + index as u8;
+            }
+            let digests = [d0, d1, d2];
+            let first = cpu_pair(&digests[0], &digests[1]);
+            let expected = cpu_pair(&first, &digests[2]);
+
+            assert_eq!(sha256_pairs_reduce_cuda(&digests), Some(expected));
+        }
+
+        #[test]
+        fn public_aes_rounds_batch_matches_scalar_when_cuda_available() {
+            if !ensure_cuda_selftest() {
+                eprintln!("CUDA unavailable; skipping public AES rounds batch regression");
+                return;
+            }
+
+            let states = [
+                [
+                    0x00u8, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc,
+                    0xdd, 0xee, 0xff,
+                ],
+                [
+                    0xffu8, 0xee, 0xdd, 0xcc, 0xbb, 0xaa, 0x99, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33,
+                    0x22, 0x11, 0x00,
+                ],
+            ];
+            let round_keys = [
+                [
+                    0x0f, 0x15, 0x71, 0xc9, 0x47, 0xd9, 0xe8, 0x59, 0x0c, 0xb7, 0xad, 0xd6, 0xaf,
+                    0x7f, 0x67, 0x98,
+                ],
+                [
+                    0xa5, 0x40, 0x76, 0x28, 0x10, 0x4f, 0xdc, 0xe6, 0x43, 0xdd, 0x27, 0x0f, 0x6c,
+                    0xa7, 0x63, 0x6f,
+                ],
+                [
+                    0x2c, 0x5e, 0x2f, 0x88, 0x6a, 0x84, 0xd2, 0x57, 0x8b, 0x3f, 0x8c, 0x9c, 0x4f,
+                    0x11, 0x64, 0x15,
+                ],
+            ];
+            let expected_enc: Vec<[u8; 16]> = states
+                .iter()
+                .copied()
+                .map(|state| {
+                    round_keys
+                        .iter()
+                        .copied()
+                        .fold(state, |block, rk| crate::aes::aesenc_impl(block, rk))
+                })
+                .collect();
+            let expected_dec: Vec<[u8; 16]> = states
+                .iter()
+                .copied()
+                .map(|state| {
+                    round_keys
+                        .iter()
+                        .copied()
+                        .fold(state, |block, rk| crate::aes::aesdec_impl(block, rk))
+                })
+                .collect();
+
+            assert_eq!(
+                aesenc_rounds_batch_cuda(&states, &round_keys),
+                Some(expected_enc)
+            );
+            assert_eq!(
+                aesdec_rounds_batch_cuda(&states, &round_keys),
+                Some(expected_dec)
+            );
+        }
+
+        #[test]
         fn bn254_selftest_covers_cuda_kernels() {
             if !ensure_cuda_selftest() {
                 eprintln!("CUDA unavailable; skipping BN254 self-test regression");

@@ -13,7 +13,6 @@ use iroha_schema::IntoSchema;
 use norito::{
     NoritoDeserialize, NoritoSerialize,
     codec::{Decode, Encode},
-    to_bytes,
 };
 
 pub use self::model::*;
@@ -147,7 +146,7 @@ impl<'de> NoritoDeserialize<'de> for AssetDefinitionId {
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for AssetId {
     fn write_json(&self, out: &mut String) {
-        let literal = self.canonical_encoded();
+        let literal = self.canonical_literal();
         norito::json::JsonSerialize::json_serialize(&literal, out);
     }
 }
@@ -158,7 +157,7 @@ impl norito::json::JsonDeserialize for AssetId {
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
         let value = parser.parse_string()?;
-        AssetId::parse_encoded(&value).map_err(|err| norito::json::Error::Message(err.to_string()))
+        AssetId::parse_literal(&value).map_err(|err| norito::json::Error::Message(err.to_string()))
     }
 }
 
@@ -190,55 +189,68 @@ impl AssetId {
         }
     }
 
-    /// Parse an encoded asset identifier from `norito:<hex>`.
+    /// Render this identifier in the canonical public literal form.
+    ///
+    /// Global balances use `<asset-definition-id>#<account-id>`.
+    /// Dataspace-scoped balances append `#dataspace:<id>`.
+    #[must_use]
+    pub fn canonical_literal(&self) -> String {
+        let base = format!("{}#{}", self.definition, self.account);
+        match self.scope {
+            AssetBalanceScope::Global => base,
+            AssetBalanceScope::Dataspace(dataspace) => {
+                format!("{base}#dataspace:{}", dataspace.as_u64())
+            }
+        }
+    }
+
+    /// Parse the canonical public asset identifier literal.
     ///
     /// # Errors
     ///
-    /// Returns [`ParseError`] when the value is empty, not prefixed with
-    /// `norito:`, contains invalid hex, or does not decode into [`AssetId`].
-    pub fn parse_encoded(input: &str) -> Result<Self, ParseError> {
+    /// Returns [`ParseError`] when the literal is empty, not in
+    /// `<asset-definition-id>#<account-id>` form, or uses an invalid
+    /// dataspace scope suffix.
+    pub fn parse_literal(input: &str) -> Result<Self, ParseError> {
         let trimmed = input.trim();
         if trimmed.is_empty() {
-            return Err(ParseError {
-                reason: "Asset ID must not be empty",
-            });
-        }
-        if trimmed.contains('#') {
-            return Err(ParseError {
-                reason: "Asset ID textual forms are not supported; use encoded `norito:<hex>`",
-            });
+            return Err(ParseError::new("Asset ID must not be empty"));
         }
 
-        let prefix = "norito:";
-        let Some(payload_hex) = trimmed
-            .get(..prefix.len())
-            .filter(|head| head.eq_ignore_ascii_case(prefix))
-            .map(|_| &trimmed[prefix.len()..])
-        else {
-            return Err(ParseError {
-                reason: "Asset ID must use encoded `norito:<hex>` format",
-            });
+        let mut parts = trimmed.split('#');
+        let definition_literal = parts
+            .next()
+            .ok_or_else(|| ParseError::new("Asset ID must include an asset definition id"))?;
+        let account_literal = parts
+            .next()
+            .ok_or_else(|| ParseError::new("Asset ID must include an account id"))?;
+        let scope_literal = parts.next();
+        if parts.next().is_some() {
+            return Err(ParseError::new(
+                "Asset ID must use `<asset-definition-id>#<account-id>` with optional `#dataspace:<id>` suffix",
+            ));
+        }
+
+        let definition = AssetDefinitionId::parse_address_literal(definition_literal)?;
+        let account = AccountId::parse_encoded(account_literal)
+            .map(ParsedAccountId::into_account_id)
+            .map_err(|_| ParseError::new("Asset ID account is invalid"))?;
+        let scope = match scope_literal {
+            None => AssetBalanceScope::Global,
+            Some(raw) => {
+                let Some(dataspace) = raw.strip_prefix("dataspace:") else {
+                    return Err(ParseError::new(
+                        "Asset ID scope must use `dataspace:<id>` when present",
+                    ));
+                };
+                let dataspace = dataspace
+                    .parse::<u64>()
+                    .map(DataSpaceId::new)
+                    .map_err(|_| ParseError::new("Asset ID dataspace scope must be a u64"))?;
+                AssetBalanceScope::Dataspace(dataspace)
+            }
         };
-        if payload_hex.is_empty() {
-            return Err(ParseError {
-                reason: "Asset ID must include hex payload after `norito:`",
-            });
-        }
-
-        let payload = hex::decode(payload_hex).map_err(|_| ParseError {
-            reason: "Asset ID `norito:` payload must be valid hex",
-        })?;
-        norito::decode_from_bytes::<Self>(&payload).map_err(|_| ParseError {
-            reason: "Asset ID `norito:` payload is invalid",
-        })
-    }
-
-    /// Render this identifier in the canonical encoded `norito:<hex>` form.
-    #[must_use]
-    pub fn canonical_encoded(&self) -> String {
-        // `parse_encoded` expects header-framed Norito bytes.
-        let payload = to_bytes(self).expect("asset id encoding should not fail");
-        format!("norito:{}", hex::encode(payload))
+        Ok(Self::with_scope(definition, account, scope))
     }
 }
 
@@ -435,13 +447,13 @@ impl FromStr for AssetDefinitionId {
 
 impl fmt::Display for AssetId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.canonical_encoded())
+        f.write_str(&self.canonical_literal())
     }
 }
 
 impl fmt::Debug for AssetId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.canonical_encoded())
+        f.write_str(&self.canonical_literal())
     }
 }
 
@@ -449,7 +461,7 @@ impl FromStr for AssetId {
     type Err = ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::parse_encoded(s)
+        Self::parse_literal(s)
     }
 }
 
@@ -469,8 +481,7 @@ mod tests {
         let def = AssetDefinitionId::new(domain, name);
         let id = AssetId::new(def, account);
         let s = format!("{id:?}");
-        // Should be the canonical encoded literal and not recurse.
-        assert!(s.starts_with("norito:"));
+        assert_eq!(s, id.canonical_literal());
     }
 
     #[test]
@@ -503,50 +514,48 @@ mod tests {
     }
 
     #[test]
-    fn asset_id_parse_encoded_roundtrips() {
+    fn asset_id_parse_literal_roundtrips_global() {
         let kp = KeyPair::random();
         let account = AccountId::new(kp.public_key().clone());
-        let domain: DomainId = "wonderland".parse().expect("domain");
-        let name: Name = "xor".parse().expect("name");
-        let definition = AssetDefinitionId::new(domain, name);
-        let id = AssetId::new(definition, account);
+        let definition = AssetDefinitionId::new(
+            "wonderland".parse().expect("domain"),
+            "xor".parse().expect("name"),
+        );
+        let literal = format!("{definition}#{account}");
 
-        let encoded = id.canonical_encoded();
-        let parsed = AssetId::parse_encoded(&encoded).expect("encoded asset id parses");
-        assert_eq!(parsed, id);
+        let parsed = AssetId::parse_literal(&literal).expect("text literal should parse");
+        assert_eq!(parsed, AssetId::new(definition, account));
+        assert_eq!(parsed.to_string(), literal);
     }
 
     #[test]
-    fn asset_id_with_explicit_scope_roundtrips() {
+    fn asset_id_parse_literal_roundtrips_scoped() {
         let kp = KeyPair::random();
         let account = AccountId::new(kp.public_key().clone());
-        let domain: DomainId = "wonderland".parse().expect("domain");
-        let name: Name = "xor".parse().expect("name");
-        let definition = AssetDefinitionId::new(domain, name);
-        let id = AssetId::with_scope(
-            definition,
-            account,
-            AssetBalanceScope::Dataspace(DataSpaceId::new(7)),
+        let definition = AssetDefinitionId::new(
+            "wonderland".parse().expect("domain"),
+            "xor".parse().expect("name"),
         );
+        let literal = format!("{definition}#{account}#dataspace:7");
 
-        let encoded = id.canonical_encoded();
-        let parsed = AssetId::parse_encoded(&encoded).expect("encoded asset id parses");
-        assert_eq!(parsed, id);
+        let parsed = AssetId::parse_literal(&literal).expect("scoped literal should parse");
         assert_eq!(
-            parsed.scope(),
-            &AssetBalanceScope::Dataspace(DataSpaceId::new(7))
+            parsed,
+            AssetId::with_scope(
+                definition,
+                account,
+                AssetBalanceScope::Dataspace(DataSpaceId::new(7))
+            )
         );
+        assert_eq!(parsed.to_string(), literal);
     }
 
     #[test]
-    fn asset_id_parse_encoded_rejects_textual_literal() {
-        let kp = KeyPair::random();
-        let account = AccountId::new(kp.public_key().clone());
-        let literal = format!("xor#wonderland#{account}");
-
-        let err = AssetId::parse_encoded(&literal).expect_err("textual literal must fail");
+    fn asset_id_parse_literal_rejects_malformed_colon_literal() {
+        let err =
+            AssetId::parse_literal("not:an-asset").expect_err("malformed asset literal must fail");
         assert!(
-            err.reason().contains("textual forms are not supported"),
+            err.reason().contains("account id"),
             "unexpected error: {err}"
         );
     }

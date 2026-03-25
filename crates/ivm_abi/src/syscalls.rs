@@ -365,6 +365,8 @@ pub const SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE: u32 = 0xC2;
 pub const SYSCALL_SORACLOUD_APPEND_JOURNAL: u32 = 0xC3;
 /// Publish a checkpoint artifact.
 pub const SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT: u32 = 0xC4;
+/// Read authoritative service config material exposed through the Soracloud host.
+pub const SYSCALL_SORACLOUD_READ_CONFIG: u32 = 0xC8;
 /// Read node-local secret material exposed only through the Soracloud host.
 pub const SYSCALL_SORACLOUD_READ_SECRET: u32 = 0xC5;
 /// Read node-local credential material exposed only through the Soracloud host.
@@ -564,6 +566,7 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_SORACLOUD_READ_SECRET,
             SYSCALL_SORACLOUD_READ_CREDENTIAL,
             SYSCALL_SORACLOUD_EGRESS_FETCH,
+            SYSCALL_SORACLOUD_READ_CONFIG,
         ]);
         // ZK extras
         v.extend_from_slice(&[
@@ -731,6 +734,7 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_SORACLOUD_READ_SECRET => "SORACLOUD_READ_SECRET",
         SYSCALL_SORACLOUD_READ_CREDENTIAL => "SORACLOUD_READ_CREDENTIAL",
         SYSCALL_SORACLOUD_EGRESS_FETCH => "SORACLOUD_EGRESS_FETCH",
+        SYSCALL_SORACLOUD_READ_CONFIG => "SORACLOUD_READ_CONFIG",
         // ZK extras
         SYSCALL_GET_ACCOUNT_BALANCE => "GET_ACCOUNT_BALANCE",
         SYSCALL_USE_NULLIFIER => "USE_NULLIFIER",

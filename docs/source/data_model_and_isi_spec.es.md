@@ -30,7 +30,7 @@ Los ID tienen formas de cadena estables con `Display`/`FromStr` de ida y vuelta.
 - `AssetDefinitionId` — `unprefixed Base58 address with versioning and checksum` canónico (bytes UUID-v4). Definición: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. Los literales `alias` deben ser `<name>#<domain>.<dataspace>` o `<name>#<dataspace>`, siendo `<name>` igual al nombre de la definición del activo. Código: `crates/iroha_data_model/src/asset/definition.rs`.
 
   - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`, where `status` is `permanent`, `leased_active`, `leased_grace`, or `expired_pending_cleanup`. Alias selectors resolve against the latest committed block creation time and stop resolving after grace even before sweep removes stale bindings.
-- `AssetId`: literal codificado canónico `norito:<hex>` (las formas textuales heredadas no se admiten en la primera versión).- `NftId` — `nft$domain`. NFT: `{ id, content: Metadata, owned_by }`. Código: `crates/iroha_data_model/src/nft.rs`.
+- `AssetId`: literal codificado canónico `<asset-definition-id>#<account-id>` (las formas textuales heredadas no se admiten en la primera versión).- `NftId` — `nft$domain`. NFT: `{ id, content: Metadata, owned_by }`. Código: `crates/iroha_data_model/src/nft.rs`.
 - `RoleId` — `name`. Rol: `{ id, permissions: BTreeSet<Permission> }` con el constructor `NewRole { inner: Role, grant_to }`. Código: `crates/iroha_data_model/src/role.rs`.
 - `Permission` — `{ name: Ident, payload: Json }`. Código: `crates/iroha_data_model/src/permission.rs`.
 - `PeerId`/`Peer`: identidad del par (clave pública) y dirección. Código: `crates/iroha_data_model/src/peer.rs`.
@@ -206,7 +206,7 @@ Sobre común: `InstructionExecutionError` con variantes para errores de evaluaci
 
 Nota de migración:
 - Los ID de definición de activos textuales `name#domain` no se admiten intencionalmente en la primera versión.
-- Las identificaciones de activos en los límites de acuñación/quema/transferencia siguen siendo canónicas `norito:<hex>`; utilice `iroha tools encode asset-id` con `--definition <base58-asset-definition-id>` o `--alias ...` más `--account`.
+- Las identificaciones de activos en los límites de acuñación/quema/transferencia siguen siendo canónicas `<asset-definition-id>#<account-id>`; utilice `iroha tools encode asset-id` con `--definition <base58-asset-definition-id>` o `--alias ...` más `--account`.
 
 ---
 

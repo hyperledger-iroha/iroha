@@ -14,9 +14,11 @@ final class OfflineNoritoEncodingTests: XCTestCase {
         return try address.toI105(networkPrefix: 0x02F1)
     }
 
-    func testEncodeAssetIdAcceptsNoritoHexLiteral() throws {
-        let encoded = try OfflineNorito.encodeAssetId("norito:0A0B")
-        XCTAssertEqual(encoded, Data([0x0A, 0x0B]))
+    func testEncodeAssetIdAcceptsCanonicalPublicLiteral() throws {
+        let assetId =
+            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+        let encoded = try OfflineNorito.encodeAssetId(assetId)
+        XCTAssertFalse(encoded.isEmpty)
     }
 
     func testEncodeAssetIdRejectsTextualForms() {
@@ -25,10 +27,10 @@ final class OfflineNoritoEncodingTests: XCTestCase {
         assertInvalidAssetId("rose##alice@wonderland")
     }
 
-    func testEncodeAssetIdRejectsInvalidHexPayload() {
-        assertInvalidAssetId("norito:GG")
-        assertInvalidAssetId("norito:abc")
-        assertInvalidAssetId("norito:")
+    func testEncodeAssetIdRejectsMalformedPublicLiterals() {
+        assertInvalidAssetId("not:an-asset")
+        assertInvalidAssetId("62Fk4FPcMuLvW5QjDGNF2a4jAmjM#")
+        assertInvalidAssetId("62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn#dataspace:")
     }
 
     func testEncodeAccountIdAcceptsI105AndI105DefaultForms() throws {

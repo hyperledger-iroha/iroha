@@ -26,7 +26,6 @@ import org.hyperledger.iroha.android.crypto.SoftwareKeyProvider;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
-import org.hyperledger.iroha.android.nexus.AddressFormatOption;
 import org.hyperledger.iroha.android.nexus.UaidBindingsQuery;
 import org.hyperledger.iroha.android.nexus.UaidBindingsResponse;
 import org.hyperledger.iroha.android.nexus.UaidManifestQuery;
@@ -874,8 +873,7 @@ public final class HttpClientTransportTests {
         ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build();
     final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
 
-    final UaidBindingsQuery query =
-        UaidBindingsQuery.builder().setAddressFormat(AddressFormatOption.I105).build();
+    final UaidBindingsQuery query = UaidBindingsQuery.builder().build();
     final UaidBindingsResponse response =
         transport.getUaidBindings("uaid:" + hex.toUpperCase(), query).join();
     assert response.dataspaces().size() == 1 : "Expected bindings entry";
@@ -887,9 +885,7 @@ public final class HttpClientTransportTests {
     assert request.uri()
         .toString()
         .equals(
-            "https://torii.example/v1/space-directory/uaids/uaid%3A"
-                + hex
-                + "?address_format=i105")
+            "https://torii.example/v1/space-directory/uaids/uaid%3A" + hex)
         : "Bindings URI must encode UAID literal and query";
   }
 
@@ -934,7 +930,6 @@ public final class HttpClientTransportTests {
             .setStatus(UaidManifestStatusFilter.INACTIVE)
             .setLimit(25L)
             .setOffset(5L)
-            .setAddressFormat(AddressFormatOption.I105)
             .build();
 
     final UaidManifestsResponse response =
@@ -966,7 +961,7 @@ public final class HttpClientTransportTests {
         .equals(
             "https://torii.example/v1/space-directory/uaids/uaid%3A"
                 + hex
-                + "/manifests?dataspace=9&status=inactive&limit=25&offset=5&address_format=i105")
+                + "/manifests?dataspace=9&status=inactive&limit=25&offset=5")
         : "Manifest URI must include encoded query parameters";
   }
 

@@ -19,8 +19,10 @@ path for legacy account/asset literals.
    - Account-facing APIs are domainless and operate on subject identity.
    - Domain context is represented only via explicit scoped/link records where needed.
 3. **Asset parser contract (strict):**
-   - Accept only encoded asset IDs: `norito:<hex>`.
-   - Reject legacy textual forms (`asset#domain#account`, `asset##account`, etc.).
+   - Accept only canonical public asset IDs:
+     `<asset-definition-id>#<account-id>` with an optional `#dataspace:<id>` suffix.
+   - Reject all prefixed/legacy forms (`norito:<hex>`, `aid:<hex>`,
+     `asset#domain#account`, `asset##account`, etc.).
 4. **Canonical output:**
    - Render account IDs as canonical I105 in user-facing output.
    - Canonical hex remains debug/render-only and is not accepted as parser input.

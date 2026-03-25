@@ -83,8 +83,6 @@ def _fixture_digest(entry: Mapping[str, object]) -> FixtureDigest:
         encoded_len = int(entry["encoded_len"])
         signed_len = int(entry["signed_len"])
         creation_time_ms = int(entry["creation_time_ms"])
-        if "time_to_live_ms" not in entry or "nonce" not in entry:
-            raise KeyError("missing time_to_live_ms/nonce")
         time_to_live_ms = entry.get("time_to_live_ms")
         nonce = entry.get("nonce")
     except (KeyError, TypeError, ValueError) as exc:  # pragma: no cover - defensive guard

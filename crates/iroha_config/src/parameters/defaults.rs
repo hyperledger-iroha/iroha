@@ -1873,6 +1873,11 @@ pub mod torii {
 
     /// Transport-specific defaults (Norito-RPC, future streaming surfaces, etc.).
     pub mod transport {
+        /// Trusted proxy CIDRs allowed to assert the canonical remote IP header.
+        pub fn trusted_proxy_cidrs() -> Vec<String> {
+            Vec::new()
+        }
+
         /// Norito-RPC transport defaults surfaced via `torii.transport.norito_rpc`.
         pub mod norito_rpc {
             /// Enable Norito-RPC decoding by default so lab/devnet builds can exercise the transport.

@@ -27,7 +27,7 @@ String forms of IDs (round-trippable with `Display`/`FromStr`):
 - `DomainId`: `name` (e.g., `wonderland`).
 - `AccountId`: canonical domainless account identifier encoded via `AccountAddress` as I105 only. Parser inputs must be canonical I105; domain suffixes (`@domain`), canonical I105 literals, alias literals, canonical hex parser input, legacy `norito:` payloads, and `uaid:`/`opaque:` account parser forms are rejected.
 - `AssetDefinitionId`: canonical unprefixed Base58 address over the canonical asset-definition bytes.
-- `AssetId`: internal ownership-bucket identifier combining `asset`, `account`, and `scope`. Public CLI/Torii selectors use those split fields instead of a single encoded string.
+- `AssetId`: canonical public literal `<asset-definition-id>#<account-id>` with an optional `#dataspace:<id>` suffix for scoped balances. CLI/Torii selectors may also expose split `asset + account + scope` fields where that is more ergonomic.
 - `NftId`: `nft$domain` (e.g., `rose$garden`).
 - `PeerId`: `public_key` (peer equality is by public key).
 

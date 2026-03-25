@@ -78,7 +78,7 @@ Configuration
 - `telemetry_profile` (default: `operator`): Capability bundle wiring both Torii routing and runtime sinks. Profiles toggle three capability flags — `metrics`, `expensive_metrics`, and `developer_outputs`. When `telemetry_enabled = false`, the effective profile is forced to `disabled`.
 - `torii.peer_telemetry_urls` (default: empty): Optional list of Torii base URLs used to fetch peer telemetry metadata. When unset, peer telemetry discovery is disabled to avoid probing P2P ports.
 - `torii.peer_geo.enabled` (default: false): Enable peer geo lookups for Torii telemetry (opt-in; requires network access to the configured endpoint).
-- `torii.peer_geo.endpoint` (default: unset): Optional ip-api compatible endpoint used for peer geo lookups; when unset and `torii.peer_geo.enabled = true`, Torii uses the built-in ip-api default.
+- `torii.peer_geo.endpoint` (default: unset): Required HTTPS ip-api compatible endpoint used for peer geo lookups when `torii.peer_geo.enabled = true`; when unset, Torii skips geo lookup and logs a warning.
 - Build-time ISI instrumentation: `#[metrics]` counters (`isi{kind="total|success"}`) and timing histograms (`isi_times`) require building `irohad` with `--features expensive-telemetry` (or `iroha_core` `expensive-telemetry`). The runtime still respects `telemetry_enabled` and `telemetry_profile` for exposure.
 
 Telemetry redaction and integrity

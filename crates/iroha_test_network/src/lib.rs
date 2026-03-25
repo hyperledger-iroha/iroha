@@ -4611,6 +4611,23 @@ impl NetworkBuilder {
                 effective_redundant_send_r,
             ));
         }
+        let mut config_layers_for_parse = Vec::with_capacity(config_layers.len() + 2);
+        config_layers_for_parse.push(
+            Table::new()
+                .write("chain", config::chain_id().to_string())
+                .write(
+                    ["genesis", "public_key"],
+                    genesis_key_pair.public_key().to_string(),
+                ),
+        );
+        config_layers_for_parse.push(trusted_peers_layer_for_parse(
+            &peers,
+            auto_populate_trusted_peer_pops,
+        ));
+        config_layers_for_parse.extend(config_layers.iter().cloned());
+        let resolved_npos_config = peers
+            .first()
+            .and_then(|peer| resolve_actual_config(peer, &config_layers_for_parse));
         let cached_genesis = OnceLock::new();
         let cached_genesis_augmented = OnceLock::new();
         if let Some(builder_fn) = custom_genesis.as_ref() {
@@ -4622,7 +4639,7 @@ impl NetworkBuilder {
                 &genesis_account_id,
                 &peer_topology,
                 &genesis_key_pair,
-                None,
+                resolved_npos_config.as_ref().map(|config| &config.nexus),
             );
             cached_genesis
                 .set(block)
@@ -4688,24 +4705,6 @@ impl NetworkBuilder {
             (block_time_ms, commit_time_ms)
         });
 
-        let mut config_layers_for_parse = Vec::with_capacity(config_layers.len() + 2);
-        config_layers_for_parse.push(
-            Table::new()
-                .write("chain", config::chain_id().to_string())
-                .write(
-                    ["genesis", "public_key"],
-                    genesis_key_pair.public_key().to_string(),
-                ),
-        );
-        config_layers_for_parse.push(trusted_peers_layer_for_parse(
-            &peers,
-            auto_populate_trusted_peer_pops,
-        ));
-        config_layers_for_parse.extend(config_layers.iter().cloned());
-
-        let resolved_npos_config = peers
-            .first()
-            .and_then(|peer| resolve_actual_config(peer, &config_layers_for_parse));
         let consensus_chain_id = resolved_npos_config
             .as_ref()
             .map(|config| config.common.chain.clone())

@@ -15,6 +15,8 @@
     "APP_ENV": "production",
     "LOG_LEVEL": "info"
   },
+  "required_config_names": [],
+  "required_secret_names": [],
   "capabilities": {
     "network": {
       "mode": "Allowlist",

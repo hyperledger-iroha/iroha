@@ -45,6 +45,8 @@ public final class NoritoRpcClientTests {
     defaultHeadersAndPayloadAreApplied();
     requestOverridesApplyHeadersMethodAndQuery();
     nonSuccessStatusRaisesException();
+    rejectsInsecureAuthorizationHeader();
+    rejectsCredentialedAbsoluteHostOverride();
     observersReceiveCallbacks();
     flowControllerGuardsLifecycle();
     telemetrySignalsEmitForRpcCalls();
@@ -59,7 +61,7 @@ public final class NoritoRpcClientTests {
           NoritoRpcClient.builder()
               .setBaseUri(server.baseUri())
               .setTransportExecutor(new UrlConnectionTransportExecutor())
-              .putDefaultHeader("Authorization", "Bearer token")
+              .putDefaultHeader("X-Test-Token", "sample-token")
               .build();
       final byte[] requestPayload = "deadbeef".getBytes(StandardCharsets.UTF_8);
       final byte[] response = client.call("/rpc/default", requestPayload);
@@ -75,7 +77,7 @@ public final class NoritoRpcClientTests {
           : "Content-Type should default to application/x-norito";
       assert "application/x-norito".equals(recorded.header("Accept"))
           : "Accept should default to application/x-norito";
-      assert "Bearer token".equals(recorded.header("Authorization"))
+      assert "sample-token".equals(recorded.header("X-Test-Token"))
           : "Default headers must be preserved";
     }
   }
@@ -135,6 +137,40 @@ public final class NoritoRpcClientTests {
       }
       assert threw : "Expected non-success status to raise NoritoRpcException";
     }
+  }
+
+  private static void rejectsInsecureAuthorizationHeader() {
+    final NoritoRpcClient client =
+        NoritoRpcClient.builder()
+            .setBaseUri(URI.create("http://example.com"))
+            .putDefaultHeader("Authorization", "Bearer token")
+            .build();
+    boolean threw = false;
+    try {
+      client.call("/rpc/default", new byte[] {0x00});
+    } catch (final IllegalArgumentException ex) {
+      threw = true;
+      assert ex.getMessage().contains("refuses insecure transport")
+          : "expected insecure transport error";
+    }
+    assert threw : "Expected insecure credentialed RPC request to be rejected";
+  }
+
+  private static void rejectsCredentialedAbsoluteHostOverride() {
+    final NoritoRpcClient client =
+        NoritoRpcClient.builder()
+            .setBaseUri(URI.create("https://example.com"))
+            .putDefaultHeader("Authorization", "Bearer token")
+            .build();
+    boolean threw = false;
+    try {
+      client.call("https://evil.example/rpc/default", new byte[] {0x00});
+    } catch (final IllegalArgumentException ex) {
+      threw = true;
+      assert ex.getMessage().contains("mismatched host")
+          : "expected host mismatch error";
+    }
+    assert threw : "Expected credentialed absolute host override to be rejected";
   }
 
   private static void observersReceiveCallbacks() throws Exception {

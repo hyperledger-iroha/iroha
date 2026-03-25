@@ -649,6 +649,12 @@ ret = "r10=&SoracloudResponse(EgressFetch)"
 gas = "-"
 
 [[syscall]]
+number = "0xC8"
+args = "r10=&SoracloudRequest(ReadConfig)"
+ret = "r10=&SoracloudResponse(ReadConfig)"
+gas = "-"
+
+[[syscall]]
 number = "0xF0"
 args = "r10=bytes:u64"
 ret = "ptr (r10)"

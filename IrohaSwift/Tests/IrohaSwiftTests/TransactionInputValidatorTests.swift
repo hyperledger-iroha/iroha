@@ -106,9 +106,11 @@ final class TransactionInputValidatorTests: XCTestCase {
         XCTAssertEqual(domainTarget.objectId, "wonderland")
     }
 
-    func testSanitizeAssetIdAcceptsNoritoHexLiteral() throws {
-        let target = try TransactionInputValidator.sanitizeMetadataTarget(.asset("norito:0A0B"))
-        XCTAssertEqual(target.objectId, "norito:0a0b")
+    func testSanitizeAssetIdAcceptsCanonicalPublicLiteral() throws {
+        let literal =
+            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+        let target = try TransactionInputValidator.sanitizeMetadataTarget(.asset(literal))
+        XCTAssertEqual(target.objectId, literal)
     }
 
     func testValidateAcceptsI105Authority() throws {

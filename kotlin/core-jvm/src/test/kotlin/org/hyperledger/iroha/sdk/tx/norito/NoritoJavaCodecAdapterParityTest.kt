@@ -37,7 +37,7 @@ class NoritoJavaCodecAdapterParityTest {
         val instructions = "android-instructions".toByteArray()
         val payload = TransactionPayload(
             chainId = "00000001",
-            authority = "alice@wonderland",
+            authority = sampleAuthority(0x11),
             creationTimeMs = 1_735_000_000_123L,
             executable = Executable.ivm(instructions),
             timeToLiveMs = 5_000L,
@@ -62,8 +62,8 @@ class NoritoJavaCodecAdapterParityTest {
     fun `codec encodes account id authority as struct`() {
         val publicKey = ByteArray(32) { 0x3A.toByte() }
         val authority = AccountAddress
-            .fromAccount("wonderland", publicKey, "ed25519")
-            .toIH58(AccountAddress.DEFAULT_IH58_PREFIX) + "@wonderland"
+            .fromAccount(publicKey, "ed25519")
+            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
         val payload = TransactionPayload(
             chainId = "00000002",
             authority = authority,
@@ -81,32 +81,19 @@ class NoritoJavaCodecAdapterParityTest {
         val expectedStringPayloadLen = 8 + authority.toByteArray(StandardCharsets.UTF_8).size
         assertFalse(authorityField.size == expectedStringPayloadLen, "authority must not use legacy string layout")
 
-        val domainFieldLen = readU64(authorityField, 0, "authority.domain")
-        val domainNameFieldLen = readU64(authorityField, 8, "authority.domain.name")
-        val domainStringLen = readU64(authorityField, 16, "authority.domain.name.string")
-        assertEquals(8 + domainStringLen, domainNameFieldLen)
-        assertEquals(8 + domainNameFieldLen, domainFieldLen)
-
-        val controllerFieldOffset = (8 + domainFieldLen).toInt()
-        val controllerFieldLen = readU64(authorityField, controllerFieldOffset, "authority.controller")
-        val controllerPayloadOffset = controllerFieldOffset + 8
-        val controllerTag = readU32(authorityField, controllerPayloadOffset, "authority.controller.tag")
+        val controllerTag = readU32(authorityField, 0, "authority.controller.tag")
         assertEquals(0L, controllerTag)
-        val publicKeyFieldLen = readU64(
+        val publicKeyFieldLen = readU64(authorityField, 4, "authority.controller.public_key")
+        val publicKeyStringLen = readU64(authorityField, 12, "authority.controller.public_key.string")
+        val publicKeyLiteral = String(
             authorityField,
-            controllerPayloadOffset + 4,
-            "authority.controller.public_key",
-        )
-        val publicKeyStringLen = readU64(
-            authorityField,
-            controllerPayloadOffset + 12,
-            "authority.controller.public_key.string",
+            20,
+            publicKeyStringLen.toInt(),
+            StandardCharsets.UTF_8,
         )
         assertEquals(8 + publicKeyStringLen, publicKeyFieldLen)
-        assertEquals(
-            8 + domainFieldLen + 8 + controllerFieldLen,
-            authorityField.size.toLong(),
-        )
+        assertEquals(encodePublicKeyMultihash(0x01, publicKey), publicKeyLiteral)
+        assertEquals(4 + 8 + publicKeyFieldLen, authorityField.size.toLong())
     }
 
     @Test
@@ -117,8 +104,8 @@ class NoritoJavaCodecAdapterParityTest {
         val memberB = MultisigMemberPayload(0x01, 2, memberKeyB)
         val policy = MultisigPolicyPayload.of(1, 2, listOf(memberA, memberB))
         val authority = AccountAddress
-            .fromMultisigPolicy("wonderland", policy)
-            .toIH58(AccountAddress.DEFAULT_IH58_PREFIX) + "@wonderland"
+            .fromMultisigPolicy(policy)
+            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
 
         val payload = TransactionPayload(
             chainId = "00000003",
@@ -142,14 +129,10 @@ class NoritoJavaCodecAdapterParityTest {
         val authorityDecoder = NoritoDecoder(encodedAuthorityPayload, NoritoHeader.MINOR_VERSION)
         readField(authorityDecoder, "payload.chain_id")
         val authorityField = readField(authorityDecoder, "payload.authority")
-        val domainFieldLen = readU64(authorityField, 0, "authority.domain")
-        val controllerFieldOffset = (8 + domainFieldLen).toInt()
-        val controllerFieldLen = readU64(authorityField, controllerFieldOffset, "authority.controller")
-        val controllerPayloadOffset = controllerFieldOffset + 8
-        val controllerTag = readU32(authorityField, controllerPayloadOffset, "authority.controller.tag")
+        val controllerTag = readU32(authorityField, 0, "authority.controller.tag")
         assertEquals(1L, controllerTag)
-        val policyLen = readU64(authorityField, controllerPayloadOffset + 4, "authority.controller.policy")
-        val policyOffset = controllerPayloadOffset + 12
+        val policyLen = readU64(authorityField, 4, "authority.controller.policy")
+        val policyOffset = 12
         assertTrue(authorityField.size >= policyOffset + policyLen)
 
         var cursor = policyOffset
@@ -177,10 +160,7 @@ class NoritoJavaCodecAdapterParityTest {
             2,
             "member[1]",
         )
-        assertEquals(
-            8 + domainFieldLen + 8 + controllerFieldLen,
-            authorityField.size.toLong(),
-        )
+        assertEquals(4 + 8 + policyLen, authorityField.size.toLong())
 
         val encodedSigned = SignedTransactionEncoder.encode(signed)
         val signedDecoder = NoritoDecoder(encodedSigned, NoritoHeader.MINOR_VERSION)
@@ -223,7 +203,7 @@ class NoritoJavaCodecAdapterParityTest {
         )
         val payload = TransactionPayload(
             chainId = "00000009",
-            authority = "instructions@wonderland",
+            authority = sampleAuthority(0x41),
             creationTimeMs = 1_735_111_111_000L,
             executable = Executable.instructions(
                 listOf(
@@ -252,7 +232,7 @@ class NoritoJavaCodecAdapterParityTest {
         val chainId = "00000003"
         val chainPayload = TransactionPayload(
             chainId = chainId,
-            authority = "chain@wonderland",
+            authority = sampleAuthority(0x42),
             creationTimeMs = 1_735_000_000_789L,
             executable = Executable.ivm(byteArrayOf(0x01)),
         )
@@ -269,7 +249,7 @@ class NoritoJavaCodecAdapterParityTest {
         val ivmBytes = byteArrayOf(0x01, 0x02, 0x03, 0x04)
         val ivmPayload = TransactionPayload(
             chainId = "00000012",
-            authority = "ivm@wonderland",
+            authority = sampleAuthority(0x43),
             creationTimeMs = 1_735_222_222_123L,
             executable = Executable.ivm(ivmBytes),
         )
@@ -305,7 +285,7 @@ class NoritoJavaCodecAdapterParityTest {
         )
         val instructionPayload = TransactionPayload(
             chainId = "00000013",
-            authority = "layout@wonderland",
+            authority = sampleAuthority(0x44),
             creationTimeMs = 1_735_222_333_123L,
             executable = Executable.instructions(
                 listOf(InstructionBox.fromWirePayload("iroha.custom.layout", wirePayload)),
@@ -450,6 +430,10 @@ class NoritoJavaCodecAdapterParityTest {
     }
 
     private fun fill(value: Int, length: Int): ByteArray = ByteArray(length) { value.toByte() }
+
+    private fun sampleAuthority(fill: Int): String = AccountAddress
+        .fromAccount(ByteArray(32) { fill.toByte() }, "ed25519")
+        .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
 
     companion object {
         private val BYTE_VECTOR_ADAPTER: TypeAdapter<ByteArray> = NoritoAdapters.byteVecAdapter()

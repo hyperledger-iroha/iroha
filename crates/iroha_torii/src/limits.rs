@@ -143,10 +143,47 @@ impl RateLimiter {
 /// Internal header recording the remote IP the connection was accepted from.
 pub const REMOTE_ADDR_HEADER: &str = "x-iroha-remote-addr";
 
+/// Resolve the effective client IP for downstream policy decisions.
+///
+/// The canonical remote address header is preferred because ingress middleware
+/// overwrites it with the accepted socket address or a trusted proxy-forwarded
+/// client IP. Falling back to the transport address keeps direct handler
+/// invocations working in narrow tests.
+pub fn effective_remote_ip(headers: &HeaderMap, remote: Option<IpAddr>) -> Option<IpAddr> {
+    headers
+        .get(REMOTE_ADDR_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse().ok())
+        .or(remote)
+}
+
+/// Resolve the remote IP that ingress middleware should inject.
+///
+/// If the transport peer belongs to a configured trusted proxy CIDR, a valid
+/// pre-existing `x-iroha-remote-addr` value is preserved as the client IP.
+/// Otherwise the accepted transport peer is used directly and any supplied
+/// header is ignored.
+pub fn ingress_remote_ip(
+    headers: &HeaderMap,
+    remote: Option<IpAddr>,
+    trusted_proxies: &[IpNet],
+) -> Option<IpAddr> {
+    let forwarded = headers
+        .get(REMOTE_ADDR_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse().ok());
+    match remote {
+        Some(remote_ip) if cidr_contains(trusted_proxies, remote_ip) => {
+            forwarded.or(Some(remote_ip))
+        }
+        Some(remote_ip) => Some(remote_ip),
+        None => None,
+    }
+}
+
 /// Derive a rate-limit key from headers and optional hint:
 /// - Prefer `X-API-Token` if present and token usage is enabled
-/// - Else the provided remote IP address (from listener metadata)
-/// - Else the trusted header injected by middleware (`x-iroha-remote-addr`)
+/// - Else the effective client IP resolved by ingress middleware
 /// - Else provided hint
 /// - Else "anon"
 pub fn key_from_headers(
@@ -160,12 +197,7 @@ pub fn key_from_headers(
             return v.to_string();
         }
     }
-    if let Some(ip) = remote.or_else(|| {
-        headers
-            .get(REMOTE_ADDR_HEADER)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.parse().ok())
-    }) {
+    if let Some(ip) = effective_remote_ip(headers, remote) {
         return ip.to_string();
     }
     if let Some(h) = hint {
@@ -302,15 +334,9 @@ pub fn cidr_contains(nets: &[IpNet], ip: IpAddr) -> bool {
 }
 
 /// Returns true if the request should bypass rate limits due to CIDR allowlist.
-/// Prefers the explicitly supplied remote IP and falls back to the trusted
-/// header injected by middleware.
+/// Uses the effective client IP resolved by ingress middleware.
 pub fn is_allowed_by_cidr(headers: &HeaderMap, remote: Option<IpAddr>, allow: &[IpNet]) -> bool {
-    let candidate_ip = remote.or_else(|| {
-        headers
-            .get(REMOTE_ADDR_HEADER)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse().ok())
-    });
+    let candidate_ip = effective_remote_ip(headers, remote);
     candidate_ip.map_or(false, |ip| cidr_contains(allow, ip))
 }
 
@@ -991,7 +1017,7 @@ mod tests {
     }
 
     #[test]
-    fn key_from_headers_remote_overrides_injected_header() {
+    fn key_from_headers_prefers_injected_header() {
         let mut headers = HeaderMap::new();
         headers.insert(REMOTE_ADDR_HEADER, "203.0.113.55".parse().unwrap());
         assert_eq!(
@@ -1001,7 +1027,29 @@ mod tests {
                 Some("hint"),
                 true
             ),
-            "198.51.100.1"
+            "203.0.113.55"
+        );
+    }
+
+    #[test]
+    fn ingress_remote_ip_preserves_trusted_forwarded_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(REMOTE_ADDR_HEADER, "203.0.113.55".parse().unwrap());
+        let trusted = parse_cidrs(&["127.0.0.0/8".into()]);
+        assert_eq!(
+            ingress_remote_ip(&headers, Some("127.0.0.1".parse().unwrap()), &trusted),
+            Some("203.0.113.55".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn ingress_remote_ip_ignores_forwarded_header_from_untrusted_peer() {
+        let mut headers = HeaderMap::new();
+        headers.insert(REMOTE_ADDR_HEADER, "203.0.113.55".parse().unwrap());
+        let trusted = parse_cidrs(&["127.0.0.0/8".into()]);
+        assert_eq!(
+            ingress_remote_ip(&headers, Some("198.51.100.10".parse().unwrap()), &trusted),
+            Some("198.51.100.10".parse().unwrap())
         );
     }
 
@@ -1025,7 +1073,7 @@ mod tests {
     }
 
     #[test]
-    fn is_allowed_by_cidr_prefers_remote_ip() {
+    fn is_allowed_by_cidr_prefers_effective_remote_ip() {
         let allow = vec![parse_cidr("203.0.113.0/24").unwrap()];
         let headers = HeaderMap::new();
         assert!(is_allowed_by_cidr(
@@ -1045,11 +1093,11 @@ mod tests {
     }
 
     #[test]
-    fn is_allowed_by_cidr_remote_override_rejects_spoofed_header() {
+    fn is_allowed_by_cidr_prefers_injected_header() {
         let allow = vec![parse_cidr("203.0.113.0/24").unwrap()];
         let mut headers = HeaderMap::new();
         headers.insert(REMOTE_ADDR_HEADER, "203.0.113.55".parse().unwrap());
-        assert!(!is_allowed_by_cidr(
+        assert!(is_allowed_by_cidr(
             &headers,
             Some("198.51.100.1".parse().unwrap()),
             &allow

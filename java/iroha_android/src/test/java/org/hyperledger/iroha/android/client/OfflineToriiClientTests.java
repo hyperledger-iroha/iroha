@@ -45,6 +45,7 @@ public final class OfflineToriiClientTests {
     propagatesCaseInsensitiveNestedJsonMessageFromNon2xxResponses();
     propagatesCompactJsonFallbackFromNon2xxResponses();
     queryTransfersUsesPostBody();
+    submitSettlementRejectsInsecureTransportForPrivateKeyBody();
     queryEnvelopeFromParamsParsesJson();
     builderRejectsInvalidVerdictFilters();
     buildProofRequestPostsBody();
@@ -278,6 +279,24 @@ public final class OfflineToriiClientTests {
     throw new AssertionError("Expected CompletionException for compact fallback non-2xx errors");
   }
 
+  private static void submitSettlementRejectsInsecureTransportForPrivateKeyBody() {
+    final StubExecutor executor = new StubExecutor(200, "{}");
+    final OfflineToriiClient client =
+        OfflineToriiClient.builder()
+            .executor(executor)
+            .baseUri(URI.create("http://example.com"))
+            .build();
+    try {
+      client.submitSettlement(Map.of("bundle_id", "deadbeef"), "merchant@wonderland", "deadbeef")
+          .join();
+    } catch (final IllegalArgumentException expected) {
+      assert expected.getMessage().contains("refuses insecure transport")
+          : "expected insecure transport rejection";
+      return;
+    }
+    throw new AssertionError("Expected insecure settlement submission to be rejected");
+  }
+
   private static void queryTransfersUsesPostBody() {
     final StubExecutor executor = new StubExecutor(200, "{\"total\":0,\"items\":[]}");
     final OfflineToriiClient client =
@@ -304,13 +323,11 @@ public final class OfflineToriiClientTests {
         OfflineListParams.builder()
             .filter("{\"op\":\"eq\",\"args\":[\"controller_id\",\"merchant@wonderland\"]}")
             .limit(10L)
-            .addressFormat("canonical")
             .build();
     final OfflineQueryEnvelope envelope = OfflineQueryEnvelope.fromListParams(params);
     final String json = new String(envelope.toJsonBytes(), StandardCharsets.UTF_8);
     assert json.contains("\"limit\":10") : "limit missing";
     assert json.contains("controller_id") : "filter not parsed";
-    assert json.contains("canonical") : "address format missing";
   }
 
   private static void builderRejectsInvalidVerdictFilters() {

@@ -13368,7 +13368,7 @@ mod tests {
       "dataspace_alias":"cbdc",
       "accounts":[
         "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU",
-        "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp"
+        "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV"
       ]
     }}
   ]

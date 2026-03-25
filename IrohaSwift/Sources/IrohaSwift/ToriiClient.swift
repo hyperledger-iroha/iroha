@@ -83,16 +83,38 @@ fileprivate func normalizeToriiAssetIdQueryValue(_ raw: String, field: String) t
     guard !trimmed.isEmpty else {
         throw ToriiClientError.invalidPayload("\(field) must be a non-empty string.")
     }
-    guard trimmed.lowercased().hasPrefix("norito:") else {
-        throw ToriiClientError.invalidPayload("\(field) must use encoded `norito:<hex>` form.")
+    let components = trimmed.split(separator: "#", omittingEmptySubsequences: false)
+    guard components.count == 2 || components.count == 3,
+          !components[0].isEmpty,
+          !components[1].isEmpty else {
+        throw ToriiClientError.invalidPayload(
+            "\(field) must use '<asset-definition-id>#<account-id>' with optional '#dataspace:<id>' suffix."
+        )
     }
-    let payload = String(trimmed.dropFirst("norito:".count))
-    guard !payload.isEmpty,
-          payload.count.isMultiple(of: 2),
-          Data(hexString: payload) != nil else {
-        throw ToriiClientError.invalidPayload("\(field) must use encoded `norito:<hex>` form.")
+    let definition = String(components[0])
+    guard !definition.contains(where: \.isWhitespace),
+          !definition.contains("%"),
+          !definition.contains("/"),
+          !definition.contains("?"),
+          !definition.contains(":") else {
+        throw ToriiClientError.invalidPayload(
+            "\(field) must use a canonical unprefixed Base58 asset definition id."
+        )
     }
-    return "norito:\(payload.lowercased())"
+    let account = try normalizeToriiAccountIdQueryValue(String(components[1]), field: "\(field).account_id")
+    guard components.count == 3 else {
+        return "\(definition)#\(account)"
+    }
+    let scope = String(components[2])
+    guard let dataspace = scope.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false).dropFirst().first,
+          scope.lowercased().hasPrefix("dataspace:"),
+          !dataspace.isEmpty,
+          dataspace.allSatisfy({ $0.isNumber }) else {
+        throw ToriiClientError.invalidPayload(
+            "\(field) scope must use 'dataspace:<id>' when present."
+        )
+    }
+    return "\(definition)#\(account)#dataspace:\(dataspace)"
 }
 
 fileprivate func normalizeToriiAssetSelectorQueryValue(_ raw: String, field: String) throws -> String {
@@ -100,15 +122,11 @@ fileprivate func normalizeToriiAssetSelectorQueryValue(_ raw: String, field: Str
     guard !trimmed.isEmpty else {
         throw ToriiClientError.invalidPayload("\(field) must be a non-empty string.")
     }
-    if trimmed.lowercased().hasPrefix("norito:") || trimmed.lowercased().hasPrefix("aid:") {
-        throw ToriiClientError.invalidPayload(
-            "\(field) must use a canonical asset definition id or alias, not a legacy prefix."
-        )
-    }
     guard !trimmed.contains(where: \.isWhitespace),
           !trimmed.contains("%"),
           !trimmed.contains("/"),
-          !trimmed.contains("?") else {
+          !trimmed.contains("?"),
+          !trimmed.contains(":") else {
         throw ToriiClientError.invalidPayload(
             "\(field) must be a canonical asset definition id or alias."
         )
@@ -126,6 +144,7 @@ public struct ToriiAssetBalance: Decodable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case asset
+        case assetId = "asset_id"
         case accountId = "account_id"
         case scope
         case assetName = "asset_name"
@@ -135,9 +154,11 @@ public struct ToriiAssetBalance: Decodable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.asset = try container.decode(String.self, forKey: .asset)
+        self.asset =
+            try container.decodeIfPresent(String.self, forKey: .asset)
+                ?? container.decode(String.self, forKey: .assetId)
         self.accountId = try container.decodeIfPresent(String.self, forKey: .accountId)
-        self.scope = try container.decode(String.self, forKey: .scope)
+        self.scope = try container.decodeIfPresent(String.self, forKey: .scope) ?? "account"
         self.assetName = try container.decodeIfPresent(String.self, forKey: .assetName)
         self.assetAlias = try container.decodeIfPresent(String.self, forKey: .assetAlias)
         self.quantity = try container.decode(String.self, forKey: .quantity)
@@ -1963,10 +1984,6 @@ public extension ToriiExplorerInstructionItem {
             return ToriiExplorerTransferDetails.parse(from: box.json)
         case "mint", "burn":
             return ToriiExplorerTransferDetails.parseMintBurn(from: box.json)
-        case "registerofflineallowance":
-            return ToriiExplorerTransferDetails.parseOfflineAllowance(from: box.json)
-        case "submitofflinetoonlinetransfer":
-            return ToriiExplorerTransferDetails.parseOfflineSettlement(from: box.json)
         default:
             return nil
         }
@@ -2083,10 +2100,6 @@ public extension ToriiExplorerTransferRecord {
                 direction = .incoming
             case "burn":
                 direction = .outgoing
-            case "registerofflineallowance":
-                direction = .outgoing // online → offline (top-up)
-            case "submitofflinetoonlinetransfer":
-                direction = .incoming // offline → online (settlement)
             default:
                 direction = ToriiExplorerTransferSummary.direction(sender: sender,
                                                                     receiver: receiver,
@@ -2359,20 +2372,7 @@ extension ToriiExplorerTransferDetails {
               let amount = stringValue(map["object"]) else {
             return nil
         }
-        // For Mint/Burn the destination is a full norito-encoded asset ID.
-        // Use pure-Swift decoders to extract asset definition ID and account ID.
-        let humanReadableDefinition = OfflineNorito.assetDefinitionIdFromLiteral(destination)
-        let pureSwiftAccount: String? = {
-            let trimmed = destination.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard trimmed.lowercased().hasPrefix("norito:") else { return nil }
-            let hex = String(trimmed.dropFirst("norito:".count))
-            guard !hex.isEmpty, hex.count.isMultiple(of: 2),
-                  let bytes = Data(hexString: hex) else { return nil }
-            return OfflineNorito.accountIdFromAssetIdPayload(bytes)
-        }()
-        let (fallbackDefinition, nativeBridgeAccount) = parseAssetId(destination)
-        let definition = humanReadableDefinition ?? fallbackDefinition
-        let accountId = pureSwiftAccount ?? nativeBridgeAccount ?? ""
+        let (definition, accountId) = parseAssetId(destination)
         let details = ToriiExplorerTransferAsset(destinationAccountId: accountId,
                                                  amount: amount,
                                                  senderAccountId: nil,
@@ -2380,41 +2380,9 @@ extension ToriiExplorerTransferDetails {
         return .asset(details)
     }
 
-    /// Parse RegisterOfflineAllowance payload.
-    /// JSON: `{ variant: "RegisterOfflineAllowance", value: { controller, amount, asset, ... } }`
-    fileprivate static func parseOfflineAllowance(from json: ToriiJSONValue) -> ToriiExplorerTransferDetails? {
-        guard let payload = payloadObject(from: json) else { return nil }
-        guard let value = payload["value"], case let .object(map) = value else { return nil }
-        guard let amount = stringValue(map["amount"]),
-              let controller = stringValue(map["controller"]) else { return nil }
-        let assetDefinitionId = extractAssetDefinitionId(from: map["asset"])
-        let details = ToriiExplorerTransferAsset(destinationAccountId: controller,
-                                                 amount: amount,
-                                                 senderAccountId: controller,
-                                                 assetDefinitionId: assetDefinitionId)
-        return .asset(details)
-    }
-
-    /// Parse SubmitOfflineToOnlineTransfer payload.
-    /// JSON: `{ variant: "SubmitOfflineToOnlineTransfer", value: { receiver, deposit_account, claimed_delta, asset, ... } }`
-    fileprivate static func parseOfflineSettlement(from json: ToriiJSONValue) -> ToriiExplorerTransferDetails? {
-        guard let payload = payloadObject(from: json) else { return nil }
-        guard let value = payload["value"], case let .object(map) = value else { return nil }
-        guard let claimedDelta = stringValue(map["claimed_delta"]) else { return nil }
-        let receiver = stringValue(map["receiver"]) ?? ""
-        let depositAccount = stringValue(map["deposit_account"]) ?? ""
-        let assetDefinitionId = extractAssetDefinitionId(from: map["asset"])
-        let details = ToriiExplorerTransferAsset(destinationAccountId: depositAccount,
-                                                 amount: claimedDelta,
-                                                 senderAccountId: receiver,
-                                                 assetDefinitionId: assetDefinitionId)
-        return .asset(details)
-    }
-
-    /// Extract asset definition ID from a norito-encoded asset JSON value.
+    /// Extract asset definition ID from a canonical public asset JSON value.
     fileprivate static func extractAssetDefinitionId(from assetValue: ToriiJSONValue?) -> String? {
         guard let assetValue else { return nil }
-        // The asset field is a norito-encoded AssetId literal
         if case let .string(literal) = assetValue {
             return OfflineNorito.assetDefinitionIdFromLiteral(literal) ?? literal
         }
@@ -2495,26 +2463,19 @@ extension ToriiExplorerTransferDetails {
         }
     }
 
-    fileprivate static func parseAssetId(_ value: String) -> (definition: String?, account: String?) {
+    fileprivate static func parseAssetId(_ value: String) -> (definition: String?, account: String) {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            return (nil, nil)
+            return (nil, "")
         }
-        // Hard cut: parse encoded asset identifiers only.
-        guard (try? OfflineNorito.encodeAssetId(trimmed)) != nil else {
-            return (nil, nil)
+        guard let canonical = try? OfflineNorito.canonicalAssetIdLiteral(trimmed) else {
+            return (nil, "")
         }
-        let lower = trimmed.lowercased()
-        guard lower.hasPrefix("norito:") else {
-            return (trimmed, nil)
+        let parts = canonical.split(separator: "#", omittingEmptySubsequences: false)
+        guard parts.count >= 2 else {
+            return (nil, "")
         }
-        let hex = String(trimmed.dropFirst("norito:".count)).lowercased()
-        let canonical = "norito:\(hex)"
-        let decoded = Self.decodeToriiAssetIdFields(canonical)
-        if let definition = decoded.assetDefinitionId {
-            return (definition, decoded.accountId)
-        }
-        return (canonical, nil)
+        return (String(parts[0]), String(parts[1]))
     }
 
     fileprivate struct DecodedToriiAssetIdFields {
@@ -2524,16 +2485,14 @@ extension ToriiExplorerTransferDetails {
 
     fileprivate static func decodeToriiAssetIdFields(_ literal: String) -> DecodedToriiAssetIdFields {
         let trimmed = literal.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.lowercased().hasPrefix("norito:") else {
+        guard let canonical = try? OfflineNorito.canonicalAssetIdLiteral(trimmed) else {
             return DecodedToriiAssetIdFields(assetDefinitionId: nil, accountId: nil)
         }
-        let assetDefinitionId = OfflineNorito.assetDefinitionIdFromLiteral(trimmed)
-        let hex = String(trimmed.dropFirst("norito:".count))
-        guard !hex.isEmpty, hex.count.isMultiple(of: 2), let bytes = Data(hexString: hex) else {
-            return DecodedToriiAssetIdFields(assetDefinitionId: assetDefinitionId, accountId: nil)
+        let parts = canonical.split(separator: "#", omittingEmptySubsequences: false)
+        guard parts.count >= 2 else {
+            return DecodedToriiAssetIdFields(assetDefinitionId: nil, accountId: nil)
         }
-        let accountId = OfflineNorito.accountIdFromAssetIdPayload(bytes)
-        return DecodedToriiAssetIdFields(assetDefinitionId: assetDefinitionId, accountId: accountId)
+        return DecodedToriiAssetIdFields(assetDefinitionId: String(parts[0]), accountId: String(parts[1]))
     }
 }
 
@@ -3784,334 +3743,6 @@ public struct ToriiSubscriptionActionResponse: Decodable, Sendable {
     }
 }
 
-public struct ToriiOfflineAllowanceItem: Decodable, Sendable {
-    public let certificateIdHex: String
-    public let controllerId: String
-    public let controllerDisplay: String
-    public let assetId: String
-    public let registeredAtMs: UInt64
-    public let expiresAtMs: UInt64
-    public let policyExpiresAtMs: UInt64
-    public let refreshAtMs: UInt64?
-    public let verdictIdHex: String?
-    public let attestationNonceHex: String?
-    public let remainingAmount: String
-    public let currentCommitmentHex: String
-    public let deadlineKind: String?
-    public let deadlineState: String?
-    public let deadlineMs: UInt64?
-    public let deadlineMsRemaining: Int64?
-    let record: ToriiJSONValue
-
-    public func decodeRecord<T: Decodable>(as type: T.Type = T.self,
-                                           decoder: JSONDecoder = JSONDecoder()) throws -> T {
-        try record.decode(as: type, decoder: decoder)
-    }
-
-    public init(certificateIdHex: String,
-                controllerId: String,
-                controllerDisplay: String,
-                assetId: String,
-                registeredAtMs: UInt64,
-                expiresAtMs: UInt64,
-                policyExpiresAtMs: UInt64,
-                refreshAtMs: UInt64?,
-                verdictIdHex: String?,
-                attestationNonceHex: String?,
-                remainingAmount: String,
-                currentCommitmentHex: String,
-                deadlineKind: String? = nil,
-                deadlineState: String? = nil,
-                deadlineMs: UInt64? = nil,
-                deadlineMsRemaining: Int64? = nil,
-                record: ToriiJSONValue) {
-        self.certificateIdHex = certificateIdHex
-        self.controllerId = controllerId
-        self.controllerDisplay = controllerDisplay
-        self.assetId = assetId
-        self.registeredAtMs = registeredAtMs
-        self.expiresAtMs = expiresAtMs
-        self.policyExpiresAtMs = policyExpiresAtMs
-        self.refreshAtMs = refreshAtMs
-        self.verdictIdHex = verdictIdHex
-        self.attestationNonceHex = attestationNonceHex
-        self.remainingAmount = remainingAmount
-        self.currentCommitmentHex = currentCommitmentHex
-        self.deadlineKind = deadlineKind
-        self.deadlineState = deadlineState
-        self.deadlineMs = deadlineMs
-        self.deadlineMsRemaining = deadlineMsRemaining
-        self.record = record
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        let rootValue = try container.decode(ToriiJSONValue.self)
-        guard case let .object(object) = rootValue else {
-            throw DecodingError.dataCorruptedError(
-                in: container,
-                debugDescription: "Offline allowance entry must be a JSON object"
-            )
-        }
-
-        func value(_ key: String) -> ToriiJSONValue? {
-            object[key]
-        }
-
-        guard let recordValue = object["record"] else {
-            throw DecodingError.keyNotFound(
-                CodingKeys.record,
-                .init(codingPath: decoder.codingPath, debugDescription: "missing record payload")
-            )
-        }
-
-        let recordObject: [String: ToriiJSONValue]
-        if case let .object(payload) = recordValue {
-            recordObject = payload
-        } else {
-            recordObject = [:]
-        }
-
-        func string(_ key: String, field: String) throws -> String {
-            if let string = ToriiOfflineAllowanceItem.normalizedString(value(key)) {
-                return string
-            }
-            throw DecodingError.dataCorrupted(
-                .init(codingPath: decoder.codingPath, debugDescription: "missing \(field)")
-            )
-        }
-
-        func optionalString(_ key: String) -> String? {
-            ToriiOfflineAllowanceItem.normalizedString(value(key))
-        }
-
-        func uint64(_ key: String, field: String, defaultValue: UInt64? = nil) throws -> UInt64 {
-            if let number = ToriiOfflineAllowanceItem.normalizedUInt64(value(key)) {
-                return number
-            }
-            if let fallback = defaultValue {
-                return fallback
-            }
-            throw DecodingError.dataCorrupted(
-                .init(codingPath: decoder.codingPath,
-                      debugDescription: "missing \(field)")
-            )
-        }
-
-        func optionalUInt64(_ key: String) -> UInt64? {
-            ToriiOfflineAllowanceItem.normalizedUInt64(value(key))
-        }
-
-        func optionalInt64(_ key: String) -> Int64? {
-            ToriiOfflineAllowanceItem.normalizedInt64(value(key))
-        }
-
-        func remainingAmountValue() -> String {
-            if let topLevel = ToriiOfflineAllowanceItem.normalizedString(
-                value("remaining_amount")
-            ) {
-                return topLevel
-            }
-            if let nested = ToriiOfflineAllowanceItem.normalizedString(
-                ToriiOfflineAllowanceItem.lookup(
-                    key: "remaining_amount",
-                    in: recordObject
-                )
-            ) {
-                return nested
-            }
-            return "0"
-        }
-
-        self.certificateIdHex = try string("certificate_id_hex", field: "certificate_id_hex")
-        self.controllerId = try string("controller_id", field: "controller_id")
-        self.controllerDisplay = try string("controller_display", field: "controller_display")
-        self.assetId = try string("asset_id", field: "asset_id")
-        self.registeredAtMs = try uint64("registered_at_ms", field: "registered_at_ms")
-        let expires = try uint64(
-            "expires_at_ms",
-            field: "expires_at_ms",
-            defaultValue: 0
-        )
-        self.expiresAtMs = expires
-        self.policyExpiresAtMs = try uint64(
-            "policy_expires_at_ms",
-            field: "policy_expires_at_ms",
-            defaultValue: expires
-        )
-        self.refreshAtMs = optionalUInt64("refresh_at_ms")
-        self.verdictIdHex = optionalString("verdict_id_hex")
-        self.attestationNonceHex = optionalString("attestation_nonce_hex")
-        self.remainingAmount = remainingAmountValue()
-        self.currentCommitmentHex = Self.parseCommitmentHex(
-            from: recordObject, recordValue: recordValue
-        )
-        self.deadlineKind = optionalString("deadline_kind")
-        self.deadlineState = optionalString("deadline_state")
-        self.deadlineMs = optionalUInt64("deadline_ms")
-        self.deadlineMsRemaining = optionalInt64("deadline_ms_remaining")
-        self.record = recordValue
-    }
-
-    private static func lookup(key: String,
-                               in object: [String: ToriiJSONValue]) -> ToriiJSONValue? {
-        object[key]
-    }
-
-    private static func normalizedString(_ value: ToriiJSONValue?) -> String? {
-        guard let value else { return nil }
-        return value.normalizedString
-    }
-
-    private static func normalizedUInt64(_ value: ToriiJSONValue?) -> UInt64? {
-        guard let value else { return nil }
-        return value.normalizedUInt64
-    }
-
-    private static func normalizedInt64(_ value: ToriiJSONValue?) -> Int64? {
-        guard let value else { return nil }
-        return value.normalizedInt64
-    }
-
-    private static func parseCommitmentHex(
-        from recordObject: [String: ToriiJSONValue],
-        recordValue: ToriiJSONValue
-    ) -> String {
-        if let hex = recordObject["current_commitment_hex"]?.normalizedString {
-            let trimmed = hex.trimmingCharacters(in: .whitespacesAndNewlines)
-            let cleaned = trimmed.lowercased().hasPrefix("0x")
-                ? String(trimmed.dropFirst(2)) : trimmed
-            if let data = Data(hexString: cleaned), !data.isEmpty {
-                return data.hexLowercased()
-            }
-        }
-        if let bytes = recordObject["current_commitment"]?.normalizedBytes, !bytes.isEmpty {
-            return bytes.hexLowercased()
-        }
-        let certificateValue: ToriiJSONValue
-        if let certValue = recordObject["certificate"] {
-            certificateValue = certValue
-        } else {
-            certificateValue = recordValue
-        }
-        if let cert = try? OfflineToriiDecoding.decodeCertificate(from: certificateValue),
-           !cert.allowance.commitment.isEmpty {
-            return cert.allowance.commitment.hexLowercased()
-        }
-        return ""
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case record
-    }
-}
-
-public struct ToriiOfflineAllowanceList: Decodable, Sendable {
-    public let items: [ToriiOfflineAllowanceItem]
-    public let total: UInt64
-}
-
-public extension ToriiOfflineAllowanceItem {
-    /// Construct a synthetic allowance item from a certificate issue response,
-    /// for immediate local use before ledger confirmation.
-    init(issueResponse: ToriiOfflineCertificateIssueResponse,
-         controllerId: String,
-         registeredAtMs: UInt64) throws {
-        let certificate = try issueResponse.decodeCertificate()
-        guard !certificate.allowance.commitment.isEmpty else {
-            throw OfflineToriiDecodingError.missingField("commitment")
-        }
-        let commitmentHex = certificate.allowance.commitment.hexLowercased()
-        self.init(
-            certificateIdHex: issueResponse.certificateIdHex,
-            controllerId: controllerId,
-            controllerDisplay: controllerId,
-            assetId: certificate.allowance.assetId,
-            registeredAtMs: registeredAtMs,
-            expiresAtMs: certificate.expiresAtMs,
-            policyExpiresAtMs: certificate.policy.expiresAtMs,
-            refreshAtMs: certificate.refreshAtMs,
-            verdictIdHex: certificate.verdictId?.hexUppercased(),
-            attestationNonceHex: certificate.attestationNonce?.hexUppercased(),
-            remainingAmount: certificate.allowance.amount,
-            currentCommitmentHex: commitmentHex,
-            record: issueResponse.certificate
-        )
-    }
-}
-
-public extension ToriiOfflineAllowanceItem {
-    /// Parsed numeric remaining amount for this certificate, or `nil` when the payload is invalid.
-    var remainingAmountDecimal: Decimal? {
-        let trimmed = remainingAmount.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            return nil
-        }
-        return Decimal(string: trimmed)
-    }
-}
-
-public extension ToriiOfflineAllowanceList {
-    /// Legacy helper over offline allowance rows retained only for older tooling.
-    ///
-    /// Important: this value is not used by the reserve wallet path.
-    var aggregateRemainingAmount: Decimal {
-        items
-            .compactMap(\.remainingAmountDecimal)
-            .reduce(.zero, +)
-    }
-
-    /// Legacy maximum single-transfer helper across allowance rows.
-    var maxSingleTransferAmount: Decimal {
-        var maximum = Decimal.zero
-        for amount in items.compactMap(\.remainingAmountDecimal) where amount > maximum {
-            maximum = amount
-        }
-        return maximum
-    }
-
-    /// Returns `true` when any single certificate can cover `amount`.
-    func supportsSingleTransfer(amount: Decimal) -> Bool {
-        guard amount > .zero else {
-            return false
-        }
-        return maxSingleTransferAmount >= amount
-    }
-
-    /// Returns the first allowance whose remaining balance can cover `amount`.
-    func firstAllowanceSupportingSingleTransfer(amount: Decimal) -> ToriiOfflineAllowanceItem? {
-        guard amount > .zero else {
-            return nil
-        }
-        return items.first { item in
-            (item.remainingAmountDecimal ?? .zero) >= amount
-        }
-    }
-}
-
-public struct ToriiOfflineSummaryItem: Decodable, Sendable {
-    public let certificateIdHex: String
-    public let controllerId: String
-    public let controllerDisplay: String
-    public let summaryHashHex: String
-    public let appleKeyCounters: [String: UInt64]
-    public let androidSeriesCounters: [String: UInt64]
-
-    private enum CodingKeys: String, CodingKey {
-        case certificateIdHex = "certificate_id_hex"
-        case controllerId = "controller_id"
-        case controllerDisplay = "controller_display"
-        case summaryHashHex = "summary_hash_hex"
-        case appleKeyCounters = "apple_key_counters"
-        case androidSeriesCounters = "android_series_counters"
-    }
-}
-
-public struct ToriiOfflineSummaryList: Decodable, Sendable {
-    public let items: [ToriiOfflineSummaryItem]
-    public let total: UInt64
-}
-
 public struct ToriiOfflineVerdictRevocation: Decodable, Sendable {
     public let verdictIdHex: String
     public let issuerId: String
@@ -4142,416 +3773,6 @@ public struct ToriiOfflineVerdictRevocation: Decodable, Sendable {
 public struct ToriiOfflineRevocationList: Decodable, Sendable {
     public let items: [ToriiOfflineVerdictRevocation]
     public let total: UInt64
-}
-
-/// Lightweight proof status response for an offline bundle.
-public struct ToriiOfflineBundleProofStatus: Decodable, Sendable, Equatable {
-    /// Proof status label returned by Torii (e.g., `fresh`, `match`, `expired`).
-    public let proofStatus: String?
-    /// Receipts root advertised by the bundle.
-    public let receiptsRootHex: String?
-    /// Aggregate proof root if present in the bundle or admission pipeline.
-    public let aggregateProofRootHex: String?
-    /// Indicates whether Torii computed the same receipts root as the bundle reported.
-    public let receiptsRootMatches: Bool?
-    /// Optional summary payload returned by Torii.
-    public let proofSummary: ToriiJSONValue?
-    /// Full payload for forward compatibility.
-    public let fields: [String: ToriiJSONValue]
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        let raw = try container.decode([String: ToriiJSONValue].self)
-        fields = raw
-        proofStatus = Self.normalizedString(raw["proof_status"])
-        receiptsRootHex = Self.normalizedString(raw["receipts_root_hex"])
-        aggregateProofRootHex = Self.normalizedString(raw["aggregate_proof_root_hex"])
-        receiptsRootMatches = Self.normalizedBool(raw["receipts_root_matches"])
-        proofSummary = raw["proof_summary"]
-    }
-
-    /// Attempt to decode the proof summary into the typed view if present.
-    public func decodeProofSummary() throws -> ToriiOfflineBundleProofSummary? {
-        guard let proofSummary else { return nil }
-        return try proofSummary.decode(as: ToriiOfflineBundleProofSummary.self)
-    }
-
-    /// Access an arbitrary raw field by name.
-    public subscript(field name: String) -> ToriiJSONValue? {
-        fields[name]
-    }
-
-    private static func normalizedString(_ value: ToriiJSONValue?) -> String? {
-        guard let value else { return nil }
-        return value.normalizedString
-    }
-
-    private static func normalizedBool(_ value: ToriiJSONValue?) -> Bool? {
-        guard let value else { return nil }
-        switch value {
-        case .bool(let flag):
-            return flag
-        case .string(let string):
-            let lowered = string.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            if lowered == "true" { return true }
-            if lowered == "false" { return false }
-            return nil
-        default:
-            return nil
-        }
-    }
-}
-
-/// Typed view of the optional proof summary payload returned by Torii.
-public struct ToriiOfflineBundleProofSummary: Decodable, Sendable, Equatable {
-    public let version: UInt16
-    public let proofSumBytes: UInt64?
-    public let proofCounterBytes: UInt64?
-    public let proofReplayBytes: UInt64?
-    public let metadataKeys: [String]?
-
-    private enum CodingKeys: String, CodingKey {
-        case version
-        case proofSumBytes = "proof_sum_bytes"
-        case proofCounterBytes = "proof_counter_bytes"
-        case proofReplayBytes = "proof_replay_bytes"
-        case metadataKeys = "metadata_keys"
-    }
-}
-
-public struct ToriiOfflineCertificateIssueRequest: Encodable, Sendable {
-    public let certificate: ToriiJSONValue
-
-    public init(certificate: ToriiJSONValue) {
-        self.certificate = certificate
-    }
-}
-
-public struct ToriiOfflineCertificateIssueResponse: Decodable, Sendable, Equatable {
-    public let certificateIdHex: String
-    let certificate: ToriiJSONValue
-
-    private enum CodingKeys: String, CodingKey {
-        case certificateIdHex = "certificate_id_hex"
-        case certificate
-    }
-
-    public func decodeCertificate() throws -> OfflineWalletCertificate {
-        try OfflineWalletCertificate(toriiValue: certificate)
-    }
-
-    /// Encode the raw certificate JSON to Data for local storage.
-    public func encodedRecordData() throws -> Data {
-        try certificate.encodedData()
-    }
-
-    /// Build a register request from this issue response — keeps ToriiJSONValue internal.
-    public func registerRequest(authority: String, privateKey: String) -> ToriiOfflineAllowanceRegisterRequest {
-        ToriiOfflineAllowanceRegisterRequest(authority: authority, privateKey: privateKey, certificate: certificate)
-    }
-}
-
-public struct ToriiOfflineBuildClaimIssueRequest: Encodable, Sendable {
-    public let certificateIdHex: String
-    public let txIdHex: String
-    public let platform: String
-    public let appId: String?
-    public let buildNumber: UInt64?
-    public let issuedAtMs: UInt64?
-    public let expiresAtMs: UInt64?
-
-    private enum CodingKeys: String, CodingKey {
-        case certificateIdHex = "certificate_id_hex"
-        case txIdHex = "tx_id_hex"
-        case platform
-        case appId = "app_id"
-        case buildNumber = "build_number"
-        case issuedAtMs = "issued_at_ms"
-        case expiresAtMs = "expires_at_ms"
-    }
-
-    public init(certificateIdHex: String,
-                txIdHex: String,
-                platform: String,
-                appId: String? = nil,
-                buildNumber: UInt64? = nil,
-                issuedAtMs: UInt64? = nil,
-                expiresAtMs: UInt64? = nil) {
-        self.certificateIdHex = certificateIdHex
-        self.txIdHex = txIdHex
-        self.platform = platform.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        self.appId = appId
-        self.buildNumber = buildNumber
-        self.issuedAtMs = issuedAtMs
-        self.expiresAtMs = expiresAtMs
-    }
-}
-
-public enum ToriiOfflineBuildClaimPlatform: String, Codable, Sendable, Equatable {
-    case apple = "Apple"
-    case android = "Android"
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        let raw = try container.decode(String.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        switch raw.lowercased() {
-        case "apple", "ios":
-            self = .apple
-        case "android":
-            self = .android
-        default:
-            throw DecodingError.dataCorruptedError(
-                in: container,
-                debugDescription: "platform must be Apple or Android"
-            )
-        }
-    }
-}
-
-public struct ToriiOfflineBuildClaim: Codable, Sendable, Equatable {
-    public let claimId: String
-    public let nonce: String
-    public let platform: ToriiOfflineBuildClaimPlatform
-    public let appId: String
-    public let buildNumber: UInt64
-    public let issuedAtMs: UInt64
-    public let expiresAtMs: UInt64
-    public let lineageScope: String?
-    public let operatorSignature: String
-
-    private enum CodingKeys: String, CodingKey {
-        case claimId = "claim_id"
-        case nonce
-        case platform
-        case appId = "app_id"
-        case buildNumber = "build_number"
-        case issuedAtMs = "issued_at_ms"
-        case expiresAtMs = "expires_at_ms"
-        case lineageScope = "lineage_scope"
-        case operatorSignature = "operator_signature"
-    }
-}
-
-public struct ToriiOfflineBuildClaimIssueResponse: Decodable, Sendable, Equatable {
-    public let claimIdHex: String
-    private let buildClaim: ToriiJSONValue
-
-    private enum CodingKeys: String, CodingKey {
-        case claimIdHex = "claim_id_hex"
-        case buildClaim = "build_claim"
-    }
-
-    public var rawBuildClaim: ToriiJSONValue {
-        buildClaim
-    }
-
-    public func decodeBuildClaim<T: Decodable>(as type: T.Type = T.self,
-                                               decoder: JSONDecoder = JSONDecoder()) throws -> T {
-        try buildClaim.decode(as: type, decoder: decoder)
-    }
-
-    public func buildClaimObject(decoder: JSONDecoder = JSONDecoder()) throws -> ToriiOfflineBuildClaim {
-        try decodeBuildClaim(as: ToriiOfflineBuildClaim.self, decoder: decoder)
-    }
-
-    /// Encode the raw build-claim JSON to Data for local storage.
-    public func encodedBuildClaimData() throws -> Data {
-        try buildClaim.encodedData()
-    }
-}
-
-public struct ToriiOfflineAllowanceRegisterRequest: Encodable, Sendable {
-    public let authority: String
-    public let privateKey: String
-    public let certificate: ToriiJSONValue
-
-    private enum CodingKeys: String, CodingKey {
-        case authority
-        case privateKey = "private_key"
-        case certificate
-    }
-
-    public init(authority: String, privateKey: String, certificate: ToriiJSONValue) {
-        self.authority = authority
-        self.privateKey = privateKey
-        self.certificate = certificate
-    }
-}
-
-public struct ToriiOfflineAllowanceRegisterResponse: Decodable, Sendable, Equatable {
-    public let certificateIdHex: String
-
-    private enum CodingKeys: String, CodingKey {
-        case certificateIdHex = "certificate_id_hex"
-    }
-}
-
-/// Aggregated result for the offline top-up helper (issue + register/renew).
-public struct ToriiOfflineTopUpResponse: Sendable, Equatable {
-    public let certificate: ToriiOfflineCertificateIssueResponse
-    public let registration: ToriiOfflineAllowanceRegisterResponse
-
-    public init(certificate: ToriiOfflineCertificateIssueResponse,
-                registration: ToriiOfflineAllowanceRegisterResponse) {
-        self.certificate = certificate
-        self.registration = registration
-    }
-}
-
-public struct ToriiOfflineSpendReceiptsSubmitRequest: Encodable, Sendable {
-    public let receipts: [ToriiJSONValue]
-
-    public init(receipts: [ToriiJSONValue]) {
-        self.receipts = receipts
-    }
-}
-
-public struct ToriiOfflineSpendReceiptsSubmitResponse: Decodable, Sendable, Equatable {
-    public let receiptsRootHex: String
-    public let receiptCount: UInt64
-    public let totalAmount: String
-    public let assetId: String?
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        let raw = try container.decode([String: ToriiJSONValue].self)
-        guard let root = raw["receipts_root_hex"]?.normalizedString else {
-            throw DecodingError.dataCorruptedError(in: container,
-                                                   debugDescription: "missing receipts_root_hex")
-        }
-        guard let count = raw["receipt_count"]?.normalizedUInt64 else {
-            throw DecodingError.dataCorruptedError(in: container,
-                                                   debugDescription: "missing receipt_count")
-        }
-        guard let total = raw["total_amount"]?.normalizedString else {
-            throw DecodingError.dataCorruptedError(in: container,
-                                                   debugDescription: "missing total_amount")
-        }
-        self.receiptsRootHex = root
-        self.receiptCount = count
-        self.totalAmount = total
-        self.assetId = raw["asset_id"]?.normalizedString
-    }
-}
-
-public struct ToriiOfflineSettlementSubmitRequest: Encodable, Sendable {
-    public let authority: String
-    public let privateKey: String
-    public let transfer: ToriiJSONValue
-    public let buildClaimOverrides: [ToriiOfflineSettlementBuildClaimOverride]
-    public let repairExistingBuildClaims: Bool
-
-    private enum CodingKeys: String, CodingKey {
-        case authority
-        case privateKey = "private_key"
-        case transfer
-        case buildClaimOverrides = "build_claim_overrides"
-        case repairExistingBuildClaims = "repair_existing_build_claims"
-    }
-
-    public init(authority: String,
-                privateKey: String,
-                transfer: ToriiJSONValue,
-                buildClaimOverrides: [ToriiOfflineSettlementBuildClaimOverride] = [],
-                repairExistingBuildClaims: Bool = false) {
-        self.authority = authority
-        self.privateKey = privateKey
-        self.transfer = transfer
-        self.buildClaimOverrides = buildClaimOverrides
-        self.repairExistingBuildClaims = repairExistingBuildClaims
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(authority, forKey: .authority)
-        try container.encode(privateKey, forKey: .privateKey)
-        try container.encode(transfer, forKey: .transfer)
-        if !buildClaimOverrides.isEmpty {
-            try container.encode(buildClaimOverrides, forKey: .buildClaimOverrides)
-        }
-        if repairExistingBuildClaims {
-            try container.encode(true, forKey: .repairExistingBuildClaims)
-        }
-    }
-}
-
-public struct ToriiOfflineSettlementSubmitResponse: Decodable, Sendable, Equatable {
-    public let bundleIdHex: String
-    public let txHashHex: String?
-
-    private enum CodingKeys: String, CodingKey {
-        case bundleIdHex = "bundle_id_hex"
-        case txHashHex = "transaction_hash_hex"
-    }
-}
-
-public struct ToriiOfflineSettlementBuildClaimOverride: Encodable, Sendable, Equatable {
-    public let txIdHex: String
-    public let appId: String?
-    public let buildNumber: UInt64?
-    public let issuedAtMs: UInt64?
-    public let expiresAtMs: UInt64?
-
-    private enum CodingKeys: String, CodingKey {
-        case txIdHex = "tx_id_hex"
-        case appId = "app_id"
-        case buildNumber = "build_number"
-        case issuedAtMs = "issued_at_ms"
-        case expiresAtMs = "expires_at_ms"
-    }
-
-    public init(txIdHex: String,
-                appId: String? = nil,
-                buildNumber: UInt64? = nil,
-                issuedAtMs: UInt64? = nil,
-                expiresAtMs: UInt64? = nil) {
-        self.txIdHex = txIdHex
-        self.appId = appId
-        self.buildNumber = buildNumber
-        self.issuedAtMs = issuedAtMs
-        self.expiresAtMs = expiresAtMs
-    }
-}
-
-public struct ToriiOfflineTransferProofRequest: Encodable, Sendable {
-    public let transfer: ToriiJSONValue
-    public let kind: String
-    public let counterCheckpoint: UInt64?
-    public let replayLogHeadHex: String?
-    public let replayLogTailHex: String?
-
-    private enum CodingKeys: String, CodingKey {
-        case transfer
-        case kind
-        case counterCheckpoint = "counter_checkpoint"
-        case replayLogHeadHex = "replay_log_head_hex"
-        case replayLogTailHex = "replay_log_tail_hex"
-    }
-
-    public init(transfer: ToriiJSONValue,
-                kind: String,
-                counterCheckpoint: UInt64? = nil,
-                replayLogHeadHex: String? = nil,
-                replayLogTailHex: String? = nil) {
-        self.transfer = transfer
-        self.kind = kind
-        self.counterCheckpoint = counterCheckpoint
-        self.replayLogHeadHex = replayLogHeadHex
-        self.replayLogTailHex = replayLogTailHex
-    }
-
-    public init(transfer: OfflineToOnlineTransfer,
-                kind: String,
-                counterCheckpoint: UInt64? = nil,
-                replayLogHeadHex: String? = nil,
-                replayLogTailHex: String? = nil) throws {
-        self.init(transfer: try transfer.toriiJSON(),
-                  kind: kind,
-                  counterCheckpoint: counterCheckpoint,
-                  replayLogHeadHex: replayLogHeadHex,
-                  replayLogTailHex: replayLogTailHex)
-    }
 }
 
 public struct ToriiOfflineTransferItem: Codable, Sendable {
@@ -4670,94 +3891,6 @@ public struct ToriiOfflineTransferItem: Codable, Sendable {
 public struct ToriiOfflineTransferList: Decodable, Sendable {
     public let items: [ToriiOfflineTransferItem]
     public let total: UInt64
-}
-
-public struct ToriiOfflineReceiptListItem: Decodable, Sendable, Equatable {
-    public let bundleIdHex: String
-    public let txIdHex: String
-    public let certificateIdHex: String
-    public let controllerId: String
-    public let controllerDisplay: String
-    public let receiverId: String
-    public let receiverDisplay: String
-    public let assetId: String
-    public let amount: String
-    public let invoiceId: String
-    public let counter: UInt64
-    public let recordedAtMs: UInt64
-    public let recordedAtHeight: UInt64
-
-    private enum CodingKeys: String, CodingKey {
-        case bundleIdHex = "bundle_id_hex"
-        case txIdHex = "tx_id_hex"
-        case certificateIdHex = "certificate_id_hex"
-        case controllerId = "controller_id"
-        case controllerDisplay = "controller_display"
-        case receiverId = "receiver_id"
-        case receiverDisplay = "receiver_display"
-        case assetId = "asset_id"
-        case amount
-        case invoiceId = "invoice_id"
-        case counter
-        case recordedAtMs = "recorded_at_ms"
-        case recordedAtHeight = "recorded_at_height"
-    }
-}
-
-public struct ToriiOfflineReceiptList: Decodable, Sendable, Equatable {
-    public let items: [ToriiOfflineReceiptListItem]
-    public let total: UInt64
-}
-
-public struct ToriiOfflineStateResponse: Decodable, Sendable, Equatable {
-    public let allowances: [ToriiJSONValue]
-    public let transfers: [ToriiJSONValue]
-    public let summaries: [ToriiJSONValue]
-    public let revocations: [ToriiJSONValue]
-    public let nowMs: UInt64
-
-    private enum CodingKeys: String, CodingKey {
-        case allowances
-        case transfers
-        case summaries
-        case revocations
-        case nowMs = "now_ms"
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        let allowancesValue = try container.decodeIfPresent(ToriiJSONValue.self, forKey: .allowances) ?? .array([])
-        let transfersValue = try container.decodeIfPresent(ToriiJSONValue.self, forKey: .transfers) ?? .array([])
-        let summariesValue = try container.decodeIfPresent(ToriiJSONValue.self, forKey: .summaries) ?? .array([])
-        let revocationsValue = try container.decodeIfPresent(ToriiJSONValue.self, forKey: .revocations) ?? .array([])
-
-        guard case let .array(allowances) = allowancesValue else {
-            throw DecodingError.dataCorruptedError(forKey: .allowances,
-                                                   in: container,
-                                                   debugDescription: "allowances must be an array")
-        }
-        guard case let .array(transfers) = transfersValue else {
-            throw DecodingError.dataCorruptedError(forKey: .transfers,
-                                                   in: container,
-                                                   debugDescription: "transfers must be an array")
-        }
-        guard case let .array(summaries) = summariesValue else {
-            throw DecodingError.dataCorruptedError(forKey: .summaries,
-                                                   in: container,
-                                                   debugDescription: "summaries must be an array")
-        }
-        guard case let .array(revocations) = revocationsValue else {
-            throw DecodingError.dataCorruptedError(forKey: .revocations,
-                                                   in: container,
-                                                   debugDescription: "revocations must be an array")
-        }
-
-        self.allowances = allowances
-        self.transfers = transfers
-        self.summaries = summaries
-        self.revocations = revocations
-        self.nowMs = try container.decode(UInt64.self, forKey: .nowMs)
-    }
 }
 
 public struct ToriiOfflinePlatformTokenSnapshot: Codable, Sendable, Equatable {
@@ -6092,115 +5225,6 @@ public struct ToriiOfflineRevocationListParams: Sendable, Equatable {
             items.append(URLQueryItem(name: "sort", value: sort))
         }
         return items.isEmpty ? nil : items
-    }
-}
-
-public struct ToriiOfflineBundleProofStatusParams: Sendable, Equatable {
-    public var bundleIdHex: String
-
-    public init(bundleIdHex: String) {
-        self.bundleIdHex = bundleIdHex
-    }
-
-    public func queryItems() throws -> [URLQueryItem] {
-        var items: [URLQueryItem] = []
-        var trimmed = bundleIdHex.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.hasPrefix("0x") || trimmed.hasPrefix("0X") {
-            trimmed = String(trimmed.dropFirst(2))
-        }
-        guard !trimmed.isEmpty, Data(hexString: trimmed) != nil else {
-            throw ToriiClientError.invalidPayload("bundleIdHex must be a valid hex string")
-        }
-        items.append(URLQueryItem(name: "bundle_id_hex", value: trimmed.lowercased()))
-        return items
-    }
-}
-
-public struct ToriiOfflineReceiptListParams: Sendable, Equatable {
-    public var filter: String?
-    public var limit: UInt64?
-    public var offset: UInt64?
-    public var sort: String?
-    public var controllerId: String?
-    public var receiverId: String?
-    public var bundleIdHex: String?
-    public var certificateIdHex: String?
-    public var invoiceId: String?
-    public var assetId: String?
-
-    public init(filter: String? = nil,
-                limit: UInt64? = nil,
-                offset: UInt64? = nil,
-                sort: String? = nil,
-                controllerId: String? = nil,
-                receiverId: String? = nil,
-                bundleIdHex: String? = nil,
-                certificateIdHex: String? = nil,
-                invoiceId: String? = nil,
-                assetId: String? = nil) {
-        self.filter = filter
-        self.limit = limit
-        self.offset = offset
-        self.sort = sort
-        self.controllerId = controllerId
-        self.receiverId = receiverId
-        self.bundleIdHex = bundleIdHex
-        self.certificateIdHex = certificateIdHex
-        self.invoiceId = invoiceId
-        self.assetId = assetId
-    }
-
-    public func queryItems() throws -> [URLQueryItem]? {
-        var items: [URLQueryItem] = []
-        if let filter, !filter.isEmpty {
-            items.append(URLQueryItem(name: "filter", value: filter))
-        }
-        if let limit {
-            items.append(URLQueryItem(name: "limit", value: String(limit)))
-        }
-        if let offset {
-            items.append(URLQueryItem(name: "offset", value: String(offset)))
-        }
-        if let sort, !sort.isEmpty {
-            items.append(URLQueryItem(name: "sort", value: sort))
-        }
-        if let controllerId = controllerId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !controllerId.isEmpty {
-            let normalized = try normalizeToriiAccountIdQueryValue(controllerId, field: "controllerId")
-            items.append(URLQueryItem(name: "controller_id", value: normalized))
-        }
-        if let receiverId = receiverId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !receiverId.isEmpty {
-            let normalized = try normalizeToriiAccountIdQueryValue(receiverId, field: "receiverId")
-            items.append(URLQueryItem(name: "receiver_id", value: normalized))
-        }
-        if let bundleIdHex = Self.normalizeHex(bundleIdHex) {
-            items.append(URLQueryItem(name: "bundle_id_hex", value: bundleIdHex))
-        }
-        if let certificateIdHex = Self.normalizeHex(certificateIdHex) {
-            items.append(URLQueryItem(name: "certificate_id_hex", value: certificateIdHex))
-        }
-        if let invoiceId = invoiceId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !invoiceId.isEmpty {
-            items.append(URLQueryItem(name: "invoice_id", value: invoiceId))
-        }
-        if let assetId = assetId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !assetId.isEmpty {
-            let normalized = try normalizeToriiAssetIdQueryValue(assetId, field: "assetId")
-            items.append(URLQueryItem(name: "asset_id", value: normalized))
-        }
-        return items.isEmpty ? nil : items
-    }
-
-    private static func normalizeHex(_ raw: String?) -> String? {
-        guard var trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !trimmed.isEmpty else {
-            return nil
-        }
-        if trimmed.hasPrefix("0x") || trimmed.hasPrefix("0X") {
-            trimmed = String(trimmed.dropFirst(2))
-        }
-        return trimmed.lowercased()
     }
 }
 
@@ -10983,6 +10007,12 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     @discardableResult
+    public func listOfflineRevocations(params: ToriiOfflineRevocationListParams? = nil,
+                                       completion: @escaping (Result<ToriiOfflineRevocationList, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.listOfflineRevocations(params: params) }
+    }
+
+    @discardableResult
     public func queryOfflineTransfers(_ envelope: ToriiQueryEnvelope,
                                       completion: @escaping (Result<ToriiOfflineTransferList, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.queryOfflineTransfers(envelope) }
@@ -12146,78 +11176,89 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         return try decodeJSON(ToriiOfflineTransferList.self, from: data)
     }
 
-    public func setupOfflineReserve(
-        _ requestBody: ToriiOfflineReserveSetupRequest
-    ) async throws -> ToriiOfflineReserveEnvelope {
+    public func setupOfflineCash(
+        _ requestBody: ToriiOfflineCashSetupRequest
+    ) async throws -> ToriiOfflineCashEnvelope {
         let body = try JSONEncoder().encode(requestBody)
         let request = try makeRequest(
-            path: "/v1/offline/reserve/setup",
+            path: "/v1/offline/cash/setup",
             method: .post,
             body: body,
             headers: ["Content-Type": "application/json"]
         )
         let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineReserveEnvelope.self, from: data)
+        return try decodeJSON(ToriiOfflineCashEnvelope.self, from: data)
     }
 
-    public func topUpOfflineReserve(
-        _ requestBody: ToriiOfflineReserveTopUpRequest
-    ) async throws -> ToriiOfflineReserveEnvelope {
+    public func loadOfflineCash(
+        _ requestBody: ToriiOfflineCashLoadRequest
+    ) async throws -> ToriiOfflineCashEnvelope {
         let body = try JSONEncoder().encode(requestBody)
         let request = try makeRequest(
-            path: "/v1/offline/reserve/topup",
+            path: "/v1/offline/cash/load",
             method: .post,
             body: body,
             headers: ["Content-Type": "application/json"]
         )
         let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineReserveEnvelope.self, from: data)
+        return try decodeJSON(ToriiOfflineCashEnvelope.self, from: data)
     }
 
-    public func renewOfflineReserve(
-        _ requestBody: ToriiOfflineReserveRenewRequest
-    ) async throws -> ToriiOfflineReserveEnvelope {
+    public func refreshOfflineCash(
+        _ requestBody: ToriiOfflineCashRefreshRequest
+    ) async throws -> ToriiOfflineCashEnvelope {
         let body = try JSONEncoder().encode(requestBody)
         let request = try makeRequest(
-            path: "/v1/offline/reserve/renew",
+            path: "/v1/offline/cash/refresh",
             method: .post,
             body: body,
             headers: ["Content-Type": "application/json"]
         )
         let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineReserveEnvelope.self, from: data)
+        return try decodeJSON(ToriiOfflineCashEnvelope.self, from: data)
     }
 
-    public func syncOfflineReserve(
-        _ requestBody: ToriiOfflineReserveSyncRequest
-    ) async throws -> ToriiOfflineReserveEnvelope {
+    public func syncOfflineCash(
+        _ requestBody: ToriiOfflineCashSyncRequest
+    ) async throws -> ToriiOfflineCashEnvelope {
         let body = try JSONEncoder().encode(requestBody)
         let request = try makeRequest(
-            path: "/v1/offline/reserve/sync",
+            path: "/v1/offline/cash/sync",
             method: .post,
             body: body,
             headers: ["Content-Type": "application/json"]
         )
         let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineReserveEnvelope.self, from: data)
+        return try decodeJSON(ToriiOfflineCashEnvelope.self, from: data)
     }
 
-    public func defundOfflineReserve(
-        _ requestBody: ToriiOfflineReserveDefundRequest
-    ) async throws -> ToriiOfflineReserveEnvelope {
+    public func redeemOfflineCash(
+        _ requestBody: ToriiOfflineCashRedeemRequest
+    ) async throws -> ToriiOfflineCashEnvelope {
         let body = try JSONEncoder().encode(requestBody)
         let request = try makeRequest(
-            path: "/v1/offline/reserve/defund",
+            path: "/v1/offline/cash/redeem",
             method: .post,
             body: body,
             headers: ["Content-Type": "application/json"]
         )
         let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineReserveEnvelope.self, from: data)
+        return try decodeJSON(ToriiOfflineCashEnvelope.self, from: data)
+    }
+
+    public func listOfflineRevocations(
+        params: ToriiOfflineRevocationListParams? = nil
+    ) async throws -> ToriiOfflineRevocationList {
+        let request = try makeRequest(
+            path: "/v1/offline/revocations",
+            queryItems: try params?.queryItems()
+        )
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiOfflineRevocationList.self, from: data)
     }
 
     public func getOfflineRevocationBundle() async throws -> ToriiOfflineRevocationBundle {
-        let request = try makeRequest(path: "/v1/offline/revocations", method: .get)
+        let request = try makeRequest(path: "/v1/offline/revocations/bundle", method: .get)
         let data = try await data(for: request)
         return try decodeJSON(ToriiOfflineRevocationBundle.self, from: data)
     }
@@ -13718,72 +12759,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         }
     }
 
-    private func ensureTopUpCertificateIdsMatch(issued: ToriiOfflineCertificateIssueResponse,
-                                                registered: ToriiOfflineAllowanceRegisterResponse) throws {
-        let issuedId = issued.certificateIdHex.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let registeredId = registered.certificateIdHex.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if issuedId != registeredId {
-            throw ToriiClientError.invalidPayload(
-                "Offline top-up certificate mismatch (issued \(issued.certificateIdHex), registered \(registered.certificateIdHex))."
-            )
-        }
-    }
-
-    private static func makeOfflineReprovisionDraft(
-        currentCertificate: OfflineWalletCertificate,
-        newCommitment: Data,
-        lineage: OfflineCertificateLineage
-    ) throws -> OfflineWalletCertificateDraft {
-        guard newCommitment.count == 32 else {
-            throw ToriiClientError.invalidPayload("newCommitment must be exactly 32 bytes.")
-        }
-        let allowance = OfflineAllowanceCommitment(
-            assetId: currentCertificate.allowance.assetId,
-            amount: currentCertificate.allowance.amount,
-            commitment: newCommitment
-        )
-        var metadata = currentCertificate.metadata
-        lineage.apply(to: &metadata)
-        return OfflineWalletCertificateDraft(
-            controller: currentCertificate.controller,
-            allowance: allowance,
-            spendPublicKey: currentCertificate.spendPublicKey,
-            attestationReport: currentCertificate.attestationReport,
-            issuedAtMs: currentCertificate.issuedAtMs,
-            expiresAtMs: currentCertificate.expiresAtMs,
-            policy: currentCertificate.policy,
-            metadata: metadata,
-            verdictId: currentCertificate.verdictId,
-            attestationNonce: currentCertificate.attestationNonce,
-            refreshAtMs: currentCertificate.refreshAtMs
-        )
-    }
-
-    private static func draftByApplyingAttestationNonce(
-        _ draft: OfflineWalletCertificateDraft,
-        _ attestationNonce: Data?
-    ) throws -> OfflineWalletCertificateDraft {
-        guard let attestationNonce else {
-            return draft
-        }
-        guard attestationNonce.count == 32 else {
-            throw ToriiClientError.invalidPayload("attestationNonce must be exactly 32 bytes.")
-        }
-        return OfflineWalletCertificateDraft(
-            controller: draft.controller,
-            allowance: draft.allowance,
-            spendPublicKey: draft.spendPublicKey,
-            attestationReport: draft.attestationReport,
-            issuedAtMs: draft.issuedAtMs,
-            expiresAtMs: draft.expiresAtMs,
-            policy: draft.policy,
-            metadata: draft.metadata,
-            verdictId: draft.verdictId,
-            attestationNonce: attestationNonce,
-            refreshAtMs: draft.refreshAtMs
-        )
-    }
-
     public func submitTransaction(data: Data,
                                   mode: PipelineEndpointMode,
                                   idempotencyKey: String? = nil) async throws -> ToriiSubmitTransactionResponse? {
@@ -14292,6 +13267,14 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     private func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        if let url = request.url,
+           let violation = IrohaTransportSecurity.httpViolation(context: "ToriiClient",
+                                                                baseURL: baseURL,
+                                                                targetURL: url,
+                                                                headers: request.allHTTPHeaderFields ?? [:],
+                                                                body: request.httpBody) {
+            throw ToriiClientError.invalidPayload(violation)
+        }
         do {
             let observedAtLocalMs = Self.currentEpochMs()
             let (data, response) = try await session.data(for: request, delegate: nil)

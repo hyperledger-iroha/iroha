@@ -9643,7 +9643,7 @@ mod tests {
         });
         super::record_nexus_fee_event(super::NexusFeeEvent::SponsorUnauthorized {
             sponsor_id: "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU".to_owned(),
-            authority_id: "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp".to_owned(),
+            authority_id: "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV".to_owned(),
         });
         let snap = super::nexus_fee_snapshot();
         assert_eq!(snap.charged_total, 1);
@@ -9654,7 +9654,7 @@ mod tests {
         assert_eq!(
             snap.last_error.as_deref(),
             Some(
-                "sponsor not authorized for authority 6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp"
+                "sponsor not authorized for authority 6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV"
             )
         );
     }

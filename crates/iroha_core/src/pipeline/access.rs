@@ -421,7 +421,7 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
                 let Ok(key) = key_raw.parse::<Name>() else {
                     continue;
                 };
-                match AssetId::parse_encoded(id_raw) {
+                match AssetId::parse_literal(id_raw) {
                     Ok(id) => {
                         parsed = Some(AssetMetadataKey { id, key });
                         break;
@@ -498,17 +498,13 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
         if let Some(rest) = raw.strip_prefix("asset_def:") {
             if let Ok(id) = AssetDefinitionId::parse_address_literal(rest) {
                 canonical.push(CanonicalStateKey::AssetDefinition(id));
-            } else if !rest.is_empty() {
-                // Compatibility: accept historical alias-shaped asset definition hints
-                // (e.g. `asset_def:name#domain`) and preserve them verbatim.
-                state_keys.insert(raw.to_owned());
             } else {
                 return None;
             }
             return Some(());
         }
         if let Some(rest) = raw.strip_prefix("asset:") {
-            match AssetId::parse_encoded(rest) {
+            match AssetId::parse_literal(rest) {
                 Ok(id) => canonical.push(CanonicalStateKey::Asset(id)),
                 Err(_) => return None,
             }

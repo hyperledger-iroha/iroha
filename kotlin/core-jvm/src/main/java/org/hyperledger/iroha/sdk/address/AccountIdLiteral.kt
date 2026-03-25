@@ -1,20 +1,29 @@
 package org.hyperledger.iroha.sdk.address
 
 /**
- * Extracts the IH58 address portion from a `"<address>@<domain>"` account identifier.
+ * Requires a canonical encoded account identifier without a trailing `@domain` suffix.
  *
  * @param accountId account identifier string
- * @return IH58 address portion without the domain suffix
+ * @param field field name used in validation messages
+ * @return canonical encoded account identifier
  */
-fun extractIh58Address(accountId: String): String {
+fun requireCanonicalI105Address(accountId: String, field: String): String {
+    require(field.isNotBlank()) { "field must not be blank" }
     val value = accountId.trim()
-    require(value.isNotEmpty()) { "accountId must not be blank" }
-    val atIndex = value.lastIndexOf('@')
-    require(atIndex > 0 && atIndex != value.length - 1) { "Invalid account ID format: $value" }
-    return value.substring(0, atIndex)
+    require(value.isNotEmpty()) { "$field must not be blank" }
+    require(value.indexOf('@') < 0) {
+        "$field must use canonical I105 encoded account without @domain"
+    }
+    val parsed = try {
+        AccountAddress.parseEncoded(value, null)
+    } catch (ex: AccountAddressException) {
+        throw IllegalArgumentException(
+            "$field must use a canonical I105 encoded account literal",
+            ex,
+        )
+    }
+    require(parsed.format == AccountAddressFormat.I105) {
+        "$field must use a canonical I105 encoded account literal"
+    }
+    return value
 }
-
-/**
- * Backward-compatible alias for callers that still use the older I105 naming.
- */
-fun extractI105Address(accountId: String): String = extractIh58Address(accountId)

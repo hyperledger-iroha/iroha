@@ -235,152 +235,21 @@ try await wallet.fetchTransfers(params: ToriiOfflineListParams(limit: 25))
 `ToriiOfflineListParams` mirrors the convenience filters exposed by Torii —
 pass `assetId`, `controllerId`, `receiverId`, `depositAccountId`,
 `certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
-`refreshBeforeMs/AfterMs`, `attestationNonceHex`, `verdictIdHex`,
-`requireVerdict`, or `onlyMissingVerdict` directly to the struct instead of
-composing JSON predicates. The helper lowercases verdict IDs and rejects invalid
-combinations before the request is executed, keeping the Swift surface aligned
-with the OA11 roadmap guarantees.
-
 `OfflineReceiptChallenge.encode(chainId, ...)` reuses the shared native helper to emit the canonical
-Norito payload plus the chain-bound `irohaHash`/`clientDataHash` pair that Apple App Attest and
-Android KeyMint expect. Receipt `amount` strings must use the allowance's canonical scale (asset
-definition scale when specified; otherwise the allowance amount scale) to match the ledger
-verifier. Use the `expectedScale` overload to enforce scale locally, and call it before generating
-platform proofs so every device feeds the exact same bytes into the attestation
-chain.【IrohaSwift/Sources/IrohaSwift/OfflineReceiptChallenge.swift:1】【IrohaSwift/Tests/IrohaSwiftTests/OfflineReceiptChallengeTests.swift:1】
+Norito payload plus the chain-bound `irohaHash`/`clientDataHash` pair used by the reserve
+attestation flow for Apple App Attest and Android KeyMint.【IrohaSwift/Sources/IrohaSwift/OfflineReceiptChallenge.swift:1】【IrohaSwift/Tests/IrohaSwiftTests/OfflineReceiptChallengeTests.swift:1】
 
-### Offline receipt builders
+### Offline reserve APIs
 
-`OfflineReceiptBuilder` validates receipts and bundles before submission, including spend-key
-signature verification, account-id/policy checks, platform snapshot policy binding, aggregate
-proof root matching, and challenge-hash verification for App Attest/provisioned proofs. Use
-`OfflineWallet.buildSignedReceipt` to sign with the spend key and append to the journal and audit
-log in one call. Pass `chainId` so the challenge hash is bound to the target network:
+The Swift SDK now documents only the reserve-era offline surface:
 
-```swift
-let chainId = "testnet"
-let journal = try OfflineJournal(url: journalURL, key: OfflineJournalKey.derive(from: seed))
-let receipt = try wallet.buildSignedReceipt(
-    chainId: chainId,
-    receiverAccountId: certificate.controller,
-    amount: "10",
-    invoiceId: "inv-001",
-    platformProof: proof,
-    senderCertificate: certificate,
-    signingKey: spendKey,
-    journal: journal
-)
+- reserve setup, top-up, renew, sync, and defund
+- revocation list, signed revocation bundle, and revocation registration
+- read-only offline transfer history through `/v1/offline/transfers*`
 
-let claimedDelta = try OfflineReceiptBuilder.aggregateAmount(receipts: [receipt])
-let resultingValue = "90" // current balance minus claimedDelta
-let initialBlindingHex = "<current-blinding-hex>"
-let resultingBlindingHex = "<next-blinding-hex>"
-let artifacts = try OfflineBalanceProofBuilder.advanceCommitment(
-    chainId: chainId,
-    claimedDelta: claimedDelta,
-    resultingValue: resultingValue,
-    initialCommitmentHex: certificate.allowance.commitment.hexUppercased(),
-    initialBlindingHex: initialBlindingHex,
-    resultingBlindingHex: resultingBlindingHex
-)
-let balanceProof = OfflineBalanceProof(
-    initialCommitment: certificate.allowance,
-    resultingCommitment: artifacts.resultingCommitment,
-    claimedDelta: claimedDelta,
-    zkProof: artifacts.proof
-)
-let transfer = try OfflineReceiptBuilder.buildTransfer(
-    chainId: chainId,
-    receiver: certificate.controller,
-    depositAccount: certificate.controller,
-    receipts: [receipt],
-    balanceProof: balanceProof
-)
-```
-
-Balance proofs are required for settlement; `OfflineBalanceProofBuilder` emits the versioned
-12,385-byte v1 proof blob (delta + range proofs) that Torii expects.
-
-If you need deterministic IDs or direct journal/audit wiring without `OfflineWallet`, use
-`OfflineReceiptRecorder` alongside the builder:
-
-```swift
-let logger = try OfflineAuditLogger(isEnabled: true)
-let recorder = OfflineReceiptRecorder(journal: journal, auditLogger: logger)
-let chainId = "testnet"
-let seed = Data("receipt-seed".utf8)
-let bundleSeed = Data("bundle-seed".utf8)
-let receipt = try OfflineReceiptBuilder.buildSignedReceipt(
-    txIdSeed: seed,
-    chainId: chainId,
-    receiverAccountId: certificate.controller,
-    amount: "10",
-    invoiceId: "inv-002",
-    platformProof: proof,
-    senderCertificate: certificate,
-    signingKey: spendKey,
-    recorder: recorder,
-    timestampMs: 123
-)
-
-let transfer = try OfflineReceiptBuilder.buildTransfer(
-    bundleIdSeed: bundleSeed,
-    chainId: chainId,
-    receiver: certificate.controller,
-    depositAccount: certificate.controller,
-    receipts: [receipt],
-    balanceProof: balanceProof,
-    sortReceipts: true
-)
-```
-
-When attaching aggregate proofs, compute the Poseidon receipts root with
-`OfflineReceiptBuilder.computeReceiptsRoot` and populate the envelope before submission. Use
-`OfflineAggregateProofMetadataKey` to tag the FASTPQ parameter set and circuit identifiers:
-
-```swift
-let metadata: [String: ToriiJSONValue] = [
-    OfflineAggregateProofMetadataKey.parameterSet: .string("fastpq-offline-v1"),
-    OfflineAggregateProofMetadataKey.sumCircuit: .string("fastpq/offline_sum/v2"),
-    OfflineAggregateProofMetadataKey.counterCircuit: .string("fastpq/offline_counter/v2"),
-    OfflineAggregateProofMetadataKey.replayCircuit: .string("fastpq/offline_replay/v2"),
-]
-```
-
-Torii builds FASTPQ witness payloads from the transfer payload
-(`POST /v1/offline/transfers/proof`). Feed the JSON into
-`OfflineReceiptBuilder.generateAggregateProofs` to get proof bytes (requires the native bridge):
-
-```swift
-let sumRequest = try await torii.requestOfflineTransferProof(
-    .init(transfer: transfer, kind: "sum")
-)
-let counterRequest = try await torii.requestOfflineTransferProof(
-    .init(transfer: transfer, kind: "counter", counterCheckpoint: counterCheckpoint)
-)
-let replayRequest = try await torii.requestOfflineTransferProof(
-    .init(transfer: transfer,
-          kind: "replay",
-          replayLogHeadHex: replayHeadHex,
-          replayLogTailHex: replayTailHex)
-)
-
-let proofs = try OfflineReceiptBuilder.generateAggregateProofs(
-    sumRequest: sumRequest,
-    counterRequest: counterRequest,
-    replayRequest: replayRequest
-)
-let envelope = try OfflineReceiptBuilder.buildAggregateProofEnvelope(
-    receipts: receipts,
-    proofSum: proofs.sum,
-    proofCounter: proofs.counter,
-    proofReplay: proofs.replay,
-    metadata: metadata
-)
-```
-
-Note: the native bridge emits deterministic sum/counter/replay proofs (Norito-encoded
-`OfflineFastpq*Proof`), and the core verifier enforces them when `proof_mode = "required"`.
+Certificate issuance, allowance registration, settlement submission, spend-receipt validation, and
+aggregate-proof helper APIs were removed from the public Swift SDK surface during the reserve
+cutover.
 
 ### Inspector provisioning proofs
 
@@ -847,25 +716,22 @@ For higher-level walkthroughs, see:
   transaction with `getExplorerTransactionDetail(hashHex:)` or a single instruction with
   `getExplorerInstructionDetail(hashHex:index:)`. Use
   `getExplorerTransactionTransfers`/`getExplorerTransactionTransferSummaries` to derive transfer
-  details for a single transaction (optionally filtering by `matchingAccount`, `assetDefinitionId`,
-  or `assetId`), or `streamTransactionTransferSummaries` for history+live streaming of a single
+  details for a single transaction (optionally filtering by `matchingAccount` or
+  `assetDefinitionId`), or `streamTransactionTransferSummaries` for history+live streaming of a single
   transaction. For transfer history, use
   `getExplorerTransfers`/`getExplorerTransferSummaries` (support `matchingAccount`,
-  `assetDefinitionId`, and `assetId` filters), or the convenience helpers
+  and `assetDefinitionId` filters), or the convenience helpers
   `getAccountTransferHistory` (alias: `getTransactionHistory`) and `iterateAccountTransferHistory`
   (iOS 15/macOS 12+) which page instructions with `kind: "Transfer"` and emit UI-ready
   `ToriiExplorerTransferSummary` records.
-  These helpers accept `assetDefinitionId` or `assetId` filters (the asset-id filter matches the
-  source asset literal in transfer payloads). Transfer summaries also expose `sourceAssetId` and
-  `destinationAssetId` convenience accessors when they can be derived from the asset definition and
-  account ids, plus `transferIndex` to track the entry position within batch transfer payloads.
+  These helpers accept `assetDefinitionId` filters. Transfer summaries expose the canonical
+  `assetDefinitionId` plus `transferIndex` to track the entry position within batch transfer
+  payloads.
   Convenience flags `isIncoming`, `isOutgoing`, and `isSelfTransfer` assist with UI direction
   labels. Use `direction(relativeTo:)` and `counterpartyAccountId(relativeTo:)` to recompute
   direction or display counterparties for a different account; `isIncoming(relativeTo:)`,
   `isOutgoing(relativeTo:)`, and `isSelfTransfer(relativeTo:)` are available for quick checks.
-  To resolve asset ids relative to a specific account, use `assetId(relativeTo:)` and
-  `counterpartyAssetId(relativeTo:)`. Use `signedAmount(relativeTo:)` when you need a +/‑ string
-  for UI totals.
+  Use `signedAmount(relativeTo:)` when you need a +/‑ string for UI totals.
   Transfer summaries also conform to `Identifiable` with a stable
   `transactionHash|instructionIndex|transferIndex` identifier.
   Live updates are available via `streamExplorerInstructions` and `streamExplorerTransactions`

@@ -132,6 +132,8 @@ fn expected_container_manifest() -> SoraContainerManifestV1 {
             ("APP_ENV".to_string(), "production".to_string()),
             ("LOG_LEVEL".to_string(), "info".to_string()),
         ]),
+        required_config_names: Vec::new(),
+        required_secret_names: Vec::new(),
         capabilities: SoraCapabilityPolicyV1 {
             network: SoraNetworkPolicyV1::Allowlist(vec![
                 "api.sora.internal".to_string(),

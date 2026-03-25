@@ -40,7 +40,7 @@ public enum TransactionInputError: Error, LocalizedError, Equatable {
         case .emptyAssetId:
             return "Asset id must not be empty."
         case let .malformedAssetId(value):
-            return "Asset id must be encoded-only in 'norito:<hex>' form with no whitespace (received '\(value)')."
+            return "Asset id must use '<asset-definition-id>#<account-id>' public form with optional '#dataspace:<id>' suffix and no whitespace (received '\(value)')."
         case let .invalidZkBallotPublicInputs(reason):
             return "Governance ZK public inputs are invalid: \(reason)"
         }
@@ -159,20 +159,10 @@ struct TransactionInputValidator {
         guard !trimmed.isEmpty else {
             throw TransactionInputError.emptyAssetId
         }
-        if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
+        guard let canonical = try? OfflineNorito.canonicalAssetIdLiteral(trimmed) else {
             throw TransactionInputError.malformedAssetId(trimmed)
         }
-        let lower = trimmed.lowercased()
-        guard lower.hasPrefix("norito:") else {
-            throw TransactionInputError.malformedAssetId(trimmed)
-        }
-        let hex = String(trimmed.dropFirst("norito:".count))
-        guard !hex.isEmpty,
-              hex.count.isMultiple(of: 2),
-              Data(hexString: hex) != nil else {
-            throw TransactionInputError.malformedAssetId(trimmed)
-        }
-        return "norito:\(hex.lowercased())"
+        return canonical
     }
 
     static func sanitizeMetadataTarget(_ target: MetadataTarget) throws -> MetadataTarget {

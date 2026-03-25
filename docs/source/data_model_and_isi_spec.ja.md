@@ -31,7 +31,7 @@ ID は、`Display`/`FromStr` 往復の安定した文字列形式を持ちます
 - `AssetDefinitionId` — 正規の `unprefixed Base58 address with versioning and checksum` (UUID-v4 バイト)。定義: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`。 `alias` リテラルは、`<name>#<domain>.<dataspace>` または `<name>#<dataspace>` である必要があります。`<name>` はアセット定義名と同じです。コード: `crates/iroha_data_model/src/asset/definition.rs`。
 
   - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`, where `status` is `permanent`, `leased_active`, `leased_grace`, or `expired_pending_cleanup`. Alias selectors resolve against the latest committed block creation time and stop resolving after grace even before sweep removes stale bindings.
-- `AssetId`: 正規エンコードされたリテラル `norito:<hex>` (従来のテキスト形式は最初のリリースではサポートされていません)。- `NftId` — `nft$domain`。 NFT: `{ id, content: Metadata, owned_by }`。コード: `crates/iroha_data_model/src/nft.rs`。
+- `AssetId`: 正規エンコードされたリテラル `<asset-definition-id>#<account-id>` (従来のテキスト形式は最初のリリースではサポートされていません)。- `NftId` — `nft$domain`。 NFT: `{ id, content: Metadata, owned_by }`。コード: `crates/iroha_data_model/src/nft.rs`。
 - `RoleId` — `name`。役割: `{ id, permissions: BTreeSet<Permission> }` ビルダー `NewRole { inner: Role, grant_to }`。コード: `crates/iroha_data_model/src/role.rs`。
 - `Permission` — `{ name: Ident, payload: Json }`。コード: `crates/iroha_data_model/src/permission.rs`。
 - `PeerId`/`Peer` — ピア ID (公開キー) とアドレス。コード: `crates/iroha_data_model/src/peer.rs`。
@@ -207,7 +207,7 @@ ID は、`Display`/`FromStr` 往復の安定した文字列形式を持ちます
 
 移行メモ:
 - `name#domain` テキストのアセット定義 ID は、最初のリリースでは意図的にサポートされていません。
-- ミント/バーン/トランスファーの境界におけるアセット ID は正規の `norito:<hex>` のままです。 `iroha tools encode asset-id` と `--definition <base58-asset-definition-id>`、または `--alias ...` と `--account` を使用します。
+- ミント/バーン/トランスファーの境界におけるアセット ID は正規の `<asset-definition-id>#<account-id>` のままです。 `iroha tools encode asset-id` と `--definition <base58-asset-definition-id>`、または `--alias ...` と `--account` を使用します。
 
 ---
 

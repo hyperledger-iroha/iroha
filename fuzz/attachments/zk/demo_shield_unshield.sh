@@ -19,8 +19,9 @@ set -euo pipefail
 #   - AUTHORITY: AccountId for VK ops (e.g., 6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9)
 #   - PRIVATE_KEY: ExposedPrivateKey for AUTHORITY
 #   - BACKEND: proof backend (default: halo2/ipa)
-#   - ASSET_ID: encoded AssetId (default: norito:4e52543000000001)
+#   - ASSET_DEFINITION_ID: canonical public asset definition id (default: 62Fk4FPcMuLvW5QjDGNF2a4jAmjM)
 #   - FROM: debit account for shield (default: 6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9)
+#   - ASSET_ID: canonical public AssetId (defaults to "${ASSET_DEFINITION_ID}#${FROM}")
 #   - TO: credit account for unshield (default: 6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9)
 #   - AMOUNT: amount for shield/unshield (default: 1000)
 #   - NOTE_COMMITMENT_HEX: 64-hex for shield (default: 32 zero bytes)
@@ -42,8 +43,9 @@ fi
 AUTHORITY="${AUTHORITY:-6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9}"
 PRIVATE_KEY="${PRIVATE_KEY:-ed0120...}"
 BACKEND="${BACKEND:-halo2/ipa}"
-ASSET_ID="${ASSET_ID:-norito:4e52543000000001}"
 FROM="${FROM:-6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9}"
+ASSET_DEFINITION_ID="${ASSET_DEFINITION_ID:-62Fk4FPcMuLvW5QjDGNF2a4jAmjM}"
+ASSET_ID="${ASSET_ID:-${ASSET_DEFINITION_ID}#${FROM}}"
 TO="${TO:-6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9}"
 AMOUNT="${AMOUNT:-1000}"
 NOTE_COMMITMENT_HEX="${NOTE_COMMITMENT_HEX:-0000000000000000000000000000000000000000000000000000000000000000}"

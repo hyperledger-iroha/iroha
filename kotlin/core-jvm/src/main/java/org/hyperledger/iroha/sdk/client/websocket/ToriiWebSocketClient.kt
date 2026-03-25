@@ -4,9 +4,11 @@ import java.net.URI
 import java.net.URLEncoder
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
+import java.util.LinkedHashMap
 import java.util.concurrent.CompletableFuture
 import org.hyperledger.iroha.sdk.client.ClientObserver
 import org.hyperledger.iroha.sdk.client.ClientResponse
+import org.hyperledger.iroha.sdk.client.TransportSecurity
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportWebSocket
 
@@ -57,12 +59,19 @@ class ToriiWebSocketClient private constructor(builder: Builder) {
     private fun buildRequest(path: String, options: ToriiWebSocketOptions): TransportRequest {
         val httpUri = appendQueryParameters(resolvePath(path), options.queryParameters)
         val wsUri = toWebSocketUri(httpUri)
+        val headers = LinkedHashMap(defaultHeaders)
+        options.headers.forEach { (k, v) -> headers[k] = v }
+        TransportSecurity.requireWebSocketRequestAllowed(
+            "ToriiWebSocketClient",
+            baseUri,
+            wsUri,
+            headers,
+        )
         val builder = TransportRequest.builder()
             .setMethod("GET")
             .setUri(wsUri)
             .setTimeout(options.connectTimeout)
-        defaultHeaders.forEach { (k, v) -> builder.addHeader(k, v) }
-        options.headers.forEach { (k, v) -> builder.addHeader(k, v) }
+        headers.forEach { (k, v) -> builder.addHeader(k, v) }
         if (options.subprotocols.isNotEmpty()) {
             builder.addHeader("Sec-WebSocket-Protocol", options.subprotocols.joinToString(","))
         }

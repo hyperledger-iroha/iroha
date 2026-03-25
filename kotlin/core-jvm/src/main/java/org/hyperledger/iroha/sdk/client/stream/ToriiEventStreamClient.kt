@@ -3,6 +3,7 @@ package org.hyperledger.iroha.sdk.client.stream
 import org.hyperledger.iroha.sdk.client.ClientObserver
 import org.hyperledger.iroha.sdk.client.ClientResponse
 import org.hyperledger.iroha.sdk.client.PlatformHttpTransportExecutor
+import org.hyperledger.iroha.sdk.client.TransportSecurity
 import org.hyperledger.iroha.sdk.client.transport.StreamingTransportExecutor
 import org.hyperledger.iroha.sdk.client.transport.TransportExecutor
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
@@ -17,6 +18,7 @@ import java.net.URI
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.time.Duration
+import java.util.LinkedHashMap
 import java.util.concurrent.CancellationException
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
@@ -76,16 +78,23 @@ class ToriiEventStreamClient(
 
     private fun buildRequest(path: String?, options: ToriiEventStreamOptions): TransportRequest {
         val target = appendQueryParameters(resolvePath(path), options.queryParameters)
-        val builder = TransportRequest.builder().setUri(target).setMethod("GET")
-        val timeout = options.timeout
-        if (timeout != null) {
-            builder.setTimeout(timeout)
-        }
         val headers = LinkedHashMap(defaultHeaders)
         headers.putIfAbsent("Accept", EVENT_STREAM_CONTENT_TYPE)
         headers.putIfAbsent("Cache-Control", "no-cache")
         headers.putIfAbsent("Connection", "keep-alive")
         options.headers.forEach { (k, v) -> headers[k] = v }
+        TransportSecurity.requireHttpRequestAllowed(
+            "ToriiEventStreamClient",
+            baseUri,
+            target,
+            headers,
+            null,
+        )
+        val builder = TransportRequest.builder().setUri(target).setMethod("GET")
+        val timeout = options.timeout
+        if (timeout != null) {
+            builder.setTimeout(timeout)
+        }
         headers.forEach { (k, v) -> builder.addHeader(k, v) }
         return builder.build()
     }

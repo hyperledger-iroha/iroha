@@ -3,20 +3,20 @@
     "2025-q2",
     "current"
   ],
-  "generatedAt": "2026-03-24T19:24:30.431Z",
+  "generatedAt": "2026-03-24T20:42:30.456Z",
   "entries": [
     {
       "label": "latest",
       "path": "torii.json",
-      "bytes": 417840,
-      "sha256": "a031808941a67ec42dc00c65065d77533ffc628cd6f7effabfe0f91a91113c34",
-      "blake3": "2868fa43faf5051991f983a9e635b4db486b6327e2cd14dc4e8fe295978de207",
-      "updatedAt": "2026-03-24T19:24:30.422Z",
+      "bytes": 395068,
+      "sha256": "4b287ba61aaaaa4955ace739070950d9ca00fe6190497a37f10c2e4afc79112a",
+      "blake3": "2cc7164c57491e286e9577fd0ced8fdbfb53129008581b381bb630f28a4fa398",
+      "updatedAt": "2026-03-24T20:42:30.446Z",
       "signed": true,
       "manifestPath": "manifest.json",
       "signatureAlgorithm": "ed25519",
       "signaturePublicKeyHex": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
-      "signatureHex": "9aaae0ff9e0a3eb5ecf76181da933e407df49a76e1c8033f9b00a33e0f93c18b7fce348b6aaf0ad06d38a694ce697458d45c8d34806625b57e41d1912096df09"
+      "signatureHex": "5872c58197cb5ba78e69719291f5e3886818951c0ce0d4730b7d9b313d8c08c8b13223bcc0042200ef68390b48916584654bcdc708d2bf012a7b12e5187a7606"
     },
     {
       "label": "2025-q2",
@@ -34,15 +34,15 @@
     {
       "label": "current",
       "path": "versions/current/torii.json",
-      "bytes": 417840,
-      "sha256": "a031808941a67ec42dc00c65065d77533ffc628cd6f7effabfe0f91a91113c34",
-      "blake3": "2868fa43faf5051991f983a9e635b4db486b6327e2cd14dc4e8fe295978de207",
-      "updatedAt": "2026-03-24T19:24:30.417Z",
+      "bytes": 395068,
+      "sha256": "4b287ba61aaaaa4955ace739070950d9ca00fe6190497a37f10c2e4afc79112a",
+      "blake3": "2cc7164c57491e286e9577fd0ced8fdbfb53129008581b381bb630f28a4fa398",
+      "updatedAt": "2026-03-24T20:42:30.437Z",
       "signed": true,
       "manifestPath": "versions/current/manifest.json",
       "signatureAlgorithm": "ed25519",
       "signaturePublicKeyHex": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
-      "signatureHex": "9aaae0ff9e0a3eb5ecf76181da933e407df49a76e1c8033f9b00a33e0f93c18b7fce348b6aaf0ad06d38a694ce697458d45c8d34806625b57e41d1912096df09"
+      "signatureHex": "5872c58197cb5ba78e69719291f5e3886818951c0ce0d4730b7d9b313d8c08c8b13223bcc0042200ef68390b48916584654bcdc708d2bf012a7b12e5187a7606"
     }
   ]
 }

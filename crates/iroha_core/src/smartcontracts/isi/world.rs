@@ -9471,25 +9471,30 @@ pub mod isi {
                 }
                 .into());
             }
-            let now_ms = state_transaction.block_unix_timestamp_ms();
-            match crate::sns::active_domain_owner(state_transaction.world(), &canonical_id, now_ms)
-            {
-                Some(owner) if owner == *authority => {}
-                Some(owner) => {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        format!(
-                            "active SNS domain-name lease for `{canonical_id}` is owned by `{owner}`, not `{authority}`"
-                        )
-                        .into(),
-                    ));
-                }
-                None => {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        format!(
-                            "active SNS domain-name lease is required before registering `{canonical_id}`"
-                        )
-                        .into(),
-                    ));
+            if !state_transaction._curr_block.is_genesis() {
+                let now_ms = state_transaction.block_unix_timestamp_ms();
+                match crate::sns::active_domain_owner(
+                    state_transaction.world(),
+                    &canonical_id,
+                    now_ms,
+                ) {
+                    Some(owner) if owner == *authority => {}
+                    Some(owner) => {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            format!(
+                                "active SNS domain-name lease for `{canonical_id}` is owned by `{owner}`, not `{authority}`"
+                            )
+                            .into(),
+                        ));
+                    }
+                    None => {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            format!(
+                                "active SNS domain-name lease is required before registering `{canonical_id}`"
+                            )
+                            .into(),
+                        ));
+                    }
                 }
             }
             let selector =
@@ -11383,7 +11388,7 @@ pub mod isi {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
-            let block = new_dummy_block();
+            let block = new_dummy_block_non_genesis();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
             let (authority, _) = gen_account_in("tenants");
@@ -11396,6 +11401,27 @@ pub mod isi {
             assert!(
                 err.to_string().contains("active SNS domain-name lease"),
                 "unexpected error: {err}"
+            );
+        }
+
+        #[test]
+        fn register_domain_in_genesis_does_not_require_sns_lease() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let (authority, _) = gen_account_in("tenants");
+            let domain_id: DomainId = "leased-genesis.world".parse().expect("domain");
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&authority, &mut stx)
+                .expect("genesis registration should bypass SNS lease gating");
+
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "genesis registration should materialize the domain"
             );
         }
 

@@ -33,7 +33,7 @@ translator: machine-google-reviewed
 - `DomainId`: `name` (ለምሳሌ `wonderland`)።
 - `AccountId`፡ ቀኖናዊ ዶሜናዊ መለያ መለያ በ`AccountAddress` እንደ I105 ብቻ የተመዘገበ። የፓርሰር ግብዓቶች ቀኖናዊ I105 መሆን አለባቸው; የጎራ ቅጥያ (`@domain`)፣ ቀኖናዊ I105 ቃላቶች፣ ተለዋጭ ስሞች፣ ቀኖናዊ ሄክስ ተንታኝ ግብዓት፣ የቆየ `norito:` ክፍያ ጭነቶች፣ እና `uaid:`/`uaid:`/`opaque:` የመለያ ቅጾች ውድቅ ናቸው።
 - `AssetDefinitionId`፡ ቀኖናዊ `unprefixed Base58 address with versioning and checksum` (UUID-v4 ባይት)።
-- `AssetId`: ቀኖናዊ ኮድ በጥሬው `norito:<hex>` (የቆዩ የጽሑፍ ቅጾች በመጀመሪያው መለቀቅ አይደገፉም)።
+- `AssetId`: ቀኖናዊ ኮድ በጥሬው `<asset-definition-id>#<account-id>` (የቆዩ የጽሑፍ ቅጾች በመጀመሪያው መለቀቅ አይደገፉም)።
 - `NftId`፡ `nft$domain` (ለምሳሌ `rose$garden`)።
 - `PeerId`: `public_key` (የአቻ እኩልነት በወል ቁልፍ ነው)።
 
@@ -259,7 +259,7 @@ curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -d '{"alias":"pkr#ubl.sbp"}'
 ```የስደት ማስታወሻ፡-
 - የድሮ `name#domain` የንብረት ትርጉም መታወቂያዎች v1 ውስጥ ተቀባይነት የላቸውም።
-- ለአዝሙድና / ለማቃጠል / ለማስተላለፍ የንብረት መታወቂያዎች ቀኖናዊ `norito:<hex>` ይቀራሉ; እነሱን በ:
+- ለአዝሙድና / ለማቃጠል / ለማስተላለፍ የንብረት መታወቂያዎች ቀኖናዊ `<asset-definition-id>#<account-id>` ይቀራሉ; እነሱን በ:
   - `iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
   - ወይም `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`.
 

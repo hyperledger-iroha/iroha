@@ -3212,6 +3212,271 @@ mod model {
         pub refresh_at_ms: Option<u64>,
     }
 
+    /// Device assertion proof attached to reserve operations and transfer receipts.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineDeviceAttestation {
+        /// Device-bound App Attest / Keystore key identifier.
+        pub key_id: String,
+        /// Monotonic assertion counter supplied by the platform.
+        pub counter: u64,
+        /// Base64-encoded platform assertion blob.
+        pub assertion_base64: String,
+        /// Lowercase hex challenge hash derived from the canonical reserve payload.
+        pub challenge_hash_hex: String,
+        /// Optional full attestation report for setup / top-up / renew binding.
+        #[norito(default)]
+        pub attestation_report_base64: Option<String>,
+        /// Optional iOS team identifier bound into the attestation.
+        #[norito(default)]
+        pub ios_team_id: Option<String>,
+        /// Optional iOS bundle identifier bound into the attestation.
+        #[norito(default)]
+        pub ios_bundle_id: Option<String>,
+        /// Optional iOS environment label bound into the attestation.
+        #[norito(default)]
+        pub ios_environment: Option<String>,
+    }
+
+    /// Issuer-signed policy lease that gates offline spending for one reserve lineage.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineSpendAuthorization {
+        /// Deterministic authorization identifier.
+        pub authorization_id: String,
+        /// Stable reserve lineage identifier.
+        pub reserve_id: String,
+        /// Controller account bound to this authorization.
+        pub account_id: String,
+        /// Device identifier bound to this authorization.
+        pub device_id: String,
+        /// Offline public key bound to this authorization.
+        pub offline_public_key: String,
+        /// Verdict identifier used for revocation snapshots.
+        pub verdict_id: String,
+        /// Maximum spendable reserve balance allowed while this authorization is active.
+        pub max_balance: String,
+        /// Maximum permitted single offline transfer amount.
+        pub max_tx_value: String,
+        /// Issuance timestamp (unix ms).
+        pub issued_at_ms: u64,
+        /// Refresh deadline timestamp (unix ms).
+        pub refresh_at_ms: u64,
+        /// Expiry timestamp (unix ms).
+        pub expires_at_ms: u64,
+        /// Bound device attestation key identifier.
+        pub app_attest_key_id: String,
+        /// Issuer signature over the unsigned authorization payload.
+        pub issuer_signature_base64: String,
+    }
+
+    /// Issuer-signed authoritative reserve anchor returned by Torii.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineReserveState {
+        /// Stable reserve lineage identifier.
+        pub reserve_id: String,
+        /// Controller account bound to this reserve.
+        pub account_id: String,
+        /// Device identifier bound to this reserve.
+        pub device_id: String,
+        /// Offline public key bound to this reserve.
+        pub offline_public_key: String,
+        /// Asset definition tracked by this reserve.
+        pub asset_definition_id: String,
+        /// Total local reserve balance.
+        pub balance: String,
+        /// Portion of the balance that is parked under policy/expiry constraints.
+        pub parked_balance: String,
+        /// Authoritative server revision for this reserve lineage.
+        pub server_revision: u64,
+        /// Canonical state hash anchoring the reserve lineage.
+        pub server_state_hash: String,
+        /// Latest local receipt revision folded into the anchor.
+        pub pending_local_revision: u64,
+        /// Active spend authorization snapshot.
+        pub authorization: OfflineSpendAuthorization,
+        /// Issuer signature over the unsigned reserve-state payload.
+        pub issuer_signature_base64: String,
+    }
+
+    /// Signed reserve envelope returned to clients.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineReserveEnvelope {
+        /// Current reserve anchor.
+        pub reserve_state: OfflineReserveState,
+    }
+
+    /// Signed revocation bundle distributed to wallets for offline deny-list enforcement.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineRevocationBundle {
+        /// Bundle issuance timestamp (unix ms).
+        pub issued_at_ms: u64,
+        /// Bundle expiry timestamp (unix ms).
+        pub expires_at_ms: u64,
+        /// Revoked verdict identifiers encoded as lowercase hex strings.
+        pub verdict_ids: Vec<String>,
+        /// Issuer signature over the unsigned revocation bundle payload.
+        pub issuer_signature_base64: String,
+    }
+
+    /// Signed reserve receipt exchanged directly between offline peers.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineTransferReceipt {
+        /// Wire-format version.
+        pub version: i32,
+        /// Deterministic transfer identifier.
+        pub transfer_id: String,
+        /// Transfer direction relative to the holder of `reserve_id`.
+        pub direction: String,
+        /// Sender or receiver reserve lineage identifier.
+        pub reserve_id: String,
+        /// Controller account of the reserve holder.
+        pub account_id: String,
+        /// Device identifier of the reserve holder.
+        pub device_id: String,
+        /// Offline public key of the reserve holder.
+        pub offline_public_key: String,
+        /// Total balance before applying the receipt.
+        pub pre_balance: String,
+        /// Total balance after applying the receipt.
+        pub post_balance: String,
+        /// Parked balance before applying the receipt.
+        pub pre_parked_balance: String,
+        /// Parked balance after applying the receipt.
+        pub post_parked_balance: String,
+        /// Local state hash before applying the receipt.
+        pub pre_state_hash: String,
+        /// Local state hash after applying the receipt.
+        pub post_state_hash: String,
+        /// Monotonic local revision after applying the receipt.
+        pub local_revision: u64,
+        /// Counterparty reserve lineage identifier.
+        pub counterparty_reserve_id: String,
+        /// Counterparty controller account identifier.
+        pub counterparty_account_id: String,
+        /// Counterparty device identifier.
+        pub counterparty_device_id: String,
+        /// Counterparty offline public key.
+        pub counterparty_offline_public_key: String,
+        /// Transfer amount.
+        pub amount: String,
+        /// Sender authorization snapshot.
+        #[norito(default)]
+        pub authorization: Option<OfflineSpendAuthorization>,
+        /// Device attestation snapshot bound to this receipt.
+        pub attestation: OfflineDeviceAttestation,
+        /// Optional outgoing payload used to prove source continuity to the receiver.
+        #[norito(default)]
+        pub source_payload: Option<String>,
+        /// Sender signature over the canonical unsigned receipt payload.
+        pub sender_signature_base64: String,
+        /// Receipt creation timestamp (unix ms).
+        pub created_at_ms: u64,
+    }
+
+    /// Outgoing transfer payload shared with a receiver for continuity validation.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineOutgoingTransferPayload {
+        /// Wire-format version.
+        pub version: i32,
+        /// Latest authoritative reserve anchor known to the sender.
+        pub anchor: OfflineReserveState,
+        /// Optional ancestry receipts bridging from the anchor to the current sender state.
+        #[norito(default)]
+        pub ancestry_receipts: Vec<OfflineTransferReceipt>,
+        /// The outgoing receipt being handed to the receiver.
+        pub receipt: OfflineTransferReceipt,
+    }
+
+    /// Persisted App Attest binding captured during reserve setup.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineAppleAppAttestBinding {
+        /// Original App Attest report used to bind the device lineage.
+        pub attestation_report_base64: String,
+        /// Expected iOS team identifier.
+        pub ios_team_id: String,
+        /// Expected iOS bundle identifier.
+        pub ios_bundle_id: String,
+        /// Expected iOS environment label.
+        pub ios_environment: String,
+    }
+
+    /// Shared reserve record stored in the Iroha world state.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineReserveRecord {
+        /// Current authoritative reserve anchor.
+        pub reserve_state: OfflineReserveState,
+        /// Device attestation key bound to this reserve lineage.
+        pub app_attest_key_id: String,
+        /// Highest attestation counter observed per device key identifier.
+        #[norito(default)]
+        pub counter_book: BTreeMap<String, u64>,
+        /// Transfer ids already folded into the reserve anchor.
+        #[norito(default)]
+        pub seen_transfer_ids: BTreeSet<String>,
+        /// Sender-state revisions already folded into the reserve anchor.
+        #[norito(default)]
+        pub seen_sender_states: BTreeSet<String>,
+        /// Persisted iOS App Attest binding, when applicable.
+        #[norito(default)]
+        pub apple_app_attest_binding: Option<OfflineAppleAppAttestBinding>,
+    }
+
+    /// Completed reserve operation result keyed by `kind:operation_id`.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineReserveOperationResult {
+        /// Stable operation key (`kind:operation_id`).
+        pub operation_key: String,
+        /// Operation kind (`topup`, `renew`, `sync`, `defund`).
+        pub kind: String,
+        /// Request hash bound to the original client request.
+        pub request_hash_hex: String,
+        /// Reserve lineage identifier mutated by this operation.
+        pub reserve_id: String,
+        /// Reserve envelope returned after the successful mutation.
+        pub envelope: OfflineReserveEnvelope,
+        /// Completion timestamp (unix ms).
+        pub completed_at_ms: u64,
+    }
+
     /// Ledger-maintained monotonic counter checkpoints per platform.
     #[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(

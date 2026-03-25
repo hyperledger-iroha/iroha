@@ -23,7 +23,7 @@ from iroha_torii_client import (  # noqa: E402  (import depends on sys.path muta
 )
 
 CANONICAL_OWNER = "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL"
-CANONICAL_ASSET_ID = "norito:00112233445566778899aabbccddeeff"
+CANONICAL_ASSET_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"
 
 
 class StubResponse(requests.Response):

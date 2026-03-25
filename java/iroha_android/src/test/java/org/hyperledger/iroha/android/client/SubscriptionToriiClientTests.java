@@ -31,6 +31,7 @@ public final class SubscriptionToriiClientTests {
   public static void main(final String[] args) {
     listPlansParsesResponse();
     createPlanBuildsBody();
+    createPlanRejectsInsecureTransportForPrivateKeyBody();
     planJsonBuilderParses();
     listSubscriptionsParsesResponse();
     createSubscriptionBuildsBody();
@@ -131,6 +132,33 @@ public final class SubscriptionToriiClientTests {
     assert "deadbeef".equals(body.get("private_key")) : "private key mismatch";
     assert "aws_compute#commerce".equals(body.get("plan_id")) : "plan id missing";
     assert body.get("plan") instanceof Map : "plan missing";
+  }
+
+  private static void createPlanRejectsInsecureTransportForPrivateKeyBody() {
+    final RecordingExecutor executor = new RecordingExecutor();
+    final SubscriptionToriiClient client =
+        SubscriptionToriiClient.builder()
+            .executor(executor)
+            .baseUri(URI.create("http://example.com"))
+            .build();
+    final Map<String, Object> plan = new LinkedHashMap<>();
+    plan.put("kind", "fixed");
+    try {
+      client
+          .createSubscriptionPlan(
+              SubscriptionPlanCreateRequest.builder()
+                  .authority("aws@commerce")
+                  .privateKey("deadbeef")
+                  .planId("aws_compute#commerce")
+                  .plan(plan)
+                  .build())
+          .join();
+    } catch (final IllegalArgumentException expected) {
+      assert expected.getMessage().contains("refuses insecure transport")
+          : "expected insecure transport rejection";
+      return;
+    }
+    throw new AssertionError("Expected insecure subscription plan creation to be rejected");
   }
 
   private static void planJsonBuilderParses() {

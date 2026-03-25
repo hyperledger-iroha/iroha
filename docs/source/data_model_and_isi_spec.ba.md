@@ -30,7 +30,7 @@ translator: machine-google-reviewed
 - `AssetDefinitionId` — канонический `unprefixed Base58 address with versioning and checksum` (UUID-v4 байты). Билдәләү: I18НИ00000057Х. `alias` литералдары `<name>#<domain>.<dataspace>` йәки `<name>#<dataspace>` булырға тейеш, `<name>` активты билдәләү исеменә тиң. Код: И18НИ00000062Х.
 
   - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`, where `status` is `permanent`, `leased_active`, `leased_grace`, or `expired_pending_cleanup`. Alias selectors resolve against the latest committed block creation time and stop resolving after grace even before sweep removes stale bindings.
-- `AssetId`: канонлы кодланған литераль `norito:<hex>` (беренсе версияла мираҫ текст формалары ярҙам итмәй).- `NftId` — SoraFS. НФТ: I18НИ00000067Х. Код: `crates/iroha_data_model/src/nft.rs`.
+- `AssetId`: канонлы кодланған литераль `<asset-definition-id>#<account-id>` (беренсе версияла мираҫ текст формалары ярҙам итмәй).- `NftId` — SoraFS. НФТ: I18НИ00000067Х. Код: `crates/iroha_data_model/src/nft.rs`.
 - `RoleId` — Norito. Роль: `{ id, permissions: BTreeSet<Permission> }` с строителем `NewRole { inner: Role, grant_to }`. Код: И18НИ00000073Х.
 - И18НИ00000074Х — И18НИ00000075Х. Код: `crates/iroha_data_model/src/permission.rs`.
 - `PeerId`/`Peer` — тиңдәштәрҙең шәхесе (асыҡ асҡыс) һәм адрес. Код: `crates/iroha_data_model/src/peer.rs`.
@@ -206,7 +206,7 @@ translator: machine-google-reviewed
 
 Миграция иҫкәрмәһе:
 - `name#domain` тексты актив-аныҡлау идентификаторҙары беренсе релизда аңлы рәүештә ярҙам итмәй.
-- Активтар идентификаторҙары ҡойма/яндырыу/тапшырыу сиктәрендә канон `norito:<hex>` ҡала; 18НИ00000427Х йәки 18НИ00000429Х плюс 18НИ00000430Х менән ҡулланыу.
+- Активтар идентификаторҙары ҡойма/яндырыу/тапшырыу сиктәрендә канон `<asset-definition-id>#<account-id>` ҡала; 18НИ00000427Х йәки 18НИ00000429Х плюс 18НИ00000430Х менән ҡулланыу.
 
 ---
 

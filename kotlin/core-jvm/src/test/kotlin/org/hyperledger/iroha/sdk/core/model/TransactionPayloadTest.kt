@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.sdk.core.model
 
+import org.hyperledger.iroha.sdk.address.AccountAddress
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -15,7 +16,7 @@ class TransactionPayloadTest {
     fun `constructor applies defaults`() {
         val payload = defaultPayload()
         assertEquals("00000000", payload.chainId)
-        assertEquals("anonymous@wonderland", payload.authority)
+        assertEquals(sampleAuthority(0x00), payload.authority)
         assertEquals(1000L, payload.creationTimeMs)
         assertEquals(null, payload.timeToLiveMs)
         assertEquals(null, payload.nonce)
@@ -121,13 +122,13 @@ class TransactionPayloadTest {
     fun `copy preserves values and allows overrides`() {
         val original = TransactionPayload(
             chainId = "chain1",
-            authority = "user@domain",
+            authority = sampleAuthority(0x21),
             creationTimeMs = 2000L,
             nonce = 7,
         )
         val copied = original.copy(chainId = "chain2", nonce = 10)
         assertEquals("chain2", copied.chainId)
-        assertEquals("user@domain", copied.authority)
+        assertEquals(sampleAuthority(0x21), copied.authority)
         assertEquals(2000L, copied.creationTimeMs)
         assertEquals(10, copied.nonce)
     }
@@ -145,7 +146,7 @@ class TransactionPayloadTest {
         val executable = Executable.ivm(byteArrayOf(1, 2, 3))
         val a = TransactionPayload(
             chainId = "c",
-            authority = "a@b",
+            authority = sampleAuthority(0x31),
             creationTimeMs = 100,
             executable = executable,
             timeToLiveMs = 500,
@@ -154,7 +155,7 @@ class TransactionPayloadTest {
         )
         val b = TransactionPayload(
             chainId = "c",
-            authority = "a@b",
+            authority = sampleAuthority(0x31),
             creationTimeMs = 100,
             executable = executable,
             timeToLiveMs = 500,
@@ -171,4 +172,8 @@ class TransactionPayloadTest {
         val b = TransactionPayload(chainId = "c2", creationTimeMs = 100)
         assertNotEquals(a, b)
     }
+
+    private fun sampleAuthority(fill: Int): String = AccountAddress
+        .fromAccount(ByteArray(32) { fill.toByte() }, "ed25519")
+        .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
 }

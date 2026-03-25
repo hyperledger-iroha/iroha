@@ -473,12 +473,15 @@ public final class OfflineToriiClient {
 
   private TransportRequest buildGetRequest(final String path, final Map<String, String> query) {
     final URI target = appendQuery(resolvePath(path), query);
+    final Map<String, String> headers = mergeHeaders();
+    TransportSecurity.requireHttpRequestAllowed(
+        "OfflineToriiClient", baseUri, target, headers, null);
     final TransportRequest.Builder builder =
         TransportRequest.builder()
             .setUri(target)
             .setMethod("GET")
             .setTimeout(timeout);
-    mergeHeaders().forEach(builder::addHeader);
+    headers.forEach(builder::addHeader);
     return builder.build();
   }
 
@@ -498,13 +501,16 @@ public final class OfflineToriiClient {
 
   private TransportRequest buildPostRequest(final String path, final byte[] body) {
     final URI target = resolvePath(path);
+    final Map<String, String> headers = mergeHeaders();
+    TransportSecurity.requireHttpRequestAllowed(
+        "OfflineToriiClient", baseUri, target, headers, body);
     final TransportRequest.Builder builder =
         TransportRequest.builder()
             .setUri(target)
             .setMethod("POST")
             .setTimeout(timeout)
             .setBody(body);
-    mergeHeaders().forEach(builder::addHeader);
+    headers.forEach(builder::addHeader);
     builder.addHeader("Content-Type", "application/json");
     return builder.build();
   }

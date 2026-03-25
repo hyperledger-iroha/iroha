@@ -26,6 +26,13 @@ internal object ToriiRequestBuilder {
         } catch (ex: NoritoException) {
             throw IllegalStateException("Failed to encode signed transaction", ex)
         }
+        TransportSecurity.requireHttpRequestAllowed(
+            "HttpClientTransport",
+            baseUri,
+            target,
+            extraHeaders,
+            norito,
+        )
         val builder = TransportRequest.builder()
             .setUri(target)
             .setMethod("POST")
@@ -47,6 +54,13 @@ internal object ToriiRequestBuilder {
         val normalizedHash = hashHex.trim()
         require(normalizedHash.isNotEmpty()) { "hashHex must not be blank" }
         val target = resolve(baseUri, "$STATUS_PATH?hash=$normalizedHash")
+        TransportSecurity.requireHttpRequestAllowed(
+            "HttpClientTransport",
+            baseUri,
+            target,
+            extraHeaders,
+            null,
+        )
         val builder = TransportRequest.builder()
             .setUri(target)
             .setMethod("GET")

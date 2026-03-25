@@ -31,7 +31,7 @@ fn asset_id_of_matches_parse() {
     let def = AssetDefinitionId::of(domain, "rose".parse().unwrap());
     let via_of = AssetId::of(def.clone(), account);
 
-    let parsed = AssetId::parse_encoded(&via_of.to_string()).unwrap();
+    let parsed: AssetId = via_of.to_string().parse().unwrap();
 
     assert_eq!(parsed, via_of);
     assert_eq!(format!("{parsed}"), format!("{via_of}"));

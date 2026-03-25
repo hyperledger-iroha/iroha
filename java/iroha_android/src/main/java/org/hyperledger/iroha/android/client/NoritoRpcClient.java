@@ -114,11 +114,14 @@ public final class NoritoRpcClient {
     final NoritoRpcRequestOptions resolved =
         options != null ? options : NoritoRpcRequestOptions.defaultOptions();
     final URI target = appendQueryParameters(resolvePath(path), resolved.queryParameters());
+    final Map<String, String> mergedHeaders = mergeHeaders(resolved);
+    TransportSecurity.requireHttpRequestAllowed(
+        "NoritoRpcClient", baseUri, target, mergedHeaders, payload);
     final TransportRequest.Builder builder =
         TransportRequest.builder().setUri(target).setMethod(resolved.method());
     final Duration requestTimeout = pickTimeout(resolved.timeout());
     builder.setTimeout(requestTimeout);
-    mergeHeaders(resolved).forEach(builder::addHeader);
+    mergedHeaders.forEach(builder::addHeader);
     final byte[] requestPayload = payload == null ? null : payload.clone();
     builder.setBody(requestPayload);
     final TransportRequest request = builder.build();

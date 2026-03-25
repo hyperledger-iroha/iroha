@@ -121,7 +121,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             quic_datagram_send_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
             scion: A::ScionConfig::default(),
             tls_enabled: false,
-            tls_fallback_to_plain: true,
+            tls_fallback_to_plain: false,
             tls_listen_address: None,
             tls_inbound_only: false,
             prefer_ws_fallback: false,

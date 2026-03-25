@@ -8631,7 +8631,7 @@ pub struct Network {
     /// When TLS-over-TCP is enabled, fall back to plain TCP if the TLS dial fails.
     ///
     /// Set to `false` to enforce TLS-only outbound P2P dials when `tls_enabled=true`.
-    #[config(default = "true")]
+    #[config(default = "false")]
     pub tls_fallback_to_plain: bool,
     /// Optional P2P TLS listener address (host:port). If set and TLS is enabled,
     /// node will accept inbound TLS connections on this address.
@@ -14217,7 +14217,7 @@ pub struct ToriiPeerGeo {
     /// Enable geo lookups for peer telemetry.
     #[config(default = "defaults::torii::peer_geo::ENABLED")]
     pub enabled: bool,
-    /// Optional geo endpoint (ip-api compatible).
+    /// Optional geo endpoint; required and HTTPS-only when lookups are enabled.
     pub endpoint: Option<Url>,
 }
 
@@ -14234,7 +14234,7 @@ impl ToriiPeerGeo {
     fn parse(self) -> actual::ToriiPeerGeo {
         actual::ToriiPeerGeo {
             enabled: self.enabled,
-            endpoint: self.endpoint.or(defaults::torii::peer_geo::endpoint()),
+            endpoint: self.endpoint,
         }
     }
 }
@@ -14259,13 +14259,13 @@ mod torii_peer_geo_tests {
     }
 
     #[test]
-    fn torii_peer_geo_parse_uses_default_endpoint_when_missing() {
+    fn torii_peer_geo_parse_preserves_missing_endpoint() {
         let parsed = ToriiPeerGeo {
             enabled: true,
             endpoint: None,
         }
         .parse();
-        assert_eq!(parsed.endpoint, defaults::torii::peer_geo::endpoint());
+        assert_eq!(parsed.endpoint, None);
     }
 }
 
@@ -15036,6 +15036,9 @@ fn parse_operator_webauthn_algorithm(value: &str) -> actual::OperatorWebAuthnAlg
 /// Transport-specific Torii configuration (Norito-RPC rollout, streaming knobs).
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize, Default)]
 pub struct ToriiTransport {
+    /// Trusted proxy CIDRs allowed to assert the canonical remote IP header.
+    #[config(default = "defaults::torii::transport::trusted_proxy_cidrs()")]
+    pub trusted_proxy_cidrs: Vec<String>,
     /// Norito-RPC transport rollout settings.
     #[config(nested)]
     pub norito_rpc: ToriiNoritoRpcTransport,

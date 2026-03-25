@@ -60,10 +60,18 @@ class NoritoRpcClient private constructor(builder: Builder) {
     fun call(path: String, payload: ByteArray?, options: NoritoRpcRequestOptions?): ByteArray {
         val resolved = options ?: NoritoRpcRequestOptions.defaultOptions()
         val target = appendQueryParameters(resolvePath(path), resolved.queryParameters)
+        val mergedHeaders = mergeHeaders(resolved)
+        TransportSecurity.requireHttpRequestAllowed(
+            "NoritoRpcClient",
+            baseUri,
+            target,
+            mergedHeaders,
+            payload,
+        )
         val requestBuilder = TransportRequest.builder().setUri(target).setMethod(resolved.method)
         val requestTimeout = pickTimeout(resolved.timeout)
         requestBuilder.setTimeout(requestTimeout)
-        mergeHeaders(resolved).forEach { (k, v) -> requestBuilder.addHeader(k, v) }
+        mergedHeaders.forEach { (k, v) -> requestBuilder.addHeader(k, v) }
         val requestPayload = payload?.clone()
         requestBuilder.setBody(requestPayload)
         val request = requestBuilder.build()

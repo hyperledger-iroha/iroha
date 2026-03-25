@@ -248,6 +248,30 @@ impl From<crate::isi::soracloud::RollbackSoracloudService> for InstructionBox {
     }
 }
 
+impl From<crate::isi::soracloud::SetSoracloudServiceConfig> for InstructionBox {
+    fn from(i: crate::isi::soracloud::SetSoracloudServiceConfig) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::DeleteSoracloudServiceConfig> for InstructionBox {
+    fn from(i: crate::isi::soracloud::DeleteSoracloudServiceConfig) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::SetSoracloudServiceSecret> for InstructionBox {
+    fn from(i: crate::isi::soracloud::SetSoracloudServiceSecret) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::DeleteSoracloudServiceSecret> for InstructionBox {
+    fn from(i: crate::isi::soracloud::DeleteSoracloudServiceSecret) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
 impl From<crate::isi::soracloud::MutateSoracloudState> for InstructionBox {
     fn from(i: crate::isi::soracloud::MutateSoracloudState) -> Self {
         InstructionBox(Box::new(i))
@@ -664,6 +688,18 @@ impl From<crate::isi::domain_link::UnlinkAccountDomain> for InstructionBox {
 }
 
 // Allow direct boxing of offline allowance instructions.
+impl From<crate::isi::offline::RegisterOfflineReserve> for InstructionBox {
+    fn from(i: crate::isi::offline::RegisterOfflineReserve) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::offline::CommitOfflineReserveOperation> for InstructionBox {
+    fn from(i: crate::isi::offline::CommitOfflineReserveOperation) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
 impl From<crate::isi::offline::RegisterOfflineAllowance> for InstructionBox {
     fn from(i: crate::isi::offline::RegisterOfflineAllowance) -> Self {
         InstructionBox(Box::new(i))

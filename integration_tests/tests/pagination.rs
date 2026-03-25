@@ -119,7 +119,6 @@ fn pagination_asset_definition_ids_are_canonical_base58_literals() {
     assert_eq!(ids.len(), 10);
     for id in ids {
         let literal = id.to_string();
-        assert!(!literal.starts_with("aid:"));
         assert!(!literal.contains(':'));
         assert_eq!(literal.parse::<AssetDefinitionId>().expect("canonical"), id);
     }

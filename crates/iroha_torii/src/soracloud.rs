@@ -43,26 +43,28 @@ use iroha_data_model::{
         CiphertextQueryMetadataLevelV1, CiphertextQueryResponseV1, CiphertextQueryResultItemV1,
         CiphertextQuerySpecV1, DecryptionAuthorityPolicyV1, DecryptionRequestV1,
         FheExecutionPolicyV1, FheGovernanceBundleV1, FheJobSpecV1, FheParamSetV1,
-        SoraAgentApartmentActionV1, SoraAgentApartmentAuditEventV1, SoraAgentApartmentRecordV1,
-        SoraAgentArtifactAllowRuleV1, SoraAgentAutonomyRunRecordV1, SoraAgentMailboxMessageV1,
-        SoraAgentRuntimeStatusV1, SoraCertifiedResponsePolicyV1, SoraContainerRuntimeV1,
-        SoraDecryptionRequestRecordV1, SoraDeploymentBundleV1, SoraHfBackendFamilyV1,
-        SoraHfModelFormatV1, SoraHfPlacementRecordV1, SoraHfResourceProfileV1,
-        SoraHfSharedLeaseActionV1, SoraHfSharedLeaseAuditEventV1, SoraHfSharedLeaseMemberStatusV1,
-        SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1, SoraHfSharedLeaseStatusV1,
-        SoraHfSourceRecordV1, SoraHfSourceStatusV1, SoraModelArtifactActionV1,
-        SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1, SoraModelHostCapabilityRecordV1,
-        SoraModelPrivacyModeV1, SoraModelProvenanceKindV1, SoraModelRegistryV1,
-        SoraModelWeightActionV1, SoraModelWeightAuditEventV1, SoraModelWeightVersionRecordV1,
-        SoraNetworkPolicyV1, SoraPrivateCompileProfileV1, SoraPrivateInferenceCheckpointV1,
+        SecretEnvelopeEncryptionV1, SecretEnvelopeV1, SoraAgentApartmentActionV1,
+        SoraAgentApartmentAuditEventV1, SoraAgentApartmentRecordV1, SoraAgentArtifactAllowRuleV1,
+        SoraAgentAutonomyRunRecordV1, SoraAgentMailboxMessageV1, SoraAgentRuntimeStatusV1,
+        SoraCertifiedResponsePolicyV1, SoraContainerRuntimeV1, SoraDecryptionRequestRecordV1,
+        SoraDeploymentBundleV1, SoraHfBackendFamilyV1, SoraHfModelFormatV1,
+        SoraHfPlacementRecordV1, SoraHfResourceProfileV1, SoraHfSharedLeaseActionV1,
+        SoraHfSharedLeaseAuditEventV1, SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseMemberV1,
+        SoraHfSharedLeasePoolV1, SoraHfSharedLeaseStatusV1, SoraHfSourceRecordV1,
+        SoraHfSourceStatusV1, SoraModelArtifactActionV1, SoraModelArtifactAuditEventV1,
+        SoraModelArtifactRecordV1, SoraModelHostCapabilityRecordV1, SoraModelPrivacyModeV1,
+        SoraModelProvenanceKindV1, SoraModelRegistryV1, SoraModelWeightActionV1,
+        SoraModelWeightAuditEventV1, SoraModelWeightVersionRecordV1, SoraNetworkPolicyV1,
+        SoraPrivateCompileProfileV1, SoraPrivateInferenceCheckpointV1,
         SoraPrivateInferenceSessionStatusV1, SoraPrivateInferenceSessionV1, SoraRolloutStageV1,
-        SoraRuntimeReceiptV1, SoraServiceAuditEventV1, SoraServiceDeploymentStateV1,
-        SoraServiceHandlerClassV1, SoraServiceLifecycleActionV1, SoraServiceRolloutStateV1,
-        SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1,
-        SoraStateMutationOperationV1, SoraTrainingJobActionV1, SoraTrainingJobAuditEventV1,
-        SoraTrainingJobRecordV1, SoraTrainingJobStatusV1, SoraUploadedModelBindingV1,
-        SoraUploadedModelBundleV1, SoraUploadedModelChunkV1,
-        SoraUploadedModelEncryptionRecipientV1, encode_agent_artifact_allow_provenance_payload,
+        SoraRuntimeReceiptV1, SoraServiceAuditEventV1, SoraServiceConfigEntryV1,
+        SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1, SoraServiceLifecycleActionV1,
+        SoraServiceRolloutStateV1, SoraServiceSecretEntryV1, SoraStateBindingV1,
+        SoraStateEncryptionV1, SoraStateMutabilityV1, SoraStateMutationOperationV1,
+        SoraTrainingJobActionV1, SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1,
+        SoraTrainingJobStatusV1, SoraUploadedModelBindingV1, SoraUploadedModelBundleV1,
+        SoraUploadedModelChunkV1, SoraUploadedModelEncryptionRecipientV1,
+        encode_agent_artifact_allow_provenance_payload,
         encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
         encode_agent_lease_renew_provenance_payload, encode_agent_message_ack_provenance_payload,
         encode_agent_message_send_provenance_payload,
@@ -70,7 +72,9 @@ use iroha_data_model::{
         encode_agent_wallet_approve_provenance_payload,
         encode_agent_wallet_spend_provenance_payload, encode_bundle_provenance_payload,
         encode_ciphertext_query_provenance_payload, encode_decryption_request_provenance_payload,
-        encode_fhe_job_run_provenance_payload, encode_hf_shared_lease_join_provenance_payload,
+        encode_delete_service_config_provenance_payload,
+        encode_delete_service_secret_provenance_payload, encode_fhe_job_run_provenance_payload,
+        encode_hf_shared_lease_join_provenance_payload,
         encode_hf_shared_lease_leave_provenance_payload,
         encode_hf_shared_lease_renew_provenance_payload,
         encode_model_artifact_register_provenance_payload,
@@ -83,7 +87,8 @@ use iroha_data_model::{
         encode_private_compile_profile_provenance_payload,
         encode_private_inference_output_release_provenance_payload,
         encode_private_inference_start_provenance_payload, encode_rollback_provenance_payload,
-        encode_rollout_provenance_payload, encode_state_mutation_provenance_payload,
+        encode_rollout_provenance_payload, encode_set_service_config_provenance_payload,
+        encode_set_service_secret_provenance_payload, encode_state_mutation_provenance_payload,
         encode_training_job_checkpoint_provenance_payload,
         encode_training_job_retry_provenance_payload, encode_training_job_start_provenance_payload,
         encode_uploaded_model_allow_provenance_payload,
@@ -93,6 +98,7 @@ use iroha_data_model::{
     },
     sorafs::pin_registry::StorageClass,
 };
+use iroha_primitives::json::Json;
 use mv::storage::StorageReadOnly;
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 #[cfg(test)]
@@ -159,6 +165,8 @@ pub(crate) enum SoracloudAction {
     Deploy,
     Upgrade,
     Rollback,
+    ConfigMutation,
+    SecretMutation,
     StateMutation,
     FheJobRun,
     DecryptionRequest,
@@ -341,6 +349,10 @@ enum MutationMode {
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 pub(crate) struct SignedBundleRequest {
     pub bundle: SoraDeploymentBundleV1,
+    #[norito(default)]
+    pub initial_service_configs: BTreeMap<String, Json>,
+    #[norito(default)]
+    pub initial_service_secrets: BTreeMap<String, SecretEnvelopeV1>,
     pub provenance: ManifestProvenance,
     #[norito(default)]
     pub authority: Option<AccountId>,
@@ -397,6 +409,72 @@ pub(crate) struct StateMutationRequest {
 #[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
 pub(crate) struct SignedStateMutationRequest {
     pub payload: StateMutationRequest,
+    pub provenance: ManifestProvenance,
+    #[norito(default)]
+    pub authority: Option<AccountId>,
+    #[norito(default)]
+    pub private_key: Option<ExposedPrivateKey>,
+}
+
+#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct ServiceConfigSetRequest {
+    pub service_name: String,
+    pub config_name: String,
+    pub value_json: Json,
+}
+
+#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct SignedServiceConfigSetRequest {
+    pub payload: ServiceConfigSetRequest,
+    pub provenance: ManifestProvenance,
+    #[norito(default)]
+    pub authority: Option<AccountId>,
+    #[norito(default)]
+    pub private_key: Option<ExposedPrivateKey>,
+}
+
+#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct ServiceConfigDeleteRequest {
+    pub service_name: String,
+    pub config_name: String,
+}
+
+#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct SignedServiceConfigDeleteRequest {
+    pub payload: ServiceConfigDeleteRequest,
+    pub provenance: ManifestProvenance,
+    #[norito(default)]
+    pub authority: Option<AccountId>,
+    #[norito(default)]
+    pub private_key: Option<ExposedPrivateKey>,
+}
+
+#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct ServiceSecretSetRequest {
+    pub service_name: String,
+    pub secret_name: String,
+    pub secret: SecretEnvelopeV1,
+}
+
+#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct SignedServiceSecretSetRequest {
+    pub payload: ServiceSecretSetRequest,
+    pub provenance: ManifestProvenance,
+    #[norito(default)]
+    pub authority: Option<AccountId>,
+    #[norito(default)]
+    pub private_key: Option<ExposedPrivateKey>,
+}
+
+#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct ServiceSecretDeleteRequest {
+    pub service_name: String,
+    pub secret_name: String,
+}
+
+#[derive(Clone, Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct SignedServiceSecretDeleteRequest {
+    pub payload: ServiceSecretDeleteRequest,
     pub provenance: ManifestProvenance,
     #[norito(default)]
     pub authority: Option<AccountId>,
@@ -1104,6 +1182,122 @@ pub(crate) struct StateMutationResponse {
     pub signed_by: String,
 }
 
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    NoritoDeserialize,
+    NoritoSerialize,
+)]
+#[norito(tag = "operation", content = "value")]
+pub(crate) enum ServiceMaterialMutationOperation {
+    Upsert,
+    Delete,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+pub(crate) struct ServiceConfigMutationResponse {
+    pub action: SoracloudAction,
+    pub service_name: String,
+    pub config_name: String,
+    pub operation: ServiceMaterialMutationOperation,
+    pub sequence: u64,
+    pub current_version: String,
+    pub config_generation: u64,
+    pub config_entry_count: u32,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub value_hash: Option<Hash>,
+    pub audit_event_count: u32,
+    pub signed_by: String,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+pub(crate) struct ServiceSecretMutationResponse {
+    pub action: SoracloudAction,
+    pub service_name: String,
+    pub secret_name: String,
+    pub operation: ServiceMaterialMutationOperation,
+    pub sequence: u64,
+    pub current_version: String,
+    pub secret_generation: u64,
+    pub secret_entry_count: u32,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub encryption: Option<SecretEnvelopeEncryptionV1>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub key_id: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub key_version: Option<u32>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub commitment: Option<Hash>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub ciphertext_bytes: Option<u64>,
+    pub audit_event_count: u32,
+    pub signed_by: String,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct ServiceConfigStatusQuery {
+    pub service_name: String,
+    #[norito(default)]
+    pub config_name: Option<String>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+pub(crate) struct ServiceConfigStatusEntry {
+    pub config_name: String,
+    pub value_hash: Hash,
+    pub value_json: norito::json::Value,
+    pub last_update_sequence: u64,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+pub(crate) struct ServiceConfigStatusResponse {
+    pub schema_version: u16,
+    pub service_name: String,
+    pub current_version: String,
+    pub config_generation: u64,
+    pub config_entry_count: u32,
+    pub configs: Vec<ServiceConfigStatusEntry>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoDeserialize, NoritoSerialize)]
+pub(crate) struct ServiceSecretStatusQuery {
+    pub service_name: String,
+    #[norito(default)]
+    pub secret_name: Option<String>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+pub(crate) struct ServiceSecretStatusEntry {
+    pub secret_name: String,
+    pub encryption: SecretEnvelopeEncryptionV1,
+    pub key_id: String,
+    pub key_version: u32,
+    pub commitment: Hash,
+    pub ciphertext_bytes: u64,
+    pub last_update_sequence: u64,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+pub(crate) struct ServiceSecretStatusResponse {
+    pub schema_version: u16,
+    pub service_name: String,
+    pub current_version: String,
+    pub secret_generation: u64,
+    pub secret_entry_count: u32,
+    pub secrets: Vec<ServiceSecretStatusEntry>,
+}
+
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 pub(crate) struct FheJobRunResponse {
     pub action: SoracloudAction,
@@ -1681,6 +1875,14 @@ pub(crate) struct ControlPlaneServiceSnapshot {
     pub current_version: String,
     pub revision_count: u32,
     #[norito(default)]
+    pub config_generation: u64,
+    #[norito(default)]
+    pub secret_generation: u64,
+    #[norito(default)]
+    pub config_entry_count: u32,
+    #[norito(default)]
+    pub secret_entry_count: u32,
+    #[norito(default)]
     pub latest_revision: Option<ControlPlaneServiceRevision>,
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -1782,6 +1984,12 @@ pub(crate) struct ControlPlaneAuditEvent {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub state_key: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub config_name: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub secret_name: Option<String>,
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub governance_tx_hash: Option<Hash>,
@@ -3189,7 +3397,7 @@ fn required_generated_bundle_provenance(
             "generated_service_provenance is required when deploying a new HF-generated service",
         )
     })?;
-    let payload = encode_bundle_signature_payload(bundle)?;
+    let payload = encode_bundle_signature_payload(bundle, &BTreeMap::new(), &BTreeMap::new())?;
     verify_auxiliary_provenance_payload(
         signer,
         provenance,
@@ -3296,6 +3504,8 @@ fn ensure_hf_generated_service_instruction(
     Ok(Some(InstructionBox::from(
         isi::soracloud::DeploySoracloudService {
             bundle: bundle.clone(),
+            initial_service_configs: BTreeMap::new(),
+            initial_service_secrets: BTreeMap::new(),
             provenance,
         },
     )))
@@ -3928,6 +4138,8 @@ fn soracloud_action_label(action: SoracloudAction) -> &'static str {
         SoracloudAction::Deploy => "deploy",
         SoracloudAction::Upgrade => "upgrade",
         SoracloudAction::Rollback => "rollback",
+        SoracloudAction::ConfigMutation => "config_mutation",
+        SoracloudAction::SecretMutation => "secret_mutation",
         SoracloudAction::StateMutation => "state_mutation",
         SoracloudAction::FheJobRun => "fhe_job_run",
         SoracloudAction::DecryptionRequest => "decryption_request",
@@ -3949,17 +4161,23 @@ fn audit_event_leaf_hash(event: &ControlPlaneAuditEvent) -> Hash {
             event.container_manifest_hash,
         ),
         (
-            event.binding_name.as_deref(),
-            event.state_key.as_deref(),
-            event.governance_tx_hash,
-            event.rollout_handle.as_deref(),
-            event.policy_name.as_deref(),
-            event.policy_snapshot_hash,
-            event.jurisdiction_tag.as_deref(),
-            event.consent_evidence_hash,
-            event.break_glass,
-            event.break_glass_reason.as_deref(),
-            event.signed_by.as_str(),
+            (
+                event.binding_name.as_deref(),
+                event.state_key.as_deref(),
+                event.config_name.as_deref(),
+                event.secret_name.as_deref(),
+                event.governance_tx_hash,
+                event.rollout_handle.as_deref(),
+            ),
+            (
+                event.policy_name.as_deref(),
+                event.policy_snapshot_hash,
+                event.jurisdiction_tag.as_deref(),
+                event.consent_evidence_hash,
+                event.break_glass,
+                event.break_glass_reason.as_deref(),
+                event.signed_by.as_str(),
+            ),
         ),
     )))
 }
@@ -4025,7 +4243,11 @@ fn build_ciphertext_inclusion_proof(
 }
 
 fn verify_bundle_signature(request: &SignedBundleRequest) -> Result<(), SoracloudError> {
-    let payload = encode_bundle_signature_payload(&request.bundle)?;
+    let payload = encode_bundle_signature_payload(
+        &request.bundle,
+        &request.initial_service_configs,
+        &request.initial_service_secrets,
+    )?;
     request
         .provenance
         .signature
@@ -4038,9 +4260,15 @@ fn verify_bundle_signature(request: &SignedBundleRequest) -> Result<(), Soraclou
 
 fn encode_bundle_signature_payload(
     bundle: &SoraDeploymentBundleV1,
+    initial_service_configs: &BTreeMap<String, Json>,
+    initial_service_secrets: &BTreeMap<String, SecretEnvelopeV1>,
 ) -> Result<Vec<u8>, SoracloudError> {
-    encode_bundle_provenance_payload(bundle)
-        .map_err(|err| SoracloudError::internal(format!("failed to encode bundle payload: {err}")))
+    iroha_data_model::soracloud::encode_bundle_with_materials_provenance_payload(
+        bundle,
+        initial_service_configs,
+        initial_service_secrets,
+    )
+    .map_err(|err| SoracloudError::internal(format!("failed to encode bundle payload: {err}")))
 }
 
 fn verify_rollback_signature(request: &SignedRollbackRequest) -> Result<(), SoracloudError> {
@@ -4061,6 +4289,120 @@ fn encode_rollback_signature_payload(payload: &RollbackPayload) -> Result<Vec<u8
         payload.target_version.as_deref(),
     )
     .map_err(|err| SoracloudError::internal(format!("failed to encode rollback payload: {err}")))
+}
+
+fn verify_service_config_set_signature(
+    request: &SignedServiceConfigSetRequest,
+) -> Result<(), SoracloudError> {
+    let payload = encode_service_config_set_signature_payload(&request.payload)?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &payload)
+        .map_err(|_| {
+            SoracloudError::unauthorized("service config provenance signature verification failed")
+        })?;
+    Ok(())
+}
+
+fn encode_service_config_set_signature_payload(
+    payload: &ServiceConfigSetRequest,
+) -> Result<Vec<u8>, SoracloudError> {
+    encode_set_service_config_provenance_payload(
+        payload.service_name.as_str(),
+        payload.config_name.as_str(),
+        &payload.value_json,
+    )
+    .map_err(|err| {
+        SoracloudError::internal(format!("failed to encode service config payload: {err}"))
+    })
+}
+
+fn verify_service_config_delete_signature(
+    request: &SignedServiceConfigDeleteRequest,
+) -> Result<(), SoracloudError> {
+    let payload = encode_service_config_delete_signature_payload(&request.payload)?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &payload)
+        .map_err(|_| {
+            SoracloudError::unauthorized(
+                "service config delete provenance signature verification failed",
+            )
+        })?;
+    Ok(())
+}
+
+fn encode_service_config_delete_signature_payload(
+    payload: &ServiceConfigDeleteRequest,
+) -> Result<Vec<u8>, SoracloudError> {
+    encode_delete_service_config_provenance_payload(
+        payload.service_name.as_str(),
+        payload.config_name.as_str(),
+    )
+    .map_err(|err| {
+        SoracloudError::internal(format!(
+            "failed to encode service config delete payload: {err}"
+        ))
+    })
+}
+
+fn verify_service_secret_set_signature(
+    request: &SignedServiceSecretSetRequest,
+) -> Result<(), SoracloudError> {
+    let payload = encode_service_secret_set_signature_payload(&request.payload)?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &payload)
+        .map_err(|_| {
+            SoracloudError::unauthorized("service secret provenance signature verification failed")
+        })?;
+    Ok(())
+}
+
+fn encode_service_secret_set_signature_payload(
+    payload: &ServiceSecretSetRequest,
+) -> Result<Vec<u8>, SoracloudError> {
+    encode_set_service_secret_provenance_payload(
+        payload.service_name.as_str(),
+        payload.secret_name.as_str(),
+        &payload.secret,
+    )
+    .map_err(|err| {
+        SoracloudError::internal(format!("failed to encode service secret payload: {err}"))
+    })
+}
+
+fn verify_service_secret_delete_signature(
+    request: &SignedServiceSecretDeleteRequest,
+) -> Result<(), SoracloudError> {
+    let payload = encode_service_secret_delete_signature_payload(&request.payload)?;
+    request
+        .provenance
+        .signature
+        .verify(&request.provenance.signer, &payload)
+        .map_err(|_| {
+            SoracloudError::unauthorized(
+                "service secret delete provenance signature verification failed",
+            )
+        })?;
+    Ok(())
+}
+
+fn encode_service_secret_delete_signature_payload(
+    payload: &ServiceSecretDeleteRequest,
+) -> Result<Vec<u8>, SoracloudError> {
+    encode_delete_service_secret_provenance_payload(
+        payload.service_name.as_str(),
+        payload.secret_name.as_str(),
+    )
+    .map_err(|err| {
+        SoracloudError::internal(format!(
+            "failed to encode service secret delete payload: {err}"
+        ))
+    })
 }
 
 fn verify_state_mutation_signature(
@@ -5570,6 +5912,8 @@ fn audit_action_to_control_plane_action(action: SoraServiceLifecycleActionV1) ->
     match action {
         SoraServiceLifecycleActionV1::Deploy => SoracloudAction::Deploy,
         SoraServiceLifecycleActionV1::Upgrade => SoracloudAction::Upgrade,
+        SoraServiceLifecycleActionV1::ConfigMutation => SoracloudAction::ConfigMutation,
+        SoraServiceLifecycleActionV1::SecretMutation => SoracloudAction::SecretMutation,
         SoraServiceLifecycleActionV1::StateMutation => SoracloudAction::StateMutation,
         SoraServiceLifecycleActionV1::FheJobRun => SoracloudAction::FheJobRun,
         SoraServiceLifecycleActionV1::DecryptionRequest => SoracloudAction::DecryptionRequest,
@@ -5616,6 +5960,8 @@ fn audit_event_to_control_plane_audit_event(
         container_manifest_hash: event.container_manifest_hash,
         binding_name: event.binding_name.as_ref().map(ToString::to_string),
         state_key: event.state_key.clone(),
+        config_name: event.config_name.clone(),
+        secret_name: event.secret_name.clone(),
         governance_tx_hash: event.governance_tx_hash,
         rollout_handle: event.rollout_handle.clone(),
         policy_name: event.policy_name.as_ref().map(ToString::to_string),
@@ -6641,6 +6987,175 @@ fn authoritative_state_mutation_response(
         binding_key_count,
         audit_event_count: authoritative_service_event_count(world, service_name),
         signed_by: event.signer.to_string(),
+    })
+}
+
+fn authoritative_service_config_mutation_response(
+    app: &SharedAppState,
+    baseline: &SoracloudAuditBaseline,
+    service_name: &str,
+    config_name: &str,
+    operation: ServiceMaterialMutationOperation,
+) -> Result<ServiceConfigMutationResponse, SoracloudError> {
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let (deployment, _bundle) = authoritative_service_deployment_bundle(world, service_name)?;
+    let event = latest_service_audit_event_after(world, baseline.service_max, |event| {
+        event.service_name.as_ref() == service_name
+            && event.action == SoraServiceLifecycleActionV1::ConfigMutation
+            && event.config_name.as_deref() == Some(config_name)
+    })
+    .cloned()
+    .ok_or_else(|| {
+        SoracloudError::conflict(format!(
+            "authoritative Soracloud config mutation event for `{service_name}`/`{config_name}` was not observed after mutation"
+        ))
+    })?;
+    let value_hash = deployment
+        .service_configs
+        .get(config_name)
+        .map(|entry| entry.value_hash);
+    Ok(ServiceConfigMutationResponse {
+        action: audit_action_to_control_plane_action(event.action),
+        service_name: service_name.to_owned(),
+        config_name: config_name.to_owned(),
+        operation,
+        sequence: event.sequence,
+        current_version: deployment.current_service_version,
+        config_generation: deployment.config_generation,
+        config_entry_count: u32::try_from(deployment.service_configs.len()).unwrap_or(u32::MAX),
+        value_hash,
+        audit_event_count: authoritative_service_event_count(world, service_name),
+        signed_by: event.signer.to_string(),
+    })
+}
+
+fn service_secret_status_entry(entry: &SoraServiceSecretEntryV1) -> ServiceSecretStatusEntry {
+    ServiceSecretStatusEntry {
+        secret_name: entry.secret_name.clone(),
+        encryption: entry.envelope.encryption,
+        key_id: entry.envelope.key_id.clone(),
+        key_version: entry.envelope.key_version.get(),
+        commitment: entry.envelope.commitment,
+        ciphertext_bytes: u64::try_from(entry.envelope.ciphertext.len()).unwrap_or(u64::MAX),
+        last_update_sequence: entry.last_update_sequence,
+    }
+}
+
+fn authoritative_service_secret_mutation_response(
+    app: &SharedAppState,
+    baseline: &SoracloudAuditBaseline,
+    service_name: &str,
+    secret_name: &str,
+    operation: ServiceMaterialMutationOperation,
+) -> Result<ServiceSecretMutationResponse, SoracloudError> {
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let (deployment, _bundle) = authoritative_service_deployment_bundle(world, service_name)?;
+    let event = latest_service_audit_event_after(world, baseline.service_max, |event| {
+        event.service_name.as_ref() == service_name
+            && event.action == SoraServiceLifecycleActionV1::SecretMutation
+            && event.secret_name.as_deref() == Some(secret_name)
+    })
+    .cloned()
+    .ok_or_else(|| {
+        SoracloudError::conflict(format!(
+            "authoritative Soracloud secret mutation event for `{service_name}`/`{secret_name}` was not observed after mutation"
+        ))
+    })?;
+    let secret_entry = deployment.service_secrets.get(secret_name);
+    Ok(ServiceSecretMutationResponse {
+        action: audit_action_to_control_plane_action(event.action),
+        service_name: service_name.to_owned(),
+        secret_name: secret_name.to_owned(),
+        operation,
+        sequence: event.sequence,
+        current_version: deployment.current_service_version,
+        secret_generation: deployment.secret_generation,
+        secret_entry_count: u32::try_from(deployment.service_secrets.len()).unwrap_or(u32::MAX),
+        encryption: secret_entry.map(|entry| entry.envelope.encryption),
+        key_id: secret_entry.map(|entry| entry.envelope.key_id.clone()),
+        key_version: secret_entry.map(|entry| entry.envelope.key_version.get()),
+        commitment: secret_entry.map(|entry| entry.envelope.commitment),
+        ciphertext_bytes: secret_entry
+            .map(|entry| u64::try_from(entry.envelope.ciphertext.len()).unwrap_or(u64::MAX)),
+        audit_event_count: authoritative_service_event_count(world, service_name),
+        signed_by: event.signer.to_string(),
+    })
+}
+
+fn authoritative_service_config_status_response(
+    app: &SharedAppState,
+    service_name: &str,
+    config_name: Option<&str>,
+) -> Result<ServiceConfigStatusResponse, SoracloudError> {
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let (deployment, _bundle) = authoritative_service_deployment_bundle(world, service_name)?;
+    let configs = deployment
+        .service_configs
+        .values()
+        .filter(|entry| config_name.is_none_or(|filter| filter == entry.config_name.as_str()))
+        .map(|entry| {
+            let value_json = entry
+                .value_json
+                .try_into_any_norito::<norito::json::Value>()
+                .map_err(|err| {
+                    SoracloudError::internal(format!(
+                        "failed to decode authoritative service config json: {err}"
+                    ))
+                })?;
+            Ok(ServiceConfigStatusEntry {
+                config_name: entry.config_name.clone(),
+                value_hash: entry.value_hash,
+                value_json,
+                last_update_sequence: entry.last_update_sequence,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if config_name.is_some() && configs.is_empty() {
+        return Err(SoracloudError::not_found(format!(
+            "service config `{}` not found for service `{service_name}`",
+            config_name.unwrap_or_default()
+        )));
+    }
+    Ok(ServiceConfigStatusResponse {
+        schema_version: CONTROL_PLANE_SCHEMA_VERSION,
+        service_name: deployment.service_name.to_string(),
+        current_version: deployment.current_service_version,
+        config_generation: deployment.config_generation,
+        config_entry_count: u32::try_from(configs.len()).unwrap_or(u32::MAX),
+        configs,
+    })
+}
+
+fn authoritative_service_secret_status_response(
+    app: &SharedAppState,
+    service_name: &str,
+    secret_name: Option<&str>,
+) -> Result<ServiceSecretStatusResponse, SoracloudError> {
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let (deployment, _bundle) = authoritative_service_deployment_bundle(world, service_name)?;
+    let secrets = deployment
+        .service_secrets
+        .values()
+        .filter(|entry| secret_name.is_none_or(|filter| filter == entry.secret_name.as_str()))
+        .map(service_secret_status_entry)
+        .collect::<Vec<_>>();
+    if secret_name.is_some() && secrets.is_empty() {
+        return Err(SoracloudError::not_found(format!(
+            "service secret `{}` not found for service `{service_name}`",
+            secret_name.unwrap_or_default()
+        )));
+    }
+    Ok(ServiceSecretStatusResponse {
+        schema_version: CONTROL_PLANE_SCHEMA_VERSION,
+        service_name: deployment.service_name.to_string(),
+        current_version: deployment.current_service_version,
+        secret_generation: deployment.secret_generation,
+        secret_entry_count: u32::try_from(secrets.len()).unwrap_or(u32::MAX),
+        secrets,
     })
 }
 
@@ -8584,6 +9099,10 @@ pub(crate) fn control_plane_snapshot(
             service_name: service_label,
             current_version: deployment.current_service_version.clone(),
             revision_count: deployment.revision_count,
+            config_generation: deployment.config_generation,
+            secret_generation: deployment.secret_generation,
+            config_entry_count: u32::try_from(deployment.service_configs.len()).unwrap_or(u32::MAX),
+            secret_entry_count: u32::try_from(deployment.service_secrets.len()).unwrap_or(u32::MAX),
             latest_revision: current_bundle.as_ref().map(|bundle| {
                 deployment_bundle_to_control_plane_revision(deployment, bundle, latest_audit)
             }),
@@ -8650,6 +9169,8 @@ pub(crate) async fn handle_deploy(
         signer,
         InstructionBox::from(isi::soracloud::DeploySoracloudService {
             bundle: request.bundle,
+            initial_service_configs: request.initial_service_configs,
+            initial_service_secrets: request.initial_service_secrets,
             provenance: request.provenance,
         }),
         "/v1/soracloud/deploy",
@@ -8699,6 +9220,8 @@ pub(crate) async fn handle_upgrade(
         signer,
         InstructionBox::from(isi::soracloud::UpgradeSoracloudService {
             bundle: request.bundle,
+            initial_service_configs: request.initial_service_configs,
+            initial_service_secrets: request.initial_service_secrets,
             provenance: request.provenance,
         }),
         "/v1/soracloud/upgrade",
@@ -8901,6 +9424,278 @@ pub(crate) async fn handle_state_mutation(
     .await
     {
         Ok(response) => response,
+        Err(err) => err.into_response(),
+    }
+}
+
+pub(crate) async fn handle_service_config_set(
+    State(app): State<SharedAppState>,
+    headers: HeaderMap,
+    NoritoJson(request): NoritoJson<SignedServiceConfigSetRequest>,
+) -> Response {
+    if let Err(err) =
+        crate::check_access(&app, &headers, None, "v1/soracloud/service/config/set").await
+    {
+        return err.into_response();
+    }
+
+    if let Err(err) = verify_service_config_set_signature(&request) {
+        return err.into_response();
+    }
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
+        Ok(signer) => signer,
+        Err(err) => return err.into_response(),
+    };
+    let service_name = match parse_service_name(&request.payload.service_name) {
+        Ok(service_name) => service_name,
+        Err(err) => return err.into_response(),
+    };
+    let service_label = service_name.to_string();
+    let config_name = request.payload.config_name.clone();
+    match submit_confirm_and_respond(
+        &app,
+        signer,
+        InstructionBox::from(isi::soracloud::SetSoracloudServiceConfig {
+            service_name,
+            config_name: config_name.clone(),
+            value_json: request.payload.value_json,
+            provenance: request.provenance,
+        }),
+        "/v1/soracloud/service/config/set",
+        move |app, baseline| {
+            authoritative_service_config_mutation_response(
+                app,
+                baseline,
+                &service_label,
+                &config_name,
+                ServiceMaterialMutationOperation::Upsert,
+            )
+        },
+    )
+    .await
+    {
+        Ok(response) => response,
+        Err(err) => err.into_response(),
+    }
+}
+
+pub(crate) async fn handle_service_config_delete(
+    State(app): State<SharedAppState>,
+    headers: HeaderMap,
+    NoritoJson(request): NoritoJson<SignedServiceConfigDeleteRequest>,
+) -> Response {
+    if let Err(err) =
+        crate::check_access(&app, &headers, None, "v1/soracloud/service/config/delete").await
+    {
+        return err.into_response();
+    }
+
+    if let Err(err) = verify_service_config_delete_signature(&request) {
+        return err.into_response();
+    }
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
+        Ok(signer) => signer,
+        Err(err) => return err.into_response(),
+    };
+    let service_name = match parse_service_name(&request.payload.service_name) {
+        Ok(service_name) => service_name,
+        Err(err) => return err.into_response(),
+    };
+    let service_label = service_name.to_string();
+    let config_name = request.payload.config_name.clone();
+    match submit_confirm_and_respond(
+        &app,
+        signer,
+        InstructionBox::from(isi::soracloud::DeleteSoracloudServiceConfig {
+            service_name,
+            config_name: config_name.clone(),
+            provenance: request.provenance,
+        }),
+        "/v1/soracloud/service/config/delete",
+        move |app, baseline| {
+            authoritative_service_config_mutation_response(
+                app,
+                baseline,
+                &service_label,
+                &config_name,
+                ServiceMaterialMutationOperation::Delete,
+            )
+        },
+    )
+    .await
+    {
+        Ok(response) => response,
+        Err(err) => err.into_response(),
+    }
+}
+
+pub(crate) async fn handle_service_config_status(
+    State(app): State<SharedAppState>,
+    headers: HeaderMap,
+    NoritoQuery(query): NoritoQuery<ServiceConfigStatusQuery>,
+) -> Response {
+    if let Err(err) =
+        crate::check_access(&app, &headers, None, "v1/soracloud/service/config/status").await
+    {
+        return err.into_response();
+    }
+
+    let service_name = match parse_service_name(&query.service_name) {
+        Ok(service_name) => service_name,
+        Err(err) => return err.into_response(),
+    };
+    match authoritative_service_config_status_response(
+        &app,
+        service_name.as_ref(),
+        query.config_name.as_deref(),
+    ) {
+        Ok(response) => JsonBody(response).into_response(),
+        Err(err) => err.into_response(),
+    }
+}
+
+pub(crate) async fn handle_service_secret_set(
+    State(app): State<SharedAppState>,
+    headers: HeaderMap,
+    NoritoJson(request): NoritoJson<SignedServiceSecretSetRequest>,
+) -> Response {
+    if let Err(err) =
+        crate::check_access(&app, &headers, None, "v1/soracloud/service/secret/set").await
+    {
+        return err.into_response();
+    }
+
+    if let Err(err) = verify_service_secret_set_signature(&request) {
+        return err.into_response();
+    }
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
+        Ok(signer) => signer,
+        Err(err) => return err.into_response(),
+    };
+    let service_name = match parse_service_name(&request.payload.service_name) {
+        Ok(service_name) => service_name,
+        Err(err) => return err.into_response(),
+    };
+    let service_label = service_name.to_string();
+    let secret_name = request.payload.secret_name.clone();
+    match submit_confirm_and_respond(
+        &app,
+        signer,
+        InstructionBox::from(isi::soracloud::SetSoracloudServiceSecret {
+            service_name,
+            secret_name: secret_name.clone(),
+            secret: request.payload.secret,
+            provenance: request.provenance,
+        }),
+        "/v1/soracloud/service/secret/set",
+        move |app, baseline| {
+            authoritative_service_secret_mutation_response(
+                app,
+                baseline,
+                &service_label,
+                &secret_name,
+                ServiceMaterialMutationOperation::Upsert,
+            )
+        },
+    )
+    .await
+    {
+        Ok(response) => response,
+        Err(err) => err.into_response(),
+    }
+}
+
+pub(crate) async fn handle_service_secret_delete(
+    State(app): State<SharedAppState>,
+    headers: HeaderMap,
+    NoritoJson(request): NoritoJson<SignedServiceSecretDeleteRequest>,
+) -> Response {
+    if let Err(err) =
+        crate::check_access(&app, &headers, None, "v1/soracloud/service/secret/delete").await
+    {
+        return err.into_response();
+    }
+
+    if let Err(err) = verify_service_secret_delete_signature(&request) {
+        return err.into_response();
+    }
+    let signer = match require_soracloud_mutation_signer(
+        &headers,
+        &request.provenance,
+        request.authority,
+        request.private_key,
+    ) {
+        Ok(signer) => signer,
+        Err(err) => return err.into_response(),
+    };
+    let service_name = match parse_service_name(&request.payload.service_name) {
+        Ok(service_name) => service_name,
+        Err(err) => return err.into_response(),
+    };
+    let service_label = service_name.to_string();
+    let secret_name = request.payload.secret_name.clone();
+    match submit_confirm_and_respond(
+        &app,
+        signer,
+        InstructionBox::from(isi::soracloud::DeleteSoracloudServiceSecret {
+            service_name,
+            secret_name: secret_name.clone(),
+            provenance: request.provenance,
+        }),
+        "/v1/soracloud/service/secret/delete",
+        move |app, baseline| {
+            authoritative_service_secret_mutation_response(
+                app,
+                baseline,
+                &service_label,
+                &secret_name,
+                ServiceMaterialMutationOperation::Delete,
+            )
+        },
+    )
+    .await
+    {
+        Ok(response) => response,
+        Err(err) => err.into_response(),
+    }
+}
+
+pub(crate) async fn handle_service_secret_status(
+    State(app): State<SharedAppState>,
+    headers: HeaderMap,
+    NoritoQuery(query): NoritoQuery<ServiceSecretStatusQuery>,
+) -> Response {
+    if let Err(err) =
+        crate::check_access(&app, &headers, None, "v1/soracloud/service/secret/status").await
+    {
+        return err.into_response();
+    }
+
+    let service_name = match parse_service_name(&query.service_name) {
+        Ok(service_name) => service_name,
+        Err(err) => return err.into_response(),
+    };
+    match authoritative_service_secret_status_response(
+        &app,
+        service_name.as_ref(),
+        query.secret_name.as_deref(),
+    ) {
+        Ok(response) => JsonBody(response).into_response(),
         Err(err) => err.into_response(),
     }
 }
@@ -11924,9 +12719,10 @@ mod tests {
             SoraModelPrivacyModeV1, SoraModelProvenanceKindV1, SoraModelProvenanceRefV1,
             SoraPrivateCompileProfileV1, SoraPrivateInferenceCheckpointV1,
             SoraPrivateInferenceSessionStatusV1, SoraPrivateInferenceSessionV1,
-            SoraServiceAuditEventV1, SoraServiceDeploymentStateV1, SoraServiceLifecycleActionV1,
-            SoraServiceManifestV1, SoraServiceStateEntryV1, SoraStateEncryptionV1,
-            SoraUploadedModelBundleV1, SoraUploadedModelChunkV1, SoraUploadedModelPricingPolicyV1,
+            SoraServiceAuditEventV1, SoraServiceConfigEntryV1, SoraServiceDeploymentStateV1,
+            SoraServiceLifecycleActionV1, SoraServiceManifestV1, SoraServiceSecretEntryV1,
+            SoraServiceStateEntryV1, SoraStateEncryptionV1, SoraUploadedModelBundleV1,
+            SoraUploadedModelChunkV1, SoraUploadedModelPricingPolicyV1,
             SoraUploadedModelRuntimeFormatV1,
         },
         sorafs::pin_registry::StorageClass,
@@ -12084,10 +12880,19 @@ mod tests {
         bundle: SoraDeploymentBundleV1,
         key_pair: &KeyPair,
     ) -> SignedBundleRequest {
-        let payload = encode_bundle_signature_payload(&bundle).expect("encode bundle payload");
+        let initial_service_configs = BTreeMap::new();
+        let initial_service_secrets = BTreeMap::new();
+        let payload = encode_bundle_signature_payload(
+            &bundle,
+            &initial_service_configs,
+            &initial_service_secrets,
+        )
+        .expect("encode bundle payload");
         let signature = Signature::new(key_pair.private_key(), &payload);
         SignedBundleRequest {
             bundle,
+            initial_service_configs,
+            initial_service_secrets,
             provenance: ManifestProvenance {
                 signer: key_pair.public_key().clone(),
                 signature,
@@ -12143,7 +12948,8 @@ mod tests {
         bundle: &SoraDeploymentBundleV1,
         key_pair: &KeyPair,
     ) -> ManifestProvenance {
-        let payload = encode_bundle_signature_payload(bundle).expect("bundle payload");
+        let payload = encode_bundle_signature_payload(bundle, &BTreeMap::new(), &BTreeMap::new())
+            .expect("bundle payload");
         ManifestProvenance {
             signer: key_pair.public_key().clone(),
             signature: Signature::new(key_pair.private_key(), &payload),
@@ -12391,7 +13197,8 @@ mod tests {
             let bundle = fixture_bundle("1.0.0");
             let provenance = {
                 let payload =
-                    encode_bundle_signature_payload(&bundle).expect("encode bundle payload");
+                    encode_bundle_signature_payload(&bundle, &BTreeMap::new(), &BTreeMap::new())
+                        .expect("encode bundle payload");
                 ManifestProvenance {
                     signer: ALICE_ID.signatory().clone(),
                     signature: Signature::new(
@@ -12400,8 +13207,13 @@ mod tests {
                     ),
                 }
             };
-            isi::soracloud::DeploySoracloudService { bundle, provenance }
-                .execute(&ALICE_ID, &mut stx)?;
+            isi::soracloud::DeploySoracloudService {
+                bundle,
+                initial_service_configs: BTreeMap::new(),
+                initial_service_secrets: BTreeMap::new(),
+                provenance,
+            }
+            .execute(&ALICE_ID, &mut stx)?;
             stx.apply();
             state_block.commit()?;
 
@@ -12483,6 +13295,10 @@ mod tests {
                     process_started_sequence: 1,
                     active_rollout: None,
                     last_rollout: None,
+                    config_generation: 0,
+                    secret_generation: 0,
+                    service_configs: BTreeMap::new(),
+                    service_secrets: BTreeMap::new(),
                 },
             );
         let app = mk_app_state_for_tests_with_world(world);
@@ -12549,6 +13365,10 @@ mod tests {
                         process_started_sequence: 1,
                         active_rollout: None,
                         last_rollout: None,
+                        config_generation: 0,
+                        secret_generation: 0,
+                        service_configs: BTreeMap::new(),
+                        service_secrets: BTreeMap::new(),
                     },
                 );
             world
@@ -12568,6 +13388,8 @@ mod tests {
                         governance_tx_hash: Some(governance_tx_hash),
                         binding_name: Some(binding_name.clone()),
                         state_key: Some(state_key.clone()),
+                        config_name: None,
+                        secret_name: None,
                         rollout_handle: None,
                         policy_name: None,
                         policy_snapshot_hash: None,
@@ -12666,6 +13488,10 @@ mod tests {
                         process_started_sequence: 1,
                         active_rollout: None,
                         last_rollout: None,
+                        config_generation: 0,
+                        secret_generation: 0,
+                        service_configs: BTreeMap::new(),
+                        service_secrets: BTreeMap::new(),
                     },
                 );
             for (sequence, state_key, break_glass, consent_evidence_hash) in [
@@ -12697,6 +13523,8 @@ mod tests {
                             )))),
                             binding_name: Some("patient_records".parse()?),
                             state_key: Some(state_key.to_string()),
+                            config_name: None,
+                            secret_name: None,
                             rollout_handle: None,
                             policy_name: Some(policy.policy_name.clone()),
                             policy_snapshot_hash: Some(policy_snapshot_hash),
@@ -12775,6 +13603,10 @@ mod tests {
                         process_started_sequence: 1,
                         active_rollout: None,
                         last_rollout: None,
+                        config_generation: 0,
+                        secret_generation: 0,
+                        service_configs: BTreeMap::new(),
+                        service_secrets: BTreeMap::new(),
                     },
                 );
             world.soracloud_training_jobs_mut_for_testing().insert(
@@ -12820,6 +13652,173 @@ mod tests {
     }
 
     #[test]
+    fn authoritative_service_config_status_reads_world_state() -> Result<(), eyre::Report> {
+        use iroha_core::state::World;
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+
+        runtime.block_on(async move {
+            let mut world = World::default();
+            let bundle = fixture_bundle("1.0.0");
+            let service_name = bundle.service.service_name.clone();
+            let config_value = norito::json!({
+                "theme": "dark",
+                "max_connections": 32
+            });
+            world.soracloud_service_revisions_mut_for_testing().insert(
+                (
+                    service_name.as_ref().to_owned(),
+                    bundle.service.service_version.clone(),
+                ),
+                bundle.clone(),
+            );
+            world
+                .soracloud_service_deployments_mut_for_testing()
+                .insert(
+                service_name.clone(),
+                SoraServiceDeploymentStateV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
+                    service_name: service_name.clone(),
+                    current_service_version: bundle.service.service_version.clone(),
+                    current_service_manifest_hash: bundle.service_manifest_hash(),
+                    current_container_manifest_hash: bundle.container_manifest_hash(),
+                    revision_count: 1,
+                    process_generation: 1,
+                    process_started_sequence: 1,
+                    active_rollout: None,
+                    last_rollout: None,
+                    config_generation: 4,
+                    secret_generation: 0,
+                    service_configs: BTreeMap::from([(
+                        "ui/theme".to_string(),
+                        SoraServiceConfigEntryV1 {
+                            schema_version:
+                                iroha_data_model::soracloud::SORA_SERVICE_CONFIG_ENTRY_VERSION_V1,
+                            config_name: "ui/theme".to_string(),
+                            value_hash: Hash::new(
+                                norito::json::to_vec(&config_value)
+                                    .expect("config json should encode"),
+                            ),
+                            value_json: Json::from(config_value.clone()),
+                            last_update_sequence: 12,
+                        },
+                    )]),
+                    service_secrets: BTreeMap::new(),
+                },
+            );
+
+            let app = mk_app_state_for_tests_with_world(world);
+            let response =
+                authoritative_service_config_status_response(&app, "web_portal", Some("ui/theme"))
+                    .map_err(|err| {
+                        eyre::eyre!("authoritative service config status query failed: {err:?}")
+                    })?;
+            assert_eq!(response.service_name, "web_portal");
+            assert_eq!(response.current_version, "1.0.0");
+            assert_eq!(response.config_generation, 4);
+            assert_eq!(response.config_entry_count, 1);
+            assert_eq!(response.configs[0].config_name, "ui/theme");
+            assert_eq!(response.configs[0].value_json, config_value);
+            assert_eq!(response.configs[0].last_update_sequence, 12);
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn authoritative_service_secret_status_reads_world_state() -> Result<(), eyre::Report> {
+        use iroha_core::state::World;
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+
+        runtime.block_on(async move {
+            let mut world = World::default();
+            let bundle = fixture_bundle("1.0.0");
+            let service_name = bundle.service.service_name.clone();
+            let secret = SecretEnvelopeV1 {
+                schema_version: iroha_data_model::soracloud::SECRET_ENVELOPE_VERSION_V1,
+                encryption: SecretEnvelopeEncryptionV1::ClientCiphertext,
+                key_id: "kms/config/test".to_string(),
+                key_version: std::num::NonZeroU32::new(7).expect("non-zero"),
+                nonce: vec![1, 2, 3, 4],
+                ciphertext: b"encrypted-db-password".to_vec(),
+                commitment: Hash::new(b"service-secret"),
+                aad_digest: None,
+            };
+            world.soracloud_service_revisions_mut_for_testing().insert(
+                (
+                    service_name.as_ref().to_owned(),
+                    bundle.service.service_version.clone(),
+                ),
+                bundle.clone(),
+            );
+            world
+                .soracloud_service_deployments_mut_for_testing()
+                .insert(
+                service_name.clone(),
+                SoraServiceDeploymentStateV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
+                    service_name: service_name.clone(),
+                    current_service_version: bundle.service.service_version.clone(),
+                    current_service_manifest_hash: bundle.service_manifest_hash(),
+                    current_container_manifest_hash: bundle.container_manifest_hash(),
+                    revision_count: 1,
+                    process_generation: 1,
+                    process_started_sequence: 1,
+                    active_rollout: None,
+                    last_rollout: None,
+                    config_generation: 0,
+                    secret_generation: 3,
+                    service_configs: BTreeMap::new(),
+                    service_secrets: BTreeMap::from([(
+                        "db/password".to_string(),
+                        SoraServiceSecretEntryV1 {
+                            schema_version:
+                                iroha_data_model::soracloud::SORA_SERVICE_SECRET_ENTRY_VERSION_V1,
+                            secret_name: "db/password".to_string(),
+                            envelope: secret.clone(),
+                            last_update_sequence: 9,
+                        },
+                    )]),
+                },
+            );
+
+            let app = mk_app_state_for_tests_with_world(world);
+            let response = authoritative_service_secret_status_response(
+                &app,
+                "web_portal",
+                Some("db/password"),
+            )
+            .map_err(|err| {
+                eyre::eyre!("authoritative service secret status query failed: {err:?}")
+            })?;
+            assert_eq!(response.service_name, "web_portal");
+            assert_eq!(response.current_version, "1.0.0");
+            assert_eq!(response.secret_generation, 3);
+            assert_eq!(response.secret_entry_count, 1);
+            assert_eq!(response.secrets[0].secret_name, "db/password");
+            assert_eq!(
+                response.secrets[0].encryption,
+                SecretEnvelopeEncryptionV1::ClientCiphertext
+            );
+            assert_eq!(response.secrets[0].key_id, "kms/config/test");
+            assert_eq!(response.secrets[0].key_version, 7);
+            assert_eq!(response.secrets[0].commitment, Hash::new(b"service-secret"));
+            assert_eq!(
+                response.secrets[0].ciphertext_bytes,
+                u64::try_from(secret.ciphertext.len()).expect("fits in u64")
+            );
+            assert_eq!(response.secrets[0].last_update_sequence, 9);
+            Ok(())
+        })
+    }
+
+    #[test]
     fn authoritative_model_weight_status_reads_world_state() -> Result<(), eyre::Report> {
         use iroha_core::state::World;
 
@@ -12854,6 +13853,10 @@ mod tests {
                         process_started_sequence: 1,
                         active_rollout: None,
                         last_rollout: None,
+                        config_generation: 0,
+                        secret_generation: 0,
+                        service_configs: BTreeMap::new(),
+                        service_secrets: BTreeMap::new(),
                     },
                 );
             world.soracloud_model_registries_mut_for_testing().insert(
@@ -12951,6 +13954,10 @@ mod tests {
                         process_started_sequence: 1,
                         active_rollout: None,
                         last_rollout: None,
+                        config_generation: 0,
+                        secret_generation: 0,
+                        service_configs: BTreeMap::new(),
+                        service_secrets: BTreeMap::new(),
                     },
                 );
             world.soracloud_model_artifacts_mut_for_testing().insert(
@@ -13671,7 +14678,8 @@ mod tests {
     #[test]
     fn bundle_signature_payload_layout_is_canonical_layout() {
         let bundle = fixture_bundle("1.0.0");
-        let encoded = encode_bundle_signature_payload(&bundle).expect("encode signature payload");
+        let encoded = encode_bundle_signature_payload(&bundle, &BTreeMap::new(), &BTreeMap::new())
+            .expect("encode signature payload");
         let expected = norito::to_bytes(&bundle).expect("encode canonical layout");
         assert_eq!(encoded, expected);
     }
@@ -14298,6 +15306,10 @@ mod tests {
                         process_started_sequence: 1,
                         active_rollout: None,
                         last_rollout: None,
+                        config_generation: 0,
+                        secret_generation: 0,
+                        service_configs: BTreeMap::new(),
+                        service_secrets: BTreeMap::new(),
                     },
                 );
             let app = mk_app_state_for_tests_with_world(world);
@@ -14491,6 +15503,10 @@ mod tests {
                         process_started_sequence: 1,
                         active_rollout: None,
                         last_rollout: None,
+                        config_generation: 0,
+                        secret_generation: 0,
+                        service_configs: BTreeMap::new(),
+                        service_secrets: BTreeMap::new(),
                     },
                 );
             let app = mk_app_state_for_tests_with_world(world);
@@ -14720,6 +15736,10 @@ mod tests {
             process_started_sequence: 1,
             active_rollout: None,
             last_rollout: None,
+            config_generation: 0,
+            secret_generation: 0,
+            service_configs: BTreeMap::new(),
+            service_secrets: BTreeMap::new(),
         };
         let revision = deployment_bundle_to_control_plane_revision(&deployment, &bundle, None);
         assert!(revision.allow_model_inference);

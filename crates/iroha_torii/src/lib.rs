@@ -54,7 +54,7 @@
 //! - `transparent_api` (on by default): forwards data-model transparent API
 //! - `p2p_ws` (off by default): exposes a `/p2p` WebSocket for P2P fallback
 //! - `connect` (on by default): WalletConnect-style WS and minimal in-node relay
-//! - `app_api_https` (off by default): enables HTTPS webhook delivery using rustls
+//! - `app_api_https` (off by default): enables HTTPS webhook delivery using reqwest + rustls native roots
 //! - `app_api_wss` (off by default): enables WebSocket/WebSocket Secure webhook delivery
 mod api_version;
 #[cfg(feature = "app_api")]
@@ -997,6 +997,7 @@ struct AppState {
     soranet_privacy_allow_nets: Arc<Vec<limits::IpNet>>,
     soranet_privacy_rate_limiter: limits::RateLimiter,
     allow_nets: Arc<Vec<limits::IpNet>>,
+    trusted_proxy_nets: Arc<Vec<limits::IpNet>>,
     norito_rpc_mtls_trusted_proxy_nets: Arc<Vec<limits::IpNet>>,
     preauth_gate: Arc<limits::PreAuthGate>,
     queue: Arc<Queue>,
@@ -1092,8 +1093,6 @@ struct AppState {
     #[cfg(feature = "app_api")]
     sorafs_chunk_range_overrides: DashMap<[u8; 32], bool>,
     #[cfg(feature = "app_api")]
-    offline_reserves: Arc<offline_reserve::OfflineReserveStore>,
-    #[cfg(feature = "app_api")]
     offline_issuer: Option<OfflineIssuerSigner>,
     #[cfg(feature = "app_api")]
     uaid_onboarding: Option<AccountOnboardingSigner>,
@@ -1110,6 +1109,7 @@ pub(crate) type SharedAppState = std::sync::Arc<AppState>;
 struct PendingSoracloudProxyRequest {
     sender: tokio::sync::oneshot::Sender<SoracloudLocalReadProxyOutcomeV1>,
     expected_peer_id: iroha_data_model::peer::PeerId,
+    request: SoracloudLocalReadRequest,
 }
 
 #[derive(Clone)]
@@ -1988,15 +1988,21 @@ fn norito_rpc_error(
 }
 
 async fn inject_remote_addr_header(
+    State(app): State<SharedAppState>,
     mut req: axum::http::Request<Body>,
     next: Next,
 ) -> Result<axum::response::Response, Infallible> {
     use axum::{extract::ConnectInfo, http::header::HeaderName};
 
     let header = HeaderName::from_static(limits::REMOTE_ADDR_HEADER);
+    let remote_ip = req
+        .extensions()
+        .get::<ConnectInfo<std::net::SocketAddr>>()
+        .map(|connect| connect.0.ip());
+    let resolved = limits::ingress_remote_ip(req.headers(), remote_ip, &app.trusted_proxy_nets);
     req.headers_mut().remove(&header);
-    if let Some(connect) = req.extensions().get::<ConnectInfo<std::net::SocketAddr>>() {
-        if let Ok(value) = connect.0.ip().to_string().parse() {
+    if let Some(ip) = resolved {
+        if let Ok(value) = ip.to_string().parse() {
             req.headers_mut().insert(header, value);
         }
     }
@@ -3809,43 +3815,6 @@ async fn handler_repo_agreements_query(
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_build_claims_issue(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::routing::OfflineBuildClaimIssueRequest,
-    >,
-) -> Result<impl IntoResponse, Error> {
-    if limits::is_allowed_by_cidr(&headers, None, &app.allow_nets) {
-        return routing::handle_post_v1_offline_build_claims_issue(
-            app.clone(),
-            crate::utils::extractors::NoritoJson(req),
-            app.telemetry.clone(),
-        )
-        .await;
-    }
-
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(
-        &app,
-        &headers,
-        None,
-        "v1/offline/build-claims/issue",
-        enforce,
-    )
-    .await?;
-
-    routing::handle_post_v1_offline_build_claims_issue(
-        app.clone(),
-        crate::utils::extractors::NoritoJson(req),
-        app.telemetry.clone(),
-    )
-    .await
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
 async fn handler_offline_reserve_setup(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3859,7 +3828,7 @@ async fn handler_offline_reserve_setup(
         check_access_enforced(&app, &headers, None, "v1/offline/reserve/setup", enforce).await?;
     }
 
-    json_ok(crate::offline_reserve::setup_reserve(app.as_ref(), req)?)
+    json_ok(crate::offline_reserve::setup_reserve(app.as_ref(), req).await?)
 }
 
 #[cfg(feature = "app_api")]
@@ -3913,7 +3882,7 @@ async fn handler_offline_reserve_sync(
         check_access_enforced(&app, &headers, None, "v1/offline/reserve/sync", enforce).await?;
     }
 
-    json_ok(crate::offline_reserve::sync_reserve(app.as_ref(), req)?)
+    json_ok(crate::offline_reserve::sync_reserve(app.as_ref(), req).await?)
 }
 
 #[cfg(feature = "app_api")]
@@ -4562,7 +4531,7 @@ fn parse_asset_definition_id(app: &AppState, raw: &str) -> Result<AssetDefinitio
 
 #[cfg(feature = "app_api")]
 fn parse_asset_id(raw: &str) -> Result<AssetId, Error> {
-    AssetId::parse_encoded(raw)
+    AssetId::parse_literal(raw)
         .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))
 }
 
@@ -8093,6 +8062,22 @@ fn handle_soracloud_generated_hf_local_proxy_execution_failure(
 }
 
 #[cfg(feature = "app_api")]
+fn request_soracloud_generated_hf_proxy_responder_reconcile(
+    app: &SharedAppState,
+    request: &SoracloudLocalReadRequest,
+    responder_peer_id: &iroha_data_model::peer::PeerId,
+    expected_peer_id: &iroha_data_model::peer::PeerId,
+) {
+    if let Some(runtime) = app.soracloud_runtime.as_ref() {
+        runtime.request_generated_hf_proxy_responder_reconcile(
+            request,
+            &responder_peer_id.to_string(),
+            &expected_peer_id.to_string(),
+        );
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn handle_incoming_soracloud_generated_hf_proxy_authority_failure(
     app: &SharedAppState,
     request: &SoracloudLocalReadRequest,
@@ -8325,6 +8310,7 @@ async fn execute_soracloud_local_read_via_proxy(
         PendingSoracloudProxyRequest {
             sender: tx,
             expected_peer_id: target_peer_id.clone(),
+            request: report_request.clone(),
         },
     );
     network.post(iroha_p2p::Post {
@@ -8601,12 +8587,11 @@ async fn process_incoming_soracloud_proxy_response(
     responder_peer_id: iroha_data_model::peer::PeerId,
     proxy_response: SoracloudLocalReadProxyResponseV1,
 ) {
-    let pending = app
-        .soracloud_proxy_pending
-        .lock()
-        .await
-        .remove(&proxy_response.request_id);
-    let Some(pending) = pending else {
+    let mut pending_requests = app.soracloud_proxy_pending.lock().await;
+    let Some((expected_peer_id, request)) = pending_requests
+        .get(&proxy_response.request_id)
+        .map(|pending| (pending.expected_peer_id.clone(), pending.request.clone()))
+    else {
         iroha_logger::warn!(
             peer_id = %responder_peer_id,
             request_id = %proxy_response.request_id,
@@ -8614,6 +8599,33 @@ async fn process_incoming_soracloud_proxy_response(
         );
         return;
     };
+
+    if expected_peer_id != responder_peer_id {
+        drop(pending_requests);
+        iroha_logger::warn!(
+            peer_id = %responder_peer_id,
+            expected_peer_id = %expected_peer_id,
+            request_id = %proxy_response.request_id,
+            "ignoring Soracloud local-read proxy response from an unexpected peer"
+        );
+        request_soracloud_generated_hf_proxy_responder_reconcile(
+            app,
+            &request,
+            &responder_peer_id,
+            &expected_peer_id,
+        );
+        return;
+    }
+
+    let Some(pending) = pending_requests.remove(&proxy_response.request_id) else {
+        iroha_logger::warn!(
+            peer_id = %responder_peer_id,
+            request_id = %proxy_response.request_id,
+            "ignoring Soracloud local-read proxy response whose pending request disappeared"
+        );
+        return;
+    };
+    drop(pending_requests);
 
     if proxy_response.schema_version != SORACLOUD_LOCAL_READ_PROXY_RESPONSE_VERSION_V1 {
         let _ = pending
@@ -8624,21 +8636,6 @@ async fn process_incoming_soracloud_proxy_response(
                     format!(
                         "Soracloud proxy response for request `{}` from peer `{}` used unsupported schema_version `{}`",
                         proxy_response.request_id, responder_peer_id, proxy_response.schema_version
-                    ),
-                ),
-            ));
-        return;
-    }
-
-    if pending.expected_peer_id != responder_peer_id {
-        let _ = pending
-            .sender
-            .send(SoracloudLocalReadProxyOutcomeV1::Err(
-                SoracloudRuntimeExecutionError::new(
-                    SoracloudRuntimeExecutionErrorKind::Unavailable,
-                    format!(
-                        "Soracloud proxy response for request `{}` arrived from unexpected peer `{}`; expected `{}`",
-                        proxy_response.request_id, responder_peer_id, pending.expected_peer_id
                     ),
                 ),
             ));
@@ -14374,6 +14371,15 @@ async fn handler_signed_query(
 }
 
 #[cfg(feature = "connect")]
+fn connect_remote_ip_from_headers(headers: &axum::http::HeaderMap) -> Result<IpAddr, &'static str> {
+    headers
+        .get(limits::REMOTE_ADDR_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse().ok())
+        .ok_or("connect: remote addr unavailable")
+}
+
+#[cfg(feature = "connect")]
 async fn handle_connect_ws_logic(
     app: SharedAppState,
     headers: axum::http::HeaderMap,
@@ -14381,11 +14387,10 @@ async fn handle_connect_ws_logic(
     ws: WebSocketUpgrade,
 ) -> axum::response::Response {
     let bus = app.connect_bus.clone();
-    let remote_ip = headers
-        .get(limits::REMOTE_ADDR_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+    let remote_ip = match connect_remote_ip_from_headers(&headers) {
+        Ok(ip) => ip,
+        Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
+    };
     let mut permit = match bus.pre_ws_handshake(remote_ip).await {
         Ok(permit) => permit,
         Err((code, msg)) => return (code, msg).into_response(),
@@ -14465,11 +14470,11 @@ async fn handler_connect_session(
 ) -> Result<JsonBody<routing::ConnectSessionResponse>> {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
 
-    let remote_ip = headers
-        .get(limits::REMOTE_ADDR_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+    let remote_ip = connect_remote_ip_from_headers(&headers).map_err(|message| {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(message.to_owned()),
+        ))
+    })?;
     app.connect_bus
         .pre_session_create(remote_ip)
         .await
@@ -14663,9 +14668,9 @@ fn resolve_connect_ws_token(
 
 #[cfg(all(test, feature = "connect"))]
 mod connect_token_tests {
-    use axum::http::{HeaderMap, StatusCode, header};
+    use axum::http::{HeaderMap, HeaderName, StatusCode, header};
 
-    use super::{parse_connect_ws_query, resolve_connect_ws_token};
+    use super::{connect_remote_ip_from_headers, parse_connect_ws_query, resolve_connect_ws_token};
 
     #[test]
     fn connect_query_rejects_token_param() {
@@ -14702,6 +14707,35 @@ mod connect_token_tests {
         let token = resolve_connect_ws_token(&headers).expect("bearer token ok");
         assert_eq!(token.token, "test-token");
         assert!(token.protocol.is_none());
+    }
+
+    #[test]
+    fn connect_remote_ip_requires_injected_header() {
+        let headers = HeaderMap::new();
+        let err = connect_remote_ip_from_headers(&headers).expect_err("missing remote addr");
+        assert_eq!(err, "connect: remote addr unavailable");
+    }
+
+    #[test]
+    fn connect_remote_ip_accepts_valid_injected_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static(crate::limits::REMOTE_ADDR_HEADER),
+            "203.0.113.7".parse().unwrap(),
+        );
+        let ip = connect_remote_ip_from_headers(&headers).expect("remote addr");
+        assert_eq!(ip.to_string(), "203.0.113.7");
+    }
+
+    #[test]
+    fn connect_remote_ip_rejects_invalid_injected_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static(crate::limits::REMOTE_ADDR_HEADER),
+            "not-an-ip".parse().unwrap(),
+        );
+        let err = connect_remote_ip_from_headers(&headers).expect_err("invalid remote addr");
+        assert_eq!(err, "connect: remote addr unavailable");
     }
 }
 
@@ -16213,6 +16247,7 @@ pub struct Torii {
     soranet_privacy_allow_nets: std::sync::Arc<Vec<limits::IpNet>>,
     soranet_privacy_rate_limiter: limits::RateLimiter,
     allow_nets: std::sync::Arc<Vec<limits::IpNet>>,
+    trusted_proxy_nets: std::sync::Arc<Vec<limits::IpNet>>,
     high_load_tx_threshold: usize,
     high_load_stream_tx_threshold: usize,
     high_load_subscription_tx_threshold: usize,
@@ -17321,6 +17356,30 @@ impl Torii {
                 .route(
                     "/v1/soracloud/state/mutate",
                     post(soracloud::handle_state_mutation),
+                )
+                .route(
+                    "/v1/soracloud/service/config/set",
+                    post(soracloud::handle_service_config_set),
+                )
+                .route(
+                    "/v1/soracloud/service/config/delete",
+                    post(soracloud::handle_service_config_delete),
+                )
+                .route(
+                    "/v1/soracloud/service/config/status",
+                    get(soracloud::handle_service_config_status),
+                )
+                .route(
+                    "/v1/soracloud/service/secret/set",
+                    post(soracloud::handle_service_secret_set),
+                )
+                .route(
+                    "/v1/soracloud/service/secret/delete",
+                    post(soracloud::handle_service_secret_delete),
+                )
+                .route(
+                    "/v1/soracloud/service/secret/status",
+                    get(soracloud::handle_service_secret_status),
                 )
                 .route(
                     "/v1/soracloud/fhe/job/run",
@@ -18579,6 +18638,9 @@ impl Torii {
             soranet_privacy_allow_nets: std::sync::Arc::new(soranet_privacy_allow_nets),
             soranet_privacy_rate_limiter,
             allow_nets: std::sync::Arc::new(allow_nets),
+            trusted_proxy_nets: std::sync::Arc::new(limits::parse_cidrs(
+                &config.transport.trusted_proxy_cidrs,
+            )),
             high_load_tx_threshold,
             high_load_stream_tx_threshold,
             high_load_subscription_tx_threshold,
@@ -18813,6 +18875,7 @@ impl Torii {
             soranet_privacy_allow_nets: self.soranet_privacy_allow_nets.clone(),
             soranet_privacy_rate_limiter: self.soranet_privacy_rate_limiter.clone(),
             allow_nets: self.allow_nets.clone(),
+            trusted_proxy_nets: self.trusted_proxy_nets.clone(),
             norito_rpc_mtls_trusted_proxy_nets: Arc::new(limits::parse_cidrs(
                 &self.norito_rpc.mtls_trusted_proxy_cidrs,
             )),
@@ -18917,8 +18980,6 @@ impl Torii {
             stream_token_quota: sorafs::StreamTokenQuotaTracker::default(),
             #[cfg(feature = "app_api")]
             sorafs_chunk_range_overrides: DashMap::new(),
-            #[cfg(feature = "app_api")]
-            offline_reserves: Arc::new(offline_reserve::OfflineReserveStore::default()),
             #[cfg(feature = "app_api")]
             offline_issuer: self.offline_issuer.clone(),
             #[cfg(feature = "app_api")]
@@ -19067,7 +19128,10 @@ impl Torii {
                 app_state.clone(),
                 enforce_soracloud_signed_mutation_request,
             ))
-            .layer(axum::middleware::from_fn(inject_remote_addr_header))
+            .layer(axum::middleware::from_fn_with_state(
+                app_state.clone(),
+                inject_remote_addr_header,
+            ))
             .layer(axum::middleware::from_fn(enforce_json_utf8_charset))
             .layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
@@ -20908,6 +20972,7 @@ pub(crate) mod tests_runtime_handlers {
             soranet_privacy_allow_nets: Arc::new(soranet_privacy_allow_nets),
             soranet_privacy_rate_limiter,
             allow_nets: Arc::new(vec![]),
+            trusted_proxy_nets: Arc::new(vec![]),
             norito_rpc_mtls_trusted_proxy_nets: Arc::new(limits::parse_cidrs(
                 &norito_rpc_cfg.mtls_trusted_proxy_cidrs,
             )),
@@ -20984,8 +21049,6 @@ pub(crate) mod tests_runtime_handlers {
             stream_token_quota: sorafs::StreamTokenQuotaTracker::default(),
             #[cfg(feature = "app_api")]
             sorafs_chunk_range_overrides: DashMap::new(),
-            #[cfg(feature = "app_api")]
-            offline_reserves: Arc::new(offline_reserve::OfflineReserveStore::default()),
             #[cfg(feature = "app_api")]
             offline_issuer: None,
             #[cfg(feature = "app_api")]
@@ -22783,6 +22846,26 @@ pub(crate) mod tests_runtime_handlers {
                 .expect("reconcile capture lock")
                 .push((request.clone(), error.clone()));
         }
+
+        fn request_generated_hf_proxy_responder_reconcile(
+            &self,
+            request: &SoracloudLocalReadRequest,
+            responder_peer_id: &str,
+            expected_peer_id: &str,
+        ) {
+            self.captured_reconcile_requests
+                .lock()
+                .expect("reconcile capture lock")
+                .push((
+                    request.clone(),
+                    iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
+                        SoracloudRuntimeExecutionErrorKind::Unavailable,
+                        format!(
+                            "unexpected proxy responder `{responder_peer_id}` answered request intended for authoritative primary `{expected_peer_id}`"
+                        ),
+                    ),
+                ));
+        }
     }
 
     impl iroha_core::soracloud_runtime::SoracloudRuntime for TestLocalReadRuntime {
@@ -22954,7 +23037,17 @@ pub(crate) mod tests_runtime_handlers {
                     reported_pending_mailbox_messages: 2,
                     authoritative_pending_mailbox_messages: 3,
                     rollout_handle: None,
+                    config_generation: 0,
+                    secret_generation: 0,
+                    config_entry_count: 0,
+                    secret_entry_count: 0,
                     materialization_dir: "/tmp/soracloud/runtime/web_portal/1.0.0".to_string(),
+                    config_materialization_dir: "/tmp/soracloud/runtime/web_portal/1.0.0/configs"
+                        .to_string(),
+                    secret_envelopes_materialization_dir:
+                        "/tmp/soracloud/runtime/web_portal/1.0.0/secret_envelopes".to_string(),
+                    secret_payload_materialization_dir:
+                        "/tmp/soracloud/runtime/secrets/web_portal/1.0.0".to_string(),
                     mailboxes: vec![],
                     artifacts: vec![
                         iroha_core::soracloud_runtime::SoracloudRuntimeArtifactPlan {
@@ -23012,6 +23105,8 @@ pub(crate) mod tests_runtime_handlers {
                 entrypoint: "main".to_owned(),
                 args: Vec::new(),
                 env: BTreeMap::new(),
+                required_config_names: Vec::new(),
+                required_secret_names: Vec::new(),
                 capabilities: iroha_data_model::soracloud::SoraCapabilityPolicyV1 {
                     network: iroha_data_model::soracloud::SoraNetworkPolicyV1::Isolated,
                     allow_wallet_signing: false,
@@ -23104,6 +23199,10 @@ pub(crate) mod tests_runtime_handlers {
                     process_started_sequence: 1,
                     active_rollout: None,
                     last_rollout: None,
+                    config_generation: 0,
+                    secret_generation: 0,
+                    service_configs: std::collections::BTreeMap::new(),
+                    service_secrets: std::collections::BTreeMap::new(),
                 },
             );
         world
@@ -23159,6 +23258,10 @@ pub(crate) mod tests_runtime_handlers {
                     process_started_sequence: 1,
                     active_rollout: None,
                     last_rollout: None,
+                    config_generation: 0,
+                    secret_generation: 0,
+                    service_configs: std::collections::BTreeMap::new(),
+                    service_secrets: std::collections::BTreeMap::new(),
                 },
             );
         world
@@ -23596,6 +23699,10 @@ pub(crate) mod tests_runtime_handlers {
             PendingSoracloudProxyRequest {
                 sender: tx,
                 expected_peer_id: responder_peer_id.clone(),
+                request: sample_public_query_request(
+                    "web_portal".to_owned(),
+                    "2026.02.0".to_owned(),
+                ),
             },
         );
 
@@ -24034,17 +24141,22 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
-    async fn soracloud_proxy_response_rejects_unexpected_responder() {
+    async fn soracloud_proxy_response_ignores_unexpected_responder_and_keeps_pending_request() {
         let app = mk_app_state_for_tests();
         let request_id = Hash::new(b"soracloud-proxy-unexpected-peer");
         let expected_peer_id = PeerId::from(KeyPair::random().public_key().clone());
         let responder_peer_id = PeerId::from(KeyPair::random().public_key().clone());
         let (tx, rx) = tokio::sync::oneshot::channel();
+        let mut rx = Box::pin(rx);
         app.soracloud_proxy_pending.lock().await.insert(
             request_id,
             PendingSoracloudProxyRequest {
                 sender: tx,
                 expected_peer_id: expected_peer_id.clone(),
+                request: sample_public_query_request(
+                    "web_portal".to_owned(),
+                    "2026.02.0".to_owned(),
+                ),
             },
         );
 
@@ -24071,17 +24183,153 @@ pub(crate) mod tests_runtime_handlers {
         )
         .await;
 
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), &mut rx)
+                .await
+                .is_err(),
+            "unexpected responder must not complete the pending proxy request"
+        );
+        assert!(
+            app.soracloud_proxy_pending
+                .lock()
+                .await
+                .contains_key(&request_id),
+            "unexpected responder must not poison the pending proxy request"
+        );
+
+        let replacement_response = iroha_core::soracloud_runtime::SoracloudLocalReadResponse {
+            response_bytes: b"authoritative".to_vec(),
+            content_type: None,
+            content_encoding: None,
+            cache_control: None,
+            bindings: Vec::new(),
+            result_commitment: Hash::new(b"authoritative"),
+            certified_by: iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1::None,
+            runtime_receipt: None,
+        };
+        super::process_incoming_soracloud_proxy_response(
+            &app,
+            expected_peer_id.clone(),
+            SoracloudLocalReadProxyResponseV1 {
+                schema_version: SORACLOUD_LOCAL_READ_PROXY_RESPONSE_VERSION_V1,
+                request_id,
+                outcome: SoracloudLocalReadProxyOutcomeV1::Ok(replacement_response.clone()),
+            },
+        )
+        .await;
+
+        let pending_result = app
+            .soracloud_proxy_pending
+            .lock()
+            .await
+            .contains_key(&request_id);
+        assert!(
+            !pending_result,
+            "expected responder must resolve and clear the pending proxy request"
+        );
         match rx.await.expect("pending proxy request should resolve") {
-            SoracloudLocalReadProxyOutcomeV1::Err(error) => {
-                assert_eq!(error.kind, SoracloudRuntimeExecutionErrorKind::Unavailable);
-                assert!(error.message.contains("unexpected peer"));
-                assert!(error.message.contains(&responder_peer_id.to_string()));
-                assert!(error.message.contains(&expected_peer_id.to_string()));
+            SoracloudLocalReadProxyOutcomeV1::Ok(delivered) => {
+                assert_eq!(
+                    delivered.response_bytes,
+                    replacement_response.response_bytes
+                );
+                assert_eq!(
+                    delivered.result_commitment,
+                    replacement_response.result_commitment
+                );
             }
-            SoracloudLocalReadProxyOutcomeV1::Ok(_) => {
-                panic!("unexpected responder must fail closed")
+            SoracloudLocalReadProxyOutcomeV1::Err(error) => {
+                panic!("expected authoritative response, got error: {error:?}")
             }
         }
+    }
+
+    #[tokio::test]
+    async fn unexpected_assigned_proxy_responder_requests_generated_hf_reconcile() {
+        let primary_peer_id = PeerId::from(KeyPair::random().public_key().clone()).to_string();
+        let (world, service_name, service_version) =
+            seed_generated_hf_public_world(&primary_peer_id);
+        let unexpected_peer_id =
+            active_generated_hf_replica_peer_id(&world, &service_name, &service_version);
+        let captured_reconcile_requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut app = mk_app_state_for_tests_with_world(world);
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime {
+            snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
+            state_dir: PathBuf::from("/tmp/test-soracloud-runtime"),
+            local_peer_id: Some(PeerId::from(KeyPair::random().public_key().clone()).to_string()),
+            result: Err(
+                iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Unavailable,
+                    "unexpected responder reconcile test should not execute the runtime locally",
+                ),
+            ),
+            captured_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
+            captured_proxy_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
+            captured_reconcile_requests: Arc::clone(&captured_reconcile_requests),
+        }));
+
+        let request = sample_generated_hf_infer_request(service_name, service_version);
+        let request_id = Hash::new(b"generated-hf-unexpected-assigned-responder");
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        app.soracloud_proxy_pending.lock().await.insert(
+            request_id,
+            PendingSoracloudProxyRequest {
+                sender: tx,
+                expected_peer_id: primary_peer_id.parse().expect("valid primary peer id"),
+                request: request.clone(),
+            },
+        );
+
+        super::process_incoming_soracloud_proxy_response(
+            &app,
+            unexpected_peer_id
+                .parse()
+                .expect("valid assigned replica peer id"),
+            SoracloudLocalReadProxyResponseV1 {
+                schema_version: SORACLOUD_LOCAL_READ_PROXY_RESPONSE_VERSION_V1,
+                request_id,
+                outcome: SoracloudLocalReadProxyOutcomeV1::Ok(
+                    iroha_core::soracloud_runtime::SoracloudLocalReadResponse {
+                        response_bytes: b"unexpected-assigned-responder".to_vec(),
+                        content_type: None,
+                        content_encoding: None,
+                        cache_control: None,
+                        bindings: Vec::new(),
+                        result_commitment: Hash::new(b"unexpected-assigned-responder"),
+                        certified_by:
+                            iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1::None,
+                        runtime_receipt: None,
+                    },
+                ),
+            },
+        )
+        .await;
+
+        assert!(
+            app.soracloud_proxy_pending
+                .lock()
+                .await
+                .contains_key(&request_id),
+            "unexpected assigned responder must not poison the pending proxy request"
+        );
+
+        let reconcile_requests = captured_reconcile_requests
+            .lock()
+            .expect("reconcile capture lock");
+        assert_eq!(reconcile_requests.len(), 1);
+        assert_eq!(reconcile_requests[0].0.service_name, request.service_name);
+        assert_eq!(
+            reconcile_requests[0].1.kind,
+            SoracloudRuntimeExecutionErrorKind::Unavailable
+        );
+        assert!(
+            reconcile_requests[0]
+                .1
+                .message
+                .contains("unexpected proxy responder")
+        );
     }
 
     #[tokio::test]
@@ -24095,6 +24343,10 @@ pub(crate) mod tests_runtime_handlers {
             PendingSoracloudProxyRequest {
                 sender: tx,
                 expected_peer_id: responder_peer_id.clone(),
+                request: sample_public_query_request(
+                    "web_portal".to_owned(),
+                    "2026.02.0".to_owned(),
+                ),
             },
         );
 
@@ -24619,6 +24871,31 @@ pub(crate) mod tests_runtime_handlers {
         .await
         .expect("token accepted");
         assert_eq!(ok.status(), axum::http::StatusCode::OK);
+    }
+
+    #[cfg(feature = "connect")]
+    #[tokio::test]
+    async fn connect_session_handler_rejects_missing_remote_addr_header() {
+        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
+
+        let app = mk_app_state_for_tests();
+        let req = routing::ConnectSessionRequest {
+            sid: Some(B64.encode([0x42_u8; 32])),
+            node: None,
+        };
+        let err =
+            match super::handler_connect_session(State(app), HeaderMap::new(), NoritoJson(req))
+                .await
+            {
+                Ok(_) => panic!("missing remote addr should fail closed"),
+                Err(err) => err,
+            };
+        assert!(matches!(
+            err,
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(message)
+            )) if message == "connect: remote addr unavailable"
+        ));
     }
 
     #[tokio::test]
@@ -27715,7 +27992,7 @@ mod tests {
         let dto: routing::AssetAliasResolveResponseDto =
             norito::json::from_slice(&body).expect("json decode");
         assert_eq!(dto.alias, "usd#issuer.main");
-        assert!(!dto.asset_definition_id.starts_with("aid:"));
+        assert!(!dto.asset_definition_id.contains(':'));
         assert_eq!(
             dto.asset_definition_id
                 .parse::<AssetDefinitionId>()
@@ -27769,7 +28046,7 @@ mod tests {
         let dto: routing::AssetAliasResolveResponseDto =
             norito::json::from_slice(&body).expect("json decode");
         assert_eq!(dto.alias, "usd#main");
-        assert!(!dto.asset_definition_id.starts_with("aid:"));
+        assert!(!dto.asset_definition_id.contains(':'));
         assert_eq!(
             dto.asset_definition_id
                 .parse::<AssetDefinitionId>()

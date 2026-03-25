@@ -8075,13 +8075,16 @@ state_tiered_cold_entries 2
     #[test]
     fn explorer_asset_record_decodes_payload() {
         let value = norito::json!({
-            "id": "norito:4e52543000000001",
-            "definition_id": "usd#sora",
+            "id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            "definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
             "account_id": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
             "value": "10.0"
         });
         let record = ExplorerAssetRecord::from_json(&value).expect("record");
-        assert_eq!(record.id, "norito:4e52543000000001");
+        assert_eq!(
+            record.id,
+            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"
+        );
         assert_eq!(
             record.account_id,
             "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"
@@ -8094,7 +8097,7 @@ state_tiered_cold_entries 2
         let value = norito::json!({
             "pagination":{"page":1,"per_page":10,"total_pages":1,"total_items":1},
             "items":[
-                {"id":"norito:4e52543000000001","definition_id":"usd#sora","account_id":"6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9","value":"10"}
+                {"id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9","definition_id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","account_id":"6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9","value":"10"}
             ]
         });
         let page = ExplorerAssetsPage::from_json(&value).expect("page");
@@ -8268,7 +8271,7 @@ state_tiered_cold_entries 2
         };
         let body = norito::json!({
             "pagination":{"page":1,"per_page":50,"total_pages":1,"total_items":1},
-            "items":[{"id":"norito:4e52543000000001","definition_id":"usd#sora","account_id":"6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9","value":"10"}]
+            "items":[{"id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9","definition_id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","account_id":"6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9","value":"10"}]
         });
         let mock = server.mock(|when, then| {
             when.method(GET)

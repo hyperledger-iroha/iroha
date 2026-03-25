@@ -1885,6 +1885,11 @@ public final class NoritoNativeBridge: @unchecked Sendable {
 
     private init() {
         #if canImport(Darwin)
+        if Self.shouldDisableBridgeForHostedXCTestApp {
+            self.bridgeStatus = .missing(path: "disabled for hosted XCTest app")
+            NSLog("[NoritoNativeBridge] native bridge disabled for hosted XCTest app")
+            return
+        }
         let loadResult = NoritoBridgeLoader.openHandle()
         let handle = loadResult.0
         self.bridgeStatus = loadResult.1
@@ -2746,6 +2751,13 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     }
 
     #if canImport(Darwin)
+    private static var shouldDisableBridgeForHostedXCTestApp: Bool {
+        guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil else {
+            return false
+        }
+        return (Bundle.main.object(forInfoDictionaryKey: "CFBundlePackageType") as? String) == "APPL"
+    }
+
     private var bridgeEnabledForRuntime: Bool {
         if let override = bridgeAvailabilityOverride {
             return override

@@ -69,7 +69,7 @@ transactions, and asset holder listings without building a full query envelope:
 from iroha_python import ToriiClient
 
 client = ToriiClient("https://torii.sora.example")
-asset_id = "norito:4e52543000000001"
+asset_id = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"
 
 assets = client.list_account_assets("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", asset_id=asset_id, limit=10)
 txs = client.list_account_transactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", asset_id=asset_id, limit=5)

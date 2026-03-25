@@ -20,8 +20,8 @@ public final class AssetDefinitionIdEncoderTests {
     encodeIsDeterministic();
     differentInputsProduceDifferentAddresses();
     isCanonicalAddressReturnsTrueForValidAddress();
-    isCanonicalAddressReturnsFalseForNoritoString();
-    isCanonicalAddressReturnsFalseForLegacyAidFormat();
+    isCanonicalAddressReturnsFalseForPlainTextString();
+    isCanonicalAddressReturnsFalseForMalformedColonString();
     isCanonicalAddressReturnsFalseForNull();
     parseAddressBytesRoundtripsWithComputeDefinitionBytes();
     parseAddressBytesRejectsInvalidFormat();
@@ -67,14 +67,14 @@ public final class AssetDefinitionIdEncoderTests {
         : "isCanonicalAddress must return true for output of encode()";
   }
 
-  private static void isCanonicalAddressReturnsFalseForNoritoString() {
-    assert !AssetDefinitionIdEncoder.isCanonicalAddress("norito:4e5254")
-        : "isCanonicalAddress must return false for norito: strings";
+  private static void isCanonicalAddressReturnsFalseForPlainTextString() {
+    assert !AssetDefinitionIdEncoder.isCanonicalAddress("not-an-address")
+        : "isCanonicalAddress must return false for plain text strings";
   }
 
-  private static void isCanonicalAddressReturnsFalseForLegacyAidFormat() {
-    assert !AssetDefinitionIdEncoder.isCanonicalAddress("aid:2f17c72466f84a4bb8a8e24884fdcd2f")
-        : "isCanonicalAddress must return false for legacy aid: strings";
+  private static void isCanonicalAddressReturnsFalseForMalformedColonString() {
+    assert !AssetDefinitionIdEncoder.isCanonicalAddress("not:an-address")
+        : "isCanonicalAddress must return false for malformed colon-delimited strings";
   }
 
   private static void isCanonicalAddressReturnsFalseForNull() {

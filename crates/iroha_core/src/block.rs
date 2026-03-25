@@ -9898,6 +9898,8 @@ pub(crate) mod valid {
                     entrypoint: "main".to_string(),
                     args: Vec::new(),
                     env: std::collections::BTreeMap::new(),
+                    required_config_names: Vec::new(),
+                    required_secret_names: Vec::new(),
                     capabilities: SoraCapabilityPolicyV1 {
                         network: SoraNetworkPolicyV1::Isolated,
                         allow_wallet_signing: false,
@@ -9975,6 +9977,10 @@ pub(crate) mod valid {
                         process_started_sequence: 1,
                         active_rollout: None,
                         last_rollout: None,
+                        config_generation: 0,
+                        secret_generation: 0,
+                        service_configs: BTreeMap::new(),
+                        service_secrets: BTreeMap::new(),
                     },
                 );
             world.soracloud_service_runtime_mut_for_testing().insert(

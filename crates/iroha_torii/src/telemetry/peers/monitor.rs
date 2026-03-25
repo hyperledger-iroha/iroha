@@ -25,7 +25,6 @@ use url::Url;
 
 use super::{GeoLocation, GeoLookupConfig, PeerConfigSnapshot, ToriiUrl};
 
-const DEFAULT_GEO_ENDPOINT: &str = "http://ip-api.com/json";
 const GEO_QUERY_FIELDS: &str = "status,message,lat,lon,country,city";
 #[cfg(test)]
 const GET_STATUS_INTERVAL: Duration = Duration::from_millis(200);
@@ -104,6 +103,26 @@ pub fn run(
                                 );
                                 return;
                             }
+                            Err(GeoLookupError::MissingEndpoint) => {
+                                iroha_logger::warn!(
+                                    "peer geo lookup enabled without torii.peer_geo.endpoint; skipping geo lookup"
+                                );
+                                return;
+                            }
+                            Err(GeoLookupError::InsecureEndpoint { endpoint }) => {
+                                iroha_logger::warn!(
+                                    %endpoint,
+                                    "peer geo lookup endpoint must use HTTPS; skipping geo lookup"
+                                );
+                                return;
+                            }
+                            Err(GeoLookupError::InvalidEndpoint { endpoint }) => {
+                                iroha_logger::warn!(
+                                    %endpoint,
+                                    "peer geo lookup endpoint is not a base URL; skipping geo lookup"
+                                );
+                                return;
+                            }
                             Err(err) => {
                                 iroha_logger::error!(?err, "failed to collect geo data");
                                 return;
@@ -170,11 +189,11 @@ enum IpApiComResponse {
 
 #[derive(thiserror::Error, Debug)]
 enum RequestError {
-    #[error("request to ip-api.com failed: {0:?}")]
+    #[error("request to geo endpoint failed: {0:?}")]
     Http(#[from] reqwest::Error),
-    #[error("request to ip-api.com failed with message: {message}")]
+    #[error("geo endpoint returned failure message: {message}")]
     FailResponse { message: String },
-    #[error("request to ip-api.com returned invalid payload: {0}")]
+    #[error("geo endpoint returned invalid payload: {0}")]
     InvalidResponse(String),
 }
 
@@ -184,8 +203,12 @@ enum GeoLookupError {
     Disabled,
     #[error("Torii URL does not have host")]
     MissingHost,
+    #[error("peer geo lookup enabled without an endpoint")]
+    MissingEndpoint,
     #[error("Torii host is not public: {host}")]
     NonPublicHost { host: String },
+    #[error("geo endpoint must use HTTPS: {endpoint}")]
+    InsecureEndpoint { endpoint: String },
     #[error("geo endpoint is not a base URL: {endpoint}")]
     InvalidEndpoint { endpoint: String },
     #[error(transparent)]
@@ -375,10 +398,14 @@ fn construct_geo_query(
             host: host.to_owned(),
         });
     }
-    let mut url = endpoint.map_or_else(
-        || Url::parse(DEFAULT_GEO_ENDPOINT).expect("default geo endpoint is valid"),
-        std::clone::Clone::clone,
-    );
+    let Some(mut url) = endpoint.cloned() else {
+        return Err(GeoLookupError::MissingEndpoint);
+    };
+    if url.scheme() != "https" {
+        return Err(GeoLookupError::InsecureEndpoint {
+            endpoint: url.to_string(),
+        });
+    }
     let endpoint_label = url.to_string();
     {
         let mut segments =
@@ -809,13 +836,25 @@ mod tests {
     }
 
     #[test]
-    fn construct_geo_query_uses_default_endpoint() {
+    fn construct_geo_query_requires_explicit_endpoint() {
         let torii_url: ToriiUrl = "http://example.com:8080".parse().expect("valid torii url");
-        let url = construct_geo_query(&torii_url, None).expect("geo query should build");
-        assert_eq!(
-            url.as_str(),
-            "http://ip-api.com/json/example.com?fields=status,message,lat,lon,country,city"
-        );
+        let err =
+            construct_geo_query(&torii_url, None).expect_err("missing endpoint should fail closed");
+        assert!(matches!(err, GeoLookupError::MissingEndpoint));
+    }
+
+    #[test]
+    fn construct_geo_query_rejects_non_https_endpoint() {
+        let torii_url: ToriiUrl = "http://example.com:8080".parse().expect("valid torii url");
+        let endpoint = Url::parse("http://geo.internal/api").expect("valid endpoint");
+        let err = construct_geo_query(&torii_url, Some(&endpoint))
+            .expect_err("non-HTTPS endpoint should fail closed");
+        match err {
+            GeoLookupError::InsecureEndpoint { endpoint } => {
+                assert_eq!(endpoint, "http://geo.internal/api");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     #[test]
@@ -823,10 +862,13 @@ mod tests {
         let torii_url: ToriiUrl = "http://example.com:8080".parse().expect("valid torii url");
         let endpoint = Url::parse("https://geo.internal/api").expect("valid endpoint");
         let url = construct_geo_query(&torii_url, Some(&endpoint)).expect("geo query should build");
-        assert_eq!(
-            url.as_str(),
-            "https://geo.internal/api/example.com?fields=status,message,lat,lon,country,city"
-        );
+        assert_eq!(url.scheme(), "https");
+        assert_eq!(url.host_str(), Some("geo.internal"));
+        assert_eq!(url.path(), "/api/example.com");
+        let fields = url
+            .query_pairs()
+            .find_map(|(key, value)| (key == "fields").then(|| value.into_owned()));
+        assert_eq!(fields.as_deref(), Some(GEO_QUERY_FIELDS));
     }
 
     #[tokio::test]
@@ -845,7 +887,7 @@ mod tests {
             &url,
             GeoLookupConfig {
                 enabled: true,
-                endpoint: None,
+                endpoint: Some(Url::parse("https://geo.internal/api").expect("valid endpoint")),
             },
         )
         .await
@@ -853,6 +895,41 @@ mod tests {
         match err {
             GeoLookupError::NonPublicHost { host } => {
                 assert_eq!(host, "127.0.0.1");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn collect_geo_requires_explicit_endpoint_when_enabled() {
+        let url: ToriiUrl = "http://example.com:8080".parse().expect("valid torii url");
+        let err = collect_geo(
+            &url,
+            GeoLookupConfig {
+                enabled: true,
+                endpoint: None,
+            },
+        )
+        .await
+        .expect_err("missing endpoint should fail closed");
+        assert!(matches!(err, GeoLookupError::MissingEndpoint));
+    }
+
+    #[tokio::test]
+    async fn collect_geo_rejects_non_https_endpoint() {
+        let url: ToriiUrl = "http://example.com:8080".parse().expect("valid torii url");
+        let err = collect_geo(
+            &url,
+            GeoLookupConfig {
+                enabled: true,
+                endpoint: Some(Url::parse("http://geo.internal/api").expect("valid endpoint")),
+            },
+        )
+        .await
+        .expect_err("non-HTTPS endpoint should fail closed");
+        match err {
+            GeoLookupError::InsecureEndpoint { endpoint } => {
+                assert_eq!(endpoint, "http://geo.internal/api");
             }
             other => panic!("unexpected error: {other:?}"),
         }

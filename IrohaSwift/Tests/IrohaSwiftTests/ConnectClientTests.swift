@@ -170,6 +170,18 @@ final class ConnectClientTests: XCTestCase {
         }
     }
 
+    func testBuildsConnectWebSocketRequestRejectsInsecureTransport() {
+        XCTAssertThrowsError(try ConnectClient.makeWebSocketRequest(baseURL: URL(string: "http://localhost")!,
+                                                                    sid: "session-123",
+                                                                    role: .app,
+                                                                    token: "token-xyz")) { error in
+            guard case let ToriiClientError.invalidPayload(reason) = error else {
+                return XCTFail("expected invalidPayload, got \(error)")
+            }
+            XCTAssertTrue(reason.contains("refuses insecure WebSocket protocol"))
+        }
+    }
+
     func testInitWithRequestUsesFactory() {
         let box = RequestBox()
         let stub = StubWebSocketTask()

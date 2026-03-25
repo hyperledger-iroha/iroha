@@ -1,6 +1,653 @@
 # Status
 
-Last updated: 2026-03-24
+Last updated: 2026-03-25
+
+## 2026-03-25 Follow-up: Soracloud services can now read authoritative config through the runtime host
+- Extended the Soracloud runtime/config ingestion path across
+  `crates/iroha_data_model/src/soracloud.rs`,
+  `crates/ivm_abi/src/syscalls.rs`,
+  `crates/ivm/spec/syscalls.toml`,
+  `crates/ivm/docs/syscalls.md`,
+  `crates/irohad/src/soracloud_runtime.rs`,
+  `crates/iroha_core/src/smartcontracts/isi/soracloud.rs`,
+  `crates/iroha_cli/src/soracloud.rs`, and
+  `docs/source/soracloud/cli_local_control_plane.md`.
+- The shipped behavior in this slice:
+  - the Soracloud host envelope now exposes `ReadConfig` alongside the
+    existing state/secret/credential operations;
+  - ABI v1 now includes `SORACLOUD_READ_CONFIG` as an explicit syscall and the
+    golden syscall list is updated accordingly;
+  - the embedded `irohad` Soracloud IVM host now resolves authoritative
+    service config bytes directly from committed deployment state for ordinary
+    handler execution instead of relying only on materialized `configs/`
+    files; and
+  - the focused CLI/core test fallout from the deploy-time inline material
+    work is fixed on this branch.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_data_model/src/soracloud.rs crates/ivm_abi/src/syscalls.rs crates/irohad/src/soracloud_runtime.rs crates/iroha_cli/src/soracloud.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs crates/ivm/tests/abi_syscall_list_golden.rs` (pass)
+  - `CARGO_TARGET_DIR=target_soracloud_readcfg_dm cargo check -p iroha_data_model --lib` (running)
+  - `CARGO_TARGET_DIR=target_soracloud_readcfg_ivm cargo test -p ivm abi_syscall_list_matches_golden -- --nocapture` (running)
+  - `CARGO_TARGET_DIR=target_soracloud_readcfg_runtime cargo test -p irohad ivm_host_public_runtime_reads_authoritative_service_config_entry -- --nocapture` (running)
+  - `CARGO_TARGET_DIR=target_soracloud_readcfg_cli cargo check -p iroha_cli --tests` (running)
+  - `CARGO_TARGET_DIR=target_soracloud_readcfg_core cargo check -p iroha_core --tests` (running)
+- Remaining implementation gap:
+  - authoritative config ingestion is now first-class for IVM services, but
+    the broader one-click secret contract is still unresolved: the runtime
+    still exposes committed secret envelope ciphertext only through the
+    private-runtime path rather than a single public-safe mount/decrypt
+    contract.
+
+## 2026-03-25 Hardening: SoraFS pin and gateway client-IP policy now resolves trusted proxies correctly
+- Closed a medium-severity SoraFS trust-boundary gap around proxy-aware
+  client-IP handling:
+  - general Torii transport config previously had no
+    `torii.transport.trusted_proxy_cidrs` surface, so there was no shared
+    allow-list for reverse proxies that are permitted to assert the canonical
+    client IP;
+  - the ingress remote-IP middleware in `crates/iroha_torii/src/lib.rs`
+    previously rewrote `x-iroha-remote-addr` from `ConnectInfo` alone, which
+    collapsed proxied callers onto the proxy socket address instead of the
+    real client IP; and
+  - the SoraFS pin/gateway paths in
+    `crates/iroha_torii/src/sorafs/pin.rs` and
+    `crates/iroha_torii/src/sorafs/api.rs` did not share a
+    trusted-proxy-aware canonical-IP resolution step at the handler boundary,
+    while storage-pin throttling still keyed on bearer token alone whenever a
+    token was present.
+- The shipped behavior in this slice:
+  - `crates/iroha_config/src/parameters/defaults.rs`,
+    `crates/iroha_config/src/parameters/user.rs`, and
+    `crates/iroha_config/src/parameters/actual.rs` now expose
+    `torii.transport.trusted_proxy_cidrs`, defaulting it to an empty list;
+  - `crates/iroha_torii/src/limits.rs` now provides
+    `ingress_remote_ip(...)` for trusted-proxy-aware canonical-IP resolution
+    and uses the resolved client IP when building limiter/CIDR keys;
+  - `crates/iroha_torii/src/lib.rs` now resolves and rewrites the internal
+    `x-iroha-remote-addr` header from trusted proxies only, preserving valid
+    forwarded client IPs while ignoring spoofed ones from untrusted peers;
+  - `crates/iroha_torii/src/sorafs/pin.rs` and
+    `crates/iroha_torii/src/sorafs/api.rs` now resolve canonical client IPs
+    against `state.trusted_proxy_nets` for storage-pin policy and SoraFS
+    gateway client fingerprinting, even on direct handler paths; and
+  - storage-pin throttling now keys shared bearer tokens by
+    `token + canonical client IP`, so proxied clients sharing one pin token
+    no longer collapse into one rate-limit bucket.
+- Focused regressions now cover:
+  - trusted and untrusted forwarded-header resolution in
+    `crates/iroha_torii/src/limits.rs`;
+  - shared-token bucket separation in `crates/iroha_torii/src/sorafs/pin.rs`;
+  - storage-pin forwarded-client rate limiting and untrusted-header handling
+    in `crates/iroha_torii/src/sorafs/api.rs`;
+  - gateway CAR-range forwarded-client rate limiting and untrusted-header
+    handling in `crates/iroha_torii/src/sorafs/api.rs`; and
+  - the default-empty config posture in `crates/iroha_config/tests/fixtures.rs`.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_config/src/parameters/defaults.rs crates/iroha_config/src/parameters/actual.rs crates/iroha_config/src/parameters/user.rs crates/iroha_config/tests/fixtures.rs crates/iroha_torii/src/limits.rs crates/iroha_torii/src/lib.rs crates/iroha_torii/src/sorafs/pin.rs crates/iroha_torii/src/sorafs/api.rs` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_HOME=/tmp/iroha-cargo-home-trusted-proxy CARGO_TARGET_DIR=/tmp/iroha-codex-target-trusted-proxy cargo test -p iroha_torii --lib limits::tests:: -- --nocapture` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_HOME=/tmp/iroha-cargo-home-trusted-proxy CARGO_TARGET_DIR=/tmp/iroha-codex-target-trusted-proxy cargo test -p iroha_torii --lib sorafs::pin::tests:: -- --nocapture` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_HOME=/tmp/iroha-cargo-home-trusted-proxy CARGO_TARGET_DIR=/tmp/iroha-codex-target-trusted-proxy cargo test -p iroha_torii --lib storage_pin_requires_token_and_respects_allowlist_and_rate_limit -- --nocapture` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_HOME=/tmp/iroha-cargo-home-trusted-proxy CARGO_TARGET_DIR=/tmp/iroha-codex-target-trusted-proxy cargo test -p iroha_torii --lib storage_pin_rate_limit_uses_forwarded_client_ip_from_trusted_proxy -- --nocapture` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_HOME=/tmp/iroha-cargo-home-trusted-proxy CARGO_TARGET_DIR=/tmp/iroha-codex-target-trusted-proxy cargo test -p iroha_torii --lib car_range_rate_limits_repeated_clients -- --nocapture` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_HOME=/tmp/iroha-cargo-home-trusted-proxy CARGO_TARGET_DIR=/tmp/iroha-codex-target-trusted-proxy cargo test -p iroha_torii --lib car_range_rate_limit_uses_forwarded_client_ip_from_trusted_proxy -- --nocapture` (pass)
+  - `CARGO_HOME=/tmp/iroha-cargo-home-trusted-proxy CARGO_TARGET_DIR=/tmp/iroha-codex-target-trusted-proxy cargo test -p iroha_config --test fixtures torii_transport_trusted_proxy_cidrs_default_to_empty -- --nocapture` (pass)
+- Remaining implementation gap:
+  - no additional live SoraFS trusted-proxy/client-IP issue was confirmed in
+    this pass. The remaining security backlog is still the dependency tranche
+    plus CUDA runtime validation on a CUDA-capable host.
+
+## 2026-03-25 Follow-up: multilane custom-genesis pre-exec and mobile asset-id automation are closed
+- Closed the remaining asset-adjacent follow-up items that were still open after the
+  first-release asset-id hard cut:
+  - `crates/iroha_test_network/src/lib.rs` now resolves the effective NPoS/Nexus
+    config before custom-genesis pre-execution, so `ensure_genesis_results(...)`
+    validates staking/public-lane instructions against the real configured stake
+    asset definition instead of falling back to synthetic success when
+    `nexus_config` was missing;
+  - `crates/iroha_test_network/src/config.rs` now carries a direct regression proving
+    that the custom staking genesis fails in the old `None`-config path with the
+    synthetic asset-definition lookup error and succeeds when the resolved
+    `nexus.staking.stake_asset_id` is supplied;
+  - the focused Android Gradle harness now exercises the asset-id/address mains
+    directly through `GradleHarnessTests` for
+    `AssetDefinitionIdEncoderTests`,
+    `AssetIdDecoderTests`,
+    `AssetIdEncoderTests`, and
+    `TransferWirePayloadEncoderTests`;
+  - those Android mains no longer depend on stale hardcoded account literals:
+    the asset-id/address tests now use `TestAccountIds.ed25519Authority(...)`,
+    `TransferWirePayloadEncoderTests` now keeps non-Ed25519 curve support enabled
+    for the duration of the positive encoding assertions, and
+    `OfflineSpendReceiptPayloadEncoderTest` no longer documents or depends on the
+    removed `IROHA_NATIVE_REQUIRED` toggle; and
+  - the previously tracked Swift item turned out to be stale: current bridge/fallback
+    parity coverage in `IrohaSwift/Tests/IrohaSwiftTests/TxBuilderTests.swift` and
+    `IrohaSwift/Tests/IrohaSwiftTests/ConfidentialWalletFixturesTests.swift`
+    already uses canonical Base58 asset-definition IDs in the shipped fixture paths,
+    so no additional Swift code change was required for this follow-up.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_test_network populate_genesis_results_uses_supplied_nexus_config_for_custom_staking_genesis -- --nocapture` (pass)
+  - `cargo test -p integration_tests --test mod cross_dataspace_localnet_genesis_preexecution_smoke -- --nocapture` (pass)
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.address.AssetDefinitionIdEncoderTests,org.hyperledger.iroha.android.address.AssetIdDecoderTests,org.hyperledger.iroha.android.address.AssetIdEncoderTests,org.hyperledger.iroha.android.model.instructions.TransferWirePayloadEncoderTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain` (pass)
+- Remaining implementation gap:
+  - none for this asset-id/mobile follow-up slice; the roadmap items for multilane
+    custom-genesis pre-exec and mobile asset-id automation are now closed.
+
+## 2026-03-25 Follow-up: Soracloud deploy-time required config/secret bindings are now authoritative
+- Extended the Soracloud admission path across
+  `crates/iroha_data_model/src/soracloud.rs`,
+  `crates/iroha_data_model/src/isi/soracloud.rs`,
+  `crates/iroha_core/src/smartcontracts/isi/soracloud.rs`,
+  `crates/iroha_torii/src/soracloud.rs`,
+  `crates/iroha_cli/src/soracloud.rs`, and
+  `docs/source/soracloud/cli_local_control_plane.md`.
+- The shipped behavior in this slice:
+  - `SoraContainerManifestV1` now declares `required_config_names` and
+    `required_secret_names` as explicit admission-time dependencies;
+  - deploy/upgrade instructions now accept optional inline
+    `initial_service_configs` and `initial_service_secrets`, and the
+    provenance payload covers `(bundle, initial_service_configs,
+    initial_service_secrets)` rather than the bundle alone;
+  - deploy, upgrade, and rollback now validate the effective authoritative
+    material set against the revision’s required config/secret names before a
+    new active deployment state is recorded; and
+  - deleting an active config or secret now fails closed when the current
+    bundle still requires that material.
+- The CLI surface now exposes first-deploy / upgrade-time inline material
+  injection through `--initial-configs <path>` and `--initial-secrets <path>`
+  on `iroha app soracloud deploy` and `upgrade`.
+- Validation:
+  - `CARGO_TARGET_DIR=target_soracloud_bindings cargo check -p iroha_data_model --lib` (pass)
+  - `CARGO_TARGET_DIR=target_soracloud_bindings cargo check -p iroha_core --lib` (pass)
+  - `CARGO_TARGET_DIR=target_soracloud_bindings cargo check -p iroha_torii --lib` (pass)
+  - `CARGO_TARGET_DIR=target_soracloud_bindings cargo check -p iroha_cli` (pass)
+- Focused test compilation/execution is still in progress in this branch:
+  - `CARGO_TARGET_DIR=target_soracloud_bindings cargo test -p iroha_data_model soracloud_container_manifest_fixture_roundtrip -- --nocapture`
+  - `CARGO_TARGET_DIR=target_soracloud_coretests cargo test -p iroha_core deploy_soracloud_service_records_bundle_and_audit_state --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=target_soracloud_corechecks cargo check -p iroha_core --tests`
+  - `CARGO_TARGET_DIR=target_soracloud_cli_tests cargo check -p iroha_cli --tests`
+- Remaining implementation gap:
+  - the required-binding contract is now authoritative, but the broader
+    one-click runtime ingestion story is still incomplete: services still read
+    authoritative materialized files by path rather than having a first-class
+    env/file injection contract declared in the manifest.
+
+## 2026-03-25 Hardening: Connect admission no longer defaults missing remote metadata to loopback
+- Closed a fail-open default in the Connect session / websocket admission path:
+  - `handler_connect_session(...)` and `handle_connect_ws_logic(...)` in
+    `crates/iroha_torii/src/lib.rs` previously treated a missing internal
+    `x-iroha-remote-addr` header as `127.0.0.1`; and
+  - that did not create a new externally reachable bypass on the current
+    router because real requests already receive injected `ConnectInfo`, but it
+    was still the wrong security default for per-IP handshake/session
+    accounting if the middleware were ever bypassed by an internal dispatch,
+    future router split, or malformed harness path.
+- The shipped hardening in this slice:
+  - `crates/iroha_torii/src/lib.rs` now requires the injected internal remote
+    address for Connect websocket/session admission and fails closed with
+    `connect: remote addr unavailable` instead of silently assuming loopback;
+  - focused parser/unit tests now cover missing, valid, and invalid injected
+    remote-IP headers; and
+  - a direct handler regression now proves Connect session creation rejects a
+    request that reaches the handler without the injected remote-IP header.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/lib.rs` (pass)
+  - `CARGO_HOME=/tmp/iroha-cargo-home-connect-remote CARGO_TARGET_DIR=/tmp/iroha-codex-target-peer-geo cargo test -p iroha_torii --lib connect_remote_ip_ -- --nocapture` (pass)
+  - `CARGO_HOME=/tmp/iroha-cargo-home-connect-remote CARGO_TARGET_DIR=/tmp/iroha-codex-target-peer-geo cargo test -p iroha_torii --lib connect_session_handler_rejects_missing_remote_addr_header -- --nocapture` (pass)
+- Remaining implementation gap:
+  - no new live Connect ingress finding was confirmed in this pass. This is
+    hardening to keep missing internal transport metadata fail-closed.
+
+## 2026-03-25 Follow-up: Soracloud now materializes committed service config/secret state
+- Extended the Soracloud runtime materialization path across
+  `crates/iroha_core/src/soracloud_runtime.rs`,
+  `crates/irohad/src/soracloud_runtime.rs`,
+  `crates/iroha_torii/src/lib.rs`, and
+  `docs/source/soracloud/cli_local_control_plane.md`.
+- The shipped behavior in this slice:
+  - `SoracloudRuntimeServicePlan` now carries config/secret generations,
+    entry counts, and the concrete materialization directories for committed
+    config payloads, secret envelopes, and the synchronized raw secret tree;
+  - `reconcile_once()` now writes committed config payloads into
+    `services/<service>/<version>/configs/...` as canonical JSON files;
+  - the same runtime pass now writes committed secret envelopes into
+    `services/<service>/<version>/secret_envelopes/...` and synchronizes the
+    legacy raw fallback bytes into `secrets/<service>/<version>/...`; and
+  - stale authoritative secret/config materializations are now pruned on the
+    next reconcile when entries are removed from deployment state.
+- Added focused runtime regressions for:
+  - active service/apartment reconciliation persisting the new committed
+    config/secret materialization tree alongside the existing runtime plan and
+    deployment bundle files; and
+  - rerunning reconciliation after clearing committed config/secret state to
+    remove stale files from both the service revision tree and the
+    synchronized legacy secret root.
+- Validation:
+  - `cargo fmt --all` (pass after the later asset-id cleanup removed the dead
+    `xtask` `rewrite-legacy-asset-literals` bin target)
+  - `CARGO_TARGET_DIR=target_soracloud_materialize cargo check -p iroha_core --lib` (pass)
+  - `CARGO_TARGET_DIR=target_soracloud_materialize cargo check -p iroha_torii --lib` (pass)
+  - `CARGO_TARGET_DIR=target_soracloud_materialize2 cargo check -p irohad --tests` (pass)
+- Focused runtime test execution is still pending in this branch because the
+  `irohad` bin test harness compile is materially slower than the library
+  checks in the current worktree:
+  - `CARGO_TARGET_DIR=target_soracloud_materialize2 cargo test -p irohad --bin irohad reconcile_once_persists_active_service_and_apartment_materializations -- --nocapture`
+  - `CARGO_TARGET_DIR=target_soracloud_materialize2 cargo test -p irohad --bin irohad reconcile_once_prunes_stale_authoritative_service_materializations -- --nocapture`
+  - `CARGO_TARGET_DIR=target_soracloud_materialize2 cargo test -p irohad --bin irohad ivm_host_private_runtime_ -- --nocapture`
+- Remaining implementation gap:
+  - committed config/secret records now materialize deterministically for the
+    runtime, but deploy-time binding validation and the long-term authoritative
+    secret-ingestion contract are still open.
+
+## 2026-03-25 Follow-up: peer telemetry geo lookup now requires an explicit HTTPS endpoint
+- Closed a medium-severity peer-telemetry egress gap:
+  - enabling `torii.peer_geo.enabled=true` without an explicit endpoint
+    previously fell back to the built-in plaintext
+    `http://ip-api.com/json` service in
+    `crates/iroha_torii/src/telemetry/peers/monitor.rs`; and
+  - the duplicated telemetry docs and sample config advertised that fallback,
+    which made it easy to enable peer-geo lookups without noticing the
+    third-party plaintext dependency.
+- The shipped behavior in this slice:
+  - `crates/iroha_torii/src/telemetry/peers/monitor.rs` now fails closed on
+    missing endpoints and non-HTTPS endpoints, logging a warning and skipping
+    geo lookup instead of silently using a built-in plaintext default;
+  - `crates/iroha_config/src/parameters/user.rs` no longer injects an implicit
+    geo endpoint during parse, so the unset state remains explicit until
+    runtime validation; and
+  - the duplicated telemetry docs plus
+    `docs/source/references/peer.template.toml` now state that
+    `torii.peer_geo.endpoint` must be explicitly configured with HTTPS when
+    peer geo lookup is enabled.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `CARGO_HOME=/tmp/iroha-cargo-home-sec14 CARGO_TARGET_DIR=/tmp/iroha-codex-target-peer-geo cargo test -p iroha_torii --features telemetry --lib construct_geo_query -- --nocapture` (pass)
+  - `CARGO_HOME=/tmp/iroha-cargo-home-sec14 CARGO_TARGET_DIR=/tmp/iroha-codex-target-peer-geo cargo test -p iroha_torii --features telemetry --lib collect_geo_ -- --nocapture` (pass)
+  - `CARGO_HOME=/tmp/iroha-cargo-home-sec14 CARGO_TARGET_DIR=/tmp/iroha-codex-target-peer-geo cargo test -p iroha_config torii_peer_geo_parse_ -- --nocapture` (pass)
+- Remaining implementation gap:
+  - no live peer-geo plaintext fallback remains in the current tree. The
+    remaining security backlog is still the dependency tranche plus CUDA
+    runtime validation on a CUDA-capable host.
+
+## 2026-03-25 Follow-up: Soracloud service config/secret control plane landed
+- Extended the Soracloud service control plane across
+  `crates/iroha_data_model/src/soracloud.rs`,
+  `crates/iroha_data_model/src/isi/soracloud.rs`,
+  `crates/iroha_core/src/smartcontracts/isi/soracloud.rs`,
+  `crates/iroha_torii/src/soracloud.rs`,
+  `crates/iroha_torii/src/lib.rs`,
+  `crates/iroha_cli/src/soracloud.rs`, and
+  `crates/irohad/src/soracloud_runtime.rs`.
+- The shipped behavior in this slice:
+  - authoritative deployment state now carries service-scoped config and secret
+    maps plus independent `config_generation` / `secret_generation` counters;
+  - new signed ISIs now support
+    `SetSoracloudServiceConfig`,
+    `DeleteSoracloudServiceConfig`,
+    `SetSoracloudServiceSecret`, and
+    `DeleteSoracloudServiceSecret`, with matching service-audit metadata and
+    provenance hashing;
+  - deploy/upgrade/rollback preserve committed config and secret state instead
+    of dropping it on revision changes;
+  - Torii now exposes authoritative
+    `POST /v1/soracloud/service/config/{set,delete}`,
+    `GET /v1/soracloud/service/config/status`,
+    `POST /v1/soracloud/service/secret/{set,delete}`, and
+    `GET /v1/soracloud/service/secret/status`; and
+  - the CLI now exposes matching `iroha app soracloud config-*` and
+    `secret-*` commands, while private-runtime `ReadSecret` checks committed
+    deployment `service_secrets` before the legacy local file fallback.
+- Focused regression coverage now proves:
+  - authoritative service-config status reads committed deployment config
+    entries;
+  - authoritative service-secret status reads committed deployment secret
+    entries; and
+  - private-runtime secret reads prefer committed deployment secret entries
+    over the older materialized file tree.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target_soracloud_cfg cargo check -p iroha_core --lib` (pass)
+  - `CARGO_TARGET_DIR=target_soracloud_cfg cargo check -p iroha_torii --lib` (pass)
+  - `CARGO_TARGET_DIR=target_soracloud_cfg cargo check -p iroha_cli` (pass)
+  - `CARGO_TARGET_DIR=target_soracloud_torii_cfg cargo test -p iroha_torii authoritative_service_config_status_reads_world_state --lib` (pass)
+  - `CARGO_TARGET_DIR=target_soracloud_torii_cfg cargo test -p iroha_torii authoritative_service_secret_status_reads_world_state --lib` (pass)
+  - `CARGO_TARGET_DIR=target_soracloud_runtime_cfg cargo test -p irohad ivm_host_private_runtime_ -- --nocapture` (pass)
+- Remaining implementation gap:
+  - this slice establishes authoritative service config/secret state and read
+    paths, but it does not yet materialize those records into general
+    one-click service env/file injection or broader deploy-time secret/config
+    binding semantics outside the current private-runtime secret lookup path.
+
+## 2026-03-25 Follow-up: outbound P2P TLS-over-TCP now defaults to TLS-only dials
+- Closed a medium-severity transport-policy gap in the P2P dialer:
+  - `network.tls_enabled=true` previously inherited
+    `tls_fallback_to_plain=true` unless operators explicitly overrode it, so a
+    TLS handshake failure or timeout in `crates/iroha_p2p/src/peer.rs` silently
+    downgraded the outbound dial to plaintext TCP; and
+  - that did not bypass peer authentication because the signed application
+    handshake still binds the peer identity, but it did break the operator's
+    expectation that enabling TLS would fail closed on transport security.
+- The shipped behavior in this slice:
+  - `crates/iroha_config/src/parameters/user.rs` now defaults
+    `tls_fallback_to_plain` to `false`, so `network.tls_enabled=true` is
+    TLS-only unless plaintext fallback is explicitly opted in;
+  - the default-config fixture snapshot, Kagami sample config, and default-like
+    P2P/Torii test helpers now mirror the hardened runtime default; and
+  - the canonical P2P docs in `docs/source/p2p*.md` now describe plaintext
+    fallback as an explicit opt-in instead of the default behavior.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `CARGO_HOME=/tmp/iroha-cargo-home-sec13 CARGO_TARGET_DIR=/tmp/iroha-codex-target-config-tls2 cargo test -p iroha_config tls_fallback_defaults_to_tls_only -- --nocapture` (pass)
+  - `CARGO_HOME=/tmp/iroha-cargo-home-sec13 CARGO_TARGET_DIR=/tmp/iroha-codex-target-p2p-sec13 cargo test -p iroha_p2p --lib start_rejects_tls_without_feature_when_tls_only_outbound -- --nocapture` (pass)
+  - `CARGO_HOME=/tmp/iroha-cargo-home-sec13 CARGO_TARGET_DIR=/tmp/iroha-codex-target-p2p-sec13 cargo test -p iroha_p2p --lib tls_only_dial_requires_p2p_tls_feature_when_no_fallback -- --nocapture` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_HOME=/tmp/iroha-cargo-home-sec13 CARGO_TARGET_DIR=/tmp/iroha-codex-target-torii-connect-gating cargo test -p iroha_torii --test connect_gating --no-run` (pass)
+- Remaining implementation gap:
+  - explicit plaintext fallback remains supported for deployments that
+    intentionally set `tls_fallback_to_plain=true`, but the shipped default now
+    fails closed once TLS is enabled.
+
+## 2026-03-25 Follow-up: local QUIC proxy now rejects non-loopback binds
+- Closed a medium-severity SoraFS workstation-proxy trust-boundary gap:
+  - `crates/sorafs_orchestrator/src/proxy.rs` previously let
+    `LocalQuicProxyConfig.bind_addr` target any socket address, so a
+    non-loopback value such as `0.0.0.0:0` or a LAN IP exposed the "local"
+    QUIC proxy as a remotely reachable listener; and
+  - the same proxy listener did not authenticate clients beyond the
+    version-matched proxy handshake, while `bridge` mode could relay TCP
+    traffic and stream local Norito/CAR/Kaigi files from the operator
+    workstation.
+- The shipped behavior in this slice:
+  - `LocalQuicProxyConfig::parsed_bind_addr(...)` now rejects non-loopback
+    addresses with `ProxyError::BindAddressNotLoopback` before the QUIC
+    endpoint starts;
+  - the config field docs now describe `bind_addr` as loopback-only in
+    `docs/source/sorafs/developer/orchestrator.md` and
+    `docs/portal/docs/sorafs/orchestrator-config.md`; and
+  - focused regression coverage now proves a non-loopback bind fails closed
+    while the intended loopback TCP bridge path still succeeds.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-proxy cargo test -p sorafs_orchestrator spawn_local_quic_proxy_rejects_non_loopback_bind_addr -- --nocapture` (pass)
+  - `/tmp/iroha-codex-target-proxy/debug/deps/sorafs_orchestrator-b3be10a343598c7b --exact proxy::tests::tcp_stream_bridge_transfers_payload --nocapture` (pass)
+- Remaining implementation gap:
+  - no live remote-exposure issue remains in this helper slice. If a future
+    product requirement needs non-loopback proxying, that should be designed
+    as an explicitly authenticated mode rather than relaxing the loopback
+    guard.
+
+## 2026-03-25 Follow-up: active `tar` advisories removed from the dependency graph
+- Closed the remaining active `tar` advisory paths without touching
+  `Cargo.lock`:
+  - `xtask/src/mochi.rs` no longer links the Rust `tar` crate to package Mochi
+    bundles; it now shells out to the system `tar` binary with a fixed
+    argument vector rooted at the approved bundle directory, and
+    `xtask/Cargo.toml` dropped the direct `tar` and `flate2` dependencies;
+  - `iroha_crypto` no longer pulls `libsodium-sys-stable` for Ed25519 interop
+    tests; those checks now use the already-present OpenSSL dev dependency in
+    `crates/iroha_crypto/src/signature/ed25519.rs`, which removes the last
+    active `tar` path from the dependency graph; and
+  - `cargo-deny` now reports five remaining advisories instead of seven:
+    `rustls-webpki`, `pqcrypto-dilithium`, `pqcrypto-kyber`, `derivative`, and
+    `paste`.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 cargo test -p xtask create_archive_packages_bundle_directory -- --nocapture` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 cargo check -p xtask` (pass)
+  - `cargo tree -p xtask -e normal -i tar` (pass: no matching package)
+  - `cargo tree -p iroha_crypto -e all -i libsodium-sys-stable` (pass: no matching package)
+  - `cargo tree -p iroha_crypto -e all -i tar` (pass: no matching package)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 cargo test -p iroha_crypto ed25519_verify -- --nocapture` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 cargo test -p iroha_crypto ed25519_sign -- --nocapture` (pass)
+  - `cargo deny check advisories bans sources --hide-inclusion-graph` (expected fail: five advisories remain for `rustls-webpki`, `pqcrypto-*`, `derivative`, and `paste`)
+- Remaining implementation gap:
+  - no live `tar` advisory remains in the active graph, but `Cargo.lock`
+    still contains stale historical entries because this repo policy forbids
+    lockfile edits in this pass. The remaining dependency backlog is now the
+    five advisories still reported by `cargo-deny`.
+
+## 2026-03-25 Follow-up: SDK transport guards now treat auth headers, canonicalAuth, and raw private_key bodies as sensitive
+- Closed a cross-SDK transport-validation gap across the sampled Swift,
+  Java/Android, Kotlin, and JS clients:
+  - some helper paths only treated explicit auth headers as transport-sensitive,
+    so raw `private_key*` JSON bodies could still be sent over plain `http`; and
+  - the JS `ToriiClient` also added `canonicalAuth` headers after its transport
+    checks, so signed app-auth requests could bypass the scheme/host guard.
+- The shipped behavior in this slice:
+  - Swift now centralizes the policy in
+    `IrohaSwift/Sources/IrohaSwift/TransportSecurity.swift` and applies it from
+    `NoritoRpcClient`, `ToriiClient`, and `ConnectClient`, so insecure/cross-host
+    auth-header, websocket, and raw-`private_key` request paths fail closed;
+  - Java/Android and Kotlin now share the same policy through
+    `TransportSecurity.{java,kt}` and apply it from Norito-RPC, request-builder,
+    offline/subscription, event-stream, and websocket surfaces; and
+  - JS `ToriiClient._request(...)` now treats `canonicalAuth` and JSON bodies
+    containing `private_key*` fields as sensitive transport material, blocks
+    insecure/cross-host delivery for those requests, and records
+    `hasSensitiveBody` / `hasCanonicalAuth` in downgraded-transport telemetry.
+- Validation:
+  - `cd IrohaSwift && swift test --filter 'NoritoRpcClientTests/testCallRejectsInsecureAuthorizationHeader'` (pass)
+  - `cd IrohaSwift && swift test --filter 'ConnectClientTests/testBuildsConnectWebSocketRequestRejectsInsecureTransport'` (pass)
+  - `cd IrohaSwift && swift test --filter 'ToriiClientTests/testCreateSubscriptionPlanRejectsInsecureTransportForPrivateKeyBody'` (pass)
+  - `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.TransportSecurityClientTest --console=plain` (pass)
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew android:compileDebugUnitTestJavaWithJavac --console=plain` (pass)
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.NoritoRpcClientTests,org.hyperledger.iroha.android.client.OfflineToriiClientTests,org.hyperledger.iroha.android.client.SubscriptionToriiClientTests,org.hyperledger.iroha.android.client.stream.ToriiEventStreamClientTests,org.hyperledger.iroha.android.client.websocket.ToriiWebSocketClientTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain` (pass)
+  - `node --test javascript/iroha_js/test/transportSecurity.test.js javascript/iroha_js/test/toriiCanonicalAuth.test.js` (pass)
+  - `node --test javascript/iroha_js/test/toriiSubscriptions.test.js` (pass)
+- Remaining implementation gap:
+  - no new live SDK transport bug from this pass, but the broader Swift/Android/Kotlin/JS suites were not rerun here; coverage remains focused on the transport/auth surfaces touched by this remediation.
+
+## 2026-03-25 Follow-up: Torii webhook egress and MCP dispatch now preserve the checked trust boundary
+- Closed two medium-severity Torii trust-boundary bugs in the same slice:
+  - secure webhook delivery previously validated destination DNS answers
+    against the egress guard and then let HTTPS / WSS re-resolve the hostname
+    at connect time; and
+  - MCP internal route dispatch previously rewrote every tool call as loopback
+    (`x-iroha-remote-addr=127.0.0.1` plus loopback `ConnectInfo`), which let
+    MCP inherit CIDR-based route privilege once MCP and a loopback-trusting
+    route were enabled together.
+- The shipped behavior in this slice:
+  - `crates/iroha_torii/src/webhook.rs` now pins vetted HTTPS DNS answers via
+    `reqwest::Client::builder().resolve_to_addrs(...)` and performs WSS
+    handshakes over a raw `TcpStream` connected to an already approved address,
+    so the destination checked by policy is the destination actually dialed;
+  - `crates/iroha_torii/src/mcp.rs` now preserves the outer request's injected
+    remote IP when internally dispatching a tool call, synthesizes
+    `ConnectInfo` from that real caller IP instead of loopback, and rejects
+    both `x-iroha-remote-addr` and `x-forwarded-client-cert` supplied through
+    MCP `headers`; and
+  - focused regression coverage now proves both the webhook pinning helpers
+    and the MCP remote-address preservation/spoof-blocking behavior.
+- Validation:
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-webhook-https cargo check -p iroha_torii --lib --features app_api_https` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-webhook-https cargo test -p iroha_torii --lib https_delivery_dns_override_ --features app_api_https -- --nocapture` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-webhook2 cargo test -p iroha_torii --lib websocket_pinned_connect_addr_pins_secure_delivery_when_guarded -- --nocapture` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-mcp cargo test -p iroha_torii --lib dispatch_route_preserves_inbound_remote_addr_for_internal_allowlist_checks -- --nocapture` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-mcp cargo test -p iroha_torii --lib dispatch_route_blocks_remote_addr_spoofing_from_extra_headers -- --nocapture` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-mcp cargo test -p iroha_torii --lib apply_extra_headers_blocks_reserved_internal_headers -- --nocapture` (pass)
+- Remaining implementation gap:
+  - the narrower `--no-default-features --features app_api,app_api_https`
+    Torii lib-test matrix still fails for unrelated pre-existing DA /
+    Soracloud feature-gating issues (`iroha_zkp_halo2`, gated proxy helpers,
+    and `p2p` field references), so this pass validated the shipped default
+    MCP path and the `app_api_https` webhook path rather than full
+    minimal-feature parity.
+
+## 2026-03-25 Follow-up: outbound P2P handshakes now fail closed on peer-id substitution
+- Closed an outbound identity-binding gap in `iroha_p2p`: dialing peer `X`
+  could previously finish as authenticated peer `Y` because the handshake
+  verified the remote signature but never checked that the resulting public key
+  matched the `peer_id` the network actor intended to reach.
+- The shipped behavior in this slice:
+  - `crates/iroha_p2p/src/peer.rs` now carries the expected outbound
+    `PeerId` through `ConnectedTo -> SendKey -> GetKey`, and
+    `GetKey::read_their_public_key(...)` now returns
+    `HandshakePeerMismatch` if the signed handshake authenticates a different
+    key;
+  - inbound P2P handshakes remain unchanged and keep `expected_peer_id=None`,
+    so only outbound dials perform the extra identity-binding check; and
+  - focused regression coverage now includes a negative mismatched-key case
+    plus the existing positive signed-handshake case to prove normal outbound
+    handshakes still succeed.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-p2p cargo test -p iroha_p2p --lib --no-run` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-p2p cargo test -p iroha_p2p --lib outgoing_handshake_rejects_unexpected_peer_identity -- --nocapture` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-p2p cargo test -p iroha_p2p --lib handshake_v1_defaults_to_trust_gossip -- --nocapture` (pass)
+- Remaining implementation gap:
+  - none from this specific P2P slice. The sampled QUIC streaming helper path
+    was traced far enough to show its `StreamingClient::connect(...)` /
+    `StreamingServer::bind(...)` call sites are currently test-only, so it did
+    not become a new live runtime finding in this pass.
+
+## 2026-03-25 Follow-up: final first-release asset-id legacy literals removed from live sources and fixtures
+- Completed the last live public asset-id cleanup so first-release user-facing paths now consistently use a single canonical asset literal form: `<asset-definition-id>#<account-id>` with optional `#dataspace:<id>` for scoped balances.
+- The shipped behavior in this slice:
+  - Swift offline encoding/decoding and Torii client parsing now build, validate, and render canonical public `AssetId` literals instead of `norito:<hex>` wrappers; `TransactionEncoder`, `OfflineNoritoEncoding`, `OfflineNoritoDecoding`, and Torii explorer parsing all share the same public-form validation path;
+  - the remaining live Rust/JS host/bridge/docs wording in `iroha_js_host`, `connect_norito_bridge`, Torii MCP tests, the tutorial example, and the IVM TLV examples no longer describe `norito:<hex>` or `aid:` as current asset-id interfaces;
+  - Android/JVM transfer encoders dropped the unused legacy decode helpers that only existed for the removed prefixed asset-id forms; and
+  - the remaining checked-in capability fixtures that still stored `aid:<hex>` asset-definition ids now use canonical Base58 addresses (`5kb2KcCA3A1vc4BetPzvuZT8PYR3`, `66owaQmAQMuHxPzxUN3bqZ6FJfDa`, `62Fk4FPcMuLvW5QjDGNF2a4jAmjM`), the old alias-shaped `asset_def:name#domain` access-hint compatibility path was removed, the dead `xtask` rewrite binary/manifest entry was deleted, and the only remaining `aid:` hits in the tree are deliberate negative tests asserting rejection.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_data_model asset_id_parse_literal_rejects_malformed_colon_literal -- --nocapture` (pass)
+  - `cargo test -p iroha_core access:: --lib -- --nocapture` (pass)
+  - `cd IrohaSwift && swift build` (pass)
+  - repo searches for residual public `norito:<hex>` / `aid:<hex>` asset-id literals in touched source/docs/fixtures (clean except for deliberate negative tests)
+- Remaining implementation gap:
+  - no known functional gap remains in the first-release asset-id hard cut, and the
+    previously tracked mobile follow-up items were closed later on 2026-03-25.
+
+## 2026-03-25 Follow-up: tracked cargo-deny policy now runs directly and the dependency findings are triaged
+- Migrated the checked-in [`deny.toml`](/Users/takemiyamakoto/dev/iroha/deny.toml) to the current cargo-deny 0.19 schema, so the dependency audit no longer depends on a temporary compatibility file.
+- The shipped behavior in this slice:
+  - `cargo deny check advisories bans sources --hide-inclusion-graph` now runs directly from the repo root and currently fails on five live findings: `derivative`, `paste`, `pqcrypto-dilithium`, `pqcrypto-kyber`, and `rustls-webpki`;
+  - the `rustls-webpki` advisory is runtime-reachable through the `reqwest` / `hyper-rustls` client stack in production crates (`iroha_torii`, `iroha_cli`, `iroha_telemetry`, `sorafs_car`), but the current tree does not appear to enable CRL-based revocation checking, so the specific bug precondition is absent unless CRL handling is added later;
+  - the two previously reported `tar` advisories are no longer active in the dependency graph after the later `xtask` and `iroha_crypto` follow-up fixes; and
+  - the PQ advisories remain direct product dependencies in `iroha_crypto`, while `derivative` / `paste` remain transitive BLS / arkworks debt rather than direct workspace macro usage.
+- Validation:
+  - `cargo deny check advisories bans sources --hide-inclusion-graph` (fails with the five advisories above; `bans` ok; `sources` ok)
+  - `cargo tree -p iroha_torii -e normal -i rustls-webpki`
+  - `cargo tree -p xtask -e normal -i tar` (now reports no matching package)
+  - `cargo tree -p iroha_crypto -e all -i tar` (now reports no matching package)
+  - `cargo tree -p iroha_crypto -e all -i libsodium-sys-stable` (now reports no matching package)
+  - `cargo tree -p iroha_crypto -e normal -i pqcrypto-dilithium`
+  - `cargo tree -p iroha_crypto -e normal -i pqcrypto-kyber`
+  - repo search for revocation/CRL usage under `crates/`
+  - `cd crates/ivm/fuzz && cargo +nightly fuzz run --fuzz-dir . tlv_validate -- -runs=4000 -rss_limit_mb=3072 -max_total_time=30` (initial nightly build remained too slow for a full scripted result in this pass, but it produced the fuzz binary)
+  - `cd crates/ivm/fuzz && ./target/aarch64-apple-darwin/release/tlv_validate -runs=200 -rss_limit_mb=3072 -max_total_time=15` (pass; reached the libFuzzer loop and completed 200 runs from an empty corpus)
+- Remaining implementation gap:
+  - the dependency scan now has first-class repo support, but the remaining fixes still require lockfile updates or upstream dependency-stack changes, and the full nightly IVM fuzz-smoke script still needs a warm-cache rerun for a stable recorded result.
+
+## 2026-03-24 Follow-up: public asset ids now use one canonical text form
+- Switched `iroha_data_model::asset::AssetId` display/`FromStr`/JSON behavior to
+  the public literal `<asset-definition-id>#<account-id>` with optional
+  `#dataspace:<id>` for scoped balances. This entry originally still mentioned
+  internal `norito:<hex>` helpers; those helpers were removed in the
+  2026-03-25 follow-up above.
+- Updated the public validators/documentation touched in this pass so they no
+  longer advertise `norito:<hex>` as the default user-facing asset-id format:
+  `crates/iroha_cli/CommandLineHelp.md`,
+  `docs/source/{data_model.md,data_model_and_isi_spec.md,sdk/swift/index.md,sdk/android/index.md,sdk/js/validation.md}`,
+  `javascript/iroha_js/src/{normalizers.js,transaction.js}`,
+  `IrohaSwift/Sources/IrohaSwift/{ToriiClient.swift,TransactionEncoder.swift}`,
+  and `java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/TransferWirePayloadEncoder.java`.
+- Validation in progress:
+  - `cargo check -p iroha_cli --tests` (pass)
+  - `cd IrohaSwift && swift build` (pass)
+  - focused `iroha_data_model` tests were recompiled successfully while the
+    long-running filtered test command continued draining the crate test set
+    under Cargo’s package lock.
+
+## 2026-03-24 Follow-up: dependency and fuzz validation now produce live audit signal
+- Unblocked the previously missing dependency/fuzz tooling and replaced those
+  audit blind spots with real results across `deny.toml`,
+  `scripts/fuzz_smoke.sh`, the Norito/IVM fuzz manifests, and the Norito JSON
+  equivalence fuzz target.
+- The shipped behavior in this slice:
+  - local `cargo-deny` / `cargo-fuzz` are now installed, and a current-schema
+    temporary compatibility config was enough to run `cargo-deny` without
+    mutating the tracked `deny.toml`; under that run, `bans` and `sources`
+    were clean while `advisories` initially returned seven live dependency findings:
+    `RUSTSEC-2024-0388` (`derivative` unmaintained),
+    `RUSTSEC-2024-0436` (`paste` unmaintained),
+    `RUSTSEC-2024-0380` (`pqcrypto-dilithium` replaced),
+    `RUSTSEC-2024-0381` (`pqcrypto-kyber` replaced),
+    `RUSTSEC-2026-0049` (`rustls-webpki` CRL matching bug),
+    `RUSTSEC-2026-0067` (`tar` symlink chmod issue), and
+    `RUSTSEC-2026-0068` (`tar` PAX size issue); later fixes in `xtask` and
+    `iroha_crypto` removed both active `tar` findings, reducing the live count
+    to five;
+  - `scripts/fuzz_smoke.sh` now passes explicit `--fuzz-dir` roots and uses
+    `cargo +nightly fuzz run`, matching the repo’s actual fuzz layout and
+    libFuzzer’s nightly requirement under the stable workspace toolchain
+    override;
+  - `crates/{norito,ivm}/fuzz/Cargo.toml` now advertise
+    `[package.metadata] cargo-fuzz = true` in the format current
+    `cargo-fuzz` expects; and
+  - `crates/norito/fuzz/fuzz_targets/json_from_json_equiv.rs` no longer
+    double-derives the fast JSON traits or incorrectly derives `Eq` for a
+    `f64`-bearing struct, so the Norito fuzz smoke targets compile and run
+    again.
+- Validation:
+  - `cargo install cargo-deny --locked` (pass)
+  - `cargo install cargo-fuzz --locked` (pass)
+  - `cargo deny check advisories bans sources` (was blocked in this earlier
+    pass by tracked `deny.toml` schema drift against cargo-deny 0.19; resolved
+    in the 2026-03-25 follow-up above)
+  - `cargo deny check advisories bans sources -c /tmp/iroha-deny-compat.*.toml`
+    (advisories failed with the seven findings above; `bans` ok; `sources`
+    ok)
+  - `cargo deny --format json check advisories -c /tmp/iroha-deny-compat.*.toml`
+    (pass; produced the seven advisory records above)
+  - `bash -n scripts/fuzz_smoke.sh` (pass)
+  - `bash scripts/fuzz_smoke.sh` (Norito `json_parse_string`,
+    `json_parse_string_ref`, `json_skip_value`, and `json_from_json_equiv`
+    passed; the IVM `tlv_validate` first nightly build was still in progress
+    at handoff, so no final IVM fuzz result was recorded in this pass)
+- Remaining implementation gap:
+  - finish the IVM nightly fuzz-smoke run after the large first build
+    completes, then rerun the full script on a warm cache to collect a stable
+    pass/fail result for `tlv_validate` and `kotodama_lower`.
+
+## 2026-03-24 Follow-up: public CUDA Merkle-pair and multi-round AES batch entry points now have focused regressions
+- Extended the CUDA regression layer in `crates/ivm/src/cuda.rs` beyond the
+  internal startup self-tests.
+- The shipped behavior in this slice:
+  - `sha256_pairs_reduce_cuda` is now pinned by a direct CPU-parity regression
+    that covers the odd-leaf carry path used by the public Merkle reducer; and
+  - `aesenc_rounds_batch_cuda` / `aesdec_rounds_batch_cuda` now have focused
+    multi-round batch parity regressions against the scalar AES reference path,
+    so the public fused CUDA entry points are covered in source alongside the
+    existing internal admission checks.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo check -p ivm` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-cuda-check cargo check -p ivm --features cuda --tests` (pass; `build.rs` still warns because `nvcc` is absent on this host)
+- Remaining implementation gap:
+  - this host still cannot link or execute the `cust`-backed CUDA test
+    binaries, so the new public-kernel regressions are compile-validated here
+    but still need runtime execution on a CUDA-capable machine.
+
+## 2026-03-24 Follow-up: public Metal Merkle-pair and multi-round AES batch entry points now have focused regressions
+- Extended the `ivm` Metal regression layer in
+  `crates/ivm/src/vector.rs` beyond startup self-tests.
+- The shipped behavior in this slice:
+  - `metal_sha256_pairs_reduce` is now pinned by a direct parity test against
+    the CPU Merkle pair-reduction path, including the odd-leaf carry case used
+    by the public reducer;
+  - `metal_aesenc_rounds_batch` and `metal_aesdec_rounds_batch` are now pinned
+    by focused multi-round batch tests against the scalar AES reference path,
+    instead of being covered only indirectly by startup admission; and
+  - the sampled Metal startup truth set remains the fail-closed gate, but the
+    public fused-kernel entry points now also have dedicated regressions that
+    exercise the exported runtime functions directly.
+- Validation:
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_sha256_pairs_reduce_matches_cpu -- --nocapture` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_aes_rounds_batch_matches_scalar -- --nocapture` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo check -p ivm --features metal --tests` (pass)
+- Remaining implementation gap:
+  - the corresponding CUDA runtime paths still need live-driver execution on a
+    CUDA-capable host before this same public-kernel coverage can be validated
+    beyond compile-time admission checks.
 
 ## 2026-03-24 Follow-up: shared Ed25519 GPU challenge preparation is unified across the accelerator admission paths
 - Removed another accelerator drift point across
@@ -729,6 +1376,11 @@ Last updated: 2026-03-24
     authoritative primary peer it targeted, so a proxy response from the wrong
     peer or with an unsupported response schema now fails closed instead of
     being accepted purely by matching `request_id`, and
+  - when that wrong peer is still an assigned generated-HF host for the same
+    placement, the runtime now reports the responder through the existing
+    `WarmupNoShow` / `AssignedHeartbeatMiss` evidence path before the same
+    authoritative reconcile hint is enqueued, so stale primary/replica
+    authority drift no longer lands as reconcile-only noise; and
   - now auto-reports `AdvertContradiction` when the local validator's runtime
     peer id disagrees with its authoritative model-host advert peer id.
 - Added focused runtime tests covering:
@@ -740,7 +1392,9 @@ Last updated: 2026-03-24
   - remote-primary health reporting for generated-HF proxy failures; and
   - runtime-side advert-contradiction reporting for local peer-id mismatch; and
   - reconcile-time `AssignedHeartbeatMiss` reporting for a failing warm local
-    replica.
+    replica; and
+  - unexpected assigned proxy-responder reporting for both warm and warming
+    generated-HF hosts.
 - Validation:
   - `cargo fmt --all` (pass)
   - `cargo check -p irohad --tests` (pass)
@@ -4189,8 +4843,8 @@ Last updated: 2026-03-24
   - `cargo test -p integration_tests --test address_canonicalisation account_transactions_ -- --nocapture` (pass)
   - `cargo test -p integration_tests --test address_canonicalisation explorer_account_qr_ -- --nocapture` (pass)
 
-## 2026-03-15 Follow-up: mobile offline asset-id literal builders (`norito:<hex>`)
-- Implemented SDK-facing support for building canonical encoded asset IDs from textual parts
+## 2026-03-15 Follow-up: mobile offline asset-id literal builders (later superseded by public literals)
+- Implemented SDK-facing support for building then-current canonical asset IDs from textual parts
   (`assetDefinitionId` + `accountId`) via `OfflineNorito.encodeAssetId` paths and bridge/native hooks.
 - `connect_norito_bridge`:
   - added literal encoder helper and exported C ABI surface
@@ -7002,7 +7656,7 @@ Last updated: 2026-03-24
 - Stabilized soft-fork assertion behavior in `integration_tests/tests/extra_functional/unstable_network.rs`:
   - For forced soft-fork runs, final supply now accepts `[rounds-1, rounds]` to account for bounded final-round lag.
 - Fixed trigger bytecode decode/runtime rejection:
-  - Updated `crates/kotodama_lang/src/samples/mint_rose_trigger.ko` to canonical asset literal `aid:6872454e9c044641aa581ec5f3801619`.
+  - Updated `crates/kotodama_lang/src/samples/mint_rose_trigger.ko` to canonical asset literal `62Fk4FPcMuLvW5QjDGNF2a4jAmjM`.
   - Recompiled:
     - `crates/kotodama_lang/src/samples/mint_rose_trigger.to`
     - `integration_tests/fixtures/ivm/mint_rose_trigger.to`

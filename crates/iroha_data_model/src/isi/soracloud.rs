@@ -4,8 +4,10 @@
 //! authoritative on-chain world model instead of Torii-local file persistence.
 
 use core::cmp::Ordering;
+use std::collections::BTreeMap;
 
 use iroha_crypto::Hash;
+use iroha_primitives::json::Json;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
@@ -16,12 +18,13 @@ use crate::{
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
         AgentApartmentManifestV1, DecryptionAuthorityPolicyV1, DecryptionRequestV1,
-        FheExecutionPolicyV1, FheJobSpecV1, FheParamSetV1, SoraDeploymentBundleV1,
-        SoraHfResourceProfileV1, SoraModelHostCapabilityRecordV1, SoraModelHostViolationKindV1,
-        SoraModelPrivacyModeV1, SoraPrivateCompileProfileV1, SoraPrivateInferenceCheckpointV1,
-        SoraPrivateInferenceSessionStatusV1, SoraPrivateInferenceSessionV1, SoraRuntimeReceiptV1,
-        SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1, SoraStateEncryptionV1,
-        SoraStateMutationOperationV1, SoraUploadedModelBundleV1, SoraUploadedModelChunkV1,
+        FheExecutionPolicyV1, FheJobSpecV1, FheParamSetV1, SecretEnvelopeV1,
+        SoraDeploymentBundleV1, SoraHfResourceProfileV1, SoraModelHostCapabilityRecordV1,
+        SoraModelHostViolationKindV1, SoraModelPrivacyModeV1, SoraPrivateCompileProfileV1,
+        SoraPrivateInferenceCheckpointV1, SoraPrivateInferenceSessionStatusV1,
+        SoraPrivateInferenceSessionV1, SoraRuntimeReceiptV1, SoraServiceMailboxMessageV1,
+        SoraServiceRuntimeStateV1, SoraStateEncryptionV1, SoraStateMutationOperationV1,
+        SoraUploadedModelBundleV1, SoraUploadedModelChunkV1,
     },
     sorafs::pin_registry::StorageClass,
 };
@@ -39,6 +42,12 @@ fn encoded_order<T: Encode>(left: &T, right: &T) -> Ordering {
 pub struct DeploySoracloudService {
     /// Bundle being admitted.
     pub bundle: SoraDeploymentBundleV1,
+    /// Optional authoritative config entries committed atomically with this deploy.
+    #[norito(default)]
+    pub initial_service_configs: BTreeMap<String, Json>,
+    /// Optional authoritative secret entries committed atomically with this deploy.
+    #[norito(default)]
+    pub initial_service_secrets: BTreeMap<String, SecretEnvelopeV1>,
     /// Provenance attestation over the bundle payload.
     pub provenance: ManifestProvenance,
 }
@@ -60,6 +69,12 @@ impl PartialOrd for DeploySoracloudService {
 pub struct UpgradeSoracloudService {
     /// Bundle being admitted as the candidate revision.
     pub bundle: SoraDeploymentBundleV1,
+    /// Optional authoritative config entries committed atomically with this upgrade.
+    #[norito(default)]
+    pub initial_service_configs: BTreeMap<String, Json>,
+    /// Optional authoritative secret entries committed atomically with this upgrade.
+    #[norito(default)]
+    pub initial_service_secrets: BTreeMap<String, SecretEnvelopeV1>,
     /// Provenance attestation over the bundle payload.
     pub provenance: ManifestProvenance,
 }
@@ -91,6 +106,102 @@ pub struct RollbackSoracloudService {
 impl crate::seal::Instruction for RollbackSoracloudService {}
 
 impl PartialOrd for RollbackSoracloudService {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(encoded_order(self, other))
+    }
+}
+
+/// Record or replace an authoritative Soracloud service config entry.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SetSoracloudServiceConfig {
+    /// Service whose config entry should be updated.
+    pub service_name: Name,
+    /// Stable service-scoped config identifier.
+    pub config_name: String,
+    /// Canonical typed config value.
+    pub value_json: Json,
+    /// Provenance attestation over the config payload.
+    pub provenance: ManifestProvenance,
+}
+
+impl crate::seal::Instruction for SetSoracloudServiceConfig {}
+
+impl PartialOrd for SetSoracloudServiceConfig {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(encoded_order(self, other))
+    }
+}
+
+/// Remove an authoritative Soracloud service config entry.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct DeleteSoracloudServiceConfig {
+    /// Service whose config entry should be removed.
+    pub service_name: Name,
+    /// Stable service-scoped config identifier.
+    pub config_name: String,
+    /// Provenance attestation over the config payload.
+    pub provenance: ManifestProvenance,
+}
+
+impl crate::seal::Instruction for DeleteSoracloudServiceConfig {}
+
+impl PartialOrd for DeleteSoracloudServiceConfig {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(encoded_order(self, other))
+    }
+}
+
+/// Record or replace an authoritative Soracloud service secret entry.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SetSoracloudServiceSecret {
+    /// Service whose secret entry should be updated.
+    pub service_name: Name,
+    /// Stable service-scoped secret identifier.
+    pub secret_name: String,
+    /// Encrypted secret envelope.
+    pub secret: SecretEnvelopeV1,
+    /// Provenance attestation over the secret payload.
+    pub provenance: ManifestProvenance,
+}
+
+impl crate::seal::Instruction for SetSoracloudServiceSecret {}
+
+impl PartialOrd for SetSoracloudServiceSecret {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(encoded_order(self, other))
+    }
+}
+
+/// Remove an authoritative Soracloud service secret entry.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct DeleteSoracloudServiceSecret {
+    /// Service whose secret entry should be removed.
+    pub service_name: Name,
+    /// Stable service-scoped secret identifier.
+    pub secret_name: String,
+    /// Provenance attestation over the secret payload.
+    pub provenance: ManifestProvenance,
+}
+
+impl crate::seal::Instruction for DeleteSoracloudServiceSecret {}
+
+impl PartialOrd for DeleteSoracloudServiceSecret {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(encoded_order(self, other))
     }

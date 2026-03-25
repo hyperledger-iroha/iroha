@@ -2,9 +2,6 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs,
-    io::Write as _,
-    path::PathBuf,
     str::FromStr,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -12,105 +9,44 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use ciborium::{de::from_reader, value::Value as CborValue};
 use ed25519_dalek::{Signature as DalekSignature, Verifier, VerifyingKey};
-use iroha_core::state::WorldReadOnly;
+use iroha_core::{
+    queue,
+    smartcontracts::isi::offline::{
+        ReserveAppleAppAttestVerification, verify_reserve_apple_app_attest,
+    },
+    state::WorldReadOnly,
+};
 use iroha_crypto::{Hash, PrivateKey, Signature};
 use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
     isi::offline::{
-        RefundOfflineEscrowBalance, RegisterOfflineVerdictRevocation, ReserveOfflineEscrowBalance,
+        CommitOfflineReserveOperation, RefundOfflineEscrowBalance, RegisterOfflineReserve,
+        RegisterOfflineVerdictRevocation, ReserveOfflineEscrowBalance,
     },
-    offline::{OfflineVerdictRevocation, OfflineVerdictRevocationReason},
+    metadata::Metadata,
+    name::Name,
+    offline::{
+        OfflineAppleAppAttestBinding as SharedOfflineAppleAppAttestBinding,
+        OfflineReserveEnvelope as SharedOfflineReserveEnvelope,
+        OfflineReserveOperationResult as SharedOfflineReserveOperationResult,
+        OfflineReserveRecord as SharedOfflineReserveRecord,
+        OfflineReserveState as SharedOfflineReserveState,
+        OfflineSpendAuthorization as SharedOfflineSpendAuthorization, OfflineVerdictRevocation,
+        OfflineVerdictRevocationReason,
+    },
     prelude::{InstructionBox, Numeric, TransactionBuilder},
+    transaction::SignedTransaction,
 };
+use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
 use mv::storage::StorageReadOnly;
 use norito::json::{self};
-use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{AppState, Error, OfflineIssuerSigner, routing};
 
 const TRANSFER_PREFIX: &str = "wallet-offline-transfer:";
-fn store_path() -> PathBuf {
-    crate::data_dir::base_dir().join("offline_reserves.json")
-}
-
-fn load_store_state() -> Result<OfflineReserveStoreState, Error> {
-    let path = store_path();
-    if !path.exists() {
-        return Ok(OfflineReserveStoreState::default());
-    }
-    let bytes = fs::read(&path).map_err(|err| {
-        conversion_error(format!(
-            "failed to read offline reserve registry at {}: {err}",
-            path.display()
-        ))
-    })?;
-    json::from_slice(&bytes).map_err(|err| {
-        conversion_error(format!(
-            "failed to decode offline reserve registry at {}: {err}",
-            path.display()
-        ))
-    })
-}
-
-fn persist_store_state(state: &OfflineReserveStoreState) -> Result<(), Error> {
-    let path = store_path();
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|err| {
-            conversion_error(format!(
-                "failed to create offline reserve registry directory {}: {err}",
-                parent.display()
-            ))
-        })?;
-    }
-    let payload = json::to_vec_pretty(state).map_err(|err| {
-        conversion_error(format!("failed to encode offline reserve registry: {err}"))
-    })?;
-    let tmp_dir = path
-        .parent()
-        .map(PathBuf::from)
-        .unwrap_or_else(crate::data_dir::base_dir);
-    let mut tmp = tempfile::NamedTempFile::new_in(&tmp_dir).map_err(|err| {
-        conversion_error(format!(
-            "failed to create temp reserve registry file: {err}"
-        ))
-    })?;
-    tmp.write_all(&payload)
-        .and_then(|_| tmp.flush())
-        .map_err(|err| conversion_error(format!("failed to write reserve registry: {err}")))?;
-    tmp.persist(&path).map_err(|err| {
-        conversion_error(format!(
-            "failed to persist offline reserve registry at {}: {err}",
-            path.display()
-        ))
-    })?;
-    Ok(())
-}
-
-pub(crate) struct OfflineReserveStore {
-    inner: RwLock<OfflineReserveStoreState>,
-}
-
-impl Default for OfflineReserveStore {
-    fn default() -> Self {
-        Self {
-            inner: RwLock::new(load_store_state().unwrap_or_else(|err| {
-                iroha_logger::warn!(%err, "failed to load offline reserve registry");
-                OfflineReserveStoreState::default()
-            })),
-        }
-    }
-}
-
-#[derive(Default, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize)]
-struct OfflineReserveStoreState {
-    #[norito(default)]
-    lineage_to_reserve_id: BTreeMap<String, String>,
-    #[norito(default)]
-    reserves: BTreeMap<String, StoredReserve>,
-}
 
 #[derive(Clone, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize)]
 struct StoredReserve {
@@ -133,7 +69,15 @@ struct StoredReserve {
     #[norito(default)]
     seen_sender_states: BTreeSet<String>,
     #[norito(default)]
-    operation_results: BTreeMap<String, OfflineReserveEnvelope>,
+    apple_app_attest_binding: Option<StoredAppleAppAttestBinding>,
+}
+
+#[derive(Clone, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize)]
+struct StoredAppleAppAttestBinding {
+    attestation_report_base64: String,
+    ios_team_id: String,
+    ios_bundle_id: String,
+    ios_environment: String,
 }
 
 #[derive(
@@ -151,6 +95,18 @@ pub struct OfflineDeviceAttestation {
     pub counter: u64,
     pub assertion_base64: String,
     pub challenge_hash_hex: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub attestation_report_base64: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub ios_team_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub ios_bundle_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub ios_environment: Option<String>,
 }
 
 #[derive(
@@ -430,6 +386,28 @@ pub struct OfflineRevocationList {
 }
 
 #[derive(crate::json_macros::JsonSerialize)]
+struct ReserveTopUpRequestHashPayload<'a> {
+    #[norito(default)]
+    reserve_id: Option<&'a str>,
+    account_id: &'a str,
+    device_id: &'a str,
+    offline_public_key: &'a str,
+    asset_definition_id: &'a str,
+    app_attest_key_id: &'a str,
+    amount: &'a str,
+}
+
+#[derive(crate::json_macros::JsonSerialize)]
+struct ReserveDefundRequestHashPayload<'a> {
+    reserve_id: &'a str,
+    account_id: &'a str,
+    device_id: &'a str,
+    offline_public_key: &'a str,
+    amount: &'a str,
+    receipt_keys: Vec<String>,
+}
+
+#[derive(crate::json_macros::JsonSerialize)]
 struct AuthorizationUnsignedPayload<'a> {
     authorization_id: &'a str,
     reserve_id: &'a str,
@@ -565,7 +543,181 @@ struct ReserveAnchorHashPayload<'a> {
     authorization_id: &'a str,
 }
 
-pub(crate) fn setup_reserve(
+fn shared_authorization_from_local(
+    authorization: &OfflineSpendAuthorization,
+) -> SharedOfflineSpendAuthorization {
+    SharedOfflineSpendAuthorization {
+        authorization_id: authorization.authorization_id.clone(),
+        reserve_id: authorization.reserve_id.clone(),
+        account_id: authorization.account_id.clone(),
+        device_id: authorization.device_id.clone(),
+        offline_public_key: authorization.offline_public_key.clone(),
+        verdict_id: authorization.verdict_id.clone(),
+        max_balance: authorization.max_balance.clone(),
+        max_tx_value: authorization.max_tx_value.clone(),
+        issued_at_ms: authorization.issued_at_ms,
+        refresh_at_ms: authorization.refresh_at_ms,
+        expires_at_ms: authorization.expires_at_ms,
+        app_attest_key_id: authorization.app_attest_key_id.clone(),
+        issuer_signature_base64: authorization.issuer_signature_base64.clone(),
+    }
+}
+
+fn local_authorization_from_shared(
+    authorization: &SharedOfflineSpendAuthorization,
+) -> OfflineSpendAuthorization {
+    OfflineSpendAuthorization {
+        authorization_id: authorization.authorization_id.clone(),
+        reserve_id: authorization.reserve_id.clone(),
+        account_id: authorization.account_id.clone(),
+        device_id: authorization.device_id.clone(),
+        offline_public_key: authorization.offline_public_key.clone(),
+        verdict_id: authorization.verdict_id.clone(),
+        max_balance: authorization.max_balance.clone(),
+        max_tx_value: authorization.max_tx_value.clone(),
+        issued_at_ms: authorization.issued_at_ms,
+        refresh_at_ms: authorization.refresh_at_ms,
+        expires_at_ms: authorization.expires_at_ms,
+        app_attest_key_id: authorization.app_attest_key_id.clone(),
+        issuer_signature_base64: authorization.issuer_signature_base64.clone(),
+    }
+}
+
+fn shared_envelope_from_local(envelope: &OfflineReserveEnvelope) -> SharedOfflineReserveEnvelope {
+    SharedOfflineReserveEnvelope {
+        reserve_state: SharedOfflineReserveState {
+            reserve_id: envelope.reserve_state.reserve_id.clone(),
+            account_id: envelope.reserve_state.account_id.clone(),
+            device_id: envelope.reserve_state.device_id.clone(),
+            offline_public_key: envelope.reserve_state.offline_public_key.clone(),
+            asset_definition_id: envelope.reserve_state.asset_definition_id.clone(),
+            balance: envelope.reserve_state.balance.clone(),
+            parked_balance: envelope.reserve_state.parked_balance.clone(),
+            server_revision: envelope.reserve_state.server_revision,
+            server_state_hash: envelope.reserve_state.server_state_hash.clone(),
+            pending_local_revision: envelope.reserve_state.pending_local_revision,
+            authorization: shared_authorization_from_local(&envelope.reserve_state.authorization),
+            issuer_signature_base64: envelope.reserve_state.issuer_signature_base64.clone(),
+        },
+    }
+}
+
+fn local_envelope_from_shared(envelope: &SharedOfflineReserveEnvelope) -> OfflineReserveEnvelope {
+    OfflineReserveEnvelope {
+        reserve_state: OfflineReserveState {
+            reserve_id: envelope.reserve_state.reserve_id.clone(),
+            account_id: envelope.reserve_state.account_id.clone(),
+            device_id: envelope.reserve_state.device_id.clone(),
+            offline_public_key: envelope.reserve_state.offline_public_key.clone(),
+            asset_definition_id: envelope.reserve_state.asset_definition_id.clone(),
+            balance: envelope.reserve_state.balance.clone(),
+            parked_balance: envelope.reserve_state.parked_balance.clone(),
+            server_revision: envelope.reserve_state.server_revision,
+            server_state_hash: envelope.reserve_state.server_state_hash.clone(),
+            pending_local_revision: envelope.reserve_state.pending_local_revision,
+            authorization: local_authorization_from_shared(&envelope.reserve_state.authorization),
+            issuer_signature_base64: envelope.reserve_state.issuer_signature_base64.clone(),
+        },
+    }
+}
+
+fn shared_binding_from_local(
+    binding: &StoredAppleAppAttestBinding,
+) -> SharedOfflineAppleAppAttestBinding {
+    SharedOfflineAppleAppAttestBinding {
+        attestation_report_base64: binding.attestation_report_base64.clone(),
+        ios_team_id: binding.ios_team_id.clone(),
+        ios_bundle_id: binding.ios_bundle_id.clone(),
+        ios_environment: binding.ios_environment.clone(),
+    }
+}
+
+fn local_binding_from_shared(
+    binding: &SharedOfflineAppleAppAttestBinding,
+) -> StoredAppleAppAttestBinding {
+    StoredAppleAppAttestBinding {
+        attestation_report_base64: binding.attestation_report_base64.clone(),
+        ios_team_id: binding.ios_team_id.clone(),
+        ios_bundle_id: binding.ios_bundle_id.clone(),
+        ios_environment: binding.ios_environment.clone(),
+    }
+}
+
+fn shared_record_from_local(
+    issuer: &OfflineIssuerSigner,
+    record: &StoredReserve,
+) -> Result<SharedOfflineReserveRecord, Error> {
+    let envelope = envelope_from_record(issuer, record)?;
+    Ok(SharedOfflineReserveRecord {
+        reserve_state: shared_envelope_from_local(&envelope).reserve_state,
+        app_attest_key_id: record.app_attest_key_id.clone(),
+        counter_book: record.counter_book.clone(),
+        seen_transfer_ids: record.seen_transfer_ids.clone(),
+        seen_sender_states: record.seen_sender_states.clone(),
+        apple_app_attest_binding: record
+            .apple_app_attest_binding
+            .as_ref()
+            .map(shared_binding_from_local),
+    })
+}
+
+fn local_record_from_shared(record: &SharedOfflineReserveRecord) -> Result<StoredReserve, Error> {
+    Ok(StoredReserve {
+        reserve_id: record.reserve_state.reserve_id.clone(),
+        account_id: record.reserve_state.account_id.clone(),
+        device_id: record.reserve_state.device_id.clone(),
+        offline_public_key: record.reserve_state.offline_public_key.clone(),
+        asset_definition_id: record.reserve_state.asset_definition_id.clone(),
+        balance: parse_numeric(&record.reserve_state.balance)?,
+        parked_balance: parse_numeric(&record.reserve_state.parked_balance)?,
+        server_revision: record.reserve_state.server_revision,
+        server_state_hash: record.reserve_state.server_state_hash.clone(),
+        pending_local_revision: record.reserve_state.pending_local_revision,
+        authorization: local_authorization_from_shared(&record.reserve_state.authorization),
+        app_attest_key_id: record.app_attest_key_id.clone(),
+        counter_book: record.counter_book.clone(),
+        seen_transfer_ids: record.seen_transfer_ids.clone(),
+        seen_sender_states: record.seen_sender_states.clone(),
+        apple_app_attest_binding: record
+            .apple_app_attest_binding
+            .as_ref()
+            .map(local_binding_from_shared),
+    })
+}
+
+fn load_shared_reserve(app: &AppState, reserve_id: &str) -> Result<Option<StoredReserve>, Error> {
+    app.state
+        .world_view()
+        .offline_reserves()
+        .get(&reserve_id.to_owned())
+        .map(local_record_from_shared)
+        .transpose()
+}
+
+fn load_shared_reserve_by_lineage(
+    app: &AppState,
+    account_id: &str,
+    device_id: &str,
+    offline_public_key: &str,
+) -> Result<Option<StoredReserve>, Error> {
+    load_shared_reserve(
+        app,
+        &deterministic_id("reserve", &[account_id, device_id, offline_public_key]),
+    )
+}
+
+fn load_operation_result(
+    app: &AppState,
+    operation_key: &str,
+) -> Option<SharedOfflineReserveOperationResult> {
+    app.state
+        .world_view()
+        .offline_reserve_operation_results()
+        .get(&operation_key.to_owned())
+        .cloned()
+}
+
+pub(crate) async fn setup_reserve(
     app: &AppState,
     req: OfflineReserveSetupRequest,
 ) -> Result<OfflineReserveEnvelope, Error> {
@@ -576,98 +728,51 @@ pub(crate) fn setup_reserve(
     ensure_non_empty(&req.app_attest_key_id, "app_attest_key_id")?;
 
     let issuer = issuer(app)?;
-    let mut store = app.offline_reserves.inner.write();
-    let lineage = reserve_lineage_key(&req.account_id, &req.device_id, &req.offline_public_key);
-    if let Some(reserve_id) = store.lineage_to_reserve_id.get(&lineage).cloned() {
-        let reserve = store
-            .reserves
-            .get_mut(&reserve_id)
-            .ok_or_else(|| conversion_error("reserve lineage is corrupted".to_owned()))?;
-        if reserve.app_attest_key_id != req.app_attest_key_id {
-            return Err(conversion_error(
-                "app_attest_key_id does not match the existing reserve lineage".to_owned(),
-            ));
-        }
-        if reserve.asset_definition_id != req.asset_definition_id {
-            return Err(conversion_error(
-                "asset_definition_id does not match the existing reserve lineage".to_owned(),
-            ));
-        }
-        validate_setup_attestation(&req, &mut reserve.counter_book, &reserve.app_attest_key_id)?;
-        let envelope = envelope_from_record(issuer, reserve)?;
-        persist_store_state(&store)?;
-        return Ok(envelope);
+    if let Some(existing) = load_shared_reserve_by_lineage(
+        app,
+        &req.account_id,
+        &req.device_id,
+        &req.offline_public_key,
+    )? {
+        validate_reserve_request(
+            &existing,
+            &req.account_id,
+            &req.device_id,
+            &req.offline_public_key,
+            Some(&req.asset_definition_id),
+            Some(&req.app_attest_key_id),
+        )?;
+        let mut counter_book = existing.counter_book.clone();
+        let _ =
+            validate_setup_attestation(app, &req, &mut counter_book, &existing.app_attest_key_id)?;
+        return envelope_from_record(issuer, &existing);
     }
 
-    let reserve_id = deterministic_id(
-        "reserve",
-        &[
-            req.account_id.as_str(),
-            req.device_id.as_str(),
-            req.offline_public_key.as_str(),
-        ],
-    );
-    let verdict_id = deterministic_id(
-        "verdict",
-        &[
-            req.account_id.as_str(),
-            req.device_id.as_str(),
-            req.offline_public_key.as_str(),
-        ],
-    );
-    let now_ms = now_ms();
-    let account_id = req.account_id.clone();
-    let device_id = req.device_id.clone();
-    let offline_public_key = req.offline_public_key.clone();
-    let authorization = signed_authorization(
+    let mut record = new_local_reserve(
         issuer,
-        AuthorizationDraft {
-            reserve_id: reserve_id.clone(),
-            account_id: account_id.clone(),
-            device_id: device_id.clone(),
-            offline_public_key: offline_public_key.clone(),
-            verdict_id,
-            app_attest_key_id: req.app_attest_key_id.clone(),
-            issued_at_ms: now_ms,
-        },
+        &req.account_id,
+        &req.device_id,
+        &req.offline_public_key,
+        &req.asset_definition_id,
+        &req.app_attest_key_id,
     )?;
-    let record = StoredReserve {
-        reserve_id: reserve_id.clone(),
-        account_id: account_id.clone(),
-        device_id: device_id.clone(),
-        offline_public_key: offline_public_key.clone(),
-        asset_definition_id: req.asset_definition_id.clone(),
-        balance: Numeric::zero(),
-        parked_balance: Numeric::zero(),
-        server_revision: 0,
-        server_state_hash: reserve_anchor_hash(
-            &reserve_id,
-            &account_id,
-            &device_id,
-            &offline_public_key,
-            &req.asset_definition_id,
-            "0",
-            "0",
-            0,
-            0,
-            &authorization.authorization_id,
-        )?,
-        pending_local_revision: 0,
-        authorization,
-        app_attest_key_id: req.app_attest_key_id.clone(),
-        counter_book: BTreeMap::new(),
-        seen_transfer_ids: BTreeSet::new(),
-        seen_sender_states: BTreeSet::new(),
-        operation_results: BTreeMap::new(),
-    };
-    let mut record = record;
-    validate_setup_attestation(&req, &mut record.counter_book, &record.app_attest_key_id)?;
+    record.apple_app_attest_binding = validate_setup_attestation(
+        app,
+        &req,
+        &mut record.counter_book,
+        &record.app_attest_key_id,
+    )?;
     let envelope = envelope_from_record(issuer, &record)?;
-    store
-        .lineage_to_reserve_id
-        .insert(lineage, reserve_id.clone());
-    store.reserves.insert(reserve_id, record);
-    persist_store_state(&store)?;
+    submit_signed_instruction(
+        app,
+        operator_authority(issuer)?,
+        issuer.operator_keypair.private_key().clone(),
+        InstructionBox::from(RegisterOfflineReserve {
+            reserve: shared_record_from_local(issuer, &record)?,
+        }),
+        "/v1/offline/reserve/setup",
+    )
+    .await?;
     Ok(envelope)
 }
 
@@ -677,65 +782,69 @@ pub(crate) async fn top_up_reserve(
 ) -> Result<OfflineReserveEnvelope, Error> {
     let issuer = issuer(app)?;
     let amount = parse_amount(&req.amount)?;
+    let amount_string = canonical_amount_string(&amount);
     let operation_key = operation_key("topup", &req.operation_id);
-    let (reserve_id, asset_definition_id) = {
-        let mut store = app.offline_reserves.inner.write();
-        let (reserve_id, asset_definition_id) = {
-            let reserve = reserve_for_topup(&mut store, issuer, &req)?;
-            if let Some(existing) = reserve.operation_results.get(&operation_key) {
-                return Ok(existing.clone());
-            }
-            validate_reserve_attestation(
-                &req.account_id,
-                &reserve.reserve_id,
-                "topup",
-                canonical_json_bytes(&ReserveTopUpAttestationPayload {
-                    reserve_id: &reserve.reserve_id,
-                    amount: &canonical_amount_string(&amount),
-                })?,
-                &req.app_attest_key_id,
-                &req.attestation,
-                &mut reserve.counter_book,
-            )?;
-            (
-                reserve.reserve_id.clone(),
-                reserve.asset_definition_id.clone(),
-            )
-        };
-        persist_store_state(&store)?;
-        (reserve_id, asset_definition_id)
-    };
-    let authority = operator_authority(issuer)?;
-    let asset = controller_asset_id(&req.account_id, &asset_definition_id)?;
-    submit_signed_instruction(
-        app,
-        authority,
-        issuer.operator_keypair.private_key().clone(),
-        InstructionBox::from(ReserveOfflineEscrowBalance {
-            asset,
-            amount: amount.clone(),
-        }),
-        "/v1/offline/reserve/topup",
-    )
-    .await?;
+    let request_hash_hex = topup_request_hash_hex(&req, &amount)?;
+    if let Some(existing) = load_operation_result(app, &operation_key) {
+        if existing.request_hash_hex != request_hash_hex {
+            return Err(conversion_error(
+                "offline reserve operation_id is already bound to a different request".to_owned(),
+            ));
+        }
+        return Ok(local_envelope_from_shared(&existing.envelope));
+    }
 
-    let mut store = app.offline_reserves.inner.write();
-    let reserve = reserve_for_mutation(
-        &mut store,
-        &reserve_id,
+    let mut reserve = if let Some(reserve_id) = req.reserve_id.as_ref() {
+        load_shared_reserve(app, reserve_id)?
+            .ok_or_else(|| conversion_error("offline reserve not found".to_owned()))?
+    } else {
+        load_shared_reserve_by_lineage(
+            app,
+            &req.account_id,
+            &req.device_id,
+            &req.offline_public_key,
+        )?
+        .unwrap_or(new_local_reserve(
+            issuer,
+            &req.account_id,
+            &req.device_id,
+            &req.offline_public_key,
+            &req.asset_definition_id,
+            &req.app_attest_key_id,
+        )?)
+    };
+    validate_reserve_request(
+        &reserve,
         &req.account_id,
         &req.device_id,
         &req.offline_public_key,
-        Some(&asset_definition_id),
+        Some(&req.asset_definition_id),
         Some(&req.app_attest_key_id),
     )?;
-    if let Some(existing) = reserve.operation_results.get(&operation_key) {
-        return Ok(existing.clone());
-    }
+    let expected_server_revision = reserve.server_revision;
+    let expected_state_hash = if expected_server_revision == 0 {
+        String::new()
+    } else {
+        reserve.server_state_hash.clone()
+    };
+    validate_reserve_attestation(
+        app,
+        &req.account_id,
+        &reserve.reserve_id,
+        "topup",
+        canonical_json_bytes(&ReserveTopUpAttestationPayload {
+            reserve_id: &reserve.reserve_id,
+            amount: &amount_string,
+        })?,
+        &req.app_attest_key_id,
+        &req.attestation,
+        &mut reserve.counter_book,
+        reserve.apple_app_attest_binding.as_ref(),
+    )?;
     reserve.balance = reserve
         .balance
         .clone()
-        .checked_add(amount)
+        .checked_add(amount.clone())
         .ok_or_else(|| conversion_error("reserve balance overflow".to_owned()))?;
     reserve.parked_balance = parse_numeric(&minimum_required_parked_balance(
         &canonical_amount_string(&reserve.balance),
@@ -755,11 +864,33 @@ pub(crate) async fn top_up_reserve(
         reserve.pending_local_revision,
         &reserve.authorization.authorization_id,
     )?;
-    let envelope = envelope_from_record(issuer, reserve)?;
-    reserve
-        .operation_results
-        .insert(operation_key, envelope.clone());
-    persist_store_state(&store)?;
+    let envelope = envelope_from_record(issuer, &reserve)?;
+    submit_signed_instructions(
+        app,
+        operator_authority(issuer)?,
+        issuer.operator_keypair.private_key().clone(),
+        vec![
+            InstructionBox::from(ReserveOfflineEscrowBalance {
+                asset: controller_asset_id(&req.account_id, &reserve.asset_definition_id)?,
+                amount,
+            }),
+            InstructionBox::from(CommitOfflineReserveOperation {
+                expected_server_revision,
+                expected_state_hash,
+                reserve: shared_record_from_local(issuer, &reserve)?,
+                result: SharedOfflineReserveOperationResult {
+                    operation_key: operation_key.clone(),
+                    kind: "topup".to_owned(),
+                    request_hash_hex,
+                    reserve_id: reserve.reserve_id.clone(),
+                    envelope: shared_envelope_from_local(&envelope),
+                    completed_at_ms: now_ms(),
+                },
+            }),
+        ],
+        "/v1/offline/reserve/topup",
+    )
+    .await?;
     Ok(envelope)
 }
 
@@ -768,21 +899,31 @@ pub(crate) async fn renew_reserve(
     req: OfflineReserveRenewRequest,
 ) -> Result<OfflineReserveEnvelope, Error> {
     let issuer = issuer(app)?;
-    let mut store = app.offline_reserves.inner.write();
-    let reserve = reserve_for_mutation(
-        &mut store,
-        &req.reserve_id,
+    let operation_key = operation_key("renew", &req.operation_id);
+    let request_hash_hex = renew_request_hash_hex(&req)?;
+    if let Some(existing) = load_operation_result(app, &operation_key) {
+        if existing.request_hash_hex != request_hash_hex {
+            return Err(conversion_error(
+                "offline reserve operation_id is already bound to a different request".to_owned(),
+            ));
+        }
+        return Ok(local_envelope_from_shared(&existing.envelope));
+    }
+
+    let mut reserve = load_shared_reserve(app, &req.reserve_id)?
+        .ok_or_else(|| conversion_error("offline reserve not found".to_owned()))?;
+    validate_reserve_request(
+        &reserve,
         &req.account_id,
         &req.device_id,
         &req.offline_public_key,
         None,
         Some(&req.app_attest_key_id),
     )?;
-    let operation_key = operation_key("renew", &req.operation_id);
-    if let Some(existing) = reserve.operation_results.get(&operation_key) {
-        return Ok(existing.clone());
-    }
+    let expected_server_revision = reserve.server_revision;
+    let expected_state_hash = reserve.server_state_hash.clone();
     validate_reserve_attestation(
+        app,
         &req.account_id,
         &reserve.reserve_id,
         "renew",
@@ -792,8 +933,8 @@ pub(crate) async fn renew_reserve(
         &req.app_attest_key_id,
         &req.attestation,
         &mut reserve.counter_book,
+        reserve.apple_app_attest_binding.as_ref(),
     )?;
-
     reserve.authorization = signed_authorization(
         issuer,
         AuthorizationDraft {
@@ -824,40 +965,87 @@ pub(crate) async fn renew_reserve(
         reserve.pending_local_revision,
         &reserve.authorization.authorization_id,
     )?;
-    let envelope = envelope_from_record(issuer, reserve)?;
-    reserve
-        .operation_results
-        .insert(operation_key, envelope.clone());
-    persist_store_state(&store)?;
+    let envelope = envelope_from_record(issuer, &reserve)?;
+    submit_signed_instruction(
+        app,
+        operator_authority(issuer)?,
+        issuer.operator_keypair.private_key().clone(),
+        InstructionBox::from(CommitOfflineReserveOperation {
+            expected_server_revision,
+            expected_state_hash,
+            reserve: shared_record_from_local(issuer, &reserve)?,
+            result: SharedOfflineReserveOperationResult {
+                operation_key: operation_key.clone(),
+                kind: "renew".to_owned(),
+                request_hash_hex,
+                reserve_id: reserve.reserve_id.clone(),
+                envelope: shared_envelope_from_local(&envelope),
+                completed_at_ms: now_ms(),
+            },
+        }),
+        "/v1/offline/reserve/renew",
+    )
+    .await?;
     Ok(envelope)
 }
 
-pub(crate) fn sync_reserve(
+pub(crate) async fn sync_reserve(
     app: &AppState,
     req: OfflineReserveSyncRequest,
 ) -> Result<OfflineReserveEnvelope, Error> {
     let issuer = issuer(app)?;
-    let mut store = app.offline_reserves.inner.write();
-    let reserve = reserve_for_mutation(
-        &mut store,
-        &req.reserve_id,
+    let operation_key = operation_key("sync", &req.operation_id);
+    let request_hash_hex = sync_request_hash_hex(&req)?;
+    if let Some(existing) = load_operation_result(app, &operation_key) {
+        if existing.request_hash_hex != request_hash_hex {
+            return Err(conversion_error(
+                "offline reserve operation_id is already bound to a different request".to_owned(),
+            ));
+        }
+        return Ok(local_envelope_from_shared(&existing.envelope));
+    }
+
+    let mut reserve = load_shared_reserve(app, &req.reserve_id)?
+        .ok_or_else(|| conversion_error("offline reserve not found".to_owned()))?;
+    validate_reserve_request(
+        &reserve,
         &req.account_id,
         &req.device_id,
         &req.offline_public_key,
         None,
         None,
     )?;
-    let operation_key = operation_key("sync", &req.operation_id);
-    if let Some(existing) = reserve.operation_results.get(&operation_key) {
-        return Ok(existing.clone());
+    let expected_server_revision = reserve.server_revision;
+    let expected_state_hash = reserve.server_state_hash.clone();
+    let prior_server_revision = reserve.server_revision;
+    let prior_pending_local_revision = reserve.pending_local_revision;
+    apply_receipts(app, issuer, &mut reserve, &req.receipts)?;
+    if reserve.server_revision == prior_server_revision
+        && reserve.pending_local_revision == prior_pending_local_revision
+    {
+        return envelope_from_record(issuer, &reserve);
     }
-
-    apply_receipts(app, issuer, reserve, &req.receipts)?;
-    let envelope = envelope_from_record(issuer, reserve)?;
-    reserve
-        .operation_results
-        .insert(operation_key, envelope.clone());
-    persist_store_state(&store)?;
+    let envelope = envelope_from_record(issuer, &reserve)?;
+    submit_signed_instruction(
+        app,
+        operator_authority(issuer)?,
+        issuer.operator_keypair.private_key().clone(),
+        InstructionBox::from(CommitOfflineReserveOperation {
+            expected_server_revision,
+            expected_state_hash,
+            reserve: shared_record_from_local(issuer, &reserve)?,
+            result: SharedOfflineReserveOperationResult {
+                operation_key: operation_key.clone(),
+                kind: "sync".to_owned(),
+                request_hash_hex,
+                reserve_id: reserve.reserve_id.clone(),
+                envelope: shared_envelope_from_local(&envelope),
+                completed_at_ms: now_ms(),
+            },
+        }),
+        "/v1/offline/reserve/sync",
+    )
+    .await?;
     Ok(envelope)
 }
 
@@ -868,58 +1056,34 @@ pub(crate) async fn defund_reserve(
     let issuer = issuer(app)?;
     let amount = parse_amount(&req.amount)?;
     let operation_key = operation_key("defund", &req.operation_id);
-    let asset_definition_id = {
-        let mut store = app.offline_reserves.inner.write();
-        let asset_definition_id = {
-            let reserve = reserve_for_mutation(
-                &mut store,
-                &req.reserve_id,
-                &req.account_id,
-                &req.device_id,
-                &req.offline_public_key,
-                None,
-                None,
-            )?;
-            if let Some(existing) = reserve.operation_results.get(&operation_key) {
-                return Ok(existing.clone());
-            }
-            apply_receipts(app, issuer, reserve, &req.receipts)?;
-            reserve.asset_definition_id.clone()
-        };
-        persist_store_state(&store)?;
-        asset_definition_id
-    };
-    let authority = operator_authority(issuer)?;
-    let asset = controller_asset_id(&req.account_id, &asset_definition_id)?;
-    submit_signed_instruction(
-        app,
-        authority,
-        issuer.operator_keypair.private_key().clone(),
-        InstructionBox::from(RefundOfflineEscrowBalance {
-            asset,
-            amount: amount.clone(),
-        }),
-        "/v1/offline/reserve/defund",
-    )
-    .await?;
+    let request_hash_hex = defund_request_hash_hex(&req, &amount)?;
+    if let Some(existing) = load_operation_result(app, &operation_key) {
+        if existing.request_hash_hex != request_hash_hex {
+            return Err(conversion_error(
+                "offline reserve operation_id is already bound to a different request".to_owned(),
+            ));
+        }
+        return Ok(local_envelope_from_shared(&existing.envelope));
+    }
 
-    let mut store = app.offline_reserves.inner.write();
-    let reserve = reserve_for_mutation(
-        &mut store,
-        &req.reserve_id,
+    let mut reserve = load_shared_reserve(app, &req.reserve_id)?
+        .ok_or_else(|| conversion_error("offline reserve not found".to_owned()))?;
+    validate_reserve_request(
+        &reserve,
         &req.account_id,
         &req.device_id,
         &req.offline_public_key,
-        Some(&asset_definition_id),
+        None,
         None,
     )?;
-    if let Some(existing) = reserve.operation_results.get(&operation_key) {
-        return Ok(existing.clone());
-    }
-    reserve.balance =
-        reserve.balance.clone().checked_sub(amount).ok_or_else(|| {
-            conversion_error("insufficient reserve balance for defund".to_owned())
-        })?;
+    let expected_server_revision = reserve.server_revision;
+    let expected_state_hash = reserve.server_state_hash.clone();
+    apply_receipts(app, issuer, &mut reserve, &req.receipts)?;
+    reserve.balance = reserve
+        .balance
+        .clone()
+        .checked_sub(amount.clone())
+        .ok_or_else(|| conversion_error("insufficient reserve balance for defund".to_owned()))?;
     reserve.parked_balance = parse_numeric(&minimum_required_parked_balance(
         &canonical_amount_string(&reserve.balance),
         Some(&reserve.authorization),
@@ -938,11 +1102,33 @@ pub(crate) async fn defund_reserve(
         reserve.pending_local_revision,
         &reserve.authorization.authorization_id,
     )?;
-    let envelope = envelope_from_record(issuer, reserve)?;
-    reserve
-        .operation_results
-        .insert(operation_key, envelope.clone());
-    persist_store_state(&store)?;
+    let envelope = envelope_from_record(issuer, &reserve)?;
+    submit_signed_instructions(
+        app,
+        operator_authority(issuer)?,
+        issuer.operator_keypair.private_key().clone(),
+        vec![
+            InstructionBox::from(RefundOfflineEscrowBalance {
+                asset: controller_asset_id(&req.account_id, &reserve.asset_definition_id)?,
+                amount,
+            }),
+            InstructionBox::from(CommitOfflineReserveOperation {
+                expected_server_revision,
+                expected_state_hash,
+                reserve: shared_record_from_local(issuer, &reserve)?,
+                result: SharedOfflineReserveOperationResult {
+                    operation_key: operation_key.clone(),
+                    kind: "defund".to_owned(),
+                    request_hash_hex,
+                    reserve_id: reserve.reserve_id.clone(),
+                    envelope: shared_envelope_from_local(&envelope),
+                    completed_at_ms: now_ms(),
+                },
+            }),
+        ],
+        "/v1/offline/reserve/defund",
+    )
+    .await?;
     Ok(envelope)
 }
 
@@ -1011,82 +1197,42 @@ pub(crate) async fn register_revocation(
     revocation_bundle(app)
 }
 
-fn reserve_for_topup<'a>(
-    store: &'a mut OfflineReserveStoreState,
+fn new_local_reserve(
     issuer: &OfflineIssuerSigner,
-    req: &OfflineReserveTopUpRequest,
-) -> Result<&'a mut StoredReserve, Error> {
-    if let Some(reserve_id) = req.reserve_id.as_ref() {
-        return reserve_for_mutation(
-            store,
-            reserve_id,
-            &req.account_id,
-            &req.device_id,
-            &req.offline_public_key,
-            Some(&req.asset_definition_id),
-            Some(&req.app_attest_key_id),
-        );
-    }
-
-    let lineage = reserve_lineage_key(&req.account_id, &req.device_id, &req.offline_public_key);
-    if let Some(reserve_id) = store.lineage_to_reserve_id.get(&lineage).cloned() {
-        return reserve_for_mutation(
-            store,
-            &reserve_id,
-            &req.account_id,
-            &req.device_id,
-            &req.offline_public_key,
-            Some(&req.asset_definition_id),
-            Some(&req.app_attest_key_id),
-        );
-    }
-
-    let reserve_id = deterministic_id(
-        "reserve",
-        &[
-            req.account_id.as_str(),
-            req.device_id.as_str(),
-            req.offline_public_key.as_str(),
-        ],
-    );
-    let verdict_id = deterministic_id(
-        "verdict",
-        &[
-            req.account_id.as_str(),
-            req.device_id.as_str(),
-            req.offline_public_key.as_str(),
-        ],
-    );
+    account_id: &str,
+    device_id: &str,
+    offline_public_key: &str,
+    asset_definition_id: &str,
+    app_attest_key_id: &str,
+) -> Result<StoredReserve, Error> {
+    let reserve_id = deterministic_id("reserve", &[account_id, device_id, offline_public_key]);
     let authorization = signed_authorization(
         issuer,
         AuthorizationDraft {
             reserve_id: reserve_id.clone(),
-            account_id: req.account_id.clone(),
-            device_id: req.device_id.clone(),
-            offline_public_key: req.offline_public_key.clone(),
-            verdict_id,
-            app_attest_key_id: req.app_attest_key_id.clone(),
+            account_id: account_id.to_owned(),
+            device_id: device_id.to_owned(),
+            offline_public_key: offline_public_key.to_owned(),
+            verdict_id: deterministic_id("verdict", &[account_id, device_id, offline_public_key]),
+            app_attest_key_id: app_attest_key_id.to_owned(),
             issued_at_ms: now_ms(),
         },
     )?;
-    store
-        .lineage_to_reserve_id
-        .insert(lineage, reserve_id.clone());
-    let reserve = StoredReserve {
+    Ok(StoredReserve {
         reserve_id: reserve_id.clone(),
-        account_id: req.account_id.clone(),
-        device_id: req.device_id.clone(),
-        offline_public_key: req.offline_public_key.clone(),
-        asset_definition_id: req.asset_definition_id.clone(),
+        account_id: account_id.to_owned(),
+        device_id: device_id.to_owned(),
+        offline_public_key: offline_public_key.to_owned(),
+        asset_definition_id: asset_definition_id.to_owned(),
         balance: Numeric::zero(),
         parked_balance: Numeric::zero(),
         server_revision: 0,
         server_state_hash: reserve_anchor_hash(
             &reserve_id,
-            &req.account_id,
-            &req.device_id,
-            &req.offline_public_key,
-            &req.asset_definition_id,
+            account_id,
+            device_id,
+            offline_public_key,
+            asset_definition_id,
             "0",
             "0",
             0,
@@ -1095,32 +1241,22 @@ fn reserve_for_topup<'a>(
         )?,
         pending_local_revision: 0,
         authorization,
-        app_attest_key_id: req.app_attest_key_id.clone(),
+        app_attest_key_id: app_attest_key_id.to_owned(),
         counter_book: BTreeMap::new(),
         seen_transfer_ids: BTreeSet::new(),
         seen_sender_states: BTreeSet::new(),
-        operation_results: BTreeMap::new(),
-    };
-    store.reserves.insert(reserve_id.clone(), reserve);
-    store
-        .reserves
-        .get_mut(&reserve_id)
-        .ok_or_else(|| conversion_error("failed to create reserve".to_owned()))
+        apple_app_attest_binding: None,
+    })
 }
 
-fn reserve_for_mutation<'a>(
-    store: &'a mut OfflineReserveStoreState,
-    reserve_id: &str,
+fn validate_reserve_request(
+    reserve: &StoredReserve,
     account_id: &str,
     device_id: &str,
     offline_public_key: &str,
     asset_definition_id: Option<&str>,
     app_attest_key_id: Option<&str>,
-) -> Result<&'a mut StoredReserve, Error> {
-    let reserve = store
-        .reserves
-        .get_mut(reserve_id)
-        .ok_or_else(|| conversion_error("offline reserve not found".to_owned()))?;
+) -> Result<(), Error> {
     if reserve.account_id != account_id
         || reserve.device_id != device_id
         || reserve.offline_public_key != offline_public_key
@@ -1129,13 +1265,6 @@ fn reserve_for_mutation<'a>(
             "offline reserve lineage does not match the request".to_owned(),
         ));
     }
-    if let Some(key_id) = app_attest_key_id {
-        if reserve.app_attest_key_id != key_id {
-            return Err(conversion_error(
-                "app_attest_key_id does not match the reserve lineage".to_owned(),
-            ));
-        }
-    }
     if let Some(definition_id) = asset_definition_id {
         if reserve.asset_definition_id != definition_id {
             return Err(conversion_error(
@@ -1143,7 +1272,14 @@ fn reserve_for_mutation<'a>(
             ));
         }
     }
-    Ok(reserve)
+    if let Some(key_id) = app_attest_key_id {
+        if reserve.app_attest_key_id != key_id {
+            return Err(conversion_error(
+                "app_attest_key_id does not match the reserve lineage".to_owned(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn apply_receipts(
@@ -1721,10 +1857,41 @@ async fn submit_signed_instruction(
     instruction: InstructionBox,
     endpoint: &'static str,
 ) -> Result<(), Error> {
-    let tx = TransactionBuilder::new((*app.chain_id).clone(), authority)
-        .with_instructions([instruction])
-        .sign(&private_key);
-    routing::handle_transaction_with_metrics(
+    let tx = build_signed_instructions(authority, private_key, [instruction], app);
+    submit_prebuilt_transaction(app, tx, endpoint).await
+}
+
+async fn submit_signed_instructions(
+    app: &AppState,
+    authority: AccountId,
+    private_key: PrivateKey,
+    instructions: Vec<InstructionBox>,
+    endpoint: &'static str,
+) -> Result<(), Error> {
+    let tx = build_signed_instructions(authority, private_key, instructions, app);
+    submit_prebuilt_transaction(app, tx, endpoint).await
+}
+
+fn build_signed_instructions<I>(
+    authority: AccountId,
+    private_key: PrivateKey,
+    instructions: I,
+    app: &AppState,
+) -> SignedTransaction
+where
+    I: IntoIterator<Item = InstructionBox>,
+{
+    TransactionBuilder::new((*app.chain_id).clone(), authority)
+        .with_instructions(instructions)
+        .sign(&private_key)
+}
+
+async fn submit_prebuilt_transaction(
+    app: &AppState,
+    tx: SignedTransaction,
+    endpoint: &'static str,
+) -> Result<(), Error> {
+    match routing::handle_transaction_with_metrics(
         app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
@@ -1732,8 +1899,19 @@ async fn submit_signed_instruction(
         app.telemetry_handle(),
         endpoint,
     )
-    .await?;
-    Ok(())
+    .await
+    {
+        Ok(_) => Ok(()),
+        Err(Error::PushIntoQueue { source, .. })
+            if matches!(
+                *source,
+                queue::Error::InBlockchain | queue::Error::IsInQueue
+            ) =>
+        {
+            Ok(())
+        }
+        Err(err) => Err(err),
+    }
 }
 
 fn issuer_public_key_base64(issuer: &OfflineIssuerSigner) -> String {
@@ -1913,12 +2091,125 @@ fn setup_challenge_payload(req: &OfflineReserveSetupRequest) -> Result<Vec<u8>, 
     })
 }
 
+fn latest_block_timestamp_ms(app: &AppState) -> u64 {
+    app.state
+        .latest_block_header_fast()
+        .map(|header| header.creation_time_ms)
+        .unwrap_or_else(now_ms)
+}
+
+fn metadata_insert_string(metadata: &mut Metadata, key: &str, value: &str) -> Result<(), Error> {
+    let name = Name::from_str(key).map_err(|err| {
+        conversion_error(format!(
+            "invalid reserve attestation metadata key `{key}`: {err}"
+        ))
+    })?;
+    metadata.insert(
+        name,
+        iroha_primitives::json::Json::from(json::Value::String(value.to_owned())),
+    );
+    Ok(())
+}
+
+fn metadata_from_apple_binding(binding: &StoredAppleAppAttestBinding) -> Result<Metadata, Error> {
+    let mut metadata = Metadata::default();
+    metadata_insert_string(
+        &mut metadata,
+        "ios.app_attest.team_id",
+        &binding.ios_team_id,
+    )?;
+    metadata_insert_string(
+        &mut metadata,
+        "ios.app_attest.bundle_id",
+        &binding.ios_bundle_id,
+    )?;
+    metadata_insert_string(
+        &mut metadata,
+        "ios.app_attest.environment",
+        &binding.ios_environment,
+    )?;
+    Ok(metadata)
+}
+
+fn apple_app_attest_binding_from_request(
+    attestation: &OfflineDeviceAttestation,
+) -> Result<Option<StoredAppleAppAttestBinding>, Error> {
+    let report = attestation
+        .attestation_report_base64
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let team_id = attestation
+        .ios_team_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let bundle_id = attestation
+        .ios_bundle_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let environment = attestation
+        .ios_environment
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    if report.is_none() && team_id.is_none() && bundle_id.is_none() && environment.is_none() {
+        return Ok(None);
+    }
+    let report = report.ok_or_else(|| {
+        conversion_error(
+            "ios attestation report is required when reserve attestation metadata is provided"
+                .to_owned(),
+        )
+    })?;
+    let team_id = team_id.ok_or_else(|| {
+        conversion_error(
+            "ios_team_id is required when attestation_report_base64 is provided".to_owned(),
+        )
+    })?;
+    let bundle_id = bundle_id.ok_or_else(|| {
+        conversion_error(
+            "ios_bundle_id is required when attestation_report_base64 is provided".to_owned(),
+        )
+    })?;
+    let environment = environment.ok_or_else(|| {
+        conversion_error(
+            "ios_environment is required when attestation_report_base64 is provided".to_owned(),
+        )
+    })?;
+    Ok(Some(StoredAppleAppAttestBinding {
+        attestation_report_base64: report.to_owned(),
+        ios_team_id: team_id.to_owned(),
+        ios_bundle_id: bundle_id.to_owned(),
+        ios_environment: environment.to_owned(),
+    }))
+}
+
+fn decode_challenge_hash_hex(challenge_hash_hex: &str) -> Result<[u8; 32], Error> {
+    let normalized = challenge_hash_hex.trim().trim_start_matches("0x");
+    let bytes = hex::decode(normalized).map_err(|err| {
+        conversion_error(format!("invalid reserve attestation challenge hash: {err}"))
+    })?;
+    if bytes.len() != Hash::LENGTH {
+        return Err(conversion_error(
+            "reserve attestation challenge hash must be 32 bytes".to_owned(),
+        ));
+    }
+    let mut hash = [0u8; Hash::LENGTH];
+    hash.copy_from_slice(&bytes);
+    Ok(hash)
+}
+
 fn validate_setup_attestation(
+    app: &AppState,
     req: &OfflineReserveSetupRequest,
     counter_book: &mut BTreeMap<String, u64>,
     expected_app_attest_key_id: &str,
-) -> Result<(), Error> {
+) -> Result<Option<StoredAppleAppAttestBinding>, Error> {
     validate_reserve_attestation(
+        app,
         &req.account_id,
         "setup",
         "setup",
@@ -1926,10 +2217,12 @@ fn validate_setup_attestation(
         expected_app_attest_key_id,
         &req.attestation,
         counter_book,
+        None,
     )
 }
 
 fn validate_reserve_attestation(
+    app: &AppState,
     account_id: &str,
     reserve_id: &str,
     operation: &str,
@@ -1937,7 +2230,8 @@ fn validate_reserve_attestation(
     expected_app_attest_key_id: &str,
     attestation: &OfflineDeviceAttestation,
     counter_book: &mut BTreeMap<String, u64>,
-) -> Result<(), Error> {
+    stored_apple_app_attest_binding: Option<&StoredAppleAppAttestBinding>,
+) -> Result<Option<StoredAppleAppAttestBinding>, Error> {
     if attestation.key_id != expected_app_attest_key_id {
         return Err(conversion_error(
             "app_attest_key_id does not match the attestation proof".to_owned(),
@@ -1954,12 +2248,46 @@ fn validate_reserve_attestation(
             "offline reserve attestation challenge hash is invalid".to_owned(),
         ));
     }
-    if extract_assertion_counter(&attestation.assertion_base64)? != attestation.counter {
+    let request_binding = apple_app_attest_binding_from_request(attestation)?;
+    if let Some(binding) = request_binding.as_ref().or(stored_apple_app_attest_binding) {
+        let metadata = metadata_from_apple_binding(binding)?;
+        let attestation_report = BASE64_STANDARD
+            .decode(binding.attestation_report_base64.as_bytes())
+            .map_err(|err| {
+                conversion_error(format!("invalid base64 reserve attestation report: {err}"))
+            })?;
+        let assertion = BASE64_STANDARD
+            .decode(attestation.assertion_base64.as_bytes())
+            .map_err(|err| {
+                conversion_error(format!(
+                    "invalid base64 reserve attestation assertion: {err}"
+                ))
+            })?;
+        let settlement_cfg = &app.state.settlement().offline;
+        verify_reserve_apple_app_attest(
+            &ReserveAppleAppAttestVerification {
+                metadata,
+                attestation_report,
+                key_id: attestation.key_id.clone(),
+                assertion,
+                counter: attestation.counter,
+                challenge_hash: decode_challenge_hash_hex(&attestation.challenge_hash_hex)?,
+            },
+            latest_block_timestamp_ms(app),
+            settlement_cfg,
+        )
+        .map_err(|err| {
+            conversion_error(format!(
+                "offline reserve app attest verification failed: {err}"
+            ))
+        })?;
+    } else if extract_assertion_counter(&attestation.assertion_base64)? != attestation.counter {
         return Err(conversion_error(
             "offline reserve attestation counter does not match assertion data".to_owned(),
         ));
     }
-    validate_counter(attestation, counter_book)
+    validate_counter(attestation, counter_book)?;
+    Ok(request_binding)
 }
 
 fn extract_assertion_counter(assertion_base64: &str) -> Result<u64, Error> {
@@ -2003,8 +2331,70 @@ fn sender_state_key(reserve_id: &str, local_revision: u64) -> String {
     format!("{reserve_id}:{local_revision}")
 }
 
-fn reserve_lineage_key(account_id: &str, device_id: &str, offline_public_key: &str) -> String {
-    format!("{account_id}\u{1f}{device_id}\u{1f}{offline_public_key}")
+fn topup_request_hash_hex(
+    req: &OfflineReserveTopUpRequest,
+    amount: &Numeric,
+) -> Result<String, Error> {
+    Ok(sha256_hex(&canonical_json_bytes(
+        &ReserveTopUpRequestHashPayload {
+            reserve_id: req.reserve_id.as_deref(),
+            account_id: &req.account_id,
+            device_id: &req.device_id,
+            offline_public_key: &req.offline_public_key,
+            asset_definition_id: &req.asset_definition_id,
+            app_attest_key_id: &req.app_attest_key_id,
+            amount: &canonical_amount_string(amount),
+        },
+    )?))
+}
+
+fn renew_request_hash_hex(req: &OfflineReserveRenewRequest) -> Result<String, Error> {
+    Ok(sha256_hex(&canonical_json_bytes(
+        &ReserveRenewAttestationPayload {
+            reserve_id: &req.reserve_id,
+        },
+    )?))
+}
+
+fn sync_request_hash_hex(req: &OfflineReserveSyncRequest) -> Result<String, Error> {
+    let mut receipt_keys = req
+        .receipts
+        .iter()
+        .map(|receipt| format!("{}:{}", receipt.transfer_id, receipt.local_revision))
+        .collect::<Vec<_>>();
+    receipt_keys.sort();
+    Ok(sha256_hex(&canonical_json_bytes(
+        &ReserveDefundRequestHashPayload {
+            reserve_id: &req.reserve_id,
+            account_id: &req.account_id,
+            device_id: &req.device_id,
+            offline_public_key: &req.offline_public_key,
+            amount: "",
+            receipt_keys,
+        },
+    )?))
+}
+
+fn defund_request_hash_hex(
+    req: &OfflineReserveDefundRequest,
+    amount: &Numeric,
+) -> Result<String, Error> {
+    let mut receipt_keys = req
+        .receipts
+        .iter()
+        .map(|receipt| format!("{}:{}", receipt.transfer_id, receipt.local_revision))
+        .collect::<Vec<_>>();
+    receipt_keys.sort();
+    Ok(sha256_hex(&canonical_json_bytes(
+        &ReserveDefundRequestHashPayload {
+            reserve_id: &req.reserve_id,
+            account_id: &req.account_id,
+            device_id: &req.device_id,
+            offline_public_key: &req.offline_public_key,
+            amount: &canonical_amount_string(amount),
+            receipt_keys,
+        },
+    )?))
 }
 
 fn revoked_verdict_ids(app: &AppState) -> BTreeSet<String> {
@@ -2032,6 +2422,67 @@ fn deterministic_id(prefix: &str, fields: &[&str]) -> String {
 
 fn operation_key(kind: &str, operation_id: &str) -> String {
     format!("{kind}:{operation_id}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sync_request_hash_is_stable_for_reordered_receipts() {
+        let make_receipt = |transfer_id: &str, local_revision: u64| OfflineTransferReceipt {
+            version: 1,
+            transfer_id: transfer_id.to_owned(),
+            direction: "incoming".to_owned(),
+            reserve_id: "reserve".to_owned(),
+            account_id: "alice@users".to_owned(),
+            device_id: "device-1".to_owned(),
+            offline_public_key: BASE64_STANDARD.encode([7u8; 32]),
+            pre_balance: "0".to_owned(),
+            post_balance: "1".to_owned(),
+            pre_parked_balance: "0".to_owned(),
+            post_parked_balance: "0".to_owned(),
+            pre_state_hash: "pre".to_owned(),
+            post_state_hash: "post".to_owned(),
+            local_revision,
+            counterparty_reserve_id: "peer".to_owned(),
+            counterparty_account_id: "bob@users".to_owned(),
+            counterparty_device_id: "device-2".to_owned(),
+            counterparty_offline_public_key: BASE64_STANDARD.encode([8u8; 32]),
+            amount: "1".to_owned(),
+            authorization: None,
+            attestation: OfflineDeviceAttestation {
+                key_id: "key".to_owned(),
+                counter: local_revision,
+                assertion_base64: BASE64_STANDARD.encode(b"assertion"),
+                challenge_hash_hex: "abc".to_owned(),
+                attestation_report_base64: None,
+                ios_team_id: None,
+                ios_bundle_id: None,
+                ios_environment: None,
+            },
+            source_payload: None,
+            sender_signature_base64: BASE64_STANDARD.encode([9u8; 64]),
+            created_at_ms: 1,
+        };
+
+        let lhs = OfflineReserveSyncRequest {
+            operation_id: "sync-1".to_owned(),
+            reserve_id: "reserve".to_owned(),
+            account_id: "alice@users".to_owned(),
+            device_id: "device-1".to_owned(),
+            offline_public_key: BASE64_STANDARD.encode([7u8; 32]),
+            receipts: vec![make_receipt("b", 2), make_receipt("a", 1)],
+        };
+        let rhs = OfflineReserveSyncRequest {
+            receipts: lhs.receipts.iter().rev().cloned().collect(),
+            ..lhs.clone()
+        };
+
+        let left = sync_request_hash_hex(&lhs).expect("left hash");
+        let right = sync_request_hash_hex(&rhs).expect("right hash");
+        assert_eq!(left, right);
+    }
 }
 
 fn now_ms() -> u64 {

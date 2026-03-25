@@ -33,7 +33,7 @@ translator: machine-google-reviewed
 - `DomainId`: `name` (օրինակ՝ `wonderland`):
 - `AccountId`. առանց տիրույթի կանոնական հաշվի նույնացուցիչ, որը կոդավորված է `AccountAddress`-ի միջոցով միայն որպես I105: Վերլուծիչի մուտքերը պետք է լինեն կանոնական I105; տիրույթի վերջածանցները (`@domain`), կանոնական I105 բառացիները, այլանունների բառացիները, կանոնական վեցանկյուն վերլուծիչի մուտքագրումը, հին `norito:` օգտակար բեռները և `uaid:`/`opaque:` հաշիվները:
 - `AssetDefinitionId`՝ կանոնական `unprefixed Base58 address with versioning and checksum` (UUID-v4 բայթ):
-- `AssetId`. կանոնական կոդավորված բառացի `norito:<hex>` (նախնական տեքստային ձևերը չեն ապահովվում առաջին թողարկումում):
+- `AssetId`. կանոնական կոդավորված բառացի `<asset-definition-id>#<account-id>` (նախնական տեքստային ձևերը չեն ապահովվում առաջին թողարկումում):
 - `NftId`՝ `nft$domain` (օրինակ՝ `rose$garden`):
 - `PeerId`՝ `public_key` (հասակակիցների հավասարությունը հանրային բանալին է):
 
@@ -259,7 +259,7 @@ curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -d '{"alias":"pkr#ubl.sbp"}'
 ```Միգրացիոն նշում.
 - Հին `name#domain` ակտիվների սահմանման ID-ները չեն ընդունվում v1-ում:
-- Անանուխի/այրման/փոխանցման համար ակտիվների ID-ները մնում են կանոնական `norito:<hex>`; կառուցել դրանք հետևյալով.
+- Անանուխի/այրման/փոխանցման համար ակտիվների ID-ները մնում են կանոնական `<asset-definition-id>#<account-id>`; կառուցել դրանք հետևյալով.
   - `iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
   - կամ `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`:
 

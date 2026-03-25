@@ -92,7 +92,7 @@ fn sse_smoke_scenarios() -> Result<()> {
             AssetDefinitionId::new("wonderland".parse()?, "rose".parse()?),
             ALICE_ID.clone(),
         );
-        let asset_id_literal = asset_id.canonical_encoded();
+        let asset_id_literal = asset_id.canonical_literal();
         let register = Register::trigger(Trigger::new(
             trigger_id.clone(),
             Action::new(

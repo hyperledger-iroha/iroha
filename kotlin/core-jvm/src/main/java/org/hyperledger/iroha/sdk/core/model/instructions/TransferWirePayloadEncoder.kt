@@ -5,7 +5,6 @@ package org.hyperledger.iroha.sdk.core.model.instructions
 
 import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.address.AccountAddressException
-import org.hyperledger.iroha.sdk.address.AssetIdDecoder
 import org.hyperledger.iroha.sdk.address.AssetDefinitionIdEncoder
 import org.hyperledger.iroha.sdk.address.MultisigMemberPayload
 import org.hyperledger.iroha.sdk.address.MultisigPolicyPayload
@@ -59,7 +58,8 @@ object TransferWirePayloadEncoder {
     /**
      * Encodes an asset transfer instruction as a wire-framed InstructionBox.
      *
-     * @param assetId The full asset ID (e.g., "rose#wonderland##alice@wonderland")
+     * @param assetId The full asset ID (`<asset-definition-id>#<account-id>` with an optional
+     * `#dataspace:<id>` suffix)
      * @param amount The amount to transfer as a string (e.g., "10" or "10.50")
      * @param destinationAccountId The recipient's account ID
      * @return InstructionBox with wire payload ready for Norito encoding
@@ -121,26 +121,18 @@ object TransferWirePayloadEncoder {
 
     private class TransferAssetPayload(val source: AssetId, val amount: NumericValue, val destination: AccountId)
 
-    private class AssetDefinitionId(aidBytes: ByteArray) {
-        private val _aidBytes: ByteArray = aidBytes.clone()
-        init { require(_aidBytes.size == 16) { "aidBytes must be 16 bytes, got ${_aidBytes.size}" } }
-        fun aidBytes(): ByteArray = _aidBytes.clone()
+    private class AssetDefinitionId(definitionBytes: ByteArray) {
+        private val _definitionBytes: ByteArray = definitionBytes.clone()
+        init {
+            require(_definitionBytes.size == 16) {
+                "definitionBytes must be 16 bytes, got ${_definitionBytes.size}"
+            }
+        }
+        fun definitionBytes(): ByteArray = _definitionBytes.clone()
 
         companion object {
-            fun fromAid(aidString: String): AssetDefinitionId =
-                AssetDefinitionId(AssetDefinitionIdEncoder.parseAidBytes(aidString))
-
-            fun fromNameDomain(name: String, domain: String): AssetDefinitionId =
-                AssetDefinitionId(AssetDefinitionIdEncoder.computeAidBytes(name, domain))
-
-            fun parse(assetDefinitionId: String): AssetDefinitionId {
-                if (AssetDefinitionIdEncoder.isAidEncoded(assetDefinitionId)) return fromAid(assetDefinitionId)
-                val hashIndex = assetDefinitionId.indexOf('#')
-                require(hashIndex >= 0) { "Invalid AssetDefinitionId format: $assetDefinitionId" }
-                val name = assetDefinitionId.substring(0, hashIndex)
-                val domainName = assetDefinitionId.substring(hashIndex + 1)
-                return fromNameDomain(name, domainName)
-            }
+            fun fromAddress(address: String): AssetDefinitionId =
+                AssetDefinitionId(AssetDefinitionIdEncoder.parseAddressBytes(address))
         }
     }
 
@@ -163,20 +155,14 @@ object TransferWirePayloadEncoder {
     private class AccountId(val controller: AccountController) {
         companion object {
             fun parse(accountIdStr: String): AccountId {
-                val atIndex = accountIdStr.lastIndexOf('@')
-                val signatory = if (atIndex >= 0) accountIdStr.substring(0, atIndex) else accountIdStr
-
-                val pk = decodePublicKeyLiteral(signatory)
-                if (pk != null) {
-                    val multihash = encodePublicKeyMultihash(pk.curveId, pk.keyBytes)
-                    return AccountId(AccountController.single(multihash))
-                }
-
                 val address: AccountAddress
                 try {
-                    address = AccountAddress.parseEncodedIgnoringCurveSupport(signatory, null).address
+                    address = AccountAddress.parseEncodedIgnoringCurveSupport(accountIdStr, null).address
                 } catch (e: AccountAddressException) {
-                    throw IllegalArgumentException("Failed to parse account identifier: $signatory", e)
+                    throw IllegalArgumentException(
+                        "AssetId.account must use canonical I105 form",
+                        e,
+                    )
                 }
 
                 try {
@@ -217,72 +203,25 @@ object TransferWirePayloadEncoder {
 
         companion object {
             fun parse(assetIdStr: String): AssetId {
-                if (AssetIdDecoder.isNoritoEncoded(assetIdStr)) return parseNoritoEncoded(assetIdStr)
+                val parts = assetIdStr.split('#')
+                require(parts.size == 2 || parts.size == 3) {
+                    "AssetId must use '<asset-definition-id>#<account-id>' with optional '#dataspace:<id>' suffix"
+                }
 
-                val lastHashIndex = assetIdStr.lastIndexOf('#')
-                require(lastHashIndex >= 0) { "Invalid AssetId format: $assetIdStr" }
-
-                val accountIdPart = assetIdStr.substring(lastHashIndex + 1)
-                val assetDefPart = assetIdStr.substring(0, lastHashIndex)
-                val accountId = AccountId.parse(accountIdPart)
-
-                val atIndex = accountIdPart.lastIndexOf('@')
-                val accountDomain = if (atIndex >= 0) accountIdPart.substring(atIndex + 1) else ""
-
-                val assetDef: AssetDefinitionId
-                if (AssetDefinitionIdEncoder.isAidEncoded(assetDefPart)) {
-                    assetDef = AssetDefinitionId.fromAid(assetDefPart)
-                } else if (assetDefPart.endsWith("#")) {
-                    val assetName = assetDefPart.substring(0, assetDefPart.length - 1)
-                    assetDef = AssetDefinitionId.fromNameDomain(assetName, accountDomain)
+                val assetDef = AssetDefinitionId.fromAddress(parts[0])
+                val accountId = AccountId.parse(parts[1])
+                val scopePayload = if (parts.size == 2) {
+                    globalScopePayload()
                 } else {
-                    val hashIndex = assetDefPart.indexOf('#')
-                    require(hashIndex >= 0) { "Invalid AssetId format: $assetIdStr" }
-                    val assetName = assetDefPart.substring(0, hashIndex)
-                    val assetDomain = assetDefPart.substring(hashIndex + 1)
-                    assetDef = AssetDefinitionId.fromNameDomain(assetName, assetDomain)
+                    val match = Regex("^dataspace:(\\d+)$").matchEntire(parts[2])
+                        ?: throw IllegalArgumentException(
+                            "AssetId.scope must use 'dataspace:<id>' when present"
+                        )
+                    encodeAssetBalanceScopePayload(
+                        AssetBalanceScopePayload.dataspace(match.groupValues[1].toLong())
+                    )
                 }
-                return AssetId(accountId, assetDef, null, globalScopePayload())
-            }
-
-            private fun parseNoritoEncoded(noritoAssetId: String): AssetId {
-                val raw = extractNoritoBytes(noritoAssetId)
-                val decoded = NoritoHeader.decode(raw, SchemaHash.hash16("iroha_data_model::asset::id::model::AssetId"))
-                val header = decoded.header
-                val payload = decoded.payload
-                header.validateChecksum(payload)
-                val sourceFlags = header.flags
-                val unsupportedFlags = sourceFlags and NoritoHeader.COMPACT_LEN.inv()
-                require(unsupportedFlags == 0) {
-                    "Unsupported norito AssetId layout flags for transfer encoding: 0x%02x".format(unsupportedFlags)
-                }
-
-                val compactLen = (sourceFlags and NoritoHeader.COMPACT_LEN) != 0
-                val decoder = NoritoDecoder(payload, sourceFlags, header.minor)
-
-                val encodedAccountPayload = readSizedField(decoder, compactLen, "AssetId.account")
-                val account: AccountId
-                try {
-                    account = decodeEncodedAccountPayload(encodedAccountPayload, sourceFlags, header.minor)
-                } catch (ex: IllegalArgumentException) {
-                    throw IllegalArgumentException("Invalid AssetId.account payload", ex)
-                }
-                val definitionPayload = readSizedField(decoder, compactLen, "AssetId.definition")
-                val aidBytes = decodeFixedByteArray(definitionPayload, 16, sourceFlags, header.minor)
-                val scopePayload = readSizedField(decoder, compactLen, "AssetId.scope")
-                val scope: AssetBalanceScopePayload
-                try {
-                    scope = decodeAssetBalanceScopePayload(scopePayload, sourceFlags, header.minor)
-                } catch (ex: IllegalArgumentException) {
-                    throw IllegalArgumentException("Invalid AssetId.scope payload", ex)
-                }
-                require(decoder.remaining() == 0) { "Trailing bytes after AssetId payload" }
-
-                return if (sourceFlags != 0) {
-                    AssetId(account, AssetDefinitionId(aidBytes), null, encodeAssetBalanceScopePayload(scope))
-                } else {
-                    AssetId(null, AssetDefinitionId(aidBytes), encodedAccountPayload, scopePayload)
-                }
+                return AssetId(accountId, assetDef, null, scopePayload)
             }
         }
     }
@@ -320,7 +259,7 @@ object TransferWirePayloadEncoder {
 
     private class AssetDefinitionIdAdapter : TypeAdapter<AssetDefinitionId> {
         override fun encode(encoder: NoritoEncoder, value: AssetDefinitionId) {
-            encodeFixedByteArray(encoder, value.aidBytes())
+            encodeFixedByteArray(encoder, value.definitionBytes())
         }
 
         override fun decode(decoder: NoritoDecoder): AssetDefinitionId =
@@ -491,97 +430,6 @@ object TransferWirePayloadEncoder {
         return encoder.toByteArray()
     }
 
-    private fun extractNoritoBytes(noritoString: String): ByteArray {
-        val prefix = "norito:"
-        require(noritoString.regionMatches(0, prefix, 0, prefix.length, ignoreCase = true)) {
-            "Value must start with norito: prefix"
-        }
-        val hex = noritoString.substring(prefix.length)
-        require(hex.length % 2 == 0) { "Hex string must have even length" }
-        return ByteArray(hex.length / 2) { i ->
-            val hi = Character.digit(hex[i * 2], 16)
-            val lo = Character.digit(hex[i * 2 + 1], 16)
-            require(hi >= 0 && lo >= 0) { "Invalid hex character at position ${i * 2}" }
-            ((hi shl 4) or lo).toByte()
-        }
-    }
-
-    private fun readSizedField(decoder: NoritoDecoder, compactLen: Boolean, fieldName: String): ByteArray {
-        val fieldLength = checkedLength(decoder.readLength(compactLen), "$fieldName field")
-        return decoder.readBytes(fieldLength)
-    }
-
-    private fun decodeFixedByteArray(payload: ByteArray, expectedLen: Int, flags: Int, flagsHint: Int): ByteArray {
-        if (payload.size == expectedLen) return payload.clone()
-        val decoder = NoritoDecoder(payload, flags, flagsHint)
-        val compactLen = (flags and NoritoHeader.COMPACT_LEN) != 0
-        val result = ByteArray(expectedLen)
-        for (i in 0 until expectedLen) {
-            val elementLen = decoder.readLength(compactLen)
-            require(elementLen == 1L) { "Expected 1-byte element, got $elementLen" }
-            result[i] = decoder.readByte().toByte()
-        }
-        require(decoder.remaining() == 0) { "Trailing bytes after fixed byte array" }
-        return result
-    }
-
-    private fun decodeEncodedAccountPayload(payload: ByteArray, flags: Int, flagsHint: Int): AccountId {
-        val decoder = NoritoDecoder(payload, flags, flagsHint)
-        val compactLen = (flags and NoritoHeader.COMPACT_LEN) != 0
-        val controllerTag = UINT32_ADAPTER.decode(decoder)
-        val variantLength = checkedLength(decoder.readLength(compactLen), "AccountController variant payload")
-        val variantPayload = decoder.readBytes(variantLength)
-        require(decoder.remaining() == 0) { "Trailing bytes after AssetId.account payload" }
-
-        if (controllerTag == 0L) {
-            val canonicalMultihash = decodeSingleControllerVariant(variantPayload, flags, flagsHint)
-            return AccountId(AccountController.single(canonicalMultihash))
-        }
-        if (controllerTag == 1L) {
-            val multisigPolicy = decodeMultisigControllerVariant(variantPayload, flags, flagsHint)
-            return AccountId(AccountController.multisig(multisigPolicy))
-        }
-        throw IllegalArgumentException("Unknown AccountController discriminant in AssetId.account: $controllerTag")
-    }
-
-    private fun decodeSingleControllerVariant(payload: ByteArray, flags: Int, flagsHint: Int): String {
-        val decoder = NoritoDecoder(payload, flags, flagsHint)
-        val multihash = STRING_ADAPTER.decode(decoder)
-        require(decoder.remaining() == 0) { "Trailing bytes after AssetId.account single controller" }
-        val publicKey = decodePublicKeyLiteral(multihash)
-            ?: throw IllegalArgumentException("Invalid public key multihash in AssetId.account")
-        return encodePublicKeyMultihash(publicKey.curveId, publicKey.keyBytes)
-    }
-
-    private fun decodeMultisigControllerVariant(payload: ByteArray, flags: Int, flagsHint: Int): MultisigPolicyPayload {
-        val decoder = NoritoDecoder(payload, flags, flagsHint)
-        val version = Math.toIntExact(decodeSizedTypedField(decoder, UINT8_ADAPTER, "MultisigPolicy.version"))
-        val threshold = Math.toIntExact(decodeSizedTypedField(decoder, UINT16_ADAPTER, "MultisigPolicy.threshold"))
-        val membersPayloadLen = checkedLength(
-            decoder.readLength((flags and NoritoHeader.COMPACT_LEN) != 0), "MultisigPolicy.members payload")
-        val membersPayload = decoder.readBytes(membersPayloadLen)
-        require(decoder.remaining() == 0) { "Trailing bytes after AssetId.account multisig policy" }
-
-        val membersDecoder = NoritoDecoder(membersPayload, flags, flagsHint)
-        val membersCount = checkedLength(membersDecoder.readLength(false), "Multisig members count")
-        val members = mutableListOf<MultisigMemberPayload>()
-        for (i in 0 until membersCount) {
-            val memberLen = checkedLength(
-                membersDecoder.readLength((flags and NoritoHeader.COMPACT_LEN) != 0), "Multisig member payload")
-            val memberPayload = membersDecoder.readBytes(memberLen)
-            val memberDecoder = NoritoDecoder(memberPayload, flags, flagsHint)
-            val memberMultihash = decodeSizedTypedField(memberDecoder, STRING_ADAPTER, "Multisig member public key")
-            val weight = Math.toIntExact(decodeSizedTypedField(memberDecoder, UINT16_ADAPTER, "Multisig member weight"))
-            require(memberDecoder.remaining() == 0) { "Trailing bytes after multisig member payload" }
-            val keyPayload = decodePublicKeyLiteral(memberMultihash)
-                ?: throw IllegalArgumentException("Invalid multisig member public key")
-            members.add(MultisigMemberPayload(keyPayload.curveId, weight, keyPayload.keyBytes))
-        }
-        require(membersDecoder.remaining() == 0) { "Trailing bytes after multisig member vector payload" }
-        validateMultisigPolicySemantics(version, threshold, members)
-        return MultisigPolicyPayload.of(version, threshold, members)
-    }
-
     private fun validateMultisigPolicySemantics(version: Int, threshold: Int, members: List<MultisigMemberPayload>) {
         require(version == MULTISIG_POLICY_VERSION_V1) { "Invalid multisig policy: unsupported version $version" }
         require(members.isNotEmpty()) { "Invalid multisig policy: zero members" }
@@ -620,26 +468,6 @@ object TransferWirePayloadEncoder {
             if (cmp != 0) return cmp
         }
         return a.size.compareTo(b.size)
-    }
-
-    private fun decodeAssetBalanceScopePayload(payload: ByteArray, flags: Int, flagsHint: Int): AssetBalanceScopePayload {
-        val decoder = NoritoDecoder(payload, flags, flagsHint)
-        val scopeTag = UINT32_ADAPTER.decode(decoder)
-        if (scopeTag == 0L) {
-            require(decoder.remaining() == 0) { "Trailing bytes after AssetBalanceScope::Global" }
-            return AssetBalanceScopePayload.global()
-        }
-        if (scopeTag == 1L) {
-            val compactLen = (flags and NoritoHeader.COMPACT_LEN) != 0
-            val variantLen = checkedLength(decoder.readLength(compactLen), "AssetBalanceScope::Dataspace payload")
-            val variantPayload = decoder.readBytes(variantLen)
-            require(decoder.remaining() == 0) { "Trailing bytes after AssetBalanceScope payload" }
-            val variantDecoder = NoritoDecoder(variantPayload, flags, flagsHint)
-            val dataspaceId = variantDecoder.readUInt(64)
-            require(variantDecoder.remaining() == 0) { "Trailing bytes after AssetBalanceScope::Dataspace value" }
-            return AssetBalanceScopePayload.dataspace(dataspaceId)
-        }
-        throw IllegalArgumentException("Unknown AssetBalanceScope discriminant in AssetId.scope: $scopeTag")
     }
 
     private fun encodeAssetBalanceScopePayload(scope: AssetBalanceScopePayload): ByteArray {

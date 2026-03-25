@@ -202,7 +202,7 @@ def test_creation_time_mismatch_triggers_error(tmp_path: Path) -> None:
     (resources / "charlie.norito").write_bytes(payload_bytes)
 
     chain = "00000004"
-    authority = "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp"
+    authority = "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV"
     payloads_path = _write_payloads(
         tmp_path / "transaction_payloads.json",
         [

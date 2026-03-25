@@ -14,13 +14,6 @@ final class ProofAttachmentNoritoTests: XCTestCase {
         let expectedAttachment = manualProofAttachmentPayload(attachment)
         XCTAssertEqual(payload, expectedAttachment)
 
-        let list = OfflineProofAttachmentList(attachments: [attachment])
-        let listPayload = try list.noritoPayload()
-        var expectedList = Data()
-        expectedList.append(u64le(1))
-        expectedList.append(u64le(UInt64(expectedAttachment.count)))
-        expectedList.append(expectedAttachment)
-        XCTAssertEqual(listPayload, expectedList)
     }
 
     func testProofAttachmentRejectsInvalidCommitmentLength() throws {

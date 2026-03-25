@@ -439,7 +439,9 @@ fn is_time_sensitive_instruction(instruction: &InstructionBox) -> bool {
         let trigger = &register.object;
         return is_time_sensitive_executable(trigger.action().executable());
     }
-    any.is::<iroha_data_model::isi::offline::RegisterOfflineAllowance>()
+    any.is::<iroha_data_model::isi::offline::RegisterOfflineReserve>()
+        || any.is::<iroha_data_model::isi::offline::CommitOfflineReserveOperation>()
+        || any.is::<iroha_data_model::isi::offline::RegisterOfflineAllowance>()
         || any.is::<iroha_data_model::isi::offline::SubmitOfflineToOnlineTransfer>()
         || any.is::<iroha_data_model::isi::offline::RegisterOfflineVerdictRevocation>()
         || any.is::<iroha_data_model::isi::offline::ReserveOfflineEscrowBalance>()

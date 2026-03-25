@@ -191,7 +191,7 @@ impl<T: Write> RunArgs<T> for Args {
 #
 # # TLS-over-TCP to peers (requires iroha_p2p/p2p_tls):
 # tls_enabled = false
-# tls_fallback_to_plain = true
+# tls_fallback_to_plain = false
 # tls_listen_address = "addr:0.0.0.0:1337"
 # tls_inbound_only = false
 #

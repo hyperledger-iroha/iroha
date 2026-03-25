@@ -974,7 +974,7 @@ pub mod genesis_instructions_json {
     }
 
     fn asset_literal(asset: &AssetId) -> String {
-        asset.canonical_encoded()
+        asset.canonical_literal()
     }
 
     #[allow(clippy::too_many_lines)]

@@ -159,6 +159,12 @@ public actor ConnectClient {
                                        role: role,
                                        endpointPath: endpointPath)
         let normalizedToken = try validateNonEmpty(token, field: "token")
+        if let violation = IrohaTransportSecurity.webSocketViolation(context: "ConnectClient",
+                                                                     baseURL: baseURL,
+                                                                     targetURL: url,
+                                                                     hasCredentials: true) {
+            throw ToriiClientError.invalidPayload(violation)
+        }
         var request = URLRequest(url: url)
         request.setValue("Bearer \(normalizedToken)", forHTTPHeaderField: "Authorization")
         return request

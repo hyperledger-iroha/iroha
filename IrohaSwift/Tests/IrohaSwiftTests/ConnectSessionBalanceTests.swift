@@ -6,7 +6,8 @@ import Combine
 
 @available(iOS 15.0, macOS 12.0, *)
 final class ConnectSessionBalanceTests: XCTestCase {
-    private let encodedUsdAssetID = "norito:757364"
+    private let encodedUsdAssetID =
+        "5ywNgSPQ5KyuQh7SwaZmwMW4GTXu#6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
 
     func testBalanceStreamFiltersAccount() async throws {
         let (session, tempURL) = makeSessionWithEvents()

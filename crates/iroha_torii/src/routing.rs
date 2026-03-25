@@ -17830,7 +17830,7 @@ pub(crate) fn parse_tx_history_asset_selector(raw: &str) -> Result<TxHistoryAsse
     if trimmed.is_empty() {
         return Err(conversion_error("asset_id must not be empty".to_string()));
     }
-    if let Ok(asset_id) = iroha_data_model::asset::AssetId::parse_encoded(trimmed) {
+    if let Ok(asset_id) = iroha_data_model::asset::AssetId::parse_literal(trimmed) {
         return Ok(TxHistoryAssetSelector::AssetId(asset_id));
     }
     trimmed
@@ -33571,7 +33571,7 @@ pub struct ListFilterParams {
 #[derive(
     crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
 )]
-pub struct OfflineAllowanceListParams {
+struct OfflineAllowanceListParams {
     /// Optional JSON-encoded filter expression.
     pub filter: Option<String>,
     /// Optional limit for pagination.
@@ -33669,7 +33669,7 @@ pub struct OfflineTransferListParams {
 /// Request payload for `/v1/offline/transfers/proof`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
-pub struct OfflineTransferProofRequest {
+struct OfflineTransferProofRequest {
     /// Transfer payload used to build proof requests.
     pub transfer: OfflineToOnlineTransfer,
     /// Proof request kind (`sum`, `counter`, `replay`).
@@ -33692,7 +33692,7 @@ pub struct OfflineTransferProofRequest {
     Debug,
     Clone,
 )]
-pub struct OfflineWalletCertificateDraft {
+struct OfflineWalletCertificateDraft {
     /// Account that owns the allowance.
     pub controller: AccountId,
     /// Deprecated operator account supplied by older clients.
@@ -33755,7 +33755,7 @@ impl OfflineWalletCertificateDraft {
 /// Request payload for POST `<deleted-offline-certificates-issue>`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
-pub struct OfflineCertificateIssueRequest {
+struct OfflineCertificateIssueRequest {
     /// Certificate data to be signed by the operator.
     pub certificate: OfflineWalletCertificateDraft,
 }
@@ -33763,7 +33763,7 @@ pub struct OfflineCertificateIssueRequest {
 /// Response payload for POST `<deleted-offline-certificates-issue>`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, Debug, Clone)]
-pub struct OfflineCertificateIssueResponse {
+struct OfflineCertificateIssueResponse {
     /// Deterministic certificate identifier (hex, lowercase).
     pub certificate_id_hex: String,
     /// Fully signed offline wallet certificate.
@@ -33773,7 +33773,7 @@ pub struct OfflineCertificateIssueResponse {
 /// Request payload for POST `/v1/offline/build-claims/issue`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
-pub struct OfflineBuildClaimIssueRequest {
+struct OfflineBuildClaimIssueRequest {
     /// Registered offline certificate identifier (hex, case-insensitive).
     pub certificate_id_hex: String,
     /// Receipt transaction identifier (hex, case-insensitive) used as claim nonce.
@@ -33797,7 +33797,7 @@ pub struct OfflineBuildClaimIssueRequest {
 /// Response payload for POST `/v1/offline/build-claims/issue`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, Debug, Clone)]
-pub struct OfflineBuildClaimIssueResponse {
+struct OfflineBuildClaimIssueResponse {
     /// Deterministic build-claim identifier (hex, lowercase).
     pub claim_id_hex: String,
     /// Fully signed build claim payload.
@@ -33807,7 +33807,7 @@ pub struct OfflineBuildClaimIssueResponse {
 /// Request payload for POST `<deleted-offline-allowances>`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
-pub struct OfflineAllowanceIssueRequest {
+struct OfflineAllowanceIssueRequest {
     /// Account authorizing the issuance transaction.
     pub authority: AccountId,
     /// Signing key exposed for API transport.
@@ -33819,7 +33819,7 @@ pub struct OfflineAllowanceIssueRequest {
 /// Response payload for POST `<deleted-offline-allowances>`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, Debug, Clone)]
-pub struct OfflineAllowanceIssueResponse {
+struct OfflineAllowanceIssueResponse {
     /// Deterministic certificate identifier (hex, lowercase).
     pub certificate_id_hex: String,
 }
@@ -33827,7 +33827,7 @@ pub struct OfflineAllowanceIssueResponse {
 /// Request payload for POST `<deleted-offline-certificates-revoke>`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
-pub struct OfflineCertificateRevokeRequest {
+struct OfflineCertificateRevokeRequest {
     /// Account authorizing the revocation transaction.
     pub authority: AccountId,
     /// Signing key exposed for API transport.
@@ -33848,7 +33848,7 @@ pub struct OfflineCertificateRevokeRequest {
 /// Response payload for POST `<deleted-offline-certificates-revoke>`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, Debug, Clone)]
-pub struct OfflineCertificateRevokeResponse {
+struct OfflineCertificateRevokeResponse {
     /// Deterministic verdict identifier (hex, lowercase).
     pub verdict_id_hex: String,
 }
@@ -33856,7 +33856,7 @@ pub struct OfflineCertificateRevokeResponse {
 /// Request payload for POST `<deleted-offline-allowances-renew>`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
-pub struct OfflineCertificateRenewRequest {
+struct OfflineCertificateRenewRequest {
     /// Account authorizing the renewal transaction.
     pub authority: AccountId,
     /// Signing key exposed for API transport.
@@ -33868,7 +33868,7 @@ pub struct OfflineCertificateRenewRequest {
 /// Response payload for POST `<deleted-offline-allowances-renew>`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, Debug, Clone)]
-pub struct OfflineCertificateRenewResponse {
+struct OfflineCertificateRenewResponse {
     /// Deterministic new certificate identifier (hex, lowercase).
     pub certificate_id_hex: String,
 }
@@ -33883,7 +33883,7 @@ pub struct OfflineCertificateRenewResponse {
     Debug,
     Clone,
 )]
-pub struct OfflineSettlementBuildClaimOverride {
+struct OfflineSettlementBuildClaimOverride {
     /// Receipt transaction identifier (hex, case-insensitive) targeted by this override.
     pub tx_id_hex: String,
     /// Optional application identifier override (`bundle_id` on iOS, package name on Android).
@@ -33903,7 +33903,7 @@ pub struct OfflineSettlementBuildClaimOverride {
 /// Request payload for POST `<deleted-offline-settlements>`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
-pub struct OfflineSettlementSubmitRequest {
+struct OfflineSettlementSubmitRequest {
     /// Account authorizing the settlement transaction.
     pub authority: AccountId,
     /// Signing key exposed for API transport.
@@ -33921,7 +33921,7 @@ pub struct OfflineSettlementSubmitRequest {
 /// Response payload for POST `<deleted-offline-settlements>`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, Debug, Clone)]
-pub struct OfflineSettlementSubmitResponse {
+struct OfflineSettlementSubmitResponse {
     /// Canonical bundle identifier (hex, lowercase).
     pub bundle_id_hex: String,
     /// Canonical signed transaction hash (hex, lowercase) for pipeline status polling.
@@ -33931,7 +33931,7 @@ pub struct OfflineSettlementSubmitResponse {
 /// Request payload for POST `<deleted-offline-spend-receipts>`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
-pub struct OfflineSpendReceiptsSubmitRequest {
+struct OfflineSpendReceiptsSubmitRequest {
     /// Receipts to validate and hash into a Poseidon root.
     pub receipts: Vec<OfflineSpendReceipt>,
 }
@@ -33939,7 +33939,7 @@ pub struct OfflineSpendReceiptsSubmitRequest {
 /// Response payload for POST `<deleted-offline-spend-receipts>`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, Debug, Clone)]
-pub struct OfflineSpendReceiptsSubmitResponse {
+struct OfflineSpendReceiptsSubmitResponse {
     /// Poseidon receipts root (hex, lowercase).
     pub receipts_root_hex: String,
     /// Number of receipts processed.
@@ -33964,7 +33964,7 @@ pub struct OfflineTransferGetParams {
 /// GET parameters for `<deleted-offline-bundle-proof-status>`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Debug, Clone)]
-pub struct OfflineBundleProofStatusParams {
+struct OfflineBundleProofStatusParams {
     /// Bundle identifier (hex, case-insensitive).
     pub bundle_id_hex: String,
 }
@@ -33972,7 +33972,7 @@ pub struct OfflineBundleProofStatusParams {
 /// Summary of the optional aggregate proof payload attached to offline bundles.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, Debug, Clone)]
-pub struct OfflineBundleProofSummary {
+struct OfflineBundleProofSummary {
     /// Aggregate proof envelope version.
     pub version: u16,
     /// Sum proof size in bytes.
@@ -34017,7 +34017,7 @@ impl OfflineBundleProofSummary {
 /// Response payload for GET `<deleted-offline-bundle-proof-status>`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, Debug, Clone)]
-pub struct OfflineBundleProofStatusResponse {
+struct OfflineBundleProofStatusResponse {
     /// Bundle identifier (hex, lowercase).
     pub bundle_id_hex: String,
     /// Poseidon receipts root computed from the stored receipts (hex, lowercase).
@@ -34040,7 +34040,7 @@ pub struct OfflineBundleProofStatusResponse {
 #[derive(
     crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
 )]
-pub struct OfflineReceiptListParams {
+struct OfflineReceiptListParams {
     /// Optional JSON-encoded filter expression.
     pub filter: Option<String>,
     /// Optional limit for pagination.
@@ -34067,7 +34067,7 @@ pub struct OfflineReceiptListParams {
 /// Flattened view of an offline spend receipt surfaced to HTTP consumers.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, Debug, Clone)]
-pub struct OfflineReceiptListItem {
+struct OfflineReceiptListItem {
     /// Bundle identifier containing this receipt.
     pub bundle_id_hex: String,
     /// Deterministic receipt transaction id (hex).
@@ -34099,7 +34099,7 @@ pub struct OfflineReceiptListItem {
 /// Canonical list response returned by the offline receipt endpoints.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, Debug, Clone)]
-pub struct OfflineReceiptListResponse {
+struct OfflineReceiptListResponse {
     /// Items captured by the query or list operation.
     pub items: Vec<OfflineReceiptListItem>,
     /// Total number of receipts that matched the filter prior to pagination.
@@ -34109,7 +34109,7 @@ pub struct OfflineReceiptListResponse {
 /// Response payload for GET `<deleted-offline-state>`.
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, Debug, Clone)]
-pub struct OfflineStateResponse {
+struct OfflineStateResponse {
     /// Registered offline allowances (raw records).
     pub allowances: Vec<OfflineAllowanceRecord>,
     /// Settled offline-to-online transfer bundles.
@@ -35869,57 +35869,6 @@ mod pagination_enforcement_tests {
     }
 
     #[tokio::test]
-    async fn offline_allowances_list_rejects_limit_zero() {
-        let state = test_state();
-        let params = OfflineAllowanceListParams {
-            limit: Some(0),
-            ..Default::default()
-        };
-
-        let err = handle_v1_offline_allowances(
-            state,
-            crate::NoritoQuery(params),
-            MaybeTelemetry::disabled(),
-        )
-        .await;
-
-        match err {
-            Err(Error::AppQueryValidation { code, .. }) => assert_eq!(code, "invalid_pagination"),
-            Err(other) => panic!("unexpected error: {other:?}"),
-            Ok(_) => panic!("expected pagination error"),
-        }
-    }
-
-    #[tokio::test]
-    async fn offline_allowances_query_rejects_limit_zero() {
-        let state = test_state();
-        let envelope = crate::filter::QueryEnvelope {
-            query: None,
-            filter: None,
-            select: None,
-            sort: Vec::new(),
-            pagination: crate::filter::Pagination {
-                limit: Some(0),
-                offset: 0,
-            },
-            fetch_size: None,
-        };
-
-        let err = handle_v1_offline_allowances_query(
-            state,
-            NoritoJson(envelope),
-            MaybeTelemetry::disabled(),
-        )
-        .await;
-
-        match err {
-            Err(Error::AppQueryValidation { code, .. }) => assert_eq!(code, "invalid_pagination"),
-            Err(other) => panic!("unexpected error: {other:?}"),
-            Ok(_) => panic!("expected pagination error"),
-        }
-    }
-
-    #[tokio::test]
     async fn offline_revocations_list_rejects_limit_zero() {
         let state = test_state();
         let params = ListFilterParams {
@@ -36008,108 +35957,6 @@ mod pagination_enforcement_tests {
         };
 
         let err = handle_v1_offline_transfers_query(
-            state,
-            NoritoJson(envelope),
-            MaybeTelemetry::disabled(),
-        )
-        .await;
-
-        match err {
-            Err(Error::AppQueryValidation { code, .. }) => assert_eq!(code, "invalid_pagination"),
-            Err(other) => panic!("unexpected error: {other:?}"),
-            Ok(_) => panic!("expected pagination error"),
-        }
-    }
-
-    #[tokio::test]
-    async fn offline_receipts_list_rejects_limit_zero() {
-        let state = test_state();
-        let params = OfflineReceiptListParams {
-            limit: Some(0),
-            ..Default::default()
-        };
-
-        let err = handle_v1_offline_receipts(
-            state,
-            crate::NoritoQuery(params),
-            MaybeTelemetry::disabled(),
-        )
-        .await;
-
-        match err {
-            Err(Error::AppQueryValidation { code, .. }) => assert_eq!(code, "invalid_pagination"),
-            Err(other) => panic!("unexpected error: {other:?}"),
-            Ok(_) => panic!("expected pagination error"),
-        }
-    }
-
-    #[tokio::test]
-    async fn offline_receipts_query_rejects_limit_zero() {
-        let state = test_state();
-        let envelope = crate::filter::QueryEnvelope {
-            query: None,
-            filter: None,
-            select: None,
-            sort: Vec::new(),
-            pagination: crate::filter::Pagination {
-                limit: Some(0),
-                offset: 0,
-            },
-            fetch_size: None,
-        };
-
-        let err = handle_v1_offline_receipts_query(
-            state,
-            NoritoJson(envelope),
-            MaybeTelemetry::disabled(),
-        )
-        .await;
-
-        match err {
-            Err(Error::AppQueryValidation { code, .. }) => assert_eq!(code, "invalid_pagination"),
-            Err(other) => panic!("unexpected error: {other:?}"),
-            Ok(_) => panic!("expected pagination error"),
-        }
-    }
-
-    #[tokio::test]
-    async fn offline_summaries_list_rejects_limit_zero() {
-        let state = test_state();
-        let params = ListFilterParams {
-            limit: Some(0),
-            ..Default::default()
-        };
-
-        let err = handle_v1_offline_summaries(
-            state,
-            crate::NoritoQuery(params),
-            MaybeTelemetry::disabled(),
-        )
-        .await;
-
-        match err {
-            Err(Error::AppQueryValidation { code, .. }) => assert_eq!(code, "invalid_pagination"),
-            Err(other) => panic!("unexpected error: {other:?}"),
-            Ok(_) => panic!("expected pagination error"),
-        }
-    }
-
-    #[tokio::test]
-    async fn offline_summaries_query_rejects_limit_zero() {
-        let state = test_state();
-        let envelope = crate::filter::QueryEnvelope {
-            query: None,
-            filter: None,
-            select: None,
-            sort: Vec::new(),
-            pagination: crate::filter::Pagination {
-                limit: Some(0),
-                offset: 0,
-            },
-            fetch_size: None,
-        };
-
-        let err = handle_v1_offline_summaries_query(
             state,
             NoritoJson(envelope),
             MaybeTelemetry::disabled(),
@@ -42427,7 +42274,7 @@ impl OfflineAllowanceQueryFilters {
             .asset_id
             .as_deref()
             .map(|raw| {
-                AssetId::parse_encoded(raw)
+                AssetId::parse_literal(raw)
                     .map_err(|_| Self::conversion_error("asset_id must be a valid asset id"))
             })
             .transpose()?;
@@ -42653,7 +42500,7 @@ impl OfflineTransferQueryFilters {
             .asset_id
             .as_deref()
             .map(|raw| {
-                AssetId::parse_encoded(raw)
+                AssetId::parse_literal(raw)
                     .map_err(|_| Self::conversion_error("asset_id must be a valid asset id"))
             })
             .transpose()?;
@@ -43968,7 +43815,7 @@ fn offline_summary_item_to_json(item: &OfflineCounterSummaryListItem) -> Value {
 
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-pub async fn handle_v1_offline_allowances(
+async fn handle_v1_offline_allowances(
     state: Arc<CoreState>,
     crate::NoritoQuery(p): crate::NoritoQuery<OfflineAllowanceListParams>,
     telemetry: MaybeTelemetry,
@@ -44142,7 +43989,7 @@ pub async fn handle_v1_offline_revocations(
 
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-pub async fn handle_v1_offline_allowances_query(
+async fn handle_v1_offline_allowances_query(
     state: Arc<CoreState>,
     NoritoJson(mut envelope): NoritoJson<crate::filter::QueryEnvelope>,
     telemetry: MaybeTelemetry,
@@ -44362,7 +44209,7 @@ pub async fn handle_v1_nexus_public_lane_rewards(
         })?;
     let asset_filter = match params.asset_id.as_deref() {
         Some(raw) => Some(
-            AssetId::parse_encoded(raw)
+            AssetId::parse_literal(raw)
                 .map_err(|_| conversion_error("asset_id must be a valid asset id".to_owned()))?,
         ),
         None => None,
@@ -44977,7 +44824,7 @@ pub async fn handle_v1_offline_revocations_query(
 
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-pub async fn handle_v1_offline_summaries(
+async fn handle_v1_offline_summaries(
     state: Arc<CoreState>,
     AxQuery(p): AxQuery<ListFilterParams>,
     telemetry: MaybeTelemetry,
@@ -45058,7 +44905,7 @@ pub async fn handle_v1_offline_summaries(
 
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-pub async fn handle_v1_offline_summaries_query(
+async fn handle_v1_offline_summaries_query(
     state: Arc<CoreState>,
     NoritoJson(mut envelope): NoritoJson<crate::filter::QueryEnvelope>,
     telemetry: MaybeTelemetry,
@@ -46433,7 +46280,7 @@ pub async fn handle_v1_offline_transfer_get(
 /// GET <deleted-offline-receipts> — list flattened offline receipts for auditing.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-pub async fn handle_v1_offline_receipts(
+async fn handle_v1_offline_receipts(
     state: Arc<CoreState>,
     crate::NoritoQuery(p): crate::NoritoQuery<OfflineReceiptListParams>,
     telemetry: MaybeTelemetry,
@@ -46596,7 +46443,7 @@ pub async fn handle_v1_offline_receipts(
 /// POST <deleted-offline-receipts-query> — list flattened receipts via QueryEnvelope.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-pub async fn handle_v1_offline_receipts_query(
+async fn handle_v1_offline_receipts_query(
     state: Arc<CoreState>,
     NoritoJson(mut envelope): NoritoJson<crate::filter::QueryEnvelope>,
     telemetry: MaybeTelemetry,
@@ -46704,7 +46551,7 @@ pub async fn handle_v1_offline_receipts_query(
 /// GET <deleted-offline-bundle-proof-status> — fetch lightweight proof status for an offline bundle.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-pub async fn handle_v1_offline_bundle_proof_status(
+async fn handle_v1_offline_bundle_proof_status(
     state: Arc<CoreState>,
     crate::NoritoQuery(p): crate::NoritoQuery<OfflineBundleProofStatusParams>,
     telemetry: MaybeTelemetry,
@@ -46751,7 +46598,7 @@ pub async fn handle_v1_offline_bundle_proof_status(
 
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-pub async fn handle_v1_offline_transfer_proof(
+async fn handle_v1_offline_transfer_proof(
     _state: Arc<CoreState>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
         OfflineTransferProofRequest,
@@ -47389,7 +47236,7 @@ fn sign_offline_certificate(
 /// POST <deleted-offline-certificates-issue> — issue a signed offline wallet certificate.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-pub async fn handle_post_v1_offline_certificates_issue(
+async fn handle_post_v1_offline_certificates_issue(
     app: crate::SharedAppState,
     NoritoJson(req): NoritoJson<OfflineCertificateIssueRequest>,
     _telemetry: MaybeTelemetry,
@@ -47412,7 +47259,7 @@ pub async fn handle_post_v1_offline_certificates_issue(
 /// POST <deleted-offline-certificates-renew-issue> — issue a renewed certificate.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-pub async fn handle_post_v1_offline_certificates_renew_issue(
+async fn handle_post_v1_offline_certificates_renew_issue(
     app: crate::SharedAppState,
     certificate_id_hex: String,
     NoritoJson(req): NoritoJson<OfflineCertificateIssueRequest>,
@@ -47480,7 +47327,7 @@ pub async fn handle_post_v1_offline_certificates_renew_issue(
 /// POST /v1/offline/build-claims/issue — issue an operator-signed build claim.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-pub async fn handle_post_v1_offline_build_claims_issue(
+async fn handle_post_v1_offline_build_claims_issue(
     app: crate::SharedAppState,
     NoritoJson(req): NoritoJson<OfflineBuildClaimIssueRequest>,
     _telemetry: MaybeTelemetry,
@@ -47517,7 +47364,7 @@ pub async fn handle_post_v1_offline_build_claims_issue(
 /// POST <deleted-offline-allowances> — register an offline wallet certificate on-ledger.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-pub async fn handle_post_v1_offline_allowances_issue(
+async fn handle_post_v1_offline_allowances_issue(
     chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
@@ -47551,7 +47398,7 @@ pub async fn handle_post_v1_offline_allowances_issue(
 /// GET <deleted-offline-allowances-detail> — fetch a specific offline allowance record.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-pub async fn handle_v1_offline_allowance_get(
+async fn handle_v1_offline_allowance_get(
     state: Arc<CoreState>,
     certificate_id_hex: String,
     _telemetry: MaybeTelemetry,
@@ -47615,7 +47462,7 @@ fn offline_allowance_verdict_id_or_error(
 /// POST <deleted-offline-allowances-renew> — renew an offline allowance certificate.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-pub async fn handle_post_v1_offline_allowances_renew(
+async fn handle_post_v1_offline_allowances_renew(
     chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
@@ -47666,7 +47513,7 @@ pub async fn handle_post_v1_offline_allowances_renew(
 /// POST <deleted-offline-certificates-revoke> — register a verdict revocation for an offline certificate.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-pub async fn handle_post_v1_offline_certificates_revoke(
+async fn handle_post_v1_offline_certificates_revoke(
     chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
@@ -47720,7 +47567,7 @@ pub async fn handle_post_v1_offline_certificates_revoke(
 /// POST <deleted-offline-settlements> — submit an offline-to-online transfer bundle for settlement.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-pub async fn handle_post_v1_offline_settlements_submit(
+async fn handle_post_v1_offline_settlements_submit(
     chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
@@ -47777,7 +47624,7 @@ pub async fn handle_post_v1_offline_settlements_submit(
 /// POST <deleted-offline-spend-receipts> — validate receipts and return their Poseidon root.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-pub async fn handle_post_v1_offline_spend_receipts(
+async fn handle_post_v1_offline_spend_receipts(
     state: Arc<CoreState>,
     NoritoJson(req): NoritoJson<OfflineSpendReceiptsSubmitRequest>,
     _telemetry: MaybeTelemetry,
@@ -47856,7 +47703,7 @@ pub async fn handle_post_v1_offline_spend_receipts(
 /// GET <deleted-offline-state> — return a full offline state snapshot for wallet sync.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-pub async fn handle_v1_offline_state(
+async fn handle_v1_offline_state(
     state: Arc<CoreState>,
     _telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
@@ -47894,7 +47741,7 @@ pub async fn handle_v1_offline_state(
 
 #[iroha_futures::telemetry_future]
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
-pub async fn handle_v1_offline_rejections(
+async fn handle_v1_offline_rejections(
     _state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
@@ -51017,265 +50864,6 @@ mod adapter_filter_tests {
     }
 
     #[cfg(feature = "app_api")]
-    #[test]
-    fn offline_allowance_filter_canonicalizes_controller_literals() {
-        use iroha_test_samples::ALICE_ID;
-
-        let i105 = crate::account_literal::display_literal(&ALICE_ID);
-        let mut expr = FilterExpr::Eq(FieldPath("controller_id".into()), Value::from(i105));
-
-        canonicalize_offline_allowance_filter_literals(
-            &mut expr,
-            &MaybeTelemetry::for_tests(),
-            ENDPOINT_OFFLINE_ALLOWANCES_LIST,
-        )
-        .unwrap();
-
-        match expr {
-            FilterExpr::Eq(_, value) => {
-                let expected = ALICE_ID.to_string();
-                assert_eq!(value.as_str(), Some(expected.as_str()));
-            }
-            other => panic!("expected Eq expression, got {other:?}"),
-        }
-    }
-
-    #[cfg(feature = "app_api")]
-    #[test]
-    fn offline_allowance_query_filters_reject_conflicts() {
-        let telemetry = MaybeTelemetry::for_tests();
-        let params = OfflineAllowanceListParams {
-            require_verdict: true,
-            only_missing_verdict: true,
-            ..Default::default()
-        };
-        assert!(
-            OfflineAllowanceQueryFilters::from_params(
-                &params,
-                0,
-                &telemetry,
-                ENDPOINT_OFFLINE_ALLOWANCES_LIST,
-            )
-            .is_err()
-        );
-
-        let params = OfflineAllowanceListParams {
-            verdict_id_hex: Some("deadbeef".into()),
-            only_missing_verdict: true,
-            ..Default::default()
-        };
-        assert!(
-            OfflineAllowanceQueryFilters::from_params(
-                &params,
-                0,
-                &telemetry,
-                ENDPOINT_OFFLINE_ALLOWANCES_LIST,
-            )
-            .is_err()
-        );
-    }
-
-    #[cfg(feature = "app_api")]
-    #[test]
-    fn offline_allowance_query_filters_match_ranges_and_ids() {
-        let record = sample_allowance_record();
-        let verdict_hex = allowance_verdict_hex(&record).expect("verdict id");
-        let telemetry = MaybeTelemetry::for_tests();
-
-        let params = OfflineAllowanceListParams {
-            certificate_expires_after_ms: Some(1_750_000_000_000),
-            certificate_expires_before_ms: Some(1_950_000_000_000),
-            verdict_id_hex: Some(verdict_hex.to_uppercase()),
-            require_verdict: true,
-            ..Default::default()
-        };
-        let filters = OfflineAllowanceQueryFilters::from_params(
-            &params,
-            1_720_000_000_000,
-            &telemetry,
-            ENDPOINT_OFFLINE_ALLOWANCES_LIST,
-        )
-        .expect("filters");
-        assert!(filters.matches(&record));
-
-        let asset_id = record.certificate.allowance.asset.to_string();
-        let params = OfflineAllowanceListParams {
-            asset_id: Some(asset_id),
-            ..Default::default()
-        };
-        let filters = OfflineAllowanceQueryFilters::from_params(
-            &params,
-            1_720_000_000_000,
-            &telemetry,
-            ENDPOINT_OFFLINE_ALLOWANCES_LIST,
-        )
-        .expect("filters");
-        assert!(filters.matches(&record));
-
-        let other_def: AssetDefinitionId =
-            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400ff");
-        let other_asset_id = AssetId::new(other_def, record.certificate.controller.clone());
-        let params = OfflineAllowanceListParams {
-            asset_id: Some(other_asset_id.to_string()),
-            ..Default::default()
-        };
-        let filters = OfflineAllowanceQueryFilters::from_params(
-            &params,
-            1_720_000_000_000,
-            &telemetry,
-            ENDPOINT_OFFLINE_ALLOWANCES_LIST,
-        )
-        .expect("filters");
-        assert!(!filters.matches(&record));
-
-        let params = OfflineAllowanceListParams {
-            certificate_expires_before_ms: Some(1_000),
-            ..Default::default()
-        };
-        let filters = OfflineAllowanceQueryFilters::from_params(
-            &params,
-            1_720_000_000_000,
-            &telemetry,
-            ENDPOINT_OFFLINE_ALLOWANCES_LIST,
-        )
-        .expect("filters");
-        assert!(!filters.matches(&record));
-
-        let params = OfflineAllowanceListParams {
-            verdict_id_hex: Some("cafebabe".into()),
-            require_verdict: true,
-            ..Default::default()
-        };
-        let filters = OfflineAllowanceQueryFilters::from_params(
-            &params,
-            1_720_000_000_000,
-            &telemetry,
-            ENDPOINT_OFFLINE_ALLOWANCES_LIST,
-        )
-        .expect("filters");
-        assert!(!filters.matches(&record));
-    }
-
-    #[cfg(feature = "app_api")]
-    #[test]
-    fn offline_allowance_query_filters_match_refresh_and_nonce() {
-        let record = sample_allowance_record();
-        let refresh_at = allowance_refresh_at_ms(&record).expect("refresh");
-        let nonce = allowance_attestation_nonce_hex(&record).expect("nonce");
-        let telemetry = MaybeTelemetry::for_tests();
-
-        let params = OfflineAllowanceListParams {
-            refresh_after_ms: Some(refresh_at - 10),
-            refresh_before_ms: Some(refresh_at + 10),
-            attestation_nonce_hex: Some(nonce.clone()),
-            ..Default::default()
-        };
-        let filters = OfflineAllowanceQueryFilters::from_params(
-            &params,
-            1_720_000_000_000,
-            &telemetry,
-            ENDPOINT_OFFLINE_ALLOWANCES_LIST,
-        )
-        .expect("filters");
-        assert!(filters.matches(&record));
-
-        let params = OfflineAllowanceListParams {
-            refresh_after_ms: Some(refresh_at + 1),
-            ..Default::default()
-        };
-        let filters = OfflineAllowanceQueryFilters::from_params(
-            &params,
-            1_720_000_000_000,
-            &telemetry,
-            ENDPOINT_OFFLINE_ALLOWANCES_LIST,
-        )
-        .expect("filters");
-        assert!(!filters.matches(&record));
-
-        let params = OfflineAllowanceListParams {
-            attestation_nonce_hex: Some("deadbeef".into()),
-            ..Default::default()
-        };
-        let filters = OfflineAllowanceQueryFilters::from_params(
-            &params,
-            1_720_000_000_000,
-            &telemetry,
-            ENDPOINT_OFFLINE_ALLOWANCES_LIST,
-        )
-        .expect("filters");
-        assert!(!filters.matches(&record));
-    }
-
-    #[cfg(feature = "app_api")]
-    #[test]
-    fn offline_allowance_query_filters_handle_controller_param() {
-        let record = sample_allowance_record();
-        let literal = record.certificate.controller.to_string();
-        let telemetry = MaybeTelemetry::for_tests();
-
-        let params = OfflineAllowanceListParams {
-            controller_id: Some(literal),
-            ..Default::default()
-        };
-        let filters = OfflineAllowanceQueryFilters::from_params(
-            &params,
-            record.certificate.expires_at_ms - 1,
-            &telemetry,
-            ENDPOINT_OFFLINE_ALLOWANCES_LIST,
-        )
-        .expect("filters");
-        let expected_controller = record.certificate.controller.to_string();
-        assert_eq!(
-            filters.controller_id.as_deref(),
-            Some(expected_controller.as_str())
-        );
-        assert!(filters.matches(&record));
-
-        let params = OfflineAllowanceListParams {
-            controller_id: Some("not-an-address".into()),
-            ..Default::default()
-        };
-        assert!(
-            OfflineAllowanceQueryFilters::from_params(
-                &params,
-                0,
-                &telemetry,
-                ENDPOINT_OFFLINE_ALLOWANCES_LIST,
-            )
-            .is_err()
-        );
-    }
-
-    #[cfg(feature = "app_api")]
-    #[test]
-    fn offline_allowance_query_filters_respect_include_expired_flag() {
-        let record = sample_allowance_record();
-        let now_ms = record.certificate.expires_at_ms + 10;
-        let telemetry = MaybeTelemetry::for_tests();
-
-        let filters = OfflineAllowanceQueryFilters::from_params(
-            &Default::default(),
-            now_ms,
-            &telemetry,
-            ENDPOINT_OFFLINE_ALLOWANCES_LIST,
-        )
-        .expect("filters");
-        assert!(!filters.matches(&record));
-
-        let params = OfflineAllowanceListParams {
-            include_expired: true,
-            ..Default::default()
-        };
-        let filters = OfflineAllowanceQueryFilters::from_params(
-            &params,
-            now_ms,
-            &telemetry,
-            ENDPOINT_OFFLINE_ALLOWANCES_LIST,
-        )
-        .expect("filters");
-        assert!(filters.matches(&record));
-    }
-
     #[cfg(feature = "app_api")]
     #[test]
     fn offline_transfer_filters_cover_certificate_metadata() {

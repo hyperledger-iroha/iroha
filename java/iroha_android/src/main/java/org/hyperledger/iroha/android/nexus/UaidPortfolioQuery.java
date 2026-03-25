@@ -66,9 +66,8 @@ public final class UaidPortfolioQuery {
       if (trimmed.isEmpty()) {
         throw new IllegalArgumentException(field + " must not be blank");
       }
-      if (trimmed.regionMatches(true, 0, "norito:", 0, "norito:".length())
-          || trimmed.regionMatches(true, 0, "aid:", 0, "aid:".length())) {
-        throw new IllegalArgumentException(field + " must use canonical asset selectors, not legacy prefixes");
+      if (trimmed.indexOf(':') >= 0) {
+        throw new IllegalArgumentException(field + " must use a canonical asset selector");
       }
       return trimmed;
     }

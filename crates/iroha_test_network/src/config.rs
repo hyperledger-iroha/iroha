@@ -1770,6 +1770,131 @@ mod tests {
     }
 
     #[test]
+    fn populate_genesis_results_uses_supplied_nexus_config_for_custom_staking_genesis() {
+        use std::num::NonZeroU32;
+
+        use iroha_data_model::nexus::{DataSpaceId, LaneCatalog, LaneConfig, LaneId};
+        use iroha_data_model::{
+            isi::{
+                Register,
+                staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
+            },
+            prelude::Numeric,
+        };
+
+        init_instruction_registry();
+        let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer_id = PeerId::new(bls.public_key().clone());
+        let topology = [peer_id.clone()].into_iter().collect();
+        let entry = GenesisTopologyEntry::new(
+            PeerId::new(bls.public_key().clone()),
+            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
+        );
+
+        let validator_id = AccountId::new(peer_id.public_key().clone());
+        let nexus_domain: DomainId = "nexus".parse().expect("nexus domain");
+        let stake_asset_id = AssetDefinitionId::new(
+            nexus_domain.clone(),
+            "multilane_stake".parse().expect("stake asset name"),
+        );
+        let lane_count = NonZeroU32::new(2).expect("non-zero lane count");
+        let lane_zero = LaneConfig {
+            id: LaneId::from_lane_index(0, lane_count).expect("lane 0 id"),
+            alias: "nexus".to_owned(),
+            ..LaneConfig::default()
+        };
+        let lane_one = LaneConfig {
+            id: LaneId::from_lane_index(1, lane_count).expect("lane 1 id"),
+            alias: "ds1".to_owned(),
+            dataspace_id: DataSpaceId::new(7),
+            ..LaneConfig::default()
+        };
+        let catalog = LaneCatalog::new(lane_count, vec![lane_zero, lane_one.clone()])
+            .expect("lane catalog should validate");
+        let nexus = ActualNexus {
+            enabled: true,
+            staking: iroha_config::parameters::actual::NexusStaking {
+                stake_asset_id: stake_asset_id.to_string(),
+                ..Default::default()
+            },
+            lane_catalog: catalog.clone(),
+            lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog(&catalog),
+            ..Default::default()
+        };
+
+        let post_topology_transactions = vec![vec![
+            Register::domain(Domain::new(nexus_domain.clone())).into(),
+            Register::account(Account::new(
+                validator_id.to_account_id(nexus_domain.clone()),
+            ))
+            .into(),
+            Register::asset_definition({
+                let __asset_definition_id = stake_asset_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .into(),
+            Mint::asset_numeric(
+                10_u32,
+                AssetId::new(stake_asset_id.clone(), validator_id.clone()),
+            )
+            .into(),
+            RegisterPublicLaneValidator::new(
+                lane_one.id,
+                validator_id.clone(),
+                validator_id.clone(),
+                Numeric::from(10_u32),
+                Metadata::default(),
+            )
+            .into(),
+            ActivatePublicLaneValidator::new(lane_one.id, validator_id.clone()).into(),
+        ]];
+
+        let (block, genesis_account, topology_vec, genesis_key_pair) =
+            super::build_minimal_genesis_unexecuted_with_post_topology(
+                Vec::new(),
+                post_topology_transactions,
+                topology,
+                vec![entry],
+                SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
+                super::chain_id(),
+                None,
+                None,
+                Some(nexus.clone()),
+                None,
+            );
+
+        let err = super::populate_genesis_results(
+            &block,
+            &genesis_account,
+            &topology_vec,
+            &genesis_key_pair,
+            None,
+        )
+        .expect_err("custom staking genesis should fail without the supplied nexus config");
+        let rendered = format!("{err:?}");
+        assert!(
+            rendered.contains("stake asset definition missing")
+                || rendered.contains("nexus.staking.stake_asset_id")
+                || rendered.contains("Find(AssetDefinition("),
+            "unexpected pre-exec error without nexus config: {err:?}"
+        );
+
+        let executed = super::populate_genesis_results(
+            &block,
+            &genesis_account,
+            &topology_vec,
+            &genesis_key_pair,
+            Some(&nexus),
+        )
+        .expect("custom staking genesis should succeed with the resolved nexus config");
+        assert!(
+            executed.results().all(|result| result.as_ref().is_ok()),
+            "pre-executed custom staking genesis should succeed when the builder threads the resolved nexus config"
+        );
+    }
+
+    #[test]
     fn preexec_overrides_recompute_lane_config_from_policies() {
         use std::num::NonZeroU32;
 

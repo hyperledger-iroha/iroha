@@ -30,7 +30,7 @@ IDs ཚུ་ལུ་ `Display`/`FromStr` round‐trip དང་ཅིག་ཁ
 - `AssetDefinitionId` — ཀེ་ནོ་ནིཀ་`unprefixed Base58 address with versioning and checksum` (UUID-v4 བཱའིཊིསི)། ངེས་ཚིག: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. `alias` ཡིག་འབྲུ་ཚུ་ `<name>#<domain>.<dataspace>` ཡང་ན་ `<name>#<dataspace>` འོང་དགོཔ་ཨིན་ དེ་ཡང་ `<name>` འདི་ རྒྱུ་དངོས་ངེས་ཚིག་མིང་དང་འདྲ་མཉམ་ཨིན། གསང་གྲངས་: `crates/iroha_data_model/src/asset/definition.rs`.
 
   - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`, where `status` is `permanent`, `leased_active`, `leased_grace`, or `expired_pending_cleanup`. Alias selectors resolve against the latest committed block creation time and stop resolving after grace even before sweep removes stale bindings.
-- `AssetId`: ཀེ་ནོ་ནིཀ་ཨེན་ཀོ་ཌི་འབད་ཡོད་པའི་ཚིག་ཡིག་ `norito:<hex>` (རིག་གཞུང་ཚིག་ཡིག་འབྲི་ཤོག་ཚུ་ གསར་བཏོན་འགོ་དང་པ་ནང་ རྒྱབ་སྐྱོར་མེདཔ་ཨིན།)།- `NftId` — `nft$domain`. NFT: `{ id, content: Metadata, owned_by }`. གསང་གྲངས་: `crates/iroha_data_model/src/nft.rs`.
+- `AssetId`: ཀེ་ནོ་ནིཀ་ཨེན་ཀོ་ཌི་འབད་ཡོད་པའི་ཚིག་ཡིག་ `<asset-definition-id>#<account-id>` (རིག་གཞུང་ཚིག་ཡིག་འབྲི་ཤོག་ཚུ་ གསར་བཏོན་འགོ་དང་པ་ནང་ རྒྱབ་སྐྱོར་མེདཔ་ཨིན།)།- `NftId` — `nft$domain`. NFT: `{ id, content: Metadata, owned_by }`. གསང་གྲངས་: `crates/iroha_data_model/src/nft.rs`.
 - `RoleId` — `name`. འགན་ཁུར་: བཟོ་བསྐྲུན་པ་ `NewRole { inner: Role, grant_to }` དང་ཅིག་ཁར་ `{ id, permissions: BTreeSet<Permission> }`. གསང་གྲངས་: `crates/iroha_data_model/src/role.rs`.
 - `Permission` — `{ name: Ident, payload: Json }`. གསང་གྲངས་: `crates/iroha_data_model/src/permission.rs`.
 - `PeerId`/`Peer` — མཉམ་རོགས་ངོ་རྟགས་ (མི་མང་ལྡེ་མིག་) དང་ཁ་བྱང་། གསང་གྲངས་: `crates/iroha_data_model/src/peer.rs`.
@@ -206,7 +206,7 @@ IDs ཚུ་ལུ་ `Display`/`FromStr` round‐trip དང་ཅིག་ཁ
 
 གནས་སྤོ་དྲན་ཐོ།
 - `name#domain` ཚིག་ཡིག་རྒྱུ་དངོས་-ངེས་ཚིག་ཨའི་ཌི་ཚུ་ གསར་བཏོན་འགོ་དང་པ་ནང་ བསམ་བཞིན་དུ་རྒྱབ་སྐྱོར་མ་འབད་བས།
-- རྒྱུ་དངོས་ཨའི་ཌི་ཚུ་ མིན་ཊི་/བརན་/སྤོ་བཤུད་མཚམས་ཐིག་ཚུ་ནང་ ཀེ་ནོ་ནིཀ་ལུ་སྡོདཔ་ཨིན་ `norito:<hex>`; ལག་ལེན་འཐབ། `iroha tools encode asset-id` དང་ `--definition <base58-asset-definition-id>` ཡང་ན་ `--alias ...` དང་ `--account`.
+- རྒྱུ་དངོས་ཨའི་ཌི་ཚུ་ མིན་ཊི་/བརན་/སྤོ་བཤུད་མཚམས་ཐིག་ཚུ་ནང་ ཀེ་ནོ་ནིཀ་ལུ་སྡོདཔ་ཨིན་ `<asset-definition-id>#<account-id>`; ལག་ལེན་འཐབ། `iroha tools encode asset-id` དང་ `--definition <base58-asset-definition-id>` ཡང་ན་ `--alias ...` དང་ `--account`.
 
 ---
 

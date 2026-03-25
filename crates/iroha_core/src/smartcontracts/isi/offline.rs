@@ -15,7 +15,7 @@ use std::{
     time::Duration,
 };
 
-use attestation::verify_platform_proof;
+use self::attestation::verify_platform_proof;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_config::parameters::actual;
 use iroha_config::parameters::actual::OfflineProofMode;
@@ -34,7 +34,8 @@ use iroha_data_model::{
     isi::{
         error::{InstructionExecutionError, MathError},
         offline::{
-            ReclaimExpiredOfflineAllowance, RefundOfflineEscrowBalance, RegisterOfflineAllowance,
+            CommitOfflineReserveOperation, ReclaimExpiredOfflineAllowance,
+            RefundOfflineEscrowBalance, RegisterOfflineAllowance, RegisterOfflineReserve,
             RegisterOfflineVerdictRevocation, ReserveOfflineEscrowBalance,
             SubmitOfflineToOnlineTransfer,
         },
@@ -54,13 +55,14 @@ use iroha_data_model::{
         OFFLINE_LINEAGE_SCOPE_KEY, OFFLINE_REJECTION_REASON_PREFIX, OfflineAllowanceRecord,
         OfflineBalanceProof, OfflineBuildClaim, OfflineBuildClaimPlatform, OfflineCounterState,
         OfflineCounterSummary, OfflinePlatformProof, OfflinePlatformTokenSnapshot,
-        OfflineProofRequestError, OfflineSpendReceipt, OfflineToOnlineTransfer,
-        OfflineTransferRecord, OfflineTransferRejectionPlatform, OfflineTransferRejectionReason,
-        OfflineTransferStatus, OfflineVerdictRevocation, OfflineVerdictSnapshot,
-        OfflineWalletCertificate, PROVISIONED_COUNTER_PREFIX, PlayIntegrityAppVerdict,
-        PlayIntegrityDeviceVerdict, PlayIntegrityEnvironment, canonical_app_attest_key_id,
-        canonical_receipts, chain_bound_receipt_hash, compute_receipts_root,
-        ensure_single_counter_scope, marker_series_from_public_key, receipts_are_canonical,
+        OfflineProofRequestError, OfflineReserveRecord, OfflineSpendReceipt,
+        OfflineToOnlineTransfer, OfflineTransferRecord, OfflineTransferRejectionPlatform,
+        OfflineTransferRejectionReason, OfflineTransferStatus, OfflineVerdictRevocation,
+        OfflineVerdictSnapshot, OfflineWalletCertificate, PROVISIONED_COUNTER_PREFIX,
+        PlayIntegrityAppVerdict, PlayIntegrityDeviceVerdict, PlayIntegrityEnvironment,
+        canonical_app_attest_key_id, canonical_receipts, chain_bound_receipt_hash,
+        compute_receipts_root, ensure_single_counter_scope, marker_series_from_public_key,
+        receipts_are_canonical,
     },
     query::{
         dsl::{CompoundPredicate, EvaluatePredicate},
@@ -1184,6 +1186,26 @@ pub mod isi {
         Some(rejection_code(reason).to_owned())
     }
 
+    impl Execute for RegisterOfflineReserve {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            register_reserve(self, authority, state_transaction)
+        }
+    }
+
+    impl Execute for CommitOfflineReserveOperation {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            commit_reserve_operation(self, authority, state_transaction)
+        }
+    }
+
     impl Execute for RegisterOfflineAllowance {
         fn execute(
             self,
@@ -1298,6 +1320,204 @@ pub mod isi {
         ) -> Result<(), Error> {
             refund_offline_escrow_balance(self, authority, state_transaction)
         }
+    }
+
+    fn ensure_can_manage_offline_escrow(
+        authority: &AccountId,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let can_manage_offline_escrow = state_transaction
+            .world
+            .account_permissions
+            .get(authority)
+            .is_some_and(|perms| {
+                perms
+                    .iter()
+                    .any(|permission| permission.name() == CAN_MANAGE_OFFLINE_ESCROW_PERMISSION)
+            });
+        if can_manage_offline_escrow {
+            Ok(())
+        } else {
+            Err(labeled_invariant(
+                "unauthorized_controller",
+                "only an offline escrow manager may mutate shared offline reserves",
+            ))
+        }
+    }
+
+    fn validate_reserve_numeric(raw: &str, field: &'static str) -> Result<Numeric, Error> {
+        raw.parse::<Numeric>().map_err(|_| {
+            InstructionExecutionError::InvariantViolation(
+                format!("offline reserve {field} must be a valid numeric string").into(),
+            )
+        })
+    }
+
+    fn validate_reserve_record(record: &OfflineReserveRecord) -> Result<(), Error> {
+        if record.reserve_state.reserve_id.trim().is_empty()
+            || record.reserve_state.account_id.trim().is_empty()
+            || record.reserve_state.device_id.trim().is_empty()
+            || record.reserve_state.offline_public_key.trim().is_empty()
+            || record.reserve_state.asset_definition_id.trim().is_empty()
+            || record.app_attest_key_id.trim().is_empty()
+        {
+            return Err(labeled_invariant(
+                "invalid_reserve",
+                "offline reserve lineage fields must be non-empty",
+            ));
+        }
+        if record.reserve_state.authorization.reserve_id != record.reserve_state.reserve_id
+            || record.reserve_state.authorization.account_id != record.reserve_state.account_id
+            || record.reserve_state.authorization.device_id != record.reserve_state.device_id
+            || record.reserve_state.authorization.offline_public_key
+                != record.reserve_state.offline_public_key
+            || record.reserve_state.authorization.app_attest_key_id != record.app_attest_key_id
+        {
+            return Err(labeled_invariant(
+                "invalid_reserve",
+                "offline reserve authorization does not match the reserve lineage",
+            ));
+        }
+        let balance = validate_reserve_numeric(&record.reserve_state.balance, "balance")?;
+        let parked =
+            validate_reserve_numeric(&record.reserve_state.parked_balance, "parked_balance")?;
+        if parked > balance {
+            return Err(labeled_invariant(
+                "invalid_reserve",
+                "offline reserve parked_balance cannot exceed balance",
+            ));
+        }
+        let _ = validate_reserve_numeric(
+            &record.reserve_state.authorization.max_balance,
+            "authorization.max_balance",
+        )?;
+        let _ = validate_reserve_numeric(
+            &record.reserve_state.authorization.max_tx_value,
+            "authorization.max_tx_value",
+        )?;
+        Ok(())
+    }
+
+    fn register_reserve(
+        isi: RegisterOfflineReserve,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        ensure_can_manage_offline_escrow(authority, state_transaction)?;
+        let record = isi.reserve;
+        validate_reserve_record(&record)?;
+        let reserve_id = record.reserve_state.reserve_id.clone();
+        if state_transaction
+            .world
+            .offline_reserves
+            .get(&reserve_id)
+            .is_some()
+        {
+            return Err(labeled_invariant(
+                "reserve_duplicate",
+                "offline reserve already exists",
+            ));
+        }
+        state_transaction
+            .world
+            .offline_reserves
+            .insert(reserve_id, record);
+        Ok(())
+    }
+
+    fn commit_reserve_operation(
+        isi: CommitOfflineReserveOperation,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        ensure_can_manage_offline_escrow(authority, state_transaction)?;
+        let record = isi.reserve;
+        let result = isi.result;
+        validate_reserve_record(&record)?;
+        let reserve_id = record.reserve_state.reserve_id.clone();
+        if result.operation_key.trim().is_empty()
+            || result.kind.trim().is_empty()
+            || result.request_hash_hex.trim().is_empty()
+        {
+            return Err(labeled_invariant(
+                "invalid_operation",
+                "offline reserve operation metadata must be non-empty",
+            ));
+        }
+        if result.reserve_id != reserve_id || result.envelope.reserve_state != record.reserve_state
+        {
+            return Err(labeled_invariant(
+                "invalid_operation",
+                "offline reserve operation result does not match the updated reserve state",
+            ));
+        }
+        if state_transaction
+            .world
+            .offline_reserve_operation_results
+            .get(&result.operation_key)
+            .is_some()
+        {
+            return Err(labeled_invariant(
+                "operation_duplicate",
+                "offline reserve operation_id already exists",
+            ));
+        }
+        let current = state_transaction
+            .world
+            .offline_reserves
+            .get(&reserve_id)
+            .cloned();
+        if let Some(current) = current {
+            if current.reserve_state.server_revision != isi.expected_server_revision
+                || current.reserve_state.server_state_hash != isi.expected_state_hash
+            {
+                return Err(labeled_invariant(
+                    "stale_reserve",
+                    "offline reserve mutation is based on a stale anchor",
+                ));
+            }
+            if current.reserve_state.account_id != record.reserve_state.account_id
+                || current.reserve_state.device_id != record.reserve_state.device_id
+                || current.reserve_state.offline_public_key
+                    != record.reserve_state.offline_public_key
+                || current.reserve_state.asset_definition_id
+                    != record.reserve_state.asset_definition_id
+                || current.app_attest_key_id != record.app_attest_key_id
+            {
+                return Err(labeled_invariant(
+                    "invalid_reserve",
+                    "offline reserve mutation cannot change reserve lineage",
+                ));
+            }
+            if record.reserve_state.pending_local_revision
+                < current.reserve_state.pending_local_revision
+            {
+                return Err(labeled_invariant(
+                    "invalid_reserve",
+                    "offline reserve mutation cannot rewind pending_local_revision",
+                ));
+            }
+        } else if isi.expected_server_revision != 0 || !isi.expected_state_hash.is_empty() {
+            return Err(labeled_invariant(
+                "reserve_not_found",
+                "offline reserve not found",
+            ));
+        }
+        if record.reserve_state.server_revision != isi.expected_server_revision.saturating_add(1) {
+            return Err(labeled_invariant(
+                "invalid_reserve",
+                "offline reserve mutation must advance server_revision by exactly one",
+            ));
+        }
+        state_transaction
+            .world
+            .offline_reserves
+            .insert(reserve_id, record);
+        state_transaction
+            .world
+            .offline_reserve_operation_results
+            .insert(result.operation_key.clone(), result);
+        Ok(())
     }
 
     fn reserve_offline_escrow_balance(
@@ -7279,6 +7499,66 @@ mod attestation {
         Ok(())
     }
 
+    /// Inputs required to validate an App Attest assertion outside the legacy
+    /// receipt/certificate flow while reusing the same verifier pipeline.
+    #[derive(Debug, Clone)]
+    pub struct ReserveAppleAppAttestVerification {
+        /// Metadata containing `ios.app_attest.*` keys.
+        pub metadata: Metadata,
+        /// Raw App Attest attestation object bytes.
+        pub attestation_report: Vec<u8>,
+        /// Stable App Attest key identifier.
+        pub key_id: String,
+        /// Raw App Attest assertion bytes.
+        pub assertion: Vec<u8>,
+        /// Expected monotonic sign counter.
+        pub counter: u64,
+        /// Expected challenge hash bound to the reserve operation.
+        pub challenge_hash: [u8; 32],
+    }
+
+    /// Validate an App Attest assertion using the same attestation chain,
+    /// nonce, counter, rpId, and signature checks as the legacy offline
+    /// settlement path.
+    ///
+    /// The caller is responsible for deriving `challenge_hash` from the
+    /// reserve operation payload in the exact same way as the client.
+    pub fn verify_reserve_apple_app_attest(
+        verification: &ReserveAppleAppAttestVerification,
+        block_timestamp_ms: u64,
+        settlement_cfg: &actual::Offline,
+    ) -> Result<(), InstructionExecutionError> {
+        let metadata = extract_ios_metadata(&verification.metadata)?;
+        let key_identifier = decode_key_id(&verification.key_id)?;
+        let attestation = AppleAttestation::from_certificate(
+            &verification.attestation_report,
+            &metadata,
+            &key_identifier,
+            block_timestamp_ms,
+            &verification.challenge_hash,
+        )?;
+        let assertion = AppleAssertion::parse(&verification.assertion)?;
+        let challenge = ReceiptChallenge {
+            iroha_hash: Hash::prehashed(verification.challenge_hash),
+            iroha_bytes: verification.challenge_hash,
+            client_data_hash: verification.challenge_hash,
+        };
+        let client_data_hash = assertion.validate(
+            &metadata,
+            verification.counter,
+            &challenge,
+            &attestation,
+            settlement_cfg,
+        )?;
+        verify_apple_signature(
+            attestation.verifying_key(),
+            &assertion,
+            &client_data_hash,
+            &challenge.iroha_bytes,
+            settlement_cfg,
+        )
+    }
+
     fn verify_marker_key_attestation(
         proof: &AndroidMarkerKeyProof,
         binding: &MarkerBindingMetadata,
@@ -8449,7 +8729,7 @@ mod attestation {
         Ok(())
     }
 
-    struct AppleAttestation {
+    pub(super) struct AppleAttestation {
         verifying_key: VerifyingKey,
         rp_id_hash: [u8; 32],
     }
@@ -8457,7 +8737,7 @@ mod attestation {
     impl AppleAttestation {
         /// `attest_client_data_hash` — the clientDataHash that was passed to
         /// `DCAppAttestService.attestKey()` at registration (top-up) time.
-        fn from_certificate(
+        pub(super) fn from_certificate(
             report: &[u8],
             metadata: &IosMetadata,
             key_identifier: &[u8],
@@ -8546,7 +8826,7 @@ mod attestation {
             })
         }
 
-        fn verifying_key(&self) -> &VerifyingKey {
+        pub(super) fn verifying_key(&self) -> &VerifyingKey {
             &self.verifying_key
         }
     }
@@ -8785,7 +9065,7 @@ mod attestation {
         ))
     }
 
-    struct AppleAssertion {
+    pub(super) struct AppleAssertion {
         authenticator_data: Vec<u8>,
         rp_id_hash: [u8; 32],
         _flags: u8,
@@ -8795,7 +9075,7 @@ mod attestation {
     }
 
     impl AppleAssertion {
-        fn parse(bytes: &[u8]) -> Result<Self, InstructionExecutionError> {
+        pub(super) fn parse(bytes: &[u8]) -> Result<Self, InstructionExecutionError> {
             if let Ok(assertion) = Self::parse_cbor(bytes) {
                 return Ok(assertion);
             }
@@ -8868,7 +9148,7 @@ mod attestation {
             })
         }
 
-        fn validate(
+        pub(super) fn validate(
             &self,
             _metadata: &IosMetadata,
             counter: u64,
@@ -8938,7 +9218,7 @@ mod attestation {
         final_digest.finalize().into()
     }
 
-    fn verify_apple_signature(
+    pub(super) fn verify_apple_signature(
         verifying_key: &VerifyingKey,
         assertion: &AppleAssertion,
         client_data_hash: &[u8; 32],
@@ -9221,7 +9501,7 @@ mod attestation {
         })
     }
 
-    fn decode_key_id(key_id: &str) -> Result<Vec<u8>, InstructionExecutionError> {
+    pub(super) fn decode_key_id(key_id: &str) -> Result<Vec<u8>, InstructionExecutionError> {
         let canonical = canonical_app_attest_key_id(key_id).map_err(|err| {
             InstructionExecutionError::InvariantViolation(
                 format!("invalid app attest key identifier: {err}").into(),
@@ -11877,6 +12157,8 @@ mod attestation {
         AccountId::new(pair.public_key().clone())
     }
 }
+
+pub use self::attestation::{ReserveAppleAppAttestVerification, verify_reserve_apple_app_attest};
 
 #[cfg(test)]
 mod aggregate_proof_tests {

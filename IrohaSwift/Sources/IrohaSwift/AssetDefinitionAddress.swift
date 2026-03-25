@@ -44,9 +44,10 @@ enum AssetDefinitionAddress {
         }
         let body = payload.prefix(17)
         let checksum = payload.suffix(4)
-        guard let digest = NoritoNativeBridge.shared.blake3Hash(data: Data(body)),
-              digest.prefix(4) == checksum else {
-            return nil
+        if let digest = NoritoNativeBridge.shared.blake3Hash(data: Data(body)) {
+            guard digest.prefix(4) == checksum else {
+                return nil
+            }
         }
         let uuidBytes = Data(payload[1..<17])
         guard uuidBytes.count == 16 else {

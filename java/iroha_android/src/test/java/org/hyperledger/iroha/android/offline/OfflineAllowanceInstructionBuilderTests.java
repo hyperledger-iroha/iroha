@@ -10,13 +10,18 @@ import org.hyperledger.iroha.android.model.instructions.RegisterOfflineAllowance
 /** Ensures `RegisterOfflineAllowance` builders stay aligned with Norito arguments. */
 public final class OfflineAllowanceInstructionBuilderTests {
 
+  private static final String ACCOUNT_ID =
+      "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
+  private static final String ASSET_ID =
+      "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#" + ACCOUNT_ID;
+
   private OfflineAllowanceInstructionBuilderTests() {}
 
   public static void main(final String[] args) {
     rejectsInvalidAttestationReportBase64();
     final OfflineAllowance allowance =
         OfflineAllowance.builder()
-            .setAssetId("61CtjvNd9T3THAR65GsMVHr82Bjc#ed0120EXAMPLE@sora")
+            .setAssetId(ASSET_ID)
             .setAmount("250.00")
             .setCommitmentHex("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
             .build();
@@ -30,8 +35,8 @@ public final class OfflineAllowanceInstructionBuilderTests {
 
     final OfflineWalletCertificate certificate =
         OfflineWalletCertificate.builder()
-            .setController("ed0120ABCDEF@wonderland")
-            .setOperator("ed0120ABCDEF@wonderland")
+            .setController(ACCOUNT_ID)
+            .setOperator(ACCOUNT_ID)
             .setAllowance(allowance)
             .setSpendPublicKey("ed0120ABCDEF")
             .setAttestationReportBase64("AAECAw==")
@@ -69,11 +74,11 @@ public final class OfflineAllowanceInstructionBuilderTests {
     boolean threw = false;
     try {
       OfflineWalletCertificate.builder()
-          .setController("ed0120ABCDEF@wonderland")
-          .setOperator("ed0120ABCDEF@wonderland")
+          .setController(ACCOUNT_ID)
+          .setOperator(ACCOUNT_ID)
           .setAllowance(
               OfflineAllowance.builder()
-                  .setAssetId("61CtjvNd9T3THAR65GsMVHr82Bjc#ed0120EXAMPLE@sora")
+                  .setAssetId(ASSET_ID)
                   .setAmount("250.00")
                   .setCommitmentHex("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
                   .build())

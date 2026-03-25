@@ -1794,6 +1794,8 @@ export interface InsecureTransportTelemetryEvent {
   originMatches: boolean;
   allowInsecure: boolean;
   hasCredentials: boolean;
+  hasSensitiveBody?: boolean;
+  hasCanonicalAuth?: boolean;
   timestampMs: number;
 }
 
@@ -4486,7 +4488,7 @@ export type RegisterAccountAndTransferInput =
 /**
  * Parameters for {@link buildRegisterAssetDefinitionAndMintTransaction}. Supply
  * either `mint` or `mints`. When `assetId` is omitted the helper derives it as
- * the canonical encoded asset id for `assetDefinitionId + accountId`, and
+ * the canonical public asset id for `assetDefinitionId + accountId`, and
  * enforces that any provided `assetId` matches the derived value.
  */
 interface RegisterAssetDefinitionAndMintInputBase {
@@ -7761,7 +7763,7 @@ export function buildRegisterAccountAndTransferTransaction(
 /**
  * Register an asset definition and optionally mint initial supply. When both
  * `accountId` and `assetId` are provided the helper validates that they match
- * the canonical encoded asset id derived from `assetDefinitionId + accountId`.
+ * the canonical public asset id derived from `assetDefinitionId + accountId`.
  */
 export function buildRegisterAssetDefinitionAndMintTransaction(
   input: RegisterAssetDefinitionAndMintInput,

@@ -4,10 +4,10 @@
 package org.hyperledger.iroha.sdk.address
 
 /**
- * Decoded asset definition carrying the `aid:<hex>` identifier.
+ * Decoded asset definition carrying the canonical unprefixed Base58 identifier.
  *
- * Since `AssetDefinitionId` is now a one-way blake3 hash,
+ * Since `AssetDefinitionId` is a one-way BLAKE3-derived UUID payload,
  * name and domain cannot be recovered from the binary representation.
  * Use the app's cached asset definitions for display info lookup.
  */
-class AssetDefinition(@JvmField val aidHex: String)
+class AssetDefinition(@JvmField val address: String)

@@ -140,7 +140,7 @@ impl norito::json::JsonDeserialize for ProxyMode {
     Eq,
 )]
 pub struct LocalQuicProxyConfig {
-    /// Address to bind for incoming browser/SDK traffic.
+    /// Loopback address to bind for incoming browser/SDK traffic.
     pub bind_addr: String,
     /// Optional telemetry label used in metrics (defaults to `proxy`).
     #[norito(default)]
@@ -482,8 +482,13 @@ impl ProxyKaigiRoomPolicy {
 
 impl LocalQuicProxyConfig {
     fn parsed_bind_addr(&self) -> Result<SocketAddr, ProxyError> {
-        SocketAddr::from_str(self.bind_addr.trim())
-            .map_err(|err| ProxyError::BindAddressInvalid(self.bind_addr.clone(), err.to_string()))
+        let bind_addr = SocketAddr::from_str(self.bind_addr.trim()).map_err(|err| {
+            ProxyError::BindAddressInvalid(self.bind_addr.clone(), err.to_string())
+        })?;
+        if !bind_addr.ip().is_loopback() {
+            return Err(ProxyError::BindAddressNotLoopback(bind_addr));
+        }
+        Ok(bind_addr)
     }
 
     fn guard_cache_key(&self) -> Result<Option<GuardCacheKey>, ProxyError> {
@@ -502,6 +507,9 @@ pub enum ProxyError {
     /// Bind address failed to parse.
     #[error("invalid bind address `{0}`: {1}")]
     BindAddressInvalid(String, String),
+    /// Bind address must stay on the local workstation.
+    #[error("local QUIC proxy bind address must be loopback (got `{0}`)")]
+    BindAddressNotLoopback(SocketAddr),
     /// Guard cache key could not be parsed.
     #[error(transparent)]
     GuardCacheKey(#[from] GuardCacheKeyError),
@@ -2513,6 +2521,21 @@ mod tests {
             client_id: None,
         };
         assert!(extract_stream_target(&none_target).is_none());
+    }
+
+    #[test]
+    fn spawn_local_quic_proxy_rejects_non_loopback_bind_addr() {
+        let result = spawn_local_quic_proxy(LocalQuicProxyConfig {
+            bind_addr: "0.0.0.0:0".into(),
+            ..LocalQuicProxyConfig::default()
+        });
+        match result {
+            Err(ProxyError::BindAddressNotLoopback(addr)) => {
+                assert_eq!(addr, "0.0.0.0:0".parse().expect("addr"));
+            }
+            Ok(_) => panic!("non-loopback bind must be rejected"),
+            Err(other) => panic!("expected loopback bind rejection, got {other}"),
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]

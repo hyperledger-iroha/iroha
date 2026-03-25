@@ -58,7 +58,7 @@
                 "poseidon_params_id": null,
                 "vk_set_hash": null
               },
-              "id": "rose#wonderland",
+              "id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
               "logo": null,
               "metadata": {
                 
@@ -106,7 +106,7 @@
                 "poseidon_params_id": null,
                 "vk_set_hash": null
               },
-              "id": "cabbage#garden_of_live_flowers",
+              "id": "5CJ6HCMxWw9xhuHmxDrzEfWGeE7M",
               "logo": null,
               "metadata": {
                 
@@ -205,7 +205,7 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed3200c7000000000000001dca78b6e91809aa00810000000000000017000000000000000f00000000000000070000000000000064656661756c745a00000000000000000000004e0000000000000046000000000000006564303132304345374641343643394443453745413442313235453245333642444236334541333330373345373539304143393238313641453145383631423730343842303336000000000000001a0000000000000012000000000000000a00000000000000776f6e6465726c616e640c000000000000000400000000000000726f7365",
+              "destination": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
               "object": "13"
             }
           }
@@ -213,7 +213,7 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed3200d6000000000000004b9fa464dfc100ea00810000000000000017000000000000000f00000000000000070000000000000064656661756c745a00000000000000000000004e00000000000000460000000000000065643031323043453746413436433944434537454134423132354532453336424442363345413333303733453735393041433932383136414531453836314237303438423033450000000000000026000000000000001e00000000000000160000000000000067617264656e5f6f665f6c6976655f666c6f776572730f00000000000000070000000000000063616262616765",
+              "destination": "5CJ6HCMxWw9xhuHmxDrzEfWGeE7M#6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
               "object": "44"
             }
           }
@@ -222,7 +222,7 @@
           "Transfer": {
             "AssetDefinition": {
               "destination": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
-              "object": "rose#wonderland",
+              "object": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
               "source": "6cmzPVPX95gYbXrP7UnfTUDLtn3Ynet18uDqS4S7njAFJS8GG8ds6MS"
             }
           }

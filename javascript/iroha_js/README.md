@@ -241,8 +241,8 @@ const newAccountIdInput =
   "6cmzPVPX8e5qQsHdB57DhqFT9wp2MiMoXsvt9LYUtypj1nx96bF5s8W";
 const authority = normalizeAccountId(authorityInput);
 const newAccountId = normalizeAccountId(newAccountIdInput);
-const roseAssetId = normalizeAssetId("norito:<hex-encoded-rose-asset-id>");
-const lilyAssetId = normalizeAssetId("norito:<hex-encoded-lily-asset-id>");
+const roseAssetId = normalizeAssetId("<base58-asset-definition-id>#<i105-account-id>");
+const lilyAssetId = normalizeAssetId("<base58-asset-definition-id>#<i105-account-id>");
 // Normalise human-supplied identifiers once and reuse the canonical forms below.
 const message = Buffer.from("test");
 const signature = signEd25519(message, privateKey);
@@ -461,7 +461,7 @@ const registerAccount = buildRegisterAccountInstruction({
   accountId: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
 });
 const transfer = buildTransferAssetInstruction({
-  sourceAssetId: "norito:01020304deadbeef",
+  sourceAssetId: "<base58-asset-definition-id>#<i105-account-id>",
   destinationAccountId: "6cmzPVPX9CDKZ7zp4XqnygVMaXeKCZHvBaeZNTPuH1TvtP7SvKbSzxA",
   quantity: "5",
 });
@@ -607,7 +607,7 @@ const domainAndMintTx = buildRegisterDomainAndMintTransaction({
   domain: { domainId: "garden_of_live_flowers", metadata: { key: "value" } },
   mints: [
     { assetId: roseAssetId, quantity: "5" },
-    { assetId: normalizeAssetId("norito:01020304feedface"), quantity: "2" },
+    { assetId: normalizeAssetId("<base58-asset-definition-id>#<i105-account-id>"), quantity: "2" },
   ],
   privateKey,
 });
@@ -860,9 +860,10 @@ pinned to the configured base.
   JavaScript floating-point pitfalls; the builders accept `string | number |
   bigint` but require plain decimal literals (no exponent), with up to 28
   fractional digits and a 512-bit mantissa.
-- Keep asset IDs encoded (`norito:<hex>`) when chaining mint
-  and transfer steps. The helpers do not guess missing suffixes, ensuring all
-  peers derive the same destination.
+- Keep asset IDs in canonical public form
+  (`<asset-definition-id>#<account-id>` with optional `#dataspace:<id>`) when
+  chaining mint and transfer steps. The helpers do not guess missing account or
+  scope suffixes, ensuring all peers derive the same destination.
 - Reuse the exported `normalizeAccountId()` / `normalizeAssetId()` helpers when you
   accept human input. They canonicalise multihash identifiers into the uppercase
   format expected by the data model, preventing subtle casing mismatches before
@@ -2375,7 +2376,7 @@ const { signedTransaction } = buildTransaction({
   authority: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
   instructions: [
     buildMintAssetInstruction({
-      assetId: "norito:01020304deadbeef",
+      assetId: "<base58-asset-definition-id>#<i105-account-id>",
       quantity: "10",
     }),
   ],
@@ -3164,17 +3165,17 @@ const nfts = await torii.listNfts({ limit: 10 });
 console.log("first NFT ids", nfts.items.map((nft) => nft.id));
 const balances = await torii.listAccountAssets("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", {
   limit: 3,
-  assetId: "norito:01020304deadbeef",
+  assetId: "<base58-asset-definition-id>#<i105-account-id>",
 });
 console.log("alice balances", balances.items);
 const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 3,
-  assetId: "norito:01020304deadbeef",
+  assetId: "<base58-asset-definition-id>#<i105-account-id>",
 });
 console.log("top holders", holders.items.map((entry) => entry.account_id));
 const history = await torii.listAccountTransactions("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", {
   limit: 2,
-  assetId: "norito:01020304deadbeef",
+  assetId: "<base58-asset-definition-id>#<i105-account-id>",
 });
 console.log(
   "recent hashes",
@@ -3230,7 +3231,7 @@ const registration = await torii.registerSnsName({
   selector: { suffix_id: 0x1002, label: "demo" },
   owner: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
   payment: {
-    asset_id: "norito:<hex-encoded-asset-id>",
+    asset_id: "<base58-asset-definition-id>#<i105-account-id>",
     gross_amount: 120,
     net_amount: 120,
     settlement_tx: { tx: "hash" },
@@ -3537,7 +3538,7 @@ const timeAction = buildTimeTriggerAction({
   authority,
   instructions: [
     buildMintAssetInstruction({
-      assetId: "norito:01020304cafebabe",
+      assetId: "<base58-asset-definition-id>#<i105-account-id>",
       quantity: "250",
     }),
   ],
@@ -3591,7 +3592,7 @@ for `null`.
 
 - `ToriiClient` accepts `timeoutMs`, `maxRetries`, `backoffInitialMs`, `backoffMultiplier`, `maxBackoffMs`, `retryStatuses`, and `retryMethods`, mirroring the retry knobs exposed in `iroha_config`.
 - Attach `retryTelemetryHook` to capture deterministic per-attempt telemetry for dashboards and SLO drills; events include phase (`response`/`network`/`timeout`), attempt numbers, method/URL, status or error metadata, backoffMs, profile name when set, durationMs for the attempt, and timestampMs so logs can be correlated with Torii-side traces.
-- Authentication headers can be supplied via `authToken` (maps to `Authorization: Bearer ...`) or `apiToken` (maps to `X-API-Token`). Credentialled calls pin to the client's base scheme/host; cross-host overrides are rejected, insecure `http`/`ws` requires `allowInsecure: true` (dev-only), and `insecureTransportTelemetryHook` captures any downgraded transports. Cross-host requests without credentials require `allowAbsoluteUrl: true`.
+- Authentication headers can be supplied via `authToken` (maps to `Authorization: Bearer ...`) or `apiToken` (maps to `X-API-Token`). Requests that carry auth headers, `canonicalAuth`, or raw `private_key*` JSON fields pin to the client's base scheme/host; cross-host overrides are rejected, insecure `http`/`ws` requires `allowInsecure: true` (dev-only), and `insecureTransportTelemetryHook` captures any downgraded transports. Cross-host requests without sensitive material require `allowAbsoluteUrl: true`.
 - Runtime defaults can be pulled from `iroha_config` JSON/TOML by passing a camelCase config object (map `torii.api_tokens` to `torii.apiTokens`) to `new ToriiClient(url, { config })`. The helper `resolveToriiClientConfig({ config })` returns the merged settings if you need to inspect them directly.
 - SoraFS/DA hooks accept explicit overrides: pass `sorafsGatewayFetch` (multi-source orchestrator) or `generateDaProofSummary` (checksum helper) to the `ToriiClient` constructor when testing; both are validated as functions, and `sorafsAliasPolicy` must be a plain object when provided (invalid shapes throw before any network call).
 - Developer-friendly environment overrides are supported for local workflows: `IROHA_TORII_TIMEOUT_MS`, `IROHA_TORII_MAX_RETRIES`, `IROHA_TORII_BACKOFF_INITIAL_MS`, `IROHA_TORII_BACKOFF_MULTIPLIER`, `IROHA_TORII_MAX_BACKOFF_MS`, `IROHA_TORII_RETRY_STATUSES`, `IROHA_TORII_RETRY_METHODS`, `IROHA_TORII_API_TOKEN`, and `IROHA_TORII_AUTH_TOKEN`.

@@ -278,7 +278,12 @@ public enum OfflineNorito {
     }
 
     static func encodeAssetId(_ assetId: String) throws -> Data {
-        try decodeNoritoAssetIdLiteral(assetId)
+        let parsed = try parsePublicAssetId(assetId)
+        var writer = OfflineNoritoWriter()
+        writer.writeField(try encodeAccountId(parsed.accountId))
+        writer.writeField(try encodeAssetDefinitionAddress(parsed.assetDefinitionId))
+        writer.writeField(encodeAssetBalanceScopePayload(dataspaceId: parsed.dataspaceId))
+        return writer.data
     }
 
     static func encodeAssetDefinitionId(name: String, domain: String) throws -> Data {
@@ -338,32 +343,88 @@ public enum OfflineNorito {
         return try address.toI105(networkPrefix: defaultNetworkPrefix)
     }
 
-    private static func decodeNoritoAssetIdLiteral(_ raw: String) throws -> Data {
+    static func canonicalAssetIdLiteral(_ raw: String) throws -> String {
+        let parsed = try parsePublicAssetId(raw)
+        let base = "\(parsed.assetDefinitionId)#\(parsed.accountId)"
+        guard let dataspaceId = parsed.dataspaceId else {
+            return base
+        }
+        return "\(base)#dataspace:\(dataspaceId)"
+    }
+
+    private struct ParsedPublicAssetId {
+        let assetDefinitionId: String
+        let accountId: String
+        let dataspaceId: UInt64?
+    }
+
+    private static func parsePublicAssetId(_ raw: String) throws -> ParsedPublicAssetId {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             throw OfflineNoritoError.invalidAssetId(raw)
         }
-        if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
+        if trimmed != raw || trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
             throw OfflineNoritoError.invalidAssetId(raw)
         }
-        let lower = trimmed.lowercased()
-        guard lower.hasPrefix("norito:") else {
+        let components = trimmed.split(separator: "#", omittingEmptySubsequences: false)
+        guard components.count == 2 || components.count == 3,
+              !components[0].isEmpty,
+              !components[1].isEmpty else {
             throw OfflineNoritoError.invalidAssetId(raw)
         }
-        let hex = String(trimmed.dropFirst("norito:".count))
-        guard !hex.isEmpty,
-              hex.count.isMultiple(of: 2),
-              let decoded = Data(hexString: hex) else {
+        let assetDefinitionId = String(components[0])
+        guard let _ = AssetDefinitionAddress.decode(assetDefinitionId) else {
             throw OfflineNoritoError.invalidAssetId(raw)
         }
-        if decoded.count > 40,
-           decoded[0] == 0x4E, // N
-           decoded[1] == 0x52, // R
-           decoded[2] == 0x54, // T
-           decoded[3] == 0x30 { // 0
-            return Data(decoded.dropFirst(40))
+        let accountId = try canonicalizeEncodedAccountId(String(components[1]))
+        guard components.count <= 3 else {
+            throw OfflineNoritoError.invalidAssetId(raw)
         }
-        return decoded
+        var dataspaceId: UInt64?
+        if components.count == 3 {
+            let scope = String(components[2])
+            guard let rawDataspace = scope.split(
+                separator: ":",
+                maxSplits: 1,
+                omittingEmptySubsequences: false
+            ).dropFirst().first,
+            scope.lowercased().hasPrefix("dataspace:"),
+            !rawDataspace.isEmpty,
+            let parsedDataspaceId = UInt64(rawDataspace) else {
+                throw OfflineNoritoError.invalidAssetId(raw)
+            }
+            dataspaceId = parsedDataspaceId
+        }
+        return ParsedPublicAssetId(
+            assetDefinitionId: assetDefinitionId,
+            accountId: accountId,
+            dataspaceId: dataspaceId
+        )
+    }
+
+    private static func encodeAssetDefinitionAddress(_ literal: String) throws -> Data {
+        guard let uuidBytes = AssetDefinitionAddress.decode(literal) else {
+            throw OfflineNoritoError.invalidAssetId(literal)
+        }
+        var writer = OfflineNoritoWriter()
+        for byte in uuidBytes {
+            writer.writeLength(1)
+            writer.writeUInt8(byte)
+        }
+        return writer.data
+    }
+
+    private static func encodeAssetBalanceScopePayload(dataspaceId: UInt64?) -> Data {
+        var writer = OfflineNoritoWriter()
+        guard let dataspaceId else {
+            writer.writeUInt32LE(0)
+            return writer.data
+        }
+        writer.writeUInt32LE(1)
+        var dataspaceWriter = OfflineNoritoWriter()
+        dataspaceWriter.writeUInt64LE(dataspaceId)
+        writer.writeField(dataspaceWriter.data)
+        return writer.data
     }
 
     private static func encodeVarint(_ value: UInt64) -> [UInt8] {

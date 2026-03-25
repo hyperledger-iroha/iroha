@@ -116,3 +116,17 @@ def test_compare_manifests_flags_nonce_drift(tmp_path: Path) -> None:
     assert not result.ok
     assert result.mismatched
     assert "nonce" in result.mismatched[0].differences
+
+
+def test_load_manifest_treats_missing_optional_fields_as_none(tmp_path: Path) -> None:
+    path = _write_manifest(tmp_path / "manifest.json", creation_time_ms=100)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["fixtures"][0].pop("time_to_live_ms")
+    payload["fixtures"][0].pop("nonce")
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    manifest = MODULE.load_manifest(path)
+
+    fixture = manifest.fixtures["alpha"]
+    assert fixture.time_to_live_ms is None
+    assert fixture.nonce is None

@@ -8,9 +8,9 @@ public enum ToriiOfflineAmountError: LocalizedError, Equatable {
     public var errorDescription: String? {
         switch self {
         case .invalidAmount(let value):
-            return "Invalid offline reserve amount: \(value)"
+            return "Invalid offline cash amount: \(value)"
         case .negativeResult:
-            return "Offline reserve amount arithmetic produced a negative result."
+            return "Offline cash amount arithmetic produced a negative result."
         }
     }
 }
@@ -25,17 +25,29 @@ public struct ToriiOfflineDeviceAttestation: Codable, Sendable, Equatable {
     public let counter: UInt64
     public let assertionBase64: String
     public let challengeHashHex: String
+    public let attestationReportBase64: String?
+    public let iosTeamId: String?
+    public let iosBundleId: String?
+    public let iosEnvironment: String?
 
     public init(
         keyId: String,
         counter: UInt64,
         assertionBase64: String,
-        challengeHashHex: String
+        challengeHashHex: String,
+        attestationReportBase64: String? = nil,
+        iosTeamId: String? = nil,
+        iosBundleId: String? = nil,
+        iosEnvironment: String? = nil
     ) {
         self.keyId = keyId
         self.counter = counter
         self.assertionBase64 = assertionBase64
         self.challengeHashHex = challengeHashHex
+        self.attestationReportBase64 = attestationReportBase64
+        self.iosTeamId = iosTeamId
+        self.iosBundleId = iosBundleId
+        self.iosEnvironment = iosEnvironment
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -43,12 +55,16 @@ public struct ToriiOfflineDeviceAttestation: Codable, Sendable, Equatable {
         case counter
         case assertionBase64 = "assertion_base64"
         case challengeHashHex = "challenge_hash_hex"
+        case attestationReportBase64 = "attestation_report_base64"
+        case iosTeamId = "ios_team_id"
+        case iosBundleId = "ios_bundle_id"
+        case iosEnvironment = "ios_environment"
     }
 }
 
 public struct ToriiOfflineSpendAuthorization: Codable, Sendable, Equatable, Identifiable {
     public let authorizationId: String
-    public let reserveId: String
+    public let lineageId: String
     public let accountId: String
     public let deviceId: String
     public let offlinePublicKey: String
@@ -65,7 +81,7 @@ public struct ToriiOfflineSpendAuthorization: Codable, Sendable, Equatable, Iden
 
     public init(
         authorizationId: String,
-        reserveId: String,
+        lineageId: String,
         accountId: String,
         deviceId: String,
         offlinePublicKey: String,
@@ -79,7 +95,7 @@ public struct ToriiOfflineSpendAuthorization: Codable, Sendable, Equatable, Iden
         issuerSignatureBase64: String
     ) {
         self.authorizationId = authorizationId
-        self.reserveId = reserveId
+        self.lineageId = lineageId
         self.accountId = accountId
         self.deviceId = deviceId
         self.offlinePublicKey = offlinePublicKey
@@ -93,13 +109,13 @@ public struct ToriiOfflineSpendAuthorization: Codable, Sendable, Equatable, Iden
         self.issuerSignatureBase64 = issuerSignatureBase64
     }
 
-    public func isExpired(nowMs: UInt64 = ToriiOfflineReserveCodec.currentTimestampMs()) -> Bool {
+    public func isExpired(nowMs: UInt64 = ToriiOfflineCashCodec.currentTimestampMs()) -> Bool {
         nowMs >= expiresAtMs
     }
 
     private enum CodingKeys: String, CodingKey {
         case authorizationId = "authorization_id"
-        case reserveId = "reserve_id"
+        case lineageId = "lineage_id"
         case accountId = "account_id"
         case deviceId = "device_id"
         case offlinePublicKey = "offline_public_key"
@@ -114,43 +130,43 @@ public struct ToriiOfflineSpendAuthorization: Codable, Sendable, Equatable, Iden
     }
 }
 
-public struct ToriiOfflineReserveState: Codable, Sendable, Equatable, Identifiable {
-    public let reserveId: String
+public struct ToriiOfflineCashState: Codable, Sendable, Equatable, Identifiable {
+    public let lineageId: String
     public let accountId: String
     public let deviceId: String
     public let offlinePublicKey: String
     public let assetDefinitionId: String
     public let balance: String
-    public let parkedBalance: String
+    public let lockedBalance: String
     public let serverRevision: UInt64
     public let serverStateHash: String
     public let pendingLocalRevision: UInt64
     public let authorization: ToriiOfflineSpendAuthorization
     public let issuerSignatureBase64: String
 
-    public var id: String { reserveId }
+    public var id: String { lineageId }
 
     public init(
-        reserveId: String,
+        lineageId: String,
         accountId: String,
         deviceId: String,
         offlinePublicKey: String,
         assetDefinitionId: String,
         balance: String,
-        parkedBalance: String,
+        lockedBalance: String,
         serverRevision: UInt64,
         serverStateHash: String,
         pendingLocalRevision: UInt64,
         authorization: ToriiOfflineSpendAuthorization,
         issuerSignatureBase64: String
     ) {
-        self.reserveId = reserveId
+        self.lineageId = lineageId
         self.accountId = accountId
         self.deviceId = deviceId
         self.offlinePublicKey = offlinePublicKey
         self.assetDefinitionId = assetDefinitionId
         self.balance = balance
-        self.parkedBalance = parkedBalance
+        self.lockedBalance = lockedBalance
         self.serverRevision = serverRevision
         self.serverStateHash = serverStateHash
         self.pendingLocalRevision = pendingLocalRevision
@@ -159,13 +175,13 @@ public struct ToriiOfflineReserveState: Codable, Sendable, Equatable, Identifiab
     }
 
     private enum CodingKeys: String, CodingKey {
-        case reserveId = "reserve_id"
+        case lineageId = "lineage_id"
         case accountId = "account_id"
         case deviceId = "device_id"
         case offlinePublicKey = "offline_public_key"
         case assetDefinitionId = "asset_definition_id"
         case balance
-        case parkedBalance = "parked_balance"
+        case lockedBalance = "locked_balance"
         case serverRevision = "server_revision"
         case serverStateHash = "server_state_hash"
         case pendingLocalRevision = "pending_local_revision"
@@ -192,7 +208,7 @@ public struct ToriiOfflineRevocationBundle: Codable, Sendable, Equatable {
         self.issuerSignatureBase64 = issuerSignatureBase64
     }
 
-    public func isExpired(nowMs: UInt64 = ToriiOfflineReserveCodec.currentTimestampMs()) -> Bool {
+    public func isExpired(nowMs: UInt64 = ToriiOfflineCashCodec.currentTimestampMs()) -> Bool {
         nowMs >= expiresAtMs
     }
 
@@ -208,18 +224,18 @@ public struct ToriiOfflineTransferReceipt: Codable, Sendable, Equatable, Identif
     public let version: Int
     public let transferId: String
     public let direction: ToriiOfflineTransferDirection
-    public let reserveId: String
+    public let lineageId: String
     public let accountId: String
     public let deviceId: String
     public let offlinePublicKey: String
     public let preBalance: String
     public let postBalance: String
-    public let preParkedBalance: String
-    public let postParkedBalance: String
+    public let preLockedBalance: String
+    public let postLockedBalance: String
     public let preStateHash: String
     public let postStateHash: String
     public let localRevision: UInt64
-    public let counterpartyReserveId: String
+    public let counterpartyLineageId: String
     public let counterpartyAccountId: String
     public let counterpartyDeviceId: String
     public let counterpartyOfflinePublicKey: String
@@ -230,24 +246,24 @@ public struct ToriiOfflineTransferReceipt: Codable, Sendable, Equatable, Identif
     public let senderSignatureBase64: String
     public let createdAtMs: UInt64
 
-    public var id: String { "\(reserveId):\(localRevision)" }
+    public var id: String { "\(lineageId):\(localRevision)" }
 
     public init(
         version: Int = 1,
         transferId: String,
         direction: ToriiOfflineTransferDirection,
-        reserveId: String,
+        lineageId: String,
         accountId: String,
         deviceId: String,
         offlinePublicKey: String,
         preBalance: String,
         postBalance: String,
-        preParkedBalance: String,
-        postParkedBalance: String,
+        preLockedBalance: String,
+        postLockedBalance: String,
         preStateHash: String,
         postStateHash: String,
         localRevision: UInt64,
-        counterpartyReserveId: String,
+        counterpartyLineageId: String,
         counterpartyAccountId: String,
         counterpartyDeviceId: String,
         counterpartyOfflinePublicKey: String,
@@ -261,18 +277,18 @@ public struct ToriiOfflineTransferReceipt: Codable, Sendable, Equatable, Identif
         self.version = version
         self.transferId = transferId
         self.direction = direction
-        self.reserveId = reserveId
+        self.lineageId = lineageId
         self.accountId = accountId
         self.deviceId = deviceId
         self.offlinePublicKey = offlinePublicKey
         self.preBalance = preBalance
         self.postBalance = postBalance
-        self.preParkedBalance = preParkedBalance
-        self.postParkedBalance = postParkedBalance
+        self.preLockedBalance = preLockedBalance
+        self.postLockedBalance = postLockedBalance
         self.preStateHash = preStateHash
         self.postStateHash = postStateHash
         self.localRevision = localRevision
-        self.counterpartyReserveId = counterpartyReserveId
+        self.counterpartyLineageId = counterpartyLineageId
         self.counterpartyAccountId = counterpartyAccountId
         self.counterpartyDeviceId = counterpartyDeviceId
         self.counterpartyOfflinePublicKey = counterpartyOfflinePublicKey
@@ -288,18 +304,18 @@ public struct ToriiOfflineTransferReceipt: Codable, Sendable, Equatable, Identif
         case version
         case transferId = "transfer_id"
         case direction
-        case reserveId = "reserve_id"
+        case lineageId = "lineage_id"
         case accountId = "account_id"
         case deviceId = "device_id"
         case offlinePublicKey = "offline_public_key"
         case preBalance = "pre_balance"
         case postBalance = "post_balance"
-        case preParkedBalance = "pre_parked_balance"
-        case postParkedBalance = "post_parked_balance"
+        case preLockedBalance = "pre_locked_balance"
+        case postLockedBalance = "post_locked_balance"
         case preStateHash = "pre_state_hash"
         case postStateHash = "post_state_hash"
         case localRevision = "local_revision"
-        case counterpartyReserveId = "counterparty_reserve_id"
+        case counterpartyLineageId = "counterparty_lineage_id"
         case counterpartyAccountId = "counterparty_account_id"
         case counterpartyDeviceId = "counterparty_device_id"
         case counterpartyOfflinePublicKey = "counterparty_offline_public_key"
@@ -314,13 +330,13 @@ public struct ToriiOfflineTransferReceipt: Codable, Sendable, Equatable, Identif
 
 public struct ToriiOfflineOutgoingTransferPayload: Codable, Sendable, Equatable {
     public let version: Int
-    public let anchor: ToriiOfflineReserveState
+    public let anchor: ToriiOfflineCashState
     public let ancestryReceipts: [ToriiOfflineTransferReceipt]
     public let receipt: ToriiOfflineTransferReceipt
 
     public init(
         version: Int = 1,
-        anchor: ToriiOfflineReserveState,
+        anchor: ToriiOfflineCashState,
         ancestryReceipts: [ToriiOfflineTransferReceipt],
         receipt: ToriiOfflineTransferReceipt
     ) {
@@ -338,7 +354,7 @@ public struct ToriiOfflineOutgoingTransferPayload: Codable, Sendable, Equatable 
     }
 }
 
-public struct ToriiOfflineReserveSetupRequest: Codable, Sendable, Equatable {
+public struct ToriiOfflineCashSetupRequest: Codable, Sendable, Equatable {
     public let accountId: String
     public let deviceId: String
     public let offlinePublicKey: String
@@ -372,9 +388,9 @@ public struct ToriiOfflineReserveSetupRequest: Codable, Sendable, Equatable {
     }
 }
 
-public struct ToriiOfflineReserveTopUpRequest: Codable, Sendable, Equatable {
+public struct ToriiOfflineCashLoadRequest: Codable, Sendable, Equatable {
     public let operationId: String
-    public let reserveId: String?
+    public let lineageId: String?
     public let accountId: String
     public let deviceId: String
     public let offlinePublicKey: String
@@ -385,7 +401,7 @@ public struct ToriiOfflineReserveTopUpRequest: Codable, Sendable, Equatable {
 
     public init(
         operationId: String,
-        reserveId: String?,
+        lineageId: String?,
         accountId: String,
         deviceId: String,
         offlinePublicKey: String,
@@ -395,7 +411,7 @@ public struct ToriiOfflineReserveTopUpRequest: Codable, Sendable, Equatable {
         attestation: ToriiOfflineDeviceAttestation
     ) {
         self.operationId = operationId
-        self.reserveId = reserveId
+        self.lineageId = lineageId
         self.accountId = accountId
         self.deviceId = deviceId
         self.offlinePublicKey = offlinePublicKey
@@ -407,7 +423,7 @@ public struct ToriiOfflineReserveTopUpRequest: Codable, Sendable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case operationId = "operation_id"
-        case reserveId = "reserve_id"
+        case lineageId = "lineage_id"
         case accountId = "account_id"
         case deviceId = "device_id"
         case offlinePublicKey = "offline_public_key"
@@ -418,9 +434,9 @@ public struct ToriiOfflineReserveTopUpRequest: Codable, Sendable, Equatable {
     }
 }
 
-public struct ToriiOfflineReserveRenewRequest: Codable, Sendable, Equatable {
+public struct ToriiOfflineCashRefreshRequest: Codable, Sendable, Equatable {
     public let operationId: String
-    public let reserveId: String
+    public let lineageId: String
     public let accountId: String
     public let deviceId: String
     public let offlinePublicKey: String
@@ -429,7 +445,7 @@ public struct ToriiOfflineReserveRenewRequest: Codable, Sendable, Equatable {
 
     public init(
         operationId: String,
-        reserveId: String,
+        lineageId: String,
         accountId: String,
         deviceId: String,
         offlinePublicKey: String,
@@ -437,7 +453,7 @@ public struct ToriiOfflineReserveRenewRequest: Codable, Sendable, Equatable {
         attestation: ToriiOfflineDeviceAttestation
     ) {
         self.operationId = operationId
-        self.reserveId = reserveId
+        self.lineageId = lineageId
         self.accountId = accountId
         self.deviceId = deviceId
         self.offlinePublicKey = offlinePublicKey
@@ -447,7 +463,7 @@ public struct ToriiOfflineReserveRenewRequest: Codable, Sendable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case operationId = "operation_id"
-        case reserveId = "reserve_id"
+        case lineageId = "lineage_id"
         case accountId = "account_id"
         case deviceId = "device_id"
         case offlinePublicKey = "offline_public_key"
@@ -456,9 +472,9 @@ public struct ToriiOfflineReserveRenewRequest: Codable, Sendable, Equatable {
     }
 }
 
-public struct ToriiOfflineReserveSyncRequest: Codable, Sendable, Equatable {
+public struct ToriiOfflineCashSyncRequest: Codable, Sendable, Equatable {
     public let operationId: String
-    public let reserveId: String
+    public let lineageId: String
     public let accountId: String
     public let deviceId: String
     public let offlinePublicKey: String
@@ -466,14 +482,14 @@ public struct ToriiOfflineReserveSyncRequest: Codable, Sendable, Equatable {
 
     public init(
         operationId: String,
-        reserveId: String,
+        lineageId: String,
         accountId: String,
         deviceId: String,
         offlinePublicKey: String,
         receipts: [ToriiOfflineTransferReceipt]
     ) {
         self.operationId = operationId
-        self.reserveId = reserveId
+        self.lineageId = lineageId
         self.accountId = accountId
         self.deviceId = deviceId
         self.offlinePublicKey = offlinePublicKey
@@ -482,7 +498,7 @@ public struct ToriiOfflineReserveSyncRequest: Codable, Sendable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case operationId = "operation_id"
-        case reserveId = "reserve_id"
+        case lineageId = "lineage_id"
         case accountId = "account_id"
         case deviceId = "device_id"
         case offlinePublicKey = "offline_public_key"
@@ -490,9 +506,9 @@ public struct ToriiOfflineReserveSyncRequest: Codable, Sendable, Equatable {
     }
 }
 
-public struct ToriiOfflineReserveDefundRequest: Codable, Sendable, Equatable {
+public struct ToriiOfflineCashRedeemRequest: Codable, Sendable, Equatable {
     public let operationId: String
-    public let reserveId: String
+    public let lineageId: String
     public let accountId: String
     public let deviceId: String
     public let offlinePublicKey: String
@@ -501,7 +517,7 @@ public struct ToriiOfflineReserveDefundRequest: Codable, Sendable, Equatable {
 
     public init(
         operationId: String,
-        reserveId: String,
+        lineageId: String,
         accountId: String,
         deviceId: String,
         offlinePublicKey: String,
@@ -509,7 +525,7 @@ public struct ToriiOfflineReserveDefundRequest: Codable, Sendable, Equatable {
         receipts: [ToriiOfflineTransferReceipt]
     ) {
         self.operationId = operationId
-        self.reserveId = reserveId
+        self.lineageId = lineageId
         self.accountId = accountId
         self.deviceId = deviceId
         self.offlinePublicKey = offlinePublicKey
@@ -519,7 +535,7 @@ public struct ToriiOfflineReserveDefundRequest: Codable, Sendable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case operationId = "operation_id"
-        case reserveId = "reserve_id"
+        case lineageId = "lineage_id"
         case accountId = "account_id"
         case deviceId = "device_id"
         case offlinePublicKey = "offline_public_key"
@@ -528,19 +544,19 @@ public struct ToriiOfflineReserveDefundRequest: Codable, Sendable, Equatable {
     }
 }
 
-public struct ToriiOfflineReserveEnvelope: Codable, Sendable, Equatable {
-    public let reserveState: ToriiOfflineReserveState
+public struct ToriiOfflineCashEnvelope: Codable, Sendable, Equatable {
+    public let lineageState: ToriiOfflineCashState
 
-    public init(reserveState: ToriiOfflineReserveState) {
-        self.reserveState = reserveState
+    public init(lineageState: ToriiOfflineCashState) {
+        self.lineageState = lineageState
     }
 
     private enum CodingKeys: String, CodingKey {
-        case reserveState = "reserve_state"
+        case lineageState = "lineage_state"
     }
 }
 
-public enum ToriiOfflineReserveCodec {
+public enum ToriiOfflineCashCodec {
     public enum Error: LocalizedError, Equatable {
         case invalidSignature
         case invalidPublicKey
@@ -549,11 +565,11 @@ public enum ToriiOfflineReserveCodec {
         public var errorDescription: String? {
             switch self {
             case .invalidSignature:
-                return "Offline reserve signature is invalid."
+                return "Offline cash signature is invalid."
             case .invalidPublicKey:
-                return "Offline reserve public key is invalid."
+                return "Offline cash public key is invalid."
             case .invalidSignatureEncoding:
-                return "Offline reserve signature encoding is invalid."
+                return "Offline cash signature encoding is invalid."
             }
         }
     }
@@ -600,27 +616,27 @@ public enum ToriiOfflineReserveCodec {
     }
 
     public static func nextLocalStateHash(
-        reserveId: String,
+        lineageId: String,
         previousStateHash: String,
         transferId: String,
         direction: ToriiOfflineTransferDirection,
-        counterpartyReserveId: String,
+        counterpartyLineageId: String,
         amount: String,
         localRevision: UInt64,
         postBalance: String,
-        postParkedBalance: String
+        postLockedBalance: String
     ) throws -> String {
         try hashHex(
             LocalStateHashPayload(
-                reserveId: reserveId,
+                lineageId: lineageId,
                 previousStateHash: previousStateHash,
                 transferId: transferId,
                 direction: direction.rawValue,
-                counterpartyReserveId: counterpartyReserveId,
+                counterpartyLineageId: counterpartyLineageId,
                 amount: canonicalAmountString(amount),
                 localRevision: localRevision,
                 postBalance: canonicalAmountString(postBalance),
-                postParkedBalance: canonicalAmountString(postParkedBalance)
+                postLockedBalance: canonicalAmountString(postLockedBalance)
             )
         )
     }
@@ -637,12 +653,12 @@ public enum ToriiOfflineReserveCodec {
     }
 
     public static func verifyIssuerSignature(
-        reserveState: ToriiOfflineReserveState,
+        lineageState: ToriiOfflineCashState,
         issuerPublicKeyBase64: String
     ) throws {
         try verifySignature(
-            payload: reserveStateUnsignedPayload(reserveState),
-            signatureBase64: reserveState.issuerSignatureBase64,
+            payload: lineageStateUnsignedPayload(lineageState),
+            signatureBase64: lineageState.issuerSignatureBase64,
             publicKeyBase64: issuerPublicKeyBase64
         )
     }
@@ -670,7 +686,7 @@ public enum ToriiOfflineReserveCodec {
         try canonicalData(
             AuthorizationUnsignedPayload(
                 authorizationId: authorization.authorizationId,
-                reserveId: authorization.reserveId,
+                lineageId: authorization.lineageId,
                 accountId: authorization.accountId,
                 deviceId: authorization.deviceId,
                 offlinePublicKey: authorization.offlinePublicKey,
@@ -685,20 +701,20 @@ public enum ToriiOfflineReserveCodec {
         )
     }
 
-    public static func reserveStateUnsignedPayload(_ reserveState: ToriiOfflineReserveState) throws -> Data {
+    public static func lineageStateUnsignedPayload(_ lineageState: ToriiOfflineCashState) throws -> Data {
         try canonicalData(
-            ReserveStateUnsignedPayload(
-                reserveId: reserveState.reserveId,
-                accountId: reserveState.accountId,
-                deviceId: reserveState.deviceId,
-                offlinePublicKey: reserveState.offlinePublicKey,
-                assetDefinitionId: reserveState.assetDefinitionId,
-                balance: try canonicalAmountString(reserveState.balance),
-                parkedBalance: try canonicalAmountString(reserveState.parkedBalance),
-                serverRevision: reserveState.serverRevision,
-                serverStateHash: reserveState.serverStateHash,
-                pendingLocalRevision: reserveState.pendingLocalRevision,
-                authorizationId: reserveState.authorization.authorizationId
+            CashStateUnsignedPayload(
+                lineageId: lineageState.lineageId,
+                accountId: lineageState.accountId,
+                deviceId: lineageState.deviceId,
+                offlinePublicKey: lineageState.offlinePublicKey,
+                assetDefinitionId: lineageState.assetDefinitionId,
+                balance: try canonicalAmountString(lineageState.balance),
+                lockedBalance: try canonicalAmountString(lineageState.lockedBalance),
+                serverRevision: lineageState.serverRevision,
+                serverStateHash: lineageState.serverStateHash,
+                pendingLocalRevision: lineageState.pendingLocalRevision,
+                authorizationId: lineageState.authorization.authorizationId
             )
         )
     }
@@ -719,18 +735,18 @@ public enum ToriiOfflineReserveCodec {
                 version: receipt.version,
                 transferId: receipt.transferId,
                 direction: receipt.direction.rawValue,
-                reserveId: receipt.reserveId,
+                lineageId: receipt.lineageId,
                 accountId: receipt.accountId,
                 deviceId: receipt.deviceId,
                 offlinePublicKey: receipt.offlinePublicKey,
                 preBalance: try canonicalAmountString(receipt.preBalance),
                 postBalance: try canonicalAmountString(receipt.postBalance),
-                preParkedBalance: try canonicalAmountString(receipt.preParkedBalance),
-                postParkedBalance: try canonicalAmountString(receipt.postParkedBalance),
+                preLockedBalance: try canonicalAmountString(receipt.preLockedBalance),
+                postLockedBalance: try canonicalAmountString(receipt.postLockedBalance),
                 preStateHash: receipt.preStateHash,
                 postStateHash: receipt.postStateHash,
                 localRevision: receipt.localRevision,
-                counterpartyReserveId: receipt.counterpartyReserveId,
+                counterpartyLineageId: receipt.counterpartyLineageId,
                 counterpartyAccountId: receipt.counterpartyAccountId,
                 counterpartyDeviceId: receipt.counterpartyDeviceId,
                 counterpartyOfflinePublicKey: receipt.counterpartyOfflinePublicKey,
@@ -744,10 +760,10 @@ public enum ToriiOfflineReserveCodec {
     }
 }
 
-private extension ToriiOfflineReserveCodec {
+private extension ToriiOfflineCashCodec {
     struct AuthorizationUnsignedPayload: Encodable {
         let authorizationId: String
-        let reserveId: String
+        let lineageId: String
         let accountId: String
         let deviceId: String
         let offlinePublicKey: String
@@ -760,14 +776,14 @@ private extension ToriiOfflineReserveCodec {
         let appAttestKeyId: String
     }
 
-    struct ReserveStateUnsignedPayload: Encodable {
-        let reserveId: String
+    struct CashStateUnsignedPayload: Encodable {
+        let lineageId: String
         let accountId: String
         let deviceId: String
         let offlinePublicKey: String
         let assetDefinitionId: String
         let balance: String
-        let parkedBalance: String
+        let lockedBalance: String
         let serverRevision: UInt64
         let serverStateHash: String
         let pendingLocalRevision: UInt64
@@ -784,18 +800,18 @@ private extension ToriiOfflineReserveCodec {
         let version: Int
         let transferId: String
         let direction: String
-        let reserveId: String
+        let lineageId: String
         let accountId: String
         let deviceId: String
         let offlinePublicKey: String
         let preBalance: String
         let postBalance: String
-        let preParkedBalance: String
-        let postParkedBalance: String
+        let preLockedBalance: String
+        let postLockedBalance: String
         let preStateHash: String
         let postStateHash: String
         let localRevision: UInt64
-        let counterpartyReserveId: String
+        let counterpartyLineageId: String
         let counterpartyAccountId: String
         let counterpartyDeviceId: String
         let counterpartyOfflinePublicKey: String
@@ -807,15 +823,15 @@ private extension ToriiOfflineReserveCodec {
     }
 
     struct LocalStateHashPayload: Encodable {
-        let reserveId: String
+        let lineageId: String
         let previousStateHash: String
         let transferId: String
         let direction: String
-        let counterpartyReserveId: String
+        let counterpartyLineageId: String
         let amount: String
         let localRevision: UInt64
         let postBalance: String
-        let postParkedBalance: String
+        let postLockedBalance: String
     }
 
     static func parseAmount(_ rawValue: String) throws -> Decimal {
@@ -841,8 +857,17 @@ private extension ToriiOfflineReserveCodec {
             throw Error.invalidSignatureEncoding
         }
         do {
-            let publicKey = try Curve25519.Signing.PublicKey(rawRepresentation: publicKeyData)
-            guard publicKey.isValidSignature(signature, for: payload) else {
+            if publicKeyData.count == 32 {
+                let publicKey = try Curve25519.Signing.PublicKey(rawRepresentation: publicKeyData)
+                guard publicKey.isValidSignature(signature, for: payload) else {
+                    throw Error.invalidSignature
+                }
+                return
+            }
+
+            let publicKey = try P256.Signing.PublicKey(x963Representation: publicKeyData)
+            let ecdsaSignature = try P256.Signing.ECDSASignature(derRepresentation: signature)
+            guard publicKey.isValidSignature(ecdsaSignature, for: payload) else {
                 throw Error.invalidSignature
             }
         } catch let error as Error {

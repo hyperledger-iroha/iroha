@@ -80,8 +80,8 @@ use iroha_data_model::{
     },
     nft::{NftEntry, NftValue},
     offline::{
-        OfflineAllowanceRecord, OfflineTransferRecord, OfflineTransferStatus,
-        OfflineVerdictRevocation,
+        OfflineAllowanceRecord, OfflineReserveOperationResult, OfflineReserveRecord,
+        OfflineTransferRecord, OfflineTransferStatus, OfflineVerdictRevocation,
     },
     oracle::{
         FeedConfig, FeedId, OracleDispute, OracleDisputeId, OracleProviderKey, OracleProviderStats,
@@ -484,6 +484,8 @@ macro_rules! build_world_block {
             repo_agreements: $state.repo_agreements.$method(),
             settlement_ledgers: $state.settlement_ledgers.$method(),
             offline_allowances: $state.offline_allowances.$method(),
+            offline_reserves: $state.offline_reserves.$method(),
+            offline_reserve_operation_results: $state.offline_reserve_operation_results.$method(),
             offline_verdict_revocations: $state.offline_verdict_revocations.$method(),
             offline_consumed_build_claim_ids: $state.offline_consumed_build_claim_ids.$method(),
             offline_to_online_transfers: $state.offline_to_online_transfers.$method(),
@@ -668,6 +670,10 @@ macro_rules! build_world_transaction {
             repo_agreements: $state.repo_agreements.transaction(),
             settlement_ledgers: $state.settlement_ledgers.transaction(),
             offline_allowances: $state.offline_allowances.transaction(),
+            offline_reserves: $state.offline_reserves.transaction(),
+            offline_reserve_operation_results: $state
+                .offline_reserve_operation_results
+                .transaction(),
             offline_verdict_revocations: $state.offline_verdict_revocations.transaction(),
             offline_consumed_build_claim_ids: $state.offline_consumed_build_claim_ids.transaction(),
             offline_to_online_transfers: $state.offline_to_online_transfers.transaction(),
@@ -1700,6 +1706,10 @@ pub struct World {
     pub(crate) settlement_ledgers: Storage<SettlementId, SettlementLedger>,
     /// Registered offline allowances keyed by certificate id.
     pub(crate) offline_allowances: Storage<Hash, OfflineAllowanceRecord>,
+    /// Shared offline reserve records keyed by stable reserve id.
+    pub(crate) offline_reserves: Storage<String, OfflineReserveRecord>,
+    /// Replayable reserve operation results keyed by `kind:operation_id`.
+    pub(crate) offline_reserve_operation_results: Storage<String, OfflineReserveOperationResult>,
     /// Recorded verdict revocations keyed by attestation verdict id.
     pub(crate) offline_verdict_revocations: Storage<Hash, OfflineVerdictRevocation>,
     /// Consumed build-claim identifiers used for replay protection across pruning.
@@ -2085,6 +2095,11 @@ pub struct WorldBlock<'world> {
     pub(crate) settlement_ledgers: StorageBlock<'world, SettlementId, SettlementLedger>,
     /// Registered offline allowances keyed by certificate id.
     pub(crate) offline_allowances: StorageBlock<'world, Hash, OfflineAllowanceRecord>,
+    /// Shared offline reserve records keyed by stable reserve id.
+    pub(crate) offline_reserves: StorageBlock<'world, String, OfflineReserveRecord>,
+    /// Replayable reserve operation results keyed by `kind:operation_id`.
+    pub(crate) offline_reserve_operation_results:
+        StorageBlock<'world, String, OfflineReserveOperationResult>,
     /// Recorded verdict revocations keyed by attestation verdict id.
     pub(crate) offline_verdict_revocations: StorageBlock<'world, Hash, OfflineVerdictRevocation>,
     /// Consumed build-claim identifiers used for replay protection across pruning.
@@ -2216,6 +2231,11 @@ impl<'world> WorldBlock<'world> {
         collect_reverts!(self.council, Council);
         collect_reverts!(self.parliament_bodies, ParliamentBodies);
         collect_reverts!(self.offline_allowances, OfflineAllowance);
+        collect_reverts!(self.offline_reserves, OfflineReserve);
+        collect_reverts!(
+            self.offline_reserve_operation_results,
+            OfflineReserveOperationResult
+        );
         collect_reverts!(self.offline_verdict_revocations, OfflineVerdictRevocation);
         collect_reverts!(
             self.offline_consumed_build_claim_ids,
@@ -2268,6 +2288,11 @@ impl<'world> WorldBlock<'world> {
         collect_payload!(self.council, Council);
         collect_payload!(self.parliament_bodies, ParliamentBodies);
         collect_payload!(self.offline_allowances, OfflineAllowance);
+        collect_payload!(self.offline_reserves, OfflineReserve);
+        collect_payload!(
+            self.offline_reserve_operation_results,
+            OfflineReserveOperationResult
+        );
         collect_payload!(self.offline_verdict_revocations, OfflineVerdictRevocation);
         collect_payload!(
             self.offline_consumed_build_claim_ids,
@@ -2660,6 +2685,11 @@ pub struct WorldTransaction<'block, 'world> {
         StorageTransaction<'block, 'world, SettlementId, SettlementLedger>,
     /// Registered offline allowances keyed by certificate id.
     pub(crate) offline_allowances: StorageTransaction<'block, 'world, Hash, OfflineAllowanceRecord>,
+    /// Shared offline reserve records keyed by stable reserve id.
+    pub(crate) offline_reserves: StorageTransaction<'block, 'world, String, OfflineReserveRecord>,
+    /// Replayable reserve operation results keyed by `kind:operation_id`.
+    pub(crate) offline_reserve_operation_results:
+        StorageTransaction<'block, 'world, String, OfflineReserveOperationResult>,
     /// Recorded verdict revocations keyed by attestation verdict id.
     pub(crate) offline_verdict_revocations:
         StorageTransaction<'block, 'world, Hash, OfflineVerdictRevocation>,
@@ -3273,6 +3303,11 @@ pub struct WorldView<'world> {
     pub(crate) settlement_ledgers: StorageView<'world, SettlementId, SettlementLedger>,
     /// Registered offline allowances keyed by certificate id.
     pub(crate) offline_allowances: StorageView<'world, Hash, OfflineAllowanceRecord>,
+    /// Shared offline reserve records keyed by stable reserve id.
+    pub(crate) offline_reserves: StorageView<'world, String, OfflineReserveRecord>,
+    /// Replayable reserve operation results keyed by `kind:operation_id`.
+    pub(crate) offline_reserve_operation_results:
+        StorageView<'world, String, OfflineReserveOperationResult>,
     /// Recorded verdict revocations keyed by attestation verdict id.
     pub(crate) offline_verdict_revocations: StorageView<'world, Hash, OfflineVerdictRevocation>,
     /// Consumed build-claim identifiers used for replay protection across pruning.
@@ -10357,6 +10392,8 @@ impl World {
             repo_agreements: Storage::default(),
             settlement_ledgers: Storage::default(),
             offline_to_online_transfers: Storage::default(),
+            offline_reserves: Storage::default(),
+            offline_reserve_operation_results: Storage::default(),
             governance_proposals: Storage::default(),
             governance_referenda: Storage::default(),
             governance_stage_approvals: Storage::default(),
@@ -11077,6 +11114,8 @@ impl World {
             repo_agreements: self.repo_agreements.view(),
             settlement_ledgers: self.settlement_ledgers.view(),
             offline_allowances: self.offline_allowances.view(),
+            offline_reserves: self.offline_reserves.view(),
+            offline_reserve_operation_results: self.offline_reserve_operation_results.view(),
             offline_verdict_revocations: self.offline_verdict_revocations.view(),
             offline_consumed_build_claim_ids: self.offline_consumed_build_claim_ids.view(),
             offline_to_online_transfers: self.offline_to_online_transfers.view(),
@@ -11481,6 +11520,12 @@ pub trait WorldReadOnly {
     fn settlement_ledgers(&self) -> &impl StorageReadOnly<SettlementId, SettlementLedger>;
     /// Registered offline allowances (read-only).
     fn offline_allowances(&self) -> &impl StorageReadOnly<Hash, OfflineAllowanceRecord>;
+    /// Shared offline reserve records keyed by reserve id (read-only).
+    fn offline_reserves(&self) -> &impl StorageReadOnly<String, OfflineReserveRecord>;
+    /// Completed reserve operation results keyed by `kind:operation_id` (read-only).
+    fn offline_reserve_operation_results(
+        &self,
+    ) -> &impl StorageReadOnly<String, OfflineReserveOperationResult>;
     /// Recorded verdict revocations (read-only).
     fn offline_verdict_revocations(&self) -> &impl StorageReadOnly<Hash, OfflineVerdictRevocation>;
     /// Consumed build-claim identifiers (read-only).
@@ -12456,6 +12501,14 @@ macro_rules! impl_world_ro {
             fn offline_allowances(&self) -> &impl StorageReadOnly<Hash, OfflineAllowanceRecord> {
                 &self.offline_allowances
             }
+            fn offline_reserves(&self) -> &impl StorageReadOnly<String, OfflineReserveRecord> {
+                &self.offline_reserves
+            }
+            fn offline_reserve_operation_results(
+                &self,
+            ) -> &impl StorageReadOnly<String, OfflineReserveOperationResult> {
+                &self.offline_reserve_operation_results
+            }
             fn offline_verdict_revocations(
                 &self,
             ) -> &impl StorageReadOnly<Hash, OfflineVerdictRevocation> {
@@ -12907,6 +12960,8 @@ impl<'world> WorldBlock<'world> {
             repo_agreements,
             settlement_ledgers,
             offline_allowances,
+            offline_reserves,
+            offline_reserve_operation_results,
             offline_verdict_revocations,
             offline_consumed_build_claim_ids,
             offline_to_online_transfers,
@@ -13013,6 +13068,8 @@ impl<'world> WorldBlock<'world> {
         repo_agreements.commit();
         settlement_ledgers.commit();
         offline_allowances.commit();
+        offline_reserves.commit();
+        offline_reserve_operation_results.commit();
         offline_verdict_revocations.commit();
         offline_consumed_build_claim_ids.commit();
         offline_to_online_transfers.commit();
@@ -13934,6 +13991,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             replication_orders,
             settlement_ledgers,
             offline_allowances,
+            offline_reserves,
+            offline_reserve_operation_results,
             offline_verdict_revocations,
             offline_consumed_build_claim_ids,
             offline_to_online_transfers,
@@ -14038,6 +14097,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         self.soradns_history_len.apply();
         settlement_ledgers.apply();
         offline_allowances.apply();
+        offline_reserves.apply();
+        offline_reserve_operation_results.apply();
         offline_verdict_revocations.apply();
         offline_consumed_build_claim_ids.apply();
         offline_to_online_transfers.apply();
@@ -18476,6 +18537,12 @@ impl State {
     pub fn set_settlement(&mut self, settlement: iroha_config::parameters::actual::Settlement) {
         self.settlement = settlement;
         self.settlement_engine = SettlementEngine::from_router_config(&self.settlement.router);
+    }
+
+    /// Current settlement configuration snapshot.
+    #[must_use]
+    pub fn settlement(&self) -> &iroha_config::parameters::actual::Settlement {
+        &self.settlement
     }
 
     /// Update Nexus configuration snapshot.
@@ -26356,6 +26423,9 @@ pub(crate) mod deserialize {
         let repo_agreements = take_optional_default(&mut map, "repo_agreements")?;
         let settlement_ledgers = take_optional_default(&mut map, "settlement_ledgers")?;
         let offline_allowances = take_optional_default(&mut map, "offline_allowances")?;
+        let offline_reserves = take_optional_default(&mut map, "offline_reserves")?;
+        let offline_reserve_operation_results =
+            take_optional_default(&mut map, "offline_reserve_operation_results")?;
         let offline_verdict_revocations =
             take_optional_default(&mut map, "offline_verdict_revocations")?;
         let offline_consumed_build_claim_ids =
@@ -26495,6 +26565,8 @@ pub(crate) mod deserialize {
             repo_agreements,
             settlement_ledgers,
             offline_allowances,
+            offline_reserves,
+            offline_reserve_operation_results,
             offline_verdict_revocations,
             offline_consumed_build_claim_ids,
             offline_to_online_transfers,
@@ -42042,6 +42114,8 @@ mod tests {
                 entrypoint: "main".to_string(),
                 args: Vec::new(),
                 env: std::collections::BTreeMap::new(),
+                required_config_names: Vec::new(),
+                required_secret_names: Vec::new(),
                 capabilities: iroha_data_model::soracloud::SoraCapabilityPolicyV1 {
                     network: iroha_data_model::soracloud::SoraNetworkPolicyV1::Isolated,
                     allow_wallet_signing: false,
@@ -42118,6 +42192,10 @@ mod tests {
                     process_started_sequence: 4,
                     active_rollout: None,
                     last_rollout: None,
+                    config_generation: 0,
+                    secret_generation: 0,
+                    service_configs: std::collections::BTreeMap::new(),
+                    service_secrets: std::collections::BTreeMap::new(),
                 },
             );
         world.soracloud_service_runtime_mut_for_testing().insert(
@@ -42151,6 +42229,8 @@ mod tests {
                     governance_tx_hash: None,
                     binding_name: None,
                     state_key: None,
+                    config_name: None,
+                    secret_name: None,
                     rollout_handle: None,
                     policy_name: None,
                     policy_snapshot_hash: None,

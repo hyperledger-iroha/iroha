@@ -443,7 +443,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 .get(),
             scion: A::ScionConfig::default(),
             tls_enabled: false,
-            tls_fallback_to_plain: true,
+            tls_fallback_to_plain: false,
             tls_listen_address: None,
             tls_inbound_only: false,
             prefer_ws_fallback: false,

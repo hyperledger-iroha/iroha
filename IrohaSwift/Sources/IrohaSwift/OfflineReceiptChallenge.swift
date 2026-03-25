@@ -171,3 +171,27 @@ public struct OfflineReceiptChallenge: Sendable, Equatable {
         }
     }
 }
+
+struct OfflineReceiptChallengePreimage {
+    let invoiceId: String
+    let receiverAccountId: String
+    let assetId: String
+    let amount: String
+    let issuedAtMs: UInt64
+    let senderCertificateId: Data
+    let nonce: Data
+
+    func noritoPayload() throws -> Data {
+        var writer = OfflineNoritoWriter()
+        writer.writeField(OfflineNorito.encodeString(invoiceId))
+        writer.writeField(try OfflineNorito.encodeAccountId(receiverAccountId))
+        writer.writeField(try OfflineNorito.encodeAssetId(assetId))
+        writer.writeField(try OfflineNorito.encodeNumeric(amount))
+        writer.writeField(OfflineNorito.encodeUInt64(issuedAtMs))
+        writer.writeField(try OfflineNorito.encodeHash(senderCertificateId))
+        writer.writeField(try OfflineNorito.encodeHash(nonce))
+        return writer.data
+    }
+
+    static let noritoTypeName = "iroha_data_model::offline::OfflineReceiptChallengePreimage"
+}

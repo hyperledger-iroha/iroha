@@ -22,7 +22,7 @@ IDs have stable string forms with `Display`/`FromStr` round‑trip. Name rules f
   - Alias lease metadata is persisted separately from the stored asset-definition row. Core/Torii materialize `alias` from the binding record when definitions are read.
   - Torii asset-definition responses expose `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`, where `status` is `permanent`, `leased_active`, `leased_grace`, or `expired_pending_cleanup`.
   - Alias selectors resolve against the latest committed block creation time. After `grace_until_ms`, alias selectors stop resolving even if background sweep has not yet removed the stale binding; direct definition reads may still report the stale binding as `expired_pending_cleanup`.
-- `AssetId`: internal ownership-bucket identifier combining `asset`, `account`, and `scope`. Public CLI/Torii selectors use those split fields instead of a single encoded literal.
+- `AssetId`: canonical public literal `<asset-definition-id>#<account-id>` with an optional `#dataspace:<id>` suffix for scoped balances. CLI/Torii selectors may also expose split `asset + account + scope` fields where that is more ergonomic.
 - `NftId` — `nft$domain`. NFT: `{ id, content: Metadata, owned_by }`. Code: `crates/iroha_data_model/src/nft.rs`.
 - `RoleId` — `name`. Role: `{ id, permissions: BTreeSet<Permission> }` with builder `NewRole { inner: Role, grant_to }`. Code: `crates/iroha_data_model/src/role.rs`.
 - `Permission` — `{ name: Ident, payload: Json }`. Code: `crates/iroha_data_model/src/permission.rs`.

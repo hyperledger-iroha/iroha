@@ -8,6 +8,7 @@
 
 use std::{
     cell::RefCell,
+    collections::BTreeMap,
     fs,
     num::{NonZeroU16, NonZeroU32, NonZeroU64},
     path::{Path, PathBuf},
@@ -20,44 +21,51 @@ use iroha::{
     client::Client,
     config::Config as ClientConfig,
     data_model::{
-    account::AccountId,
-    asset::AssetDefinitionId,
-    Encode,
-    isi::InstructionBox,
-    metadata::Metadata,
-    name::Name,
-    prelude::ExposedPrivateKey,
-    smart_contract::manifest::ManifestProvenance,
-    soracloud::{
-        AgentApartmentManifestV1, SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SORA_STATE_BINDING_VERSION_V1,
-        SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1, SoraArtifactKindV1, SoraArtifactRefV1,
-        SoraCertifiedResponsePolicyV1, SoraContainerManifestV1, SoraContainerRuntimeV1,
-        SoraDeploymentBundleV1, SoraHfBackendFamilyV1, SoraHfModelFormatV1,
-        SoraMailboxContractV1, SoraModelHostCapabilityRecordV1, SoraNetworkPolicyV1,
-        SoraRouteTargetV1, SoraRouteVisibilityV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
-        SoraServiceManifestV1, SoraStateBindingV1, SoraStateEncryptionV1,
-        SoraStateMutabilityV1, SoraStateScopeV1, SoraTlsModeV1,
-        encode_agent_artifact_allow_provenance_payload,
-        encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
-        encode_agent_lease_renew_provenance_payload, encode_agent_message_ack_provenance_payload,
-        encode_agent_message_send_provenance_payload,
-        encode_model_host_advertise_provenance_payload,
-        encode_model_host_heartbeat_provenance_payload,
-        encode_model_host_withdraw_provenance_payload,
-        encode_hf_shared_lease_join_provenance_payload,
-        encode_hf_shared_lease_leave_provenance_payload,
-        encode_hf_shared_lease_renew_provenance_payload,
-        encode_agent_policy_revoke_provenance_payload, encode_agent_restart_provenance_payload,
-        encode_agent_wallet_approve_provenance_payload,
-        encode_agent_wallet_spend_provenance_payload, encode_bundle_provenance_payload,
-        encode_model_artifact_register_provenance_payload,
-        encode_model_weight_promote_provenance_payload,
-        encode_model_weight_register_provenance_payload,
-        encode_model_weight_rollback_provenance_payload, encode_rollback_provenance_payload,
-        encode_rollout_provenance_payload, encode_training_job_checkpoint_provenance_payload,
-        encode_training_job_retry_provenance_payload, encode_training_job_start_provenance_payload,
-    },
-    sorafs::pin_registry::StorageClass,
+        Encode,
+        account::AccountId,
+        asset::AssetDefinitionId,
+        isi::InstructionBox,
+        metadata::Metadata,
+        name::Name,
+        prelude::ExposedPrivateKey,
+        smart_contract::manifest::ManifestProvenance,
+        soracloud::{
+            AgentApartmentManifestV1, SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+            SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1, SORA_STATE_BINDING_VERSION_V1,
+            SecretEnvelopeV1, SoraArtifactKindV1, SoraArtifactRefV1, SoraCertifiedResponsePolicyV1,
+            SoraContainerManifestV1, SoraContainerRuntimeV1, SoraDeploymentBundleV1,
+            SoraHfBackendFamilyV1, SoraHfModelFormatV1, SoraMailboxContractV1,
+            SoraModelHostCapabilityRecordV1, SoraNetworkPolicyV1, SoraRouteTargetV1,
+            SoraRouteVisibilityV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
+            SoraServiceManifestV1, SoraStateBindingV1, SoraStateEncryptionV1,
+            SoraStateMutabilityV1, SoraStateScopeV1, SoraTlsModeV1,
+            encode_agent_artifact_allow_provenance_payload,
+            encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
+            encode_agent_lease_renew_provenance_payload,
+            encode_agent_message_ack_provenance_payload,
+            encode_agent_message_send_provenance_payload,
+            encode_agent_policy_revoke_provenance_payload, encode_agent_restart_provenance_payload,
+            encode_agent_wallet_approve_provenance_payload,
+            encode_agent_wallet_spend_provenance_payload, encode_bundle_provenance_payload,
+            encode_delete_service_config_provenance_payload,
+            encode_delete_service_secret_provenance_payload,
+            encode_hf_shared_lease_join_provenance_payload,
+            encode_hf_shared_lease_leave_provenance_payload,
+            encode_hf_shared_lease_renew_provenance_payload,
+            encode_model_artifact_register_provenance_payload,
+            encode_model_host_advertise_provenance_payload,
+            encode_model_host_heartbeat_provenance_payload,
+            encode_model_host_withdraw_provenance_payload,
+            encode_model_weight_promote_provenance_payload,
+            encode_model_weight_register_provenance_payload,
+            encode_model_weight_rollback_provenance_payload, encode_rollback_provenance_payload,
+            encode_rollout_provenance_payload, encode_set_service_config_provenance_payload,
+            encode_set_service_secret_provenance_payload,
+            encode_training_job_checkpoint_provenance_payload,
+            encode_training_job_retry_provenance_payload,
+            encode_training_job_start_provenance_payload,
+        },
+        sorafs::pin_registry::StorageClass,
     },
 };
 use iroha_core::soracloud_runtime::{
@@ -65,7 +73,11 @@ use iroha_core::soracloud_runtime::{
     build_soracloud_hf_generated_agent_manifest, build_soracloud_hf_generated_service_bundle,
 };
 use iroha_crypto::{Hash, KeyPair, Signature};
-use norito::{decode_from_bytes, json::{self, JsonDeserialize, JsonSerialize}};
+use iroha_primitives::json::Json;
+use norito::{
+    decode_from_bytes,
+    json::{self, JsonDeserialize, JsonSerialize},
+};
 use reqwest::{
     blocking::Client as BlockingHttpClient,
     header::{self, HeaderValue},
@@ -101,6 +113,18 @@ pub enum Command {
     Deploy(DeployArgs),
     /// Show authoritative Soracloud service state (all services or one service).
     Status(StatusArgs),
+    /// Record or replace an authoritative service config entry.
+    ConfigSet(ConfigSetArgs),
+    /// Delete an authoritative service config entry.
+    ConfigDelete(ConfigDeleteArgs),
+    /// Query authoritative service config state.
+    ConfigStatus(ConfigStatusArgs),
+    /// Record or replace an authoritative service secret entry.
+    SecretSet(SecretSetArgs),
+    /// Delete an authoritative service secret entry.
+    SecretDelete(SecretDeleteArgs),
+    /// Query authoritative service secret state.
+    SecretStatus(SecretStatusArgs),
     /// Validate manifests and upgrade an existing deployed service.
     Upgrade(UpgradeArgs),
     /// Roll back a deployed service to a previous (or specified) version.
@@ -187,6 +211,24 @@ impl Run for Command {
                 context.print_data(&output)
             }
             Command::Status(args) => context.print_data(&args.run()?),
+            Command::ConfigSet(args) => {
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Command::ConfigDelete(args) => {
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Command::ConfigStatus(args) => context.print_data(&args.run()?),
+            Command::SecretSet(args) => {
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Command::SecretDelete(args) => {
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Command::SecretStatus(args) => context.print_data(&args.run()?),
             Command::Upgrade(args) => {
                 let output = args.run(
                     MutationMode::Upgrade,
@@ -422,6 +464,12 @@ pub struct DeployArgs {
     /// Path to a `SoraServiceManifestV1` JSON document.
     #[arg(long, value_name = "PATH", default_value = DEFAULT_SERVICE_MANIFEST)]
     service: PathBuf,
+    /// Optional JSON file containing a map of inline config values committed atomically with deploy.
+    #[arg(long, value_name = "PATH")]
+    initial_configs: Option<PathBuf>,
+    /// Optional JSON file containing a map of inline secret envelopes committed atomically with deploy.
+    #[arg(long, value_name = "PATH")]
+    initial_secrets: Option<PathBuf>,
     /// Torii base URL to execute deploy against authoritative control-plane APIs.
     #[arg(long, value_name = "URL")]
     torii_url: Option<String>,
@@ -448,13 +496,23 @@ impl DeployArgs {
             service,
         };
         bundle.validate_for_admission()?;
+        let initial_service_configs =
+            load_initial_service_configs(self.initial_configs.as_deref())?;
+        let initial_service_secrets =
+            load_initial_service_secrets(self.initial_secrets.as_deref())?;
 
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
         let endpoint_path = match mode {
             MutationMode::Deploy => "v1/soracloud/deploy",
             MutationMode::Upgrade => "v1/soracloud/upgrade",
         };
-        let request = signed_bundle_request(bundle, Some(authority), key_pair)?;
+        let request = signed_bundle_request(
+            bundle,
+            initial_service_configs,
+            initial_service_secrets,
+            Some(authority),
+            key_pair,
+        )?;
         let (_, payload) = post_torii_soracloud_mutation(
             torii_url,
             endpoint_path,
@@ -475,6 +533,12 @@ pub struct UpgradeArgs {
     /// Path to a `SoraServiceManifestV1` JSON document.
     #[arg(long, value_name = "PATH", default_value = DEFAULT_SERVICE_MANIFEST)]
     service: PathBuf,
+    /// Optional JSON file containing a map of inline config values committed atomically with upgrade.
+    #[arg(long, value_name = "PATH")]
+    initial_configs: Option<PathBuf>,
+    /// Optional JSON file containing a map of inline secret envelopes committed atomically with upgrade.
+    #[arg(long, value_name = "PATH")]
+    initial_secrets: Option<PathBuf>,
     /// Torii base URL to execute upgrade against authoritative control-plane APIs.
     #[arg(long, value_name = "URL")]
     torii_url: Option<String>,
@@ -501,13 +565,23 @@ impl UpgradeArgs {
             service,
         };
         bundle.validate_for_admission()?;
+        let initial_service_configs =
+            load_initial_service_configs(self.initial_configs.as_deref())?;
+        let initial_service_secrets =
+            load_initial_service_secrets(self.initial_secrets.as_deref())?;
 
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
         let endpoint_path = match mode {
             MutationMode::Deploy => "v1/soracloud/deploy",
             MutationMode::Upgrade => "v1/soracloud/upgrade",
         };
-        let request = signed_bundle_request(bundle, Some(authority), key_pair)?;
+        let request = signed_bundle_request(
+            bundle,
+            initial_service_configs,
+            initial_service_secrets,
+            Some(authority),
+            key_pair,
+        )?;
         let (_, payload) = post_torii_soracloud_mutation(
             torii_url,
             endpoint_path,
@@ -548,6 +622,249 @@ impl StatusArgs {
             self.timeout_secs,
         )?;
         Ok(StatusOutput::from_network(endpoint, payload))
+    }
+}
+
+/// Arguments for `app soracloud config-set`.
+#[derive(clap::Args, Debug)]
+pub struct ConfigSetArgs {
+    /// Service name owning the config entry.
+    #[arg(long, value_name = "NAME")]
+    service_name: String,
+    /// Stable service-scoped config name.
+    #[arg(long, value_name = "NAME")]
+    config_name: String,
+    /// Inline JSON value for the config entry.
+    #[arg(long, value_name = "JSON")]
+    value_json: Option<String>,
+    /// Path to a JSON document used as the config value.
+    #[arg(long, value_name = "PATH")]
+    value_file: Option<PathBuf>,
+    /// Torii base URL for authoritative `service/config/set`.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane mutations.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl ConfigSetArgs {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let value_json =
+            load_service_config_value(self.value_json.as_deref(), self.value_file.as_deref())?;
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let request = signed_service_config_set_request(
+            &self.service_name,
+            &self.config_name,
+            value_json,
+            authority,
+            key_pair,
+        )?;
+        let (_, payload) = post_torii_soracloud_mutation(
+            torii_url,
+            "v1/soracloud/service/config/set",
+            &request,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        Ok(payload)
+    }
+}
+
+/// Arguments for `app soracloud config-delete`.
+#[derive(clap::Args, Debug)]
+pub struct ConfigDeleteArgs {
+    /// Service name owning the config entry.
+    #[arg(long, value_name = "NAME")]
+    service_name: String,
+    /// Stable service-scoped config name.
+    #[arg(long, value_name = "NAME")]
+    config_name: String,
+    /// Torii base URL for authoritative `service/config/delete`.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane mutations.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl ConfigDeleteArgs {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let request = signed_service_config_delete_request(
+            &self.service_name,
+            &self.config_name,
+            authority,
+            key_pair,
+        )?;
+        let (_, payload) = post_torii_soracloud_mutation(
+            torii_url,
+            "v1/soracloud/service/config/delete",
+            &request,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        Ok(payload)
+    }
+}
+
+/// Arguments for `app soracloud config-status`.
+#[derive(clap::Args, Debug)]
+pub struct ConfigStatusArgs {
+    /// Service name owning the config entries.
+    #[arg(long, value_name = "NAME")]
+    service_name: String,
+    /// Optional config name filter.
+    #[arg(long, value_name = "NAME")]
+    config_name: Option<String>,
+    /// Torii base URL for authoritative `service/config/status`.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when querying live control-plane APIs.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane queries.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl ConfigStatusArgs {
+    fn run(self) -> Result<norito::json::Value> {
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let (_, payload) = fetch_torii_soracloud_service_config_status(
+            torii_url,
+            &self.service_name,
+            self.config_name.as_deref(),
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        Ok(payload)
+    }
+}
+
+/// Arguments for `app soracloud secret-set`.
+#[derive(clap::Args, Debug)]
+pub struct SecretSetArgs {
+    /// Service name owning the secret entry.
+    #[arg(long, value_name = "NAME")]
+    service_name: String,
+    /// Stable service-scoped secret name.
+    #[arg(long, value_name = "NAME")]
+    secret_name: String,
+    /// Path to a `SecretEnvelopeV1` JSON document.
+    #[arg(long, value_name = "PATH")]
+    secret_file: PathBuf,
+    /// Torii base URL for authoritative `service/secret/set`.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane mutations.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl SecretSetArgs {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let secret: SecretEnvelopeV1 = load_json(&self.secret_file)?;
+        secret.validate().wrap_err("invalid secret envelope")?;
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let request = signed_service_secret_set_request(
+            &self.service_name,
+            &self.secret_name,
+            secret,
+            authority,
+            key_pair,
+        )?;
+        let (_, payload) = post_torii_soracloud_mutation(
+            torii_url,
+            "v1/soracloud/service/secret/set",
+            &request,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        Ok(payload)
+    }
+}
+
+/// Arguments for `app soracloud secret-delete`.
+#[derive(clap::Args, Debug)]
+pub struct SecretDeleteArgs {
+    /// Service name owning the secret entry.
+    #[arg(long, value_name = "NAME")]
+    service_name: String,
+    /// Stable service-scoped secret name.
+    #[arg(long, value_name = "NAME")]
+    secret_name: String,
+    /// Torii base URL for authoritative `service/secret/delete`.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane mutations.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl SecretDeleteArgs {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let request = signed_service_secret_delete_request(
+            &self.service_name,
+            &self.secret_name,
+            authority,
+            key_pair,
+        )?;
+        let (_, payload) = post_torii_soracloud_mutation(
+            torii_url,
+            "v1/soracloud/service/secret/delete",
+            &request,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        Ok(payload)
+    }
+}
+
+/// Arguments for `app soracloud secret-status`.
+#[derive(clap::Args, Debug)]
+pub struct SecretStatusArgs {
+    /// Service name owning the secret entries.
+    #[arg(long, value_name = "NAME")]
+    service_name: String,
+    /// Optional secret name filter.
+    #[arg(long, value_name = "NAME")]
+    secret_name: Option<String>,
+    /// Torii base URL for authoritative `service/secret/status`.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when querying live control-plane APIs.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane queries.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl SecretStatusArgs {
+    fn run(self) -> Result<norito::json::Value> {
+        let torii_url = require_torii_url(self.torii_url.as_deref())?;
+        let (_, payload) = fetch_torii_soracloud_service_secret_status(
+            torii_url,
+            &self.service_name,
+            self.secret_name.as_deref(),
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+        Ok(payload)
     }
 }
 
@@ -763,12 +1080,8 @@ pub struct AgentRestartArgs {
 impl AgentRestartArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
-        let request = signed_agent_restart_request(
-            &self.apartment_name,
-            &self.reason,
-            authority,
-            key_pair,
-        )?;
+        let request =
+            signed_agent_restart_request(&self.apartment_name, &self.reason, authority, key_pair)?;
         let (_, payload) = post_torii_soracloud_mutation(
             torii_url,
             "v1/soracloud/agent/restart",
@@ -1123,18 +1436,10 @@ pub struct AgentAutonomyRunArgs {
     #[arg(long, value_name = "LABEL")]
     run_label: String,
     /// Optional canonical JSON body to forward to the generated HF `/infer` handler.
-    #[arg(
-        long,
-        value_name = "JSON",
-        conflicts_with = "workflow_input_json_file"
-    )]
+    #[arg(long, value_name = "JSON", conflicts_with = "workflow_input_json_file")]
     workflow_input_json: Option<String>,
     /// Optional path to a JSON file forwarded to the generated HF `/infer` handler.
-    #[arg(
-        long,
-        value_name = "PATH",
-        conflicts_with = "workflow_input_json"
-    )]
+    #[arg(long, value_name = "PATH", conflicts_with = "workflow_input_json")]
     workflow_input_json_file: Option<PathBuf>,
     /// Torii base URL for authoritative `agent/autonomy/run`.
     #[arg(long, value_name = "URL")]
@@ -1165,10 +1470,12 @@ impl AgentAutonomyRunArgs {
             self.workflow_input_json_file.as_deref(),
         ) {
             (Some(raw), None) => Some(raw.to_owned()),
-            (None, Some(path)) => Some(
-                fs::read_to_string(path)
-                    .wrap_err_with(|| format!("failed to read workflow input JSON from `{}`", path.display()))?,
-            ),
+            (None, Some(path)) => Some(fs::read_to_string(path).wrap_err_with(|| {
+                format!(
+                    "failed to read workflow input JSON from `{}`",
+                    path.display()
+                )
+            })?),
             (None, None) => None,
             (Some(_), Some(_)) => unreachable!("clap enforces workflow input exclusivity"),
         };
@@ -2116,7 +2423,8 @@ pub struct ModelHostHeartbeatArgs {
 impl ModelHostHeartbeatArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
-        let request = signed_model_host_heartbeat_request(self.heartbeat_expires_at_ms, authority, key_pair)?;
+        let request =
+            signed_model_host_heartbeat_request(self.heartbeat_expires_at_ms, authority, key_pair)?;
         let (_, payload) = post_torii_soracloud_mutation(
             torii_url,
             "v1/soracloud/model-host/heartbeat",
@@ -2370,8 +2678,99 @@ impl StatusOutput {
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct ServiceConfigSetPayload {
+    service_name: String,
+    config_name: String,
+    value_json: Json,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedServiceConfigSetRequest {
+    payload: ServiceConfigSetPayload,
+    provenance: ManifestProvenance,
+    #[norito(default)]
+    authority: Option<AccountId>,
+    #[norito(default)]
+    private_key: Option<ExposedPrivateKey>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct ServiceConfigDeletePayload {
+    service_name: String,
+    config_name: String,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedServiceConfigDeleteRequest {
+    payload: ServiceConfigDeletePayload,
+    provenance: ManifestProvenance,
+    #[norito(default)]
+    authority: Option<AccountId>,
+    #[norito(default)]
+    private_key: Option<ExposedPrivateKey>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct ServiceSecretSetPayload {
+    service_name: String,
+    secret_name: String,
+    secret: SecretEnvelopeV1,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedServiceSecretSetRequest {
+    payload: ServiceSecretSetPayload,
+    provenance: ManifestProvenance,
+    #[norito(default)]
+    authority: Option<AccountId>,
+    #[norito(default)]
+    private_key: Option<ExposedPrivateKey>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+struct ServiceSecretDeletePayload {
+    service_name: String,
+    secret_name: String,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SignedServiceSecretDeleteRequest {
+    payload: ServiceSecretDeletePayload,
+    provenance: ManifestProvenance,
+    #[norito(default)]
+    authority: Option<AccountId>,
+    #[norito(default)]
+    private_key: Option<ExposedPrivateKey>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct SignedBundleRequest {
     bundle: SoraDeploymentBundleV1,
+    #[norito(default)]
+    initial_service_configs: BTreeMap<String, Json>,
+    #[norito(default)]
+    initial_service_secrets: BTreeMap<String, SecretEnvelopeV1>,
     provenance: ManifestProvenance,
     #[norito(default)]
     authority: Option<AccountId>,
@@ -3057,14 +3456,222 @@ struct SignedModelWeightRollbackRequest {
 
 fn signed_bundle_request(
     bundle: SoraDeploymentBundleV1,
+    initial_service_configs: BTreeMap<String, Json>,
+    initial_service_secrets: BTreeMap<String, SecretEnvelopeV1>,
     _authority: Option<&AccountId>,
     key_pair: &KeyPair,
 ) -> Result<SignedBundleRequest> {
-    let payload = encode_bundle_provenance_payload(&bundle)
-        .wrap_err("failed to encode deployment bundle payload for signing")?;
+    let payload = iroha_data_model::soracloud::encode_bundle_with_materials_provenance_payload(
+        &bundle,
+        &initial_service_configs,
+        &initial_service_secrets,
+    )
+    .wrap_err("failed to encode deployment bundle payload for signing")?;
     let signature = Signature::new(key_pair.private_key(), &payload);
     Ok(SignedBundleRequest {
         bundle,
+        initial_service_configs,
+        initial_service_secrets,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+        authority: None,
+        private_key: None,
+    })
+}
+
+fn parse_service_material_name_arg(flag_name: &str, value: &str) -> Result<String> {
+    let normalized = value.trim();
+    if normalized.is_empty() {
+        return Err(eyre!("{flag_name} must not be empty"));
+    }
+    if normalized.len() > 256 {
+        return Err(eyre!("{flag_name} exceeds max bytes (256)"));
+    }
+    if normalized.starts_with('/') || normalized.contains("..") {
+        return Err(eyre!(
+            "{flag_name} must not contain leading `/` or parent path segments"
+        ));
+    }
+    if normalized.chars().any(|ch| ch.is_control()) {
+        return Err(eyre!("{flag_name} must not contain control characters"));
+    }
+    Ok(normalized.to_owned())
+}
+
+fn load_initial_service_configs(path: Option<&Path>) -> Result<BTreeMap<String, Json>> {
+    let Some(path) = path else {
+        return Ok(BTreeMap::new());
+    };
+    let configs: BTreeMap<String, Json> = load_json(path)?;
+    configs
+        .into_iter()
+        .map(|(config_name, value_json)| {
+            Ok((
+                parse_service_material_name_arg("--initial-configs key", &config_name)?,
+                value_json,
+            ))
+        })
+        .collect()
+}
+
+fn load_initial_service_secrets(path: Option<&Path>) -> Result<BTreeMap<String, SecretEnvelopeV1>> {
+    let Some(path) = path else {
+        return Ok(BTreeMap::new());
+    };
+    let secrets: BTreeMap<String, SecretEnvelopeV1> = load_json(path)?;
+    secrets
+        .into_iter()
+        .map(|(secret_name, envelope)| {
+            Ok((
+                parse_service_material_name_arg("--initial-secrets key", &secret_name)?,
+                envelope,
+            ))
+        })
+        .collect()
+}
+
+fn load_service_config_value(
+    value_json: Option<&str>,
+    value_file: Option<&Path>,
+) -> Result<norito::json::Value> {
+    match (value_json, value_file) {
+        (Some(_), Some(_)) => Err(eyre!("specify exactly one of --value-json or --value-file")),
+        (None, None) => Err(eyre!("specify exactly one of --value-json or --value-file")),
+        (Some(value_json), None) => {
+            json::from_str(value_json).wrap_err("failed to decode --value-json")
+        }
+        (None, Some(path)) => {
+            let bytes = fs::read(path)
+                .wrap_err_with(|| format!("failed to read config value file {}", path.display()))?;
+            json::from_slice(&bytes)
+                .wrap_err_with(|| format!("failed to decode {}", path.display()))
+        }
+    }
+}
+
+fn signed_service_config_set_request(
+    service_name: &str,
+    config_name: &str,
+    value_json: norito::json::Value,
+    _authority: &AccountId,
+    key_pair: &KeyPair,
+) -> Result<SignedServiceConfigSetRequest> {
+    let payload = ServiceConfigSetPayload {
+        service_name: service_name
+            .trim()
+            .parse::<Name>()
+            .map(|name| name.to_string())
+            .wrap_err("invalid --service-name")?,
+        config_name: parse_service_material_name_arg("--config-name", config_name)?,
+        value_json: Json::from(value_json),
+    };
+    let encoded = encode_set_service_config_provenance_payload(
+        payload.service_name.as_str(),
+        payload.config_name.as_str(),
+        &payload.value_json,
+    )
+    .wrap_err("failed to encode service config payload for signing")?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedServiceConfigSetRequest {
+        payload,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+        authority: None,
+        private_key: None,
+    })
+}
+
+fn signed_service_config_delete_request(
+    service_name: &str,
+    config_name: &str,
+    _authority: &AccountId,
+    key_pair: &KeyPair,
+) -> Result<SignedServiceConfigDeleteRequest> {
+    let payload = ServiceConfigDeletePayload {
+        service_name: service_name
+            .trim()
+            .parse::<Name>()
+            .map(|name| name.to_string())
+            .wrap_err("invalid --service-name")?,
+        config_name: parse_service_material_name_arg("--config-name", config_name)?,
+    };
+    let encoded = encode_delete_service_config_provenance_payload(
+        payload.service_name.as_str(),
+        payload.config_name.as_str(),
+    )
+    .wrap_err("failed to encode service config delete payload for signing")?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedServiceConfigDeleteRequest {
+        payload,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+        authority: None,
+        private_key: None,
+    })
+}
+
+fn signed_service_secret_set_request(
+    service_name: &str,
+    secret_name: &str,
+    secret: SecretEnvelopeV1,
+    _authority: &AccountId,
+    key_pair: &KeyPair,
+) -> Result<SignedServiceSecretSetRequest> {
+    let payload = ServiceSecretSetPayload {
+        service_name: service_name
+            .trim()
+            .parse::<Name>()
+            .map(|name| name.to_string())
+            .wrap_err("invalid --service-name")?,
+        secret_name: parse_service_material_name_arg("--secret-name", secret_name)?,
+        secret,
+    };
+    let encoded = encode_set_service_secret_provenance_payload(
+        payload.service_name.as_str(),
+        payload.secret_name.as_str(),
+        &payload.secret,
+    )
+    .wrap_err("failed to encode service secret payload for signing")?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedServiceSecretSetRequest {
+        payload,
+        provenance: ManifestProvenance {
+            signer: key_pair.public_key().clone(),
+            signature,
+        },
+        authority: None,
+        private_key: None,
+    })
+}
+
+fn signed_service_secret_delete_request(
+    service_name: &str,
+    secret_name: &str,
+    _authority: &AccountId,
+    key_pair: &KeyPair,
+) -> Result<SignedServiceSecretDeleteRequest> {
+    let payload = ServiceSecretDeletePayload {
+        service_name: service_name
+            .trim()
+            .parse::<Name>()
+            .map(|name| name.to_string())
+            .wrap_err("invalid --service-name")?,
+        secret_name: parse_service_material_name_arg("--secret-name", secret_name)?,
+    };
+    let encoded = encode_delete_service_secret_provenance_payload(
+        payload.service_name.as_str(),
+        payload.secret_name.as_str(),
+    )
+    .wrap_err("failed to encode service secret delete payload for signing")?;
+    let signature = Signature::new(key_pair.private_key(), &encoded);
+    Ok(SignedServiceSecretDeleteRequest {
+        payload,
         provenance: ManifestProvenance {
             signer: key_pair.public_key().clone(),
             signature,
@@ -3425,9 +4032,7 @@ fn signed_hf_lease_leave_request(
         revision: revision.map(parse_hf_revision_arg).transpose()?,
         storage_class,
         lease_term_ms,
-        service_name: service_name
-            .map(parse_hf_service_name_arg)
-            .transpose()?,
+        service_name: service_name.map(parse_hf_service_name_arg).transpose()?,
         apartment_name: parse_hf_apartment_name_arg(apartment_name)?,
     };
     let encoded = encode_hf_lease_leave_signature_payload(&payload)
@@ -3879,8 +4484,8 @@ fn canonicalize_agent_workflow_input_json(workflow_input_json: &str) -> Result<S
             "workflow input JSON exceeds max bytes ({AGENT_AUTONOMY_MAX_REQUEST_BYTES})"
         ));
     }
-    let parsed: norito::json::Value = json::from_str(normalized)
-        .wrap_err("workflow input JSON must be valid JSON")?;
+    let parsed: norito::json::Value =
+        json::from_str(normalized).wrap_err("workflow input JSON must be valid JSON")?;
     let canonical =
         json::to_json(&parsed).wrap_err("failed to canonicalize workflow input JSON")?;
     if canonical.len() > AGENT_AUTONOMY_MAX_REQUEST_BYTES {
@@ -4695,10 +5300,8 @@ where
         .wrap_err("failed to encode soracloud mutation request payload")?;
     let submission_config = soracloud_submission_config()?;
     let canonical_message = canonical_request_message("POST", &endpoint, &body);
-    let canonical_signature = Signature::new(
-        submission_config.key_pair.private_key(),
-        &canonical_message,
-    );
+    let canonical_signature =
+        Signature::new(submission_config.key_pair.private_key(), &canonical_message);
 
     let timeout = Duration::from_secs(timeout_secs.max(1));
     let client = BlockingHttpClient::builder()
@@ -4713,10 +5316,7 @@ where
             header::CONTENT_TYPE,
             HeaderValue::from_static("application/json"),
         )
-        .header(
-            HEADER_IROHA_ACCOUNT,
-            submission_config.account.to_string(),
-        )
+        .header(HEADER_IROHA_ACCOUNT, submission_config.account.to_string())
         .header(
             HEADER_IROHA_SIGNATURE,
             base64::engine::general_purpose::STANDARD.encode(canonical_signature.payload()),
@@ -4747,7 +5347,10 @@ where
     let submitted_tx_hash =
         submit_soracloud_draft_transaction(torii_url, timeout_secs, instructions)?;
     if let Some(root) = payload.as_object_mut() {
-        root.insert("submitted_tx_hash".to_owned(), json::to_value(&submitted_tx_hash)?);
+        root.insert(
+            "submitted_tx_hash".to_owned(),
+            json::to_value(&submitted_tx_hash)?,
+        );
         root.insert(
             "submission_mode".to_owned(),
             json::Value::String(
@@ -4842,11 +5445,11 @@ fn fetch_torii_soracloud_status(
     Ok((endpoint.to_string(), payload))
 }
 
-fn filter_soracloud_status_payload(
-    payload: &mut norito::json::Value,
-    service_name: Option<&str>,
-) {
-    let Some(service_name) = service_name.map(str::trim).filter(|value| !value.is_empty()) else {
+fn filter_soracloud_status_payload(payload: &mut norito::json::Value, service_name: Option<&str>) {
+    let Some(service_name) = service_name
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
         return;
     };
     let Some(root) = payload.as_object_mut() else {
@@ -4891,6 +5494,118 @@ fn filter_soracloud_status_payload(
                 == Some(service_name)
         });
     }
+}
+
+fn fetch_torii_soracloud_service_config_status(
+    torii_url: &str,
+    service_name: &str,
+    config_name: Option<&str>,
+    api_token: Option<&str>,
+    timeout_secs: u64,
+) -> Result<(String, norito::json::Value)> {
+    let service_name = service_name
+        .trim()
+        .parse::<Name>()
+        .map(|name| name.to_string())
+        .wrap_err("invalid --service-name")?;
+    let config_name = config_name
+        .map(|value| parse_service_material_name_arg("--config-name", value))
+        .transpose()?;
+    let mut endpoint = reqwest::Url::parse(torii_url)
+        .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
+        .join("v1/soracloud/service/config/status")
+        .wrap_err("failed to derive /v1/soracloud/service/config/status URL from --torii-url")?;
+    {
+        let mut query = endpoint.query_pairs_mut();
+        query.append_pair("service_name", service_name.as_str());
+        if let Some(config_name) = config_name.as_deref() {
+            query.append_pair("config_name", config_name);
+        }
+    }
+    let timeout = Duration::from_secs(timeout_secs.max(1));
+    let client = BlockingHttpClient::builder()
+        .timeout(timeout)
+        .build()
+        .wrap_err("failed to build HTTP client for soracloud service config status")?;
+    let mut request = client.get(endpoint.clone());
+    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
+    if let Some(token) = api_token {
+        request = request.header("x-api-token", token);
+    }
+    let response = request
+        .send()
+        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
+    let status = response.status();
+    let body = response
+        .bytes()
+        .wrap_err("failed to read Torii service config status response body")?;
+    if !status.is_success() {
+        let body_text = String::from_utf8_lossy(&body);
+        return Err(eyre!(
+            "Torii /v1/soracloud/service/config/status returned {}: {}",
+            status,
+            body_text
+        ));
+    }
+    let payload: norito::json::Value = json::from_slice(&body)
+        .wrap_err("failed to decode Torii service config status JSON payload")?;
+    Ok((endpoint.to_string(), payload))
+}
+
+fn fetch_torii_soracloud_service_secret_status(
+    torii_url: &str,
+    service_name: &str,
+    secret_name: Option<&str>,
+    api_token: Option<&str>,
+    timeout_secs: u64,
+) -> Result<(String, norito::json::Value)> {
+    let service_name = service_name
+        .trim()
+        .parse::<Name>()
+        .map(|name| name.to_string())
+        .wrap_err("invalid --service-name")?;
+    let secret_name = secret_name
+        .map(|value| parse_service_material_name_arg("--secret-name", value))
+        .transpose()?;
+    let mut endpoint = reqwest::Url::parse(torii_url)
+        .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?
+        .join("v1/soracloud/service/secret/status")
+        .wrap_err("failed to derive /v1/soracloud/service/secret/status URL from --torii-url")?;
+    {
+        let mut query = endpoint.query_pairs_mut();
+        query.append_pair("service_name", service_name.as_str());
+        if let Some(secret_name) = secret_name.as_deref() {
+            query.append_pair("secret_name", secret_name);
+        }
+    }
+    let timeout = Duration::from_secs(timeout_secs.max(1));
+    let client = BlockingHttpClient::builder()
+        .timeout(timeout)
+        .build()
+        .wrap_err("failed to build HTTP client for soracloud service secret status")?;
+    let mut request = client.get(endpoint.clone());
+    request = request.header(header::ACCEPT, HeaderValue::from_static("application/json"));
+    if let Some(token) = api_token {
+        request = request.header("x-api-token", token);
+    }
+    let response = request
+        .send()
+        .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
+    let status = response.status();
+    let body = response
+        .bytes()
+        .wrap_err("failed to read Torii service secret status response body")?;
+    if !status.is_success() {
+        let body_text = String::from_utf8_lossy(&body);
+        return Err(eyre!(
+            "Torii /v1/soracloud/service/secret/status returned {}: {}",
+            status,
+            body_text
+        ));
+    }
+    let payload: norito::json::Value = json::from_slice(&body)
+        .wrap_err("failed to decode Torii service secret status JSON payload")?;
+    Ok((endpoint.to_string(), payload))
 }
 
 fn fetch_torii_soracloud_agent_status(
@@ -5350,7 +6065,8 @@ fn fetch_torii_soracloud_model_host_status(
 }
 
 fn require_torii_url<'a>(torii_url: Option<&'a str>) -> Result<&'a str> {
-    torii_url.ok_or_else(|| eyre!("--torii-url is required for Soracloud live control-plane access"))
+    torii_url
+        .ok_or_else(|| eyre!("--torii-url is required for Soracloud live control-plane access"))
 }
 
 fn load_json<T>(path: &Path) -> Result<T>
@@ -5413,10 +6129,8 @@ fn service_handler(
                     queue_name: queue_name.parse().expect("literal queue name is valid"),
                     max_pending_messages: NonZeroU32::new(max_pending_messages)
                         .expect("nonzero literal"),
-                    max_message_bytes: NonZeroU64::new(max_message_bytes)
-                        .expect("nonzero literal"),
-                    retention_blocks: NonZeroU32::new(retention_blocks)
-                        .expect("nonzero literal"),
+                    max_message_bytes: NonZeroU64::new(max_message_bytes).expect("nonzero literal"),
+                    retention_blocks: NonZeroU32::new(retention_blocks).expect("nonzero literal"),
                 }
             },
         ),
@@ -8073,9 +8787,20 @@ mod tests {
         };
         let key_pair = KeyPair::random();
         let authority = AccountId::new(key_pair.public_key().clone());
-        let request = signed_bundle_request(bundle, Some(&authority), &key_pair)
-            .expect("signed request");
-        let payload = encode_bundle_provenance_payload(&request.bundle).expect("encode payload");
+        let request = signed_bundle_request(
+            bundle,
+            BTreeMap::new(),
+            BTreeMap::new(),
+            Some(&authority),
+            &key_pair,
+        )
+        .expect("signed request");
+        let payload = iroha_data_model::soracloud::encode_bundle_with_materials_provenance_payload(
+            &request.bundle,
+            &request.initial_service_configs,
+            &request.initial_service_secrets,
+        )
+        .expect("encode payload");
         request
             .provenance
             .signature
@@ -8147,9 +8872,8 @@ mod tests {
     fn signed_agent_lease_renew_request_uses_verifiable_signature() {
         let key_pair = KeyPair::random();
         let authority = AccountId::new(key_pair.public_key().clone());
-        let request =
-            signed_agent_lease_renew_request("ops_agent", 120, &authority, &key_pair)
-                .expect("signed agent lease renew request");
+        let request = signed_agent_lease_renew_request("ops_agent", 120, &authority, &key_pair)
+            .expect("signed agent lease renew request");
         let payload =
             encode_agent_lease_renew_signature_payload(&request.payload).expect("encode payload");
         request
@@ -8197,17 +8921,15 @@ mod tests {
                     .as_ref()
                     .expect("generated service provenance")
                     .signer,
-                &encode_bundle_provenance_payload(
-                    &build_soracloud_hf_generated_service_bundle(
-                        "hf_lease_a".parse().expect("service name"),
-                        &hf_source_hash("openai/gpt-oss", "main")
-                            .expect("source id")
-                            .to_string(),
-                        "openai/gpt-oss",
-                        "main",
-                        "gpt-oss",
-                    ),
-                )
+                &encode_bundle_provenance_payload(&build_soracloud_hf_generated_service_bundle(
+                    "hf_lease_a".parse().expect("service name"),
+                    &hf_source_hash("openai/gpt-oss", "main")
+                        .expect("source id")
+                        .to_string(),
+                    "openai/gpt-oss",
+                    "main",
+                    "gpt-oss",
+                ))
                 .expect("generated bundle payload"),
             )
             .expect("generated service provenance should verify");
@@ -8328,13 +9050,9 @@ mod tests {
     fn signed_agent_restart_request_uses_verifiable_signature() {
         let key_pair = KeyPair::random();
         let authority = AccountId::new(key_pair.public_key().clone());
-        let request = signed_agent_restart_request(
-            "ops_agent",
-            "manual-restart",
-            &authority,
-            &key_pair,
-        )
-        .expect("signed agent restart request");
+        let request =
+            signed_agent_restart_request("ops_agent", "manual-restart", &authority, &key_pair)
+                .expect("signed agent restart request");
         let payload =
             encode_agent_restart_signature_payload(&request.payload).expect("encode payload");
         request
@@ -8953,7 +9671,8 @@ mod tests {
             lease_asset_definition_id: asset_definition.clone(),
             base_fee_nanos: 10_000,
         };
-        let encoded = encode_hf_deploy_signature_payload(&payload).expect("encode signature payload");
+        let encoded =
+            encode_hf_deploy_signature_payload(&payload).expect("encode signature payload");
         let expected = norito::to_bytes(&(
             payload.repo_id.as_str(),
             HF_DEFAULT_RESOLVED_REVISION,
@@ -9233,6 +9952,8 @@ mod tests {
         let err = DeployArgs {
             container: container_path,
             service: service_path,
+            initial_configs: None,
+            initial_secrets: None,
             torii_url: None,
             api_token: None,
             timeout_secs: 10,
@@ -9280,15 +10001,9 @@ mod tests {
         assert_eq!(service.handlers[0].handler_name.as_ref(), "assets");
         assert_eq!(service.handlers[0].class, SoraServiceHandlerClassV1::Asset);
         assert_eq!(service.artifacts.len(), 1);
+        assert_eq!(service.artifacts[0].kind, SoraArtifactKindV1::StaticAsset);
         assert_eq!(
-            service.artifacts[0].kind,
-            SoraArtifactKindV1::StaticAsset
-        );
-        assert_eq!(
-            service.artifacts[0]
-                .handler_name
-                .as_ref()
-                .map(Name::as_ref),
+            service.artifacts[0].handler_name.as_ref().map(Name::as_ref),
             Some("assets")
         );
     }
@@ -9367,10 +10082,7 @@ mod tests {
         assert_eq!(service.artifacts.len(), 1);
         assert_eq!(service.artifacts[0].kind, SoraArtifactKindV1::Journal);
         assert_eq!(
-            service.artifacts[0]
-                .handler_name
-                .as_ref()
-                .map(Name::as_ref),
+            service.artifacts[0].handler_name.as_ref().map(Name::as_ref),
             Some("update")
         );
     }
@@ -13139,5 +13851,4 @@ main().catch((error) => {
             <InitTemplate as ValueEnum>::from_str("pii-app", true).expect("pii-app must parse");
         assert_eq!(parsed_new, InitTemplate::PiiApp);
     }
-
 }
