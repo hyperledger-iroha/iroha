@@ -189,7 +189,7 @@ Last updated: 2026-03-25
   - `BlockSyncUpdate` is still available as a fetch response on some paths, so contiguous-frontier repair is not yet fully isolated from deep catch-up, and
   - `RbcReady` / `RbcDeliver` plus the rest of the RBC session machinery still exist on the wire and in the worker loop, so a fresh soak rerun is still needed after the exact-frontier message split lands.
 
-## 2026-03-25 Follow-up: TAIRA faucet now requires decentralized proof-of-work
+## 2026-03-25 Follow-up: TAIRA faucet now requires adaptive decentralized memory-hard proof-of-work
 - Hardened the TAIRA faucet slice across
   `crates/iroha_config/src/parameters/{actual.rs,defaults.rs,user.rs}`,
   `crates/iroha_torii/src/{lib.rs,openapi.rs,routing.rs}`,
@@ -197,14 +197,16 @@ Last updated: 2026-03-25
   `configs/soranexus/testus/config.toml`,
   and `defaults/kagami/iroha3-testus/config.toml`.
 - The shipped behavior in this slice:
-  - Torii now exposes `GET /v1/accounts/faucet/puzzle`, which returns a deterministic SHA-256 puzzle anchored to a recent committed block hash plus an acceptance window in blocks;
-  - `POST /v1/accounts/faucet` now rejects requests that do not include a valid PoW solution when faucet PoW difficulty is non-zero, while still preserving the existing starter-funds transfer flow and balance checks; and
-  - the TAIRA/testus profile now enables faucet PoW explicitly (`pow_difficulty_bits = 20`, `pow_max_anchor_age_blocks = 6`) without changing non-TAIRA profiles.
+  - Torii now exposes `GET /v1/accounts/faucet/puzzle`, which returns a deterministic memory-hard scrypt puzzle anchored to a recent committed block hash plus an acceptance window in blocks;
+  - the effective PoW difficulty is now derived from immutable chain data for the chosen anchor height plus pending queue pressure: a base difficulty plus adaptive extra bits based on recent committed and queued faucet claim volume;
+  - finalized Sumeragi VRF epoch seed material is now required in the challenge whenever faucet VRF mode is enabled, so the puzzle uses on-chain randomness instead of falling back to a non-randomized challenge; and
+  - `POST /v1/accounts/faucet` now rejects requests that do not include a valid solution for that exact anchored puzzle, while still preserving the existing starter-funds transfer flow and balance checks.
 - Validation:
-  - `cargo test -p iroha_config torii_faucet_tests -- --nocapture` (pending rerun after current focused Torii build settles)
-  - `cargo test -p iroha_torii --features app_api accounts_faucet -- --nocapture` (build currently in progress in this workspace)
+  - `cargo test -p iroha_config torii_faucet_tests -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --features app_api --test accounts_faucet -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --features app_api accounts_faucet -- --nocapture` (still blocked by unrelated existing `accounts_portfolio.rs` compile errors on the branch)
 - Remaining implementation gap:
-  - the faucet still uses a balance-based eligibility check rather than a durable on-chain claim marker, so PoW now slows Sybil drain but does not by itself create permanent one-claim semantics.
+  - this slice is now explicitly cost-based rather than identity-based; that is the correct Sybil-resistance direction for freely creatable addresses, but it still does not make faucets "fair" in any human sense without introducing some external scarce resource beyond computation.
 
 ## 2026-03-25 Follow-up: multisig cancel integration test now waits for committed proposal state
 - Hardened `integration_tests/tests/multisig.rs` so the cancel-route coverage

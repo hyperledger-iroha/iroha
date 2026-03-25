@@ -5625,8 +5625,22 @@ pub struct ToriiFaucet {
     pub amount: Numeric,
     /// Difficulty in leading zero bits for faucet proof-of-work (0 disables PoW).
     pub pow_difficulty_bits: u8,
+    /// Scrypt `log2(N)` cost parameter for faucet proof-of-work.
+    pub pow_scrypt_log_n: u8,
+    /// Scrypt block size parameter for faucet proof-of-work.
+    pub pow_scrypt_r: u32,
+    /// Scrypt parallelization parameter for faucet proof-of-work.
+    pub pow_scrypt_p: u32,
     /// Maximum age of an accepted faucet PoW anchor, measured in committed blocks.
     pub pow_max_anchor_age_blocks: NonZeroU64,
+    /// Number of recent committed blocks to scan for prior faucet claims when adapting difficulty.
+    pub pow_adaptive_lookback_blocks: u64,
+    /// Number of recent faucet claims required to add one extra difficulty bit.
+    pub pow_adaptive_claims_per_extra_bit: u64,
+    /// Maximum number of adaptive difficulty bits added on top of the base difficulty.
+    pub pow_adaptive_max_extra_bits: u8,
+    /// Whether finalized Sumeragi VRF epoch seeds are mixed into faucet challenges when available.
+    pub pow_vrf_seed_enabled: bool,
 }
 
 /// Offline certificate issuer configuration exposed to Torii.

@@ -15204,9 +15204,30 @@ pub struct ToriiFaucet {
     /// Leading-zero-bit difficulty for faucet proof-of-work (0 disables PoW).
     #[config(default = "defaults::torii::faucet::POW_DIFFICULTY_BITS")]
     pub pow_difficulty_bits: u8,
+    /// Scrypt `log2(N)` cost parameter for faucet proof-of-work.
+    #[config(default = "defaults::torii::faucet::POW_SCRYPT_LOG_N")]
+    pub pow_scrypt_log_n: u8,
+    /// Scrypt block size parameter for faucet proof-of-work.
+    #[config(default = "defaults::torii::faucet::POW_SCRYPT_R")]
+    pub pow_scrypt_r: u32,
+    /// Scrypt parallelization parameter for faucet proof-of-work.
+    #[config(default = "defaults::torii::faucet::POW_SCRYPT_P")]
+    pub pow_scrypt_p: u32,
     /// Maximum committed-block age for accepted faucet PoW anchors.
     #[config(default = "defaults::torii::faucet::POW_MAX_ANCHOR_AGE_BLOCKS.get()")]
     pub pow_max_anchor_age_blocks: u64,
+    /// Number of recent committed blocks to scan for prior faucet claims when adapting difficulty.
+    #[config(default = "defaults::torii::faucet::POW_ADAPTIVE_LOOKBACK_BLOCKS")]
+    pub pow_adaptive_lookback_blocks: u64,
+    /// Number of recent faucet claims required to add one extra difficulty bit.
+    #[config(default = "defaults::torii::faucet::POW_ADAPTIVE_CLAIMS_PER_EXTRA_BIT")]
+    pub pow_adaptive_claims_per_extra_bit: u64,
+    /// Maximum number of adaptive difficulty bits added on top of the base difficulty.
+    #[config(default = "defaults::torii::faucet::POW_ADAPTIVE_MAX_EXTRA_BITS")]
+    pub pow_adaptive_max_extra_bits: u8,
+    /// Whether finalized Sumeragi VRF epoch seeds are mixed into faucet challenges when available.
+    #[config(default = "defaults::torii::faucet::POW_VRF_SEED_ENABLED")]
+    pub pow_vrf_seed_enabled: bool,
 }
 
 impl ToriiFaucet {
@@ -15246,6 +15267,15 @@ impl ToriiFaucet {
         if amount <= Numeric::zero() {
             panic!("torii.faucet.amount must be greater than zero");
         }
+        if self.pow_scrypt_log_n == 0 {
+            panic!("torii.faucet.pow_scrypt_log_n must be greater than zero");
+        }
+        if self.pow_scrypt_r == 0 {
+            panic!("torii.faucet.pow_scrypt_r must be greater than zero");
+        }
+        if self.pow_scrypt_p == 0 {
+            panic!("torii.faucet.pow_scrypt_p must be greater than zero");
+        }
         let pow_max_anchor_age_blocks = NonZeroU64::new(self.pow_max_anchor_age_blocks)
             .unwrap_or_else(|| {
                 panic!("torii.faucet.pow_max_anchor_age_blocks must be greater than zero")
@@ -15256,7 +15286,14 @@ impl ToriiFaucet {
             asset_definition_id,
             amount,
             pow_difficulty_bits: self.pow_difficulty_bits,
+            pow_scrypt_log_n: self.pow_scrypt_log_n,
+            pow_scrypt_r: self.pow_scrypt_r,
+            pow_scrypt_p: self.pow_scrypt_p,
             pow_max_anchor_age_blocks,
+            pow_adaptive_lookback_blocks: self.pow_adaptive_lookback_blocks,
+            pow_adaptive_claims_per_extra_bit: self.pow_adaptive_claims_per_extra_bit,
+            pow_adaptive_max_extra_bits: self.pow_adaptive_max_extra_bits,
+            pow_vrf_seed_enabled: self.pow_vrf_seed_enabled,
         })
     }
 }
@@ -15280,7 +15317,14 @@ mod torii_faucet_tests {
             asset_definition_id: "xor#sora".to_owned(),
             amount: "25000".to_owned(),
             pow_difficulty_bits: 18,
+            pow_scrypt_log_n: 13,
+            pow_scrypt_r: 8,
+            pow_scrypt_p: 1,
             pow_max_anchor_age_blocks: 4,
+            pow_adaptive_lookback_blocks: 32,
+            pow_adaptive_claims_per_extra_bit: 3,
+            pow_adaptive_max_extra_bits: 5,
+            pow_vrf_seed_enabled: true,
         }
     }
 
@@ -15297,7 +15341,14 @@ mod torii_faucet_tests {
         );
         assert_eq!(parsed.amount.to_string(), "25000");
         assert_eq!(parsed.pow_difficulty_bits, 18);
+        assert_eq!(parsed.pow_scrypt_log_n, 13);
+        assert_eq!(parsed.pow_scrypt_r, 8);
+        assert_eq!(parsed.pow_scrypt_p, 1);
         assert_eq!(parsed.pow_max_anchor_age_blocks.get(), 4);
+        assert_eq!(parsed.pow_adaptive_lookback_blocks, 32);
+        assert_eq!(parsed.pow_adaptive_claims_per_extra_bit, 3);
+        assert_eq!(parsed.pow_adaptive_max_extra_bits, 5);
+        assert!(parsed.pow_vrf_seed_enabled);
     }
 
     #[test]
@@ -15321,6 +15372,14 @@ mod torii_faucet_tests {
         faucet.pow_max_anchor_age_blocks = 0;
         let panic = std::panic::catch_unwind(|| faucet.parse());
         assert!(panic.is_err(), "expected zero pow anchor age to panic");
+    }
+
+    #[test]
+    fn torii_faucet_parse_rejects_non_positive_scrypt_log_n() {
+        let mut faucet = sample_faucet();
+        faucet.pow_scrypt_log_n = 0;
+        let panic = std::panic::catch_unwind(|| faucet.parse());
+        assert!(panic.is_err(), "expected zero scrypt log_n to panic");
     }
 }
 

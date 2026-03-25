@@ -158,6 +158,7 @@ zstd = "0.13.3"
 time = { version = "0.3.44", default-features = false, features = ["formatting", "parsing"] }
 
 tiny-keccak = { version = "2.0.2", features = ["sha3"] }
+scrypt = { version = "0.11.0", default-features = false, features = ["std"] }
 halo2curves = { version = "0.9" }
 
 mv = { path = "crates/mv" }

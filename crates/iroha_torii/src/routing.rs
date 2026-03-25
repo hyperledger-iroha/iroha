@@ -149,6 +149,7 @@ use norito::{
 };
 #[cfg(feature = "telemetry")]
 use prometheus::core::Collector;
+use scrypt::{Params as ScryptParams, scrypt as derive_scrypt};
 use sha2::{Digest as _, Sha256};
 use tokio::task;
 
@@ -36457,6 +36458,10 @@ pub struct AccountFaucetPuzzleDto {
     pub difficulty_bits: u8,
     pub anchor_height: u64,
     pub anchor_block_hash_hex: String,
+    pub challenge_salt_hex: Option<String>,
+    pub scrypt_log_n: u8,
+    pub scrypt_r: u32,
+    pub scrypt_p: u32,
     pub max_anchor_age_blocks: u64,
 }
 
@@ -36526,9 +36531,9 @@ fn faucet_invalid_request(reason: &str) -> Error {
 }
 
 #[cfg(feature = "app_api")]
-const FAUCET_POW_ALGORITHM: &str = "sha256-leading-zero-bits-v1";
+const FAUCET_POW_ALGORITHM: &str = "scrypt-leading-zero-bits-v1";
 #[cfg(feature = "app_api")]
-const FAUCET_POW_DOMAIN_SEPARATOR: &[u8] = b"iroha:accounts:faucet:pow:v1";
+const FAUCET_POW_DOMAIN_SEPARATOR: &[u8] = b"iroha:accounts:faucet:pow:v2";
 
 #[cfg(feature = "app_api")]
 fn leading_zero_bits(bytes: &[u8]) -> u32 {
@@ -36542,6 +36547,180 @@ fn leading_zero_bits(bytes: &[u8]) -> u32 {
         break;
     }
     total
+}
+
+#[cfg(feature = "app_api")]
+fn adaptive_faucet_pow_extra_bits(
+    recent_claims: u64,
+    claims_per_extra_bit: u64,
+    max_extra_bits: u8,
+) -> u8 {
+    if claims_per_extra_bit == 0 || max_extra_bits == 0 {
+        return 0;
+    }
+
+    let extra = recent_claims / claims_per_extra_bit;
+    u8::try_from(extra).unwrap_or(u8::MAX).min(max_extra_bits)
+}
+
+#[cfg(feature = "app_api")]
+fn faucet_instruction_is_claim(
+    instruction: &InstructionBox,
+    source_asset_id: &AssetId,
+    amount: &iroha_primitives::numeric::Numeric,
+) -> bool {
+    let Some(transfer) = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::TransferBox>()
+    else {
+        return false;
+    };
+    let iroha_data_model::isi::TransferBox::Asset(inner) = transfer else {
+        return false;
+    };
+
+    inner.source == *source_asset_id && inner.object == amount.clone()
+}
+
+#[cfg(feature = "app_api")]
+fn faucet_executable_is_claim(
+    executable: &Executable,
+    source_asset_id: &AssetId,
+    amount: &iroha_primitives::numeric::Numeric,
+) -> bool {
+    matches!(
+        executable,
+        Executable::Instructions(instructions)
+            if instructions.iter().any(|instruction| {
+                faucet_instruction_is_claim(instruction, source_asset_id, amount)
+            })
+    )
+}
+
+#[cfg(feature = "app_api")]
+fn faucet_pow_recent_claims(
+    app: &crate::SharedAppState,
+    faucet: &iroha_config::parameters::actual::ToriiFaucet,
+    anchor_height: u64,
+) -> u64 {
+    if faucet.pow_adaptive_lookback_blocks == 0
+        || faucet.pow_adaptive_claims_per_extra_bit == 0
+        || faucet.pow_adaptive_max_extra_bits == 0
+    {
+        return 0;
+    }
+
+    let source_asset_id =
+        AssetId::new(faucet.asset_definition_id.clone(), faucet.authority.clone());
+    let start_height = anchor_height
+        .saturating_sub(faucet.pow_adaptive_lookback_blocks.saturating_sub(1))
+        .max(1);
+    let mut total = 0u64;
+    for height in start_height..=anchor_height {
+        let Some(nonzero_height) = usize::try_from(height).ok().and_then(NonZeroUsize::new) else {
+            continue;
+        };
+        let Some(block) = app.state.block_by_height(nonzero_height) else {
+            continue;
+        };
+        let claims_in_block = block
+            .external_transactions()
+            .filter(|tx| {
+                tx.authority() == &faucet.authority
+                    && faucet_executable_is_claim(
+                        tx.instructions(),
+                        &source_asset_id,
+                        &faucet.amount,
+                    )
+            })
+            .count();
+        total = total.saturating_add(u64::try_from(claims_in_block).unwrap_or(u64::MAX));
+    }
+
+    let queued_claims = {
+        let state_view = app.state.view();
+        app.queue
+            .all_transactions(&state_view)
+            .filter(|tx| {
+                tx.authority() == &faucet.authority
+                    && faucet_executable_is_claim(
+                        tx.as_ref().instructions(),
+                        &source_asset_id,
+                        &faucet.amount,
+                    )
+            })
+            .count()
+    };
+
+    total.saturating_add(u64::try_from(queued_claims).unwrap_or(u64::MAX))
+}
+
+#[cfg(feature = "app_api")]
+fn faucet_pow_scrypt_params(
+    faucet: &iroha_config::parameters::actual::ToriiFaucet,
+) -> Result<ScryptParams> {
+    ScryptParams::new(
+        faucet.pow_scrypt_log_n,
+        faucet.pow_scrypt_r,
+        faucet.pow_scrypt_p,
+        32,
+    )
+    .map_err(|_| faucet_invalid_request("invalid faucet pow scrypt configuration"))
+}
+
+#[cfg(feature = "app_api")]
+fn faucet_pow_effective_difficulty_bits(
+    app: &crate::SharedAppState,
+    faucet: &iroha_config::parameters::actual::ToriiFaucet,
+    anchor_height: u64,
+) -> u8 {
+    let recent_claims = faucet_pow_recent_claims(app, faucet, anchor_height);
+    let adaptive_bits = adaptive_faucet_pow_extra_bits(
+        recent_claims,
+        faucet.pow_adaptive_claims_per_extra_bit,
+        faucet.pow_adaptive_max_extra_bits,
+    );
+    faucet.pow_difficulty_bits.saturating_add(adaptive_bits)
+}
+
+#[cfg(feature = "app_api")]
+fn faucet_pow_challenge_salt(
+    app: &crate::SharedAppState,
+    faucet: &iroha_config::parameters::actual::ToriiFaucet,
+    anchor_height: u64,
+) -> Result<Option<[u8; 32]>> {
+    if !faucet.pow_vrf_seed_enabled {
+        return Ok(None);
+    }
+
+    let world = app.state.world_view();
+    world
+        .vrf_epochs()
+        .iter()
+        .filter_map(|(_, record)| {
+            (record.finalized && record.updated_at_height <= anchor_height).then_some(record.seed)
+        })
+        .last()
+        .map(Some)
+        .ok_or_else(|| faucet_invalid_request("faucet pow vrf seed unavailable"))
+}
+
+#[cfg(feature = "app_api")]
+fn faucet_pow_challenge(
+    account_id: &AccountId,
+    anchor_height: u64,
+    anchor_hash: &HashOf<BlockHeader>,
+    challenge_salt: Option<&[u8; 32]>,
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(FAUCET_POW_DOMAIN_SEPARATOR);
+    hasher.update(account_id.to_string().as_bytes());
+    hasher.update(anchor_height.to_be_bytes());
+    hasher.update(anchor_hash.as_ref());
+    if let Some(challenge_salt) = challenge_salt {
+        hasher.update(challenge_salt);
+    }
+    hasher.finalize().into()
 }
 
 #[cfg(feature = "app_api")]
@@ -36562,18 +36741,14 @@ fn faucet_pow_anchor_hash(
 
 #[cfg(feature = "app_api")]
 fn faucet_pow_digest(
-    account_id: &AccountId,
-    anchor_height: u64,
-    anchor_hash: &HashOf<BlockHeader>,
+    challenge: &[u8; 32],
+    scrypt_params: &ScryptParams,
     nonce_bytes: &[u8],
-) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(FAUCET_POW_DOMAIN_SEPARATOR);
-    hasher.update(account_id.to_string().as_bytes());
-    hasher.update(anchor_height.to_be_bytes());
-    hasher.update(anchor_hash.as_ref());
-    hasher.update(nonce_bytes);
-    hasher.finalize().into()
+) -> Result<[u8; 32]> {
+    let mut output = [0u8; 32];
+    derive_scrypt(nonce_bytes, challenge, scrypt_params, &mut output)
+        .map_err(|_| faucet_invalid_request("failed to derive faucet pow digest"))?;
+    Ok(output)
 }
 
 #[cfg(feature = "app_api")]
@@ -36584,7 +36759,7 @@ fn verify_faucet_pow(
     anchor_height: Option<u64>,
     nonce_hex: Option<&str>,
 ) -> Result<()> {
-    if faucet.pow_difficulty_bits == 0 {
+    if faucet.pow_difficulty_bits == 0 && faucet.pow_adaptive_max_extra_bits == 0 {
         return Ok(());
     }
 
@@ -36600,6 +36775,12 @@ fn verify_faucet_pow(
         return Err(faucet_invalid_request("faucet pow anchor is stale"));
     }
 
+    let effective_difficulty_bits =
+        faucet_pow_effective_difficulty_bits(app, faucet, anchor_height);
+    if effective_difficulty_bits == 0 {
+        return Ok(());
+    }
+
     let nonce_hex = nonce_hex
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -36611,12 +36792,36 @@ fn verify_faucet_pow(
     }
 
     let anchor_hash = faucet_pow_anchor_hash(app, anchor_height)?;
-    let digest = faucet_pow_digest(account_id, anchor_height, &anchor_hash, &nonce_bytes);
-    if leading_zero_bits(&digest) < u32::from(faucet.pow_difficulty_bits) {
+    let challenge_salt = faucet_pow_challenge_salt(app, faucet, anchor_height)?;
+    let challenge = faucet_pow_challenge(
+        account_id,
+        anchor_height,
+        &anchor_hash,
+        challenge_salt.as_ref(),
+    );
+    let scrypt_params = faucet_pow_scrypt_params(faucet)?;
+    let digest = faucet_pow_digest(&challenge, &scrypt_params, &nonce_bytes)?;
+    if leading_zero_bits(&digest) < u32::from(effective_difficulty_bits) {
         return Err(faucet_invalid_request("invalid faucet pow solution"));
     }
 
     Ok(())
+}
+
+#[cfg(all(feature = "app_api", test))]
+mod faucet_pow_tests {
+    use super::adaptive_faucet_pow_extra_bits;
+
+    #[test]
+    fn adaptive_faucet_pow_extra_bits_scales_and_caps() {
+        assert_eq!(adaptive_faucet_pow_extra_bits(0, 4, 6), 0);
+        assert_eq!(adaptive_faucet_pow_extra_bits(3, 4, 6), 0);
+        assert_eq!(adaptive_faucet_pow_extra_bits(4, 4, 6), 1);
+        assert_eq!(adaptive_faucet_pow_extra_bits(12, 4, 6), 3);
+        assert_eq!(adaptive_faucet_pow_extra_bits(999, 4, 6), 6);
+        assert_eq!(adaptive_faucet_pow_extra_bits(10, 0, 6), 0);
+        assert_eq!(adaptive_faucet_pow_extra_bits(10, 4, 0), 0);
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -36879,11 +37084,23 @@ pub async fn handle_v1_accounts_faucet_puzzle(
         ));
     }
     let anchor_hash = faucet_pow_anchor_hash(&app, anchor_height)?;
+    let difficulty_bits = faucet_pow_effective_difficulty_bits(&app, faucet, anchor_height);
+    let challenge_salt_hex = if difficulty_bits > 0 {
+        faucet_pow_challenge_salt(&app, faucet, anchor_height)?
+            .as_ref()
+            .map(hex::encode)
+    } else {
+        None
+    };
     let response = AccountFaucetPuzzleDto {
         algorithm: FAUCET_POW_ALGORITHM,
-        difficulty_bits: faucet.pow_difficulty_bits,
+        difficulty_bits,
         anchor_height,
         anchor_block_hash_hex: hex::encode(anchor_hash.as_ref()),
+        challenge_salt_hex,
+        scrypt_log_n: faucet.pow_scrypt_log_n,
+        scrypt_r: faucet.pow_scrypt_r,
+        scrypt_p: faucet.pow_scrypt_p,
         max_anchor_age_blocks: faucet.pow_max_anchor_age_blocks.get(),
     };
 

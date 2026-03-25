@@ -20,11 +20,14 @@ use iroha_data_model::{
     Registrable,
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
+    consensus::VrfEpochRecord,
     domain::DomainId,
     peer::PeerId,
     prelude::{Account, AssetDefinition, Domain, ExposedPrivateKey, InstructionBox, Mint},
 };
 use iroha_torii::{Torii, json_entry, json_object};
+use mv::storage::StorageReadOnly;
+use scrypt::{Params as ScryptParams, scrypt as derive_scrypt};
 use sha2::{Digest as _, Sha256};
 use tower::ServiceExt as _;
 
@@ -39,7 +42,11 @@ struct FaucetTestContext {
     asset_definition_id: AssetDefinitionId,
     authority_id: AccountId,
     user_id: AccountId,
+    other_user_id: AccountId,
     pow_difficulty_bits: u8,
+    pow_scrypt_log_n: u8,
+    pow_scrypt_r: u32,
+    pow_scrypt_p: u32,
     pow_max_anchor_age_blocks: u64,
 }
 
@@ -57,22 +64,50 @@ fn build_faucet_test_context(prefund_user: bool) -> FaucetTestContext {
     let authority_id = AccountId::new(authority_kp.public_key().clone());
     let user_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
     let user_id = AccountId::new(user_kp.public_key().clone());
+    let other_user_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+    let other_user_id = AccountId::new(other_user_kp.public_key().clone());
 
     let domain = Domain::new(domain_id.clone()).build(&authority_id);
     let authority_account =
         Account::new(authority_id.clone().to_account_id(domain_id.clone())).build(&authority_id);
     let user_account =
         Account::new(user_id.clone().to_account_id(domain_id.clone())).build(&authority_id);
+    let other_user_account =
+        Account::new(other_user_id.clone().to_account_id(domain_id.clone())).build(&authority_id);
     let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
         .with_name("XOR".to_owned())
         .build(&authority_id);
 
     let mut world = World::with(
         [domain],
-        [authority_account, user_account],
+        [authority_account, user_account, other_user_account],
         [asset_definition],
     );
     fixtures::seed_peer(&mut world, local_peer_id.clone());
+    {
+        let mut block = world.block();
+        block.vrf_epochs_mut_for_testing().insert(
+            0,
+            VrfEpochRecord {
+                epoch: 0,
+                seed: [0xAB; 32],
+                epoch_length: 1,
+                commit_deadline_offset: 0,
+                reveal_deadline_offset: 0,
+                roster_len: 1,
+                finalized: true,
+                updated_at_height: 0,
+                participants: Vec::new(),
+                late_reveals: Vec::new(),
+                committed_no_reveal: Vec::new(),
+                no_participation: Vec::new(),
+                penalties_applied: true,
+                penalties_applied_at_height: Some(0),
+                validator_election: None,
+            },
+        );
+        block.commit();
+    }
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     let chain_id = iroha_data_model::ChainId::from("test-chain");
 
@@ -113,7 +148,10 @@ fn build_faucet_test_context(prefund_user: bool) -> FaucetTestContext {
         iroha_torii::test_utils::finalize_committed_block(&state, state_block, committed);
     }
 
-    let pow_difficulty_bits = 10;
+    let pow_difficulty_bits = 5;
+    let pow_scrypt_log_n = 4;
+    let pow_scrypt_r = 1;
+    let pow_scrypt_p = 1;
     let pow_max_anchor_age_blocks = 4;
     cfg.torii.faucet = Some(iroha_config::parameters::actual::ToriiFaucet {
         authority: authority_id.clone(),
@@ -121,8 +159,15 @@ fn build_faucet_test_context(prefund_user: bool) -> FaucetTestContext {
         asset_definition_id: asset_definition_id.clone(),
         amount: 25_000_u32.into(),
         pow_difficulty_bits,
+        pow_scrypt_log_n,
+        pow_scrypt_r,
+        pow_scrypt_p,
         pow_max_anchor_age_blocks: std::num::NonZeroU64::new(pow_max_anchor_age_blocks)
             .expect("non-zero faucet pow anchor age"),
+        pow_adaptive_lookback_blocks: 8,
+        pow_adaptive_claims_per_extra_bit: 1,
+        pow_adaptive_max_extra_bits: 2,
+        pow_vrf_seed_enabled: true,
     });
 
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
@@ -194,12 +239,16 @@ fn build_faucet_test_context(prefund_user: bool) -> FaucetTestContext {
         asset_definition_id,
         authority_id,
         user_id,
+        other_user_id,
         pow_difficulty_bits,
+        pow_scrypt_log_n,
+        pow_scrypt_r,
+        pow_scrypt_p,
         pow_max_anchor_age_blocks,
     }
 }
 
-const FAUCET_POW_DOMAIN_SEPARATOR: &[u8] = b"iroha:accounts:faucet:pow:v1";
+const FAUCET_POW_DOMAIN_SEPARATOR: &[u8] = b"iroha:accounts:faucet:pow:v2";
 
 fn leading_zero_bits(bytes: &[u8]) -> u32 {
     let mut total = 0u32;
@@ -214,8 +263,23 @@ fn leading_zero_bits(bytes: &[u8]) -> u32 {
     total
 }
 
-fn solve_faucet_pow(state: &State, account_id: &AccountId, difficulty_bits: u8) -> (u64, String) {
-    let anchor_height = u64::try_from(state.committed_height()).expect("height fits");
+fn faucet_vrf_seed_for_anchor(state: &State, anchor_height: u64) -> Option<[u8; 32]> {
+    state
+        .view()
+        .world()
+        .vrf_epochs()
+        .iter()
+        .filter_map(|(_, record)| {
+            (record.finalized && record.updated_at_height <= anchor_height).then_some(record.seed)
+        })
+        .last()
+}
+
+fn faucet_pow_scrypt_params(log_n: u8, r: u32, p: u32) -> ScryptParams {
+    ScryptParams::new(log_n, r, p, 32).expect("valid test scrypt params")
+}
+
+fn faucet_pow_challenge(state: &State, account_id: &AccountId, anchor_height: u64) -> [u8; 32] {
     let anchor_block = state
         .block_by_height(
             usize::try_from(anchor_height)
@@ -225,16 +289,33 @@ fn solve_faucet_pow(state: &State, account_id: &AccountId, difficulty_bits: u8) 
         )
         .expect("anchor block");
     let anchor_hash = anchor_block.hash();
+    let challenge_salt = faucet_vrf_seed_for_anchor(state, anchor_height);
+
+    let mut hasher = Sha256::new();
+    hasher.update(FAUCET_POW_DOMAIN_SEPARATOR);
+    hasher.update(account_id.to_string().as_bytes());
+    hasher.update(anchor_height.to_be_bytes());
+    hasher.update(anchor_hash.as_ref());
+    if let Some(challenge_salt) = challenge_salt.as_ref() {
+        hasher.update(challenge_salt);
+    }
+    hasher.finalize().into()
+}
+
+fn solve_faucet_pow(
+    state: &State,
+    account_id: &AccountId,
+    difficulty_bits: u8,
+    scrypt_params: &ScryptParams,
+) -> (u64, String) {
+    let anchor_height = u64::try_from(state.committed_height()).expect("height fits");
+    let challenge = faucet_pow_challenge(state, account_id, anchor_height);
 
     for nonce in 0u64.. {
         let nonce_bytes = nonce.to_be_bytes();
-        let mut hasher = Sha256::new();
-        hasher.update(FAUCET_POW_DOMAIN_SEPARATOR);
-        hasher.update(account_id.to_string().as_bytes());
-        hasher.update(anchor_height.to_be_bytes());
-        hasher.update(anchor_hash.as_ref());
-        hasher.update(nonce_bytes);
-        let digest: [u8; 32] = hasher.finalize().into();
+        let mut digest = [0u8; 32];
+        derive_scrypt(&nonce_bytes, &challenge, scrypt_params, &mut digest)
+            .expect("test scrypt digest");
         if leading_zero_bits(&digest) >= u32::from(difficulty_bits) {
             return (anchor_height, hex::encode(nonce_bytes));
         }
@@ -254,11 +335,15 @@ async fn accounts_faucet_transfers_starter_balance_to_empty_account() {
         authority_id,
         user_id,
         pow_difficulty_bits,
+        pow_scrypt_log_n,
+        pow_scrypt_r,
+        pow_scrypt_p,
         ..
     } = build_faucet_test_context(false);
 
+    let scrypt_params = faucet_pow_scrypt_params(pow_scrypt_log_n, pow_scrypt_r, pow_scrypt_p);
     let (pow_anchor_height, pow_nonce_hex) =
-        solve_faucet_pow(&state, &user_id, pow_difficulty_bits);
+        solve_faucet_pow(&state, &user_id, pow_difficulty_bits, &scrypt_params);
     let body = json_object(vec![
         json_entry("account_id", user_id.to_string()),
         json_entry("pow_anchor_height", pow_anchor_height),
@@ -312,11 +397,15 @@ async fn accounts_faucet_rejects_prefunded_accounts() {
         state,
         user_id,
         pow_difficulty_bits,
+        pow_scrypt_log_n,
+        pow_scrypt_r,
+        pow_scrypt_p,
         ..
     } = build_faucet_test_context(true);
 
+    let scrypt_params = faucet_pow_scrypt_params(pow_scrypt_log_n, pow_scrypt_r, pow_scrypt_p);
     let (pow_anchor_height, pow_nonce_hex) =
-        solve_faucet_pow(&state, &user_id, pow_difficulty_bits);
+        solve_faucet_pow(&state, &user_id, pow_difficulty_bits, &scrypt_params);
     let body = json_object(vec![
         json_entry("account_id", user_id.to_string()),
         json_entry("pow_anchor_height", pow_anchor_height),
@@ -344,6 +433,9 @@ async fn accounts_faucet_puzzle_exposes_current_anchor() {
         app,
         state,
         pow_difficulty_bits,
+        pow_scrypt_log_n,
+        pow_scrypt_r,
+        pow_scrypt_p,
         pow_max_anchor_age_blocks,
         ..
     } = build_faucet_test_context(false);
@@ -387,9 +479,29 @@ async fn accounts_faucet_puzzle_exposes_current_anchor() {
     );
     assert_eq!(
         object
+            .get("challenge_salt_hex")
+            .and_then(norito::json::Value::as_str),
+        Some("abababababababababababababababababababababababababababababababab")
+    );
+    assert_eq!(
+        object
+            .get("scrypt_log_n")
+            .and_then(norito::json::Value::as_u64),
+        Some(u64::from(pow_scrypt_log_n))
+    );
+    assert_eq!(
+        object.get("scrypt_r").and_then(norito::json::Value::as_u64),
+        Some(u64::from(pow_scrypt_r))
+    );
+    assert_eq!(
+        object.get("scrypt_p").and_then(norito::json::Value::as_u64),
+        Some(u64::from(pow_scrypt_p))
+    );
+    assert_eq!(
+        object
             .get("algorithm")
             .and_then(norito::json::Value::as_str),
-        Some("sha256-leading-zero-bits-v1")
+        Some("scrypt-leading-zero-bits-v1")
     );
 }
 
@@ -412,4 +524,80 @@ async fn accounts_faucet_rejects_missing_pow_when_required() {
         .await
         .expect("faucet response");
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn accounts_faucet_puzzle_raises_difficulty_after_recent_claim() {
+    let FaucetTestContext {
+        app,
+        state,
+        queue,
+        other_user_id,
+        pow_difficulty_bits,
+        pow_scrypt_log_n,
+        pow_scrypt_r,
+        pow_scrypt_p,
+        ..
+    } = build_faucet_test_context(false);
+
+    let scrypt_params = faucet_pow_scrypt_params(pow_scrypt_log_n, pow_scrypt_r, pow_scrypt_p);
+    let (pow_anchor_height, pow_nonce_hex) =
+        solve_faucet_pow(&state, &other_user_id, pow_difficulty_bits, &scrypt_params);
+    let initial_claim_body = json_object(vec![
+        json_entry("account_id", other_user_id.to_string()),
+        json_entry("pow_anchor_height", pow_anchor_height),
+        json_entry("pow_nonce_hex", pow_nonce_hex),
+    ]);
+    let initial_claim_body =
+        norito::json::to_json(&initial_claim_body).expect("serialize initial faucet request");
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/accounts/faucet")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(initial_claim_body))
+                .unwrap(),
+        )
+        .await
+        .expect("initial faucet response");
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/accounts/faucet/puzzle")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("faucet puzzle response");
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .expect("puzzle body bytes");
+    let payload =
+        norito::json::from_slice::<norito::json::Value>(body.as_ref()).expect("parse puzzle json");
+    let object = payload.as_object().expect("puzzle object");
+    assert_eq!(
+        object
+            .get("difficulty_bits")
+            .and_then(norito::json::Value::as_u64),
+        Some(u64::from(pow_difficulty_bits.saturating_add(1)))
+    );
+    assert_eq!(
+        object
+            .get("anchor_height")
+            .and_then(norito::json::Value::as_u64),
+        Some(u64::try_from(state.committed_height()).expect("height fits"))
+    );
+    let queued = {
+        let state_view = state.view();
+        queue.all_transactions(&state_view).count()
+    };
+    assert!(queued > 0);
 }

@@ -2680,7 +2680,7 @@ fn account_paths() -> Map {
         Value::Object(json_get_operation(
             "Accounts",
             "Fetch the faucet proof-of-work puzzle.",
-            "Return the current decentralized faucet proof-of-work puzzle, anchored to recent committed block data.",
+            "Return the current decentralized faucet proof-of-work puzzle, anchored to recent committed block data; difficulty adapts to recent committed and queued faucet claim volume, the work predicate is memory-hard scrypt, and finalized VRF seed material is required in the challenge when that mode is enabled.",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -2690,7 +2690,7 @@ fn account_paths() -> Map {
         Value::Object(json_post_operation(
             "Accounts",
             "Request faucet funds.",
-            "Transfer a fixed amount of testnet funds to an existing account when the configured faucet is enabled, the account has no positive balance for the configured asset, and a valid faucet proof-of-work solution is supplied when required.",
+            "Transfer a fixed amount of testnet funds to an existing account when the configured faucet is enabled, the account has no positive balance for the configured asset, and a valid memory-hard scrypt proof-of-work solution for the returned queue-aware puzzle is supplied when required.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
