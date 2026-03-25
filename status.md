@@ -1,6 +1,31 @@
 # Status
 
-Last updated: 2026-03-24
+Last updated: 2026-03-25
+
+## 2026-03-25 Follow-up: multisig cancel integration test now waits for committed proposal state
+- Hardened `integration_tests/tests/multisig.rs` so the cancel-route coverage
+  matches Torii's queue-admission semantics instead of assuming immediate
+  post-submit visibility.
+- The shipped behavior in this slice:
+  - the failing
+    `multisig_cancel_route_persists_canceled_terminal_state`
+    integration test now polls `/v1/multisig/proposals/get` until the cancel
+    wrapper proposal is visible in `COLLECTING_SIGNATURES` before issuing the
+    second cancel request; and
+  - the same test now polls the target proposal until it reaches the
+    persisted `CANCELED` terminal state before asserting `terminal_at_ms` and
+    list visibility, removing the earlier race between queue admission and
+    committed world state.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p integration_tests multisig_cancel_route_persists_canceled_terminal_state -- --nocapture`
+    (build/test launch reached the target multisig test, but runtime
+    verification was blocked by an unrelated 4-peer startup failure:
+    `active SNS domain-name lease is required before registering \`wonderland\``)
+- Remaining implementation gap:
+  - fix the default integration-test network genesis/bootstrap path so the
+    new SNS lease invariant does not abort peer startup, then rerun the
+    targeted multisig cancel integration test end to end.
 
 ## 2026-03-24 TAIRA faucet support landed for the app API and testnet profile
 - Added an app-facing faucet slice across

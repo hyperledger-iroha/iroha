@@ -10033,7 +10033,6 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Offline
     target_os = "macos",
     target_os = "windows"
 ))]
-
 #[cfg(any(
     target_os = "android",
     target_os = "linux",
