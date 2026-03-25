@@ -67,7 +67,7 @@ Creez un nouvel actif infiniment mintable appele `coffee` dans le Domaine
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 トランザクションのハッシュの CLI 添付ファイル (例、`0x5f...`)。コンセルベス・ル
@@ -76,7 +76,7 @@ iroha --config defaults/client.toml asset definition register \
 ## 3. 運営者を管理する
 
 生き生きとした活動の量 `(asset definition, account)`。ミンテス250
-`coffee#wonderland` と `$ADMIN_ACCOUNT` の結合:
+`7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` と `$ADMIN_ACCOUNT` の結合:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

@@ -30,7 +30,7 @@ Grafana + Alertmanager para que los revisores de economía y gobernanza auditen 
      --provider-account i105... \
      --treasury-account i105... \
      --reserve-account i105... \
-     --asset-definition xor#sora \
+     --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc \
      --json-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.json
    ```
    El helper del ledger adjunta un bloque `ledger_projection` (renta debida, déficit de reserva,

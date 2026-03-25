@@ -4981,7 +4981,7 @@ mod tests {
         nexus.enabled = true;
         nexus.fees.base_fee = 1;
         nexus.fees.sponsorship_enabled = false;
-        nexus.fees.fee_asset_id = "xor#wonderland".to_string();
+        nexus.fees.fee_asset_id = "4cuvDVPuLBKJyN6dPbRQhmLh68sU".to_string();
         nexus.fees.fee_sink_account_id = sink_id.to_string();
 
         let mut metadata = iroha_data_model::metadata::Metadata::default();
@@ -5030,7 +5030,7 @@ mod tests {
         nexus.enabled = true;
         nexus.fees.base_fee = 1;
         nexus.fees.sponsorship_enabled = true;
-        nexus.fees.fee_asset_id = "xor#wonderland".to_string();
+        nexus.fees.fee_asset_id = "4cuvDVPuLBKJyN6dPbRQhmLh68sU".to_string();
         nexus.fees.fee_sink_account_id = sink_id.to_string();
 
         let mut metadata = iroha_data_model::metadata::Metadata::default();

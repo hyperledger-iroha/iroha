@@ -45,7 +45,7 @@ settlement = "xor_dual_fund"
 metadata.scheduler.teu_capacity = "1500"
 metadata.scheduler.starvation_bound_slots = "6"
 metadata.settlement.buffer_account = "buffer::cbdc_treasury"
-metadata.settlement.buffer_asset = "xor#sora"
+metadata.settlement.buffer_asset = "61CtjvNd9T3THAR65GsMVHr82Bjc"
 metadata.settlement.buffer_capacity_micro = "1500000000"
 metadata.telemetry.contact = "ops@cb.example"
 

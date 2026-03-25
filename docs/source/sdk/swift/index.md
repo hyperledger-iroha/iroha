@@ -404,76 +404,47 @@ schema documented in `offline_allowance.md`.【IrohaSwift/Sources/IrohaSwift/And
 Use the `.notice` payload to surface disclosures/localised copy and fall back to the default handler
 when no custom UI is supplied. Additional risk guidance lives in `docs/source/offline_bearer_mode.md`.
 
-### Offline allowance top-up
+### Offline reserve setup and top-up
 
-Use `ToriiClient.topUpOfflineAllowance` to issue a certificate and register it on-ledger in one call.
-The helper performs `/v1/offline/certificates/issue` followed by `/v1/offline/allowances` and
-verifies that both responses reference the same certificate id:
-
-```swift
-let draft = OfflineWalletCertificateDraft(
-    controller: controllerId,
-    allowance: allowanceCommitment,
-    spendPublicKey: spendPublicKey,
-    attestationReport: attestationReport,
-    issuedAtMs: issuedAtMs,
-    expiresAtMs: expiresAtMs,
-    policy: policy,
-    metadata: metadata
-)
-
-let topUp = try await torii.topUpOfflineAllowance(
-    draft: draft,
-    authority: controllerId,
-    privateKey: controllerPrivateKey
-)
-
-let certificate = try topUp.certificate.decodeCertificate()
-print("Issued certificate", try certificate.certificateIdHex())
-```
-
-If you are using `OfflineWallet`, call `topUpAllowance` to perform the same flow and (by default)
-persist the verdict metadata for refresh warnings. Disable `recordVerdict` if you want to skip
-the local cache update:
+Use `ToriiClient.setupOfflineReserve` to create or fetch the device-bound reserve lineage before a
+wallet attempts offline receive. The response is the authoritative reserve envelope for the current
+`account_id` / `device_id` / `offline_public_key` tuple:
 
 ```swift
-let wallet = try OfflineWallet(toriiClient: torii)
-let topUp = try await wallet.topUpAllowance(
-    draft: draft,
-    authority: controllerId,
-    privateKey: controllerPrivateKey,
-    recordVerdict: true
-)
+let envelope = try await torii.setupOfflineReserve(.init(
+    accountId: controllerId,
+    deviceId: deviceId,
+    offlinePublicKey: offlinePublicKey,
+    operationId: UUID().uuidString,
+    attestation: attestationPayload
+))
+
+print("reserve id", envelope.reserveState.reserveId)
+print("balance", envelope.reserveState.balance)
 ```
 
-If your app issues certificates separately (for example, to inspect the response before registration),
-you can still update the local verdict cache directly:
+To move value offline, call `topUpOfflineReserve`. Torii debits the online balance, updates the
+reserve, and returns the new authoritative envelope. Renewals use `renewOfflineReserve` for the
+same reserve lineage and never mint value:
 
 ```swift
-let issued = try await torii.issueOfflineCertificate(.init(certificate: draft))
-let wallet = try OfflineWallet(toriiClient: torii)
-try wallet.recordVerdictMetadata(from: issued)
+let topUp = try await torii.topUpOfflineReserve(.init(
+    reserveId: envelope.reserveState.reserveId,
+    amount: "100.00",
+    operationId: UUID().uuidString,
+    attestation: attestationPayload
+))
+
+let renewed = try await torii.renewOfflineReserve(.init(
+    reserveId: topUp.reserveState.reserveId,
+    operationId: UUID().uuidString,
+    attestation: attestationPayload
+))
 ```
 
-For renewals, call `topUpOfflineAllowanceRenewal`, which targets
-`/v1/offline/certificates/{certificate_id_hex}/renew/issue` and
-`/v1/offline/allowances/{certificate_id_hex}/renew`:
-
-```swift
-let renewal = try await torii.topUpOfflineAllowanceRenewal(
-    certificateIdHex: existingCertificateId,
-    draft: draft,
-    authority: controllerId,
-    privateKey: controllerPrivateKey
-)
-```
-
-`OfflineWallet.topUpAllowanceRenewal` mirrors the same flow and can optionally refresh the verdict
-cache by leaving `recordVerdict` enabled.
-
-If you already have a signed certificate (for example, issued out-of-band), call
-`ToriiClient.registerOfflineAllowance` or `ToriiClient.renewOfflineAllowance` directly instead of
-the top-up helpers.
+Use `syncOfflineReserve`, `defundOfflineReserve`, and `getOfflineRevocationBundle()` for the rest of
+the reserve lifecycle. The pre-release allowance/certificate/settlement helpers were removed from
+the public Torii client surface.
 
 ### Offline audit logging
 
@@ -503,67 +474,23 @@ try wallet.clearAuditLog()
 `recordTransferAudit(_:)` inspects the transfer payload, falls back to receiver/deposit metadata when receipts are missing,
 and keeps the log deterministic so the OA5.1 audit toggle can be flipped per jurisdiction without bespoke plumbing.
 
-### Verdict metadata journal
+### Revocation bundle journal
 
-Offline allowances now return attestation verdict metadata (`verdict_id_hex`, `refresh_at_ms`,
-`policy_expires_at_ms`, etc.) plus a normalized countdown helper
-(`deadline_kind`, `deadline_state`, `deadline_ms`, `deadline_ms_remaining`). `OfflineWallet`
-persists those fields when you call `fetchAllowancesRecordingVerdicts` (or invoke
-`recordVerdictMetadata(from:)`) and exposes countdown warnings so apps can nudge users before cached
-attestation tokens expire:
+Offline reserves now use the signed revocation bundle returned by `/v1/offline/revocations` plus the
+current `OfflineSpendAuthorization` carried in each reserve envelope. Persist the latest envelope and
+revocation bundle together so wallets can fail closed for send when authorization or revocation
+freshness expires.
 
 ```swift
-let allowances = try await wallet.fetchAllowancesRecordingVerdicts(
-    params: ToriiOfflineListParams(limit: 50))
-
-// Surface refresh/expiry warnings in the UI.
-let warnings = wallet.verdictWarnings(warningThresholdMs: 86_400_000) // 24h
-for warning in warnings {
-    banner.show(title: warning.headline, message: warning.details)
-}
-
-if let specific = wallet.verdictWarning(for: "deadbeef",
-                                        warningThresholdMs: 3_600_000 /* 1h */) {
-    logger.notice("Certificate \(specific.certificateIdHex) deadline: \(specific.details)")
-}
-
-print("Journal stored at \(wallet.verdictJournalURL.path)")
+let bundle = try await torii.getOfflineRevocationBundle()
+print("revocation bundle expires", bundle.expiresAtMs)
 ```
-
-Call `ensureFreshVerdict(for:attestationNonceHex:)` before submitting cached attestations back to Torii.
-The helper consults the journal, compares `attestation_nonce_hex`, and throws `OfflineVerdictError`
-when the refresh deadline, policy expiry, or certificate expiry has elapsed:
-
-```swift
-do {
-    try wallet.ensureFreshVerdict(for: "deadbeef", attestationNonceHex: cachedNonce)
-} catch let OfflineVerdictError.expired(_, kind, deadline) {
-    throw OfflineError.cachedVerdictExpired(kind: kind, deadlineMs: deadline)
-} catch let OfflineVerdictError.nonceMismatch(_, expected, provided) {
-    throw OfflineError.nonceMismatch(expected: expected, provided: provided)
-}
-```
-
-Warnings indicate whether a refresh deadline or policy/certificate expiry triggered the alert, include the canonical ISO
-timestamp, and provide the recorded remaining amount + verdict id so operators can trace every prompt back to the exact
-allowance state. The journal lives alongside the audit log under `Documents/offline_verdict_journal.json`, and
-`verdictMetadata(for:)` exposes the cached struct whenever UIs need to display the stored controller/nonce details.
-
-Each cached entry also records the integrity policy slug (`metadata.integrityPolicy`) and, for OA10.3 provisioning
-allowances, the inspector manifest details (`metadata.provisionedMetadata`). Wallets can surface the inspector public
-key, manifest schema/version, optional manifest digest, and the configured `max_manifest_age_ms` without re-parsing the
-raw certificate JSON before toggling offline functionality or presenting regulator-facing diagnostics.
 
 ### Counter journal
 
-`/v1/offline/summaries` exposes the monotonic counter checkpoints for App Attest and Android marker-key series. Use
-`fetchSummariesRecordingCounters` to persist those checkpoints into `OfflineCounterJournal` (stored alongside the audit
-log under `Documents/offline_counter_journal.json`) and `counterCheckpoint(for:)` or `counterSnapshot()` to read the
-latest values.
-
-`buildSignedReceipt(...)` advances the stored counters automatically using the provided `OfflinePlatformProof` and
-throws `OfflineCounterError` when a counter jump or summary hash mismatch is detected, so wallets can fail fast before
-bundling receipts.
+Reserve operations and offline transfer receipts continue to use monotonic App Attest / marker
+counters. Persist the counters alongside the reserve envelope and transfer journal; there is no
+separate counter-summary endpoint in the reserve cutover.
 
 ## SoraFS orchestrator client
 

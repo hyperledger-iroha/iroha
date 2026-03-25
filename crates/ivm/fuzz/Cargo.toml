@@ -4,7 +4,7 @@ version = "2.0.0-rc.2.0"
 publish = false
 edition = "2024"
 
-[package.metadata.cargo-fuzz]
+[package.metadata]
 cargo-fuzz = true
 
 [dependencies]

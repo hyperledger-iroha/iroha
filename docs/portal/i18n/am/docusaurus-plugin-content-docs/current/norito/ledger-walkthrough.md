@@ -69,7 +69,7 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI የገባውን የግብይት ሃሽ ያትማል (ለምሳሌ፡-
@@ -78,7 +78,7 @@ CLI የገባውን የግብይት ሃሽ ያትማል (ለምሳሌ፡-
 ## 3. ሚንት ክፍሎች ወደ ኦፕሬተር መለያ
 
 የንብረት መጠን በ`(asset definition, account)` ጥንድ ስር ይኖራሉ። ሚንት 250
-የ `coffee#wonderland` ወደ I18NI0000033X ክፍሎች:
+የ `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` ወደ I18NI0000033X ክፍሎች:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

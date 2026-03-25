@@ -12481,7 +12481,7 @@ mod tests {
         );
         policy.insert(
             "bond_asset_id".to_string(),
-            norito::json::Value::String("xor#sora".to_string()),
+            norito::json::Value::String("61CtjvNd9T3THAR65GsMVHr82Bjc".to_string()),
         );
         policy.insert(
             "uptime_floor_per_mille".to_string(),
@@ -14731,7 +14731,7 @@ mod tests {
         assert_eq!(state.treasury_account, sample_account_id("treasury"));
         assert!(state.payouts.is_empty());
         assert!(state.disputes.is_empty());
-        assert_eq!(state.reward_config.policy.bond_asset_id, "xor#sora");
+        assert_eq!(state.reward_config.policy.bond_asset_id, "61CtjvNd9T3THAR65GsMVHr82Bjc");
     }
 
     #[test]

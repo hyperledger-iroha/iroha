@@ -208,9 +208,7 @@ impl ExplorerAccountDto {
             i105_address: address
                 .to_i105_for_discriminant(network_prefix)
                 .unwrap_or_else(|_| entry.id().to_string()),
-            i105_default_address: address
-                .to_i105_fullwidth()
-                .unwrap_or_else(|_| entry.id().to_string()),
+            i105_default_address: address.to_i105().unwrap_or_else(|_| entry.id().to_string()),
             network_prefix,
             metadata: metadata_to_json(entry.value().metadata()),
             owned_domains: counts.domains,

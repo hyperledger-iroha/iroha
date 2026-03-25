@@ -59,8 +59,8 @@ client = ToriiClient(
     torii_url="http://127.0.0.1:8080",
 )
 
-# 1) Register coffee#wonderland if absent
-asset_def = AssetDefinitionId.from_str("coffee#wonderland")
+# 1) Register 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ if absent
+asset_def = AssetDefinitionId.from_str("7Sp2j6zDvJFnMoscAiMaWbWHRDBZ")
 register_instruction = Instruction.register_asset_definition_numeric(asset_def)
 
 # 2) Mint 250 units into admin

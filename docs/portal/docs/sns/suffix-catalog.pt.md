@@ -31,7 +31,7 @@ status.
 | `status` | enum | `active`, `paused` ou `revoked` descrevendo a prontidao de lancamento. |
 | `steward_account` | string | Conta responsavel pela stewardship (corresponde aos hooks de politica do registrar). |
 | `fund_splitter_account` | string | Conta que recebe pagamentos antes do roteamento conforme `fee_split`. |
-| `payment_asset_id` | string | Ativo usado para settlement (`xor#sora` para a coorte inicial). |
+| `payment_asset_id` | string | Ativo usado para settlement (`61CtjvNd9T3THAR65GsMVHr82Bjc` para a coorte inicial). |
 | `min_term_years` / `max_term_years` | integer | Limites de termo de compra da politica. |
 | `grace_period_days` / `redemption_period_days` | integer | Janelas de seguranca de renovacao aplicadas pelo Torii. |
 | `referral_cap_bps` | integer | Carve-out maximo de referral permitido pela governanca (basis points). |
@@ -44,9 +44,9 @@ status.
 
 | Sufixo | ID (`hex`) | Steward | Fund splitter | Status | Ativo de pagamento | Limite de referral (bps) | Termo (min - max anos) | Grace / Redemption (dias) | Tiers de preco (regex -> preco base / leilao) | Labels reservados | Divisao de fees (T/S/R/E bps) | Versao de politica |
 |--------|------------|---------|---------------|--------|-------------------|--------------------------|------------------------|---------------------------|-----------------------------------------------|------------------|------------------------------|-------------------|
-| `.sora` | `0x0001` | `i105...` | `i105...` | Ativo | `xor#sora` | 500 | 1-5 | 30 / 60 | `T0: ^[a-z0-9]{3,}$ -> 120 XOR (Vickrey)` | `treasury -> i105...` | `7000 / 3000 / 1000 / 0` | 1 |
-| `.nexus` | `0x0002` | `i105...` | `i105...` | Pausado | `xor#sora` | 300 | 1-3 | 15 / 30 | `T0: ^[a-z0-9]{4,}$ -> 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ -> 4000 XOR (Dutch floor 500)` | `treasury -> i105...`, `guardian -> i105...` | `6500 / 2500 / 800 / 200` | 2 |
-| `.dao` | `0x0003` | `i105...` | `i105...` | Revogado | `xor#sora` | 0 | 1-2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ -> 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
+| `.sora` | `0x0001` | `i105...` | `i105...` | Ativo | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 500 | 1-5 | 30 / 60 | `T0: ^[a-z0-9]{3,}$ -> 120 XOR (Vickrey)` | `treasury -> i105...` | `7000 / 3000 / 1000 / 0` | 1 |
+| `.nexus` | `0x0002` | `i105...` | `i105...` | Pausado | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 300 | 1-3 | 15 / 30 | `T0: ^[a-z0-9]{4,}$ -> 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ -> 4000 XOR (Dutch floor 500)` | `treasury -> i105...`, `guardian -> i105...` | `6500 / 2500 / 800 / 200` | 2 |
+| `.dao` | `0x0003` | `i105...` | `i105...` | Revogado | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 0 | 1-2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ -> 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
 
 ## Trecho JSON
 
@@ -60,13 +60,13 @@ status.
       "suffix_id": 1,
       "status": "active",
       "fund_splitter_account": "i105...",
-      "payment_asset_id": "xor#sora",
+      "payment_asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
       "referral_cap_bps": 500,
       "pricing": [
         {
           "tier_id": 0,
           "label_regex": "^[a-z0-9]{3,}$",
-          "base_price": {"asset_id": "xor#sora", "amount": 120},
+          "base_price": {"asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc", "amount": 120},
           "auction_kind": "vickrey_commit_reveal",
           "min_duration_years": 1,
           "max_duration_years": 5

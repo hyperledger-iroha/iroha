@@ -54,7 +54,7 @@ fn run_block_and_events(
     Vec<iroha_data_model::events::prelude::EventBox>,
     iroha_core::state::State,
 ) {
-    // Build a fresh world with default sandbox-like setup (rose#wonderland).
+    // Build a fresh world with default sandbox-like setup (62Fk4FPcMuLvW5QjDGNF2a4jAmjM).
     let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
     let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
     let domain_id: DomainId = "wonderland".parse().unwrap();

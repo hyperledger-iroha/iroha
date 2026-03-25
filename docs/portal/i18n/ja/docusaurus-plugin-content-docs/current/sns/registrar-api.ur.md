@@ -107,15 +107,15 @@ Struct ReservedAssignmentRequestV1 {
 
 |エンドポイント | और देखेंペイロード |評価 |
 |----------|----------|----------|----------|
-| `/v1/sns/registrations` |投稿 | `RegisterNameRequestV1` | और देखें価格帯のレベル 支払い/ガバナンスの証明 レベル レジストリ イベントの出力 レベル|
-| `/v1/sns/registrations/{selector}/renew` |投稿 | `RenewNameRequestV1` | دت بڑھاتا ہے۔猶予/償還ウィンドウ پالیسی سے 猶予/償還ウィンドウ نافذ کرتا ہے۔ |
-| `/v1/sns/registrations/{selector}/transfer` |投稿 | `TransferNameRequestV1` |承認 لگنے کے 所有権 منتقل کرتا ہے۔ |
-| `/v1/sns/registrations/{selector}/controllers` |置く | `UpdateControllersRequestV1` |コントローラー署名済みアカウントのアドレス کی توثیق کرتا ہے۔ |
-| `/v1/sns/registrations/{selector}/freeze` |投稿 | `FreezeNameRequestV1` |保護者/評議会の凍結۔ガーディアン チケット ガバナンス ドケット حوالہ درکار۔ |
-| `/v1/sns/registrations/{selector}/freeze` |削除 | `GovernanceHookV1` |修復 凍結解除評議会オーバーライド ریکارڈ ہونے کو یقینی بناتا ہے۔ |
+| `/v1/sns/names` |投稿 | `RegisterNameRequestV1` | और देखें価格帯のレベル 支払い/ガバナンスの証明 レベル レジストリ イベントの出力 レベル|
+| `/v1/sns/names/{namespace}/{literal}/renew` |投稿 | `RenewNameRequestV1` | دت بڑھاتا ہے۔猶予/償還ウィンドウ پالیسی سے 猶予/償還ウィンドウ نافذ کرتا ہے۔ |
+| `/v1/sns/names/{namespace}/{literal}/transfer` |投稿 | `TransferNameRequestV1` |承認 لگنے کے 所有権 منتقل کرتا ہے۔ |
+| `/v1/sns/names/{namespace}/{literal}/controllers` |置く | `UpdateControllersRequestV1` |コントローラー署名済みアカウントのアドレス کی توثیق کرتا ہے۔ |
+| `/v1/sns/names/{namespace}/{literal}/freeze` |投稿 | `FreezeNameRequestV1` |保護者/評議会の凍結۔ガーディアン チケット ガバナンス ドケット حوالہ درکار۔ |
+| `/v1/sns/names/{namespace}/{literal}/freeze` |削除 | `GovernanceHookV1` |修復 凍結解除評議会オーバーライド ریکارڈ ہونے کو یقینی بناتا ہے۔ |
 | `/v1/sns/reserved/{selector}` |投稿 | `ReservedAssignmentRequestV1` |予約された名前 管理人/評議会 割り当て 割り当て|
 | `/v1/sns/policies/{suffix_id}` |入手 | -- | `SuffixPolicyV1` موجودہ حاصل کرتا ہے (キャッシュ可能)۔ |
-| `/v1/sns/registrations/{selector}` |入手 | -- | موجودہ `NameRecordV1` + موثر حالت (アクティブ、グレース وغیرہ) واپس کرتا ہے۔ |
+| `/v1/sns/names/{namespace}/{literal}` |入手 | -- | موجودہ `NameRecordV1` + موثر حالت (アクティブ、グレース وغیرہ) واپس کرتا ہے۔ |
 
 **セレクター エンコーディング:** `{selector}` パス セグメント I105 圧縮 (`sora`) 標準 16 進数 ADDR-5 の値。 Torii `NameSelectorV1` 正規化する
 
@@ -130,7 +130,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -155,7 +155,7 @@ iroha sns policy --suffix-id 1
 iroha sns renew \
   --selector makoto.sora \
   --term-years 1 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 120 \
   --payment-settlement '"renewal-settlement"' \
   --payment-signature '"steward-signature"'
@@ -178,7 +178,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` میں درست `GovernanceHookV1` ریکارڈ ہونا چاہیے (提案ID、投票ハッシュ、スチュワード/保護者の署名)۔ `/v1/sns/registrations/{selector}/...` エンドポイントのテスト ベータ オペレーターのテスト Torii サーフェスのリハーサルSDK の概要
+`--governance-json` میں درست `GovernanceHookV1` ریکارڈ ہونا چاہیے (提案ID、投票ハッシュ、スチュワード/保護者の署名)۔ `/v1/sns/names/{namespace}/{literal}/...` エンドポイントのテスト ベータ オペレーターのテスト Torii サーフェスのリハーサルSDK の概要
 
 ## 4. gRPC サービス
 
@@ -248,7 +248,7 @@ Torii 証明 ہوئے چیک کرتا ہے:
 
 1. Guardian `FreezeNameRequestV1` 送信 کرتا ہے جس میں Incident id کا حوالہ دینے والا ticket ہوتا ہے۔
 2. Torii 記録 `NameStatus::Frozen` منتقل کرتا ہے، `NameFrozen` 放出 کرتا ہے۔
-3. 修復評議会による無効化演算子 DELETE `/v1/sns/registrations/{selector}/freeze` کو `GovernanceHookV1` کے ساتھ بھیجتا ہے۔
+3. 修復評議会による無効化演算子 DELETE `/v1/sns/names/{namespace}/{literal}/freeze` کو `GovernanceHookV1` کے ساتھ بھیجتا ہے۔
 4. Torii オーバーライド検証 `NameUnfrozen` 発行
 
 ## 7. 検証コードとエラーコード

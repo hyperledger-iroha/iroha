@@ -30,9 +30,9 @@ iroha --config client.toml --output \
   --initiator i105... \
   --counterparty i105... \
   --custodian i105... \
-  --cash-asset usd#wonderland \
+  --cash-asset 7EAD8EFYUx1aVKZPUU1fyKvr8dF1 \
   --cash-quantity 1000 \
-  --collateral-asset bond#wonderland \
+  --collateral-asset 4fEiy2n5VMFVfi6BzDJge519zAzg \
   --collateral-quantity 1050 \
   --rate-bps 250 \
   --maturity-timestamp-ms 1704000000000 \
@@ -45,9 +45,9 @@ iroha --config client.toml --output \
   --agreement-id daily_repo \
   --initiator i105... \
   --counterparty i105... \
-  --cash-asset usd#wonderland \
+  --cash-asset 7EAD8EFYUx1aVKZPUU1fyKvr8dF1 \
   --cash-quantity 1005 \
-  --collateral-asset bond#wonderland \
+  --collateral-asset 4fEiy2n5VMFVfi6BzDJge519zAzg \
   --collateral-quantity 1055 \
   --settlement-timestamp-ms 1704086400000
 
@@ -83,9 +83,9 @@ from iroha_python import (
 
 client = create_torii_client("client.toml")
 
-cash = RepoCashLeg(asset_definition_id="usd#wonderland", quantity="1000")
+cash = RepoCashLeg(asset_definition_id="7EAD8EFYUx1aVKZPUU1fyKvr8dF1", quantity="1000")
 collateral = RepoCollateralLeg(
-    asset_definition_id="bond#wonderland",
+    asset_definition_id="4fEiy2n5VMFVfi6BzDJge519zAzg",
     quantity="1050",
     metadata={"isin": "ABC123"},
 )
@@ -125,12 +125,12 @@ next_margin = record.next_margin_check_after(at_timestamp_ms=now_ms)
 iroha --config client.toml --output \
   settlement dvp \
   --settlement-id trade_dvp \
-  --delivery-asset bond#wonderland \
+  --delivery-asset 4fEiy2n5VMFVfi6BzDJge519zAzg \
   --delivery-quantity 10 \
   --delivery-from i105... \
   --delivery-to i105... \
   --delivery-instrument-id US0378331005 \
-  --payment-asset usd#wonderland \
+  --payment-asset 7EAD8EFYUx1aVKZPUU1fyKvr8dF1 \
   --payment-quantity 1000 \
   --payment-from i105... \
   --payment-to i105... \
@@ -143,11 +143,11 @@ iroha --config client.toml --output \
 iroha --config client.toml --output \
   settlement pvp \
   --settlement-id trade_pvp \
-  --primary-asset usd#wonderland \
+  --primary-asset 7EAD8EFYUx1aVKZPUU1fyKvr8dF1 \
   --primary-quantity 500 \
   --primary-from i105... \
   --primary-to i105... \
-  --counter-asset eur#wonderland \
+  --counter-asset 5tPkFK6s2zUcd1qUHyTmY7fDVa2n \
   --counter-quantity 460 \
   --counter-from i105... \
   --counter-to i105... \
@@ -180,14 +180,14 @@ from iroha_python import (
 
 draft = TransactionDraft(TransactionConfig(chain_id="dev-chain", authority="i105..."))
 delivery = SettlementLeg(
-    asset_definition_id="bond#wonderland",
+    asset_definition_id="4fEiy2n5VMFVfi6BzDJge519zAzg",
     quantity="10",
     from_account="i105...",
     to_account="i105...",
     metadata={"isin": "ABC123"},
 )
 payment = SettlementLeg(
-    asset_definition_id="usd#wonderland",
+    asset_definition_id="7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
     quantity="1000",
     from_account="i105...",
     to_account="i105...",
@@ -198,13 +198,13 @@ draft.settlement_dvp("trade_dvp", delivery, payment, plan=plan, metadata={"desk"
 draft.settlement_pvp(
     "trade_pvp",
     SettlementLeg(
-        asset_definition_id="usd#wonderland",
+        asset_definition_id="7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
         quantity="500",
         from_account="i105...",
         to_account="i105...",
     ),
     SettlementLeg(
-        asset_definition_id="eur#wonderland",
+        asset_definition_id="5tPkFK6s2zUcd1qUHyTmY7fDVa2n",
         quantity="460",
         from_account="i105...",
         to_account="i105...",

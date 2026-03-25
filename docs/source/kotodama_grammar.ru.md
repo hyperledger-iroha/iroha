@@ -217,7 +217,7 @@ register_trigger wake {
 
 Макросы прелюда дают более короткие алиасы и inline‑валидацию для этих конструкторов:
 - `account!("i105...")`, `account_id!("i105...")`
-- `asset_definition!("rose#wonderland")`, `asset_id!("rose#wonderland")`
+- `asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`, `asset_id!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`
 - `domain!("wonderland")`, `domain_id!("wonderland")`
 - `name!("example")`
 - `json!("{\"hello\":\"world\"}")` или структурированные литералы типа `json!{ hello: "world" }`

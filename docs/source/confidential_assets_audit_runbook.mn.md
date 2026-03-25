@@ -32,7 +32,7 @@ translator: machine-google-reviewed
   сонголтоор нэг хөрөнгийн тодорхойлолтыг хамрах хүрээг хамарна. CLI жишээ:
 
   ```bash
-  iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "rose#wonderland" } }'
+  iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM" } }'
   ```
 
 - Бодлогын мета өгөгдөл болон хүлээгдэж буй шилжилтийг дамжуулан авах боломжтой

@@ -93,7 +93,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
       "term_years": 2,
       "pricing_class_hint": null,
       "payment": {
-        "asset_id":"xor#sora",
+        "asset_id":"61CtjvNd9T3THAR65GsMVHr82Bjc",
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
@@ -123,7 +123,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v1/sns/names
   done
 ```
 
@@ -143,7 +143,7 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- གྲོགས་རམ་འབད་མི་གིས་ ཞུ་བ་རེ་ལུ་ `POST /v1/sns/registrations` གཅིག་དང་ མངལ་སྟོངམ་བཏོན་མི་ཚུ་ལུ་ བཀོདཔ་ཨིན།
+- གྲོགས་རམ་འབད་མི་གིས་ ཞུ་བ་རེ་ལུ་ `POST /v1/sns/names` གཅིག་དང་ མངལ་སྟོངམ་བཏོན་མི་ཚུ་ལུ་ བཀོདཔ་ཨིན།
   ཨེཆ་ཊི་ཊི་པི་འཛོལ་བ་འགོ་དང་པ་འདི་ཨིན། ལན་ཚུ་ དྲན་ཐོ་འགྲུལ་ལམ་ལུ་ NDJSON སྦེ་ མཐུད་ཡོདཔ་ཨིན།
   དྲན་ཐོ་ཚུ།
 - I18NI000000064X འདི་གི་ཤུལ་ལས་ I18NI0000000065X འདི་ རེ་རེ་ལུ་འདྲི་དཔྱད་འབདཝ་ཨིན།
@@ -233,7 +233,7 @@ docs/portal/scripts/sns_bulk_release.sh \
 # TYPE sns_bulk_release_requests_total gauge
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
-sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
+sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="61CtjvNd9T3THAR65GsMVHr82Bjc"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 

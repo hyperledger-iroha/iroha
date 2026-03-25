@@ -66,7 +66,7 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI جمع کروائے گئے ٹرانزیکشن کی ہیش پرنٹ کرتا ہے (مثال کے طور پر ، `0x5f...`)۔ بعد میں حیثیت کی جانچ پڑتال کے لئے اسے محفوظ کریں۔
@@ -74,7 +74,7 @@ CLI جمع کروائے گئے ٹرانزیکشن کی ہیش پرنٹ کرتا 
 ## 3. آپریٹر کے اکاؤنٹ میں کیش یونٹ
 
 اثاثہ کی رقم جوڑی `(asset definition, account)` کے تحت رہتی ہے۔ پالنا
-`$ADMIN_ACCOUNT` میں `coffee#wonderland` کے 250 یونٹ:
+`$ADMIN_ACCOUNT` میں `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` کے 250 یونٹ:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

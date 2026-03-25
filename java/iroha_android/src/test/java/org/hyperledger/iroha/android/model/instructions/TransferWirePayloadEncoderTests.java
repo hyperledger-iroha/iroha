@@ -267,7 +267,7 @@ public final class TransferWirePayloadEncoderTests {
     boolean threw = false;
     try {
       TransferWirePayloadEncoder.encodeAssetTransfer(
-          "rose#wonderland#" + destinationAccountId,
+          "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#" + destinationAccountId,
           "10",
           destinationAccountId);
     } catch (final IllegalArgumentException ex) {

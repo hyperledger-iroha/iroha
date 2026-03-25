@@ -1,4 +1,4 @@
-// Mint `rose#wonderland` (canonical asset-definition address below) for the trigger authority.
+// Mint `62Fk4FPcMuLvW5QjDGNF2a4jAmjM` (canonical asset-definition address below) for the trigger authority.
 // Amount is taken from trigger args (MintRoseArgs.val) when available.
 seiyaku MintRoseTrigger {
   kotoage fn run() permission(Admin) {

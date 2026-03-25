@@ -8,14 +8,14 @@ final class ToriiOfflineResponseTests: XCTestCase {
           "receipts_root_hex": "deadbeef",
           "receipt_count": 2,
           "total_amount": 42,
-          "asset_id": "rose#wonderland"
+          "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
         }
         """.data(using: .utf8)!
         let decoded = try JSONDecoder().decode(ToriiOfflineSpendReceiptsSubmitResponse.self, from: payload)
         XCTAssertEqual(decoded.receiptsRootHex, "deadbeef")
         XCTAssertEqual(decoded.receiptCount, 2)
         XCTAssertEqual(decoded.totalAmount, "42")
-        XCTAssertEqual(decoded.assetId, "rose#wonderland")
+        XCTAssertEqual(decoded.assetId, "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
     }
 
     func testOfflineStateResponseDecodesArrays() throws {

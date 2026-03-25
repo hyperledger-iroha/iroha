@@ -89,11 +89,11 @@ sozlangan chegaralar ichida:
 - `iroha_zk_verifier_cache_events_total{cache,event}`
 
 Kalibrlash ish yukidan oldin va keyin qiymatlarni darhol yozib oling. A
-har bir aktiv uchun bitta buyruq etarli; `xor#wonderland` uchun misol:
+har bir aktiv uchun bitta buyruq etarli; `4cuvDVPuLBKJyN6dPbRQhmLh68sU` uchun misol:
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \
-  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="xor#wonderland"}'
+  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="4cuvDVPuLBKJyN6dPbRQhmLh68sU"}'
 ```
 
 Xom chiqishni (yoki Prometheus suratini) kalibrlash chiptasiga ulang, shunda

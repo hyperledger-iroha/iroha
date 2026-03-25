@@ -86,8 +86,8 @@ fn main() -> Result<()> {
 
     let client = Client::new(cfg)?;
 
-    // 1) Register coffee#wonderland if it does not exist yet.
-    let asset_definition_id = AssetDefinitionId::from_str("coffee#wonderland")?;
+    // 1) Register 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ if it does not exist yet.
+    let asset_definition_id = AssetDefinitionId::from_str("7Sp2j6zDvJFnMoscAiMaWbWHRDBZ")?;
     client.submit_blocking(Register::asset_definition(
         AssetDefinition::numeric(asset_definition_id.clone()),
     ))?;
@@ -123,7 +123,7 @@ Quyidagiga o'xshash jurnal chiqishini ko'rishingiz kerak:
 
 ```
 i105... now holds:
-  50 units of coffee#wonderland
+  50 units of 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 Agar aktiv ta'rifi allaqachon mavjud bo'lsa, ro'yxatga olish chaqiruvi a ni qaytaradi

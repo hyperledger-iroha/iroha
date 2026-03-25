@@ -29,7 +29,7 @@ translator: machine-google-reviewed
 ## 1. 註冊資產定義（CLI）
 
 ```bash
-iroha --config defaults/client.toml asset definition register --id coffee#wonderland
+iroha --config defaults/client.toml asset definition register --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 ## 2.導出憑證

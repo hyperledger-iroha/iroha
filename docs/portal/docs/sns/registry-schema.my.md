@@ -134,7 +134,7 @@ Enum AuctionKind {
 | `suffix` | `AsciiString` | ဥပမာ၊ `sora`။ |
 | `steward` | `AccountId` | အုပ်ချုပ်မှု ပဋိဉာဉ်တွင် သတ်မှတ်ထားသော ဘဏ္ဍာစိုး။ |
 | `status` | `SuffixStatus` | `Active`, `Paused`, `Revoked`။ |
-| `payment_asset_id` | `AsciiString` | ပုံသေဖြေရှင်းမှုပိုင်ဆိုင်မှုသတ်မှတ်သူ (ဥပမာ `xor#sora`)။ |
+| `payment_asset_id` | `AsciiString` | ပုံသေဖြေရှင်းမှုပိုင်ဆိုင်မှုသတ်မှတ်သူ (ဥပမာ `61CtjvNd9T3THAR65GsMVHr82Bjc`)။ |
 | `pricing` | `Vec<PriceTierV1>` | အဆင့်အလိုက်စျေးနှုန်းဖော်ကိန်းများနှင့် ကြာချိန်စည်းမျဉ်းများ။ |
 | `min_term_years` | `u8` | အထပ်ထပ်မခွဲခြားဘဲ ဝယ်ယူထားသော သက်တမ်းအတွက် အထပ်။ |
 | `grace_period_days` | `u16` | ပုံသေ 30. |
@@ -296,7 +296,7 @@ SuffixPolicyV1 {
     suffix: "sora",
     steward: "i105...",
     status: Active,
-    payment_asset_id: "xor#sora",
+    payment_asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc",
     pricing: [
         PriceTierV1 { tier_id:0, label_regex:"^[a-z0-9]{3,}$", base_price:"120 XOR", auction_kind:VickreyCommitReveal, dutch_floor:None, min_duration_years:1, max_duration_years:5 },
         PriceTierV1 { tier_id:1, label_regex:"^[a-z]{1,2}$", base_price:"10_000 XOR", auction_kind:DutchReopen, dutch_floor:Some("1_000 XOR"), min_duration_years:1, max_duration_years:3 }

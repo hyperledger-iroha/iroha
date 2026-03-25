@@ -643,11 +643,8 @@ impl AccountId {
                 Ok((Self { controller }, AccountAddressSource::Encoded))
             }
             Err(
-                AccountAddressError::MissingI105Sentinel
-                | AccountAddressError::I105TooShort
+                AccountAddressError::I105TooShort
                 | AccountAddressError::InvalidI105Char(_)
-                | AccountAddressError::InvalidI105Base
-                | AccountAddressError::InvalidI105Digit(_)
                 | AccountAddressError::UnsupportedAddressFormat
                 | AccountAddressError::InvalidLength
                 | AccountAddressError::ChecksumMismatch,

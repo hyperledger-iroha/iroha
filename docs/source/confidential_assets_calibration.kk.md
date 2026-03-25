@@ -89,11 +89,11 @@ Linux хостында немесе консоль шығысын шығарыл
 - `iroha_zk_verifier_cache_events_total{cache,event}`
 
 Мәндерді калибрлеу жұмыс жүктемесінің алдында және кейін бірден жазыңыз. А
-актив үшін бір пәрмен жеткілікті; `xor#wonderland` үшін мысал:
+актив үшін бір пәрмен жеткілікті; `4cuvDVPuLBKJyN6dPbRQhmLh68sU` үшін мысал:
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \
-  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="xor#wonderland"}'
+  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="4cuvDVPuLBKJyN6dPbRQhmLh68sU"}'
 ```
 
 Шикі шығысты (немесе Prometheus суретін) калибрлеу билетіне бекітіңіз.

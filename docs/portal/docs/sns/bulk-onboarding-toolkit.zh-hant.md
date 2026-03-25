@@ -49,7 +49,7 @@ Torii 或 CLI。助手驗證前面的每一行，發出兩個
 | `suffix_id` |是的 |數字後綴標識符（十進製或 `0x` 十六進制）。 |
 | `owner` |是的 | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` |是的 |整數 `1..=255`。 |
-| `payment_asset_id` |是的 |結算資產（例如 `xor#sora`）。 |
+| `payment_asset_id` |是的 |結算資產（例如 `61CtjvNd9T3THAR65GsMVHr82Bjc`）。 |
 | `payment_gross` / `payment_net` |是的 |表示資產本機單位的無符號整數。 |
 | `settlement_tx` |是的 |描述支付交易或哈希的 JSON 值或文字字符串。 |
 | `payment_payer` |是的 |授權付款的AccountId。 |
@@ -95,7 +95,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
       "term_years": 2,
       "pricing_class_hint": null,
       "payment": {
-        "asset_id":"xor#sora",
+        "asset_id":"61CtjvNd9T3THAR65GsMVHr82Bjc",
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
@@ -125,7 +125,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v1/sns/names
   done
 ```
 
@@ -145,10 +145,10 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- 幫助程序針對每個請求發出一個 `POST /v1/sns/registrations` 併中止
+- 幫助程序針對每個請求發出一個 `POST /v1/sns/names` 併中止
   第一個 HTTP 錯誤。響應以 NDJSON 形式附加到日誌路徑
   記錄。
-- `--poll-status` 在每次之後重新查詢 `/v1/sns/registrations/{selector}`
+- `--poll-status` 在每次之後重新查詢 `/v1/sns/names/{namespace}/{literal}`
   提交（最多`--poll-attempts`，默認5）以確認該記錄
   可見。提供 `--suffix-map` （`suffix_id` 到 `"suffix"` 值的 JSON）
   該工具可以派生 `{label}.{suffix}` 文字進行輪詢。
@@ -235,7 +235,7 @@ docs/portal/scripts/sns_bulk_release.sh \
 # TYPE sns_bulk_release_requests_total gauge
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
-sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
+sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="61CtjvNd9T3THAR65GsMVHr82Bjc"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 

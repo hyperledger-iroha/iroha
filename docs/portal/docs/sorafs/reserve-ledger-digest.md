@@ -26,7 +26,7 @@ governance reviewers can audit every billing cycle.
     --provider-account i105... \
     --treasury-account i105... \
     --reserve-account i105... \
-    --asset-definition xor#sora \
+    --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc \
     --json-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.json
    ```
    The ledger helper attaches a `ledger_projection` block (rent due, reserve

@@ -9389,12 +9389,17 @@ mod tests {
     fn settlement_conversion_metrics_update_when_enabled() {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
-        telemetry.inc_settlement_conversion_total("lane-1", "ds-9", "xor#sora", 3);
+        telemetry.inc_settlement_conversion_total(
+            "lane-1",
+            "ds-9",
+            "61CtjvNd9T3THAR65GsMVHr82Bjc",
+            3,
+        );
         telemetry.inc_settlement_haircut_total("lane-1", "ds-9", 2_000_000);
 
         let conversions = metrics
             .settlement_conversion_total
-            .with_label_values(&["lane-1", "ds-9", "xor#sora"])
+            .with_label_values(&["lane-1", "ds-9", "61CtjvNd9T3THAR65GsMVHr82Bjc"])
             .get();
         assert_eq!(conversions, 3);
 
@@ -9666,12 +9671,17 @@ mod tests {
     fn settlement_conversion_metrics_skip_when_disabled() {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), false);
-        telemetry.inc_settlement_conversion_total("lane-2", "ds-4", "xor#sora", 5);
+        telemetry.inc_settlement_conversion_total(
+            "lane-2",
+            "ds-4",
+            "61CtjvNd9T3THAR65GsMVHr82Bjc",
+            5,
+        );
         telemetry.inc_settlement_haircut_total("lane-2", "ds-4", 5_000_000);
 
         let conversions = metrics
             .settlement_conversion_total
-            .with_label_values(&["lane-2", "ds-4", "xor#sora"])
+            .with_label_values(&["lane-2", "ds-4", "61CtjvNd9T3THAR65GsMVHr82Bjc"])
             .get();
         assert_eq!(
             conversions, 0,

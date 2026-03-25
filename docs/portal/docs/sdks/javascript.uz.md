@@ -172,7 +172,7 @@ const txs = await torii.listAccountTransactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg
   limit: 5,
   assetId,
 });
-const holders = await torii.listAssetHolders("rose#wonderland", {
+const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 5,
   assetId,
 });
@@ -189,7 +189,7 @@ orqaga hisoblash yordamchilari (`deadline_kind`, `deadline_state`, `deadline_ms`
 `deadline_ms_remaining`) keyingi tugash muddatini belgilang (yangilash → siyosat
 → sertifikat) shuning uchun foydalanuvchi interfeysi nishonlari operatorlarni har doim ruxsat berilganda ogohlantirishi mumkin
 <24 soat qoldi. SDK
-`/v1/offline/allowances` tomonidan ta'sirlangan REST filtrlarini aks ettiradi:
+`/v1/offline/reserve/topup` tomonidan ta'sirlangan REST filtrlarini aks ettiradi:
 `certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
 `verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` va
 `requireVerdict` / `onlyMissingVerdict` mantiqiy. Yaroqsiz kombinatsiyalar (uchun

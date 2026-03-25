@@ -30,7 +30,7 @@ SNS のロードマップは承認済みサフィックス (SN-1/SN-2) をすべ
 | `status` | enum | `active`, `paused`, `revoked` で起動準備状況を表す。 |
 | `steward_account` | string | stewardship を担当するアカウント (registrar ポリシーフックに一致)。 |
 | `fund_splitter_account` | string | `fee_split` に従ってルーティングする前に支払いを受け取るアカウント。 |
-| `payment_asset_id` | string | 決済に使うアセット (初期コホートは `xor#sora`)。 |
+| `payment_asset_id` | string | 決済に使うアセット (初期コホートは `61CtjvNd9T3THAR65GsMVHr82Bjc`)。 |
 | `min_term_years` / `max_term_years` | integer | ポリシーからの購入期間の上限/下限。 |
 | `grace_period_days` / `redemption_period_days` | integer | Torii が適用する更新安全ウィンドウ。 |
 | `referral_cap_bps` | integer | ガバナンスで許可される referral carve-out の上限 (basis points)。 |
@@ -43,9 +43,9 @@ SNS のロードマップは承認済みサフィックス (SN-1/SN-2) をすべ
 
 | サフィックス | ID (`hex`) | Steward | Fund splitter | 状態 | 支払いアセット | Referral 上限 (bps) | 期間 (min - max 年) | Grace / Redemption (日) | 価格 tier (regex -> 基本価格 / オークション) | 予約ラベル | Fee split (T/S/R/E bps) | ポリシーバージョン |
 |--------------|------------|---------|---------------|------|---------------|---------------------|----------------------|--------------------------|---------------------------------------------|-----------|-------------------------|--------------------|
-| `.sora` | `0x0001` | `i105...` | `i105...` | 稼働中 | `xor#sora` | 500 | 1-5 | 30 / 60 | `T0: ^[a-z0-9]{3,}$ -> 120 XOR (Vickrey)` | `treasury -> i105...` | `7000 / 3000 / 1000 / 0` | 1 |
-| `.nexus` | `0x0002` | `i105...` | `i105...` | 一時停止 | `xor#sora` | 300 | 1-3 | 15 / 30 | `T0: ^[a-z0-9]{4,}$ -> 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ -> 4000 XOR (Dutch floor 500)` | `treasury -> i105...`, `guardian -> i105...` | `6500 / 2500 / 800 / 200` | 2 |
-| `.dao` | `0x0003` | `i105...` | `i105...` | 廃止 | `xor#sora` | 0 | 1-2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ -> 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
+| `.sora` | `0x0001` | `i105...` | `i105...` | 稼働中 | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 500 | 1-5 | 30 / 60 | `T0: ^[a-z0-9]{3,}$ -> 120 XOR (Vickrey)` | `treasury -> i105...` | `7000 / 3000 / 1000 / 0` | 1 |
+| `.nexus` | `0x0002` | `i105...` | `i105...` | 一時停止 | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 300 | 1-3 | 15 / 30 | `T0: ^[a-z0-9]{4,}$ -> 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ -> 4000 XOR (Dutch floor 500)` | `treasury -> i105...`, `guardian -> i105...` | `6500 / 2500 / 800 / 200` | 2 |
+| `.dao` | `0x0003` | `i105...` | `i105...` | 廃止 | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 0 | 1-2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ -> 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
 
 ## JSON 抜粋
 
@@ -59,13 +59,13 @@ SNS のロードマップは承認済みサフィックス (SN-1/SN-2) をすべ
       "suffix_id": 1,
       "status": "active",
       "fund_splitter_account": "i105...",
-      "payment_asset_id": "xor#sora",
+      "payment_asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
       "referral_cap_bps": 500,
       "pricing": [
         {
           "tier_id": 0,
           "label_regex": "^[a-z0-9]{3,}$",
-          "base_price": {"asset_id": "xor#sora", "amount": 120},
+          "base_price": {"asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc", "amount": 120},
           "auction_kind": "vickrey_commit_reveal",
           "min_duration_years": 1,
           "max_duration_years": 5

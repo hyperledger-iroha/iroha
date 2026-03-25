@@ -173,7 +173,7 @@ const txs = await torii.listAccountTransactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg
   limit: 5,
   assetId,
 });
-const holders = await torii.listAssetHolders("rose#wonderland", {
+const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 5,
   assetId,
 });
@@ -190,7 +190,7 @@ console.log(balances.items, txs.items, holders.items);
 `deadline_ms_remaining`) מדגישים את המועד האחרון שפג תוקף (רענן → מדיניות
 → אישור) כך שתגי ממשק משתמש יכולים להזהיר מפעילים בכל פעם שיש קצבה
 נותרו פחות מ-24 שעות. ה-SDK
-משקף את מסנני REST שנחשפו על ידי `/v1/offline/allowances`:
+משקף את מסנני REST שנחשפו על ידי `/v1/offline/reserve/topup`:
 `certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
 `verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs`, וה-
 `requireVerdict` / `onlyMissingVerdict` בוליאני. שילובים לא חוקיים (עבור

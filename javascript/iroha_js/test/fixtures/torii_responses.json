@@ -179,12 +179,12 @@
           "counterparty": "34mSYnDgbaJM58rbLoif4Tkp7G7xyPF1PgLSee8pqojx4ez57GhytrmGcqoufRsDGSX2Umc7i",
           "custodian": null,
           "cash_leg": {
-            "asset_definition_id": "usd#wonderland",
+            "asset_definition_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
             "quantity": "1000",
             "metadata": {}
           },
           "collateral_leg": {
-            "asset_definition_id": "bond#wonderland",
+            "asset_definition_id": "4fEiy2n5VMFVfi6BzDJge519zAzg",
             "quantity": "1100",
             "metadata": {
               "isin": "US0000000001"

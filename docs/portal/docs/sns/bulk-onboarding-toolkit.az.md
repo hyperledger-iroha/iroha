@@ -49,7 +49,7 @@ Parser aşağıdakı başlıq sırasını tələb edir (sifariş çevikdir):
 | `suffix_id` | Bəli | Rəqəm şəkilçisi identifikatoru (ondalıq və ya `0x` hex). |
 | `owner` | Bəli | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | Bəli | Tam ədəd `1..=255`. |
-| `payment_asset_id` | Bəli | Hesablaşma aktivi (məsələn, `xor#sora`). |
+| `payment_asset_id` | Bəli | Hesablaşma aktivi (məsələn, `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Bəli | Aktiv-doğma vahidləri təmsil edən işarəsiz tam ədədlər. |
 | `settlement_tx` | Bəli | JSON dəyəri və ya ödəniş əməliyyatını və ya hashı təsvir edən hərfi sətir. |
 | `payment_payer` | Bəli | Ödənişə icazə verən AccountID. |
@@ -95,7 +95,7 @@ Müvəffəqiyyət haqqında skript ümumiləşdirilmiş manifest yazır:
       "term_years": 2,
       "pricing_class_hint": null,
       "payment": {
-        "asset_id":"xor#sora",
+        "asset_id":"61CtjvNd9T3THAR65GsMVHr82Bjc",
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
@@ -125,7 +125,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v1/sns/names
   done
 ```
 
@@ -145,10 +145,10 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- Köməkçi hər sorğuya bir `POST /v1/sns/registrations` verir və dayandırır
+- Köməkçi hər sorğuya bir `POST /v1/sns/names` verir və dayandırır
   ilk HTTP xətası. Cavablar jurnal yoluna NDJSON kimi əlavə olunur
   qeydlər.
-- `--poll-status` hər dəfə `/v1/sns/registrations/{selector}` sorğusunu təkrarlayır
+- `--poll-status` hər dəfə `/v1/sns/names/{namespace}/{literal}` sorğusunu təkrarlayır
   qeydin olduğunu təsdiqləmək üçün təqdimetmə (`--poll-attempts`-ə qədər, defolt 5)
   görünən. `--suffix-map` (`suffix_id`-dən `"suffix"` dəyərlərinə JSON) təmin edin.
   alət sorğu üçün `{label}.{suffix}` literalları əldə edə bilər.
@@ -235,7 +235,7 @@ seriyası:
 # TYPE sns_bulk_release_requests_total gauge
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
-sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
+sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="61CtjvNd9T3THAR65GsMVHr82Bjc"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 

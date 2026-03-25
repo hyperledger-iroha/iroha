@@ -37,7 +37,7 @@ Le parseur exige la ligne d'en-tete suivante (l'ordre est flexible):
 | `suffix_id` | Oui | Identifiant numerique de suffixe (decimal ou `0x` hex). |
 | `owner` | Oui | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | Oui | Entier `1..=255`. |
-| `payment_asset_id` | Oui | Actif de settlement (par exemple `xor#sora`). |
+| `payment_asset_id` | Oui | Actif de settlement (par exemple `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Oui | Entiers non signes representant des unites natives de l'actif. |
 | `settlement_tx` | Oui | Valeur JSON ou chaine litterale decrivant la transaction de paiement ou hash. |
 | `payment_payer` | Oui | AccountId qui a autorise le paiement. |
@@ -83,7 +83,7 @@ En cas de succes le script ecrit un manifeste agrege:
       "term_years": 2,
       "pricing_class_hint": null,
       "payment": {
-        "asset_id":"xor#sora",
+        "asset_id":"61CtjvNd9T3THAR65GsMVHr82Bjc",
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
@@ -113,7 +113,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v1/sns/names
   done
 ```
 
@@ -133,9 +133,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- L'helper emet un `POST /v1/sns/registrations` par requete et s'arrete au premier
+- L'helper emet un `POST /v1/sns/names` par requete et s'arrete au premier
   erreur HTTP. Les reponses sont ajoutees au log comme enregistrements NDJSON.
-- `--poll-status` re-interroge `/v1/sns/registrations/{selector}` apres chaque
+- `--poll-status` re-interroge `/v1/sns/names/{namespace}/{literal}` apres chaque
   soumission (jusqu'a `--poll-attempts`, defaut 5) pour confirmer que
   l'enregistrement est visible. Fournissez `--suffix-map` (JSON de `suffix_id`
   vers des valeurs "suffix") pour que l'outil derive les litteraux
@@ -228,7 +228,7 @@ suivantes:
 # TYPE sns_bulk_release_requests_total gauge
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
-sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
+sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="61CtjvNd9T3THAR65GsMVHr82Bjc"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 

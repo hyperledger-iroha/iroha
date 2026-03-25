@@ -103,7 +103,7 @@ Torii は `GET /v1/nexus/public_lanes/{lane}/stake` で live shares と pending 
 {
   "lane_id": 1,
   "epoch": 4242,
-  "asset": "xor#wonderland",
+  "asset": "4cuvDVPuLBKJyN6dPbRQhmLh68sU",
   "total_reward": "250.0000",
   "shares": [
     { "account": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw", "role": "Validator", "amount": "150" },

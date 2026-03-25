@@ -171,7 +171,7 @@ const txs = await torii.listAccountTransactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg
   limit: 5,
   assetId,
 });
-const holders = await torii.listAssetHolders("rose#wonderland", {
+const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 5,
   assetId,
 });
@@ -186,7 +186,7 @@ ayudantes de cuenta atrás (`deadline_kind`, `deadline_state`, `deadline_ms`,
 `deadline_ms_remaining`) resalta la próxima fecha límite de vencimiento (actualizar → política
 → certificado) para que las insignias de UI puedan advertir a los operadores cada vez que se haya asignado un permiso
 Quedan <24 h. El SDK
-refleja los filtros REST expuestos por `/v1/offline/allowances`:
+refleja los filtros REST expuestos por `/v1/offline/reserve/topup`:
 `certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
 `verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` y el
 `requireVerdict` / `onlyMissingVerdict` booleanos. Combinaciones no válidas (para

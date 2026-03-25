@@ -65,7 +65,7 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI выводит хэш-доставку (например, `0x5f…`). Сохраните его, чтобы
@@ -74,7 +74,7 @@ CLI выводит хэш-доставку (например, `0x5f…`). Сох
 ## 3. Замитьте значение на операторском аккаунте
 
 Количество активности под парой `(asset definition, account)`. Замитьте 250
-единица `coffee#wonderland` на `$ADMIN_ACCOUNT`:
+единица `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` на `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

@@ -299,12 +299,12 @@ fn expected_agent_apartment_manifest() -> AgentApartmentManifestV1 {
         ],
         spend_limits: vec![
             AgentSpendLimitV1 {
-                asset_definition: "xor#sora".to_string(),
+                asset_definition: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_string(),
                 max_per_tx_nanos: NonZeroU64::new(5_000_000).expect("nonzero"),
                 max_per_day_nanos: NonZeroU64::new(20_000_000).expect("nonzero"),
             },
             AgentSpendLimitV1 {
-                asset_definition: "usd#bank".to_string(),
+                asset_definition: "7t5kWEj537rDAL7AQNp9cZPUGPr5".to_string(),
                 max_per_tx_nanos: NonZeroU64::new(2_000_000).expect("nonzero"),
                 max_per_day_nanos: NonZeroU64::new(10_000_000).expect("nonzero"),
             },

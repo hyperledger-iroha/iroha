@@ -397,7 +397,7 @@ impl ReadinessSmokePlan {
         }
     }
 
-    /// Build a plan that mints a small amount of `rose#wonderland` with the supplied signer.
+    /// Build a plan that mints a small amount of `62Fk4FPcMuLvW5QjDGNF2a4jAmjM` with the supplied signer.
     ///
     /// Each attempt carries a unique nonce so retries do not collide.
     pub fn for_signer_with_attempts(
@@ -459,7 +459,7 @@ pub struct ReadinessSmokeOutcome {
     pub status: Option<ToriiStatusSnapshot>,
 }
 
-const SMOKE_ASSET_ID: &str = "rose#wonderland";
+const SMOKE_ASSET_ID: &str = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 const SMOKE_TTL: Duration = Duration::from_secs(30);
 
 fn build_readiness_smoke_transaction(
@@ -1306,7 +1306,7 @@ pub struct ExplorerAssetDefinitionsQuery {
 /// Explorer asset entry returned by `/v1/explorer/assets`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerAssetRecord {
-    /// Canonical asset identifier (`name#domain@account` literal).
+    /// Canonical asset identifier (`norito:<hex>`).
     pub id: String,
     /// Definition backing the asset.
     pub definition_id: String,

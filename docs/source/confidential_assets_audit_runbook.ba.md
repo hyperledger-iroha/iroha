@@ -32,7 +32,7 @@ translator: machine-google-reviewed
   теләк буйынса бер активтарҙы билдәләүгә опплау. CLI миҫалы:
 
   ```bash
-  iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "rose#wonderland" } }'
+  iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM" } }'
   ```
 
 - Сәйәсәт метамағлүмәттәре һәм көтөлгән күсеүҙәр аша мөмкин.

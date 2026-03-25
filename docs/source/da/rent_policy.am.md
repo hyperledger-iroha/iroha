@@ -94,7 +94,7 @@ CLI Tooling (`iroha app da rent-quote`) ተመሳሳይ የNorito/JSON ፖሊሲ
 
 ### የኪራይ ደብተር ዕቅዶችን ማመንጨት
 
-`iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition xor#sora` አሂድ
+`iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc` አሂድ
 ቀጣይነት ያለው የኪራይ ዋጋን ወደ ተፈጻሚነት ያለው የሂሳብ መዝገብ ማስተላለፍ። ትዕዛዙ
 የተከተተውን `ledger_projection` ይተነትናል፣ Norito `Transfer` መመሪያዎችን ያወጣል።
 የመነሻ ኪራይን ወደ ግምጃ ቤት የሚሰበስቡ ፣ የተጠባባቂውን / አቅራቢውን ያካሂዳሉ

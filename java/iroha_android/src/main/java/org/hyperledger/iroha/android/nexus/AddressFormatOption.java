@@ -4,9 +4,7 @@ package org.hyperledger.iroha.android.nexus;
  * Address format preference accepted by Torii account/UAID endpoints.
  */
 public enum AddressFormatOption {
-  IH58("ih58"),
-  CANONICAL("canonical"),
-  COMPRESSED("compressed");
+  I105("i105");
 
   private final String parameter;
 

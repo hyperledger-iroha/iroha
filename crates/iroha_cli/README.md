@@ -519,21 +519,21 @@ iroha ledger account register \
 To add assets to the account, you must first register an Asset Definition. Specify the `asset` entity and then use the `register` and `mint` commands respectively. Here is an example of adding Assets of the type `Quantity` to the account:
 
 ```bash
-iroha ledger asset register --id "XOR#Soramitsu" --type Numeric
-iroha ledger asset mint --id "XOR##6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw" --quantity 1010
+iroha ledger asset register --id "6UoZbEC1BVBbDo99CSvY7qud73yh" --type Numeric
+iroha ledger asset mint --id "<ASSET_ID>" --quantity 1010
 ```
 
-With this, you created `XOR#Soramitsu`, an asset of type `Numeric`, and then gave `1010` units of this asset to the account `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw` within the `Soramitsu` domain scope.
+With this, you created an asset of type `Numeric` under the canonical asset-definition identifier `6UoZbEC1BVBbDo99CSvY7qud73yh`, and then gave `1010` units of that asset to a target account.
 
 ### Query Account Assets Quantity
 
 You can use Query API to check that your instructions were applied and the _world_ is in the desired state. For example, to know how many units of a particular asset an account has, use `asset get` with the specified account and asset:
 
 ```bash
-iroha ledger asset get --id "XOR##ed01204A3C5A6B77BBE439969F95F0AA4E01AE31EC45A0D68C131B2C622751FCC5E3B6@Soramitsu"
+iroha ledger asset get --id "<ASSET_ID>"
 ```
 
-This query returns the quantity of `XOR#Soramitsu` asset for the `ed01204A3C5A6B77BBE439969F95F0AA4E01AE31EC45A0D68C131B2C622751FCC5E3B6@Soramitsu` account.
+This query returns the quantity of the selected account-scoped asset.
 
 You can also filter based on either account, asset or domain id by using the filtering API provided by the Iroha client CLI. Generally, filtering follows the `iroha ledger ENTITY list filter PREDICATE` pattern, where ENTITY is asset, account or domain and PREDICATE is condition used for filtering serialized using JSON (check `iroha::data_model::predicate::value::ValuePredicate` type).
 

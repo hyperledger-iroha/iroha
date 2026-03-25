@@ -63,7 +63,7 @@ Ajoutez les nouvelles activités personnalisables `coffee` au domaine `wonderlan
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 La CLI vous permet de passer automatiquement (par exemple, `0x5f…`). Сохраните его, чтобы
@@ -72,7 +72,7 @@ Vous pouvez vérifier le statut.
 ## 3. Planifiez vos modifications sur le compte de l'opérateur
 
 Le colis est activé pour le `(asset definition, account)`. Замитьте 250
-Éditer `coffee#wonderland` pour `$ADMIN_ACCOUNT` :
+Éditer `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` pour `$ADMIN_ACCOUNT` :
 
 ```sh
 iroha --config defaults/client.toml asset mint \

@@ -21,36 +21,22 @@ public final class AccountAddress {
   public static final int DEFAULT_I105_DISCRIMINANT = 753;
 
   private static final byte[] LOCAL_DOMAIN_KEY = "SORA-LOCAL-K:v1".getBytes(StandardCharsets.UTF_8);
-  private static final String COMPRESSED_SENTINEL = "sora";
-  private static final int COMPRESSED_CHECKSUM_LEN = 6;
-  private static final int BECH32M_CONST = 0x2bc830a3;
-  private static final String COMPRESSED_WARNING =
-      "Canonical I105 addresses rely on the Sora sentinel and are the only supported public "
-          + "account literal form. Use the full-width rendering only when your surface requires it.";
+  private static final int I105_DISCRIMINANT_MAX = 0x3FFF;
+  private static final int I105_LITERAL_CHECKSUM_LEN = 2;
+  private static final byte[] I105_CHECKSUM_PREFIX = "I105PRE".getBytes(StandardCharsets.UTF_8);
+  private static final String I105_WARNING =
+      "I105 addresses are the canonical Base58 account literal encoding. "
+          + "Render and validate them with the intended chain discriminant.";
 
-  private static final String[] IH58_ALPHABET = {
+  private static final String[] I105_ASCII_ALPHABET = {
       "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F", "G", "H",
       "J", "K", "L", "M", "N", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "a", "b",
       "c", "d", "e", "f", "g", "h", "i", "j", "k", "m", "n", "o", "p", "q", "r", "s", "t",
       "u", "v", "w", "x", "y", "z"
   };
 
-  private static final String[] SORA_KANA = {
-      "ｲ", "ﾛ", "ﾊ", "ﾆ", "ﾎ", "ﾍ", "ﾄ", "ﾁ", "ﾘ", "ﾇ", "ﾙ", "ｦ", "ﾜ", "ｶ", "ﾖ", "ﾀ", "ﾚ", "ｿ", "ﾂ",
-      "ﾈ", "ﾅ", "ﾗ", "ﾑ", "ｳ", "ヰ", "ﾉ", "ｵ", "ｸ", "ﾔ", "ﾏ", "ｹ", "ﾌ", "ｺ", "ｴ", "ﾃ", "ｱ", "ｻ", "ｷ",
-      "ﾕ", "ﾒ", "ﾐ", "ｼ", "ヱ", "ﾋ", "ﾓ", "ｾ", "ｽ"
-  };
-
-  private static final String[] SORA_KANA_FULLWIDTH = {
-      "イ", "ロ", "ハ", "ニ", "ホ", "ヘ", "ト", "チ", "リ", "ヌ", "ル", "ヲ", "ワ", "カ", "ヨ", "タ", "レ",
-      "ソ", "ツ", "ネ", "ナ", "ラ", "ム", "ウ", "ヰ", "ノ", "オ", "ク", "ヤ", "マ", "ケ", "フ", "コ", "エ",
-      "テ", "ア", "サ", "キ", "ユ", "メ", "ミ", "シ", "ヱ", "ヒ", "モ", "セ", "ス"
-  };
-
-  private static final String[] COMPRESSED_ALPHABET;
-  private static final String[] COMPRESSED_ALPHABET_FULLWIDTH;
-  private static final Map<String, Integer> COMPRESSED_INDEX;
-  private static final int COMPRESSED_BASE;
+  private static final Map<String, Integer> I105_INDEX;
+  private static final int I105_BASE = I105_ASCII_ALPHABET.length;
 
   private static volatile boolean allowMlDsa;
   private static volatile boolean allowGost;
@@ -58,23 +44,10 @@ public final class AccountAddress {
 
   static {
     configureCurveSupport(CurveSupportConfig.ed25519Only());
-    COMPRESSED_ALPHABET = new String[IH58_ALPHABET.length + SORA_KANA.length];
-    System.arraycopy(IH58_ALPHABET, 0, COMPRESSED_ALPHABET, 0, IH58_ALPHABET.length);
-    System.arraycopy(SORA_KANA, 0, COMPRESSED_ALPHABET, IH58_ALPHABET.length, SORA_KANA.length);
-    COMPRESSED_ALPHABET_FULLWIDTH = new String[IH58_ALPHABET.length + SORA_KANA_FULLWIDTH.length];
-    System.arraycopy(IH58_ALPHABET, 0, COMPRESSED_ALPHABET_FULLWIDTH, 0, IH58_ALPHABET.length);
-    System.arraycopy(
-        SORA_KANA_FULLWIDTH, 0, COMPRESSED_ALPHABET_FULLWIDTH, IH58_ALPHABET.length, SORA_KANA_FULLWIDTH.length);
-    COMPRESSED_BASE = COMPRESSED_ALPHABET.length;
-
-    COMPRESSED_INDEX = new HashMap<>();
-    for (int i = 0; i < COMPRESSED_ALPHABET.length; i++) {
-      COMPRESSED_INDEX.put(COMPRESSED_ALPHABET[i], i);
+    I105_INDEX = new HashMap<>();
+    for (int i = 0; i < I105_ASCII_ALPHABET.length; i++) {
+      I105_INDEX.put(I105_ASCII_ALPHABET[i], i);
     }
-    for (int i = 0; i < COMPRESSED_ALPHABET_FULLWIDTH.length; i++) {
-      COMPRESSED_INDEX.put(COMPRESSED_ALPHABET_FULLWIDTH[i], i);
-    }
-
   }
 
   private final byte[] canonicalBytes;
@@ -99,23 +72,15 @@ public final class AccountAddress {
   }
 
   public String toI105(final int discriminant) throws AccountAddressException {
-    return encodeI105(canonicalBytes, discriminant, COMPRESSED_ALPHABET);
+    return encodeI105(canonicalBytes, discriminant);
   }
 
   public String toI105Default() throws AccountAddressException {
     return toI105(DEFAULT_I105_DISCRIMINANT);
   }
 
-  public String toI105FullWidth() throws AccountAddressException {
-    return toI105FullWidth(DEFAULT_I105_DISCRIMINANT);
-  }
-
-  public String toI105FullWidth(final int discriminant) throws AccountAddressException {
-    return encodeI105(canonicalBytes, discriminant, COMPRESSED_ALPHABET_FULLWIDTH);
-  }
-
   /**
-   * Convenience helper that surfaces the IH58 (preferred)/sora (second-best) pair alongside the shared warning string.
+   * Convenience helper that surfaces canonical I105 alongside the shared warning string.
    * Follow {@code docs/source/sns/address_display_guidelines.md} when presenting these values.
    */
   public DisplayFormats displayFormats() throws AccountAddressException {
@@ -123,13 +88,12 @@ public final class AccountAddress {
   }
 
   /**
-   * Convenience helper that surfaces the IH58 (preferred)/sora (second-best) pair alongside the shared warning string.
+   * Convenience helper that surfaces canonical I105 alongside the shared warning string.
    * Follow {@code docs/source/sns/address_display_guidelines.md} when presenting these values.
    */
   public DisplayFormats displayFormats(final int discriminant) throws AccountAddressException {
     final String i105 = toI105(discriminant);
-    final String i105FullWidth = toI105FullWidth(discriminant);
-    return new DisplayFormats(i105, i105FullWidth, discriminant, COMPRESSED_WARNING);
+    return new DisplayFormats(i105, discriminant, I105_WARNING);
   }
 
   /**
@@ -170,8 +134,8 @@ public final class AccountAddress {
     return extractMultisigPayload(canonicalBytes, true);
   }
 
-  public static String compressedWarningMessage() {
-    return COMPRESSED_WARNING;
+  public static String i105WarningMessage() {
+    return I105_WARNING;
   }
 
   public static AccountAddress fromAccount(
@@ -315,18 +279,17 @@ public final class AccountAddress {
     if (trimmed.isEmpty()) {
       throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "address string is empty");
     }
-    if (hasI105Sentinel(trimmed)) {
-      return new ParseResult(fromI105(trimmed, expectedPrefix), Format.I105);
-    }
-    if (containsCompressedGlyph(trimmed)) {
+    if (trimmed.contains("@")) {
       throw new AccountAddressException(
-          AccountAddressErrorCode.MISSING_COMPRESSED_SENTINEL, "I105 address must start with a sentinel");
+          AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+          "account address literals must not include @domain; use canonical I105 form");
     }
     if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
-      return new ParseResult(fromCanonicalHex(trimmed), Format.CANONICAL_HEX);
+      throw new AccountAddressException(
+          AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+          "canonical hex account addresses are not accepted; use canonical I105 form");
     }
-    throw new AccountAddressException(
-        AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT, "unsupported address format");
+    return new ParseResult(fromI105(trimmed, expectedPrefix), Format.I105);
   }
 
   /**
@@ -339,14 +302,15 @@ public final class AccountAddress {
       throw new AccountAddressException(
           AccountAddressErrorCode.INVALID_LENGTH, "address string is empty");
     }
-    if (!hasI105Sentinel(trimmed)) {
-      if (containsCompressedGlyph(trimmed)) {
-        throw new AccountAddressException(
-            AccountAddressErrorCode.MISSING_COMPRESSED_SENTINEL,
-            "I105 address must start with a sentinel");
-      }
+    if (trimmed.contains("@")) {
       throw new AccountAddressException(
-          AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT, "unsupported address format");
+          AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+          "account address literals must not include @domain; use canonical I105 form");
+    }
+    if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
+      throw new AccountAddressException(
+          AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+          "canonical hex account addresses are not accepted; use canonical I105 form");
     }
     return new ParseResult(fromI105(trimmed, expectedPrefix), Format.I105);
   }
@@ -362,41 +326,19 @@ public final class AccountAddress {
       throw new AccountAddressException(
           AccountAddressErrorCode.INVALID_LENGTH, "address string is empty");
     }
-    if (hasI105Sentinel(trimmed)) {
-      final byte[] canonical = decodeI105(trimmed, expectedPrefix);
-      parseCanonical(canonical, true);
-      return new ParseResult(new AccountAddress(canonical), Format.I105);
-    }
-    if (containsCompressedGlyph(trimmed)) {
+    if (trimmed.contains("@")) {
       throw new AccountAddressException(
-          AccountAddressErrorCode.MISSING_COMPRESSED_SENTINEL,
-          "I105 address must start with a sentinel");
+          AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+          "account address literals must not include @domain; use canonical I105 form");
     }
     if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
-      final String body =
-          trimmed.startsWith("0x") || trimmed.startsWith("0X") ? trimmed.substring(2) : trimmed;
-      final byte[] canonical = hexToBytes(body);
-      parseCanonical(canonical, true);
-      return new ParseResult(new AccountAddress(canonical), Format.CANONICAL_HEX);
+      throw new AccountAddressException(
+          AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+          "canonical hex account addresses are not accepted; use canonical I105 form");
     }
-    throw new AccountAddressException(
-        AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT, "unsupported address format");
-  }
-
-  private static boolean containsCompressedGlyph(final String value) {
-    for (int i = 0; i < value.length(); i++) {
-      final String symbol = String.valueOf(value.charAt(i));
-      if (COMPRESSED_INDEX.containsKey(symbol) && !isAsciiAlphaNumeric(symbol.charAt(0))) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  private static boolean isAsciiAlphaNumeric(final char ch) {
-    return (ch >= '0' && ch <= '9')
-        || (ch >= 'A' && ch <= 'Z')
-        || (ch >= 'a' && ch <= 'z');
+    final byte[] canonical = decodeI105(trimmed, expectedPrefix);
+    parseCanonical(canonical, true);
+    return new ParseResult(new AccountAddress(canonical), Format.I105);
   }
 
   public enum Format {
@@ -409,9 +351,7 @@ public final class AccountAddress {
     KEY_PAYLOAD_TOO_LONG("ERR_KEY_PAYLOAD_TOO_LONG"),
     INVALID_HEADER_VERSION("ERR_INVALID_HEADER_VERSION"),
     INVALID_NORM_VERSION("ERR_INVALID_NORM_VERSION"),
-    INVALID_IH58_PREFIX("ERR_INVALID_IH58_PREFIX"),
-    INVALID_IH58_ENCODING("ERR_INVALID_IH58_ENCODING"),
-    INVALID_IH58_PREFIX_ENCODING("ERR_INVALID_IH58_PREFIX_ENCODING"),
+    INVALID_I105_PREFIX("ERR_INVALID_I105_PREFIX"),
     INVALID_LENGTH("ERR_INVALID_LENGTH"),
     CHECKSUM_MISMATCH("ERR_CHECKSUM_MISMATCH"),
     INVALID_HEX_ADDRESS("ERR_INVALID_HEX_ADDRESS"),
@@ -421,15 +361,12 @@ public final class AccountAddress {
     UNEXPECTED_EXTENSION_FLAG("ERR_UNEXPECTED_EXTENSION_FLAG"),
     UNKNOWN_CONTROLLER_TAG("ERR_UNKNOWN_CONTROLLER_TAG"),
     UNKNOWN_CURVE("ERR_UNKNOWN_CURVE"),
-    INVALID_COMPRESSED_CHAR("ERR_INVALID_COMPRESSED_CHAR"),
-    INVALID_COMPRESSED_DIGIT("ERR_INVALID_COMPRESSED_DIGIT"),
-    MISSING_COMPRESSED_SENTINEL("ERR_MISSING_COMPRESSED_SENTINEL"),
+    INVALID_I105_CHAR("ERR_INVALID_I105_CHAR"),
+    I105_TOO_SHORT("ERR_I105_TOO_SHORT"),
     UNEXPECTED_TRAILING_BYTES("ERR_UNEXPECTED_TRAILING_BYTES"),
     MULTISIG_MEMBER_OVERFLOW("ERR_MULTISIG_MEMBER_OVERFLOW"),
     INVALID_MULTISIG_POLICY("ERR_INVALID_MULTISIG_POLICY"),
-    UNSUPPORTED_ADDRESS_FORMAT("ERR_UNSUPPORTED_ADDRESS_FORMAT"),
-    INVALID_COMPRESSED_BASE("ERR_INVALID_COMPRESSED_BASE"),
-    COMPRESSED_TOO_SHORT("ERR_COMPRESSED_TOO_SHORT");
+    UNSUPPORTED_ADDRESS_FORMAT("ERR_UNSUPPORTED_ADDRESS_FORMAT");
 
     private final String code;
 
@@ -454,17 +391,14 @@ public final class AccountAddress {
 
   public static final class DisplayFormats {
     public final String i105;
-    public final String i105FullWidth;
     public final int discriminant;
     public final String i105Warning;
 
     private DisplayFormats(
         final String i105,
-        final String i105FullWidth,
         final int discriminant,
         final String i105Warning) {
       this.i105 = i105;
-      this.i105FullWidth = i105FullWidth;
       this.discriminant = discriminant;
       this.i105Warning = i105Warning;
     }
@@ -943,201 +877,118 @@ public final class AccountAddress {
     return Arrays.copyOf(digest, 12);
   }
 
-  private static String encodeI105(
-      final byte[] canonical, final int discriminant, final String[] alphabet)
+  private static String encodeI105(final byte[] canonical, final int discriminant)
       throws AccountAddressException {
-    final int[] digits = encodeBaseN(canonical, COMPRESSED_BASE);
-    final int[] checksum = compressedChecksumDigits(canonical);
-    final StringBuilder sb = new StringBuilder();
-    final String sentinel =
-        alphabet == COMPRESSED_ALPHABET_FULLWIDTH
-            ? i105SentinelFullWidth(discriminant)
-            : i105Sentinel(discriminant);
-    sb.append(sentinel);
+    final byte[] prefixBytes = encodeI105Prefix(discriminant);
+    final byte[] body = new byte[prefixBytes.length + canonical.length];
+    System.arraycopy(prefixBytes, 0, body, 0, prefixBytes.length);
+    System.arraycopy(canonical, 0, body, prefixBytes.length, canonical.length);
+    final byte[] checksum = i105ChecksumBytes(body);
+    final byte[] payload = new byte[body.length + checksum.length];
+    System.arraycopy(body, 0, payload, 0, body.length);
+    System.arraycopy(checksum, 0, payload, body.length, checksum.length);
+    final int[] digits = encodeBaseN(payload, I105_BASE);
+    final StringBuilder sb = new StringBuilder(digits.length);
     for (final int digit : digits) {
-      sb.append(alphabet[digit]);
-    }
-    for (final int digit : checksum) {
-      sb.append(alphabet[digit]);
+      sb.append(I105_ASCII_ALPHABET[digit]);
     }
     return sb.toString();
   }
 
   private static byte[] decodeI105(final String encoded, final Integer expectedDiscriminant)
       throws AccountAddressException {
-    final String payload;
-    if (expectedDiscriminant != null) {
-      payload = stripI105SentinelForDiscriminant(encoded, expectedDiscriminant.intValue());
-      if (payload == null) {
-        final Integer found = i105DiscriminantFromSentinel(encoded);
-        if (found != null && found.intValue() != expectedDiscriminant.intValue()) {
-          throw new AccountAddressException(
-              AccountAddressErrorCode.UNEXPECTED_NETWORK_PREFIX,
-              "unexpected I105 discriminant: expected "
-                  + expectedDiscriminant
-                  + ", found "
-                  + found);
-        }
-        throw new AccountAddressException(
-            AccountAddressErrorCode.MISSING_COMPRESSED_SENTINEL,
-            "I105 address must start with a sentinel");
-      }
-    } else {
-      final SentinelMatch match = matchAnyI105Sentinel(encoded);
-      if (match == null) {
-        throw new AccountAddressException(
-            AccountAddressErrorCode.MISSING_COMPRESSED_SENTINEL,
-            "I105 address must start with a sentinel");
-      }
-      payload = match.payload;
-    }
-    if (payload.length() <= COMPRESSED_CHECKSUM_LEN) {
-      throw new AccountAddressException(
-          AccountAddressErrorCode.COMPRESSED_TOO_SHORT, "I105 address is too short");
-    }
-    final int[] digits = new int[payload.length()];
-    for (int i = 0; i < payload.length(); i++) {
-      final String symbol = String.valueOf(payload.charAt(i));
-      final Integer value = COMPRESSED_INDEX.get(symbol);
+    final int[] digits = new int[encoded.length()];
+    for (int i = 0; i < encoded.length(); i++) {
+      final String symbol = String.valueOf(encoded.charAt(i));
+      final Integer value = I105_INDEX.get(symbol);
       if (value == null) {
         throw new AccountAddressException(
-            AccountAddressErrorCode.INVALID_COMPRESSED_CHAR,
+            AccountAddressErrorCode.INVALID_I105_CHAR,
             "invalid I105 alphabet symbol: " + symbol);
       }
       digits[i] = value;
     }
-    final int[] dataDigits = Arrays.copyOf(digits, digits.length - COMPRESSED_CHECKSUM_LEN);
-    final int[] checksumDigits = Arrays.copyOfRange(digits, digits.length - COMPRESSED_CHECKSUM_LEN, digits.length);
-    final byte[] canonical = decodeBaseN(dataDigits, COMPRESSED_BASE);
-    final int[] expected = compressedChecksumDigits(canonical);
-    if (!Arrays.equals(checksumDigits, expected)) {
+    final byte[] payload = decodeBaseN(digits, I105_BASE);
+    if (payload.length < 1 + I105_LITERAL_CHECKSUM_LEN) {
+      throw new AccountAddressException(
+          AccountAddressErrorCode.I105_TOO_SHORT, "I105 address is too short");
+    }
+    final int splitAt = payload.length - I105_LITERAL_CHECKSUM_LEN;
+    final byte[] body = Arrays.copyOf(payload, splitAt);
+    final byte[] checksum = Arrays.copyOfRange(payload, splitAt, payload.length);
+    if (!Arrays.equals(checksum, i105ChecksumBytes(body))) {
       throw new AccountAddressException(
           AccountAddressErrorCode.CHECKSUM_MISMATCH, "I105 checksum mismatch");
     }
-    return canonical;
-  }
-
-  private static boolean hasI105Sentinel(final String encoded) {
-    return i105DiscriminantFromSentinel(encoded) != null;
-  }
-
-  private static String i105Sentinel(final int discriminant) {
-    if (discriminant == DEFAULT_I105_DISCRIMINANT) {
-      return COMPRESSED_SENTINEL;
-    }
-    if (discriminant == 369) {
-      return "test";
-    }
-    if (discriminant == 0) {
-      return "dev";
-    }
-    return "n" + discriminant;
-  }
-
-  private static String i105SentinelFullWidth(final int discriminant) {
-    return asciiToFullWidth(i105Sentinel(discriminant));
-  }
-
-  private static String stripI105SentinelForDiscriminant(
-      final String encoded, final int discriminant) {
-    final String sentinel = i105Sentinel(discriminant);
-    if (encoded.startsWith(sentinel)) {
-      return encoded.substring(sentinel.length());
-    }
-    final String fullWidthSentinel = i105SentinelFullWidth(discriminant);
-    if (encoded.startsWith(fullWidthSentinel)) {
-      return encoded.substring(fullWidthSentinel.length());
-    }
-    return null;
-  }
-
-  private static Integer i105DiscriminantFromSentinel(final String encoded) {
-    for (final int discriminant : new int[] {DEFAULT_I105_DISCRIMINANT, 369, 0}) {
-      if (stripI105SentinelForDiscriminant(encoded, discriminant) != null) {
-        return discriminant;
+    final int[] decodedPrefix = decodeI105Prefix(body);
+    final int discriminant = decodedPrefix[0];
+    final int prefixLength = decodedPrefix[1];
+    if (expectedDiscriminant != null) {
+      final int normalizedExpected =
+          normalizeI105Discriminant(expectedDiscriminant.intValue(), "expected I105 discriminant");
+      if (discriminant != normalizedExpected) {
+        throw new AccountAddressException(
+            AccountAddressErrorCode.UNEXPECTED_NETWORK_PREFIX,
+            "unexpected I105 discriminant: expected "
+                + normalizedExpected
+                + ", found "
+                + discriminant);
       }
     }
-    if (encoded.startsWith("n")) {
-      return parseNumericI105Sentinel(encoded.substring(1), false);
-    }
-    if (encoded.startsWith("ｎ")) {
-      return parseNumericI105Sentinel(encoded.substring(1), true);
-    }
-    return null;
+    return Arrays.copyOfRange(body, prefixLength, body.length);
   }
 
-  private static Integer parseNumericI105Sentinel(final String input, final boolean fullWidthDigits) {
-    final StringBuilder digits = new StringBuilder();
-    for (int i = 0; i < input.length() && digits.length() < 5; i++) {
-      final char ch = input.charAt(i);
-      final char asciiDigit;
-      if (fullWidthDigits) {
-        asciiDigit = fullWidthDigitToAscii(ch);
-        if (asciiDigit == 0) {
-          break;
-        }
-      } else {
-        if (ch < '0' || ch > '9') {
-          break;
-        }
-        asciiDigit = ch;
+  private static int normalizeI105Discriminant(final int discriminant, final String context)
+      throws AccountAddressException {
+    if (discriminant < 0 || discriminant > I105_DISCRIMINANT_MAX) {
+      throw new AccountAddressException(
+          AccountAddressErrorCode.INVALID_I105_PREFIX,
+          context + " out of range: " + discriminant);
+    }
+    return discriminant;
+  }
+
+  private static byte[] encodeI105Prefix(final int discriminant) throws AccountAddressException {
+    final int normalized = normalizeI105Discriminant(discriminant, "I105 discriminant");
+    if (normalized <= 63) {
+      return new byte[] { (byte) normalized };
+    }
+    return new byte[] {
+        (byte) ((normalized & 0x3F) | 0x40),
+        (byte) (normalized >> 6)
+    };
+  }
+
+  private static int[] decodeI105Prefix(final byte[] payload) throws AccountAddressException {
+    if (payload.length == 0) {
+      throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for address payload");
+    }
+    final int first = payload[0] & 0xFF;
+    if (first <= 63) {
+      return new int[] { first, 1 };
+    }
+    if ((first & 0x40) != 0) {
+      if (payload.length < 2) {
+        throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for address payload");
       }
-      digits.append(asciiDigit);
+      final int discriminant = ((payload[1] & 0xFF) << 6) | (first & 0x3F);
+      return new int[] { discriminant, 2 };
     }
-    if (digits.length() == 0) {
-      return null;
-    }
-    return Integer.parseInt(digits.toString());
+    throw new AccountAddressException(
+        AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+        "unsupported I105 prefix encoding");
   }
 
-  private static String asciiToFullWidth(final String ascii) {
-    final StringBuilder builder = new StringBuilder(ascii.length());
-    for (int i = 0; i < ascii.length(); i++) {
-      builder.append(asciiCharToFullWidth(ascii.charAt(i)));
-    }
-    return builder.toString();
-  }
-
-  private static char asciiCharToFullWidth(final char ch) {
-    if (ch == ' ') {
-      return '\u3000';
-    }
-    if (ch >= 0x21 && ch <= 0x7E) {
-      return (char) (ch + 0xFEE0);
-    }
-    return ch;
-  }
-
-  private static char fullWidthDigitToAscii(final char ch) {
-    if (ch >= '０' && ch <= '９') {
-      return (char) ('0' + (ch - '０'));
-    }
-    return 0;
-  }
-
-  private static final class SentinelMatch {
-    final String payload;
-
-    SentinelMatch(final String payload) {
-      this.payload = payload;
-    }
-  }
-
-  private static SentinelMatch matchAnyI105Sentinel(final String encoded) {
-    final Integer discriminant = i105DiscriminantFromSentinel(encoded);
-    if (discriminant == null) {
-      return null;
-    }
-    final String payload = stripI105SentinelForDiscriminant(encoded, discriminant);
-    if (payload == null) {
-      return null;
-    }
-    return new SentinelMatch(payload);
+  private static byte[] i105ChecksumBytes(final byte[] body) {
+    final byte[] input = new byte[I105_CHECKSUM_PREFIX.length + body.length];
+    System.arraycopy(I105_CHECKSUM_PREFIX, 0, input, 0, I105_CHECKSUM_PREFIX.length);
+    System.arraycopy(body, 0, input, I105_CHECKSUM_PREFIX.length, body.length);
+    return Arrays.copyOf(Blake2b.digest512(input), I105_LITERAL_CHECKSUM_LEN);
   }
 
   private static int[] encodeBaseN(final byte[] input, final int base) throws AccountAddressException {
     if (base < 2) {
-      throw new AccountAddressException(AccountAddressErrorCode.INVALID_COMPRESSED_BASE, "invalid base for encoding");
+      throw new IllegalArgumentException("base must be at least 2");
     }
     if (input.length == 0) {
       return new int[] { 0 };
@@ -1180,14 +1031,14 @@ public final class AccountAddress {
 
   private static byte[] decodeBaseN(final int[] digits, final int base) throws AccountAddressException {
     if (base < 2) {
-      throw new AccountAddressException(AccountAddressErrorCode.INVALID_COMPRESSED_BASE, "invalid base for decoding");
+      throw new IllegalArgumentException("base must be at least 2");
     }
     if (digits.length == 0) {
       throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for address payload");
     }
     for (final int digit : digits) {
       if (digit < 0 || digit >= base) {
-        throw new AccountAddressException(AccountAddressErrorCode.INVALID_COMPRESSED_DIGIT, "invalid digit " + digit + " for base " + base);
+        throw new IllegalArgumentException("invalid digit " + digit + " for base " + base);
       }
     }
     final int[] value = Arrays.copyOf(digits, digits.length);
@@ -1221,70 +1072,6 @@ public final class AccountAddress {
       result[i] = bytes.get(i);
     }
     return result;
-  }
-
-  private static int[] compressedChecksumDigits(final byte[] canonical) {
-    final int[] values = convertToBase32(canonical);
-    final int[] expanded = expandHrp("snx", values, COMPRESSED_CHECKSUM_LEN);
-    final int polymod = bech32Polymod(expanded) ^ BECH32M_CONST;
-    final int[] checksum = new int[COMPRESSED_CHECKSUM_LEN];
-    for (int i = 0; i < COMPRESSED_CHECKSUM_LEN; i++) {
-      final int shift = 5 * (COMPRESSED_CHECKSUM_LEN - 1 - i);
-      checksum[i] = (polymod >> shift) & 0x1F;
-    }
-    return checksum;
-  }
-
-  private static int[] convertToBase32(final byte[] data) {
-    int acc = 0;
-    int bits = 0;
-    final List<Integer> out = new ArrayList<>();
-    for (final byte b : data) {
-      acc = (acc << 8) | (b & 0xFF);
-      bits += 8;
-      while (bits >= 5) {
-        bits -= 5;
-        out.add((acc >> bits) & 0x1F);
-      }
-    }
-    if (bits > 0) {
-      out.add((acc << (5 - bits)) & 0x1F);
-    }
-    final int[] result = new int[out.size()];
-    for (int i = 0; i < out.size(); i++) {
-      result[i] = out.get(i);
-    }
-    return result;
-  }
-
-  private static int[] expandHrp(final String hrp, final int[] data, final int checksumLen) {
-    final int[] values = new int[hrp.length() * 2 + 1 + data.length + checksumLen];
-    int idx = 0;
-    for (int i = 0; i < hrp.length(); i++) {
-      final int code = hrp.charAt(i);
-      values[idx++] = code >> 5;
-    }
-    values[idx++] = 0;
-    for (int i = 0; i < hrp.length(); i++) {
-      values[idx++] = hrp.charAt(i) & 0x1F;
-    }
-    System.arraycopy(data, 0, values, idx, data.length);
-    return values;
-  }
-
-  private static int bech32Polymod(final int[] values) {
-    final int[] generators = { 0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3 };
-    int chk = 1;
-    for (final int value : values) {
-      final int top = chk >> 25;
-      chk = ((chk & 0x1ffffff) << 5) ^ value;
-      for (int i = 0; i < generators.length; i++) {
-        if (((top >> i) & 1) == 1) {
-          chk ^= generators[i];
-        }
-      }
-    }
-    return chk;
   }
 
   private static String bytesToHex(final byte[] bytes) {

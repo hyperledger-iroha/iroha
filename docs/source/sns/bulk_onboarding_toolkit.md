@@ -8,8 +8,8 @@ summary: CSV → RegisterNameRequestV1 automation for large registrants.
 **Roadmap reference:** SN-3b “Bulk onboarding tooling”  
 **Artifacts:** `scripts/sns_bulk_onboard.py`, `scripts/tests/test_sns_bulk_onboard.py`
 
-Large registrars often need to pre-stage hundreds of `.sora` / `.nexus`
-registrations using the same governance approvals and settlement rails.
+Large registrars often need to pre-stage hundreds of ledger-backed SNS names
+using the same governance approvals and settlement rails.
 Manually crafting JSON payloads or re-running the CLI quickly becomes tedious,
 so SN-3b adds a deterministic CSV→Norito builder that prepares
 `RegisterNameRequestV1` structures for Torii or the CLI.
@@ -26,10 +26,10 @@ The parser requires the following header row (order is flexible):
 | Column | Required | Description |
 |--------|----------|-------------|
 | `label` | ✅ | Requested label (mixed case accepted; tool normalises per Norm v1/UTS‑46). |
-| `suffix_id` | ✅ | Numeric suffix identifier (decimal or `0x` hex). |
+| `suffix_id` | ✅ | Numeric namespace identifier (`0x1001` account-alias, `0x1002` domain, `0x1003` dataspace; decimal or `0x` hex accepted). |
 | `owner` | ✅ | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | ✅ | Integer `1..=255`. |
-| `payment_asset_id` | ✅ | Settlement asset (e.g., `xor#sora`). |
+| `payment_asset_id` | ✅ | Settlement asset (e.g., `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | ✅ | Unsigned integers representing asset-native units. |
 | `settlement_tx` | ✅ | JSON value or literal string describing the payment transaction/hash. |
 | `payment_payer` | ✅ | AccountId that authorised the payment. |
@@ -67,7 +67,7 @@ On success the script writes an aggregated manifest:
   "source_csv": "/abs/path/registrations.csv",
   "requests": [
     {
-      "selector": {"version":1,"suffix_id":1,"label":"alpha"},
+      "selector": {"version":1,"suffix_id":4098,"label":"alpha"},
       "owner": "i105...",
       "controllers": [
         {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
@@ -75,7 +75,7 @@ On success the script writes an aggregated manifest:
       "term_years": 2,
       "pricing_class_hint": null,
       "payment": {
-        "asset_id":"xor#sora",
+        "asset_id":"61CtjvNd9T3THAR65GsMVHr82Bjc",
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
@@ -90,7 +90,7 @@ On success the script writes an aggregated manifest:
     "total_requests": 120,
     "total_gross_amount": 28800,
     "total_net_amount": 28800,
-    "suffix_breakdown": {"1":118,"42":2}
+    "suffix_breakdown": {"4098":118,"4099":2}
   }
 }
 ```
@@ -104,7 +104,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v1/sns/names
   done
 ```
 
@@ -120,17 +120,16 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submit-torii-url https://torii.sora.net \
   --submit-token-file ~/.config/sora/tokens/registrar.token \
   --poll-status \
-  --suffix-map configs/sns_suffix_map.json \
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- The helper issues one `POST /v1/sns/registrations` per request and aborts on
+- The helper issues one `POST /v1/sns/names` per request and aborts on
   the first HTTP error. Responses (success/failure) are appended to the log path
   as NDJSON records.
-- `--poll-status` re-queries `/v1/sns/registrations/{selector}` after each
+- `--poll-status` re-queries `/v1/sns/names/{namespace}/{literal}` after each
   submission (up to `--poll-attempts`, default 5) to confirm that the record is
-  visible. Provide `--suffix-map` (JSON of `suffix_id → "suffix"` values) so the
-  tool can derive `{label}.{suffix}` literals for polling.
+  visible. The helper derives `{namespace}` directly from the fixed `suffix_id`,
+  so `--suffix-map` is no longer required for the canonical polling path.
 - Tunables: `--submit-timeout`, `--poll-attempts`, `--poll-interval`.
 
 ### 3.2 iroha CLI mode
@@ -185,7 +184,6 @@ docs/portal/scripts/sns_bulk_release.sh \
   --csv assets/sns/registrations_2026q2.csv \
   --torii-url https://torii.sora.network \
   --token-env SNS_TORII_TOKEN \
-  --suffix-map configs/sns_suffix_map.json \
   --poll-status \
   --cli-path ./target/release/iroha \
   --cli-config configs/registrar.toml
@@ -215,8 +213,8 @@ series:
 # HELP sns_bulk_release_requests_total Number of registration requests per release and suffix.
 # TYPE sns_bulk_release_requests_total gauge
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
-sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
-sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
+sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="4098"} 118
+sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="61CtjvNd9T3THAR65GsMVHr82Bjc"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 

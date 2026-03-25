@@ -173,7 +173,7 @@ const txs = await torii.listAccountTransactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg
   limit: 5,
   assetId,
 });
-const holders = await torii.listAssetHolders("rose#wonderland", {
+const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 5,
   assetId,
 });
@@ -190,7 +190,7 @@ auxiliares de contagem regressiva (`deadline_kind`, `deadline_state`, `deadline_
 `deadline_ms_remaining`) destaque o próximo prazo de expiração (atualizar → política
 → certificado) para que os crachás da UI possam avisar os operadores sempre que uma permissão for
 <24h restantes. O SDK
-espelha os filtros REST expostos por `/v1/offline/allowances`:
+espelha os filtros REST expostos por `/v1/offline/reserve/topup`:
 `certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
 `verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` e o
 `requireVerdict` / `onlyMissingVerdict` booleanos. Combinações inválidas (para

@@ -36,7 +36,7 @@ const REGISTER_ACCOUNT = {
 const REGISTER_ASSET = {
   Register: {
     AssetDefinition: {
-      id: "rose#wonderland",
+      id: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
       logo: null,
       metadata: {},
       mintable: "Infinitely",

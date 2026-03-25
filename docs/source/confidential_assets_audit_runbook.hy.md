@@ -32,7 +32,7 @@ translator: machine-google-reviewed
   ընտրովի շրջանակը մեկ ակտիվի սահմանմանը: CLI օրինակ.
 
   ```bash
-  iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "rose#wonderland" } }'
+  iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM" } }'
   ```
 
 - Քաղաքականության մետատվյալները և սպասվող անցումները հասանելի են միջոցով

@@ -5481,7 +5481,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_asset_holders_accepts_flat_arguments
             "params": {
                 "name": "iroha.assets.holders",
                 "arguments": {
-                    "definition_id": "rose#wonderland",
+                    "definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                     "limit": 0
                 }
             }
@@ -5520,7 +5520,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_asset_holders_query_accepts_flat_arg
             "params": {
                 "name": "iroha.assets.holders.query",
                 "arguments": {
-                    "definition_id": "rose#wonderland",
+                    "definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                     "limit": 2
                 }
             }

@@ -42,7 +42,7 @@ fn roundtrip_transfer_asset() {
           transfer_asset(
             account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
             account_id("6cmzPVPX8dTmJWnCc8X5MpcZLb7UjrvR5Y1VdRmfj9pbb93hFbJfpLb"),
-            asset_definition("rose#wonderland"),
+            asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
             1
           );
         }

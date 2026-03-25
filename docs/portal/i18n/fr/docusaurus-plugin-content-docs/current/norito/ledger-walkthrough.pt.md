@@ -64,7 +64,7 @@ Crie un nouveau travail infiniment minable chamado `coffee` à l'intérieur du d
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 La CLI imprime le hachage de la transaction envoyée (par exemple, `0x5f...`). Garde-o para
@@ -73,7 +73,7 @@ consulter le statut plus tard.
 ## 3. Donnez des unités au contact de l'opérateur
 
 As quantidades de activos vivem sob o par `(asset definition, account)`. Neuf 250
-unités de `coffee#wonderland` dans `$ADMIN_ACCOUNT` :
+unités de `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` dans `$ADMIN_ACCOUNT` :
 
 ```sh
 iroha --config defaults/client.toml asset mint \

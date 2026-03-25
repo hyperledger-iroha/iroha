@@ -106,15 +106,15 @@ Struct ReservedAssignmentRequestV1 {
 
 | और देखें और देखेंああ |ああ |
 |-----------|-----------|-----------|------|
-| `/v1/sns/registrations` |投稿 | `RegisterNameRequestV1` |ありがとうございます。ログインしてください。 |
-| `/v1/sns/registrations/{selector}/renew` |投稿 | `RenewNameRequestV1` |そうです。 يفرض نوافذ 恵み/救い من السياسة. |
-| `/v1/sns/registrations/{selector}/transfer` |投稿 | `TransferNameRequestV1` | بعد ارفاق موافقات الحوكمة. |
-| `/v1/sns/registrations/{selector}/controllers` |置く | `UpdateControllersRequestV1` |コントローラーححقق من عناوين الحساب الموقعة. |
-| `/v1/sns/registrations/{selector}/freeze` |投稿 | `FreezeNameRequestV1` |保護者/評議会。守護者 ومرجع دفتر حوكمة。 |
-| `/v1/sns/registrations/{selector}/freeze` |削除 | `GovernanceHookV1` | فك التجميد بعد المعالجة؛をオーバーライドします。 |
+| `/v1/sns/names` |投稿 | `RegisterNameRequestV1` |ありがとうございます。ログインしてください。 |
+| `/v1/sns/names/{namespace}/{literal}/renew` |投稿 | `RenewNameRequestV1` |そうです。 يفرض نوافذ 恵み/救い من السياسة. |
+| `/v1/sns/names/{namespace}/{literal}/transfer` |投稿 | `TransferNameRequestV1` | بعد ارفاق موافقات الحوكمة. |
+| `/v1/sns/names/{namespace}/{literal}/controllers` |置く | `UpdateControllersRequestV1` |コントローラーححقق من عناوين الحساب الموقعة. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` |投稿 | `FreezeNameRequestV1` |保護者/評議会。守護者 ومرجع دفتر حوكمة。 |
+| `/v1/sns/names/{namespace}/{literal}/freeze` |削除 | `GovernanceHookV1` | فك التجميد بعد المعالجة؛をオーバーライドします。 |
 | `/v1/sns/reserved/{selector}` |投稿 | `ReservedAssignmentRequestV1` |管理人/評議会。 |
 | `/v1/sns/policies/{suffix_id}` |入手 | -- | يجلب `SuffixPolicyV1` الحالي (قابل للكاش)。 |
-| `/v1/sns/registrations/{selector}` |入手 | -- | يعيد `NameRecordV1` الحالي + الحالة الفعلية (アクティブ、グレース、الخ)。 |
+| `/v1/sns/names/{namespace}/{literal}` |入手 | -- | يعيد `NameRecordV1` الحالي + الحالة الفعلية (アクティブ、グレース、الخ)。 |
 
 ** セレクタ:** مقطع `{selector}` يقبل I105 او مضغوط او 16 進数 قياسي حسب ADDR-5; Torii يطبعها عبر `NameSelectorV1`。
 
@@ -129,7 +129,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -154,7 +154,7 @@ iroha sns policy --suffix-id 1
 iroha sns renew \
   --selector makoto.sora \
   --term-years 1 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 120 \
   --payment-settlement '"renewal-settlement"' \
   --payment-signature '"steward-signature"'
@@ -177,7 +177,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` يجب ان يحتوي على سجل `GovernanceHookV1` صالح (提案 ID 投票ハッシュ数 تواقيع スチュワード/ガーディアン)。 كل امر يعكس ببساطة نقطة النهاية `/v1/sns/registrations/{selector}/...` المقابلة حتى يتمكن مشغلو البيتا من تمرين اسطح Torii SDK。
+`--governance-json` يجب ان يحتوي على سجل `GovernanceHookV1` صالح (提案 ID 投票ハッシュ数 تواقيع スチュワード/ガーディアン)。 كل امر يعكس ببساطة نقطة النهاية `/v1/sns/names/{namespace}/{literal}/...` المقابلة حتى يتمكن مشغلو البيتا من تمرين اسطح Torii SDK。
 
 ## 4. gRPC の使用
 
@@ -247,7 +247,7 @@ Torii يتحقق من الاثباتات عبر فحص:
 
 1. ガーディアン يرسل `FreezeNameRequestV1` مع تذكرة تشير الى id حادث.
 2. Torii は `NameStatus::Frozen`、`NameFrozen` です。
-3. オーバーライドします。 `/v1/sns/registrations/{selector}/freeze` を削除してください。`GovernanceHookV1` を削除してください。
+3. オーバーライドします。 `/v1/sns/names/{namespace}/{literal}/freeze` を削除してください。`GovernanceHookV1` を削除してください。
 4. Torii は、`NameUnfrozen` をオーバーライドします。
 
 ## 7. いいえ

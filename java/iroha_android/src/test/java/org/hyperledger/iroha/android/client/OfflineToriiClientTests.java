@@ -82,7 +82,7 @@ public final class OfflineToriiClientTests {
                   "certificate_id_hex": "deadbeef",
                   "controller_id": "alice@wonderland",
                   "controller_display": "alice@wonderland",
-                  "asset_id": "usd#wonderland",
+                  "asset_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
                   "asset_definition_id": "%s",
                   "asset_definition_name": "USD",
                   "asset_definition_alias": null,
@@ -621,7 +621,7 @@ public final class OfflineToriiClientTests {
               "receiver_display": "merchant@wonderland",
               "deposit_account_id": "merchant@wonderland",
               "deposit_account_display": "merchant@wonderland",
-              "asset_id": "usd#wonderland",
+              "asset_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
               "receipt_count": 1,
               "total_amount": "5",
               "claimed_delta": "5",
@@ -732,7 +732,7 @@ public final class OfflineToriiClientTests {
               "certificate": {
                 "controller": "alice@wonderland",
                 "operator": "alice@wonderland",
-                "allowance": { "asset": "usd#wonderland", "amount": "10", "commitment": [1, 2] },
+                "allowance": { "asset": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "amount": "10", "commitment": [1, 2] },
                 "spend_public_key": "ed0120deadbeef",
                 "attestation_report": [3, 4],
                 "issued_at_ms": 100,
@@ -752,7 +752,7 @@ public final class OfflineToriiClientTests {
             .baseUri(URI.create("https://example.com"))
             .build();
     final OfflineAllowanceCommitment allowance =
-        new OfflineAllowanceCommitment("usd#wonderland", "10", new byte[] {1, 2});
+        new OfflineAllowanceCommitment("7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "10", new byte[] {1, 2});
     final OfflineWalletPolicy policy = new OfflineWalletPolicy("10", "5", 200L);
     final OfflineWalletCertificateDraft draft =
         new OfflineWalletCertificateDraft(
@@ -858,7 +858,7 @@ public final class OfflineToriiClientTests {
               "certificate": {
                 "controller": "alice@wonderland",
                 "operator": "alice@wonderland",
-                "allowance": { "asset": "usd#wonderland", "amount": "10", "commitment": [1, 2] },
+                "allowance": { "asset": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "amount": "10", "commitment": [1, 2] },
                 "spend_public_key": "ed0120deadbeef",
                 "attestation_report": [3, 4],
                 "issued_at_ms": 100,
@@ -878,7 +878,7 @@ public final class OfflineToriiClientTests {
             .baseUri(URI.create("https://example.com"))
             .build();
     final OfflineAllowanceCommitment allowance =
-        new OfflineAllowanceCommitment("usd#wonderland", "10", new byte[] {1, 2});
+        new OfflineAllowanceCommitment("7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "10", new byte[] {1, 2});
     final OfflineWalletPolicy policy = new OfflineWalletPolicy("10", "5", 200L);
     final OfflineWalletCertificateDraft draft =
         new OfflineWalletCertificateDraft(
@@ -917,7 +917,7 @@ public final class OfflineToriiClientTests {
             .baseUri(URI.create("https://example.com"))
             .build();
     final OfflineAllowanceCommitment allowance =
-        new OfflineAllowanceCommitment("usd#wonderland", "10", new byte[] {1, 2});
+        new OfflineAllowanceCommitment("7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "10", new byte[] {1, 2});
     final OfflineWalletPolicy policy = new OfflineWalletPolicy("10", "5", 200L);
     final String verdictId =
         "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
@@ -972,7 +972,7 @@ public final class OfflineToriiClientTests {
             .baseUri(URI.create("https://example.com"))
             .build();
     final OfflineAllowanceCommitment allowance =
-        new OfflineAllowanceCommitment("usd#wonderland", "10", new byte[] {1, 2});
+        new OfflineAllowanceCommitment("7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "10", new byte[] {1, 2});
     final OfflineWalletPolicy policy = new OfflineWalletPolicy("10", "5", 200L);
     final OfflineWalletCertificate certificate =
         new OfflineWalletCertificate(
@@ -1006,7 +1006,7 @@ public final class OfflineToriiClientTests {
                       "certificate": {
                         "controller": "alice@wonderland",
                         "operator": "alice@wonderland",
-                        "allowance": { "asset": "usd#wonderland", "amount": "10", "commitment": [1, 2] },
+                        "allowance": { "asset": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "amount": "10", "commitment": [1, 2] },
                         "spend_public_key": "ed0120deadbeef",
                         "attestation_report": [3, 4],
                         "issued_at_ms": 100,
@@ -1033,7 +1033,7 @@ public final class OfflineToriiClientTests {
             .baseUri(URI.create("https://example.com"))
             .build();
     final OfflineAllowanceCommitment allowance =
-        new OfflineAllowanceCommitment("usd#wonderland", "10", new byte[] {1, 2});
+        new OfflineAllowanceCommitment("7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "10", new byte[] {1, 2});
     final OfflineWalletPolicy policy = new OfflineWalletPolicy("10", "5", 200L);
     final OfflineWalletCertificateDraft draft =
         new OfflineWalletCertificateDraft(
@@ -1075,7 +1075,7 @@ public final class OfflineToriiClientTests {
                       "certificate": {
                         "controller": "alice@wonderland",
                         "operator": "alice@wonderland",
-                        "allowance": { "asset": "usd#wonderland", "amount": "10", "commitment": [1, 2] },
+                        "allowance": { "asset": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "amount": "10", "commitment": [1, 2] },
                         "spend_public_key": "ed0120deadbeef",
                         "attestation_report": [3, 4],
                         "issued_at_ms": 100,
@@ -1102,7 +1102,7 @@ public final class OfflineToriiClientTests {
             .baseUri(URI.create("https://example.com"))
             .build();
     final OfflineAllowanceCommitment allowance =
-        new OfflineAllowanceCommitment("usd#wonderland", "10", new byte[] {1, 2});
+        new OfflineAllowanceCommitment("7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "10", new byte[] {1, 2});
     final OfflineWalletPolicy policy = new OfflineWalletPolicy("10", "5", 200L);
     final OfflineWalletCertificateDraft draft =
         new OfflineWalletCertificateDraft(

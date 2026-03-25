@@ -34,7 +34,7 @@ SNS 路線圖跟踪每個批准的後綴 (SN-1/SN-2)。此頁面反映了
 | `status` |枚舉 | `active`、`paused` 或 `revoked` 描述啟動準備情況。 |
 | `steward_account` |字符串|負責管理的帳戶（匹配註冊商政策掛鉤）。 |
 | `fund_splitter_account` |字符串|根據 `fee_split` 在路由之前接收付款的帳戶。 |
-| `payment_asset_id` |字符串|用於結算的資產（初始隊列為 `xor#sora`）。 |
+| `payment_asset_id` |字符串|用於結算的資產（初始隊列為 `61CtjvNd9T3THAR65GsMVHr82Bjc`）。 |
 | `min_term_years` / `max_term_years` |整數 |購買保單的期限限制。 |
 | `grace_period_days` / `redemption_period_days` |整數 |由 Torii 強制執行的更新安全窗口。 |
 | `referral_cap_bps` |整數 |治理允許的最大推薦剝離（基點）。 |
@@ -47,9 +47,9 @@ SNS 路線圖跟踪每個批准的後綴 (SN-1/SN-2)。此頁面反映了
 
 |後綴 | ID (`hex`) |管家|資金分割 |狀態 |支付資產|推薦上限 (bps) |期限（最短 – 最長年）|恩典/救贖（天）|定價等級（正則表達式 → 基本價格/拍賣）|保留標籤|費用分割（T/S/R/E bps）|政策版本|
 |--------|------------|---------|-------------|--------|----------------|--------------------|--------------------------|----------------------------|------------------------------------------------------------|-----------------|----------------------------------------|----------------|
-| `.sora` | `0x0001` | `i105...` | `i105...` |活躍| `xor#sora` | 500 | 1 – 5 | 30 / 60 | `T0: ^[a-z0-9]{3,}$ → 120 XOR (Vickrey)` | `treasury → i105...` | `7000 / 3000 / 1000 / 0` | 1 |
-| `.nexus` | `0x0002` | `i105...` | `i105...` |暫停| `xor#sora` | 300 | 300 1 – 3 | 15 / 30 | `T0: ^[a-z0-9]{4,}$ → 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ → 4000 XOR (Dutch floor 500)` | `treasury → i105...`、`guardian → i105...` | `6500 / 2500 / 800 / 200` | 2 |
-| `.dao` | `0x0003` | `i105...` | `i105...` |撤銷| `xor#sora` | 0 | 1 – 2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ → 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
+| `.sora` | `0x0001` | `i105...` | `i105...` |活躍| `61CtjvNd9T3THAR65GsMVHr82Bjc` | 500 | 1 – 5 | 30 / 60 | `T0: ^[a-z0-9]{3,}$ → 120 XOR (Vickrey)` | `treasury → i105...` | `7000 / 3000 / 1000 / 0` | 1 |
+| `.nexus` | `0x0002` | `i105...` | `i105...` |暫停| `61CtjvNd9T3THAR65GsMVHr82Bjc` | 300 | 300 1 – 3 | 15 / 30 | `T0: ^[a-z0-9]{4,}$ → 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ → 4000 XOR (Dutch floor 500)` | `treasury → i105...`、`guardian → i105...` | `6500 / 2500 / 800 / 200` | 2 |
+| `.dao` | `0x0003` | `i105...` | `i105...` |撤銷| `61CtjvNd9T3THAR65GsMVHr82Bjc` | 0 | 1 – 2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ → 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
 
 ## JSON 摘錄
 
@@ -63,13 +63,13 @@ SNS 路線圖跟踪每個批准的後綴 (SN-1/SN-2)。此頁面反映了
       "suffix_id": 1,
       "status": "active",
       "fund_splitter_account": "i105...",
-      "payment_asset_id": "xor#sora",
+      "payment_asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
       "referral_cap_bps": 500,
       "pricing": [
         {
           "tier_id": 0,
           "label_regex": "^[a-z0-9]{3,}$",
-          "base_price": {"asset_id": "xor#sora", "amount": 120},
+          "base_price": {"asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc", "amount": 120},
           "auction_kind": "vickrey_commit_reveal",
           "min_duration_years": 1,
           "max_duration_years": 5

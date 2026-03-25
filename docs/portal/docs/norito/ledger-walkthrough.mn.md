@@ -71,7 +71,7 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI нь илгээсэн гүйлгээний хэшийг хэвлэдэг (жишээлбэл,
@@ -80,7 +80,7 @@ CLI нь илгээсэн гүйлгээний хэшийг хэвлэдэг (ж
 ## 3. Нэгжийг операторын дансанд оруулна
 
 Хөрөнгийн тоо хэмжээ нь `(asset definition, account)` хосын дор амьдардаг. гаа 250
-`coffee#wonderland` нэгжийг `$ADMIN_ACCOUNT` болгон:
+`7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` нэгжийг `$ADMIN_ACCOUNT` болгон:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

@@ -2239,7 +2239,7 @@ impl NexusStaking {
 /// Nexus fee schedule for universal XOR-denominated charges.
 #[derive(Debug, Clone)]
 pub struct NexusFees {
-    /// Asset definition used to collect fees (e.g., `xor#sora`).
+    /// Asset definition used to collect fees (e.g., `61CtjvNd9T3THAR65GsMVHr82Bjc`).
     pub fee_asset_id: String,
     /// Account that receives collected fees.
     pub fee_sink_account_id: String,
@@ -4939,7 +4939,7 @@ pub struct Torii {
     pub require_api_token: bool,
     /// Allowed API tokens (opaque strings). Empty means no tokens defined.
     pub api_tokens: Vec<String>,
-    /// Optional fee policy: asset id (e.g., "rose#wonderland").
+    /// Optional fee policy: asset definition id (e.g., `62Fk4FPcMuLvW5QjDGNF2a4jAmjM`).
     pub api_fee_asset_id: Option<String>,
     /// Optional fee policy: fixed amount per request.
     pub api_fee_amount: Option<u64>,
@@ -5624,12 +5624,31 @@ pub struct ToriiFaucet {
 /// Offline certificate issuer configuration exposed to Torii.
 #[derive(Debug, Clone)]
 pub struct ToriiOfflineIssuer {
+    /// Optional on-chain operator account authorized to manage reserve escrow on behalf of users.
+    pub operator_authority: Option<AccountId>,
     /// Private key used to sign offline wallet certificates.
     pub operator_private_key: ExposedPrivateKey,
     /// Additional legacy private keys accepted for build-claim signatures.
     pub legacy_operator_private_keys: Vec<ExposedPrivateKey>,
     /// Allowed controller allow-list (empty => allow all).
     pub allowed_controllers: Vec<AccountId>,
+    /// Reserve-policy values used for device-bound offline reserve authorization.
+    pub reserve_policy: ToriiOfflineReservePolicy,
+}
+
+/// Device-bound offline reserve policy exposed to Torii.
+#[derive(Debug, Clone)]
+pub struct ToriiOfflineReservePolicy {
+    /// Maximum total spendable offline balance per reserve.
+    pub max_balance: String,
+    /// Maximum single offline transfer value.
+    pub max_tx_value: String,
+    /// Authorization lifetime.
+    pub authorization_ttl: Duration,
+    /// Authorization refresh deadline.
+    pub authorization_refresh: Duration,
+    /// Revocation bundle lifetime.
+    pub revocation_ttl: Duration,
 }
 
 /// RAM-LFE runtime configuration exposed to Torii.

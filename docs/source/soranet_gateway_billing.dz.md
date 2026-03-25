@@ -49,7 +49,7 @@ cargo xtask soranet-gateway-billing \
   --guardrails configs/soranet/gateway_m0/billing_guardrails.json \
   --payer i105... \
   --treasury i105... \
-  --asset xor#wonderland \
+  --asset 4cuvDVPuLBKJyN6dPbRQhmLh68sU \
   --out artifacts/soranet/gateway_billing
 ```
 

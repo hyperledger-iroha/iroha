@@ -125,7 +125,7 @@ Enum AuctionKind {
 | `suffix` | `AsciiString` | 、`sora`。 |
 | `steward` | `AccountId` |スチュワード、統治憲章。 |
 | `status` | `SuffixStatus` | `Active`、`Paused`、`Revoked`。 |
-| `payment_asset_id` | `AsciiString` | Актив 和解 по умолчанию (например `xor#sora`)。 |
+| `payment_asset_id` | `AsciiString` | Актив 和解 по умолчанию (например `61CtjvNd9T3THAR65GsMVHr82Bjc`)。 |
 | `pricing` | `Vec<PriceTierV1>` |層と層が異なります。 |
 | `min_term_years` | `u8` |階層をオーバーライドします。 |
 | `grace_period_days` | `u16` |デフォルトは 30。
@@ -285,7 +285,7 @@ SuffixPolicyV1 {
     suffix: "sora",
     steward: "i105...",
     status: Active,
-    payment_asset_id: "xor#sora",
+    payment_asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc",
     pricing: [
         PriceTierV1 { tier_id:0, label_regex:"^[a-z0-9]{3,}$", base_price:"120 XOR", auction_kind:VickreyCommitReveal, dutch_floor:None, min_duration_years:1, max_duration_years:5 },
         PriceTierV1 { tier_id:1, label_regex:"^[a-z]{1,2}$", base_price:"10_000 XOR", auction_kind:DutchReopen, dutch_floor:Some("1_000 XOR"), min_duration_years:1, max_duration_years:3 }

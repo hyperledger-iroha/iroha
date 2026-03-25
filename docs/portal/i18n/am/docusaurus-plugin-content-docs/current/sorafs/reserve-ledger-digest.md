@@ -33,7 +33,7 @@ translation_last_reviewed: 2026-02-07
     --provider-account i105... \
     --treasury-account i105... \
     --reserve-account i105... \
-    --asset-definition xor#sora \
+    --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc \
     --json-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.json
    ```
    የሂሳብ ደብተር አጋዥ የ`ledger_projection` ብሎክን (የኪራይ ክፍያ ፣ የተጠራቀመ) አያይዞ።

@@ -346,7 +346,7 @@ const holdings = await torii.listAccountAssets("i105...", {
   assetId: "norito:4e52543000000001",
 });
 console.log("asset holdings", holdings.items);
-const holders = await torii.listAssetHolders("rose#wonderland", {
+const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 5,
   assetId: "norito:4e52543000000001",
 });
@@ -359,7 +359,7 @@ console.log("recent hashes", txs.items.map((tx) => tx.entrypoint_hash));
 
 for await (const nft of torii.iterateNfts({
   pageSize: 10,
-  filter: { Eq: ["id.definition_id", "art#wonderland"] },
+  filter: { Eq: ["id.definition_id", "5Pz9SwdN9eXPbiXPX9HRCpzCcE3o"] },
   sort: [{ key: "id", order: "asc" }],
 })) {
   console.log("nft:", nft.id);
@@ -367,7 +367,7 @@ for await (const nft of torii.iterateNfts({
 
 for await (const holding of torii.iterateAccountAssetsQuery("i105...", {
   pageSize: 8,
-  filter: { Eq: ["asset_id.definition_id", "rose#wonderland"] },
+  filter: { Eq: ["asset_id.definition_id", "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"] },
   select: [{ Fields: ["asset_id", "quantity"] }],
 })) {
   console.log("compressed holding", holding.asset_id, "->", holding.quantity);
@@ -440,119 +440,37 @@ for await (const nft of torii.iterateAccountNfts("i105...", {
 // env-driven pagination/filters so you can smoke-test permissions against a live Torii.
 ```
 
-Offline allowance responses expose the enriched ledger metadata up-front —
-`expires_at_ms`, `policy_expires_at_ms`, `refresh_at_ms`, `verdict_id_hex`,
-`attestation_nonce_hex`, and `remaining_amount` sit alongside the embedded
-record so dashboards do not have to drill into the raw payloads to understand
-refresh cadence or verdict bindings. `integrity_metadata` mirrors the Android
-policy slug (`policy`) for quick filtering; when `policy === "provisioned"`
-the helper adds the inspector key plus manifest schema/version/TTL/digest under
-`integrity_metadata.provisioned` so auditors can confirm which manifest profile
-was authorised. The new countdown helpers
-(`deadline_kind`, `deadline_state`, `deadline_ms`, `deadline_ms_remaining`)
-surface the next expiring deadline (refresh → policy → certificate) so UIs can
-render “warning” badges whenever an allowance has <24 h remaining.
+## Offline reserve routes
 
-Offline transfer entries now expose `platform_policy` plus
-`platform_token_snapshot.policy`/`.attestation_jws_b64`, which mirrors the
-Android policy label (`marker_key`, `play_integrity`, `hms_safety_detect`,
-`provisioned`) and bundles the inspector-issued attestation JWS. Dashboards can
-split queues by policy source or export the attestation token directly to
-reporting tooling without parsing the raw Norito record. When you need the full
-manifest metadata, inspect `integrity_metadata`: the helper mirrors the policy
-slug and, for Provisioned allowances, surfaces the inspector key, schema,
-version, TTL, and optional digest under `integrity_metadata.provisioned`.
-
-`listOfflineAllowances` accepts the same convenience filters exposed via
-`/v1/offline/allowances`: pass `assetId`, `certificateExpiresBeforeMs/AfterMs`,
-`policyExpiresBeforeMs/AfterMs`, `verdictIdHex`, `requireVerdict`, or
-`onlyMissingVerdict` to avoid building JSON predicates for common reports.
-
-To top up an offline allowance, issue a certificate and register it on-ledger.
-`topUpOfflineAllowance` performs both steps in one call and returns the issued
-certificate plus registration response. There is no dedicated top-up endpoint;
-the helper simply chains the issue + register calls.
+The pre-release allowance/certificate flow was removed before launch. JavaScript integrations should
+use the reserve routes directly through `/v1/offline/reserve/*`:
 
 ```js
-const topUp = await torii.topUpOfflineAllowance({
-  authority: "i105:...",
-  privateKey: "ed25519:...",
-  certificate: draft,
-});
-console.log("certificate id", topUp.registration.certificate_id_hex);
+const setup = await fetch(`${baseUrl}/v1/offline/reserve/setup`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({
+    account_id: 'i105:...',
+    device_id: 'device-123',
+    offline_public_key: 'ed25519:...',
+    operation_id: crypto.randomUUID(),
+  }),
+}).then((response) => response.json());
+
+const topUp = await fetch(`${baseUrl}/v1/offline/reserve/topup`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({
+    reserve_id: setup.reserve_state.reserve_id,
+    amount: '100.00',
+    operation_id: crypto.randomUUID(),
+  }),
+}).then((response) => response.json());
 ```
 
-For renewals, call `topUpOfflineAllowanceRenewal` with the existing certificate id:
-
-```js
-const renewed = await torii.topUpOfflineAllowanceRenewal(
-  topUp.registration.certificate_id_hex,
-  {
-    authority: "i105:...",
-    privateKey: "ed25519:...",
-    certificate: draft,
-  },
-);
-console.log("renewed id", renewed.registration.certificate_id_hex);
-```
-
-If you already have a signed certificate (for example, issued out-of-band),
-call `registerOfflineAllowance` or `renewOfflineAllowance` directly instead of
-the top-up helpers.
-
-### Norito encoding and transaction helpers
-
-Use the Norito helpers when you need canonical instruction bytes or to build and
-sign transactions without hand-rolled JSON.
-
-```js
-import {
-  noritoEncodeInstruction,
-  noritoDecodeInstruction,
-  buildRegisterDomainTransaction,
-  submitSignedTransaction,
-  hashSignedTransaction,
-} from "@iroha/iroha-js";
-
-const instructionJson = { RegisterDomain: { id: "docs", metadata: null } };
-const encoded = noritoEncodeInstruction(instructionJson);
-const decoded = noritoDecodeInstruction(encoded); // => normalized JSON object
-
-// Build and sign a transaction using the native helper (requires `npm run build:native`)
-const { signedTransaction, hash } = buildRegisterDomainTransaction({
-  chainId: "sora-mainnet",
-  authority: "i105...",
-  domainId: "docs",
-  privateKey: Buffer.alloc(32, 1), // replace with a real seed
-});
-console.log("tx hash (bytes)", hash.toString("hex"));
-
-// Submit over Norito RPC (Torii pipeline)
-await submitSignedTransaction(torii, signedTransaction, {
-  retryProfile: "pipeline",
-});
-
-// Derive the hash later if needed
-const hashHex = hashSignedTransaction(signedTransaction);
-console.log("tx hash (derived)", hashHex);
-```
-
-For ad hoc instruction payloads, `noritoEncodeInstruction` also accepts JSON
-strings and base64/hex payloads and will normalise account/asset identifiers
-before encoding. The native binding falls back to pure JS automatically when
-unavailable.
-Invalid combinations (for example, `verdictIdHex` + `onlyMissingVerdict`) are
-rejected locally before Torii is called.
-
-```js
-const { items: allowances } = await torii.listOfflineAllowances({ limit: 10 });
-console.log(
-  "first certificate",
-  allowances[0]?.controller_display,
-  allowances[0]?.remaining_amount,
-  allowances[0]?.verdict_id_hex,
-);
-```
+Use `POST /v1/offline/reserve/renew`, `POST /v1/offline/reserve/sync`, `POST /v1/offline/reserve/defund`,
+and `GET /v1/offline/revocations` for the rest of the lifecycle. Transfer history remains under
+`/v1/offline/transfers`.
 
 ## Torii Queries & Streaming
 

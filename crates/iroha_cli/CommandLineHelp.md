@@ -1313,7 +1313,7 @@ Retrieve details of a specific asset
 ###### **Options:**
 
 * `-i`, `--id <ID>` — Encoded asset identifier (`norito:<hex>`)
-* `--definition-alias <DEFINITION_ALIAS>` — Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`) used with `--account`
+* `--definition-alias <DEFINITION_ALIAS>` — Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`) used with `--account`
 * `--account <ACCOUNT>` — Account identifier (canonical I105), required with `--definition-alias`
 
 
@@ -1389,7 +1389,7 @@ Increase the quantity of an asset
 ###### **Options:**
 
 * `-i`, `--id <ID>` — Encoded asset identifier (`norito:<hex>`)
-* `--definition-alias <DEFINITION_ALIAS>` — Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`) used with `--account`
+* `--definition-alias <DEFINITION_ALIAS>` — Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`) used with `--account`
 * `--account <ACCOUNT>` — Account identifier (canonical I105), required with `--definition-alias`
 * `-q`, `--quantity <QUANTITY>` — Amount of change (integer or decimal)
 
@@ -1404,7 +1404,7 @@ Decrease the quantity of an asset
 ###### **Options:**
 
 * `-i`, `--id <ID>` — Encoded asset identifier (`norito:<hex>`)
-* `--definition-alias <DEFINITION_ALIAS>` — Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`) used with `--account`
+* `--definition-alias <DEFINITION_ALIAS>` — Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`) used with `--account`
 * `--account <ACCOUNT>` — Account identifier (canonical I105), required with `--definition-alias`
 * `-q`, `--quantity <QUANTITY>` — Amount of change (integer or decimal)
 
@@ -1419,7 +1419,7 @@ Transfer an asset between accounts
 ###### **Options:**
 
 * `-i`, `--id <ID>` — Encoded asset identifier (`norito:<hex>`)
-* `--definition-alias <DEFINITION_ALIAS>` — Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`) used with `--account`
+* `--definition-alias <DEFINITION_ALIAS>` — Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`) used with `--account`
 * `--account <ACCOUNT>` — Source account identifier (canonical I105), required with `--definition-alias`
 * `-t`, `--to <TO>` — Destination account identifier (canonical I105 literal)
 * `-q`, `--quantity <QUANTITY>` — Transfer amount (integer or decimal)
@@ -7632,7 +7632,7 @@ Scaffold manifest/profile templates for a UAID + dataspace pair
 * `--allow-dataspace <ID>` — Optional dataspace override for the allow entry scope
 * `--allow-program <PROGRAM>` — Program identifier (`contract.name`) for the allow entry
 * `--allow-method <NAME>` — Method/entry-point for the allow entry
-* `--allow-asset <DEF#DOMAIN>` — Asset identifier (e.g. `xor#sora`) for the allow entry
+* `--allow-asset <ASSET-ID>` — Asset identifier (e.g. `61CtjvNd9T3THAR65GsMVHr82Bjc`) for the allow entry
 * `--allow-role <ROLE>` — AMX role enforced by the allow entry (`initiator` or `participant`)
 * `--allow-max-amount <DECIMAL>` — Deterministic allowance cap (decimal string)
 * `--allow-window <WINDOW>` — Allowance window (`per-slot`, `per-minute`, or `per-day`)
@@ -7640,7 +7640,7 @@ Scaffold manifest/profile templates for a UAID + dataspace pair
 * `--deny-dataspace <ID>` — Optional dataspace override for the deny entry scope
 * `--deny-program <PROGRAM>` — Program identifier (`contract.name`) for the deny entry
 * `--deny-method <NAME>` — Method/entry-point for the deny entry
-* `--deny-asset <DEF#DOMAIN>` — Asset identifier (e.g. `xor#sora`) for the deny entry
+* `--deny-asset <ASSET-ID>` — Asset identifier (e.g. `61CtjvNd9T3THAR65GsMVHr82Bjc`) for the deny entry
 * `--deny-role <ROLE>` — AMX role enforced by the deny entry
 * `--deny-reason <TEXT>` — Optional reason recorded for the deny directive
 * `--deny-notes <TEXT>` — Optional operator note stored alongside the entry
@@ -9250,21 +9250,21 @@ Sora Name Service helpers (registrar + policy tooling)
 
 ###### **Subcommands:**
 
-* `register` — Register a SNS name via `/v1/sns/registrations`
-* `renew` — Renew a SNS name via `/v1/sns/registrations/{selector}/renew`
+* `register` — Register a SNS name via `/v1/sns/names`
+* `renew` — Renew a SNS name via `/v1/sns/names/domain/{literal}/renew`
 * `transfer` — Transfer ownership of a SNS name
 * `update-controllers` — Replace controllers on a SNS name
 * `freeze` — Freeze a SNS name
 * `unfreeze` — Unfreeze a SNS name
 * `registration` — Fetch a SNS name record
 * `policy` — Fetch the policy for a suffix
-* `governance` — Governance helpers (arbitration, transparency exports, etc.)
+* `governance` — Governance helper placeholders retained for dry-run validation only
 
 
 
 ## `iroha app sns register`
 
-Register a SNS name via `/v1/sns/registrations`
+Register a SNS name via `/v1/sns/names`
 
 **Usage:** `iroha app sns register [OPTIONS] --label <LABEL> --suffix-id <U16>`
 
@@ -9279,7 +9279,7 @@ Register a SNS name via `/v1/sns/registrations`
   Default value: `1`
 * `--pricing-class <U8>` — Optional pricing class hint advertised by the steward
 * `--payment-json <PATH>` — Optional path to a JSON file containing `PaymentProofV1`. When omitted the inline flags are used
-* `--payment-asset-id <ASSET-ID>` — Payment asset identifier (e.g., `xor#sora`)
+* `--payment-asset-id <ASSET-ID>` — Payment asset identifier (e.g., `61CtjvNd9T3THAR65GsMVHr82Bjc`)
 * `--payment-gross <U64>` — Gross payment amount (base + surcharges) in native units
 * `--payment-net <U64>` — Net payment amount forwarded to the registry. Defaults to `payment-gross`
 * `--payment-settlement <JSON>` — Settlement transaction reference (JSON literal)
@@ -9292,7 +9292,7 @@ Register a SNS name via `/v1/sns/registrations`
 
 ## `iroha app sns renew`
 
-Renew a SNS name via `/v1/sns/registrations/{selector}/renew`
+Renew a SNS name via `/v1/sns/names/domain/{literal}/renew`
 
 **Usage:** `iroha app sns renew [OPTIONS] --selector <LABEL.SUFFIX>`
 
@@ -9303,7 +9303,7 @@ Renew a SNS name via `/v1/sns/registrations/{selector}/renew`
 
   Default value: `1`
 * `--payment-json <PATH>` — Optional path to a JSON file containing `PaymentProofV1`. When omitted the inline flags are used
-* `--payment-asset-id <ASSET-ID>` — Payment asset identifier (e.g., `xor#sora`)
+* `--payment-asset-id <ASSET-ID>` — Payment asset identifier (e.g., `61CtjvNd9T3THAR65GsMVHr82Bjc`)
 * `--payment-gross <U64>` — Gross payment amount (base + surcharges) in native units
 * `--payment-net <U64>` — Net payment amount forwarded to the registry. Defaults to `payment-gross`
 * `--payment-settlement <JSON>` — Settlement transaction reference (JSON literal)

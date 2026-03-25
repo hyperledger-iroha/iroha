@@ -9,14 +9,14 @@ use std::{
 
 use eyre::{Result, WrapErr, bail, eyre};
 use integration_tests::sandbox::{self, start_network_async_or_skip};
-use iroha::client::Client as IrohaClient;
+use iroha::{client::Client as IrohaClient, sns::SnsNamespacePath};
 use iroha_data_model::{
     account::{AccountAddress, AccountId},
     metadata::Metadata,
     sns::{
-        FreezeNameRequestV1, GovernanceHookV1, NameControllerV1, NameRecordV1, NameSelectorV1,
-        NameStatus, PaymentProofV1, RegisterNameRequestV1, RenewNameRequestV1,
-        TransferNameRequestV1,
+        DOMAIN_NAME_SUFFIX_ID, FreezeNameRequestV1, GovernanceHookV1, NameControllerV1,
+        NameRecordV1, NameSelectorV1, NameStatus, PaymentProofV1, RegisterNameRequestV1,
+        RenewNameRequestV1, TransferNameRequestV1,
     },
 };
 use iroha_primitives::{json::Json, soradns::derive_gateway_hosts};
@@ -25,7 +25,6 @@ use iroha_test_samples::{ALICE_ID, BOB_ID};
 use reqwest::{Client as HttpClient, Url};
 use tokio::time::sleep;
 
-const SNS_SUFFIX_ID: u16 = 0x0001;
 const METRIC_READY_RETRIES: usize = 12;
 const METRIC_RETRY_DELAY_MS: u64 = 250;
 
@@ -54,8 +53,8 @@ async fn sns_registrar_round_trip() -> Result<()> {
         "new registrations must start in the Active state"
     );
 
-    let selector_literal = format!("{}.sora", request.selector.normalized_label());
-    let fetched = client.sns().get_registration(&selector_literal)?;
+    let literal = request.selector.normalized_label().to_owned();
+    let fetched = client.sns().get_name(SnsNamespacePath::Domain, &literal)?;
     assert_eq!(fetched.name_hash, response.name_record.name_hash);
     assert_same_owner_controller(
         &fetched.owner,
@@ -64,7 +63,7 @@ async fn sns_registrar_round_trip() -> Result<()> {
     );
 
     let policy = client.sns().get_policy(request.selector.suffix_id)?;
-    assert_eq!(policy.suffix_key(), "sora");
+    assert_eq!(policy.suffix_key(), "domain");
 
     Ok(())
 }
@@ -79,7 +78,7 @@ async fn sns_freeze_unfreeze_lifecycle() -> Result<()> {
 
     let client = network.client();
     let label = unique_label("freeze");
-    let selector_literal = format!("{label}.sora");
+    let literal = label.clone();
     register_name(&client, &label)?;
 
     let freeze = FreezeNameRequestV1 {
@@ -87,8 +86,10 @@ async fn sns_freeze_unfreeze_lifecycle() -> Result<()> {
         until_ms: now_millis() + 60_000,
         guardian_ticket: Json::from("guardian-ticket"),
     };
-    client.sns().freeze(&selector_literal, &freeze)?;
-    let frozen = wait_for_status(&client, &selector_literal, |status| {
+    client
+        .sns()
+        .freeze(SnsNamespacePath::Domain, &literal, &freeze)?;
+    let frozen = wait_for_status(&client, &literal, |status| {
         matches!(status, NameStatus::Frozen(_))
     })
     .await?;
@@ -107,8 +108,10 @@ async fn sns_freeze_unfreeze_lifecycle() -> Result<()> {
     }
 
     let governance = stub_governance_hook();
-    client.sns().unfreeze(&selector_literal, &governance)?;
-    let active = wait_for_status(&client, &selector_literal, |status| {
+    client
+        .sns()
+        .unfreeze(SnsNamespacePath::Domain, &literal, &governance)?;
+    let active = wait_for_status(&client, &literal, |status| {
         matches!(status, NameStatus::Active)
     })
     .await?;
@@ -134,7 +137,7 @@ async fn sns_registration_emits_metrics_and_gateway_bindings() -> Result<()> {
     let client = network.client();
     let metrics_endpoint = client.torii_url.join("metrics")?;
     let http = HttpClient::new();
-    let metric_labels = [("result", "ok"), ("suffix", "sora")];
+    let metric_labels = [("result", "ok"), ("suffix", "domain")];
     let baseline = read_metric_sample(
         &http,
         &metrics_endpoint,
@@ -145,7 +148,7 @@ async fn sns_registration_emits_metrics_and_gateway_bindings() -> Result<()> {
     .unwrap_or(0.0);
 
     let label = unique_label("telemetry");
-    let selector_literal = format!("{label}.sora");
+    let literal = label.clone();
     register_name(&client, &label)?;
 
     let mut observed_after = None;
@@ -169,7 +172,7 @@ async fn sns_registration_emits_metrics_and_gateway_bindings() -> Result<()> {
         "sns_registrar_status_total did not advance (baseline {baseline}, observed {observed_after})"
     );
 
-    let bindings = derive_gateway_hosts(&selector_literal)
+    let bindings = derive_gateway_hosts(&format!("{literal}.domain"))
         .map_err(|err| eyre!("gateway host derivation failed: {err}"))?;
     assert!(
         bindings.canonical_host().ends_with(".gw.sora.id"),
@@ -203,7 +206,7 @@ async fn sns_renew_and_transfer_flow() -> Result<()> {
 
     let client = network.client();
     let label = unique_label("renew-transfer");
-    let selector_literal = format!("{label}.sora");
+    let literal = label.clone();
     let record = register_name(&client, &label)?;
     let original_expiry = record.expires_at_ms;
     let policy = client.sns().get_policy(record.selector.suffix_id)?;
@@ -229,7 +232,9 @@ async fn sns_renew_and_transfer_flow() -> Result<()> {
         term_years: renew_term_years,
         payment: stub_payment_proof_with_amount(&record.owner, renew_amount),
     };
-    let renewed = client.sns().renew(&selector_literal, &renew_request)?;
+    let renewed = client
+        .sns()
+        .renew(SnsNamespacePath::Domain, &literal, &renew_request)?;
     assert!(
         renewed.expires_at_ms > original_expiry,
         "renewal should extend expiry: before {original_expiry}, after {}",
@@ -244,16 +249,17 @@ async fn sns_renew_and_transfer_flow() -> Result<()> {
         new_owner: BOB_ID.clone(),
         governance: stub_governance_hook(),
     };
-    let transferred = client
-        .sns()
-        .transfer(&selector_literal, &transfer_request)?;
+    let transferred =
+        client
+            .sns()
+            .transfer(SnsNamespacePath::Domain, &literal, &transfer_request)?;
     assert_same_owner_controller(
         &transferred.owner,
         &BOB_ID,
         "transfer should reassign ownership to Bob's controller",
     );
 
-    let fetched = client.sns().get_registration(&selector_literal)?;
+    let fetched = client.sns().get_name(SnsNamespacePath::Domain, &literal)?;
     assert_same_owner_controller(
         &fetched.owner,
         &BOB_ID,
@@ -268,7 +274,7 @@ async fn sns_renew_and_transfer_flow() -> Result<()> {
 }
 
 fn build_register_request(label: &str) -> Result<RegisterNameRequestV1> {
-    let selector = NameSelectorV1::new(SNS_SUFFIX_ID, label)
+    let selector = NameSelectorV1::new(DOMAIN_NAME_SUFFIX_ID, label)
         .map_err(|err| eyre!("invalid selector: {err}"))?;
     let owner = ALICE_ID.clone();
     let controller_address = AccountAddress::from_account_id(&owner)
@@ -292,7 +298,7 @@ fn stub_payment_proof(payer: &AccountId) -> PaymentProofV1 {
 
 fn stub_payment_proof_with_amount(payer: &AccountId, amount: u64) -> PaymentProofV1 {
     PaymentProofV1 {
-        asset_id: "xor#sora".to_string(),
+        asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_string(),
         gross_amount: amount,
         net_amount: amount,
         settlement_tx: Json::from("mock-settlement"),
@@ -312,7 +318,7 @@ async fn start_sns_network(test_name: &str) -> Result<Option<sandbox::Serialized
 
 async fn wait_for_status<F>(
     client: &IrohaClient,
-    selector: &str,
+    literal: &str,
     predicate: F,
 ) -> Result<NameRecordV1>
 where
@@ -320,13 +326,13 @@ where
 {
     const MAX_ATTEMPTS: usize = 20;
     for _ in 0..MAX_ATTEMPTS {
-        let record = client.sns().get_registration(selector)?;
+        let record = client.sns().get_name(SnsNamespacePath::Domain, literal)?;
         if predicate(&record.status) {
             return Ok(record);
         }
         sleep(Duration::from_millis(200)).await;
     }
-    bail!("registration `{selector}` did not reach expected status");
+    bail!("registration `{literal}` did not reach expected status");
 }
 
 fn stub_governance_hook() -> GovernanceHookV1 {

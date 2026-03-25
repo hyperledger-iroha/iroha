@@ -4,7 +4,7 @@ Swift SDK targeting Hyperledger Iroha v2 and Sora Nexus (Iroha v3) nodes on Appl
 
 Features:
 - Torii HTTP client (balances, transactions, explorer instructions/transactions, subscriptions, pipeline recovery, time service, ZK attachments, prover reports, contracts)
-- Offline allowance top-up helpers (`ToriiClient.topUpOfflineAllowance`, `ToriiClient.topUpOfflineAllowanceRenewal`, `OfflineWallet.topUpAllowance`, `OfflineWallet.topUpAllowanceRenewal`) plus registration/renewal endpoints for `/v1/offline/allowances`; top-up/renew helpers accept optional `attestationNonce` for iOS App Attest challenge-hash forwarding, direct build-claim issuance via `ToriiClient.issueOfflineBuildClaim` (`/v1/offline/build-claims/issue`), typed claim decoding via `ToriiOfflineBuildClaimIssueResponse.buildClaimObject()`, and settlement submit+poll convenience (`ToriiClient.submitOfflineSettlementAndWait`)
+- Device-bound offline reserve helpers (`ToriiClient.setupOfflineReserve`, `topUpOfflineReserve`, `renewOfflineReserve`, `syncOfflineReserve`, `defundOfflineReserve`) plus transfer-history inspection and signed revocation bundle fetch via `/v1/offline/revocations`
 - Health & metrics helpers (fetch `/v1/health` text probe and `/v1/metrics` Prometheus/JSON payloads)
 - Norito envelope encoder (header + CRC64-XZ)
 - Native NoritoBridge integration (auto-enabled when `dist/NoritoBridge.xcframework` is present, otherwise Swift-only fallback) powering transfer/mint/burn builders and JSON inspection helpers
@@ -75,10 +75,10 @@ let sdk = IrohaSDK(baseURL: torii.baseURL)
 // Generate Ed25519 keypair (CryptoKit)
 let kp = try Keypair.generate()
 let accountId = AccountId.make(publicKey: kp.publicKey)
-let assetId = "norito:<hex-encoded-asset-id>"
+let asset = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
 
 // Fetch balances
-sdk.getAssets(accountId: accountId, assetId: assetId) { result in
+sdk.getAssets(accountId: accountId, asset: asset, scope: "global") { result in
     print(result)
 }
 
@@ -226,7 +226,7 @@ if #available(iOS 15.0, macOS 12.0, *) {
         switch record.details {
         case .asset(let asset):
             print("transfer:", asset.amount,
-                  asset.assetDefinitionId ?? asset.sourceAssetId,
+                  asset.assetDefinitionId ?? "unknown asset",
                   "from:", asset.senderAccountId ?? "unknown",
                   "to:", asset.destinationAccountId)
         case .assetBatch(let entries):
@@ -255,19 +255,15 @@ if #available(iOS 15.0, macOS 12.0, *) {
 }
 ```
 
-Transfer summaries also expose `sourceAssetId` and `destinationAssetId` when they can be
-constructed from the asset definition and account ids. For batch transfers, `transferIndex`
-tracks the entry position within the instruction payload. Convenience flags `isIncoming`,
-`isOutgoing`, and `isSelfTransfer` help with UI direction labels.
+For batch transfers, `transferIndex` tracks the entry position within the instruction payload.
+Convenience flags `isIncoming`, `isOutgoing`, and `isSelfTransfer` help with UI direction labels.
 If you need to recompute direction for another account or show counterparties, use
 `direction(relativeTo:)` and `counterpartyAccountId(relativeTo:)`. Direction helpers also accept
 `isIncoming(relativeTo:)`, `isOutgoing(relativeTo:)`, and `isSelfTransfer(relativeTo:)`.
-To resolve asset ids relative to a specific account, use `assetId(relativeTo:)` and
-`counterpartyAssetId(relativeTo:)`.
 Use `signedAmount(relativeTo:)` when you need a simple +/‑ string for UI totals.
 Summaries conform to `Identifiable`, using `transactionHash|instructionIndex|transferIndex` as the
 stable identifier.
-Use `matchingAccount`, `assetDefinitionId`, or `assetId` to filter transfer records and summaries.
+Use `matchingAccount` or `assetDefinitionId` to filter transfer records and summaries.
 
 For a one-shot transaction history helper, use `getTransactionHistory` (alias of
 `getAccountTransferHistory`):
@@ -411,7 +407,7 @@ Swift concurrency wrappers are available on iOS 15/macOS 12 and newer:
 ```swift
 if #available(iOS 15, macOS 12, *) {
     Task {
-        let balances = try await torii.getAssets(accountId: accountId, assetId: assetId)
+        let balances = try await torii.getAssets(accountId: accountId, asset: asset, scope: "global")
         print("balances:", balances)
 
         try await sdk.submit(transfer: transfer, keypair: kp)
@@ -466,22 +462,21 @@ if #available(iOS 15, macOS 12, *) {
 }
 ```
 
-For offline settlement flows, `ToriiClient.submitOfflineSettlementAndWait` combines
-`/v1/offline/settlements` submit with pipeline status polling and raises
-`PipelineStatusError.failure` on terminal rejection (including `rejectionReason` when present):
+For offline reserve flows, use the reserve endpoints directly and treat the returned
+envelope as authoritative:
 
 ```swift
 if #available(iOS 15, macOS 12, *) {
-    let request = ToriiOfflineSettlementSubmitRequest(
-        authority: authorityId,
-        privateKey: privateKeyHex,
-        transfer: transferPayload
+    let request = ToriiOfflineReserveTopUpRequest(
+        operationId: UUID().uuidString,
+        accountId: authorityId,
+        deviceId: deviceId,
+        offlinePublicKey: offlinePublicKey,
+        amount: "10.00",
+        attestation: attestationPayload
     )
-    var poll = PipelineStatusPollOptions.default
-    poll.pollInterval = 0.25
-    poll.maxAttempts = 40
-    let settlement = try await torii.submitOfflineSettlementAndWait(request, pollOptions: poll)
-    print("bundle", settlement.bundleIdHex, "tx", settlement.txHashHex ?? "<missing>")
+    let envelope = try await torii.topUpOfflineReserve(request)
+    print("reserve", envelope.reserveState.reserveId, "balance", envelope.reserveState.balance)
 }
 ```
 
@@ -504,31 +499,6 @@ SDK surfaces `IrohaSDKError.toriiRejected` and leaves the remaining entries unto
 apps can decide how to remediate.
 
 ### Offline receipts and bundles
-
-When you need a full `norito:<hex>` asset id from textual parts, use the new builders:
-
-```swift
-let canonicalAssetId = try ToriiClient.buildCanonicalAssetIdLiteralOffline(
-    assetDefinitionId: "66owaQmAQMuHxPzxUN3bqZ6FJfDa",
-    accountId: "<account_i105>"
-)
-```
-
-For alias inputs, resolve online and encode in one call:
-
-```swift
-if #available(iOS 15.0, macOS 12.0, *) {
-    let assetId = try await torii.buildAssetIdLiteralResolvingAliases(
-        assetDefinitionIdOrAlias: "usd#issuer.main",
-        accountIdOrAlias: "alice"
-    )
-    print(assetId) // norito:<hex>
-}
-```
-
-Offline-only encoding is canonical-only. Alias-shaped inputs are rejected unless you call the async resolver path above.
-The async resolver path also falls back to `/v1/assets/aliases/resolve` when a non-alias asset definition is invalid.
-Component-based asset-id building requires the native bridge symbol `connect_norito_encode_asset_id_literal`.
 
 Use `OfflineReceiptBuilder` to validate offline spend receipts and bundle submissions (spend-key
 signature verification, policy enforcement, platform snapshot binding, and aggregate proof root

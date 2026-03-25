@@ -20,7 +20,7 @@ when validating confidential-asset flows. It complements the rotation playbook
   optionally scoping to a single asset definition. CLI example:
 
   ```bash
-  iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "rose#wonderland" } }'
+  iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM" } }'
   ```
 
 - Policy metadata and pending transitions are available through

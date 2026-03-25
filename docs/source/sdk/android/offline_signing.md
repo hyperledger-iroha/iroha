@@ -209,244 +209,26 @@ apps do not have to duplicate parsing logic when staging OA10.3a allowances.
 Track results in `status.md` (Android section) and archive supporting artefacts
 in `docs/source/sdk/android/readiness/` for AND5/AND7 readiness gates.
 
-## 8. Offline Allowance Inspection & Auditing
+## 8. Offline reserve flow
 
-- `OfflineToriiClient` reuses the primary transport stack (base URI, observers,
-  default headers) so SDKs can query `/v1/offline/allowances`,
-  `/v1/offline/transfers` (and `/v1/offline/settlements` alias), `/v1/offline/receipts`,
-  and `/v1/offline/state` without duplicating HTTP plumbing. Pass
-  `OfflineListParams` to control pagination, filters, and address formatting,
-  mirroring the Torii REST surface described in the OA7 roadmap item.
-- `OfflineListParams.Builder` exposes the same roadmap filters shipped on the
-  REST side — `assetId`, `certificateExpiresBeforeMs/AfterMs`,
-  `policyExpiresBeforeMs/AfterMs`, and `verdictIdHex` — along with
-  `requireVerdict` / `onlyMissingVerdict`
-  toggles so dashboards can target hot certificates without composing JSON
-  predicates. Invalid combinations (for example, `verdictIdHex` +
-  `onlyMissingVerdict`) are rejected when `build()` is invoked to keep client
-  behaviour aligned with Torii validation.
-- `OfflineToriiClient.topUpAllowance(...)` issues a certificate and registers it
-  on-ledger in one call, and `topUpAllowanceRenewal(...)` does the same for
-  renewals. `OfflineWallet.topUpAllowance(...)` / `topUpAllowanceRenewal(...)`
-  wrap the flow and (by default) record the issued certificate into the verdict
-  journal so refresh warnings work without an extra list call.
-- `OfflineWallet.fetchTransfersWithAudit(...)` parses the first receipt from
-  each `OfflineToOnlineTransfer` bundle and records `{sender_id, receiver_id,
-  asset_id, amount}` using the ledger payload instead of mirroring the
-  top-level receiver twice. This keeps regulator exports aligned with the actual
-  spend receipts.
-- `/v1/offline/summaries` (and the POST-based `.query` variant) returns the
-  controller-facing hardware counter checkpoints for each registered allowance.
-  Use this feed when merchants or compliance tooling need to verify App Attest
-  key counters or Android marker series without downloading every allowance
-  record. The SDK models expose the same fields (`certificate_id_hex`,
-  `controller_id`, per-platform counter maps, and the deterministic summary
-  hash) so mobile code can diff checkpoints locally.
-- `OfflineWallet.fetchSummaries(...)` records the same checkpoints into
-  `offline_counter_journal.json` so POS clients can enforce monotonic counters
-  without storing full allowance payloads. Use
-  `recordAppleCounter(...)`, `recordAndroidSeriesCounter(...)`, or
-  `recordProvisionedCounter(...)` when assembling receipts to ensure counters
-  advance exactly once per spend; the helper throws `OfflineCounterException`
-  with deterministic reasons when a jump or hash mismatch is detected.
-- `/v1/offline/revocations{,/query}` exposes the attestation verdict deny-list
-  maintained on-ledger. `OfflineToriiClient.listRevocations|queryRevocations`
-  return `OfflineRevocationList` instances mirroring the REST payload (flattened
-  fields plus the raw Norito record), and `OfflineWallet.fetchRevocations(...)`
-  passes through the same helpers so POS clients can page revocations using the
-  familiar facade. Each item includes the human-readable issuer, display-ready
-  account string, canonical reason, optional note/metadata maps, and the full
-  record JSON for downstream auditing.
-- `/v1/offline/transfers/proof` accepts a transfer payload (`transfer`) and responds with the
-  canonical `OfflineProofRequest*` payloads. Use it to build `{sum,counter,replay}` witness JSON
-  before admission.
-- `/v1/offline/spend-receipts` accepts raw receipts and returns the canonical
-  Poseidon `receipts_root` (`OfflineSpendReceiptsSubmitResponse`) so wallets can
-  cross-check their local hashing (and surface structured failures) before
-  attempting ledger reconciliation.
-- `/v1/offline/settlements` submits an offline-to-online bundle for ledger
-  admission (submits `SubmitOfflineToOnlineTransfer`). Use this endpoint only
-  when operating in ledger-reconcilable mode; offline-only circulation treats
-  receipts as final and does not require settlement. When rejection occurs,
-  Torii surfaces a stable reason code in the `x-iroha-reject-code` response
-  header (for example `certificate_expired`, `counter_conflict`,
-  `max_tx_value_exceeded`, `allowance_exceeded`, `invoice_duplicate`) so apps can map failures to
-  deterministic UX copy across platforms.
-- When OA2 journaling is required, persist envelopes via
-  `OfflineJournal` (`offline/OfflineJournal.java`). The helper mirrors the
-  Rust/Swift layout: entries are hash-chained with BLAKE2b-256 and authenticated
-  via HMAC-SHA256 using a 32-byte key derived from operator seed material so
-  regulators can replay the write-ahead log across platforms.
-- `OfflineReceiptChallenge.compute(chainId, ...)` wraps the shared native helper
-  (`connect_norito_offline_receipt_challenge`) so Android apps can derive the
-  canonical Norito payload plus the chain-bound BLAKE2b/SHA-256 hashes that
-  KeyMint proofs expect without touching the codec directly. Pass the receipt’s
-  `issued_at_ms` (unix ms) into the helper so the platform challenge stays
-  aligned with the ledger freshness checks. Receipt `amount` values must use
-  the allowance's canonical scale (asset definition scale when specified;
-  otherwise the allowance amount scale) to match ledger verification
-  rules. Use the overload that accepts `expectedScale` to enforce the scale
-  locally.【java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineReceiptChallenge.java:1】【java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineReceiptChallengeTest.java:1】
-- `OfflineBalanceProof.advanceCommitment(...)` generates the new commitment and
-  the required v1 proof blob (12,385 bytes: version + delta proof + range proof)
-  for offline-to-online settlement. Provide the claimed delta, resulting value,
-  and current/next blinding factors to stay aligned with the ledger verifier:
+The first retail reserve release removed the pre-release allowance/certificate/settlement inspection
+flow from the supported Android SDK documentation. Wallets should use the reserve routes directly:
 
-```java
-OfflineBalanceProof.Artifacts artifacts =
-    OfflineBalanceProof.advanceCommitment(
-        chainId,
-        claimedDelta,
-        resultingValue,
-        initialCommitmentHex,
-        initialBlindingHex,
-        resultingBlindingHex);
-```
-- `OfflineWallet.CirculationMode` distinguishes between ledger-reconcilable
-  allowances and pure offline/bearer pilots. Provide a
-  `OfflineWallet.ModeChangeListener` to surface the warning copy from
-  `CirculationNotice` whenever operators flip modes, and guard Torii calls when
-  `wallet.requiresLedgerReconciliation()` returns `false`. The broader risk
-  guidance lives in `docs/source/offline_bearer_mode.md`.
-- Verdict metadata (`refresh_at_ms`, policy/certificate expiries, verdict/nonce
-  identifiers, remaining allowance value) is now flattened in the REST payloads
-  and exposed through `OfflineAllowanceList`. `OfflineWallet` automatically
-  persists this information to `offline_verdict_journal.json` (next to the audit
-  log) and provides `verdictWarnings(thresholdMs)` plus `verdictMetadata()` so
-  apps can render “refresh cached verdict” banners and archive the raw JSON for
-  incident response. Each `OfflineVerdictWarning` bundles controller/id/verdict
-  labels with pre-formatted `headline`/`details` strings (matching the Swift
-  SDK) to keep UI copy aligned across platforms. The warnings honour refresh
-  deadlines first, then policy expiry, then certificate expiry; once the
-  deadline passes they flip to `State.EXPIRED` and continue to surface until a
-  fresh verdict is registered.
-- Allowance list items now also carry asset-definition metadata for UI labels.
-  Use `item.assetDefinitionName()` for the display label, keep `item.assetId()`
-  for the concrete `AssetId`, and use `item.assetDefinitionId()` /
-  `item.assetDefinitionAlias()` when you need to show or cache the canonical
-  asset-definition reference separately.
-- `OfflineWallet.ensureFreshVerdict(...)` refuses stale attestations before a
-  bundle is submitted. Pass the certificate id (and optionally the cached
-  `attestation_nonce_hex`) to ensure the refresh/policy/certificate deadlines
-  are still valid; the helper throws `OfflineVerdictException` with the exact
-  `DeadlineKind` or a nonce mismatch reason so UI layers can trigger a refresh
-  flow immediately:
+- `POST /v1/offline/reserve/setup`
+- `POST /v1/offline/reserve/topup`
+- `POST /v1/offline/reserve/renew`
+- `POST /v1/offline/reserve/sync`
+- `POST /v1/offline/reserve/defund`
+- `GET /v1/offline/revocations`
+- `GET /v1/offline/transfers` and `POST /v1/offline/transfers/query` only when transfer history is required
 
-```java
-try {
-  wallet.ensureFreshVerdict("deadbeef", cachedNonceHex);
-} catch (OfflineVerdictException verdictError) {
-  switch (verdictError.reason()) {
-    case NONCE_MISMATCH -> showNonceMismatch(verdictError.expectedNonceHex());
-    case DEADLINE_EXPIRED -> promptForRefresh(verdictError.deadlineKind(), verdictError.deadlineMs());
-    default -> throw verdictError;
-  }
-}
-```
-- `OfflineWallet.verdictMetadata("deadbeef")` returns the cached struct whenever
-  you need to display controller-friendly copy or log the stored nonce/verdict
-  identifiers alongside audit evidence.
-- Typical usage stitches everything together:
+Reserve envelopes are authoritative for balance, parked balance, authorization policy, and
+revocation freshness. The old allowance/summaries/state/spend-receipts/settlements APIs are not part
+of the shipped reserve wallet path.
 
-```java
-OfflineListParams params = OfflineListParams.builder()
-    .limit(25L)
-    .build();
-
-OfflineWallet wallet =
-    transport.offlineWallet(
-        context.getFilesDir().toPath().resolve("offline_audit.json"),
-        true /* enable audit logging */);
-
-wallet.fetchTransfersWithAudit(params)
-    .thenAccept(list ->
-        System.out.println("Logged " + list.items().size() + " offline bundles"));
-
-byte[] auditJson = wallet.exportAuditJson();
-// Forward auditJson to compliance or persist the digest locally
-```
-
-```java
-OfflineQueryEnvelope query = OfflineQueryEnvelope.builder()
-    .filterJson("{\"op\":\"eq\",\"args\":[\"receiver_id\",\"i105...\"]}")
-    .setLimit(25L)
-    .build();
-
-  transport.offlineToriiClient().queryTransfers(query)
-    .thenAccept(list -> System.out.println("Queried " + list.total() + " offline bundles"));
-```
-
-### HMS Safety Detect attestation snapshots
-
-Allowances that advertise the `hms_safety_detect` policy now round-trip their
-attestation tokens locally so POS devices can attach the snapshot to the
-`SubmitOfflineToOnlineTransfer` bundle:
-
-1. Call `wallet.fetchSafetyDetectAttestation(certificateId)` to mint a fresh
-   token. The helper enforces the issuer metadata (package name, signer digests,
-   nonce, and required evaluations) and caches the JWS alongside the verdict
-   journal.
-2. When preparing the bundle, call
-   `wallet.buildSafetyDetectPlatformTokenSnapshot(certificateId)`. The helper
-   loads the cached token, checks `max_token_age_ms`, and returns the
-   `{ policy, attestation_jws_b64 }` pair expected by Torii.
-
-The cache persists inside `offline_verdict_journal.json` next to the audit log,
-and every snapshot is checked against `max_token_age_ms` before it is attached:
-
-```java
-wallet.fetchSafetyDetectAttestation("deadbeef")
-    .thenCompose(__ ->
-        wallet.buildSafetyDetectPlatformTokenSnapshot("deadbeef")
-            .map(snapshot -> submitBundle(snapshot))
-            .orElseGet(() -> CompletableFuture.failedFuture(
-                new IllegalStateException("Safety Detect token expired"))));
-```
-
-`PlatformTokenSnapshot.policy` is always `hms_safety_detect` and the
-attestation is returned as base64-encoded JWS bytes. Swift/JS SDKs expose the
-same API surface so cross-SDK parity holds when OA10.1a is exercised.
-
-### Play Integrity attestation snapshots
-
-Play Integrity tokens follow the same workflow when `android.integrity.policy`
-is `play_integrity`:
-
-1. Call `wallet.fetchPlayIntegrityAttestation(certificateId)` to mint a token.
-   The helper validates the issuer metadata (project number, package name,
-   signing digest allowlist, and verdict classes) and caches the token in the
-   verdict journal.
-2. Call `wallet.buildPlayIntegrityPlatformTokenSnapshot(certificateId)` when
-   submitting a bundle. The helper checks `max_token_age_ms` and returns
-   `{ policy, attestation_jws_b64 }` when the cached token is still valid.
-
-```java
-wallet.fetchPlayIntegrityAttestation("deadbeef")
-    .thenCompose(__ ->
-        wallet.buildPlayIntegrityPlatformTokenSnapshot("deadbeef")
-            .map(snapshot -> submitBundle(snapshot))
-            .orElseGet(() -> CompletableFuture.failedFuture(
-                new IllegalStateException("Play Integrity token expired"))));
-```
-
-When writing the bundle to disk (JSON or Norito), include the snapshot under the
-top-level `transfer` object or alongside the receipt that generated the token:
-
-```json
-{
-  "transfer": {
-    "bundle_id": "3b6a27bccebfb63b9a...",
-    "receiver": "i105...",
-    "deposit_account": "i105...",
-    "receipts": [ /* ... */ ],
-    "balance_proof": { /* ... */ },
-    "platform_snapshot": {
-      "policy": "hms_safety_detect",
-      "attestation_jws_b64": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9..."
-    }
-  }
-}
-```
+When journaling is required, persist the reserve anchor, parked/spendable split, pending receipts,
+pending reserve operations, seen transfer ids, sender-state replay guards, revocation bundle, and
+App Attest key id together so incomplete state freezes the wallet instead of recreating value.
 
 ## QR stream handoff
 

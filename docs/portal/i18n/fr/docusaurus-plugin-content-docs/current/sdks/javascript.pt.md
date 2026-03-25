@@ -171,7 +171,7 @@ const txs = await torii.listAccountTransactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg
   limit: 5,
   assetId,
 });
-const holders = await torii.listAssetHolders("rose#wonderland", {
+const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 5,
   assetId,
 });
@@ -186,7 +186,7 @@ aides au compte à rebours (`deadline_kind`, `deadline_state`, `deadline_ms`,
 `deadline_ms_remaining`) mettre en évidence la prochaine échéance expirante (actualisation → politique
 → certificat) afin que les badges d'assurance-chômage puissent avertir les opérateurs dès qu'une allocation est dépassée.
 <24h restantes. Le SDK
-reflète les filtres REST exposés par `/v1/offline/allowances` :
+reflète les filtres REST exposés par `/v1/offline/reserve/topup` :
 `certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
 `verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` et le
 Booléens `requireVerdict` / `onlyMissingVerdict`. Combinaisons invalides (pour

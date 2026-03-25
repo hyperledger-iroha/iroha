@@ -132,14 +132,7 @@ I105 strings remain the wire format for manifests, telemetry, and QR payloads,
 so only opt into `canonical I105 output` when rendering UX where the Sora
 alphabet offers material ergonomic wins.
 
-Offline reporting endpoints reuse the same contract. `/v1/offline/allowances{,/query}`,
-`/v1/offline/certificates{,/query}`, `/v1/offline/transfers{,/query}`,
-`/v1/offline/settlements{,/query}`, `/v1/offline/receipts{,/query}`, and
-`/v1/offline/summaries{,/query}` now
-validate `controller_id`, `receiver_id`, and `deposit_account_id` filter literals strictly: GET and
-POST filters accept only canonical I105 `AccountId` selectors (including `in`/`nin` arrays).
-i105-default literals, any `@<domain>` suffix, and implicit default-domain reconstruction are
-rejected on strict parser paths.
+Offline reserve endpoints use the same canonical account-literal rules. `/v1/offline/reserve/setup`, `/v1/offline/reserve/topup`, `/v1/offline/reserve/renew`, `/v1/offline/reserve/sync`, `/v1/offline/reserve/defund`, `/v1/offline/revocations`, and `/v1/offline/transfers{,/query}` accept canonical I105 `AccountId` selectors wherever account literals appear. Only canonical I105 literals are accepted; `i105-default`, `@<domain>` suffixes, and implicit default-domain reconstruction remain invalid.
 If a workflow needs domain context, carry it in separate fields (for example domain filters,
 `ScopedAccountId`-bearing records, or resolver metadata), not by decorating strict `AccountId`
 input literals.

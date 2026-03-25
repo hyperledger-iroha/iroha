@@ -173,7 +173,7 @@ const txs = await torii.listAccountTransactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg
   limit: 5,
   assetId,
 });
-const holders = await torii.listAssetHolders("rose#wonderland", {
+const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 5,
   assetId,
 });
@@ -190,7 +190,7 @@ console.log(balances.items, txs.items, holders.items);
 `deadline_ms_remaining`) اگلی میعاد ختم ہونے والی آخری تاریخ (ریفریش → پالیسی کو اجاگر کریں
 → سرٹیفکیٹ) لہذا جب بھی الاؤنس ہوتا ہے تو UI بیج آپریٹرز کو متنبہ کرسکتے ہیں
 <24h باقی۔ ایس ڈی کے
-`/v1/offline/allowances` کے ذریعہ بے نقاب باقی فلٹرز کی آئینہ دار:
+`/v1/offline/reserve/topup` کے ذریعہ بے نقاب باقی فلٹرز کی آئینہ دار:
 `certificateExpiresBeforeMs/AfterMs` ، `policyExpiresBeforeMs/AfterMs` ،
 `verdictIdHex` ، `attestationNonceHex` ، `refreshBeforeMs/AfterMs` ، اور The
 `requireVerdict` / `onlyMissingVerdict` بولینز۔ غلط امتزاج (کے لئے

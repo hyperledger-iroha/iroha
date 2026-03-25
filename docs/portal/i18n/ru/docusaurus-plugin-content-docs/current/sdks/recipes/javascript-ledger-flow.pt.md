@@ -62,7 +62,7 @@ const tx = buildTransaction({
   chain: '00000000-0000-0000-0000-000000000000',
   authority: adminAccount,
   instructions: [
-    {Register: {assetDefinition: {numeric: {id: 'coffee#wonderland'}}}},
+    {Register: {assetDefinition: {numeric: {id: '7Sp2j6zDvJFnMoscAiMaWbWHRDBZ'}}}},
     {Mint: {asset: {id: `norito:4e52543000000002`}, value: {quantity: '250'}}},
     {Transfer: {
       asset: {id: `norito:4e52543000000002`},
@@ -79,7 +79,7 @@ console.log('Submitted tx', txHash);
 
 const balances = await client.listAccountAssets(receiverAccount, {limit: 10});
 for (const asset of balances.items) {
-  if (asset.id.definition === 'coffee#wonderland') {
+  if (asset.id.definition === '7Sp2j6zDvJFnMoscAiMaWbWHRDBZ') {
     console.log('Receiver holds', asset.value, 'units of', asset.id.definition);
   }
 }

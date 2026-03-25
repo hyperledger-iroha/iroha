@@ -2,6 +2,198 @@
 
 Last updated: 2026-03-24
 
+## 2026-03-24 TAIRA faucet support landed for the app API and testnet profile
+- Added an app-facing faucet slice across
+  `crates/iroha_config/src/parameters/{actual.rs,user.rs}`,
+  `crates/iroha_torii/src/{lib.rs,routing.rs,mcp.rs,openapi.rs}`,
+  `crates/iroha_torii/tests/accounts_faucet.rs`,
+  `configs/soranexus/testus/{config.toml,genesis.json}`,
+  and `defaults/kagami/iroha3-testus/{config.toml,genesis.json}`.
+- The shipped behavior in this slice:
+  - Torii now accepts optional `[torii.faucet]` config and exposes `POST /v1/accounts/faucet`, which transfers a fixed starter balance from a configured authority account to an existing account that still has zero balance for the configured faucet asset;
+  - the faucet response now includes both the configured asset-definition identifier and the concrete funded `asset_id`, so downstream apps can immediately reuse the exact bucket they were credited with;
+  - the TAIRA/testus profile now seeds a dedicated faucet authority plus `xor#sora` in genesis and pre-mints a faucet reserve, while leaving non-TAIRA profiles untouched; and
+  - the faucet config parser now accepts human-readable `name#domain` literals (for example `xor#sora`) for this profile instead of forcing operators to hand-compute the canonical asset-definition address.
+- Validation:
+  - `jq empty configs/soranexus/testus/genesis.json` (pass)
+  - `jq empty defaults/kagami/iroha3-testus/genesis.json` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-config cargo test -p iroha_config torii_faucet_tests -- --nocapture` (pass)
+- Remaining implementation gap:
+  - the focused `iroha_config` faucet parser path is green, but full `iroha_torii --features app_api` test execution is still blocked in this workspace by unrelated pre-existing `iroha_core` compile errors around missing offline/SNS symbols on the current branch.
+
+## 2026-03-24 Follow-up: shared Ed25519 GPU challenge preparation is unified across the accelerator admission paths
+- Removed another accelerator drift point across
+  `crates/ivm/src/{signature.rs,cuda.rs,ivm.rs,vector.rs}`.
+- The shipped behavior in this slice:
+  - the reduced Ed25519 challenge scalar bytes `H(R || A || M)` used by the
+    GPU verification kernels now come from one shared helper in
+    `signature.rs` instead of being recomputed independently in the CUDA
+    self-test, CUDA verify path, Metal batch preparation, and Metal host
+    admission path;
+  - the helper is pinned by a fixed regression vector derived from the CUDA
+    Ed25519 self-test truth set, so future transcript drift trips a focused
+    unit test before it can fork the accelerator admission logic; and
+  - the touched CUDA code no longer emits the earlier wall of stale
+    `unused_mut` / dead-code warnings during
+    `cargo check -p ivm --features cuda --tests`, leaving only the expected
+    host-side `nvcc` build-script warnings on machines without a CUDA
+    toolchain.
+- Validation:
+  - `cargo test -p ivm --lib ed25519_challenge_scalar_bytes_matches_cuda_selftest_vector -- --nocapture` (pass)
+  - `cargo check -p ivm` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_ed25519_batch_matches_cpu -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-cuda-check cargo check -p ivm --features cuda --tests` (pass; only `build.rs` warnings remain because `nvcc` is absent on this host)
+- Remaining implementation gap:
+  - rerun the focused CUDA runtime/self-test slice on a host with live CUDA
+    driver libraries and toolchain support, so the shared challenge helper and
+    the earlier mirrored Ed25519 normalization fixes are exercised beyond
+    compile-only validation.
+
+## 2026-03-24 Follow-up: IVM startup truth sets now cover live vector and AES batch kernels
+- Hardened the sampled `ivm` accelerator admission path in
+  `crates/ivm/src/{vector.rs,cuda.rs}` so more production kernels are proven
+  directly before Metal/CUDA acceleration is trusted.
+- The shipped behavior in this slice:
+  - the Metal startup self-test now proves parity for the live `vadd64`,
+    `vand`, `vxor`, `vor`, `aesenc_batch`, and `aesdec_batch` kernels instead
+    of letting those paths inherit only the earlier scalar/vector/AES checks;
+  - the CUDA startup truth set now proves the same `vadd64`, vector bitwise,
+    and single-round AES batch kernels before the backend stays enabled; and
+  - the focused CUDA test graph compiles cleanly again after fixing the
+    branch-local `ed25519_challenge_scalar_bytes` argument drift in
+    `crates/ivm/src/cuda.rs`.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo check -p ivm --features metal --tests` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_bitwise_single_vector_matches_scalar -- --nocapture` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_aes_batch_matches_scalar -- --nocapture` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_ed25519_batch_matches_cpu -- --nocapture` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_sha256_leaves_matches_cpu -- --nocapture` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-cuda-check cargo check -p ivm --features cuda --tests` (pass; `nvcc` is still absent on this host, so build.rs warns while Rust-side CUDA admission logic still compiles)
+- Remaining implementation gap:
+  - the startup-admission coverage gaps for the sampled vector/AES kernels are
+    closed in code, but focused CUDA runtime/self-test execution still needs a
+    host with live CUDA driver symbols to validate the expanded truth set
+    beyond `cargo check`.
+
+## 2026-03-24 Follow-up: CUDA startup truth set now covers live Merkle kernels
+- Closed the next accelerator-admission gap in `crates/ivm/src/cuda.rs`.
+- The shipped behavior in this slice:
+  - CUDA startup now proves parity for both `sha256_leaves` and
+    `sha256_pairs_reduce` before Merkle acceleration is trusted, instead of
+    letting those live `byte_merkle_tree` kernels inherit only the broader
+    generic CUDA self-test;
+  - the new internal self-tests use the same canonical single-block leaf
+    digests and pair-reduction root logic as the CPU path, so mismatched CUDA
+    Merkle kernels now fail closed during backend admission; and
+  - focused regression coverage now includes
+    `sha256_merkle_selftest_covers_cuda_kernels` alongside the earlier
+    Ed25519/BN254 CUDA self-test checks.
+- Focused validation:
+  - `cargo fmt --all` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-cuda-check cargo check -p ivm --features cuda --tests` (pass; `nvcc` is absent on this host, so build.rs warns while Rust-side CUDA admission logic still compiles)
+- Remaining implementation gap:
+  - rerun the focused CUDA runtime/self-test slice on a host with live CUDA
+    driver libraries and toolchain support, so the new Merkle startup probes
+    and the earlier mirrored Ed25519 fix are exercised beyond `cargo check`.
+
+## 2026-03-24 Follow-up: Metal Ed25519 signature self-test now stays enabled under focused regression coverage
+- Tightened the focused Metal regression in `crates/ivm/src/vector.rs` now
+  that the sampled Ed25519 signature kernel is producing the correct result on
+  this host again.
+- The shipped behavior in this slice:
+  - `metal_ed25519_batch_matches_cpu` now asserts the direct signature-kernel
+    parity path (`signature_kernel`, `signature_status_kernel`, and
+    `signature_check_bytes_kernel`) instead of treating CPU fallback as an
+    acceptable outcome;
+  - the same regression now pins pure `[s]B`, pure `[h](-A)`, scalar-1,
+    scalar-2, and power-of-two basepoint multiplications against the CPU
+    reference so future Metal drift trips a focused test instead of silently
+    demoting to fallback; and
+  - the stale Rust-only point-trace diagnostic helpers were removed from
+    `vector.rs`, keeping the focused `ivm --features metal --tests` check
+    warning-free again.
+- Focused validation:
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_ed25519_batch_matches_cpu -- --nocapture` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_sha256_leaves_matches_cpu -- --nocapture` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo check -p ivm --features metal --tests` (pass)
+- Remaining implementation gap:
+  - the CUDA-side accelerator self-test slice is still only partially
+    validated here because this host does not have the CUDA driver libraries
+    needed to link the `cust`-backed tests; and
+  - the broader accelerator review across the remaining CUDA/Metal/determinism
+    boundaries is still open, but the specific Metal Ed25519 signature-kernel
+    mismatch tracked in the earlier note below is no longer reproducing under
+    the focused regression set above.
+
+## 2026-03-24 Account-address first-release hard cut (JS/Swift/Android)
+- Removed the remaining compressed/sentinel/full-width account-address
+  compatibility surface from the public JS, Swift, and Android SDKs so the
+  first-release literal model is just canonical I105 Base58.
+- JavaScript (`javascript/iroha_js`):
+  - the pure-JS fallback codec now matches Rust exactly: 14-bit prefix bytes
+    + canonical payload + 2-byte `I105PRE` checksum, encoded with the standard
+    Base58 alphabet and no textual sentinel;
+  - removed the leftover public error codes tied to the sentinel-era codec
+    (`MISSING_I105_SENTINEL`, `INVALID_I105_BASE`,
+    `INVALID_I105_DIGIT`);
+  - updated `test/address.test.js`, `index.d.ts`, and regenerated
+    `dist/address.js`.
+- Swift (`IrohaSwift`):
+  - removed the last exported full-width helper
+    `AccountAddress.toI105DefaultFullWidth()`;
+  - `swift build` now completes cleanly after the account-address cleanup.
+- Android (`java/iroha_android`):
+  - `AccountAddress` now exposes only canonical I105 render/parse helpers;
+    `toI105FullWidth`, the compressed-era warning/accessor naming, and the old
+    sentinel/compressed error codes are gone;
+  - `DisplayFormats` now carries `i105`, `discriminant`, and `i105Warning`
+    only;
+  - `AddressFormatOption` has been collapsed to `I105`, and the transport
+    query-builder expectations now use `address_format=i105`.
+- Repository hygiene:
+  - strict grep across `IrohaSwift`, `javascript/iroha_js`,
+    `java/iroha_android`, and `docs/source` is now clean for the removed
+    full-width/sentinel/compressed account-address symbols when excluding the
+    historical notes in `status.md`/`roadmap.md`.
+- Focused validation:
+  - `cd javascript/iroha_js && IROHA_JS_DISABLE_NATIVE=1 node --test test/address.test.js` (pass)
+  - `cd javascript/iroha_js && npm run build:dist` (pass)
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew android:compileDebugJavaWithJavac android:compileDebugUnitTestJavaWithJavac` (pass)
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew samples-android:testDebugUnitTest --tests org.hyperledger.iroha.android.samples.SampleAddressTest` (pass)
+  - `cd IrohaSwift && swift build` (pass)
+  - `cargo test -p iroha_data_model --test account_address_vectors -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --test account_address_vectors -- --nocapture` currently stops on unrelated branch-local `norito::json!` macro errors in `crates/iroha_torii/src/offline_reserve.rs`
+
+## 2026-03-24 Follow-up: Metal Ed25519 verification is restored on this host
+- Finished the sampled Metal Ed25519 correctness tranche in
+  `crates/ivm/src/{vector.rs,metal_ed25519.metal}` and mirrored the same
+  field-op normalization hardening into `crates/ivm/cuda/signature.cu`.
+- The shipped behavior in this slice:
+  - the earlier per-pipeline fail-closed startup behavior remains in place, but
+    the sampled Metal `ed25519_signature` pipeline now passes its parity gate
+    again on this host instead of falling back to CPU;
+  - the fix was preserving ref10 limb bounds across the scalar ladder by
+    normalizing after `fe_add`, `fe_sub`, `fe_neg`, `fe_mul`, `fe_sq`,
+    `fe_sq2`, and `fe_mul121666`, alongside the earlier base-point sign, `d2`,
+    exact `fe_sq2`, and `fe_mul` carry corrections;
+  - the focused regression now confirms `[s]B`, `[h](-A)`, the power-of-two
+    basepoint ladder, direct status outputs, and full `[true, false]`
+    signature verification on Metal against the CPU reference path; and
+  - the temporary decompression trace kernels used to isolate the ladder drift
+    have been removed from the Metal shader now that the runtime regression is
+    green again.
+- Focused validation:
+  - `cargo fmt --all` (pass)
+  - `xcrun -sdk macosx metal -c crates/ivm/src/metal_ed25519.metal -o /tmp/metal_ed25519.air` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_ed25519_batch_matches_cpu -- --nocapture` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo check -p ivm --features metal --tests` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-cuda-check cargo check -p ivm --features cuda --tests` (pass; runtime CUDA execution is still host-limited)
+- Remaining implementation gap:
+  - rerun the focused CUDA runtime/self-test slice on a host with live CUDA
+    driver libraries and toolchain support, so the mirrored normalization fix
+    is exercised beyond `cargo check`.
+
 ## 2026-03-24 Follow-up: SNS-backed alias leases now resolve from ledger state and reserved `universal` ownership is seeded
 - Completed the next unified dataspace-aware alias ownership slice across
   `crates/iroha_core/src/{sns.rs,state.rs,smartcontracts/isi/{domain.rs,query.rs,sns.rs}}`,
@@ -58,13 +250,12 @@ Last updated: 2026-03-24
   - `cargo fmt --all` (pass)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-cuda2 cargo check -p ivm --features cuda --tests` (pass)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo check -p ivm --features metal --tests` (pass)
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_sha256_leaves_matches_cpu -- --nocapture` (pass with explicit skip after backend disable)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_sha256_leaves_matches_cpu -- --nocapture` (pass)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-cuda2 cargo test -p ivm --features cuda --lib selftest_covers_ -- --nocapture` (blocked by host CUDA linker errors: unresolved `cu*` symbols)
 - Remaining implementation gap:
-  - the Metal backend still disables itself on this host because the existing
-    Ed25519 startup parity check fails before the new `sha256_leaves` path can
-    be exercised end-to-end; that fail-closed behavior is desirable, but the
-    underlying Metal Ed25519 mismatch remains open and should be fixed next.
+  - the remaining gap from this slice is now CUDA-runtime-only on this host:
+    the source/test graph compiles, but focused CUDA lib tests still need a
+    machine with live CUDA driver symbols to run end-to-end.
 
 ## 2026-03-24 Follow-up: domainless multisig home-domain optionality and signed multisig alias selectors are now live
 - Completed the next unified dataspace-aware alias follow-up across
@@ -115,6 +306,79 @@ Last updated: 2026-03-24
   - the wider SNS shim replacement still requires a new authoritative ledger
     state surface rather than a small follow-up patch on top of the existing
     in-memory Torii registrar.
+
+## 2026-03-24 Follow-up: Ledger-backed SNS routes now reach the client/test/tooling surface
+- Continued the unified alias / on-chain SNS migration across the remaining
+  consumer surfaces:
+  - `crates/iroha_data_model/src/sns/mod.rs` now exports the fixed
+    namespace suffix ids (`account-alias`, `domain`, `dataspace`) as public
+    constants so the API boundary does not depend on `iroha_core` internals;
+  - `crates/iroha_core/src/sns.rs` now reuses those shared constants and the
+    focused world/SNS regressions were repaired so the new domain-lease and
+    reserved-`universal` coverage compiles again;
+  - `crates/iroha/src/sns.rs` now targets `/v1/sns/names...` and exposes
+    namespace-aware read/mutation helpers instead of the old selector-path
+    contract;
+  - `integration_tests/tests/sns.rs`,
+    `crates/iroha_torii/tests/sns_registrar.rs`,
+    `scripts/sns_bulk_onboard.py`,
+    `javascript/iroha_js/src/toriiClient.js`,
+    `javascript/iroha_js/test/toriiClient.test.js`, and
+    `crates/iroha_cli/CommandLineHelp.md`
+    were updated to stop calling the removed legacy SNS registration routes; and
+  - the removed governance-case shim is now surfaced as an explicit
+    removal in the CLI and JS helpers instead of silently drifting to stale
+    Torii calls.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target-codex-final2 cargo check -p iroha_core -p iroha_torii -p iroha -p iroha_cli -p integration_tests`
+    is currently blocked by unrelated existing `crates/iroha_torii/src/offline_reserve.rs`
+    serde/Norito compile failures on this branch; the alias/SNS changes in this
+    follow-up are not the source of those parser/derive errors.
+
+## 2026-03-24 Follow-up: generated SNS artifacts now match the ledger-backed names API
+- Closed the last generated/public drift in the unified alias / on-chain SNS
+  slice:
+  - `crates/iroha_core/src/smartcontracts/isi/world.rs` now enforces an active
+    SNS domain-name lease during `Register<Domain>`, so the focused
+    `register_domain_requires_active_sns_lease_for_non_genesis_owner`
+    regression now passes against the actual world ISI path instead of only the
+    lower-level SNS helpers;
+  - `javascript/iroha_js/dist/toriiClient.js` was rebuilt from the updated SDK
+    sources, so the shipped JS bundle now uses `/v1/sns/names...` and retains
+    only the deliberate governance-case removal stubs; and
+  - `docs/portal/static/openapi/{torii.json,versions/current/torii.json}` were
+    regenerated from `xtask openapi`, so the checked-in portal specs now expose
+    `/v1/sns/names` and no longer advertise the removed SNS registration or
+    governance-case routes.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target-codex-final2 cargo test -p iroha_core register_domain_requires_active_sns_lease_for_non_genesis_owner --lib` (pass)
+  - `CARGO_TARGET_DIR=target-codex-final2 cargo test -p iroha_core reserved_universal_dataspace_record_is_immutable --lib` (pass)
+  - `npm run build:dist` in `javascript/iroha_js` (pass)
+  - `CARGO_TARGET_DIR=target-codex-openapi NORITO_SKIP_BINDINGS_SYNC=1 cargo run -p xtask --bin xtask -- openapi --output docs/portal/static/openapi/torii.json --output docs/portal/static/openapi/versions/current/torii.json` (pass)
+- Remaining validation gap:
+  - broader workspace-wide validation remains intentionally deferred; this
+    follow-up only exercised the focused Torii/JS paths needed to close the
+    alias/SNS slice.
+
+## 2026-03-24 Follow-up: JS Torii client and focused Torii crate validation are clean again
+- Cleared the remaining branch-local validation blockers that were still
+  obscuring the completed unified alias / on-chain SNS work:
+  - `javascript/iroha_js/test/toriiClient.test.js` now matches the current
+    SDK/native contract by using the camelCase SoraFS native fixture fields,
+    an explicit non-canonical I105 fixture for the governance-owner rejection
+    cases, a valid account-id fixture in the feature-config snapshot test, and
+    valid `label.suffix` selectors in the SNS option-validation checks; and
+  - `cargo check -p iroha_torii --lib` now runs cleanly again on a fresh target
+    dir, so there is no remaining focused `iroha_torii` compile blocker in the
+    alias/SNS slice.
+- Validation:
+  - `node --test test/toriiClient.test.js` in `javascript/iroha_js` (pass, 637 tests)
+  - `CARGO_TARGET_DIR=target-codex-finish cargo check -p iroha_torii --lib` (pass)
+- Remaining validation gap:
+  - `cargo test --workspace` and other full-repo sweeps were not run here per
+    request.
 
 ## 2026-03-24 Follow-up: Norito Stage-1 GPU helpers now prove scalar parity before activation
 - Hardened `crates/norito/src/lib.rs` so dynamically loaded JSON Stage-1

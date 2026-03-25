@@ -89,11 +89,11 @@ konfiqurasiya edilmiş sərhədlər daxilində:
 - `iroha_zk_verifier_cache_events_total{cache,event}`
 
 Kalibrləmə iş yükündən dərhal əvvəl və sonra dəyərləri qeyd edin. A
-aktiv üçün tək əmr kifayətdir; `xor#wonderland` üçün nümunə:
+aktiv üçün tək əmr kifayətdir; `4cuvDVPuLBKJyN6dPbRQhmLh68sU` üçün nümunə:
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \
-  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="xor#wonderland"}'
+  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="4cuvDVPuLBKJyN6dPbRQhmLh68sU"}'
 ```
 
 Xam çıxışı (və ya Prometheus snapshot) kalibrləmə biletinə əlavə edin ki,

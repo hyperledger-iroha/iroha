@@ -33,7 +33,7 @@ CLI დამხმარეები პლუს `scripts/telemetry/reserve_le
     --provider-account i105... \
     --treasury-account i105... \
     --reserve-account i105... \
-    --asset-definition xor#sora \
+    --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc \
     --json-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.json
    ```
    წიგნის დამხმარე ანიჭებს `ledger_projection` ბლოკს (ქირა, რეზერვი

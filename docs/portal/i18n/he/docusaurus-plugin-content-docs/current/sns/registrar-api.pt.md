@@ -107,15 +107,15 @@ Struct ReservedAssignmentRequestV1 {
 
 | נקודת קצה | Metodo | מטען | תיאור |
 |--------|--------|--------|--------|
-| `/v1/sns/registrations` | פוסט | `RegisterNameRequestV1` | הרשם ou reabrir um nome. פתרו את הדרג הקדם, valida provas de pagamento/governanca, emite eventos de registro. |
-| `/v1/sns/registrations/{selector}/renew` | פוסט | `RenewNameRequestV1` | Estende o termo. Aplica Janelas de Grace/Remption da Politica. |
-| `/v1/sns/registrations/{selector}/transfer` | פוסט | `TransferNameRequestV1` | Transfere propriedade quando aprovacoes de governanca forem anexadas. |
-| `/v1/sns/registrations/{selector}/controllers` | PUT | `UpdateControllersRequestV1` | Substitui o conjunto de controls; valida enderecos de conta assinados. |
-| `/v1/sns/registrations/{selector}/freeze` | פוסט | `FreezeNameRequestV1` | הקפאת האפוטרופוס/המועצה. בקש כרטיס אפוטרופוס e referencia ao docket de governanca. |
-| `/v1/sns/registrations/{selector}/freeze` | מחק | `GovernanceHookV1` | הסר את ההקפאה apos remediacao; garante override do Council registrado. |
+| `/v1/sns/names` | פוסט | `RegisterNameRequestV1` | הרשם ou reabrir um nome. פתרו את הדרג הקדם, valida provas de pagamento/governanca, emite eventos de registro. |
+| `/v1/sns/names/{namespace}/{literal}/renew` | פוסט | `RenewNameRequestV1` | Estende o termo. Aplica Janelas de Grace/Remption da Politica. |
+| `/v1/sns/names/{namespace}/{literal}/transfer` | פוסט | `TransferNameRequestV1` | Transfere propriedade quando aprovacoes de governanca forem anexadas. |
+| `/v1/sns/names/{namespace}/{literal}/controllers` | PUT | `UpdateControllersRequestV1` | Substitui o conjunto de controls; valida enderecos de conta assinados. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | פוסט | `FreezeNameRequestV1` | הקפאת האפוטרופוס/המועצה. בקש כרטיס אפוטרופוס e referencia ao docket de governanca. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | מחק | `GovernanceHookV1` | הסר את ההקפאה apos remediacao; garante override do Council registrado. |
 | `/v1/sns/reserved/{selector}` | פוסט | `ReservedAssignmentRequestV1` | Atribuicao de nomes reservados por דייל/מועצה. |
 | `/v1/sns/policies/{suffix_id}` | קבל | -- | Busca `SuffixPolicyV1` atual (cacheavel). |
-| `/v1/sns/registrations/{selector}` | קבל | -- | Retorna `NameRecordV1` atual + estado efetivo (Active, Grace וכו'). |**Codificacao de selector:** o segmento `{selector}` aceita I105, comprimido ou hex canonico conforme ADDR-5; Torii נורמליזציה באמצעות `NameSelectorV1`.
+| `/v1/sns/names/{namespace}/{literal}` | קבל | -- | Retorna `NameRecordV1` atual + estado efetivo (Active, Grace וכו'). |**Codificacao de selector:** o segmento `{selector}` aceita I105, comprimido ou hex canonico conforme ADDR-5; Torii נורמליזציה באמצעות `NameSelectorV1`.
 
 **דגם שגיאות:** נקודות קצה של פעולות הפעלה retornam Norito JSON com `code`, `message`, `details`. מערכת קודים כוללת `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
 
@@ -128,7 +128,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -153,7 +153,7 @@ Helpers adiconais cobrem renovacoes, transferencias e acoes de guardian:
 iroha sns renew \
   --selector makoto.sora \
   --term-years 1 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 120 \
   --payment-settlement '"renewal-settlement"' \
   --payment-signature '"steward-signature"'
@@ -176,7 +176,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` deve conter um registro `GovernanceHookV1` valido (מזהה הצעה, גיבוב הצבעה, דייל/אפוטרופוס). Cada comando simplesmente espelha o נקודת קצה `/v1/sns/registrations/{selector}/...` correspondente para que Operatores de Beta Ensaiem Exatamente as superficies Torii que os SDKs chamarao.
+`--governance-json` deve conter um registro `GovernanceHookV1` valido (מזהה הצעה, גיבוב הצבעה, דייל/אפוטרופוס). Cada comando simplesmente espelha o נקודת קצה `/v1/sns/names/{namespace}/{literal}/...` correspondente para que Operatores de Beta Ensaiem Exatamente as superficies Torii que os SDKs chamarao.
 
 ## 4. Servico gRPC
 
@@ -246,7 +246,7 @@ Renovacoes durante grace כולל דרוש:
 
 1. Guardian envia `FreezeNameRequestV1` com ticket referenciando id de incidente.
 2. Torii move o registro para `NameStatus::Frozen`, emite `NameFrozen`.
-3. Apos remediacao, o מועצה פולטת לעקוף; o operator envia DELETE `/v1/sns/registrations/{selector}/freeze` com `GovernanceHookV1`.
+3. Apos remediacao, o מועצה פולטת לעקוף; o operator envia DELETE `/v1/sns/names/{namespace}/{literal}/freeze` com `GovernanceHookV1`.
 4. Torii valida o override, emite `NameUnfrozen`.
 
 ## 7. Validacao e codigos de ro

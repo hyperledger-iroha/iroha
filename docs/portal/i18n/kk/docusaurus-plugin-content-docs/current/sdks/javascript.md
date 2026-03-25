@@ -170,7 +170,7 @@ const txs = await torii.listAccountTransactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg
   limit: 5,
   assetId,
 });
-const holders = await torii.listAssetHolders("rose#wonderland", {
+const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 5,
   assetId,
 });
@@ -187,7 +187,7 @@ console.log(balances.items, txs.items, holders.items);
 `deadline_ms_remaining`) келесі аяқталатын мерзімін белгілеу (жаңарту → саясат)
 → сертификат) сондықтан UI бейджиктері операторларға жәрдемақы болған кезде ескертеді
 <24 сағат қалды. SDK
-`/v1/offline/allowances` көрсеткен REST сүзгілерін көрсетеді:
+`/v1/offline/reserve/topup` көрсеткен REST сүзгілерін көрсетеді:
 `certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
 `verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` және
 `requireVerdict` / `onlyMissingVerdict` логикалық мәндер. Жарамсыз комбинациялар (үшін

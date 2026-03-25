@@ -84,9 +84,9 @@ final class TransactionInputValidatorTests: XCTestCase {
     }
 
     func testSanitizeMetadataTargetRejectsMalformedAssetId() {
-        XCTAssertThrowsError(try TransactionInputValidator.sanitizeMetadataTarget(.asset("rose#wonderland"))) { error in
+        XCTAssertThrowsError(try TransactionInputValidator.sanitizeMetadataTarget(.asset("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"))) { error in
             XCTAssertEqual(error as? TransactionInputError,
-                           .malformedAssetId("rose#wonderland"))
+                           .malformedAssetId("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"))
         }
     }
 

@@ -110,15 +110,15 @@ Struct ReservedAssignmentRequestV1 {
 
 |端點 |方法|有效負載|描述 |
 |----------|--------|---------|------------|
-| `/v1/sns/registrations` |發布 | `RegisterNameRequestV1` |註冊或重新命名名稱。解決定價層、驗證支付/治理證明、發出註冊事件。 |
-| `/v1/sns/registrations/{selector}/renew` |發布 | `RenewNameRequestV1` |延長期限。強制實施政策中的寬限/贖回窗口。 |
-| `/v1/sns/registrations/{selector}/transfer` |發布 | `TransferNameRequestV1` |一旦獲得治理批准，就轉讓所有權。 |
-| `/v1/sns/registrations/{selector}/controllers` |放置 | `UpdateControllersRequestV1` |更換控制器組；驗證簽名的帳戶地址。 |
-| `/v1/sns/registrations/{selector}/freeze` |發布 | `FreezeNameRequestV1` |監護人/議會凍結。需要監護人票證和治理記錄參考。 |
-| `/v1/sns/registrations/{selector}/freeze` |刪除 | `GovernanceHookV1` |修復後解凍；確保理事會推翻記錄。 |
+| `/v1/sns/names` |發布 | `RegisterNameRequestV1` |註冊或重新命名名稱。解決定價層、驗證支付/治理證明、發出註冊事件。 |
+| `/v1/sns/names/{namespace}/{literal}/renew` |發布 | `RenewNameRequestV1` |延長期限。強制實施政策中的寬限/贖回窗口。 |
+| `/v1/sns/names/{namespace}/{literal}/transfer` |發布 | `TransferNameRequestV1` |一旦獲得治理批准，就轉讓所有權。 |
+| `/v1/sns/names/{namespace}/{literal}/controllers` |放置 | `UpdateControllersRequestV1` |更換控制器組；驗證簽名的帳戶地址。 |
+| `/v1/sns/names/{namespace}/{literal}/freeze` |發布 | `FreezeNameRequestV1` |監護人/議會凍結。需要監護人票證和治理記錄參考。 |
+| `/v1/sns/names/{namespace}/{literal}/freeze` |刪除 | `GovernanceHookV1` |修復後解凍；確保理事會推翻記錄。 |
 | `/v1/sns/reserved/{selector}` |發布 | `ReservedAssignmentRequestV1` |管理員/理事會分配保留名稱。 |
 | `/v1/sns/policies/{suffix_id}` |獲取 | — |獲取當前 `SuffixPolicyV1`（可緩存）。 |
-| `/v1/sns/registrations/{selector}` |獲取 | — |返回當前 `NameRecordV1` + 有效狀態（Active、Grace 等）。 |
+| `/v1/sns/names/{namespace}/{literal}` |獲取 | — |返回當前 `NameRecordV1` + 有效狀態（Active、Grace 等）。 |
 
 **選擇器編碼：** `{selector}` 路徑段接受 I105（首選）、壓縮（`sora`，第二好）或每個 ADDR-5 的規範十六進制； Torii 通過 `NameSelectorV1` 將其標準化。
 
@@ -133,7 +133,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -158,7 +158,7 @@ iroha sns policy --suffix-id 1
 iroha sns renew \
   --selector makoto.sora \
   --term-years 1 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 120 \
   --payment-settlement '"renewal-settlement"' \
   --payment-signature '"steward-signature"'
@@ -181,7 +181,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` 必須包含有效的 `GovernanceHookV1` 記錄（提案 ID、投票哈希、管理員/監護人簽名）。每個命令都簡單地鏡像相應的 `/v1/sns/registrations/{selector}/…` 端點，因此 beta 操作員可以排練 SDK 將調用的確切 Torii 表面。
+`--governance-json` 必須包含有效的 `GovernanceHookV1` 記錄（提案 ID、投票哈希、管理員/監護人簽名）。每個命令都簡單地鏡像相應的 `/v1/sns/names/{namespace}/{literal}/…` 端點，因此 beta 操作員可以排練 SDK 將調用的確切 Torii 表面。
 
 ## 4.gRPC 服務
 
@@ -253,7 +253,7 @@ Torii 通過檢查來驗證證明：
 
 1. 監護人提交 `FreezeNameRequestV1` 以及引用事件 ID 的工單。
 2. Torii 將記錄移動到 `NameStatus::Frozen`，發出 `NameFrozen`。
-3.整改後，理事會問題優先；操作員發送 DELETE `/v1/sns/registrations/{selector}/freeze` 和 `GovernanceHookV1`。
+3.整改後，理事會問題優先；操作員發送 DELETE `/v1/sns/names/{namespace}/{literal}/freeze` 和 `GovernanceHookV1`。
 4. Torii 驗證覆蓋，發出 `NameUnfrozen`。
 
 ## 7. 驗證和錯誤代碼

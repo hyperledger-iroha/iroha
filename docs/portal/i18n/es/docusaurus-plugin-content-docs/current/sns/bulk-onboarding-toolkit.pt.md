@@ -36,7 +36,7 @@ El analizador exige la siguiente línea de cabecalho (a orden y flexivel):| Colu
 | `suffix_id` | Sim | Identificador numérico de sufijo (decimal o `0x` hexadecimal). |
 | `owner` | Sim | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | Sim | Inteiro `1..=255`. |
-| `payment_asset_id` | Sim | Activo de liquidación (por ejemplo `xor#sora`). |
+| `payment_asset_id` | Sim | Activo de liquidación (por ejemplo `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Sim | Inteiros sinal representando unidades nativas do ativo. |
 | `settlement_tx` | Sim | Valor JSON o cadena literal que describe una transacción de pago o hash. |
 | `payment_payer` | Sim | AccountId que autoriza el pago. |
@@ -80,7 +80,7 @@ En caso de éxito del script se grava un manifiesto agregado:
       "term_years": 2,
       "pricing_class_hint": null,
       "payment": {
-        "asset_id":"xor#sora",
+        "asset_id":"61CtjvNd9T3THAR65GsMVHr82Bjc",
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
@@ -110,7 +110,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v1/sns/names
   done
 ```
 
@@ -128,9 +128,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --poll-status \
   --suffix-map configs/sns_suffix_map.json \
   --submission-log artifacts/sns_bulk_submit.log
-```- O helper emite un `POST /v1/sns/registrations` por solicitud y aborta no primero
+```- O helper emite un `POST /v1/sns/names` por solicitud y aborta no primero
   error HTTP. As respostas sao anexadas ao log como registros NDJSON.
-- `--poll-status` reconsulta `/v1/sns/registrations/{selector}` apos cada envío
+- `--poll-status` reconsulta `/v1/sns/names/{namespace}/{literal}` apos cada envío
   (ate `--poll-attempts`, predeterminado 5) para confirmar que o registro esta visible.
   Forneca `--suffix-map` (JSON de `suffix_id` para valores "suffix") para que a
   La herramienta deriva la literatura `{label}.{suffix}` para el sondeo.
@@ -214,7 +214,7 @@ El archivo de métricas generado por `sns_bulk_release.sh` expone las siguientes
 # TYPE sns_bulk_release_requests_total gauge
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
-sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
+sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="61CtjvNd9T3THAR65GsMVHr82Bjc"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 

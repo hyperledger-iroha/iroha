@@ -67,7 +67,7 @@ Crie um novo recurso infinito mintable `coffee` no domínio
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 A CLI exibe o hash da transação desejada (por exemplo, `0x5f...`). Conserve-o
@@ -76,7 +76,7 @@ para consultar o status mais tarde.
 ## 3. Manter as unidades na operação da conta
 
 As quantidades de atividades vivem sob o par `(asset definition, account)`. Mentez 250
-une de `coffee#wonderland` a `$ADMIN_ACCOUNT` :
+une de `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` a `$ADMIN_ACCOUNT` :
 
 ```sh
 iroha --config defaults/client.toml asset mint \

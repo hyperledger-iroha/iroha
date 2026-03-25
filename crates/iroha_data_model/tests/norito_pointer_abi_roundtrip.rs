@@ -38,9 +38,9 @@ fn manifest_pointer_roundtrip() {
         access_set_hints: Some(AccessSetHints {
             read_keys: vec![
                 format!("account:{account_id}"),
-                "asset:rose#wonderland".to_owned(),
+                "asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM".to_owned(),
             ],
-            write_keys: vec!["asset.detail:rose#wonderland:balance".to_owned()],
+            write_keys: vec!["asset.detail:62Fk4FPcMuLvW5QjDGNF2a4jAmjM:balance".to_owned()],
         }),
         entrypoints: None,
         kotoba: None,

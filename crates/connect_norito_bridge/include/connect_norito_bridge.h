@@ -45,10 +45,8 @@ int32_t connect_norito_account_address_render(
     unsigned long* out_canonical_hex_len,
     uint8_t** out_i105_ptr,
     unsigned long* out_i105_len,
-    uint8_t** out_compressed_ptr,
-    unsigned long* out_compressed_len,
-    uint8_t** out_compressed_full_ptr,
-    unsigned long* out_compressed_full_len,
+    uint8_t** out_i105_default_ptr,
+    unsigned long* out_i105_default_len,
     uint8_t** out_error_json_ptr,
     unsigned long* out_error_json_len);
 
@@ -939,11 +937,6 @@ int32_t connect_norito_encode_burn_signed_transaction_alg(
 int32_t connect_norito_decode_signed_transaction_json(
     const uint8_t* signed_bytes, unsigned long signed_len,
     uint8_t** out_json_ptr, unsigned long* out_json_len);
-
-int32_t connect_norito_encode_asset_id_literal(
-    const char* asset_definition, unsigned long asset_definition_len,
-    const char* account_id, unsigned long account_id_len,
-    uint8_t** out_asset_ptr, unsigned long* out_asset_len);
 
 int32_t connect_norito_decode_asset_id_json(
     const char* asset_literal, unsigned long asset_len,

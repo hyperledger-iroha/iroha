@@ -159,7 +159,7 @@ const ACCOUNT_ID_INPUT = ACCOUNT_ID;
 const ACCOUNT_ID_CANONICAL = hasNoritoBinding()
   ? canonicalizeAccountIdUsingNorito(ACCOUNT_ID)
   : ACCOUNT_ID;
-const ASSET_DEFINITION_ID = "rose#wonderland";
+const ASSET_DEFINITION_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 const ASSET_ID =
   "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed3200c4000000000000006165e1e191d7b79c00810000000000000017000000000000000f00000000000000070000000000000064656661756c745a00000000000000000000004e00000000000000460000000000000065643031323045444636443742353243373033324430334145433639364632303638424435333130313532384633433742363038314246463035413136363244374643323435330000000000000017000000000000000f00000000000000070000000000000064656661756c740c000000000000000400000000000000726f7365";
 const ASSET_ID_INPUT =
@@ -288,7 +288,7 @@ test("normalizeAssetId exported canonicalizes encoded asset identifiers", () => 
 
 test("normalizeAssetId rejects unsupported asset#domain#account literals", () => {
   assert.throws(
-    () => exportedNormalizeAssetId(`rose#wonderland#${ACCOUNT_ID}`),
+    () => exportedNormalizeAssetId(`62Fk4FPcMuLvW5QjDGNF2a4jAmjM#${ACCOUNT_ID}`),
     /must not use 'asset#domain#account'/,
   );
 });
@@ -797,7 +797,7 @@ test("buildRegisterSmartContractCodeInstruction normalizes manifest fields", () 
       compilerFingerprint: "rustc-1.79",
       featuresBitmap: "42",
       accessSetHints: {
-        readKeys: ["account:alice", "asset:rose#wonderland"],
+        readKeys: ["account:alice", "asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM"],
         writeKeys: ["contract:foo"],
       },
     },
@@ -810,7 +810,7 @@ test("buildRegisterSmartContractCodeInstruction normalizes manifest fields", () 
         compiler_fingerprint: "rustc-1.79",
         features_bitmap: 42,
         access_set_hints: {
-          read_keys: ["account:alice", "asset:rose#wonderland"],
+          read_keys: ["account:alice", "asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM"],
           write_keys: ["contract:foo"],
         },
         entrypoints: null,
@@ -1228,7 +1228,7 @@ test("buildCancelTwitterEscrowInstruction wraps keyed hash", () => {
 
 test("buildRegisterZkAssetInstruction normalizes verifying key ids", () => {
   const instruction = buildRegisterZkAssetInstruction({
-    assetDefinitionId: "rose#wonderland",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     mode: "zk-native",
     transferVerifyingKey: "halo2/ipa:vk_transfer",
     unshieldVerifyingKey: { backend: "halo2/ipa", name: "vk_unshield" },
@@ -1242,7 +1242,7 @@ test("buildRegisterZkAssetInstruction normalizes verifying key ids", () => {
 test("buildScheduleConfidentialPolicyTransitionInstruction encodes transition metadata", () => {
   const transitionId = Buffer.alloc(32, 0xaa);
   const instruction = buildScheduleConfidentialPolicyTransitionInstruction({
-    assetDefinitionId: "rose#wonderland",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     newMode: "ShieldedOnly",
     effectiveHeight: "42",
     transitionId,
@@ -1258,17 +1258,17 @@ test("buildScheduleConfidentialPolicyTransitionInstruction encodes transition me
 test("buildCancelConfidentialPolicyTransitionInstruction wraps hash literal", () => {
   const transitionId = Buffer.alloc(32, 0xbb);
   const instruction = buildCancelConfidentialPolicyTransitionInstruction({
-    assetDefinitionId: "rose#wonderland",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     transitionId,
   });
   const payload = encodeAndDecode(instruction).zk.CancelConfidentialPolicyTransition;
-  assert.equal(payload.asset, "rose#wonderland");
+  assert.equal(payload.asset, "62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
   assert.equal(payload.transition_id, normalizedHashHex(transitionId));
 });
 
 test("buildShieldInstruction encodes encrypted payload fields", () => {
   const instruction = buildShieldInstruction({
-    assetDefinitionId: "rose#wonderland",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     fromAccountId: ACCOUNT_ID_INPUT,
     amount: "7",
     noteCommitment: Buffer.alloc(32, 0x01),
@@ -1289,7 +1289,7 @@ test("buildShieldInstruction rejects non-safe JSON numeric amounts", () => {
   assert.throws(
     () =>
       buildShieldInstruction({
-        assetDefinitionId: "rose#wonderland",
+        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
         fromAccountId: ACCOUNT_ID_INPUT,
         amount: Number.MAX_SAFE_INTEGER + 1,
         noteCommitment: Buffer.alloc(32, 0x01),
@@ -1310,7 +1310,7 @@ test("buildShieldInstruction rejects non-safe JSON numeric amounts", () => {
 
 test("buildZkTransferInstruction normalizes proof attachments", () => {
   const instruction = buildZkTransferInstruction({
-    assetDefinitionId: "rose#wonderland",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     inputs: [Buffer.alloc(32, 0x11)],
     outputs: [Buffer.alloc(32, 0x22)],
     proof: {
@@ -1327,7 +1327,7 @@ test("buildZkTransferInstruction normalizes proof attachments", () => {
 
 test("buildUnshieldInstruction honours optional root hints", () => {
   const instruction = buildUnshieldInstruction({
-    assetDefinitionId: "rose#wonderland",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     destinationAccountId: ACCOUNT_ID_INPUT,
     publicAmount: 5,
     inputs: [Buffer.alloc(32, 0x55)],

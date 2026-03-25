@@ -110,15 +110,15 @@ Struct ReservedAssignmentRequestV1 {
 
 | Oxirgi nuqta | Usul | Yuk yuk | Tavsif |
 |----------|--------|---------|-------------|
-| `/v1/sns/registrations` | POST | `RegisterNameRequestV1` | Ro'yxatdan o'ting yoki nomni qayta oching. Narxlar darajasini hal qiladi, to'lov/boshqaruv dalillarini tasdiqlaydi, ro'yxatga olish hodisalarini chiqaradi. |
-| `/v1/sns/registrations/{selector}/renew` | POST | `RenewNameRequestV1` | Muddati uzaytirish. Siyosatdan imtiyoz/toʻlov oynalarini qoʻllaydi. |
-| `/v1/sns/registrations/{selector}/transfer` | POST | `TransferNameRequestV1` | Boshqaruv tasdiqlovlari ilova qilinganidan keyin egalik huquqini o'tkazing. |
-| `/v1/sns/registrations/{selector}/controllers` | PUT | `UpdateControllersRequestV1` | Tekshirish moslamasini almashtiring; imzolangan hisob manzillarini tasdiqlaydi. |
-| `/v1/sns/registrations/{selector}/freeze` | POST | `FreezeNameRequestV1` | Qo'riqchi / kengash muzlatib qo'ydi. Vasiylik chiptasi va boshqaruv hujjatiga havola talab qilinadi. |
-| `/v1/sns/registrations/{selector}/freeze` | OʻCHIRISH | `GovernanceHookV1` | Tuzatishdan keyin muzdan tushirish; kengashning bekor qilinishi qayd etilishini ta'minlaydi. |
+| `/v1/sns/names` | POST | `RegisterNameRequestV1` | Ro'yxatdan o'ting yoki nomni qayta oching. Narxlar darajasini hal qiladi, to'lov/boshqaruv dalillarini tasdiqlaydi, ro'yxatga olish hodisalarini chiqaradi. |
+| `/v1/sns/names/{namespace}/{literal}/renew` | POST | `RenewNameRequestV1` | Muddati uzaytirish. Siyosatdan imtiyoz/toʻlov oynalarini qoʻllaydi. |
+| `/v1/sns/names/{namespace}/{literal}/transfer` | POST | `TransferNameRequestV1` | Boshqaruv tasdiqlovlari ilova qilinganidan keyin egalik huquqini o'tkazing. |
+| `/v1/sns/names/{namespace}/{literal}/controllers` | PUT | `UpdateControllersRequestV1` | Tekshirish moslamasini almashtiring; imzolangan hisob manzillarini tasdiqlaydi. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | POST | `FreezeNameRequestV1` | Qo'riqchi / kengash muzlatib qo'ydi. Vasiylik chiptasi va boshqaruv hujjatiga havola talab qilinadi. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | OʻCHIRISH | `GovernanceHookV1` | Tuzatishdan keyin muzdan tushirish; kengashning bekor qilinishi qayd etilishini ta'minlaydi. |
 | `/v1/sns/reserved/{selector}` | POST | `ReservedAssignmentRequestV1` | Zaxiralangan nomlarni boshqaruvchi/kengash tayinlash. |
 | `/v1/sns/policies/{suffix_id}` | GET | — | Joriy `SuffixPolicyV1` (kesh) olish. |
-| `/v1/sns/registrations/{selector}` | GET | — | Joriy `NameRecordV1` + samarali holatni qaytaradi (Faol, Grace va boshqalar). |
+| `/v1/sns/names/{namespace}/{literal}` | GET | — | Joriy `NameRecordV1` + samarali holatni qaytaradi (Faol, Grace va boshqalar). |
 
 **Selektor kodlash:** `{selector}` yo‘l segmenti har bir ADDR-5 uchun I105 (afzal), siqilgan (`sora`, ikkinchi eng yaxshi) yoki kanonik olti burchakni qabul qiladi; Torii uni `NameSelectorV1` orqali normallashtiradi.
 
@@ -133,7 +133,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -158,7 +158,7 @@ Qo'shimcha yordamchilar yangilanishlar, transferlar va vasiylik harakatlarini qa
 iroha sns renew \
   --selector makoto.sora \
   --term-years 1 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 120 \
   --payment-settlement '"renewal-settlement"' \
   --payment-signature '"steward-signature"'
@@ -181,7 +181,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` to'g'ri `GovernanceHookV1` yozuvini o'z ichiga olishi kerak (taklif identifikatori, ovoz xeshlari, boshqaruvchi/qo'riqchi imzolari). Har bir buyruq shunchaki mos keladigan `/v1/sns/registrations/{selector}/…` so'nggi nuqtasini aks ettiradi, shuning uchun beta-operatorlar SDK qo'ng'iroq qiladigan aniq Torii sirtlarini takrorlashlari mumkin.
+`--governance-json` to'g'ri `GovernanceHookV1` yozuvini o'z ichiga olishi kerak (taklif identifikatori, ovoz xeshlari, boshqaruvchi/qo'riqchi imzolari). Har bir buyruq shunchaki mos keladigan `/v1/sns/names/{namespace}/{literal}/…` so'nggi nuqtasini aks ettiradi, shuning uchun beta-operatorlar SDK qo'ng'iroq qiladigan aniq Torii sirtlarini takrorlashlari mumkin.
 
 ## 4. gRPC xizmati
 
@@ -253,7 +253,7 @@ Imtiyozlarni yangilash standart soʻrov va jarimani aniqlashni oʻz ichiga oladi
 
 1. Guardian `FreezeNameRequestV1` ni chiptaga havola qilingan voqea identifikatori bilan taqdim etadi.
 2. Torii yozuvni `NameStatus::Frozen` ga o'tkazadi, `NameFrozen` chiqaradi.
-3. Tuzatishdan keyin kengash masalalari bekor qilinadi; operator DELETE `/v1/sns/registrations/{selector}/freeze` ni `GovernanceHookV1` bilan yuboradi.
+3. Tuzatishdan keyin kengash masalalari bekor qilinadi; operator DELETE `/v1/sns/names/{namespace}/{literal}/freeze` ni `GovernanceHookV1` bilan yuboradi.
 4. Torii bekor qilishni tasdiqlaydi, `NameUnfrozen` chiqaradi.
 
 ## 7. Tasdiqlash va xato kodlari

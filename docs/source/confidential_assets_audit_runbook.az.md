@@ -32,7 +32,7 @@ məxfi aktivlərin hərəkətini təsdiq edərkən. O, fırlanma oyun kitabını
   isteğe bağlı olaraq vahid aktiv tərifinə qədər əhatə dairəsi. CLI nümunəsi:
 
   ```bash
-  iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "rose#wonderland" } }'
+  iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM" } }'
   ```
 
 - Siyasət metadatası və gözlənilən keçidlər vasitəsilə mövcuddur

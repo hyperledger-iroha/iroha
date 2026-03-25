@@ -12,13 +12,13 @@
           "label": null,
           "assets": [
             {
-              "asset_definition_id": "cash#portfolio_fixture",
-              "asset_id": "norito:4e52543000000001",
+              "asset": "cash#portfolio_fixture",
+              "scope": "global",
               "quantity": "875"
             },
             {
-              "asset_definition_id": "points#portfolio_fixture",
-              "asset_id": "norito:4e52543000000002",
+              "asset": "points#portfolio_fixture",
+              "scope": "global",
               "quantity": "320"
             }
           ]

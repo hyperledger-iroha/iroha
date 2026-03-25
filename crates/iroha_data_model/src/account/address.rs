@@ -8,15 +8,15 @@ use std::{
     cell::Cell,
     io::Write,
     sync::{
-        Arc, Condvar, LazyLock, Mutex, OnceLock, RwLock,
+        Arc, Condvar, LazyLock, Mutex, RwLock,
         atomic::{AtomicU16, Ordering},
     },
     thread::ThreadId,
 };
 
 use blake2::{
-    Blake2sMac,
-    digest::{Mac, typenum::U32},
+    Blake2b512, Blake2sMac,
+    digest::{Digest, Mac, typenum::U32},
 };
 use hex;
 use iroha_crypto::{Algorithm, PublicKey};
@@ -183,7 +183,7 @@ pub(crate) fn default_domain_guard(label: Option<&str>) -> DefaultDomainGuard {
     DefaultDomainGuard::enter(label)
 }
 
-/// Obtain the currently configured chain discriminant for I105 sentinel derivation,
+/// Obtain the currently configured chain discriminant for I105 literal encoding,
 /// honoring any thread-local override.
 #[must_use]
 pub fn chain_discriminant() -> u16 {
@@ -199,19 +199,14 @@ pub fn set_chain_discriminant(discriminant: u16) -> u16 {
 }
 
 const LOCAL_DOMAIN_KEY: &[u8] = b"SORA-LOCAL-K:v1";
+const I105_CHECKSUM_PREFIX: &[u8] = b"I105PRE";
 const HEADER_VERSION_V1: u8 = 0;
 const HEADER_NORM_VERSION_V1: u8 = 1;
-const I105_SENTINEL_SORA: &str = "sora";
-const I105_SENTINEL_TEST: &str = "test";
-const I105_SENTINEL_DEV: &str = "dev";
-const I105_SENTINEL_FALLBACK_PREFIX: &str = "n";
-const I105_CHECKSUM_LEN: usize = 6;
-const BECH32M_CONST: u32 = 0x2bc8_30a3;
-
-const I105_BASE_U8: u8 = 105;
-const I105_BASE: u32 = I105_BASE_U8 as u32;
+const I105_LITERAL_CHECKSUM_LEN: usize = 2;
 const CHAIN_DISCRIMINANT_SORA: u16 = 0x02F1;
+#[cfg(test)]
 const CHAIN_DISCRIMINANT_TEST: u16 = 0x0171;
+#[cfg(test)]
 const CHAIN_DISCRIMINANT_DEV: u16 = 0x0000;
 const DEFAULT_CHAIN_DISCRIMINANT: u16 = CHAIN_DISCRIMINANT_SORA;
 
@@ -353,8 +348,8 @@ impl AccountAddress {
         })
     }
 
-    /// Encode the payload using the I105 alphabet and the sentinel derived from
-    /// the active chain discriminant.
+    /// Encode the payload as a canonical I105 Base58 literal using the active
+    /// chain discriminant.
     ///
     /// # Errors
     ///
@@ -364,7 +359,8 @@ impl AccountAddress {
         self.to_i105_for_discriminant(chain_discriminant())
     }
 
-    /// Encode the payload using the I105 alphabet and a specific chain discriminant.
+    /// Encode the payload as a canonical I105 Base58 literal with a specific
+    /// chain discriminant.
     ///
     /// # Errors
     ///
@@ -375,58 +371,7 @@ impl AccountAddress {
         discriminant: u16,
     ) -> Result<String, AccountAddressError> {
         let canonical = self.canonical_bytes()?;
-        let digits = encode_base_n(&canonical, I105_BASE)?;
-        let checksum_digits = i105_checksum_digits(&canonical);
-        let alphabet = i105_alphabet();
-        let sentinel = i105_sentinel_for_discriminant(discriminant);
-
-        let mut out = String::with_capacity(sentinel.len() + digits.len() + checksum_digits.len());
-        out.push_str(&sentinel);
-        for digit in digits.iter().copied() {
-            out.push_str(alphabet[usize::from(digit)]);
-        }
-        for digit in checksum_digits.iter().copied() {
-            out.push_str(alphabet[usize::from(digit)]);
-        }
-        Ok(out)
-    }
-
-    /// Encode the payload using the I105 alphabet with a full-width sentinel.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AccountAddressError`] if canonical payload construction or I105
-    /// encoding fails.
-    pub fn to_i105_fullwidth(&self) -> Result<String, AccountAddressError> {
-        self.to_i105_fullwidth_for_discriminant(chain_discriminant())
-    }
-
-    /// Encode the payload using the I105 alphabet with full-width kana symbols
-    /// and the sentinel derived from a specific chain discriminant.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AccountAddressError`] if canonical payload construction or I105
-    /// encoding fails.
-    pub fn to_i105_fullwidth_for_discriminant(
-        &self,
-        discriminant: u16,
-    ) -> Result<String, AccountAddressError> {
-        let canonical = self.canonical_bytes()?;
-        let digits = encode_base_n(&canonical, I105_BASE)?;
-        let checksum_digits = i105_checksum_digits(&canonical);
-        let alphabet = i105_alphabet_fullwidth();
-        let sentinel = i105_sentinel_fullwidth_for_discriminant(discriminant);
-
-        let mut out = String::with_capacity(sentinel.len() + digits.len() + checksum_digits.len());
-        out.push_str(&sentinel);
-        for digit in digits.iter().copied() {
-            out.push_str(alphabet[usize::from(digit)]);
-        }
-        for digit in checksum_digits.iter().copied() {
-            out.push_str(alphabet[usize::from(digit)]);
-        }
-        Ok(out)
+        encode_i105_literal(discriminant, &canonical)
     }
 
     /// Classify the embedded domain selector.
@@ -462,15 +407,6 @@ impl AccountAddress {
         }
     }
 
-    fn strip_i105_sentinel_for_discriminant(input: &str, discriminant: u16) -> Option<&str> {
-        let sentinel = i105_sentinel_for_discriminant(discriminant);
-        if let Some(payload) = input.strip_prefix(&sentinel) {
-            return Some(payload);
-        }
-        let fullwidth = i105_sentinel_fullwidth_for_discriminant(discriminant);
-        input.strip_prefix(&fullwidth)
-    }
-
     /// Parse an address payload from its canonical byte representation.
     ///
     /// # Errors
@@ -494,12 +430,13 @@ impl AccountAddress {
         })
     }
 
-    /// Decode the I105-only representation.
+    /// Decode the canonical I105 Base58 representation.
     ///
     /// # Errors
     ///
-    /// Returns [`AccountAddressError`] if the string lacks the expected I105 sentinel,
-    /// has an invalid alphabet symbol, or the checksum does not validate.
+    /// Returns [`AccountAddressError`] if the string contains invalid Base58
+    /// symbols, carries a mismatching chain discriminant, or fails checksum
+    /// validation.
     pub fn from_i105(encoded: &str) -> Result<Self, AccountAddressError> {
         Self::from_i105_for_discriminant(encoded, None)
     }
@@ -509,38 +446,17 @@ impl AccountAddress {
     ///
     /// # Errors
     ///
-    /// Returns [`AccountAddressError`] if the string lacks the expected I105
-    /// sentinel, carries a mismatching discriminant sentinel, has invalid alphabet
-    /// symbols, or fails checksum validation.
+    /// Returns [`AccountAddressError`] if the string carries a mismatching
+    /// discriminant, has invalid Base58 symbols, or fails checksum validation.
     pub fn from_i105_for_discriminant(
         encoded: &str,
         expected_discriminant: Option<u16>,
     ) -> Result<Self, AccountAddressError> {
         let expected = expected_discriminant.unwrap_or_else(chain_discriminant);
-        let payload =
-            if let Some(payload) = Self::strip_i105_sentinel_for_discriminant(encoded, expected) {
-                payload
-            } else if let Some(found) = i105_discriminant_from_sentinel(encoded)
-                && found != expected
-            {
-                return Err(AccountAddressError::UnexpectedNetworkPrefix { expected, found });
-            } else {
-                return Err(AccountAddressError::MissingI105Sentinel);
-            };
-        let digits = i105_to_digits(payload)?;
-        if digits.len() <= I105_CHECKSUM_LEN {
-            return Err(AccountAddressError::I105TooShort);
+        let (found, canonical) = decode_i105_literal(encoded)?;
+        if found != expected {
+            return Err(AccountAddressError::UnexpectedNetworkPrefix { expected, found });
         }
-        let digits_len = digits.len() - I105_CHECKSUM_LEN;
-        let data_digits = &digits[..digits_len];
-        let checksum_digits = &digits[digits_len..];
-
-        let canonical = decode_base_n(data_digits, I105_BASE)?;
-        let expected_checksum = i105_checksum_digits(&canonical);
-        if expected_checksum.as_ref() != checksum_digits {
-            return Err(AccountAddressError::ChecksumMismatch);
-        }
-
         Self::from_canonical_bytes(&canonical)
     }
 
@@ -562,18 +478,10 @@ impl AccountAddress {
         if trimmed.is_empty() {
             return Err(AccountAddressError::InvalidLength);
         }
-        match Self::from_i105_for_discriminant(trimmed, expected_discriminant) {
-            Ok(address) => Ok(address),
-            Err(
-                AccountAddressError::MissingI105Sentinel
-                | AccountAddressError::I105TooShort
-                | AccountAddressError::InvalidI105Char(_)
-                | AccountAddressError::InvalidI105Base
-                | AccountAddressError::InvalidI105Digit(_)
-                | AccountAddressError::UnsupportedAddressFormat,
-            ) => Err(AccountAddressError::UnsupportedAddressFormat),
-            Err(err) => Err(err),
+        if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
+            return Err(AccountAddressError::UnsupportedAddressFormat);
         }
+        Self::from_i105_for_discriminant(trimmed, expected_discriminant)
     }
 
     /// # Errors
@@ -1052,98 +960,6 @@ fn compute_local_digest(label: &str) -> [u8; 12] {
     digest
 }
 
-fn i105_sentinel_for_discriminant(discriminant: u16) -> String {
-    match discriminant {
-        CHAIN_DISCRIMINANT_SORA => I105_SENTINEL_SORA.to_owned(),
-        CHAIN_DISCRIMINANT_TEST => I105_SENTINEL_TEST.to_owned(),
-        CHAIN_DISCRIMINANT_DEV => I105_SENTINEL_DEV.to_owned(),
-        _ => format!("{I105_SENTINEL_FALLBACK_PREFIX}{discriminant}"),
-    }
-}
-
-fn i105_sentinel_fullwidth_for_discriminant(discriminant: u16) -> String {
-    let ascii = i105_sentinel_for_discriminant(discriminant);
-    ascii
-        .chars()
-        .map(|ch| ascii_char_to_fullwidth(ch).unwrap_or(ch))
-        .collect()
-}
-
-fn i105_discriminant_from_sentinel(input: &str) -> Option<u16> {
-    for (discriminant, sentinel) in [
-        (CHAIN_DISCRIMINANT_SORA, I105_SENTINEL_SORA),
-        (CHAIN_DISCRIMINANT_TEST, I105_SENTINEL_TEST),
-        (CHAIN_DISCRIMINANT_DEV, I105_SENTINEL_DEV),
-    ] {
-        if input.starts_with(sentinel) {
-            return Some(discriminant);
-        }
-        if let Some(fullwidth) = ascii_str_to_fullwidth(sentinel)
-            && input.starts_with(&fullwidth)
-        {
-            return Some(discriminant);
-        }
-    }
-    i105_discriminant_from_numeric_sentinel(input)
-}
-
-fn i105_discriminant_from_numeric_sentinel(input: &str) -> Option<u16> {
-    if let Some(rest) = input.strip_prefix(I105_SENTINEL_FALLBACK_PREFIX) {
-        return parse_i105_numeric_sentinel(rest, false);
-    }
-    if let Some(fullwidth_n) = ascii_char_to_fullwidth('n')
-        && let Some(rest) = input.strip_prefix(fullwidth_n)
-    {
-        return parse_i105_numeric_sentinel(rest, true);
-    }
-    None
-}
-
-fn parse_i105_numeric_sentinel(rest: &str, fullwidth: bool) -> Option<u16> {
-    let mut digits = String::new();
-    for ch in rest.chars().take(5) {
-        let ascii_digit = if fullwidth {
-            match fullwidth_digit_to_ascii(ch) {
-                Some(digit) => digit,
-                None => break,
-            }
-        } else if ch.is_ascii_digit() {
-            ch
-        } else {
-            break;
-        };
-        digits.push(ascii_digit);
-    }
-    if digits.is_empty() {
-        return None;
-    }
-    digits.parse::<u16>().ok()
-}
-
-fn ascii_char_to_fullwidth(ch: char) -> Option<char> {
-    match ch {
-        '0'..='9' => char::from_u32(ch as u32 - '0' as u32 + 0xFF10),
-        'A'..='Z' => char::from_u32(ch as u32 - 'A' as u32 + 0xFF21),
-        'a'..='z' => char::from_u32(ch as u32 - 'a' as u32 + 0xFF41),
-        _ => None,
-    }
-}
-
-fn ascii_str_to_fullwidth(input: &str) -> Option<String> {
-    let mut output = String::with_capacity(input.len());
-    for ch in input.chars() {
-        output.push(ascii_char_to_fullwidth(ch)?);
-    }
-    Some(output)
-}
-
-fn fullwidth_digit_to_ascii(ch: char) -> Option<char> {
-    match ch {
-        '０'..='９' => char::from_u32(ch as u32 - '０' as u32 + '0' as u32),
-        _ => None,
-    }
-}
-
 /// Stable error codes surfaced by address encoders/decoders.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AccountAddressErrorCode {
@@ -1165,7 +981,7 @@ pub enum AccountAddressErrorCode {
     DomainMismatch,
     /// Domain label failed normalisation.
     InvalidDomainLabel,
-    /// Chain discriminant sentinel did not match expectation.
+    /// Chain discriminant prefix did not match expectation.
     UnexpectedNetworkPrefix,
     /// Unknown address class encountered.
     UnknownAddressClass,
@@ -1179,16 +995,10 @@ pub enum AccountAddressErrorCode {
     UnknownCurve,
     /// Canonical payload contained trailing bytes.
     UnexpectedTrailingBytes,
-    /// I105 form missing the expected chain-discriminant sentinel.
-    MissingI105Sentinel,
     /// I105 form shorter than minimal payload.
     I105TooShort,
     /// Invalid character in I105 alphabet.
     InvalidI105Char,
-    /// Invalid I105 alphabet base requested.
-    InvalidI105Base,
-    /// Digit outside I105 alphabet bounds.
-    InvalidI105Digit,
     /// Address string format unsupported.
     UnsupportedAddressFormat,
     /// Multisig controller declares too many members.
@@ -1218,11 +1028,8 @@ impl AccountAddressErrorCode {
             Self::InvalidPublicKey => "ERR_INVALID_PUBLIC_KEY",
             Self::UnknownCurve => "ERR_UNKNOWN_CURVE",
             Self::UnexpectedTrailingBytes => "ERR_UNEXPECTED_TRAILING_BYTES",
-            Self::MissingI105Sentinel => "ERR_MISSING_I105_SENTINEL",
             Self::I105TooShort => "ERR_I105_TOO_SHORT",
             Self::InvalidI105Char => "ERR_INVALID_I105_CHAR",
-            Self::InvalidI105Base => "ERR_INVALID_I105_BASE",
-            Self::InvalidI105Digit => "ERR_INVALID_I105_DIGIT",
             Self::UnsupportedAddressFormat => "ERR_UNSUPPORTED_ADDRESS_FORMAT",
             Self::MultisigMemberOverflow => "ERR_MULTISIG_MEMBER_OVERFLOW",
             Self::InvalidMultisigPolicy => "ERR_INVALID_MULTISIG_POLICY",
@@ -1259,12 +1066,12 @@ pub enum AccountAddressError {
     /// Domain label failed normalization.
     #[error("domain label failed normalization: {0}")]
     InvalidDomainLabel(&'static str),
-    /// Chain discriminant sentinel did not match expectations.
+    /// Chain discriminant prefix did not match expectations.
     #[error("unexpected I105 chain discriminant: expected {expected}, found {found}")]
     UnexpectedNetworkPrefix {
         /// Chain discriminant we expected to decode.
         expected: u16,
-        /// Chain discriminant decoded from the sentinel.
+        /// Chain discriminant decoded from the prefix bytes.
         found: u16,
     },
     /// Encountered an unknown address class.
@@ -1285,21 +1092,12 @@ pub enum AccountAddressError {
     /// Address contains trailing bytes beyond the expected payload.
     #[error("unexpected trailing bytes in canonical payload")]
     UnexpectedTrailingBytes,
-    /// I105 form is missing the expected chain-discriminant sentinel.
-    #[error("I105 address is missing the expected chain-discriminant sentinel")]
-    MissingI105Sentinel,
     /// I105 form is too short to contain payload and checksum.
     #[error("I105 address too short")]
     I105TooShort,
     /// Encountered a character outside of the I105 alphabet.
     #[error("invalid character `{0}` in I105 address")]
     InvalidI105Char(char),
-    /// The I105 alphabet base is invalid or unsupported.
-    #[error("invalid I105 alphabet base")]
-    InvalidI105Base,
-    /// Encountered a digit value outside of the I105 alphabet size.
-    #[error("invalid compressed digit value: {0}")]
-    InvalidI105Digit(u8),
     /// Address string is not in a recognised format.
     #[error("unsupported account address format")]
     UnsupportedAddressFormat,
@@ -1345,11 +1143,8 @@ impl AccountAddressError {
             Self::InvalidPublicKey => AccountAddressErrorCode::InvalidPublicKey,
             Self::UnknownCurve(_) => AccountAddressErrorCode::UnknownCurve,
             Self::UnexpectedTrailingBytes => AccountAddressErrorCode::UnexpectedTrailingBytes,
-            Self::MissingI105Sentinel => AccountAddressErrorCode::MissingI105Sentinel,
             Self::I105TooShort => AccountAddressErrorCode::I105TooShort,
             Self::InvalidI105Char(_) => AccountAddressErrorCode::InvalidI105Char,
-            Self::InvalidI105Base => AccountAddressErrorCode::InvalidI105Base,
-            Self::InvalidI105Digit(_) => AccountAddressErrorCode::InvalidI105Digit,
             Self::UnsupportedAddressFormat => AccountAddressErrorCode::UnsupportedAddressFormat,
             Self::MultisigMemberOverflow(_) => AccountAddressErrorCode::MultisigMemberOverflow,
             Self::InvalidMultisigPolicy(_) => AccountAddressErrorCode::InvalidMultisigPolicy,
@@ -1370,253 +1165,90 @@ impl fmt::Display for AccountAddress {
     }
 }
 
-fn encode_base_n(bytes: &[u8], base: u32) -> Result<Vec<u8>, AccountAddressError> {
-    if base < 2 {
-        return Err(AccountAddressError::InvalidI105Base);
+/// Encode a chain discriminant into the canonical I105 prefix bytes.
+///
+/// # Errors
+///
+/// Returns [`AccountAddressError::UnsupportedAddressFormat`] when the prefix
+/// lies outside the 14-bit I105 range.
+pub fn encode_i105_prefix(prefix: u16) -> Result<Vec<u8>, AccountAddressError> {
+    if prefix > 0x3fff {
+        return Err(AccountAddressError::UnsupportedAddressFormat);
     }
-    if bytes.is_empty() {
-        return Ok(vec![0]);
+    if prefix <= 63 {
+        return Ok(vec![u8::try_from(prefix).expect("6-bit prefix fits in u8")]);
     }
-    let leading_zeros = bytes.iter().take_while(|&&b| b == 0).count();
-    let mut value = bytes.to_vec();
-    let mut digits = Vec::new();
-    let mut start = leading_zeros;
-    while start < value.len() {
-        let mut remainder = 0u32;
-        for byte in &mut value[start..] {
-            let accumulator = (remainder << 8) | u32::from(*byte);
-            let quotient = u8::try_from(accumulator / base)
-                .expect("radix division quotient always fits in a byte");
-            *byte = quotient;
-            remainder = accumulator % base;
-        }
-        digits.push(
-            u8::try_from(remainder).expect("remainder of division by base < 256 always fits in u8"),
-        );
-        while start < value.len() && value[start] == 0 {
-            start += 1;
-        }
-    }
-    digits.resize(digits.len() + leading_zeros, 0);
-    if digits.is_empty() {
-        digits.push(0);
-    }
-    digits.reverse();
-    Ok(digits)
+
+    let lower = u8::try_from((prefix & 0b0011_1111) | 0b0100_0000)
+        .expect("14-bit lower prefix limb fits in u8");
+    let upper = u8::try_from(prefix >> 6).expect("14-bit upper prefix limb fits in u8");
+    Ok(vec![lower, upper])
 }
 
-fn decode_base_n(digits: &[u8], base: u32) -> Result<Vec<u8>, AccountAddressError> {
-    if base < 2 {
-        return Err(AccountAddressError::InvalidI105Base);
-    }
-    if digits.is_empty() {
+fn decode_i105_prefix(payload: &[u8]) -> Result<(u16, usize), AccountAddressError> {
+    let Some(first) = payload.first().copied() else {
         return Err(AccountAddressError::InvalidLength);
+    };
+    if first <= 63 {
+        return Ok((u16::from(first), 1));
     }
-    let leading_zeros = digits.iter().take_while(|&&d| d == 0).count();
-    let mut value: Vec<u8> = digits.to_vec();
-    let mut bytes = Vec::new();
-    let mut start = leading_zeros;
-    while start < value.len() {
-        let mut remainder = 0u32;
-        for digit in &mut value[start..] {
-            if u32::from(*digit) >= base {
-                return Err(AccountAddressError::InvalidI105Digit(*digit));
-            }
-            let accumulator = remainder * base + u32::from(*digit);
-            let quotient = u8::try_from(accumulator / 256)
-                .expect("division by 256 produces quotient that fits in u8");
-            *digit = quotient;
-            remainder = accumulator % 256;
-        }
-        bytes.push(u8::try_from(remainder).expect("remainder modulo 256 must fit in u8"));
-        while start < value.len() && value[start] == 0 {
-            start += 1;
-        }
-    }
-    bytes.resize(bytes.len() + leading_zeros, 0);
-    bytes.reverse();
-    Ok(bytes)
-}
-
-fn i105_checksum_digits(canonical: &[u8]) -> [u8; I105_CHECKSUM_LEN] {
-    let data = convert_to_base32(canonical);
-    bech32m_checksum(&data)
-}
-
-fn convert_to_base32(data: &[u8]) -> Vec<u8> {
-    let mut acc = 0u32;
-    let mut bits = 0u32;
-    let mut out = Vec::with_capacity((data.len() * 8).div_ceil(5));
-    for &byte in data {
-        acc = (acc << 8) | u32::from(byte);
-        bits += 8;
-        while bits >= 5 {
-            bits -= 5;
-            let value = u8::try_from((acc >> bits) & 0x1f).expect("base32 limb fits in u8");
-            out.push(value);
-        }
-    }
-    if bits > 0 {
-        let value = u8::try_from((acc << (5 - bits)) & 0x1f).expect("base32 limb fits in u8");
-        out.push(value);
-    }
-    out
-}
-
-fn bech32m_checksum(data: &[u8]) -> [u8; I105_CHECKSUM_LEN] {
-    let mut values = expand_hrp("snx");
-    values.extend_from_slice(data);
-    values.extend([0u8; I105_CHECKSUM_LEN]);
-    let polymod = bech32_polymod(values.iter().copied()) ^ BECH32M_CONST;
-    let mut result = [0u8; I105_CHECKSUM_LEN];
-    for (index, slot) in result.iter_mut().enumerate() {
-        let shift = 5 * (I105_CHECKSUM_LEN - 1 - index);
-        let value = ((polymod >> shift) & 0x1f) as u32;
-        *slot = u8::try_from(value).expect("bech32 checksum limb fits in u8");
-    }
-    result
-}
-
-fn bech32_polymod<I>(values: I) -> u32
-where
-    I: Iterator<Item = u8>,
-{
-    const GEN: [u32; 5] = [
-        0x3b6a_57b2,
-        0x2650_8e6d,
-        0x1ea1_19fa,
-        0x3d42_33dd,
-        0x2a14_62b3,
-    ];
-    let mut chk = 1u32;
-    for value in values {
-        let top = chk >> 25;
-        chk = ((chk & 0x1ff_ffff) << 5) ^ u32::from(value);
-        for (i, generator) in GEN.iter().enumerate() {
-            if (top >> i) & 1 == 1 {
-                chk ^= generator;
-            }
-        }
-    }
-    chk
-}
-
-fn expand_hrp(hrp: &str) -> Vec<u8> {
-    let mut out = Vec::with_capacity(hrp.len() * 2 + 1);
-    for b in hrp.bytes() {
-        out.push(b >> 5);
-    }
-    out.push(0);
-    out.extend(hrp.bytes().map(|b| b & 0x1f));
-    out
-}
-
-fn i105_to_digits(payload: &str) -> Result<Vec<u8>, AccountAddressError> {
-    let mut digits = Vec::new();
-    let char_indices: Vec<(usize, char)> = payload.char_indices().collect();
-    let mut i = 0;
-    while i < char_indices.len() {
-        let (start, ch) = char_indices[i];
-        let next_start = if i + 1 < char_indices.len() {
-            char_indices[i + 1].0
-        } else {
-            payload.len()
+    if (first & 0b0100_0000) != 0 {
+        let Some(second) = payload.get(1).copied() else {
+            return Err(AccountAddressError::InvalidLength);
         };
-        if i + 1 < char_indices.len() {
-            let end = if i + 2 < char_indices.len() {
-                char_indices[i + 2].0
-            } else {
-                payload.len()
-            };
-            let candidate = &payload[start..end];
-            if let Some(digit) = lookup_i105_digit(candidate) {
-                digits.push(digit);
-                i += 2;
-                continue;
-            }
-        }
-        let slice = &payload[start..next_start];
-        if let Some(digit) = lookup_i105_digit(slice) {
-            digits.push(digit);
-            i += 1;
-        } else {
-            return Err(AccountAddressError::InvalidI105Char(ch));
-        }
+        let prefix = (u16::from(second) << 6) | u16::from(first & 0x3f);
+        return Ok((prefix, 2));
     }
-    Ok(digits)
+
+    Err(AccountAddressError::UnsupportedAddressFormat)
 }
 
-fn i105_alphabet() -> &'static [&'static str] {
-    static ALPHABET: OnceLock<Vec<&'static str>> = OnceLock::new();
-    ALPHABET.get_or_init(|| {
-        let mut table = Vec::with_capacity(BASE58_ALPHABET.len() + SORA_KANA.len());
-        table.extend_from_slice(&BASE58_ALPHABET);
-        table.extend_from_slice(&SORA_KANA);
-        debug_assert_eq!(table.len(), I105_BASE as usize);
-        table
-    })
+fn i105_checksum_bytes(body: &[u8]) -> [u8; 2] {
+    let mut checksum_input = Vec::with_capacity(I105_CHECKSUM_PREFIX.len() + body.len());
+    checksum_input.extend_from_slice(I105_CHECKSUM_PREFIX);
+    checksum_input.extend_from_slice(body);
+    let digest = Blake2b512::digest(&checksum_input);
+    [digest[0], digest[1]]
 }
 
-fn i105_alphabet_fullwidth() -> &'static [&'static str] {
-    static ALPHABET: OnceLock<Vec<&'static str>> = OnceLock::new();
-    ALPHABET.get_or_init(|| {
-        let mut table = Vec::with_capacity(BASE58_ALPHABET.len() + SORA_KANA_FULLWIDTH.len());
-        table.extend_from_slice(&BASE58_ALPHABET);
-        table.extend_from_slice(&SORA_KANA_FULLWIDTH);
-        debug_assert_eq!(table.len(), I105_BASE as usize);
-        table
-    })
+fn encode_i105_literal(prefix: u16, canonical: &[u8]) -> Result<String, AccountAddressError> {
+    let prefix_bytes = encode_i105_prefix(prefix)?;
+    let mut body = Vec::with_capacity(prefix_bytes.len() + canonical.len());
+    body.extend_from_slice(&prefix_bytes);
+    body.extend_from_slice(canonical);
+
+    let checksum = i105_checksum_bytes(&body);
+    let mut payload = Vec::with_capacity(body.len() + checksum.len());
+    payload.extend_from_slice(&body);
+    payload.extend_from_slice(&checksum);
+
+    Ok(bs58::encode(payload).into_string())
 }
 
-fn i105_digit_table() -> &'static [(&'static str, u8)] {
-    static MAP: OnceLock<Vec<(&'static str, u8)>> = OnceLock::new();
-    MAP.get_or_init(|| {
-        let mut table = Vec::with_capacity((I105_BASE as usize) * 2);
-        for (idx, symbol) in i105_alphabet().iter().enumerate() {
-            table.push((
-                *symbol,
-                u8::try_from(idx).expect("I105 alphabet length fits within u8"),
-            ));
-        }
-        for (idx, symbol) in i105_alphabet_fullwidth().iter().enumerate() {
-            table.push((
-                *symbol,
-                u8::try_from(idx).expect("I105 alphabet length fits within u8"),
-            ));
-        }
-        table.shrink_to_fit();
-        table
-    })
+fn decode_i105_literal(input: &str) -> Result<(u16, Vec<u8>), AccountAddressError> {
+    let payload = bs58::decode(input).into_vec().map_err(|_| {
+        input.chars()
+            .find(|ch| !matches!(*ch, '1'..='9' | 'A'..='H' | 'J'..='N' | 'P'..='Z' | 'a'..='k' | 'm'..='z'))
+            .map_or(AccountAddressError::UnsupportedAddressFormat, AccountAddressError::InvalidI105Char)
+    })?;
+    if payload.len() < 1 + I105_LITERAL_CHECKSUM_LEN {
+        return Err(AccountAddressError::I105TooShort);
+    }
+
+    let split_at = payload.len() - I105_LITERAL_CHECKSUM_LEN;
+    let (body, checksum) = payload.split_at(split_at);
+    let expected = i105_checksum_bytes(body);
+    if checksum != expected {
+        return Err(AccountAddressError::ChecksumMismatch);
+    }
+
+    let (prefix, prefix_len) = decode_i105_prefix(body)?;
+    Ok((prefix, body[prefix_len..].to_vec()))
 }
-
-fn lookup_i105_digit(symbol: &str) -> Option<u8> {
-    i105_digit_table()
-        .iter()
-        .find_map(|(s, value)| (*s == symbol).then_some(*value))
-}
-
-const BASE58_ALPHABET: [&str; 58] = [
-    "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F", "G", "H", "J", "K",
-    "L", "M", "N", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "a", "b", "c", "d", "e",
-    "f", "g", "h", "i", "j", "k", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y",
-    "z",
-];
-
-const SORA_KANA: [&str; 47] = [
-    "ｲ", "ﾛ", "ﾊ", "ﾆ", "ﾎ", "ﾍ", "ﾄ", "ﾁ", "ﾘ", "ﾇ", "ﾙ", "ｦ", "ﾜ", "ｶ", "ﾖ", "ﾀ", "ﾚ", "ｿ", "ﾂ",
-    "ﾈ", "ﾅ", "ﾗ", "ﾑ", "ｳ", "ヰ", "ﾉ", "ｵ", "ｸ", "ﾔ", "ﾏ", "ｹ", "ﾌ", "ｺ", "ｴ", "ﾃ", "ｱ", "ｻ", "ｷ",
-    "ﾕ", "ﾒ", "ﾐ", "ｼ", "ヱ", "ﾋ", "ﾓ", "ｾ", "ｽ",
-];
-
-const SORA_KANA_FULLWIDTH: [&str; 47] = [
-    "イ", "ロ", "ハ", "ニ", "ホ", "ヘ", "ト", "チ", "リ", "ヌ", "ル", "ヲ", "ワ", "カ", "ヨ", "タ",
-    "レ", "ソ", "ツ", "ネ", "ナ", "ラ", "ム", "ウ", "ヰ", "ノ", "オ", "ク", "ヤ", "マ", "ケ", "フ",
-    "コ", "エ", "テ", "ア", "サ", "キ", "ユ", "メ", "ミ", "シ", "ヱ", "ヒ", "モ", "セ", "ス",
-];
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeSet, str::FromStr, sync::Arc};
+    use std::{str::FromStr, sync::Arc};
 
     use iroha_crypto::{Algorithm, KeyPair, PublicKey};
     use proptest::prelude::*;
@@ -1670,10 +1302,6 @@ mod tests {
         AccountAddress::from_account_id(&account).expect("account id encodes into an address")
     }
 
-    fn current_sentinel() -> String {
-        i105_sentinel_for_discriminant(chain_discriminant())
-    }
-
     #[cfg(feature = "json")]
     #[test]
     fn account_address_json_roundtrip_supports_canonical_hex_literals() {
@@ -1685,20 +1313,6 @@ mod tests {
         assert_eq!(decoded, address);
     }
 
-    fn nfkc_like_payload(compressed: &str) -> String {
-        let sentinel = current_sentinel();
-        assert!(compressed.starts_with(&sentinel));
-        let payload = &compressed[sentinel.len()..];
-        let digits = i105_to_digits(payload).expect("I105 payload must decode into digits");
-        let alphabet = i105_alphabet_fullwidth();
-        let mut output = String::with_capacity(compressed.len());
-        output.push_str(&sentinel);
-        for digit in digits {
-            output.push_str(alphabet[usize::from(digit)]);
-        }
-        output
-    }
-
     #[test]
     fn chain_discriminant_guard_scopes_override() {
         let _outer = ChainDiscriminantGuard::enter(42);
@@ -1708,42 +1322,6 @@ mod tests {
             assert_eq!(chain_discriminant(), original.wrapping_add(1));
         }
         assert_eq!(chain_discriminant(), original);
-    }
-
-    fn ascii_payload_to_fullwidth(compressed: &str) -> Option<String> {
-        let sentinel = current_sentinel();
-        assert!(compressed.starts_with(&sentinel));
-        let payload = &compressed[sentinel.len()..];
-        let fullwidth_sentinel = ascii_str_to_fullwidth(&sentinel)?;
-        let mut output = String::with_capacity(compressed.len());
-        output.push_str(&fullwidth_sentinel);
-        let mut changed = false;
-        for ch in payload.chars() {
-            if let Some(fullwidth) = ascii_char_to_fullwidth(ch) {
-                output.push(fullwidth);
-                changed = true;
-            } else {
-                output.push(ch);
-            }
-        }
-        changed.then_some(output)
-    }
-
-    fn ascii_str_to_fullwidth(input: &str) -> Option<String> {
-        let mut output = String::with_capacity(input.len());
-        for ch in input.chars() {
-            let converted = ascii_char_to_fullwidth(ch)?;
-            output.push(converted);
-        }
-        Some(output)
-    }
-
-    fn digits_to_payload_string(digits: &[u8], alphabet: &[&str]) -> String {
-        let mut output = String::with_capacity(digits.len() * 3);
-        for digit in digits {
-            output.push_str(alphabet[usize::from(*digit)]);
-        }
-        output
     }
 
     #[test]
@@ -1810,36 +1388,7 @@ mod tests {
     }
 
     #[test]
-    fn sora_kana_matches_iroha_poem_order() {
-        const EXPECTED: [&str; 47] = [
-            "ｲ", "ﾛ", "ﾊ", "ﾆ", "ﾎ", "ﾍ", "ﾄ", "ﾁ", "ﾘ", "ﾇ", "ﾙ", "ｦ", "ﾜ", "ｶ", "ﾖ", "ﾀ", "ﾚ",
-            "ｿ", "ﾂ", "ﾈ", "ﾅ", "ﾗ", "ﾑ", "ｳ", "ヰ", "ﾉ", "ｵ", "ｸ", "ﾔ", "ﾏ", "ｹ", "ﾌ", "ｺ", "ｴ",
-            "ﾃ", "ｱ", "ｻ", "ｷ", "ﾕ", "ﾒ", "ﾐ", "ｼ", "ヱ", "ﾋ", "ﾓ", "ｾ", "ｽ",
-        ];
-        assert_eq!(SORA_KANA, EXPECTED);
-    }
-
-    #[test]
-    fn i105_alphabet_has_unique_symbols() {
-        let mut symbols = BTreeSet::new();
-        for symbol in BASE58_ALPHABET {
-            assert!(symbols.insert(symbol), "duplicate Base58 symbol {symbol}");
-        }
-        for symbol in SORA_KANA {
-            assert!(
-                symbols.insert(symbol),
-                "duplicate compressed symbol {symbol}"
-            );
-        }
-        assert_eq!(
-            symbols.len(),
-            (BASE58_ALPHABET.len() + SORA_KANA.len()),
-            "unexpected I105 alphabet length"
-        );
-    }
-
-    #[test]
-    fn compressed_golden_vectors_match_expected_strings() {
+    fn i105_golden_vectors_roundtrip() {
         let _guard_default = guard_default_label();
         let original = default_domain_name();
         let _reset = Reset(original.clone());
@@ -1866,12 +1415,12 @@ mod tests {
             let canonical = address
                 .canonical_hex()
                 .expect("canonical encoding must succeed");
-            let compressed = address.to_i105().expect("compressed encoding must succeed");
+            let literal = address.to_i105().expect("i105 encoding must succeed");
             assert!(
                 canonical.starts_with("0x020001"),
                 "canonical payloads must not include a domain selector byte: label={label} seed={seed_byte} canonical={canonical}"
             );
-            let decoded = AccountAddress::from_i105(&compressed).expect("compressed decode");
+            let decoded = AccountAddress::from_i105(&literal).expect("i105 decode");
             assert_eq!(
                 decoded.canonical_hex().expect("canonical"),
                 canonical,
@@ -1969,17 +1518,29 @@ mod tests {
     }
 
     #[test]
-    fn i105_encoding_uses_chain_discriminant_sentinel() {
+    fn i105_encoding_respects_chain_discriminant() {
         let _guard = guard_default_label();
         let _chain = ChainDiscriminantGuard::enter(42);
         let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
         let encoded = address.to_i105().expect("i105");
-        assert!(encoded.starts_with("n42"));
+        assert_eq!(
+            encoded,
+            address
+                .to_i105_for_discriminant(42)
+                .expect("explicit discriminant")
+        );
+        assert_ne!(
+            encoded,
+            address
+                .to_i105_for_discriminant(DEFAULT_CHAIN_DISCRIMINANT)
+                .expect("default discriminant"),
+            "changing the chain discriminant must change the encoded prefix bytes"
+        );
     }
 
     #[test]
-    fn i105_known_discriminants_use_named_sentinels() {
+    fn i105_known_discriminants_roundtrip() {
         let _guard = guard_default_label();
         let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
@@ -1987,17 +1548,32 @@ mod tests {
         let sora = address
             .to_i105_for_discriminant(CHAIN_DISCRIMINANT_SORA)
             .expect("sora");
-        assert!(sora.starts_with(I105_SENTINEL_SORA));
-
         let testus = address
             .to_i105_for_discriminant(CHAIN_DISCRIMINANT_TEST)
             .expect("test");
-        assert!(testus.starts_with(I105_SENTINEL_TEST));
-
         let dev = address
             .to_i105_for_discriminant(CHAIN_DISCRIMINANT_DEV)
             .expect("dev");
-        assert!(dev.starts_with(I105_SENTINEL_DEV));
+
+        assert_ne!(sora, testus);
+        assert_ne!(sora, dev);
+        assert_ne!(testus, dev);
+        assert!(!sora.contains(':'));
+        assert!(!testus.contains(':'));
+        assert!(!dev.contains(':'));
+
+        for (literal, discriminant) in [
+            (sora, CHAIN_DISCRIMINANT_SORA),
+            (testus, CHAIN_DISCRIMINANT_TEST),
+            (dev, CHAIN_DISCRIMINANT_DEV),
+        ] {
+            let decoded = AccountAddress::from_i105_for_discriminant(&literal, Some(discriminant))
+                .expect("decode succeeds with discriminant");
+            assert_eq!(
+                decoded.canonical_bytes().unwrap(),
+                address.canonical_bytes().unwrap()
+            );
+        }
     }
 
     #[test]
@@ -2063,39 +1639,11 @@ mod tests {
         let account = AccountId::new(ed25519_pk());
         let original = AccountAddress::from_account_id(&account).expect("encode");
         let literal = original.to_i105().expect("i105 encode");
-        let sentinel = current_sentinel();
-        assert!(literal.starts_with(&sentinel));
         let decoded = AccountAddress::from_i105(&literal).expect("i105 decode");
         assert_eq!(
             decoded.canonical_bytes().unwrap(),
             original.canonical_bytes().unwrap()
         );
-    }
-
-    #[test]
-    fn i105_fullwidth_round_trip() {
-        let _guard = guard_default_label();
-        let account = AccountId::new(ed25519_pk());
-        let original = AccountAddress::from_account_id(&account).expect("encode");
-        let literal = original.to_i105_fullwidth().expect("i105 encode");
-        let decoded = AccountAddress::from_i105(&literal).expect("i105 decode");
-        assert_eq!(
-            decoded.canonical_bytes().unwrap(),
-            original.canonical_bytes().unwrap()
-        );
-    }
-
-    proptest! {
-        #[test]
-        fn i105_nfkc_payload_round_trip(seed in any::<u8>()) {
-            let _guard = guard_default_label();
-            let address = account_address_for_seed(seed);
-            let canonical = address.canonical_bytes().expect("canonical bytes");
-            let literal = address.to_i105().expect("i105 encode");
-            let nfkc_variant = nfkc_like_payload(&literal);
-            let decoded = AccountAddress::parse_encoded(&nfkc_variant, None).expect("nfkc payload decodes");
-            prop_assert_eq!(decoded.canonical_bytes().unwrap(), canonical);
-        }
     }
 
     #[test]
@@ -2105,76 +1653,19 @@ mod tests {
             .expect("encode")
             .to_i105()
             .expect("i105 encode");
-        let sentinel = current_sentinel();
-        let idx = sentinel.len();
-        literal.replace_range(idx..=idx, "!");
+        literal.replace_range(0..=0, "!");
         let err = AccountAddress::from_i105(&literal).expect_err("invalid char should fail");
         assert!(matches!(err, AccountAddressError::InvalidI105Char('!')));
-    }
-
-    proptest! {
-        #[test]
-        fn i105_ascii_payload_fullwidth_is_rejected(seed in any::<u8>()) {
-            let _guard = guard_default_label();
-            let address = account_address_for_seed(seed);
-            let literal = address.to_i105().expect("i105 encode");
-            let mutated = ascii_payload_to_fullwidth(&literal);
-            prop_assume!(mutated.is_some());
-            let mutated = mutated.expect("payload contains ascii characters");
-            let err = AccountAddress::from_i105(&mutated)
-                .expect_err("IME full-width ascii must raise an error");
-            prop_assert!(matches!(err, AccountAddressError::InvalidI105Char(_)));
-        }
-    }
-
-    #[test]
-    fn i105_uppercase_sentinel_rejected() {
-        let _guard = guard_default_label();
-        let address = account_address_for_seed(0);
-        let literal = address.to_i105().expect("i105 encode");
-        let sentinel = current_sentinel();
-        let payload = &literal[sentinel.len()..];
-        let tampered = format!("SORA{payload}");
-        let err = AccountAddress::from_i105(&tampered).expect_err("uppercase sentinel rejected");
-        assert!(matches!(err, AccountAddressError::MissingI105Sentinel));
-    }
-
-    #[test]
-    fn i105_fullwidth_sentinel_accepts() {
-        let _guard = guard_default_label();
-        let address = account_address_for_seed(1);
-        let literal = address.to_i105().expect("i105 encode");
-        let sentinel = current_sentinel();
-        let payload = &literal[sentinel.len()..];
-        let sentinel = ascii_str_to_fullwidth(&sentinel).expect("sentinel converts");
-        let fullwidth = format!("{sentinel}{payload}");
-        let decoded = AccountAddress::from_i105(&fullwidth).expect("full-width sentinel accepted");
-        assert_eq!(
-            decoded.canonical_bytes().unwrap(),
-            address.canonical_bytes().unwrap()
-        );
-        let parsed =
-            AccountAddress::parse_encoded(&fullwidth, None).expect("full-width sentinel parse");
-        assert_eq!(
-            parsed.canonical_bytes().unwrap(),
-            address.canonical_bytes().unwrap()
-        );
     }
 
     #[test]
     fn i105_checksum_mismatch_detected() {
         let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
-        let literal = address.to_i105().expect("i105 encode");
-        let sentinel = current_sentinel();
-        let payload = &literal[sentinel.len()..];
-        let mut digits = i105_to_digits(payload).expect("digits");
-        let last_data_index = digits.len() - I105_CHECKSUM_LEN - 1;
-        digits[last_data_index] = (digits[last_data_index] + 1) % I105_BASE_U8;
-        let mut tampered = sentinel;
-        for &digit in &digits {
-            tampered.push_str(i105_alphabet()[usize::from(digit)]);
-        }
+        let mut tampered = address.to_i105().expect("i105 encode").into_bytes();
+        let last = tampered.len() - 1;
+        tampered[last] = if tampered[last] == b'1' { b'2' } else { b'1' };
+        let tampered = String::from_utf8(tampered).expect("utf8");
         let err = AccountAddress::from_i105(&tampered).expect_err("checksum mismatch");
         assert!(matches!(err, AccountAddressError::ChecksumMismatch));
     }
@@ -2184,18 +1675,13 @@ mod tests {
         fn i105_checksum_corruption_detected(seed in any::<u8>(), offset in any::<u8>()) {
             let _guard = guard_default_label();
             let address = account_address_for_seed(seed);
-            let literal = address.to_i105().expect("i105 encode");
-            let sentinel = current_sentinel();
-            let payload = &literal[sentinel.len()..];
-            let mut digits = i105_to_digits(payload).expect("digits");
-            let data_len = digits.len().saturating_sub(I105_CHECKSUM_LEN);
-            prop_assume!(data_len > 0);
-            let index = usize::from(offset) % data_len;
-            let current = digits[index];
-            digits[index] = (current + 1) % I105_BASE_U8;
-            let alphabet = i105_alphabet();
-            let tampered_payload = digits_to_payload_string(&digits, alphabet);
-            let tampered = format!("{sentinel}{tampered_payload}");
+            let mut literal = address.to_i105().expect("i105 encode").into_bytes();
+            let index = usize::from(offset) % literal.len();
+            literal[index] = match literal[index] {
+                b'1' => b'2',
+                _ => b'1',
+            };
+            let tampered = String::from_utf8(literal).expect("utf8");
             let err = AccountAddress::from_i105(&tampered)
                 .expect_err("checksum mismatch");
             prop_assert!(matches!(err, AccountAddressError::ChecksumMismatch));
@@ -2243,8 +1729,6 @@ mod tests {
         let literal = address
             .to_i105_for_discriminant(42)
             .expect("i105 with explicit discriminant");
-        assert!(literal.starts_with("n42"));
-
         let decoded = AccountAddress::parse_encoded(&literal, Some(42)).expect("parse i105");
         assert_eq!(
             decoded.canonical_bytes().unwrap(),
@@ -2395,11 +1879,6 @@ mod tests {
             "ERR_UNEXPECTED_TRAILING_BYTES"
         );
         assert_code!(
-            AccountAddressError::MissingI105Sentinel,
-            MissingI105Sentinel,
-            "ERR_MISSING_I105_SENTINEL"
-        );
-        assert_code!(
             AccountAddressError::I105TooShort,
             I105TooShort,
             "ERR_I105_TOO_SHORT"
@@ -2408,16 +1887,6 @@ mod tests {
             AccountAddressError::InvalidI105Char('!'),
             InvalidI105Char,
             "ERR_INVALID_I105_CHAR"
-        );
-        assert_code!(
-            AccountAddressError::InvalidI105Base,
-            InvalidI105Base,
-            "ERR_INVALID_I105_BASE"
-        );
-        assert_code!(
-            AccountAddressError::InvalidI105Digit(123),
-            InvalidI105Digit,
-            "ERR_INVALID_I105_DIGIT"
         );
         assert_code!(
             AccountAddressError::UnsupportedAddressFormat,

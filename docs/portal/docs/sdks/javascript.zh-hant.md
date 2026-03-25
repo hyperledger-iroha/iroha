@@ -172,7 +172,7 @@ const txs = await torii.listAccountTransactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg
   limit: 5,
   assetId,
 });
-const holders = await torii.listAssetHolders("rose#wonderland", {
+const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 5,
   assetId,
 });
@@ -189,7 +189,7 @@ console.log(balances.items, txs.items, holders.items);
 `deadline_ms_remaining`) 突出顯示下一個即將到期的截止日期（刷新→政策
 → 證書），以便 UI 徽章可以在津貼出現時警告操作員
 剩餘時間< 24 小時。軟件開發工具包
-鏡像 `/v1/offline/allowances` 暴露的 REST 過濾器：
+鏡像 `/v1/offline/reserve/topup` 暴露的 REST 過濾器：
 `certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
 `verdictIdHex`、`attestationNonceHex`、`refreshBeforeMs/AfterMs` 和
 `requireVerdict` / `onlyMissingVerdict` 布爾值。無效組合（對於

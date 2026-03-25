@@ -633,77 +633,63 @@ fn da_paths() -> Map {
 fn offline_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/offline/allowances".to_owned(),
-        Value::Object(offline_allowances_operation()),
-    );
-    paths.insert(
-        "/v1/offline/allowances/{certificate_id_hex}".to_owned(),
-        Value::Object(offline_allowance_detail_operation()),
-    );
-    paths.insert(
-        "/v1/offline/allowances/{certificate_id_hex}/renew".to_owned(),
-        Value::Object(offline_allowance_renew_operation()),
-    );
-    paths.insert(
-        "/v1/offline/certificates".to_owned(),
-        Value::Object(offline_allowances_operation()),
-    );
-    paths.insert(
-        "/v1/offline/certificates/issue".to_owned(),
-        Value::Object(offline_certificate_issue_operation()),
-    );
-    paths.insert(
-        "/v1/offline/build-claims/issue".to_owned(),
-        Value::Object(offline_build_claim_issue_operation()),
-    );
-    paths.insert(
-        "/v1/offline/certificates/{certificate_id_hex}".to_owned(),
-        Value::Object(offline_allowance_detail_operation()),
-    );
-    paths.insert(
-        "/v1/offline/certificates/{certificate_id_hex}/renew".to_owned(),
-        Value::Object(offline_allowance_renew_operation()),
-    );
-    paths.insert(
-        "/v1/offline/certificates/{certificate_id_hex}/renew/issue".to_owned(),
-        Value::Object(offline_certificate_renew_issue_operation()),
-    );
-    paths.insert(
-        "/v1/offline/certificates/revoke".to_owned(),
-        Value::Object(offline_certificates_revoke_operation()),
-    );
-    paths.insert(
-        "/v1/offline/allowances/query".to_owned(),
-        Value::Object(offline_allowances_query_operation()),
-    );
-    paths.insert(
-        "/v1/offline/certificates/query".to_owned(),
-        Value::Object(offline_allowances_query_operation()),
-    );
-    paths.insert(
-        "/v1/offline/receipts".to_owned(),
-        Value::Object(offline_receipts_operation()),
-    );
-    paths.insert(
-        "/v1/offline/receipts/query".to_owned(),
-        Value::Object(offline_receipts_query_operation()),
-    );
-    paths.insert(
         "/v1/offline/revocations".to_owned(),
-        Value::Object(json_get_operation(
+        Value::Object(offline_revocations_operation()),
+    );
+    paths.insert(
+        "/v1/offline/revocations/bundle".to_owned(),
+        Value::Object(offline_revocations_bundle_operation()),
+    );
+    paths.insert(
+        "/v1/offline/reserve/setup".to_owned(),
+        Value::Object(json_post_operation(
             "Offline",
-            "List offline revocations.",
-            "Return the latest offline revocation entries.",
+            "Create or fetch an offline reserve lineage.",
+            "Create the zero-balance reserve lineage for a device or return the existing reserve envelope.",
+            "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
     );
     paths.insert(
-        "/v1/offline/revocations/query".to_owned(),
+        "/v1/offline/reserve/topup".to_owned(),
         Value::Object(json_post_operation(
             "Offline",
-            "Query offline revocations via JSON envelope.",
-            "Submit a QueryEnvelope to filter offline revocations.",
+            "Top up an offline reserve.",
+            "Move online balance into the device-bound reserve and return the authoritative reserve envelope.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/offline/reserve/renew".to_owned(),
+        Value::Object(json_post_operation(
+            "Offline",
+            "Renew an offline spend authorization.",
+            "Refresh the spend authorization for an existing reserve lineage without moving funds.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/offline/reserve/sync".to_owned(),
+        Value::Object(json_post_operation(
+            "Offline",
+            "Sync offline reserve receipts.",
+            "Submit pending offline transfer receipts and return the updated authoritative reserve envelope.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/offline/reserve/defund".to_owned(),
+        Value::Object(json_post_operation(
+            "Offline",
+            "Defund an offline reserve.",
+            "Sync pending receipts, move reserve value back online, and return the updated reserve envelope.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -721,54 +707,98 @@ fn offline_paths() -> Map {
         "/v1/offline/transfers/query".to_owned(),
         Value::Object(offline_transfers_query_operation()),
     );
-    paths.insert(
-        "/v1/offline/transfers/proof".to_owned(),
-        Value::Object(json_post_operation(
-            "Offline",
-            "Build offline transfer proof requests.",
-            "Generate FASTPQ witness payloads from a transfer payload.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/offline/settlements".to_owned(),
-        Value::Object(offline_settlements_operation()),
-    );
-    paths.insert(
-        "/v1/offline/settlements/{bundle_id_hex}".to_owned(),
-        Value::Object(offline_transfer_detail_operation()),
-    );
-    paths.insert(
-        "/v1/offline/settlements/query".to_owned(),
-        Value::Object(offline_transfers_query_operation()),
-    );
-    paths.insert(
-        "/v1/offline/spend-receipts".to_owned(),
-        Value::Object(offline_spend_receipts_operation()),
-    );
-    paths.insert(
-        "/v1/offline/state".to_owned(),
-        Value::Object(offline_state_operation()),
-    );
-    paths.insert(
-        "/v1/offline/bundle/proof_status".to_owned(),
-        Value::Object(offline_bundle_proof_status_operation()),
-    );
-    paths.insert(
-        "/v1/offline/rejections".to_owned(),
-        Value::Object(offline_rejections_operation()),
-    );
-    paths.insert(
-        "/v1/offline/summaries".to_owned(),
-        Value::Object(offline_summaries_operation()),
-    );
-    paths.insert(
-        "/v1/offline/summaries/query".to_owned(),
-        Value::Object(offline_summaries_query_operation()),
-    );
     paths
+}
+
+fn offline_revocations_operation() -> Map {
+    let mut get_op = Map::new();
+    get_op.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Offline".to_owned())]),
+    );
+    get_op.insert(
+        "summary".into(),
+        Value::String("List offline verdict revocations.".to_owned()),
+    );
+    get_op.insert(
+        "description".into(),
+        Value::String(
+            "Return the human-readable list of currently revoked offline verdict identifiers."
+                .to_owned(),
+        ),
+    );
+    get_op.insert(
+        "operationId".into(),
+        Value::String("offlineRevocationsList".to_owned()),
+    );
+    get_op.insert(
+        "responses".into(),
+        Value::Object(single_json_response("#/components/schemas/JsonValue")),
+    );
+
+    let mut post_op = Map::new();
+    post_op.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Offline".to_owned())]),
+    );
+    post_op.insert(
+        "summary".into(),
+        Value::String("Register an offline verdict revocation.".to_owned()),
+    );
+    post_op.insert(
+        "description".into(),
+        Value::String(
+            "Submit an operator/admin request that records an on-ledger offline verdict revocation."
+                .to_owned(),
+        ),
+    );
+    post_op.insert(
+        "operationId".into(),
+        Value::String("offlineRevocationsRegister".to_owned()),
+    );
+    post_op.insert(
+        "requestBody".into(),
+        Value::Object(json_request_body("#/components/schemas/JsonValue")),
+    );
+    post_op.insert(
+        "responses".into(),
+        Value::Object(single_json_response("#/components/schemas/JsonValue")),
+    );
+
+    let mut path_item = Map::new();
+    path_item.insert("get".into(), Value::Object(get_op));
+    path_item.insert("post".into(), Value::Object(post_op));
+    path_item
+}
+
+fn offline_revocations_bundle_operation() -> Map {
+    let mut get_op = Map::new();
+    get_op.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Offline".to_owned())]),
+    );
+    get_op.insert(
+        "summary".into(),
+        Value::String("Fetch the signed offline revocation bundle.".to_owned()),
+    );
+    get_op.insert(
+        "description".into(),
+        Value::String(
+            "Return the issuer-signed deny-list bundle used by offline wallets.".to_owned(),
+        ),
+    );
+    get_op.insert(
+        "operationId".into(),
+        Value::String("offlineRevocationsBundleGet".to_owned()),
+    );
+    get_op.insert(
+        "responses".into(),
+        Value::Object(single_json_response("#/components/schemas/JsonValue")),
+    );
+
+    let mut path_item = Map::new();
+    path_item.insert("get".into(), Value::Object(get_op));
+    path_item
 }
 
 fn offline_allowances_operation() -> Map {
@@ -1655,8 +1685,12 @@ fn explorer_instructions_query_parameters() -> Vec<Value> {
 fn account_assets_list_query_parameters() -> Vec<Value> {
     let mut params = pagination_query_parameters();
     params.push(string_query_param(
-        "asset_id",
-        "Filter assets by asset identifier.",
+        "asset",
+        "Filter assets by asset definition selector.",
+    ));
+    params.push(string_query_param(
+        "scope",
+        "Filter assets by balance scope (`global` or `dataspace:<id>`).",
     ));
     params
 }
@@ -3738,7 +3772,7 @@ fn account_paths() -> Map {
             json_get_operation(
                 "Accounts",
                 "List account assets.",
-                "List assets held by an account (supports pagination and optional asset_id filtering).",
+                "List assets held by an account (supports pagination plus optional `asset` and `scope` filtering).",
                 "#/components/schemas/JsonValue",
                 params,
             )
@@ -3784,13 +3818,17 @@ fn account_paths() -> Map {
         Value::Object({
             let mut params = vec![string_path_param("uaid", "User account identifier.")];
             params.push(string_query_param(
-                "asset_id",
-                "Filter portfolio positions by asset identifier.",
+                "asset",
+                "Filter portfolio positions by asset definition selector.",
+            ));
+            params.push(string_query_param(
+                "scope",
+                "Filter portfolio positions by balance scope (`global` or `dataspace:<id>`).",
             ));
             json_get_operation(
                 "Accounts",
                 "Fetch account portfolio.",
-                "Fetch the asset portfolio for an account identifier (supports optional asset_id filtering).",
+                "Fetch the asset portfolio for an account identifier (supports optional `asset` and `scope` filtering).",
                 "#/components/schemas/JsonValue",
                 params,
             )
@@ -5131,76 +5169,112 @@ Role- or sponsor-gated bundles require canonical request headers \
 fn sns_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/sns/registrations".to_owned(),
+        "/v1/sns/names".to_owned(),
         Value::Object(json_post_operation(
             "SNS",
-            "Register a SNS suffix.",
-            "Register a SNS suffix.",
+            "Register a SNS name lease.",
+            "Register a ledger-backed SNS name record in one of the fixed namespaces.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
     );
     paths.insert(
-        "/v1/sns/registrations/{selector}".to_owned(),
+        "/v1/sns/names/{namespace}/{literal}".to_owned(),
         Value::Object(json_get_operation(
             "SNS",
-            "Fetch a SNS registration.",
-            "Fetch a SNS registration by selector.",
+            "Fetch a SNS name record.",
+            "Fetch a ledger-backed SNS name record by namespace and canonical literal.",
             "#/components/schemas/JsonValue",
-            vec![string_path_param("selector", "SNS selector value.")],
+            vec![
+                string_path_param(
+                    "namespace",
+                    "SNS namespace (`account-alias`, `domain`, or `dataspace`).",
+                ),
+                string_path_param("literal", "Canonical SNS literal for the namespace."),
+            ],
         )),
     );
     paths.insert(
-        "/v1/sns/registrations/{selector}/renew".to_owned(),
+        "/v1/sns/names/{namespace}/{literal}/renew".to_owned(),
         Value::Object(json_post_operation(
             "SNS",
-            "Renew a SNS registration.",
-            "Renew a SNS registration by selector.",
+            "Renew a SNS name record.",
+            "Renew a ledger-backed SNS name record by namespace and canonical literal.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
-            vec![string_path_param("selector", "SNS selector value.")],
+            vec![
+                string_path_param(
+                    "namespace",
+                    "SNS namespace (`account-alias`, `domain`, or `dataspace`).",
+                ),
+                string_path_param("literal", "Canonical SNS literal for the namespace."),
+            ],
         )),
     );
     paths.insert(
-        "/v1/sns/registrations/{selector}/transfer".to_owned(),
+        "/v1/sns/names/{namespace}/{literal}/transfer".to_owned(),
         Value::Object(json_post_operation(
             "SNS",
-            "Transfer a SNS registration.",
-            "Transfer a SNS registration by selector.",
+            "Transfer a SNS name record.",
+            "Transfer a ledger-backed SNS name record by namespace and canonical literal.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
-            vec![string_path_param("selector", "SNS selector value.")],
+            vec![
+                string_path_param(
+                    "namespace",
+                    "SNS namespace (`account-alias`, `domain`, or `dataspace`).",
+                ),
+                string_path_param("literal", "Canonical SNS literal for the namespace."),
+            ],
         )),
     );
     paths.insert(
-        "/v1/sns/registrations/{selector}/controllers".to_owned(),
+        "/v1/sns/names/{namespace}/{literal}/controllers".to_owned(),
         Value::Object(json_post_operation(
             "SNS",
             "Update SNS controllers.",
-            "Update SNS registration controllers.",
+            "Update controllers for a ledger-backed SNS name record.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
-            vec![string_path_param("selector", "SNS selector value.")],
+            vec![
+                string_path_param(
+                    "namespace",
+                    "SNS namespace (`account-alias`, `domain`, or `dataspace`).",
+                ),
+                string_path_param("literal", "Canonical SNS literal for the namespace."),
+            ],
         )),
     );
     paths.insert(
-        "/v1/sns/registrations/{selector}/freeze".to_owned(),
+        "/v1/sns/names/{namespace}/{literal}/freeze".to_owned(),
         Value::Object({
             let post_op = json_post_operation(
                 "SNS",
-                "Freeze a SNS registration.",
-                "Freeze a SNS registration.",
+                "Freeze a SNS name record.",
+                "Freeze a ledger-backed SNS name record.",
                 "#/components/schemas/JsonValue",
                 "#/components/schemas/JsonValue",
-                vec![string_path_param("selector", "SNS selector value.")],
+                vec![
+                    string_path_param(
+                        "namespace",
+                        "SNS namespace (`account-alias`, `domain`, or `dataspace`).",
+                    ),
+                    string_path_param("literal", "Canonical SNS literal for the namespace."),
+                ],
             );
             let delete_op = json_delete_operation(
                 "SNS",
-                "Unfreeze a SNS registration.",
-                "Unfreeze a SNS registration.",
+                "Unfreeze a SNS name record.",
+                "Unfreeze a ledger-backed SNS name record.",
                 "#/components/schemas/JsonValue",
-                vec![string_path_param("selector", "SNS selector value.")],
+                vec![
+                    string_path_param(
+                        "namespace",
+                        "SNS namespace (`account-alias`, `domain`, or `dataspace`).",
+                    ),
+                    string_path_param("literal", "Canonical SNS literal for the namespace."),
+                ],
             );
             let mut methods = Map::new();
             if let Some(post_value) = post_op.get("post") {
@@ -5221,34 +5295,6 @@ fn sns_paths() -> Map {
             "#/components/schemas/JsonValue",
             vec![string_path_param("suffix_id", "Suffix identifier.")],
         )),
-    );
-    paths.insert(
-        "/v1/sns/governance/cases".to_owned(),
-        Value::Object({
-            let get_op = json_get_operation(
-                "SNS",
-                "List SNS governance cases.",
-                "List SNS governance cases.",
-                "#/components/schemas/JsonValue",
-                Vec::new(),
-            );
-            let post_op = json_post_operation(
-                "SNS",
-                "Create a SNS governance case.",
-                "Create a SNS governance case.",
-                "#/components/schemas/JsonValue",
-                "#/components/schemas/JsonValue",
-                Vec::new(),
-            );
-            let mut methods = Map::new();
-            if let Some(get_value) = get_op.get("get") {
-                methods.insert("get".to_owned(), get_value.clone());
-            }
-            if let Some(post_value) = post_op.get("post") {
-                methods.insert("post".to_owned(), post_value.clone());
-            }
-            methods
-        }),
     );
     paths
 }
@@ -11750,7 +11796,7 @@ mod tests {
         assert!(paths.contains_key("/v1/sorafs/providers"));
         assert!(paths.contains_key("/v1/soradns/directory/latest"));
         assert!(paths.contains_key("/v1/content/{bundle}/{path}"));
-        assert!(paths.contains_key("/v1/sns/registrations"));
+        assert!(paths.contains_key("/v1/sns/names"));
         assert!(paths.contains_key("/v1/soranet/privacy/event"));
         assert!(paths.contains_key("/v1/webhooks"));
         assert!(paths.contains_key("/v1/notify/devices"));
@@ -12299,7 +12345,7 @@ mod tests {
             PathCase {
                 label: "offline",
                 builder: offline_paths,
-                expected: "/v1/offline/revocations",
+                expected: "/v1/offline/reserve/setup",
             },
             PathCase {
                 label: "system",
@@ -12414,7 +12460,7 @@ mod tests {
             PathCase {
                 label: "sns",
                 builder: sns_paths,
-                expected: "/v1/sns/registrations",
+                expected: "/v1/sns/names",
             },
             PathCase {
                 label: "soranet",

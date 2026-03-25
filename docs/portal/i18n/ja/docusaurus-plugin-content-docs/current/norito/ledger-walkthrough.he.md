@@ -67,14 +67,14 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI は送信されたトランザクションハッシュ (例: `0x5f…`) を表示します。後で状態を確認できるよう保存しておきます。
 
 ## 3. オペレーターアカウントにミントする
 
-資産数量は `(asset definition, account)` の組み合わせに紐づきます。`coffee#wonderland` を 250 単位 `$ADMIN_ACCOUNT` にミントします:
+資産数量は `(asset definition, account)` の組み合わせに紐づきます。`7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` を 250 単位 `$ADMIN_ACCOUNT` にミントします:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

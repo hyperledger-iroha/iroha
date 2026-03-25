@@ -22,9 +22,20 @@ spot-checked IVM, `iroha_crypto`, `norito`, and the Swift/Android/JS SDK
 request-signing helpers. No live confirmed issue from that ingress/auth slice
 remains after the fixes in this report. Follow-up hardening also expanded the
 fail-closed startup truth sets for sampled IVM CUDA/Metal accelerator paths;
-that work did not confirm a new fail-open issue, but it did surface an
-existing Metal Ed25519 parity mismatch that currently disables the Metal
-backend on this host and remains an open correctness blocker.
+that work did not confirm a new fail-open issue. The sampled Metal Ed25519
+signature path is now restored on this host after fixing multiple ref10 drift
+points in the Metal/CUDA ports: positive-basepoint handling in verification,
+the `d2` constant, the exact `fe_sq2` reduction path, the stray final
+`fe_mul` carry step, and the missing post-op field normalization that let limb
+bounds drift across the scalar ladder. Focused Metal regression coverage now
+keeps the signature pipeline enabled and verifies `[true, false]` on the
+accelerator against the CPU reference path. The sampled startup truth sets now
+also directly probe the live vector (`vadd64`, `vand`, `vxor`, `vor`) and
+single-round AES batch kernels on both Metal and CUDA before those backends
+stay enabled. The remaining accelerator work is runtime validation of the
+mirrored CUDA fix and the expanded CUDA truth set on a host with live CUDA
+driver support, not a confirmed correctness or fail-open issue in the current
+tree.
 
 ## High Severity
 
@@ -248,11 +259,20 @@ Remediation status:
   behavior. Invalid helper results now fall back instead of panicking release
   builds or drifting checksum parity. On the IVM side, sampled accelerator
   startup gates now also cover the CUDA Ed25519 `signature_kernel`, CUDA BN254
-  add/sub/mul kernels, and the Metal `sha256_leaves` kernel before those
-  paths are trusted. The remaining live issue in this area is a fail-closed
-  correctness blocker, not a confirmed security bypass: the existing Metal
-  Ed25519 startup parity check still fails on this host and disables the Metal
-  backend.
+  add/sub/mul kernels, CUDA `sha256_leaves` / `sha256_pairs_reduce`, the live
+  CUDA vector/AES batch kernels (`vadd64`, `vand`, `vxor`, `vor`,
+  `aesenc_batch`, `aesdec_batch`), and the matching Metal
+  `sha256_leaves`/vector/AES batch kernels before those paths are trusted. The
+  sampled Metal Ed25519 signature path is now also back
+  inside the live accelerator set on this host: the earlier parity failure was
+  fixed by restoring ref10 limb-bound normalization across the scalar ladder,
+  and the focused Metal regression now verifies `[s]B`, `[h](-A)`, the
+  power-of-two basepoint ladder, and full `[true, false]` batch verification
+  on Metal against the CPU reference path. The mirrored CUDA source changes
+  compile under `--features cuda --tests`, and the CUDA startup truth set now
+  fails closed if the live Merkle leaf/pair kernels drift from the CPU
+  reference path. Runtime CUDA validation remains host-limited in this
+  environment.
 - SDKs/examples: no separate key-storage or transport-validation bug was
   confirmed in the sampled code. The JS, Swift, and Android canonical-request
   helpers have been updated to the new freshness-aware four-header scheme.
@@ -283,17 +303,21 @@ Remediation status:
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p norito try_gpu_encode_rejects_invalid_success_length -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p norito try_gpu_decode_rejects_invalid_success_length -- --nocapture`
 - IVM accelerator follow-up validation now includes:
+  - `xcrun -sdk macosx metal -c crates/ivm/src/metal_ed25519.metal -o /tmp/metal_ed25519.air`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-cuda2 cargo check -p ivm --features cuda --tests`
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-cuda-check cargo check -p ivm --features cuda --tests`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo check -p ivm --features metal --tests`
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_bitwise_single_vector_matches_scalar -- --nocapture`
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_aes_batch_matches_scalar -- --nocapture`
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_ed25519_batch_matches_cpu -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-metal cargo test -p ivm --features metal --lib metal_sha256_leaves_matches_cpu -- --nocapture`
 - Focused CUDA lib-test execution remains environment-limited on this host:
   `CARGO_TARGET_DIR=/tmp/iroha-codex-target-ivm-cuda2 cargo test -p ivm --features cuda --lib selftest_covers_ -- --nocapture`
   still fails to link because the CUDA driver symbols (`cu*`) are unavailable.
-- Focused Metal runtime validation is partially blocked by an older
-  fail-closed correctness issue: enabling the Metal backend on this host still
-  trips the existing Ed25519 startup parity check, so the new `sha256_leaves`
-  regression currently passes via an explicit skip after backend disable
-  rather than exercising a live Metal backend end-to-end.
+- Focused Metal runtime validation now runs fully on the accelerator on this
+  host: the sampled Ed25519 signature pipeline stays enabled through startup
+  self-tests, and `metal_ed25519_batch_matches_cpu` verifies `[true, false]`
+  directly on Metal against the CPU reference path.
 - I did not rerun a full workspace Rust test sweep, full `npm test`, or the
   full Swift/Android suites during this remediation pass.
 
@@ -301,12 +325,10 @@ Remediation status:
 
 ### Next Tranche
 
-- Investigate and fix the existing Metal Ed25519 startup parity mismatch so
-  the Metal backend can stay enabled and the new `sha256_leaves` startup guard
-  can be validated end-to-end instead of only compile-time plus skip-path.
 - Rerun the focused CUDA lib-test self-test slice on a host with CUDA driver
   libraries installed, so the expanded CUDA startup truth set is validated
-  beyond `cargo check`.
+  beyond `cargo check` and the mirrored Ed25519 normalization fix plus the
+  new vector/AES startup probes are exercised at runtime.
 - Rerun broader JS/Swift/Android suites once the unrelated suite-level blockers
   on this branch are cleared, so the new canonical-request protocol is covered
   beyond the focused helper tests above.

@@ -52,11 +52,8 @@ export const AccountAddressErrorCode: {
   readonly INVALID_PUBLIC_KEY: "ERR_INVALID_PUBLIC_KEY";
   readonly UNKNOWN_CURVE: "ERR_UNKNOWN_CURVE";
   readonly UNEXPECTED_TRAILING_BYTES: "ERR_UNEXPECTED_TRAILING_BYTES";
-  readonly MISSING_I105_SENTINEL: "ERR_MISSING_I105_SENTINEL";
   readonly I105_TOO_SHORT: "ERR_I105_TOO_SHORT";
   readonly INVALID_I105_CHAR: "ERR_INVALID_I105_CHAR";
-  readonly INVALID_I105_BASE: "ERR_INVALID_I105_BASE";
-  readonly INVALID_I105_DIGIT: "ERR_INVALID_I105_DIGIT";
   readonly LOCAL_DIGEST_TOO_SHORT: "ERR_LOCAL8_DEPRECATED";
   readonly UNSUPPORTED_ADDRESS_FORMAT: "ERR_UNSUPPORTED_ADDRESS_FORMAT";
   readonly MULTISIG_MEMBER_OVERFLOW: "ERR_MULTISIG_MEMBER_OVERFLOW";
@@ -151,7 +148,6 @@ export class AccountAddress {
   canonicalHex(): string;
   toI105(prefix?: number | string | bigint): string;
   toI105Default(): string;
-  toI105DefaultFullWidth(): string;
   toString(): string;
   displayFormats(chainDiscriminant?: number | string | bigint): AccountAddressDisplay;
   domainSummary(): AccountAddressDomainSummary;
@@ -159,7 +155,7 @@ export class AccountAddress {
 
 export function encodeI105AccountAddress(
   canonicalBytes: Buffer | Uint8Array | ArrayBuffer | ArrayBufferView,
-  options?: { fullWidth?: boolean; chainDiscriminant?: number | string | bigint },
+  options?: { chainDiscriminant?: number | string | bigint },
 ): string;
 export function decodeI105AccountAddress(
   encoded: string,
@@ -1270,6 +1266,7 @@ export interface SnsRegisterNameResponse {
   nameRecord: SnsNameRecord;
 }
 
+/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
 export interface SnsCaseExportOptions {
   since?: string | null;
   status?: string | null;
@@ -1277,8 +1274,11 @@ export interface SnsCaseExportOptions {
   signal?: AbortSignal;
 }
 
+/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
 export type SnsGovernanceCaseDisputeType = "ownership" | "policy_violation" | "abuse" | "billing" | "other";
+/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
 export type SnsGovernanceCasePriority = "urgent" | "high" | "standard" | "info";
+/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
 export type SnsGovernanceCaseStatus =
   | "open"
   | "triage"
@@ -1287,36 +1287,46 @@ export type SnsGovernanceCaseStatus =
   | "remediation"
   | "closed"
   | "suspended";
+/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
 export type SnsGovernanceCaseReporterRole = "registrar" | "steward" | "guardian" | "public" | "support";
+/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
 export type SnsGovernanceCaseRespondentRole = "registrant" | "controller" | "registrar" | "steward" | "other";
+/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
 export type SnsGovernanceCaseEvidenceKind = "document" | "screenshot" | "log" | "governance" | "other";
+/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
 export type SnsGovernanceCaseDecisionFinding = "upheld" | "rejected" | "partial" | "withdrawn";
+/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
 export type SnsGovernanceCasePublicationState = "public" | "redacted" | "sealed";
 
+/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
 export interface SnsGovernanceCaseSelector {
   suffixId: number;
   label: string;
   globalForm: string;
 }
 
+/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
 export interface SnsGovernanceCaseReporter {
   role: SnsGovernanceCaseReporterRole;
   contact: string;
   referenceTicket: string | null;
 }
 
+/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
 export interface SnsGovernanceCaseRespondent {
   role: SnsGovernanceCaseRespondentRole;
   accountId: string;
   contact: string | null;
 }
 
+/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
 export interface SnsGovernanceCaseAllegation {
   code: string;
   summary: string | null;
   policyReference: string | null;
 }
 
+/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
 export interface SnsGovernanceCaseEvidence {
   id: string;
   kind: SnsGovernanceCaseEvidenceKind;
@@ -1326,18 +1336,21 @@ export interface SnsGovernanceCaseEvidence {
   sealed: boolean;
 }
 
+/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
 export interface SnsGovernanceCaseSlaExtension {
   approvedBy: string;
   reason: string;
   newResolutionBy: string;
 }
 
+/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
 export interface SnsGovernanceCaseSla {
   acknowledgeBy: string;
   resolutionBy: string;
   extensions: ReadonlyArray<SnsGovernanceCaseSlaExtension>;
 }
 
+/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
 export interface SnsGovernanceCaseAction {
   timestamp: string;
   actor: string;
@@ -1345,6 +1358,7 @@ export interface SnsGovernanceCaseAction {
   notes: string | null;
 }
 
+/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
 export interface SnsGovernanceCaseDecision {
   finding: SnsGovernanceCaseDecisionFinding | null;
   remedies: ReadonlyArray<string>;
@@ -1352,6 +1366,7 @@ export interface SnsGovernanceCaseDecision {
   publicationState: SnsGovernanceCasePublicationState | null;
 }
 
+/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
 export interface SnsGovernanceCase {
   caseId: string;
   selector: SnsGovernanceCaseSelector;
@@ -1372,6 +1387,7 @@ export interface SnsGovernanceCase {
   decision: SnsGovernanceCaseDecision | null;
 }
 
+/** @deprecated Torii removed `/v1/sns/governance/cases`; related helpers now always reject. */
 export interface SnsGovernanceCaseExportResult {
   cases: ReadonlyArray<SnsGovernanceCase>;
   nextSince: string | null;
@@ -4470,8 +4486,8 @@ export type RegisterAccountAndTransferInput =
 /**
  * Parameters for {@link buildRegisterAssetDefinitionAndMintTransaction}. Supply
  * either `mint` or `mints`. When `assetId` is omitted the helper derives it as
- * `<assetDefinitionId>#<accountId>` and enforces that any provided `assetId`
- * matches the derived value.
+ * the canonical encoded asset id for `assetDefinitionId + accountId`, and
+ * enforces that any provided `assetId` matches the derived value.
  */
 interface RegisterAssetDefinitionAndMintInputBase {
   chainId: string;
@@ -6575,16 +6591,19 @@ export declare class ToriiClient {
     request: SnsGovernanceHook,
     options?: { signal?: AbortSignal },
   ): Promise<SnsNameRecord>;
+  /** @deprecated Torii removed `/v1/sns/governance/cases`; this helper now always rejects. */
   createSnsGovernanceCase(
     payload: Record<string, unknown>,
     options?: { signal?: AbortSignal },
-  ): Promise<SnsGovernanceCase>;
+  ): Promise<never>;
+  /** @deprecated Torii removed `/v1/sns/governance/cases`; this helper now always rejects. */
   exportSnsGovernanceCases(
     options?: SnsCaseExportOptions,
-  ): Promise<SnsGovernanceCaseExportResult>;
+  ): Promise<never>;
+  /** @deprecated Torii removed `/v1/sns/governance/cases`; this helper now always rejects. */
   iterateSnsGovernanceCases(
     options?: SnsCaseExportOptions,
-  ): AsyncGenerator<SnsGovernanceCase, void, unknown>;
+  ): AsyncGenerator<never, void, unknown>;
   getGovernanceProposal(
     proposalId: string,
     options?: { signal?: AbortSignal },
@@ -7742,7 +7761,7 @@ export function buildRegisterAccountAndTransferTransaction(
 /**
  * Register an asset definition and optionally mint initial supply. When both
  * `accountId` and `assetId` are provided the helper validates that they match
- * the canonical `<assetDefinitionId>#<accountId>` format.
+ * the canonical encoded asset id derived from `assetDefinitionId + accountId`.
  */
 export function buildRegisterAssetDefinitionAndMintTransaction(
   input: RegisterAssetDefinitionAndMintInput,

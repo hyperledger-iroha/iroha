@@ -635,7 +635,7 @@ const assetDefinitionAndMintTx = buildRegisterAssetDefinitionAndMintTransaction(
   chainId: "test-chain",
   authority,
   assetDefinition: {
-    assetDefinitionId: "rose#wonderland",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     metadata: { description: "Rose asset" },
     mintable: "Not",
     spec: { scale: 4 },
@@ -661,7 +661,7 @@ const assetDefinitionMintAndTransferTx = buildRegisterAssetDefinitionMintAndTran
   chainId: "test-chain",
   authority,
   assetDefinition: {
-    assetDefinitionId: "lily#wonderland",
+    assetDefinitionId: "4jAY5UbAxnGPt31CkijmAsqXP4o4",
     metadata: { description: "Lily asset" },
   },
   mints: [
@@ -1981,7 +1981,7 @@ const response = await torii.callContract({
   contractId: "ledger",
   entrypoint: "increment",
   payload: { amount: 1 },
-  gasAssetId: "xor#wonderland",
+  gasAssetId: "4cuvDVPuLBKJyN6dPbRQhmLh68sU",
   gasLimit: 50_000,
 });
 
@@ -2105,7 +2105,7 @@ const registerTx = buildRegisterZkAssetTransaction({
   chainId: "test-chain",
   authority,
   registration: {
-    assetDefinitionId: "rose#wonderland",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     mode: "Hybrid",
     transferVerifyingKey: "halo2/ipa:vk_transfer",
     unshieldVerifyingKey: { backend: "halo2/ipa", name: "vk_unshield" },
@@ -2124,7 +2124,7 @@ const shieldTx = buildShieldTransaction({
   chainId: "test-chain",
   authority,
   shield: {
-    assetDefinitionId: "rose#wonderland",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     fromAccountId: authority,
     amount: "10",
     noteCommitment: Buffer.alloc(32, 0xaa),
@@ -2137,7 +2137,7 @@ const transferTx = buildZkTransferTransaction({
   chainId: "test-chain",
   authority,
   transfer: {
-    assetDefinitionId: "rose#wonderland",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     inputs: [Buffer.alloc(32, 0x01)],
     outputs: [Buffer.alloc(32, 0x02)],
     proof: {
@@ -2952,7 +2952,7 @@ so you can persist the verdict metadata immediately.
 const draft = {
   controller: "i105:...",
   allowance: {
-    asset: "usd#wonderland",
+    asset: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
     amount: "10",
     commitment: [1, 2, 3],
   },
@@ -3096,7 +3096,7 @@ console.log(
 );
 
 for await (const transfer of torii.iterateOfflineTransfersQuery({
-  filter: { Eq: ["asset_id", "usd#wonderland"] },
+  filter: { Eq: ["asset_id", "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"] },
   pageSize: 5,
 })) {
   console.log("bundle", transfer.bundle_id_hex, "receipts", transfer.receipt_count);
@@ -3167,7 +3167,7 @@ const balances = await torii.listAccountAssets("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtM
   assetId: "norito:01020304deadbeef",
 });
 console.log("alice balances", balances.items);
-const holders = await torii.listAssetHolders("rose#wonderland", {
+const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 3,
   assetId: "norito:01020304deadbeef",
 });
@@ -3191,7 +3191,7 @@ for await (const account of torii.iterateAccountsQuery({
 
 for await (const balance of torii.iterateAccountAssetsQuery("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", {
   pageSize: 32,
-  filter: { Eq: ["asset_id.definition_id", "rose#wonderland"] },
+  filter: { Eq: ["asset_id.definition_id", "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"] },
 })) {
   console.log("filtered holding", balance.asset_id, balance.quantity);
 }
@@ -3214,8 +3214,8 @@ for await (const trigger of torii.iterateTriggersQuery({
 //   node ./recipes/nft_account_iteration.mjs \
 //     TORII_URL=http://127.0.0.1:8080 \
 //     ACCOUNT_ID=6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT \
-//     ASSET_DEFINITION_ID=rose#wonderland \
-//     NFT_DEFINITION_ID=art#wonderland
+//     ASSET_DEFINITION_ID=62Fk4FPcMuLvW5QjDGNF2a4jAmjM \
+//     NFT_DEFINITION_ID=5Pz9SwdN9eXPbiXPX9HRCpzCcE3o
 ```
 
 > **Hard-cut account parser:** Account-scoped helpers (`listAccountAssets`, `listAccountPermissions`, `listAccountTransactions`, and query/iterator variants) accept only canonical I105 account IDs. Domain-suffixed and legacy compatibility literals are rejected.
@@ -3223,11 +3223,11 @@ for await (const trigger of torii.iterateTriggersQuery({
 Use the SNS helpers to manage Sora Name Service records without hand-crafting JSON:
 
 ```js
-const policy = await torii.getSnsPolicy(1);
+const policy = await torii.getSnsPolicy(0x1002);
 console.log(policy.suffix, policy.pricing.length);
 
 const registration = await torii.registerSnsName({
-  selector: { suffix_id: 1, label: "demo" },
+  selector: { suffix_id: 0x1002, label: "demo" },
   owner: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
   payment: {
     asset_id: "norito:<hex-encoded-asset-id>",
@@ -3241,25 +3241,15 @@ const registration = await torii.registerSnsName({
 console.log(registration.nameRecord.status.status);
 ```
 
-Look up an existing name via `getSnsRegistration(selector)`, renew with `renewSnsRegistration`, or transfer/freeze/unfreeze using the corresponding helpers—all return typed DTOs with canonical selectors, statuses, and metadata.
+Look up an existing domain-namespace name via `getSnsRegistration("demo.domain")`, renew with
+`renewSnsRegistration`, or transfer/freeze/unfreeze using the corresponding helpers. The JS helper
+still accepts a legacy `label.suffix` selector string for these read/mutation flows, but Torii now
+serves them from the ledger-backed `/v1/sns/names/{namespace}/{literal}` routes.
 
-Stream arbitration cases via the SNS governance export feed without hand-rolling cursor
-logic:
-
-```js
-const openCaseIds = [];
-for await (const record of torii.iterateSnsGovernanceCases({
-  status: "open",
-  limit: 50,
-})) {
-  openCaseIds.push(record.caseId);
-}
-console.log("open SNS cases:", openCaseIds);
-```
-
-`iterateSnsGovernanceCases` automatically follows the `next_since` cursor exposed by
-`/v1/sns/governance/cases`, so SDK callers can page through governance appeals in
-chunks without juggling timestamps manually.
+Governance evidence now travels inline with the register/transfer/unfreeze request bodies. Torii no
+longer exposes the old `/v1/sns/governance/cases` export feed, so the JS SDK's
+`createSnsGovernanceCase`, `exportSnsGovernanceCases`, and `iterateSnsGovernanceCases` helpers are
+retained only as explicit validation stubs that reject immediately.
 
 ## Torii Queries & Events
 
@@ -3505,7 +3495,7 @@ if (!trigger) {
     action: {
       Mint: {
         Asset: {
-          object: "rose#wonderland",
+          object: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
           destination_id: "6cmzPVPX8e5qQsHdB57DhqFT9wp2MiMoXsvt9LYUtypj1nx96bF5s8W",
           value: "5",
         },
@@ -3518,7 +3508,7 @@ if (!trigger) {
     action: {
       Mint: {
         Asset: {
-          object: "rose#wonderland",
+          object: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
           destination_id: "6cmzPVPX8e5qQsHdB57DhqFT9wp2MiMoXsvt9LYUtypj1nx96bF5s8W",
           value: "5",
         },

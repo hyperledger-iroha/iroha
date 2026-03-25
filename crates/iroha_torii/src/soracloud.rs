@@ -13885,7 +13885,7 @@ mod tests {
     fn agent_wallet_spend_signature_payload_layout_is_canonical_tuple() {
         let payload = AgentWalletSpendPayload {
             apartment_name: "ops_agent".to_owned(),
-            asset_definition: "xor#sora".to_owned(),
+            asset_definition: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_owned(),
             amount_nanos: 1_000_000,
         };
         let encoded = encode_agent_wallet_spend_signature_payload(&payload)

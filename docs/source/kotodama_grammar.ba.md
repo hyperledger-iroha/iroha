@@ -228,7 +228,7 @@ register_trigger wake {
 - `asset_handle(string|0xhex) -> AssetHandle*`
 - `proof_blob(string|0xhex) -> ProofBlob*`Прелюдия макрос был конструкторҙар өсөн ҡыҫҡараҡ псевдоним һәм рәт-работ раҫлау тәьмин итә:
 - `account!("i105...")`, `account_id!("i105...")`
-- `asset_definition!("rose#wonderland")`, `asset_id!("rose#wonderland")`
+- `asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`, `asset_id!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`
 - `domain!("wonderland")`, `domain_id!("wonderland")` XX
 - `name!("example")`
 - `json!("{\"hello\":\"world\"}")` йәки структуралы литералдар, мәҫәлән, `json!{ hello: "world" }`X

@@ -50,7 +50,7 @@ This specification completes **SFM-6 — Reserve-plus-Rent & lifecycle policies*
     - `reserve_shortfall` — reserve delta required to satisfy underwriting.
     - `top_up_shortfall` — amount needed to clear the top-up alert threshold.
     - `meets_underwriting` / `needs_top_up_alert` — booleans used by dashboards and admission ISIs to trigger policy transitions.
-  - `sorafs reserve ledger --quote <path> --provider-account <id> --treasury-account <id> --reserve-account <id> --asset-definition xor#sora` — convert a saved quote into the concrete XOR transfers required for rent settlement and reserve top-ups. The helper reads the `ledger_projection` block, echoes the micro-XOR totals, and emits an `instructions` array containing Norito-encoded `Transfer` ISIs that can be piped straight into existing automation (or stored alongside governance evidence).
+  - `sorafs reserve ledger --quote <path> --provider-account <id> --treasury-account <id> --reserve-account <id> --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc` — convert a saved quote into the concrete XOR transfers required for rent settlement and reserve top-ups. The helper reads the `ledger_projection` block, echoes the micro-XOR totals, and emits an `instructions` array containing Norito-encoded `Transfer` ISIs that can be piped straight into existing automation (or stored alongside governance evidence).
 
 ## Integration Points
 - **Hedging/Billing**: rent calculations feed billing aggregator; hedging service uses reserve balance to estimate exposure.
@@ -136,7 +136,7 @@ ledger projection that triggered the payment.
     --provider-account i105... \
     --treasury-account i105... \
     --reserve-account i105... \
-    --asset-definition xor#sora \
+    --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc \
     --json-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.json
    ```
 2. **Normalise the values with the new helper.**

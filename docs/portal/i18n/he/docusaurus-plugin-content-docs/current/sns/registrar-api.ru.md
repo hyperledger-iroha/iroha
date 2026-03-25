@@ -107,15 +107,15 @@ Struct ReservedAssignmentRequestV1 {
 
 | Эндпоинт | Метод | מטען | Описание |
 |--------|-------|--------|--------|
-| `/v1/sns/registrations` | פוסט | `RegisterNameRequestV1` | Регистрирует или повторно открывает имя. Разрешает ценовой tier, проверяет доказательства платежа/управления, испускает события реестра. |
-| `/v1/sns/registrations/{selector}/renew` | פוסט | `RenewNameRequestV1` | Продлевает срок. Применяет окна חסד/גאולה из политики. |
-| `/v1/sns/registrations/{selector}/transfer` | פוסט | `TransferNameRequestV1` | Передает владение после прикрепления согласований управления. |
-| `/v1/sns/registrations/{selector}/controllers` | PUT | `UpdateControllersRequestV1` | בקרי Заменяет набор; проверяет подписанные адреса аккаунтов. |
-| `/v1/sns/registrations/{selector}/freeze` | פוסט | `FreezeNameRequestV1` | הקפאת אפוטרופוס/מועצה. Требует כרטיס אפוטרופוס и ссылку на מסמך ממשל. |
-| `/v1/sns/registrations/{selector}/freeze` | מחק | `GovernanceHookV1` | Unfreeze после устранения; убеждается, что המועצה לעקוף את зафиксирован. |
+| `/v1/sns/names` | פוסט | `RegisterNameRequestV1` | Регистрирует или повторно открывает имя. Разрешает ценовой tier, проверяет доказательства платежа/управления, испускает события реестра. |
+| `/v1/sns/names/{namespace}/{literal}/renew` | פוסט | `RenewNameRequestV1` | Продлевает срок. Применяет окна חסד/גאולה из политики. |
+| `/v1/sns/names/{namespace}/{literal}/transfer` | פוסט | `TransferNameRequestV1` | Передает владение после прикрепления согласований управления. |
+| `/v1/sns/names/{namespace}/{literal}/controllers` | PUT | `UpdateControllersRequestV1` | בקרי Заменяет набор; проверяет подписанные адреса аккаунтов. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | פוסט | `FreezeNameRequestV1` | הקפאת אפוטרופוס/מועצה. Требует כרטיס אפוטרופוס и ссылку на מסמך ממשל. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | מחק | `GovernanceHookV1` | Unfreeze после устранения; убеждается, что המועצה לעקוף את зафиксирован. |
 | `/v1/sns/reserved/{selector}` | פוסט | `ReservedAssignmentRequestV1` | Назначение שמור имен דייל/מועצה. |
 | `/v1/sns/policies/{suffix_id}` | קבל | -- | Получает текущую `SuffixPolicyV1` (кэшируемо). |
-| `/v1/sns/registrations/{selector}` | קבל | -- | Возвращает текущий `NameRecordV1` + эффективное состояние (Active, Grace, и т. д.). |**בורר כונן:** סמן `{selector}` принимает I105, דחוס (`sora`) או קנונית משומשת ל-ADDR-5; Torii נורמאלי של `NameSelectorV1`.
+| `/v1/sns/names/{namespace}/{literal}` | קבל | -- | Возвращает текущий `NameRecordV1` + эффективное состояние (Active, Grace, и т. д.). |**בורר כונן:** סמן `{selector}` принимает I105, דחוס (`sora`) או קנונית משומשת ל-ADDR-5; Torii נורמאלי של `NameSelectorV1`.
 
 **Модель ошибок:** все эндпоинты возвращают Norito JSON с `code`, `message`, I100NI730. Коды включают `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
 
@@ -128,7 +128,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -153,7 +153,7 @@ iroha sns policy --suffix-id 1
 iroha sns renew \
   --selector makoto.sora \
   --term-years 1 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 120 \
   --payment-settlement '"renewal-settlement"' \
   --payment-signature '"steward-signature"'
@@ -176,7 +176,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` должен содержать корректную запись `GovernanceHookV1` (מזהה הצעה, גיבוב הצבעה, דייל/אפוטרופוס). Каждая команда просто отражает соответствующий эндпоинт `/v1/sns/registrations/{selector}/...` чтобы операторы беты могтьтри поверхности Torii, которые будут вызывать SDK.
+`--governance-json` должен содержать корректную запись `GovernanceHookV1` (מזהה הצעה, גיבוב הצבעה, דייל/אפוטרופוס). Каждая команда просто отражает соответствующий эндпоинт `/v1/sns/names/{namespace}/{literal}/...` чтобы операторы беты могтьтри поверхности Torii, которые будут вызывать SDK.
 
 ## 4. gRPC сервис
 
@@ -246,7 +246,7 @@ Torii проверяет доказательства, проверяя:
 
 1. Guardian отправляет `FreezeNameRequestV1` с כרטיס, ссылающимся на id инцидента.
 2. Torii переводит запись в `NameStatus::Frozen`, испускает `NameFrozen`.
-3. После устранения המועצה выпускает לעקוף; оператор отправляет DELETE `/v1/sns/registrations/{selector}/freeze` עם `GovernanceHookV1`.
+3. После устранения המועצה выпускает לעקוף; оператор отправляет DELETE `/v1/sns/names/{namespace}/{literal}/freeze` עם `GovernanceHookV1`.
 4. Torii проверяет לעקוף, испускает `NameUnfrozen`.
 
 ## 7. Валидация и коды ошибок

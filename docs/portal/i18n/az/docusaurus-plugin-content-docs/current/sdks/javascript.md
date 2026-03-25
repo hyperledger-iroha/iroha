@@ -170,7 +170,7 @@ const txs = await torii.listAccountTransactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg
   limit: 5,
   assetId,
 });
-const holders = await torii.listAssetHolders("rose#wonderland", {
+const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 5,
   assetId,
 });
@@ -187,7 +187,7 @@ geri sayım köməkçiləri (`deadline_kind`, `deadline_state`, `deadline_ms`,
 `deadline_ms_remaining`) növbəti bitən son tarixi vurğulayın (təzələyin → siyasət
 → sertifikat) beləliklə UI nişanları müavinət olduqda operatorları xəbərdar edə bilər
 <24 saat qalıb. SDK
-`/v1/offline/allowances` tərəfindən ifşa edilən REST filtrlərini əks etdirir:
+`/v1/offline/reserve/topup` tərəfindən ifşa edilən REST filtrlərini əks etdirir:
 `certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
 `verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` və
 `requireVerdict` / `onlyMissingVerdict` booleanları. Yanlış birləşmələr (üçün

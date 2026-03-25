@@ -103,15 +103,15 @@ Struct ReservedAssignmentRequestV1 {
 
 ## 3. Points de terminaison REST| Point de terminaison | طریقہ | Charge utile | تفصیل |
 |--------------|-------|---------|-------|
-| `/v1/sns/registrations` | POSTER | `RegisterNameRequestV1` | نام رجسٹر یا دوبارہ کھولنا۔ niveau de tarification et les preuves de paiement/gouvernance et les événements de registre émettent des preuves |
-| `/v1/sns/registrations/{selector}/renew` | POSTER | `RenewNameRequestV1` | مدت بڑھاتا ہے۔ پالیسی سے Grace/Redemption Windows نافذ کرتا ہے۔ |
-| `/v1/sns/registrations/{selector}/transfer` | POSTER | `TransferNameRequestV1` | حکمرانی approbations لگنے کے بعد propriété منتقل کرتا ہے۔ |
-| `/v1/sns/registrations/{selector}/controllers` | METTRE | `UpdateControllersRequestV1` | contrôleurs کا سیٹ بدلتا ہے؛ adresses de compte signées کی توثیق کرتا ہے۔ |
-| `/v1/sns/registrations/{selector}/freeze` | POSTER | `FreezeNameRequestV1` | gel du tuteur/du conseil۔ ticket de gardien et dossier de gouvernance کا حوالہ درکار۔ |
-| `/v1/sns/registrations/{selector}/freeze` | SUPPRIMER | `GovernanceHookV1` | remédiation کے بعد dégeler؛ dérogation du conseil |
+| `/v1/sns/names` | POSTER | `RegisterNameRequestV1` | نام رجسٹر یا دوبارہ کھولنا۔ niveau de tarification et les preuves de paiement/gouvernance et les événements de registre émettent des preuves |
+| `/v1/sns/names/{namespace}/{literal}/renew` | POSTER | `RenewNameRequestV1` | مدت بڑھاتا ہے۔ پالیسی سے Grace/Redemption Windows نافذ کرتا ہے۔ |
+| `/v1/sns/names/{namespace}/{literal}/transfer` | POSTER | `TransferNameRequestV1` | حکمرانی approbations لگنے کے بعد propriété منتقل کرتا ہے۔ |
+| `/v1/sns/names/{namespace}/{literal}/controllers` | METTRE | `UpdateControllersRequestV1` | contrôleurs کا سیٹ بدلتا ہے؛ adresses de compte signées کی توثیق کرتا ہے۔ |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | POSTER | `FreezeNameRequestV1` | gel du tuteur/du conseil۔ ticket de gardien et dossier de gouvernance کا حوالہ درکار۔ |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | SUPPRIMER | `GovernanceHookV1` | remédiation کے بعد dégeler؛ dérogation du conseil |
 | `/v1/sns/reserved/{selector}` | POSTER | `ReservedAssignmentRequestV1` | noms réservés کی intendant/conseil کی طرف سے affectation۔ |
 | `/v1/sns/policies/{suffix_id}` | OBTENIR | -- | `SuffixPolicyV1` موجودہ حاصل کرتا ہے (mise en cache)۔ |
-| `/v1/sns/registrations/{selector}` | OBTENIR | -- | موجودہ `NameRecordV1` + موثر حالت (Active, Grace وغیرہ) et کرتا ہے۔ |
+| `/v1/sns/names/{namespace}/{literal}` | OBTENIR | -- | موجودہ `NameRecordV1` + موثر حالت (Active, Grace وغیرہ) et کرتا ہے۔ |
 
 **Encodage du sélecteur :** Segment de chemin `{selector}` I105, compressé (`sora`) et hexadécimal canonique ADDR-5 pour le segment de chemin d'accès. Torii `NameSelectorV1` pour normaliser les choses**Modèle d'erreur :** Les points de terminaison Norito JSON `code`, `message`, `details` sont affichés. Codes `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing` en anglais
 
@@ -124,7 +124,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -149,7 +149,7 @@ Renouvellements d'aides supplémentaires, transferts et actions du tuteur et aut
 iroha sns renew \
   --selector makoto.sora \
   --term-years 1 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 120 \
   --payment-settlement '"renewal-settlement"' \
   --payment-signature '"steward-signature"'
@@ -172,7 +172,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` میں درست `GovernanceHookV1` ریکارڈ ہونا چاہیے (identifiant de proposition, hachages de vote, signatures d'intendant/tuteur)۔ Le point de terminaison `/v1/sns/registrations/{selector}/...` est utilisé pour les opérateurs bêta et les surfaces Torii répètent. Les SDK sont également disponibles
+`--governance-json` میں درست `GovernanceHookV1` ریکارڈ ہونا چاہیے (identifiant de proposition, hachages de vote, signatures d'intendant/tuteur)۔ Le point de terminaison `/v1/sns/names/{namespace}/{literal}/...` est utilisé pour les opérateurs bêta et les surfaces Torii répètent. Les SDK sont également disponibles
 
 ## 4. Service gRPC
 
@@ -238,7 +238,7 @@ Renouvellements de grâce comme demande standard et détection de pénalité com
 
 ### 6.3 Gel des gardiens et dérogation au conseil1. Guardian `FreezeNameRequestV1` soumettre un ticket pour un identifiant d'incident et un ticket pour un ticket
 2. L'enregistrement Torii et `NameStatus::Frozen` émettent un message d'erreur.
-3. Assainissement et dérogation du conseil opérateur DELETE `/v1/sns/registrations/{selector}/freeze` et `GovernanceHookV1` sont en cours de réalisation
+3. Assainissement et dérogation du conseil opérateur DELETE `/v1/sns/names/{namespace}/{literal}/freeze` et `GovernanceHookV1` sont en cours de réalisation
 4. Torii override validate کرتا ہے، `NameUnfrozen` émet کرتا ہے۔
 
 ## 7. Validation et codes d'erreur

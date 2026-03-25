@@ -56,7 +56,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Create realistic bytecode for known samples; fall back to a minimal HALT
         // program for others.
         let payload = match *name {
-            // Mint 1 unit of rose#wonderland to the current authority using pointer-ABI inputs.
+            // Mint 1 unit of 62Fk4FPcMuLvW5QjDGNF2a4jAmjM to the current authority using pointer-ABI inputs.
             "mint_rose_trigger" => build_program_mint_rose_for_authority(),
             // Convenience: create one NFT per known account
             "create_nft_for_every_user_trigger" => build_program_create_nft_for_authority(),

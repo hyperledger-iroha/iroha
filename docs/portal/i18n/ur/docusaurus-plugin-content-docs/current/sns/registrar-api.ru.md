@@ -107,15 +107,15 @@ Struct ReservedAssignmentRequestV1 {
 
 | اختتامی نقطہ | طریقہ | پے لوڈ | تفصیل |
 | ---------- | ------- | --------- | ------------ |
-| `/v1/sns/registrations` | پوسٹ | `RegisterNameRequestV1` | کسی نام کو رجسٹر یا دوبارہ کھولتا ہے۔ قیمت کے درجے کو حل کرتا ہے ، ادائیگی/کنٹرول کے ثبوت کی تصدیق کرتا ہے ، رجسٹری کے واقعات کو خارج کرتا ہے۔ |
-| `/v1/sns/registrations/{selector}/renew` | پوسٹ | `RenewNameRequestV1` | ڈیڈ لائن میں توسیع کرتا ہے۔ پالیسی سے ونڈوز گریس/چھٹکارے کا اطلاق کرتا ہے۔ |
-| `/v1/sns/registrations/{selector}/transfer` | پوسٹ | `TransferNameRequestV1` | انتظامیہ کی منظوری سے منسلک ہونے کے بعد ملکیت کی منتقلی۔ |
-| `/v1/sns/registrations/{selector}/controllers` | put | `UpdateControllersRequestV1` | کنٹرولرز کے ایک سیٹ کی جگہ لے لیتا ہے۔ دستخط شدہ اکاؤنٹ کے پتے کی توثیق کرتا ہے۔ |
-| `/v1/sns/registrations/{selector}/freeze` | پوسٹ | `FreezeNameRequestV1` | گارڈین/کونسل کو منجمد کریں۔ گارڈین کے ٹکٹ اور گورننس دستاویز سے لنک کی ضرورت ہے۔ |
-| `/v1/sns/registrations/{selector}/freeze` | حذف کریں | `GovernanceHookV1` | خاتمے کے بعد غیر منقولہ ؛ اس بات کو یقینی بناتا ہے کہ کونسل کا اوور رائڈ طے شدہ ہے۔ |
+| `/v1/sns/names` | پوسٹ | `RegisterNameRequestV1` | کسی نام کو رجسٹر یا دوبارہ کھولتا ہے۔ قیمت کے درجے کو حل کرتا ہے ، ادائیگی/کنٹرول کے ثبوت کی تصدیق کرتا ہے ، رجسٹری کے واقعات کو خارج کرتا ہے۔ |
+| `/v1/sns/names/{namespace}/{literal}/renew` | پوسٹ | `RenewNameRequestV1` | ڈیڈ لائن میں توسیع کرتا ہے۔ پالیسی سے ونڈوز گریس/چھٹکارے کا اطلاق کرتا ہے۔ |
+| `/v1/sns/names/{namespace}/{literal}/transfer` | پوسٹ | `TransferNameRequestV1` | انتظامیہ کی منظوری سے منسلک ہونے کے بعد ملکیت کی منتقلی۔ |
+| `/v1/sns/names/{namespace}/{literal}/controllers` | put | `UpdateControllersRequestV1` | کنٹرولرز کے ایک سیٹ کی جگہ لے لیتا ہے۔ دستخط شدہ اکاؤنٹ کے پتے کی توثیق کرتا ہے۔ |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | پوسٹ | `FreezeNameRequestV1` | گارڈین/کونسل کو منجمد کریں۔ گارڈین کے ٹکٹ اور گورننس دستاویز سے لنک کی ضرورت ہے۔ |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | حذف کریں | `GovernanceHookV1` | خاتمے کے بعد غیر منقولہ ؛ اس بات کو یقینی بناتا ہے کہ کونسل کا اوور رائڈ طے شدہ ہے۔ |
 | `/v1/sns/reserved/{selector}` | پوسٹ | `ReservedAssignmentRequestV1` | محفوظ اسٹیورڈ/کونسل کے نام تفویض کرنا۔ |
 | `/v1/sns/policies/{suffix_id}` | حاصل کریں | - | موجودہ `SuffixPolicyV1` (کیچ ایبل) ملتا ہے۔ |
-| `/v1/sns/registrations/{selector}` | حاصل کریں | - | موجودہ `NameRecordV1` + موثر حالت (فعال ، فضل ، وغیرہ) لوٹاتا ہے۔ |** سلیکٹر انکوڈنگ: ** طبقہ `{selector}` I105 ، کمپریسڈ (`sora`) یا ADDR-5 کے ذریعہ کیننیکل ہیکس قبول کرتا ہے۔ Torii `NameSelectorV1` کے ذریعے معمول بناتا ہے۔
+| `/v1/sns/names/{namespace}/{literal}` | حاصل کریں | - | موجودہ `NameRecordV1` + موثر حالت (فعال ، فضل ، وغیرہ) لوٹاتا ہے۔ |** سلیکٹر انکوڈنگ: ** طبقہ `{selector}` I105 ، کمپریسڈ (`sora`) یا ADDR-5 کے ذریعہ کیننیکل ہیکس قبول کرتا ہے۔ Torii `NameSelectorV1` کے ذریعے معمول بناتا ہے۔
 
 ** غلطی کا ماڈل: ** تمام اختتامی نکات Norito ، `message` ، `details` کے ساتھ Norito JSON واپس کریں گے۔ کوڈز میں `sns_err_reserved` ، `sns_err_payment_mismatch` ، `sns_err_policy_violation` ، `sns_err_governance_missing` شامل ہیں۔
 
@@ -128,7 +128,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -153,7 +153,7 @@ iroha sns policy --suffix-id 1
 iroha sns renew \
   --selector makoto.sora \
   --term-years 1 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 120 \
   --payment-settlement '"renewal-settlement"' \
   --payment-signature '"steward-signature"'
@@ -176,7 +176,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` میں صحیح اندراج `GovernanceHookV1` (تجویز ID ، ووٹ ہیشس ، اسٹیورڈ/سرپرست دستخطوں) پر مشتمل ہونا ضروری ہے۔ ہر کمانڈ آسانی سے متعلقہ `/v1/sns/registrations/{selector}/...` اختتامی نقطہ کی عکاسی کرتا ہے تاکہ بیٹا آپریٹرز عین مطابق Torii سطحوں کی تکرار کرسکیں جو SDK کو کال کریں گے۔
+`--governance-json` میں صحیح اندراج `GovernanceHookV1` (تجویز ID ، ووٹ ہیشس ، اسٹیورڈ/سرپرست دستخطوں) پر مشتمل ہونا ضروری ہے۔ ہر کمانڈ آسانی سے متعلقہ `/v1/sns/names/{namespace}/{literal}/...` اختتامی نقطہ کی عکاسی کرتا ہے تاکہ بیٹا آپریٹرز عین مطابق Torii سطحوں کی تکرار کرسکیں جو SDK کو کال کریں گے۔
 
 ## 4. جی آر پی سی سروس
 
@@ -246,7 +246,7 @@ Torii جانچ پڑتال کرکے شواہد کی جانچ پڑتال کرتا 
 
 1. گارڈین `FreezeNameRequestV1` کو ٹکٹ کے ساتھ واقعہ کی شناخت کا حوالہ دیتے ہوئے بھیجتا ہے۔
 2. Torii ریکارڈ کو `NameStatus::Frozen` میں ترجمہ کرتا ہے ، `NameFrozen` کو خارج کرتا ہے۔
-3. خاتمے کے بعد ، کونسل ایک اوور رائڈ جاری کرتی ہے۔ بیان `GovernanceHookV1` کے ساتھ `/v1/sns/registrations/{selector}/freeze` کو حذف کرتا ہے۔
+3. خاتمے کے بعد ، کونسل ایک اوور رائڈ جاری کرتی ہے۔ بیان `GovernanceHookV1` کے ساتھ `/v1/sns/names/{namespace}/{literal}/freeze` کو حذف کرتا ہے۔
 4. Torii چیک اوور رائڈ ، `NameUnfrozen` کو خارج کرتا ہے۔
 
 ## 7. توثیق اور غلطی کے کوڈ

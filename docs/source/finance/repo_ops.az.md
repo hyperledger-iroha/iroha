@@ -83,10 +83,10 @@ avtomatlaşdırma və ya ConfigMap. Minimal profil belə görünür:
 [settlement.repo]
 default_haircut_bps = 1500
 margin_frequency_secs = 86400
-eligible_collateral = ["bond#wonderland", "note#wonderland"]
+eligible_collateral = ["4fEiy2n5VMFVfi6BzDJge519zAzg", "7dk8Pj8Bqo6XUqch4K2sF8MCM1zd"]
 
 [settlement.repo.collateral_substitution_matrix]
-"bond#wonderland" = ["note#wonderland", "bill#wonderland"]
+"4fEiy2n5VMFVfi6BzDJge519zAzg" = ["7dk8Pj8Bqo6XUqch4K2sF8MCM1zd", "6zK1LDcJ3FvkpfoZQ8kHUaW6sA7F"]
 ```
 
 Əməliyyat yoxlama siyahısı:
@@ -186,10 +186,10 @@ hər bir idarəetmə sübut paketi.【crates/iroha_config/src/parameters/user.rs
 [settlement.repo]
 default_haircut_bps = 1750
 margin_frequency_secs = 43200
-eligible_collateral = ["bond#wonderland", "note#wonderland"]
+eligible_collateral = ["4fEiy2n5VMFVfi6BzDJge519zAzg", "7dk8Pj8Bqo6XUqch4K2sF8MCM1zd"]
 
 [settlement.repo.collateral_substitution_matrix]
-"bond#wonderland" = ["note#wonderland", "bill#wonderland"]
+"4fEiy2n5VMFVfi6BzDJge519zAzg" = ["7dk8Pj8Bqo6XUqch4K2sF8MCM1zd", "6zK1LDcJ3FvkpfoZQ8kHUaW6sA7F"]
 ```
 
 **Dəyişikliklərin idarə edilməsinə nəzarət siyahısı**1. Təklif olunan TOML fraqmentini (əvəzetmə matrisinin deltaları daxil olmaqla) mərhələləndirin, hash
@@ -573,7 +573,7 @@ hər bir fayl üçün dəyişdirilmiş vaxt damğası və JSON xülasəsi yazır
 ```bash
 python3 scripts/repo_evidence_manifest.py \
   --root artifacts/finance/repo/wonderland-2026q1 \
-  --agreement-id repo#wonderland \
+  --agreement-id 7mxD1tKRyv32je4kZwcWa9wa33bX \
   --output artifacts/finance/repo/wonderland-2026q1/manifest.json \
   --exclude 'scratch/*'
 ```
@@ -588,7 +588,7 @@ faylları paketdən köçürmədən; qlob nümunəsi həmişə tətbiq olunur
 
 ```json
 {
-  "agreement_id": "repo#wonderland",
+  "agreement_id": "7mxD1tKRyv32je4kZwcWa9wa33bX",
   "generated_at": "2026-04-30T11:58:43Z",
   "root": "/var/tmp/repo/wonderland-2026q1",
   "file_count": 5,

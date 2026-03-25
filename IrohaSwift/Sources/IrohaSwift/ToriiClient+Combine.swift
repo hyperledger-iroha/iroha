@@ -7,9 +7,10 @@ public extension ToriiClient {
     /// Fetch account asset balances once and emit them on the requested scheduler.
     func assetsPublisher(accountId: String,
                          limit: Int = 100,
-                         assetId: String? = nil,
+                         asset: String? = nil,
+                         scope: String? = nil,
                          scheduler: DispatchQueue? = .main) -> AnyPublisher<[ToriiAssetBalance], ToriiClientError> {
-        makeValuePublisher(operation: { try await self.getAssets(accountId: accountId, limit: limit, assetId: assetId) },
+        makeValuePublisher(operation: { try await self.getAssets(accountId: accountId, limit: limit, asset: asset, scope: scope) },
                            scheduler: scheduler)
     }
 
@@ -39,12 +40,10 @@ public extension ToriiClient {
     func explorerTransfersPublisher(lastEventId: String? = nil,
                                     matchingAccount accountId: String? = nil,
                                     assetDefinitionId: String? = nil,
-                                    assetId: String? = nil,
                                     scheduler: DispatchQueue? = .main) -> AnyPublisher<ToriiExplorerTransferRecord, ToriiClientError> {
         makeStreamPublisher({ self.streamExplorerTransfers(lastEventId: lastEventId,
                                                            matchingAccount: accountId,
-                                                           assetDefinitionId: assetDefinitionId,
-                                                           assetId: assetId) },
+                                                           assetDefinitionId: assetDefinitionId) },
                             scheduler: scheduler)
     }
 
@@ -52,13 +51,11 @@ public extension ToriiClient {
     func explorerTransferSummariesPublisher(lastEventId: String? = nil,
                                             matchingAccount accountId: String? = nil,
                                             assetDefinitionId: String? = nil,
-                                            assetId: String? = nil,
                                             relativeTo relativeAccountId: String? = nil,
                                             scheduler: DispatchQueue? = .main) -> AnyPublisher<ToriiExplorerTransferSummary, ToriiClientError> {
         makeStreamPublisher({ self.streamExplorerTransferSummaries(lastEventId: lastEventId,
                                                                    matchingAccount: accountId,
                                                                    assetDefinitionId: assetDefinitionId,
-                                                                   assetId: assetId,
                                                                    relativeTo: relativeAccountId) },
                             scheduler: scheduler)
     }
@@ -68,7 +65,6 @@ public extension ToriiClient {
                                          page: UInt64? = nil,
                                          perPage: UInt64? = nil,
                                          assetDefinitionId: String? = nil,
-                                         assetId: String? = nil,
                                          lastEventId: String? = nil,
                                          maxItems: UInt64? = nil,
                                          dedupeLimit: Int = 10_000,
@@ -77,7 +73,6 @@ public extension ToriiClient {
                                                                page: page,
                                                                perPage: perPage,
                                                                assetDefinitionId: assetDefinitionId,
-                                                               assetId: assetId,
                                                                lastEventId: lastEventId,
                                                                maxItems: maxItems,
                                                                dedupeLimit: dedupeLimit) },
@@ -88,7 +83,6 @@ public extension ToriiClient {
     func transactionTransferSummariesPublisher(hashHex: String,
                                                matchingAccount accountId: String? = nil,
                                                assetDefinitionId: String? = nil,
-                                               assetId: String? = nil,
                                                relativeTo relativeAccountId: String? = nil,
                                                lastEventId: String? = nil,
                                                maxItems: UInt64? = nil,
@@ -98,7 +92,6 @@ public extension ToriiClient {
             self.streamTransactionTransferSummaries(hashHex: hashHex,
                                                      matchingAccount: accountId,
                                                      assetDefinitionId: assetDefinitionId,
-                                                     assetId: assetId,
                                                      relativeTo: relativeAccountId,
                                                      lastEventId: lastEventId,
                                                      maxItems: maxItems,

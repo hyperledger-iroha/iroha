@@ -218,7 +218,7 @@ Constructeurs de pointeurs (émettent un TLV Norito dans INPUT et renvoient un p
 
 Les macros du prélude fournissent des alias plus courts et une validation en ligne pour ces constructeurs :
 - `account!("i105...")`, `account_id!("i105...")`
-- `asset_definition!("rose#wonderland")`, `asset_id!("rose#wonderland")`
+- `asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`, `asset_id!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`
 - `domain!("wonderland")`, `domain_id!("wonderland")`
 - `name!("example")`
 - `json!("{\"hello\":\"world\"}")` ou des littéraux structurés tels que `json!{ hello: "world" }`

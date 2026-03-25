@@ -32,7 +32,7 @@ maxfiy aktivlar oqimini tasdiqlashda. Bu aylanish o'yin kitobini to'ldiradi
   ixtiyoriy ravishda bitta aktiv ta'rifiga ko'ra. CLI misoli:
 
   ```bash
-  iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "rose#wonderland" } }'
+  iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM" } }'
   ```
 
 - Siyosat metama'lumotlari va kutilayotgan o'tishlar orqali mavjud

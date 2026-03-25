@@ -83,7 +83,6 @@ struct Encodings {
     canonical_hex: String,
     i105: I105Encoding,
     i105_default: String,
-    i105_default_fullwidth: String,
 }
 
 #[allow(dead_code)]
@@ -181,9 +180,9 @@ fn validate_positive_case(case: &PositiveCase, default_prefix: u16) {
         case.case_id
     );
 
-    // Secondary I105 decoding (half-width sentinel)
+    // Default-discriminant I105 decoding.
     let compressed_addr =
-        AccountAddress::from_i105(&case.encodings.i105_default).expect("half-width i105 decode");
+        AccountAddress::from_i105(&case.encodings.i105_default).expect("default i105 decode");
     assert_eq!(
         compressed_addr, canonical_address,
         "{} i105_default payload mismatch",
@@ -193,21 +192,6 @@ fn validate_positive_case(case: &PositiveCase, default_prefix: u16) {
         canonical_bytes_from_address(&compressed_addr),
         canonical_bytes,
         "{} i105_default canonical mismatch",
-        case.case_id
-    );
-
-    // Secondary I105 decoding (full-width sentinel)
-    let compressed_full = AccountAddress::from_i105(&case.encodings.i105_default_fullwidth)
-        .expect("fullwidth i105 decode");
-    assert_eq!(
-        compressed_full, canonical_address,
-        "{} i105_default full payload mismatch",
-        case.case_id
-    );
-    assert_eq!(
-        canonical_bytes_from_address(&compressed_full),
-        canonical_bytes,
-        "{} i105_default full canonical mismatch",
         case.case_id
     );
 
@@ -403,12 +387,6 @@ fn assert_error(err: &AccountAddressError, expected: &ExpectedError, case_id: &s
             } else {
                 panic!("{case_id}: expected UnexpectedNetworkPrefix, got {err}");
             }
-        }
-        "MissingI105Sentinel" => {
-            assert!(
-                matches!(err, AccountAddressError::MissingI105Sentinel),
-                "{case_id}: expected MissingI105Sentinel, got {err}"
-            );
         }
         "InvalidCompressedChar" | "InvalidI105Char" => {
             if let AccountAddressError::InvalidI105Char(ch) = err {

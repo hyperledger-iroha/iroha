@@ -45,9 +45,9 @@ fn kotodama_revoke_role_denies_mint() {
           register_domain(domain("default"));
           register_account(account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"));
           register_asset("rose", "ROSE", 0, 1);
-          create_role(name("minter"), json("{\"perms\":[\"mint_asset:rose#wonderland\"]}"));
+          create_role(name("minter"), json("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
           grant_role(account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"), name("minter"));
-          mint_asset(account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"), asset_definition("rose#wonderland"), 1);
+          mint_asset(account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"), asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), 1);
         }
     "#,
     );
@@ -59,7 +59,7 @@ fn kotodama_revoke_role_denies_mint() {
         r#"
         fn main() {
           revoke_role(account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"), name("minter"));
-          mint_asset(account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"), asset_definition("rose#wonderland"), 1);
+          mint_asset(account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"), asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), 1);
         }
     "#,
     );
@@ -92,7 +92,7 @@ fn kotodama_delete_role_prevents_grant() {
           register_domain(domain("default"));
           register_account(account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"));
           register_asset("rose", "ROSE", 0, 1);
-          create_role(name("minter"), json("{\"perms\":[\"mint_asset:rose#wonderland\"]}"));
+          create_role(name("minter"), json("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
         }
     "#,
     );
@@ -136,7 +136,7 @@ fn kotodama_delete_role_denied_while_assigned_then_succeeds_after_revoke() {
           register_domain(domain("default"));
           register_account(account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"));
           register_asset("rose", "ROSE", 0, 1);
-          create_role(name("minter"), json("{\"perms\":[\"mint_asset:rose#wonderland\"]}"));
+          create_role(name("minter"), json("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
           grant_role(account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"), name("minter"));
         }
     "#,
@@ -190,7 +190,7 @@ fn kotodama_combined_revoke_then_delete_blocks_grant_and_mint() {
           register_domain(domain("default"));
           register_account(account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"));
           register_asset("rose", "ROSE", 0, 1);
-          create_role(name("minter"), json("{\"perms\":[\"mint_asset:rose#wonderland\"]}"));
+          create_role(name("minter"), json("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
           grant_role(account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"), name("minter"));
         }
     "#,
@@ -226,7 +226,7 @@ fn kotodama_combined_revoke_then_delete_blocks_grant_and_mint() {
     let mint = compile(
         r#"
         fn main() {
-          mint_asset(account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"), asset_definition("rose#wonderland"), 1);
+          mint_asset(account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"), asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), 1);
         }
     "#,
     );

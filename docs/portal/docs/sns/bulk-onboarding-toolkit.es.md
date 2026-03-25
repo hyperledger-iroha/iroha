@@ -38,7 +38,7 @@ El parser requiere la siguiente fila de encabezado (el orden es flexible):
 | `suffix_id` | Si | Identificador numerico de sufijo (decimal o `0x` hex). |
 | `owner` | Si | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | Si | Entero `1..=255`. |
-| `payment_asset_id` | Si | Activo de settlement (por ejemplo `xor#sora`). |
+| `payment_asset_id` | Si | Activo de settlement (por ejemplo `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Si | Enteros sin signo que representan unidades nativas del activo. |
 | `settlement_tx` | Si | Valor JSON o cadena literal que describe la transaccion de pago o hash. |
 | `payment_payer` | Si | AccountId que autorizo el pago. |
@@ -84,7 +84,7 @@ En caso de exito el script escribe un manifiesto agregado:
       "term_years": 2,
       "pricing_class_hint": null,
       "payment": {
-        "asset_id":"xor#sora",
+        "asset_id":"61CtjvNd9T3THAR65GsMVHr82Bjc",
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
@@ -114,7 +114,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v1/sns/names
   done
 ```
 
@@ -134,10 +134,10 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- El helper emite un `POST /v1/sns/registrations` por solicitud y aborta ante el
+- El helper emite un `POST /v1/sns/names` por solicitud y aborta ante el
   primer error HTTP. Las respuestas se anexan a la ruta del log como registros
   NDJSON.
-- `--poll-status` vuelve a consultar `/v1/sns/registrations/{selector}` despues de
+- `--poll-status` vuelve a consultar `/v1/sns/names/{namespace}/{literal}` despues de
   cada envio (hasta `--poll-attempts`, default 5) para confirmar que el registro
   es visible. Proporcione `--suffix-map` (JSON de `suffix_id` a valores "suffix")
   para que la herramienta derive literales `{label}.{suffix}` al hacer polling.
@@ -226,7 +226,7 @@ series:
 # TYPE sns_bulk_release_requests_total gauge
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
-sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
+sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="61CtjvNd9T3THAR65GsMVHr82Bjc"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 

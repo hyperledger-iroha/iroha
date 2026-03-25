@@ -69,7 +69,7 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI жіберілген транзакция хэшін басып шығарады (мысалы,
@@ -78,7 +78,7 @@ CLI жіберілген транзакция хэшін басып шығара
 ## 3. Бірліктерді оператор шотына енгізу
 
 Активтер саны `(asset definition, account)` жұбында тұрады. Жалбыз 250
-`coffee#wonderland` бірліктері `$ADMIN_ACCOUNT`:
+`7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` бірліктері `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

@@ -1135,12 +1135,12 @@ mod tests {
             other => panic!("unexpected query variant: {other:?}"),
         }
 
-        let legacy = SingularQueryJson::FindAssetDefinitionById {
-            asset: "aid:2f17c72466f84a4bb8a8e24884fdcd2f".to_owned(),
+        let invalid = SingularQueryJson::FindAssetDefinitionById {
+            asset: "prefix:2f17c72466f84a4bb8a8e24884fdcd2f".to_owned(),
         };
-        let err = legacy
+        let err = invalid
             .into_box()
-            .expect_err("legacy aid literal must be rejected");
+            .expect_err("prefixed literal must be rejected");
         assert_eq!(err, QueryJsonError::InvalidField("payload", "asset"));
     }
 

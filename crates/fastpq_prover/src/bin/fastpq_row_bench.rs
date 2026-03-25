@@ -615,8 +615,8 @@ mod tests {
             .and_then(|value| value.split('/').next())
             .expect("receiver asset key");
 
-        assert!(AssetDefinitionId::from_str(sender_definition).is_ok());
-        assert!(AssetDefinitionId::from_str(receiver_definition).is_ok());
+        assert!(AssetDefinitionId::parse_address_literal(sender_definition).is_ok());
+        assert!(AssetDefinitionId::parse_address_literal(receiver_definition).is_ok());
         assert!(!sender_definition.contains('#'));
         assert!(!receiver_definition.contains('#'));
     }

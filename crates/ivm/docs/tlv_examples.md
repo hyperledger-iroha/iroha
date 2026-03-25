@@ -16,7 +16,7 @@ Examples (hex, spaces added for readability)
     - `00 01` | `01` | `<len:be u32>` | `<utf8 bytes of encoded literal>` | `00..00 (32 bytes)`
 
 - AssetDefinitionId (0x0002, v1)
-  - Payload: `"rose#wonderland"` → `726f736523776f6e6465726c616e64`
+  - Payload: `"62Fk4FPcMuLvW5QjDGNF2a4jAmjM"` → `726f736523776f6e6465726c616e64`
   - TLV: `00 02 01 00 00 00 10 72 6f 73 65 23 77 6f 6e 64 65 72 6c 61 6e 64 00..00`
 
 - Name (0x0003, v1)

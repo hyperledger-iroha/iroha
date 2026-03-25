@@ -59,14 +59,14 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 يطبع CLI hash مميزة (مثلا `0x5f…`). احفظه كي يتعلم عن الحالة لاحقا.
 
 ## 3. وحدات سك في حسابات التشغيل
 
-هناك المزيد من الاصول تحت الزوج `(asset definition, account)`. اسك 250 وحدة من `coffee#wonderland` في `$ADMIN_ACCOUNT`:
+هناك المزيد من الاصول تحت الزوج `(asset definition, account)`. اسك 250 وحدة من `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` في `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

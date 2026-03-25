@@ -147,7 +147,7 @@ final class PendingTransactionQueueTests: XCTestCase {
         let keypair = try Keypair.generate()
         let transfer = TransferRequest(chainId: "chain",
                                        authority: AccountId.make(publicKey: keypair.publicKey),
-                                       assetDefinitionId: "rose#wonderland",
+                                       assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                        quantity: "1",
                                        destination: AccountId.make(publicKey: keypair.publicKey),
                                        description: nil,
@@ -178,7 +178,7 @@ final class PendingTransactionQueueTests: XCTestCase {
         let keypair = try Keypair.generate()
         let transfer = TransferRequest(chainId: "chain",
                                        authority: AccountId.make(publicKey: keypair.publicKey),
-                                       assetDefinitionId: "rose#wonderland",
+                                       assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                        quantity: "1",
                                        destination: AccountId.make(publicKey: keypair.publicKey),
                                        description: nil,

@@ -2,25 +2,17 @@
 
 import { Buffer } from "node:buffer";
 import { domainToASCII } from "node:url";
-import { blake2b256 } from "./blake2b.js";
+import { blake2b256, blake2b512 } from "./blake2b.js";
 import { getNativeBinding } from "./native.js";
 export const DEFAULT_DOMAIN_NAME = "default";
 const DEFAULT_I105_DISCRIMINANT = 0x02f1;
-const I105_DISCRIMINANT_MAX = 0xffff;
+const I105_DISCRIMINANT_MAX = 0x3fff;
 const HEADER_VERSION_V1 = 0;
 const HEADER_NORM_VERSION_V1 = 1;
-const I105_SENTINEL_SORA = "sora";
-const I105_SENTINEL_TEST = "test";
-const I105_SENTINEL_DEV = "dev";
-const I105_SENTINEL_NUMERIC_PREFIX = "n";
-const I105_SENTINEL_SORA_FULLWIDTH = "ｓｏｒａ";
-const I105_SENTINEL_TEST_FULLWIDTH = "ｔｅｓｔ";
-const I105_SENTINEL_DEV_FULLWIDTH = "ｄｅｖ";
-const I105_SENTINEL_NUMERIC_PREFIX_FULLWIDTH = "ｎ";
-const I105_CHECKSUM_LEN = 6;
-const BECH32M_CONST = 0x2bc830a3;
+const I105_LITERAL_CHECKSUM_LEN = 2;
+const I105_CHECKSUM_PREFIX = Buffer.from("I105PRE", "ascii");
 const I105_WARNING =
-  "I105 addresses are the canonical account literal encoding. Use the chain-discriminant sentinel (for example, `sora` on discriminant 753).";
+  "I105 addresses are the canonical Base58 account literal encoding. Render and validate them with the intended chain discriminant.";
 const I105_ASCII_ALPHABET = [
   "1",
   "2",
@@ -82,56 +74,6 @@ const I105_ASCII_ALPHABET = [
   "z",
 ];
 
-const SORA_KANA = [
-  "ｲ",
-  "ﾛ",
-  "ﾊ",
-  "ﾆ",
-  "ﾎ",
-  "ﾍ",
-  "ﾄ",
-  "ﾁ",
-  "ﾘ",
-  "ﾇ",
-  "ﾙ",
-  "ｦ",
-  "ﾜ",
-  "ｶ",
-  "ﾖ",
-  "ﾀ",
-  "ﾚ",
-  "ｿ",
-  "ﾂ",
-  "ﾈ",
-  "ﾅ",
-  "ﾗ",
-  "ﾑ",
-  "ｳ",
-  "ヰ",
-  "ﾉ",
-  "ｵ",
-  "ｸ",
-  "ﾔ",
-  "ﾏ",
-  "ｹ",
-  "ﾌ",
-  "ｺ",
-  "ｴ",
-  "ﾃ",
-  "ｱ",
-  "ｻ",
-  "ｷ",
-  "ﾕ",
-  "ﾒ",
-  "ﾐ",
-  "ｼ",
-  "ヱ",
-  "ﾋ",
-  "ﾓ",
-  "ｾ",
-  "ｽ",
-];
-
 const MULTISIG_DIGEST_PERSONALIZATION = (() => {
   const bytes = new Uint8Array(16);
   bytes.set(Buffer.from("iroha-ms-policy", "ascii"));
@@ -140,56 +82,6 @@ const MULTISIG_DIGEST_PERSONALIZATION = (() => {
 
 const nativeBinding = getNativeBinding();
 const nativeAddressCodec = initNativeAddressCodec(nativeBinding);
-
-const SORA_KANA_FULLWIDTH = [
-  "イ",
-  "ロ",
-  "ハ",
-  "ニ",
-  "ホ",
-  "ヘ",
-  "ト",
-  "チ",
-  "リ",
-  "ヌ",
-  "ル",
-  "ヲ",
-  "ワ",
-  "カ",
-  "ヨ",
-  "タ",
-  "レ",
-  "ソ",
-  "ツ",
-  "ネ",
-  "ナ",
-  "ラ",
-  "ム",
-  "ウ",
-  "ヰ",
-  "ノ",
-  "オ",
-  "ク",
-  "ヤ",
-  "マ",
-  "ケ",
-  "フ",
-  "コ",
-  "エ",
-  "テ",
-  "ア",
-  "サ",
-  "キ",
-  "ユ",
-  "メ",
-  "ミ",
-  "シ",
-  "ヱ",
-  "ヒ",
-  "モ",
-  "セ",
-  "ス",
-];
 
 function domainSelectorDetails(selector) {
   if (!selector) {
@@ -225,12 +117,8 @@ function assertDomainMatches(address, expectedDomainName) {
   canonicalizeDomainLabel(normalizedDomain);
 }
 
-const I105_ALPHABET = I105_ASCII_ALPHABET.concat(SORA_KANA);
-const I105_ALPHABET_FULLWIDTH = I105_ASCII_ALPHABET.concat(SORA_KANA_FULLWIDTH);
+const I105_ALPHABET = I105_ASCII_ALPHABET;
 const I105_DIGIT_INDEX = new Map(I105_ALPHABET.map((symbol, idx) => [symbol, idx]));
-for (const [idx, symbol] of I105_ALPHABET_FULLWIDTH.entries()) {
-  I105_DIGIT_INDEX.set(symbol, idx);
-}
 const I105_BASE = I105_ALPHABET.length;
 
 export const AccountAddressErrorCode = Object.freeze({
@@ -254,11 +142,8 @@ export const AccountAddressErrorCode = Object.freeze({
   INVALID_PUBLIC_KEY: "ERR_INVALID_PUBLIC_KEY",
   UNKNOWN_CURVE: "ERR_UNKNOWN_CURVE",
   UNEXPECTED_TRAILING_BYTES: "ERR_UNEXPECTED_TRAILING_BYTES",
-  MISSING_I105_SENTINEL: "ERR_MISSING_I105_SENTINEL",
   I105_TOO_SHORT: "ERR_I105_TOO_SHORT",
   INVALID_I105_CHAR: "ERR_INVALID_I105_CHAR",
-  INVALID_I105_BASE: "ERR_INVALID_I105_BASE",
-  INVALID_I105_DIGIT: "ERR_INVALID_I105_DIGIT",
   LOCAL_DIGEST_TOO_SHORT: "ERR_LOCAL8_DEPRECATED",
   UNSUPPORTED_ADDRESS_FORMAT: "ERR_UNSUPPORTED_ADDRESS_FORMAT",
   MULTISIG_MEMBER_OVERFLOW: "ERR_MULTISIG_MEMBER_OVERFLOW",
@@ -1322,15 +1207,6 @@ export class AccountAddress {
     return this.toI105(DEFAULT_I105_DISCRIMINANT);
   }
 
-  toI105DefaultFullWidth() {
-    const canonical = this.canonicalBytes();
-    const rendered = renderWithNativeCodec(canonical, DEFAULT_I105_DISCRIMINANT);
-    if (rendered?.i105FullWidth) {
-      return rendered.i105FullWidth;
-    }
-    return encodeI105String(DEFAULT_I105_DISCRIMINANT, canonical, { fullWidth: true });
-  }
-
   toString() {
     return this.canonicalHex();
   }
@@ -1462,6 +1338,12 @@ function parseWithNativeCodec(input, expectedPrefix) {
   if (!nativeAddressCodec) {
     return null;
   }
+  if (expectedPrefix === undefined) {
+    // The Rust helper always validates against the active default discriminant.
+    // For caller-supplied "detect whatever is present" flows, keep the pure-JS
+    // decoder authoritative so non-default prefixes round-trip correctly.
+    return null;
+  }
   try {
     const parsed = nativeAddressCodec.parseEncoded(String(input), expectedPrefix ?? null);
     if (!parsed) {
@@ -1482,6 +1364,9 @@ function parseWithNativeCodec(input, expectedPrefix) {
     if (
       converted instanceof AccountAddressError &&
       (converted.code === AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT ||
+        converted.code === AccountAddressErrorCode.INVALID_I105_CHAR ||
+        converted.code === AccountAddressErrorCode.CHECKSUM_MISMATCH ||
+        converted.code === AccountAddressErrorCode.UNEXPECTED_NETWORK_PREFIX ||
         converted.code === AccountAddressErrorCode.UNKNOWN_CURVE ||
         converted.code === AccountAddressErrorCode.UNSUPPORTED_ALGORITHM ||
         converted.code === AccountAddressErrorCode.UNKNOWN_CONTROLLER_TAG ||
@@ -1514,7 +1399,7 @@ function renderWithNativeCodec(canonicalBytes, chainDiscriminant = DEFAULT_I105_
     return {
       canonicalHex: rendered.canonical_hex,
       i105: rendered.i105,
-      i105FullWidth: rendered.i105_default_fullwidth,
+      i105Default: rendered.i105_default,
     };
   } catch (error) {
     const converted = convertNativeCodecError(error);
@@ -1576,7 +1461,7 @@ export function decodeI105AccountAddress(encoded, options = {}) {
 
 function isCanonicalHexLiteral(literal) {
   if (literal.startsWith("0x") || literal.startsWith("0X")) {
-    // Honour the sentinel regardless of body validity so errors stay in the hex path.
+    // Honour the hex prefix regardless of body validity so errors stay in the hex path.
     return true;
   }
   const body = literal;
@@ -1650,23 +1535,17 @@ export function inspectAccountId(literal, options = {}) {
 
 function normalizeI105EncodeOptions(options, context) {
   if (options === undefined) {
-    return { fullWidth: false, chainDiscriminant: DEFAULT_I105_DISCRIMINANT };
+    return { chainDiscriminant: DEFAULT_I105_DISCRIMINANT };
   }
   if (!isPlainObject(options)) {
     throw new TypeError(`${context} options must be an object`);
   }
-  const allowedKeys = new Set(["fullWidth", "chainDiscriminant"]);
+  const allowedKeys = new Set(["chainDiscriminant"]);
   const extras = Object.keys(options).filter((key) => !allowedKeys.has(key));
   if (extras.length > 0) {
     throw new TypeError(
       `${context} options contains unsupported fields: ${extras.join(", ")}`,
     );
-  }
-  if (
-    Object.prototype.hasOwnProperty.call(options, "fullWidth") &&
-    typeof options.fullWidth !== "boolean"
-  ) {
-    throw new TypeError(`${context} options.fullWidth must be a boolean`);
   }
   const chainDiscriminant = Object.prototype.hasOwnProperty.call(options, "chainDiscriminant")
     ? normalizeI105DiscriminantInput(
@@ -1674,7 +1553,7 @@ function normalizeI105EncodeOptions(options, context) {
       `${context} options.chainDiscriminant`,
     )
     : DEFAULT_I105_DISCRIMINANT;
-  return { fullWidth: options.fullWidth === true, chainDiscriminant };
+  return { chainDiscriminant };
 }
 
 function normalizeI105DecodeOptions(options) {
@@ -1778,109 +1657,105 @@ function normalizeI105DiscriminantInput(value, context = "I105 chain discriminan
   return numeric;
 }
 
-function i105SentinelForDiscriminant(discriminant) {
-  if (discriminant === DEFAULT_I105_DISCRIMINANT) {
-    return I105_SENTINEL_SORA;
-  }
-  if (discriminant === 0x0171) {
-    return I105_SENTINEL_TEST;
-  }
-  if (discriminant === 0x0000) {
-    return I105_SENTINEL_DEV;
-  }
-  return `${I105_SENTINEL_NUMERIC_PREFIX}${discriminant}`;
-}
-
-function toFullwidthAscii(input) {
-  let output = "";
-  for (const ch of input) {
-    if (ch >= "!" && ch <= "~") {
-      output += String.fromCharCode(ch.codePointAt(0) + 0xfee0);
-    } else {
-      output += ch;
-    }
-  }
-  return output;
-}
-
-function parseI105SentinelAndPayload(encoded) {
-  if (encoded.startsWith(I105_SENTINEL_SORA) || encoded.startsWith(I105_SENTINEL_SORA_FULLWIDTH)) {
-    return [DEFAULT_I105_DISCRIMINANT, encoded.slice(I105_SENTINEL_SORA.length)];
-  }
-  if (encoded.startsWith(I105_SENTINEL_TEST) || encoded.startsWith(I105_SENTINEL_TEST_FULLWIDTH)) {
-    return [0x0171, encoded.slice(I105_SENTINEL_TEST.length)];
-  }
-  if (encoded.startsWith(I105_SENTINEL_DEV) || encoded.startsWith(I105_SENTINEL_DEV_FULLWIDTH)) {
-    return [0x0000, encoded.slice(I105_SENTINEL_DEV.length)];
-  }
-  if (
-    !encoded.startsWith(I105_SENTINEL_NUMERIC_PREFIX) &&
-    !encoded.startsWith(I105_SENTINEL_NUMERIC_PREFIX_FULLWIDTH)
-  ) {
-    return null;
-  }
-  const tail = encoded.slice(I105_SENTINEL_NUMERIC_PREFIX.length);
-  const toAsciiDigit = (char) => {
-    if (char >= "0" && char <= "9") {
-      return char;
-    }
-    if (char >= "０" && char <= "９") {
-      return String.fromCharCode(char.codePointAt(0) - 0xfee0);
-    }
-    return null;
-  };
-  let index = 0;
-  let discriminantDigits = "";
-  while (index < tail.length) {
-    const asciiDigit = toAsciiDigit(tail[index]);
-    if (asciiDigit === null) {
-      break;
-    }
-    discriminantDigits += asciiDigit;
-    index += 1;
-  }
-  if (discriminantDigits.length === 0) {
-    return null;
-  }
-  const discriminant = Number(discriminantDigits);
-  if (!Number.isInteger(discriminant) || discriminant < 0 || discriminant > I105_DISCRIMINANT_MAX) {
+function encodeI105Prefix(discriminant) {
+  if (discriminant > I105_DISCRIMINANT_MAX) {
     throw new AccountAddressError(
-      AccountAddressErrorCode.INVALID_I105_DISCRIMINANT,
-      `invalid I105 chain discriminant sentinel: ${encoded}`,
+      AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+      `unsupported I105 chain discriminant: ${discriminant}`,
     );
   }
-  return [discriminant, tail.slice(index)];
+  if (discriminant <= 63) {
+    return Uint8Array.of(discriminant);
+  }
+  return Uint8Array.of((discriminant & 0x3f) | 0x40, discriminant >> 6);
 }
 
-function encodeI105String(discriminant, canonical, options = {}) {
+function decodeI105Prefix(payload) {
+  if (!payload || payload.length === 0) {
+    throw new AccountAddressError(
+      AccountAddressErrorCode.INVALID_LENGTH,
+      "invalid length for address payload",
+    );
+  }
+  const first = payload[0];
+  if (first <= 63) {
+    return [first, 1];
+  }
+  if ((first & 0x40) !== 0) {
+    if (payload.length < 2) {
+      throw new AccountAddressError(
+        AccountAddressErrorCode.INVALID_LENGTH,
+        "invalid length for address payload",
+      );
+    }
+    return [((payload[1] << 6) | (first & 0x3f)), 2];
+  }
+  throw new AccountAddressError(
+    AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+    "unsupported I105 prefix encoding",
+  );
+}
+
+function i105ChecksumBytes(body) {
+  const normalized = normalizeBytes(body);
+  const checksumInput = new Uint8Array(I105_CHECKSUM_PREFIX.length + normalized.length);
+  checksumInput.set(I105_CHECKSUM_PREFIX, 0);
+  checksumInput.set(normalized, I105_CHECKSUM_PREFIX.length);
+  return blake2b512(checksumInput).subarray(0, I105_LITERAL_CHECKSUM_LEN);
+}
+
+function encodeI105String(discriminant, canonical) {
   const normalizedDiscriminant = normalizeI105DiscriminantInput(
     discriminant,
     "I105 chain discriminant",
   );
   const canonicalBytes = normalizeBytes(canonical);
-  const digits = encodeBaseN(canonicalBytes, I105_BASE);
-  const checksum = i105ChecksumDigits(canonicalBytes);
-  const alphabet = options.fullWidth === true ? I105_ALPHABET_FULLWIDTH : I105_ALPHABET;
-  const sentinel = i105SentinelForDiscriminant(normalizedDiscriminant);
-  const renderedSentinel = options.fullWidth === true ? toFullwidthAscii(sentinel) : sentinel;
-  const parts = [renderedSentinel];
-  parts.push(...digits.map((digit) => alphabet[digit]));
-  parts.push(...checksum.map((digit) => alphabet[digit]));
-  return parts.join("");
+  const prefixBytes = encodeI105Prefix(normalizedDiscriminant);
+  const body = new Uint8Array(prefixBytes.length + canonicalBytes.length);
+  body.set(prefixBytes, 0);
+  body.set(canonicalBytes, prefixBytes.length);
+  const checksum = i105ChecksumBytes(body);
+  const payload = new Uint8Array(body.length + checksum.length);
+  payload.set(body, 0);
+  payload.set(checksum, body.length);
+  const digits = encodeBaseN(payload, I105_BASE);
+  return digits.map((digit) => I105_ALPHABET[digit]).join("");
 }
 
 function decodeI105String(encoded, expectedDiscriminant) {
   if (typeof encoded !== "string") {
     throw new TypeError("I105 address must be a string");
   }
-  const parsed = parseI105SentinelAndPayload(encoded);
-  if (!parsed) {
+  const digits = [];
+  for (const ch of encoded) {
+    const value = I105_DIGIT_INDEX.get(ch);
+    if (value === undefined) {
+      throw new AccountAddressError(
+        AccountAddressErrorCode.INVALID_I105_CHAR,
+        `invalid character in I105 address: ${ch}`,
+        { details: { char: ch } },
+      );
+    }
+    digits.push(value);
+  }
+  const payload = decodeBaseN(digits, I105_BASE);
+  if (payload.length < 1 + I105_LITERAL_CHECKSUM_LEN) {
     throw new AccountAddressError(
-      AccountAddressErrorCode.MISSING_I105_SENTINEL,
-      "I105 address is missing the expected chain-discriminant sentinel",
+      AccountAddressErrorCode.I105_TOO_SHORT,
+      "I105 address too short",
     );
   }
-  const [discriminant, payload] = parsed;
+  const splitAt = payload.length - I105_LITERAL_CHECKSUM_LEN;
+  const body = payload.subarray(0, splitAt);
+  const checksum = payload.subarray(splitAt);
+  const expected = i105ChecksumBytes(body);
+  if (!Buffer.from(expected).equals(Buffer.from(checksum))) {
+    throw new AccountAddressError(
+      AccountAddressErrorCode.CHECKSUM_MISMATCH,
+      "I105 checksum mismatch",
+    );
+  }
+  const [discriminant, prefixLength] = decodeI105Prefix(body);
   if (expectedDiscriminant !== undefined) {
     const normalizedExpected = normalizeI105DiscriminantInput(
       expectedDiscriminant,
@@ -1894,40 +1769,12 @@ function decodeI105String(encoded, expectedDiscriminant) {
       );
     }
   }
-  if (payload.length <= I105_CHECKSUM_LEN) {
-    throw new AccountAddressError(
-      AccountAddressErrorCode.I105_TOO_SHORT,
-      "I105 address too short",
-    );
-  }
-  const digits = [];
-  for (const ch of payload) {
-    const value = I105_DIGIT_INDEX.get(ch);
-    if (value === undefined) {
-      throw new AccountAddressError(
-        AccountAddressErrorCode.INVALID_I105_CHAR,
-        `invalid character in I105 address: ${ch}`,
-        { details: { char: ch } },
-      );
-    }
-    digits.push(value);
-  }
-  const dataDigits = digits.slice(0, -I105_CHECKSUM_LEN);
-  const checksumDigits = digits.slice(-I105_CHECKSUM_LEN);
-  const canonical = decodeBaseN(dataDigits, I105_BASE);
-  const expected = i105ChecksumDigits(canonical);
-  if (!Buffer.from(expected).equals(Buffer.from(checksumDigits))) {
-    throw new AccountAddressError(
-      AccountAddressErrorCode.CHECKSUM_MISMATCH,
-      "I105 checksum mismatch",
-    );
-  }
-  return [discriminant, canonical];
+  return [discriminant, body.subarray(prefixLength)];
 }
 
 function encodeBaseN(bytes, base) {
   if (base < 2) {
-    throw new AccountAddressError(AccountAddressErrorCode.INVALID_I105_BASE, "invalid base for encoding");
+    throw new RangeError("base must be at least 2");
   }
   const value = Array.from(bytes);
   let leading = 0;
@@ -1960,7 +1807,7 @@ function encodeBaseN(bytes, base) {
 
 function decodeBaseN(digits, base) {
   if (base < 2) {
-    throw new AccountAddressError(AccountAddressErrorCode.INVALID_I105_BASE, "invalid base for decoding");
+    throw new RangeError("base must be at least 2");
   }
   if (digits.length === 0) {
     throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for address payload");
@@ -1968,11 +1815,7 @@ function decodeBaseN(digits, base) {
   const value = Array.from(digits);
   for (const digit of value) {
     if (digit < 0 || digit >= base) {
-      throw new AccountAddressError(
-        AccountAddressErrorCode.INVALID_I105_DIGIT,
-        `invalid digit ${digit} for base ${base}`,
-        { details: { digit, base } },
-      );
+      throw new RangeError(`invalid digit ${digit} for base ${base}`);
     }
   }
   let leading = 0;
@@ -1998,68 +1841,4 @@ function decodeBaseN(digits, base) {
   }
   out.reverse();
   return Uint8Array.from(out);
-}
-
-function convertToBase32(data) {
-  const bytes = Array.from(data);
-  let acc = 0;
-  let bits = 0;
-  const out = [];
-  for (const byte of bytes) {
-    acc = (acc << 8) | byte;
-    bits += 8;
-    while (bits >= 5) {
-      bits -= 5;
-      out.push((acc >> bits) & 0x1f);
-    }
-  }
-  if (bits > 0) {
-    out.push((acc << (5 - bits)) & 0x1f);
-  }
-  return out;
-}
-
-function bech32Polymod(values) {
-  const generators = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3];
-  let chk = 1;
-  for (const value of values) {
-    const top = chk >> 25;
-    chk = ((chk & 0x1ff_ffff) << 5) ^ value;
-    generators.forEach((generator, idx) => {
-      if ((top >> idx) & 1) {
-        chk ^= generator;
-      }
-    });
-  }
-  return chk;
-}
-
-function expandHrp(hrp) {
-  const out = [];
-  for (const ch of hrp) {
-    const code = ch.codePointAt(0);
-    out.push(code >> 5);
-  }
-  out.push(0);
-  for (const ch of hrp) {
-    out.push(ch.codePointAt(0) & 0x1f);
-  }
-  return out;
-}
-
-function bech32mChecksum(data) {
-  const values = expandHrp("snx");
-  values.push(...data);
-  values.push(...Array(I105_CHECKSUM_LEN).fill(0));
-  const polymod = bech32Polymod(values) ^ BECH32M_CONST;
-  const result = [];
-  for (let i = 0; i < I105_CHECKSUM_LEN; i += 1) {
-    result.push((polymod >> (5 * (I105_CHECKSUM_LEN - 1 - i))) & 0x1f);
-  }
-  return result;
-}
-
-function i105ChecksumDigits(canonical) {
-  const base32 = convertToBase32(canonical);
-  return bech32mChecksum(base32);
 }

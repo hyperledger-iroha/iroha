@@ -688,6 +688,18 @@ impl From<crate::isi::offline::ReclaimExpiredOfflineAllowance> for InstructionBo
     }
 }
 
+impl From<crate::isi::offline::ReserveOfflineEscrowBalance> for InstructionBox {
+    fn from(i: crate::isi::offline::ReserveOfflineEscrowBalance) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::offline::RefundOfflineEscrowBalance> for InstructionBox {
+    fn from(i: crate::isi::offline::RefundOfflineEscrowBalance) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
 // Allow direct boxing of oracle feed instructions.
 impl From<crate::isi::oracle::RegisterOracleFeed> for InstructionBox {
     fn from(i: crate::isi::oracle::RegisterOracleFeed) -> Self {

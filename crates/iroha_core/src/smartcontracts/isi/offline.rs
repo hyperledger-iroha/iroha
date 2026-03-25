@@ -34,8 +34,9 @@ use iroha_data_model::{
     isi::{
         error::{InstructionExecutionError, MathError},
         offline::{
-            ReclaimExpiredOfflineAllowance, RegisterOfflineAllowance,
-            RegisterOfflineVerdictRevocation, SubmitOfflineToOnlineTransfer,
+            ReclaimExpiredOfflineAllowance, RefundOfflineEscrowBalance, RegisterOfflineAllowance,
+            RegisterOfflineVerdictRevocation, ReserveOfflineEscrowBalance,
+            SubmitOfflineToOnlineTransfer,
         },
     },
     metadata::Metadata,
@@ -92,6 +93,7 @@ use self::{
 const IOS_TEAM_ID_KEY: &str = "ios.app_attest.team_id";
 const IOS_BUNDLE_ID_KEY: &str = "ios.app_attest.bundle_id";
 const IOS_ENVIRONMENT_KEY: &str = "ios.app_attest.environment";
+const CAN_MANAGE_OFFLINE_ESCROW_PERMISSION: &str = "CanManageOfflineEscrow";
 #[cfg(test)]
 const ANDROID_PACKAGE_NAMES_KEY: &str = "android.attestation.package_names";
 #[cfg(test)]
@@ -1276,6 +1278,92 @@ pub mod isi {
         ) -> Result<(), Error> {
             reclaim_expired_allowance(self, authority, state_transaction)
         }
+    }
+
+    impl Execute for ReserveOfflineEscrowBalance {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            reserve_offline_escrow_balance(self, authority, state_transaction)
+        }
+    }
+
+    impl Execute for RefundOfflineEscrowBalance {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            refund_offline_escrow_balance(self, authority, state_transaction)
+        }
+    }
+
+    fn reserve_offline_escrow_balance(
+        isi: ReserveOfflineEscrowBalance,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let asset = isi.asset;
+        let amount = isi.amount;
+        let can_manage_offline_escrow = state_transaction
+            .world
+            .account_permissions
+            .get(authority)
+            .is_some_and(|perms| {
+                perms
+                    .iter()
+                    .any(|permission| permission.name() == CAN_MANAGE_OFFLINE_ESCROW_PERMISSION)
+            });
+        if asset.account() != authority && !can_manage_offline_escrow {
+            return Err(labeled_invariant(
+                "unauthorized_controller",
+                "only the controller or an offline escrow manager may reserve online balance into offline escrow",
+            ));
+        }
+        let spec = state_transaction.numeric_spec_for(asset.definition())?;
+        assert_numeric_spec_with(&amount, spec)?;
+        if amount <= Numeric::zero() {
+            return Err(labeled_invariant(
+                "invalid_amount",
+                "offline reserve amount must be positive",
+            ));
+        }
+        reserve_offline_allowance(state_transaction, &asset, &amount)
+    }
+
+    fn refund_offline_escrow_balance(
+        isi: RefundOfflineEscrowBalance,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let asset = isi.asset;
+        let amount = isi.amount;
+        let can_manage_offline_escrow = state_transaction
+            .world
+            .account_permissions
+            .get(authority)
+            .is_some_and(|perms| {
+                perms
+                    .iter()
+                    .any(|permission| permission.name() == CAN_MANAGE_OFFLINE_ESCROW_PERMISSION)
+            });
+        if asset.account() != authority && !can_manage_offline_escrow {
+            return Err(labeled_invariant(
+                "unauthorized_controller",
+                "only the controller or an offline escrow manager may refund offline escrow back online",
+            ));
+        }
+        let spec = state_transaction.numeric_spec_for(asset.definition())?;
+        assert_numeric_spec_with(&amount, spec)?;
+        if amount <= Numeric::zero() {
+            return Err(labeled_invariant(
+                "invalid_amount",
+                "offline reserve amount must be positive",
+            ));
+        }
+        refund_allowance_from_escrow(state_transaction, &asset, authority, &amount)
     }
 
     fn register_allowance(

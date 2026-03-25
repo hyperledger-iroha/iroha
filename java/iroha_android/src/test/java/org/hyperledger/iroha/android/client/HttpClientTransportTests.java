@@ -741,9 +741,9 @@ public final class HttpClientTransportTests {
             + "\"account_id\":\"alice@wonderland\","
             + "\"label\":\"Primary\","
             + "\"assets\":[{"
-            + "\"asset_id\":\"xor#wonderland\",\"asset_definition_id\":\""
+            + "\"asset\":\""
             + assetDefinitionId
-            + "\",\"quantity\":\"42\""
+            + "\",\"scope\":\"global\",\"quantity\":\"42\""
             + "}]"
             + "}]"
             + "}]"
@@ -776,8 +776,8 @@ public final class HttpClientTransportTests {
     assert "Primary".equals(account.label()) : "Account label mismatch";
     assert account.assets().size() == 1 : "Expected single asset entry";
     final UaidPortfolioResponse.UaidPortfolioAsset asset = account.assets().get(0);
-    assert "xor#wonderland".equals(asset.assetId()) : "Asset ID mismatch";
-    assert assetDefinitionId.equals(asset.assetDefinitionId()) : "Asset definition mismatch";
+    assert assetDefinitionId.equals(asset.asset()) : "Asset definition mismatch";
+    assert "global".equals(asset.scope()) : "Scope mismatch";
     assert "42".equals(asset.quantity()) : "Asset quantity mismatch";
 
     final TransportRequest request = executor.lastRequest();
@@ -796,7 +796,7 @@ public final class HttpClientTransportTests {
   private static void uaidPortfolioRequestSupportsQuery() {
     final String hex =
         "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff0102030405060708090a0b0c0d0e0f11";
-    final String encodedAssetId = "norito:A1B2";
+    final String assetDefinitionId = AssetDefinitionIdEncoder.encode("xor", "nexus");
     final String json =
         "{"
             + "\"uaid\":\"uaid:"
@@ -814,7 +814,7 @@ public final class HttpClientTransportTests {
     final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
 
     final UaidPortfolioQuery query =
-        UaidPortfolioQuery.builder().setAssetId(encodedAssetId).build();
+        UaidPortfolioQuery.builder().setAsset(assetDefinitionId).setScope("global").build();
     transport.getUaidPortfolio("uaid:" + hex.toUpperCase(), query).join();
 
     final TransportRequest request = executor.lastRequest();
@@ -825,8 +825,10 @@ public final class HttpClientTransportTests {
         .equals(
             "https://torii.example/v1/accounts/uaid%3A"
                 + hex
-                + "/portfolio?asset_id=norito%3Aa1b2")
-        : "UAID portfolio query must include asset_id filter";
+                + "/portfolio?asset="
+                + assetDefinitionId
+                + "&scope=global")
+        : "UAID portfolio query must include asset and scope filters";
   }
 
   private static void uaidRequestsRespectBasePath() {
@@ -873,7 +875,7 @@ public final class HttpClientTransportTests {
     final HttpClientTransport transport = HttpClientTransport.withExecutor(executor, config);
 
     final UaidBindingsQuery query =
-        UaidBindingsQuery.builder().setAddressFormat(AddressFormatOption.COMPRESSED).build();
+        UaidBindingsQuery.builder().setAddressFormat(AddressFormatOption.I105).build();
     final UaidBindingsResponse response =
         transport.getUaidBindings("uaid:" + hex.toUpperCase(), query).join();
     assert response.dataspaces().size() == 1 : "Expected bindings entry";
@@ -887,7 +889,7 @@ public final class HttpClientTransportTests {
         .equals(
             "https://torii.example/v1/space-directory/uaids/uaid%3A"
                 + hex
-                + "?address_format=compressed")
+                + "?address_format=i105")
         : "Bindings URI must encode UAID literal and query";
   }
 
@@ -932,7 +934,7 @@ public final class HttpClientTransportTests {
             .setStatus(UaidManifestStatusFilter.INACTIVE)
             .setLimit(25L)
             .setOffset(5L)
-            .setAddressFormat(AddressFormatOption.IH58)
+            .setAddressFormat(AddressFormatOption.I105)
             .build();
 
     final UaidManifestsResponse response =
@@ -964,7 +966,7 @@ public final class HttpClientTransportTests {
         .equals(
             "https://torii.example/v1/space-directory/uaids/uaid%3A"
                 + hex
-                + "/manifests?dataspace=9&status=inactive&limit=25&offset=5&address_format=ih58")
+                + "/manifests?dataspace=9&status=inactive&limit=25&offset=5&address_format=i105")
         : "Manifest URI must include encoded query parameters";
   }
 

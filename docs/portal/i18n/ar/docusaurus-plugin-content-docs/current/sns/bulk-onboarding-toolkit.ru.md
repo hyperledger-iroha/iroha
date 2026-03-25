@@ -35,7 +35,7 @@ translation_last_reviewed: 2026-02-07
 | `suffix_id` | نعم | لاحقة المعرف تشيسلوفي (ست عشرية أو `0x`). |
 | `owner` | نعم | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | نعم | سيلوي تشيسلو `1..=255`. |
-| `payment_asset_id` | نعم | التسوية النشطة (على سبيل المثال `xor#sora`). |
+| `payment_asset_id` | نعم | التسوية النشطة (على سبيل المثال `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | نعم | مجموعة رائعة من الوحدات النشطة. |
 | `settlement_tx` | نعم | بداية JSON أو السكتة الدماغية أو تسجيل المعاملات الضريبية أو التجزئة. |
 | `payment_payer` | نعم | معرف الحساب، لوحة ترخيص. |
@@ -79,7 +79,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
       "term_years": 2,
       "pricing_class_hint": null,
       "payment": {
-        "asset_id":"xor#sora",
+        "asset_id":"61CtjvNd9T3THAR65GsMVHr82Bjc",
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
@@ -109,7 +109,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v1/sns/names
   done
 ```
 
@@ -129,9 +129,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- المساعدة في الاتصال بأحد `POST /v1/sns/registrations` والتوقف عنه
+- المساعدة في الاتصال بأحد `POST /v1/sns/names` والتوقف عنه
   خطأ HTTP الأول. يتم إضافة الإجابات إلى السجل عن طريق كتابة NDJSON.
-- `--poll-status` تم الاتصال به مرة أخرى `/v1/sns/registrations/{selector}` بعد ذلك
+- `--poll-status` تم الاتصال به مرة أخرى `/v1/sns/names/{namespace}/{literal}` بعد ذلك
   بعض الإجراءات (إلى `--poll-attempts`، من خلال 5)، للتأكيد
   видимость записи. قم بتنزيل `--suffix-map` (رسم خرائط JSON `suffix_id` في البداية)
   "suffix")، يمكن للأداة أن تظهر `{label}.{suffix}` للاقتراع.
@@ -212,7 +212,7 @@ docs/portal/scripts/sns_bulk_release.sh \
 # TYPE sns_bulk_release_requests_total gauge
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
-sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
+sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="61CtjvNd9T3THAR65GsMVHr82Bjc"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 

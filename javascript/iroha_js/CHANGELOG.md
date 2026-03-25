@@ -15,12 +15,12 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   iterator option whitelists so SoraFS/registry/prover paginators accept their
   filter fields alongside paging knobs; typings, README snippets, and Jest
   coverage close the remaining JS-04/JS-07 pagination gaps.【javascript/iroha_js/src/toriiClient.js:1181】【javascript/iroha_js/src/toriiClient.js:4671】【javascript/iroha_js/src/toriiClient.js:6949】【javascript/iroha_js/index.d.ts:5470】【javascript/iroha_js/test/toriiClient.test.js:761】【javascript/iroha_js/test/toriiClient.test.js:11493】【javascript/iroha_js/README.md:106】
-- Added `ToriiClient.iterateSnsGovernanceCases`, which follows the
-  `/v1/sns/governance/cases` `next_since` cursor automatically so JS-04/ADDR-6
-  automation can stream arbitration cases without bespoke pagination.
-  TypeScript declarations, README docs, and Jest coverage demonstrate the
-  iterator usage and confirm the `limit`/`status` filters stay intact across
-  pages.【javascript/iroha_js/src/toriiClient.js:3131】【javascript/iroha_js/index.d.ts:5673】【javascript/iroha_js/test/toriiClient.test.js:14354】【javascript/iroha_js/README.md:2564】
+- The JS SNS helpers now track the ledger-backed `/v1/sns/names...` Torii API.
+  `createSnsGovernanceCase`, `exportSnsGovernanceCases`, and
+  `iterateSnsGovernanceCases` are retained only as validation stubs that reject
+  because Torii removed `/v1/sns/governance/cases`; README guidance, typings,
+  and Jest coverage now point callers at inline governance hooks and the new
+  namespace-aware SNS routes.【javascript/iroha_js/src/toriiClient.js:4121】【javascript/iroha_js/index.d.ts:6578】【javascript/iroha_js/test/toriiClient.test.js:18238】【javascript/iroha_js/README.md:3226】
 - ISO bridge status normalization now constrains Torii responses to the
   expected `Pending`/`Accepted`/`Rejected` labels and validates `pacs002_code`
   against the standard `ACTC`/`ACSP`/`ACSC`/`ACWC`/`PDNG`/`RJCT` set so JS-06

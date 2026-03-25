@@ -217,7 +217,7 @@ Constructores de punteros (emiten TLV Norito en INPUT y devuelven un puntero tip
 
 Las macros del preludio proporcionan alias más cortos y validación en línea para estos constructores:
 - `account!("i105...")`, `account_id!("i105...")`
-- `asset_definition!("rose#wonderland")`, `asset_id!("rose#wonderland")`
+- `asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`, `asset_id!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`
 - `domain!("wonderland")`, `domain_id!("wonderland")`
 - `name!("example")`
 - `json!("{\"hello\":\"world\"}")` o literales estructurados como `json!{ hello: "world" }`

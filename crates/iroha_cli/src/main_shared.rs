@@ -621,9 +621,6 @@ mod tools {
         /// Account address helpers (canonical I105 conversions)
         #[command(subcommand)]
         Address(crate::address::Command),
-        /// Canonical ID encoders
-        #[command(subcommand)]
-        Encode(encode::Command),
         /// Cryptography helpers (SM2/SM3/SM4)
         #[command(subcommand)]
         Crypto(crate::crypto::Command),
@@ -641,62 +638,10 @@ mod tools {
             use self::Command::*;
             match self {
                 Address(variant) => Run::run(variant, context),
-                Encode(variant) => Run::run(variant, context),
                 Crypto(variant) => Run::run(variant, context),
                 Ivm(variant) => Run::run(variant, context),
                 MarkdownHelp(variant) => Run::run(variant, context),
                 Version(variant) => Run::run(variant, context),
-            }
-        }
-    }
-
-    mod encode {
-        use super::*;
-        use iroha::data_model::asset::{AssetDefinitionAlias, AssetDefinitionId};
-
-        #[derive(clap::Subcommand, Debug)]
-        pub enum Command {
-            /// Encode a canonical asset id (`norito:<hex>`)
-            AssetId(AssetId),
-        }
-
-        impl Run for Command {
-            fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-                match self {
-                    Command::AssetId(args) => args.run(context),
-                }
-            }
-        }
-
-        #[derive(clap::Args, Debug)]
-        pub struct AssetId {
-            /// Canonical asset definition id (unprefixed Base58 address)
-            #[arg(long, conflicts_with = "alias")]
-            pub definition: Option<AssetDefinitionId>,
-            /// Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`).
-            #[arg(long, conflicts_with = "definition")]
-            pub alias: Option<AssetDefinitionAlias>,
-            /// Canonical I105 account literal receiving the asset bucket.
-            #[arg(long)]
-            pub account: String,
-        }
-
-        impl AssetId {
-            fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-                let account = resolve_account_id(context, &self.account)
-                    .wrap_err("failed to resolve --account")?;
-                let definition = match (self.definition, self.alias) {
-                    (Some(definition), None) => definition,
-                    (None, Some(alias)) => {
-                        let client = context.client_from_config();
-                        resolve_asset_definition_id_by_alias(&client, &alias)?
-                    }
-                    _ => eyre::bail!(
-                        "provide either `--definition <base58-asset-id>` or `--alias <name>#<domain>.<dataspace>|<name>#<dataspace>`"
-                    ),
-                };
-                let asset_id = iroha::data_model::asset::AssetId::new(definition, account);
-                context.print_data(&asset_id.canonical_encoded())
             }
         }
     }
@@ -2118,24 +2063,31 @@ mod asset {
 
     fn resolve_asset_id_components<C: RunContext>(
         context: &C,
-        id: Option<AssetId>,
+        definition: Option<AssetDefinitionId>,
         definition_alias: Option<AssetDefinitionAlias>,
         account: Option<String>,
+        scope: Option<iroha::data_model::asset::AssetBalanceScope>,
     ) -> Result<AssetId> {
-        if let Some(id) = id {
-            return Ok(id);
-        }
         let account =
-            account.ok_or_else(|| eyre!("`--account` must be provided when `--id` is omitted"))?;
+            account.ok_or_else(|| eyre!("`--account` must be provided with asset selectors"))?;
         let account =
             resolve_account_id(context, &account).wrap_err("failed to resolve --account")?;
-        if let Some(alias) = definition_alias {
-            let client = context.client_from_config();
-            let definition = resolve_asset_definition_id_by_alias(&client, &alias)?;
-            return Ok(AssetId::new(definition, account));
-        }
-        Err(eyre!(
-            "`--definition-alias` must be provided when `--id` is omitted"
+        let definition = match (definition, definition_alias) {
+            (Some(definition), None) => definition,
+            (None, Some(alias)) => {
+                let client = context.client_from_config();
+                resolve_asset_definition_id_by_alias(&client, &alias)?
+            }
+            _ => {
+                eyre::bail!(
+                    "provide either `--definition <base58-asset-definition-id>` or `--definition-alias <name>#<domain>.<dataspace>|<name>#<dataspace>`"
+                )
+            }
+        };
+        Ok(AssetId::with_scope(
+            definition,
+            account,
+            scope.unwrap_or(iroha::data_model::asset::AssetBalanceScope::Global),
         ))
     }
 
@@ -2585,16 +2537,19 @@ mod asset {
 
     #[derive(clap::Args, Debug)]
     pub struct Transfer {
-        /// Encoded asset identifier (`norito:<hex>`).
-        #[arg(short, long, value_parser = parse_asset_id_literal, conflicts_with_all = ["definition_alias", "account"])]
-        pub id: Option<AssetId>,
+        /// Canonical asset definition id (unprefixed Base58 address) used with `--account`.
+        #[arg(long, requires = "account", conflicts_with = "definition_alias")]
+        pub definition: Option<AssetDefinitionId>,
         /// Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`) used
         /// with `--account`.
-        #[arg(long, requires = "account", conflicts_with = "id")]
+        #[arg(long, requires = "account", conflicts_with = "definition")]
         pub definition_alias: Option<AssetDefinitionAlias>,
-        /// Source account identifier (canonical I105), required with `--definition-alias`.
-        #[arg(long, conflicts_with = "id")]
+        /// Source account identifier (canonical I105), required with asset selectors.
+        #[arg(long)]
         pub account: Option<String>,
+        /// Optional balance scope (`global` or `dataspace:<id>`).
+        #[arg(long, value_parser = parse_asset_balance_scope_literal)]
+        pub scope: Option<iroha::data_model::asset::AssetBalanceScope>,
         /// Destination account identifier (canonical I105 literal)
         #[arg(short, long)]
         pub to: String,
@@ -2608,30 +2563,36 @@ mod asset {
 
     #[derive(clap::Args, Debug)]
     pub struct Id {
-        /// Encoded asset identifier (`norito:<hex>`).
-        #[arg(short, long, value_parser = parse_asset_id_literal, conflicts_with_all = ["definition_alias", "account"])]
-        pub id: Option<AssetId>,
+        /// Canonical asset definition id (unprefixed Base58 address) used with `--account`.
+        #[arg(long, requires = "account", conflicts_with = "definition_alias")]
+        pub definition: Option<AssetDefinitionId>,
         /// Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`) used
         /// with `--account`.
-        #[arg(long, requires = "account", conflicts_with = "id")]
+        #[arg(long, requires = "account", conflicts_with = "definition")]
         pub definition_alias: Option<AssetDefinitionAlias>,
-        /// Account identifier (canonical I105), required with `--definition-alias`.
-        #[arg(long, conflicts_with = "id")]
+        /// Account identifier (canonical I105), required with asset selectors.
+        #[arg(long)]
         pub account: Option<String>,
+        /// Optional balance scope (`global` or `dataspace:<id>`).
+        #[arg(long, value_parser = parse_asset_balance_scope_literal)]
+        pub scope: Option<iroha::data_model::asset::AssetBalanceScope>,
     }
 
     #[derive(clap::Args, Debug)]
     pub struct IdQuantity {
-        /// Encoded asset identifier (`norito:<hex>`).
-        #[arg(short, long, value_parser = parse_asset_id_literal, conflicts_with_all = ["definition_alias", "account"])]
-        pub id: Option<AssetId>,
+        /// Canonical asset definition id (unprefixed Base58 address) used with `--account`.
+        #[arg(long, requires = "account", conflicts_with = "definition_alias")]
+        pub definition: Option<AssetDefinitionId>,
         /// Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`) used
         /// with `--account`.
-        #[arg(long, requires = "account", conflicts_with = "id")]
+        #[arg(long, requires = "account", conflicts_with = "definition")]
         pub definition_alias: Option<AssetDefinitionAlias>,
-        /// Account identifier (canonical I105), required with `--definition-alias`.
-        #[arg(long, conflicts_with = "id")]
+        /// Account identifier (canonical I105), required with asset selectors.
+        #[arg(long)]
         pub account: Option<String>,
+        /// Optional balance scope (`global` or `dataspace:<id>`).
+        #[arg(long, value_parser = parse_asset_balance_scope_literal)]
+        pub scope: Option<iroha::data_model::asset::AssetBalanceScope>,
         /// Amount of change (integer or decimal)
         #[arg(short, long)]
         pub quantity: Numeric,
@@ -2641,9 +2602,10 @@ mod asset {
         fn resolve_asset_id<C: RunContext>(&self, context: &C) -> Result<AssetId> {
             resolve_asset_id_components(
                 context,
-                self.id.clone(),
+                self.definition.clone(),
                 self.definition_alias.clone(),
                 self.account.clone(),
+                self.scope,
             )
         }
     }
@@ -2652,9 +2614,10 @@ mod asset {
         fn resolve_asset_id<C: RunContext>(&self, context: &C) -> Result<AssetId> {
             resolve_asset_id_components(
                 context,
-                self.id.clone(),
+                self.definition.clone(),
                 self.definition_alias.clone(),
                 self.account.clone(),
+                self.scope,
             )
         }
     }
@@ -2663,9 +2626,10 @@ mod asset {
         fn resolve_asset_id<C: RunContext>(&self, context: &C) -> Result<AssetId> {
             resolve_asset_id_components(
                 context,
-                self.id.clone(),
+                self.definition.clone(),
                 self.definition_alias.clone(),
                 self.account.clone(),
+                self.scope,
             )
         }
     }
@@ -2744,7 +2708,7 @@ mod asset {
         use iroha_crypto::Algorithm;
         use iroha_primitives::numeric::Numeric;
 
-        fn sample_transfer_args(ensure_destination: bool) -> (Transfer, ScopedAccountId) {
+        fn sample_transfer_args(ensure_destination: bool) -> (Transfer, ScopedAccountId, AssetId) {
             let domain: DomainId = "wonderland".parse().expect("domain id");
             let src = KeyPair::from_seed(vec![1; 32], Algorithm::Ed25519);
             let dest = KeyPair::from_seed(vec![2; 32], Algorithm::Ed25519);
@@ -2756,14 +2720,15 @@ mod asset {
             );
             let asset_id = AssetId::new(asset_def_id, owner.clone().into());
             let args = Transfer {
-                id: Some(asset_id),
+                definition: Some(asset_id.definition().clone()),
                 definition_alias: None,
-                account: None,
+                account: Some(asset_id.account().to_string()),
+                scope: None,
                 to: to.to_string(),
                 quantity: Numeric::new(5, 0),
                 ensure_destination,
             };
-            (args, to)
+            (args, to, asset_id)
         }
 
         fn assert_transfer_destination(instruction: &InstructionBox, to: &ScopedAccountId) {
@@ -2780,13 +2745,13 @@ mod asset {
 
         #[test]
         fn explicit_policy_rejects_ensure_destination_without_explicit_scope() {
-            let (args, to) = sample_transfer_args(true);
+            let (args, to, asset_id) = sample_transfer_args(true);
             let policy = AccountAdmissionPolicy {
                 mode: AccountAdmissionMode::ExplicitOnly,
                 ..AccountAdmissionPolicy::default()
             };
             let err = asset_transfer_instructions(
-                args.id.clone().expect("id"),
+                asset_id,
                 &args,
                 to.account(),
                 Some(&policy),
@@ -2801,9 +2766,9 @@ mod asset {
 
         #[test]
         fn implicit_policy_skips_register_instruction() {
-            let (args, to) = sample_transfer_args(true);
+            let (args, to, asset_id) = sample_transfer_args(true);
             let instructions = asset_transfer_instructions(
-                args.id.clone().expect("id"),
+                asset_id,
                 &args,
                 to.account(),
                 Some(&AccountAdmissionPolicy::default()),
@@ -2815,13 +2780,13 @@ mod asset {
 
         #[test]
         fn ensure_flag_off_sends_transfer_only() {
-            let (args, to) = sample_transfer_args(false);
+            let (args, to, asset_id) = sample_transfer_args(false);
             let policy = AccountAdmissionPolicy {
                 mode: AccountAdmissionMode::ExplicitOnly,
                 ..AccountAdmissionPolicy::default()
             };
             let instructions = asset_transfer_instructions(
-                args.id.clone().expect("id"),
+                asset_id,
                 &args,
                 to.account(),
                 Some(&policy),
@@ -4925,11 +4890,19 @@ mod trigger {
         /// Data filter preset: events for an account (canonical I105 literal)
         #[arg(long)]
         pub data_account: Option<String>,
-        /// Data filter preset: events for an encoded asset (`norito:<hex>`)
-        #[arg(long, value_parser = parse_asset_id_literal)]
-        pub data_asset: Option<AssetId>,
+        /// Data filter preset: events for a specific asset definition; use with
+        /// `--data-asset-account` for a concrete ownership bucket.
+        #[arg(long, requires = "data_asset_account", conflicts_with = "data_asset_definition")]
+        pub data_asset: Option<AssetDefinitionId>,
+        /// Data filter preset: account owning the selected asset bucket (canonical I105 literal).
+        #[arg(long, requires = "data_asset")]
+        pub data_asset_account: Option<String>,
+        /// Data filter preset: balance scope for the selected asset bucket (`global` or
+        /// `dataspace:<id>`).
+        #[arg(long, value_parser = parse_asset_balance_scope_literal, requires_all = ["data_asset", "data_asset_account"])]
+        pub data_asset_scope: Option<iroha::data_model::asset::AssetBalanceScope>,
         /// Data filter preset: events for an asset definition
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["data_asset", "data_asset_account", "data_asset_scope"])]
         pub data_asset_definition: Option<AssetDefinitionId>,
         /// Data filter preset: events for a role
         #[arg(long)]
@@ -5083,7 +5056,21 @@ mod trigger {
                             iroha::data_model::events::data::prelude::AccountEventFilter::new()
                                 .for_account(account),
                         )
-                    } else if let Some(asset) = self.data_asset.clone() {
+                    } else if let Some(definition) = self.data_asset.clone() {
+                        let owner = resolve_account_id(
+                            context,
+                            self.data_asset_account.as_deref().ok_or_else(|| {
+                                eyre!("`--data-asset-account` is required with `--data-asset`")
+                            })?,
+                        )
+                        .wrap_err("failed to resolve --data-asset-account")?;
+                        let asset = AssetId::with_scope(
+                            definition,
+                            owner,
+                            self.data_asset_scope.clone().unwrap_or(
+                                iroha::data_model::asset::AssetBalanceScope::Global,
+                            ),
+                        );
                         DataEventFilter::from(
                             iroha::data_model::events::data::prelude::AssetEventFilter::new()
                                 .for_asset(asset),
@@ -6877,12 +6864,24 @@ fn resolve_scoped_account_for_subject(
     )
 }
 
-fn parse_asset_id_literal_with(literal: &str, field: &str) -> Result<AssetId> {
-    AssetId::parse_encoded(literal).map_err(|err| eyre!("{field}: {err}"))
-}
-
-fn parse_asset_id_literal(literal: &str) -> Result<AssetId> {
-    parse_asset_id_literal_with(literal, "asset literal")
+fn parse_asset_balance_scope_literal(
+    literal: &str,
+) -> Result<iroha::data_model::asset::AssetBalanceScope> {
+    let trimmed = literal.trim();
+    if trimmed.eq_ignore_ascii_case("global") {
+        return Ok(iroha::data_model::asset::AssetBalanceScope::Global);
+    }
+    if let Some(rest) = trimmed.strip_prefix("dataspace:") {
+        let dataspace = rest
+            .parse::<u64>()
+            .map_err(|_| eyre!("asset balance scope must be `global` or `dataspace:<id>`"))?;
+        return Ok(iroha::data_model::asset::AssetBalanceScope::Dataspace(
+            iroha::data_model::nexus::DataSpaceId::new(dataspace),
+        ));
+    }
+    Err(eyre!(
+        "asset balance scope must be `global` or `dataspace:<id>`"
+    ))
 }
 
 fn resolve_asset_definition_id_by_alias(
@@ -7290,64 +7289,53 @@ mod tests {
     }
 
     #[test]
-    fn parse_asset_id_literal_accepts_encoded_literal() {
-        let account = account_with_seed("wonderland", 22);
-        let definition: iroha::data_model::asset::id::AssetDefinitionId =
-            iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
-                "xor".parse().unwrap(),
-            );
-        let expected = AssetId::new(definition, account);
-        let encoded = format!(
-            "norito:{}",
-            hex::encode(norito::to_bytes(&expected).expect("encode asset id"))
+    fn parse_asset_balance_scope_literal_accepts_global() {
+        let parsed = parse_asset_balance_scope_literal("global").expect("global scope should parse");
+        assert_eq!(
+            parsed,
+            iroha::data_model::asset::AssetBalanceScope::Global
         );
-
-        let parsed = parse_asset_id_literal(&encoded).expect("encoded asset literal should parse");
-        assert_eq!(parsed, expected);
     }
 
     #[test]
-    fn parse_asset_id_literal_rejects_textual_literal() {
-        let account = account_with_seed("wonderland", 23);
-        let literal = format!("xor#wonderland#{account}");
+    fn parse_asset_balance_scope_literal_accepts_dataspace() {
+        let parsed = parse_asset_balance_scope_literal("dataspace:7")
+            .expect("dataspace scope should parse");
+        assert_eq!(
+            parsed,
+            iroha::data_model::asset::AssetBalanceScope::Dataspace(
+                iroha::data_model::nexus::DataSpaceId::new(7)
+            )
+        );
+    }
 
-        let err = parse_asset_id_literal(&literal).expect_err("textual literal must be rejected");
+    #[test]
+    fn parse_asset_balance_scope_literal_rejects_invalid_literal() {
+        let err = parse_asset_balance_scope_literal("norito:not-supported")
+            .expect_err("invalid asset balance scope must fail");
         assert!(
-            err.to_string().contains("norito:<hex>"),
+            err.to_string()
+                .contains("asset balance scope must be `global` or `dataspace:<id>`"),
             "unexpected error: {err}"
         );
     }
 
     #[test]
-    fn ledger_asset_mint_parser_rejects_textual_literal() {
-        let account = account_with_seed("wonderland", 24);
-        let literal = format!("xor#wonderland#{account}");
-
+    fn ledger_asset_mint_parser_rejects_missing_account_for_definition() {
         let err = Args::try_parse_from([
             "iroha",
             "ledger",
             "asset",
             "mint",
-            "--id",
-            &literal,
+            "--definition",
+            "66owaQmAQMuHxPzxUN3bqZ6FJfDa",
             "--quantity",
             "1",
         ])
-        .expect_err("textual asset literal must be rejected");
+        .expect_err("definition selector without account must be rejected");
         assert!(
-            err.to_string().contains("norito:<hex>"),
+            err.to_string().contains("--account"),
             "unexpected clap error: {err}"
-        );
-    }
-
-    #[test]
-    fn parse_asset_id_literal_rejects_invalid_norito_hex() {
-        let err = parse_asset_id_literal("norito:not-hex")
-            .expect_err("invalid norito hex payload must fail");
-        assert!(
-            err.to_string().contains("must be valid hex"),
-            "unexpected error: {err}"
         );
     }
 
@@ -7364,9 +7352,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_asset_definition_literal_rejects_legacy_literal() {
-        let err = parse_asset_definition_literal("aid:2f17c72466f84a4bb8a8e24884fdcd2f")
-            .expect_err("legacy literal should be rejected");
+    fn parse_asset_definition_literal_rejects_prefixed_literal() {
+        let err = parse_asset_definition_literal("prefix:2f17c72466f84a4bb8a8e24884fdcd2f")
+            .expect_err("prefixed literal should be rejected");
         assert!(
             err.to_string().contains("Base58"),
             "unexpected error: {err}"
@@ -7878,6 +7866,8 @@ transaction_status_timeout = "77s"
             data_domain: None,
             data_account: None,
             data_asset: None,
+            data_asset_account: None,
+            data_asset_scope: None,
             data_asset_definition: None,
             data_role: None,
             data_trigger: None,
@@ -7958,6 +7948,8 @@ transaction_status_timeout = "77s"
             data_domain: None,
             data_account: None,
             data_asset: None,
+            data_asset_account: None,
+            data_asset_scope: None,
             data_asset_definition: None,
             data_role: None,
             data_trigger: None,
@@ -8024,6 +8016,8 @@ transaction_status_timeout = "77s"
             data_domain: Some("wonderland".parse().unwrap()),
             data_account: None,
             data_asset: None,
+            data_asset_account: None,
+            data_asset_scope: None,
             data_asset_definition: None,
             data_role: None,
             data_trigger: None,

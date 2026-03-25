@@ -27,7 +27,7 @@ muvozanat.
 ## 1. Obyekt taʼrifini roʻyxatdan oʻtkazing (CLI)
 
 ```bash
-iroha --config defaults/client.toml asset definition register --id coffee#wonderland
+iroha --config defaults/client.toml asset definition register --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 ## 2. Hisob maʼlumotlarini eksport qilish

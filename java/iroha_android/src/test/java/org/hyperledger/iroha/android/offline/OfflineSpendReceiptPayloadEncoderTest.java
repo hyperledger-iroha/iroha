@@ -31,7 +31,7 @@ public final class OfflineSpendReceiptPayloadEncoderTest {
     }
 
     // Test values derived from Rust unit test (encode_offline_spend_receipt_payload_matches_native)
-    // These use the compressed AccountAddress format
+    // These use canonical I105 AccountAddress literals
     final String sender = "RnuaJGGDLA57fKeoK1TaFQWhYLxMXY9sEqWhSviYfXxDwTkLdBw3Khq2";
     final String receiver = "RnuaJGGDL9ruds8g1c7AAz8cq1kS16u1LDptWe8FC3NLR4qs1RhLjNjk";
     final String asset = "xor##" + sender;

@@ -391,7 +391,6 @@ struct NativeAccountAddressRenderResult {
     let canonicalHex: String
     let i105: String
     let i105Default: String
-    let i105DefaultFullWidth: String
 }
 
 enum NativeBridgeError: Error, Equatable {
@@ -1097,12 +1096,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
         UnsafeMutablePointer<UInt>?
     ) -> Int32
-    private typealias EncodeAssetIdLiteralFn = @convention(c) (
-        UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
-        UnsafeMutablePointer<UInt>?
-    ) -> Int32
 
     private typealias FreeFn = @convention(c) (UnsafeMutablePointer<UInt8>?) -> Void
     private typealias SetChainDiscriminantFn = @convention(c) (UInt16) -> UInt16
@@ -1197,7 +1190,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private typealias AccountAddressRenderFn = @convention(c) (
         UnsafePointer<UInt8>?, UInt,
         UInt16,
-        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<UInt>?,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<UInt>?,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<UInt>?,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<UInt>?,
@@ -1638,7 +1630,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var decodeSignedFn: DecodeSignedFn? = nil
     private var decodeReceiptFn: DecodeReceiptFn? = nil
     private var decodeAssetIdFn: DecodeAssetIdFn? = nil
-    private var encodeAssetIdLiteralFn: EncodeAssetIdLiteralFn? = nil
     private var freeFn: FreeFn? = nil
     private var setChainDiscriminantFn: SetChainDiscriminantFn? = nil
     private var setAccelerationConfigFn: SetAccelerationConfigFn? = nil
@@ -1752,7 +1743,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let encodeGovernancePersistCouncilWithAlgFn: Any? = nil
     private let decodeSignedFn: Any? = nil
     private let decodeAssetIdFn: Any? = nil
-    private let encodeAssetIdLiteralFn: Any? = nil
     private let freeFn: Any? = nil
     private let setChainDiscriminantFn: Any? = nil
     private let setAccelerationConfigFn: Any? = nil
@@ -2088,11 +2078,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 self.decodeAssetIdFn = unsafeBitCast(decodeAssetIdSymbol, to: DecodeAssetIdFn.self)
             } else {
                 self.decodeAssetIdFn = nil
-            }
-            if let encodeAssetIdLiteralSymbol = dlsym(handle, "connect_norito_encode_asset_id_literal") {
-                self.encodeAssetIdLiteralFn = unsafeBitCast(encodeAssetIdLiteralSymbol, to: EncodeAssetIdLiteralFn.self)
-            } else {
-                self.encodeAssetIdLiteralFn = nil
             }
             if let publicKeyFromPrivateSymbol = dlsym(handle, "connect_norito_public_key_from_private") {
                 self.publicKeyFromPrivateFn = unsafeBitCast(publicKeyFromPrivateSymbol, to: PublicKeyFromPrivateFn.self)
@@ -2504,7 +2489,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.decodeSignedFn = nil
             self.decodeReceiptFn = nil
             self.decodeAssetIdFn = nil
-            self.encodeAssetIdLiteralFn = nil
             self.freeFn = nil
             self.setChainDiscriminantFn = nil
             self.setAccelerationConfigFn = nil
@@ -2932,10 +2916,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         var hexLen: UInt = 0
         var i105Ptr: UnsafeMutablePointer<UInt8>? = nil
         var i105Len: UInt = 0
-        var compressedPtr: UnsafeMutablePointer<UInt8>? = nil
-        var compressedLen: UInt = 0
-        var compressedFullPtr: UnsafeMutablePointer<UInt8>? = nil
-        var compressedFullLen: UInt = 0
+        var i105DefaultPtr: UnsafeMutablePointer<UInt8>? = nil
+        var i105DefaultLen: UInt = 0
         var errorPtr: UnsafeMutablePointer<UInt8>? = nil
         var errorLen: UInt = 0
 
@@ -2948,10 +2930,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 &hexLen,
                 &i105Ptr,
                 &i105Len,
-                &compressedPtr,
-                &compressedLen,
-                &compressedFullPtr,
-                &compressedFullLen,
+                &i105DefaultPtr,
+                &i105DefaultLen,
                 &errorPtr,
                 &errorLen
             )
@@ -2961,31 +2941,27 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             guard
                 let canonicalHex = takeString(pointer: hexPtr, length: hexLen),
                 let i105 = takeString(pointer: i105Ptr, length: i105Len),
-                let compressed = takeString(pointer: compressedPtr, length: compressedLen),
-                let compressedFull = takeString(pointer: compressedFullPtr, length: compressedFullLen)
+                let i105Default = takeString(pointer: i105DefaultPtr, length: i105DefaultLen)
             else {
                 return nil
             }
             return NativeAccountAddressRenderResult(
                 canonicalHex: canonicalHex,
                 i105: i105,
-                i105Default: compressed,
-                i105DefaultFullWidth: compressedFull
+                i105Default: i105Default
             )
         }
 
         if let error = consumeAccountAddressError(pointer: errorPtr, length: errorLen) {
             if let hexPtr { freeFn?(hexPtr) }
             if let i105Ptr { freeFn?(i105Ptr) }
-            if let compressedPtr { freeFn?(compressedPtr) }
-            if let compressedFullPtr { freeFn?(compressedFullPtr) }
+            if let i105DefaultPtr { freeFn?(i105DefaultPtr) }
             throw error
         }
 
         if let hexPtr { freeFn?(hexPtr) }
         if let i105Ptr { freeFn?(i105Ptr) }
-        if let compressedPtr { freeFn?(compressedPtr) }
-        if let compressedFullPtr { freeFn?(compressedFullPtr) }
+        if let i105DefaultPtr { freeFn?(i105DefaultPtr) }
         return nil
         #else
         return nil
@@ -5172,46 +5148,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         return String(data: jsonData, encoding: .utf8)
         #else
         return nil
-        #endif
-    }
-
-    func encodeAssetIdLiteral(assetDefinition: String, accountId: String) -> String? {
-        #if canImport(Darwin)
-        guard let encodeAssetIdLiteralFn, let freeFn else { return nil }
-        let trimmedAssetDefinition = assetDefinition.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedAccountId = accountId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedAssetDefinition.isEmpty, !trimmedAccountId.isEmpty else { return nil }
-        var outPtr: UnsafeMutablePointer<UInt8>? = nil
-        var outLen: UInt = 0
-        let status = trimmedAssetDefinition.withCString { assetDefinitionCString -> Int32 in
-            trimmedAccountId.withCString { accountCString -> Int32 in
-                encodeAssetIdLiteralFn(
-                    assetDefinitionCString,
-                    UInt(trimmedAssetDefinition.utf8.count),
-                    accountCString,
-                    UInt(trimmedAccountId.utf8.count),
-                    &outPtr,
-                    &outLen
-                )
-            }
-        }
-        guard status == 0, let outPtr else {
-            if let outPtr { freeFn(outPtr) }
-            return nil
-        }
-        let outData = Data(bytes: outPtr, count: Int(outLen))
-        freeFn(outPtr)
-        return String(data: outData, encoding: .utf8)
-        #else
-        return nil
-        #endif
-    }
-
-    var canEncodeAssetIdLiteral: Bool {
-        #if canImport(Darwin)
-        return encodeAssetIdLiteralFn != nil && freeFn != nil
-        #else
-        return false
         #endif
     }
 

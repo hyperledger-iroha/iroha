@@ -21,10 +21,10 @@ public final class OfflineAuditLoggerTest {
     final OfflineAuditLogger logger = new OfflineAuditLogger(logFile, true);
     logger.record(
         new OfflineAuditEntry(
-            "tx1", "alice@wonderland", "bob@wonderland", "usd#wonderland", "10", 1));
+            "tx1", "alice@wonderland", "bob@wonderland", "7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "10", 1));
     logger.record(
         new OfflineAuditEntry(
-            "tx2", "carol@wonderland", "dave@wonderland", "usd#wonderland", "20", 2));
+            "tx2", "carol@wonderland", "dave@wonderland", "7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "20", 2));
 
     final List<OfflineAuditEntry> entries = logger.entries();
     assert entries.size() == 2 : "entries size mismatch";
@@ -49,7 +49,7 @@ public final class OfflineAuditLoggerTest {
             "tx_id": "tx1",
             "sender_id": "alice@wonderland",
             "receiver_id": "bob@wonderland",
-            "asset_id": "usd#wonderland",
+            "asset_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
             "amount": "10",
             "timestamp_ms": 1.5
           }

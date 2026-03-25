@@ -9471,6 +9471,27 @@ pub mod isi {
                 }
                 .into());
             }
+            let now_ms = state_transaction.block_unix_timestamp_ms();
+            match crate::sns::active_domain_owner(state_transaction.world(), &canonical_id, now_ms)
+            {
+                Some(owner) if owner == *authority => {}
+                Some(owner) => {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "active SNS domain-name lease for `{canonical_id}` is owned by `{owner}`, not `{authority}`"
+                        )
+                        .into(),
+                    ));
+                }
+                None => {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "active SNS domain-name lease is required before registering `{canonical_id}`"
+                        )
+                        .into(),
+                    ));
+                }
+            }
             let selector =
                 iroha_data_model::account::AccountDomainSelector::from_domain(&canonical_id)
                     .map_err(|err| {
@@ -11256,6 +11277,27 @@ pub mod isi {
             NewAccount::new_in_domain(account_id.clone(), domain_id.clone())
         }
 
+        fn seed_domain_name_lease(world: &mut World, owner: &AccountId, domain_id: &DomainId) {
+            let selector = crate::sns::selector_for_domain(domain_id).expect("selector");
+            let address =
+                iroha_data_model::account::AccountAddress::from_account_id(owner).expect("address");
+            let record = iroha_data_model::sns::NameRecordV1::new(
+                selector.clone(),
+                owner.clone(),
+                vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+                0,
+                0,
+                u64::MAX,
+                u64::MAX,
+                u64::MAX,
+                Metadata::default(),
+            );
+            world.smart_contract_state_mut_for_testing().insert(
+                crate::sns::record_storage_key(&selector),
+                norito::codec::Encode::encode(&record),
+            );
+        }
+
         #[test]
         fn grant_role_permission_records_epoch_and_revoke_clears() {
             let kura = Kura::blank_kura_for_testing();
@@ -11334,6 +11376,50 @@ pub mod isi {
                 "stark/fri/sha256-goldilocks:vote-tally",
                 "vote-ballot"
             ));
+        }
+
+        #[test]
+        fn register_domain_requires_active_sns_lease_for_non_genesis_owner() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let (authority, _) = gen_account_in("tenants");
+            let domain_id: DomainId = "leased.world".parse().expect("domain");
+
+            let err = Register::domain(Domain::new(domain_id))
+                .execute(&authority, &mut stx)
+                .expect_err("missing lease must fail");
+
+            assert!(
+                err.to_string().contains("active SNS domain-name lease"),
+                "unexpected error: {err}"
+            );
+        }
+
+        #[test]
+        fn register_domain_accepts_matching_active_sns_lease() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let (authority, _) = gen_account_in("tenants");
+            let domain_id: DomainId = "leased-ok.world".parse().expect("domain");
+            let mut world = World::default();
+            seed_domain_name_lease(&mut world, &authority, &domain_id);
+            let state = State::new(world, kura, query_handle);
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&authority, &mut stx)
+                .expect("lease-backed registration should succeed");
+
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "domain should be stored after registration"
+            );
         }
 
         #[test]

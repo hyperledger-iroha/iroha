@@ -94,7 +94,7 @@ CLI գործիքավորումը (`iroha app da rent-quote`) ընդունում 
 
 ### Վարձավճարների հաշվառման պլանների ստեղծում
 
-Գործարկեք `iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition xor#sora`
+Գործարկեք `iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc`
 շարունակական վարձավճարի գնանշումը կատարվող մատյանային փոխանցումների վերածելու համար: Հրաման
 վերլուծում է ներկառուցված `ledger_projection`-ը, թողարկում Norito `Transfer` հրահանգներ
 որոնք բազային վարձավճարը գանձում են գանձարան, ուղղորդում պահուստին/մատակարարին

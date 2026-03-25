@@ -104,15 +104,15 @@ Struct ReservedAssignmentRequestV1 {
 
 | نقطة النهاية | الطريقة | الحمولة | الوصف |
 |-------------|---------|---------|-------|
-| `/v1/sns/registrations` | PUBLICAR | `RegisterNameRequestV1` | تسجيل او اعادة فتح اسم. يحل شريحة التسعير، يتحقق من اثباتات الدفع/الحوكمة, ويصدر احداث السجل. |
-| `/v1/sns/registrations/{selector}/renew` | PUBLICAR | `RenewNameRequestV1` | يمدد المدة. يفرض نوافذ gracia/redención من السياسة. |
-| `/v1/sns/registrations/{selector}/transfer` | PUBLICAR | `TransferNameRequestV1` | ينقل الملكية بعد ارفاق موافقات الحوكمة. |
-| `/v1/sns/registrations/{selector}/controllers` | PONER | `UpdateControllersRequestV1` | يستبدل مجموعة controladores؛ يتحقق من عناوين الحساب الموقعة. |
-| `/v1/sns/registrations/{selector}/freeze` | PUBLICAR | `FreezeNameRequestV1` | تجميد tutor/consejo. يتطلب تذكرة guardian ومرجع دفتر حوكمة. |
-| `/v1/sns/registrations/{selector}/freeze` | BORRAR | `GovernanceHookV1` | فك التجميد بعد المعالجة؛ Esta es una anulación de la función. |
+| `/v1/sns/names` | PUBLICAR | `RegisterNameRequestV1` | تسجيل او اعادة فتح اسم. يحل شريحة التسعير، يتحقق من اثباتات الدفع/الحوكمة, ويصدر احداث السجل. |
+| `/v1/sns/names/{namespace}/{literal}/renew` | PUBLICAR | `RenewNameRequestV1` | يمدد المدة. يفرض نوافذ gracia/redención من السياسة. |
+| `/v1/sns/names/{namespace}/{literal}/transfer` | PUBLICAR | `TransferNameRequestV1` | ينقل الملكية بعد ارفاق موافقات الحوكمة. |
+| `/v1/sns/names/{namespace}/{literal}/controllers` | PONER | `UpdateControllersRequestV1` | يستبدل مجموعة controladores؛ يتحقق من عناوين الحساب الموقعة. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | PUBLICAR | `FreezeNameRequestV1` | تجميد tutor/consejo. يتطلب تذكرة guardian ومرجع دفتر حوكمة. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | BORRAR | `GovernanceHookV1` | فك التجميد بعد المعالجة؛ Esta es una anulación de la función. |
 | `/v1/sns/reserved/{selector}` | PUBLICAR | `ReservedAssignmentRequestV1` | تعيين اسماء محجوزة بواسطة administrador/consejo. |
 | `/v1/sns/policies/{suffix_id}` | OBTENER | -- | يجلب `SuffixPolicyV1` الحالي (قابل للكاش). |
-| `/v1/sns/registrations/{selector}` | OBTENER | -- | يعيد `NameRecordV1` الحالي + الحالة الفعلية (Activo, Gracia, الخ). |
+| `/v1/sns/names/{namespace}/{literal}` | OBTENER | -- | يعيد `NameRecordV1` الحالي + الحالة الفعلية (Activo, Gracia, الخ). |
 
 **Selector ترميز:** مقطع `{selector}` يقبل I105 او مضغوط او hex قياسي حسب ADDR-5; Torii يطبعها عبر `NameSelectorV1`.**Actualización:** Establece el JSON Norito entre `code`, `message`, `details`. Utilice los valores `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
 
@@ -125,7 +125,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -150,7 +150,7 @@ iroha sns policy --suffix-id 1
 iroha sns renew \
   --selector makoto.sora \
   --term-years 1 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 120 \
   --payment-settlement '"renewal-settlement"' \
   --payment-signature '"steward-signature"'
@@ -173,7 +173,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` es el nombre de `GovernanceHookV1` (identificación de propuesta, hashes de voto, administrador/tutor). كل امر يعكس ببساطة نقطة النهاية `/v1/sns/registrations/{selector}/...` المقابلة حتى يتمكن مشغلو البيتا من تمرين اسطح Torii Estos son los SDK.
+`--governance-json` es el nombre de `GovernanceHookV1` (identificación de propuesta, hashes de voto, administrador/tutor). كل امر يعكس ببساطة نقطة النهاية `/v1/sns/names/{namespace}/{literal}/...` المقابلة حتى يتمكن مشغلو البيتا من تمرين اسطح Torii Estos son los SDK.
 
 ## 4. خدمة gRPC
 
@@ -241,7 +241,7 @@ Torii يتحقق من الاثباتات عبر فحص:
 
 1. guardián يرسل `FreezeNameRequestV1` مع تذكرة تشير الى id حادث.
 2. Torii y `NameStatus::Frozen`, y `NameFrozen`.
-3. Anulación de بعد المعالجة، يصدر المجلس; Haga clic en DELETE `/v1/sns/registrations/{selector}/freeze` o `GovernanceHookV1`.
+3. Anulación de بعد المعالجة، يصدر المجلس; Haga clic en DELETE `/v1/sns/names/{namespace}/{literal}/freeze` o `GovernanceHookV1`.
 4. Torii está anulado y `NameUnfrozen`.
 
 ## 7. التحقق واكواد الخطا| الكود | الوصف | HTTP |

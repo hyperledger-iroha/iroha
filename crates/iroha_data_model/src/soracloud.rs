@@ -983,7 +983,7 @@ pub struct AgentToolCapabilityV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct AgentSpendLimitV1 {
-    /// Asset definition identifier (for example `xor#sora`).
+    /// Asset definition identifier (for example `61CtjvNd9T3THAR65GsMVHr82Bjc`).
     pub asset_definition: String,
     /// Maximum amount spendable per transaction, in nanos.
     pub max_per_tx_nanos: NonZeroU64,
@@ -8732,7 +8732,7 @@ mod tests {
             pool_id: sample_hash(23),
             source_id: sample_hash(21),
             storage_class: StorageClass::Warm,
-            lease_asset_definition_id: sample_asset_definition_id("xor#wonderland"),
+            lease_asset_definition_id: sample_asset_definition_id("4cuvDVPuLBKJyN6dPbRQhmLh68sU"),
             base_fee_nanos: 10_000,
             lease_term_ms: 604_800_000,
             window_started_at_ms: 10_000,
@@ -9099,11 +9099,18 @@ mod tests {
 
     #[test]
     fn agent_wallet_spend_provenance_payload_encodes_canonical_tuple() {
-        let encoded =
-            encode_agent_wallet_spend_provenance_payload("agent-apartment", "xor#sora", 1_250_000)
-                .expect("encode payload");
-        let expected =
-            norito::to_bytes(&("agent-apartment", "xor#sora", 1_250_000u64)).expect("encode tuple");
+        let encoded = encode_agent_wallet_spend_provenance_payload(
+            "agent-apartment",
+            "61CtjvNd9T3THAR65GsMVHr82Bjc",
+            1_250_000,
+        )
+        .expect("encode payload");
+        let expected = norito::to_bytes(&(
+            "agent-apartment",
+            "61CtjvNd9T3THAR65GsMVHr82Bjc",
+            1_250_000u64,
+        ))
+        .expect("encode tuple");
         assert_eq!(encoded, expected);
     }
 
@@ -9439,7 +9446,7 @@ mod tests {
 
     #[test]
     fn hf_shared_lease_join_provenance_payload_encodes_canonical_tuple() {
-        let asset_definition_id = sample_asset_definition_id("xor#wonderland");
+        let asset_definition_id = sample_asset_definition_id("4cuvDVPuLBKJyN6dPbRQhmLh68sU");
         let encoded = encode_hf_shared_lease_join_provenance_payload(
             "openai/demo-model",
             "4f9d72c",
@@ -9492,7 +9499,7 @@ mod tests {
 
     #[test]
     fn hf_shared_lease_renew_provenance_payload_encodes_canonical_tuple() {
-        let asset_definition_id = sample_asset_definition_id("xor#wonderland");
+        let asset_definition_id = sample_asset_definition_id("4cuvDVPuLBKJyN6dPbRQhmLh68sU");
         let encoded = encode_hf_shared_lease_renew_provenance_payload(
             "openai/demo-model",
             "4f9d72c",
@@ -9830,7 +9837,7 @@ mod tests {
                 "governance.audit".parse().expect("valid name"),
             ],
             spend_limits: vec![AgentSpendLimitV1 {
-                asset_definition: "xor#sora".to_string(),
+                asset_definition: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_string(),
                 max_per_tx_nanos: NonZeroU64::new(5_000_000).expect("nonzero"),
                 max_per_day_nanos: NonZeroU64::new(20_000_000).expect("nonzero"),
             }],
@@ -9870,15 +9877,15 @@ mod tests {
                 String::from("ops_agent:wallet:35"),
                 SoraAgentWalletSpendRequestV1 {
                     request_id: "ops_agent:wallet:35".to_string(),
-                    asset_definition: "xor#sora".to_string(),
+                    asset_definition: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_string(),
                     amount_nanos: 1_000_000,
                     created_sequence: 35,
                 },
             )]),
             wallet_daily_spend: BTreeMap::from([(
-                String::from("xor#sora:0"),
+                String::from("61CtjvNd9T3THAR65GsMVHr82Bjc:0"),
                 SoraAgentWalletDailySpendEntryV1 {
-                    asset_definition: "xor#sora".to_string(),
+                    asset_definition: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_string(),
                     day_bucket: 0,
                     spent_nanos: 1_000_000,
                 },
@@ -11183,7 +11190,7 @@ mod tests {
         pool.queued_next_window = Some(SoraHfSharedLeaseQueuedWindowV1 {
             sponsor_account_id: sample_account_id(0xC3),
             model_name: "demo_model".to_string(),
-            lease_asset_definition_id: sample_asset_definition_id("xor#wonderland"),
+            lease_asset_definition_id: sample_asset_definition_id("4cuvDVPuLBKJyN6dPbRQhmLh68sU"),
             base_fee_nanos: 15_000,
             compute_reservation_fee_nanos: 3_000,
             planned_placement,

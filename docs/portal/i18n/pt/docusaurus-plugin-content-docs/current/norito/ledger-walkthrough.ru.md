@@ -65,7 +65,7 @@ Esses comandos são executados no Norito-ответы, usando filtragem e pagina
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI é a opção de transação de transferência (por exemplo, `0x5f…`). Сохраните его, чтобы
@@ -74,7 +74,7 @@ CLI é a opção de transação de transferência (por exemplo, `0x5f…`). Со
 ## 3. Acesse a conta do operador
 
 A unidade ativa está ativa no par `(asset definition, account)`. Ganhe 250
-единиц `coffee#wonderland` em `$ADMIN_ACCOUNT`:
+единиц `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` em `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

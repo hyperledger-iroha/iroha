@@ -17,6 +17,13 @@ use crate::{
 /// Unique identifier assigned to a top-level suffix (e.g., `.sora`).
 pub type SuffixId = u16;
 
+/// Fixed suffix id for full account-alias lease records.
+pub const ACCOUNT_ALIAS_SUFFIX_ID: SuffixId = 0x1001;
+/// Fixed suffix id for domain-name lease records.
+pub const DOMAIN_NAME_SUFFIX_ID: SuffixId = 0x1002;
+/// Fixed suffix id for dataspace-alias lease records.
+pub const DATASPACE_ALIAS_SUFFIX_ID: SuffixId = 0x1003;
+
 /// Canonical selector payload for SNS names.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -206,7 +213,7 @@ pub struct NameTombstoneStateV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct TokenValue {
-    /// Settlement asset identifier (e.g., `xor#sora`).
+    /// Settlement asset identifier (e.g., `61CtjvNd9T3THAR65GsMVHr82Bjc`).
     pub asset_id: String,
     /// Amount expressed in the asset's native units.
     pub amount: u128,
@@ -421,7 +428,7 @@ pub struct ReservedAssignmentRequestV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct PaymentProofV1 {
-    /// Asset identifier used for settlement (e.g., `xor#sora`).
+    /// Asset identifier used for settlement (e.g., `61CtjvNd9T3THAR65GsMVHr82Bjc`).
     pub asset_id: String,
     /// Gross amount paid (base price + surcharges) expressed in the asset's native units.
     pub gross_amount: u64,
@@ -557,7 +564,7 @@ pub struct SuffixPolicyV1 {
     pub referral_cap_bps: u16,
     /// Reserved labels enforced by governance.
     pub reserved_labels: Vec<ReservedNameV1>,
-    /// Asset required for settlement (e.g., `xor#sora`).
+    /// Asset required for settlement (e.g., `61CtjvNd9T3THAR65GsMVHr82Bjc`).
     pub payment_asset_id: String,
     /// Pricing tiers advertised by the steward.
     pub pricing: Vec<PriceTierV1>,
@@ -612,11 +619,11 @@ pub mod fixtures {
                 release_at_ms: None,
                 note: "Protocol reserved".to_string(),
             }],
-            payment_asset_id: "xor#sora".to_string(),
+            payment_asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_string(),
             pricing: vec![PriceTierV1 {
                 tier_id: 0,
                 label_regex: "^[a-z0-9]{3,}$".to_string(),
-                base_price: TokenValue::new("xor#sora", 120),
+                base_price: TokenValue::new("61CtjvNd9T3THAR65GsMVHr82Bjc", 120),
                 auction_kind: AuctionKind::VickreyCommitReveal,
                 dutch_floor: None,
                 min_duration_years: 1,
@@ -653,8 +660,8 @@ mod tests {
 
     #[test]
     fn token_value_new_assigns_fields() {
-        let value = TokenValue::new("xor#sora", 120);
-        assert_eq!(value.asset_id, "xor#sora");
+        let value = TokenValue::new("61CtjvNd9T3THAR65GsMVHr82Bjc", 120);
+        assert_eq!(value.asset_id, "61CtjvNd9T3THAR65GsMVHr82Bjc");
         assert_eq!(value.amount, 120);
     }
 

@@ -739,6 +739,15 @@ pub trait SoracloudRuntimeReadHandle: Send + Sync {
     ) {
     }
 
+    /// Report a generated-HF proxy forwarding failure caused by the local assigned host before
+    /// the request reached the authoritative primary.
+    fn report_generated_hf_local_proxy_failure(
+        &self,
+        _request: &SoracloudLocalReadRequest,
+        _error: &SoracloudRuntimeExecutionError,
+    ) {
+    }
+
     /// Request authoritative HF host reconciliation after ingress observes routing failure.
     fn request_generated_hf_reconcile(
         &self,

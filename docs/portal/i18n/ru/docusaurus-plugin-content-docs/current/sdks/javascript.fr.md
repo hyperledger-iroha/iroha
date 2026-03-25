@@ -173,7 +173,7 @@ const txs = await torii.listAccountTransactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg
   limit: 5,
   assetId,
 });
-const holders = await torii.listAssetHolders("rose#wonderland", {
+const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 5,
   assetId,
 });
@@ -190,7 +190,7 @@ console.log(balances.items, txs.items, holders.items);
 `deadline_ms_remaining`) выделить следующий истекающий срок (обновить → политика
 → сертификат), чтобы значки пользовательского интерфейса могли предупреждать операторов о превышении допуска.
 Осталось <24 ч. SDK
-отражает фильтры REST, представленные `/v1/offline/allowances`:
+отражает фильтры REST, представленные `/v1/offline/reserve/topup`:
 И18НИ00000075Х, И18НИ00000076Х,
 `verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` и
 `requireVerdict` / `onlyMissingVerdict` логические значения. Недопустимые комбинации (для

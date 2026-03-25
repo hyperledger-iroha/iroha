@@ -35,13 +35,11 @@ private struct Encodings: Decodable {
     let canonicalHex: String
     let i105: I105Encoding
     let i105Default: String
-    let i105DefaultFullwidth: String
 
     private enum CodingKeys: String, CodingKey {
         case canonicalHex
         case i105
         case i105Default
-        case i105DefaultFullwidth
     }
 
     init(from decoder: Decoder) throws {
@@ -49,7 +47,6 @@ private struct Encodings: Decodable {
         canonicalHex = try container.decode(String.self, forKey: .canonicalHex)
         i105 = try container.decode(I105Encoding.self, forKey: .i105)
         i105Default = try container.decode(String.self, forKey: .i105Default)
-        i105DefaultFullwidth = try container.decode(String.self, forKey: .i105DefaultFullwidth)
     }
 }
 
@@ -195,9 +192,9 @@ final class AccountAddressTests: XCTestCase {
     }
 
     func testBridgePayloadRejectsFractionalField() {
-        let payload = AccountAddressError.BridgePayload(code: "ERR_INVALID_COMPRESSED_DIGIT",
-                                                        message: "ERR_INVALID_COMPRESSED_DIGIT",
-                                                        fields: ["digit": NSNumber(value: 1.5)])
+        let payload = AccountAddressError.BridgePayload(code: "ERR_INVALID_I105_CHAR",
+                                                        message: "ERR_INVALID_I105_CHAR",
+                                                        fields: ["char": NSNumber(value: 1.5)])
         XCTAssertNil(AccountAddressError.fromBridgePayload(payload))
     }
 
@@ -209,17 +206,17 @@ final class AccountAddressTests: XCTestCase {
     }
 
     func testI105DefaultTooShort() {
-        XCTAssertThrowsError(try AccountAddress.fromI105Default("soraabc")) { error in
+        XCTAssertThrowsError(try AccountAddress.fromI105Default("1")) { error in
             guard let addressError = error as? AccountAddressError else {
                 return XCTFail("unexpected error: \(error)")
             }
-            XCTAssertEqual(addressError.code, "ERR_COMPRESSED_TOO_SHORT")
+            XCTAssertEqual(addressError.code, "ERR_I105_TOO_SHORT")
         }
     }
 
     func testParseLiveLinkedBankReserveLiteral() throws {
         let liveReserveLiteral =
-            "soraﾁｷVMXKﾏtKAoQﾅzSeﾈGCWYﾑｸpqM88ﾓqﾁ8MwFｹﾀﾐeﾅ1ｻﾕDBﾔヱGﾅ6ﾅﾄﾐﾃｻeﾗﾕ3ﾀﾎRﾋﾈヰaﾊmquﾗﾚ8ﾒﾕﾆﾅVﾅｷk7cﾕﾖg2yﾙhkﾓDfwpﾀｵcpｲcﾚヱﾊﾐMBTｽｿヰﾁeﾒ4Mﾜr7hqJﾒｳﾈUｿaFｳgkXｻｼｴﾍGﾚNA37KF"
+            "6GFicP73LBKijpLkJuhjgBxMUAnoyqmpo84YsQSAkp814P4NzFSMDxD8s59pTz7rtHKKBPwD1Qq2aqYn93wmQUYqa1UcAtYqhBYLxtzMqd9KCSCpxz3rqinK9wVZi3K8ofvv6Y8foNCg7hEVPEsab3G6xUPcN3izdFKU52i"
 
         let parsed = try AccountAddress.parseEncoded(liveReserveLiteral, expectedPrefix: nil)
         XCTAssertEqual(try parsed.toI105Default(), liveReserveLiteral)
@@ -259,7 +256,7 @@ final class AccountAddressTests: XCTestCase {
         XCTAssertEqual(formats.networkPrefix, 753)
         XCTAssertEqual(formats.i105, try address.toI105(networkPrefix: 753))
         XCTAssertEqual(formats.i105Default, try address.toI105Default())
-        XCTAssertTrue(formats.i105Warning.contains("canonical account literal encoding"))
+        XCTAssertTrue(formats.i105Warning.contains("canonical Base58 account literal encoding"))
     }
 
     private func loadAddressFixture() throws -> Fixture {
@@ -298,10 +295,6 @@ final class AccountAddressTests: XCTestCase {
                 return nil
             }
         } catch let error as AccountAddressError {
-            if vector.expectedError.kind == "MissingI105Sentinel",
-               case .unsupportedAddressFormat = error {
-                return .missingCompressedSentinel
-            }
             return error
         }
         return nil
@@ -341,7 +334,6 @@ final class AccountAddressTests: XCTestCase {
                 let i105DefaultLiteral = renderUsesSoraSentinel ? vector.encodings.i105Default : render.i105Default
                 if renderUsesSoraSentinel {
                     XCTAssertEqual(render.i105Default, vector.encodings.i105Default, "\(vector.caseId): bridge i105-default mismatch")
-                    XCTAssertEqual(render.i105DefaultFullWidth, vector.encodings.i105DefaultFullwidth, "\(vector.caseId): bridge full-width mismatch")
                 }
 
                 let i105DefaultResult = try XCTUnwrap(
@@ -402,12 +394,10 @@ final class AccountAddressTests: XCTestCase {
         let parsedI105 = try AccountAddress.parseEncoded(vector.encodings.i105.string, expectedPrefix: vector.encodings.i105.prefix)
         XCTAssertEqual(try parsedI105.canonicalBytes(), canonicalBytes, "\(vector.caseId): parseEncoded i105 canonical mismatch")
 
-        for (encoding, label) in [(vector.encodings.i105Default, "half-width"), (vector.encodings.i105DefaultFullwidth, "full-width")] {
-            let decoded = try AccountAddress.fromI105Default(encoding)
-            XCTAssertEqual(try decoded.canonicalBytes(), canonicalBytes, "\(vector.caseId): \(label) i105-default canonical mismatch")
-            let parsedI105Default = try AccountAddress.parseEncoded(encoding)
-            XCTAssertEqual(try parsedI105Default.canonicalBytes(), canonicalBytes, "\(vector.caseId): \(label) i105-default parse canonical mismatch")
-        }
+        let decoded = try AccountAddress.fromI105Default(vector.encodings.i105Default)
+        XCTAssertEqual(try decoded.canonicalBytes(), canonicalBytes, "\(vector.caseId): i105-default canonical mismatch")
+        let parsedI105Default = try AccountAddress.parseEncoded(vector.encodings.i105Default)
+        XCTAssertEqual(try parsedI105Default.canonicalBytes(), canonicalBytes, "\(vector.caseId): i105-default parse canonical mismatch")
 
         XCTAssertThrowsError(try AccountAddress.parseEncoded(vector.encodings.canonicalHex),
                              "\(vector.caseId): canonical hex parse should be rejected") { error in
@@ -416,7 +406,6 @@ final class AccountAddressTests: XCTestCase {
 
         XCTAssertEqual(try address.toI105(networkPrefix: vector.encodings.i105.prefix), vector.encodings.i105.string, "\(vector.caseId): i105 re-encode mismatch")
         XCTAssertEqual(try address.toI105Default(), vector.encodings.i105Default, "\(vector.caseId): i105-default re-encode mismatch")
-        XCTAssertEqual(try address.toI105DefaultFullWidth(), vector.encodings.i105DefaultFullwidth, "\(vector.caseId): i105-default full-width re-encode mismatch")
         XCTAssertEqual(try address.canonicalHex().lowercased(), vector.encodings.canonicalHex.lowercased(), "\(vector.caseId): canonical hex re-encode mismatch")
 
         if let controller = vector.controller, controller.kind == "multisig" {
@@ -502,13 +491,11 @@ final class AccountAddressTests: XCTestCase {
             } else {
                 XCTFail("\(caseId): expected unexpected network prefix, got \(addressError)")
             }
-        case "MissingI105Sentinel":
-            XCTAssertEqual(addressError, .missingCompressedSentinel, "\(caseId): expected missing sentinel")
-        case "InvalidCompressedChar":
-            if case let .invalidCompressedChar(symbol) = addressError {
+        case "InvalidI105Char":
+            if case let .invalidI105Char(symbol) = addressError {
                 XCTAssertEqual(String(symbol), expected.char, "\(caseId): invalid symbol mismatch")
             } else {
-                XCTFail("\(caseId): expected invalid i105-default symbol, got \(addressError)")
+                XCTFail("\(caseId): expected invalid I105 symbol, got \(addressError)")
             }
         case "InvalidHexAddress":
             XCTAssertEqual(addressError, .invalidHexAddress, "\(caseId): expected invalid hex")
@@ -587,16 +574,10 @@ private extension AccountAddressError {
             return "UnexpectedTrailingBytes"
         case .invalidI105PrefixEncoding:
             return "InvalidI105PrefixEncoding"
-        case .missingCompressedSentinel:
-            return "MissingI105Sentinel"
-        case .compressedTooShort:
-            return "CompressedTooShort"
-        case .invalidCompressedChar:
-            return "InvalidCompressedChar"
-        case .invalidCompressedBase:
-            return "InvalidCompressedBase"
-        case .invalidCompressedDigit:
-            return "InvalidCompressedDigit"
+        case .i105TooShort:
+            return "I105TooShort"
+        case .invalidI105Char:
+            return "InvalidI105Char"
         case .unsupportedAddressFormat:
             return "UnsupportedAddressFormat"
         case .multisigMemberOverflow:

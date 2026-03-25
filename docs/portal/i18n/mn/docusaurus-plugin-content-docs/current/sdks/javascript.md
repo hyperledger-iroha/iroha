@@ -170,7 +170,7 @@ const txs = await torii.listAccountTransactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg
   limit: 5,
   assetId,
 });
-const holders = await torii.listAssetHolders("rose#wonderland", {
+const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 5,
   assetId,
 });
@@ -187,7 +187,7 @@ console.log(balances.items, txs.items, holders.items);
 `deadline_ms_remaining`) дараагийн хугацаа нь дуусч байгааг онцол (шинэчлэх → бодлого)
 → гэрчилгээ) тул UI тэмдэг нь тэтгэмж авах бүрд операторуудад анхааруулах боломжтой
 <24 цаг үлдсэн. SDK
-`/v1/offline/allowances`-д илэрсэн REST шүүлтүүрүүдийг толин тусгал:
+`/v1/offline/reserve/topup`-д илэрсэн REST шүүлтүүрүүдийг толин тусгал:
 `certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
 `verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` болон
 `requireVerdict` / `onlyMissingVerdict` логик. Буруу хослолууд (for

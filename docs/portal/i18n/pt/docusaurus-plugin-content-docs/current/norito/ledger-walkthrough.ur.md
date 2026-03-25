@@ -61,14 +61,14 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 Hash de transação enviado pela CLI (مثلاً `0x5f…`) پرنٹ کرتا ہے۔ اسے محفوظ کریں تاکہ بعد میں status کو consulta کیا جا سکے۔
 
 ## 3. آپریٹر اکاؤنٹ میں unidades de hortelã کریں
 
-quantidades de ativos `(asset definition, account)` کے جوڑے کے تحت رہتی ہیں۔ `$ADMIN_ACCOUNT` میں `coffee#wonderland` کی 250 unidades hortelã کریں:
+quantidades de ativos `(asset definition, account)` کے جوڑے کے تحت رہتی ہیں۔ `$ADMIN_ACCOUNT` میں `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` کی 250 unidades hortelã کریں:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

@@ -64,7 +64,7 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 يقوم CLI بطباعة تجزئة التحويل المرسل (على سبيل المثال، `0x5f...`). Guarde-o الفقرة
@@ -73,7 +73,7 @@ iroha --config defaults/client.toml asset definition register \
 ## 3. احفظ الوحدات بحساب المشغل
 
 كما تحيا كميات كبيرة من الأشياء على قدم المساواة `(asset definition, account)`. النعناع 250
-وحدات `coffee#wonderland` في `$ADMIN_ACCOUNT`:
+وحدات `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` في `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

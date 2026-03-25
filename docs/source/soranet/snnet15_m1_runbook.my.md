@@ -58,7 +58,7 @@ Operational steps to execute the M1 alpha scope for the SoraGlobal Gateway CDN. 
     --output-dir artifacts/soranet/gateway_billing/m1_alpha \
     --payer <payer_account> \
     --treasury <treasury_account> \
-    --asset xor#wonderland
+    --asset 4cuvDVPuLBKJyN6dPbRQhmLh68sU
   ```
 - Outputs: `billing_invoice.{json,csv,parquet}`, `billing_guardrails.json`, `billing_ledger_projection.json`, reconciliation report. Include alert triggers if caps are crossed; set `--allow-hard-cap` only for controlled drills.
 

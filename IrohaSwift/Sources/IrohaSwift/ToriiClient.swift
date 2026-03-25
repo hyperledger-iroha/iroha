@@ -95,63 +95,52 @@ fileprivate func normalizeToriiAssetIdQueryValue(_ raw: String, field: String) t
     return "norito:\(payload.lowercased())"
 }
 
-fileprivate func decodeToriiAssetIdFields(_ raw: String) -> (assetDefinitionId: String?, accountId: String?) {
-    let canonical: String
-    if let normalized = try? normalizeToriiAssetIdQueryValue(raw, field: "asset_id") {
-        canonical = normalized
-    } else {
-        canonical = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+fileprivate func normalizeToriiAssetSelectorQueryValue(_ raw: String, field: String) throws -> String {
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+        throw ToriiClientError.invalidPayload("\(field) must be a non-empty string.")
     }
-    guard !canonical.isEmpty,
-          let payload = NoritoNativeBridge.shared.decodeAssetId(canonical),
-          let json = payload.data(using: .utf8)
-    else {
-        return (nil, nil)
+    if trimmed.lowercased().hasPrefix("norito:") || trimmed.lowercased().hasPrefix("aid:") {
+        throw ToriiClientError.invalidPayload(
+            "\(field) must use a canonical asset definition id or alias, not a legacy prefix."
+        )
     }
-
-    struct DecodedAssetId: Decodable {
-        let asset_definition_id: String
-        let account_id: String
+    guard !trimmed.contains(where: \.isWhitespace),
+          !trimmed.contains("%"),
+          !trimmed.contains("/"),
+          !trimmed.contains("?") else {
+        throw ToriiClientError.invalidPayload(
+            "\(field) must be a canonical asset definition id or alias."
+        )
     }
-
-    guard let decoded = try? JSONDecoder().decode(DecodedAssetId.self, from: json) else {
-        return (nil, nil)
-    }
-    let definition = decoded.asset_definition_id.trimmingCharacters(in: .whitespacesAndNewlines)
-    let account = decoded.account_id.trimmingCharacters(in: .whitespacesAndNewlines)
-    return (definition.isEmpty ? nil : definition, account.isEmpty ? nil : account)
+    return trimmed
 }
 
 public struct ToriiAssetBalance: Decodable, Sendable {
-    public let asset_id: String
-    public let asset_definition_id: String?
-    public let account_id: String?
-    public let asset_name: String?
-    public let asset_alias: String?
+    public let asset: String
+    public let accountId: String?
+    public let scope: String
+    public let assetName: String?
+    public let assetAlias: String?
     public let quantity: String
 
     private enum CodingKeys: String, CodingKey {
-        case asset_id
-        case asset_definition_id
-        case account_id
-        case asset_name
-        case asset_alias
+        case asset
+        case accountId = "account_id"
+        case scope
+        case assetName = "asset_name"
+        case assetAlias = "asset_alias"
         case quantity
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let sourceAssetId = try container.decode(String.self, forKey: .asset_id)
-        self.asset_id = sourceAssetId
-        self.asset_name = try container.decodeIfPresent(String.self, forKey: .asset_name)
-        self.asset_alias = try container.decodeIfPresent(String.self, forKey: .asset_alias)
+        self.asset = try container.decode(String.self, forKey: .asset)
+        self.accountId = try container.decodeIfPresent(String.self, forKey: .accountId)
+        self.scope = try container.decode(String.self, forKey: .scope)
+        self.assetName = try container.decodeIfPresent(String.self, forKey: .assetName)
+        self.assetAlias = try container.decodeIfPresent(String.self, forKey: .assetAlias)
         self.quantity = try container.decode(String.self, forKey: .quantity)
-
-        let decoded = decodeToriiAssetIdFields(sourceAssetId)
-        let providedDefinition = try container.decodeIfPresent(String.self, forKey: .asset_definition_id)
-        let providedAccount = try container.decodeIfPresent(String.self, forKey: .account_id)
-        self.asset_definition_id = providedDefinition ?? decoded.assetDefinitionId
-        self.account_id = providedAccount ?? decoded.accountId
     }
 }
 
@@ -1837,18 +1826,6 @@ public struct ToriiExplorerTransferSummary: Sendable, Equatable, Identifiable {
         direction == .selfTransfer
     }
 
-    /// Construct the source asset id when possible.
-    public var sourceAssetId: String? {
-        ToriiExplorerTransferSummary.assetId(assetDefinitionId: assetDefinitionId,
-                                             accountId: senderAccountId)
-    }
-
-    /// Construct the destination asset id when possible.
-    public var destinationAssetId: String? {
-        ToriiExplorerTransferSummary.assetId(assetDefinitionId: assetDefinitionId,
-                                             accountId: receiverAccountId)
-    }
-
     /// Stable identifier for SwiftUI lists (`transactionHash|instructionIndex|transferIndex`).
     public var id: String {
         "\(transactionHash)|\(instructionIndex)|\(transferIndex)"
@@ -1891,42 +1868,6 @@ public struct ToriiExplorerTransferSummary: Sendable, Equatable, Identifiable {
 
     public func isSelfTransfer(relativeTo accountId: String?) -> Bool {
         direction(relativeTo: accountId) == .selfTransfer
-    }
-
-    /// Return the asset id scoped to the provided account (source for sender, destination for receiver).
-    public func assetId(relativeTo accountId: String?) -> String? {
-        let trimmed = accountId?.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let trimmed, !trimmed.isEmpty else {
-            return nil
-        }
-        if senderAccountId == trimmed && receiverAccountId == trimmed {
-            return sourceAssetId ?? destinationAssetId
-        }
-        if senderAccountId == trimmed {
-            return sourceAssetId
-        }
-        if receiverAccountId == trimmed {
-            return destinationAssetId
-        }
-        return nil
-    }
-
-    /// Return the counterparty asset id relative to the provided account (destination for sender, source for receiver).
-    public func counterpartyAssetId(relativeTo accountId: String?) -> String? {
-        let trimmed = accountId?.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let trimmed, !trimmed.isEmpty else {
-            return nil
-        }
-        if senderAccountId == trimmed && receiverAccountId == trimmed {
-            return sourceAssetId ?? destinationAssetId
-        }
-        if senderAccountId == trimmed {
-            return destinationAssetId
-        }
-        if receiverAccountId == trimmed {
-            return sourceAssetId
-        }
-        return nil
     }
 
     /// Return the amount with a sign relative to the provided account (`+` for incoming, `-` for outgoing).
@@ -1977,8 +1918,6 @@ public struct ToriiExplorerTransferSummary: Sendable, Equatable, Identifiable {
 
 /// Parsed transfer details derived from explorer instruction payloads.
 public struct ToriiExplorerTransferAsset: Sendable, Equatable {
-    /// Full asset identifier literal (encoded `norito:<hex>`).
-    public let sourceAssetId: String
     /// Destination account literal.
     public let destinationAccountId: String
     /// Amount transferred (string numeric).
@@ -2097,22 +2036,6 @@ public extension ToriiExplorerTransferDetails {
         }
     }
 
-    /// Check whether a transfer involves the provided asset id (source asset literal).
-    func involvesAssetId(_ assetId: String) -> Bool {
-        let trimmed = assetId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            return false
-        }
-        switch self {
-        case .asset(let asset):
-            return asset.sourceAssetId == trimmed
-        case .assetBatch(let entries):
-            return entries.contains {
-                ToriiExplorerTransferSummary.assetId(assetDefinitionId: $0.assetDefinitionId,
-                                                     accountId: $0.senderAccountId) == trimmed
-            }
-        }
-    }
 }
 
 extension ToriiExplorerTransferSummary {
@@ -2133,22 +2056,6 @@ extension ToriiExplorerTransferSummary {
         }
         return .unknown
     }
-
-    fileprivate static func assetId(assetDefinitionId: String, accountId _: String) -> String? {
-        let trimmedDefinition = assetDefinitionId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedDefinition.isEmpty else {
-            return nil
-        }
-        let lower = trimmedDefinition.lowercased()
-        guard lower.hasPrefix("norito:") else {
-            return nil
-        }
-        let hex = String(trimmedDefinition.dropFirst("norito:".count))
-        guard !hex.isEmpty else {
-            return nil
-        }
-        return "norito:\(hex.lowercased())"
-    }
 }
 
 public extension ToriiExplorerTransferRecord {
@@ -2165,7 +2072,7 @@ public extension ToriiExplorerTransferRecord {
             guard !sender.isEmpty else {
                 return []
             }
-            guard let assetDefinition = asset.assetDefinitionId ?? (!asset.sourceAssetId.isEmpty ? asset.sourceAssetId : nil) else {
+            guard let assetDefinition = asset.assetDefinitionId else {
                 return []
             }
             let receiver = asset.destinationAccountId
@@ -2224,27 +2131,23 @@ public extension ToriiExplorerTransferRecord {
 }
 
 public extension ToriiExplorerInstructionsPage {
-    /// Extract flattened transfer summaries from this page, optionally filtering by account, asset definition, or asset id.
+    /// Extract flattened transfer summaries from this page, optionally filtering by account or asset definition.
     func transferSummaries(matchingAccount accountId: String? = nil,
                            assetDefinitionId: String? = nil,
-                           assetId: String? = nil,
                            relativeTo relativeAccountId: String? = nil) -> [ToriiExplorerTransferSummary] {
         let relative = relativeAccountId ?? accountId
         let records = transferRecords(matchingAccount: accountId,
-                                      assetDefinitionId: assetDefinitionId,
-                                      assetId: assetId)
+                                      assetDefinitionId: assetDefinitionId)
         return records.flatMap { $0.summaries(relativeTo: relative) }
     }
 }
 
 public extension ToriiExplorerInstructionsPage {
-    /// Extract transfer records from this page, optionally filtering by account, asset definition, or asset id.
+    /// Extract transfer records from this page, optionally filtering by account or asset definition.
     func transferRecords(matchingAccount accountId: String? = nil,
-                         assetDefinitionId: String? = nil,
-                         assetId: String? = nil) -> [ToriiExplorerTransferRecord] {
+                         assetDefinitionId: String? = nil) -> [ToriiExplorerTransferRecord] {
         let accountFilter = accountId?.trimmingCharacters(in: .whitespacesAndNewlines)
         let assetFilter = assetDefinitionId?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let assetIdFilter = assetId?.trimmingCharacters(in: .whitespacesAndNewlines)
         var records: [ToriiExplorerTransferRecord] = []
         records.reserveCapacity(items.count)
         for item in items {
@@ -2255,9 +2158,6 @@ public extension ToriiExplorerInstructionsPage {
                 continue
             }
             if let assetFilter, !assetFilter.isEmpty, !details.involvesAssetDefinition(assetFilter) {
-                continue
-            }
-            if let assetIdFilter, !assetIdFilter.isEmpty, !details.involvesAssetId(assetIdFilter) {
                 continue
             }
             records.append(ToriiExplorerTransferRecord(instruction: item, details: details))
@@ -2277,7 +2177,7 @@ public struct ToriiExplorerInstructionsParams: Sendable, Equatable {
     public var transactionStatus: String?
     public var block: UInt64?
     public var kind: String?
-    public var assetId: String?
+    public var assetDefinitionId: String?
 
     public init(page: UInt64? = nil,
                 perPage: UInt64? = nil,
@@ -2287,7 +2187,7 @@ public struct ToriiExplorerInstructionsParams: Sendable, Equatable {
                 transactionStatus: String? = nil,
                 block: UInt64? = nil,
                 kind: String? = nil,
-                assetId: String? = nil) {
+                assetDefinitionId: String? = nil) {
         self.page = page
         self.perPage = perPage
         self.account = account
@@ -2296,7 +2196,7 @@ public struct ToriiExplorerInstructionsParams: Sendable, Equatable {
         self.transactionStatus = transactionStatus
         self.block = block
         self.kind = kind
-        self.assetId = assetId
+        self.assetDefinitionId = assetDefinitionId
     }
 
     public func queryItems() throws -> [URLQueryItem]? {
@@ -2341,9 +2241,12 @@ public struct ToriiExplorerInstructionsParams: Sendable, Equatable {
            !kind.isEmpty {
             items.append(URLQueryItem(name: "kind", value: kind))
         }
-        if let assetId = assetId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !assetId.isEmpty {
-            let normalized = try normalizeToriiAssetIdQueryValue(assetId, field: "assetId")
+        if let assetDefinitionId = assetDefinitionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !assetDefinitionId.isEmpty {
+            let normalized = try normalizeToriiAssetSelectorQueryValue(
+                assetDefinitionId,
+                field: "assetDefinitionId"
+            )
             items.append(URLQueryItem(name: "asset_id", value: normalized))
         }
         return items.isEmpty ? nil : items
@@ -2357,20 +2260,20 @@ public struct ToriiExplorerTransactionsParams: Sendable, Equatable {
     public var authority: String?
     public var block: UInt64?
     public var status: String?
-    public var assetId: String?
+    public var assetDefinitionId: String?
 
     public init(page: UInt64? = nil,
                 perPage: UInt64? = nil,
                 authority: String? = nil,
                 block: UInt64? = nil,
                 status: String? = nil,
-                assetId: String? = nil) {
+                assetDefinitionId: String? = nil) {
         self.page = page
         self.perPage = perPage
         self.authority = authority
         self.block = block
         self.status = status
-        self.assetId = assetId
+        self.assetDefinitionId = assetDefinitionId
     }
 
     public func queryItems() throws -> [URLQueryItem]? {
@@ -2402,9 +2305,12 @@ public struct ToriiExplorerTransactionsParams: Sendable, Equatable {
            !status.isEmpty {
             items.append(URLQueryItem(name: "status", value: status))
         }
-        if let assetId = assetId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !assetId.isEmpty {
-            let normalized = try normalizeToriiAssetIdQueryValue(assetId, field: "assetId")
+        if let assetDefinitionId = assetDefinitionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !assetDefinitionId.isEmpty {
+            let normalized = try normalizeToriiAssetSelectorQueryValue(
+                assetDefinitionId,
+                field: "assetDefinitionId"
+            )
             items.append(URLQueryItem(name: "asset_id", value: normalized))
         }
         return items.isEmpty ? nil : items
@@ -2467,11 +2373,10 @@ extension ToriiExplorerTransferDetails {
         let (fallbackDefinition, nativeBridgeAccount) = parseAssetId(destination)
         let definition = humanReadableDefinition ?? fallbackDefinition
         let accountId = pureSwiftAccount ?? nativeBridgeAccount ?? ""
-        let details = ToriiExplorerTransferAsset(sourceAssetId: destination,
-                                                  destinationAccountId: accountId,
-                                                  amount: amount,
-                                                  senderAccountId: nil,
-                                                  assetDefinitionId: definition)
+        let details = ToriiExplorerTransferAsset(destinationAccountId: accountId,
+                                                 amount: amount,
+                                                 senderAccountId: nil,
+                                                 assetDefinitionId: definition)
         return .asset(details)
     }
 
@@ -2483,11 +2388,10 @@ extension ToriiExplorerTransferDetails {
         guard let amount = stringValue(map["amount"]),
               let controller = stringValue(map["controller"]) else { return nil }
         let assetDefinitionId = extractAssetDefinitionId(from: map["asset"])
-        let details = ToriiExplorerTransferAsset(sourceAssetId: "",
-                                                  destinationAccountId: controller,
-                                                  amount: amount,
-                                                  senderAccountId: controller,
-                                                  assetDefinitionId: assetDefinitionId)
+        let details = ToriiExplorerTransferAsset(destinationAccountId: controller,
+                                                 amount: amount,
+                                                 senderAccountId: controller,
+                                                 assetDefinitionId: assetDefinitionId)
         return .asset(details)
     }
 
@@ -2500,11 +2404,10 @@ extension ToriiExplorerTransferDetails {
         let receiver = stringValue(map["receiver"]) ?? ""
         let depositAccount = stringValue(map["deposit_account"]) ?? ""
         let assetDefinitionId = extractAssetDefinitionId(from: map["asset"])
-        let details = ToriiExplorerTransferAsset(sourceAssetId: "",
-                                                  destinationAccountId: depositAccount,
-                                                  amount: claimedDelta,
-                                                  senderAccountId: receiver,
-                                                  assetDefinitionId: assetDefinitionId)
+        let details = ToriiExplorerTransferAsset(destinationAccountId: depositAccount,
+                                                 amount: claimedDelta,
+                                                 senderAccountId: receiver,
+                                                 assetDefinitionId: assetDefinitionId)
         return .asset(details)
     }
 
@@ -2541,11 +2444,10 @@ extension ToriiExplorerTransferDetails {
             return nil
         }
         let (definition, sender) = parseAssetId(source)
-        let details = ToriiExplorerTransferAsset(sourceAssetId: source,
-                                                  destinationAccountId: destination,
-                                                  amount: amount,
-                                                  senderAccountId: sender,
-                                                  assetDefinitionId: definition)
+        let details = ToriiExplorerTransferAsset(destinationAccountId: destination,
+                                                 amount: amount,
+                                                 senderAccountId: sender,
+                                                 assetDefinitionId: definition)
         return .asset(details)
     }
 
@@ -2608,11 +2510,30 @@ extension ToriiExplorerTransferDetails {
         }
         let hex = String(trimmed.dropFirst("norito:".count)).lowercased()
         let canonical = "norito:\(hex)"
-        let decoded = decodeToriiAssetIdFields(canonical)
+        let decoded = Self.decodeToriiAssetIdFields(canonical)
         if let definition = decoded.assetDefinitionId {
             return (definition, decoded.accountId)
         }
         return (canonical, nil)
+    }
+
+    fileprivate struct DecodedToriiAssetIdFields {
+        let assetDefinitionId: String?
+        let accountId: String?
+    }
+
+    fileprivate static func decodeToriiAssetIdFields(_ literal: String) -> DecodedToriiAssetIdFields {
+        let trimmed = literal.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.lowercased().hasPrefix("norito:") else {
+            return DecodedToriiAssetIdFields(assetDefinitionId: nil, accountId: nil)
+        }
+        let assetDefinitionId = OfflineNorito.assetDefinitionIdFromLiteral(trimmed)
+        let hex = String(trimmed.dropFirst("norito:".count))
+        guard !hex.isEmpty, hex.count.isMultiple(of: 2), let bytes = Data(hexString: hex) else {
+            return DecodedToriiAssetIdFields(assetDefinitionId: assetDefinitionId, accountId: nil)
+        }
+        let accountId = OfflineNorito.accountIdFromAssetIdPayload(bytes)
+        return DecodedToriiAssetIdFields(assetDefinitionId: assetDefinitionId, accountId: accountId)
     }
 }
 
@@ -4131,16 +4052,16 @@ public extension ToriiOfflineAllowanceItem {
 }
 
 public extension ToriiOfflineAllowanceList {
-    /// Sum of all remaining offline allowances across certificates.
+    /// Legacy helper over offline allowance rows retained only for older tooling.
     ///
-    /// Important: this value can be higher than what can be sent in a single receipt.
+    /// Important: this value is not used by the reserve wallet path.
     var aggregateRemainingAmount: Decimal {
         items
             .compactMap(\.remainingAmountDecimal)
             .reduce(.zero, +)
     }
 
-    /// Maximum amount that can be sent in one offline receipt, constrained by one certificate.
+    /// Legacy maximum single-transfer helper across allowance rows.
     var maxSingleTransferAmount: Decimal {
         var maximum = Decimal.zero
         for amount in items.compactMap(\.remainingAmountDecimal) where amount > maximum {
@@ -4281,7 +4202,7 @@ public struct ToriiOfflineBundleProofStatus: Decodable, Sendable, Equatable {
     }
 }
 
-/// Typed view of the optional proof summary payload returned by `/v1/offline/bundle/proof_status`.
+/// Typed view of the optional proof summary payload returned by Torii.
 public struct ToriiOfflineBundleProofSummary: Decodable, Sendable, Equatable {
     public let version: UInt16
     public let proofSumBytes: UInt64?
@@ -4749,28 +4670,6 @@ public struct ToriiOfflineTransferItem: Codable, Sendable {
 public struct ToriiOfflineTransferList: Decodable, Sendable {
     public let items: [ToriiOfflineTransferItem]
     public let total: UInt64
-}
-
-/// Execution outcome for an offline settlement bundle.
-///
-/// Semantics:
-/// - ``settled``: a settlement record exists on Torii (`status=settled|archived`).
-/// - ``pending``: the bundle was submitted by this client but no settlement record exists yet.
-/// - ``rejected(reason:)``: a submit rejection was observed locally or the server reported a rejected status.
-/// - ``unknown``: no settlement record exists and this client has no local submit outcome for the bundle.
-public enum ToriiSettlementExecutionStatus: Sendable, Equatable {
-    case settled
-    case rejected(reason: String?)
-    case pending
-    case unknown
-
-    /// Rejection reason when ``self`` is ``rejected(reason:)``.
-    public var rejectionReason: String? {
-        guard case .rejected(let reason) = self else {
-            return nil
-        }
-        return reason
-    }
 }
 
 public struct ToriiOfflineReceiptListItem: Decodable, Sendable, Equatable {
@@ -6328,13 +6227,13 @@ public struct ToriiUaidPortfolioTotals: Decodable, Sendable {
 }
 
 public struct ToriiUaidPortfolioAsset: Decodable, Sendable {
-    public let assetId: String
-    public let assetDefinitionId: String
+    public let asset: String
+    public let scope: String
     public let quantity: String
 
     private enum CodingKeys: String, CodingKey {
-        case assetId = "asset_id"
-        case assetDefinitionId = "asset_definition_id"
+        case asset
+        case scope
         case quantity
     }
 }
@@ -6440,18 +6339,24 @@ public struct ToriiUaidBindingsQuery: Sendable, Equatable {
 }
 
 public struct ToriiUaidPortfolioQuery: Sendable, Equatable {
-    public var assetId: String?
+    public var asset: String?
+    public var scope: String?
 
-    public init(assetId: String? = nil) {
-        self.assetId = assetId
+    public init(asset: String? = nil, scope: String? = nil) {
+        self.asset = asset
+        self.scope = scope
     }
 
     public func queryItems() throws -> [URLQueryItem]? {
         var items: [URLQueryItem] = []
-        if let assetId = assetId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !assetId.isEmpty {
-            let normalized = try normalizeToriiAssetIdQueryValue(assetId, field: "assetId")
-            items.append(URLQueryItem(name: "asset_id", value: normalized))
+        if let asset = asset?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !asset.isEmpty {
+            let normalized = try normalizeToriiAssetSelectorQueryValue(asset, field: "asset")
+            items.append(URLQueryItem(name: "asset", value: normalized))
+        }
+        if let scope = scope?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !scope.isEmpty {
+            items.append(URLQueryItem(name: "scope", value: scope))
         }
         return items.isEmpty ? nil : items
     }
@@ -10606,12 +10511,7 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     private let dataModelQueue = DispatchQueue(label: "org.hyperledger.iroha.torii.data-model")
     private let serverClockQueue = DispatchQueue(label: "org.hyperledger.iroha.torii.server-clock")
     private var observedServerClock: ObservedServerClock?
-    private var cachedOfflineSettlementStatusByBundleIdHex: [String: ToriiSettlementExecutionStatus] = [:]
-    private let offlineSettlementStatusQueue = DispatchQueue(label: "org.hyperledger.iroha.torii.offline-settlement-status")
     private static let defaultListPageSize = 100
-    internal var assetIdLiteralBuilder: (String, String) throws -> String = {
-        try OfflineNorito.assetIdLiteral(assetDefinitionId: $0, accountId: $1)
-    }
 
     public init(baseURL: URL, session: URLSession = .shared) {
         // Normalize to directory URL for correct relative URL resolution.
@@ -10658,9 +10558,10 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     @discardableResult
     public func getAssets(accountId: String,
                           limit: Int = 100,
-                          assetId: String? = nil,
+                          asset: String? = nil,
+                          scope: String? = nil,
                           completion: @escaping (Result<[ToriiAssetBalance], Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getAssets(accountId: accountId, limit: limit, assetId: assetId) }
+        runTask(completion) { try await self.getAssets(accountId: accountId, limit: limit, asset: asset, scope: scope) }
     }
 
     @discardableResult
@@ -10771,24 +10672,19 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     @discardableResult
-    public func buildAssetIdLiteralResolvingAliases(assetDefinitionIdOrAlias: String,
-                                                    accountIdOrAlias: String,
-                                                    completion: @escaping (Result<String, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) {
-            try await self.buildAssetIdLiteralResolvingAliases(
-                assetDefinitionIdOrAlias: assetDefinitionIdOrAlias,
-                accountIdOrAlias: accountIdOrAlias
-            )
-        }
-    }
-
-    @discardableResult
     public func getTransactions(accountId: String,
                                 limit: Int = 50,
                                 offset: Int = 0,
-                                assetId: String? = nil,
+                                assetDefinitionId: String? = nil,
                                 completion: @escaping (Result<ToriiTxEnvelope, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getTransactions(accountId: accountId, limit: limit, offset: offset, assetId: assetId) }
+        runTask(completion) {
+            try await self.getTransactions(
+                accountId: accountId,
+                limit: limit,
+                offset: offset,
+                assetDefinitionId: assetDefinitionId
+            )
+        }
     }
 
     @discardableResult
@@ -10853,13 +10749,11 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func getExplorerTransfers(params: ToriiExplorerInstructionsParams? = nil,
                                      matchingAccount accountId: String? = nil,
                                      assetDefinitionId: String? = nil,
-                                     assetId: String? = nil,
                                      completion: @escaping (Result<[ToriiExplorerTransferRecord], Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) {
             try await self.getExplorerTransfers(params: params,
                                                 matchingAccount: accountId,
-                                                assetDefinitionId: assetDefinitionId,
-                                                assetId: assetId)
+                                                assetDefinitionId: assetDefinitionId)
         }
     }
 
@@ -10868,14 +10762,12 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func getExplorerTransferSummaries(params: ToriiExplorerInstructionsParams? = nil,
                                              matchingAccount accountId: String? = nil,
                                              assetDefinitionId: String? = nil,
-                                             assetId: String? = nil,
                                              relativeTo relativeAccountId: String? = nil,
                                              completion: @escaping (Result<[ToriiExplorerTransferSummary], Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) {
             try await self.getExplorerTransferSummaries(params: params,
                                                         matchingAccount: accountId,
                                                         assetDefinitionId: assetDefinitionId,
-                                                        assetId: assetId,
                                                         relativeTo: relativeAccountId)
         }
     }
@@ -10885,14 +10777,12 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func getExplorerTransactionTransfers(hashHex: String,
                                                 matchingAccount accountId: String? = nil,
                                                 assetDefinitionId: String? = nil,
-                                                assetId: String? = nil,
                                                 maxItems: UInt64? = nil,
                                                 completion: @escaping (Result<[ToriiExplorerTransferRecord], Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) {
             try await self.getExplorerTransactionTransfers(hashHex: hashHex,
                                                            matchingAccount: accountId,
                                                            assetDefinitionId: assetDefinitionId,
-                                                           assetId: assetId,
                                                            maxItems: maxItems)
         }
     }
@@ -10902,7 +10792,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func getExplorerTransactionTransferSummaries(hashHex: String,
                                                         matchingAccount accountId: String? = nil,
                                                         assetDefinitionId: String? = nil,
-                                                        assetId: String? = nil,
                                                         relativeTo relativeAccountId: String? = nil,
                                                         maxItems: UInt64? = nil,
                                                         completion: @escaping (Result<[ToriiExplorerTransferSummary], Swift.Error>) -> Void) -> Task<Void, Never> {
@@ -10910,7 +10799,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
             try await self.getExplorerTransactionTransferSummaries(hashHex: hashHex,
                                                                    matchingAccount: accountId,
                                                                    assetDefinitionId: assetDefinitionId,
-                                                                   assetId: assetId,
                                                                    relativeTo: relativeAccountId,
                                                                    maxItems: maxItems)
         }
@@ -10922,14 +10810,12 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                           page: UInt64? = nil,
                                           perPage: UInt64? = nil,
                                           assetDefinitionId: String? = nil,
-                                          assetId: String? = nil,
                                           completion: @escaping (Result<[ToriiExplorerTransferSummary], Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) {
             try await self.getAccountTransferHistory(accountId: accountId,
                                                      page: page,
                                                      perPage: perPage,
-                                                     assetDefinitionId: assetDefinitionId,
-                                                     assetId: assetId)
+                                                     assetDefinitionId: assetDefinitionId)
         }
     }
 
@@ -10940,14 +10826,12 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                       page: UInt64? = nil,
                                       perPage: UInt64? = nil,
                                       assetDefinitionId: String? = nil,
-                                      assetId: String? = nil,
                                       completion: @escaping (Result<[ToriiExplorerTransferSummary], Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) {
             try await self.getTransactionHistory(accountId: accountId,
                                                  page: page,
                                                  perPage: perPage,
-                                                 assetDefinitionId: assetDefinitionId,
-                                                 assetId: assetId)
+                                                 assetDefinitionId: assetDefinitionId)
         }
     }
 
@@ -10956,7 +10840,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                               page: UInt64? = nil,
                                               perPage: UInt64? = nil,
                                               assetDefinitionId: String? = nil,
-                                              assetId: String? = nil,
                                               maxItems: UInt64? = nil) -> AsyncThrowingStream<ToriiExplorerTransferSummary, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
@@ -10971,14 +10854,13 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                         let params = ToriiExplorerInstructionsParams(page: currentPage,
                                                                      perPage: currentPerPage,
                                                                      kind: "Transfer",
-                                                                     assetId: assetId)
+                                                                     assetDefinitionId: assetDefinitionId)
                         let response = try await getExplorerInstructions(params: params)
                         if currentPerPage == nil {
                             currentPerPage = response.pagination.perPage
                         }
                         let summaries = response.transferSummaries(matchingAccount: normalizedAccount,
                                                                    assetDefinitionId: assetDefinitionId,
-                                                                   assetId: assetId,
                                                                    relativeTo: normalizedAccount)
                         for summary in summaries {
                             continuation.yield(summary)
@@ -11095,202 +10977,15 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     @discardableResult
-    public func listOfflineAllowances(params: ToriiOfflineListParams? = nil,
-                                      completion: @escaping (Result<ToriiOfflineAllowanceList, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.listOfflineAllowances(params: params) }
-    }
-
-    @discardableResult
     public func listOfflineTransfers(params: ToriiOfflineListParams? = nil,
                                      completion: @escaping (Result<ToriiOfflineTransferList, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.listOfflineTransfers(params: params) }
-    }
-
-    public func listOfflineSummaries(params: ToriiOfflineListParams? = nil,
-                                     completion: @escaping (Result<ToriiOfflineSummaryList, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.listOfflineSummaries(params: params) }
-    }
-
-    @discardableResult
-    public func listOfflineRevocations(params: ToriiOfflineRevocationListParams? = nil,
-                                       completion: @escaping (Result<ToriiOfflineRevocationList, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.listOfflineRevocations(params: params) }
-    }
-
-    @discardableResult
-    public func getOfflineBundleProofStatus(params: ToriiOfflineBundleProofStatusParams,
-                                            completion: @escaping (Result<ToriiOfflineBundleProofStatus, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getOfflineBundleProofStatus(params: params) }
-    }
-
-    @discardableResult
-    public func listOfflineReceipts(params: ToriiOfflineReceiptListParams? = nil,
-                                    completion: @escaping (Result<ToriiOfflineReceiptList, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.listOfflineReceipts(params: params) }
-    }
-
-    @discardableResult
-    public func queryOfflineReceipts(_ envelope: ToriiQueryEnvelope,
-                                     completion: @escaping (Result<ToriiOfflineReceiptList, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.queryOfflineReceipts(envelope) }
-    }
-
-    @discardableResult
-    public func queryOfflineAllowances(_ envelope: ToriiQueryEnvelope,
-                                       completion: @escaping (Result<ToriiOfflineAllowanceList, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.queryOfflineAllowances(envelope) }
-    }
-
-    @discardableResult
-    public func queryOfflineCertificates(_ envelope: ToriiQueryEnvelope,
-                                         completion: @escaping (Result<ToriiOfflineAllowanceList, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.queryOfflineCertificates(envelope) }
     }
 
     @discardableResult
     public func queryOfflineTransfers(_ envelope: ToriiQueryEnvelope,
                                       completion: @escaping (Result<ToriiOfflineTransferList, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.queryOfflineTransfers(envelope) }
-    }
-
-    @discardableResult
-    public func queryOfflineSettlements(_ envelope: ToriiQueryEnvelope,
-                                        completion: @escaping (Result<ToriiOfflineTransferList, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.queryOfflineSettlements(envelope) }
-    }
-
-    @discardableResult
-    public func getSettlementStatus(bundleIdHex: String,
-                                    completion: @escaping (Result<ToriiSettlementExecutionStatus, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getSettlementStatus(bundleIdHex: bundleIdHex) }
-    }
-
-    @discardableResult
-    public func getOfflineSettlementStatus(bundleIdHex: String,
-                                           completion: @escaping (Result<ToriiSettlementExecutionStatus, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getOfflineSettlementStatus(bundleIdHex: bundleIdHex) }
-    }
-
-    @discardableResult
-    public func queryOfflineRevocations(_ envelope: ToriiQueryEnvelope,
-                                        completion: @escaping (Result<ToriiOfflineRevocationList, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.queryOfflineRevocations(envelope) }
-    }
-
-    @discardableResult
-    public func getOfflineState(completion: @escaping (Result<ToriiOfflineStateResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getOfflineState() }
-    }
-
-    @discardableResult
-    public func issueOfflineCertificate(_ requestBody: ToriiOfflineCertificateIssueRequest,
-                                        completion: @escaping (Result<ToriiOfflineCertificateIssueResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.issueOfflineCertificate(requestBody) }
-    }
-
-    @discardableResult
-    public func issueOfflineBuildClaim(_ requestBody: ToriiOfflineBuildClaimIssueRequest,
-                                       completion: @escaping (Result<ToriiOfflineBuildClaimIssueResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.issueOfflineBuildClaim(requestBody) }
-    }
-
-    @discardableResult
-    public func registerOfflineAllowance(_ requestBody: ToriiOfflineAllowanceRegisterRequest,
-                                         completion: @escaping (Result<ToriiOfflineAllowanceRegisterResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.registerOfflineAllowance(requestBody) }
-    }
-
-    @discardableResult
-    public func renewOfflineAllowance(certificateIdHex: String,
-                                      requestBody: ToriiOfflineAllowanceRegisterRequest,
-                                      completion: @escaping (Result<ToriiOfflineAllowanceRegisterResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.renewOfflineAllowance(certificateIdHex: certificateIdHex,
-                                                                   requestBody: requestBody) }
-    }
-
-    @discardableResult
-    public func issueOfflineCertificateRenewal(certificateIdHex: String,
-                                               requestBody: ToriiOfflineCertificateIssueRequest,
-                                               completion: @escaping (Result<ToriiOfflineCertificateIssueResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.issueOfflineCertificateRenewal(certificateIdHex: certificateIdHex,
-                                                                            requestBody: requestBody) }
-    }
-
-    @discardableResult
-    public func topUpOfflineAllowance(draft: OfflineWalletCertificateDraft,
-                                      authority: String,
-                                      privateKey: String,
-                                      attestationNonce: Data? = nil,
-                                      completion: @escaping (Result<ToriiOfflineTopUpResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.topUpOfflineAllowance(draft: draft,
-                                                                   authority: authority,
-                                                                   privateKey: privateKey,
-                                                                   attestationNonce: attestationNonce) }
-    }
-
-    @discardableResult
-    public func topUpOfflineAllowanceRenewal(certificateIdHex: String,
-                                             draft: OfflineWalletCertificateDraft,
-                                             authority: String,
-                                             privateKey: String,
-                                             attestationNonce: Data? = nil,
-                                             completion: @escaping (Result<ToriiOfflineTopUpResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.topUpOfflineAllowanceRenewal(certificateIdHex: certificateIdHex,
-                                                                          draft: draft,
-                                                                          authority: authority,
-                                                                          privateKey: privateKey,
-                                                                          attestationNonce: attestationNonce) }
-    }
-
-    /// Reprovisions an existing offline allowance by renewing the certificate with a
-    /// new Pedersen commitment while preserving the current allowance amount and policy.
-    ///
-    /// This is intended for recovery flows that rotate the commitment/blinding without
-    /// changing balances or policy caps.
-    @discardableResult
-    public func reprovisionOfflineAllowance(certificateIdHex: String,
-                                            currentCertificateRecordData: Data,
-                                            newCommitment: Data,
-                                            authority: String,
-                                            privateKey: String,
-                                            lineage: OfflineCertificateLineage,
-                                            completion: @escaping (Result<ToriiOfflineTopUpResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.reprovisionOfflineAllowance(certificateIdHex: certificateIdHex,
-                                                                         currentCertificateRecordData: currentCertificateRecordData,
-                                                                         newCommitment: newCommitment,
-                                                                         authority: authority,
-                                                                         privateKey: privateKey,
-                                                                         lineage: lineage) }
-    }
-
-    @discardableResult
-    public func submitOfflineSpendReceipts(_ requestBody: ToriiOfflineSpendReceiptsSubmitRequest,
-                                           completion: @escaping (Result<ToriiOfflineSpendReceiptsSubmitResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.submitOfflineSpendReceipts(requestBody) }
-    }
-
-    @discardableResult
-    public func submitOfflineSettlement(_ requestBody: ToriiOfflineSettlementSubmitRequest,
-                                        completion: @escaping (Result<ToriiOfflineSettlementSubmitResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.submitOfflineSettlement(requestBody) }
-    }
-
-    @discardableResult
-    public func submitOfflineSettlementAndWait(_ requestBody: ToriiOfflineSettlementSubmitRequest,
-                                               pollOptions: PipelineStatusPollOptions = .default,
-                                               mode: PipelineEndpointMode = .pipeline,
-                                               completion: @escaping (Result<ToriiOfflineSettlementSubmitResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) {
-            try await self.submitOfflineSettlementAndWait(requestBody,
-                                                          pollOptions: pollOptions,
-                                                          mode: mode)
-        }
-    }
-
-    @discardableResult
-    public func requestOfflineTransferProof(_ requestBody: ToriiOfflineTransferProofRequest,
-                                            completion: @escaping (Result<ToriiJSONValue, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.requestOfflineTransferProof(requestBody) }
     }
 
     @discardableResult
@@ -11763,13 +11458,17 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         return try decodeJSON(ToriiAccountOnboardingResponse.self, from: data)
     }
 
-    public func getAssets(accountId: String, limit: Int = 100, assetId: String? = nil) async throws -> [ToriiAssetBalance] {
+    public func getAssets(accountId: String, limit: Int = 100, asset: String? = nil, scope: String? = nil) async throws -> [ToriiAssetBalance] {
         let encodedAccountId = try encodeAccountIdPath(accountId)
         var items = [URLQueryItem(name: "limit", value: String(limit))]
-        if let assetId = assetId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !assetId.isEmpty {
-            let normalized = try normalizeToriiAssetIdQueryValue(assetId, field: "assetId")
-            items.append(URLQueryItem(name: "asset_id", value: normalized))
+        if let asset = asset?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !asset.isEmpty {
+            let normalized = try normalizeToriiAssetSelectorQueryValue(asset, field: "asset")
+            items.append(URLQueryItem(name: "asset", value: normalized))
+        }
+        if let scope = scope?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !scope.isEmpty {
+            items.append(URLQueryItem(name: "scope", value: scope))
         }
         let request = try makeRequest(path: "/v1/accounts/\(encodedAccountId)/assets",
                                       queryItems: items)
@@ -11995,88 +11694,23 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         )
     }
 
-    public static func buildCanonicalAssetIdLiteralOffline(assetDefinitionId: String,
-                                                           accountId: String) throws -> String {
-        try OfflineNorito.assetIdLiteral(assetDefinitionId: assetDefinitionId, accountId: accountId)
-    }
-
-    /// Derive the deterministic asset definition ID from a legacy `name#domain` seed.
-    ///
-    /// Mutable dotted aliases must be resolved online via `resolveAssetAlias(_:)`.
-    ///
-    /// - Parameter alias: Legacy deterministic seed in `"name#domain"` form.
-    /// - Returns: Canonical unprefixed Base58 asset-definition ID.
-    @available(*, deprecated, message: "Asset aliases are mutable. Resolve aliases through Torii instead of deriving IDs offline.")
-    public static func assetDefinitionId(fromAlias alias: String) throws -> String {
-        try OfflineNorito.assetDefinitionIdFromAlias(alias)
-    }
-
-    public func buildAssetIdLiteralResolvingAliases(assetDefinitionIdOrAlias: String,
-                                                    accountIdOrAlias: String) async throws -> String {
-        let normalizedAssetInput = try ToriiRequestValidation.normalizedNonEmpty(
-            assetDefinitionIdOrAlias,
-            field: "assetDefinitionIdOrAlias"
-        )
-        let normalizedAccountInput = try ToriiRequestValidation.normalizedNonEmpty(
-            accountIdOrAlias,
-            field: "accountIdOrAlias"
-        )
-
-        let resolvedAccountId: String
-        if let canonical = try? normalizeToriiAccountIdQueryValue(
-            normalizedAccountInput,
-            field: "accountIdOrAlias"
-        ) {
-            resolvedAccountId = canonical
-        } else {
-            guard let resolvedAlias = try await resolveAccountAlias(normalizedAccountInput) else {
-                throw ToriiClientError.invalidPayload(
-                    "account alias '\(normalizedAccountInput)' was not found"
-                )
-            }
-            resolvedAccountId = resolvedAlias.accountId
-        }
-
-        var resolvedAssetDefinition = normalizedAssetInput
-        let assetLooksLikeAlias = normalizedAssetInput.contains("#")
-        if assetLooksLikeAlias {
-            guard let resolvedAlias = try await resolveAssetAlias(normalizedAssetInput) else {
-                throw ToriiClientError.invalidPayload(
-                    "asset alias '\(normalizedAssetInput)' was not found"
-                )
-            }
-            resolvedAssetDefinition = resolvedAlias.assetDefinitionId
-        }
-
-        do {
-            return try assetIdLiteralBuilder(
-                resolvedAssetDefinition,
-                resolvedAccountId
-            )
-        } catch OfflineNoritoError.invalidAssetId where !assetLooksLikeAlias {
-            guard let resolvedAlias = try await resolveAssetAlias(normalizedAssetInput) else {
-                throw ToriiClientError.invalidPayload(
-                    "asset definition '\(normalizedAssetInput)' is invalid and alias resolution did not find a mapping"
-                )
-            }
-            return try assetIdLiteralBuilder(
-                resolvedAlias.assetDefinitionId,
-                resolvedAccountId
-            )
-        }
-    }
-
     /// Returns account transaction metadata from `/v1/accounts/{account_id}/transactions`.
     /// Use `getTransactionHistory`/`getAccountTransferHistory` for transfer details.
-    public func getTransactions(accountId: String, limit: Int = 50, offset: Int = 0, assetId: String? = nil) async throws -> ToriiTxEnvelope {
+    public func getTransactions(accountId: String,
+                                limit: Int = 50,
+                                offset: Int = 0,
+                                assetDefinitionId: String? = nil) async throws -> ToriiTxEnvelope {
         let encodedAccountId = try encodeAccountIdPath(accountId)
         var items = [
             URLQueryItem(name: "limit", value: String(limit)),
             URLQueryItem(name: "offset", value: String(offset))
         ]
-        if let assetId = assetId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !assetId.isEmpty {
-            let normalized = try normalizeToriiAssetIdQueryValue(assetId, field: "assetId")
+        if let assetDefinitionId = assetDefinitionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !assetDefinitionId.isEmpty {
+            let normalized = try normalizeToriiAssetSelectorQueryValue(
+                assetDefinitionId,
+                field: "assetDefinitionId"
+            )
             items.append(URLQueryItem(name: "asset_id", value: normalized))
         }
         let request = try makeRequest(path: "/v1/accounts/\(encodedAccountId)/transactions", queryItems: items)
@@ -12126,54 +11760,53 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
 
     public func getExplorerTransfers(params: ToriiExplorerInstructionsParams? = nil,
                                      matchingAccount accountId: String? = nil,
-                                     assetDefinitionId: String? = nil,
-                                     assetId: String? = nil) async throws -> [ToriiExplorerTransferRecord] {
+                                     assetDefinitionId: String? = nil) async throws -> [ToriiExplorerTransferRecord] {
         var effectiveParams = params ?? ToriiExplorerInstructionsParams()
         let kindTrimmed = effectiveParams.kind?.trimmingCharacters(in: .whitespacesAndNewlines)
         if kindTrimmed == nil || kindTrimmed?.isEmpty == true {
             effectiveParams.kind = "Transfer"
         }
-        if let assetId = assetId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !assetId.isEmpty {
-            let existing = effectiveParams.assetId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let assetDefinitionId = assetDefinitionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !assetDefinitionId.isEmpty {
+            let existing = effectiveParams.assetDefinitionId?.trimmingCharacters(in: .whitespacesAndNewlines)
             if existing == nil || existing?.isEmpty == true {
-                effectiveParams.assetId = assetId
+                effectiveParams.assetDefinitionId = assetDefinitionId
             }
         }
         let page = try await getExplorerInstructions(params: effectiveParams)
-        return page.transferRecords(matchingAccount: accountId,
-                                    assetDefinitionId: assetDefinitionId,
-                                    assetId: assetId)
+        return page.transferRecords(
+            matchingAccount: accountId,
+            assetDefinitionId: assetDefinitionId
+        )
     }
 
     public func getExplorerTransferSummaries(params: ToriiExplorerInstructionsParams? = nil,
                                              matchingAccount accountId: String? = nil,
                                              assetDefinitionId: String? = nil,
-                                             assetId: String? = nil,
                                              relativeTo relativeAccountId: String? = nil) async throws -> [ToriiExplorerTransferSummary] {
         var effectiveParams = params ?? ToriiExplorerInstructionsParams()
         let kindTrimmed = effectiveParams.kind?.trimmingCharacters(in: .whitespacesAndNewlines)
         if kindTrimmed == nil || kindTrimmed?.isEmpty == true {
             effectiveParams.kind = "Transfer"
         }
-        if let assetId = assetId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !assetId.isEmpty {
-            let existing = effectiveParams.assetId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let assetDefinitionId = assetDefinitionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !assetDefinitionId.isEmpty {
+            let existing = effectiveParams.assetDefinitionId?.trimmingCharacters(in: .whitespacesAndNewlines)
             if existing == nil || existing?.isEmpty == true {
-                effectiveParams.assetId = assetId
+                effectiveParams.assetDefinitionId = assetDefinitionId
             }
         }
         let page = try await getExplorerInstructions(params: effectiveParams)
-        return page.transferSummaries(matchingAccount: accountId,
-                                      assetDefinitionId: assetDefinitionId,
-                                      assetId: assetId,
-                                      relativeTo: relativeAccountId)
+        return page.transferSummaries(
+            matchingAccount: accountId,
+            assetDefinitionId: assetDefinitionId,
+            relativeTo: relativeAccountId
+        )
     }
 
     public func getExplorerTransactionTransfers(hashHex: String,
                                                 matchingAccount accountId: String? = nil,
                                                 assetDefinitionId: String? = nil,
-                                                assetId: String? = nil,
                                                 maxItems: UInt64? = nil) async throws -> [ToriiExplorerTransferRecord] {
         if let maxItems, maxItems == 0 {
             return []
@@ -12188,14 +11821,15 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                                          perPage: currentPerPage,
                                                          transactionHash: normalizedHash,
                                                          kind: "Transfer",
-                                                         assetId: assetId)
+                                                         assetDefinitionId: assetDefinitionId)
             let response = try await getExplorerInstructions(params: params)
             if currentPerPage == nil {
                 currentPerPage = response.pagination.perPage
             }
-            let pageRecords = response.transferRecords(matchingAccount: accountId,
-                                                       assetDefinitionId: assetDefinitionId,
-                                                       assetId: assetId)
+            let pageRecords = response.transferRecords(
+                matchingAccount: accountId,
+                assetDefinitionId: assetDefinitionId
+            )
             for record in pageRecords {
                 records.append(record)
                 if let remainingValue = remaining {
@@ -12223,13 +11857,11 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func getExplorerTransactionTransferSummaries(hashHex: String,
                                                         matchingAccount accountId: String? = nil,
                                                         assetDefinitionId: String? = nil,
-                                                        assetId: String? = nil,
                                                         relativeTo relativeAccountId: String? = nil,
                                                         maxItems: UInt64? = nil) async throws -> [ToriiExplorerTransferSummary] {
         let records = try await getExplorerTransactionTransfers(hashHex: hashHex,
                                                                 matchingAccount: accountId,
                                                                 assetDefinitionId: assetDefinitionId,
-                                                                assetId: assetId,
                                                                 maxItems: maxItems)
         let relative = relativeAccountId ?? accountId
         return records.flatMap { $0.summaries(relativeTo: relative) }
@@ -12240,7 +11872,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func streamTransactionTransferSummaries(hashHex: String,
                                                    matchingAccount accountId: String? = nil,
                                                    assetDefinitionId: String? = nil,
-                                                   assetId: String? = nil,
                                                    relativeTo relativeAccountId: String? = nil,
                                                    lastEventId: String? = nil,
                                                    maxItems: UInt64? = nil,
@@ -12275,7 +11906,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                     let history = try await getExplorerTransactionTransferSummaries(hashHex: normalizedHash,
                                                                                     matchingAccount: accountId,
                                                                                     assetDefinitionId: assetDefinitionId,
-                                                                                    assetId: assetId,
                                                                                     relativeTo: relative,
                                                                                     maxItems: remaining)
                     for summary in history {
@@ -12296,7 +11926,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                     for try await summary in streamExplorerTransferSummaries(lastEventId: lastEventId,
                                                                              matchingAccount: accountId,
                                                                              assetDefinitionId: assetDefinitionId,
-                                                                             assetId: assetId,
                                                                              relativeTo: relative) {
                         if Task.isCancelled {
                             break
@@ -12328,17 +11957,15 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func getAccountTransferHistory(accountId: String,
                                           page: UInt64? = nil,
                                           perPage: UInt64? = nil,
-                                          assetDefinitionId: String? = nil,
-                                          assetId: String? = nil) async throws -> [ToriiExplorerTransferSummary] {
+                                          assetDefinitionId: String? = nil) async throws -> [ToriiExplorerTransferSummary] {
         let normalizedAccount = try ToriiRequestValidation.normalizedNonEmpty(accountId, field: "accountId")
         let params = ToriiExplorerInstructionsParams(page: page,
                                                      perPage: perPage,
                                                      kind: "Transfer",
-                                                     assetId: assetId)
+                                                     assetDefinitionId: assetDefinitionId)
         return try await getExplorerTransferSummaries(params: params,
                                                       matchingAccount: normalizedAccount,
                                                       assetDefinitionId: assetDefinitionId,
-                                                      assetId: assetId,
                                                       relativeTo: normalizedAccount)
     }
 
@@ -12346,13 +11973,11 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func getTransactionHistory(accountId: String,
                                       page: UInt64? = nil,
                                       perPage: UInt64? = nil,
-                                      assetDefinitionId: String? = nil,
-                                      assetId: String? = nil) async throws -> [ToriiExplorerTransferSummary] {
+                                      assetDefinitionId: String? = nil) async throws -> [ToriiExplorerTransferSummary] {
         try await getAccountTransferHistory(accountId: accountId,
                                             page: page,
                                             perPage: perPage,
-                                            assetDefinitionId: assetDefinitionId,
-                                            assetId: assetId)
+                                            assetDefinitionId: assetDefinitionId)
     }
 
     public func listDomains(options: ToriiListOptions = ToriiListOptions()) async throws -> ToriiDomainListPage {
@@ -12504,73 +12129,10 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         return try decodeJSON(ToriiUaidManifestsResponse.self, from: data)
     }
 
-    public func listOfflineAllowances(params: ToriiOfflineListParams? = nil) async throws -> ToriiOfflineAllowanceList {
-        let request = try makeRequest(path: "/v1/offline/allowances", queryItems: try params?.queryItems())
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineAllowanceList.self, from: data)
-    }
-
     public func listOfflineTransfers(params: ToriiOfflineListParams? = nil) async throws -> ToriiOfflineTransferList {
         let request = try makeRequest(path: "/v1/offline/transfers", queryItems: try params?.queryItems())
         let data = try await data(for: request)
         return try decodeJSON(ToriiOfflineTransferList.self, from: data)
-    }
-
-    public func listOfflineSummaries(params: ToriiOfflineListParams? = nil) async throws -> ToriiOfflineSummaryList {
-        let request = try makeRequest(path: "/v1/offline/summaries", queryItems: try params?.queryItems())
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineSummaryList.self, from: data)
-    }
-
-    public func listOfflineRevocations(params: ToriiOfflineRevocationListParams? = nil) async throws -> ToriiOfflineRevocationList {
-        let request = try makeRequest(path: "/v1/offline/revocations", queryItems: try params?.queryItems())
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineRevocationList.self, from: data)
-    }
-
-    public func getOfflineBundleProofStatus(params: ToriiOfflineBundleProofStatusParams) async throws -> ToriiOfflineBundleProofStatus {
-        let request = try makeRequest(path: "/v1/offline/bundle/proof_status", queryItems: try params.queryItems())
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineBundleProofStatus.self, from: data)
-    }
-
-    public func listOfflineReceipts(params: ToriiOfflineReceiptListParams? = nil) async throws -> ToriiOfflineReceiptList {
-        let request = try makeRequest(path: "/v1/offline/receipts", queryItems: try params?.queryItems())
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineReceiptList.self, from: data)
-    }
-
-    public func queryOfflineReceipts(_ envelope: ToriiQueryEnvelope) async throws -> ToriiOfflineReceiptList {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(envelope)
-        let request = try makeRequest(path: "/v1/offline/receipts/query",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineReceiptList.self, from: data)
-    }
-
-    public func queryOfflineAllowances(_ envelope: ToriiQueryEnvelope) async throws -> ToriiOfflineAllowanceList {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(envelope)
-        let request = try makeRequest(path: "/v1/offline/allowances/query",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineAllowanceList.self, from: data)
-    }
-
-    public func queryOfflineCertificates(_ envelope: ToriiQueryEnvelope) async throws -> ToriiOfflineAllowanceList {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(envelope)
-        let request = try makeRequest(path: "/v1/offline/certificates/query",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineAllowanceList.self, from: data)
     }
 
     public func queryOfflineTransfers(_ envelope: ToriiQueryEnvelope) async throws -> ToriiOfflineTransferList {
@@ -12582,228 +12144,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                       headers: ["Content-Type": "application/json"])
         let data = try await data(for: request)
         return try decodeJSON(ToriiOfflineTransferList.self, from: data)
-    }
-
-    public func queryOfflineSettlements(_ envelope: ToriiQueryEnvelope) async throws -> ToriiOfflineTransferList {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(envelope)
-        let request = try makeRequest(path: "/v1/offline/settlements/query",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineTransferList.self, from: data)
-    }
-
-    /// Resolves settlement execution status for a specific offline bundle id.
-    ///
-    /// This method combines server settlement rows with local submit outcomes:
-    /// - server row present with `settled`/`archived` -> ``ToriiSettlementExecutionStatus/settled``
-    /// - server row present with `rejected` -> ``ToriiSettlementExecutionStatus/rejected(reason:)``
-    /// - no server row but this client submitted the bundle -> ``ToriiSettlementExecutionStatus/pending``
-    /// - no row and no local knowledge -> ``ToriiSettlementExecutionStatus/unknown``
-    public func getSettlementStatus(bundleIdHex: String) async throws -> ToriiSettlementExecutionStatus {
-        let normalizedBundleId = try Self.normalizeBundleIdHex(bundleIdHex, field: "bundleIdHex")
-        let envelope = ToriiQueryEnvelope(
-            filter: Self.queryEqualsFilter(field: "bundle_id_hex", value: normalizedBundleId),
-            sort: [ToriiQuerySortKey(key: "recorded_at_ms", order: .desc)],
-            pagination: ToriiQueryPagination(limit: 1, offset: 0)
-        )
-        let settlements = try await queryOfflineSettlements(envelope)
-        if let item = settlements.items.first {
-            let resolved = try await settlementStatus(from: item)
-            cacheOfflineSettlementStatus(resolved, bundleIdHex: normalizedBundleId)
-            return resolved
-        }
-        if let cached = cachedOfflineSettlementStatus(bundleIdHex: normalizedBundleId) {
-            return cached
-        }
-        return .unknown
-    }
-
-    /// Alias for ``getSettlementStatus(bundleIdHex:)``.
-    public func getOfflineSettlementStatus(bundleIdHex: String) async throws -> ToriiSettlementExecutionStatus {
-        try await getSettlementStatus(bundleIdHex: bundleIdHex)
-    }
-
-    public func queryOfflineRevocations(_ envelope: ToriiQueryEnvelope) async throws -> ToriiOfflineRevocationList {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(envelope)
-        let request = try makeRequest(path: "/v1/offline/revocations/query",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineRevocationList.self, from: data)
-    }
-
-    public func getOfflineState() async throws -> ToriiOfflineStateResponse {
-        let request = try makeRequest(path: "/v1/offline/state")
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineStateResponse.self, from: data)
-    }
-
-    public func issueOfflineCertificate(_ requestBody: ToriiOfflineCertificateIssueRequest) async throws -> ToriiOfflineCertificateIssueResponse {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(requestBody)
-        let request = try makeRequest(path: "/v1/offline/certificates/issue",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineCertificateIssueResponse.self, from: data)
-    }
-
-    public func issueOfflineBuildClaim(_ requestBody: ToriiOfflineBuildClaimIssueRequest) async throws -> ToriiOfflineBuildClaimIssueResponse {
-        let normalizedCertificateId = try Self.normalizeHash32HexOrLiteral(
-            requestBody.certificateIdHex,
-            field: "certificate_id_hex"
-        )
-        let normalizedTxId = try Self.normalizeHash32HexOrLiteral(
-            requestBody.txIdHex,
-            field: "tx_id_hex"
-        )
-        let normalizedPlatform = try ToriiRequestValidation.normalizedNonEmpty(
-            requestBody.platform,
-            field: "platform"
-        ).lowercased()
-        guard normalizedPlatform == "apple" || normalizedPlatform == "android" else {
-            throw ToriiClientError.invalidPayload("platform must be either \"apple\" or \"android\".")
-        }
-        let normalizedRequest = ToriiOfflineBuildClaimIssueRequest(
-            certificateIdHex: normalizedCertificateId,
-            txIdHex: normalizedTxId,
-            platform: normalizedPlatform,
-            appId: requestBody.appId,
-            buildNumber: requestBody.buildNumber,
-            issuedAtMs: requestBody.issuedAtMs,
-            expiresAtMs: requestBody.expiresAtMs
-        )
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(normalizedRequest)
-        let request = try makeRequest(path: "/v1/offline/build-claims/issue",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineBuildClaimIssueResponse.self, from: data)
-    }
-
-    public func registerOfflineAllowance(_ requestBody: ToriiOfflineAllowanceRegisterRequest) async throws -> ToriiOfflineAllowanceRegisterResponse {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(requestBody)
-        let request = try makeRequest(path: "/v1/offline/allowances",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineAllowanceRegisterResponse.self, from: data)
-    }
-
-    public func renewOfflineAllowance(certificateIdHex: String,
-                                      requestBody: ToriiOfflineAllowanceRegisterRequest) async throws -> ToriiOfflineAllowanceRegisterResponse {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(requestBody)
-        let encodedId = encodePathComponent(certificateIdHex)
-        let request = try makeRequest(path: "/v1/offline/allowances/\(encodedId)/renew",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineAllowanceRegisterResponse.self, from: data)
-    }
-
-    public func issueOfflineCertificateRenewal(certificateIdHex: String,
-                                               requestBody: ToriiOfflineCertificateIssueRequest) async throws -> ToriiOfflineCertificateIssueResponse {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(requestBody)
-        let encodedId = encodePathComponent(certificateIdHex)
-        let request = try makeRequest(path: "/v1/offline/certificates/\(encodedId)/renew/issue",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineCertificateIssueResponse.self, from: data)
-    }
-
-    public func topUpOfflineAllowance(draft: OfflineWalletCertificateDraft,
-                                      authority: String,
-                                      privateKey: String,
-                                      attestationNonce: Data? = nil) async throws -> ToriiOfflineTopUpResponse {
-        let effectiveDraft = try Self.draftByApplyingAttestationNonce(draft, attestationNonce)
-        let issueRequest = try ToriiOfflineCertificateIssueRequest(certificate: effectiveDraft)
-        let issued = try await issueOfflineCertificate(issueRequest)
-        let registerRequest = ToriiOfflineAllowanceRegisterRequest(authority: authority,
-                                                                   privateKey: privateKey,
-                                                                   certificate: issued.certificate)
-        let registered = try await registerOfflineAllowance(registerRequest)
-        try ensureTopUpCertificateIdsMatch(issued: issued, registered: registered)
-        return ToriiOfflineTopUpResponse(certificate: issued, registration: registered)
-    }
-
-    public func topUpOfflineAllowanceRenewal(certificateIdHex: String,
-                                             draft: OfflineWalletCertificateDraft,
-                                             authority: String,
-                                             privateKey: String,
-                                             attestationNonce: Data? = nil) async throws -> ToriiOfflineTopUpResponse {
-        let effectiveDraft = try Self.draftByApplyingAttestationNonce(draft, attestationNonce)
-        let issueRequest = try ToriiOfflineCertificateIssueRequest(certificate: effectiveDraft)
-        let issued = try await issueOfflineCertificateRenewal(certificateIdHex: certificateIdHex,
-                                                              requestBody: issueRequest)
-        let renewRequest = ToriiOfflineAllowanceRegisterRequest(authority: authority,
-                                                                privateKey: privateKey,
-                                                                certificate: issued.certificate)
-        let registered = try await renewOfflineAllowance(certificateIdHex: certificateIdHex,
-                                                         requestBody: renewRequest)
-        try ensureTopUpCertificateIdsMatch(issued: issued, registered: registered)
-        return ToriiOfflineTopUpResponse(certificate: issued, registration: registered)
-    }
-
-    /// Reprovisions an existing offline allowance by renewing the certificate with a
-    /// new Pedersen commitment while preserving allowance amount/policy fields.
-    ///
-    /// This avoids `topUp(0)` workarounds in recovery flows where only the commitment
-    /// must change.
-    /// Reprovision from raw record data — decodes the certificate internally.
-    public func reprovisionOfflineAllowance(certificateIdHex: String,
-                                            currentCertificateRecordData: Data,
-                                            newCommitment: Data,
-                                            authority: String,
-                                            privateKey: String,
-                                            lineage: OfflineCertificateLineage) async throws -> ToriiOfflineTopUpResponse {
-        let currentCertificate = try OfflineWalletCertificate(recordData: currentCertificateRecordData)
-        return try await reprovisionOfflineAllowance(certificateIdHex: certificateIdHex,
-                                                      currentCertificate: currentCertificate,
-                                                      newCommitment: newCommitment,
-                                                      authority: authority,
-                                                      privateKey: privateKey,
-                                                      lineage: lineage)
-    }
-
-    func reprovisionOfflineAllowance(certificateIdHex: String,
-                                            currentCertificate: OfflineWalletCertificate,
-                                            newCommitment: Data,
-                                            authority: String,
-                                            privateKey: String,
-                                            lineage: OfflineCertificateLineage) async throws -> ToriiOfflineTopUpResponse {
-        let draft = try Self.makeOfflineReprovisionDraft(currentCertificate: currentCertificate,
-                                                         newCommitment: newCommitment,
-                                                         lineage: lineage)
-        return try await topUpOfflineAllowanceRenewal(certificateIdHex: certificateIdHex,
-                                                      draft: draft,
-                                                      authority: authority,
-                                                      privateKey: privateKey)
-    }
-
-    public func submitOfflineSpendReceipts(_ requestBody: ToriiOfflineSpendReceiptsSubmitRequest) async throws -> ToriiOfflineSpendReceiptsSubmitResponse {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(requestBody)
-        let request = try makeRequest(path: "/v1/offline/spend-receipts",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineSpendReceiptsSubmitResponse.self, from: data)
     }
 
     public func setupOfflineReserve(
@@ -12882,51 +12222,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         return try decodeJSON(ToriiOfflineRevocationBundle.self, from: data)
     }
 
-    public func submitOfflineSettlement(_ requestBody: ToriiOfflineSettlementSubmitRequest) async throws -> ToriiOfflineSettlementSubmitResponse {
-        let normalizedOverrides = try requestBody.buildClaimOverrides.enumerated().map { index, buildClaimOverride in
-            let normalizedTxIdHex = try Self.normalizeHash32HexOrLiteral(
-                buildClaimOverride.txIdHex,
-                field: "build_claim_overrides[\(index)].tx_id_hex"
-            )
-            return ToriiOfflineSettlementBuildClaimOverride(
-                txIdHex: normalizedTxIdHex,
-                appId: buildClaimOverride.appId,
-                buildNumber: buildClaimOverride.buildNumber,
-                issuedAtMs: buildClaimOverride.issuedAtMs,
-                expiresAtMs: buildClaimOverride.expiresAtMs
-            )
-        }
-        let normalizedBundleId = Self.extractBundleIdHex(from: requestBody.transfer)
-        let normalizedRequest = ToriiOfflineSettlementSubmitRequest(
-            authority: requestBody.authority,
-            privateKey: requestBody.privateKey,
-            transfer: requestBody.transfer,
-            buildClaimOverrides: normalizedOverrides,
-            repairExistingBuildClaims: requestBody.repairExistingBuildClaims
-        )
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(normalizedRequest)
-        let request = try makeRequest(path: "/v1/offline/settlements",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        do {
-            let data = try await data(for: request)
-            let response = try decodeJSON(ToriiOfflineSettlementSubmitResponse.self, from: data)
-            let cachedBundleId = (try? Self.normalizeBundleIdHex(response.bundleIdHex, field: "bundle_id_hex")) ?? normalizedBundleId
-            if let cachedBundleId {
-                cacheOfflineSettlementStatus(.pending, bundleIdHex: cachedBundleId)
-            }
-            return response
-        } catch {
-            if let normalizedBundleId,
-               let rejectCode = Self.extractRejectCode(from: error) {
-                cacheOfflineSettlementStatus(.rejected(reason: rejectCode), bundleIdHex: normalizedBundleId)
-            }
-            throw error
-        }
-    }
-
     public func waitForTransactionStatus(hashHex: String,
                                          pollOptions: PipelineStatusPollOptions = .default,
                                          mode: PipelineEndpointMode = .pipeline) async throws -> ToriiPipelineTransactionStatus {
@@ -12959,50 +12254,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                 await Task.yield()
             }
         }
-    }
-
-    public func submitOfflineSettlementAndWait(_ requestBody: ToriiOfflineSettlementSubmitRequest,
-                                               pollOptions: PipelineStatusPollOptions = .default,
-                                               mode: PipelineEndpointMode = .pipeline) async throws -> ToriiOfflineSettlementSubmitResponse {
-        let settlement = try await submitOfflineSettlement(requestBody)
-        let cachedBundleId =
-            (try? Self.normalizeBundleIdHex(settlement.bundleIdHex, field: "bundle_id_hex"))
-            ?? Self.extractBundleIdHex(from: requestBody.transfer)
-        guard let txHashHex = settlement.txHashHex, !txHashHex.isEmpty else {
-            throw ToriiClientError.invalidPayload(
-                "offline settlement submit response missing transaction_hash_hex"
-            )
-        }
-        do {
-            _ = try await waitForTransactionStatus(hashHex: txHashHex,
-                                                   pollOptions: pollOptions,
-                                                   mode: mode)
-            return settlement
-        } catch let error as PipelineStatusError {
-            if case .failure = error, let cachedBundleId {
-                cacheOfflineSettlementStatus(.rejected(reason: error.rejectionReason),
-                                             bundleIdHex: cachedBundleId)
-            }
-            throw error
-        }
-    }
-
-    public func requestOfflineTransferProof(_ requestBody: ToriiOfflineTransferProofRequest) async throws -> ToriiJSONValue {
-        let data = try await requestOfflineTransferProofData(requestBody)
-        return try decodeJSON(ToriiJSONValue.self, from: data)
-    }
-
-    /// Returns the raw JSON bytes from the Torii proof endpoint, preserving
-    /// the original Iroha JSON format (important for ``norito::json`` parsing
-    /// in the native bridge).
-    public func requestOfflineTransferProofData(_ requestBody: ToriiOfflineTransferProofRequest) async throws -> Data {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(requestBody)
-        let request = try makeRequest(path: "/v1/offline/transfers/proof",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        return try await data(for: request)
     }
 
     public func getConnectStatus() async throws -> ToriiConnectStatusSnapshot? {
@@ -14270,14 +13521,12 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     @available(iOS 15.0, macOS 12.0, *)
     public func streamExplorerTransfers(lastEventId: String? = nil,
                                         matchingAccount accountId: String? = nil,
-                                        assetDefinitionId: String? = nil,
-                                        assetId: String? = nil) -> AsyncThrowingStream<ToriiExplorerTransferRecord, Error> {
+                                        assetDefinitionId: String? = nil) -> AsyncThrowingStream<ToriiExplorerTransferRecord, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
                     let accountFilter = accountId?.trimmingCharacters(in: .whitespacesAndNewlines)
                     let assetFilter = assetDefinitionId?.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let assetIdFilter = assetId?.trimmingCharacters(in: .whitespacesAndNewlines)
                     for try await item in streamExplorerInstructions(lastEventId: lastEventId) {
                         if Task.isCancelled {
                             break
@@ -14289,9 +13538,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                             continue
                         }
                         if let assetFilter, !assetFilter.isEmpty, !details.involvesAssetDefinition(assetFilter) {
-                            continue
-                        }
-                        if let assetIdFilter, !assetIdFilter.isEmpty, !details.involvesAssetId(assetIdFilter) {
                             continue
                         }
                         continuation.yield(ToriiExplorerTransferRecord(instruction: item, details: details))
@@ -14318,14 +13564,12 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func streamExplorerTransferSummaries(lastEventId: String? = nil,
                                                 matchingAccount accountId: String? = nil,
                                                 assetDefinitionId: String? = nil,
-                                                assetId: String? = nil,
                                                 relativeTo relativeAccountId: String? = nil) -> AsyncThrowingStream<ToriiExplorerTransferSummary, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
                     let accountFilter = accountId?.trimmingCharacters(in: .whitespacesAndNewlines)
                     let assetFilter = assetDefinitionId?.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let assetIdFilter = assetId?.trimmingCharacters(in: .whitespacesAndNewlines)
                     let relativeCandidate = relativeAccountId ?? accountId
                     let relativeTrimmed = relativeCandidate?.trimmingCharacters(in: .whitespacesAndNewlines)
                     let relativeAccount = (relativeTrimmed?.isEmpty ?? true) ? nil : relativeTrimmed
@@ -14340,9 +13584,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                             continue
                         }
                         if let assetFilter, !assetFilter.isEmpty, !details.involvesAssetDefinition(assetFilter) {
-                            continue
-                        }
-                        if let assetIdFilter, !assetIdFilter.isEmpty, !details.involvesAssetId(assetIdFilter) {
                             continue
                         }
                         let record = ToriiExplorerTransferRecord(instruction: item, details: details)
@@ -14373,7 +13614,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                              page: UInt64? = nil,
                                              perPage: UInt64? = nil,
                                              assetDefinitionId: String? = nil,
-                                             assetId: String? = nil,
                                              lastEventId: String? = nil,
                                              maxItems: UInt64? = nil,
                                              dedupeLimit: Int = 10_000) -> AsyncThrowingStream<ToriiExplorerTransferSummary, Error> {
@@ -14408,7 +13648,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                                                            page: page,
                                                                            perPage: perPage,
                                                                            assetDefinitionId: assetDefinitionId,
-                                                                           assetId: assetId,
                                                                            maxItems: remaining) {
                         if Task.isCancelled {
                             break
@@ -14427,7 +13666,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                     for try await summary in streamExplorerTransferSummaries(lastEventId: lastEventId,
                                                                              matchingAccount: normalizedAccount,
                                                                              assetDefinitionId: assetDefinitionId,
-                                                                             assetId: assetId,
                                                                              relativeTo: normalizedAccount) {
                         if Task.isCancelled {
                             break
@@ -15658,89 +14896,11 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                       rawEvent: parsed.raw)
     }
 
-    private func settlementStatus(from item: ToriiOfflineTransferItem) async throws -> ToriiSettlementExecutionStatus {
-        let normalizedStatus = item.status
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        switch normalizedStatus {
-        case "settled", "archived":
-            return .settled
-        case "rejected":
-            let reason = try await settlementRejectionReason(from: item)
-            return .rejected(reason: reason)
-        case "pending", "queued", "in_pool", "in-pool", "pool":
-            return .pending
-        default:
-            return .unknown
-        }
-    }
-
-    private func settlementRejectionReason(from item: ToriiOfflineTransferItem) async throws -> String? {
-        if let reason = item.rejectionReason?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !reason.isEmpty {
-            return reason
-        }
-        if let reason = Self.extractRejectionReason(from: item.transfer) {
-            return reason
-        }
-        guard let verdictIdHex = item.verdictIdHex,
-              let normalizedVerdictIdHex = try? Self.normalizeBundleIdHex(verdictIdHex,
-                                                                           field: "verdictIdHex") else {
-            return nil
-        }
-        let envelope = ToriiQueryEnvelope(
-            filter: Self.queryEqualsFilter(field: "verdict_id_hex", value: normalizedVerdictIdHex),
-            sort: [ToriiQuerySortKey(key: "revoked_at_ms", order: .desc)],
-            pagination: ToriiQueryPagination(limit: 1, offset: 0)
-        )
-        let revocations = try await queryOfflineRevocations(envelope)
-        return revocations.items.first?.reason
-    }
-
-    private func cacheOfflineSettlementStatus(_ status: ToriiSettlementExecutionStatus,
-                                              bundleIdHex: String) {
-        offlineSettlementStatusQueue.sync {
-            cachedOfflineSettlementStatusByBundleIdHex[bundleIdHex] = status
-        }
-    }
-
-    private func cachedOfflineSettlementStatus(bundleIdHex: String) -> ToriiSettlementExecutionStatus? {
-        offlineSettlementStatusQueue.sync {
-            cachedOfflineSettlementStatusByBundleIdHex[bundleIdHex]
-        }
-    }
-
-    private static func extractRejectCode(from error: Error) -> String? {
-        guard let clientError = error as? ToriiClientError else {
-            return nil
-        }
-        guard case let .httpStatus(_, _, rejectCode) = clientError else {
-            return nil
-        }
-        return rejectCode
-    }
-
     private static func queryEqualsFilter(field: String, value: String) -> ToriiJSONValue {
         .object([
             "op": .string("eq"),
             "args": .array([.string(field), .string(value)])
         ])
-    }
-
-    private static func normalizeBundleIdHex(_ bundleIdHex: String,
-                                             field: String) throws -> String {
-        let trimmed = try ToriiRequestValidation.normalizedNonEmpty(bundleIdHex, field: field)
-        if trimmed.lowercased().hasPrefix("hash:") {
-            return try normalizeHashLiteralBundleId(trimmed, field: field)
-        }
-        var normalized = trimmed
-        if normalized.hasPrefix("0x") || normalized.hasPrefix("0X") {
-            normalized = String(normalized.dropFirst(2))
-        }
-        guard Data(hexString: normalized) != nil else {
-            throw ToriiClientError.invalidPayload("\(field) must be a valid hex string.")
-        }
-        return normalized.lowercased()
     }
 
     private static func normalizeHash32HexOrLiteral(_ value: String,
@@ -15810,41 +14970,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         return current & 0xFFFF
     }
 
-    private static func extractBundleIdHex(from transfer: ToriiJSONValue) -> String? {
-        guard case let .object(transferObject) = transfer else {
-            return nil
-        }
-        if let explicit = transferObject["bundle_id_hex"]?.normalizedString,
-           let normalized = try? normalizeBundleIdHex(explicit, field: "transfer.bundle_id_hex") {
-            return normalized
-        }
-        if let literal = transferObject["bundle_id"]?.normalizedString,
-           let normalized = try? normalizeBundleIdHex(literal, field: "transfer.bundle_id") {
-            return normalized
-        }
-        return nil
-    }
-
-    private static func extractRejectionReason(from transfer: ToriiJSONValue) -> String? {
-        guard case let .object(record) = transfer else {
-            return nil
-        }
-        if let reason = firstNormalizedString(in: record,
-                                              keys: ["rejection_reason", "reject_code", "reason"]) {
-            return reason
-        }
-        if let rejection = objectValue(record["rejection"]),
-           let reason = firstNormalizedString(in: rejection,
-                                              keys: ["reason", "code", "reject_code"]) {
-            return reason
-        }
-        if let error = objectValue(record["error"]),
-           let reason = firstNormalizedString(in: error,
-                                              keys: ["reason", "code", "reject_code"]) {
-            return reason
-        }
-        return nil
-    }
 
     private static func objectValue(_ value: ToriiJSONValue?) -> [String: ToriiJSONValue]? {
         guard let value else { return nil }

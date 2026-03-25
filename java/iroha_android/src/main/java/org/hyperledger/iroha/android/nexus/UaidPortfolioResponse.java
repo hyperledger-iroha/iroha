@@ -105,23 +105,23 @@ public final class UaidPortfolioResponse {
 
   /** Asset balance entry associated with an account. */
   public static final class UaidPortfolioAsset {
-    private final String assetId;
-    private final String assetDefinitionId;
+    private final String asset;
+    private final String scope;
     private final String quantity;
 
     public UaidPortfolioAsset(
-        final String assetId, final String assetDefinitionId, final String quantity) {
-      this.assetId = Objects.requireNonNull(assetId, "assetId");
-      this.assetDefinitionId = Objects.requireNonNull(assetDefinitionId, "assetDefinitionId");
+        final String asset, final String scope, final String quantity) {
+      this.asset = Objects.requireNonNull(asset, "asset");
+      this.scope = Objects.requireNonNull(scope, "scope");
       this.quantity = Objects.requireNonNull(quantity, "quantity");
     }
 
-    public String assetId() {
-      return assetId;
+    public String asset() {
+      return asset;
     }
 
-    public String assetDefinitionId() {
-      return assetDefinitionId;
+    public String scope() {
+      return scope;
     }
 
     public String quantity() {

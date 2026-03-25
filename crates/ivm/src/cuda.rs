@@ -21,6 +21,7 @@ mod imp {
     static BN254_PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/bn254.ptx"));
     static SIG_PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/signature.ptx"));
     static SHA_PAIRS_PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/sha256_pairs_reduce.ptx"));
+    #[allow(dead_code)]
     static BITONIC_PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/bitonic_sort.ptx"));
     static POSEIDON2_RC_FLAT: OnceLock<Vec<u64>> = OnceLock::new();
     static POSEIDON2_MDS_FLAT: OnceLock<Vec<u64>> = OnceLock::new();
@@ -75,6 +76,7 @@ mod imp {
     const POSEIDON6_STATE_WORDS: usize = POSEIDON6_WIDTH * BN254_LIMBS;
     const POSEIDON_FULL_ROUNDS: u32 = 8;
     const POSEIDON_PARTIAL_ROUNDS: u32 = 56;
+    #[cfg(test)]
     const POSEIDON_STATUS_ERR_STRIDE: u32 = 2; // keep in sync with poseidon.cu STATUS_ERR_STRIDE
     const POSEIDON_STATUS_ERR_ROUNDS: u32 = 3; // keep in sync with poseidon.cu STATUS_ERR_ROUNDS
 
@@ -100,6 +102,7 @@ mod imp {
         flat
     }
 
+    #[allow(dead_code)]
     pub(super) fn bitonic_sort_pairs(hi: &mut [u64], lo: &mut [u64]) -> Option<()> {
         if hi.len() != lo.len() {
             return None;
@@ -129,8 +132,8 @@ mod imp {
             gpu.with_stream(|stream| {
                 let module = Module::from_ptx(BITONIC_PTX, &[]).ok()?;
                 let function = module.get_function("bitonic_step").ok()?;
-                let mut d_hi = DeviceBuffer::from_slice(&hi_pad).ok()?;
-                let mut d_lo = DeviceBuffer::from_slice(&lo_pad).ok()?;
+                let d_hi = DeviceBuffer::from_slice(&hi_pad).ok()?;
+                let d_lo = DeviceBuffer::from_slice(&lo_pad).ok()?;
 
                 let threads: u32 = 256;
                 let blocks: u32 = ((pow2 as u32) + threads - 1) / threads;
@@ -179,9 +182,9 @@ mod imp {
             gpu.with_stream(|stream| {
                 let module = Module::from_ptx(BN254_PTX, &[]).ok()?;
                 let function = module.get_function(kernel_name).ok()?;
-                let mut d_lhs = DeviceBuffer::from_slice(lhs).ok()?;
-                let mut d_rhs = DeviceBuffer::from_slice(rhs).ok()?;
-                let mut d_out = device_buffer_uninitialized::<u64>(BN254_LIMBS)?;
+                let d_lhs = DeviceBuffer::from_slice(lhs).ok()?;
+                let d_rhs = DeviceBuffer::from_slice(rhs).ok()?;
+                let d_out = device_buffer_uninitialized::<u64>(BN254_LIMBS)?;
                 let threads: u32 = 128;
                 let grid: u32 = 1;
                 let launch_res = unsafe {
@@ -315,19 +318,13 @@ mod imp {
     }
 
     fn ed25519_cuda_selftest() -> bool {
-        use curve25519_dalek::scalar::Scalar;
         use ed25519_dalek::{Signer, SigningKey};
-        use sha2::{Digest, Sha512};
 
         let key = SigningKey::from_bytes(&[9u8; 32]);
         let pk = key.verifying_key();
         let msg = b"ivm-cuda-ed25519-selftest";
         let sig = key.sign(msg).to_bytes();
-        let mut hasher = Sha512::new();
-        hasher.update(&sig[..32]);
-        hasher.update(pk.as_bytes());
-        hasher.update(msg);
-        let hram = Scalar::from_hash(hasher).to_bytes();
+        let hram = crate::signature::ed25519_challenge_scalar_bytes(&sig, pk.as_bytes(), msg);
 
         let mgr = match crate::GpuManager::shared() {
             Some(mgr) => mgr,
@@ -340,10 +337,10 @@ mod imp {
             gpu.with_stream(|stream| {
                 let module = Module::from_ptx(SIG_PTX, &[]).ok()?;
                 let function = module.get_function("signature_kernel").ok()?;
-                let mut d_sig = DeviceBuffer::from_slice(sig.as_ref()).ok()?;
-                let mut d_pk = DeviceBuffer::from_slice(pk.as_bytes()).ok()?;
-                let mut d_hram = DeviceBuffer::from_slice(hram.as_ref()).ok()?;
-                let mut d_out = device_buffer_uninitialized::<u8>(1)?;
+                let d_sig = DeviceBuffer::from_slice(sig.as_ref()).ok()?;
+                let d_pk = DeviceBuffer::from_slice(pk.as_bytes()).ok()?;
+                let d_hram = DeviceBuffer::from_slice(hram.as_ref()).ok()?;
+                let d_out = device_buffer_uninitialized::<u8>(1)?;
                 unsafe {
                     launch!(function<<<1, 32, 0, stream>>>(
                         d_sig.as_device_ptr(),
@@ -385,10 +382,10 @@ mod imp {
             gpu.with_stream(|stream| {
                 let module = Module::from_ptx(SIG_PTX, &[]).ok()?;
                 let function = module.get_function("signature_kernel").ok()?;
-                let mut d_sig = DeviceBuffer::from_slice(&flat_sigs).ok()?;
-                let mut d_pk = DeviceBuffer::from_slice(&flat_pks).ok()?;
-                let mut d_hram = DeviceBuffer::from_slice(&flat_hrams).ok()?;
-                let mut d_out = device_buffer_uninitialized::<u8>(2)?;
+                let d_sig = DeviceBuffer::from_slice(&flat_sigs).ok()?;
+                let d_pk = DeviceBuffer::from_slice(&flat_pks).ok()?;
+                let d_hram = DeviceBuffer::from_slice(&flat_hrams).ok()?;
+                let d_out = device_buffer_uninitialized::<u8>(2)?;
                 unsafe {
                     launch!(function<<<1, 128, 0, stream>>>(
                         d_sig.as_device_ptr(),
@@ -503,6 +500,14 @@ mod imp {
                 record_cuda_disable("golden self-test mismatch: vadd32");
                 return false;
             }
+            if !vadd64_cuda_selftest() {
+                record_cuda_disable("golden self-test mismatch: vadd64");
+                return false;
+            }
+            if !bit_ops_cuda_selftest() {
+                record_cuda_disable("golden self-test mismatch: vector bit kernels");
+                return false;
+            }
             // sha256 parity on single block ("abc")
             let mut st_scalar = [
                 0x6a09e667u32,
@@ -527,8 +532,8 @@ mod imp {
                     gpu.with_stream(|stream| {
                         let module = Module::from_ptx(SHA_PTX, &[]).ok()?;
                         let function = module.get_function("sha256_compress").ok()?;
-                        let mut d_state = DeviceBuffer::from_slice(&st_cuda).ok()?;
-                        let mut d_block = DeviceBuffer::from_slice(&block).ok()?;
+                        let d_state = DeviceBuffer::from_slice(&st_cuda).ok()?;
+                        let d_block = DeviceBuffer::from_slice(&block).ok()?;
                         unsafe {
                             launch!(function<<<1, 1, 0, stream>>>(
                                 d_state.as_device_ptr(), d_block.as_device_ptr()
@@ -548,6 +553,14 @@ mod imp {
                 record_cuda_disable("golden self-test mismatch: sha256");
                 return false;
             }
+            if !sha256_leaves_cuda_selftest() {
+                record_cuda_disable("golden self-test mismatch: sha256 leaves");
+                return false;
+            }
+            if !sha256_pairs_reduce_cuda_selftest() {
+                record_cuda_disable("golden self-test mismatch: sha256 pairs");
+                return false;
+            }
             // keccak_f1600 parity on a simple patterned state
             let mut k_scalar = [0u64; 25];
             for i in 0..25 {
@@ -560,7 +573,7 @@ mod imp {
                     gpu.with_stream(|stream| {
                         let module = Module::from_ptx(SHA3_PTX, &[]).ok()?;
                         let function = module.get_function("keccak_f1600_cuda").ok()?;
-                        let mut d_state = DeviceBuffer::from_slice(&k_cuda).ok()?;
+                        let d_state = DeviceBuffer::from_slice(&k_cuda).ok()?;
                         unsafe {
                             launch!(function<<<1, 1, 0, stream>>>(d_state.as_device_ptr())).ok()?;
                         }
@@ -594,9 +607,9 @@ mod imp {
                         let module = Module::from_ptx(AES_PTX, &[]).ok()?;
                         // AESENC
                         let enc_fn = module.get_function("aesenc_round").ok()?;
-                        let mut d_state = DeviceBuffer::from_slice(&state).ok()?;
-                        let mut d_rk = DeviceBuffer::from_slice(&rk).ok()?;
-                        let mut d_out = device_buffer_uninitialized::<u8>(16)?;
+                        let d_state = DeviceBuffer::from_slice(&state).ok()?;
+                        let d_rk = DeviceBuffer::from_slice(&rk).ok()?;
+                        let d_out = device_buffer_uninitialized::<u8>(16)?;
                         unsafe {
                             launch!(enc_fn<<<1, 1, 0, stream>>>(
                                 d_state.as_device_ptr(),
@@ -613,8 +626,8 @@ mod imp {
                         }
                         // AESDEC on the encoded block
                         let dec_fn = module.get_function("aesdec_round").ok()?;
-                        let mut d_state2 = DeviceBuffer::from_slice(&enc_out).ok()?;
-                        let mut d_out2 = device_buffer_uninitialized::<u8>(16)?;
+                        let d_state2 = DeviceBuffer::from_slice(&enc_out).ok()?;
+                        let d_out2 = device_buffer_uninitialized::<u8>(16)?;
                         unsafe {
                             launch!(dec_fn<<<1, 1, 0, stream>>>(
                                 d_state2.as_device_ptr(),
@@ -638,6 +651,10 @@ mod imp {
             };
             if !ok {
                 record_cuda_disable("golden self-test mismatch: aes round");
+                return false;
+            }
+            if !aes_batch_cuda_selftest() {
+                record_cuda_disable("golden self-test mismatch: aes batch");
                 return false;
             }
             // AES fused two-round parity (ENC and DEC) to validate fused kernels
@@ -666,15 +683,15 @@ mod imp {
                         let module = Module::from_ptx(AES_PTX, &[]).ok()?;
                         // Encrypt 2 rounds
                         let enc_fn = module.get_function("aesenc_rounds_batch").ok()?;
-                        let mut d_states = DeviceBuffer::from_slice(&state).ok()?;
+                        let d_states = DeviceBuffer::from_slice(&state).ok()?;
                         let rks: [u8; 32] = {
                             let mut buf = [0u8; 32];
                             buf[..16].copy_from_slice(&rk1);
                             buf[16..].copy_from_slice(&rk2);
                             buf
                         };
-                        let mut d_rks = DeviceBuffer::from_slice(&rks).ok()?;
-                        let mut d_out = device_buffer_uninitialized::<u8>(16)?;
+                        let d_rks = DeviceBuffer::from_slice(&rks).ok()?;
+                        let d_out = device_buffer_uninitialized::<u8>(16)?;
                         unsafe {
                             launch!(enc_fn<<<1, 1, 0, stream>>>(
                                 d_states.as_device_ptr(),
@@ -693,8 +710,8 @@ mod imp {
                         }
                         // Decrypt 2 rounds on enc2
                         let dec_fn = module.get_function("aesdec_rounds_batch").ok()?;
-                        let mut d_states2 = DeviceBuffer::from_slice(&enc2).ok()?;
-                        let mut d_out2 = device_buffer_uninitialized::<u8>(16)?;
+                        let d_states2 = DeviceBuffer::from_slice(&enc2).ok()?;
+                        let d_out2 = device_buffer_uninitialized::<u8>(16)?;
                         unsafe {
                             launch!(dec_fn<<<1, 1, 0, stream>>>(
                                 d_states2.as_device_ptr(),
@@ -797,9 +814,9 @@ mod imp {
             gpu.with_stream(|stream| {
                 let module = Module::from_ptx(PTX, &[]).ok()?;
                 let function = module.get_function("sum").ok()?;
-                let mut d_a = DeviceBuffer::from_slice(a).ok()?;
-                let mut d_b = DeviceBuffer::from_slice(b).ok()?;
-                let mut d_out = device_buffer_uninitialized::<f32>(len)?;
+                let d_a = DeviceBuffer::from_slice(a).ok()?;
+                let d_b = DeviceBuffer::from_slice(b).ok()?;
+                let d_out = device_buffer_uninitialized::<f32>(len)?;
                 unsafe {
                     launch!(function<<<(len as u32 + 255) / 256, 256, 0, stream>>>(
                         d_a.as_device_ptr(),
@@ -827,9 +844,9 @@ mod imp {
             gpu.with_stream(|stream| {
                 let module = Module::from_ptx(VEC_PTX, &[]).ok()?;
                 let function = module.get_function(name).ok()?;
-                let mut d_a = DeviceBuffer::from_slice(a).ok()?;
-                let mut d_b = DeviceBuffer::from_slice(b).ok()?;
-                let mut d_out = device_buffer_uninitialized::<u32>(len)?;
+                let d_a = DeviceBuffer::from_slice(a).ok()?;
+                let d_b = DeviceBuffer::from_slice(b).ok()?;
+                let d_out = device_buffer_uninitialized::<u32>(len)?;
                 unsafe {
                     launch!(function<<<(len as u32 + 255) / 256, 256, 0, stream>>> (
                         d_a.as_device_ptr(),
@@ -857,9 +874,9 @@ mod imp {
             gpu.with_stream(|stream| {
                 let module = Module::from_ptx(VEC_PTX, &[]).ok()?;
                 let function = module.get_function(name).ok()?;
-                let mut d_a = DeviceBuffer::from_slice(a).ok()?;
-                let mut d_b = DeviceBuffer::from_slice(b).ok()?;
-                let mut d_out = device_buffer_uninitialized::<u64>(len)?;
+                let d_a = DeviceBuffer::from_slice(a).ok()?;
+                let d_b = DeviceBuffer::from_slice(b).ok()?;
+                let d_out = device_buffer_uninitialized::<u64>(len)?;
                 unsafe {
                     launch!(function<<<(len as u32 + 255) / 256, 256, 0, stream>>> (
                         d_a.as_device_ptr(),
@@ -875,6 +892,138 @@ mod imp {
                 Some(out)
             })
         })?
+    }
+
+    fn vadd64_cuda_selftest() -> bool {
+        let a = [
+            (0x0000_0000u64 << 32) | 0xffff_ffff,
+            (0x8000_0000u64 << 32) | 0x0000_0001,
+        ];
+        let b = [
+            (0x0000_0001u64 << 32) | 0x0000_0001,
+            (0x7fff_ffffu64 << 32) | 0xffff_ffff,
+        ];
+        let expected = vec![a[0].wrapping_add(b[0]), a[1].wrapping_add(b[1])];
+        launch_u64_kernel("vadd64", &a, &b)
+            .map(|actual| actual == expected)
+            .unwrap_or(false)
+    }
+
+    fn bit_ops_cuda_selftest() -> bool {
+        let lhs = [0xffff_0000u32, 0x1234_5678, 0x0f0f_0f0f, 0xaaaa_5555];
+        let rhs = [0x00ff_ff00u32, 0xf0f0_f0f0, 0x3333_cccc, 0x5555_aaaa];
+        let and_ok = launch_u32_kernel("vand", &lhs, &rhs)
+            .map(|actual| {
+                actual
+                    == vec![
+                        lhs[0] & rhs[0],
+                        lhs[1] & rhs[1],
+                        lhs[2] & rhs[2],
+                        lhs[3] & rhs[3],
+                    ]
+            })
+            .unwrap_or(false);
+        let xor_ok = launch_u32_kernel("vxor", &lhs, &rhs)
+            .map(|actual| {
+                actual
+                    == vec![
+                        lhs[0] ^ rhs[0],
+                        lhs[1] ^ rhs[1],
+                        lhs[2] ^ rhs[2],
+                        lhs[3] ^ rhs[3],
+                    ]
+            })
+            .unwrap_or(false);
+        let or_ok = launch_u32_kernel("vor", &lhs, &rhs)
+            .map(|actual| {
+                actual
+                    == vec![
+                        lhs[0] | rhs[0],
+                        lhs[1] | rhs[1],
+                        lhs[2] | rhs[2],
+                        lhs[3] | rhs[3],
+                    ]
+            })
+            .unwrap_or(false);
+        and_ok && xor_ok && or_ok
+    }
+
+    fn aes_batch_cuda_selftest() -> bool {
+        let states = [
+            [
+                0x00u8, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc,
+                0xdd, 0xee, 0xff,
+            ],
+            [
+                0xffu8, 0xee, 0xdd, 0xcc, 0xbb, 0xaa, 0x99, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33,
+                0x22, 0x11, 0x00,
+            ],
+        ];
+        let rk = [
+            0x0f, 0x15, 0x71, 0xc9, 0x47, 0xd9, 0xe8, 0x59, 0x0c, 0xb7, 0xad, 0xd6, 0xaf, 0x7f,
+            0x67, 0x98,
+        ];
+        let expected_enc: Vec<[u8; 16]> = states
+            .iter()
+            .map(|&state| crate::aes::aesenc_impl(state, rk))
+            .collect();
+        let expected_dec: Vec<[u8; 16]> = states
+            .iter()
+            .map(|&state| crate::aes::aesdec_impl(state, rk))
+            .collect();
+
+        let mgr = match crate::GpuManager::shared() {
+            Some(mgr) => mgr,
+            None => return false,
+        };
+        let module = match Module::from_ptx(AES_PTX, &[]) {
+            Ok(module) => module,
+            Err(_) => return false,
+        };
+        let flat: Vec<u8> = states
+            .iter()
+            .flat_map(|state| state.iter())
+            .copied()
+            .collect();
+        let count = states.len() as u32;
+        let run_batch = |function_name: &str, expected: &[[u8; 16]]| -> Option<bool> {
+            let function = module.get_function(function_name).ok()?;
+            let mut out = vec![0u8; flat.len()];
+            let result = mgr.with_gpu_for_task(0, |gpu| {
+                gpu.with_stream(|stream| {
+                    let d_states = DeviceBuffer::from_slice(&flat).ok()?;
+                    let d_rk = DeviceBuffer::from_slice(&rk).ok()?;
+                    let d_out = device_buffer_uninitialized::<u8>(out.len())?;
+                    let threads: u32 = 256;
+                    let grid: u32 = ((count + threads - 1) / threads).max(1);
+                    unsafe {
+                        launch!(function<<<grid, threads, 0, stream>>>(
+                            d_states.as_device_ptr(),
+                            d_rk.as_device_ptr(),
+                            d_out.as_device_ptr(),
+                            count
+                        ))
+                        .ok()?;
+                    }
+                    stream.synchronize().ok()?;
+                    d_out.copy_to(&mut out).ok()?;
+                    Some(())
+                })
+            });
+            result??;
+            let actual: Vec<[u8; 16]> = out
+                .chunks_exact(16)
+                .map(|chunk| {
+                    let mut block = [0u8; 16];
+                    block.copy_from_slice(chunk);
+                    block
+                })
+                .collect();
+            Some(actual == expected)
+        };
+
+        run_batch("aesenc_round_batch", &expected_enc).unwrap_or(false)
+            && run_batch("aesdec_round_batch", &expected_dec).unwrap_or(false)
     }
 
     pub fn vadd32_cuda(a: &[u32], b: &[u32]) -> Option<Vec<u32>> {
@@ -932,11 +1081,11 @@ mod imp {
         };
         let result = mgr.with_gpu_for_task(0, |gpu| {
             gpu.with_stream(|stream| {
-                let mut d_state = match DeviceBuffer::from_slice(state) {
+                let d_state = match DeviceBuffer::from_slice(state) {
                     Ok(b) => b,
                     Err(_) => return Some(false),
                 };
-                let mut d_block = match DeviceBuffer::from_slice(block) {
+                let d_block = match DeviceBuffer::from_slice(block) {
                     Ok(b) => b,
                     Err(_) => return Some(false),
                 };
@@ -966,6 +1115,198 @@ mod imp {
         }
     }
 
+    fn sha256_leaves_cuda_selftest() -> bool {
+        let mut block_a = [0u8; 64];
+        block_a[0] = b'a';
+        block_a[1] = b'b';
+        block_a[2] = b'c';
+        block_a[3] = 0x80;
+        block_a[63] = 24;
+
+        let mut block_b = [0u8; 64];
+        block_b[0] = b'n';
+        block_b[1] = b'o';
+        block_b[2] = b'r';
+        block_b[3] = b'i';
+        block_b[4] = b't';
+        block_b[5] = b'o';
+        block_b[6] = 0x80;
+        block_b[63] = 48;
+
+        let blocks = [block_a, block_b];
+        let expected: Vec<[u8; 32]> = blocks
+            .iter()
+            .map(|block| {
+                let mut state = [
+                    0x6a09e667u32,
+                    0xbb67ae85,
+                    0x3c6ef372,
+                    0xa54ff53a,
+                    0x510e527f,
+                    0x9b05688c,
+                    0x1f83d9ab,
+                    0x5be0cd19,
+                ];
+                sha256_scalar_ref(&mut state, block);
+                let mut digest = [0u8; 32];
+                for (index, word) in state.iter().enumerate() {
+                    digest[index * 4..index * 4 + 4].copy_from_slice(&word.to_be_bytes());
+                }
+                digest
+            })
+            .collect();
+
+        let mgr = match crate::GpuManager::shared() {
+            Some(mgr) => mgr,
+            None => return false,
+        };
+        let module = match Module::from_ptx(SHA_LEAVES_PTX, &[]) {
+            Ok(module) => module,
+            Err(_) => return false,
+        };
+        let function = match module.get_function("sha256_leaves") {
+            Ok(function) => function,
+            Err(_) => return false,
+        };
+
+        let flat: Vec<u8> = blocks
+            .iter()
+            .flat_map(|block| block.iter())
+            .copied()
+            .collect();
+        let mut out_words = vec![0u32; blocks.len() * 8];
+        let count = blocks.len() as u32;
+        let result = mgr.with_gpu_for_task(0, |gpu| {
+            gpu.with_stream(|stream| {
+                let d_blocks = DeviceBuffer::from_slice(&flat).ok()?;
+                let d_out = device_buffer_uninitialized::<u32>(out_words.len())?;
+                let threads: u32 = 256;
+                let grid: u32 = ((count + threads - 1) / threads).max(1);
+                unsafe {
+                    launch!(function<<<grid, threads, 0, stream>>>(
+                        d_blocks.as_device_ptr(),
+                        d_out.as_device_ptr(),
+                        count
+                    ))
+                    .ok()?;
+                }
+                stream.synchronize().ok()?;
+                d_out.copy_to(&mut out_words).ok()?;
+                Some(())
+            })
+        });
+        if result.is_none() || result.flatten().is_none() {
+            return false;
+        }
+
+        let actual: Vec<[u8; 32]> = out_words
+            .chunks_exact(8)
+            .map(|chunk| {
+                let mut digest = [0u8; 32];
+                for (index, word) in chunk.iter().enumerate() {
+                    digest[index * 4..index * 4 + 4].copy_from_slice(&word.to_be_bytes());
+                }
+                digest
+            })
+            .collect();
+        actual == expected
+    }
+
+    fn sha256_pairs_reduce_cuda_selftest() -> bool {
+        fn cpu_pair(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
+            let mut state = [
+                0x6a09e667u32,
+                0xbb67ae85,
+                0x3c6ef372,
+                0xa54ff53a,
+                0x510e527f,
+                0x9b05688c,
+                0x1f83d9ab,
+                0x5be0cd19,
+            ];
+            let mut block = [0u8; 64];
+            block[..32].copy_from_slice(left);
+            block[32..].copy_from_slice(right);
+            sha256_scalar_ref(&mut state, &block);
+            let mut pad = [0u8; 64];
+            pad[0] = 0x80;
+            pad[62] = 0x02;
+            pad[63] = 0x00;
+            sha256_scalar_ref(&mut state, &pad);
+            let mut out = [0u8; 32];
+            for (index, word) in state.iter().enumerate() {
+                out[index * 4..index * 4 + 4].copy_from_slice(&word.to_be_bytes());
+            }
+            out
+        }
+
+        let mut d0 = [0u8; 32];
+        let mut d1 = [0u8; 32];
+        let mut d2 = [0u8; 32];
+        for (index, byte) in d0.iter_mut().enumerate() {
+            *byte = index as u8;
+        }
+        for (index, byte) in d1.iter_mut().enumerate() {
+            *byte = 0x40 + index as u8;
+        }
+        for (index, byte) in d2.iter_mut().enumerate() {
+            *byte = 0x80 + index as u8;
+        }
+        let digests = [d0, d1, d2];
+        let first = cpu_pair(&digests[0], &digests[1]);
+        let expected = cpu_pair(&first, &digests[2]);
+
+        let mgr = match crate::GpuManager::shared() {
+            Some(mgr) => mgr,
+            None => return false,
+        };
+        let module = match Module::from_ptx(SHA_PAIRS_PTX, &[]) {
+            Ok(module) => module,
+            Err(_) => return false,
+        };
+        let function = match module.get_function("sha256_pairs_reduce") {
+            Ok(function) => function,
+            Err(_) => return false,
+        };
+
+        let mut cur: Vec<u8> = digests
+            .iter()
+            .flat_map(|digest| digest.iter())
+            .copied()
+            .collect();
+        let mut cur_count = digests.len() as u32;
+        while cur_count > 1 {
+            let next_count = (cur_count + 1) / 2;
+            let mut next = vec![0u8; (next_count as usize) * 32];
+            let result = mgr.with_gpu_for_task(0, |gpu| {
+                gpu.with_stream(|stream| {
+                    let d_in = DeviceBuffer::from_slice(&cur).ok()?;
+                    let d_out = device_buffer_uninitialized::<u8>(next.len())?;
+                    let threads: u32 = 256;
+                    let grid: u32 = ((next_count + threads - 1) / threads).max(1);
+                    unsafe {
+                        launch!(function<<<grid, threads, 0, stream>>>(
+                            d_in.as_device_ptr(),
+                            d_out.as_device_ptr(),
+                            cur_count
+                        ))
+                        .ok()?;
+                    }
+                    stream.synchronize().ok()?;
+                    d_out.copy_to(&mut next).ok()?;
+                    Some(())
+                })
+            });
+            if result.is_none() || result.flatten().is_none() {
+                return false;
+            }
+            cur = next;
+            cur_count = next_count;
+        }
+
+        cur[..32] == expected
+    }
+
     /// Compute SHA-256 digests for many 64-byte blocks in parallel on the GPU.
     /// Each block must be a fully padded single-block message. Returns digest
     /// bytes (big-endian) per block on success.
@@ -985,8 +1326,8 @@ mod imp {
         let mut out_words = vec![0u32; (count as usize) * 8];
         let result = mgr.with_gpu_for_task(0, |gpu| {
             gpu.with_stream(|stream| {
-                let mut d_blocks = DeviceBuffer::from_slice(&flat).ok()?;
-                let mut d_out = device_buffer_uninitialized::<u32>(out_words.len())?;
+                let d_blocks = DeviceBuffer::from_slice(&flat).ok()?;
+                let d_out = device_buffer_uninitialized::<u32>(out_words.len())?;
                 // Launch with 256 threads per block
                 let threads: u32 = 256;
                 let grid: u32 = ((count + threads - 1) / threads).max(1);
@@ -1042,8 +1383,8 @@ mod imp {
             let mut next = vec![0u8; (next_count as usize) * 32];
             let ok = mgr.with_gpu_for_task(0, |gpu| {
                 gpu.with_stream(|stream| {
-                    let mut d_in = DeviceBuffer::from_slice(&cur).ok()?;
-                    let mut d_out = device_buffer_uninitialized::<u8>(next.len())?;
+                    let d_in = DeviceBuffer::from_slice(&cur).ok()?;
+                    let d_out = device_buffer_uninitialized::<u8>(next.len())?;
                     let threads: u32 = 256;
                     let grid: u32 = ((next_count + threads - 1) / threads).max(1);
                     unsafe {
@@ -1102,10 +1443,10 @@ mod imp {
             gpu.with_stream(|stream| {
                 let module = Module::from_ptx(POSEIDON_PTX, &[]).ok()?;
                 let function = module.get_function(kernel_name).ok()?;
-                let mut d_state = DeviceBuffer::from_slice(state_words).ok()?;
-                let mut d_rc = DeviceBuffer::from_slice(rc_flat).ok()?;
-                let mut d_mds = DeviceBuffer::from_slice(mds_flat).ok()?;
-                let mut d_status = DeviceBuffer::from_slice(&status).ok()?;
+                let d_state = DeviceBuffer::from_slice(state_words).ok()?;
+                let d_rc = DeviceBuffer::from_slice(rc_flat).ok()?;
+                let d_mds = DeviceBuffer::from_slice(mds_flat).ok()?;
+                let d_status = DeviceBuffer::from_slice(&status).ok()?;
                 let threads: u32 = 32;
                 let blocks = ((batch_len + threads - 1) / threads).max(1);
                 let grid = blocks.max(1);
@@ -1330,7 +1671,7 @@ mod imp {
         };
         let result = mgr.with_gpu_for_task(0, |gpu| {
             gpu.with_stream(|stream| {
-                let mut d_state = match DeviceBuffer::from_slice(state) {
+                let d_state = match DeviceBuffer::from_slice(state) {
                     Ok(b) => b,
                     Err(_) => return Some(false),
                 };
@@ -1365,9 +1706,9 @@ mod imp {
             gpu.with_stream(|stream| {
                 let module = Module::from_ptx(AES_PTX, &[]).ok()?;
                 let function = module.get_function("aesenc_round").ok()?;
-                let mut d_state = DeviceBuffer::from_slice(&state).ok()?;
-                let mut d_rk = DeviceBuffer::from_slice(&rk).ok()?;
-                let mut d_out = device_buffer_uninitialized::<u8>(16)?;
+                let d_state = DeviceBuffer::from_slice(&state).ok()?;
+                let d_rk = DeviceBuffer::from_slice(&rk).ok()?;
+                let d_out = device_buffer_uninitialized::<u8>(16)?;
                 unsafe {
                     launch!(function<<<1, 1, 0, stream>>>(
                         d_state.as_device_ptr(),
@@ -1394,9 +1735,9 @@ mod imp {
             gpu.with_stream(|stream| {
                 let module = Module::from_ptx(AES_PTX, &[]).ok()?;
                 let function = module.get_function("aesdec_round").ok()?;
-                let mut d_state = DeviceBuffer::from_slice(&state).ok()?;
-                let mut d_rk = DeviceBuffer::from_slice(&rk).ok()?;
-                let mut d_out = device_buffer_uninitialized::<u8>(16)?;
+                let d_state = DeviceBuffer::from_slice(&state).ok()?;
+                let d_rk = DeviceBuffer::from_slice(&rk).ok()?;
+                let d_out = device_buffer_uninitialized::<u8>(16)?;
                 unsafe {
                     launch!(function<<<1, 1, 0, stream>>>(
                         d_state.as_device_ptr(),
@@ -1436,9 +1777,9 @@ mod imp {
         let mut out = vec![0u8; states.len() * 16];
         let ok = mgr.with_gpu_for_task(0, |gpu| {
             gpu.with_stream(|stream| {
-                let mut d_states = DeviceBuffer::from_slice(&flat).ok()?;
-                let mut d_rk = DeviceBuffer::from_slice(&rk).ok()?;
-                let mut d_out = device_buffer_uninitialized::<u8>(out.len())?;
+                let d_states = DeviceBuffer::from_slice(&flat).ok()?;
+                let d_rk = DeviceBuffer::from_slice(&rk).ok()?;
+                let d_out = device_buffer_uninitialized::<u8>(out.len())?;
                 let threads: u32 = 256;
                 let grid: u32 = ((count + threads - 1) / threads).max(1);
                 unsafe {
@@ -1486,9 +1827,9 @@ mod imp {
         let mut out = vec![0u8; states.len() * 16];
         let ok = mgr.with_gpu_for_task(0, |gpu| {
             gpu.with_stream(|stream| {
-                let mut d_states = DeviceBuffer::from_slice(&flat).ok()?;
-                let mut d_rk = DeviceBuffer::from_slice(&rk).ok()?;
-                let mut d_out = device_buffer_uninitialized::<u8>(out.len())?;
+                let d_states = DeviceBuffer::from_slice(&flat).ok()?;
+                let d_rk = DeviceBuffer::from_slice(&rk).ok()?;
+                let d_out = device_buffer_uninitialized::<u8>(out.len())?;
                 let threads: u32 = 256;
                 let grid: u32 = ((count + threads - 1) / threads).max(1);
                 unsafe {
@@ -1539,9 +1880,9 @@ mod imp {
         let mut out = vec![0u8; states.len() * 16];
         let ok = mgr.with_gpu_for_task(0, |gpu| {
             gpu.with_stream(|stream| {
-                let mut d_states = DeviceBuffer::from_slice(&flat_states).ok()?;
-                let mut d_rks = DeviceBuffer::from_slice(&flat_rks).ok()?;
-                let mut d_out = device_buffer_uninitialized::<u8>(out.len())?;
+                let d_states = DeviceBuffer::from_slice(&flat_states).ok()?;
+                let d_rks = DeviceBuffer::from_slice(&flat_rks).ok()?;
+                let d_out = device_buffer_uninitialized::<u8>(out.len())?;
                 let threads: u32 = 256;
                 let grid: u32 = ((count + threads - 1) / threads).max(1);
                 unsafe {
@@ -1593,9 +1934,9 @@ mod imp {
         let mut out = vec![0u8; states.len() * 16];
         let ok = mgr.with_gpu_for_task(0, |gpu| {
             gpu.with_stream(|stream| {
-                let mut d_states = DeviceBuffer::from_slice(&flat_states).ok()?;
-                let mut d_rks = DeviceBuffer::from_slice(&flat_rks).ok()?;
-                let mut d_out = device_buffer_uninitialized::<u8>(out.len())?;
+                let d_states = DeviceBuffer::from_slice(&flat_states).ok()?;
+                let d_rks = DeviceBuffer::from_slice(&flat_rks).ok()?;
+                let d_out = device_buffer_uninitialized::<u8>(out.len())?;
                 let threads: u32 = 256;
                 let grid: u32 = ((count + threads - 1) / threads).max(1);
                 unsafe {
@@ -1650,21 +1991,14 @@ mod imp {
         if !ensure_cuda_selftest() {
             return None;
         }
-        use curve25519_dalek::scalar::Scalar;
         use ed25519_dalek::{Signature, VerifyingKey};
-        use sha2::{Digest, Sha512};
 
         let signature = Signature::from_slice(sig).ok()?;
         let sig_bytes = signature.to_bytes();
         let verifying_key = VerifyingKey::from_bytes(pk).ok()?;
         let pk_bytes = verifying_key.to_bytes();
-
-        let mut hasher = Sha512::new();
-        hasher.update(&sig_bytes[..32]);
-        hasher.update(pk_bytes.as_ref());
-        hasher.update(msg);
-        let hram_scalar = Scalar::from_hash(hasher);
-        let hram_bytes = hram_scalar.to_bytes();
+        let hram_bytes =
+            crate::signature::ed25519_challenge_scalar_bytes(&sig_bytes, &pk_bytes, msg);
 
         let mgr = crate::GpuManager::shared()?;
         let module = Module::from_ptx(SIG_PTX, &[]).ok()?;
@@ -1672,10 +2006,10 @@ mod imp {
 
         let gpu_result = mgr.with_gpu_for_task(0, |gpu| {
             gpu.with_stream(|stream| {
-                let mut d_sig = DeviceBuffer::from_slice(sig_bytes.as_ref()).ok()?;
-                let mut d_pk = DeviceBuffer::from_slice(pk_bytes.as_ref()).ok()?;
-                let mut d_hram = DeviceBuffer::from_slice(hram_bytes.as_ref()).ok()?;
-                let mut d_out = device_buffer_uninitialized::<u8>(1)?;
+                let d_sig = DeviceBuffer::from_slice(sig_bytes.as_ref()).ok()?;
+                let d_pk = DeviceBuffer::from_slice(pk_bytes.as_ref()).ok()?;
+                let d_hram = DeviceBuffer::from_slice(hram_bytes.as_ref()).ok()?;
+                let d_out = device_buffer_uninitialized::<u8>(1)?;
                 unsafe {
                     launch!(function<<<1, 32, 0, stream>>>(
                         d_sig.as_device_ptr(),
@@ -1734,10 +2068,10 @@ mod imp {
         let function = module.get_function("signature_kernel").ok()?;
         let gpu_result = mgr.with_gpu_for_task(0, |gpu| {
             gpu.with_stream(|stream| {
-                let mut d_sig = DeviceBuffer::from_slice(&flat_sigs).ok()?;
-                let mut d_pk = DeviceBuffer::from_slice(&flat_pks).ok()?;
-                let mut d_hram = DeviceBuffer::from_slice(&flat_hrams).ok()?;
-                let mut d_out = device_buffer_uninitialized::<u8>(count)?;
+                let d_sig = DeviceBuffer::from_slice(&flat_sigs).ok()?;
+                let d_pk = DeviceBuffer::from_slice(&flat_pks).ok()?;
+                let d_hram = DeviceBuffer::from_slice(&flat_hrams).ok()?;
+                let d_out = device_buffer_uninitialized::<u8>(count)?;
                 let threads: u32 = 128;
                 let blocks: u32 = ((count as u32) + threads - 1) / threads;
                 unsafe {
@@ -1880,6 +2214,50 @@ mod imp {
         }
 
         #[test]
+        fn sha256_merkle_selftest_covers_cuda_kernels() {
+            if !ensure_cuda_selftest() {
+                eprintln!("CUDA unavailable; skipping SHA-256 merkle self-test regression");
+                return;
+            }
+            assert!(
+                sha256_leaves_cuda_selftest(),
+                "sha256 leaves CUDA self-test must accept the golden truth set",
+            );
+            assert!(
+                sha256_pairs_reduce_cuda_selftest(),
+                "sha256 pairs-reduce CUDA self-test must accept the golden truth set",
+            );
+        }
+
+        #[test]
+        fn vector_selftest_covers_cuda_kernels() {
+            if !ensure_cuda_selftest() {
+                eprintln!("CUDA unavailable; skipping vector self-test regression");
+                return;
+            }
+            assert!(
+                vadd64_cuda_selftest(),
+                "vadd64 CUDA self-test must accept the golden truth set",
+            );
+            assert!(
+                bit_ops_cuda_selftest(),
+                "bitwise CUDA self-test must accept the golden truth set",
+            );
+        }
+
+        #[test]
+        fn aes_batch_selftest_covers_cuda_kernels() {
+            if !ensure_cuda_selftest() {
+                eprintln!("CUDA unavailable; skipping AES batch self-test regression");
+                return;
+            }
+            assert!(
+                aes_batch_cuda_selftest(),
+                "AES batch CUDA self-test must accept the golden truth set",
+            );
+        }
+
+        #[test]
         fn bn254_selftest_covers_cuda_kernels() {
             if !ensure_cuda_selftest() {
                 eprintln!("CUDA unavailable; skipping BN254 self-test regression");
@@ -1897,6 +2275,7 @@ mod imp {
 pub use imp::*;
 
 #[cfg(feature = "cuda")]
+#[allow(dead_code)]
 pub fn bitonic_sort_pairs(hi: &mut [u64], lo: &mut [u64]) -> Option<()> {
     imp::bitonic_sort_pairs(hi, lo)
 }

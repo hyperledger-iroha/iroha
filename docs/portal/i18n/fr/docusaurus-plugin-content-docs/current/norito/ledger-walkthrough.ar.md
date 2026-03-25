@@ -59,14 +59,14 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 Utilisez le hachage CLI pour la connexion (avec `0x5f…`). احفظه كي تستعلم عن الحالة لاحقا.
 
 ## 3. سك وحدات في حساب المشغل
 
-Il s'agit du `(asset definition, account)`. Il y a 250 millions de dollars pour `coffee#wonderland` pour `$ADMIN_ACCOUNT` :
+Il s'agit du `(asset definition, account)`. Il y a 250 millions de dollars pour `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` pour `$ADMIN_ACCOUNT` :
 
 ```sh
 iroha --config defaults/client.toml asset mint \

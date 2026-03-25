@@ -11,7 +11,7 @@
             "kind": "Transfer",
             "arguments": {
               "action": "TransferAsset",
-              "asset_definition_id": "rose#wonderland",
+              "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
               "quantity": "15.7500",
               "destination": "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp"
             }
@@ -35,7 +35,7 @@
             "kind": "Mint",
             "arguments": {
               "action": "MintAsset",
-              "asset_definition_id": "rose#wonderland",
+              "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
               "quantity": "42.0100",
               "destination": "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp"
             }
@@ -59,7 +59,7 @@
             "kind": "Burn",
             "arguments": {
               "action": "BurnAsset",
-              "asset_definition_id": "rose#wonderland",
+              "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
               "quantity": "5.2500",
               "destination": "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp"
             }

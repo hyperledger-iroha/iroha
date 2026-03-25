@@ -30,7 +30,10 @@ fn validate_known_types_ok() {
     let valid_account = valid_account_id_literal();
     let cases: Vec<(PointerType, &[u8])> = vec![
         (PointerType::AccountId, valid_account.as_slice()),
-        (PointerType::AssetDefinitionId, b"rose#wonderland"),
+        (
+            PointerType::AssetDefinitionId,
+            b"62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+        ),
         (PointerType::Name, b"cursor"),
         (PointerType::Json, br#"{"q":1}"#),
         (PointerType::NftId, b"rose$wonderland"),

@@ -22,7 +22,7 @@ private struct WalletFixtureCase: Decodable {
 final class ConfidentialWalletFixturesTests: XCTestCase {
     private static let fixtureChainId = "00000000-0000-0000-0000-000000000000"
     private static let fixtureDomain = "wonderland"
-    private static let fixtureAssetDefinition = "rose#wonderland"
+    private static let fixtureAssetDefinition = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
     private static let fixtureCreationTime: UInt64 = 1_700_000_000_000
     private static let fixtureTtlMs: UInt64 = 45
     private static let fixturePrivateKeyHex =

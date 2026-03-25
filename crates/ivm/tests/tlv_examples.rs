@@ -77,7 +77,7 @@ fn tlv_account_id_structure() {
 
 #[test]
 fn tlv_assetdef_structure() {
-    let payload = b"rose#wonderland";
+    let payload = b"62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
     let tlv = make_tlv(0x0002, 1, payload);
     assert_eq!(u16::from_be_bytes(tlv[0..2].try_into().unwrap()), 0x0002);
     assert_eq!(

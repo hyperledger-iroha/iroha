@@ -2431,7 +2431,10 @@ mod tests {
         vm.memory
             .preload_input(from.len() as u64 + 8, &to)
             .expect("preload to");
-        let asset = make_pointer_tlv(PointerType::AssetDefinitionId, b"rose#wonderland");
+        let asset = make_pointer_tlv(
+            PointerType::AssetDefinitionId,
+            b"62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+        );
         vm.memory
             .preload_input(from.len() as u64 + to.len() as u64 + 16, &asset)
             .expect("preload asset");

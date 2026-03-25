@@ -69,7 +69,7 @@ domen:
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI topshirilgan tranzaksiya xeshini chop etadi (masalan,
@@ -78,7 +78,7 @@ CLI topshirilgan tranzaksiya xeshini chop etadi (masalan,
 ## 3. Operator hisobiga zarb birliklari
 
 Aktivlar miqdori `(asset definition, account)` juftligi ostida yashaydi. Yalpiz 250
-`coffee#wonderland` birliklari `$ADMIN_ACCOUNT` ga:
+`7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` birliklari `$ADMIN_ACCOUNT` ga:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

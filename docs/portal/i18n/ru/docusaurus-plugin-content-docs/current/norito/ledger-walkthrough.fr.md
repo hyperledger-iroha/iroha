@@ -67,7 +67,7 @@ Creez un nouvel actif infiniment mintable appele `coffee` в домене
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI добавляет хэш суммы транзакции (например, `0x5f...`). Консерве-ле
@@ -76,7 +76,7 @@ CLI добавляет хэш суммы транзакции (например,
 ## 3. Minter des unites sur le Compte Operationur
 
 Количество действий, живущих в одной паре `(asset definition, account)`. Минтез 250
-Объединяет `coffee#wonderland` и `$ADMIN_ACCOUNT`:
+Объединяет `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` и `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

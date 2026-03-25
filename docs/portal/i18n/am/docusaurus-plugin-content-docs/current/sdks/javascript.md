@@ -170,7 +170,7 @@ const txs = await torii.listAccountTransactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg
   limit: 5,
   assetId,
 });
-const holders = await torii.listAssetHolders("rose#wonderland", {
+const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 5,
   assetId,
 });
@@ -187,7 +187,7 @@ console.log(balances.items, txs.items, holders.items);
 `deadline_ms_remaining`) የሚቀጥለውን የማለቂያ ቀነ-ገደብ ያደምቃል (አድስ → ፖሊሲ
 → ሰርተፍኬት) ስለዚህ የUI ባጆች አበል በሚኖርበት ጊዜ ኦፕሬተሮችን ሊያስጠነቅቁ ይችላሉ።
 <24 ሰአት ይቀራል። ኤስዲኬ
-በ `/v1/offline/allowances` የተጋለጡትን የ REST ማጣሪያዎች ያንጸባርቃል:
+በ `/v1/offline/reserve/topup` የተጋለጡትን የ REST ማጣሪያዎች ያንጸባርቃል:
 `certificateExpiresBeforeMs/AfterMs`፣ `policyExpiresBeforeMs/AfterMs`፣
 `verdictIdHex`፣ `attestationNonceHex`፣ `refreshBeforeMs/AfterMs`፣ እና እ.ኤ.አ.
 `requireVerdict` / `onlyMissingVerdict` ቡሊያንስ። ልክ ያልሆኑ ጥምሮች (ለ

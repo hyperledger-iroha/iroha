@@ -107,15 +107,15 @@ Struct ReservedAssignmentRequestV1 {
 
 | Эндпоинт | Метод |ペイロード | Описание |
 |----------|----------|----------|----------|
-| `/v1/sns/registrations` |投稿 | `RegisterNameRequestV1` | Регистрирует или повторно открывает имя. Разрезает ценовой tier, проверяет доказательства платежа/управления, испускает события реестра. |
-| `/v1/sns/registrations/{selector}/renew` |投稿 | `RenewNameRequestV1` | Продлевает срок.恵みと救いを意味します。 |
-| `/v1/sns/registrations/{selector}/transfer` |投稿 | `TransferNameRequestV1` | Передает владение после прикрепления согласований управления。 |
-| `/v1/sns/registrations/{selector}/controllers` |置く | `UpdateControllersRequestV1` |コントローラーを使用します。必要に応じて、必要な情報を入力してください。 |
-| `/v1/sns/registrations/{selector}/freeze` |投稿 | `FreezeNameRequestV1` |ガーディアン/評議会を凍結します。ガーディアンチケットとガバナンスドケットを参照してください。 |
-| `/v1/sns/registrations/{selector}/freeze` |削除 | `GovernanceHookV1` |凍結を解除してください。 убеждается、議会オーバーライド зафиксирован。 |
+| `/v1/sns/names` |投稿 | `RegisterNameRequestV1` | Регистрирует или повторно открывает имя. Разрезает ценовой tier, проверяет доказательства платежа/управления, испускает события реестра. |
+| `/v1/sns/names/{namespace}/{literal}/renew` |投稿 | `RenewNameRequestV1` | Продлевает срок.恵みと救いを意味します。 |
+| `/v1/sns/names/{namespace}/{literal}/transfer` |投稿 | `TransferNameRequestV1` | Передает владение после прикрепления согласований управления。 |
+| `/v1/sns/names/{namespace}/{literal}/controllers` |置く | `UpdateControllersRequestV1` |コントローラーを使用します。必要に応じて、必要な情報を入力してください。 |
+| `/v1/sns/names/{namespace}/{literal}/freeze` |投稿 | `FreezeNameRequestV1` |ガーディアン/評議会を凍結します。ガーディアンチケットとガバナンスドケットを参照してください。 |
+| `/v1/sns/names/{namespace}/{literal}/freeze` |削除 | `GovernanceHookV1` |凍結を解除してください。 убеждается、議会オーバーライド зафиксирован。 |
 | `/v1/sns/reserved/{selector}` |投稿 | `ReservedAssignmentRequestV1` | Назначение 予約されたスチュワード/評議会。 |
 | `/v1/sns/policies/{suffix_id}` |入手 | -- | Получает текущую `SuffixPolicyV1` (кэвируемо)。 |
-| `/v1/sns/registrations/{selector}` |入手 | -- | Возвращает текущий `NameRecordV1` + эффективное состояние (アクティブ、グレース、и т. д.)。 |
+| `/v1/sns/names/{namespace}/{literal}` |入手 | -- | Возвращает текущий `NameRecordV1` + эффективное состояние (アクティブ、グレース、и т. д.)。 |
 
 **セレクター:** `{selector}` は I105、圧縮 (`sora`) または 16 進数、ADDR-5; Torii нормализует через `NameSelectorV1`。
 
@@ -130,7 +130,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -155,7 +155,7 @@ iroha sns policy --suffix-id 1
 iroha sns renew \
   --selector makoto.sora \
   --term-years 1 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 120 \
   --payment-settlement '"renewal-settlement"' \
   --payment-signature '"steward-signature"'
@@ -178,7 +178,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` должен содержать корректную запись `GovernanceHookV1` (提案 ID、投票ハッシュ、スチュワード/ガーディアン)。 Каждая команда просто отражает соответствующий эндпоинт `/v1/sns/registrations/{selector}/...` чтобы операторы беты могли репетировать Torii は、SDK に含まれています。
+`--governance-json` должен содержать корректную запись `GovernanceHookV1` (提案 ID、投票ハッシュ、スチュワード/ガーディアン)。 Каждая команда просто отражает соответствующий эндпоинт `/v1/sns/names/{namespace}/{literal}/...` чтобы операторы беты могли репетировать Torii は、SDK に含まれています。
 
 ## 4. gRPC の使い方
 
@@ -248,7 +248,7 @@ Torii の日付:
 
 1. ガーディアン отправляет `FreezeNameRequestV1` с ticket, ссылающимся на id инцидента.
 2. Torii は `NameStatus::Frozen`、`NameFrozen` と一致します。
-3. 評議会のオーバーライド。 `/v1/sns/registrations/{selector}/freeze` から `GovernanceHookV1` を削除してください。
+3. 評議会のオーバーライド。 `/v1/sns/names/{namespace}/{literal}/freeze` から `GovernanceHookV1` を削除してください。
 4. Torii はオーバーライド、`NameUnfrozen` です。
 
 ## 7. Валидация и коды осибок

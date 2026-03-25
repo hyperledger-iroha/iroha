@@ -71,7 +71,7 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI 打印提交的交易哈希（例如，
@@ -80,7 +80,7 @@ CLI 打印提交的交易哈希（例如，
 ## 3. 將鑄幣單位存入運營商賬戶
 
 資產數量位於 `(asset definition, account)` 貨幣對下。薄荷 250
-將 `coffee#wonderland` 轉換為 `$ADMIN_ACCOUNT` 的單位：
+將 `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` 轉換為 `$ADMIN_ACCOUNT` 的單位：
 
 ```sh
 iroha --config defaults/client.toml asset mint \

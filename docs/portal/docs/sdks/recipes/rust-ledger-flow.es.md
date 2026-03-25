@@ -83,8 +83,8 @@ fn main() -> Result<()> {
 
     let client = Client::new(cfg)?;
 
-    // 1) Register coffee#wonderland if it does not exist yet.
-    let asset_definition_id = AssetDefinitionId::from_str("coffee#wonderland")?;
+    // 1) Register 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ if it does not exist yet.
+    let asset_definition_id = AssetDefinitionId::from_str("7Sp2j6zDvJFnMoscAiMaWbWHRDBZ")?;
     client.submit_blocking(Register::asset_definition(
         AssetDefinition::numeric(asset_definition_id.clone()),
     ))?;
@@ -120,7 +120,7 @@ Deberías ver una salida similar a:
 
 ```
 i105... now holds:
-  50 units of coffee#wonderland
+  50 units of 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 Si la definición del activo ya existe, la llamada de registro devuelve `ValidationError::Duplicate`. Ignórala (la acuñación sigue funcionando) o elige otro nombre.

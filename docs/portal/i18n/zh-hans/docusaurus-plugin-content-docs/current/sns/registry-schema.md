@@ -132,7 +132,7 @@ Enum AuctionKind {
 | `suffix` | `AsciiString` |例如，`sora`。 |
 | `steward` | `AccountId` |管家在治理章程中定义。 |
 | `status` | `SuffixStatus` | `Active`、`Paused`、`Revoked`。 |
-| `payment_asset_id` | `AsciiString` |默认结算资产标识符（例如`xor#sora`）。 |
+| `payment_asset_id` | `AsciiString` |默认结算资产标识符（例如`61CtjvNd9T3THAR65GsMVHr82Bjc`）。 |
 | `pricing` | `Vec<PriceTierV1>` |分级定价系数和期限规则。 |
 | `min_term_years` | `u8` |购买期限的下限，无论层级覆盖如何。 |
 | `grace_period_days` | `u16` |默认 30。
@@ -294,7 +294,7 @@ SuffixPolicyV1 {
     suffix: "sora",
     steward: "i105...",
     status: Active,
-    payment_asset_id: "xor#sora",
+    payment_asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc",
     pricing: [
         PriceTierV1 { tier_id:0, label_regex:"^[a-z0-9]{3,}$", base_price:"120 XOR", auction_kind:VickreyCommitReveal, dutch_floor:None, min_duration_years:1, max_duration_years:5 },
         PriceTierV1 { tier_id:1, label_regex:"^[a-z]{1,2}$", base_price:"10_000 XOR", auction_kind:DutchReopen, dutch_floor:Some("1_000 XOR"), min_duration_years:1, max_duration_years:3 }

@@ -61,14 +61,14 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 سی ایل آئی جمع کروائی گئی ٹرانزیکشن ہیش (جیسے `0x5f…`) پرنٹ کرتی ہے۔ بعد میں حیثیت کے بارے میں پوچھ گچھ کرنے کے لئے اسے محفوظ کریں۔
 
 ## 3. آپریٹر کے اکاؤنٹ میں ٹکسال یونٹ
 
-اثاثوں کی مقدار جوڑی `(asset definition, account)` کے تحت ہے۔ `coffee#wonderland` کے 250 یونٹوں سے `$ADMIN_ACCOUNT` میں پوچھیں:
+اثاثوں کی مقدار جوڑی `(asset definition, account)` کے تحت ہے۔ `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` کے 250 یونٹوں سے `$ADMIN_ACCOUNT` میں پوچھیں:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

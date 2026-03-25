@@ -47,7 +47,7 @@ fn soranet_gateway_billing_runs_end_to_end() {
             "--treasury",
             "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
             "--asset",
-            "xor#wonderland",
+            "4cuvDVPuLBKJyN6dPbRQhmLh68sU",
         ])
         .env("CARGO_NET_OFFLINE", "true")
         .output()
@@ -113,7 +113,7 @@ fn soranet_gateway_billing_runs_end_to_end() {
     );
     assert_eq!(
         ledger["asset_definition"],
-        Value::from("xor#wonderland"),
+        Value::from("4cuvDVPuLBKJyN6dPbRQhmLh68sU"),
         "ledger asset definition mismatch"
     );
 }

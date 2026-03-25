@@ -67,7 +67,7 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI جمع کروائے گئے ٹرانزیکشن ہیش کو دکھاتا ہے (مثال کے طور پر ، `0x5f...`)۔ اسے رکھو
@@ -76,7 +76,7 @@ CLI جمع کروائے گئے ٹرانزیکشن ہیش کو دکھاتا ہے 
 ## 3. آپریٹر اکاؤنٹ پر منٹر یونٹ
 
 اثاثوں کی مقدار جوڑی `(asset definition, account)` کے تحت رہتی ہے۔ منٹیز 250
-`$ADMIN_ACCOUNT` میں `coffee#wonderland` کی اکائیاں:
+`$ADMIN_ACCOUNT` میں `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` کی اکائیاں:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

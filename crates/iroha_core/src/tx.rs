@@ -442,6 +442,8 @@ fn is_time_sensitive_instruction(instruction: &InstructionBox) -> bool {
     any.is::<iroha_data_model::isi::offline::RegisterOfflineAllowance>()
         || any.is::<iroha_data_model::isi::offline::SubmitOfflineToOnlineTransfer>()
         || any.is::<iroha_data_model::isi::offline::RegisterOfflineVerdictRevocation>()
+        || any.is::<iroha_data_model::isi::offline::ReserveOfflineEscrowBalance>()
+        || any.is::<iroha_data_model::isi::offline::RefundOfflineEscrowBalance>()
         || any.is::<iroha_data_model::isi::oracle::RecordTwitterBinding>()
         || any.is::<iroha_data_model::isi::social::ClaimTwitterFollowReward>()
         || any.is::<iroha_data_model::isi::social::SendToTwitter>()

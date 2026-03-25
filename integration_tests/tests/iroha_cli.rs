@@ -3607,7 +3607,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         .arg("--apartment-name")
         .arg("ops_agent")
         .arg("--asset-definition")
-        .arg("xor#sora")
+        .arg("61CtjvNd9T3THAR65GsMVHr82Bjc")
         .arg("--amount-nanos")
         .arg("1000")
         .arg("--torii-url")
@@ -3721,7 +3721,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         .arg("--apartment-name")
         .arg("ops_agent")
         .arg("--asset-definition")
-        .arg("xor#sora")
+        .arg("61CtjvNd9T3THAR65GsMVHr82Bjc")
         .arg("--amount-nanos")
         .arg("1000000")
         .arg("--torii-url")
@@ -4118,7 +4118,7 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         .arg("--apartment-name")
         .arg("ops_agent")
         .arg("--asset-definition")
-        .arg("xor#sora")
+        .arg("61CtjvNd9T3THAR65GsMVHr82Bjc")
         .arg("--amount-nanos")
         .arg("1000000")
         .arg("--torii-url")
@@ -4724,7 +4724,7 @@ async fn soracloud_agent_wallet_and_mailbox_commands_require_torii_url() -> eyre
             "--apartment-name",
             "ops_agent",
             "--asset-definition",
-            "xor#sora",
+            "61CtjvNd9T3THAR65GsMVHr82Bjc",
             "--amount-nanos",
             "1000000",
         ],
@@ -4861,7 +4861,7 @@ async fn soracloud_agent_lease_commands_require_torii_url() -> eyre::Result<()> 
             "--apartment-name",
             "ops_agent",
             "--asset-definition",
-            "xor#sora",
+            "61CtjvNd9T3THAR65GsMVHr82Bjc",
             "--amount-nanos",
             "1000",
         ],

@@ -12,7 +12,7 @@ fn contract_manifest_roundtrip_norito() {
             read_keys: vec![
                 "account:6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".to_string(),
             ],
-            write_keys: vec!["asset:rose#wonderland".to_string()],
+            write_keys: vec!["asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM".to_string()],
         }),
         entrypoints: None,
         kotoba: None,

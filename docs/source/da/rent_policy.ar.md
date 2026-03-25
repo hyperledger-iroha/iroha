@@ -94,7 +94,7 @@ egress_credit_per_gib_micro = 1500            # 0.0015 XOR/GiB egress credit
 
 ### إنشاء خطط دفتر الأستاذ الإيجار
 
-قم بتشغيل `iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition xor#sora`
+قم بتشغيل `iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc`
 لتحويل عرض أسعار الإيجار المستمر إلى عمليات نقل دفتر الأستاذ القابلة للتنفيذ. الأمر
 يوزع `ledger_projection` المضمن، ويصدر تعليمات Norito `Transfer`
 التي تجمع الإيجار الأساسي في الخزانة، توجه الاحتياطي/المزود
