@@ -62,15 +62,13 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
             authorizationId: "auth-1",
             lineageId: "lineage-1",
             accountId: "alice@hbl",
-            deviceId: "device-1",
-            offlinePublicKey: "offline-public-key",
             verdictId: "verdict-1",
             policyMaxBalance: "1000.00",
             policyMaxTxValue: "200.00",
             issuedAtMs: 1_700_000_000_000,
             refreshAtMs: 1_700_003_600_000,
             expiresAtMs: 1_700_086_400_000,
-            appAttestKeyId: "attest-key",
+            deviceBinding: deviceBinding,
             issuerSignatureBase64: "authorization-signature"
         )
         let lineageState = ToriiOfflineCashState(

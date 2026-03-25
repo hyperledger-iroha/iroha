@@ -96,46 +96,43 @@ public struct ToriiOfflineSpendAuthorization: Codable, Sendable, Equatable, Iden
     public let authorizationId: String
     public let lineageId: String
     public let accountId: String
-    public let deviceId: String
-    public let offlinePublicKey: String
     public let verdictId: String
     public let policyMaxBalance: String
     public let policyMaxTxValue: String
     public let issuedAtMs: UInt64
     public let refreshAtMs: UInt64
     public let expiresAtMs: UInt64
-    public let appAttestKeyId: String
+    public let deviceBinding: ToriiOfflineDeviceBinding
     public let issuerSignatureBase64: String
 
     public var id: String { authorizationId }
+    public var deviceId: String { deviceBinding.deviceId }
+    public var offlinePublicKey: String { deviceBinding.offlinePublicKey }
+    public var appAttestKeyId: String { deviceBinding.attestationKeyId }
 
     public init(
         authorizationId: String,
         lineageId: String,
         accountId: String,
-        deviceId: String,
-        offlinePublicKey: String,
         verdictId: String,
         policyMaxBalance: String,
         policyMaxTxValue: String,
         issuedAtMs: UInt64,
         refreshAtMs: UInt64,
         expiresAtMs: UInt64,
-        appAttestKeyId: String,
+        deviceBinding: ToriiOfflineDeviceBinding,
         issuerSignatureBase64: String
     ) {
         self.authorizationId = authorizationId
         self.lineageId = lineageId
         self.accountId = accountId
-        self.deviceId = deviceId
-        self.offlinePublicKey = offlinePublicKey
         self.verdictId = verdictId
         self.policyMaxBalance = policyMaxBalance
         self.policyMaxTxValue = policyMaxTxValue
         self.issuedAtMs = issuedAtMs
         self.refreshAtMs = refreshAtMs
         self.expiresAtMs = expiresAtMs
-        self.appAttestKeyId = appAttestKeyId
+        self.deviceBinding = deviceBinding
         self.issuerSignatureBase64 = issuerSignatureBase64
     }
 
@@ -147,15 +144,13 @@ public struct ToriiOfflineSpendAuthorization: Codable, Sendable, Equatable, Iden
         case authorizationId = "authorization_id"
         case lineageId = "lineage_id"
         case accountId = "account_id"
-        case deviceId = "device_id"
-        case offlinePublicKey = "offline_public_key"
         case verdictId = "verdict_id"
         case policyMaxBalance = "max_balance"
         case policyMaxTxValue = "max_tx_value"
         case issuedAtMs = "issued_at_ms"
         case refreshAtMs = "refresh_at_ms"
         case expiresAtMs = "expires_at_ms"
-        case appAttestKeyId = "app_attest_key_id"
+        case deviceBinding = "device_binding"
         case issuerSignatureBase64 = "issuer_signature_base64"
     }
 }
@@ -694,15 +689,13 @@ public enum ToriiOfflineCashCodec {
                 authorizationId: authorization.authorizationId,
                 lineageId: authorization.lineageId,
                 accountId: authorization.accountId,
-                deviceId: authorization.deviceId,
-                offlinePublicKey: authorization.offlinePublicKey,
                 verdictId: authorization.verdictId,
                 policyMaxBalance: try canonicalAmountString(authorization.policyMaxBalance),
                 policyMaxTxValue: try canonicalAmountString(authorization.policyMaxTxValue),
                 issuedAtMs: authorization.issuedAtMs,
                 refreshAtMs: authorization.refreshAtMs,
                 expiresAtMs: authorization.expiresAtMs,
-                appAttestKeyId: authorization.appAttestKeyId
+                deviceBinding: authorization.deviceBinding
             )
         )
     }
@@ -771,29 +764,25 @@ private extension ToriiOfflineCashCodec {
         let authorizationId: String
         let lineageId: String
         let accountId: String
-        let deviceId: String
-        let offlinePublicKey: String
         let verdictId: String
         let policyMaxBalance: String
         let policyMaxTxValue: String
         let issuedAtMs: UInt64
         let refreshAtMs: UInt64
         let expiresAtMs: UInt64
-        let appAttestKeyId: String
+        let deviceBinding: ToriiOfflineDeviceBinding
 
         enum CodingKeys: String, CodingKey {
             case authorizationId = "authorization_id"
             case lineageId = "lineage_id"
             case accountId = "account_id"
-            case deviceId = "device_id"
-            case offlinePublicKey = "offline_public_key"
             case verdictId = "verdict_id"
             case policyMaxBalance = "max_balance"
             case policyMaxTxValue = "max_tx_value"
             case issuedAtMs = "issued_at_ms"
             case refreshAtMs = "refresh_at_ms"
             case expiresAtMs = "expires_at_ms"
-            case appAttestKeyId = "app_attest_key_id"
+            case deviceBinding = "device_binding"
         }
     }
 

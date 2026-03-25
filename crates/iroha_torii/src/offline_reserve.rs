@@ -32,6 +32,7 @@ use iroha_data_model::{
     metadata::Metadata,
     name::Name,
     offline::{
+        OfflineCashDeviceBinding as SharedOfflineCashDeviceBinding,
         OfflineAppleAppAttestBinding as SharedOfflineAppleAppAttestBinding,
         OfflineReserveEnvelope as SharedOfflineReserveEnvelope,
         OfflineReserveOperationResult as SharedOfflineReserveOperationResult,
@@ -153,6 +154,10 @@ pub struct OfflineSpendAuthorization {
     pub issued_at_ms: u64,
     pub refresh_at_ms: u64,
     pub expires_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub device_binding: Option<OfflineCashAndroidDeviceBinding>,
     pub app_attest_key_id: String,
     pub issuer_signature_base64: String,
 }
@@ -373,7 +378,16 @@ pub struct OfflineReserveDefundRequest {
     pub receipts: Vec<OfflineTransferReceipt>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, crate::json_macros::JsonDeserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
 pub struct OfflineCashAndroidDeviceBinding {
     pub platform: String,
     pub attestation_key_id: String,
@@ -536,6 +550,20 @@ struct AuthorizationUnsignedPayload<'a> {
 }
 
 #[derive(crate::json_macros::JsonSerialize)]
+struct CashAuthorizationUnsignedPayload<'a> {
+    authorization_id: &'a str,
+    lineage_id: &'a str,
+    account_id: &'a str,
+    verdict_id: &'a str,
+    max_balance: &'a str,
+    max_tx_value: &'a str,
+    issued_at_ms: u64,
+    refresh_at_ms: u64,
+    expires_at_ms: u64,
+    device_binding: &'a OfflineCashAndroidDeviceBinding,
+}
+
+#[derive(crate::json_macros::JsonSerialize)]
 struct ReserveStateUnsignedPayload<'a> {
     reserve_id: &'a str,
     account_id: &'a str,
@@ -591,15 +619,13 @@ struct CashTransferReceiptAuthorizationPayload {
     authorization_id: String,
     lineage_id: String,
     account_id: String,
-    device_id: String,
-    offline_public_key: String,
     verdict_id: String,
     max_balance: String,
     max_tx_value: String,
     issued_at_ms: u64,
     refresh_at_ms: u64,
     expires_at_ms: u64,
-    app_attest_key_id: String,
+    device_binding: OfflineCashAndroidDeviceBinding,
     issuer_signature_base64: String,
 }
 
@@ -626,6 +652,52 @@ struct CashTransferReceiptUnsignedPayload {
     amount: String,
     #[norito(skip_serializing_if = "Option::is_none")]
     authorization: Option<CashTransferReceiptAuthorizationPayload>,
+    attestation: OfflineDeviceAttestation,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    source_payload: Option<String>,
+    created_at_ms: u64,
+}
+
+#[derive(Clone, crate::json_macros::JsonSerialize)]
+struct LegacyCashTransferReceiptAuthorizationPayload {
+    authorization_id: String,
+    lineage_id: String,
+    account_id: String,
+    device_id: String,
+    offline_public_key: String,
+    verdict_id: String,
+    max_balance: String,
+    max_tx_value: String,
+    issued_at_ms: u64,
+    refresh_at_ms: u64,
+    expires_at_ms: u64,
+    app_attest_key_id: String,
+    issuer_signature_base64: String,
+}
+
+#[derive(crate::json_macros::JsonSerialize)]
+struct LegacyCashTransferReceiptUnsignedPayload {
+    version: i32,
+    transfer_id: String,
+    direction: String,
+    lineage_id: String,
+    account_id: String,
+    device_id: String,
+    offline_public_key: String,
+    pre_balance: String,
+    post_balance: String,
+    pre_locked_balance: String,
+    post_locked_balance: String,
+    pre_state_hash: String,
+    post_state_hash: String,
+    local_revision: u64,
+    counterparty_lineage_id: String,
+    counterparty_account_id: String,
+    counterparty_device_id: String,
+    counterparty_offline_public_key: String,
+    amount: String,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    authorization: Option<LegacyCashTransferReceiptAuthorizationPayload>,
     attestation: OfflineDeviceAttestation,
     #[norito(skip_serializing_if = "Option::is_none")]
     source_payload: Option<String>,
@@ -753,6 +825,10 @@ fn shared_authorization_from_local(
         issued_at_ms: authorization.issued_at_ms,
         refresh_at_ms: authorization.refresh_at_ms,
         expires_at_ms: authorization.expires_at_ms,
+        device_binding: authorization
+            .device_binding
+            .as_ref()
+            .map(shared_cash_device_binding_from_local),
         app_attest_key_id: authorization.app_attest_key_id.clone(),
         issuer_signature_base64: authorization.issuer_signature_base64.clone(),
     }
@@ -773,8 +849,42 @@ fn local_authorization_from_shared(
         issued_at_ms: authorization.issued_at_ms,
         refresh_at_ms: authorization.refresh_at_ms,
         expires_at_ms: authorization.expires_at_ms,
+        device_binding: authorization
+            .device_binding
+            .as_ref()
+            .map(local_cash_device_binding_from_shared),
         app_attest_key_id: authorization.app_attest_key_id.clone(),
         issuer_signature_base64: authorization.issuer_signature_base64.clone(),
+    }
+}
+
+fn shared_cash_device_binding_from_local(
+    binding: &OfflineCashAndroidDeviceBinding,
+) -> SharedOfflineCashDeviceBinding {
+    SharedOfflineCashDeviceBinding {
+        platform: binding.platform.clone(),
+        attestation_key_id: binding.attestation_key_id.clone(),
+        device_id: binding.device_id.clone(),
+        offline_public_key: binding.offline_public_key.clone(),
+        attestation_report_base64: binding.attestation_report_base64.clone(),
+        ios_team_id: binding.ios_team_id.clone(),
+        ios_bundle_id: binding.ios_bundle_id.clone(),
+        ios_environment: binding.ios_environment.clone(),
+    }
+}
+
+fn local_cash_device_binding_from_shared(
+    binding: &SharedOfflineCashDeviceBinding,
+) -> OfflineCashAndroidDeviceBinding {
+    OfflineCashAndroidDeviceBinding {
+        platform: binding.platform.clone(),
+        attestation_key_id: binding.attestation_key_id.clone(),
+        device_id: binding.device_id.clone(),
+        offline_public_key: binding.offline_public_key.clone(),
+        attestation_report_base64: binding.attestation_report_base64.clone(),
+        ios_team_id: binding.ios_team_id.clone(),
+        ios_bundle_id: binding.ios_bundle_id.clone(),
+        ios_environment: binding.ios_environment.clone(),
     }
 }
 
@@ -986,6 +1096,7 @@ pub(crate) async fn setup_reserve(
         &req.offline_public_key,
         &req.asset_definition_id,
         &req.app_attest_key_id,
+        None,
     )?;
     record.apple_app_attest_binding = validate_setup_attestation(
         app,
@@ -1050,6 +1161,7 @@ pub(crate) async fn top_up_reserve(
                     &req.offline_public_key,
                     &req.asset_definition_id,
                     &req.app_attest_key_id,
+                    None,
                 )?
             }
         }
@@ -1180,6 +1292,7 @@ pub(crate) async fn renew_reserve(
             device_id: reserve.device_id.clone(),
             offline_public_key: reserve.offline_public_key.clone(),
             verdict_id: reserve.authorization.verdict_id.clone(),
+            device_binding: None,
             app_attest_key_id: reserve.app_attest_key_id.clone(),
             issued_at_ms: now_ms(),
         },
@@ -1447,6 +1560,12 @@ pub(crate) async fn setup_cash(
         &req.offline_public_key,
         &req.asset_definition_id,
         &req.app_attest_key_id,
+        Some(match &mode {
+            OfflineCashAttestationMode::AppleAttest { binding, .. }
+            | OfflineCashAttestationMode::Android { binding, .. } => {
+                binding.clone()
+            }
+        }),
     )?;
     record.apple_app_attest_binding = match &mode {
         OfflineCashAttestationMode::AppleAttest { binding, proof } => {
@@ -1540,6 +1659,12 @@ pub(crate) async fn load_cash(
                     &req.offline_public_key,
                     &req.asset_definition_id,
                     &req.app_attest_key_id,
+                    Some(match &mode {
+                        OfflineCashAttestationMode::AppleAttest { binding, .. }
+                        | OfflineCashAttestationMode::Android { binding, .. } => {
+                            binding.clone()
+                        }
+                    }),
                 )?
             }
         }
@@ -1722,6 +1847,12 @@ pub(crate) async fn refresh_cash(
             device_id: reserve.device_id.clone(),
             offline_public_key: reserve.offline_public_key.clone(),
             verdict_id: reserve.authorization.verdict_id.clone(),
+            device_binding: Some(match &mode {
+                OfflineCashAttestationMode::AppleAttest { binding, .. }
+                | OfflineCashAttestationMode::Android { binding, .. } => {
+                    binding.clone()
+                }
+            }),
             app_attest_key_id: reserve.app_attest_key_id.clone(),
             issued_at_ms: now_ms(),
         },
@@ -1952,6 +2083,7 @@ fn new_local_reserve(
     offline_public_key: &str,
     asset_definition_id: &str,
     app_attest_key_id: &str,
+    device_binding: Option<OfflineCashAndroidDeviceBinding>,
 ) -> Result<StoredReserve, Error> {
     let reserve_id = deterministic_id("reserve", &[account_id, device_id, offline_public_key]);
     let authorization = signed_authorization(
@@ -1962,6 +2094,7 @@ fn new_local_reserve(
             device_id: device_id.to_owned(),
             offline_public_key: offline_public_key.to_owned(),
             verdict_id: deterministic_id("verdict", &[account_id, device_id, offline_public_key]),
+            device_binding,
             app_attest_key_id: app_attest_key_id.to_owned(),
             issued_at_ms: now_ms(),
         },
@@ -2480,12 +2613,61 @@ fn transfer_receipt_unsigned_payload(receipt: &OfflineTransferReceipt) -> Result
 fn cash_transfer_receipt_unsigned_payload(
     receipt: &OfflineTransferReceipt,
 ) -> Result<Vec<u8>, Error> {
+    if let Some(authorization) = receipt.authorization.as_ref() {
+        if let Some(device_binding) = authorization.device_binding.clone() {
+            return canonical_json_bytes(&CashTransferReceiptUnsignedPayload {
+                version: receipt.version,
+                transfer_id: receipt.transfer_id.clone(),
+                direction: receipt.direction.clone(),
+                lineage_id: receipt.reserve_id.clone(),
+                account_id: receipt.account_id.clone(),
+                device_id: receipt.device_id.clone(),
+                offline_public_key: receipt.offline_public_key.clone(),
+                pre_balance: canonical_amount_string(&parse_numeric(&receipt.pre_balance)?),
+                post_balance: canonical_amount_string(&parse_numeric(&receipt.post_balance)?),
+                pre_locked_balance: canonical_amount_string(
+                    &parse_numeric(&receipt.pre_parked_balance)?,
+                ),
+                post_locked_balance: canonical_amount_string(
+                    &parse_numeric(&receipt.post_parked_balance)?,
+                ),
+                pre_state_hash: receipt.pre_state_hash.clone(),
+                post_state_hash: receipt.post_state_hash.clone(),
+                local_revision: receipt.local_revision,
+                counterparty_lineage_id: receipt.counterparty_reserve_id.clone(),
+                counterparty_account_id: receipt.counterparty_account_id.clone(),
+                counterparty_device_id: receipt.counterparty_device_id.clone(),
+                counterparty_offline_public_key: receipt.counterparty_offline_public_key.clone(),
+                amount: canonical_amount_string(&parse_amount(&receipt.amount)?),
+                authorization: Some(CashTransferReceiptAuthorizationPayload {
+                    authorization_id: authorization.authorization_id.clone(),
+                    lineage_id: authorization.reserve_id.clone(),
+                    account_id: authorization.account_id.clone(),
+                    verdict_id: authorization.verdict_id.clone(),
+                    max_balance: canonical_amount_string(&parse_amount(
+                        &authorization.max_balance,
+                    )?),
+                    max_tx_value: canonical_amount_string(&parse_amount(
+                        &authorization.max_tx_value,
+                    )?),
+                    issued_at_ms: authorization.issued_at_ms,
+                    refresh_at_ms: authorization.refresh_at_ms,
+                    expires_at_ms: authorization.expires_at_ms,
+                    device_binding,
+                    issuer_signature_base64: authorization.issuer_signature_base64.clone(),
+                }),
+                attestation: receipt.attestation.clone(),
+                source_payload: receipt.source_payload.clone(),
+                created_at_ms: receipt.created_at_ms,
+            });
+        }
+    }
     let authorization = receipt
         .authorization
         .as_ref()
         .map(
-            |authorization| -> Result<CashTransferReceiptAuthorizationPayload, Error> {
-                Ok(CashTransferReceiptAuthorizationPayload {
+            |authorization| -> Result<LegacyCashTransferReceiptAuthorizationPayload, Error> {
+                Ok(LegacyCashTransferReceiptAuthorizationPayload {
                     authorization_id: authorization.authorization_id.clone(),
                     lineage_id: authorization.reserve_id.clone(),
                     account_id: authorization.account_id.clone(),
@@ -2507,7 +2689,7 @@ fn cash_transfer_receipt_unsigned_payload(
             },
         )
         .transpose()?;
-    canonical_json_bytes(&CashTransferReceiptUnsignedPayload {
+    canonical_json_bytes(&LegacyCashTransferReceiptUnsignedPayload {
         version: receipt.version,
         transfer_id: receipt.transfer_id.clone(),
         direction: receipt.direction.clone(),
@@ -2537,6 +2719,20 @@ fn cash_transfer_receipt_unsigned_payload(
 fn authorization_unsigned_payload(
     authorization: &OfflineSpendAuthorization,
 ) -> Result<Vec<u8>, Error> {
+    if let Some(device_binding) = authorization.device_binding.as_ref() {
+        return canonical_json_bytes(&CashAuthorizationUnsignedPayload {
+            authorization_id: &authorization.authorization_id,
+            lineage_id: &authorization.reserve_id,
+            account_id: &authorization.account_id,
+            verdict_id: &authorization.verdict_id,
+            max_balance: &canonical_amount_string(&parse_amount(&authorization.max_balance)?),
+            max_tx_value: &canonical_amount_string(&parse_amount(&authorization.max_tx_value)?),
+            issued_at_ms: authorization.issued_at_ms,
+            refresh_at_ms: authorization.refresh_at_ms,
+            expires_at_ms: authorization.expires_at_ms,
+            device_binding,
+        });
+    }
     canonical_json_bytes(&AuthorizationUnsignedPayload {
         authorization_id: &authorization.authorization_id,
         reserve_id: &authorization.reserve_id,
@@ -2648,6 +2844,7 @@ struct AuthorizationDraft {
     device_id: String,
     offline_public_key: String,
     verdict_id: String,
+    device_binding: Option<OfflineCashAndroidDeviceBinding>,
     app_attest_key_id: String,
     issued_at_ms: u64,
 }
@@ -2683,6 +2880,7 @@ fn signed_authorization(
         expires_at_ms: draft
             .issued_at_ms
             .saturating_add(issuer.reserve_policy.authorization_ttl.as_millis() as u64),
+        device_binding: draft.device_binding,
         app_attest_key_id: draft.app_attest_key_id,
         issuer_signature_base64: String::new(),
     };

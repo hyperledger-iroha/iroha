@@ -867,7 +867,17 @@ fn parse_tx_history_jwt_algorithm(value: &str) -> Option<JwtAlgorithm> {
 
 #[cfg(feature = "app_api")]
 fn canonical_tx_history_alias(alias: &str) -> String {
-    alias.trim().to_ascii_lowercase()
+    let normalized = alias.trim().to_ascii_lowercase();
+    let Some((label, scope)) = normalized.split_once('@') else {
+        return normalized;
+    };
+    if scope.contains('.') {
+        return normalized;
+    }
+    match scope {
+        "hbl" | "ubl" => format!("{label}@{scope}.sbp"),
+        _ => normalized,
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -4002,7 +4012,7 @@ fn translate_cash_authorization_to_reserve_json(value: &mut Value) -> Result<(),
         ));
     };
     rename_offline_json_key(map, "lineage_id", "reserve_id");
-    if let Some(device_binding_value) = map.remove("device_binding") {
+    if let Some(device_binding_value) = map.get("device_binding").cloned() {
         let binding = decode_offline_cash_device_binding(
             device_binding_value,
             "authorization device_binding",
@@ -4018,13 +4028,38 @@ fn translate_cash_authorization_to_reserve_json(value: &mut Value) -> Result<(),
 }
 
 #[cfg(feature = "app_api")]
-fn translate_reserve_authorization_to_cash_json(value: &mut Value) -> Result<(), Error> {
+fn encode_offline_cash_device_binding_value(
+    binding: &crate::offline_reserve::OfflineCashAndroidDeviceBinding,
+) -> Result<Value, Error> {
+    norito::json::to_value(binding).map_err(|err| {
+        offline_cash_invalid_payload(format!(
+            "failed to encode offline cash device_binding: {err}"
+        ))
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn translate_reserve_authorization_to_cash_json(
+    value: &mut Value,
+    fallback_binding: Option<&crate::offline_reserve::OfflineCashAndroidDeviceBinding>,
+) -> Result<(), Error> {
     let Some(map) = value.as_object_mut() else {
         return Err(offline_cash_invalid_payload(
             "offline cash authorization must be an object",
         ));
     };
     rename_offline_json_key(map, "reserve_id", "lineage_id");
+    if !map.contains_key("device_binding") {
+        if let Some(binding) = fallback_binding {
+            map.insert(
+                "device_binding".to_owned(),
+                encode_offline_cash_device_binding_value(binding)?,
+            );
+        }
+    }
+    map.remove("device_id");
+    map.remove("offline_public_key");
+    map.remove("app_attest_key_id");
     Ok(())
 }
 
@@ -4044,7 +4079,10 @@ fn translate_cash_state_to_reserve_json(value: &mut Value) -> Result<(), Error> 
 }
 
 #[cfg(feature = "app_api")]
-fn translate_reserve_state_to_cash_json(value: &mut Value) -> Result<(), Error> {
+fn translate_reserve_state_to_cash_json(
+    value: &mut Value,
+    fallback_binding: Option<&crate::offline_reserve::OfflineCashAndroidDeviceBinding>,
+) -> Result<(), Error> {
     let Some(map) = value.as_object_mut() else {
         return Err(offline_cash_invalid_payload(
             "offline cash state must be an object",
@@ -4053,7 +4091,7 @@ fn translate_reserve_state_to_cash_json(value: &mut Value) -> Result<(), Error> 
     rename_offline_json_key(map, "reserve_id", "lineage_id");
     rename_offline_json_key(map, "parked_balance", "locked_balance");
     if let Some(authorization) = map.get_mut("authorization") {
-        translate_reserve_authorization_to_cash_json(authorization)?;
+        translate_reserve_authorization_to_cash_json(authorization, fallback_binding)?;
     }
     Ok(())
 }
@@ -4214,6 +4252,18 @@ fn extract_offline_cash_mode(
     }
 }
 
+#[cfg(feature = "app_api")]
+fn clone_offline_cash_mode_binding(
+    mode: &crate::offline_reserve::OfflineCashAttestationMode,
+) -> crate::offline_reserve::OfflineCashAndroidDeviceBinding {
+    match mode {
+        crate::offline_reserve::OfflineCashAttestationMode::AppleAttest { binding, .. }
+        | crate::offline_reserve::OfflineCashAttestationMode::Android { binding, .. } => {
+            binding.clone()
+        }
+    }
+}
+
 fn offline_cash_attestation_value(
     binding: &crate::offline_reserve::OfflineCashAndroidDeviceBinding,
     proof: &crate::offline_reserve::OfflineCashAndroidDeviceProof,
@@ -4272,19 +4322,22 @@ fn translate_cash_request_to_reserve_json(
 }
 
 #[cfg(feature = "app_api")]
-fn translate_reserve_envelope_to_cash_json(mut value: Value) -> Result<Value, Error> {
+fn translate_reserve_envelope_to_cash_json(
+    mut value: Value,
+    fallback_binding: Option<&crate::offline_reserve::OfflineCashAndroidDeviceBinding>,
+) -> Result<Value, Error> {
     let Some(map) = value.as_object_mut() else {
         return Err(offline_cash_invalid_payload(
             "offline cash envelope must be an object",
         ));
     };
     if let Some(mut reserve_state) = map.remove("reserve_state") {
-        translate_reserve_state_to_cash_json(&mut reserve_state)?;
+        translate_reserve_state_to_cash_json(&mut reserve_state, fallback_binding)?;
         map.insert("lineage_state".to_owned(), reserve_state);
         return Ok(value);
     }
     if let Some(lineage_state) = map.get_mut("lineage_state") {
-        translate_reserve_state_to_cash_json(lineage_state)?;
+        translate_reserve_state_to_cash_json(lineage_state, fallback_binding)?;
         return Ok(value);
     }
     Err(offline_cash_invalid_payload(
@@ -4315,7 +4368,10 @@ fn decode_offline_cash_request_body(body: &Bytes, context: &'static str) -> Resu
 }
 
 #[cfg(feature = "app_api")]
-fn offline_cash_response<T>(envelope: &T) -> Result<AxResponse, Error>
+fn offline_cash_response<T>(
+    envelope: &T,
+    fallback_binding: Option<&crate::offline_reserve::OfflineCashAndroidDeviceBinding>,
+) -> Result<AxResponse, Error>
 where
     T: JsonSerialize,
 {
@@ -4324,7 +4380,7 @@ where
             context: "offline cash response",
             source,
         })?;
-    let cash_value = translate_reserve_envelope_to_cash_json(reserve_value)?;
+    let cash_value = translate_reserve_envelope_to_cash_json(reserve_value, fallback_binding)?;
     json_ok(cash_value)
 }
 
@@ -4352,13 +4408,14 @@ async fn handler_offline_cash_setup(
 
     let request_body = decode_offline_cash_request_body(&body, "offline cash setup")?;
     let mode = extract_offline_cash_mode(&request_body)?;
+    let response_binding = clone_offline_cash_mode_binding(&mode);
     let req = decode_offline_cash_request::<crate::offline_reserve::OfflineReserveSetupRequest>(
         request_body,
         "offline cash setup",
         true,
     )?;
     let envelope = crate::offline_reserve::setup_cash(app.as_ref(), req, mode).await?;
-    offline_cash_response(&envelope)
+    offline_cash_response(&envelope, Some(&response_binding))
 }
 
 #[cfg(feature = "app_api")]
@@ -4385,13 +4442,14 @@ async fn handler_offline_cash_load(
 
     let request_body = decode_offline_cash_request_body(&body, "offline cash load")?;
     let mode = extract_offline_cash_mode(&request_body)?;
+    let response_binding = clone_offline_cash_mode_binding(&mode);
     let req = decode_offline_cash_request::<crate::offline_reserve::OfflineReserveTopUpRequest>(
         request_body,
         "offline cash load",
         true,
     )?;
     let envelope = crate::offline_reserve::load_cash(app.as_ref(), req, mode).await?;
-    offline_cash_response(&envelope)
+    offline_cash_response(&envelope, Some(&response_binding))
 }
 
 #[cfg(feature = "app_api")]
@@ -4418,13 +4476,14 @@ async fn handler_offline_cash_refresh(
 
     let request_body = decode_offline_cash_request_body(&body, "offline cash refresh")?;
     let mode = extract_offline_cash_mode(&request_body)?;
+    let response_binding = clone_offline_cash_mode_binding(&mode);
     let req = decode_offline_cash_request::<crate::offline_reserve::OfflineReserveRenewRequest>(
         request_body,
         "offline cash refresh",
         true,
     )?;
     let envelope = crate::offline_reserve::refresh_cash(app.as_ref(), req, mode).await?;
-    offline_cash_response(&envelope)
+    offline_cash_response(&envelope, Some(&response_binding))
 }
 
 #[cfg(feature = "app_api")]
@@ -4451,13 +4510,14 @@ async fn handler_offline_cash_sync(
 
     let request_body = decode_offline_cash_request_body(&body, "offline cash sync")?;
     let mode = extract_offline_cash_mode(&request_body)?;
+    let response_binding = clone_offline_cash_mode_binding(&mode);
     let req = decode_offline_cash_request::<crate::offline_reserve::OfflineReserveSyncRequest>(
         request_body,
         "offline cash sync",
         false,
     )?;
     let envelope = crate::offline_reserve::sync_cash(app.as_ref(), req, mode).await?;
-    offline_cash_response(&envelope)
+    offline_cash_response(&envelope, Some(&response_binding))
 }
 
 #[cfg(feature = "app_api")]
@@ -4484,13 +4544,14 @@ async fn handler_offline_cash_redeem(
 
     let request_body = decode_offline_cash_request_body(&body, "offline cash redeem")?;
     let mode = extract_offline_cash_mode(&request_body)?;
+    let response_binding = clone_offline_cash_mode_binding(&mode);
     let req = decode_offline_cash_request::<crate::offline_reserve::OfflineReserveDefundRequest>(
         request_body,
         "offline cash redeem",
         false,
     )?;
     let envelope = crate::offline_reserve::redeem_cash(app.as_ref(), req, mode).await?;
-    offline_cash_response(&envelope)
+    offline_cash_response(&envelope, Some(&response_binding))
 }
 
 #[cfg(feature = "app_api")]
@@ -16773,15 +16834,15 @@ fn tx_history_subject_alias_candidates(subject: &str, dataspace_id: &str) -> Vec
         return Vec::new();
     }
     if normalized_subject.contains('@') {
-        return vec![normalized_subject];
+        return vec![canonical_tx_history_alias(&normalized_subject)];
     }
     if normalized_subject.contains(':') {
         return Vec::new();
     }
-    vec![format!(
+    vec![canonical_tx_history_alias(&format!(
         "{normalized_subject}@{}",
         dataspace_id.trim().to_ascii_lowercase()
-    )]
+    ))]
 }
 
 #[cfg(feature = "app_api")]
@@ -28173,8 +28234,37 @@ mod tests {
 
     #[cfg(feature = "app_api")]
     #[test]
+    fn canonical_tx_history_alias_maps_fi_domains_into_sbp_dataspace() {
+        assert_eq!(canonical_tx_history_alias("operator1@hbl"), "operator1@hbl.sbp");
+        assert_eq!(canonical_tx_history_alias("operator2@ubl"), "operator2@ubl.sbp");
+        assert_eq!(canonical_tx_history_alias("banking@sbp"), "banking@sbp");
+        assert_eq!(
+            canonical_tx_history_alias("operator1@hbl.sbp"),
+            "operator1@hbl.sbp"
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn tx_history_subject_alias_candidates_canonicalize_short_fi_aliases() {
+        assert_eq!(
+            tx_history_subject_alias_candidates("operator1@hbl", "hbl"),
+            vec!["operator1@hbl.sbp".to_string()]
+        );
+        assert_eq!(
+            tx_history_subject_alias_candidates("operator2", "ubl"),
+            vec!["operator2@ubl.sbp".to_string()]
+        );
+        assert_eq!(
+            tx_history_subject_alias_candidates("banking", "sbp"),
+            vec!["banking@sbp".to_string()]
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
     fn offline_cash_mode_extraction_accepts_ios_binding_and_proof() {
-        let request = json!({
+        let request = norito::json!({
             "account_id": "alice@users",
             "device_binding": {
                 "platform": "ios",
@@ -28210,7 +28300,7 @@ mod tests {
     #[cfg(feature = "app_api")]
     #[test]
     fn translate_cash_request_to_reserve_json_injects_canonical_attestation_fields() {
-        let mut request = json!({
+        let mut request = norito::json!({
             "account_id": "alice@users",
             "lineage_id": "lineage-1",
             "amount": "25",
