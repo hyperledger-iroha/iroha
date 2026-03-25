@@ -2,18 +2,19 @@
 
 Last updated: 2026-03-25
 
-Latest sync (2026-03-25 TAIRA faucet PoW hardening):
-the TAIRA faucet now requires a deterministic, chain-anchored proof-of-work
-before Torii will enqueue the starter-funds transfer, and the wallet-side flow
-solves that puzzle locally against recent committed block data.
+Latest sync (2026-03-25 TAIRA faucet adaptive PoW hardening):
+the TAIRA faucet now requires a deterministic, chain-anchored, memory-hard
+scrypt proof-of-work before Torii will enqueue the starter-funds transfer; the
+effective difficulty adapts to recent committed plus queued faucet claim volume
+in the configured lookback window, and finalized VRF seed material is required
+in the challenge when that mode is enabled.
 
 Open work for this slice now remains:
-- rerun the focused `iroha_config` and `iroha_torii --features app_api`
-  faucet test graph after the current workspace build settles, then capture the
-  exact pass/fail state in `status.md`; and
-- decide whether to add a durable on-chain claim marker in addition to PoW, so
-  the faucet moves from "spam-resistant" to "permanently single-claim per
-  account" semantics.
+- decide whether the adaptive formula should remain purely recent-claim based or
+  also incorporate faucet-reserve scarcity over time; and
+- if broader `iroha_torii` test-package health matters for this branch, fix the
+  unrelated `accounts_portfolio.rs` test harness breakage so the faucet slice is
+  no longer hidden behind pre-existing workspace failures.
 
 Latest sync (2026-03-25 multisig cancel integration stabilization):
 `integration_tests/tests/multisig.rs`

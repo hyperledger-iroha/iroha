@@ -127,6 +127,7 @@ nonzero_ext = { workspace = true }
 pretty-error-debug = "0.3.2"
 tungstenite = { workspace = true }
 sha2 = { version = "0.10.9", default-features = false }
+scrypt = { workspace = true }
 tempfile = { workspace = true }
 mv = { workspace = true }
 dashmap = { workspace = true }

@@ -1652,8 +1652,22 @@ pub mod torii {
 
         /// Leading-zero-bit difficulty for faucet proof-of-work (0 disables PoW).
         pub const POW_DIFFICULTY_BITS: u8 = 0;
+        /// Scrypt `log2(N)` cost parameter for faucet proof-of-work.
+        pub const POW_SCRYPT_LOG_N: u8 = 13;
+        /// Scrypt block size parameter for faucet proof-of-work.
+        pub const POW_SCRYPT_R: u32 = 8;
+        /// Scrypt parallelization parameter for faucet proof-of-work.
+        pub const POW_SCRYPT_P: u32 = 1;
         /// Maximum committed-block age for accepted faucet PoW anchors.
         pub const POW_MAX_ANCHOR_AGE_BLOCKS: NonZeroU64 = nonzero!(6u64);
+        /// Number of recent committed blocks to scan for prior faucet claims when adapting difficulty.
+        pub const POW_ADAPTIVE_LOOKBACK_BLOCKS: u64 = 0;
+        /// Number of recent faucet claims required to add one extra difficulty bit.
+        pub const POW_ADAPTIVE_CLAIMS_PER_EXTRA_BIT: u64 = 0;
+        /// Maximum number of adaptive difficulty bits added on top of the base difficulty.
+        pub const POW_ADAPTIVE_MAX_EXTRA_BITS: u8 = 0;
+        /// Whether finalized Sumeragi VRF epoch seeds are mixed into faucet challenges when available.
+        pub const POW_VRF_SEED_ENABLED: bool = false;
     }
     /// Steady-state rate for pre-authorization attempts per IP.
     pub const PREAUTH_RATE_PER_IP_PER_SEC: Option<u32> = Some(20);

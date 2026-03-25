@@ -31,8 +31,15 @@ authority = "testuﾛ1NrpｽﾓaMﾒﾌNhziﾙZfvWn9ﾙﾘvFqxｾmUﾓﾏ2ﾊｷ
 private_key = "8026207E82135F0CF3DA3F85DDF07E2FB797E0FBB62BCE789034DCE3A7D76C78106938"
 asset_definition_id = "xor#sora"
 amount = "25000"
-pow_difficulty_bits = 20
+pow_difficulty_bits = 8
+pow_scrypt_log_n = 13
+pow_scrypt_r = 8
+pow_scrypt_p = 1
 pow_max_anchor_age_blocks = 6
+pow_adaptive_lookback_blocks = 64
+pow_adaptive_claims_per_extra_bit = 4
+pow_adaptive_max_extra_bits = 2
+pow_vrf_seed_enabled = true
 
 [torii.sorafs]
 discovery_enabled = true
