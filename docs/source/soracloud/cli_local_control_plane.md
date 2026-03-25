@@ -20,12 +20,18 @@ Soracloud v1 is an authoritative, IVM-only runtime.
 - Hydration and materialization come from committed SoraFS/DA content rather
   than synthetic local snapshots.
 - `SoraContainerManifestV1` now carries `required_config_names` and
-  `required_secret_names`. Deploy, upgrade, and rollback fail closed when the
-  effective authoritative material set would not satisfy those declared
-  bindings.
+  `required_secret_names`, plus explicit `config_exports`. Deploy, upgrade,
+  and rollback fail closed when the effective authoritative material set would
+  not satisfy those declared bindings or when a config export targets a
+  non-required config or a duplicate env/file destination.
 - Committed service config entries are now materialized under
   `services/<service>/<version>/configs/<config_name>` as canonical JSON
   payload files.
+- Explicit config env exports are projected into
+  `services/<service>/<version>/effective_env.json`, and file exports are
+  materialized under
+  `services/<service>/<version>/config_exports/<relative_path>`. Exported
+  values use the canonical JSON payload text of the referenced config entry.
 - Soracloud IVM handlers can now read those authoritative config payloads
   directly through the runtime host `ReadConfig` surface, so ordinary
   `query`/`update` handlers do not need to guess node-local file paths just to
@@ -48,9 +54,11 @@ Soracloud v1 is an authoritative, IVM-only runtime.
   `ReadSecret` remains private-runtime-only and still returns the committed
   envelope ciphertext bytes rather than a plaintext mount contract.
 - Runtime service plans now expose the corresponding ingestion capability
-  booleans directly, so status consumers can tell whether a materialized
-  revision supports host config reads, host secret-envelope reads, and private
-  raw secret reads without inferring it from handler classes alone.
+  booleans plus the declared `config_exports` and effective projected
+  environment, so status consumers can tell whether a materialized revision
+  supports host config reads, host secret-envelope reads, private raw secret
+  reads, and explicit config injection without inferring it from handler
+  classes alone.
 
 ## CLI Commands
 

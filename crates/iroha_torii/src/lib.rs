@@ -4002,13 +4002,117 @@ fn translate_cash_outgoing_payload_to_reserve_json(value: &mut Value) -> Result<
 }
 
 #[cfg(feature = "app_api")]
-fn translate_cash_request_to_reserve_json(value: &mut Value) -> Result<(), Error> {
+fn extract_android_cash_mode(
+    value: &Value,
+) -> Result<
+    Option<(
+        crate::offline_reserve::OfflineCashAndroidDeviceBinding,
+        crate::offline_reserve::OfflineCashAndroidDeviceProof,
+    )>,
+    Error,
+> {
+    let Some(map) = value.as_object() else {
+        return Err(offline_cash_invalid_payload(
+            "offline cash request must be an object",
+        ));
+    };
+    let binding_value = map.get("device_binding").cloned();
+    let proof_value = map.get("device_proof").cloned();
+    match (binding_value, proof_value) {
+        (None, None) => Ok(None),
+        (Some(_), None) | (None, Some(_)) => Err(offline_cash_invalid_payload(
+            "offline cash android requests require both device_binding and device_proof",
+        )),
+        (Some(binding_value), Some(proof_value)) => {
+            let binding = norito::json::from_value::<
+                crate::offline_reserve::OfflineCashAndroidDeviceBinding,
+            >(binding_value)
+            .map_err(|err| {
+                offline_cash_invalid_payload(format!(
+                    "failed to decode offline cash device_binding: {err}"
+                ))
+            })?;
+            let proof = norito::json::from_value::<
+                crate::offline_reserve::OfflineCashAndroidDeviceProof,
+            >(proof_value)
+            .map_err(|err| {
+                offline_cash_invalid_payload(format!(
+                    "failed to decode offline cash device_proof: {err}"
+                ))
+            })?;
+            Ok(Some((binding, proof)))
+        }
+    }
+}
+
+fn android_cash_attestation_value(
+    proof: &crate::offline_reserve::OfflineCashAndroidDeviceProof,
+) -> Result<Value, Error> {
+    norito::json::to_value(&crate::offline_reserve::OfflineDeviceAttestation {
+        key_id: proof.attestation_key_id.clone(),
+        counter: 0,
+        assertion_base64: proof.assertion_base64.clone(),
+        challenge_hash_hex: proof.challenge_hash_hex.clone(),
+        attestation_report_base64: None,
+        ios_team_id: None,
+        ios_bundle_id: None,
+        ios_environment: None,
+    })
+    .map_err(|err| {
+        offline_cash_invalid_payload(format!(
+            "failed to encode offline cash android attestation: {err}"
+        ))
+    })
+}
+
+fn translate_cash_request_to_reserve_json(
+    value: &mut Value,
+    include_android_attestation: bool,
+) -> Result<(), Error> {
     let Some(map) = value.as_object_mut() else {
         return Err(offline_cash_invalid_payload(
             "offline cash request must be an object",
         ));
     };
     rename_offline_json_key(map, "lineage_id", "reserve_id");
+    let android_binding = map.remove("device_binding");
+    let android_proof = map.remove("device_proof");
+    match (android_binding, android_proof) {
+        (None, None) => {}
+        (Some(_), None) | (None, Some(_)) => {
+            return Err(offline_cash_invalid_payload(
+                "offline cash android requests require both device_binding and device_proof",
+            ));
+        }
+        (Some(binding_value), Some(proof_value)) => {
+            let binding = norito::json::from_value::<
+                crate::offline_reserve::OfflineCashAndroidDeviceBinding,
+            >(binding_value)
+            .map_err(|err| {
+                offline_cash_invalid_payload(format!(
+                    "failed to decode offline cash device_binding: {err}"
+                ))
+            })?;
+            let proof = norito::json::from_value::<
+                crate::offline_reserve::OfflineCashAndroidDeviceProof,
+            >(proof_value)
+            .map_err(|err| {
+                offline_cash_invalid_payload(format!(
+                    "failed to decode offline cash device_proof: {err}"
+                ))
+            })?;
+            map.entry("device_id".to_owned())
+                .or_insert(Value::String(binding.device_id.clone()));
+            map.entry("offline_public_key".to_owned())
+                .or_insert(Value::String(binding.offline_public_key.clone()));
+            map.entry("app_attest_key_id".to_owned())
+                .or_insert(Value::String(binding.attestation_key_id.clone()));
+            if include_android_attestation {
+                map.entry("attestation".to_owned())
+                    .or_insert(android_cash_attestation_value(&proof)?);
+            }
+        }
+    }
     if let Some(Value::Array(receipts)) = map.get_mut("receipts") {
         for receipt in receipts {
             translate_cash_receipt_to_reserve_json(receipt)?;
@@ -4042,11 +4146,12 @@ fn translate_reserve_envelope_to_cash_json(mut value: Value) -> Result<Value, Er
 fn decode_offline_cash_request<T>(
     mut request_body: Value,
     context: &'static str,
+    include_android_attestation: bool,
 ) -> Result<T, Error>
 where
     T: JsonDeserialize,
 {
-    translate_cash_request_to_reserve_json(&mut request_body)?;
+    translate_cash_request_to_reserve_json(&mut request_body, include_android_attestation)?;
     norito::json::from_value(request_body).map_err(|err| {
         offline_cash_invalid_payload(format!("failed to decode {context} request: {err}"))
     })
@@ -4087,11 +4192,23 @@ async fn handler_offline_cash_setup(
     }
 
     let request_body = decode_offline_cash_request_body(&body, "offline cash setup")?;
+    let android_mode = extract_android_cash_mode(&request_body)?;
     let req = decode_offline_cash_request::<crate::offline_reserve::OfflineReserveSetupRequest>(
         request_body,
         "offline cash setup",
+        true,
     )?;
-    let envelope = crate::offline_reserve::setup_reserve(app.as_ref(), req).await?;
+    let envelope = crate::offline_reserve::setup_cash(
+        app.as_ref(),
+        req,
+        match android_mode {
+            Some((binding, proof)) => {
+                crate::offline_reserve::OfflineCashAttestationMode::Android { binding, proof }
+            }
+            None => crate::offline_reserve::OfflineCashAttestationMode::AppleAttest,
+        },
+    )
+    .await?;
     offline_cash_response(&envelope)
 }
 
@@ -4109,11 +4226,23 @@ async fn handler_offline_cash_load(
     }
 
     let request_body = decode_offline_cash_request_body(&body, "offline cash load")?;
+    let android_mode = extract_android_cash_mode(&request_body)?;
     let req = decode_offline_cash_request::<crate::offline_reserve::OfflineReserveTopUpRequest>(
         request_body,
         "offline cash load",
+        true,
     )?;
-    let envelope = crate::offline_reserve::top_up_reserve(app.as_ref(), req).await?;
+    let envelope = crate::offline_reserve::load_cash(
+        app.as_ref(),
+        req,
+        match android_mode {
+            Some((binding, proof)) => {
+                crate::offline_reserve::OfflineCashAttestationMode::Android { binding, proof }
+            }
+            None => crate::offline_reserve::OfflineCashAttestationMode::AppleAttest,
+        },
+    )
+    .await?;
     offline_cash_response(&envelope)
 }
 
@@ -4131,11 +4260,23 @@ async fn handler_offline_cash_refresh(
     }
 
     let request_body = decode_offline_cash_request_body(&body, "offline cash refresh")?;
+    let android_mode = extract_android_cash_mode(&request_body)?;
     let req = decode_offline_cash_request::<crate::offline_reserve::OfflineReserveRenewRequest>(
         request_body,
         "offline cash refresh",
+        true,
     )?;
-    let envelope = crate::offline_reserve::renew_reserve(app.as_ref(), req).await?;
+    let envelope = crate::offline_reserve::refresh_cash(
+        app.as_ref(),
+        req,
+        match android_mode {
+            Some((binding, proof)) => {
+                crate::offline_reserve::OfflineCashAttestationMode::Android { binding, proof }
+            }
+            None => crate::offline_reserve::OfflineCashAttestationMode::AppleAttest,
+        },
+    )
+    .await?;
     offline_cash_response(&envelope)
 }
 
@@ -4153,11 +4294,13 @@ async fn handler_offline_cash_sync(
     }
 
     let request_body = decode_offline_cash_request_body(&body, "offline cash sync")?;
+    let android_mode = extract_android_cash_mode(&request_body)?;
     let req = decode_offline_cash_request::<crate::offline_reserve::OfflineReserveSyncRequest>(
         request_body,
         "offline cash sync",
+        false,
     )?;
-    let envelope = crate::offline_reserve::sync_reserve(app.as_ref(), req).await?;
+    let envelope = crate::offline_reserve::sync_cash(app.as_ref(), req, android_mode).await?;
     offline_cash_response(&envelope)
 }
 
@@ -4175,11 +4318,13 @@ async fn handler_offline_cash_redeem(
     }
 
     let request_body = decode_offline_cash_request_body(&body, "offline cash redeem")?;
+    let android_mode = extract_android_cash_mode(&request_body)?;
     let req = decode_offline_cash_request::<crate::offline_reserve::OfflineReserveDefundRequest>(
         request_body,
         "offline cash redeem",
+        false,
     )?;
-    let envelope = crate::offline_reserve::defund_reserve(app.as_ref(), req).await?;
+    let envelope = crate::offline_reserve::redeem_cash(app.as_ref(), req, android_mode).await?;
     offline_cash_response(&envelope)
 }
 
@@ -23428,12 +23573,18 @@ pub(crate) mod tests_runtime_handlers {
                     secret_generation: 0,
                     config_entry_count: 0,
                     secret_entry_count: 0,
+                    config_exports: vec![],
                     supports_host_read_config: true,
                     supports_host_read_secret_envelope: true,
                     supports_private_secret_payload_reads: false,
                     materialization_dir: "/tmp/soracloud/runtime/web_portal/1.0.0".to_string(),
                     config_materialization_dir: "/tmp/soracloud/runtime/web_portal/1.0.0/configs"
                         .to_string(),
+                    effective_env: BTreeMap::new(),
+                    effective_env_materialization_path:
+                        "/tmp/soracloud/runtime/web_portal/1.0.0/effective_env.json".to_string(),
+                    config_exports_materialization_dir:
+                        "/tmp/soracloud/runtime/web_portal/1.0.0/config_exports".to_string(),
                     secret_envelopes_materialization_dir:
                         "/tmp/soracloud/runtime/web_portal/1.0.0/secret_envelopes".to_string(),
                     secret_payload_materialization_dir:
@@ -23497,6 +23648,7 @@ pub(crate) mod tests_runtime_handlers {
                 env: BTreeMap::new(),
                 required_config_names: Vec::new(),
                 required_secret_names: Vec::new(),
+                config_exports: Vec::new(),
                 capabilities: iroha_data_model::soracloud::SoraCapabilityPolicyV1 {
                     network: iroha_data_model::soracloud::SoraNetworkPolicyV1::Isolated,
                     allow_wallet_signing: false,

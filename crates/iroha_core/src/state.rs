@@ -42129,6 +42129,7 @@ mod tests {
                 env: std::collections::BTreeMap::new(),
                 required_config_names: Vec::new(),
                 required_secret_names: Vec::new(),
+                config_exports: Vec::new(),
                 capabilities: iroha_data_model::soracloud::SoraCapabilityPolicyV1 {
                     network: iroha_data_model::soracloud::SoraNetworkPolicyV1::Isolated,
                     allow_wallet_signing: false,

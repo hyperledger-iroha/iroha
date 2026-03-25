@@ -19,17 +19,18 @@ use iroha_data_model::{
         AgentUpgradePolicyV1, SORA_CONTAINER_MANIFEST_VERSION_V1,
         SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SORA_SERVICE_MANIFEST_VERSION_V1,
         SoraAgentRuntimeStatusV1, SoraArtifactKindV1, SoraCapabilityPolicyV1,
-        SoraCertifiedResponsePolicyV1, SoraContainerManifestRefV1, SoraContainerManifestV1,
-        SoraContainerRuntimeV1, SoraDeploymentBundleV1, SoraHfPlacementHostAssignmentV1,
-        SoraHfPlacementHostRoleV1, SoraHfPlacementHostStatusV1, SoraHfPlacementRecordV1,
-        SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseStatusV1, SoraHfSourceStatusV1,
-        SoraLifecycleHooksV1, SoraNetworkPolicyV1, SoraPrivateInferenceCheckpointV1,
-        SoraPrivateInferenceSessionStatusV1, SoraResourceLimitsV1, SoraRolloutPolicyV1,
-        SoraRouteTargetV1, SoraRouteVisibilityV1, SoraRuntimeReceiptV1,
-        SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
-        SoraServiceHealthStatusV1, SoraServiceMailboxMessageV1, SoraServiceManifestV1,
-        SoraServiceRuntimeStateV1, SoraStateEncryptionV1, SoraStateMutationOperationV1,
-        SoraTlsModeV1, SoraUploadedModelKeyEncapsulationV1, SoraUploadedModelKeyWrapAeadV1,
+        SoraCertifiedResponsePolicyV1, SoraConfigExportV1, SoraContainerManifestRefV1,
+        SoraContainerManifestV1, SoraContainerRuntimeV1, SoraDeploymentBundleV1,
+        SoraHfPlacementHostAssignmentV1, SoraHfPlacementHostRoleV1, SoraHfPlacementHostStatusV1,
+        SoraHfPlacementRecordV1, SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseStatusV1,
+        SoraHfSourceStatusV1, SoraLifecycleHooksV1, SoraNetworkPolicyV1,
+        SoraPrivateInferenceCheckpointV1, SoraPrivateInferenceSessionStatusV1,
+        SoraResourceLimitsV1, SoraRolloutPolicyV1, SoraRouteTargetV1, SoraRouteVisibilityV1,
+        SoraRuntimeReceiptV1, SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1,
+        SoraServiceHandlerV1, SoraServiceHealthStatusV1, SoraServiceMailboxMessageV1,
+        SoraServiceManifestV1, SoraServiceRuntimeStateV1, SoraStateEncryptionV1,
+        SoraStateMutationOperationV1, SoraTlsModeV1, SoraUploadedModelKeyEncapsulationV1,
+        SoraUploadedModelKeyWrapAeadV1,
     },
 };
 use mv::storage::StorageReadOnly;
@@ -151,6 +152,7 @@ pub fn build_soracloud_hf_generated_service_bundle(
         env,
         required_config_names: Vec::new(),
         required_secret_names: Vec::new(),
+        config_exports: Vec::new(),
         capabilities: SoraCapabilityPolicyV1 {
             network: SoraNetworkPolicyV1::Isolated,
             allow_wallet_signing: false,
@@ -481,6 +483,9 @@ pub struct SoracloudRuntimeServicePlan {
     pub config_entry_count: u32,
     /// Number of committed service secret entries projected into runtime materialization.
     pub secret_entry_count: u32,
+    /// Explicit config exports declared by the admitted container manifest.
+    #[norito(default)]
+    pub config_exports: Vec<SoraConfigExportV1>,
     /// Whether ordinary handlers on this revision can read authoritative config payloads.
     pub supports_host_read_config: bool,
     /// Whether ordinary handlers on this revision can read authoritative secret envelopes.
@@ -491,6 +496,15 @@ pub struct SoracloudRuntimeServicePlan {
     pub materialization_dir: String,
     /// Local directory containing canonical JSON config files for this revision.
     pub config_materialization_dir: String,
+    /// Effective launch environment after applying explicit config env exports.
+    #[norito(default)]
+    pub effective_env: BTreeMap<String, String>,
+    /// Local file containing the effective launch environment projection.
+    #[norito(default)]
+    pub effective_env_materialization_path: String,
+    /// Local directory containing explicit config file exports for this revision.
+    #[norito(default)]
+    pub config_exports_materialization_dir: String,
     /// Local directory containing committed secret-envelope files for this revision.
     pub secret_envelopes_materialization_dir: String,
     /// Local directory containing the legacy raw secret payload tree for this revision.

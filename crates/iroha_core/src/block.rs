@@ -9903,6 +9903,7 @@ pub(crate) mod valid {
                     env: std::collections::BTreeMap::new(),
                     required_config_names: Vec::new(),
                     required_secret_names: Vec::new(),
+                    config_exports: Vec::new(),
                     capabilities: SoraCapabilityPolicyV1 {
                         network: SoraNetworkPolicyV1::Isolated,
                         allow_wallet_signing: false,

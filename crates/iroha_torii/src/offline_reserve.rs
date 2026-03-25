@@ -3,6 +3,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     str::FromStr,
+    sync::LazyLock,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -43,10 +44,22 @@ use mv::storage::StorageReadOnly;
 use norito::json::{self};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use x509_parser::{certificate::X509Certificate, prelude::FromDer, time::ASN1Time};
 
 use crate::{AppState, Error, OfflineIssuerSigner, routing};
 
 const TRANSFER_PREFIX: &str = "wallet-offline-transfer:";
+
+static GOOGLE_ATTESTATION_ROOT_RSA: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../certs/google_attestation_root_rsa.der"
+));
+static GOOGLE_ATTESTATION_ROOT_ECDSA: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../certs/google_attestation_root_ecdsa.der"
+));
+static ANDROID_ROOT_ANCHORS: LazyLock<Box<[&'static [u8]]>> =
+    LazyLock::new(|| Box::new([GOOGLE_ATTESTATION_ROOT_RSA, GOOGLE_ATTESTATION_ROOT_ECDSA]));
 
 #[derive(Clone, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize)]
 struct StoredReserve {
@@ -349,6 +362,34 @@ pub struct OfflineReserveDefundRequest {
     pub offline_public_key: String,
     pub amount: String,
     pub receipts: Vec<OfflineTransferReceipt>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, crate::json_macros::JsonDeserialize)]
+pub struct OfflineCashAndroidDeviceBinding {
+    pub platform: String,
+    pub attestation_key_id: String,
+    pub device_id: String,
+    pub offline_public_key: String,
+    pub attestation_report_base64: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, crate::json_macros::JsonDeserialize)]
+pub struct OfflineCashAndroidDeviceProof {
+    pub platform: String,
+    pub attestation_key_id: String,
+    pub challenge_hash_hex: String,
+    pub assertion_base64: String,
+    #[serde(default)]
+    pub counter: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+pub enum OfflineCashAttestationMode {
+    AppleAttest,
+    Android {
+        binding: OfflineCashAndroidDeviceBinding,
+        proof: OfflineCashAndroidDeviceProof,
+    },
 }
 
 #[derive(
@@ -1132,6 +1173,446 @@ pub(crate) async fn defund_reserve(
     )
     .await?;
     Ok(envelope)
+}
+
+pub(crate) async fn setup_cash(
+    app: &AppState,
+    req: OfflineReserveSetupRequest,
+    mode: OfflineCashAttestationMode,
+) -> Result<OfflineReserveEnvelope, Error> {
+    ensure_non_empty(&req.account_id, "account_id")?;
+    ensure_non_empty(&req.device_id, "device_id")?;
+    ensure_non_empty(&req.offline_public_key, "offline_public_key")?;
+    ensure_non_empty(&req.asset_definition_id, "asset_definition_id")?;
+    ensure_non_empty(&req.app_attest_key_id, "app_attest_key_id")?;
+
+    let issuer = issuer(app)?;
+    if let Some(existing) = load_shared_reserve_by_lineage(
+        app,
+        &req.account_id,
+        &req.device_id,
+        &req.offline_public_key,
+    )? {
+        validate_reserve_request(
+            &existing,
+            &req.account_id,
+            &req.device_id,
+            &req.offline_public_key,
+            Some(&req.asset_definition_id),
+            Some(&req.app_attest_key_id),
+        )?;
+        let mut counter_book = existing.counter_book.clone();
+        match &mode {
+            OfflineCashAttestationMode::AppleAttest => {
+                let _ = validate_cash_attestation(
+                    app,
+                    &req.account_id,
+                    "setup",
+                    "setup",
+                    setup_challenge_payload(&req)?,
+                    &existing.app_attest_key_id,
+                    &req.attestation,
+                    &mut counter_book,
+                    existing.apple_app_attest_binding.as_ref(),
+                )?;
+            }
+            OfflineCashAttestationMode::Android { binding, proof } => {
+                validate_android_cash_device_binding(
+                    app,
+                    &req.account_id,
+                    binding,
+                    &req.device_id,
+                    &req.offline_public_key,
+                )?;
+                validate_android_cash_operation_proof(
+                    &req.account_id,
+                    "setup",
+                    "setup",
+                    setup_challenge_payload(&req)?,
+                    binding,
+                    proof,
+                )?;
+            }
+        }
+        return envelope_from_record(issuer, &existing);
+    }
+
+    let mut record = new_local_reserve(
+        issuer,
+        &req.account_id,
+        &req.device_id,
+        &req.offline_public_key,
+        &req.asset_definition_id,
+        &req.app_attest_key_id,
+    )?;
+    record.apple_app_attest_binding = match &mode {
+        OfflineCashAttestationMode::AppleAttest => validate_cash_attestation(
+            app,
+            &req.account_id,
+            "setup",
+            "setup",
+            setup_challenge_payload(&req)?,
+            &record.app_attest_key_id,
+            &req.attestation,
+            &mut record.counter_book,
+            None,
+        )?,
+        OfflineCashAttestationMode::Android { binding, proof } => {
+            validate_android_cash_device_binding(
+                app,
+                &req.account_id,
+                binding,
+                &req.device_id,
+                &req.offline_public_key,
+            )?;
+            validate_android_cash_operation_proof(
+                &req.account_id,
+                "setup",
+                "setup",
+                setup_challenge_payload(&req)?,
+                binding,
+                proof,
+            )?;
+            None
+        }
+    };
+    let envelope = envelope_from_record(issuer, &record)?;
+    submit_signed_instruction(
+        app,
+        operator_authority(issuer)?,
+        issuer.operator_keypair.private_key().clone(),
+        InstructionBox::from(RegisterOfflineReserve {
+            reserve: shared_record_from_local(issuer, &record)?,
+        }),
+        "/v1/offline/cash/setup",
+    )
+    .await?;
+    Ok(envelope)
+}
+
+pub(crate) async fn load_cash(
+    app: &AppState,
+    req: OfflineReserveTopUpRequest,
+    mode: OfflineCashAttestationMode,
+) -> Result<OfflineReserveEnvelope, Error> {
+    let issuer = issuer(app)?;
+    let amount = parse_amount(&req.amount)?;
+    let amount_string = canonical_amount_string(&amount);
+    let operation_key = operation_key("topup", &req.operation_id);
+    let request_hash_hex = topup_request_hash_hex(&req, &amount)?;
+    if let Some(existing) = load_operation_result(app, &operation_key) {
+        if existing.request_hash_hex != request_hash_hex {
+            return Err(conversion_error(
+                "offline cash operation_id is already bound to a different request".to_owned(),
+            ));
+        }
+        return Ok(local_envelope_from_shared(&existing.envelope));
+    }
+
+    let mut reserve = if let Some(reserve_id) = req.reserve_id.as_ref() {
+        load_shared_reserve(app, reserve_id)?
+            .ok_or_else(|| conversion_error("offline cash lineage not found".to_owned()))?
+    } else {
+        load_shared_reserve_by_lineage(
+            app,
+            &req.account_id,
+            &req.device_id,
+            &req.offline_public_key,
+        )?
+        .unwrap_or(new_local_reserve(
+            issuer,
+            &req.account_id,
+            &req.device_id,
+            &req.offline_public_key,
+            &req.asset_definition_id,
+            &req.app_attest_key_id,
+        )?)
+    };
+    validate_reserve_request(
+        &reserve,
+        &req.account_id,
+        &req.device_id,
+        &req.offline_public_key,
+        Some(&req.asset_definition_id),
+        Some(&req.app_attest_key_id),
+    )?;
+    let expected_server_revision = reserve.server_revision;
+    let expected_state_hash = if expected_server_revision == 0 {
+        String::new()
+    } else {
+        reserve.server_state_hash.clone()
+    };
+    let lineage_id = req
+        .reserve_id
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .unwrap_or("setup");
+    let payload = canonical_json_bytes(&CashLineageAmountPayload {
+        lineage_id,
+        amount: &amount_string,
+    })?;
+    match &mode {
+        OfflineCashAttestationMode::AppleAttest => {
+            validate_cash_attestation(
+                app,
+                &req.account_id,
+                lineage_id,
+                "load",
+                payload,
+                &req.app_attest_key_id,
+                &req.attestation,
+                &mut reserve.counter_book,
+                reserve.apple_app_attest_binding.as_ref(),
+            )?;
+        }
+        OfflineCashAttestationMode::Android { binding, proof } => {
+            validate_android_cash_device_binding(
+                app,
+                &req.account_id,
+                binding,
+                &req.device_id,
+                &req.offline_public_key,
+            )?;
+            validate_android_cash_operation_proof(
+                &req.account_id,
+                lineage_id,
+                "load",
+                payload,
+                binding,
+                proof,
+            )?;
+        }
+    }
+    reserve.balance = reserve
+        .balance
+        .clone()
+        .checked_add(amount.clone())
+        .ok_or_else(|| conversion_error("offline cash balance overflow".to_owned()))?;
+    reserve.parked_balance = parse_numeric(&minimum_required_parked_balance(
+        &canonical_amount_string(&reserve.balance),
+        Some(&reserve.authorization),
+        now_ms(),
+    )?)?;
+    reserve.server_revision = reserve.server_revision.saturating_add(1);
+    reserve.server_state_hash = reserve_anchor_hash(
+        &reserve.reserve_id,
+        &reserve.account_id,
+        &reserve.device_id,
+        &reserve.offline_public_key,
+        &reserve.asset_definition_id,
+        &canonical_amount_string(&reserve.balance),
+        &canonical_amount_string(&reserve.parked_balance),
+        reserve.server_revision,
+        reserve.pending_local_revision,
+        &reserve.authorization.authorization_id,
+    )?;
+    let envelope = envelope_from_record(issuer, &reserve)?;
+    submit_signed_instructions(
+        app,
+        operator_authority(issuer)?,
+        issuer.operator_keypair.private_key().clone(),
+        vec![
+            InstructionBox::from(ReserveOfflineEscrowBalance {
+                asset: controller_asset_id(&req.account_id, &reserve.asset_definition_id)?,
+                amount,
+            }),
+            InstructionBox::from(CommitOfflineReserveOperation {
+                expected_server_revision,
+                expected_state_hash,
+                reserve: shared_record_from_local(issuer, &reserve)?,
+                result: SharedOfflineReserveOperationResult {
+                    operation_key: operation_key.clone(),
+                    kind: "topup".to_owned(),
+                    request_hash_hex,
+                    reserve_id: reserve.reserve_id.clone(),
+                    envelope: shared_envelope_from_local(&envelope),
+                    completed_at_ms: now_ms(),
+                },
+            }),
+        ],
+        "/v1/offline/cash/load",
+    )
+    .await?;
+    Ok(envelope)
+}
+
+pub(crate) async fn refresh_cash(
+    app: &AppState,
+    req: OfflineReserveRenewRequest,
+    mode: OfflineCashAttestationMode,
+) -> Result<OfflineReserveEnvelope, Error> {
+    let issuer = issuer(app)?;
+    let operation_key = operation_key("renew", &req.operation_id);
+    let request_hash_hex = renew_request_hash_hex(&req)?;
+    if let Some(existing) = load_operation_result(app, &operation_key) {
+        if existing.request_hash_hex != request_hash_hex {
+            return Err(conversion_error(
+                "offline cash operation_id is already bound to a different request".to_owned(),
+            ));
+        }
+        return Ok(local_envelope_from_shared(&existing.envelope));
+    }
+
+    let mut reserve = load_shared_reserve(app, &req.reserve_id)?
+        .ok_or_else(|| conversion_error("offline cash lineage not found".to_owned()))?;
+    validate_reserve_request(
+        &reserve,
+        &req.account_id,
+        &req.device_id,
+        &req.offline_public_key,
+        None,
+        Some(&req.app_attest_key_id),
+    )?;
+    let expected_server_revision = reserve.server_revision;
+    let expected_state_hash = reserve.server_state_hash.clone();
+    let payload = canonical_json_bytes(&CashLineagePayload {
+        lineage_id: &req.reserve_id,
+    })?;
+    match &mode {
+        OfflineCashAttestationMode::AppleAttest => {
+            validate_cash_attestation(
+                app,
+                &req.account_id,
+                &req.reserve_id,
+                "refresh",
+                payload,
+                &req.app_attest_key_id,
+                &req.attestation,
+                &mut reserve.counter_book,
+                reserve.apple_app_attest_binding.as_ref(),
+            )?;
+        }
+        OfflineCashAttestationMode::Android { binding, proof } => {
+            validate_android_cash_device_binding(
+                app,
+                &req.account_id,
+                binding,
+                &req.device_id,
+                &req.offline_public_key,
+            )?;
+            validate_android_cash_operation_proof(
+                &req.account_id,
+                &req.reserve_id,
+                "refresh",
+                payload,
+                binding,
+                proof,
+            )?;
+        }
+    }
+    reserve.authorization = signed_authorization(
+        issuer,
+        AuthorizationDraft {
+            reserve_id: reserve.reserve_id.clone(),
+            account_id: reserve.account_id.clone(),
+            device_id: reserve.device_id.clone(),
+            offline_public_key: reserve.offline_public_key.clone(),
+            verdict_id: reserve.authorization.verdict_id.clone(),
+            app_attest_key_id: reserve.app_attest_key_id.clone(),
+            issued_at_ms: now_ms(),
+        },
+    )?;
+    reserve.parked_balance = parse_numeric(&minimum_required_parked_balance(
+        &canonical_amount_string(&reserve.balance),
+        Some(&reserve.authorization),
+        now_ms(),
+    )?)?;
+    reserve.server_revision = reserve.server_revision.saturating_add(1);
+    reserve.server_state_hash = reserve_anchor_hash(
+        &reserve.reserve_id,
+        &reserve.account_id,
+        &reserve.device_id,
+        &reserve.offline_public_key,
+        &reserve.asset_definition_id,
+        &canonical_amount_string(&reserve.balance),
+        &canonical_amount_string(&reserve.parked_balance),
+        reserve.server_revision,
+        reserve.pending_local_revision,
+        &reserve.authorization.authorization_id,
+    )?;
+    let envelope = envelope_from_record(issuer, &reserve)?;
+    submit_signed_instruction(
+        app,
+        operator_authority(issuer)?,
+        issuer.operator_keypair.private_key().clone(),
+        InstructionBox::from(CommitOfflineReserveOperation {
+            expected_server_revision,
+            expected_state_hash,
+            reserve: shared_record_from_local(issuer, &reserve)?,
+            result: SharedOfflineReserveOperationResult {
+                operation_key: operation_key.clone(),
+                kind: "renew".to_owned(),
+                request_hash_hex,
+                reserve_id: reserve.reserve_id.clone(),
+                envelope: shared_envelope_from_local(&envelope),
+                completed_at_ms: now_ms(),
+            },
+        }),
+        "/v1/offline/cash/refresh",
+    )
+    .await?;
+    Ok(envelope)
+}
+
+pub(crate) async fn sync_cash(
+    app: &AppState,
+    req: OfflineReserveSyncRequest,
+    mode: Option<(
+        OfflineCashAndroidDeviceBinding,
+        OfflineCashAndroidDeviceProof,
+    )>,
+) -> Result<OfflineReserveEnvelope, Error> {
+    if let Some((binding, proof)) = mode.as_ref() {
+        validate_android_cash_device_binding(
+            app,
+            &req.account_id,
+            binding,
+            &req.device_id,
+            &req.offline_public_key,
+        )?;
+        validate_android_cash_operation_proof(
+            &req.account_id,
+            &req.reserve_id,
+            "sync",
+            canonical_json_bytes(&CashLineagePayload {
+                lineage_id: &req.reserve_id,
+            })?,
+            binding,
+            proof,
+        )?;
+    }
+    sync_reserve(app, req).await
+}
+
+pub(crate) async fn redeem_cash(
+    app: &AppState,
+    req: OfflineReserveDefundRequest,
+    mode: Option<(
+        OfflineCashAndroidDeviceBinding,
+        OfflineCashAndroidDeviceProof,
+    )>,
+) -> Result<OfflineReserveEnvelope, Error> {
+    if let Some((binding, proof)) = mode.as_ref() {
+        validate_android_cash_device_binding(
+            app,
+            &req.account_id,
+            binding,
+            &req.device_id,
+            &req.offline_public_key,
+        )?;
+        validate_android_cash_operation_proof(
+            &req.account_id,
+            &req.reserve_id,
+            "redeem",
+            canonical_json_bytes(&CashLineageAmountPayload {
+                lineage_id: &req.reserve_id,
+                amount: &req.amount,
+            })?,
+            binding,
+            proof,
+        )?;
+    }
+    defund_reserve(app, req).await
 }
 
 pub(crate) fn revocation_bundle(app: &AppState) -> Result<OfflineRevocationBundle, Error> {
@@ -2228,6 +2709,238 @@ fn validate_setup_attestation(
     )
 }
 
+#[derive(crate::json_macros::JsonSerialize)]
+struct CashAttestationChallengePayload<'a> {
+    account_id: &'a str,
+    lineage_id: &'a str,
+    operation: &'a str,
+    payload_hash: &'a str,
+}
+
+#[derive(crate::json_macros::JsonSerialize)]
+struct CashLineageAmountPayload<'a> {
+    lineage_id: &'a str,
+    amount: &'a str,
+}
+
+#[derive(crate::json_macros::JsonSerialize)]
+struct CashLineagePayload<'a> {
+    lineage_id: &'a str,
+}
+
+#[derive(crate::json_macros::JsonSerialize)]
+struct AndroidDeviceBindingChallengePayload<'a> {
+    account_id: &'a str,
+    device_id: &'a str,
+    offline_public_key: &'a str,
+    operation: &'a str,
+}
+
+fn cash_attestation_challenge_seed(
+    account_id: &str,
+    lineage_id: &str,
+    operation: &str,
+    payload: &[u8],
+) -> Result<Vec<u8>, Error> {
+    canonical_json_bytes(&CashAttestationChallengePayload {
+        account_id,
+        lineage_id,
+        operation,
+        payload_hash: &sha256_hex(payload),
+    })
+}
+
+fn validate_cash_attestation(
+    app: &AppState,
+    account_id: &str,
+    lineage_id: &str,
+    operation: &str,
+    payload: Vec<u8>,
+    expected_app_attest_key_id: &str,
+    attestation: &OfflineDeviceAttestation,
+    counter_book: &mut BTreeMap<String, u64>,
+    stored_apple_app_attest_binding: Option<&StoredAppleAppAttestBinding>,
+) -> Result<Option<StoredAppleAppAttestBinding>, Error> {
+    if attestation.key_id != expected_app_attest_key_id {
+        return Err(conversion_error(
+            "app_attest_key_id does not match the attestation proof".to_owned(),
+        ));
+    }
+    let challenge_seed =
+        cash_attestation_challenge_seed(account_id, lineage_id, operation, &payload)?;
+    if attestation.challenge_hash_hex != sha256_hex(&challenge_seed) {
+        return Err(conversion_error(
+            "offline cash attestation challenge hash is invalid".to_owned(),
+        ));
+    }
+    let request_binding = apple_app_attest_binding_from_request(attestation)?;
+    if let Some(binding) = request_binding.as_ref().or(stored_apple_app_attest_binding) {
+        let metadata = metadata_from_apple_binding(binding)?;
+        let attestation_report = BASE64_STANDARD
+            .decode(binding.attestation_report_base64.as_bytes())
+            .map_err(|err| {
+                conversion_error(format!(
+                    "invalid base64 offline cash attestation report: {err}"
+                ))
+            })?;
+        let assertion = BASE64_STANDARD
+            .decode(attestation.assertion_base64.as_bytes())
+            .map_err(|err| {
+                conversion_error(format!(
+                    "invalid base64 offline cash attestation assertion: {err}"
+                ))
+            })?;
+        let settlement_cfg = &app.state.settlement().offline;
+        verify_reserve_apple_app_attest(
+            &ReserveAppleAppAttestVerification {
+                metadata,
+                attestation_report,
+                key_id: attestation.key_id.clone(),
+                assertion,
+                counter: attestation.counter,
+                challenge_hash: decode_challenge_hash_hex(&attestation.challenge_hash_hex)?,
+            },
+            latest_block_timestamp_ms(app),
+            settlement_cfg,
+        )
+        .map_err(|err| {
+            conversion_error(format!(
+                "offline cash app attest verification failed: {err}"
+            ))
+        })?;
+    } else if extract_assertion_counter(&attestation.assertion_base64)? != attestation.counter {
+        return Err(conversion_error(
+            "offline cash attestation counter does not match assertion data".to_owned(),
+        ));
+    }
+    validate_counter(attestation, counter_book)?;
+    Ok(request_binding)
+}
+
+fn validate_android_cash_device_binding(
+    app: &AppState,
+    account_id: &str,
+    binding: &OfflineCashAndroidDeviceBinding,
+    expected_device_id: &str,
+    expected_offline_public_key: &str,
+) -> Result<(), Error> {
+    if !binding.platform.eq_ignore_ascii_case("android") {
+        return Err(conversion_error(
+            "offline cash device binding platform must be android".to_owned(),
+        ));
+    }
+    ensure_non_empty(
+        &binding.attestation_key_id,
+        "device_binding.attestation_key_id",
+    )?;
+    ensure_non_empty(&binding.device_id, "device_binding.device_id")?;
+    ensure_non_empty(
+        &binding.offline_public_key,
+        "device_binding.offline_public_key",
+    )?;
+    ensure_non_empty(
+        &binding.attestation_report_base64,
+        "device_binding.attestation_report_base64",
+    )?;
+    if binding.device_id != expected_device_id {
+        return Err(conversion_error(
+            "offline cash device binding does not match the request device".to_owned(),
+        ));
+    }
+    if binding.offline_public_key != expected_offline_public_key {
+        return Err(conversion_error(
+            "offline cash device binding does not match the request signer".to_owned(),
+        ));
+    }
+    let public_key_bytes = BASE64_STANDARD
+        .decode(binding.offline_public_key.as_bytes())
+        .map_err(|err| conversion_error(format!("invalid base64 public key: {err}")))?;
+    let expected_key_id = sha256_hex(&public_key_bytes);
+    if binding.attestation_key_id != expected_key_id {
+        return Err(conversion_error(
+            "offline cash device binding attestation key id is invalid".to_owned(),
+        ));
+    }
+
+    let challenge_hash_hex = sha256_hex(&canonical_json_bytes(
+        &AndroidDeviceBindingChallengePayload {
+            account_id,
+            device_id: expected_device_id,
+            offline_public_key: expected_offline_public_key,
+            operation: "device_binding",
+        },
+    )?);
+    let expected_challenge = decode_challenge_hash_hex(&challenge_hash_hex)?;
+    let chain = decode_android_attestation_chain(&binding.attestation_report_base64)?;
+    let leaf = verify_android_chain(
+        &chain,
+        latest_block_timestamp_ms(app),
+        &app.state.settlement().offline,
+    )?;
+    let key_description = parse_android_key_description(&leaf)?;
+    if key_description.attestation_challenge.as_slice() != expected_challenge.as_slice() {
+        return Err(conversion_error(
+            "offline cash android attestation challenge does not match the device binding"
+                .to_owned(),
+        ));
+    }
+    if key_description.attestation_security_level == AndroidSecurityLevel::Software
+        || key_description.keymaster_security_level == AndroidSecurityLevel::Software
+    {
+        return Err(conversion_error(
+            "offline cash android attestation must be hardware-backed".to_owned(),
+        ));
+    }
+    if leaf.public_key().subject_public_key.data.as_ref() != public_key_bytes.as_slice() {
+        return Err(conversion_error(
+            "offline cash android attestation key does not match offline_public_key".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_android_cash_operation_proof(
+    account_id: &str,
+    lineage_id: &str,
+    operation: &str,
+    payload: Vec<u8>,
+    binding: &OfflineCashAndroidDeviceBinding,
+    proof: &OfflineCashAndroidDeviceProof,
+) -> Result<(), Error> {
+    if !proof.platform.eq_ignore_ascii_case("android") {
+        return Err(conversion_error(
+            "offline cash device proof platform must be android".to_owned(),
+        ));
+    }
+    if proof.counter.unwrap_or(0) != 0 {
+        return Err(conversion_error(
+            "android offline cash proofs must not include a counter".to_owned(),
+        ));
+    }
+    if proof.attestation_key_id != binding.attestation_key_id {
+        return Err(conversion_error(
+            "offline cash device proof does not match the device binding".to_owned(),
+        ));
+    }
+    let challenge_seed =
+        cash_attestation_challenge_seed(account_id, lineage_id, operation, &payload)?;
+    let expected_hash_hex = sha256_hex(&challenge_seed);
+    if !proof
+        .challenge_hash_hex
+        .eq_ignore_ascii_case(&expected_hash_hex)
+    {
+        return Err(conversion_error(
+            "offline cash device proof challenge hash is invalid".to_owned(),
+        ));
+    }
+    validate_signature(
+        &decode_challenge_hash_hex(&proof.challenge_hash_hex)?,
+        &proof.assertion_base64,
+        &binding.offline_public_key,
+    )
+    .map_err(|_| conversion_error("offline cash device proof assertion is invalid".to_owned()))
+}
+
 fn validate_reserve_attestation(
     app: &AppState,
     account_id: &str,
@@ -2334,6 +3047,349 @@ fn extract_assertion_counter(assertion_base64: &str) -> Result<u64, Error> {
             .try_into()
             .map_err(|_| conversion_error("invalid attestation counter bytes".to_owned()))?,
     )))
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AndroidSecurityLevel {
+    Software,
+    TrustedEnvironment,
+    StrongBox,
+}
+
+struct AndroidKeyDescription {
+    attestation_security_level: AndroidSecurityLevel,
+    keymaster_security_level: AndroidSecurityLevel,
+    attestation_challenge: Vec<u8>,
+}
+
+struct AndroidDerReader<'a> {
+    data: &'a [u8],
+    offset: usize,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AndroidTagClass {
+    Universal,
+    Application,
+    ContextSpecific,
+    Private,
+}
+
+struct AndroidTlv<'a> {
+    class: AndroidTagClass,
+    constructed: bool,
+    tag: u32,
+    value: &'a [u8],
+}
+
+impl TryFrom<u64> for AndroidSecurityLevel {
+    type Error = Error;
+
+    fn try_from(value: u64) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Software),
+            1 => Ok(Self::TrustedEnvironment),
+            2 => Ok(Self::StrongBox),
+            other => Err(conversion_error(format!(
+                "unknown android security level `{other}`"
+            ))),
+        }
+    }
+}
+
+impl<'a> AndroidDerReader<'a> {
+    fn new(data: &'a [u8]) -> Self {
+        Self { data, offset: 0 }
+    }
+
+    fn has_remaining(&self) -> bool {
+        self.offset < self.data.len()
+    }
+
+    fn read_integer(&mut self, label: &str) -> Result<u64, Error> {
+        let value = self.expect_universal(AndroidTagClass::Universal, false, 2, label)?;
+        parse_android_unsigned_integer_bytes(value, label)
+    }
+
+    fn read_enumerated(&mut self, label: &str) -> Result<u64, Error> {
+        let value = self.expect_universal(AndroidTagClass::Universal, false, 10, label)?;
+        parse_android_unsigned_integer_bytes(value, label)
+    }
+
+    fn read_octet_string(&mut self, label: &str) -> Result<&'a [u8], Error> {
+        self.expect_universal(AndroidTagClass::Universal, false, 4, label)
+    }
+
+    fn read_sequence_bytes(&mut self, label: &str) -> Result<&'a [u8], Error> {
+        self.expect_universal(AndroidTagClass::Universal, true, 16, label)
+    }
+
+    fn expect_universal(
+        &mut self,
+        class: AndroidTagClass,
+        constructed: bool,
+        tag: u32,
+        label: &str,
+    ) -> Result<&'a [u8], Error> {
+        let tlv = self.read_tlv()?;
+        if tlv.class != class || tlv.constructed != constructed || tlv.tag != tag {
+            return Err(conversion_error(format!(
+                "unexpected DER tag while parsing `{label}`"
+            )));
+        }
+        Ok(tlv.value)
+    }
+
+    fn read_tlv(&mut self) -> Result<AndroidTlv<'a>, Error> {
+        if self.offset >= self.data.len() {
+            return Err(conversion_error("unexpected end of DER input".to_owned()));
+        }
+        let tag_byte = self.data[self.offset];
+        self.offset += 1;
+        let class = match tag_byte >> 6 {
+            0 => AndroidTagClass::Universal,
+            1 => AndroidTagClass::Application,
+            2 => AndroidTagClass::ContextSpecific,
+            _ => AndroidTagClass::Private,
+        };
+        let constructed = (tag_byte & 0x20) != 0;
+        let mut tag_number = u32::from(tag_byte & 0x1F);
+        if tag_number == 0x1F {
+            tag_number = 0;
+            loop {
+                if self.offset >= self.data.len() {
+                    return Err(conversion_error("invalid DER tag encoding".to_owned()));
+                }
+                let byte = self.data[self.offset];
+                self.offset += 1;
+                tag_number = (tag_number << 7) | u32::from(byte & 0x7F);
+                if byte & 0x80 == 0 {
+                    break;
+                }
+            }
+        }
+        let length = self.read_length()?;
+        if self.offset + length > self.data.len() {
+            return Err(conversion_error(
+                "DER value exceeds available input".to_owned(),
+            ));
+        }
+        let value = &self.data[self.offset..self.offset + length];
+        self.offset += length;
+        Ok(AndroidTlv {
+            class,
+            constructed,
+            tag: tag_number,
+            value,
+        })
+    }
+
+    fn read_length(&mut self) -> Result<usize, Error> {
+        if self.offset >= self.data.len() {
+            return Err(conversion_error("invalid DER length encoding".to_owned()));
+        }
+        let first = self.data[self.offset];
+        self.offset += 1;
+        if first & 0x80 == 0 {
+            return Ok(first as usize);
+        }
+        let octets = (first & 0x7F) as usize;
+        if octets == 0 || octets > 4 {
+            return Err(conversion_error(
+                "unsupported DER length encoding".to_owned(),
+            ));
+        }
+        if self.offset + octets > self.data.len() {
+            return Err(conversion_error("invalid DER length encoding".to_owned()));
+        }
+        let mut length = 0usize;
+        for _ in 0..octets {
+            length = (length << 8) | self.data[self.offset] as usize;
+            self.offset += 1;
+        }
+        Ok(length)
+    }
+}
+
+fn parse_android_unsigned_integer_bytes(bytes: &[u8], label: &str) -> Result<u64, Error> {
+    if bytes.is_empty() || bytes.len() > 8 {
+        return Err(conversion_error(format!(
+            "invalid DER integer while parsing `{label}`"
+        )));
+    }
+    let mut value = 0u64;
+    for byte in bytes {
+        value = (value << 8) | u64::from(*byte);
+    }
+    Ok(value)
+}
+
+fn decode_android_attestation_chain(report_base64: &str) -> Result<Vec<Vec<u8>>, Error> {
+    let bytes = BASE64_STANDARD
+        .decode(report_base64.as_bytes())
+        .map_err(|err| conversion_error(format!("invalid base64 android attestation: {err}")))?;
+    let value: CborValue = from_reader(bytes.as_slice())
+        .map_err(|err| conversion_error(format!("invalid android attestation CBOR: {err}")))?;
+    match value {
+        CborValue::Array(entries) if !entries.is_empty() => entries
+            .into_iter()
+            .map(|entry| match entry {
+                CborValue::Bytes(bytes) => Ok(bytes),
+                _ => Err(conversion_error(
+                    "android attestation must be a CBOR array of certificates".to_owned(),
+                )),
+            })
+            .collect(),
+        _ => Err(conversion_error(
+            "android attestation must be a CBOR array of certificates".to_owned(),
+        )),
+    }
+}
+
+fn verify_android_chain<'a>(
+    certificates: &'a [Vec<u8>],
+    block_timestamp_ms: u64,
+    settlement_cfg: &iroha_config::parameters::actual::Offline,
+) -> Result<X509Certificate<'a>, Error> {
+    if certificates.is_empty() {
+        return Err(conversion_error("attestation chain is empty".to_owned()));
+    }
+    let block_time = asn1_time_from_unix_ms(block_timestamp_ms)?;
+    let (_, leaf_cert) = X509Certificate::from_der(&certificates[0])
+        .map_err(|err| conversion_error(format!("failed to parse attestation leaf cert: {err}")))?;
+    check_certificate_validity(&leaf_cert, block_time)?;
+
+    for window in certificates.windows(2) {
+        let (_, child) = X509Certificate::from_der(&window[0])
+            .map_err(|err| conversion_error(format!("failed to parse attestation cert: {err}")))?;
+        let (_, parent) = X509Certificate::from_der(&window[1])
+            .map_err(|err| conversion_error(format!("failed to parse attestation cert: {err}")))?;
+        check_certificate_validity(&child, block_time)?;
+        check_certificate_validity(&parent, block_time)?;
+        child
+            .verify_signature(Some(parent.public_key()))
+            .map_err(|_| {
+                conversion_error("attestation chain is not internally signed".to_owned())
+            })?;
+    }
+
+    let last_bytes = certificates
+        .last()
+        .expect("attestation chain cannot be empty");
+    let (_, last_cert) = X509Certificate::from_der(last_bytes)
+        .map_err(|err| conversion_error(format!("failed to parse attestation cert: {err}")))?;
+    let mut anchored = false;
+    for anchor in &settlement_cfg.android_trust_anchors {
+        if android_anchor_matches(anchor, last_bytes, &last_cert) {
+            anchored = true;
+            break;
+        }
+    }
+    if !anchored {
+        for anchor in ANDROID_ROOT_ANCHORS.iter() {
+            if android_anchor_matches(anchor, last_bytes, &last_cert) {
+                anchored = true;
+                break;
+            }
+        }
+    }
+    if !anchored {
+        return Err(conversion_error(
+            "attestation chain does not terminate at a trusted root".to_owned(),
+        ));
+    }
+    Ok(leaf_cert)
+}
+
+fn android_anchor_matches(
+    anchor_bytes: &[u8],
+    last_bytes: &[u8],
+    last_cert: &X509Certificate<'_>,
+) -> bool {
+    if last_bytes == anchor_bytes {
+        return true;
+    }
+    if let Ok((_, root)) = X509Certificate::from_der(anchor_bytes) {
+        return last_cert.verify_signature(Some(root.public_key())).is_ok();
+    }
+    false
+}
+
+fn check_certificate_validity(
+    cert: &X509Certificate<'_>,
+    block_time: ASN1Time,
+) -> Result<(), Error> {
+    if block_time < cert.validity().not_before || block_time > cert.validity().not_after {
+        return Err(conversion_error(
+            "attestation certificate is not valid for current block time".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn asn1_time_from_unix_ms(block_timestamp_ms: u64) -> Result<ASN1Time, Error> {
+    let seconds = i64::try_from(block_timestamp_ms / 1000)
+        .map_err(|_| conversion_error("block timestamp is out of range".to_owned()))?;
+    ASN1Time::from_timestamp(seconds)
+        .map_err(|err| conversion_error(format!("failed to convert block timestamp: {err}")))
+}
+
+fn parse_android_key_description(
+    cert: &X509Certificate<'_>,
+) -> Result<AndroidKeyDescription, Error> {
+    let key_desc_oid = x509_parser::oid_registry::Oid::from(&[1, 3, 6, 1, 4, 1, 11129, 2, 1, 17])
+        .expect("android attestation OID must be valid");
+    let ext = cert
+        .extensions()
+        .iter()
+        .find(|ext| ext.oid == key_desc_oid)
+        .ok_or_else(|| {
+            conversion_error(
+                "android attestation certificate does not contain keyDescription extension"
+                    .to_owned(),
+            )
+        })?;
+    let mut reader = AndroidDerReader::new(ext.value);
+    let octet = reader.read_octet_string("attestationExtension")?;
+    if reader.has_remaining() {
+        return Err(conversion_error(
+            "android attestation extension contained trailing data".to_owned(),
+        ));
+    }
+    let mut seq = AndroidDerReader::new(octet);
+    let attestation_version = seq.read_integer("attestationVersion")?;
+    if attestation_version == 0 {
+        return Err(conversion_error(
+            "android attestationVersion must be positive".to_owned(),
+        ));
+    }
+    let attestation_security_level =
+        AndroidSecurityLevel::try_from(seq.read_enumerated("attestationSecurityLevel")?)?;
+    let keymaster_version = seq.read_integer("keymasterVersion")?;
+    if keymaster_version == 0 {
+        return Err(conversion_error(
+            "android keymasterVersion must be positive".to_owned(),
+        ));
+    }
+    let keymaster_security_level =
+        AndroidSecurityLevel::try_from(seq.read_enumerated("keymasterSecurityLevel")?)?;
+    let attestation_challenge = seq.read_octet_string("attestationChallenge")?.to_vec();
+    let _unique_id = seq.read_octet_string("uniqueId")?;
+    let _software = seq.read_sequence_bytes("softwareEnforced")?;
+    let _tee = seq.read_sequence_bytes("teeEnforced")?;
+    if seq.has_remaining() {
+        let _strongbox = seq.read_sequence_bytes("strongBoxEnforced")?;
+    }
+    if seq.has_remaining() {
+        return Err(conversion_error(
+            "android keyDescription contained trailing data".to_owned(),
+        ));
+    }
+    Ok(AndroidKeyDescription {
+        attestation_security_level,
+        keymaster_security_level,
+        attestation_challenge,
+    })
 }
 
 fn sender_state_key(reserve_id: &str, local_revision: u64) -> String {

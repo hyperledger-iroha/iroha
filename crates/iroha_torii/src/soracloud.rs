@@ -46,16 +46,16 @@ use iroha_data_model::{
         SecretEnvelopeEncryptionV1, SecretEnvelopeV1, SoraAgentApartmentActionV1,
         SoraAgentApartmentAuditEventV1, SoraAgentApartmentRecordV1, SoraAgentArtifactAllowRuleV1,
         SoraAgentAutonomyRunRecordV1, SoraAgentMailboxMessageV1, SoraAgentRuntimeStatusV1,
-        SoraCertifiedResponsePolicyV1, SoraContainerRuntimeV1, SoraDecryptionRequestRecordV1,
-        SoraDeploymentBundleV1, SoraHfBackendFamilyV1, SoraHfModelFormatV1,
-        SoraHfPlacementRecordV1, SoraHfResourceProfileV1, SoraHfSharedLeaseActionV1,
-        SoraHfSharedLeaseAuditEventV1, SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseMemberV1,
-        SoraHfSharedLeasePoolV1, SoraHfSharedLeaseStatusV1, SoraHfSourceRecordV1,
-        SoraHfSourceStatusV1, SoraModelArtifactActionV1, SoraModelArtifactAuditEventV1,
-        SoraModelArtifactRecordV1, SoraModelHostCapabilityRecordV1, SoraModelPrivacyModeV1,
-        SoraModelProvenanceKindV1, SoraModelRegistryV1, SoraModelWeightActionV1,
-        SoraModelWeightAuditEventV1, SoraModelWeightVersionRecordV1, SoraNetworkPolicyV1,
-        SoraPrivateCompileProfileV1, SoraPrivateInferenceCheckpointV1,
+        SoraCertifiedResponsePolicyV1, SoraConfigExportV1, SoraContainerRuntimeV1,
+        SoraDecryptionRequestRecordV1, SoraDeploymentBundleV1, SoraHfBackendFamilyV1,
+        SoraHfModelFormatV1, SoraHfPlacementRecordV1, SoraHfResourceProfileV1,
+        SoraHfSharedLeaseActionV1, SoraHfSharedLeaseAuditEventV1, SoraHfSharedLeaseMemberStatusV1,
+        SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1, SoraHfSharedLeaseStatusV1,
+        SoraHfSourceRecordV1, SoraHfSourceStatusV1, SoraModelArtifactActionV1,
+        SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1, SoraModelHostCapabilityRecordV1,
+        SoraModelPrivacyModeV1, SoraModelProvenanceKindV1, SoraModelRegistryV1,
+        SoraModelWeightActionV1, SoraModelWeightAuditEventV1, SoraModelWeightVersionRecordV1,
+        SoraNetworkPolicyV1, SoraPrivateCompileProfileV1, SoraPrivateInferenceCheckpointV1,
         SoraPrivateInferenceSessionStatusV1, SoraPrivateInferenceSessionV1, SoraRolloutStageV1,
         SoraRuntimeReceiptV1, SoraServiceAuditEventV1, SoraServiceConfigEntryV1,
         SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1, SoraServiceLifecycleActionV1,
@@ -1958,6 +1958,15 @@ pub(crate) struct ControlPlaneServiceRevision {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub healthcheck_path: Option<String>,
+    /// Required service-scoped configs declared by the container manifest.
+    #[norito(default)]
+    pub required_config_names: Vec<String>,
+    /// Required service-scoped secrets declared by the container manifest.
+    #[norito(default)]
+    pub required_secret_names: Vec<String>,
+    /// Explicit config exports declared by the container manifest.
+    #[norito(default)]
+    pub config_exports: Vec<SoraConfigExportV1>,
     /// Deterministic hash of sandbox/capability/resource admission inputs.
     pub sandbox_profile_hash: Hash,
     /// Monotonic simulated SCR process generation.
@@ -8923,6 +8932,9 @@ fn deployment_bundle_to_control_plane_revision(
         start_grace_secs: bundle.container.lifecycle.start_grace_secs.get(),
         stop_grace_secs: bundle.container.lifecycle.stop_grace_secs.get(),
         healthcheck_path: bundle.container.lifecycle.healthcheck_path.clone(),
+        required_config_names: bundle.container.required_config_names.clone(),
+        required_secret_names: bundle.container.required_secret_names.clone(),
+        config_exports: bundle.container.config_exports.clone(),
         sandbox_profile_hash,
         process_generation: deployment.process_generation,
         process_started_sequence: deployment.process_started_sequence,
@@ -13194,7 +13206,23 @@ mod tests {
             )
             .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
 
-            let bundle = fixture_bundle("1.0.0");
+            let mut bundle = fixture_bundle("1.0.0");
+            bundle.container.required_config_names = vec!["ui/theme".to_string()];
+            bundle.container.config_exports = vec![
+                SoraConfigExportV1 {
+                    config_name: "ui/theme".to_string(),
+                    target: iroha_data_model::soracloud::SoraConfigExportTargetV1::Env(
+                        "UI_THEME_JSON".to_string(),
+                    ),
+                },
+                SoraConfigExportV1 {
+                    config_name: "ui/theme".to_string(),
+                    target: iroha_data_model::soracloud::SoraConfigExportTargetV1::File(
+                        "runtime/ui/theme.json".to_string(),
+                    ),
+                },
+            ];
+            bundle.service.container.manifest_hash = bundle.container_manifest_hash();
             let provenance = {
                 let payload =
                     encode_bundle_signature_payload(&bundle, &BTreeMap::new(), &BTreeMap::new())
@@ -13228,6 +13256,15 @@ mod tests {
                     .expect("latest revision")
                     .signed_by,
                 ALICE_ID.signatory().to_string()
+            );
+            assert_eq!(
+                snapshot.services[0]
+                    .latest_revision
+                    .as_ref()
+                    .expect("latest revision")
+                    .config_exports
+                    .len(),
+                2
             );
             assert_eq!(snapshot.recent_audit_events.len(), 1);
             Ok(())

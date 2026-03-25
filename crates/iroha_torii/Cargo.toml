@@ -115,6 +115,7 @@ error-stack = { workspace = true, features = ["eyre"] }
 async-trait = { workspace = true }
 base64 = { workspace = true }
 ciborium = { version = "0.2.2", default-features = false, features = ["std"] }
+x509-parser = "0.18.1"
 hex = { workspace = true }
 blake3 = { workspace = true }
 ed25519-dalek = "2.2.0"
