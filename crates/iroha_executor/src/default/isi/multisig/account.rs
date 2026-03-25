@@ -16,7 +16,7 @@ use crate::data_model::{
 impl VisitExecute for MultisigRegister {
     fn visit<V: Execute + Visit + ?Sized>(&self, executor: &mut V) {
         if let Err(err) =
-            validate_registration(&self.account, &self.home_domain, &self.spec, executor)
+            validate_registration(&self.account, self.home_domain.as_ref(), &self.spec, executor)
         {
             deny!(executor, err);
         }
@@ -26,7 +26,7 @@ impl VisitExecute for MultisigRegister {
         let spec = self.spec;
         let multisig_account_id = self.account;
         let home_domain = self.home_domain;
-        validate_registration(&multisig_account_id, &home_domain, &spec, executor)?;
+        validate_registration(&multisig_account_id, home_domain.as_ref(), &spec, executor)?;
         let domain_owner = home_domain
             .as_ref()
             .map(|domain_id| domain_owner(domain_id, executor))
@@ -89,7 +89,7 @@ impl VisitExecute for MultisigRegister {
 
 fn validate_registration<V: Execute + Visit + ?Sized>(
     _multisig_account: &AccountId,
-    _home_domain: &Option<DomainId>,
+    _home_domain: Option<&DomainId>,
     spec: &MultisigSpec,
     executor: &V,
 ) -> Result<(), ValidationFail> {

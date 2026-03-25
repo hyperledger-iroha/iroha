@@ -572,7 +572,7 @@ impl OperatorAuth {
             self.record_event(action, "denied", err.metric_label());
             return Err(err);
         }
-        let key = auth_key(headers);
+        let key = auth_key(headers, remote_ip);
         if !self.limiter.allow(&key).await {
             let err = OperatorAuthError::rate_limited();
             self.record_event(action, "rate_limited", err.metric_label());
@@ -1206,11 +1206,8 @@ fn decode_b64url(label: &'static str, value: &str) -> Result<Vec<u8>, OperatorAu
         .map_err(|_| OperatorAuthError::invalid_payload(format!("{label} must be base64url")))
 }
 
-fn auth_key(headers: &HeaderMap) -> String {
-    headers
-        .get(limits::REMOTE_ADDR_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<IpAddr>().ok())
+fn auth_key(headers: &HeaderMap, remote: Option<IpAddr>) -> String {
+    limits::effective_remote_ip(headers, remote)
         .map(|ip| ip.to_string())
         .unwrap_or_else(|| "anon".to_string())
 }
@@ -2256,6 +2253,56 @@ mod tests {
             .await
             .expect_err("untrusted proxy must not satisfy mTLS");
         assert_eq!(err.code, "operator_mtls_required");
+    }
+
+    #[tokio::test]
+    async fn operator_auth_key_uses_remote_ip_when_internal_header_missing() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config = base_operator_auth_config(
+            OperatorTokenFallback::Always,
+            OperatorTokenSource::OperatorTokens,
+            vec!["valid".to_owned()],
+            OperatorAuthLockout::default(),
+            vec![OperatorWebAuthnAlgorithm::Es256],
+        );
+        let auth = build_operator_auth(config, HashSet::new(), tempdir.path());
+
+        let remote_ip: IpAddr = "198.51.100.33".parse().expect("remote ip");
+        let ctx = auth
+            .authorize_login(&HeaderMap::new(), Some(remote_ip), ACTION_LOGIN_OPTIONS)
+            .await
+            .expect("login key derivation should succeed");
+
+        assert_eq!(ctx.key, remote_ip.to_string());
+    }
+
+    #[tokio::test]
+    async fn operator_auth_key_prefers_injected_header_over_transport_remote_ip() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config = base_operator_auth_config(
+            OperatorTokenFallback::Always,
+            OperatorTokenSource::OperatorTokens,
+            vec!["valid".to_owned()],
+            OperatorAuthLockout::default(),
+            vec![OperatorWebAuthnAlgorithm::Es256],
+        );
+        let auth = build_operator_auth(config, HashSet::new(), tempdir.path());
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            limits::REMOTE_ADDR_HEADER,
+            HeaderValue::from_static("203.0.113.77"),
+        );
+        let ctx = auth
+            .authorize_login(
+                &headers,
+                Some("198.51.100.33".parse().expect("transport remote ip")),
+                ACTION_LOGIN_OPTIONS,
+            )
+            .await
+            .expect("login key derivation should succeed");
+
+        assert_eq!(ctx.key, "203.0.113.77");
     }
 
     #[test]

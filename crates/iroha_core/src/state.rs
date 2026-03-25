@@ -2767,7 +2767,15 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) internal_event_buf: Vec<Arc<DataEvent>>,
 }
 
-impl WorldTransaction<'_, '_> {
+impl<'block, 'world> WorldTransaction<'block, 'world> {
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Provides mutable access to durable smart-contract state for tests and API scaffolding.
+    pub fn smart_contract_state_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, 'world, Name, Vec<u8>> {
+        &mut self.smart_contract_state
+    }
+
     /// Record that the given asset definition belongs to its domain.
     pub(crate) fn track_asset_definition_domain(&mut self, definition_id: &AssetDefinitionId) {
         if definition_id.is_opaque_canonical() {

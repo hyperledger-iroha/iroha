@@ -33,7 +33,7 @@ fn i105_to_digits(payload: &str) -> Result<Vec<u8>, AccountAddressError> {
         .map(|ch| {
             BASE58_ALPHABET
                 .find(ch)
-                .map(|index| index as u8)
+                .map(|index| u8::try_from(index).expect("base58 alphabet length fits in u8"))
                 .ok_or(AccountAddressError::InvalidI105Char(ch))
         })
         .collect()

@@ -13127,8 +13127,8 @@ mod tests {
 
         let service_name: iroha_data_model::name::Name =
             "portal".parse().expect("valid service name");
-        let deployment = state
-            .view()
+        let view = state.view();
+        let deployment = view
             .world()
             .soracloud_service_deployments()
             .get(&service_name)

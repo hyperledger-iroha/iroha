@@ -10,13 +10,14 @@ crypto/serialization surfaces. This audit initially confirmed three
 ingress/authentication issues: two high severity and one medium severity.
 Those three findings are now closed in the current tree by the remediation
 described below. Follow-up transport and internal-dispatch review confirmed
-eight additional medium-severity issues: one outbound P2P identity-binding
+nine additional medium-severity issues: one outbound P2P identity-binding
 gap, one outbound P2P TLS-downgrade default, two Torii trust-boundary bugs in
 webhook delivery and MCP internal dispatch, one cross-SDK sensitive-transport
 gap in the Swift, Java/Android, Kotlin, and JS clients, one SoraFS
 trusted-proxy/client-IP policy gap, one SoraFS local-proxy
-bind/authentication gap, and one peer-telemetry geo-lookup plaintext
-fallback. Those later findings are also closed in the current tree.
+bind/authentication gap, one peer-telemetry geo-lookup plaintext fallback,
+and one operator-auth remote-IP fail-open lockout/rate-keying gap. Those
+later findings are also closed in the current tree.
 
 The four previously reported Soracloud findings about raw private keys over
 HTTP, internal-only local-read proxy execution, unmetered public-runtime
@@ -30,8 +31,8 @@ request-signing helpers, the peer-telemetry geo path, and the SoraFS
 workstation proxy helpers plus the SoraFS pin/gateway client-IP policy
 surfaces. No live confirmed issue from that ingress/auth, egress-policy,
 peer-telemetry geo, sampled P2P transport defaults, MCP-dispatch, sampled SDK
-transport, SoraFS trusted-proxy/client-IP policy, or local-proxy slice
-remains after the fixes in this report.
+transport, operator-auth lockout/rate-keying, SoraFS trusted-proxy/client-IP
+policy, or local-proxy slice remains after the fixes in this report.
 Follow-up hardening also expanded the fail-closed startup truth sets for
 sampled IVM CUDA/Metal accelerator paths; that work did not confirm a new
 fail-open issue. The sampled Metal Ed25519
@@ -745,6 +746,63 @@ Remediation status:
   config fixture
   `torii_transport_trusted_proxy_cidrs_default_to_empty`.
 
+### SEC-16: Operator auth lockout and rate-limit keying fell back to a shared anonymous bucket when the injected remote-IP header was missing (Closed 2026-03-25)
+
+Impact:
+
+- Operator auth admission already received the accepted socket IP, but the
+  lockout/rate-limit key ignored it and collapsed requests into a shared
+  `"anon"` bucket whenever the internal `x-iroha-remote-addr` header was
+  absent.
+- That was not a fresh public ingress bypass on the default router, because
+  ingress middleware rewrites the internal header before these handlers run.
+  It was still a real fail-open trust-boundary gap for narrower internal
+  handler paths, direct tests, and any future route that reaches
+  `OperatorAuth` before the injection middleware.
+- In those cases one caller could consume rate-limit budget or lock out other
+  callers that should have been isolated by source IP.
+
+Evidence:
+
+- `OperatorAuth::check_common(...)` in
+  `crates/iroha_torii/src/operator_auth.rs` already received
+  `remote_ip: Option<IpAddr>`, but it previously called `auth_key(headers)`
+  and dropped the transport IP entirely.
+- `auth_key(...)` in `crates/iroha_torii/src/operator_auth.rs` previously
+  parsed only `limits::REMOTE_ADDR_HEADER` and otherwise returned `"anon"`.
+- The general Torii helper in `crates/iroha_torii/src/limits.rs` already had
+  the correct fail-closed resolution rule in `effective_remote_ip(headers,
+  remote)`, preferring the injected canonical header but falling back to the
+  accepted socket IP when direct handler invocations bypass middleware.
+
+Why this matters:
+
+- Lockout and rate-limit state must key on the same effective caller identity
+  that the rest of Torii uses for policy decisions. Falling back to a shared
+  anonymous bucket turns a missing internal metadata hop into cross-client
+  interference instead of localizing the effect to the true caller.
+- Operator auth is an abuse-sensitive boundary, so even a medium-severity
+  bucket-collision issue is worth closing explicitly.
+
+Recommendation:
+
+- Derive the operator-auth key from `limits::effective_remote_ip(headers,
+  remote_ip)` so the injected header still wins when present, but direct
+  handler invocations fall back to the transport address instead of `"anon"`.
+- Keep `"anon"` only as the final fallback when both the internal header and
+  the transport IP are unavailable.
+
+Remediation status:
+
+- Closed in current code. `crates/iroha_torii/src/operator_auth.rs` now calls
+  `auth_key(headers, remote_ip)` from `check_common(...)`, and `auth_key(...)`
+  now derives the lockout/rate-limit key from
+  `limits::effective_remote_ip(headers, remote_ip)`.
+- Regression coverage now includes
+  `operator_auth_key_uses_remote_ip_when_internal_header_missing` and
+  `operator_auth_key_prefers_injected_header_over_transport_remote_ip` in
+  `crates/iroha_torii/src/operator_auth.rs`.
+
 ## Closed Or Superseded Findings From The Earlier Report
 
 - Earlier raw-private-key Soracloud finding: closed. Current mutation ingress
@@ -818,11 +876,11 @@ Remediation status:
 ## Coverage Notes
 
 - Server/runtime/config/networking: SEC-05, SEC-06, SEC-07, SEC-08, SEC-09,
-  SEC-10, SEC-12, SEC-13, SEC-14, and SEC-15 were confirmed during the audit
-  and are now closed in the current tree. Additional hardening in the current
-  tree now also makes Connect websocket/session admission fail closed when the
-  internal injected remote-IP header is missing, instead of defaulting that
-  condition to loopback.
+  SEC-10, SEC-12, SEC-13, SEC-14, SEC-15, and SEC-16 were confirmed during
+  the audit and are now closed in the current tree. Additional hardening in
+  the current tree now also makes Connect websocket/session admission fail
+  closed when the internal injected remote-IP header is missing, instead of
+  defaulting that condition to loopback.
 - IVM/crypto/serialization: no additional confirmed finding from this audit
   slice. Positive evidence includes confidential key material zeroization in
   `crates/iroha_crypto/src/confidential.rs:53-60` and replay-aware Soranet PoW
@@ -901,6 +959,8 @@ Remediation status:
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_torii --lib verify_accepts_valid_signature -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_torii --lib verify_rejects_replayed_nonce -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_torii --lib operator_auth_rejects_forwarded_mtls_from_untrusted_proxy -- --nocapture`
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_HOME=/tmp/iroha-cargo-home-operator-auth-key CARGO_TARGET_DIR=/tmp/iroha-codex-target-operator-auth-key cargo test -p iroha_torii --lib operator_auth_key_ -- --nocapture`
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_HOME=/tmp/iroha-cargo-home-operator-auth-key CARGO_TARGET_DIR=/tmp/iroha-codex-target-operator-auth-key cargo test -p iroha_torii --lib operator_auth_rejects_forwarded_mtls_from_untrusted_proxy -- --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_torii --lib trusted_forwarded_header_requires_proxy_membership -- --nocapture`
   - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-webhook-https cargo check -p iroha_torii --lib --features app_api_https`
   - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-webhook-https cargo test -p iroha_torii --lib https_delivery_dns_override_ --features app_api_https -- --nocapture`

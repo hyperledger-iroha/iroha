@@ -117,6 +117,54 @@
               }
             }
           }
+        },
+        {
+          "Register": {
+            "Domain": {
+              "id": "sora",
+              "logo": null,
+              "metadata": {
+                
+              }
+            }
+          }
+        },
+        {
+          "Register": {
+            "Account": {
+              "id": "testuﾛ1NrpｽﾓaMﾒﾌNhziﾙZfvWn9ﾙﾘvFqxｾmUﾓﾏ2ﾊｷﾍhqzｾ71P2D3",
+              "label": null,
+              "metadata": {
+                
+              },
+              "opaque_ids": [
+                
+              ],
+              "uaid": null
+            }
+          }
+        },
+        {
+          "Register": {
+            "AssetDefinition": {
+              "confidential_policy": {
+                "mode": "TransparentOnly",
+                "pedersen_params_id": null,
+                "pending_transition": null,
+                "poseidon_params_id": null,
+                "vk_set_hash": null
+              },
+              "id": "xor#sora",
+              "logo": null,
+              "metadata": {
+                
+              },
+              "mintable": "Infinitely",
+              "spec": {
+                "scale": null
+              }
+            }
+          }
         }
       ],
       "ivm_triggers": [
@@ -215,6 +263,14 @@
             "Asset": {
               "destination": "5CJ6HCMxWw9xhuHmxDrzEfWGeE7M#6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
               "object": "44"
+            }
+          }
+        },
+        {
+          "Mint": {
+            "Asset": {
+              "destination": "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed32000601000000000000d1ebb7a9c61afa19005a00000000000000000000004e0000000000000046000000000000006564303132303133324533323039433445433843384534464345374433354632434546363235333441353541433139373838414134454642393941353938364535324631324690000000000000000100000000000000670100000000000000250100000000000000e201000000000000006f0100000000000000170100000000000000d201000000000000004c0100000000000000900100000000000000a90100000000000000170100000000000000ad01000000000000007f010000000000000013010000000000000035010000000000000044010000000000000072040000000000000000000000",
+              "object": "250000000"
             }
           }
         },

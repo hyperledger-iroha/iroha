@@ -217,6 +217,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             mcp: A::ToriiMcp::default(),
             ram_lfe: None,
             tx_history: None,
+            faucet: None,
             // minimal defaults
             query_rate_per_authority_per_sec: None,
             query_burst_per_authority: None,

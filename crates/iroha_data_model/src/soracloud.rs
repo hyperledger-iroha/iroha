@@ -226,6 +226,7 @@ pub enum SoraNetworkPolicyV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[allow(clippy::struct_excessive_bools)]
 pub struct SoraCapabilityPolicyV1 {
     /// Egress policy for outbound network access.
     pub network: SoraNetworkPolicyV1,
@@ -3425,7 +3426,7 @@ fn validate_service_material_name(
             reason: "must not exceed 256 bytes".to_string(),
         });
     }
-    if value.chars().any(|ch| ch.is_control()) {
+    if value.chars().any(char::is_control) {
         return Err(SoraCloudManifestError::InvalidField {
             manifest,
             field,
@@ -5345,7 +5346,7 @@ pub enum SoraHfBackendFamilyV1 {
 pub enum SoraHfModelFormatV1 {
     /// Safetensors checkpoint layout.
     Safetensors,
-    /// PyTorch `.bin` / `.pt` checkpoint layout.
+    /// `PyTorch` `.bin` / `.pt` checkpoint layout.
     PyTorch,
     /// GGUF layout.
     Gguf,
@@ -7733,6 +7734,8 @@ pub enum SoracloudHostOperationV1 {
     PublishCheckpoint,
     /// Read authoritative service config material for the active service revision.
     ReadConfig,
+    /// Read an authoritative service secret envelope for the active service revision.
+    ReadSecretEnvelope,
     /// Read node-local secret material exposed only through the runtime host.
     ReadSecret,
     /// Read node-local credential material exposed only through the runtime host.
@@ -7793,6 +7796,8 @@ pub enum SoracloudHostRequestPayloadV1 {
     PublishCheckpoint(SoracloudPublishCheckpointRequestV1),
     /// Request to read an authoritative service config payload.
     ReadConfig(SoracloudReadConfigRequestV1),
+    /// Request to read an authoritative service secret envelope.
+    ReadSecretEnvelope(SoracloudReadSecretEnvelopeRequestV1),
     /// Request to read a node-local secret.
     ReadSecret(SoracloudReadSecretRequestV1),
     /// Request to read a node-local credential.
@@ -7853,6 +7858,8 @@ pub enum SoracloudHostResponsePayloadV1 {
     PublishCheckpoint(SoracloudPublishCheckpointResponseV1),
     /// Response to service config lookups.
     ReadConfig(SoracloudReadConfigResponseV1),
+    /// Response to secret-envelope lookups.
+    ReadSecretEnvelope(SoracloudReadSecretEnvelopeResponseV1),
     /// Response to secret lookups.
     ReadSecret(SoracloudReadSecretResponseV1),
     /// Response to credential lookups.
@@ -8027,6 +8034,29 @@ pub struct SoracloudReadConfigResponseV1 {
     /// Canonical JSON payload bytes when the lookup succeeds.
     #[norito(default)]
     pub payload_bytes: Vec<u8>,
+}
+
+/// Read an authoritative service secret envelope for the active service revision.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoracloudReadSecretEnvelopeRequestV1 {
+    /// Stable secret identifier relative to the authoritative service-secret set.
+    pub secret_name: String,
+}
+
+/// Response to an authoritative service secret-envelope lookup.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoracloudReadSecretEnvelopeResponseV1 {
+    /// Matching authoritative secret envelope when one exists.
+    #[norito(default)]
+    pub envelope: Option<SecretEnvelopeV1>,
 }
 
 /// Read node-local secret material for the active service revision.
@@ -8430,6 +8460,7 @@ pub fn encode_agent_autonomy_run_provenance_payload(
 
 /// Derive the deterministic runtime request commitment for an approved Soracloud agent autonomy run.
 #[must_use]
+#[allow(clippy::too_many_arguments)]
 pub fn derive_agent_autonomy_request_commitment(
     apartment_name: &str,
     artifact_hash: &str,
@@ -8633,6 +8664,7 @@ pub fn encode_model_weight_rollback_provenance_payload(
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
+#[allow(clippy::needless_pass_by_value)]
 pub fn encode_uploaded_model_bundle_register_provenance_payload(
     bundle: SoraUploadedModelBundleV1,
 ) -> Result<Vec<u8>, norito::Error> {
@@ -8645,6 +8677,7 @@ pub fn encode_uploaded_model_bundle_register_provenance_payload(
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
+#[allow(clippy::needless_pass_by_value)]
 pub fn encode_uploaded_model_chunk_append_provenance_payload(
     chunk: SoraUploadedModelChunkV1,
 ) -> Result<Vec<u8>, norito::Error> {
@@ -8752,6 +8785,7 @@ pub fn encode_uploaded_model_allow_provenance_payload(
 ///
 /// # Errors
 /// Returns an encoding error when Norito serialization fails.
+#[allow(clippy::needless_pass_by_value)]
 pub fn encode_private_inference_start_provenance_payload(
     session: SoraPrivateInferenceSessionV1,
 ) -> Result<Vec<u8>, norito::Error> {

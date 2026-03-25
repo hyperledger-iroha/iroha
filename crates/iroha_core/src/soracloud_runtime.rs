@@ -481,6 +481,12 @@ pub struct SoracloudRuntimeServicePlan {
     pub config_entry_count: u32,
     /// Number of committed service secret entries projected into runtime materialization.
     pub secret_entry_count: u32,
+    /// Whether ordinary handlers on this revision can read authoritative config payloads.
+    pub supports_host_read_config: bool,
+    /// Whether ordinary handlers on this revision can read authoritative secret envelopes.
+    pub supports_host_read_secret_envelope: bool,
+    /// Whether this revision exposes at least one private runtime handler that can read raw secret payload bytes.
+    pub supports_private_secret_payload_reads: bool,
     /// Local directory where the revision plan is materialized.
     pub materialization_dir: String,
     /// Local directory containing canonical JSON config files for this revision.

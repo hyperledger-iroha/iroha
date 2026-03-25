@@ -884,13 +884,13 @@ impl NewAccount {
             label: self.label,
             uaid: self.uaid,
             opaque_ids: self.opaque_ids,
-            linked_domains: linked_domains_from_registration(&self.domain),
+            linked_domains: linked_domains_from_registration(self.domain.as_ref()),
         }
     }
 }
 
-fn linked_domains_from_registration(domain: &Option<DomainId>) -> BTreeSet<DomainId> {
-    domain.iter().cloned().collect()
+fn linked_domains_from_registration(domain: Option<&DomainId>) -> BTreeSet<DomainId> {
+    domain.into_iter().cloned().collect()
 }
 
 impl NewAccount {
@@ -1015,7 +1015,7 @@ impl Registrable for NewAccount {
             label: self.label,
             uaid: self.uaid,
             opaque_ids: self.opaque_ids,
-            linked_domains: linked_domains_from_registration(&self.domain),
+            linked_domains: linked_domains_from_registration(self.domain.as_ref()),
         }
     }
 }

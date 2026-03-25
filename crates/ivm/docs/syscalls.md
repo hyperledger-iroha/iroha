@@ -252,6 +252,7 @@ Soracloud runtime host surface
 - 0xC6 SORACLOUD_READ_CREDENTIAL — Args: `r10=&SoracloudRequest(ReadCredential)` → `r10=&SoracloudResponse(ReadCredential)`. Reads node-local credential material and is only valid from `private_update`.
 - 0xC7 SORACLOUD_EGRESS_FETCH — Args: `r10=&SoracloudRequest(EgressFetch)` → `r10=&SoracloudResponse(EgressFetch)`. Performs a bounded host-allowlisted fetch and fails deterministically on policy or hash mismatch.
 - 0xC8 SORACLOUD_READ_CONFIG — Args: `r10=&SoracloudRequest(ReadConfig)` → `r10=&SoracloudResponse(ReadConfig)`. Reads authoritative service config payload bytes for the active revision and is valid from ordinary Soracloud handlers.
+- 0xC9 SORACLOUD_READ_SECRET_ENVELOPE — Args: `r10=&SoracloudRequest(ReadSecretEnvelope)` → `r10=&SoracloudResponse(ReadSecretEnvelope)`. Reads the authoritative committed secret envelope for the active revision and is valid from ordinary Soracloud handlers; plaintext/ciphertext payload reads remain on the private-runtime `READ_SECRET` path.
 - All Soracloud payloads are Norito request/response envelopes carried in the Soracloud pointer-ABI types. Host failures must be deterministic and receipt-stable, and unknown numbers still map to `VMError::UnknownSyscall`.
 
 ZK Helpers
@@ -435,6 +436,7 @@ but they must not change the host ABI.
 | 0xC6 | SORACLOUD_READ_CREDENTIAL | r10=&SoracloudRequest(ReadCredential) | r10=&SoracloudResponse(ReadCredential) | - |
 | 0xC7 | SORACLOUD_EGRESS_FETCH | r10=&SoracloudRequest(EgressFetch) | r10=&SoracloudResponse(EgressFetch) | - |
 | 0xC8 | SORACLOUD_READ_CONFIG | r10=&SoracloudRequest(ReadConfig) | r10=&SoracloudResponse(ReadConfig) | - |
+| 0xC9 | SORACLOUD_READ_SECRET_ENVELOPE | r10=&SoracloudRequest(ReadSecretEnvelope) | r10=&SoracloudResponse(ReadSecretEnvelope) | - |
 | 0xE0 | INPUT_PUBLISH_TLV | r10=&Blob(TLV) | ptr (r10) | asset:gas/G_input_publish@ivm.core/v2 |
 | 0xF0 | ALLOC | r10=bytes:u64 | ptr (r10) | asset:gas/G_alloc@ivm.core/v2 + bytes |
 | 0xF1 | GET_PUBLIC_INPUT | r10=&Name | ptr (&Tlv) | asset:gas/G_get_pub@ivm.core/v2 + bytes |

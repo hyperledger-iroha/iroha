@@ -2,6 +2,124 @@
 
 Last updated: 2026-03-25
 
+## 2026-03-25 Follow-up: strict workspace clippy is green after validation-driven cleanup
+- Continued the repo-level validation pass after closing the asset/mobile follow-up and fixed
+  the next layer of compile/lint drift that strict workspace `clippy` exposed across unrelated
+  crates:
+  - `crates/iroha_data_model` picked up the expected `Option<&T>` / `map_or_else` /
+    doc-markdown cleanup plus narrow local `clippy` allowances where the current
+    Soracloud/data-model API shape is intentional;
+  - `crates/kotodama_lang`, `crates/iroha_config`, `crates/iroha_executor`,
+    `crates/connect_norito_bridge`, `crates/iroha_kagami`, `crates/iroha_core`, and
+    `crates/iroha_torii` all needed small follow-up fixes for stale signatures, new
+    optional-domain account fields, added Torii config fields, missing test-only helpers,
+    dead test code, and borrow/lifetime issues uncovered by the strict lint pass; and
+  - the workspace now passes `cargo clippy --workspace --all-targets -- -D warnings`.
+- Validation:
+  - `cargo clippy --workspace --all-targets -- -D warnings` (pass)
+  - `cargo test --workspace` (started, still compiling/running in this turn; no final pass/fail result yet)
+- Remaining implementation gap:
+  - no additional lint blockers remain in the strict workspace `clippy` pass. The only
+    unfinished repo-level validation from this turn is the long-running
+    `cargo test --workspace` execution.
+
+## 2026-03-25 Hardening: operator auth now keys lockout and rate limiting off the effective caller IP
+- Hardened `crates/iroha_torii/src/operator_auth.rs` so
+  `OperatorAuth::check_common(...)` derives its lockout/rate-limit key from
+  `limits::effective_remote_ip(headers, remote_ip)` instead of collapsing
+  missing internal remote metadata to a shared `"anon"` bucket.
+- The shipped behavior in this slice:
+  - operator auth still prefers the ingress-injected
+    `x-iroha-remote-addr` header when present, preserving the current trusted
+    proxy and ingress-middleware semantics; and
+  - direct handler invocations that bypass ingress middleware now fall back to
+    the accepted socket IP for rate-limit and lockout isolation, only using
+    `"anon"` when both header and transport IP are unavailable.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/operator_auth.rs`
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_HOME=/tmp/iroha-cargo-home-operator-auth-key CARGO_TARGET_DIR=/tmp/iroha-codex-target-operator-auth-key cargo test -p iroha_torii --lib operator_auth_key_ -- --nocapture` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_HOME=/tmp/iroha-cargo-home-operator-auth-key CARGO_TARGET_DIR=/tmp/iroha-codex-target-operator-auth-key cargo test -p iroha_torii --lib operator_auth_rejects_forwarded_mtls_from_untrusted_proxy -- --nocapture` (pass)
+- Remaining implementation gap:
+  - no additional live operator-auth remote-IP trust-boundary issue was
+    confirmed in this pass; the remaining confirmed security backlog is still
+    the dependency tranche plus CUDA runtime validation on a CUDA-capable
+    host.
+
+## 2026-03-25 Follow-up: Soracloud ordinary handlers can now read authoritative secret envelopes
+- Extended the Soracloud runtime/ABI secret-ingestion path across
+  `crates/iroha_data_model/src/soracloud.rs`,
+  `crates/ivm_abi/src/syscalls.rs`,
+  `crates/ivm/spec/syscalls.toml`,
+  `crates/ivm/docs/syscalls.md`,
+  `crates/ivm/tests/abi_syscall_list_golden.rs`,
+  `crates/irohad/src/soracloud_runtime.rs`, and
+  `docs/source/soracloud/cli_local_control_plane.md`.
+- The shipped behavior in this slice:
+  - the Soracloud host envelope now exposes `ReadSecretEnvelope` as the
+    public-safe ordinary-handler path for committed service secrets;
+  - ABI v1 now includes `SORACLOUD_READ_SECRET_ENVELOPE` as an explicit
+    syscall and the golden syscall list is updated accordingly;
+  - the embedded `irohad` Soracloud IVM host now resolves authoritative
+    service secret envelopes directly from committed deployment state for
+    ordinary handler execution; and
+  - the existing `ReadSecret` path remains private-runtime-only and still
+    returns committed ciphertext bytes rather than widening to plaintext
+    mounts.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=target_soracloud_secret_envelope_ivm cargo test -p ivm abi_syscall_list_matches_golden -- --nocapture` (pending rerun after current Soracloud-focused build settles)
+  - `CARGO_TARGET_DIR=target_soracloud_secret_envelope_runtime cargo test -p irohad ivm_host_public_runtime_reads_authoritative_service_secret_envelope -- --nocapture` (pending rerun after current Soracloud-focused build settles)
+  - `CARGO_TARGET_DIR=target_soracloud_secret_envelope_runtime cargo test -p irohad ivm_host_public_runtime_reads_authoritative_service_config_entry -- --nocapture` (pending rerun after current Soracloud-focused build settles)
+  - `CARGO_TARGET_DIR=target_soracloud_readcfg_cli cargo check -p iroha_cli --tests` (running)
+  - `CARGO_TARGET_DIR=target_soracloud_readcfg_core cargo check -p iroha_core --tests` (running)
+- Remaining implementation gap:
+  - Soracloud now has an explicit authoritative envelope-only secret contract
+    for ordinary IVM services, but there is still no automatic plaintext
+    decrypt/mount handoff for one-click services that need local secret
+    consumption without handling envelopes themselves.
+
+## 2026-03-25 Follow-up: TAIRA faucet now requires decentralized proof-of-work
+- Hardened the TAIRA faucet slice across
+  `crates/iroha_config/src/parameters/{actual.rs,defaults.rs,user.rs}`,
+  `crates/iroha_torii/src/{lib.rs,openapi.rs,routing.rs}`,
+  `crates/iroha_torii/tests/accounts_faucet.rs`,
+  `configs/soranexus/testus/config.toml`,
+  and `defaults/kagami/iroha3-testus/config.toml`.
+- The shipped behavior in this slice:
+  - Torii now exposes `GET /v1/accounts/faucet/puzzle`, which returns a deterministic SHA-256 puzzle anchored to a recent committed block hash plus an acceptance window in blocks;
+  - `POST /v1/accounts/faucet` now rejects requests that do not include a valid PoW solution when faucet PoW difficulty is non-zero, while still preserving the existing starter-funds transfer flow and balance checks; and
+  - the TAIRA/testus profile now enables faucet PoW explicitly (`pow_difficulty_bits = 20`, `pow_max_anchor_age_blocks = 6`) without changing non-TAIRA profiles.
+- Validation:
+  - `cargo test -p iroha_config torii_faucet_tests -- --nocapture` (pending rerun after current focused Torii build settles)
+  - `cargo test -p iroha_torii --features app_api accounts_faucet -- --nocapture` (build currently in progress in this workspace)
+- Remaining implementation gap:
+  - the faucet still uses a balance-based eligibility check rather than a durable on-chain claim marker, so PoW now slows Sybil drain but does not by itself create permanent one-claim semantics.
+
+## 2026-03-25 Follow-up: multisig cancel integration test now waits for committed proposal state
+- Hardened `integration_tests/tests/multisig.rs` so the cancel-route coverage
+  matches Torii's queue-admission semantics instead of assuming immediate
+  post-submit visibility.
+- The shipped behavior in this slice:
+  - the failing
+    `multisig_cancel_route_persists_canceled_terminal_state`
+    integration test now polls `/v1/multisig/proposals/get` until the cancel
+    wrapper proposal is visible in `COLLECTING_SIGNATURES` before issuing the
+    second cancel request; and
+  - the same test now polls the target proposal until it reaches the
+    persisted `CANCELED` terminal state before asserting `terminal_at_ms` and
+    list visibility, removing the earlier race between queue admission and
+    committed world state.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p integration_tests multisig_cancel_route_persists_canceled_terminal_state -- --nocapture`
+    (build/test launch reached the target multisig test, but runtime
+    verification was blocked by an unrelated 4-peer startup failure:
+    `active SNS domain-name lease is required before registering \`wonderland\``)
+- Remaining implementation gap:
+  - fix the default integration-test network genesis/bootstrap path so the
+    new SNS lease invariant does not abort peer startup, then rerun the
+    targeted multisig cancel integration test end to end.
+
 ## 2026-03-25 Follow-up: Soracloud services can now read authoritative config through the runtime host
 - Extended the Soracloud runtime/config ingestion path across
   `crates/iroha_data_model/src/soracloud.rs`,
@@ -648,6 +766,25 @@ Last updated: 2026-03-25
   - the corresponding CUDA runtime paths still need live-driver execution on a
     CUDA-capable host before this same public-kernel coverage can be validated
     beyond compile-time admission checks.
+
+## 2026-03-24 TAIRA faucet support landed for the app API and testnet profile
+- Added an app-facing faucet slice across
+  `crates/iroha_config/src/parameters/{actual.rs,user.rs}`,
+  `crates/iroha_torii/src/{lib.rs,routing.rs,mcp.rs,openapi.rs}`,
+  `crates/iroha_torii/tests/accounts_faucet.rs`,
+  `configs/soranexus/testus/{config.toml,genesis.json}`,
+  and `defaults/kagami/iroha3-testus/{config.toml,genesis.json}`.
+- The shipped behavior in this slice:
+  - Torii now accepts optional `[torii.faucet]` config and exposes `POST /v1/accounts/faucet`, which transfers a fixed starter balance from a configured authority account to an existing account that still has zero balance for the configured faucet asset;
+  - the faucet response now includes both the configured asset-definition identifier and the concrete funded `asset_id`, so downstream apps can immediately reuse the exact bucket they were credited with;
+  - the TAIRA/testus profile now seeds a dedicated faucet authority plus `xor#sora` in genesis and pre-mints a faucet reserve, while leaving non-TAIRA profiles untouched; and
+  - the faucet config parser now accepts human-readable `name#domain` literals (for example `xor#sora`) for this profile instead of forcing operators to hand-compute the canonical asset-definition address.
+- Validation:
+  - `jq empty configs/soranexus/testus/genesis.json` (pass)
+  - `jq empty defaults/kagami/iroha3-testus/genesis.json` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-config cargo test -p iroha_config torii_faucet_tests -- --nocapture` (pass)
+- Remaining implementation gap:
+  - the focused `iroha_config` faucet parser path is green, but full `iroha_torii --features app_api` test execution is still blocked in this workspace by unrelated pre-existing `iroha_core` compile errors around missing offline/SNS symbols on the current branch.
 
 ## 2026-03-24 Follow-up: shared Ed25519 GPU challenge preparation is unified across the accelerator admission paths
 - Removed another accelerator drift point across

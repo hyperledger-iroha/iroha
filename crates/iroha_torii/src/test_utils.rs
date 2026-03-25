@@ -532,6 +532,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             transport: A::ToriiTransport::default(),
             mcp: A::ToriiMcp::default(),
             ram_lfe: None,
+            faucet: None,
             tx_history: None,
             events_buffer_capacity: defaults::torii::events_buffer_capacity(),
             ws_message_timeout: Duration::from_millis(defaults::torii::WS_MESSAGE_TIMEOUT_MS),

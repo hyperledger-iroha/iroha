@@ -308,6 +308,7 @@ fn with_core_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistr
     registry
 }
 
+#[allow(clippy::too_many_lines)]
 fn with_soracloud_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistry {
     registry = registry
         .register_with_id::<soracloud::DeploySoracloudService>("soracloud::DeploySoracloudService");

@@ -33,6 +33,8 @@ Soracloud v1 is an authoritative, IVM-only runtime.
 - Committed service secret envelopes are now materialized under
   `services/<service>/<version>/secret_envelopes/<secret_name>` as
   authoritative envelope files.
+- Ordinary Soracloud IVM handlers can now read those committed secret
+  envelopes directly through the runtime host `ReadSecretEnvelope` surface.
 - The legacy private-runtime fallback tree is now synchronized from committed
   deployment state under `secrets/<service>/<version>/<secret_name>` so the
   older raw secret read path and the authoritative control plane point at the
@@ -42,8 +44,13 @@ Soracloud v1 is an authoritative, IVM-only runtime.
   `secrets/<service>/<version>/...` materialized file tree when no committed
   service secret entry exists for the requested key.
 - Secret ingestion is still intentionally narrower than config ingestion:
+  `ReadSecretEnvelope` is the public-safe ordinary-handler contract, while
   `ReadSecret` remains private-runtime-only and still returns the committed
   envelope ciphertext bytes rather than a plaintext mount contract.
+- Runtime service plans now expose the corresponding ingestion capability
+  booleans directly, so status consumers can tell whether a materialized
+  revision supports host config reads, host secret-envelope reads, and private
+  raw secret reads without inferring it from handler classes alone.
 
 ## CLI Commands
 

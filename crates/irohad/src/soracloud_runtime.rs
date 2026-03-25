@@ -71,7 +71,8 @@ use iroha_data_model::{
         SoracloudHostResponseEnvelopeV1, SoracloudHostResponsePayloadV1,
         SoracloudPublishCheckpointResponseV1, SoracloudReadCommittedStateResponseV1,
         SoracloudReadConfigResponseV1, SoracloudReadCredentialResponseV1,
-        SoracloudReadSecretResponseV1, encode_model_host_heartbeat_provenance_payload,
+        SoracloudReadSecretEnvelopeResponseV1, SoracloudReadSecretResponseV1,
+        encode_model_host_heartbeat_provenance_payload,
     },
     sorafs::pin_registry::ManifestDigest,
     transaction::TransactionBuilder,
@@ -88,7 +89,7 @@ use ivm::{
         SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE, SYSCALL_SORACLOUD_EMIT_STATE_MUTATION,
         SYSCALL_SORACLOUD_PUBLISH_CHECKPOINT, SYSCALL_SORACLOUD_READ_COMMITTED_STATE,
         SYSCALL_SORACLOUD_READ_CONFIG, SYSCALL_SORACLOUD_READ_CREDENTIAL,
-        SYSCALL_SORACLOUD_READ_SECRET,
+        SYSCALL_SORACLOUD_READ_SECRET, SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE,
     },
     verify_contract_artifact,
 };
@@ -1557,6 +1558,20 @@ impl SoracloudIvmHost {
         })
     }
 
+    fn read_service_secret_envelope(
+        &self,
+        secret_name: &str,
+    ) -> SoracloudReadSecretEnvelopeResponseV1 {
+        SoracloudReadSecretEnvelopeResponseV1 {
+            envelope: self
+                .request
+                .deployment
+                .service_secrets
+                .get(secret_name)
+                .map(|entry| entry.envelope.clone()),
+        }
+    }
+
     fn host_network_allows(&self, host: &str) -> bool {
         let container_policy: &SoraCapabilityPolicyV1 = &self.request.bundle.container.capabilities;
         let container_allows = match &container_policy.network {
@@ -1825,6 +1840,20 @@ impl IVMHost for SoracloudIvmHost {
                     vm,
                     SoracloudHostOperationV1::ReadConfig,
                     SoracloudHostResponsePayloadV1::ReadConfig(response),
+                )?;
+                Ok(0)
+            }
+            SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE => {
+                let SoracloudHostRequestPayloadV1::ReadSecretEnvelope(request) = self
+                    .read_request_payload(vm, SoracloudHostOperationV1::ReadSecretEnvelope, number)?
+                else {
+                    return Err(VMError::NoritoInvalid);
+                };
+                let response = self.read_service_secret_envelope(&request.secret_name);
+                self.write_response(
+                    vm,
+                    SoracloudHostOperationV1::ReadSecretEnvelope,
+                    SoracloudHostResponsePayloadV1::ReadSecretEnvelope(response),
                 )?;
                 Ok(0)
             }
@@ -6814,6 +6843,11 @@ fn build_runtime_snapshot(
                 .as_ref()
                 .filter(|state| state.active_service_version == service_version);
             let artifact_plans = build_artifact_plans(bundle, &artifacts_root);
+            let supports_private_secret_payload_reads = bundle
+                .service
+                .handlers
+                .iter()
+                .any(|handler| handler.class == SoraServiceHandlerClassV1::PrivateUpdate);
             let hydration_complete = artifact_plans
                 .iter()
                 .all(|artifact| artifact.available_locally);
@@ -6853,6 +6887,9 @@ fn build_runtime_snapshot(
                     .unwrap_or(u32::MAX),
                 secret_entry_count: u32::try_from(deployment.service_secrets.len())
                     .unwrap_or(u32::MAX),
+                supports_host_read_config: true,
+                supports_host_read_secret_envelope: true,
+                supports_private_secret_payload_reads,
                 materialization_dir: service_dir.display().to_string(),
                 config_materialization_dir: config_dir.display().to_string(),
                 secret_envelopes_materialization_dir: secret_envelopes_dir.display().to_string(),
@@ -13496,6 +13533,9 @@ mod tests {
                         secret_generation: 0,
                         config_entry_count: 0,
                         secret_entry_count: 0,
+                        supports_host_read_config: true,
+                        supports_host_read_secret_envelope: true,
+                        supports_private_secret_payload_reads: false,
                         materialization_dir: temp_dir
                             .path()
                             .join("services/restored_service/2026.03.0")
@@ -14061,6 +14101,48 @@ mod tests {
         let response = public_host.read_service_config("ui/settings")?;
         assert!(response.found);
         assert_eq!(response.payload_bytes, expected_payload);
+        Ok(())
+    }
+
+    #[test]
+    fn ivm_host_public_runtime_reads_authoritative_service_secret_envelope() -> Result<()> {
+        let mut bundle = load_deployment_bundle_fixture()?;
+        bundle.container.capabilities.network = SoraNetworkPolicyV1::Allowlist(Vec::new());
+        let temp_dir = tempfile::tempdir()?;
+
+        let envelope = SecretEnvelopeV1 {
+            schema_version: SECRET_ENVELOPE_VERSION_V1,
+            encryption: SecretEnvelopeEncryptionV1::ClientCiphertext,
+            key_id: "kms/runtime/test".to_string(),
+            key_version: std::num::NonZeroU32::new(1).expect("non-zero"),
+            nonce: vec![1, 2, 3, 4],
+            ciphertext: b"enveloped-secret".to_vec(),
+            commitment: Hash::new(b"enveloped-secret"),
+            aad_digest: None,
+        };
+        let mut public_request = sample_ordered_mailbox_request(
+            &bundle,
+            "update",
+            sample_mailbox_message(&bundle, "update", b"public".to_vec()),
+        );
+        public_request.deployment.service_secrets.insert(
+            "db/password".to_string(),
+            SoraServiceSecretEntryV1 {
+                schema_version: iroha_data_model::soracloud::SORA_SERVICE_SECRET_ENTRY_VERSION_V1,
+                secret_name: "db/password".to_string(),
+                envelope: envelope.clone(),
+                last_update_sequence: 23,
+            },
+        );
+        let public_host = SoracloudIvmHost::new(
+            public_request,
+            temp_dir.path().to_path_buf(),
+            test_runtime_manager_config(temp_dir.path().to_path_buf()).egress,
+            BTreeMap::new(),
+        );
+
+        let response = public_host.read_service_secret_envelope("db/password");
+        assert_eq!(response.envelope, Some(envelope));
         Ok(())
     }
 

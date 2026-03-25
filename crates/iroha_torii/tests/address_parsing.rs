@@ -70,12 +70,6 @@ fn query_envelope_with_account_filter(field: &str, literal: &str) -> Vec<u8> {
     norito::json::to_vec(&envelope).expect("serialize envelope")
 }
 
-fn encode_filter(expr: &FilterExpr) -> String {
-    let raw_value = json::to_value(expr).expect("serialize filter expr");
-    let raw = json::to_string(&raw_value).expect("serialize filter expr");
-    encode(&raw).into_owned()
-}
-
 fn encode_query_value(value: &str) -> String {
     encode(value).into_owned()
 }

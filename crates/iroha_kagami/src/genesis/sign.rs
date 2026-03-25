@@ -891,7 +891,7 @@ mod tests {
             if let Executable::Instructions(instructions) = tx.instructions() {
                 for instr in instructions {
                     if let Some(register) = instr.as_any().downcast_ref::<Register<Account>>()
-                        && register.object.domain == ivm_domain
+                        && register.object.domain == Some(ivm_domain.clone())
                         && register.object.id == genesis_account
                     {
                         ivm_genesis_registrations += 1;

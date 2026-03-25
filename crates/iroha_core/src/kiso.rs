@@ -802,6 +802,7 @@ mod tests {
                 api_high_load_subscription_threshold: None,
                 ram_lfe: None,
                 tx_history: None,
+                faucet: None,
                 events_buffer_capacity: NonZeroUsize::new(
                     iroha_config::parameters::defaults::torii::EVENTS_BUFFER_CAPACITY,
                 )

@@ -11340,6 +11340,7 @@ impl Default for NexusUploadedModels {
 }
 
 impl NexusUploadedModels {
+    #[allow(clippy::unnecessary_wraps)]
     fn parse(self, _emitter: &mut Emitter<ParseError>) -> Option<actual::NexusUploadedModels> {
         Some(actual::NexusUploadedModels {
             chunk_plaintext_bytes: self.chunk_plaintext_bytes,
@@ -14203,6 +14204,8 @@ pub struct Torii {
     pub webhook_security: WebhookSecurity,
     /// Optional UAID onboarding authority wiring for app API endpoints.
     pub onboarding: Option<ToriiOnboarding>,
+    /// Optional faucet configuration for app API endpoints.
+    pub faucet: Option<ToriiFaucet>,
     /// Optional offline certificate issuer configuration for app API endpoints.
     pub offline_issuer: Option<ToriiOfflineIssuer>,
     /// Optional RAM-LFE runtime configuration for app API endpoints.
@@ -14663,6 +14666,7 @@ impl Torii {
             webhook_security,
             push,
             onboarding: self.onboarding.and_then(ToriiOnboarding::parse),
+            faucet: self.faucet.and_then(ToriiFaucet::parse),
             offline_issuer: self.offline_issuer.and_then(ToriiOfflineIssuer::parse),
             ram_lfe: self.ram_lfe.and_then(ToriiRamLfe::parse),
             tx_history: self.tx_history.map(ToriiTxHistory::parse),
@@ -15180,6 +15184,143 @@ impl ToriiOnboarding {
             allowed_permissions,
             fee_sponsor_account,
         })
+    }
+}
+
+/// Faucet configuration for app-facing onboarding helpers.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct ToriiFaucet {
+    /// Master enable switch (defaults to enabled).
+    #[config(default = "true")]
+    pub enabled: bool,
+    /// Account identifier that signs faucet transfers.
+    pub authority: String,
+    /// Private key corresponding to the faucet authority.
+    pub private_key: ExposedPrivateKey,
+    /// Asset definition distributed by the faucet.
+    pub asset_definition_id: String,
+    /// Fixed quantity transferred to each eligible account.
+    pub amount: String,
+    /// Leading-zero-bit difficulty for faucet proof-of-work (0 disables PoW).
+    #[config(default = "defaults::torii::faucet::POW_DIFFICULTY_BITS")]
+    pub pow_difficulty_bits: u8,
+    /// Maximum committed-block age for accepted faucet PoW anchors.
+    #[config(default = "defaults::torii::faucet::POW_MAX_ANCHOR_AGE_BLOCKS.get()")]
+    pub pow_max_anchor_age_blocks: u64,
+}
+
+impl ToriiFaucet {
+    fn parse(self) -> Option<actual::ToriiFaucet> {
+        if !self.enabled {
+            return None;
+        }
+        let authority = AccountId::parse_encoded(&self.authority).map_or_else(
+            |err| panic!("invalid torii.faucet.authority `{}`: {err}", self.authority),
+            iroha_data_model::account::ParsedAccountId::into_account_id,
+        );
+        let asset_definition_id = self.asset_definition_id.split_once('#').map_or_else(
+            || {
+                AssetDefinitionId::parse_address_literal(&self.asset_definition_id).unwrap_or_else(
+                    |err| {
+                        panic!(
+                            "invalid torii.faucet.asset_definition_id `{}`: {err}",
+                            self.asset_definition_id
+                        )
+                    },
+                )
+            },
+            |(name_literal, domain_literal)| {
+                let name = name_literal.trim().parse().unwrap_or_else(|err| {
+                    panic!("invalid torii.faucet.asset_definition_id name `{name_literal}`: {err}")
+                });
+                let domain = domain_literal.trim().parse().unwrap_or_else(|err| {
+                    panic!(
+                        "invalid torii.faucet.asset_definition_id domain `{domain_literal}`: {err}"
+                    )
+                });
+                AssetDefinitionId::new(domain, name)
+            },
+        );
+        let amount = Numeric::from_str(self.amount.trim())
+            .unwrap_or_else(|err| panic!("invalid torii.faucet.amount `{}`: {err}", self.amount));
+        if amount <= Numeric::zero() {
+            panic!("torii.faucet.amount must be greater than zero");
+        }
+        let pow_max_anchor_age_blocks = NonZeroU64::new(self.pow_max_anchor_age_blocks)
+            .unwrap_or_else(|| {
+                panic!("torii.faucet.pow_max_anchor_age_blocks must be greater than zero")
+            });
+        Some(actual::ToriiFaucet {
+            authority,
+            private_key: self.private_key,
+            asset_definition_id,
+            amount,
+            pow_difficulty_bits: self.pow_difficulty_bits,
+            pow_max_anchor_age_blocks,
+        })
+    }
+}
+
+#[cfg(test)]
+mod torii_faucet_tests {
+    use super::*;
+    use iroha_crypto::PublicKey;
+
+    fn sample_faucet() -> ToriiFaucet {
+        let public_key: PublicKey =
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+                .parse()
+                .expect("public key");
+        ToriiFaucet {
+            enabled: true,
+            authority: AccountId::new(public_key).to_string(),
+            private_key: "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
+                .parse()
+                .expect("private key"),
+            asset_definition_id: "xor#sora".to_owned(),
+            amount: "25000".to_owned(),
+            pow_difficulty_bits: 18,
+            pow_max_anchor_age_blocks: 4,
+        }
+    }
+
+    #[test]
+    fn torii_faucet_parse_maps_enabled_config() {
+        let parsed = sample_faucet().parse().expect("enabled faucet");
+        assert_eq!(parsed.authority.to_string(), sample_faucet().authority);
+        assert_eq!(
+            parsed.asset_definition_id,
+            AssetDefinitionId::new(
+                "sora".parse().expect("domain"),
+                "xor".parse().expect("name")
+            )
+        );
+        assert_eq!(parsed.amount.to_string(), "25000");
+        assert_eq!(parsed.pow_difficulty_bits, 18);
+        assert_eq!(parsed.pow_max_anchor_age_blocks.get(), 4);
+    }
+
+    #[test]
+    fn torii_faucet_parse_returns_none_when_disabled() {
+        let mut faucet = sample_faucet();
+        faucet.enabled = false;
+        assert!(faucet.parse().is_none());
+    }
+
+    #[test]
+    fn torii_faucet_parse_rejects_non_positive_amount() {
+        let mut faucet = sample_faucet();
+        faucet.amount = "0".to_owned();
+        let panic = std::panic::catch_unwind(|| faucet.parse());
+        assert!(panic.is_err(), "expected zero amount to panic");
+    }
+
+    #[test]
+    fn torii_faucet_parse_rejects_non_positive_pow_anchor_age() {
+        let mut faucet = sample_faucet();
+        faucet.pow_max_anchor_age_blocks = 0;
+        let panic = std::panic::catch_unwind(|| faucet.parse());
+        assert!(panic.is_err(), "expected zero pow anchor age to panic");
     }
 }
 

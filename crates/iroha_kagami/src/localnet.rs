@@ -4459,7 +4459,7 @@ mod tests {
                     .map(|register| (register.object.id.clone(), register.object.domain.clone()))
             })
             .filter(|(account_id, domain)| {
-                account_id == &genesis_account_id && domain == &ivm_domain
+                account_id == &genesis_account_id && domain.as_ref() == Some(&ivm_domain)
             })
             .count();
 

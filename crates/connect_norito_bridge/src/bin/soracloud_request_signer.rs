@@ -1045,6 +1045,7 @@ where
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_bundle_root(
     service_name: &Name,
     manifest: &StageUploadManifest,

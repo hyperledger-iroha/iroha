@@ -6955,7 +6955,7 @@ impl Compiler {
                     )
                 }
                 DataKey(DataKind::AssetDef, s) => {
-                    let id = AssetDefinitionId::parse_address_literal(&s).map_err(|e| {
+                    let id = AssetDefinitionId::parse_address_literal(s).map_err(|e| {
                         let err = format!("invalid AssetDefinitionId literal `{s}`: {e}");
                         i18n::translate(self.lang, Message::SemanticError(&err))
                     })?;

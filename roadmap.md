@@ -2,6 +2,60 @@
 
 Last updated: 2026-03-25
 
+Latest sync (2026-03-25 operator-auth effective-remote-IP hardening):
+`crates/iroha_torii/src/operator_auth.rs`
+now keys operator-auth lockout and rate limiting off Torii's effective caller
+identity instead of falling back to a shared anonymous bucket when the
+internally injected remote-IP header is missing.
+
+Validation:
+- `rustfmt --edition 2024 crates/iroha_torii/src/operator_auth.rs`
+- `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_HOME=/tmp/iroha-cargo-home-operator-auth-key CARGO_TARGET_DIR=/tmp/iroha-codex-target-operator-auth-key cargo test -p iroha_torii --lib operator_auth_key_ -- --nocapture`
+- `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_HOME=/tmp/iroha-cargo-home-operator-auth-key CARGO_TARGET_DIR=/tmp/iroha-codex-target-operator-auth-key cargo test -p iroha_torii --lib operator_auth_rejects_forwarded_mtls_from_untrusted_proxy -- --nocapture`
+
+Open work for this slice now remains:
+- no additional live operator-auth remote-IP trust-boundary issue was
+  confirmed in this pass; the remaining confirmed security backlog is still
+  the dependency tranche plus CUDA runtime validation on a CUDA-capable host.
+
+Latest sync (2026-03-25 TAIRA faucet PoW hardening):
+the TAIRA faucet now requires a deterministic, chain-anchored proof-of-work
+before Torii will enqueue the starter-funds transfer, and the wallet-side flow
+solves that puzzle locally against recent committed block data.
+
+Open work for this slice now remains:
+- rerun the focused `iroha_config` and `iroha_torii --features app_api`
+  faucet test graph after the current workspace build settles, then capture the
+  exact pass/fail state in `status.md`; and
+- decide whether to add a durable on-chain claim marker in addition to PoW, so
+  the faucet moves from "spam-resistant" to "permanently single-claim per
+  account" semantics.
+
+Latest sync (2026-03-25 multisig cancel integration stabilization):
+`integration_tests/tests/multisig.rs`
+now waits for committed multisig proposal state before assuming the cancel
+route can see a prior cancel wrapper:
+
+- the test polls `/v1/multisig/proposals/get` until the first cancel request
+  becomes a committed `COLLECTING_SIGNATURES` proposal before sending the
+  second cancel request that should return `APPROVE`; and
+- the test also waits for the target proposal to become `CANCELED` before it
+  asserts `terminal_at_ms` and terminal listing visibility, matching Torii's
+  enqueue-first behavior.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p integration_tests multisig_cancel_route_persists_canceled_terminal_state -- --nocapture`
+  (build/test launch reached the target test, but runtime verification is
+  currently blocked by an unrelated peer-startup failure:
+  `active SNS domain-name lease is required before registering \`wonderland\``)
+
+Open work for this slice now remains:
+- fix the default integration-test network genesis/bootstrap path so the new
+  SNS lease requirement does not abort 4-peer startup; and
+- rerun the targeted multisig cancel integration test after that harness
+  blocker is cleared.
+
 Latest sync (2026-03-25 Soracloud authoritative runtime config ingestion):
 Soracloud services can now consume committed service config through the IVM
 host surface instead of relying only on node-local materialized file paths.
@@ -534,6 +588,21 @@ Open work for this slice now remains:
 - continue the deeper `ivm` accelerator review across the remaining
   CUDA/Metal/determinism boundaries once the CUDA-side public-kernel parity
   paths can be exercised directly.
+
+Latest sync (2026-03-24 TAIRA faucet/testus profile enablement):
+the TAIRA-only faucet path is implemented across Torii config/routing and the
+`configs/soranexus/testus` / `defaults/kagami/iroha3-testus` profiles now seed
+the dedicated `xor#sora` faucet reserve and authority account.
+
+Open work for this slice now remains:
+- rerun the focused `iroha_torii --features app_api` faucet/onboarding test
+  graph once the unrelated branch-local `iroha_core` compile errors around the
+  offline/SNS symbols are resolved, since this workspace currently blocks the
+  higher-level Torii validation path before the new faucet endpoint tests can
+  execute end to end; and
+- decide whether the broader asset-definition config surface should also accept
+  human-readable `name#domain` literals like the new `torii.faucet` parser, or
+  whether that convenience should stay scoped to the TAIRA faucet/operator flow.
 
 Latest sync (2026-03-24 shared Ed25519 GPU challenge preparation):
 `crates/ivm/src/{signature.rs,cuda.rs,ivm.rs,vector.rs}`

@@ -260,6 +260,7 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_accounts_qr_tool());
     tools.push(iroha_accounts_query_tool());
     tools.push(iroha_accounts_onboard_tool());
+    tools.push(iroha_accounts_faucet_tool());
     tools.push(iroha_account_transactions_tool());
     tools.push(iroha_account_transactions_query_tool());
     tools.push(iroha_account_assets_tool());
@@ -1214,6 +1215,12 @@ async fn handle_tools_call(
         }
         "iroha.accounts.onboard" => {
             match dispatch_iroha_accounts_onboard(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.accounts.faucet" => {
+            match dispatch_iroha_accounts_faucet(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -4618,6 +4625,29 @@ async fn dispatch_iroha_accounts_onboard(
     .await
 }
 
+async fn dispatch_iroha_accounts_faucet(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_accounts_faucet_body(arguments)?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/accounts/faucet",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
 async fn dispatch_iroha_account_transactions(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -6865,6 +6895,27 @@ fn build_accounts_onboard_body(arguments: &Map) -> Result<Value, String> {
         payload.insert("uaid".to_owned(), Value::String(uaid.to_owned()));
     }
 
+    Ok(Value::Object(payload))
+}
+
+fn build_accounts_faucet_body(arguments: &Map) -> Result<Value, String> {
+    if let Some(body) = arguments.get("body") {
+        return body
+            .as_object()
+            .map(|_| body.clone())
+            .ok_or_else(|| "`body` must be an object".to_owned());
+    }
+
+    let account_id = arguments
+        .get("account_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "`account_id` is required (or provide `body.account_id`)".to_owned())?;
+
+    let mut payload = Map::new();
+    payload.insert(
+        "account_id".to_owned(),
+        Value::String(account_id.to_owned()),
+    );
     Ok(Value::Object(payload))
 }
 
@@ -10001,6 +10052,37 @@ fn iroha_accounts_onboard_tool() -> ToolSpec {
                     "type": "object",
                     "additionalProperties": true,
                     "description": "Raw onboarding request body. If provided, it takes precedence over shortcuts."
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_accounts_faucet_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.accounts.faucet".to_owned(),
+        description:
+            "Request starter testnet funds for an existing account (`account_id` shortcut supported when `body` is omitted)."
+                .to_owned(),
+        method: Method::POST,
+        path_template: "/v1/accounts/faucet".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "account_id": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `body.account_id`."
+                },
+                "body": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Raw faucet request body. If provided, it takes precedence over shortcuts."
                 },
                 "headers": {
                     "type": "object",
@@ -13549,6 +13631,28 @@ mod tests {
         let err =
             build_accounts_onboard_body(args.as_object().expect("object")).expect_err("error");
         assert!(err.contains("`alias` is required"));
+    }
+
+    #[test]
+    fn build_accounts_faucet_body_collects_shortcut_field() {
+        let args = norito::json!({
+            "account_id": TEST_ACCOUNT_I105
+        });
+        let body = build_accounts_faucet_body(args.as_object().expect("object")).expect("body");
+        let body = body.as_object().expect("object");
+        assert_eq!(
+            body.get("account_id").and_then(Value::as_str),
+            Some(TEST_ACCOUNT_I105)
+        );
+    }
+
+    #[test]
+    fn build_accounts_faucet_body_rejects_missing_account_id() {
+        let args = norito::json!({
+            "headers": { "x-test": "1" }
+        });
+        let err = build_accounts_faucet_body(args.as_object().expect("object")).expect_err("error");
+        assert!(err.contains("`account_id` is required"));
     }
 
     #[test]

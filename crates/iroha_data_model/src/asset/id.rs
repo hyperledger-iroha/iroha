@@ -24,7 +24,7 @@ mod model {
 
     /// Canonical asset definition identifier.
     ///
-    /// Textual form is an unprefixed Base58 address over canonical UUIDv4 bytes
+    /// Textual form is an unprefixed Base58 address over canonical `UUIDv4` bytes
     /// plus a version byte and checksum.
     #[derive(Debug, Clone, Getters, IntoSchema)]
     #[getset(get = "pub")]

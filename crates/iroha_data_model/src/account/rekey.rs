@@ -90,14 +90,16 @@ impl AccountLabel {
             .ok_or_else(|| ParseError::new("unknown dataspace id for account alias"))?;
         let label = self.label.as_ref().to_ascii_lowercase();
         let dataspace_alias = dataspace.alias.to_ascii_lowercase();
-        Ok(match &self.domain {
-            Some(domain) => format!(
+        Ok(self.domain.as_ref().map_or_else(
+            || format!("{label}@{dataspace_alias}"),
+            |domain| {
+                format!(
                 "{label}@{}.{}",
                 domain.to_string().to_ascii_lowercase(),
                 dataspace_alias
-            ),
-            None => format!("{label}@{dataspace_alias}"),
-        })
+            )
+            },
+        ))
     }
 }
 
