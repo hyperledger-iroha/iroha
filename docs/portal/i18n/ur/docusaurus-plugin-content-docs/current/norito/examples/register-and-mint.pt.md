@@ -19,9 +19,9 @@ translation_last_reviewed: 2026-02-07
 
 ## لیجر اسکرپٹ
 
-- اس بات کو یقینی بنائیں کہ ہدف اکاؤنٹ (مثال کے طور پر `<katakana-i105-account-id>`) موجود ہے ، ہر SDK کوئیک اسٹارٹ میں کنفیگریشن مرحلے کی عکس بندی کرتا ہے۔
+- اس بات کو یقینی بنائیں کہ ہدف اکاؤنٹ (مثال کے طور پر `<i105-account-id>`) موجود ہے ، ہر SDK کوئیک اسٹارٹ میں کنفیگریشن مرحلے کی عکس بندی کرتا ہے۔
 - ایک ہی لین دین میں ایلس کے لئے روز اثاثہ تعریف اور ٹکسال 250 یونٹ بنانے کے لئے انٹری پوائنٹ `register_and_mint` کی انووک کریں۔
-- ٹکسنگ کامیاب ہونے کی تصدیق کرنے کے لئے `client.request(FindAccountAssets)` یا `iroha_cli ledger assets list --account <katakana-i105-account-id>` کے ذریعے بیلنس چیک کریں۔
+- ٹکسنگ کامیاب ہونے کی تصدیق کرنے کے لئے `client.request(FindAccountAssets)` یا `iroha_cli ledger assets list --account <i105-account-id>` کے ذریعے بیلنس چیک کریں۔
 
 ## متعلقہ SDK گائیڈز
 
@@ -43,7 +43,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("<katakana-i105-account-id>");
+    let to = account!("<i105-account-id>");
     let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     mint_asset(to, asset, 250);
   }

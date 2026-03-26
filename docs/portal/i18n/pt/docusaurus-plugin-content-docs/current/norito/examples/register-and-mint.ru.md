@@ -19,9 +19,9 @@ Registre as atividades e determine a sua atividade.
 
 ## Пошаговый обход реестра
 
-- Verifique se a conta está configurada (por exemplo, `<katakana-i105-account-id>`) para instalar o SDK de início rápido.
+- Verifique se a conta está configurada (por exemplo, `<i105-account-id>`) para instalar o SDK de início rápido.
 - Вызовите точку входа `register_and_mint`, чтобы создать определение актива ROSE e выпустить 250 единиц para Alice em одной транзакции.
-- Verifique os saldos de `client.request(FindAccountAssets)` ou `iroha_cli ledger assets list --account <katakana-i105-account-id>`, que podem ser usados.
+- Verifique os saldos de `client.request(FindAccountAssets)` ou `iroha_cli ledger assets list --account <i105-account-id>`, que podem ser usados.
 
 ## Como usar o SDK
 
@@ -43,7 +43,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("<katakana-i105-account-id>");
+    let to = account!("<i105-account-id>");
     let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     mint_asset(to, asset, 250);
   }

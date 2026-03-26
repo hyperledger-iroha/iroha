@@ -113,7 +113,7 @@ impl Run for CodeBytesGetArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct DeployArgs {
-    /// Authority account identifier (canonical Katakana i105 account literal)
+    /// Authority account identifier (canonical I105 account literal)
     #[arg(long)]
     pub authority: String,
     /// Hex-encoded private key for signing
@@ -152,7 +152,7 @@ impl Run for DeployArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct DeployActivateArgs {
-    /// Authority account identifier (canonical Katakana i105 account literal)
+    /// Authority account identifier (canonical I105 account literal)
     #[arg(long)]
     pub authority: String,
     /// Governance namespace to bind (e.g., apps)
@@ -536,7 +536,7 @@ mod tests {
 
 #[derive(clap::Args, Debug)]
 pub struct SimulateArgs {
-    /// Authority account identifier (canonical Katakana i105 account literal)
+    /// Authority account identifier (canonical I105 account literal)
     #[arg(long)]
     pub authority: String,
     /// Hex-encoded private key used to sign the simulated transaction

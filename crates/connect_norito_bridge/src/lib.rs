@@ -9403,9 +9403,9 @@ pub unsafe extern "C" fn connect_norito_decode_signed_transaction_json(
 ///
 /// Response JSON object fields:
 /// - `asset_id`: canonical internal asset balance-bucket literal
-///   (`<base58-asset-definition-id>#<katakana-i105-account-id>`)
+///   (`<base58-asset-definition-id>#<i105-account-id>`)
 /// - `asset_definition_id`: canonical asset definition id (unprefixed Base58 address)
-/// - `account_id`: canonical Katakana i105 account id (i105 literal)
+/// - `account_id`: canonical I105 account id (i105 literal)
 ///
 /// # Safety
 /// All pointer arguments must be valid and non-null.

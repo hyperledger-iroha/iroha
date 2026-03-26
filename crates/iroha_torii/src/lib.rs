@@ -21762,7 +21762,7 @@ mod gateway_denylist_loader_tests {
 
         let policy = sample_policy();
         let err = build_account_id_denylist_entry(&entry, &policy)
-            .expect_err("non-canonical Katakana i105 account_id must be rejected");
+            .expect_err("non-canonical I105 account_id must be rejected");
         assert!(err.contains("invalid account_id"));
     }
 }
@@ -22381,12 +22381,14 @@ pub(crate) mod tests_runtime_handlers {
         );
         let mut block = app.state.block(header);
         let mut tx = block.transaction();
-        let bind = iroha_data_model::isi::domain_link::BindAccountAlias {
-            account: account_id.clone(),
-            label,
-        };
-        iroha_core::smartcontracts::Execute::execute(bind, account_id, &mut tx)
-            .expect("bind account alias for test");
+        let world = tx.world_mut_for_testing();
+        world
+            .account_aliases_mut_for_testing()
+            .insert(label.clone(), account_id.clone());
+        world.account_rekey_records_mut_for_testing().insert(
+            label.clone(),
+            iroha_data_model::account::rekey::AccountRekeyRecord::new(label, account_id.clone()),
+        );
         tx.apply();
         block.commit().expect("commit account alias for test");
     }

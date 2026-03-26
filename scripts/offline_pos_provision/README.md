@@ -50,7 +50,7 @@ so every run records a timestamped entry in `<output>/rotation_drill.log`.
 }
 ```
 
-All account identifiers must use canonical Katakana i105 account IDs. Public keys
+All account identifiers must use canonical I105 account IDs. Public keys
 accept either the multihash literal (`ed0120...`) or the `algo:hex` helper used
 elsewhere in the repo.
 

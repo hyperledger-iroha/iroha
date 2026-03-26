@@ -3515,7 +3515,7 @@ mod tests {
     fn canonical_i105_from_seed(seed: u8) -> String {
         AccountId::new(PublicKey::from(parse_private_key(&[seed; 32]).unwrap()))
             .canonical_i105()
-            .expect("canonical Katakana i105")
+            .expect("canonical I105")
     }
 
     fn provider_metadata(provider_id: &str) -> PyProviderMetadata {
@@ -3591,7 +3591,7 @@ mod tests {
         let public_key = PublicKey::from(private_key.clone());
         let authority = AccountId::new(public_key.clone())
             .canonical_i105()
-            .expect("canonical Katakana i105 authority");
+            .expect("canonical I105 authority");
 
         let mut builder =
             TransactionBuilder::new("test-chain", &authority).expect("builder constructs");

@@ -26,8 +26,8 @@ translation_last_reviewed: 2026-02-07
 Для этого необходимо установить `$ADMIN_ACCOUNT` и `$RECEIVER_ACCOUNT`. В комплект поставки входит:
 
 ```sh
-export ADMIN_ACCOUNT="<katakana-i105-account-id>"
-export RECEIVER_ACCOUNT="<katakana-i105-account-id>"
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 По словам президента США:

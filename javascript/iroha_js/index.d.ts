@@ -424,7 +424,7 @@ export function normalizeAssetId(value: string, name?: string): string;
 
 /**
  * Canonicalise an internal asset-holding identifier in
- * `<base58-asset-definition-id>#<katakana-i105-account-id>` form.
+ * `<base58-asset-definition-id>#<i105-account-id>` form.
  */
 export function normalizeAssetHoldingId(value: string, name?: string): string;
 

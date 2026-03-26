@@ -33,7 +33,7 @@ L'analyseur nécessite le fil d'encabezado suivant (l'ordre est flexible) :| Co
 |---------|-----------|-------------|
 | `label` | Si | Étiquette sollicitée (si vous acceptez peut-être/moins ; l'outil de normalisation à partir de la norme v1 et de l'UTS-46). |
 | `suffix_id` | Si | Identificateur numérique du suffixe (décimal ou `0x` hex). |
-| `owner` | Si | AccountId string (domainless encoded literal; canonical Katakana i105 only; no `@<domain>` suffix). |
+| `owner` | Si | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | Si | Entrez `1..=255`. |
 | `payment_asset_id` | Si | Actif de règlement (par exemple `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Si | Enteros sin signo que representan unidades natives del activo. |
@@ -72,9 +72,9 @@ En cas de sortie du script, écrivez un manifeste agrégé :
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "<katakana-i105-account-id>",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"<katakana-i105-account-id>","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -83,7 +83,7 @@ En cas de sortie du script, écrivez un manifeste agrégé :
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"<katakana-i105-account-id>",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -237,7 +237,7 @@ corrida de CSV.
   les références aux archives se rapportent à l'emplacement du CSV. Métadonnées
   qu'aucun objet marin ne produit une erreur de validation.
 - **Contrôleurs :** celdas en blanco respetan `--default-controllers`. Proportion
-  listes de contrôleurs explicites (par exemple `<katakana-i105-account-id>;<katakana-i105-account-id>`) au délégué
+  listes de contrôleurs explicites (par exemple `<i105-account-id>;<i105-account-id>`) au délégué
   acteurs sans propriétaire.
 
 Los fallos se reportan con numeros de fila contextuales (par exemple

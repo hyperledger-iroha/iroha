@@ -860,7 +860,7 @@ fn parse_account_id(value: &str) -> Result<AccountId> {
     AccountId::parse_encoded(value.trim())
         .map(|parsed| parsed.into_account_id())
         .with_context(|| {
-            format!("account id '{value}' must be a canonical Katakana i105-encoded literal")
+            format!("account id '{value}' must be a canonical I105-encoded literal")
         })
 }
 

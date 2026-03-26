@@ -19,9 +19,9 @@ description: دکھاتا ہے کہ Kotodama انٹری پوائنٹ کس طرح
 
 ## لیجر واک تھرو
 
-- کنٹریکٹ اتھارٹی (مثلا `<katakana-i105-account-id>`) کو اس اثاثے سے فنڈ کریں جسے وہ منتقل کرے گی اور اتھارٹی کو `CanTransfer` رول یا مساوی اجازت دیں۔
+- کنٹریکٹ اتھارٹی (مثلا `<i105-account-id>`) کو اس اثاثے سے فنڈ کریں جسے وہ منتقل کرے گی اور اتھارٹی کو `CanTransfer` رول یا مساوی اجازت دیں۔
 - `call_transfer_asset` אוניברסלי 18NI000000014X ہوں، یہ اس طریقے کی عکاسی کرتا ہے کہ آن چین آٹومیشن ہوسٹ کالز کو لپیٹ سکتی ہے۔
-- `FindAccountAssets` ו-`iroha_cli ledger assets list --account <katakana-i105-account-id>` גירסה לתקשורת. ہو کہ میٹا ڈیٹا گارڈ نے ٹرانسفر کانٹیکسٹ لاگ کیا ہے۔
+- `FindAccountAssets` ו-`iroha_cli ledger assets list --account <i105-account-id>` גירסה לתקשורת. ہو کہ میٹا ڈیٹا گارڈ نے ٹرانسفر کانٹیکسٹ لاگ کیا ہے۔
 
 ## תוכנות SDK
 
@@ -36,8 +36,8 @@ description: دکھاتا ہے کہ Kotodama انٹری پوائنٹ کس طرح
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("<katakana-i105-account-id>"),
-      account!("<katakana-i105-account-id>"),
+      account!("<i105-account-id>"),
+      account!("<i105-account-id>"),
       asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );

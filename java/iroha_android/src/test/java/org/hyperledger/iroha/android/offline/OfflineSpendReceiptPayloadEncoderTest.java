@@ -18,7 +18,7 @@ public final class OfflineSpendReceiptPayloadEncoderTest {
     }
 
     // Test values derived from the live account-address fixtures and an owner-qualified
-    // asset-holding id in `<base58-asset-definition-id>#<katakana-i105-account-id>` form.
+    // asset-holding id in `<base58-asset-definition-id>#<i105-account-id>` form.
     final String sender = "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE";
     final String receiver = "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D";
     final String asset = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#" + sender;

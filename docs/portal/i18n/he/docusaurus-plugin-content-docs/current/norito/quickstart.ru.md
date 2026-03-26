@@ -90,7 +90,7 @@ Runner выводит лог `info("Hello from Kotodama")` и выполняет
 
 Пока узел работает, отправьте скомпилированный байткод в Torii через CLI. Дефолтная dev-идентичность выводится из публичного ключа в `defaults/client.toml`, נקודת זיהוי נקודתית:
 ```
-<katakana-i105-account-id>
+<i105-account-id>
 ```
 
 Используйте конфигурационный файл, чтобы задать URL Torii, מזהה שרשרת ומספר טלפונים:
@@ -108,7 +108,7 @@ iroha --config defaults/client.toml \
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id <katakana-i105-account-id> \
+  --id <i105-account-id> \
   --key example | jq .
 ```
 

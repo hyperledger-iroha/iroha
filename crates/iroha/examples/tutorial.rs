@@ -79,7 +79,7 @@ fn account_definition_test() {
     let (public_key, _) = KeyPair::random().into_parts();
     // Materialize a scoped AccountId for `looking_glass` from the account subject's public key
     let longhand_account_id = AccountId::new(public_key.clone());
-    // Create an AccountId instance by parsing the canonical Katakana i105 account address form
+    // Create an AccountId instance by parsing the canonical I105 account address form
     let canonical_account_id = longhand_account_id
         .canonical_i105()
         .expect("Single-key account IDs can be rendered as I105");
@@ -227,7 +227,7 @@ fn asset_minting_test(config: Config) -> Result<(), Error> {
     // #region mint_asset_mint_alt
     // Mint the Asset instance (alternate syntax).
     // AssetId textual representation uses the canonical internal balance-bucket
-    // `<base58-asset-definition-id>#<katakana-i105-account-id>` form with optional `#dataspace:<id>` suffix.
+    // `<base58-asset-definition-id>#<i105-account-id>` form with optional `#dataspace:<id>` suffix.
     // Public asset ids remain bare Base58 asset-definition ids.
     let alice_roses_literal = AssetId::new(roses, alice).canonical_literal();
     let alice_roses: AssetId = alice_roses_literal.parse()?;
@@ -282,7 +282,7 @@ fn asset_burning_test(config: Config) -> Result<(), Error> {
     // #region burn_asset_burn_alt
     // Burn the Asset instance (alternate syntax).
     // AssetId textual representation uses the canonical internal balance-bucket
-    // `<base58-asset-definition-id>#<katakana-i105-account-id>` form with optional `#dataspace:<id>` suffix.
+    // `<base58-asset-definition-id>#<i105-account-id>` form with optional `#dataspace:<id>` suffix.
     // Public asset ids remain bare Base58 asset-definition ids.
     let alice_roses_literal = AssetId::new(roses, alice).canonical_literal();
     let alice_roses: AssetId = alice_roses_literal.parse()?;

@@ -4,7 +4,7 @@ import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
 
 private const val I105_WARNING =
-    "i105 addresses use the canonical Katakana i105 alphabet: Base58 plus the 47 katakana from the Iroha poem. " +
+    "i105 addresses use the canonical I105 alphabet: Base58 plus the 47 katakana from the Iroha poem. " +
         "Render and validate them with the intended chain discriminant."
 private const val I105_DISCRIMINANT_MAX = 0xFFFF
 private const val I105_DISCRIMINANT_SORA = 0x02F1
@@ -259,13 +259,13 @@ class AccountAddress private constructor(canonicalBytes: ByteArray) {
             if (trimmed.contains("@")) {
                 throw AccountAddressException(
                     AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
-                    "account address literals must not include @domain; use canonical Katakana i105 form",
+                    "account address literals must not include @domain; use canonical I105 form",
                 )
             }
             if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
                 throw AccountAddressException(
                     AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
-                    "canonical hex account addresses are not accepted; use canonical Katakana i105 form",
+                    "canonical hex account addresses are not accepted; use canonical I105 form",
                 )
             }
             return ParseResult(fromI105(trimmed, expectedPrefix), AccountAddressFormat.I105)
@@ -288,13 +288,13 @@ class AccountAddress private constructor(canonicalBytes: ByteArray) {
             if (trimmed.contains("@")) {
                 throw AccountAddressException(
                     AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
-                    "account address literals must not include @domain; use canonical Katakana i105 form",
+                    "account address literals must not include @domain; use canonical I105 form",
                 )
             }
             if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
                 throw AccountAddressException(
                     AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
-                    "canonical hex account addresses are not accepted; use canonical Katakana i105 form",
+                    "canonical hex account addresses are not accepted; use canonical I105 form",
                 )
             }
             val canonical = decodeI105(trimmed, expectedPrefix)
@@ -328,7 +328,7 @@ private fun ensureCanonicalI105Literal(literal: String, address: AccountAddress)
     if (canonical != literal) {
         throw AccountAddressException(
             AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
-            "account address literals must use canonical Katakana i105 form",
+            "account address literals must use canonical I105 form",
         )
     }
 }

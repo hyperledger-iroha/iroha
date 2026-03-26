@@ -72,7 +72,7 @@ and a predicate payload:
     },
     "predicate": {
       "equals": [
-        {"field": "authority", "value": "<katakana-i105-account-id>"}
+        {"field": "authority", "value": "<i105-account-id>"}
       ],
       "in": [
         {"field": "metadata.tier", "values": [1, 2, 3]}

@@ -26,7 +26,7 @@ $ scripts/offline_topup/run.sh \
       "label": "retail-demo",           // folder name, used in logs
       "controller": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
       "operator": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB", // optional per entry override for operator account
-      "allowance_asset": "<base58-asset-definition-id>#<katakana-i105-account-id>",
+      "allowance_asset": "<base58-asset-definition-id>#<i105-account-id>",
       "amount": "250.00",
       "issued_at_ms": 1730314876000,
       "expires_at_ms": 1745900000000,
@@ -49,8 +49,8 @@ $ scripts/offline_topup/run.sh \
 }
 ```
 
-Controller IDs must use canonical Katakana i105 account IDs, and
-`allowance_asset` must use the canonical owner-qualified `<base58-asset-definition-id>#<katakana-i105-account-id>` form. The `allowance_asset` account must match the controller (the
+Controller IDs must use canonical I105 account IDs, and
+`allowance_asset` must use the canonical owner-qualified `<base58-asset-definition-id>#<i105-account-id>` form. The `allowance_asset` account must match the controller (the
 allowance is funded from the controller account, not an operator pool). Spend keys accept either
 the multihash literal or the `algo:hex` helper format used elsewhere in the spec. Each allowance
 must provide an operator account, either via `operator.account` or the per-entry `operator` override.

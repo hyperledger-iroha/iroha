@@ -30,8 +30,8 @@ Este ウォークスルーの補足 [Norito クイックスタート](./quicksta
 デモ版:
 
 ```sh
-export ADMIN_ACCOUNT="<katakana-i105-account-id>"
-export RECEIVER_ACCOUNT="<katakana-i105-account-id>"
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 os valores listando を primeiras contas として確認します。

@@ -247,21 +247,21 @@ This ISI is idempotent per `(lane_id, epoch)` and underpins nightly accounting.
   - `iroha_cli app nexus public-lane validators --lane <id> [--summary]`
     surfaces lifecycle/activation markers (pending target epoch, `activation_epoch` /
     `activation_height`, exit release, slash id) alongside bonded/self stake.
-    `iroha_cli app nexus public-lane stake --lane <id> [--validator <katakana-i105-account-id>] [--summary]`
+    `iroha_cli app nexus public-lane stake --lane <id> [--validator <i105-account-id>] [--summary]`
     mirrors the `/stake` endpoint with pending-unbond hints per `(validator, staker)` pair.
   - Torii snapshots for dashboards and SDKs:
     - `GET /v1/nexus/public_lanes/{lane}/validators` – metadata, status
       (`PendingActivation`/`Active`/`Exiting`/`Exited`/`Slashed`), activation
       epoch/height, release timers, bonded stake, last reward epoch.
-      Optional `canonical Katakana i105 literal rendering` controls the literal rendering
-      (canonical Katakana i105 output only).
+      Optional `canonical I105 literal rendering` controls the literal rendering
+      (canonical I105 output only).
     - `GET /v1/nexus/public_lanes/{lane}/stake` – stake shares (`validator`,
       `staker`, bonded amount) plus pending unbond timers. Optional
-      `?validator=<katakana-i105-account-id>` filters the response for dashboards that focus
-      on a single validator; `canonical Katakana i105 rendering` applies to all literals.
+      `?validator=<i105-account-id>` filters the response for dashboards that focus
+      on a single validator; `canonical I105 rendering` applies to all literals.
     - `GET /v1/nexus/public_lanes/{lane}/rewards/pending` – pending rewards per
-      asset for the requested account. Requires `account=<katakana-i105-account-id>` and accepts
-      optional `asset_id` and `upto_epoch` filters; `canonical Katakana i105 rendering` applies to
+      asset for the requested account. Requires `account=<i105-account-id>` and accepts
+      optional `asset_id` and `upto_epoch` filters; `canonical I105 rendering` applies to
       the account literal in the response.
   - Lifecycle ISIs use the standard transaction path (Torii
     `/v1/transactions` or the CLI instruction pipeline). Example Norito JSON
@@ -269,11 +269,11 @@ This ISI is idempotent per `(lane_id, epoch)` and underpins nightly accounting.
 
     ```jsonc
     [
-      { "ActivatePublicLaneValidator": { "lane_id": 1, "validator": "<katakana-i105-account-id>" } },
+      { "ActivatePublicLaneValidator": { "lane_id": 1, "validator": "<i105-account-id>" } },
       {
         "ExitPublicLaneValidator": {
           "lane_id": 1,
-          "validator": "<katakana-i105-account-id>",
+          "validator": "<i105-account-id>",
           "release_at_ms": 1730000000000
         }
       }

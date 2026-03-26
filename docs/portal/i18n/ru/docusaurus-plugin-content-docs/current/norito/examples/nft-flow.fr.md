@@ -19,7 +19,7 @@ translation_last_reviewed: 2026-02-07
 
 ## Парк регистрации
 
-- Убедитесь, что определение NFT (например, `n0#wonderland`) существует с использованием собственных/назначенных счетов в фрагменте (`<katakana-i105-account-id>`, `<katakana-i105-account-id>`).
+- Убедитесь, что определение NFT (например, `n0#wonderland`) существует с использованием собственных/назначенных счетов в фрагменте (`<i105-account-id>`, `<i105-account-id>`).
 - Вызовите точку входа `nft_issue_and_transfer` для перехвата NFT, передачи Алисы против Боба и присоединения указателя метадонных декривантов эмиссии.
 - Проверьте состояние регистрации NFT с `iroha_cli ledger nfts list --account <id>` или эквивалентами SDK для проверки передачи, чтобы подтвердить, что действие подтверждено, что инструкция по записи выполняется.
 
@@ -35,11 +35,11 @@ translation_last_reviewed: 2026-02-07
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
 seiyaku NftFlow {
   kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
-    let owner = account!("<katakana-i105-account-id>");
+    let owner = account!("<i105-account-id>");
     let nft = nft_id!("n0$wonderland");
     nft_mint_asset(nft, owner);
 
-    let to = account!("<katakana-i105-account-id>");
+    let to = account!("<i105-account-id>");
     nft_transfer_asset(owner, nft, to);
     nft_set_metadata(nft, json!{ issued: "demo" });
     nft_burn_asset(nft);

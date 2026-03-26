@@ -66,7 +66,7 @@ test("normalizeAccountId rejects canonical hex account literals", () => {
     (error) =>
       error instanceof ValidationError &&
       error.code === ValidationErrorCode.INVALID_ACCOUNT_ID &&
-      /must be a canonical katakana i105 account id/i.test(error.message),
+      /must be a canonical I105 account id/i.test(error.message),
   );
 });
 

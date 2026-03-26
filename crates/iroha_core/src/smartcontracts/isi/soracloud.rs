@@ -3764,7 +3764,7 @@ fn resolve_fee_sink_account(
     )
     .ok_or_else(|| {
         InstructionExecutionError::InvariantViolation(
-            "invalid nexus.fees.fee_sink_account_id; expected canonical Katakana i105 account id or on-chain alias"
+            "invalid nexus.fees.fee_sink_account_id; expected canonical I105 account id or on-chain alias"
                 .into(),
         )
     })

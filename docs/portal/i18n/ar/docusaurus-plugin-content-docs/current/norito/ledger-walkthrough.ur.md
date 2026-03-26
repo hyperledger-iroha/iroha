@@ -26,8 +26,8 @@ translation_last_reviewed: 2026-02-07
 هذا هو `$ADMIN_ACCOUNT` و`$RECEIVER_ACCOUNT` الذي يمكن استخدام معرفات الحساب فيه. حزمة الإعدادات الافتراضية تحتوي على مفاتيح تجريبية وتأخذ في الاعتبار حساباتك التي تتضمن العناصر التالية:
 
 ```sh
-export ADMIN_ACCOUNT="<katakana-i105-account-id>"
-export RECEIVER_ACCOUNT="<katakana-i105-account-id>"
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 بعض الحسابات القليلة لتصفح مقاطع الفيديو:

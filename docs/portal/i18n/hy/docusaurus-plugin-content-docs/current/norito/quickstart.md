@@ -105,7 +105,7 @@ ABI վերնագիր, հատկանիշի բիթեր և արտահանվող մո
 Լռելյայն զարգացման նույնականացումը բխում է մուտքի հանրային բանալիից
 `defaults/client.toml`, ուստի հաշվի ID-ն է
 ```
-<katakana-i105-account-id>
+<i105-account-id>
 ```
 
 Օգտագործեք կազմաձևման ֆայլը՝ Torii URL-ը, շղթայի ID-ն և ստորագրման բանալի մատակարարելու համար.
@@ -127,7 +127,7 @@ syscall կամ վերահսկել CLI ելքը կատարված գործարքի
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id <katakana-i105-account-id> \
+  --id <i105-account-id> \
   --key example | jq .
 ```
 

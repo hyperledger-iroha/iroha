@@ -4507,12 +4507,14 @@ fn bind_account_alias_for_test(
     );
     let mut block = state.block(header);
     let mut tx = block.transaction();
-    let bind = iroha_data_model::isi::domain_link::BindAccountAlias {
-        account: account_id.clone(),
-        label,
-    };
-    bind.execute(account_id, &mut tx)
-        .expect("bind account alias for test");
+    let world = tx.world_mut_for_testing();
+    world
+        .account_aliases_mut_for_testing()
+        .insert(label.clone(), account_id.clone());
+    world.account_rekey_records_mut_for_testing().insert(
+        label.clone(),
+        iroha_data_model::account::rekey::AccountRekeyRecord::new(label, account_id.clone()),
+    );
     tx.apply();
     block.commit().expect("commit account alias for test");
 }
@@ -12339,7 +12341,7 @@ pub struct SubscriptionPlanCreateResponseDto {
 )]
 /// Query parameters for listing subscription plans.
 pub struct SubscriptionPlanListParams {
-    /// Optional plan provider filter using a canonical Katakana i105 id or on-chain alias.
+    /// Optional plan provider filter using a canonical I105 id or on-chain alias.
     pub provider: Option<String>,
     /// Optional limit for pagination.
     pub limit: Option<u64>,
@@ -12426,9 +12428,9 @@ pub struct SubscriptionCreateResponseDto {
 )]
 /// Query parameters for listing subscriptions.
 pub struct SubscriptionListParams {
-    /// Optional subscriber filter using a canonical Katakana i105 id or on-chain alias.
+    /// Optional subscriber filter using a canonical I105 id or on-chain alias.
     pub owned_by: Option<String>,
-    /// Optional provider filter using a canonical Katakana i105 id or on-chain alias.
+    /// Optional provider filter using a canonical I105 id or on-chain alias.
     pub provider: Option<String>,
     /// Optional status filter (active, paused, past_due, canceled, suspended).
     pub status: Option<String>,
@@ -13176,7 +13178,7 @@ pub struct RepairWorkerClaimDto {
     pub ticket_id: RepairTicketId,
     /// Hex-encoded manifest digest (BLAKE3-256).
     pub manifest_digest_hex: String,
-    /// Repair worker as canonical Katakana i105 or on-chain account alias.
+    /// Repair worker as canonical I105 or on-chain account alias.
     pub worker_id: String,
     /// Unix timestamp (seconds) when the claim was issued.
     pub claimed_at_unix: u64,
@@ -13199,7 +13201,7 @@ pub struct RepairWorkerHeartbeatDto {
     pub ticket_id: RepairTicketId,
     /// Hex-encoded manifest digest (BLAKE3-256).
     pub manifest_digest_hex: String,
-    /// Repair worker as canonical Katakana i105 or on-chain account alias.
+    /// Repair worker as canonical I105 or on-chain account alias.
     pub worker_id: String,
     /// Unix timestamp (seconds) when the heartbeat was recorded.
     pub heartbeat_at_unix: u64,
@@ -13222,7 +13224,7 @@ pub struct RepairWorkerCompleteDto {
     pub ticket_id: RepairTicketId,
     /// Hex-encoded manifest digest (BLAKE3-256).
     pub manifest_digest_hex: String,
-    /// Repair worker as canonical Katakana i105 or on-chain account alias.
+    /// Repair worker as canonical I105 or on-chain account alias.
     pub worker_id: String,
     /// Unix timestamp (seconds) when remediation completed.
     pub completed_at_unix: u64,
@@ -13248,7 +13250,7 @@ pub struct RepairWorkerFailDto {
     pub ticket_id: RepairTicketId,
     /// Hex-encoded manifest digest (BLAKE3-256).
     pub manifest_digest_hex: String,
-    /// Repair worker as canonical Katakana i105 or on-chain account alias.
+    /// Repair worker as canonical I105 or on-chain account alias.
     pub worker_id: String,
     /// Unix timestamp (seconds) when the failure was recorded.
     pub failed_at_unix: u64,
@@ -14408,12 +14410,12 @@ fn ensure_canonical_repair_account_id(value: &str, field: &str) -> Result<(), Er
     let trimmed = value.trim();
     if trimmed != value {
         return Err(conversion_error(format!(
-            "invalid {field} `{value}`: expected canonical Katakana i105 account id without surrounding whitespace"
+            "invalid {field} `{value}`: expected canonical I105 account id without surrounding whitespace"
         )));
     }
     AccountId::parse_encoded(trimmed).map_err(|err| {
         conversion_error(format!(
-            "invalid {field} `{value}`: expected canonical Katakana i105 account id ({err})"
+            "invalid {field} `{value}`: expected canonical I105 account id ({err})"
         ))
     })?;
     Ok(())
@@ -15402,10 +15404,7 @@ mod repair_worker_tests {
                 Ok(_) => panic!("alias worker id must be rejected"),
                 Err(err) => err,
             };
-            assert!(
-                err.to_string()
-                    .contains("canonical Katakana i105 account id")
-            );
+            assert!(err.to_string().contains("canonical I105 account id"));
         });
     }
 }
@@ -33834,7 +33833,7 @@ struct OfflineAllowanceListParams {
     pub offset: u64,
     /// Optional compact sort string.
     pub sort: Option<String>,
-    /// Filter allowances by controller account literal (canonical Katakana i105 only).
+    /// Filter allowances by controller account literal (canonical I105 only).
     pub controller_id: Option<String>,
     /// Filter allowances by asset identifier.
     pub asset_id: Option<String>,
@@ -33883,11 +33882,11 @@ pub struct OfflineTransferListParams {
     pub offset: u64,
     /// Optional compact sort string.
     pub sort: Option<String>,
-    /// Filter transfers by originating controller (canonical Katakana i105 only).
+    /// Filter transfers by originating controller (canonical I105 only).
     pub controller_id: Option<String>,
-    /// Filter transfers by receiver account literal (canonical Katakana i105 only).
+    /// Filter transfers by receiver account literal (canonical I105 only).
     pub receiver_id: Option<String>,
-    /// Filter transfers by deposit account literal (canonical Katakana i105 only).
+    /// Filter transfers by deposit account literal (canonical I105 only).
     pub deposit_account_id: Option<String>,
     /// Filter transfers by asset identifier.
     pub asset_id: Option<String>,
@@ -34329,11 +34328,11 @@ struct OfflineReceiptListItem {
     pub certificate_id_hex: String,
     /// Sender/controller account literal.
     pub controller_id: String,
-    /// Sender/controller display literal (canonical Katakana i105 rendering).
+    /// Sender/controller display literal (canonical I105 rendering).
     pub controller_display: String,
     /// Receiver account literal.
     pub receiver_id: String,
-    /// Receiver display literal (canonical Katakana i105 rendering).
+    /// Receiver display literal (canonical I105 rendering).
     pub receiver_display: String,
     /// Asset identifier being transferred.
     pub asset_id: String,
@@ -34415,7 +34414,7 @@ pub struct AssetHolderGetParams {
     /// Offset for pagination (default 0).
     #[norito(default)]
     pub offset: u64,
-    /// Filter holders by canonical Katakana i105 account identifier or on-chain account alias.
+    /// Filter holders by canonical I105 account identifier or on-chain account alias.
     pub account_id: Option<String>,
     /// Filter holders by balance scope (`global` or `dataspace:<id>`).
     pub scope: Option<String>,
@@ -35660,7 +35659,7 @@ async fn repo_agreements_list_uses_canonical_i105_literals() {
     let expected = crate::account_literal::display_literal(&fixture.initiator_id);
     assert_eq!(
         first, expected,
-        "initiator literal should be rendered as canonical Katakana i105"
+        "initiator literal should be rendered as canonical I105"
     );
 }
 
@@ -38892,12 +38891,9 @@ mod accounts_query_tests {
     use axum::http::StatusCode;
     use http_body_util::BodyExt as _;
     use iroha_core::{
-        block::{BlockBuilder, ValidBlock},
         kura::Kura,
         query::store::LiveQueryStore,
-        smartcontracts::Execute as _,
         state::{State, World},
-        sumeragi::network_topology::Topology,
     };
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::prelude as dm;
@@ -38908,44 +38904,29 @@ mod accounts_query_tests {
     async fn accounts_query_streams_without_sort() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
+        let domain_id: dm::DomainId = "wonderland".parse().unwrap();
+        let exec_authority = dm::AccountId::new(
+            KeyPair::random_with_algorithm(Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let exec_id = exec_authority.clone().to_account_id(domain_id.clone());
+        let domain = dm::Domain::new(domain_id.clone()).build(&exec_authority);
+        let mut accounts = vec![dm::Account::new(exec_id.clone()).build(&exec_authority)];
+        for _ in 0..5 {
+            let authority = dm::AccountId::new(
+                KeyPair::random_with_algorithm(Algorithm::Ed25519)
+                    .public_key()
+                    .clone(),
+            );
+            let account_id = authority.clone().to_account_id(domain_id.clone());
+            accounts.push(dm::Account::new(account_id).build(&authority));
+        }
         let state = Arc::new(State::new_for_testing(
-            World::default(),
-            kura.clone(),
+            World::with([domain], accounts, []),
+            kura,
             query,
         ));
-
-        // Register a domain with five accounts
-        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let _topology = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
-        let unverified = BlockBuilder::new(vec![dummy_accepted_transaction()])
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(leader.private_key())
-            .unpack(|_| {});
-        let mut st_block = state.block(unverified.header());
-        let mut stx = st_block.transaction();
-        let domain_id: dm::DomainId = "wonderland".parse().unwrap();
-        let kp_exec = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let exec_id = dm::ScopedAccountId::new(domain_id.clone(), kp_exec.public_key().clone());
-        dm::Register::domain(dm::Domain::new(domain_id.clone()))
-            .execute(exec_id.account(), &mut stx)
-            .unwrap();
-        dm::Register::account(dm::Account::new(exec_id.clone()))
-            .execute(exec_id.account(), &mut stx)
-            .unwrap();
-        for _ in 0..5 {
-            let kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-            let acct = dm::ScopedAccountId::new(domain_id.clone(), kp.public_key().clone());
-            dm::Register::account(dm::Account::new(acct))
-                .execute(exec_id.account(), &mut stx)
-                .unwrap();
-        }
-        stx.apply();
-        let valid: ValidBlock = unverified
-            .clone()
-            .validate_and_record_transactions(&mut st_block)
-            .unpack(|_| {});
-        let committed = valid.clone().commit_unchecked().unpack(|_| {});
-        crate::test_utils::finalize_committed_block(&state, st_block, committed);
 
         // Query with limit + fetch_size smaller than number of accounts.
         let env = crate::filter::QueryEnvelope {
@@ -38979,49 +38960,39 @@ mod accounts_query_tests {
      {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let state = Arc::new(State::new_for_testing(
-            World::default(),
-            kura.clone(),
-            query,
-        ));
-
-        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let _topology = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
-        let unverified = BlockBuilder::new(vec![dummy_accepted_transaction()])
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(leader.private_key())
-            .unpack(|_| {});
-        let mut st_block = state.block(unverified.header());
-        let mut stx = st_block.transaction();
         let domain_id: dm::DomainId = "aliases".parse().expect("valid domain");
-        let kp_exec = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let exec_id = dm::ScopedAccountId::new(domain_id.clone(), kp_exec.public_key().clone());
-        dm::Register::domain(dm::Domain::new(domain_id.clone()))
-            .execute(exec_id.account(), &mut stx)
-            .expect("register domain");
-        dm::Register::account(dm::Account::new(exec_id.clone()))
-            .execute(exec_id.account(), &mut stx)
-            .expect("register executor account");
+        let exec_authority = dm::AccountId::new(
+            KeyPair::random_with_algorithm(Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let exec_id = exec_authority.clone().to_account_id(domain_id.clone());
+        let domain = dm::Domain::new(domain_id.clone()).build(&exec_authority);
 
-        let account_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let account_id =
-            dm::ScopedAccountId::new(domain_id.clone(), account_keypair.public_key().clone());
+        let labelled_authority = dm::AccountId::new(
+            KeyPair::random_with_algorithm(Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let account_id = labelled_authority.clone().to_account_id(domain_id.clone());
         let label = dm::AccountLabel::new(
             domain_id.clone(),
             "primary".parse().expect("valid label name"),
         );
-        let account = dm::Account::new(account_id.clone()).with_label(Some(label.clone()));
-        dm::Register::account(account)
-            .execute(exec_id.account(), &mut stx)
-            .expect("register labelled account");
-
-        stx.apply();
-        let valid: ValidBlock = unverified
-            .clone()
-            .validate_and_record_transactions(&mut st_block)
-            .unpack(|_| {});
-        let committed = valid.clone().commit_unchecked().unpack(|_| {});
-        crate::test_utils::finalize_committed_block(&state, st_block, committed);
+        let state = Arc::new(State::new_for_testing(
+            World::with(
+                [domain],
+                [
+                    dm::Account::new(exec_id).build(&exec_authority),
+                    dm::Account::new(account_id.clone())
+                        .with_label(Some(label.clone()))
+                        .build(&labelled_authority),
+                ],
+                [],
+            ),
+            kura,
+            query,
+        ));
 
         let expected = account_id.account().to_string();
         let non_canonical_i105_literal = expected.replacen("sora", "ｓｏｒａ", 1);
@@ -39161,7 +39132,7 @@ mod accounts_query_tests {
         .await;
         assert!(
             i105_result.is_err(),
-            "non-canonical Katakana i105 literal `{non_canonical_i105_literal}` must be rejected"
+            "non-canonical I105 literal `{non_canonical_i105_literal}` must be rejected"
         );
     }
 
@@ -39169,49 +39140,39 @@ mod accounts_query_tests {
     async fn accounts_list_filter_accepts_alias_and_returns_canonical_i105_ids() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let state = Arc::new(State::new_for_testing(
-            World::default(),
-            kura.clone(),
-            query,
-        ));
-
-        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let _topology = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
-        let unverified = BlockBuilder::new(vec![dummy_accepted_transaction()])
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(leader.private_key())
-            .unpack(|_| {});
-        let mut st_block = state.block(unverified.header());
-        let mut stx = st_block.transaction();
         let domain_id: dm::DomainId = "aliases-list".parse().expect("valid domain");
-        let kp_exec = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let exec_id = dm::ScopedAccountId::new(domain_id.clone(), kp_exec.public_key().clone());
-        dm::Register::domain(dm::Domain::new(domain_id.clone()))
-            .execute(exec_id.account(), &mut stx)
-            .expect("register domain");
-        dm::Register::account(dm::Account::new(exec_id.clone()))
-            .execute(exec_id.account(), &mut stx)
-            .expect("register executor account");
+        let exec_authority = dm::AccountId::new(
+            KeyPair::random_with_algorithm(Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let exec_id = exec_authority.clone().to_account_id(domain_id.clone());
+        let domain = dm::Domain::new(domain_id.clone()).build(&exec_authority);
 
-        let account_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let account_id =
-            dm::ScopedAccountId::new(domain_id.clone(), account_keypair.public_key().clone());
+        let labelled_authority = dm::AccountId::new(
+            KeyPair::random_with_algorithm(Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let account_id = labelled_authority.clone().to_account_id(domain_id.clone());
         let label = dm::AccountLabel::new(
             domain_id.clone(),
             "primary".parse().expect("valid label name"),
         );
-        let account = dm::Account::new(account_id.clone()).with_label(Some(label.clone()));
-        dm::Register::account(account)
-            .execute(exec_id.account(), &mut stx)
-            .expect("register labelled account");
-
-        stx.apply();
-        let valid: ValidBlock = unverified
-            .clone()
-            .validate_and_record_transactions(&mut st_block)
-            .unpack(|_| {});
-        let committed = valid.clone().commit_unchecked().unpack(|_| {});
-        crate::test_utils::finalize_committed_block(&state, st_block, committed);
+        let state = Arc::new(State::new_for_testing(
+            World::with(
+                [domain],
+                [
+                    dm::Account::new(exec_id).build(&exec_authority),
+                    dm::Account::new(account_id.clone())
+                        .with_label(Some(label.clone()))
+                        .build(&labelled_authority),
+                ],
+                [],
+            ),
+            kura,
+            query,
+        ));
 
         let expected = account_id.account().to_string();
         let alias_literal = label
@@ -45477,12 +45438,12 @@ mod public_lane_tests {
         assert_eq!(
             obj.get("validator").and_then(Value::as_str),
             Some(expected_validator.as_str()),
-            "validator literal should use canonical Katakana i105 rendering"
+            "validator literal should use canonical I105 rendering"
         );
         assert_eq!(
             obj.get("stake_account").and_then(Value::as_str),
             Some(expected_stake.as_str()),
-            "stake account literal should use canonical Katakana i105 rendering"
+            "stake account literal should use canonical I105 rendering"
         );
         assert_eq!(
             obj.get("lane_id").and_then(Value::as_u64),

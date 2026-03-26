@@ -8473,24 +8473,24 @@ fileprivate func ensureGovernanceZkOwnerCanonical(_ inputs: [String: ToriiJSONVa
     guard let value = inputs["owner"] else { return }
     if case .null = value { return }
     guard case let .string(owner) = value else {
-        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical Katakana i105 account id.")
+        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical I105 account id.")
     }
     let canonical = try canonicalizeGovernanceZkOwnerLiteral(owner, field: field)
     if canonical != owner {
-        throw ToriiClientError.invalidPayload("\(field).owner must use canonical Katakana i105 account id form.")
+        throw ToriiClientError.invalidPayload("\(field).owner must use canonical I105 account id form.")
     }
 }
 
 fileprivate func canonicalizeGovernanceZkOwnerLiteral(_ raw: String, field: String) throws -> String {
     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty, trimmed == raw else {
-        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical Katakana i105 account id.")
+        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical I105 account id.")
     }
     if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
-        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical Katakana i105 account id.")
+        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical I105 account id.")
     }
     if trimmed.contains("@") {
-        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical Katakana i105 account id.")
+        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical I105 account id.")
     }
     let address: AccountAddress
     do {
@@ -8499,7 +8499,7 @@ fileprivate func canonicalizeGovernanceZkOwnerLiteral(_ raw: String, field: Stri
             expectedPrefix: 0x02F1
         )
     } catch {
-        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical Katakana i105 account id.")
+        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical I105 account id.")
     }
     let i105 = try address.toI105(networkPrefix: 0x02F1)
     return i105

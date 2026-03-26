@@ -24,7 +24,7 @@ The Torii client now exposes the `/v1/explorer/accounts/{account_id}/qr` route
 so wallets and explorers can render canonical account QR codes without re‑implementing
 the encoder. Call
 `ToriiClient.get_explorer_account_qr_typed(account_id)`
-to receive an `ExplorerAccountQrSnapshot`, which includes the canonical Katakana i105 account id,
+to receive an `ExplorerAccountQrSnapshot`, which includes the canonical I105 account id,
 the Norito literal used for the QR payload, the network prefix, error‑correction
 setting, module count, QR version, and the inline SVG rendering emitted by Torii.
 described in the ADDR‑6b roadmap item; omit it to keep the preferred i105 output
@@ -90,7 +90,7 @@ from iroha_python import ToriiClient
 client = ToriiClient("https://torii.sora.example")
 
 draft = {
-    "controller": "<katakana-i105-account-id>",
+    "controller": "<i105-account-id>",
     "allowance": {"asset": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "amount": "10", "commitment": [1, 2]},
     "spend_public_key": "ed0120deadbeef",
     "attestation_report": [3, 4],

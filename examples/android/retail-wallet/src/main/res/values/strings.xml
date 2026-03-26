@@ -11,7 +11,7 @@
     <string name="wallet_address_domain_note">Domain selector: %1$s</string>
     <string name="wallet_address_i105_label">I105 address (prefix %1$d)</string>
     <string name="wallet_copy_i105">Copy I105</string>
-    <string name="wallet_copy_i105_tooltip">Copy the canonical Katakana i105 account id (safe to share).</string>
+    <string name="wallet_copy_i105_tooltip">Copy the canonical I105 account id (safe to share).</string>
     <string name="wallet_copy_i105_content_description">Copy I105 address to the clipboard (safe to share).</string>
     <string name="wallet_qr_caption">I105 QR payload (shareable with wallets/explorers)</string>
     <string name="wallet_qr_content_description">QR code encoding I105 %1$s</string>

@@ -12,7 +12,7 @@ This page mirrors `docs/source/sns/address_display_guidelines.md` and now serves
 as the canonical portal copy. The source file sticks around for translation PRs.
 :::
 
-Wallets, explorers, and SDK samples must treat the canonical Katakana i105
+Wallets, explorers, and SDK samples must treat the canonical I105
 literal as the only public account-id format. On-chain aliases are separate
 lookup keys:
 
@@ -25,7 +25,7 @@ an alternate public account-id encoding.
 ## Required UX
 
 - **Copy/share only canonical i105.** Ship one primary copy action for the
-  canonical Katakana i105 account id. That same literal powers QR payloads,
+  canonical I105 account id. That same literal powers QR payloads,
   deep links, and clipboard actions.
 - **Render aliases separately.** If a workflow includes an alias, show it in a
   labeled field such as “Alias” or “Routing alias”. Do not concatenate it onto
@@ -55,7 +55,7 @@ tooltips, and warnings stay aligned across platforms:
 
 ## SDK helpers
 
-Each SDK exposes a convenience helper that returns canonical Katakana i105
+Each SDK exposes a convenience helper that returns canonical I105
 rendering plus warning text so UI layers can stay consistent:
 
 - JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)`
@@ -89,7 +89,7 @@ Use the CLI workflow documented under ADDR-5:
 
 1. Run `iroha tools address convert <address-or-account_id> --format json`.
    The summary reports the detected format and canonical encodings (`i105`,
-   `canonical_hex`). Strict parser paths accept canonical Katakana i105 only.
+   `canonical_hex`). Strict parser paths accept canonical I105 only.
 2. SDKs can surface the same summary via JavaScript:
 
    ```js
@@ -110,14 +110,14 @@ Use the CLI workflow documented under ADDR-5:
 5. For newline-to-newline rewrites, run
    `iroha tools address normalize --input addresses.txt --network-prefix 753 --format i105`.
    This rewrites each parsed row to the requested encoding
-   (canonical Katakana i105/hex/JSON). Pair with
+   (canonical I105/hex/JSON). Pair with
    `--allow-errors` for malformed dump triage.
 
 ### Release note snippet (wallet & explorer)
 
 Include the following bullet in wallet/explorer release notes when shipping the cutover:
 
-> **Addresses:** Copy/share flows now use canonical Katakana i105 account ids
+> **Addresses:** Copy/share flows now use canonical I105 account ids
 > only. On-chain aliases remain available as separate routing labels in
 > `name@dataspace` / `name@domain.dataspace` form and resolve to the same
 > canonical i105 account id.

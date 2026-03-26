@@ -86,7 +86,7 @@ ivm_run target/quickstart/hello.to --args '{}'
 
 ## 4. قم بإرسال الرمز الثانوي عبر Toriiبعقد اجتماع جديد، يمكنك إرسال الرمز الثانوي المترجم إلى Torii باستخدام CLI. معرف تطوير الموقع ومشتق من نشره على `defaults/client.toml`، يحمل أو معرف الحساب
 ```
-<katakana-i105-account-id>
+<i105-account-id>
 ```
 
 استخدم ملف التكوين لإنشاء عنوان URL لـ Torii أو معرف السلسلة ومفتاح الاختراق:
@@ -106,7 +106,7 @@ iroha --config defaults/client.toml \
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id <katakana-i105-account-id> \
+  --id <i105-account-id> \
   --key example | jq .
 ```
 

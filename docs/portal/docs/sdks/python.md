@@ -103,7 +103,7 @@ from iroha_python import ToriiClient
 client = ToriiClient("http://127.0.0.1:8080")
 
 draft = {
-    "controller": "<katakana-i105-account-id>",
+    "controller": "<i105-account-id>",
     "allowance": {"asset": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "amount": "10", "commitment": [1, 2]},
     "spend_public_key": "ed0120deadbeef",
     "attestation_report": [3, 4],

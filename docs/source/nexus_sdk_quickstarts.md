@@ -86,7 +86,7 @@ use iroha_client::client::{
 
 fn share_wallet_qr(client: &Client) -> eyre::Result<()> {
     let snapshot = client.get_explorer_account_qr(
-        "<katakana-i105-account-id>",
+        "<i105-account-id>",
     )?;
     println!("i105 literal: {}", snapshot.literal);
     std::fs::write("alice_qr.svg", snapshot.svg)?;
@@ -94,8 +94,8 @@ fn share_wallet_qr(client: &Client) -> eyre::Result<()> {
 }
 ```
 
-The returned `ExplorerAccountQrSnapshot` includes the canonical Katakana i105 account id,
-canonical Katakana i105 literal, error-correction settings, and the inline SVG payload used by
+The returned `ExplorerAccountQrSnapshot` includes the canonical I105 account id,
+canonical I105 literal, error-correction settings, and the inline SVG payload used by
 wallet/explorer share flows.
 
 ## JavaScript / TypeScript (`@iroha/iroha-js`)

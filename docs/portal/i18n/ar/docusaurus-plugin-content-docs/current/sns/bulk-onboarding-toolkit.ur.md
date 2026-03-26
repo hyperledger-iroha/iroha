@@ -34,7 +34,7 @@ translation_last_reviewed: 2026-02-07
 |--------|----------|-------------|
 | `label` | نعم | التسمية المطلوبة (تم قبول الحالة المختلطة؛ الأداة Norm v1 وUTS-46 متوافقة مع التطبيع کرتا ہے). |
 | `suffix_id` | نعم | معرف اللاحقة الرقمية (عشري أو `0x` سداسي عشري). |
-| `owner` | نعم | AccountId string (domainless encoded literal; canonical Katakana i105 only; no `@<domain>` suffix). |
+| `owner` | نعم | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | نعم | عدد صحيح `1..=255`. |
 | `payment_asset_id` | نعم | أصل التسوية (مثال `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | نعم | الأعداد الصحيحة غير الموقعة هي وحدات الأصول الأصلية التي تمثل كريں. |
@@ -73,9 +73,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "<katakana-i105-account-id>",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"<katakana-i105-account-id>","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -84,7 +84,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"<katakana-i105-account-id>",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -237,7 +237,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
   المراجع موقع CSV هو الحل النسبي. البيانات التعريفية غير الكائنية
   خطأ في التحقق دیتا ہے۔
 - **وحدات التحكم:** الخلايا الفارغة `--default-controllers` لتكريم الشرف. غير مالك
-  الجهات الفاعلة کو مندوب کرتے وقت قوائم التحكم الصريحة دیں (مثال `<katakana-i105-account-id>;<katakana-i105-account-id>`)۔
+  الجهات الفاعلة کو مندوب کرتے وقت قوائم التحكم الصريحة دیں (مثال `<i105-account-id>;<i105-account-id>`)۔
 
 حالات الفشل في أرقام الصفوف السياقية کے ساتھ تقرير ہوتے ہیں (مثال
 `error: row 12 term_years must be between 1 and 255`). أخطاء التحقق من صحة البرنامج النصي

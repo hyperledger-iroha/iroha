@@ -208,12 +208,12 @@ iroha app settlement dvp \
   --settlement-id DVP-FIXTURE-1 \
   --delivery-asset security#equities \
   --delivery-quantity 500 \
-  --delivery-from <katakana-i105-account-id> \
-  --delivery-to <katakana-i105-account-id> \
+  --delivery-from <i105-account-id> \
+  --delivery-to <i105-account-id> \
   --payment-asset usd#fi \
   --payment-quantity 1050000 \
-  --payment-from <katakana-i105-account-id> \
-  --payment-to <katakana-i105-account-id> \
+  --payment-from <i105-account-id> \
+  --payment-to <i105-account-id> \
   --delivery-instrument-id US0378331005 \
   --place-of-settlement-mic XNAS \
   --partial-indicator npar \

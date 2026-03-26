@@ -88,7 +88,7 @@ ivm_run target/quickstart/hello.to --args '{}'
 
 في ما يلي، تم إضافة رمز بايت محمول إلى CLI وهو Torii. تم استخدام هوية التطوير `defaults/client.toml` للمفتاح العام الموجود، وهو عبارة عن معرف الحساب:
 ```
-<katakana-i105-account-id>
+<i105-account-id>
 ```Torii عنوان URL ومعرف السلسلة ومفتاح التوقيع اسم المستخدم للتكوين:
 
 ```sh
@@ -106,7 +106,7 @@ CLI Norito هو عبارة عن تشفير كرتا ومفتاح تطوير يو
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id <katakana-i105-account-id> \
+  --id <i105-account-id> \
   --key example | jq .
 ```
 

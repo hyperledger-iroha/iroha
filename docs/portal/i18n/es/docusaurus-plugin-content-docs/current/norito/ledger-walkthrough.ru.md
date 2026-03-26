@@ -29,8 +29,8 @@ Para todas las instrucciones, coloque `$ADMIN_ACCOUNT` e `$RECEIVER_ACCOUNT` en 
 ID аккаунтов. En el paquete de software que contiene esta segunda cuenta, puede utilizar el programa de demostración:
 
 ```sh
-export ADMIN_ACCOUNT="<katakana-i105-account-id>"
-export RECEIVER_ACCOUNT="<katakana-i105-account-id>"
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 Подтвердите значения, выведя первые аккаунты:

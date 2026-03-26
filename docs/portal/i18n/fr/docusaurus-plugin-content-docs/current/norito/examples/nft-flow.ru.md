@@ -19,7 +19,7 @@ Il s'agit d'un projet de cycle de vie NFT qui se résume à : avant de commencer
 
 ## Пошаговый обход реестра
 
-- Assurez-vous que l'utilisation de NFT (par exemple `n0#wonderland`) corresponde à votre compte/compte, en utilisant des captures d'écran. (`<katakana-i105-account-id>`, `<katakana-i105-account-id>`).
+- Assurez-vous que l'utilisation de NFT (par exemple `n0#wonderland`) corresponde à votre compte/compte, en utilisant des captures d'écran. (`<i105-account-id>`, `<i105-account-id>`).
 - Choisissez maintenant `nft_issue_and_transfer` pour utiliser NFT, en pensant à Alice et Bob et à acheter un drapeau de métadonnées, des informations sur выпуск.
 - Vérifiez que le logiciel NFT est disponible à partir du `iroha_cli ledger nfts list --account <id>` ou que le SDK est disponible, afin de mettre à jour l'ancien, afin de déterminer ce qui est actif. после выполнения инструкции brûler.
 
@@ -35,11 +35,11 @@ Il s'agit d'un projet de cycle de vie NFT qui se résume à : avant de commencer
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
 seiyaku NftFlow {
   kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
-    let owner = account!("<katakana-i105-account-id>");
+    let owner = account!("<i105-account-id>");
     let nft = nft_id!("n0$wonderland");
     nft_mint_asset(nft, owner);
 
-    let to = account!("<katakana-i105-account-id>");
+    let to = account!("<i105-account-id>");
     nft_transfer_asset(owner, nft, to);
     nft_set_metadata(nft, json!{ issued: "demo" });
     nft_burn_asset(nft);

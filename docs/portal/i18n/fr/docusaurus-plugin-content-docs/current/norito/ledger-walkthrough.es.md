@@ -30,8 +30,8 @@ ID du compte que les avions utilisent. Le bundle par défaut inclut les comptes
 Démo des dérivés des touches :
 
 ```sh
-export ADMIN_ACCOUNT="<katakana-i105-account-id>"
-export RECEIVER_ACCOUNT="<katakana-i105-account-id>"
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 Confirmez les valeurs répertoriées dans les premières données :

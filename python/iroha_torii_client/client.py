@@ -4754,7 +4754,7 @@ class ToriiClient:
         literal = ToriiClient._require_non_empty_string(value, context)
         if literal != value or any(ch.isspace() for ch in literal):
             raise ValueError(
-                f"{context} must be a canonical Katakana i105 account id or on-chain account alias"
+                f"{context} must be a canonical I105 account id or on-chain account alias"
             )
         if "@" in literal:
             label, separator, scope = literal.partition("@")
@@ -4767,14 +4767,14 @@ class ToriiClient:
                 or any(not part for part in scope_parts)
             ):
                 raise ValueError(
-                    f"{context} must use canonical Katakana i105 account id or account alias `name@dataspace` / `name@domain.dataspace`"
+                    f"{context} must use canonical I105 account id or account alias `name@dataspace` / `name@domain.dataspace`"
                 )
             return literal
         try:
             _decode_i105_string(literal)
         except ValueError as exc:
             raise ValueError(
-                f"{context} must be a canonical Katakana i105 account id or on-chain account alias"
+                f"{context} must be a canonical I105 account id or on-chain account alias"
             ) from exc
         return literal
 
@@ -6800,20 +6800,20 @@ class ToriiClient:
         if owner is None:
             return
         if not isinstance(owner, str):
-            raise RuntimeError(f"{context}.owner must be a canonical Katakana i105 account id")
+            raise RuntimeError(f"{context}.owner must be a canonical I105 account id")
         trimmed = owner.strip()
         if not trimmed or trimmed != owner:
-            raise RuntimeError(f"{context}.owner must be a canonical Katakana i105 account id")
+            raise RuntimeError(f"{context}.owner must be a canonical I105 account id")
         if any(ch.isspace() for ch in trimmed):
-            raise RuntimeError(f"{context}.owner must be a canonical Katakana i105 account id")
+            raise RuntimeError(f"{context}.owner must be a canonical I105 account id")
         if "@" in trimmed:
-            raise RuntimeError(f"{context}.owner must be a canonical Katakana i105 account id")
+            raise RuntimeError(f"{context}.owner must be a canonical I105 account id")
         if trimmed.lower().startswith("0x"):
-            raise RuntimeError(f"{context}.owner must be a canonical Katakana i105 account id")
+            raise RuntimeError(f"{context}.owner must be a canonical I105 account id")
         try:
             _decode_i105_string(trimmed)
         except ValueError as exc:
-            raise RuntimeError(f"{context}.owner must be a canonical Katakana i105 account id") from exc
+            raise RuntimeError(f"{context}.owner must be a canonical I105 account id") from exc
 
     @classmethod
     def _normalize_governance_zk_public_inputs(

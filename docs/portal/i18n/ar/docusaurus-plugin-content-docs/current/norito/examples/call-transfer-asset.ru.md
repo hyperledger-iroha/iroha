@@ -19,9 +19,9 @@ description: لاحظ كيف يمكن لـ Kotodama أن تستخرج تعليم
 
 ## Почаговый обдод еестра
 
-- عقد المساهمات الكاملة (على سبيل المثال `<katakana-i105-account-id>`) الذي يتم تجديده على الميزانية، ويحدد الدور الهام `CanTransfer` أو ما يعادلها.
-- اختر هنا `call_transfer_asset` لتحويل 5 سنوات إلى عقد حساب `<katakana-i105-account-id>`، بالإضافة إلى ذلك، يمكن للأتمتة الأولية أن تدعم استخدام المضيف.
-- التحقق من التوازن عبر `FindAccountAssets` أو `iroha_cli ledger assets list --account <katakana-i105-account-id>` وإظهار الاشتراكات للتأكد من حماية البيانات المسجلة إعادة صياغة السياق.
+- عقد المساهمات الكاملة (على سبيل المثال `<i105-account-id>`) الذي يتم تجديده على الميزانية، ويحدد الدور الهام `CanTransfer` أو ما يعادلها.
+- اختر هنا `call_transfer_asset` لتحويل 5 سنوات إلى عقد حساب `<i105-account-id>`، بالإضافة إلى ذلك، يمكن للأتمتة الأولية أن تدعم استخدام المضيف.
+- التحقق من التوازن عبر `FindAccountAssets` أو `iroha_cli ledger assets list --account <i105-account-id>` وإظهار الاشتراكات للتأكد من حماية البيانات المسجلة إعادة صياغة السياق.
 
 ## تطوير شامل SDK
 
@@ -36,8 +36,8 @@ description: لاحظ كيف يمكن لـ Kotodama أن تستخرج تعليم
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("<katakana-i105-account-id>"),
-      account!("<katakana-i105-account-id>"),
+      account!("<i105-account-id>"),
+      account!("<i105-account-id>"),
       asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );

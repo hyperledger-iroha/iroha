@@ -31,7 +31,7 @@
         },
         "format": "i105",
         "input": "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HS0",
-        "note": "Introduces a glyph outside the canonical Katakana i105 alphabet."
+        "note": "Introduces a glyph outside the canonical I105 alphabet."
       },
       {
         "case_id": "i105-checksum-mismatch-default-sentinel",
@@ -40,7 +40,7 @@
         },
         "format": "i105",
         "input": "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HS1",
-        "note": "Checksum bytes replaced to trigger canonical Katakana i105 verification failure."
+        "note": "Checksum bytes replaced to trigger canonical I105 verification failure."
       },
       {
         "case_id": "canonical-invalid-hex",

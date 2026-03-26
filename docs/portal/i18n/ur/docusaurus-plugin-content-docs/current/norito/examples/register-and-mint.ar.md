@@ -19,9 +19,9 @@ translation_last_reviewed: 2026-02-07
 
 ## لیجر ٹور
 
-- اس بات کو یقینی بنائیں کہ ہر SDK ہاٹ اسٹارٹ میں سیٹ اپ مرحلے کی عکاسی کرنے کے لئے منزل مقصود اکاؤنٹ (جیسے `<katakana-i105-account-id>`) موجود ہے۔
+- اس بات کو یقینی بنائیں کہ ہر SDK ہاٹ اسٹارٹ میں سیٹ اپ مرحلے کی عکاسی کرنے کے لئے منزل مقصود اکاؤنٹ (جیسے `<i105-account-id>`) موجود ہے۔
 - ایک ہی لین دین میں ایلس کے لئے گلاب اثاثہ تعریف اور ٹکسال 250 یونٹ بنانے کے لئے انٹری پوائنٹ `register_and_mint` پر کال کریں۔
-- کامیاب ٹکسال کی تصدیق کے ل I `client.request(FindAccountAssets)` یا `iroha_cli ledger assets list --account <katakana-i105-account-id>` کے ذریعے بیلنس چیک کریں۔
+- کامیاب ٹکسال کی تصدیق کے ل I `client.request(FindAccountAssets)` یا `iroha_cli ledger assets list --account <i105-account-id>` کے ذریعے بیلنس چیک کریں۔
 
 ## متعلقہ SDK گائیڈز
 
@@ -43,7 +43,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("<katakana-i105-account-id>");
+    let to = account!("<i105-account-id>");
     let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     mint_asset(to, asset, 250);
   }

@@ -74,7 +74,7 @@ Manifestləri Torii-ə köçürmək və ləqəbləri bağlamaq üçün `sorafs_c
 ```bash
 OUT="artifacts/devportal/sorafs/20260219T130012Z"
 TORII_URL="https://torii.stg.sora.net/"
-AUTHORITY="<katakana-i105-account-id>"
+AUTHORITY="<i105-account-id>"
 KEY_FILE="secrets/docs-admin.key"
 ALIAS_PROOF="secrets/docs.alias.proof"
 SUBMITTED_EPOCH="$(curl -s ${TORII_URL}/v1/status | jq '.sumeragi.epoch')"

@@ -35,7 +35,7 @@ Torii или CLI. El helper valida cada fila de antemano, emite tanto un manific
 |---------|-----------|-------------|
 | `label` | Си | Etiqueta solicitada (se acepta mayus/minus; la Herramienta Normaliza Segun Norm v1 и UTS-46). |
 | `suffix_id` | Си | Цифровой идентификатор суфии (десятичный или шестнадцатеричный `0x`). |
-| `owner` | Си | AccountId string (domainless encoded literal; canonical Katakana i105 only; no `@<domain>` suffix). |
+| `owner` | Си | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | Си | Энтеро `1..=255`. |
 | `payment_asset_id` | Си | Активация урегулирования (например, `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Си | Enteros sin Signo que представляет собой unidades nativas del activo. |
@@ -76,9 +76,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "<katakana-i105-account-id>",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"<katakana-i105-account-id>","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -87,7 +87,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"<katakana-i105-account-id>",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -245,7 +245,7 @@ alineados о большом прогрессе. Эль-табло Grafana
   Ссылки на архивы могут быть найдены относительно распространения CSV. Метаданные
   ни один морской объект не может привести к ошибке проверки.
 - **Контроллеры:** указаны на белом фоне `--default-controllers`. Пропорционе
-  явные списки контроллеров (например, `<katakana-i105-account-id>;<katakana-i105-account-id>`) и делегировать
+  явные списки контроллеров (например, `<i105-account-id>;<i105-account-id>`) и делегировать
   актеры без владельца.
 
 Los Fallos se reportan con numeros de fila contextuales (например,

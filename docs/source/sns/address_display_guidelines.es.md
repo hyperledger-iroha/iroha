@@ -1,7 +1,6 @@
 # Sora Address Display Guidelines (ADDR-6)
 
-Wallets, explorers, SDKs, and CLI samples must treat the canonical Katakana
-i105 literal as the only public account id format. On-chain aliases are a
+Wallets, explorers, SDKs, and CLI samples must treat the canonical I105 literal as the only public account id format. On-chain aliases are a
 separate lookup surface:
 
 - `name@dataspace`
@@ -14,7 +13,7 @@ an omitted domain suffix on the i105 literal.
 ## Required UX
 
 - **Copy/share only canonical i105.** Ship one primary copy action for the
-  canonical Katakana i105 account id. The same literal powers QR payloads,
+  canonical I105 account id. The same literal powers QR payloads,
   deep links, and clipboard actions.
 - **Render aliases as secondary metadata.** When a workflow has an on-chain
   alias, show it in a separate labeled field such as “Alias” or “Routing
@@ -46,7 +45,7 @@ tooltips, and QR captions stay aligned across platforms:
 
 ## SDK helpers
 
-Each SDK exposes a helper that returns canonical Katakana i105 rendering plus
+Each SDK exposes a helper that returns canonical I105 rendering plus
 warning text so UI layers do not have to reimplement the codec:
 
 - JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)` (`javascript/iroha_js/src/address.js`)
@@ -60,10 +59,10 @@ account id.
 
 ## Torii API contract
 
-- Strict `AccountId` parser paths accept only canonical Katakana i105.
+- Strict `AccountId` parser paths accept only canonical I105.
 - Alias-aware routes may additionally accept on-chain aliases in
   `name@dataspace` or `name@domain.dataspace` form.
-- Responses render canonical Katakana i105 account ids even when the caller
+- Responses render canonical I105 account ids even when the caller
   used an alias as the lookup key.
 - Clients must not append `@<domain>` suffixes to i105 literals.
 
@@ -105,7 +104,7 @@ reserve flows, manifests, telemetry payloads, and QR generation.
    audit fails on parse errors; use `--allow-errors` only for best-effort scans.
 6. For newline-to-newline rewrites, run `iroha tools address normalize --input addresses.txt --network-prefix 753 --format i105`.
    The helper rewrites each parsed row into the requested encoding
-   (canonical Katakana i105/hex/JSON). Pair it with `--allow-errors` to keep scanning
+   (canonical I105/hex/JSON). Pair it with `--allow-errors` to keep scanning
    malformed dumps.
 7. CI/lint automation can run `ci/check_address_normalize.sh`, which extracts the Local selectors from
    `fixtures/account/address_vectors.json`, converts them via `iroha tools address normalize`, and audits
@@ -132,7 +131,7 @@ Alertmanager pack (`dashboards/alerts/address_ingest_rules.yml`) surfaces three 
   responsible SDK team before declaring the incident resolved.
 
 `torii_address_format_total{endpoint,format}` complements the ingest metrics by counting every
-`canonical Katakana i105 literal rendering` request that Torii serves. Dashboard the metric alongside
+`canonical I105 literal rendering` request that Torii serves. Dashboard the metric alongside
 `torii_address_invalid_total` to prove that wallet/explorer traffic is gradually switching to the
 i105 output before you disable Local selectors, and wire alert thresholds to catch any sudden
 fallback to the default i105 responses.

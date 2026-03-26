@@ -11,9 +11,9 @@ Demonstrates permissioned domain creation, asset registration, and deterministic
 
 ## Ledger walkthrough
 
-- Ensure the destination account (e.g., `<katakana-i105-account-id>` for Alice) exists, mirroring the setup phase in each SDK quickstart.
+- Ensure the destination account (e.g., `<i105-account-id>` for Alice) exists, mirroring the setup phase in each SDK quickstart.
 - Invoke the `register_and_mint` entrypoint to create the ROSE asset definition and mint 250 units to Alice in one transaction.
-- Verify balances through `client.request(FindAccountAssets)` or `iroha_cli ledger asset list --account <katakana-i105-account-id>` to confirm the mint succeeded.
+- Verify balances through `client.request(FindAccountAssets)` or `iroha_cli ledger asset list --account <i105-account-id>` to confirm the mint succeeded.
 
 ## Related SDK guides
 

@@ -232,7 +232,7 @@ Environment variables:
 
 - `TORII_URL` — Torii endpoint (defaults to `http://localhost:8080`).
 - `ACCOUNT_ID` — account literal for asset iteration.
-- `NFT_ID` — optional canonical NFT/asset-holding id (`<base58-asset-definition-id>#<katakana-i105-account-id>`) to filter on (exact match).
+- `NFT_ID` — optional canonical NFT/asset-holding id (`<base58-asset-definition-id>#<i105-account-id>`) to filter on (exact match).
 - `PAGE_SIZE` / `MAX_ITEMS` — pagination controls.
 - `TORII_API_TOKEN` / `TORII_AUTH_TOKEN` — credentials for permissioned nodes.
 - `ALLOW_INSECURE=1` — allow HTTP while sending credentials (dev/test only).

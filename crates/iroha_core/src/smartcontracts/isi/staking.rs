@@ -851,7 +851,7 @@ impl Execute for ClaimPublicLaneRewards {
         )
         .ok_or_else(|| {
             Error::InvariantViolation(
-                "invalid nexus.fees.fee_sink_account_id; expected canonical Katakana i105 account id or on-chain alias"
+                "invalid nexus.fees.fee_sink_account_id; expected canonical I105 account id or on-chain alias"
                     .into(),
             )
         })?;
@@ -1166,7 +1166,7 @@ fn validate_reward_sink(
     )
     .ok_or_else(|| {
         Error::InvariantViolation(
-            "invalid nexus.fees.fee_sink_account_id; expected canonical Katakana i105 account id or on-chain alias"
+            "invalid nexus.fees.fee_sink_account_id; expected canonical I105 account id or on-chain alias"
                 .into(),
         )
     })?;
@@ -1603,7 +1603,7 @@ fn parse_staking_account_literal(
 
     Err(Error::InvariantViolation(
         format!(
-            "invalid nexus.staking.{field}; expected canonical Katakana i105 account id or on-chain alias ({reason})"
+            "invalid nexus.staking.{field}; expected canonical I105 account id or on-chain alias ({reason})"
         )
         .into(),
     ))

@@ -34,8 +34,8 @@ SDK хурдан ажилладаг тул та CLI болон SDK-ийн үйл
 Демо түлхүүрүүдээс гаралтай:
 
 ```sh
-export ADMIN_ACCOUNT="<katakana-i105-account-id>"
-export RECEIVER_ACCOUNT="<katakana-i105-account-id>"
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 Эхний хэдэн дансыг жагсааж утгыг баталгаажуулна уу:

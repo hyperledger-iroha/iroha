@@ -10,7 +10,7 @@ __Prerequisites:__
   controller and related roles under the multisig home domain automatically.
 - Signatory accounts do not need to exist in advance. Missing signatories are materialized during
   registration and tagged with metadata `iroha:created_via = "multisig"`.
-- The CLI expects canonical Katakana i105 account literals for `--account` and `--signatories`. The
+- The CLI expects canonical I105 account literals for `--account` and `--signatories`. The
   multisig home domain is taken from the configured default domain.
 
 __Example usage:__

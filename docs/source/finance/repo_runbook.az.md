@@ -27,9 +27,9 @@ yoxlama siyahıları, sübutların tutulması və fırıldaqçılıq/geri qaytar
 iroha --config client.toml --output \
   repo initiate \
   --agreement-id daily_repo \
-  --initiator <katakana-i105-account-id> \
-  --counterparty <katakana-i105-account-id> \
-  --custodian <katakana-i105-account-id> \
+  --initiator <i105-account-id> \
+  --counterparty <i105-account-id> \
+  --custodian <i105-account-id> \
   --cash-asset 7EAD8EFYUx1aVKZPUU1fyKvr8dF1 \
   --cash-quantity 1000 \
   --collateral-asset 4fEiy2n5VMFVfi6BzDJge519zAzg \
@@ -43,8 +43,8 @@ iroha --config client.toml --output \
 iroha --config client.toml --output \
   repo unwind \
   --agreement-id daily_repo \
-  --initiator <katakana-i105-account-id> \
-  --counterparty <katakana-i105-account-id> \
+  --initiator <i105-account-id> \
+  --counterparty <i105-account-id> \
   --cash-asset 7EAD8EFYUx1aVKZPUU1fyKvr8dF1 \
   --cash-quantity 1005 \
   --collateral-asset 4fEiy2n5VMFVfi6BzDJge519zAzg \
@@ -91,11 +91,11 @@ collateral = RepoCollateralLeg(
 )
 governance = RepoGovernance(haircut_bps=1500, margin_frequency_secs=86_400)
 
-draft = TransactionDraft(TransactionConfig(chain_id="dev-chain", authority="<katakana-i105-account-id>"))
+draft = TransactionDraft(TransactionConfig(chain_id="dev-chain", authority="<i105-account-id>"))
 draft.repo_initiate(
     agreement_id="daily_repo",
-    initiator="<katakana-i105-account-id>",
-    counterparty="<katakana-i105-account-id>",
+    initiator="<i105-account-id>",
+    counterparty="<i105-account-id>",
     cash_leg=cash,
     collateral_leg=collateral,
     rate_bps=250,
@@ -127,13 +127,13 @@ iroha --config client.toml --output \
   --settlement-id trade_dvp \
   --delivery-asset 4fEiy2n5VMFVfi6BzDJge519zAzg \
   --delivery-quantity 10 \
-  --delivery-from <katakana-i105-account-id> \
-  --delivery-to <katakana-i105-account-id> \
+  --delivery-from <i105-account-id> \
+  --delivery-to <i105-account-id> \
   --delivery-instrument-id US0378331005 \
   --payment-asset 7EAD8EFYUx1aVKZPUU1fyKvr8dF1 \
   --payment-quantity 1000 \
-  --payment-from <katakana-i105-account-id> \
-  --payment-to <katakana-i105-account-id> \
+  --payment-from <i105-account-id> \
+  --payment-to <i105-account-id> \
   --order payment-then-delivery \
   --atomicity all-or-nothing \
   --iso-reference-crosswalk /opt/iso/isin_crosswalk.json \
@@ -145,12 +145,12 @@ iroha --config client.toml --output \
   --settlement-id trade_pvp \
   --primary-asset 7EAD8EFYUx1aVKZPUU1fyKvr8dF1 \
   --primary-quantity 500 \
-  --primary-from <katakana-i105-account-id> \
-  --primary-to <katakana-i105-account-id> \
+  --primary-from <i105-account-id> \
+  --primary-to <i105-account-id> \
   --counter-asset 5tPkFK6s2zUcd1qUHyTmY7fDVa2n \
   --counter-quantity 460 \
-  --counter-from <katakana-i105-account-id> \
-  --counter-to <katakana-i105-account-id> \
+  --counter-from <i105-account-id> \
+  --counter-to <i105-account-id> \
   --iso-xml-out trade_pvp.xml
 ```
 
@@ -178,19 +178,19 @@ from iroha_python import (
     TransactionDraft,
 )
 
-draft = TransactionDraft(TransactionConfig(chain_id="dev-chain", authority="<katakana-i105-account-id>"))
+draft = TransactionDraft(TransactionConfig(chain_id="dev-chain", authority="<i105-account-id>"))
 delivery = SettlementLeg(
     asset_definition_id="4fEiy2n5VMFVfi6BzDJge519zAzg",
     quantity="10",
-    from_account="<katakana-i105-account-id>",
-    to_account="<katakana-i105-account-id>",
+    from_account="<i105-account-id>",
+    to_account="<i105-account-id>",
     metadata={"isin": "ABC123"},
 )
 payment = SettlementLeg(
     asset_definition_id="7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
     quantity="1000",
-    from_account="<katakana-i105-account-id>",
-    to_account="<katakana-i105-account-id>",
+    from_account="<i105-account-id>",
+    to_account="<i105-account-id>",
 )
 plan = SettlementPlan(order=SettlementExecutionOrder.PAYMENT_THEN_DELIVERY)
 
@@ -200,14 +200,14 @@ draft.settlement_pvp(
     SettlementLeg(
         asset_definition_id="7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
         quantity="500",
-        from_account="<katakana-i105-account-id>",
-        to_account="<katakana-i105-account-id>",
+        from_account="<i105-account-id>",
+        to_account="<i105-account-id>",
     ),
     SettlementLeg(
         asset_definition_id="5tPkFK6s2zUcd1qUHyTmY7fDVa2n",
         quantity="460",
-        from_account="<katakana-i105-account-id>",
-        to_account="<katakana-i105-account-id>",
+        from_account="<i105-account-id>",
+        to_account="<i105-account-id>",
     ),
 )
 ```

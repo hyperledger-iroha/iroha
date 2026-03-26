@@ -36,7 +36,7 @@ Le parseur exige la ligne d'en-tete suivante (l'ordre est гибкий):
 |---------|--------|-------------|
 | `label` | Да | Libelle requiree (касса смешанного приема; l'outil нормализовать selon Norm v1 и UTS-46). |
 | `suffix_id` | Да | Идентификатор суффикса (десятичный или шестнадцатеричный `0x`). |
-| `owner` | Да | AccountId string (domainless encoded literal; canonical Katakana i105 only; no `@<domain>` suffix). |
+| `owner` | Да | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | Да | Энтьер `1..=255`. |
 | `payment_asset_id` | Да | Акт урегулирования (пример `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Да | Entiers не является представителем объединения местных жителей в действии. |
@@ -77,9 +77,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "<katakana-i105-account-id>",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"<katakana-i105-account-id>","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -88,7 +88,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"<katakana-i105-account-id>",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -249,7 +249,7 @@ panneaux pour les comptes par suffixe, le Volume de Paiement et les Ratios de
   ссылки на файлы, которые разрешают соотнесение с размещением CSV.
   Необъективные метаданные приводят к ошибке проверки.
 - **Контроллеры:** ячейки имеют соответствующий `--default-controllers`. Фурниссе
-  явные списки (пример `<katakana-i105-account-id>;<katakana-i105-account-id>`), когда вы делегируете их
+  явные списки (пример `<i105-account-id>;<i105-account-id>`), когда вы делегируете их
   актеры не являются владельцами.
 
 Сигнальные сигналы с числом строк контекста (например,

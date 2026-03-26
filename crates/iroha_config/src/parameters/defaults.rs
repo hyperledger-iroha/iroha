@@ -3069,7 +3069,7 @@ pub mod governance {
     }
 
     fn account_literal_from_account_id(account_id: &AccountId) -> String {
-        // Configuration parsing accepts canonical Katakana i105 account literals.
+        // Configuration parsing accepts canonical I105 account literals.
         account_id
             .canonical_i105()
             .expect("default governance account literal")

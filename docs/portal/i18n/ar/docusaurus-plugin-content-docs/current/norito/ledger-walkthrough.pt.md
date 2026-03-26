@@ -30,8 +30,8 @@ conta que voceplaneja usar. تحتوي الحزمة على حسابين مشتق
 شافيز دي التجريبي:
 
 ```sh
-export ADMIN_ACCOUNT="<katakana-i105-account-id>"
-export RECEIVER_ACCOUNT="<katakana-i105-account-id>"
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 قم بتأكيد القيم المدرجة كحسابات أولية:

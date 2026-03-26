@@ -1010,11 +1010,11 @@ mod prefetch_tests {
         let encoded = alpha_account
             .account()
             .canonical_i105()
-            .expect("canonical Katakana i105 account literal");
+            .expect("canonical I105 account literal");
         assert_eq!(
             parse_account_literal_with_world(&world_view, &DataSpaceCatalog::default(), &encoded),
             Some(alpha_account.account().clone()),
-            "canonical Katakana i105 account ids must remain valid even when the subject is linked across domains"
+            "canonical I105 account ids must remain valid even when the subject is linked across domains"
         );
     }
 

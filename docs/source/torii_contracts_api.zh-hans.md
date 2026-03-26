@@ -56,7 +56,7 @@ Upload compiled bytecode and let Torii derive the manifest and hashes.
 
 ```jsonc
 {
-  "authority":   "<katakana-i105-account-id>", // AccountId (string form)
+  "authority":   "<i105-account-id>", // AccountId (string form)
   "private_key": "ed25519:0123…",    // ExposedPrivateKey (bare or prefixed multihash hex)
   "code_b64":    "Base64Payload=="
 }
@@ -80,8 +80,8 @@ Notes:
 ### Type encodings (JSON)
 
 - `Hash` values (e.g., `code_hash`, `abi_hash`) are encoded as 64‑char lowercase hex strings (32 bytes).
-- `AccountId` strings use canonical Katakana i105 literals (domainless encoded literal).
-  Strict parser paths accept only canonical Katakana i105 literals (no `@<domain>` suffix).
+- `AccountId` strings use canonical I105 literals (domainless encoded literal).
+  Strict parser paths accept only canonical I105 literals (no `@<domain>` suffix).
 - `ExposedPrivateKey` accepts either a bare multihash hex string or its algorithm-prefixed variant (e.g., `ed25519:…`). Responses normalise to bare multihash hex. Multihash hex is canonical: varint bytes are lowercase, payload bytes are uppercase, and `0x` prefixes are rejected.
 
 ### GET response: ContractCodeRecordDto
@@ -103,7 +103,7 @@ Represents a request to deploy bytecode and immediately bind `(namespace, contra
 
 ```jsonc
 {
-  "authority":   "<katakana-i105-account-id>",
+  "authority":   "<i105-account-id>",
   "private_key": "ed25519:…",
   "namespace":   "apps",
   "contract_id": "calc.v1",
@@ -133,7 +133,7 @@ Bind an existing manifest/code hash to a namespace contract identifier.
 
 ```jsonc
 {
-  "authority":   "<katakana-i105-account-id>",
+  "authority":   "<i105-account-id>",
   "private_key": "ed25519:0123…",
   "namespace":   "apps",
   "contract_id": "calc.v1",
@@ -178,7 +178,7 @@ Deploy code and then fetch code bytes:
 curl -s -X POST \
   -H 'Content-Type: application/json' \
   -d '{
-        "authority": "<katakana-i105-account-id>",
+        "authority": "<i105-account-id>",
         "private_key": "ed25519:…",
         "code_b64": "…"
       }' \
@@ -193,7 +193,7 @@ Deploy and activate an instance atomically:
 curl -s -X POST \
   -H 'Content-Type: application/json' \
   -d '{
-        "authority": "<katakana-i105-account-id>",
+        "authority": "<i105-account-id>",
         "private_key": "ed25519:…",
         "namespace": "apps",
         "contract_id": "calc.v1",
@@ -208,7 +208,7 @@ Activate an existing instance with previously uploaded artifacts:
 curl -s -X POST \
   -H 'Content-Type: application/json' \
   -d '{
-        "authority": "<katakana-i105-account-id>",
+        "authority": "<i105-account-id>",
         "private_key": "ed25519:…",
         "namespace": "apps",
         "contract_id": "calc.v1",

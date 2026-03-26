@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Roadmap ADDR-5 coverage ensuring Torii surfaces canonical Katakana i105 account IDs.
+//! Roadmap ADDR-5 coverage ensuring Torii surfaces canonical I105 account IDs.
 
 use std::{
     collections::BTreeSet,
@@ -827,7 +827,7 @@ async fn accounts_listing_emits_i105_identifiers() -> Result<()> {
     );
     assert!(
         ids.iter().all(|id| !id.contains('@')),
-        "account listing should emit canonical Katakana i105 strings"
+        "account listing should emit canonical I105 strings"
     );
 
     Ok(())
@@ -1011,7 +1011,7 @@ async fn accounts_listing_supports_i105_response() -> Result<()> {
     );
     for id in &ids {
         AccountId::parse_encoded(id)
-            .wrap_err_with(|| format!("account id {id} should parse as canonical Katakana i105"))?;
+            .wrap_err_with(|| format!("account id {id} should parse as canonical I105"))?;
     }
 
     Ok(())
@@ -1266,7 +1266,7 @@ async fn asset_holders_get_supports_i105_response() -> Result<()> {
     );
     for id in &ids {
         AccountId::parse_encoded(id)
-            .wrap_err_with(|| format!("holder id {id} should parse as canonical Katakana i105"))?;
+            .wrap_err_with(|| format!("holder id {id} should parse as canonical I105"))?;
     }
 
     Ok(())
@@ -1452,7 +1452,7 @@ async fn account_transactions_get_returns_i105_literals() -> Result<()> {
         .await?;
     assert!(
         resp.status().is_success(),
-        "expected success fetching account transactions with canonical Katakana i105, got {}",
+        "expected success fetching account transactions with canonical I105, got {}",
         resp.status()
     );
     let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
@@ -1574,7 +1574,7 @@ async fn account_transactions_query_returns_i105_literals() -> Result<()> {
         .await?;
     assert!(
         resp.status().is_success(),
-        "expected success from account transactions query with canonical Katakana i105, got {}",
+        "expected success from account transactions query with canonical I105, got {}",
         resp.status()
     );
     let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
@@ -1672,7 +1672,7 @@ async fn explorer_transactions_emit_i105_literals() -> Result<()> {
     );
     assert!(
         authorities.iter().all(|literal| literal == &i105_literal),
-        "explorer transactions should honour canonical Katakana i105; got {authorities:?}"
+        "explorer transactions should honour canonical I105; got {authorities:?}"
     );
 
     let dotted_i105_filter = dotted_i105_literal(&i105_literal);
@@ -1793,7 +1793,7 @@ async fn explorer_instructions_emit_i105_literals() -> Result<()> {
     );
     assert!(
         authorities.iter().all(|literal| literal == &i105_literal),
-        "explorer instructions should honour canonical Katakana i105; got {authorities:?}"
+        "explorer instructions should honour canonical I105; got {authorities:?}"
     );
 
     let dotted_i105_filter = dotted_i105_literal(&i105_literal);
@@ -1921,7 +1921,7 @@ async fn explorer_account_qr_accepts_i105_hint() -> Result<()> {
         .await?;
     assert!(
         resp.status().is_success(),
-        "expected explorer account QR to respect canonical Katakana i105, got {}",
+        "expected explorer account QR to respect canonical I105, got {}",
         resp.status()
     );
     let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
@@ -2256,7 +2256,7 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
         .expect("I105 initiator literal must be present");
     assert_eq!(
         initiator, i105_alice,
-        "repo agreements should honour canonical Katakana i105 for initiators"
+        "repo agreements should honour canonical I105 for initiators"
     );
     let counterparty = entry
         .get("counterparty")
@@ -2264,7 +2264,7 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
         .expect("I105 counterparty literal must be present");
     assert_eq!(
         counterparty, i105_bob,
-        "repo agreements should honour canonical Katakana i105 for counterparties"
+        "repo agreements should honour canonical I105 for counterparties"
     );
 
     let query_url = base.join("/v1/repo/agreements/query")?;
@@ -2292,7 +2292,7 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
         .expect("I105 query initiator literal must be present");
     assert_eq!(
         initiator, i105_alice,
-        "repo agreements query should honour canonical Katakana i105"
+        "repo agreements query should honour canonical I105"
     );
     let counterparty = entry
         .get("counterparty")
@@ -2300,7 +2300,7 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
         .expect("I105 query counterparty literal must be present");
     assert_eq!(
         counterparty, i105_bob,
-        "repo agreements query should honour canonical Katakana i105"
+        "repo agreements query should honour canonical I105"
     );
 
     Ok(())
@@ -2454,7 +2454,7 @@ async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
         .await?;
     assert!(
         formatted_resp.status().is_success(),
-        "kaigi relay detail with canonical Katakana i105 should succeed, got {}",
+        "kaigi relay detail with canonical I105 should succeed, got {}",
         formatted_resp.status()
     );
     let formatted_detail: norito::json::Value =
@@ -2467,7 +2467,7 @@ async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
         .ok_or_else(|| eyre!("formatted detail missing relay literal"))?;
     assert_eq!(
         relay_literal, seed.relay_i105,
-        "relay literal should honour canonical Katakana i105"
+        "relay literal should honour canonical I105"
     );
     let reported_by_literal = formatted_detail
         .get("reported_by")
@@ -2475,7 +2475,7 @@ async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
         .ok_or_else(|| eyre!("formatted detail missing reported_by literal"))?;
     assert_eq!(
         reported_by_literal, seed.reporter_i105,
-        "reported_by should honour canonical Katakana i105"
+        "reported_by should honour canonical I105"
     );
 
     Ok(())
@@ -2638,7 +2638,7 @@ async fn offline_allowances_query_emit_i105_literals() -> Result<()> {
         .await?;
     assert!(
         resp.status().is_success(),
-        "offline allowance query with canonical Katakana i105 should succeed, got {}",
+        "offline allowance query with canonical I105 should succeed, got {}",
         resp.status()
     );
     let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
@@ -2650,7 +2650,7 @@ async fn offline_allowances_query_emit_i105_literals() -> Result<()> {
         .ok_or_else(|| eyre!("offline allowance missing controller_display field"))?;
     assert_eq!(
         i105_display, seed.controller_i105,
-        "canonical Katakana i105 should rewrite controller_display"
+        "canonical I105 should rewrite controller_display"
     );
 
     Ok(())

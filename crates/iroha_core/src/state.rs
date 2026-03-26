@@ -1412,7 +1412,7 @@ pub struct World {
     /// Index from UAID to bound account (1:1).
     #[norito(skip)]
     pub(crate) uaid_accounts: Storage<UniversalAccountId, AccountId>,
-    /// Index from account alias to canonical Katakana i105 account id.
+    /// Index from account alias to canonical I105 account id.
     #[norito(skip)]
     pub(crate) account_aliases: Storage<AccountLabel, AccountId>,
     /// Index from opaque identifiers to UAIDs.
@@ -1821,7 +1821,7 @@ pub struct WorldBlock<'world> {
     pub(crate) domain_account_subjects: StorageBlock<'world, DomainId, BTreeSet<AccountId>>,
     /// Index from UAID to bound account (1:1).
     pub(crate) uaid_accounts: StorageBlock<'world, UniversalAccountId, AccountId>,
-    /// Index from account alias to canonical Katakana i105 account id.
+    /// Index from account alias to canonical I105 account id.
     pub(crate) account_aliases: StorageBlock<'world, AccountLabel, AccountId>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids: StorageBlock<'world, OpaqueAccountId, UniversalAccountId>,
@@ -2364,7 +2364,7 @@ pub struct WorldTransaction<'block, 'world> {
         StorageTransaction<'block, 'world, DomainId, BTreeSet<AccountId>>,
     /// Index from UAID to bound account (1:1).
     pub(crate) uaid_accounts: StorageTransaction<'block, 'world, UniversalAccountId, AccountId>,
-    /// Index from account alias to canonical Katakana i105 account id.
+    /// Index from account alias to canonical I105 account id.
     pub(crate) account_aliases: StorageTransaction<'block, 'world, AccountLabel, AccountId>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids:
@@ -2800,6 +2800,32 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self.smart_contract_state
     }
 
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Provides mutable access to account-alias bindings for tests and API scaffolding.
+    pub fn account_aliases_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<
+        'block,
+        'world,
+        iroha_data_model::account::rekey::AccountLabel,
+        iroha_data_model::account::AccountId,
+    > {
+        &mut self.account_aliases
+    }
+
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Provides mutable access to account rekey records for tests and API scaffolding.
+    pub fn account_rekey_records_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<
+        'block,
+        'world,
+        iroha_data_model::account::rekey::AccountLabel,
+        iroha_data_model::account::rekey::AccountRekeyRecord,
+    > {
+        &mut self.account_rekey_records
+    }
+
     /// Record that the given asset definition belongs to its domain.
     pub(crate) fn track_asset_definition_domain(&mut self, definition_id: &AssetDefinitionId) {
         if definition_id.is_opaque_canonical() {
@@ -3020,7 +3046,7 @@ pub struct WorldView<'world> {
     pub(crate) domain_account_subjects: StorageView<'world, DomainId, BTreeSet<AccountId>>,
     /// Index from UAID to bound account (1:1).
     pub(crate) uaid_accounts: StorageView<'world, UniversalAccountId, AccountId>,
-    /// Index from account alias to canonical Katakana i105 account id.
+    /// Index from account alias to canonical I105 account id.
     pub(crate) account_aliases: StorageView<'world, AccountLabel, AccountId>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids: StorageView<'world, OpaqueAccountId, UniversalAccountId>,

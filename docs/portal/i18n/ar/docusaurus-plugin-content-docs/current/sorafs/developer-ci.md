@@ -70,7 +70,7 @@ jobs:
             --manifest artifacts/site.manifest.to \
             --chunk-plan artifacts/site.plan.json \
             --torii-url "$TORII_URL" \
-            --authority <katakana-i105-account-id> \
+            --authority <i105-account-id> \
             --private-key "$IROHA_PRIVATE_KEY" \
             --summary-out artifacts/site.submit.json
       - name: Stream PoR proofs
@@ -124,7 +124,7 @@ sorafs:publish:
   image: rust:1.81
   script:
     - sorafs_cli manifest sign --manifest artifacts/site.manifest.to --bundle-out artifacts/site.manifest.bundle.json --signature-out artifacts/site.manifest.sig --identity-token-env SIGSTORE_ID_TOKEN
-    - sorafs_cli manifest submit --manifest artifacts/site.manifest.to --chunk-plan artifacts/site.plan.json --torii-url "$TORII_URL" --authority <katakana-i105-account-id> --private-key "$IROHA_PRIVATE_KEY" --summary-out artifacts/site.submit.json
+    - sorafs_cli manifest submit --manifest artifacts/site.manifest.to --chunk-plan artifacts/site.plan.json --torii-url "$TORII_URL" --authority <i105-account-id> --private-key "$IROHA_PRIVATE_KEY" --summary-out artifacts/site.submit.json
     - sorafs_cli proof verify --manifest artifacts/site.manifest.to --car artifacts/site.car --summary-out artifacts/site.verify.json
   artifacts:
     paths:

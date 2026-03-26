@@ -34,7 +34,7 @@ Analizador کو درج ذیل fila de encabezado درکار ہے (orden flexible
 |--------|----------|-------------|
 | `label` | Sí | Etiqueta solicitada (se aceptan mayúsculas y minúsculas mixtas; herramienta Norm v1 اور UTS-46 کے مطابق normalize کرتا ہے). |
 | `suffix_id` | Sí | Identificador de sufijo numérico (decimal یا `0x` hexadecimal). |
-| `owner` | Sí | AccountId string (domainless encoded literal; canonical Katakana i105 only; no `@<domain>` suffix). |
+| `owner` | Sí | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | Sí | Entero `1..=255`. |
 | `payment_asset_id` | Sí | Activo de liquidación (مثال `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Sí | Los enteros sin signo y las unidades nativas de activos representan کریں۔ |
@@ -73,9 +73,9 @@ Opciones clave:
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "<katakana-i105-account-id>",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"<katakana-i105-account-id>","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -84,7 +84,7 @@ Opciones clave:
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"<katakana-i105-account-id>",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -237,7 +237,7 @@ filtro کرتا ہے تاکہ auditores ایک CSV ejecutar پر taladro کر س
   referencias ubicación CSV کے resolución relativa ہوتی ہیں۔ Metadatos que no son objetos
   error de validación دیتا ہے۔
 - **Controladores:** خالی celdas `--default-controllers` کو honor کرتے ہیں۔ no propietario
-  actores کو delegado کرتے وقت listas de controladores explícitos دیں (مثال `<katakana-i105-account-id>;<katakana-i105-account-id>`)۔
+  actores کو delegado کرتے وقت listas de controladores explícitos دیں (مثال `<i105-account-id>;<i105-account-id>`)۔
 
 Números de fila contextuales de fallas کے ساتھ informe ہوتے ہیں (مثال
 `error: row 12 term_years must be between 1 and 255`). Errores de validación del script

@@ -26,7 +26,7 @@ class AccountIdLiteralTest {
             requireCanonicalI105Address("$address@hbl.dataspace", "accountId")
         }
         assertEquals(
-            "accountId must use canonical Katakana i105 encoded account without @domain",
+            "accountId must use canonical I105 encoded account without @domain",
             error.message,
         )
     }
@@ -39,7 +39,7 @@ class AccountIdLiteralTest {
             requireCanonicalI105Address(malformed, "accountId")
         }
         assertEquals(
-            "accountId must use a canonical Katakana i105 encoded account literal",
+            "accountId must use a canonical I105 encoded account literal",
             malformedError.message,
         )
 
@@ -47,7 +47,7 @@ class AccountIdLiteralTest {
             requireCanonicalI105Address(address.canonicalHex(), "accountId")
         }
         assertEquals(
-            "accountId must use a canonical Katakana i105 encoded account literal",
+            "accountId must use a canonical I105 encoded account literal",
             hexError.message,
         )
     }

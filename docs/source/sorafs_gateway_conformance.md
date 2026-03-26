@@ -150,7 +150,7 @@ is deterministic and cross-platform; it does not rely on bespoke tooling.
 
 You can generate the report/attestation bundle locally via `cargo xtask sorafs-gateway-attest`.
 The command accepts `--signing-key <path>` (hex-encoded private key),
-`--signer-account <<katakana-i105-account-id>>` (domainless encoded AccountId; `@domain` suffix rejected), and optional `--gateway <url>` plus `--out <dir>`.
+`--signer-account <<i105-account-id>>` (domainless encoded AccountId; `@domain` suffix rejected), and optional `--gateway <url>` plus `--out <dir>`.
 Artifacts default to `artifacts/sorafs_gateway_attest/`.
 
 By keeping the signing hook inside the harness binary, nightly CI runs can

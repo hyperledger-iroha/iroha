@@ -88,7 +88,7 @@ ivm_run target/quickstart/hello.to --args '{}'
 
 مع العقدة، ارسل bytecode المترجم إلى Torii باستخدام CLI. هوية التطوير التكتيكية التكتيكية من المفتاح العام في `defaults/client.toml`، لذلك تم تعريف الحساب:
 ```
-<katakana-i105-account-id>
+<i105-account-id>
 ```
 
 استخدم هذا الحل لتحسين عنوان URL الخاص بـ Torii ومعرف السلسلة ومفتاح التوقيع:
@@ -108,7 +108,7 @@ iroha --config defaults/client.toml \
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id <katakana-i105-account-id> \
+  --id <i105-account-id> \
   --key example | jq .
 ```يجب أن ترى الحمولة JSON المؤهلة على Norito:
 

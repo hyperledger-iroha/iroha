@@ -227,7 +227,7 @@ register_trigger wake {
 - `axt_descriptor(string|0xhex) -> AxtDescriptor*`
 - `asset_handle(string|0xhex) -> AssetHandle*`
 - `proof_blob(string|0xhex) -> ProofBlob*`Прелюдия макрос был конструкторҙар өсөн ҡыҫҡараҡ псевдоним һәм рәт-работ раҫлау тәьмин итә:
-- `account!("<katakana-i105-account-id>")`, `account_id!("<katakana-i105-account-id>")`
+- `account!("<i105-account-id>")`, `account_id!("<i105-account-id>")`
 - `asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`, `asset_id!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`
 - `domain!("wonderland")`, `domain_id!("wonderland")` XX
 - `name!("example")`

@@ -693,7 +693,7 @@ pub mod isi {
             .ok_or_else(|| {
                 InstructionExecutionError::InvariantViolation(
                     format!(
-                        "invalid {field_path} account literal `{raw}`: expected canonical Katakana i105 account id or on-chain alias"
+                        "invalid {field_path} account literal `{raw}`: expected canonical I105 account id or on-chain alias"
                     )
                     .into(),
                 )

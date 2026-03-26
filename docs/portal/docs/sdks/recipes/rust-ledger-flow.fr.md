@@ -32,8 +32,8 @@ Cette recette reflète le [parcours du registre via la CLI](../../norito/ledger-
    `defaults/client.toml`:
 
    ```bash
-   export ADMIN_ACCOUNT="<katakana-i105-account-id>"
-   export RECEIVER_ACCOUNT="<katakana-i105-account-id>"
+   export ADMIN_ACCOUNT="<i105-account-id>"
+   export RECEIVER_ACCOUNT="<i105-account-id>"
    export ADMIN_PRIVATE_KEY="802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
    ```
 
@@ -119,7 +119,7 @@ cargo run
 Vous devriez voir une sortie similaire à :
 
 ```
-<katakana-i105-account-id> now holds:
+<i105-account-id> now holds:
   50 units of 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 

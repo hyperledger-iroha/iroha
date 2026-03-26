@@ -19,9 +19,9 @@ Se você comentar um ponto de entrada Kotodama, poderá acessar a instrução `t
 
 ## Parcours du registre
 
-- Aprovar a autoridade do contrato (por exemplo `<katakana-i105-account-id>`) com o ato de transferência e conceder a função `CanTransfer` ou uma permissão equivalente.
-- Ligue para o ponto de entrada `call_transfer_asset` para transferir 5 unidades da conta do contrato para `<katakana-i105-account-id>`, de modo que a maneira como a automatização na cadeia não pode encapsular as chamadas em casa.
-- Verifique as vendas via `FindAccountAssets` ou `iroha_cli ledger assets list --account <katakana-i105-account-id>` e inspecione os eventos para confirmar que o acúmulo de metadonos foi publicado no contexto da transferência.
+- Aprovar a autoridade do contrato (por exemplo `<i105-account-id>`) com o ato de transferência e conceder a função `CanTransfer` ou uma permissão equivalente.
+- Ligue para o ponto de entrada `call_transfer_asset` para transferir 5 unidades da conta do contrato para `<i105-account-id>`, de modo que a maneira como a automatização na cadeia não pode encapsular as chamadas em casa.
+- Verifique as vendas via `FindAccountAssets` ou `iroha_cli ledger assets list --account <i105-account-id>` e inspecione os eventos para confirmar que o acúmulo de metadonos foi publicado no contexto da transferência.
 
 ## Guias SDK associados
 
@@ -36,8 +36,8 @@ Se você comentar um ponto de entrada Kotodama, poderá acessar a instrução `t
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("<katakana-i105-account-id>"),
-      account!("<katakana-i105-account-id>"),
+      account!("<i105-account-id>"),
+      account!("<i105-account-id>"),
       asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );

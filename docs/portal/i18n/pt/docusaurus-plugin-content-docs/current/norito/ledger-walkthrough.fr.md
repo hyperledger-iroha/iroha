@@ -30,8 +30,8 @@ IDs de conta que você usará. Le bundle par defaut inclut deja deux comptes
 emite as fichas de demonstração:
 
 ```sh
-export ADMIN_ACCOUNT="<katakana-i105-account-id>"
-export RECEIVER_ACCOUNT="<katakana-i105-account-id>"
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 Confirme os valores na lista das principais contas:

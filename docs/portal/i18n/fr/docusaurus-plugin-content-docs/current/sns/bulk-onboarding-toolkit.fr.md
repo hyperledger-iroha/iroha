@@ -34,7 +34,7 @@ L'analyseur exige la ligne d'en-tête suivante (l'ordre est flexible) :| Colonn
 |---------|--------|-------------|
 | `label` | Oui | Libelle demande (casse mixte acceptée; l'outil normalise selon Norm v1 et UTS-46). |
 | `suffix_id` | Oui | Identifiant numérique de suffixe (décimal ou `0x` hex). |
-| `owner` | Oui | AccountId string (domainless encoded literal; canonical Katakana i105 only; no `@<domain>` suffix). |
+| `owner` | Oui | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | Oui | Entier `1..=255`. |
 | `payment_asset_id` | Oui | Actif de règlement (par exemple `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Oui | Entiers non signes représentant des unités natives de l'actif. |
@@ -73,9 +73,9 @@ En cas de succès, le script écrit un manifeste agrégé :
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "<katakana-i105-account-id>",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"<katakana-i105-account-id>","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -84,7 +84,7 @@ En cas de succès, le script écrit un manifeste agrégé :
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"<katakana-i105-account-id>",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -241,7 +241,7 @@ les auditeurs peuvent se concentrer sur une seule exécution CSV.
   les références aux fichiers sont résolues relativement à l'emplacement du CSV.
   Les métadonnées non objet produisent une erreur de validation.
 - **Contrôleurs :** les cellules vides respectent `--default-controllers`. Fournissez
-  des listes explicites (par exemple `<katakana-i105-account-id>;<katakana-i105-account-id>`) quand vous déléguez à des
+  des listes explicites (par exemple `<i105-account-id>;<i105-account-id>`) quand vous déléguez à des
   acteurs non propriétaire.
 
 Les échecs sont des signaux avec des numéros de ligne contextuels (par exemple

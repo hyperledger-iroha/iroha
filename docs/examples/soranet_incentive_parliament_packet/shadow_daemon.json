@@ -2,32 +2,32 @@
   "relays": [
     {
       "relay_id": "1111111111111111111111111111111111111111111111111111111111111111",
-      "beneficiary": "<katakana-i105-account-id>",
+      "beneficiary": "<i105-account-id>",
       "bond_path": "artifacts/incentives/bonds/relay-1111.to"
     },
     {
       "relay_id": "2222222222222222222222222222222222222222222222222222222222222222",
-      "beneficiary": "<katakana-i105-account-id>",
+      "beneficiary": "<i105-account-id>",
       "bond_path": "artifacts/incentives/bonds/relay-2222.to"
     },
     {
       "relay_id": "3333333333333333333333333333333333333333333333333333333333333333",
-      "beneficiary": "<katakana-i105-account-id>",
+      "beneficiary": "<i105-account-id>",
       "bond_path": "artifacts/incentives/bonds/relay-3333.to"
     },
     {
       "relay_id": "4444444444444444444444444444444444444444444444444444444444444444",
-      "beneficiary": "<katakana-i105-account-id>",
+      "beneficiary": "<i105-account-id>",
       "bond_path": "artifacts/incentives/bonds/relay-4444.to"
     },
     {
       "relay_id": "5555555555555555555555555555555555555555555555555555555555555555",
-      "beneficiary": "<katakana-i105-account-id>",
+      "beneficiary": "<i105-account-id>",
       "bond_path": "artifacts/incentives/bonds/relay-5555.to"
     },
     {
       "relay_id": "6666666666666666666666666666666666666666666666666666666666666666",
-      "beneficiary": "<katakana-i105-account-id>",
+      "beneficiary": "<i105-account-id>",
       "bond_path": "artifacts/incentives/bonds/relay-6666.to"
     }
   ]

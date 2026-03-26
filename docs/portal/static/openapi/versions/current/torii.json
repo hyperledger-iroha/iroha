@@ -1311,7 +1311,7 @@
             "type": "string"
           },
           "relay_id": {
-            "description": "Relay account identifier rendered as canonical Katakana i105 literal.",
+            "description": "Relay account identifier rendered as canonical I105 literal.",
             "type": "string"
           },
           "reported_at_ms": {
@@ -1969,7 +1969,7 @@
             "type": "string"
           },
           "controller_display": {
-            "description": "Controller rendered as canonical Katakana i105 account literal.",
+            "description": "Controller rendered as canonical I105 account literal.",
             "type": "string"
           },
           "controller_id": {
@@ -1977,7 +1977,7 @@
             "type": "string"
           },
           "deposit_account_display": {
-            "description": "Deposit account rendered as canonical Katakana i105 account literal.",
+            "description": "Deposit account rendered as canonical I105 account literal.",
             "type": "string"
           },
           "deposit_account_id": {
@@ -2006,7 +2006,7 @@
             "type": "integer"
           },
           "receiver_display": {
-            "description": "Receiver rendered as canonical Katakana i105 account literal.",
+            "description": "Receiver rendered as canonical I105 account literal.",
             "type": "string"
           },
           "receiver_id": {
@@ -2361,11 +2361,11 @@
             "type": "array"
           },
           "staker": {
-            "description": "Staker account literal rendered as canonical Katakana i105.",
+            "description": "Staker account literal rendered as canonical I105.",
             "type": "string"
           },
           "validator": {
-            "description": "Validator account literal rendered as canonical Katakana i105.",
+            "description": "Validator account literal rendered as canonical I105.",
             "type": "string"
           }
         },
@@ -2477,7 +2477,7 @@
             "type": "string"
           },
           "validator": {
-            "description": "Validator account literal rendered as canonical Katakana i105.",
+            "description": "Validator account literal rendered as canonical I105.",
             "type": "string"
           }
         },
@@ -2538,7 +2538,7 @@
         "additionalProperties": false,
         "properties": {
           "account_id": {
-            "description": "Account selector for the device owner (canonical Katakana i105 or on-chain alias `name@domain.dataspace` / `name@dataspace`); registrations are stored against the resolved canonical Katakana i105 account id.",
+            "description": "Account selector for the device owner (canonical I105 or on-chain alias `name@domain.dataspace` / `name@dataspace`); registrations are stored against the resolved canonical I105 account id.",
             "type": "string"
           },
           "platform": {
@@ -3907,7 +3907,7 @@
     },
     "/v1/accounts": {
       "get": {
-        "description": "List accounts visible to the caller. `id` filters accept canonical Katakana i105 account ids or on-chain aliases in `name@domain.dataspace` / `name@dataspace` form; responses always render canonical Katakana i105 account ids.",
+        "description": "List accounts visible to the caller. `id` filters accept canonical I105 account ids or on-chain aliases in `name@domain.dataspace` / `name@dataspace` form; responses always render canonical I105 account ids.",
         "responses": {
           "200": {
             "content": {
@@ -4011,7 +4011,7 @@
     },
     "/v1/accounts/query": {
       "post": {
-        "description": "Query accounts with JSON envelope. `id` filters accept canonical Katakana i105 account ids or on-chain aliases in `name@domain.dataspace` / `name@dataspace` form; responses always render canonical Katakana i105 account ids.",
+        "description": "Query accounts with JSON envelope. `id` filters accept canonical I105 account ids or on-chain aliases in `name@domain.dataspace` / `name@dataspace` form; responses always render canonical I105 account ids.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -4045,7 +4045,7 @@
         "description": "List assets held by an account (supports pagination plus optional `asset` and `scope` filtering).",
         "parameters": [
           {
-            "description": "Canonical Katakana i105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
+            "description": "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
             "in": "path",
             "name": "account_id",
             "required": true,
@@ -4115,7 +4115,7 @@
         "description": "Query assets held by an account.",
         "parameters": [
           {
-            "description": "Canonical Katakana i105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
+            "description": "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
             "in": "path",
             "name": "account_id",
             "required": true,
@@ -4199,7 +4199,7 @@
         "description": "List permissions granted to an account.",
         "parameters": [
           {
-            "description": "Canonical Katakana i105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
+            "description": "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
             "in": "path",
             "name": "account_id",
             "required": true,
@@ -4231,7 +4231,7 @@
         "description": "List transactions authored by an account (supports pagination and optional asset_id filtering).",
         "parameters": [
           {
-            "description": "Canonical Katakana i105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
+            "description": "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
             "in": "path",
             "name": "account_id",
             "required": true,
@@ -4292,7 +4292,7 @@
         "description": "Query transactions for a specific account.",
         "parameters": [
           {
-            "description": "Canonical Katakana i105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
+            "description": "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
             "in": "path",
             "name": "account_id",
             "required": true,
@@ -4737,7 +4737,7 @@
             }
           },
           {
-            "description": "Filter holders by canonical Katakana i105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
+            "description": "Filter holders by canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
             "in": "query",
             "name": "account_id",
             "required": false,
@@ -4775,7 +4775,7 @@
     },
     "/v1/assets/{definition_id}/holders/query": {
       "post": {
-        "description": "Query holders for an asset definition. `account_id` filters accept canonical Katakana i105 account ids or on-chain aliases in `name@domain.dataspace` / `name@dataspace` form.",
+        "description": "Query holders for an asset definition. `account_id` filters accept canonical I105 account ids or on-chain aliases in `name@domain.dataspace` / `name@dataspace` form.",
         "parameters": [
           {
             "description": "Asset selector (unprefixed Base58 id or alias).",
@@ -5854,7 +5854,7 @@
         "description": "Fetch account detail for explorer usage.",
         "parameters": [
           {
-            "description": "Canonical Katakana i105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
+            "description": "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
             "in": "path",
             "name": "account_id",
             "required": true,
@@ -5886,7 +5886,7 @@
         "description": "Return a QR code for the account identifier.",
         "parameters": [
           {
-            "description": "Canonical Katakana i105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
+            "description": "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
             "in": "path",
             "name": "account_id",
             "required": true,
@@ -6056,7 +6056,7 @@
             }
           },
           {
-            "description": "Filter assets by account owner (accepts canonical Katakana i105 account literals or on-chain aliases `name@domain.dataspace` / `name@dataspace`).",
+            "description": "Filter assets by account owner (accepts canonical I105 account literals or on-chain aliases `name@domain.dataspace` / `name@dataspace`).",
             "in": "query",
             "name": "owned_by",
             "required": false,
@@ -6285,7 +6285,7 @@
             }
           },
           {
-            "description": "Filter instructions by authority account (accepts canonical Katakana i105 account literals or on-chain aliases `name@domain.dataspace` / `name@dataspace`).",
+            "description": "Filter instructions by authority account (accepts canonical I105 account literals or on-chain aliases `name@domain.dataspace` / `name@dataspace`).",
             "in": "query",
             "name": "authority",
             "required": false,
@@ -6294,7 +6294,7 @@
             }
           },
           {
-            "description": "Filter instructions by referenced account (transfer participants, asset-owner scoped mint/burn/asset-metadata updates, multisig accounts, and public-lane reward assets; accepts canonical Katakana i105 account literals or on-chain aliases `name@domain.dataspace` / `name@dataspace`).",
+            "description": "Filter instructions by referenced account (transfer participants, asset-owner scoped mint/burn/asset-metadata updates, multisig accounts, and public-lane reward assets; accepts canonical I105 account literals or on-chain aliases `name@domain.dataspace` / `name@dataspace`).",
             "in": "query",
             "name": "account",
             "required": false,
@@ -6582,7 +6582,7 @@
             }
           },
           {
-            "description": "Filter transactions by authority account (accepts canonical Katakana i105 account literals or on-chain aliases `name@domain.dataspace` / `name@dataspace`).",
+            "description": "Filter transactions by authority account (accepts canonical I105 account literals or on-chain aliases `name@domain.dataspace` / `name@dataspace`).",
             "in": "query",
             "name": "authority",
             "required": false,
@@ -7603,7 +7603,7 @@
         "operationId": "kaigiRelayDetail",
         "parameters": [
           {
-            "description": "Relay account identifier encoded as a canonical Katakana i105 account literal or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
+            "description": "Relay account identifier encoded as a canonical I105 account literal or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
             "in": "path",
             "name": "relay_id",
             "required": true,
@@ -8193,11 +8193,11 @@
     },
     "/v1/nexus/dataspaces/accounts/{literal}/summary": {
       "get": {
-        "description": "Resolves the supplied canonical Katakana i105 account literal or on-chain alias and returns a joined view of UAID bindings, space-directory manifests, portfolio counters, and per-dataspace consensus commitments.",
+        "description": "Resolves the supplied canonical I105 account literal or on-chain alias and returns a joined view of UAID bindings, space-directory manifests, portfolio counters, and per-dataspace consensus commitments.",
         "operationId": "nexusDataspacesAccountSummary",
         "parameters": [
           {
-            "description": "Account literal to resolve (canonical Katakana i105 or on-chain alias `name@domain.dataspace` / `name@dataspace`).",
+            "description": "Account literal to resolve (canonical I105 or on-chain alias `name@domain.dataspace` / `name@dataspace`).",
             "in": "path",
             "name": "literal",
             "required": true,
@@ -8277,7 +8277,7 @@
     },
     "/v1/nexus/public_lanes/{lane_id}/rewards/pending": {
       "get": {
-        "description": "Returns the unclaimed reward amount per asset for the requested account in the given public lane. Requires an `account` query parameter (canonical Katakana i105 or on-chain alias `name@domain.dataspace` / `name@dataspace`) and accepts optional `asset_id` and `upto_epoch` filters.",
+        "description": "Returns the unclaimed reward amount per asset for the requested account in the given public lane. Requires an `account` query parameter (canonical I105 or on-chain alias `name@domain.dataspace` / `name@dataspace`) and accepts optional `asset_id` and `upto_epoch` filters.",
         "operationId": "nexusPublicLaneRewards",
         "parameters": [
           {
@@ -8291,7 +8291,7 @@
             }
           },
           {
-            "description": "Account literal to evaluate pending rewards for (canonical Katakana i105 or on-chain alias `name@domain.dataspace` / `name@dataspace`).",
+            "description": "Account literal to evaluate pending rewards for (canonical I105 or on-chain alias `name@domain.dataspace` / `name@dataspace`).",
             "in": "query",
             "name": "account",
             "required": false,
@@ -8363,7 +8363,7 @@
             }
           },
           {
-            "description": "Optional validator account literal to filter stake entries (canonical Katakana i105 or on-chain alias `name@domain.dataspace` / `name@dataspace`).",
+            "description": "Optional validator account literal to filter stake entries (canonical I105 or on-chain alias `name@domain.dataspace` / `name@dataspace`).",
             "in": "query",
             "name": "validator",
             "required": false,
@@ -8689,7 +8689,7 @@
             }
           },
           {
-            "description": "Filter bundles by originating controller account (accepts canonical Katakana i105 account literals or on-chain aliases `name@domain.dataspace` / `name@dataspace`).",
+            "description": "Filter bundles by originating controller account (accepts canonical I105 account literals or on-chain aliases `name@domain.dataspace` / `name@dataspace`).",
             "in": "query",
             "name": "controller_id",
             "required": false,
@@ -8698,7 +8698,7 @@
             }
           },
           {
-            "description": "Filter bundles by receiver account (accepts canonical Katakana i105 account literals or on-chain aliases `name@domain.dataspace` / `name@dataspace`).",
+            "description": "Filter bundles by receiver account (accepts canonical I105 account literals or on-chain aliases `name@domain.dataspace` / `name@dataspace`).",
             "in": "query",
             "name": "receiver_id",
             "required": false,
@@ -8707,7 +8707,7 @@
             }
           },
           {
-            "description": "Filter bundles by deposit account (accepts canonical Katakana i105 account literals or on-chain aliases `name@domain.dataspace` / `name@dataspace`).",
+            "description": "Filter bundles by deposit account (accepts canonical I105 account literals or on-chain aliases `name@domain.dataspace` / `name@dataspace`).",
             "in": "query",
             "name": "deposit_account_id",
             "required": false,
@@ -11671,7 +11671,7 @@
         "description": "List subscriptions with optional filters.",
         "parameters": [
           {
-            "description": "Filter subscriptions by subscriber account id (canonical Katakana i105 or on-chain alias `name@domain.dataspace` / `name@dataspace`).",
+            "description": "Filter subscriptions by subscriber account id (canonical I105 or on-chain alias `name@domain.dataspace` / `name@dataspace`).",
             "in": "query",
             "name": "owned_by",
             "required": false,
@@ -11680,7 +11680,7 @@
             }
           },
           {
-            "description": "Filter subscriptions by provider account id (canonical Katakana i105 or on-chain alias `name@domain.dataspace` / `name@dataspace`).",
+            "description": "Filter subscriptions by provider account id (canonical I105 or on-chain alias `name@domain.dataspace` / `name@dataspace`).",
             "in": "query",
             "name": "provider",
             "required": false,
@@ -11741,7 +11741,7 @@
         "description": "List subscription plans by provider.",
         "parameters": [
           {
-            "description": "Filter plans by provider account id (canonical Katakana i105 or on-chain alias `name@domain.dataspace` / `name@dataspace`).",
+            "description": "Filter plans by provider account id (canonical I105 or on-chain alias `name@domain.dataspace` / `name@dataspace`).",
             "in": "query",
             "name": "provider",
             "required": false,

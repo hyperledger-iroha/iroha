@@ -23,7 +23,7 @@ string matching.
 - `ERR_INVALID_STRING` — empty or whitespace-only string input.
 - `ERR_INVALID_HEX` — malformed or odd-length hexadecimal strings.
 - `ERR_INVALID_MULTIHASH` — multihash parsing failed.
-- `ERR_INVALID_ACCOUNT_ID` — account identifiers are not canonical Katakana i105 account literals. Domain suffixes (`@domain`), canonical hex, `uaid:`, and `opaque:` forms are rejected.
+- `ERR_INVALID_ACCOUNT_ID` — account identifiers are not canonical I105 account literals. Domain suffixes (`@domain`), canonical hex, `uaid:`, and `opaque:` forms are rejected.
 - `ERR_INVALID_ASSET_ID` — public asset identifiers must be canonical bare Base58 asset ids. Asset aliases (`name#dataspace` / `name#domain.dataspace`) and internal asset-holding ids are rejected here.
 - `ERR_INVALID_IBAN` — IBAN parsing/normalization failed (bad country code, length, or checksum).
 - `ERR_INVALID_OBJECT` — unexpected object shape or missing required keys.
@@ -54,7 +54,7 @@ try {
 } catch (error) {
   if (error instanceof ValidationError) {
     if (error.code === ValidationErrorCode.INVALID_ACCOUNT_ID) {
-      console.error("Account IDs must be canonical Katakana i105 literals only (no @domain suffix)", {
+      console.error("Account IDs must be canonical I105 literals only (no @domain suffix)", {
         field: error.path,
         cause: error.cause,
       });

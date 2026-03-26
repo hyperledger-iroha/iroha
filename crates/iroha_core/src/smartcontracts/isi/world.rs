@@ -2325,12 +2325,12 @@ pub mod isi {
                                 iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
                                     iroha_data_model::events::data::governance::GovernanceBallotRejected {
                                         referendum_id: self.election_id.clone(),
-                                        reason: "owner must be a canonical Katakana i105 account id".into(),
+                                        reason: "owner must be a canonical I105 account id".into(),
                                 },
                             ),
                         ));
                         InstructionExecutionError::InvariantViolation(
-                            "owner must be a canonical Katakana i105 account id".into(),
+                            "owner must be a canonical I105 account id".into(),
                         )
                     })?;
                         let owner_str = owner_str_raw.trim();
@@ -2339,12 +2339,12 @@ pub mod isi {
                                 iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
                                     iroha_data_model::events::data::governance::GovernanceBallotRejected {
                                         referendum_id: self.election_id.clone(),
-                                        reason: "owner must use canonical Katakana i105 account id form".into(),
+                                        reason: "owner must use canonical I105 account id form".into(),
                                     },
                                 ),
                             ));
                             return Err(InstructionExecutionError::InvariantViolation(
-                                "owner must use canonical Katakana i105 account id form".into(),
+                                "owner must use canonical I105 account id form".into(),
                             ));
                         }
 
@@ -2357,12 +2357,12 @@ pub mod isi {
                                 iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
                                     iroha_data_model::events::data::governance::GovernanceBallotRejected {
                                         referendum_id: self.election_id.clone(),
-                                        reason: "owner must be a canonical Katakana i105 account id".into(),
+                                        reason: "owner must be a canonical I105 account id".into(),
                                     },
                                 ),
                             ));
                             InstructionExecutionError::InvariantViolation(
-                                "owner must be a canonical Katakana i105 account id".into(),
+                                "owner must be a canonical I105 account id".into(),
                             )
                         })?;
                         if owner_parsed.to_string() != owner_str {
@@ -2370,12 +2370,12 @@ pub mod isi {
                                 iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
                                     iroha_data_model::events::data::governance::GovernanceBallotRejected {
                                         referendum_id: self.election_id.clone(),
-                                        reason: "owner must use canonical Katakana i105 account id form".into(),
+                                        reason: "owner must use canonical I105 account id form".into(),
                                     },
                                 ),
                             ));
                             return Err(InstructionExecutionError::InvariantViolation(
-                                "owner must use canonical Katakana i105 account id form".into(),
+                                "owner must use canonical I105 account id form".into(),
                             ));
                         }
                         if lock_owner.is_none() {

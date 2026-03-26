@@ -19,7 +19,7 @@ translation_last_reviewed: 2026-02-07
 
 ## Roteiro do livro razao
 
-- ضمان أن تعريف NFT (على سبيل المثال `n0#wonderland`) موجود جنبًا إلى جنب مع حسابات التبرع/الوجهة المستخدمة (`<katakana-i105-account-id>`، `<katakana-i105-account-id>`).
+- ضمان أن تعريف NFT (على سبيل المثال `n0#wonderland`) موجود جنبًا إلى جنب مع حسابات التبرع/الوجهة المستخدمة (`<i105-account-id>`، `<i105-account-id>`).
 - قم باستدعاء نقطة الدخول `nft_issue_and_transfer` لإنشاء NFT، ونقل Alice إلى Bob، وإدخال مجموعة من البيانات التي تكتشفها.
 - فحص حالة كتاب NFT مع `iroha_cli ledger nfts list --account <id>` أو ما يعادلها من SDK للتحقق من النقل، بعد التأكد من القيام بالمهمة وإزالتها عند تلقي تعليمات هذا الأمر.
 
@@ -35,11 +35,11 @@ translation_last_reviewed: 2026-02-07
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
 seiyaku NftFlow {
   kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
-    let owner = account!("<katakana-i105-account-id>");
+    let owner = account!("<i105-account-id>");
     let nft = nft_id!("n0$wonderland");
     nft_mint_asset(nft, owner);
 
-    let to = account!("<katakana-i105-account-id>");
+    let to = account!("<i105-account-id>");
     nft_transfer_asset(owner, nft, to);
     nft_set_metadata(nft, json!{ issued: "demo" });
     nft_burn_asset(nft);

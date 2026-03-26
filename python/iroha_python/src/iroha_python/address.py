@@ -21,7 +21,7 @@ CHAIN_DISCRIMINANT_SORA = DEFAULT_CHAIN_DISCRIMINANT
 CHAIN_DISCRIMINANT_TEST = 0x0171
 CHAIN_DISCRIMINANT_DEV = 0x0000
 I105_WARNING = (
-    "i105 addresses use the canonical Katakana i105 alphabet: Base58 plus the 47 "
+    "i105 addresses use the canonical I105 alphabet: Base58 plus the 47 "
     "katakana from the Iroha poem. Render and validate them with the intended "
     "chain discriminant."
 )
@@ -361,7 +361,7 @@ class AccountAddress:
         address = cls.from_canonical_bytes(payload)
         discriminant = i105_discriminant_from_sentinel(literal)
         if discriminant is not None and address.to_i105(discriminant) != literal:
-            raise AccountAddressError("account address literals must use canonical Katakana i105 form")
+            raise AccountAddressError("account address literals must use canonical I105 form")
         return address
 
     @classmethod

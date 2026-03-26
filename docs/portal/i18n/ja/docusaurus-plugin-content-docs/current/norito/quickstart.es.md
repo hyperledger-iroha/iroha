@@ -90,7 +90,7 @@ ivm_run target/quickstart/hello.to --args '{}'
 
 ノードを修正し、Torii を使用して CLI を使用してバイトコードをコンパイルします。 `defaults/client.toml` で公開されているクラーベの情報の欠陥を特定し、ID を確認します
 ```
-<katakana-i105-account-id>
+<i105-account-id>
 ```
 
 Torii の URL、クラベのチェーン ID での管理のアーカイブの使用:
@@ -110,7 +110,7 @@ CLI に関する米国のミスモ パーフィルとアカウント詳細の確
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id <katakana-i105-account-id> \
+  --id <i105-account-id> \
   --key example | jq .
 ```
 

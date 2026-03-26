@@ -19,7 +19,7 @@ const I105_SENTINEL_NUMERIC_PREFIX_FULLWIDTH = "ｎ";
 const I105_CHECKSUM_LEN = 6;
 const BECH32M_CONST = 0x2bc830a3;
 const I105_WARNING =
-  "i105 addresses use the canonical Katakana i105 alphabet: Base58 plus the 47 katakana from the Iroha poem. Render and validate them with the intended chain discriminant.";
+  "i105 addresses use the canonical I105 alphabet: Base58 plus the 47 katakana from the Iroha poem. Render and validate them with the intended chain discriminant.";
 
 const MULTISIG_DIGEST_PERSONALIZATION = (() => {
   const bytes = new Uint8Array(16);
@@ -1035,13 +1035,13 @@ export class AccountAddress {
     if (trimmed.includes("@")) {
       throw new AccountAddressError(
         AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
-        "account address literals must not include '@domain'; use canonical Katakana i105 form",
+        "account address literals must not include '@domain'; use canonical I105 form",
       );
     }
     if (isCanonicalHexLiteral(trimmed)) {
       throw new AccountAddressError(
         AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
-        "canonical hex account addresses are not accepted; use canonical Katakana i105 form",
+        "canonical hex account addresses are not accepted; use canonical I105 form",
       );
     }
     try {
@@ -1102,7 +1102,7 @@ export class AccountAddress {
   }
 
   /**
-   * Convenience helper that returns canonical Katakana i105 plus chain discriminant metadata.
+   * Convenience helper that returns canonical I105 plus chain discriminant metadata.
    *
    * @param {number|bigint|string} chainDiscriminant - Chain discriminant (defaults to Sora `753`);
    * accepts numeric strings that will be normalized.
@@ -1156,7 +1156,7 @@ function assertCanonicalI105Literal(input, address) {
   if (address.toI105(discriminant) !== input) {
     throw new AccountAddressError(
       AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
-      "account address literals must use canonical Katakana i105 form",
+      "account address literals must use canonical I105 form",
     );
   }
 }
@@ -1353,9 +1353,9 @@ function classifyDetectedFormat(literal, inputKind, chainDiscriminant) {
 }
 
 /**
- * Inspect an account-id literal (canonical Katakana i105) and emit canonical encodings.
+ * Inspect an account-id literal (canonical I105) and emit canonical encodings.
  *
- * @param {string} literal - Account literal (canonical Katakana i105)
+ * @param {string} literal - Account literal (canonical I105)
  * @param {{ chainDiscriminant?: number, expectDiscriminant?: number }} [options]
  * @returns {{
  *   detectedFormat: { kind: string, chainDiscriminant?: number },

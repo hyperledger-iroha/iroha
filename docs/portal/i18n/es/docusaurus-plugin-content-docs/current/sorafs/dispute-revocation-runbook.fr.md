@@ -67,7 +67,7 @@ Este runbook guía a los operadores de gobierno en la creación de litigios de c
      --base64-out=dispute.b64 \
      --json-out=dispute_summary.json \
      --request-out=dispute_request.json \
-     --authority=<katakana-i105-account-id> \
+     --authority=<i105-account-id> \
      --private-key=ed25519:<key>
    ```
 

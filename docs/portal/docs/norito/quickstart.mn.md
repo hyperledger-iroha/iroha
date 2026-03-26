@@ -107,7 +107,7 @@ ABI толгой хэсэг, онцлог битүүд болон экспорт
 Өгөгдмөл хөгжүүлэлтийн таних тэмдэг нь нийтийн түлхүүрээс үүсэлтэй
 `defaults/client.toml` тул дансны ID нь байна
 ```
-<katakana-i105-account-id>
+<i105-account-id>
 ```
 
 Torii URL, гинжин ID болон гарын үсэг зурах түлхүүрийг оруулахын тулд тохиргооны файлыг ашиглана уу:
@@ -129,7 +129,7 @@ syscall эсвэл хийсэн гүйлгээний хэшийн CLI гарал
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id <katakana-i105-account-id> \
+  --id <i105-account-id> \
   --key example | jq .
 ```
 

@@ -53,7 +53,7 @@ abuse resistance before enabling automation.
    JSON as described in the shadow-run report. Confirm the embedded
    `report_metadata.git_revision` matches the commit under review.
 3. **Config sanity** - run
-   `iroha app sorafs incentives service init --state /tmp/incentives-test.json --config docs/examples/soranet_incentive_parliament_packet/reward_config.json --treasury-account <katakana-i105-account-id> --force`
+   `iroha app sorafs incentives service init --state /tmp/incentives-test.json --config docs/examples/soranet_incentive_parliament_packet/reward_config.json --treasury-account <i105-account-id> --force`
    (then delete the temporary file) to ensure the reward configuration parses
    and passes calculator invariants.
 4. **Replay confirmation** - execute

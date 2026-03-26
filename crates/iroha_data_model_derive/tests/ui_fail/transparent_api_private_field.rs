@@ -19,7 +19,7 @@ mod account {
 
 fn main() {
     let account_id: AccountId =
-        "<katakana-i105-account-id>"
+        "<i105-account-id>"
             .parse()
             .unwrap();
     println!("ID: {}", account_id.signatory);

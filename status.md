@@ -65,7 +65,7 @@ Last updated: 2026-03-26
   - shared account-address fixtures now derive every positive I105 sample from
     the canonical bytes using the live encoder, so multisig vectors no longer
     carry stale checksum-broken literals;
-  - first-party docs/examples/tests now use the same canonical katakana-I105
+  - first-party docs/examples/tests now use the same canonical I105
     account ids as the current codecs instead of old ASCII-corrupted samples or
     unsupported-kana placeholder strings;
   - the JS source tests now match the current encoder output; and

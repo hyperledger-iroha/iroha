@@ -71,7 +71,7 @@ Você pode usar o CLI کے ذریعے اسے نوڈ پر ڈپلائے کریں۔
 
 ```sh
 iroha_cli app contracts deploy \
-  --authority <katakana-i105-account-id> \
+  --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
 ```

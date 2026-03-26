@@ -88,7 +88,7 @@ Runner `info("Hello from Kotodama")` est un appel système moqué par un hôte m
 
 Il s'agit d'un bytecode et d'une CLI en Torii. L'identité de développement `defaults/client.toml` contient une clé publique et un identifiant de compte :
 ```
-<katakana-i105-account-id>
+<i105-account-id>
 ```Torii URL, ID de chaîne et clé de signature pour la configuration de la configuration :
 
 ```sh
@@ -106,7 +106,7 @@ La CLI fournit des informations sur les détails du compte et les détails du co
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id <katakana-i105-account-id> \
+  --id <i105-account-id> \
   --key example | jq .
 ```
 

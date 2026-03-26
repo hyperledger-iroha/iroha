@@ -25,8 +25,8 @@ conta que voce planeja usar. O bundle padrao ja inclui duas contas derivadas das
 chaves de demo:
 
 ```sh
-export ADMIN_ACCOUNT="<katakana-i105-account-id>"
-export RECEIVER_ACCOUNT="<katakana-i105-account-id>"
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 Confirme os valores listando as primeiras contas:

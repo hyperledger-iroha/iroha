@@ -19,9 +19,9 @@ translation_last_reviewed: 2026-02-07
 
 ## ليجر واک تھرو
 
-- هذا هو التطبيق المنزلي (مثل `<katakana-i105-account-id>`) الموجود، وهو عبارة عن SDK Quickstart وهو عبارة عن رحلة مستمرة.
+- هذا هو التطبيق المنزلي (مثل `<i105-account-id>`) الموجود، وهو عبارة عن SDK Quickstart وهو عبارة عن رحلة مستمرة.
 - `register_and_mint` بطاقة ائتمان عبر الإنترنت من ROSE وهي عبارة عن أثاث من إيفينشن وأليس 250 يونيو.
-- `client.request(FindAccountAssets)` أو `iroha_cli ledger assets list --account <katakana-i105-account-id>` هو ذريعة واحدة لفحص كريات الدم البيضاء.
+- `client.request(FindAccountAssets)` أو `iroha_cli ledger assets list --account <i105-account-id>` هو ذريعة واحدة لفحص كريات الدم البيضاء.
 
 ## مواضيع ذات صلة SDK
 
@@ -43,7 +43,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("<katakana-i105-account-id>");
+    let to = account!("<i105-account-id>");
     let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     mint_asset(to, asset, 250);
   }

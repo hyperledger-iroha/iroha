@@ -19,9 +19,9 @@ source : crates/ivm/docs/examples/13_register_and_mint.ko
 
 ## لیجر واک تھرو
 
-- Téléchargez le guide de démarrage rapide du SDK (`<katakana-i105-account-id>`) pour démarrer rapidement le SDK. عکاسی کرتا ہے۔
+- Téléchargez le guide de démarrage rapide du SDK (`<i105-account-id>`) pour démarrer rapidement le SDK. عکاسی کرتا ہے۔
 - `register_and_mint` انٹری پوائنٹ کال کریں تاکہ ROSE اثاثہ ڈیفینیشن بنے اور ایک ہی ٹرانزیکشن Alice a 250 ans d'argent
-- `client.request(FindAccountAssets)` et `iroha_cli ledger assets list --account <katakana-i105-account-id>` sont en cours de mise à jour en cas de problème. ہو۔
+- `client.request(FindAccountAssets)` et `iroha_cli ledger assets list --account <i105-account-id>` sont en cours de mise à jour en cas de problème. ہو۔
 
 ## Utiliser le SDK
 
@@ -43,7 +43,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("<katakana-i105-account-id>");
+    let to = account!("<i105-account-id>");
     let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     mint_asset(to, asset, 250);
   }

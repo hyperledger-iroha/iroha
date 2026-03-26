@@ -171,7 +171,7 @@ golden vector exercised in
 ## Validation artefacts
 
 - **Fixtures:** `fixtures/account/address_vectors.json` captures i105,
-  canonical Katakana i105, and canonical-domain samples for every selector class and is
+  canonical I105, and canonical-domain samples for every selector class and is
   regenerated via `cargo xtask address-vectors`.
 - **Tests:** `crates/iroha_data_model/tests/account_address_vectors.rs`,
   `javascript/iroha_js/test/address.test.js`, Android/Swift SDK suites, and

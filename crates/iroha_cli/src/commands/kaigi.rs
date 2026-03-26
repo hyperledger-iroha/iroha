@@ -62,7 +62,7 @@ pub struct CreateArgs {
     /// Call name within the domain (e.g. `daily-sync`).
     #[arg(long, value_name = "NAME")]
     pub call_name: String,
-    /// Host account identifier responsible for the call (canonical Katakana i105 account literal).
+    /// Host account identifier responsible for the call (canonical I105 account literal).
     #[arg(long, value_name = "ACCOUNT-ID")]
     pub host: String,
     /// Optional human friendly title.
@@ -77,7 +77,7 @@ pub struct CreateArgs {
     /// Gas rate charged per minute (defaults to 0).
     #[arg(long, value_name = "U64", default_value_t = 0)]
     pub gas_rate_per_minute: u64,
-    /// Optional billing account that will cover usage (canonical Katakana i105 account literal).
+    /// Optional billing account that will cover usage (canonical I105 account literal).
     #[arg(long, value_name = "ACCOUNT-ID")]
     pub billing_account: Option<String>,
     /// Optional scheduled start timestamp (milliseconds since epoch).
@@ -139,7 +139,7 @@ pub struct QuickstartArgs {
     /// Call name within the domain (defaults to a timestamp-based identifier).
     #[arg(long, value_name = "NAME")]
     pub call_name: Option<String>,
-    /// Host account identifier responsible for the call (canonical Katakana i105 account literal).
+    /// Host account identifier responsible for the call (canonical I105 account literal).
     #[arg(long, value_name = "ACCOUNT-ID")]
     pub host: Option<String>,
     /// Privacy mode for the session (defaults to `transparent`).
@@ -339,7 +339,7 @@ pub struct JoinArgs {
     /// Call name within the domain.
     #[arg(long, value_name = "NAME")]
     pub call_name: String,
-    /// Participant account joining the call (canonical Katakana i105 account literal).
+    /// Participant account joining the call (canonical I105 account literal).
     #[arg(long, value_name = "ACCOUNT-ID")]
     pub participant: String,
     /// Commitment hash (hex) for privacy mode joins.
@@ -443,7 +443,7 @@ pub struct LeaveArgs {
     /// Call name within the domain.
     #[arg(long, value_name = "NAME")]
     pub call_name: String,
-    /// Participant account leaving the call (canonical Katakana i105 account literal).
+    /// Participant account leaving the call (canonical I105 account literal).
     #[arg(long, value_name = "ACCOUNT-ID")]
     pub participant: String,
     /// Commitment hash (hex) identifying the participant in privacy mode.
@@ -586,7 +586,7 @@ pub struct ReportRelayHealthArgs {
     /// Call name within the domain.
     #[arg(long, value_name = "NAME")]
     pub call_name: String,
-    /// Relay account identifier being reported (canonical Katakana i105 account literal).
+    /// Relay account identifier being reported (canonical I105 account literal).
     #[arg(long, value_name = "ACCOUNT-ID")]
     pub relay: String,
     /// Observed health status for the relay.

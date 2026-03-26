@@ -19,9 +19,9 @@ translation_last_reviewed: 2026-02-07
 
 ## ليجر واک تھرو
 
-- تم السماح للبطاقة الإلكترونية (مثل `<katakana-i105-account-id>`) التي تعمل بتقنية الأثاث والألعاب بدورة أو إجراء `CanTransfer`.
-- `call_transfer_asset` تنتقل بطاقة الائتمان عبر الإنترنت `<katakana-i105-account-id>` إلى 5 يونيو، أو من خلال هذه المهارة. ما الذي يجعل هذه الآلة أكثر ذكاءً؟
-- `FindAccountAssets` أو `iroha_cli ledger assets list --account <katakana-i105-account-id>` لا يمكن نقل أي شيء آخر إلى أي شيء آخر. كان الكنست حاضرًا.
+- تم السماح للبطاقة الإلكترونية (مثل `<i105-account-id>`) التي تعمل بتقنية الأثاث والألعاب بدورة أو إجراء `CanTransfer`.
+- `call_transfer_asset` تنتقل بطاقة الائتمان عبر الإنترنت `<i105-account-id>` إلى 5 يونيو، أو من خلال هذه المهارة. ما الذي يجعل هذه الآلة أكثر ذكاءً؟
+- `FindAccountAssets` أو `iroha_cli ledger assets list --account <i105-account-id>` لا يمكن نقل أي شيء آخر إلى أي شيء آخر. كان الكنست حاضرًا.
 
 ## مواضيع ذات صلة SDK
 
@@ -36,8 +36,8 @@ translation_last_reviewed: 2026-02-07
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("<katakana-i105-account-id>"),
-      account!("<katakana-i105-account-id>"),
+      account!("<i105-account-id>"),
+      account!("<i105-account-id>"),
       asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );
