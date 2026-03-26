@@ -1779,7 +1779,6 @@ mod tests {
 
         use iroha_crypto::KeyPair;
         use iroha_data_model::{
-            account::Account,
             confidential::ConfidentialStatus,
             domain::Domain,
             prelude::{AccountId, IvmBytecode, TransactionBuilder},
@@ -1934,7 +1933,6 @@ mod tests {
 
         use iroha_crypto::KeyPair;
         use iroha_data_model::{
-            account::Account,
             confidential::ConfidentialStatus,
             domain::Domain,
             prelude::{AccountId, IvmBytecode, TransactionBuilder},

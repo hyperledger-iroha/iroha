@@ -3420,6 +3420,7 @@ fn send_missing_block_request(
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 #[cfg(any(test, feature = "iroha-core-tests"))]
+#[allow(dead_code)] // Exercised by unit-test-only recovery harnesses.
 fn defer_qc_for_missing_block<F>(
     block_known: bool,
     retry_window: Duration,
@@ -7312,6 +7313,7 @@ struct FrontierRecoveryState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RoundRecoveryBundleSource {
     CommitQuorumReschedule,
+    #[allow(dead_code)] // Reserved for unit-test coverage of fallback gating semantics.
     RosterProofFallback,
     RangePullExpiry,
     PayloadMismatchRecovery,

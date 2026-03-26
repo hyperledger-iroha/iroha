@@ -3862,8 +3862,7 @@ mod tests {
             let merge_payload = json_module
                 .call_method1(
                     "loads",
-                    (format!(
-                        r#"{{
+                    (r#"{{
                             "parents": [
                                 {{
                                     "rwa": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities",
@@ -3873,8 +3872,7 @@ mod tests {
                             "primary_reference": "blend-cert-007",
                             "status": "blended",
                             "metadata": {{"grade": "A"}}
-                        }}"#
-                    ),),
+                        }}"#,),
                 )
                 .expect("merge payload loads");
             let merge_instruction =

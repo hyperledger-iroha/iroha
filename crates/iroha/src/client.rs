@@ -13450,8 +13450,9 @@ mod tests {
             .first()
             .cloned()
             .expect("snapshot captured");
+        let expected_query = format!("asset_id={asset_id}");
         assert_eq!(snapshot.method, HttpMethod::GET);
-        assert_eq!(snapshot.url.query(), Some(&format!("asset_id={asset_id}")));
+        assert_eq!(snapshot.url.query(), Some(expected_query.as_str()));
     }
 
     #[test]

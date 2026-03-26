@@ -16923,7 +16923,7 @@ pub mod isi {
         fn activate_contract_instance_is_public_for_unprotected_namespace() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::default(), kura, query_handle);
+            let state = State::new_for_testing(World::default(), kura, query_handle);
             let header = iroha_data_model::block::BlockHeader::new(
                 NonZeroU64::new(1).unwrap(),
                 None,
@@ -16967,7 +16967,7 @@ pub mod isi {
         fn activate_contract_instance_requires_governance_for_protected_namespace() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let mut state = State::new_for_testing(World::default(), kura, query_handle);
+            let state = State::new_for_testing(World::default(), kura, query_handle);
             let header = iroha_data_model::block::BlockHeader::new(
                 NonZeroU64::new(1).unwrap(),
                 None,

@@ -3733,6 +3733,7 @@ where
     result
 }
 
+#[allow(dead_code)] // Retained for workload helpers that need success-only submission semantics.
 async fn run_submission<F>(
     plan_label: &'static str,
     expect_success: bool,

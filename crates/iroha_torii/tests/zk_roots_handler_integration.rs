@@ -9,6 +9,7 @@ use http_body_util::BodyExt as _;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
+    smartcontracts::Execute,
     state::{State, World, WorldReadOnly},
 };
 use iroha_data_model::{NewAccount, prelude::*};
@@ -130,16 +131,10 @@ async fn zk_roots_endpoint_returns_bounded_recent_roots() {
         let mut stx = block.transaction();
         let definition =
             AssetDefinition::numeric(asset_def_id.clone()).with_name("rose".to_owned());
-        let init_instrs: [InstructionBox; 6] = [
+        let init_instrs: [InstructionBox; 5] = [
             Register::domain(Domain::new(domain_id.clone())).into(),
             Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
             Register::asset_definition(definition).into(),
-            iroha_data_model::isi::SetAssetDefinitionAlias::bind(
-                asset_def_id.clone(),
-                asset_alias.parse().expect("asset alias literal"),
-                None,
-            )
-            .into(),
             Mint::asset_numeric(10_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
                 asset_def_id.clone(),
@@ -159,6 +154,13 @@ async fn zk_roots_endpoint_returns_bounded_recent_roots() {
                 .execute_instruction(&mut stx, &owner, instr)
                 .unwrap();
         }
+        iroha_data_model::isi::SetAssetDefinitionAlias::bind(
+            asset_def_id.clone(),
+            asset_alias.parse().expect("asset alias literal"),
+            None,
+        )
+        .execute(&owner, &mut stx)
+        .expect("bind asset alias");
         // Push 5 commitments (cap is 3).
         for i in 0..5u8 {
             let mut note = [0u8; 32];
