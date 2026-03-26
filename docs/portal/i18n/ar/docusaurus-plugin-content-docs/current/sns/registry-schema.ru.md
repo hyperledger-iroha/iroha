@@ -226,7 +226,7 @@ Enum RegistryEventKind {
 تتوافق البوابات مع `RegistryEventV1` وتقوم بمزامنة DNS/SoraFS، وهي متاحة:
 
 1. قم بشحن `NameRecordV1` التالي، مما يؤدي إلى شفاء أفضل.
-2. قوالب محلل الترقية (I105 افتراضي + مضغوط (`sora`) كاختيار خارجي، وسجلات نصية).
+2. قوالب محلل الترقية (i105 افتراضي + مضغوط (`sora`) كاختيار خارجي، وسجلات نصية).
 3. قم بتثبيت مناطق البيانات الأساسية عبر سير عمل SoraDNS من [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
 
 ضمانات التسليم:

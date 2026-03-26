@@ -236,7 +236,7 @@ Enum RegistryEventKind {
 ## 5. Канонические события и синхронизация ゲートウェイゲートウェイは `RegistryEventV1` と DNS/SoraFS、および次のとおりです。
 
 1. Загрузка последнего `NameRecordV1`, на который указывает последовательность событий.
-2. リゾルバー テンプレート (I105 バージョン + 圧縮 (`sora`) как второй выбор、テキスト レコード)。
+2. リゾルバー テンプレート (i105 バージョン + 圧縮 (`sora`) как второй выбор、テキスト レコード)。
 3. SoraDNS ワークフローを [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md) にピン留めします。
 
 メッセージ:

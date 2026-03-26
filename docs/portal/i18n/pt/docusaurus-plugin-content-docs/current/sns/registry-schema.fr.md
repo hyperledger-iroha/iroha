@@ -234,7 +234,7 @@ Todos os arquivos são serializados através das tuplas Norito para criar um has
 Os gateways são transferidos para `RegistryEventV1` e sincronizam DNS/SoraFS via:
 
 1. Recupere a referência `NameRecordV1` anterior pela sequência de eventos.
-2. Regenerar os modelos de resolução (endereços I105 preferidos + compactados (`sora`) na segunda opção, registros de texto).
+2. Regenerar os modelos de resolução (endereços i105 preferidos + compactados (`sora`) na segunda opção, registros de texto).
 3. Fixe os dados da zona atual por meio do fluxo de trabalho SoraDNS decrit em [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
 
 Garantias de entrega de eventos:

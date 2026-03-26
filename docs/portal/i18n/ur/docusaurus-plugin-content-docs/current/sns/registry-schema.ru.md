@@ -234,7 +234,7 @@ Enum RegistryEventKind {
 گیٹ ویز `RegistryEventV1` کو سبسکرائب کریں اور DNS/SoraFS کو ہم آہنگ کریں: کر کے:
 
 1. آخری `NameRecordV1` کو لوڈ کرنا واقعات کی ترتیب کی طرف اشارہ کیا۔
-2. حل کرنے والے ٹیمپلیٹس کی تخلیق نو (I105 ترجیحی طور پر + کمپریسڈ (`sora`) دوسرے انتخاب کے طور پر ، متن کے ریکارڈ)۔
+2. حل کرنے والے ٹیمپلیٹس کی تخلیق نو (i105 ترجیحی طور پر + کمپریسڈ (`sora`) دوسرے انتخاب کے طور پر ، متن کے ریکارڈ)۔
 3. [`soradns_registry_rfc.md`] (https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md) سے Soradns ورک فلو کے توسط سے PIN اپ ڈیٹ شدہ زون کا ڈیٹا۔
 
 واقعہ کی فراہمی کی ضمانتیں:

@@ -228,7 +228,7 @@ Esta es la configuración `RegistryEventKind` que almacena cachés en sentido de
 ## 5. الاحداث القياسية y sincronización للبوابات
 
 Los archivos de `RegistryEventV1` y DNS/SoraFS son:1. جلب اخر `NameRecordV1` المشار اليه في تسلسل الاحداث.
-2. اعادة توليد plantillas de resolución (عناوين I105 المفضلة + comprimido (`sora`) كخيار ثانٍ، registros de texto).
+2. اعادة توليد plantillas de resolución (عناوين i105 المفضلة + comprimido (`sora`) كخيار ثانٍ، registros de texto).
 3. Utilice el servidor SoraDNS en [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
 
 ضمانات تسليم الاحداث:

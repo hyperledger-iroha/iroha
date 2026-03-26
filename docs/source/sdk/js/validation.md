@@ -24,7 +24,7 @@ string matching.
 - `ERR_INVALID_HEX` — malformed or odd-length hexadecimal strings.
 - `ERR_INVALID_MULTIHASH` — multihash parsing failed.
 - `ERR_INVALID_ACCOUNT_ID` — account identifiers are not canonical Katakana i105 account literals. Domain suffixes (`@domain`), canonical hex, `uaid:`, and `opaque:` forms are rejected.
-- `ERR_INVALID_ASSET_ID` — asset identifiers must use `<base58-asset-id>#<katakana-i105-account-id>` with an optional `#dataspace:<id>` suffix.
+- `ERR_INVALID_ASSET_ID` — asset identifiers must use `<canonical-base58-asset-definition-id>#<canonical-katakana-i105-account-id>` with an optional `#dataspace:<id>` suffix.
 - `ERR_INVALID_IBAN` — IBAN parsing/normalization failed (bad country code, length, or checksum).
 - `ERR_INVALID_OBJECT` — unexpected object shape or missing required keys.
 - `ERR_INVALID_METADATA` — metadata entries failed validation.

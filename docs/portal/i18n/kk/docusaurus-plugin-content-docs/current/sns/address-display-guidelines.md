@@ -1,245 +1,123 @@
 ---
 id: address-display-guidelines
-lang: kk
-direction: ltr
-source: docs/portal/docs/sns/address-display-guidelines.md
-status: complete
-generator: docs/portal/scripts/sync-i18n.mjs
 title: Sora Address Display Guidelines
 sidebar_label: Address display
-description: UX and CLI requirements for I105 vs I105 Sora address presentation (ADDR-6).
-translator: machine-google-reviewed
-translation_last_reviewed: 2026-02-07
+description: UX and CLI requirements for canonical i105 account ids and on-chain aliases (ADDR-6).
 ---
 
-ExplorerAddressCard картасын '@site/src/components/ExplorerAddressCard' ішінен импорттау;
+import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
 
-:::ескерту Канондық дереккөз
-Бұл бет `docs/source/sns/address_display_guidelines.md` көрсетеді және қазір қызмет етеді
-канондық портал көшірмесі ретінде. Бастапқы файл аударма PR үшін айналады.
+:::note Canonical Source
+This page mirrors `docs/source/sns/address_display_guidelines.md` and now serves
+as the canonical portal copy. The source file sticks around for translation PRs.
 :::
 
-Әмияндар, зерттеушілер және SDK үлгілері тіркелгі мекенжайларын өзгермейтін ретінде қарастыруы керек
-пайдалы жүктемелер. Android бөлшек әмиян үлгісі
-`examples/android/retail-wallet` енді қажетті UX үлгісін көрсетеді:
+Wallets, explorers, and SDK samples must treat the canonical Katakana i105
+literal as the only public account-id format. On-chain aliases are separate
+lookup keys:
 
-- **Қос көшіру мақсаттары.** Екі анық көшіру түймелерін жіберіңіз—I105 (қалаулы) және
-  тек сығылған Sora пішіні (`i105`, екінші ең жақсы). I105 әрқашан сырттай бөлісуге қауіпсіз
-  және QR пайдалы жүктемесіне қуат береді. Қысылған нұсқа кірістірілген мәнді қамтуы керек
-  ескерту, себебі ол тек Sora-хабарлама қолданбаларында жұмыс істейді. Android бөлшек саудасы
-  әмиян үлгісі материал түймелерінің екеуін де, олардың құралдар кеңестерін де қосады
-  `examples/android/retail-wallet/src/main/res/layout/activity_main.xml`, және
-  iOS SwiftUI демонстрациясы ішіндегі `AddressPreviewCard` арқылы бірдей UX көрсетеді
-  `examples/ios/NoritoDemo/Sources/ContentView.swift`.
-- **Monospace, таңдалатын мәтін.** Екі жолды да монокеңістік қаріппен және
-  `textIsSelectable="true"`, сондықтан пайдаланушылар IME шақырмай мәндерді тексере алады.
-  Өңделетін өрістерден аулақ болыңыз: IME-лер кананы қайта жаза алады немесе нөлдік ен код нүктелерін енгізе алады.
-- **Жасырын әдепкі домен кеңестері.** Селектор жасырынға нұсқағанда
-  `default` доменінде операторларға ешқандай жұрнақ қажет емес екенін еске салатын тақырып қойыңыз.
-  Зерттеушілер селектор кезінде канондық домен белгісін бөлектеу керек
-  дайджестті кодтайды.
-- **I105 QR пайдалы жүктемелері.** QR кодтары I105 жолын кодтауы керек. Егер QR генерациясы
-  сәтсіз болса, бос кескіннің орнына анық қатені көрсетіңіз.
-- **Буфердегі хабар алмасу.** Қысылған пішінді көшіргеннен кейін тост немесе шығарыңыз
-  snackbar пайдаланушыларға оның тек Sora және IME қателеріне бейім екенін еске салады.
+- `name@dataspace`
+- `name@domain.dataspace`
 
-Осы қоршаулардан кейін Юникод/IME бүлінуіне жол бермейді және талаптарды қанағаттандырады
-Әмиян/барлаушы UX үшін ADDR-6 жол картасын қабылдау критерийлері.
+Those aliases resolve on-chain to the canonical i105 account id. They are not
+an alternate public account-id encoding.
 
-## Скриншот құрылғылары
+## Required UX
 
-Түймешік белгілерін қамтамасыз ету үшін локализацияны тексеру кезінде келесі құрылғыларды пайдаланыңыз,
-құралдар кеңестері мен ескертулер платформаларда тураланады:
+- **Copy/share only canonical i105.** Ship one primary copy action for the
+  canonical Katakana i105 account id. That same literal powers QR payloads,
+  deep links, and clipboard actions.
+- **Render aliases separately.** If a workflow includes an alias, show it in a
+  labeled field such as “Alias” or “Routing alias”. Do not concatenate it onto
+  the i105 literal.
+- **Monospace, selectable text.** Render the i105 literal with a monospace font
+  and `textIsSelectable="true"` so users can inspect it without invoking an
+  IME. Avoid editable fields: IMEs can rewrite kana or inject zero-width code
+  points.
+- **Confirm the exact copied value.** After copying the i105 form, emit a toast
+  or snackbar that quotes the canonical i105 literal.
+- **No alternate public encodings.** Canonical hex and legacy/non-canonical
+  address forms are tooling/debug inputs only and must not be marketed as
+  copy/share formats.
 
-- Android анықтамасы: `/img/sns/address_copy_android.svg`
+## Screenshot fixtures
 
-  ![Android қос көшірме анықтамасы](/img/sns/address_copy_android.svg)
+Use the following fixtures during localization reviews to ensure button labels,
+tooltips, and warnings stay aligned across platforms:
 
-- iOS анықтамасы: `/img/sns/address_copy_ios.svg`
+- Android reference: `/img/sns/address_copy_android.svg`
 
-  ![iOS қос көшірме анықтамасы](/img/sns/address_copy_ios.svg)
+  ![Android address copy reference](/img/sns/address_copy_android.svg)
 
-## SDK көмекшілері
+- iOS reference: `/img/sns/address_copy_ios.svg`
 
-Әрбір SDK I105 (қалаулы) және қысылған (`sora`, екінші ең жақсы) қайтаратын ыңғайлы көмекшіні көрсетеді.
-UI қабаттары біркелкі болуы үшін ескерту жолының жанында пішіндер:
+  ![iOS address copy reference](/img/sns/address_copy_ios.svg)
+
+## SDK helpers
+
+Each SDK exposes a convenience helper that returns canonical Katakana i105
+rendering plus warning text so UI layers can stay consistent:
 
 - JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)`
   (`javascript/iroha_js/src/address.js`)
-- JavaScript инспекторы: `inspectAccountId(...)` қысылған ескертуді қайтарады
-  жолды қосады және қоңырау шалушылар `i105` бергенде оны `warnings` қосады
-  сөзбе-сөз, сондықтан зерттеушілер/әмиянның бақылау тақталары тек Sora хабарламасын көрсете алады
-  генерациялағанда ғана емес, қою/тексеру ағындары кезінде
-  қысылған пішіннің өзі.
 - Python: `AccountAddress.display_formats(network_prefix: int = 753)`
-- Жылдам: `AccountAddress.displayFormats(networkPrefix: UInt16 = 753)`
+- Swift: `AccountAddress.displayFormats(networkPrefix: UInt16 = 753)`
 - Java/Kotlin: `AccountAddress.displayFormats(int networkPrefix = 753)`
   (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountAddress.java`)
 
-UI қабаттарындағы кодтау логикасын қайта енгізудің орнына осы көмекшілерді пайдаланыңыз.
-JavaScript көмекшісі сонымен қатар `domainSummary` жүйесінде `selector` пайдалы жүктемесін көрсетеді.
-(`tag`, `digest_hex`, `registry_id`, `label`) сондықтан пайдаланушы интерфейстері
-селектор жергілікті-12 немесе шикі пайдалы жүктемені қайта талдамай тізілімге қолдау көрсетеді.
+Use these helpers instead of reimplementing the encode logic in UI layers.
+Use alias-aware Torii endpoints when you need to resolve `name@dataspace` or
+`name@domain.dataspace` into the canonical i105 account id.
 
-## Explorer аспаптарының демонстрациясы
+## Explorer instrumentation demo
 
 <ExplorerAddressCard />
 
-Зерттеушілер әмиянның телеметриясын және қол жетімділік жұмысын көрсетуі керек:
+Explorers should mirror the wallet telemetry and accessibility work:
 
-- Көшіру түймелері үшін `data-copy-mode="i105|qr"` қолданыңыз, осылайша алдыңғы бөліктер пайдалану есептегіштерін шығара алады.
-  Torii жағындағы `torii_address_format_total` метрикасымен бірге. Жоғарыдағы демонстрациялық компонент жіберіледі
-  `iroha:address-copy` оқиғасы `{mode,timestamp}` бар — мұны аналитикаға/телеметрияға қосыңыз
-  бақылау тақталары серверді өзара байланыстыра алатындай құбыр желісі (мысалы, Segment немесе NORITO қолдайтын коллекторға басу)
-  клиенттің көшіру әрекетімен мекенжай пішімін пайдалану. Сондай-ақ Torii домен есептегіштерін қайталаңыз
-  (`torii_address_domain_total{domain_kind}`) сол арнада, сондықтан Local-12 зейнеткерлік шолулары мүмкін
-  30 күндік `domain_kind="local12"` нөлдік пайдалану дәлелін тікелей `address_ingest` арқылы экспорттаңыз
-  Grafana тақтасы.
-- Әрбір басқару элементін нақты `aria-label`/`aria-describedby` кеңестерімен жұптаңыз
-  literal ортақ пайдалану қауіпсіз (`I105`) немесе тек Sora (қысылған `sora`). Жасырын домен тақырыбын қосыңыз
-  Сипаттама көмекші технология визуалды түрде көрсетілген контекстке сәйкес келеді.
-- Көшіру нәтижелерін жариялайтын тірі аймақты (мысалы, `<output aria-live="polite">…</output>`) көрсетіңіз және
-  Swift/Android үлгілеріне қосылған VoiceOver/TalkBack әрекетіне сәйкес келетін ескертулер.
+- Apply `data-copy-mode="i105|alias|qr"` to copy buttons so front-ends can emit
+  usage counters alongside server-side account-literal metrics.
+- Pair every control with distinct `aria-label`/`aria-describedby` hints that
+  explain whether a control copies the canonical i105 account id, views the
+  alias, or shares the QR payload.
+- Expose a live region (e.g., `<output aria-live="polite">…</output>`) announcing copy results and
+  warnings, matching the VoiceOver/TalkBack behaviour now wired into the Swift/Android samples.
 
-Бұл құрал операторлардың Torii қабылдауын да, қабылдауын да бақылай алатынын дәлелдеу арқылы ADDR-6b талаптарына жауап береді.
-Жергілікті селекторлар өшірілгенге дейін клиенттік көшіру режимдері.
+## Enforcing canonical forms
 
-## Жергілікті → Жаһандық көші-қон құралдар жинағы
+Use the CLI workflow documented under ADDR-5:
 
-Автоматтандыру үшін [Жергілікті → Жаһандық құралдар жинағы](local-to-global-toolkit.md) пайдаланыңыз.
-JSON аудитінің есебі және түрлендірілген таңдаулы I105 / операторлар тіркейтін екінші ең жақсы қысылған (`sora`) тізімі
-Дайындық билеттеріне, ал ілеспе runbook Grafana сілтемесін береді
-бақылау тақталары және қатаң режимдегі кесіндіні ашатын Alertmanager ережелері.
-
-## Екілік орналасудың жылдам анықтамасы (ADDR-1a)
-
-SDK кеңейтілген мекенжай құралдарын (инспекторлар, тексеру кеңестері,
-манифест құрастырушылар), әзірлеушілерге түсірілген канондық сым пішімін көрсетіңіз
-`docs/account_structure.md`. Орналасу әрқашан
-`header · selector · controller`, мұндағы тақырып биттері:
-
-```
-bit index:   7        5 4      3 2      1 0
-             ┌─────────┬────────┬────────┬────┐
-payload bit: │version  │ class  │  norm  │ext │
-             └─────────┴────────┴────────┴────┘
-```
-
-- `addr_version = 0` (бит 7‑5) бүгін; нөлдік емес мәндер сақталған және міндетті
-  `AccountAddressError::InvalidHeaderVersion` көтеріңіз.
-- `addr_class` жалғыз (`0`) және multisig (`1`) контроллерлерін ажыратады.
-- `norm_version = 1` Normv1 селектор ережелерін кодтайды. Болашақ нормалар қайта пайдаланылады
-  бірдей 2-биттік өріс.
-- `ext_flag` әрқашан `0` — орнатылған биттер қолдау көрсетілмейтін пайдалы жүктеме кеңейтімдерін көрсетеді.
-
-Селектор бірден тақырыпты бақылайды:
-
-```
-┌──────────┬──────────────────────────────────────────────┐
-│ tag (u8) │ payload (depends on selector kind)           │
-└──────────┴──────────────────────────────────────────────┘
-```
-
-UI және SDK беттері селектор түрін көрсетуге дайын болуы керек:
-
-- `0x00` = жасырын әдепкі домен (пайдалы жүктеме жоқ).
-- `0x01` = жергілікті дайджест (12 байт `blake2s_mac("SORA-LOCAL-K:v1", label)`).
-- `0x02` = жаһандық тізілім жазбасы (үлкен `registry_id:u32`).
-
-Әмиян құралдары байланыстыруға немесе құжаттарға/тесттерге енгізуге болатын канондық он алтылық мысалдар:
-
-| Селектор түрі | Канондық алтылық |
-|-------------|---------------|
-| Жанама әдепкі | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
-| Жергілікті дайджест (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
-| Ғаламдық тізілім (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
-
-Толық селекторды/күйді `docs/source/references/address_norm_v1.md` қараңыз
-толық байт диаграммасы үшін кесте және `docs/account_structure.md`.
-
-## Канондық пішіндерді қолдану
-
-жолдар ADDR-5 астында құжатталған CLI жұмыс үрдісіне сәйкес келуі керек:
-
-1. `iroha tools address inspect` енді I105 бар құрылымдық JSON қорытындысын шығарады,
-   қысылған және канондық алтылық пайдалы жүктемелер. Жиынтықта `domain` бар
-   `kind`/`warning` өрістері бар нысан және кез келген берілген домен арқылы қайталайды
-   `input_domain` өрісі. `kind` `local12` болғанда, CLI ескертуді басып шығарады
-   stderr және JSON қорытындысы бірдей нұсқаулықты қайталайды, сондықтан CI құбырлары мен SDKs
-   оны бетіне түсіре алады. Түрлендірілген кез келген уақытта `legacy  suffix` өткізіңіз
-   кодтау `<i105>@<domain>` ретінде қайталанады.
-2. SDK JavaScript көмекшісі арқылы бірдей ескертуді/қорытындыны көрсете алады:
+1. Run `iroha tools address convert <address-or-account_id> --format json`.
+   The summary reports the detected format and canonical encodings (`i105`,
+   `canonical_hex`). Strict parser paths accept canonical Katakana i105 only.
+2. SDKs can surface the same summary via JavaScript:
 
    ```js
    import { inspectAccountId } from "@iroha/iroha-js";
 
-   const summary = inspectAccountId("sora...");
-   if (summary.domain.warning) {
-     console.warn(summary.domain.warning);
-   }
+   const summary = inspectAccountId(accountLiteral);
    console.log(summary.i105.value, summary.i105Warning);
    ```
-  Көмекші сіз болмасаңыз, литералдан анықталған I105 префиксін сақтайды
-  анық `networkPrefix` қамтамасыз етеді, сондықтан әдепкі емес желілер үшін қорытындылар жасайды
-  үнсіз әдепкі префикспен қайта көрсетпеңіз.
+3. Resolve aliases through alias-aware APIs instead of feeding
+   `name@dataspace` or `name@domain.dataspace` into strict `AccountId`
+   parsers.
+4. Reuse `i105.value` from the summary (or request another encoding via
+   `--format`) in manifests and user-facing docs.
+4. For bulk data sets, run
+   `iroha tools address audit --input addresses.txt --network-prefix 753`.
+   Audit emits JSON/CSV summaries per row and fails on parse errors by default.
+   Use `--allow-errors` only for best-effort scans.
+5. For newline-to-newline rewrites, run
+   `iroha tools address normalize --input addresses.txt --network-prefix 753 --format i105`.
+   This rewrites each parsed row to the requested encoding
+   (canonical Katakana i105/hex/JSON). Pair with
+   `--allow-errors` for malformed dump triage.
 
-3. `i105.value` қайта пайдалану арқылы канондық пайдалы жүктемені түрлендіру
-   өрістерді қорытындыдан (немесе `--format` арқылы басқа кодтауды сұраңыз). Бұл
-   жолдарды сырттан ортақ пайдалану қауіпсіз.
-4. Манифесттерді, тізілімдерді және тұтынушыға арналған құжаттарды жаңартыңыз
-   канондық пішінді қалыптастырыңыз және жергілікті селекторлар болатынын контрагенттерге хабарлаңыз
-   кесу аяқталғаннан кейін қабылданбайды.
-5. Жаппай деректер жиындары үшін іске қосыңыз
-   `iroha tools address audit --input addresses.txt --network-prefix 753`. Пәрмен
-   жаңа жолдан бөлінген литералдарды оқиды (`#` деп басталатын түсініктемелер еленбейді және
-   `--input -` немесе ешқандай жалауша STDIN қолданбайды), JSON есебін шығарады
-   Әрбір жазба үшін канондық/таңдаулы I105/екінші ең жақсы қысылған (`sora`) қорытындылары және талдаудың екеуін де санайды
-   қажетсіз жолдарды қамтитын үйінділер және `strict CI post-check` арқылы қақпаны автоматтандыру
-   операторлар CI ішіндегі жергілікті селекторларды блоктауға дайын болғанда.
-6. Жаңа жолдан жаңа жолға қайта жазу қажет болғанда, пайдаланыңыз
-  Жергілікті таңдаушының түзету электрондық кестелері үшін пайдаланыңыз
-  канондық кодтауларды, ескертулерді және талдау сәтсіздіктерін бір өтуде бөлектейтін `input,status,format,…` CSV экспорттау үшін.
-   Көмекші әдепкі бойынша Жергілікті емес жолдарды өткізіп жібереді, әрбір қалған жазбаны түрлендіреді
-   сұралған кодтауға (I105 таңдаулы/қысылған (`sora`) екінші ең жақсы/он алтылық/JSON) және сақтайды
-   `legacy  suffix` орнатылған кезде бастапқы домен. Оны `--allow-errors` арқылы жұптаңыз
-   тіпті дампта қате пішімделген литералдар болса да сканерлеуді жалғастыру.
-7. CI/lint автоматизациясы сығындыларды шығаратын `ci/check_address_normalize.sh` іске қоса алады.
-   `fixtures/account/address_vectors.json` жергілікті селекторлары түрлендіреді
-   оларды `iroha tools address normalize` арқылы және қайта ойнатады
-   `iroha tools address audit` шығарылымдар енді шығарылмайтынын дәлелдеу үшін
-   Жергілікті дайджесттер.`torii_address_local8_total{endpoint}` плюс
-`torii_address_collision_total{endpoint,kind="local12_digest"}`,
-`torii_address_collision_domain_total{endpoint,domain}`, және
-Grafana тақтасы `dashboards/grafana/address_ingest.json` орындауды қамтамасыз етеді
-сигнал: өндірістік бақылау тақталары нөлдік заңды жергілікті жіберулерді көрсеткенде және
-30 күн қатарынан нөлдік Local-12 соқтығысуы, Torii Local-8-ді аударады
-Mainnet желісіндегі қателік қақпасы, содан кейін жаһандық домендер болған кезде Local-12
-сәйкес тізілім жазбалары. Операторға арналған хабарламаның CLI шығысын қарастырыңыз
-бұл мұздату үшін — бірдей ескерту жолы SDK құралдар кеңестерінде пайдаланылады және
-жол картасынан шығу критерийлерімен тепе-теңдікті сақтау үшін автоматтандыру. Torii енді әдепкі
-регрессияларды диагностикалау кезінде. `torii_address_domain_total{domain_kind}` шағылыстыра беріңіз
-Grafana (`dashboards/grafana/address_ingest.json`) ішіне, сондықтан ADDR-7 дәлелдер бумасы
-алдында талап етілетін 30 күндік терезе үшін `domain_kind="local12"` нөлде қалғанын дәлелдей алады
-(`dashboards/alerts/address_ingest_rules.yml`) үш қоршауды қосады:
+### Release note snippet (wallet & explorer)
 
-- `AddressLocal8Resurgence` беттер контекст жаңа Local-8 туралы хабарлаған сайын
-  арттыру. Қатаң режимді шығаруды тоқтатыңыз, қате SDK бетін табыңыз
-  сигнал нөлге оралғанша — әдепкі мәнді қалпына келтіріңіз (`true`).
-- `AddressLocal12Collision` екі Local-12 жапсырмасының хэштері бірдей болғанда іске қосылады
-  қорыту. Манифестті жылжытуды кідіртіңіз, тексеру үшін Жергілікті → Жаһандық құралдар жинағын іске қосыңыз
-  дайджест картасын жасаңыз және қайта шығару алдында Nexus басқаруымен үйлестіріңіз.
-  тізбе жазбасы немесе төменгі ағынды шығаруларды қайта қосу.
-- `AddressInvalidRatioSlo` флот бойынша жарамсыз коэффициент (қоспағанда) ескертеді
-  Жергілікті-8/қатаң режимді қабылдамау) он минут ішінде 0,1% SLO-дан асады. Қолдану
-  Жауапты контекст/себепті анықтау үшін `torii_address_invalid_total` және
-  қатаң режимді қайта қосу алдында SDK иесімен келісіңіз.
+Include the following bullet in wallet/explorer release notes when shipping the cutover:
 
-### Жазба үзіндісін шығару (әмиян және зерттеуші)
-
-Жеткізу кезінде әмиян/барлаушының шығарылым жазбаларына келесі таңбаны қосыңыз
-кесу:
-
-> **Мекенжайлар:** `iroha tools address normalize` қосылды
-> көмекші және оны CI (`ci/check_address_normalize.sh`) жүйесіне қосты, сондықтан әмиян/зерттеуші
-> Local-8/Local-12 негізгі желіде бұғатталғанға дейін. Кез келген реттелетін экспорттарды жаңартыңыз
-> пәрменді іске қосыңыз және қалыпқа келтірілген тізімді шығару дәлелдер жинағына тіркеңіз.
+> **Addresses:** Copy/share flows now use canonical Katakana i105 account ids
+> only. On-chain aliases remain available as separate routing labels in
+> `name@dataspace` / `name@domain.dataspace` form and resolve to the same
+> canonical i105 account id.

@@ -1,110 +1,99 @@
----
-lang: dz
-direction: ltr
-source: docs/account_structure.md
-status: complete
-generator: scripts/sync_docs_i18n.py
-source_hash: 01561366c9698c10d29ff3f49ad4c14b22b1796b5c7701cf98d200a140af1caf
-source_last_modified: "2026-01-28T17:11:30.635172+00:00"
-translation_last_reviewed: 2026-02-07
-translator: machine-google-reviewed
----
+# Account Structure RFC
 
-# རྩིས་ཁྲའི་བཟོ་བཀོད། RFC
+**Status:** Accepted (ADDR-1)  
+**Audience:** Data model, Torii, Nexus, Wallet, Governance teams  
+**Related issues:** TBD
 
-**གནས་སྟངས་:** ངོས་ལེན་འབད་ཡོདཔ། (ADDR-1)  
-**འཕྲུལ་རིག:** གནད་སྡུད་དཔེ་ཚད་ Torii, I18NT000000009X, ཝ་ལེཊ་ གཞུང་སྐྱོང་སྡེ་ཚན།  
-**འབྲེལ་ཡོད་ཀྱི་གནད་དོན།:** TBD
+## Summary
 
-## བཅུད༌བསྡུ
+This document describes the shipping account-addressing stack implemented in
+`AccountAddress` (`crates/iroha_data_model/src/account/address.rs`) and the
+companion tooling. It provides:
 
-ཡིག་ཆ་འདི་གིས་ ༢༠༠༨ ལུ་ལག་ལེན་འཐབ་མི་ གྲུ་གཟིངས་ཁ་བྱང་བརྩེགས་བརྩེགས་བརྩེགས་ཕུང་འདི་འགྲེལ་བཤད་རྐྱབ་ཨིན།
-`AccountAddress` (`crates/iroha_data_model/src/account/address.rs`) དང་།
-མཉམ་རོགས་ ལག་ལེན། འདི་གིས་བྱིནམ་ཨིན།
+- A checksummed, human-facing **Katakana I105 account address** produced by
+  `AccountAddress::to_i105` that binds a chain discriminant to the account
+  controller and offers deterministic interop-friendly textual forms.
+- A domainless canonical account payload keyed only by the controller.
+  Explicit domain context now lives outside the payload via
+  `ScopedAccountId { account, domain }` and domain-link state.
 
-- ཅེག་སམ་བཟོ་བའི་མི་ལ་གདོང་ཐུག་ **I1N1NT0000005X ཁ་བྱང་** གིས་བཟོ་ཡོདཔ།
-  I18NI000000074X རྩིས་ཁྲའི་ཁྱད་པར་ཅན་གྱི་རིམ་པ་གཅིག་བསྡམས།
-  ཚད་འཛིན་དང་ ཐག་གཅོད་ཀྱི་ མཐུན་སྒྲིག་ཅན་གྱི་ ཚིག་ཡིག་འབྲི་ཤོག་ཚུ་ བྱིནམ་ཨིན།
-- སྔོན་སྒྲིག་མངའ་ཁོངས་དང་ ཉེ་གནས་བཞུ་ནི་གི་དོན་ལུ་ མངའ་ཁོངས་སེལ་འཐུ་འབད་མི་ཚུ་ཨིན།
-  མ་འོངས་པ་ Nexus-backed routing (the the the the the by of the cartion.
-  ཐོ་བཀོད་བལྟ་ཚུལ་འདི་ **ད་ལྟོ་ཡང་མ་བཏང་**).
+## Motivation
 
-## བརྒྱུད༌སྐུལ
+Wallets and off-chain tooling rely on raw `name@dataspace` or `name@domain.dataspace` on-chain account aliases today. This
+has two major drawbacks:
 
-གྱང་ཁོག་དང་ རིམ་སྒྲིག་ལག་ཆ་ཚུ་ ད་རེས་ `name@dataspace` or `name@domain.dataspace` འགྲུལ་ལམ་གཞན་ལུ་བརྟེན་ཏེ་ཨིན། ཨ་ནཱི
-སྐྱོན་ཆེ་ཤོས་གཉིས་ཡོད།
+1. **No network binding.** The string has no checksum or chain prefix, so users
+   can paste an address from the wrong network without immediate feedback. The
+   transaction will eventually be rejected (chain mismatch) or, worse, succeed
+   against an unintended account if the destination exists locally.
+2. **Domain collision.** Domains are namespace-only and can be reused on each
+   chain. Federation of services (custodians, bridges, cross-chain workflows)
+   becomes brittle because `finance` on chain A is unrelated to `finance` on
+   chain B.
 
-1. **ཡོངས་འབྲེལ་བཱའིན་ཌིང་མེད།** ཡིག་རྒྱུན་འདི་ལུ་ ཅེག་སམ་ཡང་ན་ རིམ་སྒྲིག་སྔོན་སྒྲིག་མེདཔ་ལས་ ལག་ལེན་པ་ཚུ་ལུ་ ལག་ལེན་པ་ཚུ་ལུ་
-   འཕྲལ་མགྱོགས་རང་ བསམ་འཆར་མེད་པར་ ཡོངས་འབྲེལ་འཛོལ་བ་ལས་ ཁ་བྱང་ཅིག་ སྦྱར་ཚུགས། ཚིག༌ཕྲད
-   ཚོང་འབྲེལ་འདི་ མཐར་ཐུག་ལུ་ (མཐུན་སྒྲིག་མེདཔ་) ཡང་ན་ ངན་པ་ མཐར་ཕྱིན་འོང་།
-   ས་གནས་ནང་ འགྲོ་ཡུལ་ཡོད་ན་ མནོ་མེད་རྩིས་ཁྲ་ལུ་ རྒྱབ་འགལ་འབད།
-2. **མངའ་ཁོངས་ཁ་ཐུག་རྐྱབ་ནི།** མངའ་ཁོངས་ཚུ་མིང་ས་སྒོ་རྐྱངམ་ཅིག་ཨིནམ་ལས་ རེ་རེ་ལུ་ལོག་ལག་ལེན་འཐབ་བཏུབ།
-   ལྕགས༌ཐག། ཞབས་ཏོག་སྤྱི་མཐུན་ (བདག་འཛིན་འཐབ་མི་ ཟམ་ ཕར་ཚུར་རྒྱུན་རིམ་གྱི་ལཱ་གི་རྒྱུན་རིམ་ཚུ།)
-   18NI00000076X གི་རིམ་པ་ A ནང་ I18NI000000007X 2 ནང་འབྲེལ་བ་མེད་པ་ལུ་འགྱུར་ཡོདཔ་ཨིན།
-   རིམ་རིམ་ ཁ།
+We need a human-friendly address format that guards against copy/paste errors
+and a deterministic mapping from an on-chain alias to the authoritative chain/account binding.
 
-ང་བཅས་ལུ་ འདྲ་བཤུས་/སྦྱར་བའི་འཛོལ་བ་ལུ་སྲུང་སྐྱོབ་འབད་མི་ མི་དང་མཐུན་པའི་ཁ་བྱང་རྩ་སྒྲིག་ཅིག་དགོཔ་ཨིན།
-དང་ མངའ་ཁོངས་མིང་ལས་ དབང་ཚད་ཅན་གྱི་རྒྱུན་རིམ་ཚུན་ གཏན་འཁེལ་གྱི་སབ་ཁྲ་བཟོ་ནི།
+## Goals
 
-## རིལ་ཚང
+- Describe the I105 envelope implemented in the data model and the
+  canonical parsing/alias rules that `AccountId` and `AccountAddress` follow.
+- Encode the configured chain discriminant directly into each address and
+  define its governance/registry process.
+- Describe how to introduce a global domain registry without breaking current
+  deployments and specify normalization/anti-spoofing rules.
 
-- གནད་སྡུད་དཔེ་ཚད་དང་ དེ་ནང་ལུ་ ལག་ལེན་འཐབ་མི་ I105 གི་ཡིག་ཤུབས་འདི་ འགྲེལ་བཤད་རྐྱབས།
-  ཀེ་ནོ་ནིག་མིང་དཔྱད་འབད་ནི་/མིང་གཞན་ཚུ་གིས་ གཤམ་གསལ་གྱི་ I18NI000000078X དང་ I18NI000000079X གིས་ བཀག་འཛིན་འབདཝ་ཨིན།
-- ཁ་བྱང་རེ་རེ་ནང་ ཐད་ཀར་དུ་ རིམ་སྒྲིག་འབད་ཡོད་པའི་ རིམ་སྒྲིག་རིམ་སྒྲིག་འདི་ ཨིན་ཀོ་ཌི།
-  གཞུང་སྐྱོང་/ཐོ་བཀོད་བྱ་རིམ་ངེས་ཚིག་བརྗོད།
-- ད་ལྟོའི་ད་ལྟོའི་མ་བཅག་པར་ འཛམ་གླིང་མངའ་ཁོངས་ཐོ་བཀོད་ཅིག་ ངོ་སྤྲོད་འབད་ཐངས་འགྲེལ་བཤད་རྐྱབས།
-  བཀྲམ་སྤེལ་དང་ སྤྱིར་བཏང་བཟོ་ནི་/ཁ་སླབ་མི་-ནང་འདྲེན་ལམ་ལུགས་ཚུ་གསལ་བཀོད་འབད།
+## Non-goals
 
-## དམིགས་ཡུལ་མེད་པ།
+- Implementing cross-chain asset transfers. The routing layer only returns the
+  target chain.
+- Finalising governance for global domain issuance. This RFC focuses on the data
+  model and transport primitives.
 
-- ཕར་ཚུར་རྒྱུན་རིམ་རྒྱུ་དངོས་སྤོ་བཤུད་ཚུ་ལག་ལེན་འཐབ་དོ། རའུ་ཊིང་བང་རིམ་འདི་གིས་ འདི་རྐྱངམ་ཅིག་སླར་ལོག་འབདཝ་ཨིན།
-  དམིགས་ཚད་རིམ་སྒྲིག།
-- འཛམ་གླིང་ཡོངས་ཀྱི་མངའ་ཁོངས་བཏོན་ནིའི་དོན་ལུ་ གཞུང་སྐྱོང་། འ་ནི་ཨར་ཨེཕ་སི་འདི་ གནད་སྡུད་གུ་གཙོ་བོར་བཏོནམ་ཨིན།
-  དཔེ་སྟོན་དང་སྐྱེལ་འདྲེན་གྱི་ གནའ་དུས་ཚུ།
+## Background
 
-## རྒྱབ་རྟེན
-
-### ད་ལྟའི་འགྲུལ་ལམ་མི་འདྲ་བ།
+### Current on-chain account alias
 
 ```
 AccountId {
-    domain: DomainId,   // wrapper over Name (ASCII-ish string)
     controller: AccountController // single PublicKey or multisig policy
 }
+ScopedAccountId {
+    account: AccountId,
+    domain: DomainId,
+}
 
-Display: canonical Katakana i105 literal (no `@domain` suffix)
+Display / JSON text: canonical Katakana i105 literal only
 Parse accepts:
-- Encoded account identifiers only: i105.
-- Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and account-alias literals such as name@dataspace or name@domain.dataspace.
+- Canonical Katakana i105 account literals only.
+- Runtime parsers reject non-canonical/dotted i105 literals, legacy `norito:<hex>`,
+  canonical hex (`0x...`), any `@<domain>` suffix, and account-alias literals such as
+  `name@dataspace` or `name@domain.dataspace`.
 
-Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
-and `0x` prefixes are not accepted.
-
-Account aliases are separate on-chain bindings. They use
-name@dataspace or name@domain.dataspace and resolve to canonical
-i105 `AccountId` values. Strict `AccountId` parsers never accept alias literals directly.
+Domain context is explicit and out-of-band. There is no public
+`AccountSubjectId`; subject identity is `AccountId`.
 ```
 
-`ChainId` `AccountId` གི་ཕྱི་ཁར་སྡོད་ཡོད། ནོ་ཌིསི་གིས་ ཚོང་འབྲེལ་གྱི་ I18NI0000082X བརྟག་དཔྱད་འབད།
-འཛུལ་ཞུགས་སྐབས་རིམ་སྒྲིག་ལུ་ (I18NI0000083X)
-དང་ ཕྱི་རྒྱལ་གྱི་ཚོང་འབྲེལ་ཚུ་ ངོས་ལེན་མ་འབད་རུང་ རྩིས་ཐོ་ཡིག་རྒྱུན་འདི་གིས་ no འབག་འོང་།
-ཡོངས་འབྲེལ་བརྡ་སྟོན་།
+`ChainId` lives outside of `AccountId`. Nodes check the transaction’s `ChainId`
+against configuration during admission (`AcceptTransactionFail::ChainIdMismatch`)
+and reject foreign transactions, but the account string itself carries no
+network hint.
 
-### མངའ་ཁོངས་ངོས་འཛིན་པ།
+### Domain identifiers
 
-`DomainId` གིས་ `Name` (སྤྱིར་བཏང་ཡིག་རྒྱུན་) ཅིག་བཤུབ་སྟེ་ ས་གནས་ཀྱི་རིམ་སྒྲིག་ལུ་ ཁྱབ་ཨིན།
-རང་དབང་ཅན་སྦེ་ `wonderland`, `finance`, ལ་སོགས་པ་ཚུ་གིས་ ཐོ་བཀོད་འབད་ཚུགས།
+`DomainId` wraps a `Name` (normalized string) and is scoped to the local chain.
+Every chain can register `wonderland`, `finance`, etc. independently.
 
-### Nexus སྐབས་དོན་།
+### Nexus context
 
-Nexus འདི་ ཆ་ཤས་མཉམ་འབྲེལ་ (ལམ་ཐིག་/གནས་སྡུད་-བར་སྟོང་) གི་འགན་ཁུར་འབགཔ་ཨིན། འདི
-ད་ལྟོ་ མཐུན་སྒྲིག་མངའ་ཁོངས་ཀྱི་ ལམ་སྟོན་གྱི་བསམ་གཞི་མེདཔ་ཨིན།
+Nexus is responsible for cross-component coordination (lanes/data-spaces). It
+currently has no concept of cross-chain domain routing.
 
-## གྲོས་འཆར་བཀོད་པའི་བཟོ་བཀོད།
+## Proposed Design
 
-### ༡.
+### 1. Deterministic chain discriminant
 
-Iroha ད་ལྟ་གསལ་སྟོན་བྱས།
+`iroha_config::parameters::actual::Common` now exposes:
 
 ```rust
 pub struct Common {
@@ -114,54 +103,46 @@ pub struct Common {
 }
 ```
 
-- **བཀག་ཆ་:**
-  - ཤུགས་ལྡན་དྲ་རྒྱ་རེ་ལུ་ ཁྱད་མེད་ལུགས། མཚན་རྟགས་བཀོད་པའི་མི་མང་ཐོ་བཀོད་ཐོག་ལས་ འཛིན་སྐྱོང་འཐབ་ཡོདཔ།
-    གསལ་ཏོག་ཏོ་བཞག་ཡོད་པའི་ (དཔེར་ན་ I18NI0000008X བརྟག་དཔྱད་/dev, I18NI000000900X
-    མི་སྡེ་བགོ་བཀྲམ་, `0x8000–0xFFEF` གཞུང་སྐྱོང་གིས་ཆ་འཇོག་འབད་ཡོདཔ།, `0xFFF0–0xFFFF`
-    གསོག་འཇོག་འབད་ཡོདཔ།)
-  - རྒྱུན་རིམ་ཅིག་གི་དོན་ལུ་ བསྒྱུར་བཅོས་འབད་མ་བཏུབ་པས། དེ་བསྒྱུར་བཅོས་འབད་ནི་ལུ་ ཕོརཀ་ དང་ a དགོཔ་ཨིན།
-    ཐོ་བཀོད་དུས་མཐུན།
-- **གཞུང་སྐྱོང་དང་ཐོ་བཀོད་ (འཆར་གཞི་བཟོ་ཡོདཔ་):** མཚན་རྟགས་སྣ་ཚོགས་ཀྱི་གཞུང་སྐྱོང་ཆ་ཚན་ཅིག་འོང་།
-  མཚན་རྟགས་བཀོད་པའི་ JSON ཐོ་བཀོད་སབ་ཁྲ་བཟོ་མི་ དབྱེ་འབྱེད་ཚུ་ མི་མིང་གཞན་ལུ་ དང་།
-  CAIP-2 ངོས་འཛིན་འབད་མི། ཐོ་བཀོད་འདི་ད་ལྟོ་ཡང་གཏང་ཡོད་པའི་ རན་དུས་ཚོད་ཀྱི་ཆ་ཤས་ཅིག་མེན།
-- **ལག་ལེན་:** མངའ་སྡེའི་འཛུལ་ཞུགས་བརྒྱུད་དེ་ ཐགས་འཐག་སྟེ་ Torii, SDKs, དང་ དངུལ་ཁུག་ཨེ་པི་ཨའི་ཚུ་ དེ་སྦེ་ཨིན།
-  ཆ་ཤས་རེ་རེ་གིས་ བཙུགས་ནི་ཡང་ན་ བདེན་དཔྱད་འབད་ཚུགས། CAIP-2 གི་གདོང་ལེན་འདི་མ་འོངས་པ་སྦེ་ལུས་ཡོདཔ།
-  interop ལས་ཀ།
+- **Constraints:**
+  - Unique per active network; managed through a signed public registry with
+    explicit reserved ranges (e.g., `0x0000–0x0FFF` test/dev, `0x1000–0x7FFF`
+    community allocations, `0x8000–0xFFEF` governance-approved, `0xFFF0–0xFFFF`
+    reserved).
+  - Immutable for a running chain. Changing it requires a hard fork and a
+    registry update.
+- **Governance & registry (planned):** A multi-signature governance set will
+  maintain a signed JSON registry mapping discriminants to human aliases and
+  CAIP-2 identifiers. This registry is not yet part of the shipped runtime.
+- **Usage:** Threaded through state admission, Torii, SDKs, and wallet APIs so
+  every component can embed or validate it. CAIP-2 exposure remains a future
+  interop task.
 
-### 2. ཀེ་ནོ་ནིག་ཁ་བྱང་གི་གསང་གྲངས་ཚུ།
+### 2. Canonical address codecs
 
-རསཊ་གནས་སྡུད་དཔེ་ཚད་འདི་གིས་ ཀེ་ནོ་ནིག་པེ་ལོཌ་ངོ་ཚབ་ཅིག་ ཕྱིར་བཏོན་འབདཝ་ཨིན།
-(`AccountAddress`) འདི་ཡང་ མི་ཡི་གདོང་ཕྱོགས་ཀྱི་རྩ་སྒྲིག་ལེ་ཤ་ཅིག་སྦེ་ བཏོན་ཚུགས། I105 ནི།
-བརྗེ་སོར་དང་ ཀེ་ནོ་ནིག་ཨའུཊི་པུཊི་གི་དོན་ལུ་ གདམ་ཁ་ཅན་གྱི་རྩིས་ཐོ། བསྡམ་བཞག་ཡོདཔ།
-`sora` འབྲི་ཤོག་འདི་ དྲག་ཤོས་གཉིས་པ་ཨིན། དེ་ཡང་ ཀ་ན་ཨཱལ་ཕ་བེཊི་ཡོད་སའི་ ཡུ་ཨེགསི་གི་དོན་ལུ་ སོ་ར་གཅིག་རྐྱངམ་ཅིག་གི་གདམ་ཁ་ཅིག་ཨིན།
-གནས་གོང་ཁ་སྐོང་འབདཝ་ཨིན། ཀེ་ནོ་ནིག་ཧེགསི་འདི་ རྐྱེན་སེལ་གྱི་གྲོགས་རམ་ཅིག་སྦེ་ལུསཔ་ཨིན།
+The Rust data model now distinguishes the public `AccountId` surface from the
+lower-level `AccountAddress` helper.
 
-- **I105 (Iroha གཞི་རྟེན་༥༨)** – གཞི་རྟེན་༥༨ ཡིག་ཤུབས་ཅིག།
-  ཉེ་འགྲམ་པ། ཌི་ཀོ་ཌར་ཚུ་གིས་ པེ་ལོཌ་འདི་ ༢༠༡༦ ལུ་ ཁྱབ་སྤེལ་མ་འབད་བའི་ཧེ་མ་ སྔོན་འཇུག་འདི་ བདེན་དཔྱད་འབདཝ་ཨིན།
-  ཁྲིམས་ལུགས་ཀྱི་འབྲི་ཤོག་འདི།
-- **སོ་ར་-བསྡམ་བཞག་ཡོད་པའི་མཐོང་སྣང་** – གིས་བཟོ་བསྐྲུན་འབད་མི་ **105 རྟགས་མཚན་** གི་སོ་ར་རྐྱངམ་ཅིག་ཡི་གུ།
-  ཕྱེད་ཀའི་རྒྱ་ཚད་ イロハ སྙན་རྩོམ་ ( ヰ) དང་ ヱ) ཡིག་འབྲུ་ ༥༨ -ཡིག་འབྲུ་ལུ་བཀོད།
-  I105 ཆ་ཚན་. ཡིག་རྒྱུན་འདི་ བརྡ་རྟགས་ `sora` ལས་འགོ་བཙུགསཔ་ཨིན།
-  checksum, དང་ ཡོངས་འབྲེལ་སྔོན་སྒྲིག་འདི་བཏོན་གཏང་། (Sora I18NT0000013X འདི་ sensinel གིས་ བརྡ་སྟོན་འབདཝ་ཨིན།)
+- `AccountId` text/JSON parsing is hard-cut to canonical Katakana i105 only.
+- `AccountAddress` remains the canonical binary envelope and can still be
+  rendered as I105. Canonical hex remains an internal envelope/debug view and
+  is not a public account identifier.
 
-  ```
-  I105  : 123456789ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz
-  Iroha : ｲﾛﾊﾆﾎﾍﾄﾁﾘﾇﾙｦﾜｶﾖﾀﾚｿﾂﾈﾅﾗﾑｳヰﾉｵｸﾔﾏｹﾌｺｴﾃｱｻｷﾕﾒﾐｼヱﾋﾓｾｽ
-  ```
-- **ཀེ་ནོ་ནིག་ཧེགསི་** – རྐྱེན་སེལ་འབད་ནི་ལུ་མཐུན་སྒྲིག་འབད་མི་ `0x…` གི་ ཀེ་ནོ་ནིག་བཱའིཊི་གི་ ཨིན་ཀོ་ཌིང་འབད་ནི།
-  ཡིག༌ཤུབས།
+- **I105** – the canonical account-address envelope that embeds the chain
+  discriminant. Decoders validate the prefix before promoting the payload to
+  the canonical form.
+- **Canonical hex** – an internal `0x…` view of the canonical byte envelope for
+  debugging, fixtures, and low-level tooling only.
 
-`AccountAddress::parse_encoded` རང་བཞིན་གྱིས་ཤེས་རྟོགས་འབདཝ་ཨིན། I105 (དགའ་གདམ་) བསྡམ་བཞག་ཡོདཔ་ (`sora`, གཉིས་པ་དྲག་ཤོས་) ཡང་ན་ ཀེ་ནོ་ནིག་ཧེགསི་
-(I18NI0000099X only; are hex འདི་བཀག་ཆ་འབད་ཡོདཔ་) ཨིན་པུཊ་ཚུ་དང་ ཌི་ཀོཌ་པེ་ལོཌི་དང་ བརྟག་དཔྱད་འབད་ཡོད་མི་གཉིས་ཆ་ར་ སླར་ལོག་འབདཝ་ཨིན།
-`AccountAddress`. Torii ད་ལྟ་ ISO 20022 ཁ་སྐོང་ཆེད་དུ་ `parse_encoded` འབོད་ཡོད།
-ཁ་བྱང་དང་ ཁྲིམས་ལུགས་ཀྱི་ཧེགསི་འབྲི་ཤོག་འདི་ གསོག་འཇོག་འབདཝ་ལས་ མེ་ཊ་ཌེ་ཊ་འདི་ གཏན་འབེབས་སྦེ་ལུས་ཡོདཔ་ཨིན།
-ངོ་ཚབ་ངོ་མ་ལུ་མ་ལྟོས་པར་།
+`AccountAddress::parse_encoded` accepts i105 forms for
+the raw address envelope. `AccountId::parse_encoded`, `FromStr`, and JSON
+deserialization accept only canonical Katakana i105 and reject non-canonical/legacy
+i105 forms, canonical hex, `norito:`, alias, and `@domain` forms.
 
-#### 2.1 མགོ་ཡིག་བང་སྒྲིག་ (ADDR-1a)
+#### 2.1 Header byte layout (ADDR-1a)
 
-ཚད་ལྡན་གྱི་ པེ་ལོཌ་ག་ར་ `header · controller` ཟེར་བཀོད་དེ་ཡོདཔ་ཨིན། ཚིག༌ཕྲད
-`header` འདི་ བརྡ་བཀོད་ལམ་ལུགས་ག་ཅི་ལུ་ བརྡ་སྤྲོད་འབད་མི་ བཱའིཊི་གཅིག་རྐྱངམ་ཅིག་ཨིན་ དེ་ཡང་ བཱའིཊི་ཚུ་ལུ་ བརྡ་བཀོད་འབདཝ་ཨིན།
-རྗེས་སུ་འབྲང་ནི:
+Every canonical payload is laid out as `header · controller`. The
+`header` is a single byte that communicates which parser rules apply to the bytes that
+follow:
 
 ```
 bit index:   7        5 4      3 2      1 0
@@ -170,18 +151,18 @@ payload bit: │version  │ class  │  norm  │ext │
              └─────────┴────────┴────────┴────┘
 ```
 
-བཱའིཊི་དང་པ་འདི་གིས་ མར་རིམ་ཌི་ཀོ་ཌར་ཚུ་གི་དོན་ལུ་ ལས་འཆར་མེ་ཊ་ཌེ་ཊ་འདི་ བསྡུ་སྒྲིག་འབདཝ་ཨིན།
+The first byte therefore packs the schema metadata for downstream decoders:
 
-| བིཊི་ | ཕིལཌ་ | གནས་གོང་ཚུ་ | འགལ་འཛོལ་གྱི་འཛོལ་བ། |
+| Bits | Field | Allowed values | Error on violation |
 |------|-------|----------------|--------------------|
-| ༧-༥ | `addr_version` | `0` (v1). བེ་ལུ་ཚུ་ `1-7` འདི་ མ་འོངས་པའི་བསྐྱར་ཞིབ་ཀྱི་དོན་ལུ་ བཀག་བཞག་ཡོདཔ་ཨིན། | `0-7` གི་ཕྱི་ཁའི་གནས་གོང་ཚུ་ `AccountAddressError::InvalidHeaderVersion` འགོ་འབྱེད་འབདཝ་ཨིན། ལག་ལེན་འཐབ་ཐངས་ ཀླད་ཀོར་མེན་པའི་ཐོན་རིམ་ཚུ་ ད་རེས་ རྒྱབ་སྐྱོར་མ་འབད་བའི་ ཐོན་རིམ་ཚུ་ བརྩི་དགོ། |
-| ༤-༣ | `addr_class` | `0` = ལྡེ་མིག་རྐྱང་པ་, I18NI000000111X = སྣ་མང་སིག. | གཞན་གནས་གོང་ཚུ་ `AccountAddressError::UnknownAddressClass` ཡར་སེང་འབདཝ་ཨིན། |
-| ༢-༡ | `norm_version` | `1` (ནོར་མ་ v༡)། གནས་གོང་ `0`, I18NI000000116X, I18NI000000117X ཚུ་ བཀག་བཞག་ཡོདཔ་ཨིན། | I18NI000000118X ལས་ལྷག་པའི་གནས་གོང་ཚུ་ ཡར་སེང་འབདཝ་ཨིན། |
-| 0 | `ext_flag` | `0` འབད་དགོ། | གཞི་སྒྲིག་གིས་ `AccountAddressError::UnexpectedExtensionFlag`. |
+| 7-5  | `addr_version` | `0` (v1). Values `1-7` are reserved for future revisions. | Values outside `0-7` trigger `AccountAddressError::InvalidHeaderVersion`; implementations MUST treat non-zero versions as unsupported today. |
+| 4-3  | `addr_class` | `0` = single key, `1` = multisig. | Other values raise `AccountAddressError::UnknownAddressClass`. |
+| 2-1  | `norm_version` | `1` (Norm v1). Values `0`, `2`, `3` are reserved. | Values outside `0-3` raise `AccountAddressError::InvalidNormVersion`. |
+| 0    | `ext_flag` | MUST be `0`. | Set bit raises `AccountAddressError::UnexpectedExtensionFlag`. |
 
-རསཊི་ཨེན་ཀོ་ཌར་གྱིས་ ལྡེ་མིག་རྐྱང་པའི་ཚད་འཛིན་ (ཐོན་རིམ་ ༠ དབྱེ་རིམ་ ༠, ༢༠༠, དང་ ༢༠,
-ནོར་མ་ཝི་༡, རྒྱ་བསྐྱེད་དར་ཆ་བསལ་ཡོདཔ་) དང་ སྣ་མང་སིག་ཚད་འཛིན་ (ཐོན་རིམ་༠,
-class 1, སྒྲིག་གཞི་ v1, རྒྱ་བསྐྱེད་དར་ཆ་བསལ་ཡོདཔ།).
+The Rust encoder writes `0x02` for single-key controllers (version 0, class 0,
+norm v1, extension flag cleared) and `0x0A` for multisig controllers (version 0,
+class 1, norm v1, extension flag cleared).
 
 #### 2.2 Domainless payload semantics
 
@@ -190,244 +171,202 @@ with no selector segment, no implicit default-domain reconstruction, and no
 public decode fallback for legacy scoped-account literals.
 
 Explicit domain context is modeled separately as `ScopedAccountId { account,
-domain }` or separate API fields; it is not encoded into `AccountId` payload
-bytes.
+domain }` and via account-domain link state. Converting an `AccountAddress`
+into a scoped account therefore requires the caller to supply the domain
+explicitly. The public subject-identity surface is just `AccountId`;
+`AccountSubjectId` is not part of the public API.
 
-| Tag | Meaning | Payload | Notes |
-|-----|---------|---------|-------|
-| `0x00` | Domainless canonical scope | none | Canonical account payloads are domainless; explicit domain context lives outside the address payload. |
-| `0x01` | Local domain digest | 12 bytes | Digest = `blake2s_mac(key = "SORA-LOCAL-K:v1", canonical_label)[0..12]`. |
-| `0x02` | Global registry entry | 4 bytes | Big-endian `registry_id`; reserved until the global registry ships. |
+#### 2.3 Controller payload encodings (ADDR-1a)
 
-Domain labels are canonicalised (UTS-46 + STD3 + NFC) before hashing. Unknown tags raise `AccountAddressError::UnknownDomainTag`. When validating an address against a domain, mismatched selectors raise `AccountAddressError::DomainMismatch`.
+The controller payload is a tagged union appended immediately after the header in
+canonical payloads:
 
-```
-legacy selector segment
-┌──────────┬──────────────────────────────────────────────┐
-│ tag (u8) │ payload (depends on selector kind, see table)│
-└──────────┴──────────────────────────────────────────────┘
-```
-
-When present, the selector is immediately adjacent to the controller payload, so
-a decoder can walk the wire format in order: read the tag byte, read the
-tag-specific payload, then move on to the controller bytes.
-
-**Legacy selector examples**
-
-- *Implicit default* (`tag = 0x00`). No payload. Example canonical hex for the default
-  domain using the deterministic test key:
-  `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.
-- *Local digest* (`tag = 0x01`). Payload is the 12-byte digest. Example (`treasury` seed
-  `0x01`): `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`.
-- *Global registry* (`tag = 0x02`). Payload is a big-endian `registry_id:u32`. The bytes
-  that follow the payload are identical to the implicit-default case; the selector simply
-  replaces the normalised domain string with a registry pointer. Example using
-  `registry_id = 0x0000_002A` (decimal 42) and the deterministic default controller:
-  `0x02020000002a000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201`.
-
-#### 2.3 ཚད་འཛིན་པེ་ལོཌི་ཨེན་ཀོ་ཌིང་ (ADDR-1a)
-
-ཚད་འཛིན་པེ་ལོསིཊི་འདི་ ཀེ་ནོ་ནིཀཱལ་ payload ནང་ header ཤུལ་ལས་ (legacy selector segment ཌི་ཀོཌི་འབད་བའི་སྐབས་དེའི་ཤུལ་ལས་) འོང་བའི་ tagged union ཅིག་ཨིན།
-
-| རྟགས་ | ཚད་འཛིན་ | བཀོད་སྒྲིག་ | དྲན་ཐོ། |
+| Tag | Controller | Layout | Notes |
 |-----|------------|--------|-------|
-| `0x00` | གཅིག ལྡེ་མིག་ | `curve_id:u8` · `key_len:u8` · `key_bytes` | `curve_id=0x01` ད་རིས་ Ed25519 ལུ་ས་ཁྲ་ཚུ་ཡོདཔ་ཨིན། `key_len` འདི་ `u8` ལུ་བཀག་ཆ་འབད་ཡོདཔ་ཨིན། གནས་གོང་སྦོམ་ཚུ་གིས་ `AccountAddressError::KeyPayloadTooLong` ཡར་སེང་འབདཝ་ཨིན་ (དེ་འབདཝ་ད་ >255 བཱའིཊི་ཚུ་ཨིན་མི་ ལྡེ་མིག་རྐྱང་པའི་ཨེམ་ཨེལ་ མི་མང་ལྡེ་མིག་ཚུ་ ཨིན་ཀོཌི་འབད་མི་བཏུབ་ དེ་ལས་ སྣ་མང་སིག་ལག་ལེན་འཐབ་དགོཔ་ཨིན།) |
-| `0x01` | སྣ་མང་སིག་ | · `threshold:u16` · `threshold:u16` · (I18NI000000000161X · I18NI0000162X · `key_len:u16` · `key_len:u16` · `key_bytes`)\ འཐུས་མི་༢༥༥ ཚུན་རྒྱབ་སྐྱོར་འབདཝ་ཨིན། (`CONTROLLER_MULTISIG_MEMBER_MAX`) མ་ཤེས་པའི་གུག་གུགཔ་ཚུ་གིས་ `AccountAddressError::UnknownCurve`; སྐྱོན་བརྗོད་ཀྱི་སྲིད་བྱུས་ཚུ་ `AccountAddressError::InvalidMultisigPolicy` སྦེ་ བརྡུང་ཡོདཔ་ཨིན། |
+| `0x00` | Single key | `curve_id:u8` · `key_len:u8` · `key_bytes` | `curve_id=0x01` maps to Ed25519 today. `key_len` is bounded to `u8`; larger values raise `AccountAddressError::KeyPayloadTooLong` (so single-key ML‑DSA public keys, which are >255 bytes, cannot be encoded and must use multisig). |
+| `0x01` | Multisig | `version:u8` · `threshold:u16` · `member_count:u16` · (`curve_id:u8` · `weight:u16` · `key_len:u16` · `key_bytes`)\* | The encoded member count is 16-bit; the old 255-member hard cap is gone. Unknown curves raise `AccountAddressError::UnknownCurve`; malformed policies bubble up as `AccountAddressError::InvalidMultisigPolicy`. |
 
-སྣ་མང་སྲིད་བྱུས་ཚུ་གིས་ཡང་ CTAP2-style CBOR སབ་ཁྲ་དང་ ཀེ་ནོ་ནིག་བཞུ་བཅོས་འདི་ གསལ་སྟོན་འབདཝ་ཨིན།
-ཧོསིཊི་ཚུ་དང་ཨེསི་ཌི་ཀེ་ཚུ་གིས་ ཚད་འཛིན་པ་འདི་ གཏན་འབེབས་བཟོ་ཐོག་ལས་ བདེན་དཔྱད་འབད་ཚུགས། མཐོང
-ལས་འཆར་གྱི་དོན་ལུ་ `docs/source/references/multisig_policy_schema.md` (ADDR-1c)
-བདེན་དཔྱད་ལམ་ལུགས་དང་ ཧ་ཤིང་བྱ་རིམ་ དེ་ལས་ གསེར་གྱི་ཅ་ཆས་ཚུ་ཨིན།
+Multisig policies also expose a CTAP2-style CBOR map and canonical digest so
+hosts and SDKs can verify the controller deterministically. See
+`docs/source/references/multisig_policy_schema.md` (ADDR-1c) for the schema,
+validation rules, hashing procedure, and golden fixtures.
 
-ལྡེ་མིག་བཱའིཊི་ཚུ་ `PublicKey::to_bytes` གིས་ ལོག་སྤྲོད་མི་བཟུམ་སྦེ་ ཨིན་ཀོཌི་འབད་ཡོདཔ་ཨིན། ཌི་ཀོ་ཌར་ཚུ་གིས་ `PublicKey` གནས་སྟངས་ཚུ་ བསྐྱར་བཟོ་འབད་དེ་ བཱའིཊི་ཚུ་ གསལ་བསྒྲགས་འབད་ཡོད་པའི་གུག་གུགཔ་དང་ མ་མཐུན་པ་ཅིན་ `AccountAddressError::InvalidPublicKey` ཡར་སེང་འབདཝ་ཨིན།
+All key bytes are encoded exactly as returned by `PublicKey::to_bytes`; decoders reconstruct `PublicKey` instances and raise `AccountAddressError::InvalidPublicKey` if the bytes do not match the declared curve.
 
-> **Ed25519 ཀེ་ནོ་ནིག་བཀག་སྡོམ་ (ADDR-3a):** གུག་གུགཔ་ `0x01` ལྡེ་མིག་ཚུ་གིས་ མཚན་རྟགས་བཀོད་མི་གིས་ བཱའིཊི་ཡིག་རྒྱུན་ངེས་བདེན་ལུ་ ཌི་ཀོཌི་འབད་དགོཔ་དང་ ཆུང་ཀུ་སྡེ་ཚན་ནང་ ཆུང་ཀུ་སྦེ་ཡོད་མི་ གོ་རིམ་ཆུང་བ་ནང་ ཡོདཔ་ཨིན། ད་རེས་ Nodes གིས་ ཁྲིམས་ལུགས་མེན་པའི་ཨིན་ཀོ་ཌིང་ཚུ་ ངོས་ལེན་མ་འབད་བར་ ༼དཔེར་ན་ གནས་གོང་ཚུ་ Modulo `2^255-19` མར་ཕབ་འབད་ཡོདཔ་ཨིན།༽
+> **Ed25519 canonical enforcement (ADDR-3a):** curve `0x01` keys must decode to the exact byte string emitted by the signer and must not lie in the small-order subgroup. Nodes now reject non-canonical encodings (e.g., values reduced modulo `2^255-19`) and weak points such as the identity element, so SDKs should surface matching validation errors before submitting addresses.
 
-####
+##### 2.3.1 Curve identifier registry (ADDR-1d)
 
-| ID (`curve_id`) | ཨཱལ་གོ་རི་དམ་ | ཁྱད་ཆོས་ཀྱི་སྒོ་སྒྲིག | དྲན་ཐོ། |
-|----------------------------------------------------------------------------------------------
-| `0x00` | ཉར་ཚགས་འབད་ཡོདཔ། | — | མ་བཏོན་པར་; decoders ཁ་ཐོག་ `ERR_UNKNOWN_CURVE`. |
-| `0x01` | Ed25519 | — | ཀེ་ནོ་ནིག་ཝི་༡ ཨཱལ་གོ་རི་དམ་ (`Algorithm::Ed25519`); སྔོན་སྒྲིག་རིམ་སྒྲིག་ནང་ལྕོགས་ཅན་བཟོ་ཡོདཔ། |
-| `0x02` | ཨེམ་ཨེལ་‐ཌི་ཨེསི་ཨེ་ (ཌི་ལི་ཐི་ཡམ་༣) | — | ཌི་ལི་ཐི་ཡམ་༣ མི་མང་ལྡེ་མིག་བཱའིཊིསི་ (༡༩༥༢ བཱའིཊི) ལག་ལེན་འཐབ་ཨིན། ཁ་བྱང་རྐྱང་པ་ཚུ་ ML‐DSA ཨིན་ཀོ་ཌི་འབད་མི་ཚུགས། ག་ཅི་འབད་ཟེར་བ་ཅིན་ I18NI000000180X འདི་ I18NI000000181X ཨིན། སྣ་མང་ལག་ལེན་གྱིས་ `u16` རིང་ཚད་ཚུ། |
-| `0x03` | BLS12‐381 (སྤྱིར་བཏང་) | `bls` | ཇི་༡ (བཱའིཊི་༤༨) ནང་ མི་མང་ལྡེ་མིག་ (༤༨ བཱའིཊི་༤༨) ཇི་༢ (བཱའིཊི་༩༦) ནང་ མིང་རྟགས་ཚུ། |
-| `0x04` | སེཔ་༢༥༦ཀེ་༡ | — | SHA གི་ཐོག་ལུ་ གཏན་འབེབས་ ECDSA དང་། མི་མང་ལྡེ་མིག་ཚུ་གིས་ ༣༣‐བཱའིཊི་ཨེསི་ཨི་སི་༡ བསྡམ་བཞག་ཡོད་པའི་རྣམ་པ་ལག་ལེན་འཐབ་ཨིནམ་དང་ མཚན་རྟགས་ཚུ་གིས་ ཀེ་ནོ་ནིག་ ༦༤‐བཱའིཊི་ `r∥s` བཀོད་སྒྲིག་འདི་ལག་ལེན་འཐབ་ཨིན། |
-| `0x05` | BLS12‐381 (ཆུང་ཀུ) | `bls` | ཇི་༢ (བཱའིཊི་༩༦) ནང་ མི་མང་ལྡེ་མིག་ G1 (bytes 48) ནང་མིང་རྟགས་ཚུ། |
-| `0x0A` | GOST R 34.10‐2012 (256, set A) | `gost` | `gost` ཁྱད་རྣམ་འདི་ལྕོགས་ཅན་བཟོ་བའི་སྐབས་རྐྱངམ་ཅིག་ཐོབ་ཚུགས། |
-| `0x0B` | GOST R 34.10‐2012 (256, གཞི་སྒྲིག་ཁ) | `gost` | `gost` ཁྱད་རྣམ་འདི་ལྕོགས་ཅན་བཟོ་བའི་སྐབས་རྐྱངམ་ཅིག་ཐོབ་ཚུགས། |
-| `0x0C` | GOST R 34.10‐2012 (256, set C) | `gost` | `gost` ཁྱད་རྣམ་འདི་ལྕོགས་ཅན་བཟོ་བའི་སྐབས་རྐྱངམ་ཅིག་ཐོབ་ཚུགས། |
-| `0x0D` | GOST R 34.10‐2012 (512, set A) | `gost` | `gost` ཁྱད་རྣམ་འདི་ལྕོགས་ཅན་བཟོ་བའི་སྐབས་ལུ་རྐྱངམ་ཅིག་ཐོབ་ཚུགས། |
-| `0x0E` | GOST R 34.10‐2012 (512, གཞི་སྒྲིག་ཁ) | I18NI0000020202 | `gost` ཁྱད་རྣམ་འདི་ལྕོགས་ཅན་བཟོ་བའི་སྐབས་ལུ་རྐྱངམ་ཅིག་ཐོབ་ཚུགས། |
-| `0x0F` | SM2 | `sm` | ཌིསིཊི་ཨའི་ཌི་རིང་ཚད་ (u16 BE) + ཌིསིཊི་ཨའི་ཌི་བཱའིཊིསི་ + 65‐བཱའིཊི་ཨེསི་ཨི་སི་༡ མ་བསྡམས་པའི་ཨེསི་ཨེམ་༢ ལྡེ་མིག་; `sm` ལྕོགས་ཅན་བཟོ་བའི་སྐབས་རྐྱངམ་ཅིག་ཐོབ་ཚུགས། |
+| ID (`curve_id`) | Algorithm | Feature gate | Notes |
+|-----------------|-----------|--------------|-------|
+| `0x00` | Reserved | — | MUST NOT be emitted; decoders surface `ERR_UNKNOWN_CURVE`. |
+| `0x01` | Ed25519 | — | Canonical v1 algorithm (`Algorithm::Ed25519`); enabled in the default config. |
+| `0x02` | ML‑DSA (Dilithium3) | — | Uses the Dilithium3 public key bytes (1952 bytes). Single‑key addresses cannot encode ML‑DSA because `key_len` is `u8`; multisig uses `u16` lengths. |
+| `0x03` | BLS12‑381 (normal) | `bls` | Public keys in G1 (48 bytes), signatures in G2 (96 bytes). |
+| `0x04` | secp256k1 | — | Deterministic ECDSA over SHA‑256; public keys use the 33‑byte SEC1 compressed form and signatures use the canonical 64‑byte `r∥s` layout. |
+| `0x05` | BLS12‑381 (small) | `bls` | Public keys in G2 (96 bytes), signatures in G1 (48 bytes). |
+| `0x0A` | GOST R 34.10‑2012 (256, set A) | `gost` | Available only when the `gost` feature is enabled. |
+| `0x0B` | GOST R 34.10‑2012 (256, set B) | `gost` | Available only when the `gost` feature is enabled. |
+| `0x0C` | GOST R 34.10‑2012 (256, set C) | `gost` | Available only when the `gost` feature is enabled. |
+| `0x0D` | GOST R 34.10‑2012 (512, set A) | `gost` | Available only when the `gost` feature is enabled. |
+| `0x0E` | GOST R 34.10‑2012 (512, set B) | `gost` | Available only when the `gost` feature is enabled. |
+| `0x0F` | SM2 | `sm` | DistID length (u16 BE) + DistID bytes + 65‑byte SEC1 uncompressed SM2 key; available only when `sm` is enabled. |
 
-ཁ་སྐོང་གུག་གུགཔ་ཚུ་གི་དོན་ལུ་ འགན་སྤྲོད་མེད་པར་ ས་སྒོ་ `0x06–0x09` ལུས་ཡོདཔ་ཨིན། གསརཔ་ཅིག་ངོ་སྤྲོད་འབད་ནི།
-ཨཱལ་གོ་རི་དམ་ལུ་ ལམ་གྱི་ས་ཁྲ་དུས་མཐུན་བཟོ་ནི་དང་ ཨེསི་ཌི་ཀེ་/ཧོསཊི་ཁྱབ་ཚད་དགོཔ་ཨིན། ཨིན་ཀོ་ཌར་ཚུ།
-`ERR_UNSUPPORTED_ALGORITHM`, དང་ རྒྱབ་སྐྱོར་མ་འབད་བའི་ཨཱལ་གོ་རི་དམ་གང་རུང་ཅིག་ ངོས་ལེན་མི་འབད།
-decoders ཉམས་སྲུང་འབད་ནི་ལུ་ `ERR_UNKNOWN_CURVE` དང་གཅིག་ཁར་ མ་ཤེས་པའི་ཨའི་ཌི་ཚུ་ལུ་ མགྱོགས་དྲགས་སྦེ་ འཐུས་ཤོར་འབྱུང་དགོ།
-འཐུས་ཤོར་བཀག་པའི་སྤྱོད་ལམ།
+Slots `0x06–0x09` remain unassigned for additional curves; introducing a new
+algorithm requires a roadmap update and matching SDK/host coverage. Encoders
+MUST reject any unsupported algorithm with `ERR_UNSUPPORTED_ALGORITHM`, and
+decoders MUST fail fast on unknown ids with `ERR_UNKNOWN_CURVE` to preserve
+fail-closed behaviour.
 
-ཀེན་ནོ་ཀའི་ཐོ་བཀོད་ (འཕྲུལ་ཆས་ལྷག་བཏུབ་པའི་ཇེ་ཨེསི་ཨོ་ཨེན་ཕྱིར་འདྲེན་ཚུ་རྩིས་ཏེ་) འདི་ འོག་ལུ་སྡོད་དོ་ཡོདཔ་ཨིན།
+The canonical registry (including a machine-readable JSON export) lives under
 [`docs/source/references/address_curve_registry.md`](source/references/address_curve_registry.md).
-ལག་ཆས་ལག་ཆས་འདི་གིས་ གནད་སྡུད་ཆ་ཚན་དེ་ཐད་ཀར་དུ་ གུག་གུགཔ་ངོས་འཛིན་འབད་ནི་ཚུ་ལུསཔ་ཨིན།
-ཨེསི་ཌི་ཀེ་ཚུ་དང་ བཀོལ་སྤྱོད་པའི་ལཱ་གི་རྒྱུན་རིམ་ཚུ་ནང་ལུ་ རིམ་མཐུན་འབད་ཡོདཔ།
+Tooling SHOULD consume that dataset directly so curve identifiers remain
+consistent across SDKs and operator workflows.
 
-- **SDK གཱ་ཊིང་:** ཨེསི་ཌི་ཀེ་ཨེསི་ཚུ་ ཨེ་ཌི་༢༥༥༡༩ རྐྱངམ་གཅིག་བདེན་དཔྱད་/ཨེན་ཀོ་ཌིང་ལུ་སྔོན་སྒྲིག་འབད། སོར་བསྒྱུར་འབད།
-  བསྡུ་སྒྲིག་འབད་བའི་དུས་ཚོད་ཀྱི་རྒྱལ་དར་ (`IROHASWIFT_ENABLE_MLDSA`, `IROHASWIFT_ENABLE_GOST`,
-  `IROHASWIFT_ENABLE_SM`); ཇ་བ་/ཨེན་ཌོརཌི་ཨེསི་ཌི་ཀེ་ དགོས་མཁོ་དགོཔ།
-  `AccountAddress.configureCurveSupport(...)`; the ཇ་བ་ཨིསི་ཀིརིཔཊི་ཨེསི་ཌི་ཀེ་ལག་ལེན་འཐབ་ཨིན།
+- **SDK gating:** SDKs default to Ed25519-only validation/encoding. Swift exposes
+  compile-time flags (`IROHASWIFT_ENABLE_MLDSA`, `IROHASWIFT_ENABLE_GOST`,
+  `IROHASWIFT_ENABLE_SM`); the Java/Android SDK requires
+  `AccountAddress.configureCurveSupport(...)`; the JavaScript SDK uses
   `configureCurveSupport({ allowMlDsa: true, allowGost: true, allowSm2: true })`.
-  secp256k1 རྒྱབ་སྐྱོར་འཐོབ་ཚུགས་ དེ་འབདཝ་ད་ ཇེ་ཨེསི་/ཨེན་ཌོའིཌ་ནང་ སྔོན་སྒྲིག་གིས་ ལྕོགས་ཅན་མ་བཟོ།
-  SDKs; འབོད་བརྡ་གཏང་མི་ཚུ་གིས་ མེན་ Ed25519 ཚད་འཛིན་ཚུ་བཏོན་པའི་སྐབས་ གསལ་ཏོག་ཏོ་སྦེ་ གདམ་ཁ་རྐྱབ་དགོ།
-- **ཧོསིཊི་གཱེཊི་:** `Register<Account>` བཀག་ཆ་ཚད་འཛིན་ཚུ་ མཚན་རྟགས་བཀོད་མི་ཚུ་གིས་ ཨཱལ་གོ་རི་དམ་ཚུ་ལག་ལེན་འཐབ་ཨིན།
-  from the node’s `crypto.allowed_signing` ཐོ་ཡིག་ **ཡང་ན་** གུག་གུགཔ་ངོས་འཛིན་འབད་མི་ཚུ་ ལས་མེདཔ་ཨིན།
-  `crypto.curves.allowed_curve_ids`, དེ་འབདཝ་ལས་ ཀླད་ཀོར་ཚུ་གིས་ རྒྱབ་སྐྱོར་ (རིམ་སྒྲིག་ + +) ཁྱབ་བསྒྲགས་འབད་དགོ།
-  རིགས་མཚན་) ML‐DSA/GOST/SM ཚད་འཛིན་པ་ཚུ་ ཐོ་བཀོད་འབད་བའི་ཧེ་མ་ཨིན། བི་ཨེལ་ཨེསི་ཚད་འཛིན་འབད་མི།
-  ཨེལ་གོ་རི་དམ་ཚུ་ བསྡུ་སྒྲིག་འབད་བའི་སྐབས་ ཨ་རྟག་རང་ འབད་ཆོགཔ་ཨིན། ༼མོས་མཐུན་ལྡེ་མིག་ཚུ་ དེ་ཚུ་ལུ་བརྟེན་དགོཔ་ཨིན།༽
-  དང་ སྔོན་སྒྲིག་རིམ་སྒྲིག་གིས་ Ed25519 + secp256k1.【crates/iroha_core/smrtc/smart གན་རྒྱ་/ཨི་སི་/མངའ་ཁོངས་/མངའ་ཁོངས་.s:32】 ལྕོགས་ཅན་བཟོཝ་ཨིན།
+  secp256k1 support is available but not enabled by default in the JS/Android
+  SDKs; callers must opt in explicitly when emitting non‑Ed25519 controllers.
+- **Host gating:** `Register<Account>` rejects controllers whose signatories use algorithms
+  missing from the node’s `crypto.allowed_signing` list **or** curve identifiers absent from
+  `crypto.curves.allowed_curve_ids`, so clusters must advertise support (configuration +
+  genesis) before ML‑DSA/GOST/SM controllers can be registered. BLS controller
+  algorithms are always allowed when compiled (consensus keys rely on them),
+  and the default configuration enables Ed25519 + secp256k1.【crates/iroha_core/src/smartcontracts/isi/domain.rs:32】
 
-##### 2.3.2 སྣ་མང་ཚད་འཛིན་གྱི་ལམ་སྟོན།
+##### 2.3.2 Multisig controller guidance
 
-`AccountController::Multisig` བརྒྱུད་དེ་སྲིད་བྱུས་ཚུ་ རིམ་སྒྲིག་འབདཝ་ཨིན།
-`crates/iroha_data_model/src/account/controller.rs` དང་ ལས་འཆར་འདི་ བསྟར་སྤྱོད་འབདཝ་ཨིན།
-[`docs/source/references/multisig_policy_schema.md`](source/references/multisig_policy_schema.md)ནང་ཡིག་ཐོག་ལུ་བཀོད་ཡོད།
-བཀོལ་སྤྱོད་ཀྱི་ཁ་གསལ་གཙོ་བོ་ནི།
+`AccountController::Multisig` serialises policies via
+`crates/iroha_data_model/src/account/controller.rs` and enforces the schema
+documented in [`docs/source/references/multisig_policy_schema.md`](source/references/multisig_policy_schema.md).
+Key implementation details:
 
-- སྲིད་བྱུས་ཚུ་ སྤྱིར་བཏང་བཟོ་སྟེ་ བདེན་དཔྱད་འབད་དེ་ ཧེ་མ་ `MultisigPolicy::validate()` གིས་ ཧེ་མ་གི་ཧེ་མ་ཨིན།
-  བཙུགས་བཞག་ཡོདཔ། ཐེརེ་ཤོལཌ་ཚུ་ ≥1 དང་ ≤Σ ལྗིད་ཚད་དགོ། འཐུས་མི་འདྲ་མཚུངས་ནི།
-  `(algorithm || 0x00 || key_bytes)` གིས་ དབྱེ་སེལ་འབད་བའི་ཤུལ་ལས་ གཏན་འབེབས་བཟོ་ཡོདཔ་ཨིན།
-- གཉིས་ལྡན་ཚད་འཛིན་པ་ པེ་ལོཌ་ (`ControllerPayload::Multisig`) ཨིན་ཀོ་ཌི།
-  `version:u8`, `threshold:u16`, I18NI000000227X, དེ་ལས་ འཐུས་མི་རེ་རེ་བཞིན་དུ།
-  `(curve_id, weight:u16, key_len:u16, key_bytes)`. འདི་ ཏག་ཏག་སྦེ་ག་ཅི་ཨིན་ན།
-  `AccountAddress::canonical_bytes()` གིས་ I105 (དགའ་གདམ་)/སོ་ར་ (ངོ་མ) ལུ་བྲིས་ཡོདཔ་ཨིན།
-- ཧ་ཤིང་ (`MultisigPolicy::digest_blake2b256()`) གིས་ Blake2b-256 དང་གཅིག་ཁར་ ལག་ལེན་འཐབ་ཨིན།
-  `iroha-ms-policy` མི་སྒེར་གྱི་ཡིག་རྒྱུན་འདི་ དེ་འབདཝ་ལས་ གཞུང་སྐྱོང་གིས་ གསལ་སྟོན་འདི་ 1 ལུ་མཐུད་ཚུགས།
-  I105 ནང་བཙུགས་ཡོད་པའི་ ཚད་འཛིན་གྱི་བཱའི་ཊི་ཚུ་དང་མཐུན་པའི་ གཏན་འབེབས་སྲིད་བྱུས་ཨའི་ཌི་།
-- བདེ་སྒྲིག་ཁྱབ་ཁོངས་འདི་ `fixtures/account/address_vectors.json` ནང་ལུ་ཡོདཔ་ཨིན། (casess)
-  `addr-multisig-*`). དངུལ་ཁུག་དང་ཨེསི་ཌི་ཀེ་ཚུ་གིས་ ཀེ་ནོ་ནིག་ཨའི་ཨེཆ་༥༨ ཡིག་རྒྱུན་ཚུ་ བཤད་དགོཔ་ཨིན།
-  གཤམ་གསལ་གྱི་ཁོང་ཚོའི་ཨེན་ཀོ་ཌར་ཚུ་ རཱསི་ཊི་ལག་ལེན་འཐབ་མི་དང་མཐུན་སྒྲིག་འབད་ནི་ལུ་ ངེས་གཏན་བཟོ་ནིའི་དོན་ལུ་ཨིན།
+- Policies are normalised and validated by `MultisigPolicy::validate()` before
+  being embedded. Thresholds must be ≥ 1 and ≤ Σ weight; duplicate members are
+  removed deterministically after sorting by `(algorithm || 0x00 || key_bytes)`.
+- The binary controller payload (`ControllerPayload::Multisig`) encodes
+  `version:u8`, `threshold:u16`, `member_count:u16`, then each member’s
+  `(curve_id, weight:u16, key_len:u16, key_bytes)`. This is exactly what
+  `AccountAddress::canonical_bytes()` writes to I105 payloads.
+- Multisig address encoding is no longer limited by an 8-bit member counter.
+  The binary field is `u16`, so the old 255-member hard cap no longer applies.
+- Hashing (`MultisigPolicy::digest_blake2b256()`) uses Blake2b-256 with the
+  `iroha-ms-policy` personalization string so governance manifests can bind to a
+  deterministic policy ID that matches the controller bytes embedded in I105.
+- Fixture coverage lives in `fixtures/account/address_vectors.json` (cases
+  `addr-multisig-*`). Wallets and SDKs should assert the generated fixture
+  bundle directly rather than copying inline literals into code or docs. The
+  canonical renderer now emits katakana-only I105 payload symbols after the
+  chain sentinel.
 
-| གནད་དོན་ ID | ཐེ་རེ་ཤོལ་ / འཐུས་མི། | I105 ལི་ཊར་ (སྔོན་འཇུག་ I18NI0000234X) | སོ་ར་བསྡམ་བཞག་ (`sora`) དངོས་ཡོད་ | དྲན་ཐོ། |
-|---||-|-|----------------------------------------------------------------------------------------  -- -                                 
-| `addr-multisig-council-threshold3` | `≥3` ལྗིད་ཚད་, འཐུས་མིའི་ `(2,1,1)` | `SRfSHsrH3tEmYaaAYyD248F3vfT1oQ3WEGS22MaD8W9bLefF7rsoKLYGcpbcM9EcSus5ZhCAZU7ztn2BCsyeCAdfRncAVmVsipd4ibk6CBLF3Nrzcw8P7VKJg6mtFgEhWVTjfDkUMoc63oeEmaWyV6cyiphwk8ZgKAJUe4TyVtmKm1WWcg7qZ6i` | `sora3vﾑ2zkaoUwﾋﾅGﾘﾚyﾂe3ﾖfﾙヰｶﾘﾉwｷnoWﾛYicaUr3ﾔｲﾖ2Ado3TﾘYQﾉJqﾜﾇｳﾑﾐd8dDjRGｦ3Vﾃ9HcﾀMヰR8ﾎﾖgEqGｵEｾDyc5ﾁ1ﾔﾉ31sUﾑﾀﾖaｸxﾘ3ｲｷMEuFｺｿﾉBQSVQnxﾈeJzrXLヰhｿｹ5SEEﾅPﾂﾗｸdヰﾋ1bUGHｲVXBWNNJ6K` | ཚོགས་སྡེའི་མངའ་ཁོངས་གཞུང་སྐྱོང་ གནས་ཚུལ། |
-| I18NI0000241X | `≥2`, འཐུས་མི་ `(1,2)` | `3xsmkps1KPBn9dtpE5qHRhHEZCpiAe8d9j6H9A42TV6kc1TpaqdwnSksKgQrsSEHznqvWKBMc1os69BELzkLjsR7EV2gjV14d9JMzo97KEmYoKtxCrFeKFAcy7ffQdboV1uRt` | `sora2ﾖZﾘeｴAdx3ﾂﾉﾔXhnｹﾀ2ﾉｱﾋxﾅﾄﾌヱwﾐmﾊvEﾐCﾏﾎｦ1ﾑHﾋso2GKﾔﾕﾁwﾂﾃP6ﾁｼﾙﾖｺ9ｻｦbﾈ4wFdﾑFヰ3HaﾘｼMｷﾌHWtｷﾋLﾙﾖQ4D3XﾊﾜXmpktﾚｻ5ﾅﾅﾇ1gkﾏsCFQGH9` | གཉིས་ལྡན་མཚན་རྟགས་ཡ་མཚན་ཅན་གྱི་དཔེ་ (ལྗིད་ཚད་ ༡ + ༢)། |
-| `addr-multisig-default-quorum3` | `≥3`, འཐུས་མི་ `(1,1,1,1)` | `nA2bDNhMqXz7ERkHNoEWbvJGyR1aDRsw32LaUWLgbK3vcpzohmdFCLvdotxUWWDY3aZeX4ptLk4Z6TjF5ossnJm8VrNo6daxmGTkqUyP4MxJxiNyPFxsEE5DLnsoLWUcxaWNpZ76tmkbiGS31Gv8tejKpuiHUMaQ1s5ohWyZvDnpycNkBK8AEfGJqn5yc9zAzfWbVhpDwkPj8ScnzvH1Echr5` | `soraﾐ38ﾅｴｸﾜ8ﾃzwBrqﾘｺ4yﾄv6kqJp1ｳｱﾛｿrzﾄﾃﾘﾒRﾗtV9ｼﾔPｽcヱEﾌVVVｼﾘｲZAｦﾓﾅｦeﾒN76vﾈcuｶuﾛL54rzﾙﾏX2zMﾌRLﾃﾋpﾚpｲcHﾑﾅﾃﾔzｵｲVfAﾃﾚﾎﾚCヰﾔｲｽｦw9ﾔﾕ8bGGkﾁ6sNｼaｻRﾖﾜYﾕﾚU18ﾅHヰﾌuMeﾊtﾂrｿj95Ft8ﾜ3fﾄkNiｴuﾈrCﾐQt8ヱｸｸmﾙﾒgUbﾑEKTTCM` | གཞི་རྟེན་གཞུང་སྐྱོང་དོན་ལུ་ལག་ལེན་འཐབ་མི་ མཛེས་སྡུག་ལྡན་པའི་-སྔོན་སྒྲིག་མངའ་ཁོངས།
+#### 2.4 Failure rules (ADDR-1a)
 
-#### 2.4 འཐུས་ཤོར་གྱི་སྒྲིག་གཞི་ (ADDR-1a)
+- Payloads shorter than the required canonical header+controller size emit
+  `AccountAddressError::InvalidLength` or
+  `AccountAddressError::UnexpectedTrailingBytes`.
+- Headers that set the reserved `ext_flag` or advertise unsupported versions/classes MUST be rejected using `UnexpectedExtensionFlag`, `InvalidHeaderVersion`, or `UnknownAddressClass`.
+- Unknown controller tags raise `UnknownControllerTag`.
+- Oversized or malformed key material raises `KeyPayloadTooLong` or `InvalidPublicKey`.
+- Multisig controllers that exceed the encodable `u16` member count raise
+  `MultisigMemberOverflow`; there is no 255-member limit.
+- Canonical rendering uses katakana-only I105 payload symbols after the chain
+  sentinel. Decoders may still read historical mixed payloads for compatibility,
+  but public renderers, JSON, and docs must emit the katakana canonical form.
+- `AccountId` text/JSON parsing does not attempt alias or domain fallback:
+  non-canonical/legacy i105 literals, `norito:<hex>`, canonical hex, `@domain`, and alias
+  forms are rejected up front in favor of canonical Katakana i105 only.
 
-- དགོས་མཁོའི་མགོ་ཡིག་ + གདམ་འཐུ་འབད་མི་ ཡང་ན་ ལྷག་ལུས་བཱའིཊིསི་གིས་ `AccountAddressError::InvalidLength` དང་ ཡང་ན་ `AccountAddressError::UnexpectedTrailingBytes` འདི་ བཤུབ་ནི་ལས་ ཐུང་ཀུ་སྦེ་ ཕབ་ལེན་འབདཝ་ཨིན།
-- བཀག་བཞག་ཡོད་པའི་ I18NI0000253X གཞི་སྒྲིག་འབད་མི་ མགོ་ཡིག་ཚུ་ `UnexpectedExtensionFlag`, `InvalidHeaderVersion`, ཡང་ན་ `UnknownAddressClass` ལག་ལེན་འཐབ་སྟེ་ ངོས་ལེན་མ་འབད་བར་བཞག་དགོ།
-- མ་ཤེས་པའི་འདེམས་ངོ་/ཚད་འཛིན་གྱི་ངོ་རྟགས་ཚུ་ `UnknownDomainTag` ཡང་ན་ `UnknownControllerTag` ཡར་སེང་འབདཝ་ཨིན།
-- ཚད་ལས་བརྒལ་བ་དང་ ཡང་ན་ ནོར་འཁྲུལ་ཅན་གྱི་ ལྡེ་མིག་རྒྱུ་ཆ་ཚུ་ `KeyPayloadTooLong` ཡང་ན་ `InvalidPublicKey` ཡར་སེང་འབདཝ་ཨིན།
-- འཐུས་མི་༢༥༥ ལས་ལྷག་སྟེ་ཡོད་མི་ སྣ་མང་ཚད་འཛིན་ཚུ་གིས་ `MultisigMemberOverflow` བསྡུ་ལེན་འབདཝ་ཨིན།
-- IME5NFKC བསྒྱུར་བཅོས: ཕྱེད་ཀ་ སོ་ར་ཀ་ན་འདི་ ཌིཀ་མ་བཅད་པར་ ཁོང་རའི་ རྒྱ་ཚད་ཆ་ཚང་སྦེ་ སྤྱིར་བཏང་བཟོ་ཚུགས་ནི་ཨིན་རུང་ ཨེ་ཨེསི་སི་ཨའི་ `sora` sensinel དང་ I105 ཨང་གྲངས་/ཡི་གུ་ཚུ་ ASCI ལུ་སྡོད་དགོ། རྒྱ་ཚད་ཡང་ན་ གནས་སྟངས་ཀྱིས་ བཀབ་ཡོད་པའི་ བརྡ་མཚོན་ཚུ་ ཁ་ཐོག་ལུ་ `ERR_MISSING_COMPRESSED_SENTINEL`, རྒྱ་ཚད་ཆ་ཚང་ ASCII གིས་ I18NI000000264X ཡར་སེང་འབདཝ་ཨིནམ་དང་ ཞིབ་དཔྱད་མ་མཐུནམ་ཚུ་ I18NI000000265X སྦེ་ ཡར་སེང་འབདཝ་ཨིན། `crates/iroha_data_model/src/account/address.rs` ནང་ རྒྱུ་དངོས་བརྟག་དཔྱད་ཚུ་གིས་ ལམ་འདི་ཚུ་ ཁྱབ་ཚུགསཔ་ལས་ SDKs དང་ དངུལ་ཁུག་ཚུ་ ཐག་བཅད་མ་ཚུགས་པའི་ འཐུས་ཤོར་ཚུ་ལུ་ བློ་གཏད་ཚུགས།
-- Torii དང་ I18NI000000267X གི་ canonical Katakana i105 / non-canonical Katakana i105 ཨིན་པུཊི་ཚུ་ འདྲ་མཚུངས་སྦེ་ བཏོནམ་ཨིན། ༼དཔེར་ན་ མ་མཐུནམ་, dight digest digest༽ མཉེན་ཆས་ཚུ་ འབད་ཚུགས། བརྡ་དོན་གྱི་ཡིག་རྒྱུན་ཚུ་ལས་ ཕོ་ཚོད་དཔག་མ་དགོ་པར་ བཟོ་བཀོད་འབད་ཡོད་པའི་རྒྱུ་མཚན་ཚུ་ རི་ལེ་ཨིན།
-- ས་གནས་ཀྱི་འདེམས་སྒྲུག་འབད་མི་ཚུ་གིས་ བཱའིཊི་༡༢ ལས་ཐུང་ཀུ་སྦེ་ཡོད་མི་ `ERR_LOCAL8_DEPRECATED` གིས་ སྲོལ་རྒྱུན་ལས་ ཧརཌི་སིཊི་ཝར་ཅིག་ ཉམས་སྲུང་འབདཝ་ཨིན།
-- Domainless canonical Katakana i105 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
+#### 2.5 Normative binary vectors
 
-#### 2.5 རྒྱུན་སྐྱོང་གཉིས་ལྡན་བེག་ཊར་ཚུ།
+- **Selector-free canonical single-key payload (`seed byte 0x00`)**  
+  Canonical hex: `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.  
+  Breakdown: `0x02` header, `0x00` controller tag, `0x01` curve id (Ed25519),
+  `0x20` key length, followed by the 32-byte key payload.
+- **Canonical multisig payload layout**  
+  `0x0A | 0x01 | version:u8 | threshold:u16 | member_count:u16 | ...members`
+  where each member is encoded as `(curve_id:u8, weight:u16, key_len:u16,
+  key_bytes)`.
 
-- **སྔོན་སྒྲིག་མངའ་ཁོངས་ (`default`, སོན་སོན་བཱའིཊི་ `0x00`)**  
-  ཀེ་ནོ་ནིག་ཧེགསི་: `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.  
-  བརྡ་བཀོད་: `0x02` མགོ་ཡིག་ `0x00` འདེམས་བྱེད་ (སྔོན་སྒྲིག་), `0x00` ཚད་འཛིན་ངོ་རྟགས་, I18NI000000277X གུག་རྟགས་གུག་གུགཔ་ཨའི་ཌི་ (Ed25519), `0x20` ལྡེ་མིག་རིང་ཚད་, འདི་གི་ཤུལ་ལས་ 32-byte ལྡེ་མིག་ཚུ། པེ་ལོཌ་.
-- **ས་གནས་མངའ་ཁོངས་ བཞུ་བཅོས་ (`treasury`, སོན་རིགས་བཱའིཊི་ `0x01`)**  
-  ཀེ་ནོ་ནིག་ཧེགསི་: `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`.  
-  བརྡལ་བཤིག་: I18NI0000282X མགོ་ཡིག་, གདམ་བྱེད་ཀྱི་ངོ་རྟགས་ I18NI0000283X, དང་ བཞུ་བའི་ `b1 8f e9 c1 ab ba c4 5b 3e 38 fc 5d`, དེ་གི་ཤུལ་ལས་ (`0x00` ངོ་རྟགས་, I18NI0000285X ངོ་རྟགས་, I18NI0000286X གུག་གུགཔ་ I18NI00000287 རིང་ཚད་ཚུ། 32-byte Ed25519 ལྡེ་མིག)།Unit tests (`account::address::tests::parse_encoded_accepts_all_formats`) གིས་ `AccountAddress::parse_encoded` བརྒྱུད་དེ་ འོག་གི་ V1 ཝེག་ཊར་ཚུ་ བརྡ་བཀོད་འབདཝ་ཨིནམ་ད་ འདི་གིས་ ལག་ཆས་འདི་ ཧིགསི་དང་ I105 (prefered) དང་ བསྡམ་བཞག་ཚུགས་པའི་ (`sora`X, གཉིས་པ་) `cargo run -p iroha_data_model --example address_vectors` དང་ཅིག་ཁར་ རྒྱ་སྐྱེད་འབད་ཡོད་པའི་སྒྲིག་ཆས་འདི་ ལོག་བཟོ་ནི།
+The fixture bundle in `fixtures/account/address_vectors.json` still publishes
+i105 outputs plus non-canonical legacy-vector fixtures for the same canonical payloads.
+Public `AccountId` parser tests separately assert that only canonical Katakana i105 is
+accepted.
 
-| ཌོ་མེན་ | ས་བོན་བཏེ | ཀེན་ནོ་ཀལ་ཧེགསི་ | བསྡམ་བཞག་ (`sora`) |
-|-------------|-----------|--------------------------------- ----------------------------------------------|------------|
-| སྔོན་སྒྲིག་ | I18NI0000293X | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE` |
-| བང་མཛོད་ | `0x01` | `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
-| ཡ་མཚན་ཅན་གྱི་ས་ཆ་ | `0x02` | `0x0201b8ae571b79c5a80f5834da2b0001208139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394` | `sora5ｻwﾓyRｿqﾏnMﾀﾙヰKoﾒﾇﾓQｺﾛyｼ3ｸFHB2F5LyPﾐTMZkｹｼw67ﾋVﾕｻr8ﾉGﾇeEnｻVRNKCS` |
-| iroha | `0x03` | `0x0201de8b36819700c807083608e2000120ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1` | `sora5ｻﾜxﾀ7Vｱ7QFeｷMﾂLﾉﾃﾏﾓﾀTﾚgSav3Wnｱｵ4ｱCKｷﾛMﾘzヰHiﾐｱ6ﾃﾉﾁﾐZmﾇ2fiﾎX21P4L` |
-| ཨཱལ་ཕ་ | `0x04` | `0x020146be2154ae86826a3fef0ec0000120ca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c` | `sora5ｻ9JヱﾈｿuwU6ｴpﾔﾂﾈRqRTds1HﾃﾐｶLVﾍｳ9ﾔhｾNｵVｷyucEﾒGﾈﾏﾍ9sKeﾉDzrｷﾆ742WG1` |
-| མེ་ ག་ | `0x05` | `0x0201390d946885bc8416b3d30c9d0001206e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1` | `sora5ｻ3zrﾌuﾚﾄJﾑXQhｸTyN8pzwRkWxmjVﾗbﾚﾕヰﾈoｽｦｶtEEﾊﾐ6GPｿﾓﾊｾEhvPｾｻ3XAJ73F` |
-| གཞུང་སྐྱོང་ | `0x06` | `0x0201989eb45a80940d187e2c908f0001208a875fff1eb38451577acd5afee405456568dd7c89e090863a0557bc7af49f17` | `sora5ｻiｵﾁyVﾕｽbFpDHHuﾇﾉdﾗｲﾓﾄRﾋAW3frUCｾ5ｷﾘTwdﾚnｽtQiLﾏｼｶﾅXgｾZmﾒヱH58H4KP` |
-| བདེན་དཔྱད་འབད་མི་ | `0x07` | `0x0201e4ffa58704c69afaeb7cc2d7000120ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c` | `sora5ｻﾀLDH6VYﾑNAｾgﾉVﾜtxﾊRXLｹﾍﾔﾌLd93GﾔGeｴﾄYrs1ﾂHｸkYxｹwｿyZﾗxyﾎZoXT1S4N` |
-| འཚོལ་ཞིབ་པ་ | `0x08` | `0x02013b35422c65c2a83c99c523ad0001201398f62c6d1a457c51ba6a4b5f3dbd2f69fca93216218dc8997e416bd17d93ca` | `sora5ｻ4nmｻaﾚﾚPvNLgｿｱv6MHDeEyﾀovﾉJcpvrﾖ6ﾈCQcCNﾇﾜhﾚﾖyFdTwｸｶHEｱ9rWU8FMB` |
-| སོ་རེན་ནེཊ་ | `0x09` | `0x0201047d9ea7f5d5dbec3f7bfc58000120fd1724385aa0c75b64fb78cd602fa1d991fdebf76b13c58ed702eac835e9f618` | `sora5ｱｸヱVQﾂcﾁヱRﾓcApｲﾁﾅﾒvﾌﾏfｾNnﾛRJsｿDhﾙuHaﾚｺｦﾌﾍﾈeﾆﾎｺN1UUDｶ6ﾎﾄﾛoRH8JUL` |
-| ཀིཊ་སུ་ནེ | `0x0A` | `0x0201e91933de397fd7723dc9a76c00012043a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c` | `sora5ｻﾚｺヱkfFJfSﾁｼJwﾉLvbpSｷﾔMWFMrbｳｸｲｲyヰKGJﾉｻ4ｹﾕrｽhｺｽzSDヰXAN62AD7RGNS` |
-| ད | `0x0B` | `0x02016838cf5bb0ce0f3d4f380e1c00012066be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a` | `sora5ｻNﾒ5SﾐRﾉﾐﾃ62ｿ1ｶｷWFKyF1BcAﾔvｼﾐHqﾙﾐPﾏｴヰ5tｲﾕvnﾙT6ﾀW7mﾔ7ﾇﾗﾂｳ25CXS93` |
+Reviewed-by: Data Model WG, Cryptography WG — scope approved for ADDR-1a.
 
-བསྐྱར་ཞིབ། གནས་སྡུད་དཔེ་ཚད་ WG, Crypography WG — ADDR-1a གི་དོན་ལུ་ ཆ་འཇོག་གྲུབ་ཡོདཔ།
+##### Sora Nexus reference aliases
 
-##### སོ་ར་ Nexus གཞི་བསྟུན་གཞན་མི།
+Sora Nexus networks default to `chain_discriminant = 0x02F1`
+(`iroha_config::parameters::defaults::common::CHAIN_DISCRIMINANT`). The
+`AccountAddress::to_i105` helpers therefore emit
+consistent textual forms for every canonical payload. The authoritative sample
+literals now live only in `fixtures/account/address_vectors.json` so the CLI,
+Torii responses, and SDK helpers all consume one canonical katakana-I105 source
+of truth instead of duplicating stale inline strings.
 
-སོ་ར་ I18NT0000015X ཡོངས་འབྲེལ་ཚུ་ `chain_discriminant = 0x02F1` ལུ་སྔོན་སྒྲིག་འབདཝ་ཨིན།
-(I 18NI00000330X). ཚིག༌ཕྲད
-`AccountAddress::to_i105` དང་ `to_i105` རོགས་རམ་བསྐྲུན།
-ཚད་མཐུན་ཅན་གྱི་ པེ་ལོཌི་རེ་རེ་གི་དོན་ལུ་ རིམ་མཐུན་ཚིག་ཡིག་འབྲི་ཤོག་ཚུ། ལས་ སེལ་འཐུ་འབད་ཡོད་པའི་སྒྲིག་བཀོད་ཚུ།
-`fixtures/account/address_vectors.json` (བརྒྱུད་དེ་བཟོ་ཡོད།
-I18NI000000334X) གཤམ་གསལ་གྱི་མགྱོགས་དྲགས་གཞི་བསྟུན་གྱི་དོན་ལུ་སྟོན་ཡོདཔ་ཨིན།
+#### 2.6 Public textual forms
 
-| རྩིས་ཁྲ་ / འདེམས་སྒྲུག་ | I105 ལི་ཊར་ (སྔོན་འཇུག་ `0x02F1`) | སོ་ར་བསྡམ་བཞག་ (`sora`) དངོས་ཡོད་ |
-| |
-| `default` མངའ་ཁོངས་ (plict སེལ་འཐུ་འབད་མི་, སོན་ I18NI000000338X) | `soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE` (གདམ་ཁ་ཅན་གྱི་ I18NI000000341X གསལ་སྟོན་ལམ་སྟོན་བརྡ་སྟོན་ཚུ་བྱིན་པའི་སྐབས་ རྗེས་འཇུག་) |
-| `treasury` (ས་གནས་ཀྱི་བཞུ་ཁུའི་འདེམས་སྒྲུག་, སོན་ `0x01`) | `34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
-| འཛམ་གླིང་ཐོ་བཀོད་ཀྱི་དཔག་བྱེད་ (`registry_id = 0x0000_002A`, དང་འདྲན་འདྲ་ `treasury`) | `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF` | `sorakXｹ6NｻﾍﾀﾖSﾜﾖｱ3ﾚ5WﾘﾋQﾅｷｦxgﾛｸcﾁｵﾋkﾋvﾏ8SPﾓﾀｹdｴｴｲW9iCM6AEP` |
+- **Canonical account id:** a Katakana i105 literal only.
+- **On-chain account aliases:** `name@dataspace` or `name@domain.dataspace`.
+  These aliases resolve on-chain to canonical i105 account ids and are not a
+  second account-id codec.
+- **Out-of-band wrappers:** transport wrappers such as CAIP-style URIs or other
+  integration envelopes may exist in downstream systems, but they are not
+  public account ids. Any such wrapper must resolve to canonical i105 or an
+  on-chain alias before it reaches strict parser paths.
+- **Machine helpers:** Rust, TypeScript/JavaScript, Python, Swift, Kotlin, and
+  Java SDKs expose canonical Katakana i105 codecs
+  (`AccountAddress::to_i105`, `AccountAddress::parse_encoded`, and equivalents).
 
-འ་ནི་ཡིག་རྒྱུན་ཚུ་ སི་ཨེལ་ཨའི་ (`iroha tools address convert`) གིས་ བཏོན་ཡོད་མི་ཚུ་དང་ མཐུན་སྒྲིག་འབདཝ་ཨིན།
-ལན་ཚུ་ (`canonical Katakana i105 literal rendering`) དང་ ཨེསི་ཌི་ཀེ་གྲོགས་རམ་པ་ དེ་ལས་ ཡུ་ཨེགསི་འདྲ་བཤུས་/སྦྱར།
-flows of the of the proben ལ་བརྟེན་ཐུབ། ཁྱོད་ལུ་གསལ་ཏོག་ཏོ་སྦེ་ རའུ་ཊིང་བརྡ་སྟོན་དགོ་པའི་སྐབས་ལུ་རྐྱངམ་ཅིག་ `<address>@<domain>` (rejected legacy form) སྦྱར་དགོ། རྗེས་འཇུག་འདི་ ཁྲིམས་ལུགས་ཨའུཊི་པུཊི་གི་ཆ་ཤས་ཅིག་མེན།
+#### 2.7 Deterministic i105 encoding
 
-#### ༢.༦ ཕན་ཚུན་འབྲེལ་བའི་དོན་ལུ་ ཚིག་དོན་གྱི་མིང་གཞན་ (འཆར་གཞི་བཟོ་ཡོདཔ་)
-
-- **རྒྱུན་ལམ་དང་མི་ཚུ་གི་དོན་ལུ་ I18NI000000353X
-  འཛུལ་ཞུགས་ ཝ་ལེཊི་ཚུ་གིས་ སྔོན་སྒྲིག་འདི་དབྱེ་དཔྱད་འབད་དགོཔ་དང་ བཙུགས་ཡོད་པའི་རིམ་སྒྲིག་འདི་བདེན་དཔྱད་འབད་དགོཔ་དང་ བཀག་ཆ་འབད་དགོཔ་ཨིན།
-  མི་མཐུན་པ།
-- **CAIP-10 འབྲི་ཤོག་:** I18NI000000354X རིམ་སྒྲིག་ཨེག་ནོསི་ཊིག་གི་དོན་ལུ་ཨིན།
-  མཉམ་བསྡོམས། སབ་ཁྲ་འདི་ **ད་ལྟོ་ཡང་ ལག་ལེན་འཐབ་མ་བཏུབ་མི་* གཏང་ཡོདཔ་ཨིན།
-  ལག་ཆས་ཚུ་།
-- **འཕྲུལ་ཆས་ཀྱི་གྲོགས་རམ་པ་:** རཱསིཊ་དང་ དབྱེ་བ་ཡིག་གཟུགས་/ཇ་བ་ཨིསི་ཀིརིཔཊི་ དེ་ལས་ པའི་ཐོན་གྱི་དོན་ལུ་ ཀོ་ཌེཀསི་ཚུ་དཔར་བསྐྲུན་འབད།
-  དང་ ཀོཊ་ལིན་གྱིས་ I105 དང་ བསྡམ་བཞག་ཡོད་པའི་རྩ་སྒྲིག་ཚུ་ བཀབ་ཡོདཔ་ཨིན། (I18NI000000355X,
-  `AccountAddress::parse_encoded`, དང་དེ་ཚུ་གི་ SDK འདྲ་མཉམ་ཚུ། CAIP-10 གྲོགས་རམ་འབད་མི་ཚུ་ཨིན།
-  མ་འོངས་པའི་ལས་ཀ།
-
-#### 2.7 ངེས་པའི་I105 མིང་གཞན་པ།
-
-- **སྔོན་སྒྲིག་སབ་ཁྲ་:** I105 ཡོངས་འབྲེལ་སྔོན་སྒྲིག་སྦེ་ `chain_discriminant` ལོག་སྟེ་ལག་ལེན་འཐབ།
-  `encode_i105_prefix()` (`crates/iroha_data_model/src/account/address.rs` བལྟ།)
-  གནས་གོང་ཚུ་གི་དོན་ལུ་ ༦ སྔོན་ཚིག་ (བཱའིཊི་གཅིག་རྐྱངམ་ཅིག་) དང་ ༡༤‐བིཊི་ གཉིས་ གཉིས་-བཱའིཊི་ཅིག་ བཏོནམ་ཨིན།
-  ཡོངས་འབྲེལ་སྦོམ་ཚུ་གི་དོན་ལུ་ འབྲི་ཤོག། དབང་ཚད་ཅན་གྱི་ལས་འགན་ཚུ་ ༢༠༠༨ ལུ་སྡོད་དོ་ཡོདཔ་ཨིན།
+- **Prefix mapping:** Reuse the `chain_discriminant` inside the same canonical
+  i105 codec. Well-known discriminants use sentinels such as `sora`, `test`,
+  or `dev` as part of the canonical i105 literal; there is no separate ASCII
+  account-id codec. The authoritative assignments live in
   [`address_prefix_registry.md`](source/references/address_prefix_registry.md);
-  SDKs ཁ་ཐུག་རྐྱབ་ནི་ལས་འཛེམ་ཐབས་ལུ་ མཐུན་སྒྲིག་འབད་མི་ JSON ཐོ་བཀོད་འདི་ མཉམ་འབྱུང་སྦེ་བཞག་དགོ།
-- **རྩིས་ཁྲ་རྒྱུ་ཆའི་:** I105 གིས་བཟོ་བསྐྲུན་འབད་མི་ ཀེ་ནོ་ནིཀ་པེ་ལོཌི་འདི་ ཨིན་ཀོ་ནི་ཀཱལ་འབདཝ་ཨིན།
-  `AccountAddress::canonical_bytes()`—མགོ་ཡིག་བཱའིཊི་, ཌོ་མེན་སེལ་འཐུ་འབད་མི་, དང་།
-  ཚད་འཛིན་པ་ གླ་ཆ་སྤྲོད་ཐངས། ཁ་སྐོང་ཧ་ཤིང་གི་རིམ་པ་མེད། I105 གིས་ བཙུགསཔ་ཨིན།
-  གཉིས་ལྡན་ཚད་འཛིན་པེ་ལོཌི་ (ལྡེ་མིག་རྐྱང་པ་ཡང་ན་ སྣ་མང་སིག) འདི་ རསཊི་གིས་བཟོ་བསྐྲུན་འབད་ཡོདཔ།
-  སྣ་མང་སྲིད་བྱུས་དོན་ལུ་ལག་ལེན་འཐབ་མི་ སི་ཊི་ཨེ་པི་༢ སབ་ཁྲ་མེན་པར་ ཨེན་ཀོ་ཌར་གྱིས་མེན།
-- **ཨིན་ཀོ་ཌིང:** `encode_i105()` སྔོན་འཇུག་བཱའིཊི་ཚུ་ ཀེ་ནོ་ནིཀ་དང་གཅིག་ཁར་ མཉམ་སྦྲགས་འབདཝ་ཨིན།
-  པེ་ལོསིཊི་དང་ བེལེཀ་༢བི་-༥༡༢ ལས་ ཐོབ་མི་ ༡༦-བིཀ་སུམ་ཅིག་ གཏན་བཟོས་དང་གཅིག་ཁར་ ཟུར་རྟགས་འབདཝ་ཨིན།
-  སྔོན་འཇུག་ `I105PRE` (`b"I105PRE"` || prefix || payload)། གྲུབ་འབྲས་འདི་ I105 ཡིག་འབྲུའི་གོ་རིམ་བཟུམ་སྦེ་ `bs58` བརྒྱུད་དེ་ ཨེན་ཀོཌ་འབད་ཡོད།
-  CLI/SDK གྲོགས་རམ་པ་ཚུ་གིས་ བྱ་རིམ་གཅིག་པའི་ ཕྱིར་བཏོན་དང་ `AccountAddress::parse_encoded` ཚུ་ཨིན།
-  `decode_i105` བརྒྱུད་དེ་ ཕྱིར་ལོག་འབདཝ་ཨིན།
+  SDKs MUST keep the matching JSON registry in sync to avoid collisions.
+- **Account material:** I105 encodes the canonical payload built by
+  `AccountAddress::canonical_bytes()`—header byte and controller payload.
+  Domain-selector bytes are not emitted in canonical payloads. There is no additional hashing step; I105 embeds the
+  binary controller payload (single key or multisig) as produced by the Rust
+  encoder, not the CTAP2 map used for multisig policy digests.
+- **Encoding:** `encode_i105()` renders the canonical payload with the
+  105-symbol katakana alphabet and appends a six-symbol Bech32m-style checksum
+  over the canonical bytes. CLI/SDK helpers expose the same procedure, and
+  `AccountAddress::parse_encoded` reverses it via `decode_i105`.
 
-#### 2.8 རྒྱུན་སྐྱོང་གི་ཚིག་ཡིག་བརྟག་དཔྱད་བེག་ཊར་ཚུ།
+#### 2.8 Normative textual test vectors
 
-I18NI000000369X ནང་ I105 (དགའ་གདམ་) དང་ བསྡམ་བཞག་ (`sora`, གཉིས་པ་) ཡོད།
-ཆ་རྐྱེན་རེ་རེ་གི་དོན་ལུ་ དངོས་གཞི། གཙོ་བསྟེན།
+`fixtures/account/address_vectors.json` contains canonical i105 literals plus
+negative fixtures that exercise non-canonical and malformed inputs.
+Highlights:
 
-- **I18NI0000371X (སོ་ར་ Nexus, སྔོན་སྒྲིག་ `0x02F1`,**  
-  I105 I105 `soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ`, བསྡམ་བཞག་ (`sora`)
-  `sora2QG…U4N5E5`. Torii གིས་ `AccountId`’s ལས་ ཡིག་རྒྱུན་ངོ་མ་འདི་ཚུ་ བཏོནམ་ཨིན།
-  `Display` ལག་ལེན་འཐབ་ (ཀེན་ནོ་ཀལ་ཨའི་ཨེཆ་༥༨) དང་ `AccountAddress::to_i105`.
-- **`addr-global-registry-002a` (ཐོ་བཀོད་འདེམས་སྒྲུག་ → བང་མཛོད་)**  
-  I105 I105 `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF`, བསྡམ་བཞག་ (`sora`)
-  `sorakX…CM6AEP`. ཐོ་བཀོད་འདེམས་སྒྲུག་ཚུ་ད་ལྟོ་ཡང་ གསལ་སྟོན་འབདཝ་ཨིན་ཟེར་སྟོནམ་ཨིན།
-  དེ་དང་འདྲ་བའི་ འདྲ་བའི་ས་གནས་ བཞུ་བཅོས་དང་འདྲ་བ།
-- **འཐུས་ཤོར་གྱི་གནད་དོན་ (`i105-prefix-mismatch`),**  
-  མཐུད་མཚམས་གུ་ སྔོན་སྒྲིག་ `NETWORK_PREFIX + 1` དང་གཅིག་ཁར་ ཨིན་ཀོ་ཌི་འབད་ཡོད་པའི་ I105 ཚིག་དོན་ཅིག་ བཀོད་སྒྲིག་འབད་དོ།
-  སྔོན་སྒྲིག་སྔོན་ཚིག་ཐོན་ཤུགས་རེ་བ་བསྐྱེད་དོ།
+- **`addr-single-default-ed25519` (Sora Nexus, prefix `0x02F1`).**  
+  Torii emits the generated katakana-I105 literal from `AccountId`’s `Display`
+  implementation (canonical Katakana i105).
+- **Multisig controller payloads.**  
+  Canonical controller bytes now encode `member_count:u16`, so address encoding
+  no longer has the old 255-member hard cap.
+- **Failure case (`i105-prefix-mismatch`).**  
+  Parsing an i105 literal encoded with prefix `NETWORK_PREFIX + 1` on a node
+  expecting the default prefix yields
   `AccountAddressError::UnexpectedNetworkPrefix { expected: 753, found: 754 }`
-  མངའ་ཁོངས་འགྲུལ་ལམ་འདི་དཔའ་བཅམ་པའི་ཧེ་མ། `i105-checksum-mismatch` བརྟན་ཆ།
-  Blake2b checksum ལས་ བརྡལ་བཤིག་བརྟག་དཔྱད་ཚུ་ བརྡལ་བཤིག་གཏང་ནི།
+  before domain routing is attempted. Negative-path `AccountId` tests also cover
+  rejected `norito:...`, `0x...`, alias, and `@domain` inputs. The
+  `i105-checksum-mismatch` fixture exercises tampering detection over the
+  katakana-I105 checksum.
 
-#### ༢.༩ བསྟུད་པའི་བསྡམས།
+#### 2.9 Compliance fixtures
 
-ADDR‐2 གིས་ བསྐྱར་རྩེད་འབད་བཏུབ་པའི་ བརྟན་བཞུགས་ཀྱི་ བཱན་ཌལ་གྱིས་ ངེས་གཏན་དང་ ངན་པ་ བཀབ་སྟེ་ བཏངམ་ཨིན།
-ཀེར་ནིག་ཧེགསི་(དགའ་གདམ་) བརྒྱུད་དེ་ མཐོང་སྣང་ཚུ་ བསྡམ་བཞག་ཡོདཔ་ཨིན།
-སྔོན་སྒྲིག་འདེམས་སྒྲུག་ཚུ་དང་ འཛམ་གླིང་ཐོ་བཀོད་ཀྱི་མིང་རྟགས་ཚུ་ དེ་ལས་ མཚན་རྟགས་སྣ་མང་ཚད་འཛིན་ཚུ། ཚིག༌ཕྲད
-ཁྲིམས་ལུགས་JSON ནི་ `fixtures/account/address_vectors.json` ནང་སྡོད་ཅིང་།
-བསྐྱར་བཟོ་འབད་ཡོདཔ།
+ADDR‑2 ships a replayable fixture bundle covering positive and negative
+scenarios across canonical Katakana i105, non-canonical legacy-vector output, canonical
+`AccountAddress` hex renderings, selector-free payloads, multisignature
+controllers, and rejected legacy `AccountId` literal forms. The canonical JSON
+lives in `fixtures/account/address_vectors.json` and can be regenerated with:
 
 ```
 cargo xtask address-vectors --out fixtures/account/address_vectors.json
@@ -435,26 +374,26 @@ cargo xtask address-vectors --out fixtures/account/address_vectors.json
 cargo xtask address-vectors --verify
 ```
 
-ad-hoc བརྟག་དཔྱད་ཚུ་གི་དོན་ལུ་ (ལམ་སོ་སོ་/རྩ་སྒྲིག་ཚུ་) དཔེ་གཉིས་ལྡན་འདི་ད་ལྟོ་ཡང་ཨིན།
-ཡོད༌པ:
+For ad-hoc experiments (different paths/formats) the example binary is still
+available:
 
 ```
 cargo run -p iroha_data_model --example account_address_vectors > fixtures/account/address_vectors.json
 ```
 
-`crates/iroha_data_model/tests/account_address_vectors.rs` ནང་ རཱསི་ཊི་ཡུ་ནིཊ་བརྟག་དཔྱད།
-དང་ `crates/iroha_torii/tests/account_address_vectors.rs`, མཉམ་དུ་ JS དང་།
-Swift, དང་ Android harness (I18NI000000391X,
+Rust unit tests in `crates/iroha_data_model/tests/account_address_vectors.rs`
+and `crates/iroha_torii/tests/account_address_vectors.rs`, together with the JS,
+Swift, and Android harnesses (`javascript/iroha_js/test/address.test.js`,
 `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift`,
-`java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java`);
-SDKs དང་ Torii འཛུལ་ཞུགས་ཚུ་ནང་ལུ་ ཀོ་ཌེཀ་འདྲ་མཉམ་གྱི་ ངེས་གཏན་བཟོ་ནི་ལུ་ གཅིག་མཚུངས་འདི་ བཀོལ་སྤྱོད་འབདཝ་ཨིན།
+`java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java`),
+consume the same fixture to guarantee codec parity across SDKs and Torii admission.
 
-### 3. ཡོངས་ཁྱབ་ཁྱད་པར་གྱི་མངའ་ཁོངས་དང་སྤྱིར་བཏང་བཟོ་བ།
+### 3. Globally unique domains & normalization
 
-ད་དུང་ཡང་: [`docs/source/references/address_norm_v1.md`](source/references/address_norm_v1.md)
-Torii ནང་ལུ་ལག་ལེན་འཐབ་མི་ ཀེ་ནོ་ནིག་ནོར་ཨེམ་ཝི་༡ མདོང་ལམ་གྱི་དོན་ལུ་ གནད་སྡུད་དཔེ་ཚད་དང་ ཨེསི་ཌི་ཀེ་ཚུ་ཨིན།
+See also: [`docs/source/references/address_norm_v1.md`](source/references/address_norm_v1.md)
+for the canonical Norm v1 pipeline used across Torii, the data model, and SDKs.
 
-ངོ་རྟགས་བཀོད་ཡོད་པའི་ཊུཔ་ལི་སྦེ་ `DomainId` བསྐྱར་བཟོ་འབད།
+Redefine `DomainId` as a tagged tuple:
 
 ```
 DomainId {
@@ -468,334 +407,321 @@ enum GlobalDomainAuthority {
 }
 ```
 
-`LocalChain` གིས་ ད་ལྟོའི་རིམ་སྒྲིག་གིས་ འཛིན་སྐྱོང་འཐབ་མི་ མངའ་ཁོངས་ཚུ་གི་དོན་ལུ་ ད་ལྟོ་ཡོད་པའི་མིང་འདི་ བཀབ་བཞགཔ་ཨིན།
-འཛམ་གླིང་ཐོ་བཀོད་བརྒྱུད་དེ་ མངའ་ཁོངས་ཅིག་ ཐོ་བཀོད་འབད་བའི་སྐབས་ ང་བཅས་ཀྱིས་ བདག་དབང་འདི་ གནས་ཏེ་ཡོདཔ་ཨིན།
-རིམ་སྒྲིག་’s དབྱེ་འབྱེད་པ། བཀྲམ་སྟོན་/དབྱེ་དཔྱད་འབད་ནི་འདི་ ད་ལྟོ་བསྒྱུར་བཅོས་མེད་པར་སྡོད་ཡོདཔ་ཨིན་རུང་ འདི་ཨིན།
-རྒྱ་སྐྱེད་འབད་ཡོད་པའི་གཞི་བཀོད་འདི་གིས་ ལམ་སྟོན་གྱི་གྲོས་ཐག་བཅད་བཅུགཔ་ཨིན།
+`LocalChain` wraps the existing Name for domains managed by the current chain.
+When a domain is registered through the global registry, we persist the owning
+chain’s discriminant. Display / parsing stays unchanged for now, but the
+expanded structure allows routing decisions.
 
-#### 3.1 སྤྱི་མཐུན་དང་མགུ་སྐོར་སྲུང་སྐྱོབ།
+#### 3.1 Normalization & spoofing defenses
 
-Norm v1 གིས་ མངའ་ཁོངས་ཀྱི་ཧེ་མ་ ཆ་ཤས་རེ་རེ་ལུ་ ལག་ལེན་འཐབ་དགོ་པའི་ ཆ་ཤས་རེ་རེ་ལུ་ ཀེ་ནོ་ནིག་གི་ པའིཔ་ལའིན་འདི་ ངེས་འཛིན་འབདཝ་ཨིན།
-མིང་འདི་ གནས་ཏེ་ ཡང་ན་ I18NI000000397X ནང་ལུ་ བཙུགས་ཡོདཔ་ཨིན། ལམ་འགྲུལ་ཆ་ཚང་།
-[I18NI000000398X](source/references/address_norm_v1.md), ནང་སྡོད་ཡོད།);
-འོག་གི་བཅུད་བསྡུས་འདི་གིས་ དངུལ་ཁུག་ཚུ་དང་ Torii, SDKs, དང་ གཞུང་སྐྱོང་ཚུ་ བཟུང་ཡོདཔ་ཨིན།
-ལག་ཆས་ཚུ་གིས་ ལག་ལེན་འཐབ་དགོ།
+Norm v1 defines the canonical pipeline every component must use before a domain
+name is persisted or embedded into an `AccountAddress`. The full walkthrough
+lives in [`docs/source/references/address_norm_v1.md`](source/references/address_norm_v1.md);
+the summary below captures the steps that wallets, Torii, SDKs, and governance
+tools must implement.
 
-1. **ཨིན་པུཊི་བདེན་བཀོད།** ཡིག་རྒྱུན་སྟོངམ་ཚུ་དང་ བར་སྟོང་དཀརཔོ་ དེ་ལས་ གསོག་འཇོག་འབད་ཡོདཔ།
-   ཌི་ལི་མི་ཊར་ I༡༨NI000003999X, `#`, I18NI000000401X. འདི་གིས་ འགྱུར་ལྡོག་མེད་པའི་ བསྟར་སྤྱོད་འབད་མི་དང་ མཐུན་སྒྲིག་འབདཝ་ཨིན།
+1. **Input validation.** Reject empty strings, whitespace, and the reserved
+   delimiters `@`, `#`, `$`. This matches the invariants enforced by
    `Name::validate_str`.
-2. **ཡུ་ནི་ཀོཌ་ཨེན་ཨེཕ་སི་ རྩོམ་སྒྲིག་།** ཨའི་སི་ཡུ་-རྒྱབ་ཐག་ཡོད་པའི་ཨེན་ཨེཕ་སི་ སྤྱིར་བཏང་བཟོ་ནི་འདི་ དེ་འབདཝ་ལས་ ཀེར་ཐིག་ནང་།
-   འདྲ་མཉམ་གྱི་གོ་རིམ་འདི་ མར་ཕབ་འགྱོཝ་ཨིན། (དཔེར་ན་ `e\u{0301}` → `é`)
-3. **UTS-46 སྤྱིར་བཏང་བཟོ་ནི།** ཡུ་ཊི་ཨེསི་‐༤༦ བརྒྱུད་དེ་ ཨེན་ཨེཕ་སི་ཨའུཊི་པུཊི་འདི་ གཡོག་བཀོལ།
-   `use_std3_ascii_rules = true`, `transitional_processing = false`, དང་།
-   DNS-རིང་ཚད་བཀག་སྡོམ་ལྕོགས་ཅན་བཟོ་ཡོདཔ། གྲུབ་འབྲས་འདི་ དམའ་བའི་ཨེ་-ལེ་བྷེལ་རིམ་པ་ཨིན།
-   ཨེསི་ཊི་ཌི་༣ ལམ་ལུགས་ལས་འགལ་བའི་ཨིན་པུཊི་ཚུ་ ནཱ་ལུ་འཐུས་ཤོར་བྱུང་ཡོདཔ།
-4. **རིང་ཚད་ཚད་གཞི།** ཌི་ཨེན་ཨེསི་-བཟོ་རྣམ་གྱི་མཐའ་མཚམས་ཚུ་ བསྟར་སྤྱོད་འབད་: ཁ་ཡིག་རེ་རེ་ལུ་ ༡–༦༣ འོང་དགོ།
-   བཱའིཊི་དང་ རིམ་པ་ ༣ གྱི་ཤུལ་ལས་ བཱའིཊི་༢༥༥ ལས་བརྒལ་མི་དགོ།
-5. **མགོ་རྙོག་ཅན་གྱི་སྲིད་བྱུས།** UTS‐39 ཡིག་གཟུགས་ཞིབ་དཔྱད་ཚུ་ དོན་ལུ་བརྟག་ཞིབ་འབད་ཡོདཔ་ཨིན།
-   Norm v2; བཀོལ་སྤྱོད་པ་ཚུ་གིས་ དེ་ཚུ་ ཧེ་མ་ལས་ ལྕོགས་ཅན་བཟོ་ཚུགས་ནི་ཨིན་རུང་ ཞིབ་དཔྱད་འཐུས་ཤོར་འགྱོ་མི་འདི་གིས་ བཤོལ་དགོཔ་ཨིན།
-   ལས་སྦྱོར་འབད་ནི།
+2. **Unicode NFC composition.** Apply ICU-backed NFC normalisation so canonically
+   equivalent sequences collapse deterministically (e.g., `e\u{0301}` → `é`).
+3. **UTS-46 normalisation.** Run the NFC output through UTS‑46 with
+   `use_std3_ascii_rules = true`, `transitional_processing = false`, and
+   DNS-length enforcement enabled. The result is a lower-case A-label sequence;
+   inputs that violate STD3 rules fail here.
+4. **Length limits.** Enforce the DNS-style bounds: each label MUST be 1–63
+   bytes and the full domain MUST NOT exceed 255 bytes after step 3.
+5. **Optional confusable policy.** UTS‑39 script checks are tracked for
+   Norm v2; operators can enable them early, but failing the check must abort
+   processing.
 
-གནས་རིམ་རེ་རེ་གིས་ མཐར་འཁྱོལ་བྱུང་པ་ཅིན་ ཉུང་མཐའ་ཨེ་-མིང་རྟགས་ཡིག་རྒྱུན་འདི་ དོན་ལུ་ འདྲ་མཛོད་འབད་དེ་ ལག་ལེན་འཐབ་ཨིན།
-ཁ་བྱང་ཨེན་ཀོ་ཌིང་དང་ རིམ་སྒྲིག་ གསལ་སྟོན་ཚུ་ དེ་ལས་ ཐོ་བཀོད་འཚོལ་ཞིབ་ཚུ། ས་གནས་ཀྱི་ བབས་པའི་འཇའ་ཚོགས།
-སེལ་འཐུ་ཚུ་གིས་ ཁོང་རའི་ ༡༢-བཱའིཊི་གནས་གོང་འདི་ `blake2s_mac(key = "I18NT0000055X-LOCAL-K:v1", སྦེ་ བཏོནམ་ཨིན།
-canonical_label)[0..12]` གོམ་པ་ ༣ ཐོན་འབྲས་ལག་ལེན་འཐབ་ཐོག་ལས་། འབད་རྩོལ་གཞན་ཆ་མཉམ་ (སླ་བསྲེ།
-གནད་དོན་ཚུ་ མཐོ་རིམ་དང་ ཡུ་ནི་ཀོཌི་ཨིན་པུཊི་) ཚུ་ གཞི་བཀོད་འབད་ཡོད་པའི་ ཆ་མེད་བཏང་ཡོདཔ་ཨིན།
-མིང་འདི་བཀྲམ་སྤེལ་འབད་སའི་མཚམས་ལུ་ `ParseError`s ཚུ།
+If every stage succeeds, the lower-case A-label string is cached and used for
+address encoding, configuration, manifests, and registry lookups. Local digest
+selectors derive their 12-byte value as `blake2s_mac(key = "SORA-LOCAL-K:v1",
+canonical_label)[0..12]` using the step 3 output. All other attempts (mixed
+case, upper-case, raw Unicode input) are rejected with structured
+`ParseError`s at the boundary where the name was supplied.
 
-ཁྲིམས་ལུགས་འདི་ཚུ་སྟོན་མི་ ཁྲིམས་ལུགས་སྒྲིག་བཀོད་ཚུ་གིས་ — ཉེས་འགེལ་གྱི་སྐོར་རིམ་ཚུ་རྩིས་ཏེ་ ཉེས་འགེལ་ཚུ་ཨིན།
-དང་ ནུས་མེད་ཨེསི་ཊི་ཌི་༣ རིམ་པ་ — ནང་ ནང་ཐོ་བཀོད་འབད་ཡོདཔ་ཨིན།
-`docs/source/references/address_norm_v1.md` དང་ SDK CI ནང་མེ་ལོང་བཏབ།
-ADDR‐2 གི་འོག་ལུ་ བརྟག་ཞིབ་འབད་མི་ vector ཆ་ཚང་།
+Canonical fixtures demonstrating these rules — including punycode round-trips
+and invalid STD3 sequences — are listed in
+`docs/source/references/address_norm_v1.md` and are mirrored in the SDK CI
+vector suites tracked under ADDR‑2.
 
-### 4. Nexus མངའ་ཁོངས་ཐོ་བཀོད་དང་ལམ་སྟོན།- **ཐོ་བཀོད་ལས་རིམ་:** Nexus གིས་ མཚན་རྟགས་བཀོད་ཡོད་པའི་སབ་ཁྲ་ `DomainName -> ChainRecord` རྒྱུན་སྐྱོང་འཐབ་ཨིན།
-  འདི་ནང་ `ChainRecord` ནང་ལུ་ རིམ་སྒྲིག་ཁྱད་པར་ཕྱེ་སྟེ་ གདམ་ཁ་ཅན་གྱི་ མེ་ཊ་ཌེ་ཊ་ (RPC) ཚུ་ཚུདཔ་ཨིན།
-  མཐའ་མཚམས་ཚུ་) དང་ དབང་ཚད་ཀྱི་བདེན་ཁུངས་ (དཔེར་ན་ གཞུང་སྐྱོང་མཚན་རྟགས་སྣ་མང་)
-- **མཉམ་འབྱུང་ཐབས་ལམ་:**
-  - རིམ་སྒྲིག་ཐོག་ལས་ མིང་རྟགས་བཀོད་ཡོད་པའི་ ཌོ་མེན་ཐོབ་བརྗོད་ཚུ་ Nexus ལུ་བཙུགས་ (རིགས་བརྒྱུད་ཀྱི་སྐབས་ལུ་ ཡང་ན་ བརྒྱུད་དེ་)།
-    གཞུང་སྐྱོང་བསླབ་བྱ།).
-  - I18NT000000020X གིས་ དུས་མཚམས་གསལ་སྟོན་ཚུ་ དཔར་བསྐྲུན་འབདཝ་ཨིན་ (མིང་རྟགས་བཀོད་ཡོད་མི་ JSON དང་ Markle roote)
-    Over HTTPS དང་ ནང་དོན་ཁ་བྱང་ཡོད་པའི་གསོག་འཇོག་ (དཔེར་ན་ IPFS). མཁོ་མངགས་འབད་མི་ཚུ་གིས་ པིན་འབདཝ་ཨིན།
-    གསར་འགྱུར་དང་ མཚན་རྟགས་བདེན་དཔྱད་འབད།
-- **ལྟ་སྐོར་གྱི་རྒྱུན་འབབ་:**
-  - I18NT000000040X གིས་ `DomainId` གཞི་བསྟུན་འབད་མི་ ཚོང་འབྲེལ་ཅིག་ཐོབ་ཨིན།
-  - མངའ་ཁོངས་འདི་ ཉེ་གནས་ལུ་ མ་ཤེས་པ་ཅིན་ Torii གིས་ འདྲ་མཛོད་ Nexus འདི་ གསལ་སྟོན་འབདཝ་ཨིན།
-  - གསལ་སྟོན་འདི་གིས་ ཕྱིའི་རྒྱུན་རིམ་ཅིག་སྟོན་པ་ཅིན་ ཚོང་འབྲེལ་འདི་ དང་གཅིག་ཁར་ ངོས་ལེན་འབདཝ་ཨིན།
-    a གཏན་འབེབས་ `ForeignDomain` འཛོལ་བ་དང་ ཐག་རིང་རིམ་སྒྲིག་བརྡ་དོན་འདི་ཨིན།
-  - གལ་སྲིད་ མངའ་ཁོངས་འདི་ Nexus ལས་མེད་པ་ཅིན་ `UnknownDomain` སླར་ལོག་འབདཝ་ཨིན།
-- **བློ་གཏད དང་ བསྒྱིར་ཚད་:** གཞུང་སྐྱོང་ལྡེ་མིག་ཚུ་གི་རྟགས་རྟགས་གསལ་རྟགས་ཚུ་; འཁོར་རིམ་འམ།
-  ཆ་མེད་གཏང་ནི་འདི་ གསལ་སྟོན་ཐོ་བཀོད་གསརཔ་ཅིག་སྦེ་ དཔར་བསྐྲུན་འབདཝ་ཨིན། མཁོ་མངགས་བཀག་དམ་གསལ་སྒྲུབ།
-  TTLs (དཔེར་ན་ ཆུ་ཚོད་ ༢༤) དང་ སྒོ་སྒྲིག་འདི་ལས་ལྷག་སྟེ་ གནས་སྡུད་རྙིངམ་ཚུ་ གྲོས་བསྟུན་འབད་ནི་ལུ་ ངོས་ལེན་མ་འབད་བས།
-- **འཐུས་ཤོར་གྱི་ཐབས་ལམ་ཚུ་:** གལ་སྲིད་ གསལ་སྟོན་སླར་ལོག་འཐུས་ཤོར་འབྱུང་པ་ཅིན་ Torii ལོག་སྟེ་འདྲ་མཛོད་ནང་ཚུདཔ་ཨིན།
-  TTL ནང་འཁོད་ལུ་ གནས་སྡུད། pay ཊི་ཊི་ཨེལ་གྱིས་ `RegistryUnavailable` དང་ ངོས་ལེན་མི་འབད།
-  མ་མཐུན་པའི་གནས་སྟངས་ལས་ བཀག་ཐབས་ལུ་ ཀོརསི་ཌོ་མེན་གྱི་ལམ་སྟོན།
+### 4. Nexus domain registry & routing
 
-### 4.1 ཐོ་བཀོད་མ་བསྒྱུར་ཐུབ་པའི་ མིང་གཞན་དང་ དུར་ཁྲོད་རྡོ་ (ADDR-7c)
+- **Registry schema:** Nexus maintains a signed map `DomainName -> ChainRecord`
+  where `ChainRecord` includes the chain discriminant, optional metadata (RPC
+  endpoints), and a proof of authority (e.g., governance multi-signature).
+- **Sync mechanism:**
+  - Chains submit signed domain claims to Nexus (either during genesis or via
+    governance instruction).
+  - Nexus publishes periodic manifests (signed JSON plus optional Merkle root)
+    over HTTPS and content-addressed storage (e.g., IPFS). Clients pin the
+    latest manifest and verify signatures.
+- **Lookup flow:**
+  - Torii receives a transaction referencing `DomainId`.
+  - If the domain is unknown locally, Torii queries the cached Nexus manifest.
+  - If the manifest indicates a foreign chain, the transaction is rejected with
+    a deterministic `ForeignDomain` error and the remote chain info.
+  - If the domain is missing from Nexus, Torii returns `UnknownDomain`.
+- **Trust anchors & rotation:** Governance keys sign manifests; rotation or
+  revocation is published as a new manifest entry. Clients enforce manifest
+  TTLs (e.g., 24h) and refuse to consult stale data beyond that window.
+- **Failure modes:** If manifest retrieval fails, Torii falls back to cached
+  data within TTL; past TTL it emits `RegistryUnavailable` and refuses
+  cross-domain routing to avoid inconsistent state.
 
-Nexus གིས་ **ppond-only གསལ་སྟོན་** གིས་མངའ་ཁོངས་ ཡང་ན་ མིང་གཞན་ལས་འགན་ག་ར་ དཔར་བསྐྲུན་འབདཝ་ཨིན།
-རྩིས་ཞིབ་འབད་དེ་ ལོག་སྟེ་རྩེད་ཚུགས། བཀོལ་སྤྱོད་པ་ཚུ་གིས་ ནང་གསལ་བཀོད་ཡོད་པའི་བཱུན་ཌལ་འདི་བརྩི་དགོ།
-[ཁ་བྱང་གསལ་སྟོན་དེབ་](I18NU0000070X) དང་།
-བདེན་པའི་འབྱུང་ཁུངས་གཅིག་པུ་: གསལ་སྟོན་ཅིག་གིས་ བདེན་དཔྱད་འབད་མ་ཚུགས་པ་ཅིན་ I18NT0000044X འདི་དགོ།
-གནོད་སྐྱོན་ཕོག་པའི་མངའ་ཁོངས་འདི་སེལ་མ་བཏུབ།
+### 4.1 Registry immutability, aliases, and tombstones (ADDR-7c)
 
-རང་འགུལ་རྒྱབ་སྐྱོར།: `cargo xtask address-manifest verify --bundle <current_dir> --previous <previous_dir>`
-བརྟག་ཞིབ་སམ་དང་ ལས་འཆར་ དེ་ལས་ ཧེ་མའི་བཞུ་ཁུ་ཞིབ་དཔྱད་ཚུ་ ནང་བྲིས།
-བང་དེབ་. I18NI0000416X སྟོན་ནིའི་དོན་ལུ་ བསྒྱུར་བཅོས་ཤོག་བྱང་ཚུ་ནང་ བརྡ་བཀོད་ཨའུཊི་པུཊི་འདི་བཙུགས།
-དང་ `previous_digest` འབྲེལ་མཐུད་འདི་ བཱན་ཌལ་འདི་ དཔར་བསྐྲུན་མ་འབད་བའི་ཧེ་མ་ བདེན་དཔྱད་འབད་ཡོདཔ་ཨིན།
+Nexus publishes an **append-only manifest** so every domain or alias assignment
+can be audited and replayed. Operators must treat the bundle described in the
+[address manifest runbook](source/runbooks/address_manifest_ops.md) as the
+sole source of truth: if a manifest is missing or fails validation, Torii must
+refuse to resolve the affected domain.
 
-#### མགོ་ཡིག་དང་མིང་རྟགས་གན་རྒྱ།
+Automation support: `cargo xtask address-manifest verify --bundle <current_dir> --previous <previous_dir>`
+replays the checksum, schema, and previous-digest checks spelled out in the
+runbook. Include the command output in change tickets to show the `sequence`
+and `previous_digest` linkage was validated before publishing the bundle.
 
-| ཕིལཌ་ | དགོས་མཁོ། |
-|----------------------------------------------------------------------------------------------
-| I18NI0000418X | ད་ལྟ་`1`. མཐུན་སྒྲིག་ཁྱད་ཚད་དུས་མཐུན་བཟོ་མི་དང་གཅིག་ཁར་རྐྱངམ་ཅིག་བརྩེགས་འབད། |
-| `sequence` | པར་སྐྲུན་རེ་ལུ་ **ཡང་དག་** ཡར་སེང་། Torii འདྲ་མཛོད་ཀྱིས་ བར་སྟོང་དང་ ཡང་ན་ འགྱུར་ལྡོག་ཚུ་ བསྐྱར་ཞིབ་འབད་ནི་ལུ་ ངོས་ལེན་འབདཝ་ཨིན། |
-| I18NI0000421X + `ttl_hours` | གསརཔ་སྦེ་ མཛོད་བཙུགས་ (སྔོན་སྒྲིག་ ༢༤h)། གལ་སྲིད་ ཊི་ཊི་ཨེལ་འདི་ ཤུལ་མམ་གྱི་དཔར་བསྐྲུན་མ་འབད་བའི་ཧེ་མ་ དུས་ཡུན་ཚང་པ་ཅིན་ `RegistryUnavailable` ལུ་ Torii ཚུ་ འགྱོཝ་ཨིན། |
-| `previous_digest` | BLAKE3 བཞུ་བཅོས་ (hex) སྔོན་གྱི་གཟུགས་ཀྱི་གསལ་པོ་ཡོད། བདེན་དཔྱད་ཚུ་གིས་ སྐྱོན་བརྗོད་འབད་ནི་གི་དོན་ལུ་ `b3sum` དང་ཅིག་ཁར་ རྩིས་རྐྱབ་ཨིན། |
-| I18NI0000426X | མངོན་གསལ་ཚུ་ Sigstore (I18NI000000427X) བརྒྱུད་དེ་ མཚན་རྟགས་བཀོད་ཡོདཔ་ཨིན། Ops གིས་ `cosign verify-blob --bundle manifest.sigstore manifest.json` གཡོག་བཀོལ་དགོཔ་དང་ འགོ་མ་བཙུགས་པའི་ཧེ་མ་ གཞུང་སྐྱོང་ངོ་རྟགས་/ བརྡ་སྟོན་གྱི་ བཀག་ཆ་ཚུ་ བསྟར་སྤྱོད་འབད་དགོ། |
+#### Manifest header & signature contract
 
-གསར་བཏོན་འཕྲུལ་ཆས་འདི་གིས་ `manifest.sigstore` དང་ `checksums.sha256` བཏོནམ་ཨིན།
-JSON གཟུགས་པོའི་སྦོམ། SoraFS ཡང་ན་ ལུ་ ཡིག་སྣོད་ཚུ་ གཅིག་ཁར་བཞག་དགོ།
-རྩིས་ཞིབ་པ་ཚུ་གིས་ བདེན་དཔྱད་ཀྱི་གོ་རིམ་འདི་ ཚིག་སྦྱོར་གྱི་གོ་རིམ་ཚུ་ ལོག་རྩེད་ཚུགས།
+| Field | Requirement |
+|-------|-------------|
+| `version` | Currently `1`. Bump only with a matching spec update. |
+| `sequence` | Increment by **exactly** one per publication. Torii caches refuse revisions with gaps or regressions. |
+| `generated_ms` + `ttl_hours` | Establish cache freshness (default 24 h). If the TTL expires before the next publication, Torii flips to `RegistryUnavailable`. |
+| `previous_digest` | BLAKE3 digest (hex) of the prior manifest body. Verifiers recompute it with `b3sum` to prove immutability. |
+| `signatures` | Manifests are signed via Sigstore (`cosign sign-blob`). Ops must run `cosign verify-blob --bundle manifest.sigstore manifest.json` and enforce the governance identity/issuer constraints before rollout. |
 
-#### འཛུལ་ཞུགས་རིགས།
+The release automation emits `manifest.sigstore` and `checksums.sha256`
+alongside the JSON body. Keep the files together when mirroring to SoraFS or
+HTTP endpoints so auditors can replay the verification steps verbatim.
 
-| དབྱེ་བ་ | དམིགས་ཡུལ། | དགོས་མཁོའི་ས་སྒོ། |
-|------------------------------------------ |
-| I18NI0000431X | མངའ་ཁོངས་འདི་ འཛམ་གླིང་ནང་ལུ་ ཐོ་བཀོད་འབད་དེ་ཡོདཔ་ལས་ དབྱེ་བ་ཕྱེ་ཚུགས་མི་དང་ I105 གི་སྔོན་སྒྲིག་ལུ་ སབ་ཁྲ་བཟོ་དགོཔ་སྦེ་ གསལ་བསྒྲགས་འབད་ནུག | `{ "domain": "<label>", "chain": "sora:nexus:global", "i105_prefix": 753, "selector": "global" }` |
-| `tombstone` | རྟག་བརྟན་སྦེ་ མིང་གཞན་/གདམ་འཐུ་འབད་མི་ཅིག་ དགོངས་ཞུ་འབདཝ་ཨིན། ག་དུས་ལུ་ Lactor‐‐8 བཞུ་ནི་ཡང་ན་ མངའ་ཁོངས་ཅིག་བཏོན་གཏངམ་ཨིན། | `{ "selector": {…}, "reason_code": "LOCAL8_RETIREMENT" \| …, "ticket": "<governance id>", "replaces_sequence": <number> }` |
+#### Entry types
 
-`global_domain` ཐོ་བཀོད་ཚུ་ནང་ གདམ་ཁ་ཅན་སྦེ་ `manifest_url` ཡང་ན་ I18NI000000437X ཚུད་འོང་།
-མཚན་རྟགས་བཀོད་པའི་རིམ་སྒྲིག་མེ་ཊ་ཌེ་ཊ་ལུ་ དངུལ་ཁུག་ཚུ་ བཏོན་ནི་ཨིན་རུང་ ཀེ་ནོ་ནིག་ཊུཔ་ལི་འདི་ ལུས་ཡོདཔ་ཨིན།
-`{domain, chain, discriminant/i105_prefix}`. `tombstone` དྲན་ཐོ་ **དགོས་** cite
-འདམ་ཁ་རྐྱབ་མི་འདི་ དགོངས་ཞུ་འབད་མི་དང་ དབང་ཚད་བྱིན་མི་ ཤོག་འཛིན་/གཞུང་སྐྱོང་གི་ཅ་ཆས་ཚུ་ཨིན།
-བསྒྱུར་བཅོས་འདི་ དེ་འབདཝ་ལས་ རྩིས་ཞིབ་ལམ་འདི་ བསྐྱར་བཟོ་འབད་བཏུབ་པའི་ ཕྱིར་ཐིག་ཅིག་ཨིན།
+| Type | Purpose | Required fields |
+|------|---------|-----------------|
+| `global_domain` | Declares that a domain is registered globally and should map to a chain discriminant and I105 prefix. | `{ "domain": "<label>", "chain": "sora:nexus:global", "i105_prefix": 753, "selector": "global" }` |
+| `tombstone` | Retires an alias/selector permanently. Required when erasing Local‑8 digests or removing a domain. | `{ "selector": {…}, "reason_code": "LOCAL8_RETIREMENT" \| …, "ticket": "<governance id>", "replaces_sequence": <number> }` |
 
-#### ཨ་ལི་ཡས་/དུར་ཁྲོད་རྡོ་རིང་གི་ལས་རིམ།
+`global_domain` entries may optionally include a `manifest_url` or `sorafs_cid`
+to point wallets at signed chain metadata, but the canonical tuple remains
+`{domain, chain, discriminant/i105_prefix}`. `tombstone` records **must** cite
+the selector being retired and the ticket/governance artefact that authorised
+the change so the audit trail is reconstructable offline.
 
-1. ** དབུགས་གཏོང་ལེན་འབད་ནི།** `torii_address_local8_total{endpoint}` ལག་ལེན་འཐབ།
+#### Alias/tombstone workflow & telemetry
+
+1. **Detect drift.** Use `torii_address_local8_total{endpoint}`,
    `torii_address_local8_domain_total{endpoint,domain}`,
    `torii_address_collision_total{endpoint,kind="local12_digest"}`,
    `torii_address_collision_domain_total{endpoint,domain}`,
-   `torii_address_domain_total{endpoint,domain_kind}`, དང་།
-   `torii_address_invalid_total{endpoint,reason}` (སྤྱི་ལོ་༢༠༡༦ ལུ་བཀོད་ཡོད།
-   `dashboards/grafana/address_ingest.json`) གིས་ ས་གནས་ཀྱི་ཡིག་ཆ་ཚུ་ ངེས་གཏན་བཟོ་ནི་ལུ་ དང་།
-   ས་གནས་ཀྱི་-༡༢ ཁ་ཐུག་རྐྱབ་མི་ཚུ་ དུར་ཁྲོད་ཀྱི་རྡོ་ཅིག་མ་བཟོ་བའི་ཧེ་མ་ ཀླད་ཀོར་ནང་སྡོད་དགོ། ཚིག༌ཕྲད
-   མངའ་ཁོངས་ཀྱི་ ཇོ་བདག་ཚུ་གིས་ dev/test domain ཚུ་གིས་རྐྱངམ་ཅིག་ ས་གནས་ཀྱི་ བཏོནམ་ཨིནམ་སྦེ་ བདེན་ཁུངས་བསྐྱལ་བཅུགཔ་ཨིན།
-   འགྲུལ་སྐྱོད་ (ཤེས་རྟོགས་ཡོད་པའི་ གནས་རིམ་མངའ་ཁོངས་ལུ་ ས་གནས་གཅིག་གི་ ཁ་ཐུག་རྐྱབ་སའི་ས་ཁྲ།) དང་།
-   **ཌོ་མེན་མིནཌི་མིགསི་ (5m)** པེ་ནཱལ་འདི་ཚུདཔ་ཨིན།
-   `torii_address_domain_total{endpoint,domain_kind}` འགྲུལ་བཞུད་ལྷག་དང་`AddressLocal12Traffic`
-   ཉེན་བརྡའི་མེ་རྐྱེན་འདི་ ཐོན་སྐྱེད་ཀྱིས་ ད་ལྟོ་ཡང་ ས་གནས་-༡༢ གི་འདམ་ཁ་ཚུ་མཐོང་པ་ཅིན་
-   དགོངས་ཞུའི་སྒོ་ར།
-2. ** ཀེན་ནོ་ཀཱལ་ བཞུ་བཅུག་མི་ འཇུ་ནི།** གཡོག་བཀོལ།
+   `torii_address_domain_total{endpoint,domain_kind}`, and
+   `torii_address_invalid_total{endpoint,reason}` (rendered in
+   `dashboards/grafana/address_ingest.json`) to confirm Local submissions and
+   Local-12 collisions stay at zero before proposing a tombstone. The
+   per-domain counters let owners prove that only dev/test domains emit Local‑8
+   traffic (and that Local‑12 collisions map to known staging domains) while
+   includes the **Domain Kind Mix (5m)** panel so SREs can graph how much
+   `domain_kind="local12"` traffic remains, and the `AddressLocal12Traffic`
+   alert fires whenever production still sees Local-12 selectors despite the
+   retirement gate.
+2. **Derive canonical digests.** Run
    `iroha tools address convert <address> --format json --expect-prefix 753`
-   (ཡང་ན་ `fixtures/account/address_vectors.json` བརྒྱུད་དེ་ བཀོལ་སྤྱོད་འབདཝ་ཨིན།
-   `scripts/account_fixture_helper.py`) གཏན་གཏན་ I18NI000000452X བཟུང་ཡོད།
-   CLI གིས་ I105, `i105`, དང་ ཀེ་ནོ་ནིག་ I18NI000000454X ཚིག་དོན་ཚུ་ ངོས་ལེན་འབདཝ་ཨིན། ཟུར་ཐོ།
-   `@<domain>` ཁྱོད་ཀྱིས་ གསལ་སྟོན་ཚུ་གི་དོན་ལུ་ ཁ་ཡིག་ཅིག་ ཉམས་སྲུང་འབད་དགོ་པའི་སྐབས་ལུ་རྐྱངམ་ཅིག་ཨིན།
-   JSON བཅུད་བསྡུས་ཁ་ཐོག་འདི་ I18NI000000456X ས་སྒོ་བརྒྱུད་དེ་ མངའ་ཁོངས་དེ་ཨིན།
-   I18NI000000457X གིས་ གཞི་བསྒྱུར་འབད་ཡོད་པའི་ ཨིན་ཀོ་ཌིང་འདི་ I18NI000000458X གི་དོན་ལུ་ བསྐྱར་རྩེད་འབདཝ་ཨིན།
-   sound diffs (འདི་ རྗེས་འཇུག་འདི་ མེ་ཊ་ཌེ་ཊ་ཨིན་ ཀེ་ནོ་ནིག་རྩིས་ཐོ་ id མེན།)
-   གྲལ་ཐིག་གསརཔ་ལུ་གཞི་བཞག་པའི་ཕྱིར་འདྲེན་ལག་ལེན་གྱི་དོན་ལུ།
-   `iroha tools address normalize --input <file> legacy-selector input mode` མང་ཚོགས་-བསྒྱུར་བཅོས-གཞི་བསྒྱུར་ས་གནས་ལུ།
-   སེལ་འཐུ་འབད་མི་ I105 (དགའ་གདམ་) བསྡམ་བཞག་ཡོདཔ་ (I18NI000000460X, གཉིས་པ་) ཡང་ན་ ཧེགསི་ཡང་ན་ JSON འབྲི་ཤོག་ཚུ་ གོམ་བསྐྱོད་འབད་བའི་སྐབས་ཨིན།
-   ས་མེད་ས་གནས་ཀྱི་གྲལ་ཐིག་ཚུ། རྩིས་ཞིབ་པ་ཚུ་ལུ་ ཤོག་ཁྲམ་མཐུན་སྒྲིག་ཅན་གྱི་སྒྲུབ་བྱེད་དགོཔ་ད་ གཡོག་བཀོལ།
-   `iroha tools address audit --input <file> --format csv` གིས་ སི་ཨེསི་ཝི་བཅུད་བསྡུས་ཅིག་བཏོན་ནི།
-   (`input,status,format,domain_kind,…`) དེ་གིས་ ས་གནས་ཀྱི་འདེམས་སྒྲུག་ཚུ་ གཙོ་བོར་བཏོནམ་ཨིན།
-   ཀེ་ནོ་ནིག་ཨེན་ཀོ་ཌིང་ཚུ་, དང་ ཡིག་སྣོད་གཅིག་པ་ནང་ འཐུས་ཤོར་ཚུ་ མིང་དཔྱད་འབད།
-3.*ཟུར་དེབ་ཀྱི་གསལ་སྟོན་ཐོ་འགོད་ཚུ།** `tombstone` དྲན་ཐོ་ (དང་རྗེས་འཇུག་འདི་)
-   ཡོངས་ཁྱབ་ཐོ་བཀོད་ལུ་གནས་སྤོ་འབད་བའི་སྐབས་ `global_domain` དྲན་ཐོ་) དང་ བདེན་དཔྱད་འབད་ནི།
-   མཚན་རྟགས་མ་ཞུ་བའི་ཧེ་མ་ `cargo xtask address-vectors` དང་བཅས་པའི་གསལ་སྟོན་འདི།
-4. **བདེན་དཔྱད་དང་དཔར་བསྐྲུན་འབད།
-   རིམ་པ་གཅིག་པའི་རྐྱང་པ།) I18NT0000004X ད་ལྟ་།
-   canonical Katakana i105 / non-canonical Katakana i105 འདི་ ས་གཞི་ཚུ་གི་ཤུལ་ལས་ དེ་འཕྲོ་ལས་ ཡིག་དོན་བཟོཝ་ཨིན།
-5. **Monitor & sourbet.** ས་གནས་ཀྱི་-༨ དང་ ས་གནས་ཀྱི་‐༡༢ ཁ་ཐུག་རྐྱབ་མི་ པེ་ནཱལ་ཚུ་ .
-   ཉིནམ་༣༠ གི་དོན་ལུ་ ཀླད་ཀོར་; ག་དེམ་ཅིག་སྦེ་ རི་གེ་རེ་ཤཱན་ འཐོན་པ་ཅིན་ ཧེ་མའི་ གསལ་སྟོན་འདི་ ལོག་དཔར་བསྐྲུན་འབད།
-   བརྡ་འཕྲིན་བརྟན་ཏོག་ཏོ་མ་འགྱོ་ཚུན་ཚོད་ ཐོན་སྐྱེད་མེད་པའི་མཐའ་འཁོར་ནང་རྐྱངམ་ཅིག།
+   (or consume `fixtures/account/address_vectors.json` via
+   `scripts/account_fixture_helper.py`) to capture the exact `digest_hex`.
+  The CLI address tool accepts canonical Katakana i105 and the internal
+  canonical `0x…` envelope view; runtime `AccountId` parsers continue to accept
+  canonical Katakana i105 only.
+  The JSON summary reports the parsed format/domain kind plus canonical
+  encodings (I105 and canonical hex) for each input.
+  For newline-oriented exports use
+  `iroha tools address normalize --input <file>` to rewrite newline-separated
+  address lists into canonical Katakana i105, canonical hex, or JSON forms.
+  When auditors need spreadsheet-friendly evidence, run
+  `iroha tools address audit --input <file> --format csv` to emit a CSV summary
+  (`input,status,format,domain_kind,…`) that highlights domain kind,
+  canonical encodings, and parse failures in the same file.
+3. **Append manifest entries.** Draft the `tombstone` record (and the follow-up
+   `global_domain` record when migrating to the global registry) and validate
+   the manifest with `cargo xtask address-vectors` before requesting signatures.
+4. **Verify & publish.** Follow the runbook checklist (hashes, Sigstore,
+   sequence monotonicity) before mirroring the bundle to SoraFS. Torii now
+   canonicalizes account filters and path literals from canonical Katakana i105 input only.
+5. **Monitor & rollback.** Keep the Local‑8 and Local‑12 collision panels at
+   zero for 30 days; if regressions appear, republish the previous manifest
+   only in the affected non-production environment until telemetry stabilises.
 
-གོང་འཁོད་ཀྱི་གོ་རིམ་ཚུ་ག་ར་ ADDR‐-7c གི་དོན་ལུ་ མཁོ་བའི་སྒྲུབ་བྱེད་ཨིན།
-`cosign` མིང་རྟགས་བང་སྒྲིག་ཡང་ན་ I18NI000000467X གནས་གོང་ཚུ་ མཐུན་སྒྲིག་མ་འབད་བར་ ཁག་ཆེ།
-རང་བཞིན་གྱིས་ངོས་ལེན་མ་འབད་བར་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ བདེན་བཤད་དྲན་ཐོ་ཚུ་ ༡ ལུ་མཉམ་སྦྲགས་འབད་དགོ།
-ཁོང་གི་བསྒྱུར་བཅོས་ཀྱི་ཤོག་བྱང་།
+All of the steps above are mandatory evidence for ADDR‑7c: manifests without
+the `cosign` signature bundle or without matching `previous_digest` values must
+be rejected automatically, and operators must attach the verification logs to
+their change tickets.
 
-### 5. བརྡ་རྟགས་དང་ཨེ་པི་ཨའི་ ལས་རིམ།
+### 5. Wallet & API ergonomics
 
-- **གསལ་སྟོན་སྔོན་སྒྲིག་ཚུ་:** དངུལ་ཁུག་ཚུ་གིས་ I105 ཁ་བྱང་ (མགྱོགས་ཐལ, ཞིབ་དཔྱད་ཚུ་)སྟོནམ་ཨིན།
-  ཐོ་བཀོད་ལས་ ལེན་ཡོད་པའི་ ཁ་ཡིག་སྦེ་ ཐག་བཅད་ཡོད་པའི་ མངའ་ཁོངས་འདི་ཨིན། མངའ་ཁོངས་འདི་ཚུ་ཨིན།
-  གསལ་ཏོག་ཏོ་སྦེ་ འགྲེལ་བཤད་ཅན་གྱི་ མེ་ཊ་ཌེ་ཊ་སྦེ་ རྟགས་བཀལ་ཡོདཔ་ཨིན་ དེ་ཡང་ I105 འདི་ཨིན།
-  ཁ་བྱང་།
-- **ཨིན་པུཊི་ ཀེ་ནོ་ནིལ་ :** Torii དང་ SDKs ཚུ་གིས་ I105 (དགའ་གདམ་)/སོ་ར་ (གཉིས་པའི་དྲག་ཤོས་)/༠x དང་ལེན་འབདཝ་ཨིན།
-  ཁ་བྱང་ཚུ་དང་ I18NI0000468X, I18NI000000469X, `uaid:…`, དང་།
-  `opaque:…` རྣམ་པ་ དེ་ལས་ ཐོན་འབྲས་དོན་ལུ་ I105 ལུ་ ཀེ་ནོ་ནིག་བཟོཝ་ཨིན། མེད།
-  དམ་དམ་སྦེ་ སོར་བསྒྱུར་; raw ཁ་པར་/གློག་འཕྲིན་ངོས་འཛིན་པ་ཚུ་ རེས་ཇར་ལས་བཞག་དགོ།
-  vi UAID/གསལ་པོ་མེད་པའི་སབ་ཁྲ་ཚུ།
-- **འཛོལ་བ་སྔོན་འགོག་:** ཝ་ལེཊི་ཚུ་གིས་ I105 སྔོན་སྒྲིག་དང་ རིམ་སྒྲིག་རྒྱུན་རིམ་-དབྱེ་བ་བཀག་ཆ་འབད་ནི།
-  རེ་བ་ རིམ་སྒྲིག་མ་མཐུན་མི་ཚུ་གིས་ བྱ་བ་འབད་ཚུགས་པའི་ནད་བརྟག་དང་གཅིག་ཁར་ ཧརཌི་འཐུས་ཤོར་ཚུ་ འབྱུང་བཅུགཔ་ཨིན།
-- **Codec དཔེ་མཛོད་ཚུ་:** གཞུང་འབྲེལ་གྱི་ རསཊ་ ཊའིཔ་སི་ཀིརིཔཊི་/ཇ་བ་ཨིསི་ཀིརིཔཊི་, པའི་ཐོན་, དང་ ཀོཊ་ལིན་ཚུ།
-  དཔེ་མཛོད་ཚུ་གིས་ I105 ཨིན་ཀོ་ཌིང་/ཌི་ཀོ་ཌིང་དང་ བསྡམ་བཞག་ཡོད་མི་ (I18NI000000472X) རྒྱབ་སྐྱོར་ཚུ་ ལུ་བྱིནམ་ཨིན།
-  ཆ་ཤས་ཆ་ཤས་ཚུ་སྤང་དགོ། CAIP-10 བསྒྱུར་བཅོས་ཚུ་ ད་ལྟོ་ཡང་ གཏང་མི་བཏུབ།
+- **Display defaults:** Wallets show the I105 address (short, checksummed)
+  plus the resolved domain as a label fetched from the registry. Domains are
+  clearly marked as descriptive metadata that may change, while I105 is the
+  stable address.
+- **Input canonicalization:** Torii and SDKs accept canonical Katakana i105 account IDs only and reject `@domain` suffixes, alias forms, non-canonical/legacy i105 literals, and canonical-hex account literals in runtime parser paths. There is no
+  strict-mode toggle; raw phone/email identifiers must be kept off-ledger
+  via UAID/opaque mappings.
+- **Error prevention:** Wallets parse I105 prefixes and enforce chain-discriminant
+  expectations. Chain mismatches trigger hard failures with actionable diagnostics.
+- **Codec libraries:** Official Rust, TypeScript/JavaScript, Python, and Kotlin
+  libraries provide I105 encoding/decoding plus I105 support to
+  avoid fragmented implementations. CAIP-10 conversions are not shipped yet.
 
-#### འཐོབ་ཚུགསཔ་དང་ཉེན་སྲུང་བགོ་བཤའི་ལམ་སྟོན།- ཐོན་སྐྱེད་ཀྱི་ཁ་ཐོག་ཚུ་གི་དོན་ལུ་ ལག་ལེན་འཐབ་ཐངས་ལམ་སྟོན་འདི་ ༢༠༠༨ ལུ་ ཐད་རི་བ་རི་ བརྟག་ཞིབ་འབདཝ་ཨིན།
-  `docs/portal/docs/reference/address-safety.md`; ག་དེམ་ཅིག་སྦེ་ ཞིབ་དཔྱད་ཐོ་ཡིག་དེ་ གཞི་བསྟུན་འབད།
-  དངུལ་ཁུག་ཡང་ན་ འཚོལ་ཞིབ་པ་ UX ལུ་དགོས་མཁོ་འདི་ཚུ་ བསྒྱུར་བཅོས་འབད་ནི།
-- **ཉེན་སྲུང་བགོ་བཤའ་རྐྱབ་ཨིན།** ཁ་བྱང་འདྲ་བཤུས་རྐྱབ་མི་ ཡང་ན་ བཀྲམ་སྟོན་འབད་མི་ ཁ་ཐོག་ཚུ་གིས་ I105 འབྲི་ཤོག་ལུ་ སྔོན་སྒྲིག་འབད་དེ་ ཉེ་འདབས་ཀྱི་ “བགོ་བཤའ་” བྱ་བ་འདི་ ཡིག་རྒྱུན་ཆ་ཚང་དང་ པེ་ལོཌི་གཅིག་ལས་ ཀིའུ་ཨར་ཨང་རྟགས་འདི་ གསལ་སྟོན་འབདཝ་ཨིནམ་ལས་ ལག་ལེན་པ་ཚུ་གིས་ ཅེག་སམ་མཐོང་སྣང་དང་ ཡང་ན་ པར་ལེན་ཐོག་ལས་ བདེན་དཔྱད་འབད་ཚུགས། བཏོག་ནི་འདི་ བཀག་ཐབས་མེད་པའི་སྐབས་ལུ་ ༼དཔེར་ན་ གསལ་གཞི་ཆུང་ཀུ་ཚུ་༽ ཡིག་རྒྱུན་འགོ་བཙུགས་ནི་དང་མཇུག་འདི་ བཀག་བཞག་ཞིནམ་ལས་ ཡིག་རྒྱུན་གསལ་ཏོག་ཏོ་སྦེ་ཁ་སྐོང་བརྐྱབ་སྟེ་ ཁ་བྱང་ཆ་ཚང་འདི་ འདྲ་བཤུས་ལས་བཤུད་བརྙན་བརྒྱུད་དེ་ འཛུལ་སྤྱོད་འབད་ཚུགསཔ་སྦེ་བཞག་དགོ།
-- **IME ཉེན་སྲུང་ཚུ་:** ཁ་བྱང་ཨིན་པུཊི་ཚུ་ IME/IME-བཟོ་རྣམ་ལྡེ་སྒྲོམ་ནང་ལས་ རྩོམ་སྒྲིག་ཅ་ཆས་ཚུ་ ངོས་ལེན་མ་འབད། ASCII-only འཛུལ་ཞུགས་འདི་ རྒྱ་ཚད་ ཡང་ན་ Kana ཡིག་འབྲུ་ཚུ་ བརྟག་དཔྱད་འབད་བའི་སྐབས་ ནང་ཐིག་ཉེན་བརྡ་ཅིག་ གསལ་བཀོད་འབདཝ་ཨིནམ་དང་ བདེན་དཔྱད་མ་འབད་བའི་ཧེ་མ་ རྟགས་མཚན་ཚུ་ མཉམ་སྡེབ་འབད་བའི་ ཚིག་ཡིག་གཙང་མའི་ སྦྱར་རྫས་ས་ཁོངས་ཅིག་ བྱིན་དོ་ཡོདཔ་ལས་ ཇ་པཱན་དང་རྒྱ་ནག་གི་ ལག་ལེན་པ་ཚུ་གིས་ གོང་འཕེལ་མ་ཤོར་བར་ ཁོང་རའི་ IME ལྕོགས་མིན་བཟོ་ཚུགས།
-- **གསལ་གཞི་ལྷག་མི་ཚུ་གི་རྒྱབ་སྐྱོར་:** མཐོང་སྣང་སྦ་བཞག་མི་ཁ་ཡིག་ཚུ་ (I18NI000000474X/I18NI000000475X) འགོ་འཁྲིདཔ་ I105 སྔོན་སྒྲིག་ཨང་གྲངས་ཚུ་འགྲེལ་བཤད་རྐྱབ་ཞིནམ་ལས་ I105 སྤྲོད་ལེན་སྡེ་ཚན་འདི་ ༤- ཡང་ན་ ༨-ཡིག་འབྲུ་སྡེ་ཚན་ནང་ལུ་བསྒྱུར་ཞིནམ་ལས་ ཕན་འདེབས་འཕྲུལ་རིག་གིས་ རྒྱུག་པའི་ཚབ་ལུ་ རྒྱུག་པའི་ཚབ་ལུ་ ཕན་འདེབས་འཕྲུལ་རིག་གིས་ སྡེ་ཚན་བཟོ་ཡོད་པའི་ཡིག་འབྲུ་ཚུ་ལྷགཔ་ཨིན། གུས་ཞབས་ཅན་གྱི་ལུང་ཕྱོགས་ཚུ་བརྒྱུད་དེ་ འདྲ་བཤུས་/བགོ་བཤའ་མཐར་འཁྱོལ་གསལ་བསྒྲགས་འབད་ནི་དང་ ཀིའུ་ཨར་ སྔོན་ལྟ་ཚུ་ནང་ འགྲེལ་བཤད་ཅན་གྱི་ཚིག་ཡིག་ཚུ་ ངེས་གཏན་བཟོཝ་ཨིན། (“I105 for <alias> for 0x02F1”)།
-- **སོ་ར་རྐྱངམ་ཅིག་བསྡམ་བཞག་ཡོད་པའི་ལག་ལེན་:** ཨ་རྟག་ར་ `i105` བསྡམ་བཞག་ཡོད་པའི་མཐོང་སྣང་འདི་ “Sora-only” ཟེར་ ཁ་ཡིག་བཏགས་ཏེ་ འདྲ་བཤུས་མ་རྐྱབ་པའི་ཧེ་མ་ གསལ་ཏོག་ཏོ་སྦེ་ ངེས་གཏན་གྱི་རྒྱབ་ལུ་སྒོ་བསྡམ་དགོ། འདི་ཡང་ མ་དངུལ་ཚུ་ མ་འབྱུང་ནི་གི་དོན་ལུ་ དྲྭ་རྒྱ་ནང་ལུ་ སྤོ་བཤུད་འབད་ནི་གི་དོན་ལུ་ དྲྭ་རྒྱ་ནང་ལུ་ སྤོ་བཤུད་འབད་ནི་གི་དོན་ལུ་ ལག་ལེན་འཐབ་མི་ཚུ་ལུ་ སོ་ར་ I18NT0000024X གི་གནས་གོང་འདི་ མེན་པའི་སྐབས་ལུ་ བསྡམ་བཞག་ཡོད་པའི་ ཐོན་འབྲས་འདི་ བཀྲམ་སྟོན་འབད་ནི་ལུ་ ངོས་ལེན་མ་འབད་ཟེར་ཨིན་མས།
+#### Accessibility & Safe Sharing Guidance
 
-## ལག་ལེན་འཐབ་ནི་ ཞིབ་དཔྱད་ཐོ་ཡིག་།
+- Implementation guidance for product surfaces is tracked live in
+  `docs/portal/docs/reference/address-safety.md`; reference that checklist when
+  adapting these requirements to wallet or explorer UX.
+- **Safe sharing flows:** Surfaces that copy or display addresses default to the i105 form and expose an adjacent “share” action that presents both the full string and a QR code derived from the same payload so users can verify the checksum visually or by scanning. When truncation is unavoidable (e.g., small screens), retain the start and end of the string, add clear ellipses, and keep the full address accessible via copy-to-clipboard to prevent accidental clipping.
+- **IME safeguards:** Address inputs MUST reject composition artefacts from IME/IME-style keyboards. Enforce ASCII-only entry, present an inline warning when full-width or Kana characters are detected, and offer a plain-text paste zone that strips combining marks before validation so Japanese and Chinese users can disable their IME without losing progress.
+- **Screen-reader support:** Provide visually hidden labels (`aria-label`/`aria-describedby`) that describe the leading i105 digits and chunk the i105 payload into 4- or 8-character groups, so assistive technology reads grouped characters instead of a run-on string. Announce copy/share success via polite live regions and ensure QR previews include descriptive alt text (“i105 address for <alias> on chain 0x02F1”).
+- **Single-format usage:** Keep address sharing on canonical Katakana i105 only and avoid secondary account-literal formats in wallet/explorer copy flows.
 
-- **I105 ཡིག་ཤུབས་:** སྔོན་སྒྲིག་འདི་ བསྡུ་སྒྲིག་འབད་དེ་ ལག་ལེན་འཐབ་ཐོག་ལས་ I18NI000000477X ཨིན།
-  ༦-/༡༤-བིཊི་འཆར་གཞི་ I18NI000000478X ལས་ གཟུགས་འདི་ ཚད་གཞི་ཅན་གྱི་བཱའིཊི་ཚུ་ཨིན།
-  (`AccountAddress::canonical_bytes()`) དང་ ཅེག་སམ་འདི་ བཱའིཊི་འགོ་དང་པ་གཉིས་ཨིན།
-  of Blake2b-512(`b"I105PRE"` || སྔོན་འཇུག་ ||གཟུགས་པོ།). ཆ་ཚང་འདི་ I105- ཨིན།
-  `bs58` བརྒྱུད་དེ་ ཨིན་ཀོཌ་འབད་ཡོདཔ།
-- ** ཐོ་བཀོད་ཀྱི་གན་རྒྱ་:** མཚན་རྟགས་བཀོད་ཡོད་པའི་ JSON (དང་གདམ་ཁ་ཅན་གྱི་ Merkle root) པར་སྐྲུན་འབད་ནི།
-  `{discriminant, i105_prefix, chain_alias, endpoints}` དང་ 24h TTL དང་།
-  འཁོར་སྐྱོད་ལྡེ་མིག་ཚུ།
-- **མངའ་ཁོངས་སྲིད་བྱུས།:** SCII `Name`; i18n ལྕོགས་ཅན་བཟོ་བ་ཅིན་ UTS-46 གི་དོན་ལུ་འཇུག་སྤྱོད་འབད།
-  མགུ་ཐོམ་སི་སི་གི་ཞིབ་དཔྱད་ཚུ་གི་དོན་ལུ་ སྤྱིར་བཏང་བཟོ་ནི་དང་ UTS-39 ཨིན། max ཁ་ཡིག་ (༦༣) དང་།
-  བསྡོམས་པས་ (༢༥༥) རིང་ཚད་ནི།
-- **ཚིག་ཡིག་གྲོགས་རམ་པ་ཚུ་:** གྲུ་ཨའི་ཨེཆ་༥༨ ↔ བསྡམ་བཞག་ཡོདཔ་ (`i105`) རཱསིཊི་ནང་ལུ་ ཀོ་ཌེཀསི་ཚུ།
-  དབྱེ་བ་ཡིག་གཟུགས་/ཇ་བ་ཨིསི་ཀིརིཔཊི་ པའི་ཐོན་ དང་ཀོཊ་ལིན་ཚུ་ བརྗེ་སོར་འབད་ཡོད་པའི་བརྟག་དཔྱད་ཝེཀ་ཊར་ (CAIP-10
-  སབ་ཁྲ་བཟོ་ནི་ཚུ་ མ་འོངས་པའི་ལཱ་སྦེ་ལུསཔ་ཨིན།)
-- **CLI ལག་ཆས་:** `iroha tools address convert` བརྒྱུད་དེ་ གཏན་འབེབས་བཀོལ་སྤྱོད་བཀོལ་སྤྱོད་ཀྱི་རྒྱུན་རིམ་ཅིག་བྱིན།
-  (I105/`0x…` གི་ཚིག་དོན་དང་ དེ་ངོས་ལེན་བྱེད་པའི་ I18NI0000486X),
-  གདམ་ཁ་ཅན་ I18NI0000049X ཁ་ཡིག་ཚུ་, སོ་ར་ I18NT0000025X སྔོན་སྒྲིག་ (I18NI000000490X) ལག་ལེན་འཐབ་སྟེ་ I105 ཐོན་འབྲས་ལུ་སྔོན་སྒྲིག་འབདཝ་ཨིན།
-  དང་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ གསལ་ཏོག་ཏོ་སྦེ་ཞུ་བ་འབད་བའི་སྐབས་ སོ་ར་རྐྱངམ་ཅིག་བསྡམ་བཞག་ཡོད་པའི་ཡིག་འབྲུ་འདི་རྐྱངམ་ཅིག་ བཏོནམ་ཨིན།
-  `--format i105` ཡང་ན་ JSON བཅུད་དོན་ཐབས་ལམ་། བརྡ་བཀོད་ཀྱིས་ སྔོན་འཇུག་གི་རེ་བ་ཚུ་གུ་ བརྟན་བཞུགས་འབདཝ་ཨིན།
-  དབྱེ་དཔྱད་འབད་ཡོད་པའི་མངའ་ཁོངས་ (I18NI0000042X in JSON ནང་) དང་ `legacy  suffix` དར་ཆ་ཚུ་ཐོ་བཀོད་འབདཝ་ཨིན།
-  བསྒྱུར་བཅོས་འབད་ཡོད་པའི་ཨེན་ཀོ་ཌིང་འདི་ `<address>@<domain>` (rejected legacy form) སྦེ་ལོག་སྟེ་རྩེད་དོ་ཡོདཔ་ལས་ གསལ་སྟོན་འདི་ བརྟན་ཤུགས་སྦེ་རང་ ལུས་དོ་ཡོདཔ་ཨིན།
-- **Wallet/འཚོལ་ཞིབ་པ་ UX:** [ཁ་བྱང་བཀྲམ་སྟོན་ལམ་སྟོན་](I18NU0000071X) ལུ་རྗེས་སུ་འབྲང་།
-  ADDR-6—འདྲ་བཤུས་གཉིས་ཀྱི་ཨེབ་རྟ་ཚུ་བྱིན་ཏེ་ I105 འདི་ QR pappabased སྦེ་བཞག་ཞིནམ་ལས་ ཉེན་བརྡ་འབད།
-  ལག་ལེན་པ་ཚུ་གིས་ `i105` འབྲི་ཤོག་འདི་ Sora-only དང་ IME བསྐྱར་འབྲི་ཚུ་ལུ་ འཚོར་སྣང་བྱུང་ཚུགས།
-- **I18NT0000049X མཉམ་བསྡོམས་:** འདྲ་མཛོད་ Nexus གིས་ ཊི་ཊི་ཨེལ་ལུ་གུས་ཞབས་འབད་མི་ བཏོན་གཏང་།
-  `ForeignDomain`/I18NI0000497X/`RegistryUnavailable` དང་ དེ་ལས་
-  keep strict account-literal parsing canonical-i105-only (reject non-canonical Katakana i105 literals and any `@domain` suffix) with canonical Katakana i105 output.
+## Implementation Checklist
 
-### Torii ལན་འདེབས་རྩ་སྒྲིག་ཚུ།
+- **I105 envelope:** Prefix encodes the `chain_discriminant` using the compact
+  6-/14-bit scheme from `encode_i105_prefix()`, the body is the canonical bytes
+  (`AccountAddress::canonical_bytes()`), and the checksum is the first two bytes
+  of Blake2b-512(`b"I105PRE"` || prefix || body). The full payload is encoded
+  with the I105 alphabet via `bs58`.
+- **Registry contract:** Signed JSON (and optional Merkle root) publishing
+  `{discriminant, i105_prefix, chain_alias, endpoints}` with 24h TTL and
+  rotation keys.
+- **Domain policy:** ASCII `Name` today; if enabling i18n, apply UTS-46 for
+  normalization and UTS-39 for confusable checks. Enforce max label (63) and
+  total (255) lengths.
+- **Textual helpers:** Ship I105 ↔ canonical Katakana i105 codecs in Rust,
+  TypeScript/JavaScript, Python, and Kotlin with shared test vectors (CAIP-10
+  mappings remain future work).
+- **CLI tooling:** Provide a deterministic operator workflow via `iroha tools address convert`
+  (see `crates/iroha_cli/src/address.rs`), which accepts canonical Katakana i105 literals,
+  defaults to i105 output using the Sora Nexus prefix (`753`), enforces prefix
+  expectations on parse, and rejects `@domain` suffixes so operator pipelines
+  stay on canonical address literals only.
+- **Wallet/explorer UX:** Follow the [address display guidelines](source/sns/address_display_guidelines.md)
+  shipped with ADDR-6—keep canonical Katakana i105 as the single copy/QR payload and
+  apply IME-safe input/output handling.
+- **Torii integration:** Cache Nexus manifests respecting TTL, emit
+  `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` deterministically, and
+  keep strict account-literal parsing canonical-i105-only (reject non-canonical
+  forms and any `@domain` suffix) with canonical Katakana i105 output.
 
-- `GET /v1/accounts` གིས་ གདམ་ཁ་ཅན་གྱི་ `canonical Katakana i105 rendering` འདྲི་དཔྱད་ཚད་བཟུང་དང་ དང་ལེན་འབདཝ་ཨིན།
-  `POST /v1/accounts/query` གིས་ JSON ཡིག་ཤུབས་ནང་ན་ཡོད་པའི་ས་སྒོ་གཅིག་པ་ངོས་ལེན་འབདཝ་ཨིན།
-  རྒྱབ་སྐྱོར་ཡོད་པའི་གནས་གོང་ཚུ་:
-  - I18NI000000507X (སྔོན་སྒྲིག་) — ལན་འདེབས་ཚུ་ ཁྲིམས་མཐུན་གྱི་ I105 གླ་ཆ་ (དཔེར་ན་,
-    `soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ`).
-  - I18NI0000059X — ལན་འདེབས་ཚུ་གིས་ སོ་ར་རྐྱངམ་ཅིག་ `i105` བསྡམ་བཞག་ཡོད་པའི་མཐོང་སྣང་འདི་ བཏོནམ་ཨིན།
-    ཚགས་མ་/འགྲུལ་ལམ་ཚད་བཟུང་ཚུ་ ཀེ་ནོ་ནིཀ་བཞག་དོ་ཡོདཔ།
-- ནུས་མེད་གནས་གོང་ཚུ་ `400` སླར་ལོག་འབད་ (I18NI000000512X). འདི་གིས་ ཆོག་ཐམ་
-  སོ་ར་རྐྱངམ་ཅིག་ཡུ་ཨེགསི་གི་དོན་ལུ་ བསྡམ་བཞག་ཡོད་པའི་ཡིག་རྒྱུན་ཚུ་ ཞུ་བ་འབད་ནིའི་དོན་ལུ་ དངུལ་ཁུག་དང་ འཚོལ་ཞིབ་པ་ཚུ་གིས་ ཨིན།
-  I105 འདི་ ཕན་ཚུན་ཁ་ཕྱེ་བཏུབ་པའི་སྔོན་སྒྲིག་སྦེ་བཞག་དོ།
-- རྒྱུ་དངོས་ཐོ་ཡིག་ (`GET /v1/assets/{definition_id}/holders`) དང་ཁོང་ཚོའི་JSON
-  ཡིག་ཤུབས་ཀྱི་མཉམ་འབྲེལ་ (`POST …/holders/query`) ཡང་ `canonical Katakana i105 rendering` ཡང་གུས་ཞབས་ཡོད།
-  I18NI000000516X ས་སྒོ་འདི་གིས་ ག་དུས་འབད་རུང་ ཚིག་དོན་ཚུ་ བཤུབ་བཏང་ཡོདཔ་ཨིན།
-  པེ་ར་མི་ཊར་/ཡིག་ཤུབས་ས་སྒོ་འདི་ `i105` ལུ་གཞི་སྒྲིག་འབད་དེ་ རྩིས་ཐོ་ཚུ་མེ་ལོང་བཟོཝ་ཨིན།
-  མཇུག་ཚུ་ འཚོལ་ཞིབ་འབད་མི་ཚུ་གིས་ སྣོད་ཐོ་ཚུ་ནང་ ཐོན་འབྲས་ཚུ་ རིམ་མཐུན་སྦེ་ གསལ་བཀོད་འབད་ཚུགས།
-- **བརྟག་དཔྱད་:** ཨིན་ཀོ་ཌར་/ཌི་ཀོཌར་སྒོར་སྒོརམ་འགྲུལ་སྐྱོད་ཀྱི་དོན་ལུ་ ཡུ་ནིཊི་བརྟག་དཔྱད་ཚུ་ཁ་སྐོང་བརྐྱབས་ཏེ་, འཛོལ་བ་-རིམ་སྒྲིག་།
-  འཐུས་ཤོར་དང་ གསལ་སྟོན་ཚུ་; Torii དང་ SDKs ཚུ་ནང་ མཉམ་བསྡོམས་ཁྱབ་ཚད་ཁ་སྐོང་འབད།
-  for I105 མཇུག་བསྡུའི་མཇུག་བསྡུ།
+### Torii response formats
 
-## འཛོལ་བའི་ཨང་རྟགས་ཐོ་འཁོར།
+- `GET /v1/accounts` and `POST /v1/accounts/query` emit canonical Katakana i105 account
+  literals in responses.
+- Asset holder listings (`GET /v1/assets/{definition_id}/holders`) and their JSON
+  envelope counterpart (`POST …/holders/query`) also emit canonical Katakana i105 account
+  identifiers in `items[*].account_id`.
+- **Testing:** Add unit tests for encoder/decoder round-trips, wrong-chain
+  failures, and manifest lookups; add integration coverage in Torii and SDKs
+  for I105 flows end to end.
 
-ཁ་བྱང་ཨེན་ཀོ་ཌར་དང་ ཌི་ཀོ་ཌར་ཚུ་གིས་ བརྒྱུད་དེ་ འཐུས་ཤོར་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན།
-`AccountAddressError::code_str()`. འོག་གི་ཐིག་ཁྲམ་ཚུ་གིས་ བརྟན་ཏོག་ཏོ་གི་ཨང་རྟགས་ཚུ་བྱིནམ་ཨིན།
-དེ་ SDKs དང་ དངུལ་ཁུག་ དེ་ལས་ I18NT0000005X ཁ་ཐོག་ལུ་ མི་གིས་ལྷག་ཚུགས་པའི་ ཁ་ཐོག་ལུ་ ཁ་ཐོག་ལུ་འོང་དགོ།
-འཕྲིན་དོན་ཚུ་ དང་ གྲོས་འཆར་གྱི་ བཅོ་ཁ་གི་ལམ་སྟོན།
+## Error Code Registry
 
-### ཀེ་ན་ནིལ་བཟོ་བསྐྲུན།
+Address encoders and decoders expose failures through
+`AccountAddressError::code_str()`. The following tables provide the stable codes
+that SDKs, wallets, and Torii surfaces should surface alongside human-readable
+messages, plus recommended remediation guidance.
 
-| ཨང་རྟགས་ | འཐུས་ཤོར་ | གྲོས་འཆར་གྱི་བཅོ་ཁ་ |
-|------------------------------------------------- |
-| `ERR_UNSUPPORTED_ALGORITHM` | Encoder གིས་ ཐོ་བཀོད་ཡང་ན་ བཟོ་བསྐྲུན་ཁྱད་རྣམ་ཚུ་གིས་ རྒྱབ་སྐྱོར་མ་འབད་བའི་ མཚན་རྟགས་བཀོད་ནི་གི་ཨཱལ་གོ་རི་དམ་ཅིག་ཐོབ་ནུག། | ཐོ་བཀོད་དང་རིམ་སྒྲིག་ནང་ ལྕོགས་ཅན་བཟོ་ཡོད་པའི་ གུག་ཤད་ཚུ་ལུ་ གུག་གུགཔ་ཚུ་ལུ་ བཀག་ཆ་འབད་ཡོད་པའི་རྩིས་ཐོ། |
-| `ERR_KEY_PAYLOAD_TOO_LONG` | ལྡེ་མིག་སྤྲོད་ལེན་གྱི་རིང་ཚད་མིང་རྟགས་བཀོད་མི་འདི་ རྒྱབ་སྐྱོར་འབད་ཡོད་པའི་ཚད་ལས་ལྷག་སྟེ་ཡོདཔ་ཨིན། | ལྡེ་མིག་རྐྱང་པའི་ཚད་འཛིན་ཚུ་ `u8` རིང་ཚད་ལུ་ཚད་འཛིན་འབད་ཡོདཔ་ཨིན། མི་མང་ལྡེ་མིག་སྦོམ་ཚུ་གི་དོན་ལུ་ སྣ་མང་ལག་ལེན་ (དཔེར་ན་ ཨེམ་ཨེལ་‐ཌི་ཨེསི་ཨེ་) ལག་ལེན་འཐབ། |
-| I18NI0000052X | ཁ་བྱང་མགོ་ཐོན་རིམ་འདི་རྒྱབ་སྐྱོར་འབད་ཡོད་པའི་ཁྱབ་ཚད་ཀྱི་ཕྱི་ཁར་ཨིན། | མགོ་ཡིག་ཐོན་རིམ་ `0` V1 ཁ་བྱང་ཚུ་གི་དོན་ལུ་ བཏོན་གཏང་། ཐོན་རིམ་གསརཔ་ཚུ་ ཆ་འཇོག་མ་འབད་བའི་ཧེ་མ་ ཨེན་ཀོ་ཌར་ཚུ་ ཡར་བསྐྱེད་འབད་ནི། |
-| `ERR_INVALID_NORM_VERSION` | སྤྱིར་བཏང་ཐོན་རིམ་གྱི་ དར་ཆ་འདི་ངོས་འཛིན་མ་འབད་བས། | སྤྱིར་བཏང་བཟོ་བའི་ཐོན་རིམ་ `1` ལག་ལེན་འཐབ་སྟེ་ བཀག་འཛིན་འབད་ཡོད་པའི་བིཊི་ཚུ་ སོར་བསྒྱུར་འབད་ནི་ལས་ འཛེམ་དགོ། |
-| `ERR_INVALID_I105_PREFIX` | ཞུ་བ་འབད་མི་ I105 ཡོངས་འབྲེལ་སྔོན་ཚིག་འདི་ ཨིན་ཀོཌི་འབད་མི་བཏུབ། | རིམ་སྒྲིག་ཐོ་བཀོད་ནང་ དཔར་བསྐྲུན་འབད་ཡོད་པའི་ གྲངས་སུ་ཚུད་པའི་ `0..=16383` ཁྱབ་ཚད་ནང་ སྔོན་འཇུག་ཅིག་ འཐུ་དགོ། |
-| `ERR_CANONICAL_HASH_FAILURE` | ཀེན་ནིཀ་པེ་ལོཌ་ཧ་ཤིང་འདི་འཐུས་ཤོར་བྱུང་ཡོདཔ། | བཀོལ་སྤྱོད་འདི་ལོག་འབད་རྩོལ་བསྐྱེད། འཛོལ་བ་འདི་ གནས་ཏེ་ཡོད་པ་ཅིན་ ཧ་ཤིང་བརྩེགས་ཕུང་ནང་ ནང་འཁོད་འབུཔ་ཅིག་སྦེ་ བརྩི་འཇོག་འབད། |
+### Canonical Construction
 
-### རྩ་སྒྲིག་གི་ ཌི་ཀོཌི་དང་ རང་བཞིན་བརྟག་དཔྱད།
+| Code | Failure | Recommended Remediation |
+|------|---------|-------------------------|
+| `ERR_UNSUPPORTED_ALGORITHM` | Encoder received a signing algorithm not supported by the registry or build features. | Restrict account construction to curves enabled in the registry and configuration. |
+| `ERR_KEY_PAYLOAD_TOO_LONG` | Signing key payload length exceeds the supported limit. | Single-key controllers are limited to `u8` lengths; use multisig for large public keys (e.g., ML‑DSA). |
+| `ERR_INVALID_HEADER_VERSION` | Address header version is outside the supported range. | Emit header version `0` for V1 addresses; upgrade encoders before adopting new versions. |
+| `ERR_INVALID_NORM_VERSION` | Normalisation version flag is not recognised. | Use normalisation version `1` and avoid toggling reserved bits. |
+| `ERR_INVALID_I105_PREFIX` | Requested I105 network prefix cannot be encoded. | Pick a prefix within the inclusive `0..=16383` range published in the chain registry. |
+| `ERR_CANONICAL_HASH_FAILURE` | Canonical payload hashing failed. | Retry the operation; if the error persists, treat it as an internal bug in the hashing stack. |
 
-| ཨང་རྟགས་ | འཐུས་ཤོར་ | གྲོས་འཆར་གྱི་བཅོ་ཁ་ |
-|------------------------------------------------- |
-| `ERR_INVALID_I105_ENCODING` | I105 ཡིག་རྒྱུན་ནང་ ཡིག་འབྲུ་གི་ཕྱི་ཁར་ཡོད་པའི་ཡིག་འབྲུ་ཚུ་ཡོདཔ་ཨིན། | ཁ་བྱང་འདི་ དཔར་བསྐྲུན་འབད་ཡོད་པའི་ I105 ཡི་གུའི་ལག་ལེན་འཐབ་ཡོདཔ་ངེས་གཏན་བཟོ་ཞིནམ་ལས་ འདྲ་བཤུས་/སྦྱར་བའི་སྐབས་ བཏོག་མ་བཏང་པར་བཞག་དགོ། |
-| `ERR_INVALID_LENGTH` | དངུལ་སྤྲོད་ལེན་གྱི་རིང་ཚད་འདི་ སེལ་འཐུ་འབད་མི་/ཚད་འཛིན་གྱི་དོན་ལུ་ རེ་བ་བསྐྱེད་པའི་ ཀེ་ནོ་ནིག་ཚད་དང་མཐུན་མི་དགོ། | སེལ་འཐུ་འབད་ཡོད་པའི་མངའ་ཁོངས་འདེམས་བྱེད་དང་ཚད་འཛིན་སྒྲིག་བཀོད་ཀྱི་དོན་ལུ་ ཀེར་ནི་ཀཱལ་པེ་ལོཌི་ཆ་ཚང་བཀྲམ་སྤེལ་འབད། |
-| `ERR_CHECKSUM_MISMATCH` | I105 (དགའ་གདམ་) ཡང་ན་ བསྡམ་བཞག་ཡོདཔ་ (`sora`, གཉིས་པ་) ཞིབ་དཔྱད་སམ་བདེན་དཔྱད་འཐུས་ཤོར་བྱུང་ཡོདཔ། | ཁ་བྱང་འདི་ བློ་གཏད་ཅན་གྱི་འབྱུང་ཁུངས་ལས་ ལོག་བཟོ་ནི། འདི་གིས་ སྤྱིར་བཏང་ལུ་ འདྲ་བཤུས་/སྦྱར་བའི་འཛོལ་བ་ཅིག་བརྡ་སྟོནམ་ཨིན། |
-| `ERR_INVALID_I105_PREFIX_ENCODING` | I105 སྔོན་སྒྲིག་བཱའིཊི་ཚུ་ སྐྱོན་བརྗོད་འབད་ཡོདཔ་ཨིན། | ཁ་བྱང་འདི་ མཐུན་སྒྲིག་ཅན་གྱི་ཨེན་ཀོ་ཌར་དང་གཅིག་ཁར་ ལོག་ཨེན་ཀོ་ཌར་; ལག་ཐོག་ལས་ གཞི་རྟེན་༥༨ བཱའིཊི་ཚུ་ བསྒྱུར་བཅོས་མ་འབད། |
-| `ERR_INVALID_HEX_ADDRESS` | ཀེ་ནོ་ནིག་ཧེག་ས་ཌི་སི་མཱལ་རྣམ་པ་དེ་ གསལ་བཏོན་འབད་མ་ཚུགས། | གཞུང་འབྲེལ་གྱི་ཨེན་ཀོ་ཌར་གྱིས་ ཐོན་སྐྱེད་འབད་མི་ `0x`-prefixed, རིང་ཚད་ཀྱི་ རིང་ཚད་ཀྱི་ཧེགསི་ཡིག་རྒྱུན་ཅིག་བྱིན། |
-| `ERR_MISSING_COMPRESSED_SENTINEL` | བསྡམ་བཞག་ཡོད་པའི་རྣམ་པ་འདི་ `sora` དང་ཅིག་ཁར་འགོ་བཙུགས་མི་བཏུབ། | སྔོན་སྒྲིག་གིས་ དགོས་མཁོའི་ བརྡ་མཚོན་ཚུ་ ཌི་ཀོ་ཌར་ཚུ་ལུ་ མ་བྱིན་པའི་ཧེ་མ་ སོ་ར་གི་ཁ་བྱང་ཚུ་ བསྡམ་བཞག་ཡོདཔ་ཨིན། |
-| `ERR_COMPRESSED_TOO_SHORT` | བསྡམ་བཞག་ཡོད་པའི་ཡིག་རྒྱུན་ལུ་ པེ་ལོཌ་དང་ ཅེག་སམ་གྱི་དོན་ལུ་ ཨང་གྲངས་ལངམ་སྦེ་མེདཔ་ཨིན། | བཏོག་བཏང་ཡོད་པའི་ ཆ་ཤས་ཚུ་གི་ཚབ་ལུ་ ཨེན་ཀོ་ཌར་གྱིས་ བཏོན་ཡོད་པའི་ བསྡམ་བཞག་ཡོད་པའི་ ཡིག་རྒྱུན་ཆ་ཚང་ལག་ལེན་འཐབ། |
-| `ERR_INVALID_COMPRESSED_CHAR` | བསྡམ་བཞག་ཡོད་པའི་ཡི་གུ་གི་ཕྱི་ཁར་ ཡིག་འབྲུ་ཚུ་ འཕྱད་ཡོདཔ་ཨིན། | དཔར་བསྐྲུན་འབད་ཡོད་པའི་ ཕྱེད་ཀ་རྒྱ་ཚད་/རྒྱ་ཚད་ཐིག་ཁྲམ་ཚུ་ལས་ ནུས་ཅན་གཞི་རྟེན་༡༠༥ glyph དང་ཅིག་ཁར་ ཡིག་འབྲུ་འདི་ཚབ་བཙུགས། |
-| `ERR_INVALID_COMPRESSED_BASE` | ཨེན་ཀོ་ཌར་གྱིས་ རྒྱབ་སྐྱོར་མ་འབད་བའི་ རེ་ཌིགསི་ཅིག་ ལག་ལེན་འཐབ་ནི་ལུ་ དཔའ་བཅམ་ནུག། | ཨིན་ཀོ་ཌར་གྱི་རྒྱབ་འགལ་ལུ་ འཛོལ་བ་ཅིག་བཙུགས་དགོ། བསྡམ་བཞག་ཡོད་པའི་ཀ་ཆེན་འདི་ V1 ནང་ལུ་ radix 105 ལུ་གཏན་འཁེལ་བཟོཝ་ཨིན། |
-| `ERR_INVALID_COMPRESSED_DIGIT` | ཨང་གྲངས་ཀྱི་གནས་གོང་འདི་ བསྡམ་བཞག་ཡོད་པའི་ ཡི་གུའི་ཚད་ལས་ལྷག་སྟེ་ཡོདཔ་ཨིན། | ཨང་གྲངས་རེ་རེ་བཞིན་དུ་ `0..105)` ནང་འཁོད་ལུ་ཡོདཔ་ངེས་གཏན་བཟོ་ཞིནམ་ལས་ དགོས་མཁོ་ཡོད་པ་ཅིན་ ཁ་བྱང་འདི་ ལོག་བཟོ་དགོ། |
-| `ERR_UNSUPPORTED_ADDRESS_FORMAT` | རང་བཞིན་བརྟག་དཔྱད་འདི་གིས་ ཨིན་པུཊི་རྩ་སྒྲིག་འདི་ངོས་འཛིན་འབད་མ་ཚུགས། | I105 (དགའ་གདམ་) བསྡམ་བཞག་ཡོདཔ་ (I18NI0000054X) ཡང་ན་ བཀྲམ་སྤེལ་པ་ཚུ་ འབོད་བརྡ་འབད་བའི་སྐབས་ ཀེ་ནོ་ནིག་ `0x` ཧེགསི་ཡིག་རྒྱུན་ཚུ། |
+### Format Decoding and Auto Detection
 
-### མདོ་དང་དྲ་རྒྱའི་བདེན་དཔྱད།| ཨང་རྟགས་ | འཐུས་ཤོར་ | གྲོས་འཆར་གྱི་བཅོ་ཁ་ |
-|------------------------------------------------- |
-| `ERR_DOMAIN_MISMATCH` | ཌོ་མེན་སེལ་འཐུ་འབད་མི་གིས་ རེ་བ་བསྐྱེད་པའི་མངའ་ཁོངས་དང་མཐུན་སྒྲིག་མི་འབད། | དམིགས་གཏད་ཅན་གྱི་མངའ་ཁོངས་ཀྱི་དོན་ལུ་བྱིན་མི་ཁ་བྱང་ཅིག་ལག་ལེན་འཐབ། ཡང་ན་ རེ་བ་དུས་མཐུན་བཟོ་ནི། |
-| `ERR_INVALID_DOMAIN_LABEL` | མངའ་ཁོངས་ཁ་ཡིག་འཐུས་ཤོར་འབྱུང་ཡོད་མི་སྤྱིར་བཏང་ཞིབ་དཔྱད་ཚུ་། | ཨིན་ཀོ་ཌིང་མ་འབད་བའི་ཧེ་མ་ ཡུ་ཊི་ཨེསི་-༤༦ འགྱུར་ལྡོག་མེད་པའི་ལས་སྣོན་ལག་ལེན་འཐབ་སྟེ་ མངའ་ཁོངས་འདི་ ཀེན་ནི་སི་ ཀེན་སིང་འབད། |
-| `ERR_UNEXPECTED_NETWORK_PREFIX` | ཌི་ཀོཌི་ཨའི་ཨེཆ་༥༨ ཡོངས་འབྲེལ་སྔོན་ཚིག་འདི་ རིམ་སྒྲིག་འབད་ཡོད་པའི་གནས་གོང་ལས་ ཁྱད་པར་ཡོདཔ་ཨིན། | དམིགས་གཏད་རིམ་སྒྲིག་ལས་ ཁ་བྱང་ཅིག་ སོར་བསྒྱུར་འབད་ ཡང་ན་ རེ་བ་བསྐྱེད་མི་ ཉེ་རིང་ཕྱེ་མི་/སྔོན་སྒྲིག་འདི་ བདེ་སྒྲིག་འབད། |
-| `ERR_UNKNOWN_ADDRESS_CLASS` | ཁ་བྱང་དབྱེ་རིམ་བིཊི་ཚུ་ངོས་འཛིན་མ་འབད་བས། | དབྱེ་རིམ་གསརཔ་འདི་ཧ་གོ་མི་ གསར་བཏོན་འབད་ནི་ལུ་ ཌི་ཀོ་ཌར་འདི་ ཡར་བསྐྱེད་འབད་ ཡང་ན་ མགོ་ཡིག་བིཊི་ཚུ་དང་གཅིག་ཁར་ བརྡབ་ནི་ལས་ འཛེམ་དགོ། |
-| `ERR_UNKNOWN_DOMAIN_TAG` | ཌོ་མེན་སེལ་འཐུ་འབད་མི་ངོ་རྟགས་འདི་ མ་ཤེས། | སེལ་འཐུ་འབད་མི་དབྱེ་བ་གསརཔ་ལུ་རྒྱབ་སྐྱོར་འབད་མི་ གསར་བཏོན་ཅིག་ལུ་དུས་མཐུན་བཟོ། ཡང་ན་ ཝི་༡ ནོཌི་ཚུ་གུ་ བརྟག་དཔྱད་ཀྱི་པེ་ལོཌི་ཚུ་ལག་ལེན་འཐབ་ནི་ལས་ འཛེམ་དགོ། |
-| I18NI0000051X | བཀག་བཞག་ཡོད་པའི་རྒྱ་བསྐྱེད་བིཊི་གཞི་སྒྲིག་འབད་ཡོདཔ་ཨིན། | གསལ་ཏོག་ཏོ་བཞག་ཡོད་པའི་བིཊི་ཚུ་; མ་འོངས་པའི་ ABI གིས་ ངོ་སྤྲོད་མ་འབད་ཚུན་ཚོད་ དེ་ཚུ་ སྒོ་བསྡམ་བཞག་ནུག། |
-| I18NI0000052X | ངོས་འཛིན་མ་འབད་བའི་ ཚད་འཛིན་པ་ གླ་ཆའི་ངོ་རྟགས་ཚུ། | དེ་ཚུ་ མིང་དཔྱད་མ་འབད་བའི་ཧེ་མ་ ཚད་འཛིན་དབྱེ་བ་གསརཔ་ཚུ་ངོས་འཛིན་འབད་ནི་ལུ་ ཌི་ཀོ་ཌར་འདི་ ཡར་འཕེལ་གཏང་། |
-| `ERR_UNEXPECTED_TRAILING_BYTES` | ཀེ་ནོ་ནིག་པེ་ལོཌ་ནང་ ཌི་ཀོ་ཌིང་འབད་བའི་ཤུལ་ལས་ ཊེབ་བཱའིཊི་ཚུ་ཡོདཔ་ཨིན། | ཀེ་ནོ་ནིག་པེ་ལོཌ་འདི་བསྐྱར་བཟོ་འབད་ནི། ཡིག་ཆ་བཟོ་ཡོད་པའི་རིང་ཚད་རྐྱངམ་ཅིག་འོང་དགོ། |
+| Code | Failure | Recommended Remediation |
+|------|---------|-------------------------|
+| `ERR_INVALID_I105_ENCODING` | I105 string contains characters outside the alphabet. | Ensure the address uses the published I105 alphabet and has not been truncated during copy/paste. |
+| `ERR_INVALID_LENGTH` | Payload length does not match the expected canonical size for header/controller (or legacy decode-compat selector variants). | Supply the full canonical payload emitted by the official encoder, or a complete legacy payload when decoding historical data. |
+| `ERR_CHECKSUM_MISMATCH` | Canonical Katakana i105 checksum validation failed. | Regenerate the canonical Katakana i105 address from a trusted source; this typically indicates a copy/paste error. |
+| `ERR_INVALID_I105_PREFIX_ENCODING` | I105 prefix bytes are malformed. | Re-encode the address with a compliant encoder; do not alter the leading I105 bytes manually. |
+| `ERR_INVALID_HEX_ADDRESS` | Canonical hexadecimal form failed to decode. | Provide a `0x`-prefixed, even-length hex string produced by the official encoder. |
+| `ERR_MISSING_COMPRESSED_SENTINEL` | Legacy/non-canonical Katakana i105 form does not start with the expected sentinel. | Use canonical Katakana i105 output and avoid manual sentinel rewriting. |
+| `ERR_COMPRESSED_TOO_SHORT` | Legacy/non-canonical Katakana i105 string is truncated before payload+checksum complete. | Use the full canonical Katakana i105 string emitted by the encoder. |
+| `ERR_INVALID_COMPRESSED_CHAR` | Legacy/non-canonical Katakana i105 payload includes an invalid glyph. | Replace with canonical Katakana i105 output generated by official codecs. |
+| `ERR_INVALID_COMPRESSED_BASE` | Encoder attempted to use an unsupported legacy radix. | File a bug against the encoder; production flows must stay canonical Katakana i105. |
+| `ERR_INVALID_COMPRESSED_DIGIT` | Legacy/non-canonical digit value exceeds the supported legacy alphabet size. | Regenerate canonical Katakana i105 and avoid manual digit manipulation. |
+| `ERR_UNSUPPORTED_ADDRESS_FORMAT` | Auto-detection could not recognise the input format. | Provide canonical Katakana i105 on strict account-id parser paths; use canonical `0x` hex only in low-level/debug tooling that explicitly accepts it. |
 
-### ཚོད་འཛིན་བྱེད་པའི་བདེན་དཔྱད།
+### Domain and Network Validation
 
-| ཨང་རྟགས་ | འཐུས་ཤོར་ | གྲོས་འཆར་གྱི་བཅོ་ཁ་ |
-|------------------------------------------------- |
-| `ERR_INVALID_PUBLIC_KEY` | ཀི་བཱའིཊིསི་གིས་ གསལ་བསྒྲགས་འབད་ཡོད་པའི་གུག་གུགཔ་དང་ མཐུན་སྒྲིག་མི་འབད། | ལྡེ་མིག་བཱའིཊི་ཚུ་ སེལ་འཐུ་འབད་ཡོད་པའི་གུག་ཀྱོག་གི་དོན་ལུ་ དགོས་མཁོ་དང་འཁྲིལ་ཏེ་ ཨིན་ཀོཌ་འབད་ཡོདཔ་ངེས་གཏན་བཟོ།(དཔེར་ན་ ༣༢-བཱའིཊི་ཨི་ཌི་༢༥༥༡༩) |
-| `ERR_UNKNOWN_CURVE` | གུག་གུགཔ་ངོས་འཛིན་འབད་མི་འདི་ ཐོ་བཀོད་འབད་དེ་མེདཔ་ཨིན། | ཁ་སྐོང་གུག་གུགཔ་ཚུ་ ཆ་འཇོག་འབད་དེ་ ཐོ་བཀོད་ནང་ དཔར་བསྐྲུན་མ་འབད་ཚུན་ཚོད་ གུག་གུགཔ་ ID ID ID ID ID ID ID ID ID ID ID ID ID ID ID ID ID ID ID ID ID ID ID ID ID ID ID ལག་ལེན་འཐབ་ཨིན། |
-| I18NI0000057X | སྣ་མང་སིག་ཚད་འཛིན་གྱིས་ རྒྱབ་སྐྱོར་འབད་མི་ལས་ འཐུས་མི་མངམ་གསལ་བསྒྲགས་འབདཝ་ཨིན། | ཨིན་ཀོ་ཌིང་མ་འབད་བའི་ཧེ་མ་ ཡིག་ཐོག་ལུ་བཀོད་ཡོད་པའི་ཚད་ལུ་ སྣ་མང་འདྲ་བའི་འཐུས་མི་འདི་མར་ཕབ་འབད། |
-| `ERR_INVALID_MULTISIG_POLICY` | སྣ་མང་སྲིད་བྱུས་སྤྲོད་ལེན་འཐུས་ཤོར་བདེན་དཔང་འབད་ཡོདཔ་ཨིན་ (ཐེབས་/ལྗིད་ཚད་/ལས་འཆར་)། | སྲིད་བྱུས་འདི་ CTAP2 ལས་འཆར་དང་ ལྗིད་ཚད་མཐའ་མཚམས་ དེ་ལས་ ཐེམ་སྐས་བཀག་ཆ་ཚུ་ བསྒྲུབ་ཐབས་ལུ་ བསྐྱར་བཟོ་འབད། |
+| Code | Failure | Recommended Remediation |
+|------|---------|-------------------------|
+| `ERR_DOMAIN_MISMATCH` | Domain selector does not match the expected domain. | Use an address issued for the intended domain or update the expectation. |
+| `ERR_INVALID_DOMAIN_LABEL` | Domain label failed normalisation checks. | Canonicalise the domain using UTS-46 non-transitional processing before encoding. |
+| `ERR_UNEXPECTED_NETWORK_PREFIX` | Decoded I105 network prefix differs from the configured value. | Switch to an address from the target chain or adjust the expected discriminant/prefix. |
+| `ERR_UNKNOWN_ADDRESS_CLASS` | Address class bits are not recognised. | Upgrade the decoder to a release that understands the new class, or avoid tampering with the header bits. |
+| `ERR_UNKNOWN_DOMAIN_TAG` | Domain selector tag is unknown. | Update to a release that supports the new selector type, or avoid using experimental payloads on V1 nodes. |
+| `ERR_UNEXPECTED_EXTENSION_FLAG` | Reserved extension bit was set. | Clear reserved bits; they remain gated until a future ABI introduces them. |
+| `ERR_UNKNOWN_CONTROLLER_TAG` | Controller payload tag not recognised. | Upgrade the decoder to recognise new controller types before parsing them. |
+| `ERR_UNEXPECTED_TRAILING_BYTES` | Canonical payload contained trailing bytes after decoding. | Regenerate the canonical payload; only the documented length should be present. |
 
-## གདམ་ཁ་ཅན་ཚུ་ བསམ་ཞིབ་འབད་ཡོདཔ།
+### Controller Payload Validation
 
-- **རྩ་མེད་ཀྱི་གཞི་རྟེན་༥༨ བརྟག་ཞིབ་ (བིཊི་ཀོའིན་-བཟོ་རྣམ་)** ཞིབ་དཔྱད་སམ་འཇམ་ཏོང་ཏོ་ཨིན་རུང་ འཛོལ་བ་བརྟག་དཔྱད་ཞན་ཁོག།
-  བེལེཀ་༢བི་ལས་ཐོན་ཡོད་པའི་ I105 ཅེག་སམ་ (I18NI000000559X གིས་ 512-bit hash ཅིག་བཏོག་བཏངམ་ཨིན།)
-  དང་ བིཊ་༡༦-བིཊི་གི་དབྱེ་བ་ཕྱེ་མི་ཚུ་གི་དོན་ལུ་ གསལ་ཏོག་ཏོ་སྦེ་ སྔོན་འཇུག་ཡིག་བརྡ་མེདཔ་ཨིན།
-- **མངའ་ཁོངས་ཡིག་རྒྱུན་ནང་ རིམ་སྒྲིག་མིང་བཙུགས་དོ་ཡོདཔ་ (དཔེར་ན་ `finance@chain`)** བརྡ་བཀོད་ཚུ།
--*ཁ་བྱང་ཚུ་བསྒྱུར་བཅོས་མ་འབད་བར་ Nexus འགྲུལ་ལམ་གུ་རྐྱངམ་ཅིག་ཨིན།
-  copy/hin གསལ་ཏོག་ཏོ་མེད་པའི་ཡིག་རྒྱུན་ཚུ་; ང་བཅས་ཀྱིས་ ཁ་བྱང་འདི་རང་ སྐབས་དོན་འབག་དགོ་མནོཝ་ཨིན།
-- **Bech32m ཡིག་ཤུབས་.** མཐུན་སྒྲིལ་དང་ མི་ལྷག་ཐུབ་པའི་སྔོན་འཇུག་ཅིག་ ཡང་ བྱིནམ་ཨིན།
-  I105 ལག་ལེན་འཐབ་ས་ལས་ ཁ་སྟོར་འགྱོ་འོང་། (`AccountAddress::to_i105`)
-  དང་ སྒྲིག་ཆས་/ཨེསི་ཌི་ཀེ་ཚུ་ཆ་མཉམ་རང་ བསྐྱར་བཟོ་འབད་དགོ། ད་ལྟའི་ལམ་ཐིག་འདི་གིས་ I105 + བཞགཔ་ཨིན།
-  མ་འོངས་པར་ཞིབ་འཚོལ་འཕྲོ་མཐུད་འབད་བའི་སྐབས་ བསྡམ་བཞག་ (`sora`) རྒྱབ་སྐྱོར་།
-  Bech32m/QR བང་རིམ་ཚུ་ (CAIIP-10 སབ་ཁྲ་བཟོ་ནི་འདི་ ཕར་འགྱངས་འབད་ཡོདཔ་ཨིན།)
+| Code | Failure | Recommended Remediation |
+|------|---------|-------------------------|
+| `ERR_INVALID_PUBLIC_KEY` | Key bytes do not match the declared curve. | Ensure the key bytes are encoded exactly as required for the selected curve (e.g., 32-byte Ed25519). |
+| `ERR_UNKNOWN_CURVE` | Curve identifier is not registered. | Use curve ID `1` (Ed25519) until additional curves are approved and published in the registry. |
+| `ERR_MULTISIG_MEMBER_OVERFLOW` | Multisig controller declares more members than supported. | Reduce the multisig membership to the documented limit before encoding. |
+| `ERR_INVALID_MULTISIG_POLICY` | Multisig policy payload failed validation (threshold/weights/schema). | Rebuild the policy so that it satisfies the CTAP2 schema, weight bounds, and threshold constraints. |
 
-## དྲི་བ་ཁ་ཕྱེ།
+## Alternatives Considered
 
-- `u16` ཉེ་རིང་ཕྱེ་མི་ དང་ བསྡོམས་རྩིས་བཀག་ཆའི་ཁྱབ་ཚད་ཚུ་གིས་ ཡུན་རིང་གི་དགོས་མཁོ་ཚུ་ ཁྱབ་ཚུགསཔ་སྦེ་ ངེས་གཏན་བཟོ་ནི།
-  དེ་མེན་པ་ཅིན་ I18NI0000054X འདི་ འགྱུར་ལྡོག་ཅན་གྱི་ཨེན་ཀོ་ཌིང་དང་གཅིག་ཁར་ བརྟག་ཞིབ་འབད།
-- ཐོ་བཀོད་དུས་མཐུན་བཟོ་ནིའི་དོན་ལུ་ མིང་རྟགས་སྣ་ཚོགས་ཀྱི་གཞུང་སྐྱོང་བྱ་རིམ་དང་ ག་དེ་སྦེ་ག་དེ་སྦེ་བཟོ་ནི།
-  ཆ་མེད་གཏང་ནི་ཚུ་/མཐོང་མེད་བགོ་བཀྲམ་ཚུ་ འཛིན་སྐྱོང་འཐབ་ཨིན།
-- གསལ་སྟོན་གསལ་སྟོན་གྱི་ ངེས་བདེན་ ངེས་འཛིན་འབད་ (དཔེར་ན་ Ed25519 multi-sig) དང་།
-  སྐྱེལ་འདྲེན་ཉེན་སྲུང་ (HTTPS pinning, IPFS ཧ་ཤི་རྩ་སྒྲིག་) གི་དོན་ལུ་ I18NT0000028X བཀྲམ་སྤེལ་གྱི་དོན་ལུ་ཨིན།
-- གནས་སྤོའི་དོན་ལུ་ ཌོ་མེན་-ཟུར་རྟགས་/བསྐྱར་ལོག་ཚུ་ལུ་རྒྱབ་སྐྱོར་འབད་ནི་ཨིན་ན་མེན་ན་དང་ ག་དེ་སྦེ་ གཏན་འབེབས་བཟོ།
-  དེ་ཚུ་ གཏན་འབེབས་བཟོ་མ་དགོ་པར་ ཁ་ཐོག་ལུ་བཏོན་ནི།
-- I18NT000000000X/IVM གན་རྒྱ་ཚུ་ I105 གྲོགས་རམ་པ་ (I18NI0000005665X, ལུ་ ག་དེ་ཅིག་སྦེ་ གསལ་བཀོད་འབད།
-  `parse_address()`) དང་ རིམ་སྒྲིག་ནང་ གསོག་འཇོག་འབད་དགོཔ་ཨིན་ན་མེན་ན་ CAIP-10 དང་།
-  སབ་ཁྲ་ (ད་རེས་ I105 འདི་ ཁྲིམས་ལུགས་) ཨིན།
-- ཕྱིའི་ཐོ་བཀོད་ནང་ Iroha ཐོ་བཀོད་ཚུ་ འཚོལ་ཞིབ་འབད། (དཔེར་ན་ I105 ཐོ་བཀོད་ནི།
-  CAIP namepace སྣོད་ཐོ་) རྒྱ་ཆེ་བའི་སྐྱེ་ལྡན་རིམ་ལུགས་ཀྱི་ཕྲང་སྒྲིག་འབད་ནིའི་དོན་ལུ་ཨིན།
+- **Pure checksum envelope (Bitcoin-style).** Simpler checksum but weaker error detection
+  than the Blake2b-derived I105 checksum (`encode_i105` truncates a 512-bit hash)
+  and lacks explicit prefix semantics for 16-bit discriminants.
+- **Embedding chain name in the domain string (e.g., `finance@chain`).** Breaks
+- **Rely solely on Nexus routing without changing addresses.** Users would still
+  copy/paste ambiguous strings; we want the address itself to carry context.
+- **Bech32m envelope.** QR-friendly and offers a human-readable prefix, but
+  would diverge from the shipping I105 implementation (`AccountAddress::to_i105`)
+  and require recreating all fixtures/SDKs. The current roadmap keeps I105 +
+  I105 support while continuing research into future
+  Bech32m/QR layers (CAIP-10 mapping is deferred).
 
-## ཤུལ་མམ་གྱི་གོ་རིམ་ཚུ།
+## Open Questions
 
-1. I105 ཨིན་ཀོ་ཌིང་ I18NI000000567X (```rust
-pub struct Common {
-    pub chain: ChainId,
-    pub chain_discriminant: u16, // globally coordinated
-    // ... existing fields
-}
-```, ནང་དུ་བཙུགས་ཡོད།
-   I18NI000000569X); འཕྲོ་མཐུད་དེ་ ཨེསི་ཌི་ཀེ་རེ་ལུ་ སྒྲིག་ཆས་/བརྟག་དཔྱད་ཚུ་ འཕྲོ་མཐུད་དེ་ གང་རུང་ཅིག་ གཙང་མ་བཟོ་ནི།
-   Bech32m ས་གནས་འཛིན་མི་ཚུ།
-2. `chain_discriminant` དང་ཤེས་རྟོགས་ཅན་གཉིས་ལྡན་གྱི་རིམ་སྒྲིག་ལས་རིམ་རྒྱ་བསྐྱེད་འབད།
-  ད་ལྟོ་ཡོད་པའི་བརྟག་དཔྱད་/dev གཞི་སྒྲིག་ཚུ་གི་དོན་ལུ་ སྔོན་སྒྲིག་ཚུ། **(Done: `common.chain_discriminant`
-  ད་ལྟ་`iroha_config` ནང་གྲུ་ཚུ་ དྲྭ་རྒྱ་རེ་ལུ་ `0x02F1` ལུ་སྔོན་སྒྲིག་འབད་ནི།
-  ཚབ་འཛུགས་འབད་ནི།)**
-3. Nexus ཐོ་བཀོད་ལས་རིམ་དང་ བསམ་གཞི་གི་བདེན་ཁུངས་གསལ་སྟོན་པར་སྐྲུན་པ།
-༤ མིའི་ཆ་རྐྱེན་གྱི་ཐོག་ལུ་ དངུལ་ཁུག་བྱིན་མི་དང་ བདག་འཛིན་འཐབ་མི་ཚུ་ལས་ བསམ་འཆར་ཚུ་བསྡུ་ལེན་འབད་ནི།
-   (HRP མིང་བཏགས་ནི། རྩ་སྒྲིག་འབད་ནི་ བཀྲམ་སྟོན་འབད།)
-༥༽ ཡིག་ཆ་ (`docs/source/data_model.md`, Torii ཨེ་པི་ཨའི་ ཌོཀ་ཚུ་ ཚར་ཅིག་ དུས་མཐུན་བཟོ་ནི།
-   ལག་ལེན་འཐབ་ཐངས་འདི་ དམ་སྦྱིས་ཡོདཔ་ཨིན།
-༦ གྲུ་གཟིངས་གཞུང་འབྲེལ་གྱི་གསང་ཡིག་དཔེ་མཛོད་ (Rust/TS/Python/Kotlin) དང་ཚད་ལྡན་བརྟག་དཔྱད།
-   མཐར་འཁྱོལ་དང་ འཐུས་ཤོར་གྱི་གནད་དོན་ཚུ་ ཁྱབ་པའི་ vectors.
+- Confirm that `u16` discriminants plus reserved ranges cover long-term demand;
+  otherwise evaluate `u32` with varint encoding.
+- Finalize the multi-signature governance process for registry updates and how
+  revocations/expired allocations are handled.
+- Define the exact manifest signature scheme (e.g., Ed25519 multi-sig) and
+  transport security (HTTPS pinning, IPFS hash format) for Nexus distribution.
+- Determine whether to support domain aliases/redirects for migrations and how
+  to surface them without breaking determinism.
+- Specify how Kotodama/IVM contracts access I105 helpers (`to_address()`,
+  `parse_address()`) and whether on-chain storage should ever expose CAIP-10
+  mappings (today I105 is canonical).
+- Explore registering Iroha chains in external registries (e.g., I105 registry,
+  CAIP namespace directory) for broader ecosystem alignment.
+
+## Next Steps
+
+1. I105 encoding landed in `iroha_data_model` (`AccountAddress::to_i105`,
+   `parse_encoded`); continue porting fixtures/tests to every SDK and purge any
+   Bech32m placeholders.
+2. Extend configuration schema with `chain_discriminant` and derive sensible
+  defaults for existing test/dev setups. **(Done: `common.chain_discriminant`
+  now ships in `iroha_config`, defaulting to `0x02F1` with per-network
+  overrides.)**
+3. Draft the Nexus registry schema and proof-of-concept manifest publisher.
+4. Collect feedback from wallet providers and custodians on human-factor aspects
+   (HRP naming, display formatting).
+5. Update documentation (`docs/source/data_model.md`, Torii API docs) once the
+   implementation path is committed.
+6. Ship official codec libraries (Rust/TS/Python/Kotlin) with normative test
+   vectors covering success and failure cases.

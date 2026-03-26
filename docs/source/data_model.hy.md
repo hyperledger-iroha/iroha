@@ -31,9 +31,9 @@ translator: machine-google-reviewed
 - `IdBox`. Գումարի տիպի ծրար ցանկացած աջակցվող ID-ի համար (`DomainId`, `AccountId`, `AssetDefinitionId`, `AssetId`, Kotodama `TriggerId`, `RoleId`, `Permission`, `CustomParameterId`): Օգտակար է ընդհանուր հոսքերի և Norito կոդավորման համար որպես մեկ տեսակ:
 - `ChainId`. Անթափանց շղթայի նույնացուցիչ, որն օգտագործվում է գործարքներում կրկնակի պաշտպանության համար:ID-ների լարային ձևեր (շրջագայելի `Display`/`FromStr`-ով).
 - `DomainId`: `name` (օրինակ՝ `wonderland`):
-- `AccountId`. առանց տիրույթի կանոնական հաշվի նույնացուցիչ, որը կոդավորված է `AccountAddress`-ի միջոցով միայն որպես I105: Վերլուծիչի մուտքերը պետք է լինեն կանոնական I105; տիրույթի վերջածանցները (`@domain`), կանոնական I105 բառացիները, այլանունների բառացիները, կանոնական վեցանկյուն վերլուծիչի մուտքագրումը, հին `norito:` օգտակար բեռները և `uaid:`/`opaque:` հաշիվները:
+- `AccountId`. առանց տիրույթի կանոնական հաշվի նույնացուցիչ, որը կոդավորված է `AccountAddress`-ի միջոցով միայն որպես i105: Վերլուծիչի մուտքերը պետք է լինեն կանոնական i105; տիրույթի վերջածանցները (`@domain`), կանոնական i105 բառացիները, այլանունների բառացիները, կանոնական վեցանկյուն վերլուծիչի մուտքագրումը, հին `norito:` օգտակար բեռները և `uaid:`/`opaque:` հաշիվները:
 - `AssetDefinitionId`՝ կանոնական `unprefixed Base58 address with versioning and checksum` (UUID-v4 բայթ):
-- `AssetId`. կանոնական կոդավորված բառացի `<base58-asset-id>#<katakana-i105-account-id>` (նախնական տեքստային ձևերը չեն ապահովվում առաջին թողարկումում):
+- `AssetId`. կանոնական կոդավորված բառացի `<canonical-base58-asset-definition-id>` (նախնական տեքստային ձևերը չեն ապահովվում առաջին թողարկումում):
 - `NftId`՝ `nft$domain` (օրինակ՝ `rose$garden`):
 - `PeerId`՝ `public_key` (հասակակիցների հավասարությունը հանրային բանալին է):
 
@@ -43,7 +43,7 @@ translator: machine-google-reviewed
 - `DomainId { name: Name }` – եզակի անուն:
 - `Domain { id, logo: Option<SorafsUri>, metadata: Metadata, owned_by: AccountId }`.
 - Շինարար՝ `NewDomain` `with_logo`, `with_metadata`, ապա `Registrable::build(authority)` հավաքածուներ `owned_by`:### Հաշիվ
-- `AccountId`-ը կանոնական առանց տիրույթի հաշվի նույնականացումն է, որը բանալի է վերահսկիչի կողմից և կոդավորված է որպես կանոնական I105:
+- `AccountId`-ը կանոնական առանց տիրույթի հաշվի նույնականացումն է, որը բանալի է վերահսկիչի կողմից և կոդավորված է որպես կանոնական i105:
 - `ScopedAccountId { account: AccountId, domain: DomainId }`-ը կրում է տիրույթի բացահայտ համատեքստ միայն այն դեպքում, երբ պահանջվում է շրջանակի դիտում:
 - `Account { id, metadata, label?, uaid? }` — `label` կամընտիր կայուն կեղծանուն է, որն օգտագործվում է վերաբանալու գրառումների կողմից, `uaid` կրում է կամընտիր Nexus լայնածավալ [Universal Account ID] (Kotodama):
 - Շինարար՝ `NewAccount` `Account::new(id)`-ի միջոցով; գրանցումը պահանջում է բացահայտ `ScopedAccountId` տիրույթ և չի հետևում լռելյայններից:
@@ -250,7 +250,7 @@ iroha ledger asset definition register \
 # Mint using alias + account components (no manual norito hex copy/paste)
 iroha ledger asset mint \
   --definition-alias pkr#ubl.sbp \
-  --account sorauﾛ1P... \
+  --account soraゴヂ... \
   --quantity 500
 
 # Resolve alias to canonical Base58 id via Torii
@@ -259,7 +259,7 @@ curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -d '{"alias":"pkr#ubl.sbp"}'
 ```Միգրացիոն նշում.
 - Հին `name#domain` ակտիվների սահմանման ID-ները չեն ընդունվում v1-ում:
-- Անանուխի/այրման/փոխանցման համար ակտիվների ID-ները մնում են կանոնական `<base58-asset-id>#<katakana-i105-account-id>`; կառուցել դրանք հետևյալով.
+- Անանուխի/այրման/փոխանցման համար ակտիվների ID-ները մնում են կանոնական `<canonical-base58-asset-definition-id>`; կառուցել դրանք հետևյալով.
   - `iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
   - կամ `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`:
 

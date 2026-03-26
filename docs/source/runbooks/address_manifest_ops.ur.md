@@ -173,7 +173,7 @@ address-manifest-<REVISION>/
   - `AddressLocal12Collision` — دو Local‑12 لیبلز ایک ہی digest میں ٹکرا جائیں تو
     فوراً فائر۔ مینی فیسٹ promotion روکیں، `scripts/address_local_toolkit.sh` چلائیں،
     اور Nexus گورننس کے ساتھ کوآرڈینیٹ کر کے متاثرہ انٹری دوبارہ جاری کریں۔
-  - `AddressInvalidRatioSlo` — invalid I105/کمپریسڈ submissions (Local‑8/strict‑mode
+  - `AddressInvalidRatioSlo` — invalid i105/کمپریسڈ submissions (Local‑8/strict‑mode
     ریجیکشنز کے علاوہ) 0.1% SLO سے 10 منٹ تک بڑھیں تو وارننگ۔ `torii_address_invalid_total`
     کو context/reason کے حساب سے دیکھیں اور SDK ٹیم سے مل کر strict‑mode دوبارہ آن کریں۔
 - لاگز: Torii `manifest_refresh` لاگز اور گورننس ٹکٹ نمبر `notes.md` میں محفوظ کریں۔

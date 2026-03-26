@@ -8,7 +8,6 @@ import java.util.Map;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
-import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
 import org.hyperledger.iroha.android.offline.OfflineAllowanceCommitment;
 import org.hyperledger.iroha.android.offline.OfflineAllowanceList;
 import org.hyperledger.iroha.android.offline.OfflineAllowanceRegisterResponse;
@@ -29,6 +28,7 @@ import org.hyperledger.iroha.android.offline.OfflineTransferList;
 import org.hyperledger.iroha.android.offline.OfflineWalletCertificate;
 import org.hyperledger.iroha.android.offline.OfflineWalletCertificateDraft;
 import org.hyperledger.iroha.android.offline.OfflineWalletPolicy;
+import org.hyperledger.iroha.android.testing.TestAssetDefinitionIds;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
@@ -84,7 +84,7 @@ public final class OfflineToriiClientTests {
   }
 
   private static void listAllowancesParsesResponse() {
-    final String assetDefinitionId = AssetDefinitionIdEncoder.encode("usd", "wonderland");
+    final String assetDefinitionId = TestAssetDefinitionIds.SECONDARY;
     final StubExecutor executor =
         new StubExecutor(
             200,
@@ -96,7 +96,7 @@ public final class OfflineToriiClientTests {
                   "certificate_id_hex": "deadbeef",
                   "controller_id": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
                   "controller_display": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
-                  "asset_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+                  "asset_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
                   "asset_definition_id": "%s",
                   "asset_definition_name": "USD",
                   "asset_definition_alias": null,
@@ -126,7 +126,7 @@ public final class OfflineToriiClientTests {
                 OfflineListParams.builder()
                     .limit(5L)
                     .offset(10L)
-                    .assetId("usd##soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ")
+                    .assetId("7EAD8EFYUx1aVKZPUU1fyKvr8dF1")
                     .certificateExpiresBeforeMs(1_000L)
                     .certificateExpiresAfterMs(500L)
                     .policyExpiresBeforeMs(2_000L)
@@ -152,7 +152,7 @@ public final class OfflineToriiClientTests {
         .contains("limit=5") : "limit query missing";
     final String query = executor.lastRequest.uri().getQuery();
     assert query.contains("offset=10") : "offset query missing";
-    assert query.contains("asset_id=usd##soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ") : "asset_id missing";
+    assert query.contains("asset_id=7EAD8EFYUx1aVKZPUU1fyKvr8dF1") : "asset_id missing";
     assert query.contains("certificate_expires_before_ms=1000")
         : "certificate_expires_before_ms missing";
     assert query.contains("certificate_expires_after_ms=500")
@@ -542,7 +542,7 @@ public final class OfflineToriiClientTests {
               "receiver_display": "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
               "deposit_account_id": "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
               "deposit_account_display": "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
-              "asset_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1#soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
+              "asset_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
               "receipt_count": 1,
               "total_amount": "5",
               "claimed_delta": "5",
@@ -653,7 +653,7 @@ public final class OfflineToriiClientTests {
               "certificate": {
                 "controller": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
                 "operator": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
-                "allowance": { "asset": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ", "amount": "10", "commitment": [1, 2] },
+                "allowance": { "asset": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "amount": "10", "commitment": [1, 2] },
                 "spend_public_key": "ed0120deadbeef",
                 "attestation_report": [3, 4],
                 "issued_at_ms": 100,
@@ -673,7 +673,7 @@ public final class OfflineToriiClientTests {
             .baseUri(URI.create("https://example.com"))
             .build();
     final OfflineAllowanceCommitment allowance =
-        new OfflineAllowanceCommitment("7EAD8EFYUx1aVKZPUU1fyKvr8dF1#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ", "10", new byte[] {1, 2});
+        new OfflineAllowanceCommitment("7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "10", new byte[] {1, 2});
     final OfflineWalletPolicy policy = new OfflineWalletPolicy("10", "5", 200L);
     final OfflineWalletCertificateDraft draft =
         new OfflineWalletCertificateDraft(
@@ -779,7 +779,7 @@ public final class OfflineToriiClientTests {
               "certificate": {
                 "controller": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
                 "operator": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
-                "allowance": { "asset": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ", "amount": "10", "commitment": [1, 2] },
+                "allowance": { "asset": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "amount": "10", "commitment": [1, 2] },
                 "spend_public_key": "ed0120deadbeef",
                 "attestation_report": [3, 4],
                 "issued_at_ms": 100,
@@ -799,7 +799,7 @@ public final class OfflineToriiClientTests {
             .baseUri(URI.create("https://example.com"))
             .build();
     final OfflineAllowanceCommitment allowance =
-        new OfflineAllowanceCommitment("7EAD8EFYUx1aVKZPUU1fyKvr8dF1#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ", "10", new byte[] {1, 2});
+        new OfflineAllowanceCommitment("7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "10", new byte[] {1, 2});
     final OfflineWalletPolicy policy = new OfflineWalletPolicy("10", "5", 200L);
     final OfflineWalletCertificateDraft draft =
         new OfflineWalletCertificateDraft(
@@ -830,7 +830,7 @@ public final class OfflineToriiClientTests {
             .baseUri(URI.create("https://example.com"))
             .build();
     final OfflineAllowanceCommitment allowance =
-        new OfflineAllowanceCommitment("7EAD8EFYUx1aVKZPUU1fyKvr8dF1#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ", "10", new byte[] {1, 2});
+        new OfflineAllowanceCommitment("7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "10", new byte[] {1, 2});
     final OfflineWalletPolicy policy = new OfflineWalletPolicy("10", "5", 200L);
     final String verdictId =
         "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
@@ -863,7 +863,7 @@ public final class OfflineToriiClientTests {
             .baseUri(URI.create("https://example.com"))
             .build();
     final OfflineAllowanceCommitment allowance =
-        new OfflineAllowanceCommitment("7EAD8EFYUx1aVKZPUU1fyKvr8dF1#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ", "10", new byte[] {1, 2});
+        new OfflineAllowanceCommitment("7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "10", new byte[] {1, 2});
     final OfflineWalletPolicy policy = new OfflineWalletPolicy("10", "5", 200L);
     final OfflineWalletCertificate certificate =
         new OfflineWalletCertificate(
@@ -895,7 +895,7 @@ public final class OfflineToriiClientTests {
             .baseUri(URI.create("https://example.com"))
             .build();
     final OfflineAllowanceCommitment allowance =
-        new OfflineAllowanceCommitment("7EAD8EFYUx1aVKZPUU1fyKvr8dF1#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ", "10", new byte[] {1, 2});
+        new OfflineAllowanceCommitment("7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "10", new byte[] {1, 2});
     final OfflineWalletPolicy policy = new OfflineWalletPolicy("10", "5", 200L);
     final OfflineWalletCertificateDraft draft =
         new OfflineWalletCertificateDraft(
@@ -922,7 +922,7 @@ public final class OfflineToriiClientTests {
             .baseUri(URI.create("https://example.com"))
             .build();
     final OfflineAllowanceCommitment allowance =
-        new OfflineAllowanceCommitment("7EAD8EFYUx1aVKZPUU1fyKvr8dF1#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ", "10", new byte[] {1, 2});
+        new OfflineAllowanceCommitment("7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "10", new byte[] {1, 2});
     final OfflineWalletPolicy policy = new OfflineWalletPolicy("10", "5", 200L);
     final OfflineWalletCertificateDraft draft =
         new OfflineWalletCertificateDraft(

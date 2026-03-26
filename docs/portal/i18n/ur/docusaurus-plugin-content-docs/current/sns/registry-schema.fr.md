@@ -234,7 +234,7 @@ Enum RegistryEventKind {
 گیٹ وے `RegistryEventV1` کو سبسکرائب کریں اور DNS/SoraFS کے ذریعے ہم آہنگی کریں:
 
 1. واقعات کی ترتیب سے آخری `NameRecordV1` حوالہ بازیافت کریں۔
-2. حل کرنے والے ٹیمپلیٹس کو دوبارہ تخلیق کریں (I105 ایڈریس ترجیحی + کمپریسڈ (`sora`) دوسری پسند ، متن کے ریکارڈ)۔
+2. حل کرنے والے ٹیمپلیٹس کو دوبارہ تخلیق کریں (i105 ایڈریس ترجیحی + کمپریسڈ (`sora`) دوسری پسند ، متن کے ریکارڈ)۔
 3. [`soradns_registry_rfc.md`] (https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md) میں بیان کردہ Soradns ورک فلو کے ذریعے تازہ ترین زون کے اعداد و شمار کو پن کریں۔
 
 واقعہ کی فراہمی کی ضمانتیں:

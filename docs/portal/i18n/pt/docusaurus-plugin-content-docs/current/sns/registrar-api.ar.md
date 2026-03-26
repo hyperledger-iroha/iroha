@@ -116,7 +116,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/policies/{suffix_id}` | OBTER | -- | Selecione `SuffixPolicyV1` (para o caso). |
 | `/v1/sns/names/{namespace}/{literal}` | OBTER | -- | يعيد `NameRecordV1` الحالي + الحالة الفعلية (Ativo, Graça, الخ). |
 
-**Seletor de extensão:** مقطع `{selector}` يقبل I105 او مضغوط او hex قياسي حسب ADDR-5; Torii é igual a `NameSelectorV1`.
+**Seletor de extensão:** مقطع `{selector}` يقبل i105 او مضغوط او hex قياسي حسب ADDR-5; Torii é igual a `NameSelectorV1`.
 
 **Nome do arquivo:** Para definir o valor do Norito JSON como `code`, `message`, `details`. Verifique o código `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
 
@@ -160,7 +160,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner soraカタカナ... \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -222,7 +222,7 @@ O código é `sns_err_governance_missing`.
 
 1. Use o `/v1/sns/policies/{suffix_id}` para obter a graça e a graça.
 2. Código `RegisterNameRequestV1`:
-   - `selector` é compatível com a etiqueta I105 (I105) e I105 (I105).
+   - `selector` é compatível com a etiqueta i105 (i105) e i105 (i105).
    - `term_years` é um problema.
    - `payment` é um divisor de divisão/steward.
 3. Torii Descrição:

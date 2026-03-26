@@ -31,9 +31,9 @@ translator: machine-google-reviewed
 - `IdBox`: مظروف من النوع الإجمالي لأي معرف معتمد (`DomainId`، `AccountId`، `AssetDefinitionId`، `AssetId`، `NftId`، `PeerId`، `TriggerId`، `RoleId`، `Permission`، `CustomParameterId`). مفيد للتدفقات العامة وترميز Norito كنوع واحد.
 - `ChainId`: معرف سلسلة غير شفاف يستخدم لحماية إعادة التشغيل في المعاملات.نماذج سلسلة من المعرفات (قابلة للتعثر مع `Display`/`FromStr`):
 - `DomainId`: `name` (على سبيل المثال، `wonderland`).
-- `AccountId`: معرف الحساب الأساسي بدون نطاق المشفر عبر `AccountAddress` كـ I105 فقط. يجب أن تكون مدخلات المحلل اللغوي I105 الأساسية؛ يتم رفض لاحقات المجال (`@domain`)، وأحرف I105 الأساسية، وأحرف الاسم المستعار، وإدخال المحلل اللغوي السداسي الكنسي، وحمولات `norito:` القديمة، ونماذج محلل الحساب `uaid:`/`opaque:`.
+- `AccountId`: معرف الحساب الأساسي بدون نطاق المشفر عبر `AccountAddress` كـ i105 فقط. يجب أن تكون مدخلات المحلل اللغوي i105 الأساسية؛ يتم رفض لاحقات المجال (`@domain`)، وأحرف i105 الأساسية، وأحرف الاسم المستعار، وإدخال المحلل اللغوي السداسي الكنسي، وحمولات `norito:` القديمة، ونماذج محلل الحساب `uaid:`/`opaque:`.
 - `AssetDefinitionId`: `unprefixed Base58 address with versioning and checksum` الأساسي (UUID-v4 بايت).
-- `AssetId`: `<base58-asset-id>#<katakana-i105-account-id>` الحرفي المشفر الأساسي (النماذج النصية القديمة غير مدعومة في الإصدار الأول).
+- `AssetId`: `<canonical-base58-asset-definition-id>` الحرفي المشفر الأساسي (النماذج النصية القديمة غير مدعومة في الإصدار الأول).
 - `NftId`: `nft$domain` (على سبيل المثال، `rose$garden`).
 - `PeerId`: `public_key` (تتم المساواة بين الأقران عن طريق المفتاح العام).
 
@@ -43,7 +43,7 @@ translator: machine-google-reviewed
 - `DomainId { name: Name }` – اسم فريد.
 -`Domain { id, logo: Option<SorafsUri>, metadata: Metadata, owned_by: AccountId }`.
 - المنشئ: `NewDomain` مع `with_logo`، `with_metadata`، ثم `Registrable::build(authority)` يعين `owned_by`.### الحساب
-- `AccountId` هي هوية الحساب بدون مجال الأساسية التي يتم مفتاحها بواسطة وحدة التحكم والمشفرة كـ I105 الأساسية.
+- `AccountId` هي هوية الحساب بدون مجال الأساسية التي يتم مفتاحها بواسطة وحدة التحكم والمشفرة كـ i105 الأساسية.
 - يحمل `ScopedAccountId { account: AccountId, domain: DomainId }` سياق المجال الصريح فقط عندما يكون العرض محدد النطاق مطلوبًا.
 - `Account { id, metadata, label?, uaid? }` — `label` هو اسم مستعار ثابت اختياري تستخدمه سجلات إعادة المفتاح، ويحمل `uaid` نطاق Nexus [معرف الحساب العالمي] (./universal_accounts_guide.md) الاختياري.
 - المنشئ: `NewAccount` عبر `Account::new(id)`؛ يتطلب التسجيل مجال `ScopedAccountId` صريحًا ولا يستنتج واحدًا من الإعدادات الافتراضية.
@@ -250,7 +250,7 @@ iroha ledger asset definition register \
 # Mint using alias + account components (no manual norito hex copy/paste)
 iroha ledger asset mint \
   --definition-alias pkr#ubl.sbp \
-  --account sorauﾛ1P... \
+  --account soraゴヂ... \
   --quantity 500
 
 # Resolve alias to canonical Base58 id via Torii
@@ -259,7 +259,7 @@ curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -d '{"alias":"pkr#ubl.sbp"}'
 ```مذكرة الهجرة:
 - لا يتم قبول معرفات تعريف الأصول `name#domain` القديمة في الإصدار 1.
-- تظل معرفات الأصول الخاصة بالنعناع/النسخ/النقل هي `<base58-asset-id>#<katakana-i105-account-id>` الأساسية؛ بناء لهم مع:
+- تظل معرفات الأصول الخاصة بالنعناع/النسخ/النقل هي `<canonical-base58-asset-definition-id>` الأساسية؛ بناء لهم مع:
   -`iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
   - أو `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`.
 

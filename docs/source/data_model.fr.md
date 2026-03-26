@@ -31,9 +31,9 @@ Ce document explique les structures, les identifiants, les caractéristiques et 
 - `IdBox` : Une enveloppe de type somme pour tout identifiant pris en charge (`DomainId`, `AccountId`, `AssetDefinitionId`, `AssetId`, `NftId`, `PeerId`, `TriggerId`, `RoleId`, `Permission`, `CustomParameterId`). Utile pour les flux génériques et l’encodage Norito en tant que type unique.
 - `ChainId` : Identifiant de chaîne opaque utilisé pour la protection contre la relecture dans les transactions.Formes de chaîne d'identifiants (autorisées avec `Display`/`FromStr`) :
 - `DomainId` : `name` (par exemple, `wonderland`).
-- `AccountId` : identifiant canonique de compte sans domaine codé via `AccountAddress` en I105 uniquement. Les entrées de l'analyseur doivent être canoniques I105 ; les suffixes de domaine (`@domain`), les littéraux canoniques I105, les littéraux d'alias, l'entrée de l'analyseur hexadécimal canonique, les charges utiles `norito:` héritées et les formulaires d'analyseur de compte `uaid:`/`opaque:` sont rejetés.
+- `AccountId` : identifiant canonique de compte sans domaine codé via `AccountAddress` en i105 uniquement. Les entrées de l'analyseur doivent être canoniques i105 ; les suffixes de domaine (`@domain`), les littéraux canoniques i105, les littéraux d'alias, l'entrée de l'analyseur hexadécimal canonique, les charges utiles `norito:` héritées et les formulaires d'analyseur de compte `uaid:`/`opaque:` sont rejetés.
 - `AssetDefinitionId` : canonique `unprefixed Base58 address with versioning and checksum` (UUID-v4 octets).
-- `AssetId` : littéral codé canonique `<base58-asset-id>#<katakana-i105-account-id>` (les formes textuelles héritées ne sont pas prises en charge dans la première version).
+- `AssetId` : littéral codé canonique `<canonical-base58-asset-definition-id>` (les formes textuelles héritées ne sont pas prises en charge dans la première version).
 - `NftId` : `nft$domain` (par exemple, `rose$garden`).
 - `PeerId` : `public_key` (l'égalité des pairs se fait par clé publique).
 
@@ -43,7 +43,7 @@ Ce document explique les structures, les identifiants, les caractéristiques et 
 - `DomainId { name: Name }` – nom unique.
 - `Domain { id, logo: Option<SorafsUri>, metadata: Metadata, owned_by: AccountId }`.
 - Constructeur : `NewDomain` avec `with_logo`, `with_metadata`, puis `Registrable::build(authority)` définit `owned_by`.### Compte
-- `AccountId` est l'identité canonique du compte sans domaine saisie par le contrôleur et codée comme canonique I105.
+- `AccountId` est l'identité canonique du compte sans domaine saisie par le contrôleur et codée comme canonique i105.
 - `ScopedAccountId { account: AccountId, domain: DomainId }` comporte un contexte de domaine explicite uniquement lorsqu'une vue étendue est requise.
 - `Account { id, metadata, label?, uaid? }` — `label` est un alias stable facultatif utilisé par les enregistrements de retouche, `uaid` porte l'[ID de compte universel] facultatif Nexus (./universal_accounts_guide.md).
 - Constructeur : `NewAccount` via `Account::new(id)` ; l'enregistrement nécessite un domaine `ScopedAccountId` explicite et n'en déduit pas à partir des valeurs par défaut.
@@ -250,7 +250,7 @@ iroha ledger asset definition register \
 # Mint using alias + account components (no manual norito hex copy/paste)
 iroha ledger asset mint \
   --definition-alias pkr#ubl.sbp \
-  --account sorauﾛ1P... \
+  --account soraゴヂ... \
   --quantity 500
 
 # Resolve alias to canonical Base58 id via Torii
@@ -259,7 +259,7 @@ curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -d '{"alias":"pkr#ubl.sbp"}'
 ```Remarque sur la migration :
 - Les anciens ID de définition d'actif `name#domain` ne sont pas acceptés dans la v1.
-- Les ID d'actifs pour la création/gravure/transfert restent canoniques `<base58-asset-id>#<katakana-i105-account-id>` ; construisez-les avec :
+- Les ID d'actifs pour la création/gravure/transfert restent canoniques `<canonical-base58-asset-definition-id>` ; construisez-les avec :
   -`iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
   - ou `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`.
 

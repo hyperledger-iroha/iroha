@@ -35,7 +35,7 @@ Grafana, and feed reports directly into the public governance portal.
 The canonical schema lives in
 `docs/examples/sns/arbitration_case_schema.json`. It follows JSON Schema
 Draft 7 and mirrors the registrar/Norito selector data model, so automation can
-attach disputes to the same I105 selectors and suffix identifiers used
+attach disputes to the same i105 selectors and suffix identifiers used
 elsewhere in SNS.
 
 ```bash

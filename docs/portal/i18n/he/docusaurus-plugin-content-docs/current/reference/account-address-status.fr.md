@@ -1,28 +1,17 @@
 ---
-lang: fr
-direction: ltr
-source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/reference/account-address-status.md
-status: complete
-generator: scripts/sync_docs_i18n.py
-source_hash: e1c2593468841e039292580f749784bfa44b47f0cb56f711c1c4a6ea6406b71a
-source_last_modified: "2026-01-28T17:58:57+00:00"
-translation_last_reviewed: 2026-01-30
----
-
----
-lang: he
-direction: rtl
-source: docs/portal/docs/reference/account-address-status.md
-status: complete
-generator: docs/portal/scripts/sync-i18n.mjs
 id: account-address-status
-title: ציות כתובת חשבון
-description: סיכום זרימת העבודה של fixture ADDR-2 וכיצד צוותי SDK נשארים מסונכרנים.
+title: Account address compliance
+description: Summary of the ADDR-2 fixture workflow and how SDK teams stay in sync.
 ---
 
-חבילת ה-ADDR-2 הקנונית (`fixtures/account/address_vectors.json`) כוללת fixtures של canonical Katakana i105, multisignature ו-negative. כל משטח SDK + Torii מסתמך על אותו JSON כדי לזהות כל סטייה של codec לפני הגעה לפרודקשן. דף זה משקף את תקציר הסטטוס הפנימי (`docs/source/account_address_status.md` בשורש המאגר) כדי שקוראי הפורטל יוכלו לעיין בזרימה בלי לחפור ב-mono-repo.
+The canonical ADDR-2 bundle (`fixtures/account/address_vectors.json`) captures
+canonical Katakana i105, multisignature, and negative fixtures.
+Every SDK + Torii surface relies on the same JSON so we can detect any codec
+drift before it hits production. This page mirrors the internal status brief
+(`docs/source/account_address_status.md` in the root repository) so portal
+readers can reference the workflow without digging through the mono-repo.
 
-## יצירה מחדש או אימות של החבילה
+## Regenerate or verify the bundle
 
 ```bash
 # Refresh the canonical fixture (writes fixtures/account/address_vectors.json)
@@ -34,14 +23,15 @@ cargo xtask address-vectors --verify
 
 Flags:
 
-- `--stdout` — פולט את ה-JSON ל-stdout לבדיקה אד-הוק.
-- `--out <path>` — כותב לנתיב אחר (למשל בעת השוואת שינויים מקומית).
-- `--verify` — משווה את העותק העובד לתוכן שנוצר מחדש (לא ניתן לשלב עם `--stdout`).
+- `--stdout` — emit the JSON to stdout for ad-hoc inspection.
+- `--out <path>` — write to a different path (e.g., when diffing changes locally).
+- `--verify` — compare the working copy against freshly generated content (cannot
+  be combined with `--stdout`).
 
-זרימת ה-CI **Address Vector Drift** מריצה `cargo xtask address-vectors --verify`
-בכל שינוי של ה-fixture, הגנרטור או ה-docs כדי להתריע למבקרים מיד.
+The CI workflow **Address Vector Drift** runs `cargo xtask address-vectors --verify`
+any time the fixture, generator, or docs change to alert reviewers immediately.
 
-## מי צורך את ה-fixture?
+## Who consumes the fixture?
 
 | Surface | Validation |
 |---------|------------|
@@ -51,12 +41,14 @@ Flags:
 | Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
 | Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |
 
-כל harness מבצע round-trip של הבייטים הקנוניים + I105 + קידודים דחוסים ובודק שקודי השגיאה בסגנון Norito תואמים ל-fixture עבור המקרים השליליים.
+Each harness round-trips canonical bytes + i105 encodings and
+checks that Norito-style error codes line up with the fixture for negative cases.
 
-## צריכים אוטומציה?
+## Need automation?
 
-כלי ה-release יכולים לסקריפט רענוני fixture עם ה-helper
-`scripts/account_fixture_helper.py`, שמביא או מאמת את החבילה הקנונית בלי שלבי copy/paste:
+Release tooling can script fixture refreshes with the helper
+`scripts/account_fixture_helper.py`, which fetches or verifies the canonical
+bundle without copy/paste steps:
 
 ```bash
 # Download to a custom path (defaults to fixtures/account/address_vectors.json)
@@ -72,9 +64,20 @@ python3 scripts/account_fixture_helper.py check \
   --metrics-label android
 ```
 
-ה-helper מקבל overrides של `--source` או משתנה הסביבה `IROHA_ACCOUNT_FIXTURE_URL` כדי ש-CI של SDK יוכל להצביע למראה המועדפת. כאשר מספקים `--metrics-out`, ה-helper כותב `account_address_fixture_check_status{target="…"}` יחד עם digest SHA-256 קנוני (`account_address_fixture_remote_info`) כדי ש-Prometheus textfile collectors ולוח Grafana `account_address_fixture_status` יוכלו להוכיח שכל משטח נשאר מסונכרן. יש להתריע כאשר יעד מדווח `0`. לאוטומציה מרובת משטחים השתמשו בעטיפה `ci/account_fixture_metrics.sh` (מקבל `--target label=path[::source]` חוזרים) כדי שצוותי הכוננות יפרסמו קובץ `.prom` מאוחד עבור textfile collector של node-exporter.
+The helper accepts `--source` overrides or the `IROHA_ACCOUNT_FIXTURE_URL`
+environment variable so SDK CI jobs can point at their preferred mirror.
+When `--metrics-out` is supplied the helper writes
+`account_address_fixture_check_status{target=\"…\"}` along with the canonical
+SHA-256 digest (`account_address_fixture_remote_info`) so Prometheus textfile
+collectors and Grafana dashboard `account_address_fixture_status` can prove
+every surface remains in sync. Alert whenever a target reports `0`. For
+multi-surface automation use the wrapper `ci/account_fixture_metrics.sh`
+(accepts repeated `--target label=path[::source]`) so on-call teams can publish
+one consolidated `.prom` file for the node-exporter textfile collector.
 
-## צריכים את התקציר המלא?
+## Need the full brief?
 
-סטטוס התאימות המלא של ADDR-2 (owners, תוכנית ניטור, פריטי פעולה פתוחים)
-נמצא ב-`docs/source/account_address_status.md` בתוך המאגר יחד עם Address Structure RFC (`docs/account_structure.md`). השתמשו בדף הזה כתזכורת תפעולית מהירה; להנחיות מעמיקות, פנו למסמכי המאגר.
+The full ADDR-2 compliance status (owners, monitoring plan, open action items)
+lives in `docs/source/account_address_status.md` within the repository along
+with the Address Structure RFC (`docs/account_structure.md`). Use this page as a
+quick operational reminder; defer to the repo docs for in-depth guidance.

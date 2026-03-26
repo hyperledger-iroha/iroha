@@ -12,7 +12,7 @@ use crate::{
     nexus::{DataSpaceCatalog, DataSpaceId},
 };
 
-/// Stable account label that survives signatory rotation.
+/// Stable on-chain account alias that survives signatory rotation.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -20,7 +20,7 @@ use crate::{
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 pub struct AccountLabel {
-    /// Human-readable label unique within the alias namespace.
+    /// Human-readable alias label unique within the alias namespace.
     pub label: Name,
     /// Optional concrete domain scope for the alias.
     #[norito(default)]

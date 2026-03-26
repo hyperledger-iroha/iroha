@@ -21,7 +21,7 @@ NFT hayotiy tsiklini oxirigacha bosib o'tadi: egasiga zarb qilish, metama'lumotl
 
 ## Buxgalteriya kitobi bo'yicha ko'rsatmalar
 
-- NFT ta'rifi (masalan, `n0#wonderland`) parchada ishlatiladigan egasi/oluvchi hisoblari (`i105...`, `i105...`) bilan birga mavjudligiga ishonch hosil qiling.
+- NFT ta'rifi (masalan, `n0#wonderland`) parchada ishlatiladigan egasi/oluvchi hisoblari (`soraカタカナ...`, `soraカタカナ...`) bilan birga mavjudligiga ishonch hosil qiling.
 - NFTni zarb qilish uchun `nft_issue_and_transfer` kirish nuqtasini chaqiring, uni Elisdan Bobga o'tkazing va emissiyani tavsiflovchi metadata bayrog'ini qo'shing.
 - O'tkazishni tekshirish uchun `iroha_cli ledger nfts list --account <id>` yoki SDK ekvivalentlari bilan NFT daftarining holatini tekshiring, so'ngra yoqish bo'yicha ko'rsatma bajarilgandan so'ng aktiv o'chirilganligini tasdiqlang.
 

@@ -275,7 +275,7 @@ torii_tx_queue_depth / torii_tx_queue_capacity
 - `torii_http_request_duration_seconds_bucket{content_type,method}` — היסטוגרמת לטנסי שמאפשרת להצליב בין JSON ל-Norito.
 - `torii_http_response_bytes_total{content_type,method,status}` — מעקב אחרי גדלי תגובות כדי לזהות נסיגות בגודל המטען.
 - `torii_norito_decode_failures_total{payload_kind,reason}` — מבטא כמה בקשות נכשלו בבדיקת הכותרת (קסם, checksum, דגלי layout).
-- `torii_address_invalid_total{surface,reason}` ו-`torii_address_local8_total{surface}` — נשארים רלוונטיים גם ב-Norito משום שהן כוחניות לגבי כתובות I105/דחוסות.
+- `torii_address_invalid_total{surface,reason}` ו-`torii_address_local8_total{surface}` — נשארים רלוונטיים גם ב-Norito משום שהן כוחניות לגבי כתובות i105/דחוסות.
 - מדי חיבורים וגייטינג קיימים (`torii_active_connections_total{scheme}`, `torii_pre_auth_reject_total{reason}`) מוכרחים לכלול את `scheme="norito_rpc"` כדי להבחין בין ערוצים.
 
 חוקי ההתראה שמורים ב-`dashboards/alerts/torii_norito_rpc_rules.yml` (עם בדיקות ב-`dashboards/alerts/tests/torii_norito_rpc_rules.test.yml`). דגשים:

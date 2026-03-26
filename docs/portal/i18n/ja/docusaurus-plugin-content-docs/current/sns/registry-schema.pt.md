@@ -236,7 +236,7 @@ Todas はホストのシリアル化を使用して Norito パラメータのハ
 ゲートウェイ assinam `RegistryEventV1` および同期 DNS/SoraFS ao:
 
 1. 究極のイベント `NameRecordV1` 参照。
-2. Regenerar テンプレート デ リゾルバー (enderecos I105 優先 + 圧縮 (`sora`) como segunda opcao、テキスト レコード)。
+2. Regenerar テンプレート デ リゾルバー (enderecos i105 優先 + 圧縮 (`sora`) como segunda opcao、テキスト レコード)。
 3. Fluxo SoraDNS の説明 [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md) を介して、真の状態を示します。
 
 イベントの開催日:

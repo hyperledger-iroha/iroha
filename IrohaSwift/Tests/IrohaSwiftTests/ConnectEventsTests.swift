@@ -3,7 +3,7 @@ import XCTest
 
 final class ConnectEventsTests: XCTestCase {
     private let encodedUsdAssetID =
-        "5ywNgSPQ5KyuQh7SwaZmwMW4GTXu#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"
+        "5ywNgSPQ5KyuQh7SwaZmwMW4GTXu"
 
     func testBalanceAssetRejectsFractionalPrecision() {
         let json: [String: Any] = [

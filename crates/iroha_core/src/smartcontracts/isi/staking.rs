@@ -102,6 +102,7 @@ impl Execute for RegisterPublicLaneValidator {
         }
         let stake_ctx = stake_context(
             &state_transaction.world,
+            &state_transaction.nexus.dataspace_catalog,
             &state_transaction.nexus.staking,
             &self.stake_account,
             None,
@@ -387,6 +388,7 @@ impl Execute for BondPublicLaneStake {
 
         let stake_ctx = stake_context(
             &state_transaction.world,
+            &state_transaction.nexus.dataspace_catalog,
             &state_transaction.nexus.staking,
             &self.staker,
             None,
@@ -497,6 +499,7 @@ impl Execute for SchedulePublicLaneUnbond {
         }
         let stake_ctx = stake_context(
             &state_transaction.world,
+            &state_transaction.nexus.dataspace_catalog,
             &state_transaction.nexus.staking,
             &self.staker,
             None,
@@ -593,6 +596,7 @@ impl Execute for FinalizePublicLaneUnbond {
         let block_timestamp_ms = state_transaction.block_unix_timestamp_ms();
         let stake_ctx = stake_context(
             &state_transaction.world,
+            &state_transaction.nexus.dataspace_catalog,
             &state_transaction.nexus.staking,
             &self.staker,
             None,
@@ -670,6 +674,7 @@ impl Execute for SlashPublicLaneValidator {
         let recorded_at_ms = state_transaction.block_unix_timestamp_ms();
         apply_slash_to_validator(
             &mut state_transaction.world,
+            &state_transaction.nexus.dataspace_catalog,
             &state_transaction.nexus.staking,
             self.lane_id,
             &self.validator,
@@ -841,11 +846,12 @@ impl Execute for ClaimPublicLaneRewards {
 
         let sink_account = crate::block::parse_account_literal_with_world(
             &state_transaction.world,
+            &state_transaction.nexus.dataspace_catalog,
             &state_transaction.nexus.fees.fee_sink_account_id,
         )
         .ok_or_else(|| {
             Error::InvariantViolation(
-                "invalid nexus.fees.fee_sink_account_id; expected canonical Katakana i105 account id"
+                "invalid nexus.fees.fee_sink_account_id; expected canonical Katakana i105 account id or on-chain alias"
                     .into(),
             )
         })?;
@@ -1155,11 +1161,12 @@ fn validate_reward_sink(
 ) -> Result<(), Error> {
     let sink_account = crate::block::parse_account_literal_with_world(
         &state_transaction.world,
+        &state_transaction.nexus.dataspace_catalog,
         &state_transaction.nexus.fees.fee_sink_account_id,
     )
     .ok_or_else(|| {
         Error::InvariantViolation(
-            "invalid nexus.fees.fee_sink_account_id; expected canonical Katakana i105 account id"
+            "invalid nexus.fees.fee_sink_account_id; expected canonical Katakana i105 account id or on-chain alias"
                 .into(),
         )
     })?;
@@ -1413,6 +1420,7 @@ fn remove_all_shares_for_validator(
 /// Apply a slash to a validator using a prebuilt world transaction.
 pub(crate) fn apply_slash_to_validator(
     world: &mut WorldTransaction<'_, '_>,
+    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
     staking_cfg: &iroha_config::parameters::actual::NexusStaking,
     lane_id: LaneId,
     validator: &AccountId,
@@ -1428,7 +1436,14 @@ pub(crate) fn apply_slash_to_validator(
         .get(&validator_key)
         .map(|record| record.stake_account.clone())
         .ok_or_else(|| Error::InvariantViolation("validator not registered".into()))?;
-    let stake_ctx = stake_context(world, staking_cfg, &stake_account, None, now_ms)?;
+    let stake_ctx = stake_context(
+        world,
+        dataspace_catalog,
+        staking_cfg,
+        &stake_account,
+        None,
+        now_ms,
+    )?;
     let spec = world
         .asset_definitions
         .get(&stake_ctx.asset_definition)
@@ -1532,6 +1547,7 @@ struct StakeEscrowContext {
 
 fn stake_context(
     world: &impl WorldReadOnly,
+    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
     staking_cfg: &iroha_config::parameters::actual::NexusStaking,
     staker: &AccountId,
     slash_sink_override: Option<&AccountId>,
@@ -1545,6 +1561,7 @@ fn stake_context(
     )?;
     let escrow_account = parse_staking_account_literal(
         world,
+        dataspace_catalog,
         &staking_cfg.stake_escrow_account_id,
         "stake_escrow_account_id",
     )?;
@@ -1553,6 +1570,7 @@ fn stake_context(
     } else {
         parse_staking_account_literal(
             world,
+            dataspace_catalog,
             &staking_cfg.slash_sink_account_id,
             "slash_sink_account_id",
         )?
@@ -1568,21 +1586,24 @@ fn stake_context(
 
 fn parse_staking_account_literal(
     world: &impl WorldReadOnly,
+    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
     literal: &str,
     field: &'static str,
 ) -> Result<AccountId, Error> {
-    if let Some(account) = crate::block::parse_account_literal_with_world(world, literal) {
+    if let Some(account) =
+        crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal)
+    {
         return Ok(account);
     }
 
     let reason = match AccountId::parse_encoded(literal) {
-        Ok(_) => "literal must use canonical Katakana i105 account-id form".to_owned(),
+        Ok(_) => "literal resolved to no matching account in world state".to_owned(),
         Err(err) => format!("decode failed: {err}"),
     };
 
     Err(Error::InvariantViolation(
         format!(
-            "invalid nexus.staking.{field}; expected canonical Katakana i105 account id ({reason})"
+            "invalid nexus.staking.{field}; expected canonical Katakana i105 account id or on-chain alias ({reason})"
         )
         .into(),
     ))
@@ -1976,6 +1997,7 @@ mod tests {
 
         let stake_ctx = stake_context(
             &stx.world,
+            &stx.nexus.dataspace_catalog,
             &stx.nexus.staking,
             &validator,
             None,

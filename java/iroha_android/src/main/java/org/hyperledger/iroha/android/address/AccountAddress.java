@@ -7,14 +7,11 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
-import java.util.Objects;
 import java.util.Optional;
 
 import org.hyperledger.iroha.android.crypto.Blake2s;
 
 public final class AccountAddress {
-
-  public static final String DEFAULT_DOMAIN_NAME = "default";
   public static final int DEFAULT_I105_DISCRIMINANT = 753;
 
   private static final byte[] LOCAL_DOMAIN_KEY = "SORA-LOCAL-K:v1".getBytes(StandardCharsets.UTF_8);
@@ -29,20 +26,25 @@ public final class AccountAddress {
   private static final String I105_SENTINEL_TEST_FULLWIDTH = "ｔｅｓｔ";
   private static final String I105_SENTINEL_DEV_FULLWIDTH = "ｄｅｖ";
   private static final String I105_SENTINEL_NUMERIC_PREFIX_FULLWIDTH = "ｎ";
-  private static final int I105_MAX_SYMBOL_CHARS = 2;
   private static final String I105_WARNING =
-      "I105 addresses are the canonical account literal encoding. "
+      "i105 addresses use the canonical I105 alphabet: Base58 plus the 47 katakana from the Iroha poem. "
           + "Render and validate them with the intended chain discriminant.";
 
-  private static final String[] I105_KATAKANA_ALPHABET = {
-      "ア", "イ", "ウ", "エ", "オ", "カ", "キ", "ク", "ケ", "コ", "サ", "シ", "ス", "セ", "ソ",
-      "タ", "チ", "ツ", "テ", "ト", "ナ", "ニ", "ヌ", "ネ", "ノ", "ハ", "ヒ", "フ", "ヘ", "ホ",
-      "マ", "ミ", "ム", "メ", "モ", "ヤ", "ユ", "ヨ", "ラ", "リ", "ル", "レ", "ロ", "ワ", "ヰ",
-      "ヱ", "ヲ", "ン", "ガ", "ギ", "グ", "ゲ", "ゴ", "ザ", "ジ", "ズ", "ゼ", "ゾ", "ダ", "ヂ",
-      "ヅ", "デ", "ド", "バ", "ビ", "ブ", "ベ", "ボ", "パ", "ピ", "プ", "ペ", "ポ", "ヴ", "ヷ",
-      "ヸ", "ヹ", "ヺ", "ァ", "ィ", "ゥ", "ェ", "ォ", "ャ", "ュ", "ョ", "ッ", "ヮ", "ヵ", "ヶ",
-      "キャ", "キュ", "キョ", "シャ", "シュ", "ショ", "チャ", "チュ", "チョ", "ニャ", "ニュ",
-      "ニョ", "ヒャ", "ヒュ", "ヒョ"
+  private static final String[] BASE58_ALPHABET = {
+      "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F", "G", "H", "J",
+      "K", "L", "M", "N", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "a", "b", "c",
+      "d", "e", "f", "g", "h", "i", "j", "k", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v",
+      "w", "x", "y", "z"
+  };
+  private static final String[] IROHA_POEM_KANA_FULLWIDTH = {
+      "イ", "ロ", "ハ", "ニ", "ホ", "ヘ", "ト", "チ", "リ", "ヌ", "ル", "ヲ", "ワ", "カ", "ヨ", "タ",
+      "レ", "ソ", "ツ", "ネ", "ナ", "ラ", "ム", "ウ", "ヰ", "ノ", "オ", "ク", "ヤ", "マ", "ケ", "フ",
+      "コ", "エ", "テ", "ア", "サ", "キ", "ユ", "メ", "ミ", "シ", "ヱ", "ヒ", "モ", "セ", "ス"
+  };
+  private static final String[] IROHA_POEM_KANA_HALFWIDTH = {
+      "ｲ", "ﾛ", "ﾊ", "ﾆ", "ﾎ", "ﾍ", "ﾄ", "ﾁ", "ﾘ", "ﾇ", "ﾙ", "ｦ", "ﾜ", "ｶ", "ﾖ", "ﾀ",
+      "ﾚ", "ｿ", "ﾂ", "ﾈ", "ﾅ", "ﾗ", "ﾑ", "ｳ", "ヰ", "ﾉ", "ｵ", "ｸ", "ﾔ", "ﾏ", "ｹ", "ﾌ",
+      "ｺ", "ｴ", "ﾃ", "ｱ", "ｻ", "ｷ", "ﾕ", "ﾒ", "ﾐ", "ｼ", "ヱ", "ﾋ", "ﾓ", "ｾ", "ｽ"
   };
 
   private static final String[] I105_ALPHABET;
@@ -54,7 +56,14 @@ public final class AccountAddress {
 
   static {
     configureCurveSupport(CurveSupportConfig.ed25519Only());
-    I105_ALPHABET = Arrays.copyOf(I105_KATAKANA_ALPHABET, I105_KATAKANA_ALPHABET.length);
+    I105_ALPHABET = new String[BASE58_ALPHABET.length + IROHA_POEM_KANA_FULLWIDTH.length];
+    System.arraycopy(BASE58_ALPHABET, 0, I105_ALPHABET, 0, BASE58_ALPHABET.length);
+    System.arraycopy(
+        IROHA_POEM_KANA_FULLWIDTH,
+        0,
+        I105_ALPHABET,
+        BASE58_ALPHABET.length,
+        IROHA_POEM_KANA_FULLWIDTH.length);
     I105_BASE = I105_ALPHABET.length;
   }
 
@@ -68,13 +77,6 @@ public final class AccountAddress {
     return Arrays.copyOf(canonicalBytes, canonicalBytes.length);
   }
 
-  /** Canonical payloads are domainless, so rebasing is a no-op. */
-  public AccountAddress rebasedFromDefaultDomain(final String domainLabel) throws AccountAddressException {
-    Objects.requireNonNull(domainLabel, "domainLabel must not be null");
-    parseCanonical(canonicalBytes);
-    return this;
-  }
-
   public String canonicalHex() {
     return "0x" + bytesToHex(canonicalBytes);
   }
@@ -84,7 +86,7 @@ public final class AccountAddress {
   }
 
   /**
-   * Convenience helper that surfaces canonical Katakana i105 alongside the shared warning string.
+   * Convenience helper that surfaces canonical I105 alongside the shared warning string.
    * Follow {@code docs/source/sns/address_display_guidelines.md} when presenting these values.
    */
   public DisplayFormats displayFormats() throws AccountAddressException {
@@ -92,7 +94,7 @@ public final class AccountAddress {
   }
 
   /**
-   * Convenience helper that surfaces canonical Katakana i105 alongside the shared warning string.
+   * Convenience helper that surfaces canonical I105 alongside the shared warning string.
    * Follow {@code docs/source/sns/address_display_guidelines.md} when presenting these values.
    */
   public DisplayFormats displayFormats(final int discriminant) throws AccountAddressException {
@@ -143,7 +145,6 @@ public final class AccountAddress {
   }
 
   public static AccountAddress fromAccount(
-      final String domain,
       final byte[] publicKey,
       final String algorithm) throws AccountAddressException {
     if (publicKey.length > 0xFF) {
@@ -164,27 +165,10 @@ public final class AccountAddress {
   }
 
   /**
-   * Backward-compatible overload that uses the default domain selector.
-   */
-  public static AccountAddress fromAccount(
-      final byte[] publicKey, final String algorithm) throws AccountAddressException {
-    return fromAccount(DEFAULT_DOMAIN_NAME, publicKey, algorithm);
-  }
-
-  /**
    * Constructs a multisig account address from the provided policy payload.
    */
   public static AccountAddress fromMultisigPolicy(final MultisigPolicyPayload policy)
       throws AccountAddressException {
-    return fromMultisigPolicy(DEFAULT_DOMAIN_NAME, policy);
-  }
-
-  /**
-   * Constructs a multisig account address from the provided policy payload.
-   */
-  public static AccountAddress fromMultisigPolicy(
-      final String domain,
-      final MultisigPolicyPayload policy) throws AccountAddressException {
     if (policy == null) {
       throw new AccountAddressException(AccountAddressErrorCode.INVALID_MULTISIG_POLICY, "multisig policy must not be null");
     }
@@ -903,7 +887,7 @@ public final class AccountAddress {
 
   private static String encodeI105(final byte[] canonical, final int discriminant)
       throws AccountAddressException {
-    final int normalizedDiscriminant = normalizeI105Discriminant(discriminant, "I105 discriminant");
+    final int normalizedDiscriminant = normalizeI105Discriminant(discriminant, "i105 discriminant");
     final int[] digits = encodeBaseN(canonical, I105_BASE);
     final int[] checksum = i105ChecksumDigits(canonical);
     final StringBuilder sb = new StringBuilder();
@@ -923,15 +907,15 @@ public final class AccountAddress {
     if (parsed == null) {
       throw new AccountAddressException(
           AccountAddressErrorCode.MISSING_I105_SENTINEL,
-          "I105 address is missing the expected chain-discriminant sentinel");
+          "i105 address is missing the expected chain-discriminant sentinel");
     }
     if (expectedDiscriminant != null) {
       final int normalizedExpected =
-          normalizeI105Discriminant(expectedDiscriminant.intValue(), "expected I105 discriminant");
+          normalizeI105Discriminant(expectedDiscriminant.intValue(), "expected i105 discriminant");
       if (parsed.discriminant != normalizedExpected) {
         throw new AccountAddressException(
             AccountAddressErrorCode.UNEXPECTED_NETWORK_PREFIX,
-            "unexpected I105 discriminant: expected "
+            "unexpected i105 discriminant: expected "
                 + normalizedExpected
                 + ", found "
                 + parsed.discriminant);
@@ -949,19 +933,19 @@ public final class AccountAddress {
     }
     if (state.sawChecksumMismatch) {
       throw new AccountAddressException(
-          AccountAddressErrorCode.CHECKSUM_MISMATCH, "I105 checksum mismatch");
+          AccountAddressErrorCode.CHECKSUM_MISMATCH, "i105 checksum mismatch");
     }
     if (state.sawTooShort) {
       throw new AccountAddressException(
-          AccountAddressErrorCode.I105_TOO_SHORT, "I105 address is too short");
+          AccountAddressErrorCode.I105_TOO_SHORT, "i105 address is too short");
     }
     if (state.invalidChar != null) {
       throw new AccountAddressException(
           AccountAddressErrorCode.INVALID_I105_CHAR,
-          "invalid I105 alphabet symbol: " + state.invalidChar.charValue());
+          "invalid i105 alphabet symbol: " + state.invalidChar.charValue());
     }
     throw new AccountAddressException(
-        AccountAddressErrorCode.CHECKSUM_MISMATCH, "I105 checksum mismatch");
+        AccountAddressErrorCode.CHECKSUM_MISMATCH, "i105 checksum mismatch");
   }
 
   private static byte[] backtrackI105Payload(
@@ -1093,10 +1077,10 @@ public final class AccountAddress {
     } catch (final NumberFormatException ex) {
       throw new AccountAddressException(
           AccountAddressErrorCode.INVALID_I105_PREFIX,
-          "invalid I105 discriminant sentinel: " + encoded);
+          "invalid i105 discriminant sentinel: " + encoded);
     }
     return new I105SentinelPayload(
-        normalizeI105Discriminant(discriminant, "I105 discriminant"),
+        normalizeI105Discriminant(discriminant, "i105 discriminant"),
         tail.substring(index));
   }
 

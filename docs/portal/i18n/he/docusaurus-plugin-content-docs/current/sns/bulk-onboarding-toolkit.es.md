@@ -245,7 +245,7 @@ corrida de CSV.
   רפרנסים לארכיון של מערכות יחסים ל-CSV. מטא נתונים
   que no sea objeto produce un error de validacion.
 - **בקרים:** celdas en blanco respetan `--default-controllers`. פרופורציון
-  רשימה מפורשת של בקר (לפי דוגמה `i105...;i105...`)
+  רשימה מפורשת של בקר (לפי דוגמה `soraカタカナ...;soraカタカナ...`)
   שחקנים אין בעלים.
 
 Los fallos se reportan con numeros de fila contextuales (por ejemplo

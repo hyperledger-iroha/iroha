@@ -526,6 +526,21 @@ pub(crate) struct ExplorerNftsPage {
 }
 
 #[derive(Clone, Debug, JsonSerialize)]
+pub(crate) struct ExplorerRwaParentDto {
+    pub rwa: String,
+    pub quantity: String,
+}
+
+impl ExplorerRwaParentDto {
+    fn from_parent(parent: &iroha_data_model::rwa::RwaParentRef) -> Self {
+        Self {
+            rwa: parent.rwa().to_string(),
+            quantity: parent.quantity().to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, JsonSerialize)]
 pub(crate) struct ExplorerRwaDto {
     pub id: String,
     pub owned_by: String,
@@ -535,6 +550,7 @@ pub(crate) struct ExplorerRwaDto {
     pub status: Option<String>,
     pub is_frozen: bool,
     pub metadata: Value,
+    pub parents: Vec<ExplorerRwaParentDto>,
 }
 
 impl ExplorerRwaDto {
@@ -549,6 +565,11 @@ impl ExplorerRwaDto {
             status: value.status.as_ref().map(ToString::to_string),
             is_frozen: value.is_frozen,
             metadata: metadata_to_json(&value.metadata),
+            parents: value
+                .parents
+                .iter()
+                .map(ExplorerRwaParentDto::from_parent)
+                .collect(),
         }
     }
 }
@@ -1568,7 +1589,7 @@ mod tests {
         isi::{Register, Transfer},
         metadata::Metadata,
         nft::{NftData, NftId},
-        rwa::{RwaControlPolicy, RwaData, RwaId},
+        rwa::{RwaControlPolicy, RwaData, RwaId, RwaParentRef},
         transaction::{
             error::TransactionRejectionReason,
             signed::{TransactionBuilder, TransactionResultInner},
@@ -2060,6 +2081,12 @@ mod tests {
         )
         .parse()
         .expect("rwa id");
+        let rwa_alpha_parent: RwaId = format!(
+            "{}$wonderland",
+            iroha_crypto::Hash::prehashed([9; iroha_crypto::Hash::LENGTH])
+        )
+        .parse()
+        .expect("rwa parent id");
         let rwa_beta: RwaId = format!(
             "{}$garden_of_live_flowers",
             iroha_crypto::Hash::prehashed([8; iroha_crypto::Hash::LENGTH])
@@ -2073,7 +2100,10 @@ mod tests {
             primary_reference: "https://example.test/rwa/alpha".to_owned(),
             status: Some("vaulted".parse().unwrap()),
             metadata: Metadata::default(),
-            parents: Vec::new(),
+            parents: vec![RwaParentRef::new(
+                rwa_alpha_parent.clone(),
+                "4".parse().unwrap(),
+            )],
             controls: RwaControlPolicy::default(),
             owned_by: ALICE_ID.clone(),
             is_frozen: false,
@@ -2109,6 +2139,12 @@ mod tests {
         );
         assert_eq!(owner_page.items.len(), 1);
         assert_eq!(owner_page.items[0].id, rwa_alpha.to_string());
+        assert_eq!(owner_page.items[0].parents.len(), 1);
+        assert_eq!(
+            owner_page.items[0].parents[0].rwa,
+            rwa_alpha_parent.to_string()
+        );
+        assert_eq!(owner_page.items[0].parents[0].quantity, "4");
 
         let domain_filter = rwa_beta.domain().clone();
         let domain_page = rwas_page(

@@ -226,7 +226,7 @@ La mayoría de las veces se agregan registros reproducibles (por ejemplo, `Regis
 Las puertas de enlace se pueden conectar a `RegistryEventV1` y sincronizar DNS/SoraFS, según:
 
 1. Загрузка последнего `NameRecordV1`, на который указывает последовательность событий.
-2. Plantillas de resolución de archivos (I105 preдпочтительно + comprimido (`sora`) как второй выбор, registros de texto).
+2. Plantillas de resolución de archivos (i105 preдпочтительно + comprimido (`sora`) как второй выбор, registros de texto).
 3. Pin обновленных данных зоны через SoraDNS flow из [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
 
 Garantías de entrega:

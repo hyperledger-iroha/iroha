@@ -13359,7 +13359,7 @@ mod tests {
           "label":"primary",
           "assets":[
             {{
-              "asset_id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+              "asset_id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
               "asset_definition_id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
               "quantity":"500"
             }}
@@ -13388,7 +13388,7 @@ mod tests {
         assert_eq!(dataspace.accounts[0].assets.len(), 1);
         assert_eq!(
             dataspace.accounts[0].assets[0].asset_id,
-            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"
+            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
         );
         assert_eq!(
             dataspace.accounts[0].assets[0].asset_definition_id,
@@ -13422,7 +13422,7 @@ mod tests {
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let client = client_with_base_url(base_url());
         let uaid_hex = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543211";
-        let asset_id = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
+        let asset_id = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
         let payload = format!(
             r#"{{
   "uaid":"uaid:{uaid_hex}",

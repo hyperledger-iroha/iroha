@@ -108,7 +108,7 @@ Reward distributions use `PublicLaneRewardRecord` and `PublicLaneRewardShare`:
   "total_reward": "250.0000",
   "shares": [
     { "account": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ", "role": "Validator", "amount": "150" },
-    { "account": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r", "role": "Nominator", "amount": "100" }
+    { "account": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ", "role": "Nominator", "amount": "100" }
   ],
   "metadata": {
     "telemetry_epoch_root": "0x4afe…",

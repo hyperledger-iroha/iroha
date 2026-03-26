@@ -61,7 +61,7 @@ necessárias, dashboards e caminhos de escalada.
 | Carta + adendos KPI | `docs/source/sns/governance_addenda/` | Cartas assinadas com controle de versão, covenants KPI e decisões de governança referenciadas por votos da CLI. |
 | Esquema de registro | [`registry-schema.md`](./registry-schema.md) | Estruturas Norito canônicas (`NameRecordV1`, `SuffixPolicyV1`, `RevenueAccrualEventV1`). |
 | Contrato do registrador | [`registrar-api.md`](./registrar-api.md) | Payloads REST/gRPC, métricas `sns_registrar_status_total` e expectativas de governança. |
-| Guia UX de enderecos | [`address-display-guidelines.md`](./address-display-guidelines.md) | Renderizações canônicas I105 (preferidas) e comprimidas (segunda melhor opção) refletidas por wallets/explorers. |
+| Guia UX de enderecos | [`address-display-guidelines.md`](./address-display-guidelines.md) | Renderizações canônicas i105 (preferidas) e comprimidas (segunda melhor opção) refletidas por wallets/explorers. |
 | Documentos SoraDNS/GAR | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | Derivação determinística de hosts, fluxo de coleta de transparência e regras de alerta. |
 | Memorandos regulatórios | `docs/source/sns/regulatory/` | Notas de entrada por jurisdição (ex. EU DSA), agradecimentos do administrador, anexos de modelo. |
 | Registro de perfuração | `ops/drill-log.md` | Registro de ensaios de caos e IR exigidos antes das saídas de fase. |
@@ -97,11 +97,11 @@ acima para que os auditores reconstruam o rastro de decisão em 24 horas.
 | Fase | Responsável | Ação e evidência | SLA |
 |------|-------------|------------------|-----|
 | Pedido de congelamento suave | Administrador / suporte | Abrir ticket `SNS-DF-<id>` com provas de pagamento, referência do vínculo de disputa e seletor(es) afetado(s). | <=4h da entrada. |
-| Guardião de ingressos | Conselho guardião | `sns governance freeze --selector <I105> --reason <text> --until <ts>` produz `GuardianFreezeTicketV1`. Armazene o JSON do ticket em `artifacts/sns/guardian/<id>.json`. | <=30 min ACK, <=2 h execucao. |
+| Guardião de ingressos | Conselho guardião | `sns governance freeze --selector <i105> --reason <text> --until <ts>` produz `GuardianFreezeTicketV1`. Armazene o JSON do ticket em `artifacts/sns/guardian/<id>.json`. | <=30 min ACK, <=2 h execucao. |
 | Ratificação do conselho | Conselho de governança | Aprovar ou rejeitar congelamentos, documentar decisão com link ao ticket Guardian e digest do bond de disputa. | Próxima sessão do conselho ou voto assincrono. |
 | Painel de arbitragem | Conformidade + mordomo | Convocar painel de 7 jurados (conforme roadmap) com cedulas hasheadas via `sns governance dispute ballot`. Anexar recibos de voto anonimizados ao pacote de incidente. | Veredito <=7 dias após o depósito do título. |
 | Apelação | Tutor + conselho | Apelações dobram o bond e repetem o processo de jurados; manifesto do registrador Norito `DisputeAppealV1` e referenciar ticket primário. | <=10 dias. |
-| Descongelar e remediar | Registrador + operações de resolução | Executar `sns governance unfreeze --selector <I105> --ticket <id>`, atualizar status do registrador e propagar diffs GAR/resolver. | Ocorreu após o veredito. |
+| Descongelar e remediar | Registrador + operações de resolução | Executar `sns governance unfreeze --selector <i105> --ticket <id>`, atualizar status do registrador e propagar diffs GAR/resolver. | Ocorreu após o veredito. |
 
 Canones de emergencia (congelamentos acionados por Guardian <=72 h) Segue o mesmo
 fluxo, mas desativar revisão retroativa do conselho e uma nota de transparência em

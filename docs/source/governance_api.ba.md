@@ -41,7 +41,7 @@ Endpoints
       "abi_hash": "blake2b32:…" | "…64hex",
       "abi_version": "1",
       "window": { "lower": 12345, "upper": 12400 },
-      "authority": "i105...?",
+      "authority": "soraカタカナ...?",
       "private_key": "…?"
     }
   - Response (JSON):
@@ -98,7 +98,7 @@ Code Size Cap
   - Notes: Re-votes are extend-only — a new ballot cannot reduce the existing lock’s amount or expiry. The `owner` must equal the transaction authority. Minimum duration is `conviction_step_blocks`.
 
 - POST `/v1/gov/finalize`
-  - Request: { "referendum_id": "r1", "proposal_id": "…64hex", "authority": "i105...?", "private_key": "…?" }
+  - Request: { "referendum_id": "r1", "proposal_id": "…64hex", "authority": "soraカタカナ...?", "private_key": "…?" }
   - Response: { "ok": true, "tx_instructions": [{ "wire_id": "…FinalizeReferendum", "payload_hex": "…" }] }
   - On-chain effect (current scaffold): enacting an approved deploy proposal inserts a minimal `ContractManifest` keyed by `code_hash` with the expected `abi_hash` and marks the proposal Enacted. If a manifest already exists for the `code_hash` with a different `abi_hash`, enactment is rejected.
   - Notes:
@@ -107,7 +107,7 @@ Code Size Cap
     - Turnout checks use approve+reject only; abstain does not count toward turnout.
 
 - POST `/v1/gov/enact`
-  - Request: { "proposal_id": "…64hex", "preimage_hash": "…64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "i105...?", "private_key": "…?" }
+  - Request: { "proposal_id": "…64hex", "preimage_hash": "…64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "soraカタカナ...?", "private_key": "…?" }
   - Response: { "ok": true, "tx_instructions": [{ "wire_id": "…EnactReferendum", "payload_hex": "…" }] }
   - Notes: Torii submits the signed transaction when `authority`/`private_key` are provided; otherwise it returns a skeleton for clients to sign and submit. The preimage is optional and currently informational.
 
@@ -165,8 +165,8 @@ GOV_VK_BACKEND=halo2/ipa
 GOV_VK_NAME=ballot_v1
 GOV_VOTING_ASSET_ID=61CtjvNd9T3THAR65GsMVHr82Bjc
 GOV_MIN_BOND_AMOUNT=150
-GOV_BOND_ESCROW_ACCOUNT=i105...
-GOV_SLASH_RECEIVER_ACCOUNT=i105...
+GOV_BOND_ESCROW_ACCOUNT=soraカタカナ...
+GOV_SLASH_RECEIVER_ACCOUNT=soraカタカナ...
 GOV_SLASH_DOUBLE_VOTE_BPS=2500
 GOV_SLASH_INVALID_PROOF_BPS=5000
 GOV_SLASH_INELIGIBLE_PROOF_BPS=1500
@@ -203,8 +203,8 @@ Protected Namespaces
 - Clients must include transaction metadata keys for deploys targeting protected namespaces:
   - `gov_namespace`: the target namespace (e.g., `"apps"`)
   - `gov_contract_id`: the logical contract id within the namespace
-- `gov_manifest_approvers`: optional JSON array of i105... account IDs. When a lane manifest declares a quorum greater than one, admission requires the transaction authority plus the listed accounts to satisfy the manifest quorum.
-- Telemetry exposes holistic admission counters via `governance_manifest_admission_total{result}` so operators can distinguish successful admits from `missing_manifest`, `non_i105..._authority`, `quorum_rejected`, `protected_namespace_rejected`, and `runtime_hook_rejected` paths.
+- `gov_manifest_approvers`: optional JSON array of soraカタカナ... account IDs. When a lane manifest declares a quorum greater than one, admission requires the transaction authority plus the listed accounts to satisfy the manifest quorum.
+- Telemetry exposes holistic admission counters via `governance_manifest_admission_total{result}` so operators can distinguish successful admits from `missing_manifest`, `non_soraカタカナ..._authority`, `quorum_rejected`, `protected_namespace_rejected`, and `runtime_hook_rejected` paths.
 - Telemetry surfaces the enforcement path via `governance_manifest_quorum_total{outcome}` (values `satisfied` / `rejected`) so operators can audit missing approvals.
 - Lanes enforce the namespace allowlist published in their manifests. Any transaction that sets `gov_namespace` must provide `gov_contract_id`, and the namespace must appear in the manifest's `protected_namespaces` set. `RegisterSmartContractCode` submissions without this metadata are rejected when protection is enabled.
 - Admission enforces that an Enacted governance proposal exists for the tuple `(namespace, contract_id, code_hash, abi_hash)`; otherwise validation fails with a NotPermitted error.
@@ -218,7 +218,7 @@ Runtime Upgrade Hooks
   - `allowed_ids` (array of strings): optional allowlist of metadata values (after trimming). Rejects when the provided value is not listed.
 - When the hook is present, queue admission enforces the metadata policy before the transaction enters the queue. Missing metadata, blank values, or values outside the allowlist produce a deterministic `NotPermitted` error.
 - Telemetry tracks enforcement outcomes via `governance_manifest_hook_total{hook="runtime_upgrade", outcome="allowed|rejected"}`.
-- Transactions satisfying the hook must include metadata `gov_upgrade_id=<value>` (or the manifest-defined key) alongside any i105... approvals required by the manifest quorum.
+- Transactions satisfying the hook must include metadata `gov_upgrade_id=<value>` (or the manifest-defined key) alongside any soraカタカナ... approvals required by the manifest quorum.
 
 Convenience Endpoint
 - POST `/v1/gov/protected-namespaces` — applies `gov_protected_namespaces` directly on the node.
@@ -234,15 +234,15 @@ CLI Helpers
     - An enacted governance proposal exists for `(namespace, contract_id, code_hash, abi_hash)` as derived by the same proposal-id hashing the node uses.
   - Outputs a JSON report with `results[]` per contract (issues, manifest/code/proposal summaries) plus a one-line summary unless suppressed (`--no-summary`).
   - Useful for auditing protected namespaces or verifying governance-controlled deploy workflows.
-- `iroha app gov deploy meta --namespace apps --contract-id calc.v1 [--approver i105... --approver i105...]`
+- `iroha app gov deploy meta --namespace apps --contract-id calc.v1 [--approver soraカタカナ... --approver soraカタカナ...]`
   - Emits the JSON metadata skeleton used when submitting deployments into protected namespaces, including optional `gov_manifest_approvers` for satisfying manifest quorum rules.
-- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner i105... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
+- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner soraカタカナ... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
   - Validates canonical Katakana i105 account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
   - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier` is validated against the proof when supplied.
   - The one-line summary now surfaces a deterministic `fingerprint=<hex>` derived from the encoded `CastZkBallot` along with any decoded hints (`owner`, `amount`, `duration_blocks`, `direction` when provided).
   - CLI responses annotate `tx_instructions[]` with `payload_fingerprint_hex` plus decoded fields so downstream tooling can verify the skeleton without reimplementing Norito decoding.
   - When any lock hint is provided, ZK ballots must supply `owner`, `amount`, and `duration_blocks`; partial hints are rejected. When `min_bond_amount > 0`, lock hints are required. Direction remains optional and is treated as a hint only.
-- `iroha app gov vote --mode plain --referendum-id <id> --owner i105... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
+- `iroha app gov vote --mode plain --referendum-id <id> --owner soraカタカナ... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
   - `--owner` accepts canonical Katakana i105 literals; Pass domain context through the surrounding scoped interface when required.
   - Aliases `--lock-amount`/`--lock-duration-blocks` mirror the ZK flag names for scripting parity.
   - Summary output mirrors `vote --mode zk` by including the encoded instruction fingerprint and human-readable ballot fields (`owner`, `amount`, `duration_blocks`, `direction`), providing quick confirmation before signing the skeleton.
@@ -326,7 +326,7 @@ CastZkBallot Verification Path
 
 ### Slashing and Jailing Workflow
 
-Consensus emits Norito-encoded `Evidence` whenever a i105... violates the protocol. Each payload lands in the in-memory `EvidenceStore` and, if unseen, is materialised into the WSV-backed `consensus_evidence` map. Records older than `sumeragi.npos.reconfig.evidence_horizon_blocks` (default `7200` blocks) are rejected so the archive remains bounded, but the rejection is logged for operators. Evidence within the horizon obeys the joint-consensus staging rule (`mode_activation_height requires next_mode to be set in the same block`), the activation delay (`sumeragi.npos.reconfig.activation_lag_blocks`, default `1`), and the slashing delay (`sumeragi.npos.reconfig.slashing_delay_blocks`, default `259200`) so governance can cancel penalties before they apply.
+Consensus emits Norito-encoded `Evidence` whenever a soraカタカナ... violates the protocol. Each payload lands in the in-memory `EvidenceStore` and, if unseen, is materialised into the WSV-backed `consensus_evidence` map. Records older than `sumeragi.npos.reconfig.evidence_horizon_blocks` (default `7200` blocks) are rejected so the archive remains bounded, but the rejection is logged for operators. Evidence within the horizon obeys the joint-consensus staging rule (`mode_activation_height requires next_mode to be set in the same block`), the activation delay (`sumeragi.npos.reconfig.activation_lag_blocks`, default `1`), and the slashing delay (`sumeragi.npos.reconfig.slashing_delay_blocks`, default `259200`) so governance can cancel penalties before they apply.
 
 Recognised offences map one-to-one to `EvidenceKind`; the discriminants are stable and enforced by the data model:
 
@@ -346,7 +346,7 @@ for (expected, kind) in offences.iter().enumerate() {
 }
 ```
 
-- **DoublePrepare/DoubleCommit** — the i105... signed conflicting hashes for the same `(phase,height,view,epoch)` tuple.
+- **DoublePrepare/DoubleCommit** — the soraカタカナ... signed conflicting hashes for the same `(phase,height,view,epoch)` tuple.
 - **InvalidQc** — an aggregator gossiped a commit QC whose shape fails deterministic checks (e.g., empty signer bitmap).
 - **InvalidProposal** — a leader proposed a block that fails structural validation (e.g., breaks the locked-chain rule).
 - **Censorship** — signed submission receipts show a transaction that was never proposed/committed.
@@ -363,12 +363,12 @@ Governance must treat the evidence bytes as canonical proof:
 1. **Collect the payload** before it ages out. Archive the raw Norito bytes alongside height/view metadata.
 2. **Cancel if needed** by submitting `CancelConsensusEvidencePenalty` with the evidence payload before `slashing_delay_blocks` elapses; the record is marked `penalty_cancelled` and `penalty_cancelled_at_height`, and no slashing applies.
 3. **Stage the penalty** by embedding the payload in a referendum or sudo instruction (e.g., `Unregister::peer`). Execution re-validates the payload; malformed nor stale evidence is rejected deterministically.
-4. **Schedule the follow-up topology** so the offending i105... cannot immediately rejoin. Typical flows queue `SetParameter(Sumeragi::NextMode)` and `SetParameter(Sumeragi::ModeActivationHeight)` with the updated roster.
+4. **Schedule the follow-up topology** so the offending soraカタカナ... cannot immediately rejoin. Typical flows queue `SetParameter(Sumeragi::NextMode)` and `SetParameter(Sumeragi::ModeActivationHeight)` with the updated roster.
 5. **Audit results** via `/v1/sumeragi/evidence` and `/v1/sumeragi/status` to ensure the evidence counter advanced and governance enacted the removal.
 
 ### Joint-Consensus Sequencing
 
-Joint consensus guarantees that the outgoing i105... set finalises the boundary block before the new set starts proposing. The runtime enforces the rule via paired parameters:
+Joint consensus guarantees that the outgoing soraカタカナ... set finalises the boundary block before the new set starts proposing. The runtime enforces the rule via paired parameters:
 
 - `SumeragiParameter::NextMode` and `SumeragiParameter::ModeActivationHeight` must be committed in the **same block**. `mode_activation_height` must be strictly greater than the block height that carried the update, providing at least one-block lag.
 - `sumeragi.npos.reconfig.activation_lag_blocks` (default `1`) is the configuration guard that prevents zero-lag hand-offs:
@@ -379,13 +379,13 @@ use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_
 assert_eq!(RECONFIG_ACTIVATION_LAG_BLOCKS, 1);
 ```
 
-- The runtime and CLI expose staged parameters through `/v1/sumeragi/params` and `iroha sumeragi params --summary`, so operators can confirm activation heights and i105... rosters.
+- The runtime and CLI expose staged parameters through `/v1/sumeragi/params` and `iroha sumeragi params --summary`, so operators can confirm activation heights and soraカタカナ... rosters.
 - Governance automation should always:
   1. Finalise the evidence-backed removal (or reinstatement) decision.
   2. Queue a follow-up reconfiguration with `mode_activation_height = h_current + activation_lag_blocks`.
   3. Monitor `/v1/sumeragi/status` until `effective_consensus_mode` flips at the expected height.
 
-Any script that rotates i105...s or applies slashing **must not** attempt zero-lag activation or omit the hand-off parameters; such transactions are rejected and leave the network in the previous mode.
+Any script that rotates soraカタカナ...s or applies slashing **must not** attempt zero-lag activation or omit the hand-off parameters; such transactions are rejected and leave the network in the previous mode.
 
 ## Telemetry surfaces
 

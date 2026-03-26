@@ -234,7 +234,7 @@ Existem tuplas seriais Norito para determinar o valor da configuração. Os índ
 Os gateways são enviados para `RegistryEventV1` e sincronizados DNS/SoraFS, por exemplo:
 
 1. Verifique o `NameRecordV1` para que você possa usar o produto.
-2. Modelos de resolução de configuração (I105 предпочтительно + compactado (`sora`) как второй выбор, registros de texto).
+2. Modelos de resolução de configuração (i105 предпочтительно + compactado (`sora`) как второй выбор, registros de texto).
 3. Fixe o fluxo de trabalho SoraDNS em [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
 
 Garantia de envio:

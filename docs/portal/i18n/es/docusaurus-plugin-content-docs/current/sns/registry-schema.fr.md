@@ -225,7 +225,7 @@ Todas las claves se serializan a través de las tuplas Norito para guardar un ha
 Las puertas de enlace se conectan a `RegistryEventV1` y sincronizan DNS/SoraFS a través de:
 
 1. Recuperar la última referencia `NameRecordV1` por la secuencia de acontecimientos.
-2. Regenerar las plantillas de resolución (direcciones preferidas de I105 + comprimido (`sora`) en segunda opción, registros de texto).
+2. Regenerar las plantillas de resolución (direcciones preferidas de i105 + comprimido (`sora`) en segunda opción, registros de texto).
 3. Inserte los donnees de zona perdidos un día a través del flujo de trabajo SoraDNS escrito en [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
 
 Garantías de vida de eventos:

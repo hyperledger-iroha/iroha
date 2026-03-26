@@ -11,7 +11,6 @@ import {
   AccountAddressError,
   AccountAddressErrorCode,
   canonicalizeDomainLabel,
-  DEFAULT_DOMAIN_NAME,
   decodeI105AccountAddress,
   encodeI105AccountAddress,
   inspectAccountId,
@@ -110,9 +109,7 @@ test("configureCurveSupport validates options and gating toggles", () => {
 
     assert.throws(
       () =>
-        AccountAddress.fromAccount({
-          domain: DEFAULT_DOMAIN_NAME,
-          publicKey: DEFAULT_PUBLIC_KEY,
+        AccountAddress.fromAccount({ publicKey: DEFAULT_PUBLIC_KEY,
           algorithm: "ml-dsa",
         }),
       (error) =>
@@ -122,16 +119,13 @@ test("configureCurveSupport validates options and gating toggles", () => {
 
     configureCurveSupport({ allowMlDsa: true });
     const mlDsaAddress = AccountAddress.fromAccount({
-      domain: DEFAULT_DOMAIN_NAME,
       publicKey: DEFAULT_PUBLIC_KEY,
       algorithm: "ml-dsa",
     });
-    assert.equal(mlDsaAddress.domainSummary().kind, "default");
+    assert.ok(mlDsaAddress.toI105().startsWith("sora"));
     assert.throws(
       () =>
-        AccountAddress.fromAccount({
-          domain: DEFAULT_DOMAIN_NAME,
-          publicKey: DEFAULT_PUBLIC_KEY,
+        AccountAddress.fromAccount({ publicKey: DEFAULT_PUBLIC_KEY,
           algorithm: "gost512a",
         }),
       (error) =>
@@ -183,9 +177,7 @@ test("multisig policies enforce core validation rules", () => {
 });
 
 test("account address golden vectors round-trip", () => {
-  const address = AccountAddress.fromAccount({
-    domain: "default",
-    publicKey: DEFAULT_PUBLIC_KEY,
+  const address = AccountAddress.fromAccount({ publicKey: DEFAULT_PUBLIC_KEY,
   });
 
   const canonical = address.canonicalHex();
@@ -208,9 +200,7 @@ test("account address golden vectors round-trip", () => {
 });
 
 test("decodeI105AccountAddress accepts live canonical Katakana i105 literals", () => {
-  const address = AccountAddress.fromAccount({
-    domain: "default",
-    publicKey: DEFAULT_PUBLIC_KEY,
+  const address = AccountAddress.fromAccount({ publicKey: DEFAULT_PUBLIC_KEY,
   });
   const decoded = decodeI105AccountAddress(DEFAULT_PUBLIC_KEY_I105, {
     expectDiscriminant: 753,
@@ -221,9 +211,7 @@ test("decodeI105AccountAddress accepts live canonical Katakana i105 literals", (
 });
 
 test("ambiguous canonical Katakana i105 literals round-trip to the original ed25519 payload", () => {
-  const address = AccountAddress.fromAccount({
-    domain: "default",
-    publicKey: AMBIGUOUS_ED25519_PUBLIC_KEY,
+  const address = AccountAddress.fromAccount({ publicKey: AMBIGUOUS_ED25519_PUBLIC_KEY,
   });
   assert.equal(address.canonicalHex(), "0x02000120bc717326224e4b4119298e7b1db8133cb27d6cdf6b3e04d75a6d27b29a34c1cf");
   assert.equal(address.toI105(), AMBIGUOUS_ED25519_I105);
@@ -254,9 +242,7 @@ test("parseEncoded rejects fullwidth-sentinel i105 literals", () => {
 });
 
 test("account address rejects extension flag", () => {
-  const address = AccountAddress.fromAccount({
-    domain: "default",
-    publicKey: DEFAULT_PUBLIC_KEY,
+  const address = AccountAddress.fromAccount({ publicKey: DEFAULT_PUBLIC_KEY,
   });
   const bytes = Uint8Array.from(address.canonicalBytes());
   bytes[0] |= 0x01;
@@ -271,9 +257,7 @@ test("account address rejects extension flag", () => {
 });
 
 test("selector-prefixed noncanonical payloads are rejected", () => {
-  const selectorFree = AccountAddress.fromAccount({
-    domain: DEFAULT_DOMAIN_NAME,
-    publicKey: DEFAULT_PUBLIC_KEY,
+  const selectorFree = AccountAddress.fromAccount({ publicKey: DEFAULT_PUBLIC_KEY,
   });
   const baseCanonical = Array.from(selectorFree.canonicalBytes());
   const prefixedLocal = [baseCanonical[0], 0x01];
@@ -320,9 +304,7 @@ test("parseEncoded rejects non-string address literals", () => {
 });
 
 test("parseEncoded rejects canonical hex literals", () => {
-  const address = AccountAddress.fromAccount({
-    domain: DEFAULT_DOMAIN_NAME,
-    publicKey: DEFAULT_PUBLIC_KEY,
+  const address = AccountAddress.fromAccount({ publicKey: DEFAULT_PUBLIC_KEY,
   });
   const canonical = address.canonicalHex();
   const rawHex = canonical.replace(/^0x/i, "");
@@ -336,85 +318,33 @@ test("parseEncoded rejects canonical hex literals", () => {
   }
 });
 
-test("parseEncoded validates expected domain input type", () => {
+test("displayFormats exposes immutable i105 UI hints", () => {
   const address = AccountAddress.fromAccount({
-    domain: DEFAULT_DOMAIN_NAME,
     publicKey: DEFAULT_PUBLIC_KEY,
   });
-  const i105 = address.toI105();
-
-  assert.throws(
-    () => AccountAddress.parseEncoded(i105, undefined, 99),
-    (error) =>
-      error instanceof TypeError &&
-      /expected domain name must be a string/.test(error.message),
-  );
-});
-
-test("displayFormats exposes domain summary for UI hints", () => {
-  const defaultAddress = AccountAddress.fromAccount({
-    domain: DEFAULT_DOMAIN_NAME,
-    publicKey: DEFAULT_PUBLIC_KEY,
-  });
-  const defaultFormats = defaultAddress.displayFormats();
-  assert.equal(defaultFormats.chainDiscriminant, 753);
-  assert.equal(defaultFormats.domainSummary.kind, "default");
-  assert.equal(defaultFormats.domainSummary.warning, null);
-  assert.deepEqual(defaultFormats.domainSummary.selector, {
-    tag: 0,
-    digestHex: null,
-    registryId: null,
-    label: DEFAULT_DOMAIN_NAME,
-  });
-
-  const nonDefaultAddress = AccountAddress.fromAccount({
-    domain: "wonderland",
-    publicKey: ALT_PUBLIC_KEY,
-  });
-  const nonDefaultFormats = nonDefaultAddress.displayFormats();
-  assert.equal(nonDefaultFormats.domainSummary.kind, "default");
-  assert.equal(nonDefaultFormats.domainSummary.warning, null);
-  assert.deepEqual(nonDefaultFormats.domainSummary.selector, {
-    tag: 0,
-    digestHex: null,
-    registryId: null,
-    label: DEFAULT_DOMAIN_NAME,
-  });
+  const formats = address.displayFormats();
+  assert.equal(formats.chainDiscriminant, 753);
+  assert.equal(formats.i105, address.toI105(753));
+  assert.equal(formats.i105Warning.length > 0, true);
   assert.throws(
     () => {
-      nonDefaultFormats.domainSummary.kind = "mutated";
+      formats.i105 = "mutated";
     },
     TypeError,
   );
 });
 
-test("fromAccount enforces domain normalization rules", () => {
-  const unicodeDomain = "Exämple";
-  const address = AccountAddress.fromAccount({
-    domain: unicodeDomain,
-    publicKey: ALT_PUBLIC_KEY,
-  });
-  const i105 = address.toI105();
-  const { address: parsed } = AccountAddress.parseEncoded(i105, undefined, unicodeDomain);
-  assert.deepEqual(Buffer.from(parsed.canonicalBytes()), Buffer.from(address.canonicalBytes()));
-
-  const expectedDomain = "xn--exmple-cua";
-  const parsedAscii = AccountAddress.parseEncoded(i105, undefined, expectedDomain);
-  assert.deepEqual(
-    Buffer.from(parsedAscii.address.canonicalBytes()),
-    Buffer.from(address.canonicalBytes()),
-  );
-
-  for (const invalid of [" space domain", "bad@domain", "under_score"]) {
+test("fromAccount rejects legacy domain and registryId options", () => {
+  for (const legacyOptions of [
+    { domain: "default", publicKey: DEFAULT_PUBLIC_KEY },
+    { domain: "wonderland", publicKey: DEFAULT_PUBLIC_KEY },
+    { registryId: 1, publicKey: DEFAULT_PUBLIC_KEY },
+  ]) {
     assert.throws(
-      () =>
-        AccountAddress.fromAccount({
-          domain: invalid,
-          publicKey: DEFAULT_PUBLIC_KEY,
-        }),
+      () => AccountAddress.fromAccount(legacyOptions),
       (error) =>
-        error instanceof AccountAddressError &&
-        error.code === AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
+        error instanceof TypeError &&
+        /unsupported fields/.test(error.message),
     );
   }
 });
@@ -433,50 +363,28 @@ test("canonicalizeDomainLabel enforces STD3 hyphen rules while allowing punycode
   }
 });
 
-test("fromAccount accepts dotted domain ids without changing canonical payloads", () => {
-  const dotted = AccountAddress.fromAccount({
-    domain: "hbl.sbp",
-    publicKey: DEFAULT_PUBLIC_KEY,
-  });
-  const single = AccountAddress.fromAccount({
-    domain: "hbl",
-    publicKey: DEFAULT_PUBLIC_KEY,
-  });
-
-  assert.deepEqual(Buffer.from(dotted.canonicalBytes()), Buffer.from(single.canonicalBytes()));
-  assert.equal(dotted.toI105(), single.toI105());
-});
-
 test("fromAccount accepts buffer sources and rejects invalid hex strings", () => {
-  const base = AccountAddress.fromAccount({
-    domain: DEFAULT_DOMAIN_NAME,
-    publicKey: DEFAULT_PUBLIC_KEY,
+  const base = AccountAddress.fromAccount({ publicKey: DEFAULT_PUBLIC_KEY,
   });
   const arrayBuffer = DEFAULT_PUBLIC_KEY.buffer.slice(
     DEFAULT_PUBLIC_KEY.byteOffset,
     DEFAULT_PUBLIC_KEY.byteOffset + DEFAULT_PUBLIC_KEY.byteLength,
   );
-  const asArrayBuffer = AccountAddress.fromAccount({
-    domain: DEFAULT_DOMAIN_NAME,
-    publicKey: arrayBuffer,
+  const asArrayBuffer = AccountAddress.fromAccount({ publicKey: arrayBuffer,
   });
   assert.deepEqual(
     Buffer.from(asArrayBuffer.canonicalBytes()),
     Buffer.from(base.canonicalBytes()),
   );
   const dataView = new DataView(arrayBuffer);
-  const asDataView = AccountAddress.fromAccount({
-    domain: DEFAULT_DOMAIN_NAME,
-    publicKey: dataView,
+  const asDataView = AccountAddress.fromAccount({ publicKey: dataView,
   });
   assert.deepEqual(Buffer.from(asDataView.canonicalBytes()), Buffer.from(base.canonicalBytes()));
 
   for (const invalid of ["abc", "zz", "0x123g"]) {
     assert.throws(
       () =>
-        AccountAddress.fromAccount({
-          domain: DEFAULT_DOMAIN_NAME,
-          publicKey: invalid,
+        AccountAddress.fromAccount({ publicKey: invalid,
         }),
       (error) => error instanceof TypeError && /hex string inputs/.test(error.message),
     );
@@ -489,9 +397,7 @@ test("fromAccount rejects numeric arrays with out-of-range bytes", () => {
     mutator(bytes);
     assert.throws(
       () =>
-        AccountAddress.fromAccount({
-          domain: DEFAULT_DOMAIN_NAME,
-          publicKey: bytes,
+        AccountAddress.fromAccount({ publicKey: bytes,
         }),
       (error) =>
         error instanceof TypeError &&
@@ -518,9 +424,7 @@ test("fromAccount rejects numeric arrays with out-of-range bytes", () => {
 });
 
 test("displayFormats validates chain discriminant input", () => {
-  const address = AccountAddress.fromAccount({
-    domain: "default",
-    publicKey: DEFAULT_PUBLIC_KEY,
+  const address = AccountAddress.fromAccount({ publicKey: DEFAULT_PUBLIC_KEY,
   });
   const coerced = address.displayFormats("753");
   assert.equal(coerced.chainDiscriminant, 753);
@@ -540,61 +444,12 @@ test("displayFormats validates chain discriminant input", () => {
   );
 });
 
-test("fromAccount accepts registryId but keeps selector-free canonical payloads", () => {
-  const byRegistry = AccountAddress.fromAccount({
-    registryId: 42,
-    publicKey: ALT_PUBLIC_KEY,
-  });
-  const byDomain = AccountAddress.fromAccount({
-    domain: DEFAULT_DOMAIN_NAME,
-    publicKey: ALT_PUBLIC_KEY,
-  });
-  assert.equal(byRegistry.canonicalHex().toLowerCase(), byDomain.canonicalHex().toLowerCase());
-  assert.equal(byRegistry.toI105(), byDomain.toI105());
-
-  const formats = byRegistry.displayFormats(753);
-  assert.equal(formats.domainSummary.kind, "default");
-  assert.equal(formats.domainSummary.warning, null);
-  assert.deepEqual(formats.domainSummary.selector, {
-    tag: 0,
-    digestHex: null,
-    registryId: null,
-    label: DEFAULT_DOMAIN_NAME,
-  });
-});
-
-test("fromAccount validates registryId inputs", () => {
-  for (const value of [-1, 2 ** 32, Number.NaN, 1.5, "", "  "]) {
-    assert.throws(
-      () =>
-        AccountAddress.fromAccount({
-          registryId: value,
-          publicKey: DEFAULT_PUBLIC_KEY,
-        }),
-      (error) =>
-        error instanceof AccountAddressError &&
-        error.code === AccountAddressErrorCode.INVALID_REGISTRY_ID,
-    );
-  }
-  assert.throws(
-    () =>
-      AccountAddress.fromAccount({
-        domain: "default",
-        registryId: 1,
-        publicKey: DEFAULT_PUBLIC_KEY,
-      }),
-    (error) => error instanceof TypeError && error.message.includes("domain or registryId"),
-  );
-});
-
 test("configureCurveSupport gates optional curves at encode/decode time", () => {
   configureCurveSupport();
   try {
     assert.throws(
       () =>
-        AccountAddress.fromAccount({
-          domain: "default",
-          publicKey: GOST256_PUBLIC_KEY,
+        AccountAddress.fromAccount({ publicKey: GOST256_PUBLIC_KEY,
           algorithm: "gost256a",
         }),
       (error) =>
@@ -603,9 +458,7 @@ test("configureCurveSupport gates optional curves at encode/decode time", () => 
     );
 
     configureCurveSupport({ allowGost: true });
-    const gostAddress = AccountAddress.fromAccount({
-      domain: "default",
-      publicKey: GOST256_PUBLIC_KEY,
+    const gostAddress = AccountAddress.fromAccount({ publicKey: GOST256_PUBLIC_KEY,
       algorithm: "gost256a",
     });
     const gostI105 = gostAddress.toI105();
@@ -625,9 +478,7 @@ test("configureCurveSupport gates optional curves at encode/decode time", () => 
 
     assert.throws(
       () =>
-        AccountAddress.fromAccount({
-          domain: "default",
-          publicKey: SM2_PUBLIC_KEY,
+        AccountAddress.fromAccount({ publicKey: SM2_PUBLIC_KEY,
           algorithm: "sm2",
         }),
       (error) =>
@@ -636,9 +487,7 @@ test("configureCurveSupport gates optional curves at encode/decode time", () => 
     );
 
     configureCurveSupport({ allowSm2: true });
-    const sm2Address = AccountAddress.fromAccount({
-      domain: "default",
-      publicKey: SM2_PUBLIC_KEY,
+    const sm2Address = AccountAddress.fromAccount({ publicKey: SM2_PUBLIC_KEY,
       algorithm: "sm2",
     });
     const sm2I105 = sm2Address.toI105();
@@ -661,9 +510,7 @@ test("configureCurveSupport gates optional curves at encode/decode time", () => 
 });
 
 test("i105 helper exports mirror instance methods", () => {
-  const address = AccountAddress.fromAccount({
-    domain: "default",
-    publicKey: ALT_PUBLIC_KEY,
+  const address = AccountAddress.fromAccount({ publicKey: ALT_PUBLIC_KEY,
   });
   const canonicalBytes = address.canonicalBytes();
   const encoded = encodeI105AccountAddress(canonicalBytes);
@@ -681,15 +528,13 @@ test("decodeI105AccountAddress enforces string input", () => {
       () => decodeI105AccountAddress(value),
       (error) =>
         error instanceof TypeError &&
-        /I105 address must be a string/.test(error.message),
+        /i105 address must be a string/.test(error.message),
     );
   }
 });
 
 test("encodeI105AccountAddress rejects invalid options", () => {
-  const address = AccountAddress.fromAccount({
-    domain: "default",
-    publicKey: DEFAULT_PUBLIC_KEY,
+  const address = AccountAddress.fromAccount({ publicKey: DEFAULT_PUBLIC_KEY,
   });
   const canonicalBytes = address.canonicalBytes();
   for (const value of [null, [], "full"]) {
@@ -708,9 +553,7 @@ test("encodeI105AccountAddress rejects invalid options", () => {
 });
 
 test("i105 prefix mismatch raises", () => {
-  const address = AccountAddress.fromAccount({
-    domain: "default",
-    publicKey: new Uint8Array(32).fill(1),
+  const address = AccountAddress.fromAccount({ publicKey: new Uint8Array(32).fill(1),
   });
   const i105 = address.toI105(5);
   assert.throws(
@@ -724,9 +567,7 @@ test("i105 prefix mismatch raises", () => {
 });
 
 test("toI105 enforces prefix bounds and type", () => {
-  const address = AccountAddress.fromAccount({
-    domain: "default",
-    publicKey: ALT_PUBLIC_KEY,
+  const address = AccountAddress.fromAccount({ publicKey: ALT_PUBLIC_KEY,
   });
   for (const value of [-1, 0x1_0000, ""]) {
     assert.throws(
@@ -742,7 +583,7 @@ test("toI105 enforces prefix bounds and type", () => {
   );
 });
 
-test("i105 format rejects characters outside the I105 alphabet", () => {
+test("i105 format rejects characters outside the i105 alphabet", () => {
   assert.throws(
     () => AccountAddress.fromI105(INVALID_I105_CHAR_LITERAL),
     (error) =>
@@ -751,7 +592,7 @@ test("i105 format rejects characters outside the I105 alphabet", () => {
   );
 });
 
-test("native codec propagates I105 errors", () => {
+test("native codec propagates i105 errors", () => {
   assert.throws(
     () => AccountAddress.fromI105(INVALID_I105_CHAR_LITERAL),
     (error) => {
@@ -773,9 +614,7 @@ test("parseEncoded rejects malformed i105 literals", () => {
 });
 
 test("inspectAccountId enforces option shape", () => {
-  const address = AccountAddress.fromAccount({
-    domain: "default",
-    publicKey: ALT_PUBLIC_KEY,
+  const address = AccountAddress.fromAccount({ publicKey: ALT_PUBLIC_KEY,
   });
   const literal = address.toI105();
   for (const options of [null, [], "prefix"]) {
@@ -793,7 +632,6 @@ test("inspectAccountId enforces option shape", () => {
   const inspected = inspectAccountId(literal, { expectDiscriminant: 753, chainDiscriminant: 753 });
   assert.equal(inspected.detectedFormat.kind, "i105");
   assert.equal(inspected.i105.chainDiscriminant, 753);
-  assert.equal(inspected.domain.kind, "default");
   assert.throws(
     () => inspectAccountId(literal, { chainDiscriminant: "bad" }),
     (error) =>
@@ -803,9 +641,7 @@ test("inspectAccountId enforces option shape", () => {
 });
 
 test("inspectAccountId rejects invalid expectDiscriminant values", () => {
-  const address = AccountAddress.fromAccount({
-    domain: "default",
-    publicKey: ALT_PUBLIC_KEY,
+  const address = AccountAddress.fromAccount({ publicKey: ALT_PUBLIC_KEY,
   });
   const literal = address.toI105();
   for (const value of ["abc", [], {}, -1, 0x1_0000]) {
@@ -820,10 +656,8 @@ test("inspectAccountId rejects invalid expectDiscriminant values", () => {
   assert.equal(inspected.detectedFormat.chainDiscriminant, 753);
 });
 
-test("inspectAccountId preserves detected I105 prefix when rendering outputs", () => {
-  const address = AccountAddress.fromAccount({
-    domain: "default",
-    publicKey: ALT_PUBLIC_KEY,
+test("inspectAccountId preserves detected i105 prefix when rendering outputs", () => {
+  const address = AccountAddress.fromAccount({ publicKey: ALT_PUBLIC_KEY,
   });
   const literal = address.toI105(7);
   const summary = inspectAccountId(literal);
@@ -838,9 +672,7 @@ test("inspectAccountId preserves detected I105 prefix when rendering outputs", (
 });
 
 test("fromI105 normalizes expectedPrefix inputs", () => {
-  const address = AccountAddress.fromAccount({
-    domain: "default",
-    publicKey: ALT_PUBLIC_KEY,
+  const address = AccountAddress.fromAccount({ publicKey: ALT_PUBLIC_KEY,
   });
   const i105 = address.toI105(8);
 
@@ -892,11 +724,11 @@ test("account address compliance vectors", () => {
       `${caseId}: canonical fixture mismatch`,
     );
 
-    // I105 round-trip
+    // i105 round-trip
     assert.deepEqual(
       Buffer.from(canonical.canonicalBytes()),
       canonicalBytes,
-      `${caseId}: I105 canonical mismatch`,
+      `${caseId}: i105 canonical mismatch`,
     );
     const { address: parsedI105 } = AccountAddress.parseEncoded(
       fixtureI105Literal,
@@ -905,7 +737,7 @@ test("account address compliance vectors", () => {
     assert.deepEqual(
       Buffer.from(parsedI105.canonicalBytes()),
       canonicalBytes,
-      `${caseId}: I105 parse canonical mismatch`,
+      `${caseId}: i105 parse canonical mismatch`,
     );
 
     const decoded = AccountAddress.fromI105(fixtureI105Literal);
@@ -925,7 +757,7 @@ test("account address compliance vectors", () => {
     assert.equal(
       canonical.toI105(i105Vector.prefix),
       fixtureI105Literal,
-      `${caseId}: I105 re-encode mismatch`,
+      `${caseId}: i105 re-encode mismatch`,
     );
     assert.equal(
       canonical.toI105(),

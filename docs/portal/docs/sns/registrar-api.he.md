@@ -117,7 +117,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/policies/{suffix_id}` | GET | -- | מביא את `SuffixPolicyV1` הנוכחי (ניתן לקאש). |
 | `/v1/sns/names/{namespace}/{literal}` | GET | -- | מחזיר את `NameRecordV1` הנוכחי + מצב אפקטיבי (Active, Grace, וכו'). |
 
-**קידוד selector:** מקטע הנתיב `{selector}` מקבל I105, דחוס, או hex קנוני לפי ADDR-5; Torii מנרמל אותו דרך `NameSelectorV1`.
+**קידוד selector:** מקטע הנתיב `{selector}` מקבל i105, דחוס, או hex קנוני לפי ADDR-5; Torii מנרמל אותו דרך `NameSelectorV1`.
 
 **מודל שגיאות:** כל נקודות הקצה מחזירות Norito JSON עם `code`, `message`, `details`. הקודים כוללים `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
 
@@ -225,7 +225,7 @@ Torii מאמת הוכחות על ידי בדיקה:
 
 1. הלקוח שואל `/v1/sns/policies/{suffix_id}` כדי לקבל מחירים, grace ו-tiers זמינים.
 2. הלקוח בונה `RegisterNameRequestV1`:
-   - `selector` נגזר מתווית I105 (מועדף) או דחוסה (אפשרות שנייה).
+   - `selector` נגזר מתווית i105 (מועדף) או דחוסה (אפשרות שנייה).
    - `term_years` בתוך גבולות המדיניות.
    - `payment` שמפנה להעברת splitter של אוצרות/steward.
 3. Torii מאמת:

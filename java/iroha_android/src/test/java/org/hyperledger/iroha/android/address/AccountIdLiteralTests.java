@@ -39,7 +39,7 @@ public final class AccountIdLiteralTests {
     final AccountAddress address = AccountAddress.fromAccount(publicKey, "ed25519");
     try {
       AccountIdLiteral.requireCanonicalI105Address(
-          "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9", "accountId");
+          "soraブショヘナマラワコジヨスソキョガハワルマェギユフダニョデエヨミガシュシャミグチョォピゲエュシュェショチォワニブピチュチョジロネリヰプユヱョケルオサハワニュプパザヒュカシュゼホゲハポヂコペメニュヂヷシュズビチュニャナコゼヒョクヸロスムァダヒョナジブサヒャォケドォヂノチャネキャワウショデベニャヰスィゼレノタチャラタキャチメヮヘミオンルヒテネウアカ", "accountId");
       throw new AssertionError("expected legacy non-i105 literal to be rejected");
     } catch (final IllegalArgumentException expected) {
       assert expected.getMessage().contains("canonical Katakana i105")

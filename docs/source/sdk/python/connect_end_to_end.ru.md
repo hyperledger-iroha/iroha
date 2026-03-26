@@ -407,7 +407,7 @@ time samples alongside the Connect evidence.
 
 Roadmap item **ADDR-6b** calls for parity across SDKs when surfacing the new
 `/v1/explorer/accounts/{account_id}/qr` endpoint. Python now ships the typed
-`ExplorerAccountQrSnapshot` DTO so wallets/tools can fetch the preferred I105 or
+`ExplorerAccountQrSnapshot` DTO so wallets/tools can fetch the preferred i105 or
 canonical Katakana i105 literal plus the ready-to-embed SVG payload:
 
 ```python

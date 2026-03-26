@@ -5,9 +5,9 @@ package org.hyperledger.iroha.android.model.instructions;
 
 import java.util.Arrays;
 import org.hyperledger.iroha.android.address.AccountAddress;
-import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.testing.TestAccountIds;
+import org.hyperledger.iroha.android.testing.TestAssetDefinitionIds;
 
 public final class TransferWirePayloadEncoderTests {
 
@@ -29,7 +29,7 @@ public final class TransferWirePayloadEncoderTests {
   }
 
   private static void encodeAssetTransferAcceptsCanonicalAssetId() {
-    final String definitionAddress = AssetDefinitionIdEncoder.encode("rose", "wonderland");
+    final String definitionAddress = TestAssetDefinitionIds.PRIMARY;
     final InstructionBox box =
         TransferWirePayloadEncoder.encodeAssetTransfer(
             definitionAddress + "#" + ACCOUNT_ID, "10", ACCOUNT_ID);
@@ -38,7 +38,7 @@ public final class TransferWirePayloadEncoderTests {
   }
 
   private static void encodeAssetTransferAcceptsDataspaceScopedAssetId() {
-    final String definitionAddress = AssetDefinitionIdEncoder.encode("rose", "wonderland");
+    final String definitionAddress = TestAssetDefinitionIds.PRIMARY;
     final InstructionBox box =
         TransferWirePayloadEncoder.encodeAssetTransfer(
             definitionAddress + "#" + ACCOUNT_ID + "#dataspace:42", "10", ACCOUNT_ID);
@@ -57,7 +57,7 @@ public final class TransferWirePayloadEncoderTests {
                 AccountAddress.MultisigMemberPayload.of(1, 1, filledKey((byte) 0x22))));
     final String multisigAccountId =
         AccountAddress.fromMultisigPolicy(policy).toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
-    final String definitionAddress = AssetDefinitionIdEncoder.encode("rose", "wonderland");
+    final String definitionAddress = TestAssetDefinitionIds.PRIMARY;
 
     final InstructionBox box =
         TransferWirePayloadEncoder.encodeAssetTransfer(
@@ -74,7 +74,7 @@ public final class TransferWirePayloadEncoderTests {
     } catch (final IllegalArgumentException ex) {
       threw =
           ex.getMessage() != null
-              && ex.getMessage().contains("<asset-definition-address>#<account-id>");
+              && ex.getMessage().contains("<base58-asset-definition-id>#<katakana-i105-account-id>");
     }
 
     assert threw : "malformed asset ids must be rejected";
@@ -88,14 +88,14 @@ public final class TransferWirePayloadEncoderTests {
     } catch (final IllegalArgumentException ex) {
       threw =
           ex.getMessage() != null
-              && ex.getMessage().contains("<asset-definition-address>#<account-id>");
+              && ex.getMessage().contains("<base58-asset-definition-id>#<katakana-i105-account-id>");
     }
 
     assert threw : "legacy name/domain asset ids must be rejected";
   }
 
   private static void encodeAssetTransferRejectsMalformedScopeSuffix() {
-    final String definitionAddress = AssetDefinitionIdEncoder.encode("rose", "wonderland");
+    final String definitionAddress = TestAssetDefinitionIds.PRIMARY;
     boolean threw = false;
     try {
       TransferWirePayloadEncoder.encodeAssetTransfer(
@@ -137,7 +137,7 @@ public final class TransferWirePayloadEncoderTests {
       final byte keyFill)
       throws Exception {
     final byte[] key = filledKey(keyFill);
-    final String definitionAddress = AssetDefinitionIdEncoder.encode("rose", "wonderland");
+    final String definitionAddress = TestAssetDefinitionIds.PRIMARY;
     final String i105AccountId;
 
     AccountAddress.configureCurveSupport(curveSupport);

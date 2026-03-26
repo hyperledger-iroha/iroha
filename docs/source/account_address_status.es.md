@@ -1,28 +1,19 @@
----
-lang: es
-direction: ltr
-source: docs/source/account_address_status.md
-status: complete
-generator: scripts/sync_docs_i18n.py
-source_hash: 9c1214f4d0ad86449c0ef4b8f8cbaa38fe265bab4afcc2930cd30a57c089e6d7
-source_last_modified: "2025-11-15T05:05:33.914289+00:00"
-translation_last_reviewed: 2026-01-01
----
+## Account Address Compliance Status (ADDR-2)
 
-## Estado de cumplimiento de direccion de cuenta (ADDR-2)
+Status: Accepted 2026-03-30  
+Owners: Data Model Team / QA Guild  
+Roadmap reference: ADDR-2 — Canonical Katakana i105 Compliance Suite
 
-Estado: Aceptado 2026-03-30  
-Propietarios: Equipo de modelo de datos / Gremio de QA  
-Referencia de roadmap: ADDR-2 - Dual-Format Compliance Suite
+### 1. Overview
 
-### 1. Resumen
-
-- Fixture: `fixtures/account/address_vectors.json` (I105 + multisig casos positivos/negativos).
-- Alcance: payloads V1 deterministas que cubren implicit-default, Local-12, Global registry y controladores multisig con taxonomia completa de errores.
-- Distribucion: compartido entre Rust data-model, Torii, SDKs JS/TS, Swift y Android; CI falla si algun consumidor se desvia.
-- Fuente de verdad: el generador vive en `crates/iroha_data_model/src/account/address/compliance_vectors.rs` y se expone via `cargo xtask address-vectors`.
-
-### 2. Regeneracion y verificacion
+- Fixture: `fixtures/account/address_vectors.json` (canonical Katakana i105 +
+  multisig positive/negative cases).
+- Scope: deterministic V1 payloads covering canonical account-id rendering,
+  multisig controllers, and explicit rejection of non-canonical account-id
+  forms.
+- Distribution: shared across Rust data-model, Torii, JS/TS, Swift, and Android SDKs; CI fails if any consumer deviates.
+- Source of truth: the generator lives in `crates/iroha_data_model/src/account/address/compliance_vectors.rs` and is exposed via `cargo xtask address-vectors`.
+### 2. Regeneration & Verification
 
 ```bash
 # Write/update the canonical fixture
@@ -32,29 +23,31 @@ cargo xtask address-vectors --out fixtures/account/address_vectors.json
 cargo xtask address-vectors --verify
 ```
 
-Opciones:
+Flags:
 
-- `--out <path>` - anulacion opcional al producir bundles ad hoc (por defecto `fixtures/account/address_vectors.json`).
-- `--stdout` - emite JSON a stdout en lugar de escribir a disco.
-- `--verify` - compara el archivo actual con el contenido recien generado (falla rapido ante drift; no se puede combinar con `--stdout`).
+- `--out <path>` — optional override when producing ad-hoc bundles (defaults to `fixtures/account/address_vectors.json`).
+- `--stdout` — emit JSON to stdout instead of writing to disk.
+- `--verify` — compare the current file against freshly generated content (fails fast on drift; cannot be used with `--stdout`).
 
-### 3. Matriz de artefactos
+### 3. Artefact Matrix
 
-| Superficie | Aplicacion | Notas |
+| Surface | Enforcement | Notes |
 |---------|-------------|-------|
-| Rust data-model | `crates/iroha_data_model/tests/account_address_vectors.rs` | Analiza el JSON, reconstruye payloads canonicos y comprueba conversiones I105/canonical + errores estructurados. |
-| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` | Valida codecs del lado servidor para que Torii rechace payloads I105 malformados de forma determinista. |
-| JavaScript SDK | `javascript/iroha_js/test/address.test.js` | Replica fixtures V1 (I105/fullwidth) y afirma codigos de error estilo Norito para cada caso negativo. |
-| Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` | Ejercita decodificacion I105, payloads multisig y exposicion de errores en plataformas Apple. |
-| Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` | Garantiza que los bindings Kotlin/Java sigan alineados con el fixture canonico. |
+| Rust data-model | `crates/iroha_data_model/tests/account_address_vectors.rs` | Parses the JSON, reconstructs canonical payloads, and checks canonical Katakana i105 plus canonical-hex conversions + structured errors. |
+| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` | Validates server-side codecs so Torii refuses malformed i105 payloads deterministically. |
+| JavaScript SDK | `javascript/iroha_js/test/address.test.js` | Mirrors V1 fixtures (i105/fullwidth) and asserts Norito-style error codes for every negative case. |
+| Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` | Exercises i105 decoding, multisig payloads, and error surfacing on Apple platforms. |
+| Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` | Ensures Kotlin/Java bindings stay aligned with the canonical fixture. |
 
-### 4. Monitoreo y trabajo pendiente
+### 4. Monitoring & Outstanding Work
 
-- Informe de estado: este documento esta enlazado desde `status.md` y el roadmap para que las revisiones semanales verifiquen la salud del fixture.
-- Resumen en portal de desarrolladores: ver **Reference -> Account address compliance** en el portal de docs (`docs/portal/docs/reference/account-address-status.md`).
-- Prometheus y dashboards: cuando verifiques una copia del SDK, ejecuta el helper con `--metrics-out` (y opcionalmente `--metrics-label`) para que el textfile collector de Prometheus ingiera `account_address_fixture_check_status{target=...}`. El dashboard de Grafana **Account Address Fixture Status** (`dashboards/grafana/account_address_fixture_status.json`) muestra conteos pass/fail por superficie y expone el digest SHA-256 canonico como evidencia de auditoria. Alertar cuando cualquier target reporte `0`.
-- Torii metrics: `torii_address_domain_total{endpoint,domain_kind}` ahora emite para cada account literal parseado con exito, reflejando `torii_address_invalid_total`/`torii_address_local8_total`. Alertar sobre trafico `domain_kind="local12"` en produccion y espejar los contadores en el dashboard SRE `address_ingest` para que la retirada de Local-12 tenga evidencia auditada.
-- Fixture helper: `scripts/account_fixture_helper.py` descarga o verifica el JSON canonico para que la automatizacion de releases del SDK pueda obtener/verificar el bundle sin copiar/pegar manual, y opcionalmente escriba metricas de Prometheus. Ejemplo:
+- Status reporting: this document is linked from `status.md` and the roadmap so weekly reviews can verify fixture health.
+- Developer portal summary: see **Reference → Account address compliance** in the docs portal (`docs/portal/docs/reference/account-address-status.md`) for the externally-facing synopsis.
+- Prometheus and dashboards: whenever you verify an SDK copy, run the helper with `--metrics-out` (and optionally `--metrics-label`) so the Prometheus textfile collector can ingest `account_address_fixture_check_status{target=…}`. Grafana dashboard **Account Address Fixture Status** (`dashboards/grafana/account_address_fixture_status.json`) renders pass/fail counts per surface and surfaces the canonical SHA-256 digest for audit evidence. Alert when any target reports `0`.
+- Torii metrics: monitor canonical i105 parse success/failure counters and
+  alias-resolution counters together so SRE reviews can prove that account-id
+  traffic stays canonical while alias traffic remains explicit.
+- Fixture helper: `scripts/account_fixture_helper.py` downloads or verifies the canonical JSON so SDK release automation can fetch/check the bundle without manual copy/paste while optionally writing Prometheus metrics. Example:
 
   ```bash
   # Write the latest fixture to a custom path (defaults to fixtures/account/address_vectors.json)
@@ -64,11 +57,11 @@ Opciones:
   python3 scripts/account_fixture_helper.py check --target path/to/sdk/address_vectors.json --quiet
 
   # Emit Prometheus textfile metrics for dashboards/alerts (writes remote/local digests as labels)
-  python3 scripts/account_fixture_helper.py check \
-    --target path/to/sdk/address_vectors.json \
-    --metrics-out /var/lib/node_exporter/textfile_collector/address_fixture.prom \
+  python3 scripts/account_fixture_helper.py check \\
+    --target path/to/sdk/address_vectors.json \\
+    --metrics-out /var/lib/node_exporter/textfile_collector/address_fixture.prom \\
     --metrics-label android
   ```
 
-  El helper escribe `account_address_fixture_check_status{target="android"} 1` cuando el target coincide, mas los gauges `account_address_fixture_remote_info` / `account_address_fixture_local_info` que exponen digests SHA-256. Archivos ausentes reportan `account_address_fixture_local_missing`.
-  Automation wrapper: llama a `ci/account_fixture_metrics.sh` desde cron/CI para emitir un textfile consolidado (por defecto `artifacts/account_fixture/address_fixture.prom`). Pasa entradas repetidas de `--target label=path` (opcionalmente anade `::https://mirror/...` por target para sobreescribir la fuente) para que Prometheus raspe un solo archivo que cubra cada copia SDK/CLI. El workflow de GitHub `address-vectors-verify.yml` ya ejecuta este helper contra el fixture canonico y sube el artefacto `account-address-fixture-metrics` para ingestion SRE.
+  The helper writes `account_address_fixture_check_status{target="android"} 1` when the target matches, plus `account_address_fixture_remote_info` / `account_address_fixture_local_info` gauges that expose SHA-256 digests. Missing files report `account_address_fixture_local_missing`.
+  Automation wrapper: call `ci/account_fixture_metrics.sh` from cron/CI to emit a consolidated textfile (default `artifacts/account_fixture/address_fixture.prom`). Pass repeated `--target label=path` entries (optionally append `::https://mirror/...` per target to override the source) so Prometheus scrapes one file covering every SDK/CLI copy. The GitHub workflow `address-vectors-verify.yml` already runs this helper against the canonical fixture and uploads the `account-address-fixture-metrics` artifact for SRE ingestion.

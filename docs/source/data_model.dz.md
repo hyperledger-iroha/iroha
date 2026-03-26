@@ -31,9 +31,9 @@ translator: machine-google-reviewed
 - `IdBox`: རྒྱབ་སྐྱོར་འབད་ཡོད་པའི་ཨའི་ཌི་གང་རུང་ཅིག་གི་དོན་ལུ་ བསྡོམས་རྩིས་དབྱེ་བ་ཡིག་ཤུབས་ (`DomainId`, `AccountId`, `AssetDefinitionId`, `AssetId`, Norito, Norito `TriggerId`, `RoleId`, `Permission`, `CustomParameterId`). སྤྱིར་བཏང་རྒྱུན་འབབ་དང་ Norito ཨིན་ཀོ་ཌིང་གི་དོན་ལུ་ དབྱེ་བ་རྐྱང་པ་སྦེ་ཕན་ཐོགས་ཅན་ཨིན།
 - `ChainId`: ཚོང་འབྲེལ་ཚུ་ནང་ བསྐྱར་རྩེད་སྲུང་སྐྱོབ་ཀྱི་དོན་ལུ་ ལག་ལེན་འཐབ་མི་ མཐོང་མ་ཚུགས་པའི་ རིམ་སྒྲིག་ངོས་འཛིན་པ།ཨའི་ཌི་ཚུ་གི་ཡིག་རྒྱུན་འབྲི་ཤོག་ཚུ་ (`Display`/`FromStr` དང་ཅིག་ཁར་ སྐོར་ཐེངས་འགྲུལ་བསྐྱོད་འབད་བཏུབ་):
 - `DomainId`: `name` (དཔེར་ན་ `wonderland`)།
-- `AccountId`: ཀེ་ནོ་ནིཀ་ཌོ་མེན་མེད་པའི་རྩིས་ཐོ་ངོས་འཛིན་འབད་མི་འདི་ `AccountAddress` བརྒྱུད་དེ་ I105 རྐྱངམ་ཅིག་སྦེ་ ཨིན་ཀོ་ཌི་འབད་ཡོདཔ་ཨིན། དབྱེ་དཔྱད་འབད་མི་ཨིན་པུཊི་ཚུ་ ཀེ་ནོ་ནིཀ་ I105; མངའ་ཁོངས་རྗེས་འཇུག་ཚུ་ (`@domain`) དང་ ཀེ་ནོ་ནིཀ་ I105 ཡིག་འབྲུ་ཚུ་ མིང་གཞན་ཚུ་ ཀེ་ནོ་ནིཀ་ཧེགསི་པར་སར་ཨིན་པུཊི་ རིག་གཞུང་ `norito:` པེ་ལོཌི་ཚུ་ དང་ `uaid:`/`uaid:`/`uaid:`/`opaque:` ཚུ་ཨིན།
+- `AccountId`: ཀེ་ནོ་ནིཀ་ཌོ་མེན་མེད་པའི་རྩིས་ཐོ་ངོས་འཛིན་འབད་མི་འདི་ `AccountAddress` བརྒྱུད་དེ་ i105 རྐྱངམ་ཅིག་སྦེ་ ཨིན་ཀོ་ཌི་འབད་ཡོདཔ་ཨིན། དབྱེ་དཔྱད་འབད་མི་ཨིན་པུཊི་ཚུ་ ཀེ་ནོ་ནིཀ་ i105; མངའ་ཁོངས་རྗེས་འཇུག་ཚུ་ (`@domain`) དང་ ཀེ་ནོ་ནིཀ་ i105 ཡིག་འབྲུ་ཚུ་ མིང་གཞན་ཚུ་ ཀེ་ནོ་ནིཀ་ཧེགསི་པར་སར་ཨིན་པུཊི་ རིག་གཞུང་ `norito:` པེ་ལོཌི་ཚུ་ དང་ `uaid:`/`uaid:`/`uaid:`/`opaque:` ཚུ་ཨིན།
 - `AssetDefinitionId`: ཀེ་ནོ་ནིཀ་`unprefixed Base58 address with versioning and checksum` (UUID-v4 བཱའིཊིསི)།
-- `AssetId`: ཀེ་ནོ་ནིཀ་ཨེན་ཀོ་ཌི་འབད་ཡོད་པའི་ཚིག་ཡིག་ `<base58-asset-id>#<katakana-i105-account-id>` (རིག་གཞུང་ཚིག་ཡིག་འབྲི་ཤོག་ཚུ་ གསར་བཏོན་འགོ་དང་པ་ནང་ རྒྱབ་སྐྱོར་མེདཔ་ཨིན།)།
+- `AssetId`: ཀེ་ནོ་ནིཀ་ཨེན་ཀོ་ཌི་འབད་ཡོད་པའི་ཚིག་ཡིག་ `<canonical-base58-asset-definition-id>` (རིག་གཞུང་ཚིག་ཡིག་འབྲི་ཤོག་ཚུ་ གསར་བཏོན་འགོ་དང་པ་ནང་ རྒྱབ་སྐྱོར་མེདཔ་ཨིན།)།
 - `NftId`: `nft$domain` (དཔེར་ན་ `rose$garden`)།
 - `PeerId`: `public_key` (མཉམ་རོགས་འདྲ་མཉམ་འདི་ མི་མང་ལྡེ་མིག་གིས་ཨིན།)།
 
@@ -43,7 +43,7 @@ translator: machine-google-reviewed
 - `DomainId { name: Name }` – གཞན་དང་མ་འདྲ་བའི་མིང་།
 - `Domain { id, logo: Option<SorafsUri>, metadata: Metadata, owned_by: AccountId }`.
 - བཟོ་བསྐྲུན་པ་: `NewDomain` དང་ `with_logo`, `with_metadata`, དེ་ལས་ `Registrable::build(authority)` གིས་ `owned_by` གཞི་སྒྲིག་འབདཝ་ཨིན།### རྩིས་ཐོ།
-- `AccountId` འདི་ ཚད་འཛིན་པ་གིས་ ལྡེ་མིག་བཙུགས་ཏེ་ ཀེ་ནོ་ནིཀ་ མངའ་ཁོངས་མེད་པའི་རྩིས་ཐོའི་ངོ་རྟགས་དང་ ཀེ་ནོ་ནིཀ་ I105 སྦེ་ ཨིན་ཀོ་ཌི་འབད་ཡོདཔ་ཨིན།
+- `AccountId` འདི་ ཚད་འཛིན་པ་གིས་ ལྡེ་མིག་བཙུགས་ཏེ་ ཀེ་ནོ་ནིཀ་ མངའ་ཁོངས་མེད་པའི་རྩིས་ཐོའི་ངོ་རྟགས་དང་ ཀེ་ནོ་ནིཀ་ i105 སྦེ་ ཨིན་ཀོ་ཌི་འབད་ཡོདཔ་ཨིན།
 - `ScopedAccountId { account: AccountId, domain: DomainId }` གིས་ ཁྱབ་ཚད་མཐོང་སྣང་དགོ་ས་ལུ་རྐྱངམ་ཅིག་ གསལ་ཏོག་ཏོ་མངའ་ཁོངས་སྐབས་དོན་འབག་འོང་།
 - `Account { id, metadata, label?, uaid? }` — `label` འདི་ རི་ཀི་དྲན་ཐོ་ཚུ་གིས་ལག་ལེན་འཐབ་མི་ གདམ་ཁ་ཅན་གྱི་གཏན་འཇགས་མིང་གཞན་ཅིག་ཨིན། `uaid` གིས་ གདམ་ཁ་ཅན་གྱི་ Nexus-wide [ཡོངས་ཁྱབ་རྩིས་ཐོ་ཨའི་ཌི་](Kotodama) འབག་འོང་།
 - བཟོ་བསྐྲུན་པ་: `NewAccount` བརྒྱུད་དེ་ `Account::new(id)`; ཐོ་བཀོད་འབད་ནི་ལུ་ གསལ་ཏོག་ཏོ་ `ScopedAccountId` མངའ་ཁོངས་དགོཔ་དང་ སྔོན་སྒྲིག་ཚུ་ལས་ གཅིག་ གཞི་བསྟུན་མི་འབད།
@@ -250,7 +250,7 @@ iroha ledger asset definition register \
 # Mint using alias + account components (no manual norito hex copy/paste)
 iroha ledger asset mint \
   --definition-alias pkr#ubl.sbp \
-  --account sorauﾛ1P... \
+  --account soraゴヂ... \
   --quantity 500
 
 # Resolve alias to canonical Base58 id via Torii
@@ -259,7 +259,7 @@ curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -d '{"alias":"pkr#ubl.sbp"}'
 ```གནས་སྤོ་དྲན་ཐོ།
 - རྙིངམ་ `name#domain` རྒྱུ་དངོས་-ངེས་ཚིག་ཨའི་ཌི་ཚུ་ v1 ནང་ངོས་ལེན་མི་འབད།
-- མིན་ཊི་/བརན་/སྤོ་བཤུད་ཀྱི་དོན་ལུ་ རྒྱུ་དངོས་ཨའི་ཌི་ཚུ་ ཀེ་ནོ་ནིཀ་ལུ་ལུས་ཡོདཔ་ཨིན། `<base58-asset-id>#<katakana-i105-account-id>`; དེ་ཚུ་དང་གཅིག་ཁར་བཟོ་བསྐྲུན་འབད།
+- མིན་ཊི་/བརན་/སྤོ་བཤུད་ཀྱི་དོན་ལུ་ རྒྱུ་དངོས་ཨའི་ཌི་ཚུ་ ཀེ་ནོ་ནིཀ་ལུ་ལུས་ཡོདཔ་ཨིན། `<canonical-base58-asset-definition-id>`; དེ་ཚུ་དང་གཅིག་ཁར་བཟོ་བསྐྲུན་འབད།
   - `iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
   - ཡང་ན་ `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`.
 

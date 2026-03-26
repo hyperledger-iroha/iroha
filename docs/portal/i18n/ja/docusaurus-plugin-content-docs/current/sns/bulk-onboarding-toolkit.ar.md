@@ -235,7 +235,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
 - **メタデータとガバナンス:** JSON インライン セキュリティありがとう
   CSV を使用します。メタデータは、次のとおりです。
 - **コントローラー:** `--default-controllers`。 قدم قوائم
-  コントローラ (مثل `i105...;i105...`) は、コントローラを制御します。
+  コントローラ (مثل `soraカタカナ...;soraカタカナ...`) は、コントローラを制御します。
 
 يتم الابلاغ عن الاخطاء مع ارقام صفوف سياقية (مثلا)
 `error: row 12 term_years must be between 1 and 255`)。セキュリティ `1`

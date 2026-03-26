@@ -69,7 +69,7 @@ Sidebar_label: دليل تشغيل النزاعات والإلغاءات
      --base64-out=dispute.b64 \
      --json-out=dispute_summary.json \
      --request-out=dispute_request.json \
-     --authority=i105... \
+     --authority=soraカタカナ... \
      --private-key=ed25519:<key>
    ```
 

@@ -33,8 +33,9 @@ Examples (hex, spaces added for readability)
 
 - AssetId (0x0007, v1)
   - Payload: Norito-encoded `AssetId { definition, account }` bytes.
-  - Textual API representation is the public form:
-    `<base58-asset-id>#<katakana-i105-account-id>` with optional `#dataspace:<id>` suffix.
+  - Textual API representation is the canonical internal balance-bucket form:
+    `<base58-asset-definition-id>#<katakana-i105-account-id>` with optional `#dataspace:<id>` suffix.
+    Public asset ids remain bare Base58 asset-definition ids.
   - TLV: `00 07 01 <len:be u32> <payload bytes> <hash:32>`
 
 - DomainId (0x0008, v1)

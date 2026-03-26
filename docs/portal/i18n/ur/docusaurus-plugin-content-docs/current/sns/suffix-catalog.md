@@ -42,9 +42,9 @@ wallet tooling چلانے والے آپریٹرز status docs کو scrape کئے
 
 | لاحقہ | ID (`hex`) | Steward | Fund splitter | حالت | ادائیگی asset | referral حد (bps) | مدت (min - max سال) | Grace / Redemption (دن) | pricing tiers (regex -> base price / auction) | reserved labels | fee split (T/S/R/E bps) | policy version |
 |-------|------------|---------|---------------|------|--------------|-------------------|----------------------|--------------------------|----------------------------------------------|----------------|-------------------------|----------------|
-| `.sora` | `0x0001` | `i105...` | `i105...` | فعال | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 500 | 1-5 | 30 / 60 | `T0: ^[a-z0-9]{3,}$ -> 120 XOR (Vickrey)` | `treasury -> i105...` | `7000 / 3000 / 1000 / 0` | 1 |
-| `.nexus` | `0x0002` | `i105...` | `i105...` | معطل | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 300 | 1-3 | 15 / 30 | `T0: ^[a-z0-9]{4,}$ -> 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ -> 4000 XOR (Dutch floor 500)` | `treasury -> i105...`, `guardian -> i105...` | `6500 / 2500 / 800 / 200` | 2 |
-| `.dao` | `0x0003` | `i105...` | `i105...` | منسوخ | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 0 | 1-2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ -> 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
+| `.sora` | `0x0001` | `soraカタカナ...` | `soraカタカナ...` | فعال | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 500 | 1-5 | 30 / 60 | `T0: ^[a-z0-9]{3,}$ -> 120 XOR (Vickrey)` | `treasury -> soraカタカナ...` | `7000 / 3000 / 1000 / 0` | 1 |
+| `.nexus` | `0x0002` | `soraカタカナ...` | `soraカタカナ...` | معطل | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 300 | 1-3 | 15 / 30 | `T0: ^[a-z0-9]{4,}$ -> 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ -> 4000 XOR (Dutch floor 500)` | `treasury -> soraカタカナ...`, `guardian -> soraカタカナ...` | `6500 / 2500 / 800 / 200` | 2 |
+| `.dao` | `0x0003` | `soraカタカナ...` | `soraカタカナ...` | منسوخ | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 0 | 1-2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ -> 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
 
 ## JSON excerpt
 

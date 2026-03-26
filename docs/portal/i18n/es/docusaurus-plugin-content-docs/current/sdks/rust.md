@@ -143,7 +143,7 @@ fn download_qr() -> eyre::Result<()> {
 }
 ```
 
-`ExplorerAccountQrSnapshot` refleja el JSON `/v1/explorer/accounts/{id}/qr`: incluye el account id canónico, el literal canónico I105, metadatos de prefijo/corrección de error, dimensiones del QR y el payload SVG en línea que wallets/explorers pueden incrustar.
+`ExplorerAccountQrSnapshot` refleja el JSON `/v1/explorer/accounts/{id}/qr`: incluye el account id canónico, el literal canónico i105, metadatos de prefijo/corrección de error, dimensiones del QR y el payload SVG en línea que wallets/explorers pueden incrustar.
 
 ## 7. Suscríbete a eventos
 

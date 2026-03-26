@@ -86,26 +86,10 @@ export class ValidationError extends TypeError {
   readonly cause?: unknown;
 }
 
-export type AccountAddressDomainKind = "default" | "local12" | "global" | "unknown";
-
-export interface AccountAddressDomainSelector {
-  tag: number | null;
-  digestHex: string | null;
-  registryId: number | null;
-  label: string | null;
-}
-
-export interface AccountAddressDomainSummary {
-  kind: AccountAddressDomainKind;
-  warning: string | null;
-  selector: AccountAddressDomainSelector;
-}
-
 export interface AccountAddressDisplay {
   i105: string;
   chainDiscriminant: number;
   i105Warning: string;
-  domainSummary: AccountAddressDomainSummary;
 }
 
 export interface CurveSupportOptions {
@@ -119,14 +103,6 @@ export function configureCurveSupport(options?: CurveSupportOptions): void;
 export class AccountAddress {
   static fromAccount(
     options: {
-      domain: string;
-      publicKey: Buffer | Uint8Array | ArrayBuffer | ArrayBufferView | number[] | string;
-      algorithm?: string;
-    },
-  ): AccountAddress;
-  static fromAccount(
-    options: {
-      registryId: number | string | bigint;
       publicKey: Buffer | Uint8Array | ArrayBuffer | ArrayBufferView | number[] | string;
       algorithm?: string;
     },
@@ -141,14 +117,12 @@ export class AccountAddress {
   static parseEncoded(
     input: string,
     expectedPrefix?: number | string | bigint,
-    expectedDomain?: string,
   ): { address: AccountAddress; chainDiscriminant?: number };
   canonicalBytes(): Uint8Array;
   canonicalHex(): string;
   toI105(prefix?: number | string | bigint): string;
   toString(): string;
   displayFormats(chainDiscriminant?: number | string | bigint): AccountAddressDisplay;
-  domainSummary(): AccountAddressDomainSummary;
 }
 
 export function encodeI105AccountAddress(
@@ -167,11 +141,9 @@ export interface InspectAccountIdOptions {
 
 export interface AccountIdInspection {
   detectedFormat: { kind: string; chainDiscriminant?: number };
-  domain: { kind: string; warning: string | null };
   canonicalHex: string;
   i105: { value: string; chainDiscriminant: number };
   i105Warning: string;
-  inputDomain: string | null;
   warnings: string[];
 }
 
@@ -179,8 +151,6 @@ export function inspectAccountId(
   accountId: string,
   options?: InspectAccountIdOptions,
 ): AccountIdInspection;
-
-export const DEFAULT_DOMAIN_NAME: string;
 
 export interface MultisigProposalTtlPreview {
   effectiveTtlMs: number;
@@ -439,7 +409,7 @@ export interface ProofAttachmentInput {
 }
 
 /**
- * Canonicalise an account identifier to I105.
+ * Canonicalise an account identifier to i105.
  *
  * Accepts only encoded i105 account ids.
  * Domain-suffixed literals (`<id>@domain`) and canonical-hex account literals are rejected.
@@ -447,7 +417,8 @@ export interface ProofAttachmentInput {
 export function normalizeAccountId(value: string, name?: string): string;
 
 /**
- * Canonicalise an asset identifier, including embedded account components.
+ * Canonicalise an asset-holding identifier in
+ * `<base58-asset-definition-id>#<katakana-i105-account-id>` form.
  */
 export function normalizeAssetId(value: string, name?: string): string;
 
@@ -4695,7 +4666,7 @@ export type RegisterAccountAndTransferInput =
 /**
  * Parameters for {@link buildRegisterAssetDefinitionAndMintTransaction}. Supply
  * either `mint` or `mints`. When `assetId` is omitted the helper derives it as
- * the canonical public asset id for `assetDefinitionId + accountId`, and
+ * the canonical asset-holding id for `assetDefinitionId + accountId`, and
  * enforces that any provided `assetId` matches the derived value.
  */
 interface RegisterAssetDefinitionAndMintInputBase {
@@ -8036,7 +8007,7 @@ export function buildRegisterAccountAndTransferTransaction(
 /**
  * Register an asset definition and optionally mint initial supply. When both
  * `accountId` and `assetId` are provided the helper validates that they match
- * the canonical public asset id derived from `assetDefinitionId + accountId`.
+ * the canonical asset-holding id derived from `assetDefinitionId + accountId`.
  */
 export function buildRegisterAssetDefinitionAndMintTransaction(
   input: RegisterAssetDefinitionAndMintInput,

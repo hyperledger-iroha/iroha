@@ -117,7 +117,7 @@ public final class AccountAddressTests {
 
   private static void goldenVectorsRoundTrip() throws Exception {
     final byte[] key = new byte[32];
-    final AccountAddress address = AccountAddress.fromAccount("default", key, "ed25519");
+    final AccountAddress address = AccountAddress.fromAccount(key, "ed25519");
 
     final String canonical = address.canonicalHex();
     final String i105 = address.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
@@ -125,13 +125,13 @@ public final class AccountAddressTests {
     assert canonical.equals("0x020001200000000000000000000000000000000000000000000000000000000000000000")
         : "canonical encoding mismatch";
     assert i105.equals("soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ")
-        : "I105 encoding mismatch";
+        : "i105 encoding mismatch";
 
     final AccountAddress.ParseResult i105Parsed =
         AccountAddress.parseEncoded(i105, AccountAddress.DEFAULT_I105_DISCRIMINANT);
     assert i105Parsed.format == AccountAddress.Format.I105 : "expected i105 format";
     assert Arrays.equals(address.canonicalBytes(), i105Parsed.address.canonicalBytes())
-        : "I105 round-trip mismatch";
+        : "i105 round-trip mismatch";
   }
 
   private static void ambiguousKatakanaLiteralRoundTrip() throws Exception {
@@ -149,7 +149,7 @@ public final class AccountAddressTests {
   private static void i105PrefixMismatchThrows() throws Exception {
     final byte[] key = new byte[32];
     Arrays.fill(key, (byte) 1);
-    final AccountAddress address = AccountAddress.fromAccount("default", key, "ed25519");
+    final AccountAddress address = AccountAddress.fromAccount(key, "ed25519");
     final String i105 = address.toI105(5);
     boolean threw = false;
     try {
@@ -163,7 +163,7 @@ public final class AccountAddressTests {
   private static void i105RejectsFullwidthSentinel() throws Exception {
     final byte[] key = new byte[32];
     Arrays.fill(key, (byte) 0x31);
-    final AccountAddress address = AccountAddress.fromAccount("default", key, "ed25519");
+    final AccountAddress address = AccountAddress.fromAccount(key, "ed25519");
     final String canonical = address.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
     final String noncanonical = canonical.replaceFirst("sora", "ｓｏｒａ");
 
@@ -190,7 +190,7 @@ public final class AccountAddressTests {
     for (int i = 0; i < key.length; i++) {
       key[i] = (byte) i;
     }
-    final AccountAddress address = AccountAddress.fromAccount("default", key, "ed25519");
+    final AccountAddress address = AccountAddress.fromAccount(key, "ed25519");
     final java.util.Optional<AccountAddress.SingleKeyPayload> payload = address.singleKeyPayload();
     assert payload.isPresent() : "expected single-key payload";
     final AccountAddress.SingleKeyPayload info = payload.get();
@@ -203,7 +203,7 @@ public final class AccountAddressTests {
     final String literal;
     try {
       literal =
-          AccountAddress.fromAccount("default", key, "ed25519")
+          AccountAddress.fromAccount(key, "ed25519")
               .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
     } catch (final AccountAddress.AccountAddressException ex) {
       throw new AssertionError("failed to build canonical Katakana i105 literal", ex);
@@ -215,7 +215,7 @@ public final class AccountAddressTests {
     } catch (final AccountAddress.AccountAddressException ex) {
       threw = ex.getCode() == AccountAddress.AccountAddressErrorCode.INVALID_I105_CHAR;
     }
-    assert threw : "I105 parsing should reject invalid non-I105 symbols";
+    assert threw : "i105 parsing should reject invalid non-i105 symbols";
   }
 
   private static void curveSupportDefaults() {
@@ -223,7 +223,7 @@ public final class AccountAddressTests {
     final byte[] key = new byte[32];
     boolean threw = false;
     try {
-      AccountAddress.fromAccount("default", key, "ml-dsa");
+      AccountAddress.fromAccount(key, "ml-dsa");
     } catch (final AccountAddress.AccountAddressException ex) {
       threw = ex.getCode() == AccountAddress.AccountAddressErrorCode.UNSUPPORTED_ALGORITHM;
     }
@@ -234,7 +234,7 @@ public final class AccountAddressTests {
     final byte[] key = new byte[32];
     AccountAddress.configureCurveSupport(
         AccountAddress.CurveSupportConfig.builder().allowMlDsa(true).build());
-    final AccountAddress address = AccountAddress.fromAccount("default", key, "ml-dsa");
+    final AccountAddress address = AccountAddress.fromAccount(key, "ml-dsa");
     final AccountAddress roundTripped = AccountAddress.fromI105(address.toI105(1), 1);
     assert Arrays.equals(address.canonicalBytes(), roundTripped.canonicalBytes())
         : "ML-DSA enablement round-trip mismatch";
@@ -329,12 +329,12 @@ public final class AccountAddressTests {
       case "UnexpectedNetworkPrefix":
         final Object expectedPrefix = expected.get("expected");
         final Object foundPrefix = expected.get("found");
-        return message.contains("unexpected I105 discriminant")
+        return message.contains("unexpected i105 discriminant")
             && (expectedPrefix == null || message.contains(expectedPrefix.toString()))
             && (foundPrefix == null || message.contains(foundPrefix.toString()));
       case "InvalidI105Char":
         final Object invalidChar = expected.get("char");
-        return message.contains("invalid I105 alphabet symbol")
+        return message.contains("invalid i105 alphabet symbol")
             && (invalidChar == null || message.contains(Objects.toString(invalidChar)));
       case "InvalidMultisigPolicy":
         return message.contains("InvalidMultisigPolicy") || message.contains("unknown controller tag");

@@ -240,7 +240,7 @@ importer), чтобы registrars, stewards и governance peers видели со
 - **Metadata/governance parsing:** inline JSON парсится напрямую; ссылки на файлы
   разрешаются относительно CSV. Metadata не-объект приводит к ошибке валидации.
 - **Controllers:** пустые ячейки соблюдают `--default-controllers`. Указывайте
-  явные списки controllers (например `i105...;i105...`) при делегировании не-owner.
+  явные списки controllers (например `soraカタカナ...;soraカタカナ...`) при делегировании не-owner.
 
 Ошибки сообщаются с контекстными номерами строк (например
 `error: row 12 term_years must be between 1 and 255`). Скрипт выходит с кодом `1`

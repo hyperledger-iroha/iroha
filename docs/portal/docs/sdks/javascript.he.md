@@ -489,7 +489,7 @@ canonicalise them before submitting requests:
   grouping asset holdings by canonical account IDs; pass `assetId` to filter the
   portfolio down to a single asset instance.
 - `getUaidBindings(uaid)` enumerates every dataspace ↔ account
-  binding (`I105` returns the `i105` literals).
+  binding (`i105` returns the `i105` literals).
 - `getUaidManifests(uaid, { dataspaceId })` returns each capability manifest,
   lifecycle status, and bound accounts for auditing.
 

@@ -41,7 +41,7 @@ any time the fixture, generator, or docs change to alert reviewers immediately.
 | Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
 | Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |
 
-Each harness round-trips canonical bytes + I105 encodings and
+Each harness round-trips canonical bytes + i105 encodings and
 checks that Norito-style error codes line up with the fixture for negative cases.
 
 ## Need automation?

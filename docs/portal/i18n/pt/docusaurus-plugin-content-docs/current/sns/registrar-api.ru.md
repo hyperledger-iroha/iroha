@@ -115,7 +115,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/names/{namespace}/{literal}/freeze` | EXCLUIR | `GovernanceHookV1` | Descongelar após a operação; убеждается, что Council Override зафиксирован. |
 | `/v1/sns/reserved/{selector}` | POSTAR | `ReservedAssignmentRequestV1` | Назначение reservado para administrador/conselho. |
 | `/v1/sns/policies/{suffix_id}` | OBTER | -- | Use a tecnologia `SuffixPolicyV1` (requer). |
-| `/v1/sns/names/{namespace}/{literal}` | OBTER | -- | Возвращает текущий `NameRecordV1` + эффективное состояние (Active, Grace, и т. д.). |**Seletor de conversão:** segmento `{selector}` принимает I105, compactado (`sora`) ou канонический hexadecimal em ADDR-5; Torii é normalizado pelo `NameSelectorV1`.
+| `/v1/sns/names/{namespace}/{literal}` | OBTER | -- | Возвращает текущий `NameRecordV1` + эффективное состояние (Active, Grace, и т. д.). |**Seletor de conversão:** segmento `{selector}` принимает i105, compactado (`sora`) ou канонический hexadecimal em ADDR-5; Torii é normalizado pelo `NameSelectorV1`.
 
 **Modely ошибок:** Você pode usar Norito JSON com `code`, `message`, `details`. Os códigos são `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
 
@@ -161,7 +161,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner soraカタカナ... \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -221,7 +221,7 @@ A nova versão é `sns_err_governance_missing`.
 
 ### 6.1 Registro padrão1. O cliente запрашивает `/v1/sns/policies/{suffix_id}` oferece mais dinheiro, graça e níveis de entrega.
 2. Estrutura do cliente `RegisterNameRequestV1`:
-   - `selector` é usado para fornecer rótulo I105 ou второго по предпочтению comprimido (`sora`).
+   - `selector` é usado para fornecer rótulo i105 ou второго по предпочтению comprimido (`sora`).
    - `term_years` na política de segurança.
    - `payment` ссылается на перевод divisor tesouraria/administrador.
 3. Prova Torii:

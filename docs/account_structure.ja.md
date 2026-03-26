@@ -1,98 +1,99 @@
-# アカウント構造 RFC
+# Account Structure RFC
 
-**ステータス:** 承認済み (ADDR-1)  
-**対象者:** データ モデル、torii、Nexus、ウォレット、ガバナンス チーム  
-**関連する問題:** 未定
+**Status:** Accepted (ADDR-1)  
+**Audience:** Data model, Torii, Nexus, Wallet, Governance teams  
+**Related issues:** TBD
 
-## 概要
+## Summary
 
-このドキュメントでは、に実装されている配送先アカウントのアドレス指定スタックについて説明します。
-`AccountAddress` (`crates/iroha_data_model/src/account/address.rs`) と
-コンパニオンツール。それは以下を提供します:
+This document describes the shipping account-addressing stack implemented in
+`AccountAddress` (`crates/iroha_data_model/src/account/address.rs`) and the
+companion tooling. It provides:
 
-- チェックサム付き、人間向けの **I105 アドレス** によって生成されます。
-  `AccountAddress::to_i105` チェーン判別式をアカウントにバインドします
-  コントローラーであり、決定論的な相互運用に適したテキスト形式を提供します。
-- 暗黙的なデフォルト ドメインとローカル ダイジェストのドメイン セレクター。
-  将来の Nexus-backed ルーティング用に予約されたグローバル レジストリ セレクター タグ (
-  レジストリ ルックアップは **まだ出荷されていません**)。
+- A checksummed, human-facing **Katakana I105 account address** produced by
+  `AccountAddress::to_i105` that binds a chain discriminant to the account
+  controller and offers deterministic interop-friendly textual forms.
+- A domainless canonical account payload keyed only by the controller.
+  Explicit domain context now lives outside the payload via
+  `ScopedAccountId { account, domain }` and domain-link state.
 
-## モチベーション
+## Motivation
 
-現在、ウォレットとオフチェーン ツールは生の `name@dataspace` or `name@domain.dataspace` ルーティング エイリアスに依存しています。これ
-には 2 つの大きな欠点があります。
+Wallets and off-chain tooling rely on raw `name@dataspace` or `name@domain.dataspace` on-chain account aliases today. This
+has two major drawbacks:
 
-1. **ネットワーク バインディングがありません。** 文字列にはチェックサムやチェーン プレフィックスがないため、ユーザーは
-   すぐにフィードバックが得られずに、間違ったネットワークからアドレスを貼り付ける可能性があります。の
-   トランザクションは最終的に拒否されるか (チェーンの不一致)、最悪の場合は成功します。
-   宛先がローカルに存在する場合、意図しないアカウントに対して。
-2. **ドメインの衝突。** ドメインは名前空間のみであり、それぞれのドメインで再利用できます。
-   チェーン。サービスのフェデレーション (カストディアン、ブリッジ、クロスチェーン ワークフロー)
-   チェーン A の `finance` はチェーン A の `finance` と無関係であるため、脆くなります。
-   チェーンB。
+1. **No network binding.** The string has no checksum or chain prefix, so users
+   can paste an address from the wrong network without immediate feedback. The
+   transaction will eventually be rejected (chain mismatch) or, worse, succeed
+   against an unintended account if the destination exists locally.
+2. **Domain collision.** Domains are namespace-only and can be reused on each
+   chain. Federation of services (custodians, bridges, cross-chain workflows)
+   becomes brittle because `finance` on chain A is unrelated to `finance` on
+   chain B.
 
-コピー/ペーストのエラーを防ぐ、人に優しいアドレス形式が必要です
-そしてドメイン名から権威チェーンへの決定論的なマッピング。
+We need a human-friendly address format that guards against copy/paste errors
+and a deterministic mapping from an on-chain alias to the authoritative chain/account binding.
 
-## 目標
+## Goals
 
-- データ モデルに実装された I105 エンベロープと
-  `AccountId` および `AccountAddress` に従う正規の解析/エイリアス ルール。
-- 構成されたチェーン判別式を各アドレスに直接エンコードし、
-  ガバナンス/レジストリ プロセスを定義します。
-- 現状を壊さずにグローバル ドメイン レジストリを導入する方法を説明する
-  展開を行い、正規化/スプーフィング防止ルールを指定します。
+- Describe the I105 envelope implemented in the data model and the
+  canonical parsing/alias rules that `AccountId` and `AccountAddress` follow.
+- Encode the configured chain discriminant directly into each address and
+  define its governance/registry process.
+- Describe how to introduce a global domain registry without breaking current
+  deployments and specify normalization/anti-spoofing rules.
 
-## 非目標
+## Non-goals
 
-- クロスチェーン資産移転の実装。ルーティング層は、
-  ターゲットチェーン。
-- グローバル ドメイン発行のガバナンスを最終決定します。この RFC はデータに焦点を当てています
-  プリミティブのモデル化とトランスポート。
+- Implementing cross-chain asset transfers. The routing layer only returns the
+  target chain.
+- Finalising governance for global domain issuance. This RFC focuses on the data
+  model and transport primitives.
 
-## 背景
+## Background
 
-### 現在のルーティング エイリアス
+### Current on-chain account alias
 
 ```
 AccountId {
-    domain: DomainId,   // wrapper over Name (ASCII-ish string)
     controller: AccountController // single PublicKey or multisig policy
 }
+ScopedAccountId {
+    account: AccountId,
+    domain: DomainId,
+}
 
-Display: canonical Katakana i105 literal (no `@domain` suffix)
+Display / JSON text: canonical Katakana i105 literal only
 Parse accepts:
-- Encoded account identifiers only: i105.
-- Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and account-alias literals such as name@dataspace or name@domain.dataspace.
+- Canonical Katakana i105 account literals only.
+- Runtime parsers reject non-canonical/dotted i105 literals, legacy `norito:<hex>`,
+  canonical hex (`0x...`), any `@<domain>` suffix, and account-alias literals such as
+  `name@dataspace` or `name@domain.dataspace`.
 
-Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
-and `0x` prefixes are not accepted.
-
-Account aliases are separate on-chain bindings. They use
-name@dataspace or name@domain.dataspace and resolve to canonical
-i105 `AccountId` values. Strict `AccountId` parsers never accept alias literals directly.
+Domain context is explicit and out-of-band. There is no public
+`AccountSubjectId`; subject identity is `AccountId`.
 ```
 
-`ChainId` は `AccountId` の外に住んでいます。ノードはトランザクションの `ChainId` をチェックします
-許可時の設定に対する違反 (`AcceptTransactionFail::ChainIdMismatch`)
-外国取引を拒否しますが、アカウント文字列自体には何も含まれていません。
-ネットワークのヒント。
+`ChainId` lives outside of `AccountId`. Nodes check the transaction’s `ChainId`
+against configuration during admission (`AcceptTransactionFail::ChainIdMismatch`)
+and reject foreign transactions, but the account string itself carries no
+network hint.
 
-### ドメイン識別子
+### Domain identifiers
 
-`DomainId` は `Name` (正規化された文字列) をラップし、ローカル チェーンにスコープされます。
-各チェーンは `wonderland`、`finance` などを個別に登録できます。
+`DomainId` wraps a `Name` (normalized string) and is scoped to the local chain.
+Every chain can register `wonderland`, `finance`, etc. independently.
 
-### ネクサスコンテキスト
+### Nexus context
 
-Nexus は、コンポーネント間の調整 (レーン/データスペース) を担当します。それ
-現在、クロスチェーン ドメイン ルーティングの概念はありません。
+Nexus is responsible for cross-component coordination (lanes/data-spaces). It
+currently has no concept of cross-chain domain routing.
 
-## 提案されたデザイン
+## Proposed Design
 
-### 1. 決定的連鎖判別式
+### 1. Deterministic chain discriminant
 
-`iroha_config::parameters::actual::Common` は以下を公開するようになりました:
+`iroha_config::parameters::actual::Common` now exposes:
 
 ```rust
 pub struct Common {
@@ -102,54 +103,46 @@ pub struct Common {
 }
 ```
 
-- **制約:**
-  - アクティブなネットワークごとに一意。署名されたパブリックレジストリを通じて管理されます
-    明示的に予約された範囲 (例: `0x0000–0x0FFF` test/dev、`0x1000–0x7FFF`)
-    コミュニティ割り当て、`0x8000–0xFFEF` ガバナンス承認済み、`0xFFF0–0xFFFF`
-    予約済み）。
-  - 実行中のチェーンに対して不変です。これを変更するにはハードフォークと
-    レジストリの更新。
-- **ガバナンスとレジストリ (計画中):** マルチシグネチャ ガバナンス セットは、
-  識別子を人間のエイリアスにマッピングする署名付き JSON レジストリを維持し、
-  CAIP-2 識別子。このレジストリは、出荷されたランタイムにはまだ含まれていません。
-- **使用法:** ステートアドミッション、Torii、SDK、ウォレット API を介してスレッド化されるため、
-  すべてのコンポーネントはそれを埋め込んだり検証したりできます。 CAIP-2 への曝露は依然として将来的なものである
-  相互運用タスク。
+- **Constraints:**
+  - Unique per active network; managed through a signed public registry with
+    explicit reserved ranges (e.g., `0x0000–0x0FFF` test/dev, `0x1000–0x7FFF`
+    community allocations, `0x8000–0xFFEF` governance-approved, `0xFFF0–0xFFFF`
+    reserved).
+  - Immutable for a running chain. Changing it requires a hard fork and a
+    registry update.
+- **Governance & registry (planned):** A multi-signature governance set will
+  maintain a signed JSON registry mapping discriminants to human aliases and
+  CAIP-2 identifiers. This registry is not yet part of the shipped runtime.
+- **Usage:** Threaded through state admission, Torii, SDKs, and wallet APIs so
+  every component can embed or validate it. CAIP-2 exposure remains a future
+  interop task.
 
-### 2. 正規のアドレス コーデック
+### 2. Canonical address codecs
 
-Rustデータモデルは単一の正規ペイロード表現を公開します
-(`AccountAddress`) は、人間向けのいくつかの形式として出力できます。 I105は
-共有および正規出力に推奨されるアカウント形式。圧縮された
-`sora` フォームは、かなアルファベットが使用される UX の 2 番目に優れた Sora 専用オプションです。
-価値を追加します。 Canonical hex は引き続きデバッグ補助として使用されます。
+The Rust data model now distinguishes the public `AccountId` surface from the
+lower-level `AccountAddress` helper.
 
-- **I105** – チェーンを埋め込む I105 エンベロープ
-  差別的な。デコーダはペイロードをプロモートする前にプレフィックスを検証します。
-  正規形。
-- **Sora 圧縮ビュー** – によって構築された **105 個の記号**からなる Sora 専用のアルファベット
-  58字に半角イロハ詩（ヰ、ヱ含む）を付ける
-  I105セット。文字列はセンチネル `sora` で始まり、Bech32m 由来のコードが埋め込まれます。
-  チェックサムを使用し、ネットワーク プレフィックスを省略します (Sora Nexus はセンチネルによって暗示されます)。
+- `AccountId` text/JSON parsing is hard-cut to canonical Katakana i105 only.
+- `AccountAddress` remains the canonical binary envelope and can still be
+  rendered as I105. Canonical hex remains an internal envelope/debug view and
+  is not a public account identifier.
 
-```
-  I105  : 123456789ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz
-  Iroha : ｲﾛﾊﾆﾎﾍﾄﾁﾘﾇﾙｦﾜｶﾖﾀﾚｿﾂﾈﾅﾗﾑｳヰﾉｵｸﾔﾏｹﾌｺｴﾃｱｻｷﾕﾒﾐｼヱﾋﾓｾｽ
-  ```
-- **正規 16 進数** – デバッグしやすい正規バイトの `0x…` エンコード
-  封筒。
+- **I105** – the canonical account-address envelope that embeds the chain
+  discriminant. Decoders validate the prefix before promoting the payload to
+  the canonical form.
+- **Canonical hex** – an internal `0x…` view of the canonical byte envelope for
+  debugging, fixtures, and low-level tooling only.
 
-`AccountAddress::parse_encoded` は、I105 (推奨)、圧縮 (`sora`、2 番目に優れた)、または正規の 16 進数を自動検出します。
-(`0x...` のみ。裸の 16 進数は拒否されます) デコードされたペイロードと検出されたペイロードの両方を入力して返します。
-`AccountAddress`。鳥居は ISO 20022 補足のために `parse_encoded` を呼び出します
-メタデータが決定性を維持できるように、正規の 16 進形式をアドレス指定して保存します。
-元の表現に関係なく。
+`AccountAddress::parse_encoded` accepts i105 forms for
+the raw address envelope. `AccountId::parse_encoded`, `FromStr`, and JSON
+deserialization accept only canonical Katakana i105 and reject non-canonical/legacy
+i105 forms, canonical hex, `norito:`, alias, and `@domain` forms.
 
-#### 2.1 ヘッダーバイトレイアウト (ADDR-1a)
+#### 2.1 Header byte layout (ADDR-1a)
 
-すべての正規ペイロードは `header · controller` としてレイアウトされます。の
-`header` は、どのパーサー ルールがそのバイトに適用されるかを伝達する 1 バイトです。
-フォローしてください：
+Every canonical payload is laid out as `header · controller`. The
+`header` is a single byte that communicates which parser rules apply to the bytes that
+follow:
 
 ```
 bit index:   7        5 4      3 2      1 0
@@ -158,18 +151,18 @@ payload bit: │version  │ class  │  norm  │ext │
              └─────────┴────────┴────────┴────┘
 ```
 
-したがって、最初のバイトには、ダウンストリーム デコーダーのスキーマ メタデータがパックされます。
+The first byte therefore packs the schema metadata for downstream decoders:
 
-|ビット |フィールド |許可される値 |違反時のエラー |
-|-----|----------|----------------|----------|
-| 7-5 | `addr_version` | `0` (v1)。値 `1-7` は、将来のリビジョンのために予約されています。 | `0-7` 以外の値は `AccountAddressError::InvalidHeaderVersion` をトリガーします。実装は、ゼロ以外のバージョンを現在サポートされていないものとして扱わなければなりません。 |
-| 4-3 | `addr_class` | `0` = 単一キー、`1` = マルチシグ。 |他の値では `AccountAddressError::UnknownAddressClass` が発生します。 |
-| 2-1 | `norm_version` | `1` (標準 v1)。値 `0`、`2`、`3` は予約されています。 | `0-3` 以外の値は `AccountAddressError::InvalidNormVersion` を引き起こします。 |
-| 0 | `ext_flag` | `0` でなければなりません。 |ビットを設定すると `AccountAddressError::UnexpectedExtensionFlag` が発生します。 |
+| Bits | Field | Allowed values | Error on violation |
+|------|-------|----------------|--------------------|
+| 7-5  | `addr_version` | `0` (v1). Values `1-7` are reserved for future revisions. | Values outside `0-7` trigger `AccountAddressError::InvalidHeaderVersion`; implementations MUST treat non-zero versions as unsupported today. |
+| 4-3  | `addr_class` | `0` = single key, `1` = multisig. | Other values raise `AccountAddressError::UnknownAddressClass`. |
+| 2-1  | `norm_version` | `1` (Norm v1). Values `0`, `2`, `3` are reserved. | Values outside `0-3` raise `AccountAddressError::InvalidNormVersion`. |
+| 0    | `ext_flag` | MUST be `0`. | Set bit raises `AccountAddressError::UnexpectedExtensionFlag`. |
 
-Rust エンコーダは、単一キー コントローラ (バージョン 0、クラス 0、
-ノルム v1、拡張フラグはクリアされています）および `0x0A` マルチシグ コントローラー用（バージョン 0、
-クラス 1、標準 v1、拡張フラグはクリアされます)。
+The Rust encoder writes `0x02` for single-key controllers (version 0, class 0,
+norm v1, extension flag cleared) and `0x0A` for multisig controllers (version 0,
+class 1, norm v1, extension flag cleared).
 
 #### 2.2 Domainless payload semantics
 
@@ -178,246 +171,202 @@ with no selector segment, no implicit default-domain reconstruction, and no
 public decode fallback for legacy scoped-account literals.
 
 Explicit domain context is modeled separately as `ScopedAccountId { account,
-domain }` or separate API fields; it is not encoded into `AccountId` payload
-bytes.
+domain }` and via account-domain link state. Converting an `AccountAddress`
+into a scoped account therefore requires the caller to supply the domain
+explicitly. The public subject-identity surface is just `AccountId`;
+`AccountSubjectId` is not part of the public API.
 
-| Tag | Meaning | Payload | Notes |
-|-----|---------|---------|-------|
-| `0x00` | Domainless canonical scope | none | Canonical account payloads are domainless; explicit domain context lives outside the address payload. |
-| `0x01` | Local domain digest | 12 bytes | Digest = `blake2s_mac(key = "SORA-LOCAL-K:v1", canonical_label)[0..12]`. |
-| `0x02` | Global registry entry | 4 bytes | Big-endian `registry_id`; reserved until the global registry ships. |
+#### 2.3 Controller payload encodings (ADDR-1a)
 
-Domain labels are canonicalised (UTS-46 + STD3 + NFC) before hashing. Unknown tags raise `AccountAddressError::UnknownDomainTag`. When validating an address against a domain, mismatched selectors raise `AccountAddressError::DomainMismatch`.
+The controller payload is a tagged union appended immediately after the header in
+canonical payloads:
 
-```
-legacy selector segment
-┌──────────┬──────────────────────────────────────────────┐
-│ tag (u8) │ payload (depends on selector kind, see table)│
-└──────────┴──────────────────────────────────────────────┘
-```
+| Tag | Controller | Layout | Notes |
+|-----|------------|--------|-------|
+| `0x00` | Single key | `curve_id:u8` · `key_len:u8` · `key_bytes` | `curve_id=0x01` maps to Ed25519 today. `key_len` is bounded to `u8`; larger values raise `AccountAddressError::KeyPayloadTooLong` (so single-key ML‑DSA public keys, which are >255 bytes, cannot be encoded and must use multisig). |
+| `0x01` | Multisig | `version:u8` · `threshold:u16` · `member_count:u16` · (`curve_id:u8` · `weight:u16` · `key_len:u16` · `key_bytes`)\* | The encoded member count is 16-bit; the old 255-member hard cap is gone. Unknown curves raise `AccountAddressError::UnknownCurve`; malformed policies bubble up as `AccountAddressError::InvalidMultisigPolicy`. |
 
-When present, the selector is immediately adjacent to the controller payload, so
-a decoder can walk the wire format in order: read the tag byte, read the
-tag-specific payload, then move on to the controller bytes.
+Multisig policies also expose a CTAP2-style CBOR map and canonical digest so
+hosts and SDKs can verify the controller deterministically. See
+`docs/source/references/multisig_policy_schema.md` (ADDR-1c) for the schema,
+validation rules, hashing procedure, and golden fixtures.
 
-**Legacy selector examples**
+All key bytes are encoded exactly as returned by `PublicKey::to_bytes`; decoders reconstruct `PublicKey` instances and raise `AccountAddressError::InvalidPublicKey` if the bytes do not match the declared curve.
 
-- *Implicit default* (`tag = 0x00`). No payload. Example canonical hex for the default
-  domain using the deterministic test key:
-  `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.
-- *Local digest* (`tag = 0x01`). Payload is the 12-byte digest. Example (`treasury` seed
-  `0x01`): `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`.
-- *Global registry* (`tag = 0x02`). Payload is a big-endian `registry_id:u32`. The bytes
-  that follow the payload are identical to the implicit-default case; the selector simply
-  replaces the normalised domain string with a registry pointer. Example using
-  `registry_id = 0x0000_002A` (decimal 42) and the deterministic default controller:
-  `0x02020000002a000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201`.
+> **Ed25519 canonical enforcement (ADDR-3a):** curve `0x01` keys must decode to the exact byte string emitted by the signer and must not lie in the small-order subgroup. Nodes now reject non-canonical encodings (e.g., values reduced modulo `2^255-19`) and weak points such as the identity element, so SDKs should surface matching validation errors before submitting addresses.
 
-#### 2.3 コントローラー ペイロード エンコーディング (ADDR-1a)
+##### 2.3.1 Curve identifier registry (ADDR-1d)
 
-コントローラー ペイロードは、ドメイン セレクターの後に追加される別のタグ付き共用体です。
+| ID (`curve_id`) | Algorithm | Feature gate | Notes |
+|-----------------|-----------|--------------|-------|
+| `0x00` | Reserved | — | MUST NOT be emitted; decoders surface `ERR_UNKNOWN_CURVE`. |
+| `0x01` | Ed25519 | — | Canonical v1 algorithm (`Algorithm::Ed25519`); enabled in the default config. |
+| `0x02` | ML‑DSA (Dilithium3) | — | Uses the Dilithium3 public key bytes (1952 bytes). Single‑key addresses cannot encode ML‑DSA because `key_len` is `u8`; multisig uses `u16` lengths. |
+| `0x03` | BLS12‑381 (normal) | `bls` | Public keys in G1 (48 bytes), signatures in G2 (96 bytes). |
+| `0x04` | secp256k1 | — | Deterministic ECDSA over SHA‑256; public keys use the 33‑byte SEC1 compressed form and signatures use the canonical 64‑byte `r∥s` layout. |
+| `0x05` | BLS12‑381 (small) | `bls` | Public keys in G2 (96 bytes), signatures in G1 (48 bytes). |
+| `0x0A` | GOST R 34.10‑2012 (256, set A) | `gost` | Available only when the `gost` feature is enabled. |
+| `0x0B` | GOST R 34.10‑2012 (256, set B) | `gost` | Available only when the `gost` feature is enabled. |
+| `0x0C` | GOST R 34.10‑2012 (256, set C) | `gost` | Available only when the `gost` feature is enabled. |
+| `0x0D` | GOST R 34.10‑2012 (512, set A) | `gost` | Available only when the `gost` feature is enabled. |
+| `0x0E` | GOST R 34.10‑2012 (512, set B) | `gost` | Available only when the `gost` feature is enabled. |
+| `0x0F` | SM2 | `sm` | DistID length (u16 BE) + DistID bytes + 65‑byte SEC1 uncompressed SM2 key; available only when `sm` is enabled. |
 
-|タグ |コントローラー |レイアウト |メモ |
-|-----|-----------|----------|----------|
-| `0x00` |単一のキー | `curve_id:u8` · `key_len:u8` · `key_bytes` | `curve_id=0x01` は今日の Ed25519 にマッピングされます。 `key_len` は `u8` にバインドされます。値が大きいほど、`AccountAddressError::KeyPayloadTooLong` が発生します (そのため、255 バイトを超える単一キーの ML‑DSA 公開キーはエンコードできず、マルチシグを使用する必要があります)。 |
-| `0x01` |マルチシグ | `version:u8` · `threshold:u16` · `member_count:u8` · (`curve_id:u8` · `weight:u16` · `key_len:u16` · `key_bytes`)\* |最大 255 人のメンバーをサポートします (`CONTROLLER_MULTISIG_MEMBER_MAX`)。不明な曲線により `AccountAddressError::UnknownCurve` が発生します。不正なポリシーは `AccountAddressError::InvalidMultisigPolicy` としてバブルします。 |
+Slots `0x06–0x09` remain unassigned for additional curves; introducing a new
+algorithm requires a roadmap update and matching SDK/host coverage. Encoders
+MUST reject any unsupported algorithm with `ERR_UNSUPPORTED_ALGORITHM`, and
+decoders MUST fail fast on unknown ids with `ERR_UNKNOWN_CURVE` to preserve
+fail-closed behaviour.
 
-マルチシグ ポリシーは、CTAP2 スタイルの CBOR マップと正規ダイジェストも公開します。
-ホストと SDK はコントローラーを決定的に検証できます。参照
-スキーマの場合は `docs/source/references/multisig_policy_schema.md` (ADDR-1c)、
-検証ルール、ハッシュ手順、およびゴールデン フィクスチャ。
+The canonical registry (including a machine-readable JSON export) lives under
+[`docs/source/references/address_curve_registry.md`](source/references/address_curve_registry.md).
+Tooling SHOULD consume that dataset directly so curve identifiers remain
+consistent across SDKs and operator workflows.
 
-すべてのキーバイトは、`PublicKey::to_bytes` によって返されたとおりに正確にエンコードされます。デコーダは `PublicKey` インスタンスを再構築し、バイトが宣言された曲線と一致しない場合は `AccountAddressError::InvalidPublicKey` を発生させます。
+- **SDK gating:** SDKs default to Ed25519-only validation/encoding. Swift exposes
+  compile-time flags (`IROHASWIFT_ENABLE_MLDSA`, `IROHASWIFT_ENABLE_GOST`,
+  `IROHASWIFT_ENABLE_SM`); the Java/Android SDK requires
+  `AccountAddress.configureCurveSupport(...)`; the JavaScript SDK uses
+  `configureCurveSupport({ allowMlDsa: true, allowGost: true, allowSm2: true })`.
+  secp256k1 support is available but not enabled by default in the JS/Android
+  SDKs; callers must opt in explicitly when emitting non‑Ed25519 controllers.
+- **Host gating:** `Register<Account>` rejects controllers whose signatories use algorithms
+  missing from the node’s `crypto.allowed_signing` list **or** curve identifiers absent from
+  `crypto.curves.allowed_curve_ids`, so clusters must advertise support (configuration +
+  genesis) before ML‑DSA/GOST/SM controllers can be registered. BLS controller
+  algorithms are always allowed when compiled (consensus keys rely on them),
+  and the default configuration enables Ed25519 + secp256k1.【crates/iroha_core/src/smartcontracts/isi/domain.rs:32】
 
-> **Ed25519 正規強制 (ADDR-3a):** 曲線 `0x01` キーは、署名者が発行した正確なバイト文字列にデコードする必要があり、小次数のサブグループ内にあってはなりません。ノードは非正規エンコーディング (`2^255-19` を法として削減された値など) や ID 要素などの弱点を拒否するようになりました。そのため、SDK はアドレスを送信する前に一致検証エラーを検出する必要があります。
+##### 2.3.2 Multisig controller guidance
 
-##### 2.3.1 曲線識別子レジストリ (ADDR-1d)
+`AccountController::Multisig` serialises policies via
+`crates/iroha_data_model/src/account/controller.rs` and enforces the schema
+documented in [`docs/source/references/multisig_policy_schema.md`](source/references/multisig_policy_schema.md).
+Key implementation details:
 
-| ID (`curve_id`) |アルゴリズム |フィーチャーゲート |メモ |
-|-----------------|-----------|--------------|------|
-| `0x00` |予約済み | — |放出してはなりません。デコーダは `ERR_UNKNOWN_CURVE` を表示します。 |
-| `0x01` | Ed25519 | — |正規 v1 アルゴリズム (`Algorithm::Ed25519`);デフォルト設定で有効になっています。 |
-| `0x02` | ML‑DSA (ダイリチウム3) | — | Dilithium3 公開キー バイト (1952 バイト) を使用します。 `key_len` は `u8` であるため、単一キー アドレスは ML-DSA をエンコードできません。マルチシグは `u16` の長さを使用します。 |
-| `0x03` | BLS12‑381（ノーマル） | `bls` |公開キーは G1 (48 バイト)、署名は G2 (96 バイト) にあります。 |
-| `0x04` | secp256k1 | — | SHA-256 上の決定論的 ECDSA。公開鍵は 33 バイトの SEC1 圧縮形式を使用し、署名は正規の 64 バイト `r∥s` レイアウトを使用します。 |
-| `0x05` | BLS12‑381(小) | `bls` |公開キーは G2 (96 バイト)、署名は G1 (48 バイト) にあります。 |
-| `0x0A` | GOST R 34.10-2012 (256、セット A) | `gost` | `gost` 機能が有効になっている場合にのみ使用できます。 |
-| `0x0B` | GOST R 34.10‑2012 (256、セット B) | `gost` | `gost` 機能が有効になっている場合にのみ使用できます。 |
-| `0x0C` | GOST R 34.10‑2012 (256、セット C) | `gost` | `gost` 機能が有効になっている場合にのみ使用できます。 |
-| `0x0D` | GOST R 34.10‑2012 (512、セット A) | `gost` | `gost` 機能が有効になっている場合にのみ使用できます。 |
-| `0x0E` | GOST R 34.10‑2012 (512、セット B) | `gost` | `gost` 機能が有効になっている場合にのみ使用できます。 |
-| `0x0F` | SM2 | `sm` | DistID 長 (u16 BE) + DistID バイト + 65 バイトの SEC1 非圧縮 SM2 キー。 `sm` が有効な場合にのみ使用できます。 |
+- Policies are normalised and validated by `MultisigPolicy::validate()` before
+  being embedded. Thresholds must be ≥ 1 and ≤ Σ weight; duplicate members are
+  removed deterministically after sorting by `(algorithm || 0x00 || key_bytes)`.
+- The binary controller payload (`ControllerPayload::Multisig`) encodes
+  `version:u8`, `threshold:u16`, `member_count:u16`, then each member’s
+  `(curve_id, weight:u16, key_len:u16, key_bytes)`. This is exactly what
+  `AccountAddress::canonical_bytes()` writes to I105 payloads.
+- Multisig address encoding is no longer limited by an 8-bit member counter.
+  The binary field is `u16`, so the old 255-member hard cap no longer applies.
+- Hashing (`MultisigPolicy::digest_blake2b256()`) uses Blake2b-256 with the
+  `iroha-ms-policy` personalization string so governance manifests can bind to a
+  deterministic policy ID that matches the controller bytes embedded in I105.
+- Fixture coverage lives in `fixtures/account/address_vectors.json` (cases
+  `addr-multisig-*`). Wallets and SDKs should assert the generated fixture
+  bundle directly rather than copying inline literals into code or docs. The
+  canonical renderer now emits katakana-only I105 payload symbols after the
+  chain sentinel.
 
-スロット `0x06–0x09` は追加のカーブに割り当てられていないままになります。新しいものを導入する
-アルゴリズムにはロードマップの更新と、SDK/ホストの対応範囲の一致が必要です。エンコーダ
-`ERR_UNSUPPORTED_ALGORITHM` を使用して、サポートされていないアルゴリズムを拒否しなければなりません。
-デコーダは、`ERR_UNKNOWN_CURVE` を保持するために不明な ID で高速に失敗しなければなりません (MUST)。
-フェイルクローズ動作。
+#### 2.4 Failure rules (ADDR-1a)
 
-正規レジストリ (機械可読な JSON エクスポートを含む) は以下にあります。
-[`docs/source/references/address_curve_registry.md`](source/references/address_curve_registry.md)。
-曲線識別子が残るように、ツールはそのデータセットを直接使用する必要があります (SHOULD)
-SDK とオペレーターのワークフロー全体で一貫性があります。
+- Payloads shorter than the required canonical header+controller size emit
+  `AccountAddressError::InvalidLength` or
+  `AccountAddressError::UnexpectedTrailingBytes`.
+- Headers that set the reserved `ext_flag` or advertise unsupported versions/classes MUST be rejected using `UnexpectedExtensionFlag`, `InvalidHeaderVersion`, or `UnknownAddressClass`.
+- Unknown controller tags raise `UnknownControllerTag`.
+- Oversized or malformed key material raises `KeyPayloadTooLong` or `InvalidPublicKey`.
+- Multisig controllers that exceed the encodable `u16` member count raise
+  `MultisigMemberOverflow`; there is no 255-member limit.
+- Canonical rendering uses katakana-only I105 payload symbols after the chain
+  sentinel. Decoders may still read historical mixed payloads for compatibility,
+  but public renderers, JSON, and docs must emit the katakana canonical form.
+- `AccountId` text/JSON parsing does not attempt alias or domain fallback:
+  non-canonical/legacy i105 literals, `norito:<hex>`, canonical hex, `@domain`, and alias
+  forms are rejected up front in favor of canonical Katakana i105 only.
 
-- **SD​​K ゲーティング:** SDK はデフォルトで Ed25519 のみの検証/エンコーディングになります。スウィフトが暴露する
-  コンパイル時フラグ (`IROHASWIFT_ENABLE_MLDSA`、`IROHASWIFT_ENABLE_GOST`、
-  `IROHASWIFT_ENABLE_SM`); Java/Android SDK に必要なもの
-  `AccountAddress.configureCurveSupport(...)`; JavaScript SDK が使用する
-  `configureCurveSupport({ allowMlDsa: true, allowGost: true, allowSm2: true })`。
-  secp256k1 サポートは利用可能ですが、JS/Android ではデフォルトで有効になっていません。
-  SDK; Ed25519 以外のコントローラを発行する場合、呼び出し元は明示的にオプトインする必要があります。
-- **ホスト ゲーティング:** `Register<Account>` は、署名者がアルゴリズムを使用しているコントローラーを拒否します
-  ノードの `crypto.allowed_signing` リストに欠落しています **または** 曲線識別子が欠落しています
-  `crypto.curves.allowed_curve_ids` なので、クラスターはサポートをアドバタイズする必要があります (構成 +
-  Genesis) は、ML‑DSA/GOST/SM コントローラーを登録する前に必要です。 BLSコントローラー
-  アルゴリズムはコンパイル時に常に許可されます (コンセンサス キーはアルゴリズムに依存します)。
-  デフォルト設定では Ed25519 + secp256k1 が有効になります。【crates/iroha_core/src/smartcontracts/isi/domain.rs:32】
+#### 2.5 Normative binary vectors
 
-##### 2.3.2 マルチシグ コントローラーのガイダンス
+- **Selector-free canonical single-key payload (`seed byte 0x00`)**  
+  Canonical hex: `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.  
+  Breakdown: `0x02` header, `0x00` controller tag, `0x01` curve id (Ed25519),
+  `0x20` key length, followed by the 32-byte key payload.
+- **Canonical multisig payload layout**  
+  `0x0A | 0x01 | version:u8 | threshold:u16 | member_count:u16 | ...members`
+  where each member is encoded as `(curve_id:u8, weight:u16, key_len:u16,
+  key_bytes)`.
 
-`AccountController::Multisig` はポリシーをシリアル化します。
-`crates/iroha_data_model/src/account/controller.rs` とスキーマを適用します
-[`docs/source/references/multisig_policy_schema.md`](source/references/multisig_policy_schema.md) に記載されています。
-主要な実装の詳細:
+The fixture bundle in `fixtures/account/address_vectors.json` still publishes
+i105 outputs plus non-canonical legacy-vector fixtures for the same canonical payloads.
+Public `AccountId` parser tests separately assert that only canonical Katakana i105 is
+accepted.
 
-- ポリシーは、事前に `MultisigPolicy::validate()` によって正規化および検証されます。
-  埋め込まれている。しきい値は ≥1 かつ ≤Σ の重みである必要があります。重複したメンバーは
-  `(algorithm || 0x00 || key_bytes)` で並べ替えた後、決定的に削除されます。
-- バイナリ コントローラ ペイロード (`ControllerPayload::Multisig`) はエンコードされます。
-  `version:u8`、`threshold:u16`、`member_count:u8`、次に各メンバーの
-  `(curve_id, weight:u16, key_len:u16, key_bytes)`。まさにこれです
-  `AccountAddress::canonical_bytes()` は、canonical Katakana i105 / non-canonical Katakana i105 ペイロードに書き込みます。
-- ハッシュ (`MultisigPolicy::digest_blake2b256()`) は、Blake2b-256 を使用します。
-  `iroha-ms-policy` パーソナライゼーション文字列を使用して、ガバナンス マニフェストを
-  I105 に埋め込まれたコントローラ バイトと一致する決定的なポリシー ID。
-- フィクスチャ カバレッジは `fixtures/account/address_vectors.json` にあります (ケース
-  `addr-multisig-*`)。ウォレットと SDK は正規の I105 文字列をアサートする必要があります
-  以下で、エンコーダが Rust 実装と一致していることを確認します。
+Reviewed-by: Data Model WG, Cryptography WG — scope approved for ADDR-1a.
 
-|ケースID |しきい値 / メンバー | I105 リテラル (接頭辞 `0x02F1`) | Sora 圧縮 (`sora`) リテラル |メモ |
-|----------|---------------------|----------------------------|----------------------|----------|
-| `addr-multisig-council-threshold3` | `≥3` 体重、メンバー `(2,1,1)` | `SRfSHsrH3tEmYaaAYyD248F3vfT1oQ3WEGS22MaD8W9bLefF7rsoKLYGcpbcM9EcSus5ZhCAZU7ztn2BCsyeCAdfRncAVmVsipd4ibk6CBLF3Nrzcw8P7VKJg6mtFgEhWVTjfDkUMoc63oeEmaWyV6cyiphwk8ZgKAJUe4TyVtmKm1WWcg7qZ6i` | `sora3vﾑ2zkaoUwﾋﾅGﾘﾚyﾂe3ﾖfﾙヰｶﾘﾉwｷnoWﾛYicaUr3ﾔｲﾖ2Ado3TﾘYQﾉJqﾜﾇｳﾑﾐd8dDjRGｦ3Vﾃ9HcﾀMヰR8ﾎﾖgEqGｵEｾDyc5ﾁ1ﾔﾉ31sUﾑﾀﾖaｸxﾘ3ｲｷMEuFｺｿﾉBQSVQnxﾈeJzrXLヰhｿｹ5SEEﾅPﾂﾗｸdヰﾋ1bUGHｲVXBWNNJ6K` |評議会ドメインのガバナンス定足数。 |
-| `addr-multisig-wonderland-threshold2` | `≥2`、メンバー `(1,2)` | `3xsmkps1KPBn9dtpE5qHRhHEZCpiAe8d9j6H9A42TV6kc1TpaqdwnSksKgQrsSEHznqvWKBMc1os69BELzkLjsR7EV2gjV14d9JMzo97KEmYoKtxCrFeKFAcy7ffQdboV1uRt` | `sora2ﾖZﾘeｴAdx3ﾂﾉﾔXhnｹﾀ2ﾉｱﾋxﾅﾄﾌヱwﾐmﾊvEﾐCﾏﾎｦ1ﾑHﾋso2GKﾔﾕﾁwﾂﾃP6ﾁｼﾙﾖｺ9ｻｦbﾈ4wFdﾑFヰ3HaﾘｼMｷﾌHWtｷﾋLﾙﾖQ4D3XﾊﾜXmpktﾚｻ5ﾅﾅﾇ1gkﾏsCFQGH9` |デュアルシグネチャーワンダーランドの例 (ウェイト 1 + 2)。 |
-| `addr-multisig-default-quorum3` | `≥3`、メンバー `(1,1,1,1)` | `nA2bDNhMqXz7ERkHNoEWbvJGyR1aDRsw32LaUWLgbK3vcpzohmdFCLvdotxUWWDY3aZeX4ptLk4Z6TjF5ossnJm8VrNo6daxmGTkqUyP4MxJxiNyPFxsEE5DLnsoLWUcxaWNpZ76tmkbiGS31Gv8tejKpuiHUMaQ1s5ohWyZvDnpycNkBK8AEfGJqn5yc9zAzfWbVhpDwkPj8ScnzvH1Echr5` | `soraﾐ38ﾅｴｸﾜ8ﾃzwBrqﾘｺ4yﾄv6kqJp1ｳｱﾛｿrzﾄﾃﾘﾒRﾗtV9ｼﾔPｽcヱEﾌVVVｼﾘｲZAｦﾓﾅｦeﾒN76vﾈcuｶuﾛL54rzﾙﾏX2zMﾌRLﾃﾋpﾚpｲcHﾑﾅﾃﾔzｵｲVfAﾃﾚﾎﾚCヰﾔｲｽｦw9ﾔﾕ8bGGkﾁ6sNｼaｻRﾖﾜYﾕﾚU18ﾅHヰﾌuMeﾊtﾂrｿj95Ft8ﾜ3fﾄkNiｴuﾈrCﾐQt8ヱｸｸmﾙﾒgUbﾑEKTTCM` |基本ガバナンスに使用される暗黙的なデフォルトのドメイン クォーラム。
+##### Sora Nexus reference aliases
 
-#### 2.4 障害ルール (ADDR-1a)
+Sora Nexus networks default to `chain_discriminant = 0x02F1`
+(`iroha_config::parameters::defaults::common::CHAIN_DISCRIMINANT`). The
+`AccountAddress::to_i105` helpers therefore emit
+consistent textual forms for every canonical payload. The authoritative sample
+literals now live only in `fixtures/account/address_vectors.json` so the CLI,
+Torii responses, and SDK helpers all consume one canonical katakana-I105 source
+of truth instead of duplicating stale inline strings.
 
-- 必要なヘッダーとセレクターよりも短いペイロード、または残りのバイトがあるペイロードは、`AccountAddressError::InvalidLength` または `AccountAddressError::UnexpectedTrailingBytes` を出力します。
-- 予約された `ext_flag` を設定するヘッダー、またはサポートされていないバージョン/クラスを宣伝するヘッダーは、`UnexpectedExtensionFlag`、`InvalidHeaderVersion`、または `UnknownAddressClass` を使用して拒否されなければなりません。
-- 不明なセレクター/コントローラー タグにより、`UnknownDomainTag` または `UnknownControllerTag` が発生します。
-- サイズが大きすぎるキーマテリアルまたは不正な形式のキーマテリアルにより、`KeyPayloadTooLong` または `InvalidPublicKey` が発生します。
-- 255 メンバーを超えるマルチシグ コントローラーでは `MultisigMemberOverflow` が発生します。
-- IME/NFKC 変換: 半角のそらかなは、デコードを中断することなく全角形式に正規化できますが、ASCII `sora` センチネルと I105 の数字/文字は ASCII のままでなければなりません。全角または大文字小文字を折り畳んだセンチネルは `ERR_MISSING_COMPRESSED_SENTINEL` を表示し、全角 ASCII ペイロードは `ERR_INVALID_COMPRESSED_CHAR` を発生させ、チェックサムの不一致は `ERR_CHECKSUM_MISMATCH` として発生します。 `crates/iroha_data_model/src/account/address.rs` のプロパティ テストはこれらのパスをカバーするため、SDK とウォレットは決定的な障害に依存できます。
-- `name@dataspace` or `name@domain.dataspace` エイリアスの Torii および SDK 解析では、canonical Katakana i105 / non-canonical Katakana i105 入力がエイリアスのフォールバック前に失敗した場合 (例: チェックサムの不一致、ドメイン ダイジェストの不一致)、同じ `ERR_*` コードが出力されるようになりました。そのため、クライアントは散文文字列から推測することなく、構造化された理由を伝えることができます。
-- 12 バイト未満のローカル セレクター ペイロードは `ERR_LOCAL8_DEPRECATED` を表示し、従来の Local‑8 ダイジェストからのハード カットオーバーを維持します。
-- Domainless canonical Katakana i105 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
+#### 2.6 Public textual forms
 
-#### 2.5 規範的なバイナリ ベクトル
+- **Canonical account id:** a Katakana i105 literal only.
+- **On-chain account aliases:** `name@dataspace` or `name@domain.dataspace`.
+  These aliases resolve on-chain to canonical i105 account ids and are not a
+  second account-id codec.
+- **Out-of-band wrappers:** transport wrappers such as CAIP-style URIs or other
+  integration envelopes may exist in downstream systems, but they are not
+  public account ids. Any such wrapper must resolve to canonical i105 or an
+  on-chain alias before it reaches strict parser paths.
+- **Machine helpers:** Rust, TypeScript/JavaScript, Python, Swift, Kotlin, and
+  Java SDKs expose canonical Katakana i105 codecs
+  (`AccountAddress::to_i105`, `AccountAddress::parse_encoded`, and equivalents).
 
-- **暗黙的なデフォルト ドメイン (`default`、シード バイト `0x00`)**  
-  正規の 16 進数: `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`。  
-  内訳: `0x02` ヘッダー、`0x00` セレクター (暗黙のデフォルト)、`0x00` コントローラー タグ、`0x01` カーブ ID (Ed25519)、`0x20` キーの長さ、その後に 32 バイトのキー ペイロードが続きます。
-- **ローカル ドメイン ダイジェスト (`treasury`、シード バイト `0x01`)**  
-  正規の 16 進数: `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`。  
-  内訳: `0x02` ヘッダー、セレクター タグ `0x01` とダイジェスト `b1 8f e9 c1 ab ba c4 5b 3e 38 fc 5d`、その後に単一キー ペイロード (`0x00` タグ、`0x01` 曲線 ID、`0x20` 長さ、32 バイト Ed25519キー）。
+#### 2.7 Deterministic i105 encoding
 
-単体テスト (`account::address::tests::parse_encoded_accepts_all_formats`) は、`AccountAddress::parse_encoded` を介して以下の V1 ベクトルをアサートし、ツールが 16 進数、I105 (推奨)、および圧縮 (`sora`、次善の) 形式にわたる正規のペイロードに依存できることを保証します。 `cargo run -p iroha_data_model --example address_vectors` を使用して拡張フィクスチャ セットを再生成します。
-
-|ドメイン |シードバイト |正規の 16 進数 |圧縮 (`sora`) |
-|-----------|-----------|----------------------------------------------------------------------|------------|
-|デフォルト | `0x00` | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE` |
-|財務省 | `0x01` | `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
-|ワンダーランド | `0x02` | `0x0201b8ae571b79c5a80f5834da2b0001208139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394` | `sora5ｻwﾓyRｿqﾏnMﾀﾙヰKoﾒﾇﾓQｺﾛyｼ3ｸFHB2F5LyPﾐTMZkｹｼw67ﾋVﾕｻr8ﾉGﾇeEnｻVRNKCS` |
-|いろは | `0x03` | `0x0201de8b36819700c807083608e2000120ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1` | `sora5ｻﾜxﾀ7Vｱ7QFeｷMﾂLﾉﾃﾏﾓﾀTﾚgSav3Wnｱｵ4ｱCKｷﾛMﾘzヰHiﾐｱ6ﾃﾉﾁﾐZmﾇ2fiﾎX21P4L` |
-|アルファ | `0x04` | `0x020146be2154ae86826a3fef0ec0000120ca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c` | `sora5ｻ9JヱﾈｿuwU6ｴpﾔﾂﾈRqRTds1HﾃﾐｶLVﾍｳ9ﾔhｾNｵVｷyucEﾒGﾈﾏﾍ9sKeﾉDzrｷﾆ742WG1` |
-|オメガ | `0x05` | `0x0201390d946885bc8416b3d30c9d0001206e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1` | `sora5ｻ3zrﾌuﾚﾄJﾑXQhｸTyN8pzwRkWxmjVﾗbﾚﾕヰﾈoｽｦｶtEEﾊﾐ6GPｿﾓﾊｾEhvPｾｻ3XAJ73F` |
-|ガバナンス | `0x06` | `0x0201989eb45a80940d187e2c908f0001208a875fff1eb38451577acd5afee405456568dd7c89e090863a0557bc7af49f17` | `sora5ｻiｵﾁyVﾕｽbFpDHHuﾇﾉdﾗｲﾓﾄRﾋAW3frUCｾ5ｷﾘTwdﾚnｽtQiLﾏｼｶﾅXgｾZmﾒヱH58H4KP` |
-|バリデータ | `0x07` | `0x0201e4ffa58704c69afaeb7cc2d7000120ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c` | `sora5ｻﾀLDH6VYﾑNAｾgﾉVﾜtxﾊRXLｹﾍﾔﾌLd93GﾔGeｴﾄYrs1ﾂHｸkYxｹwｿyZﾗxyﾎZoXT1S4N` |
-|探検家 | `0x08` | `0x02013b35422c65c2a83c99c523ad0001201398f62c6d1a457c51ba6a4b5f3dbd2f69fca93216218dc8997e416bd17d93ca` | `sora5ｻ4nmｻaﾚﾚPvNLgｿｱv6MHDeEyﾀovﾉJcpvrﾖ6ﾈCQcCNﾇﾜhﾚﾖyFdTwｸｶHEｱ9rWU8FMB` |
-|ソラネット | `0x09` | `0x0201047d9ea7f5d5dbec3f7bfc58000120fd1724385aa0c75b64fb78cd602fa1d991fdebf76b13c58ed702eac835e9f618` | `sora5ｱｸヱVQﾂcﾁヱRﾓcApｲﾁﾅﾒvﾌﾏfｾNnﾛRJsｿDhﾙuHaﾚｺｦﾌﾍﾈeﾆﾎｺN1UUDｶ6ﾎﾄﾛoRH8JUL` |
-|きつね | `0x0A` | `0x0201e91933de397fd7723dc9a76c00012043a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c` | `sora5ｻﾚｺヱkfFJfSﾁｼJwﾉLvbpSｷﾔMWFMrbｳｸｲｲyヰKGJﾉｻ4ｹﾕrｽhｺｽzSDヰXAN62AD7RGNS` |
-|だ | `0x0B` | `0x02016838cf5bb0ce0f3d4f380e1c00012066be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a` | `sora5ｻNﾒ5SﾐRﾉﾐﾃ62ｿ1ｶｷWFKyF1BcAﾔvｼﾐHqﾙﾐPﾏｴヰ5tｲﾕvnﾙT6ﾀW7mﾔ7ﾇﾗﾂｳ25CXS93` |
-
-レビュー者: データ モデル WG、暗号化 WG — ADDR-1a の範囲が承認されました。
-
-##### Sora Nexus 参照エイリアス
-
-Sora Nexus ネットワークのデフォルトは `chain_discriminant = 0x02F1`
-(`iroha_config::parameters::defaults::common::CHAIN_DISCRIMINANT`)。の
-したがって、`AccountAddress::to_i105` ヘルパーと `to_i105` ヘルパーは次のように出力します。
-すべての正規ペイロードに対して一貫したテキスト形式。から選択された備品
-`fixtures/account/address_vectors.json` (経由で生成
-`cargo xtask address-vectors`) を簡単な参照のために以下に示します。
-
-|アカウント/セレクター | I105 リテラル (接頭辞 `0x02F1`) | Sora 圧縮 (`sora`) リテラル |
-|---------------------|--------------------------------|--------------------------|
-| `default` ドメイン (暗黙的なセレクター、シード `0x00`) | `soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE` |
-| `treasury` (ローカル ダイジェスト セレクター、シード `0x01`) | `34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
-|グローバル レジストリ ポインター (`registry_id = 0x0000_002A`、`treasury` と同​​等) | `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF` | `sorakXｹ6NｻﾍﾀﾖSﾜﾖｱ3ﾚ5WﾘﾋQﾅｷｦxgﾛｸcﾁｵﾋkﾋvﾏ8SPﾓﾀｹdｴｴｲW9iCM6AEP` |
-
-これらの文字列は、CLI (`iroha tools address convert`) によって出力された文字列と一致します。鳥井
-応答 (`canonical Katakana i105 literal rendering`) と SDK ヘルパー、つまり UX のコピー/ペースト
-フローはそれらをそのまま信頼できます。 `<address>@<domain>` (rejected legacy form) は、明示的なルーティング ヒントが必要な場合にのみ追加します。サフィックスは正規の出力の一部ではありません。
-
-#### 2.6 相互運用性のためのテキスト エイリアス (計画中)
-
-- **チェーンエイリアスのスタイル:** `ih:<chain-alias>:<name@domain.dataspace>` (ログと人間の場合)
-  エントリー。ウォレットはプレフィックスを解析し、埋め込まれたチェーンを検証してブロックする必要があります。
-  不一致。
-- **CAIP-10 フォーム:** `iroha:<caip-2-id>:<i105-addr>` (チェーンに依存しない)
-  統合。このマッピングは出荷された製品では**まだ実装されていません**
-  ツールチェーン。
-- **マシン ヘルパー:** Rust、TypeScript/JavaScript、Python、
-  I105 と圧縮形式をカバーする Kotlin (`AccountAddress::to_i105`、
-  `AccountAddress::parse_encoded`、および同等の SDK)。 CAIP-10 ヘルパーは、
-  今後の仕事。
-
-#### 2.7 決定的な I105 エイリアス
-
-- **プレフィックス マッピング:** `chain_discriminant` を I105 ネットワーク プレフィックスとして再利用します。
-  `encode_i105_prefix()` (`crates/iroha_data_model/src/account/address.rs` を参照)
-  `<64` の値に対して 6 ビットのプレフィックス (シングル バイト) と 14 ビットの 2 バイトを出力します。
-  大規模なネットワーク用のフォーム。権限のある割り当ては次の場所にあります
+- **Prefix mapping:** Reuse the `chain_discriminant` inside the same canonical
+  i105 codec. Well-known discriminants use sentinels such as `sora`, `test`,
+  or `dev` as part of the canonical i105 literal; there is no separate ASCII
+  account-id codec. The authoritative assignments live in
   [`address_prefix_registry.md`](source/references/address_prefix_registry.md);
-  SDK は、衝突を避けるために、一致する JSON レジストリの同期を維持しなければなりません。
-- **アカウント資料:** I105 は、によって構築された正規ペイロードをエンコードします。
-  `AccountAddress::canonical_bytes()` - ヘッダー バイト、ドメイン セレクター、および
-  コントローラーのペイロード。追加のハッシュ手順はありません。 I105 には、
-  Rust によって生成されたバイナリ コントローラ ペイロード (単一キーまたはマルチシグ)
-  マルチシグ ポリシー ダイジェストに使用される CTAP2 マップではなく、エンコーダです。
-- **エンコーディング:** `encode_i105()` はプレフィックス バイトを正規文字列と連結します。
-  ペイロードを作成し、Blake2b-512 から派生した 16 ビット チェックサムを追加します。
-  接頭辞 `I105PRE` (`b"I105PRE"` || prefix || payload)。結果は I105 アルファベットを使って `bs58` でエンコードされます。
-  CLI/SDK ヘルパーは同じプロシージャを公開しており、`AccountAddress::parse_encoded`
-  `decode_i105` を介してそれを反転します。
+  SDKs MUST keep the matching JSON registry in sync to avoid collisions.
+- **Account material:** I105 encodes the canonical payload built by
+  `AccountAddress::canonical_bytes()`—header byte and controller payload.
+  Domain-selector bytes are not emitted in canonical payloads. There is no additional hashing step; I105 embeds the
+  binary controller payload (single key or multisig) as produced by the Rust
+  encoder, not the CTAP2 map used for multisig policy digests.
+- **Encoding:** `encode_i105()` renders the canonical payload with the
+  105-symbol katakana alphabet and appends a six-symbol Bech32m-style checksum
+  over the canonical bytes. CLI/SDK helpers expose the same procedure, and
+  `AccountAddress::parse_encoded` reverses it via `decode_i105`.
 
-#### 2.8 規範的なテキストテストベクトル
+#### 2.8 Normative textual test vectors
 
-`fixtures/account/address_vectors.json` には完全な I105 (推奨) と圧縮 (`sora`、2 番目に優れた) が含まれています
-すべての正規ペイロードのリテラル。ハイライト:
+`fixtures/account/address_vectors.json` contains canonical i105 literals plus
+negative fixtures that exercise non-canonical and malformed inputs.
+Highlights:
 
-- **`addr-single-default-ed25519` (Sora Nexus、プレフィックス `0x02F1`)。**  
-  I105 `soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ`、圧縮 (`sora`)
-  `sora2QG…U4N5E5`。鳥居は、`AccountId` からこれらの正確な文字列を出力します。
-  `Display` 実装 (標準 I105) および `AccountAddress::to_i105`。
-- **`addr-global-registry-002a` (レジストリ セレクタ → 財務)。**  
-  I105 `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF`、圧縮 (`sora`)
-  `sorakX…CM6AEP`。レジストリ セレクターが引き続きデコードされることを示します。
-  対応するローカル ダイジェストと同じ正規ペイロード。
-- **失敗ケース (`i105-prefix-mismatch`)。**  
-  ノード上でプレフィックス `NETWORK_PREFIX + 1` でエンコードされた I105 リテラルを解析する
-  デフォルトのプレフィックスの結果を期待すると、
+- **`addr-single-default-ed25519` (Sora Nexus, prefix `0x02F1`).**  
+  Torii emits the generated katakana-I105 literal from `AccountId`’s `Display`
+  implementation (canonical Katakana i105).
+- **Multisig controller payloads.**  
+  Canonical controller bytes now encode `member_count:u16`, so address encoding
+  no longer has the old 255-member hard cap.
+- **Failure case (`i105-prefix-mismatch`).**  
+  Parsing an i105 literal encoded with prefix `NETWORK_PREFIX + 1` on a node
+  expecting the default prefix yields
   `AccountAddressError::UnexpectedNetworkPrefix { expected: 753, found: 754 }`
-  ドメインルーティングが試行される前に。 `i105-checksum-mismatch` フィクスチャ
-  Blake2b チェックサムに対して改ざん検出を実行します。
+  before domain routing is attempted. Negative-path `AccountId` tests also cover
+  rejected `norito:...`, `0x...`, alias, and `@domain` inputs. The
+  `i105-checksum-mismatch` fixture exercises tampering detection over the
+  katakana-I105 checksum.
 
-#### 2.9 コンプライアンス対策
+#### 2.9 Compliance fixtures
 
-ADDR‑2には、ポジティブとネガティブをカバーする再生可能なフィクスチャバンドルが同梱されています
-標準 16 進数、I105 (推奨)、圧縮 (`sora`、半角/全角)、暗黙的なシナリオ
-デフォルト セレクター、グローバル レジストリ エイリアス、およびマルチシグネチャ コントローラー。の
-正規の JSON は `fixtures/account/address_vectors.json` にあり、
-で再生成されました:
+ADDR‑2 ships a replayable fixture bundle covering positive and negative
+scenarios across canonical Katakana i105, non-canonical legacy-vector output, canonical
+`AccountAddress` hex renderings, selector-free payloads, multisignature
+controllers, and rejected legacy `AccountId` literal forms. The canonical JSON
+lives in `fixtures/account/address_vectors.json` and can be regenerated with:
 
 ```
 cargo xtask address-vectors --out fixtures/account/address_vectors.json
@@ -425,26 +374,26 @@ cargo xtask address-vectors --out fixtures/account/address_vectors.json
 cargo xtask address-vectors --verify
 ```
 
-アドホック実験 (異なるパス/形式) の場合、サンプル バイナリはそのままです。
-利用可能:
+For ad-hoc experiments (different paths/formats) the example binary is still
+available:
 
 ```
 cargo run -p iroha_data_model --example account_address_vectors > fixtures/account/address_vectors.json
 ```
 
-`crates/iroha_data_model/tests/account_address_vectors.rs` での Rust 単体テスト
-`crates/iroha_torii/tests/account_address_vectors.rs` と JS を組み合わせて、
-Swift および Android ハーネス (`javascript/iroha_js/test/address.test.js`、
-`IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift`、
-`java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java`)、
-SDK 間でのコーデックのパリティと Torii アドミッションを保証するために、同じフィクスチャを使用します。
+Rust unit tests in `crates/iroha_data_model/tests/account_address_vectors.rs`
+and `crates/iroha_torii/tests/account_address_vectors.rs`, together with the JS,
+Swift, and Android harnesses (`javascript/iroha_js/test/address.test.js`,
+`IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift`,
+`java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java`),
+consume the same fixture to guarantee codec parity across SDKs and Torii admission.
 
-### 3. グローバルに固有のドメインと正規化
+### 3. Globally unique domains & normalization
 
-参照: [`docs/source/references/address_norm_v1.md`](source/references/address_norm_v1.md)
-Torii、データモデル、SDK 全体で使用される正規の Norm v1 パイプライン用。
+See also: [`docs/source/references/address_norm_v1.md`](source/references/address_norm_v1.md)
+for the canonical Norm v1 pipeline used across Torii, the data model, and SDKs.
 
-`DomainId` をタグ付きタプルとして再定義します。
+Redefine `DomainId` as a tagged tuple:
 
 ```
 DomainId {
@@ -458,334 +407,321 @@ enum GlobalDomainAuthority {
 }
 ```
 
-`LocalChain` は、現在のチェーンによって管理されているドメインの既存の名前をラップします。
-ドメインがグローバル レジストリを通じて登録されると、所有権が永続化されます。
-チェーンの判別式。表示/解析は今のところ変更されていませんが、
-拡張された構造により、ルーティングの決定が可能になります。
+`LocalChain` wraps the existing Name for domains managed by the current chain.
+When a domain is registered through the global registry, we persist the owning
+chain’s discriminant. Display / parsing stays unchanged for now, but the
+expanded structure allows routing decisions.
 
-#### 3.1 正規化とスプーフィング防御
+#### 3.1 Normalization & spoofing defenses
 
-Norm v1 は、すべてのコンポーネントがドメインの前に使用する必要がある正規のパイプラインを定義します
-名前は永続化されるか、`AccountAddress` に埋め込まれます。完全なウォークスルー
-[`docs/source/references/address_norm_v1.md`](source/references/address_norm_v1.md) に存在します。
-以下の概要は、ウォレット、トリイ、SDK、ガバナンスのステップをまとめています。
-ツールは実装する必要があります。
+Norm v1 defines the canonical pipeline every component must use before a domain
+name is persisted or embedded into an `AccountAddress`. The full walkthrough
+lives in [`docs/source/references/address_norm_v1.md`](source/references/address_norm_v1.md);
+the summary below captures the steps that wallets, Torii, SDKs, and governance
+tools must implement.
 
-1. **入力検証。** 空の文字列、空白、および予約された文字列を拒否します。
-   区切り文字 `@`、`#`、`$`。これは、によって強制される不変式と一致します。
-   `Name::validate_str`。
-2. **Unicode NFC 構成** ICU 支援の NFC 正規化を標準的に適用する
-   同等のシーケンスは決定論的に折りたたまれます (例: `e\u{0301}` → `é`)。
-3. **UTS-46 正規化。** UTS-46 を介して NFC 出力を実行します。
-   `use_std3_ascii_rules = true`、`transitional_processing = false`、および
-   DNS 長の強制が有効になっています。結果は、小文字の A ラベル シーケンスになります。
-   STD3 ルールに違反する入力はここで失敗します。
-4. **長さの制限。** DNS スタイルの境界を適用します。各ラベルは 1 ～ 63 である必要があります。
-   ステップ 3 の後、完全なドメインは 255 バイトを超えてはなりません。
-5. **オプションの紛らわしいポリシー** UTS‑39 スクリプト チェックは次のように追跡されます。
-   ノルム v2;オペレータはそれらを早期に有効にすることができますが、チェックに失敗した場合は中止する必要があります
-   処理中。
+1. **Input validation.** Reject empty strings, whitespace, and the reserved
+   delimiters `@`, `#`, `$`. This matches the invariants enforced by
+   `Name::validate_str`.
+2. **Unicode NFC composition.** Apply ICU-backed NFC normalisation so canonically
+   equivalent sequences collapse deterministically (e.g., `e\u{0301}` → `é`).
+3. **UTS-46 normalisation.** Run the NFC output through UTS‑46 with
+   `use_std3_ascii_rules = true`, `transitional_processing = false`, and
+   DNS-length enforcement enabled. The result is a lower-case A-label sequence;
+   inputs that violate STD3 rules fail here.
+4. **Length limits.** Enforce the DNS-style bounds: each label MUST be 1–63
+   bytes and the full domain MUST NOT exceed 255 bytes after step 3.
+5. **Optional confusable policy.** UTS‑39 script checks are tracked for
+   Norm v2; operators can enable them early, but failing the check must abort
+   processing.
 
-すべてのステージが成功すると、小文字の A ラベル文字列がキャッシュされ、
-アドレスエンコーディング、構成、マニフェスト、およびレジストリ検索。ローカルダイジェスト
-セレクターは 12 バイトの値を `blake2s_mac(key = "SORA-LOCAL-K:v1",
-canonical_label)[0..12]` ステップ 3 の出力を使用します。他のすべての試行 (混合
-大文字、大文字、生の Unicode 入力) は構造化されたものでは拒否されます。
-`ParseError`s は、名前が指定された境界にあります。
+If every stage succeeds, the lower-case A-label string is cached and used for
+address encoding, configuration, manifests, and registry lookups. Local digest
+selectors derive their 12-byte value as `blake2s_mac(key = "SORA-LOCAL-K:v1",
+canonical_label)[0..12]` using the step 3 output. All other attempts (mixed
+case, upper-case, raw Unicode input) are rejected with structured
+`ParseError`s at the boundary where the name was supplied.
 
-これらのルールを実証する正規フィクスチャ (punycode ラウンドトリップを含む)
-および無効な STD3 シーケンス — にリストされています。
-`docs/source/references/address_norm_v1.md` は SDK CI にミラーリングされます
-ベクトル スイートは ADDR-2 で追跡されます。
+Canonical fixtures demonstrating these rules — including punycode round-trips
+and invalid STD3 sequences — are listed in
+`docs/source/references/address_norm_v1.md` and are mirrored in the SDK CI
+vector suites tracked under ADDR‑2.
 
-### 4. Nexus ドメインのレジストリとルーティング
+### 4. Nexus domain registry & routing
 
-- **レジストリ スキーマ:** Nexus は署名付きマップ `DomainName -> ChainRecord` を維持します
-  `ChainRecord` には、チェーン判別のオプションのメタデータ (RPC) が含まれます。
-  エンドポイント）、および権限の証明（例：ガバナンスマルチ署名）。
-- **同期メカニズム:**
-  - チェーンは署名されたドメイン クレームを Nexus に送信します (生成中または経由で)
-    ガバナンス指導）。
-  - Nexus は定期的なマニフェスト (署名付き JSON とオプションの Merkle ルート) を公開します。
-    HTTPS およびコンテンツ アドレス ストレージ (IPFS など) 経由で。クライアントは、
-    最新のマニフェストを使用して署名を検証します。
-- **検索フロー:**
-  - 鳥居は、`DomainId` を参照するトランザクションを受け取ります。
-  - ドメインがローカルで不明な場合、Torii はキャッシュされた Nexus マニフェストをクエリします。
-  - マニフェストが外部チェーンを示している場合、トランザクションは次のように拒否されます。
-    決定的な `ForeignDomain` エラーとリモート チェーン情報。
-  - Nexus にドメインがない場合、Torii は `UnknownDomain` を返します。
-- **トラスト アンカーとローテーション:** ガバナンス キーはマニフェストに署名します。回転とか
-  失効は新しいマニフェスト エントリとして公開されます。クライアントはマニフェストを強制します
-  TTL (例: 24 時間) を設定し、その期間を超える古いデータの参照を拒否します。
-- **失敗モード:** マニフェストの取得が失敗した場合、Torii はキャッシュされた状態にフォールバックします。
-  TTL内のデータ。 TTL を超えると `RegistryUnavailable` が発行され、拒否されます
-  不整合な状態を避けるためのクロスドメインルーティング。
+- **Registry schema:** Nexus maintains a signed map `DomainName -> ChainRecord`
+  where `ChainRecord` includes the chain discriminant, optional metadata (RPC
+  endpoints), and a proof of authority (e.g., governance multi-signature).
+- **Sync mechanism:**
+  - Chains submit signed domain claims to Nexus (either during genesis or via
+    governance instruction).
+  - Nexus publishes periodic manifests (signed JSON plus optional Merkle root)
+    over HTTPS and content-addressed storage (e.g., IPFS). Clients pin the
+    latest manifest and verify signatures.
+- **Lookup flow:**
+  - Torii receives a transaction referencing `DomainId`.
+  - If the domain is unknown locally, Torii queries the cached Nexus manifest.
+  - If the manifest indicates a foreign chain, the transaction is rejected with
+    a deterministic `ForeignDomain` error and the remote chain info.
+  - If the domain is missing from Nexus, Torii returns `UnknownDomain`.
+- **Trust anchors & rotation:** Governance keys sign manifests; rotation or
+  revocation is published as a new manifest entry. Clients enforce manifest
+  TTLs (e.g., 24h) and refuse to consult stale data beyond that window.
+- **Failure modes:** If manifest retrieval fails, Torii falls back to cached
+  data within TTL; past TTL it emits `RegistryUnavailable` and refuses
+  cross-domain routing to avoid inconsistent state.
 
-### 4.1 レジストリの不変性、エイリアス、および廃棄 (ADDR-7c)
+### 4.1 Registry immutability, aliases, and tombstones (ADDR-7c)
 
-Nexus は **追加専用マニフェスト** を公開しているため、すべてのドメインまたはエイリアスの割り当てが
-監査して再生することができます。オペレータは、に記載されているバンドルを扱う必要があります。
-[アドレス マニフェスト Runbook](source/runbooks/address_manifest_ops.md) として
-唯一の真実の情報源: マニフェストが見つからない場合、または検証に失敗した場合、鳥井は次のことを行う必要があります。
-影響を受けるドメインの解決を拒否します。
+Nexus publishes an **append-only manifest** so every domain or alias assignment
+can be audited and replayed. Operators must treat the bundle described in the
+[address manifest runbook](source/runbooks/address_manifest_ops.md) as the
+sole source of truth: if a manifest is missing or fails validation, Torii must
+refuse to resolve the affected domain.
 
-自動化サポート: `cargo xtask address-manifest verify --bundle <current_dir> --previous <previous_dir>`
-に記載されているチェックサム、スキーマ、および以前のダイジェスト チェックを再生します。
-ランブック。 `sequence` を表示するには、変更チケットにコマンド出力を含めます。
-`previous_digest` リンクはバンドルを公開する前に検証されました。
+Automation support: `cargo xtask address-manifest verify --bundle <current_dir> --previous <previous_dir>`
+replays the checksum, schema, and previous-digest checks spelled out in the
+runbook. Include the command output in change tickets to show the `sequence`
+and `previous_digest` linkage was validated before publishing the bundle.
 
-#### マニフェストヘッダーと署名契約
+#### Manifest header & signature contract
 
-|フィールド |要件 |
-|------|-----------|
-| `version` |現在 `1` です。一致する仕様の更新でのみバンプします。 |
-| `sequence` |パブリケーションごとに **ちょうど** 1 ずつ増加します。 Torii キャッシュは、ギャップや回帰のあるリビジョンを拒否します。 |
-| `generated_ms` + `ttl_hours` |キャッシュの鮮度を確立します (デフォルトは 24 時間)。次の公開前に TTL が期限切れになると、鳥井は `RegistryUnavailable` に切り替わります。 |
-| `previous_digest` |以前のマニフェスト本体の BLAKE3 ダイジェスト (16 進数)。検証者は `b3sum` を使用してそれを再計算し、不変性を証明します。 |
-| `signatures` |マニフェストは Sigstore (`cosign sign-blob`) 経由で署名されます。運用は、ロールアウト前に `cosign verify-blob --bundle manifest.sigstore manifest.json` を実行し、ガバナンス ID/発行者の制約を適用する必要があります。 |
+| Field | Requirement |
+|-------|-------------|
+| `version` | Currently `1`. Bump only with a matching spec update. |
+| `sequence` | Increment by **exactly** one per publication. Torii caches refuse revisions with gaps or regressions. |
+| `generated_ms` + `ttl_hours` | Establish cache freshness (default 24 h). If the TTL expires before the next publication, Torii flips to `RegistryUnavailable`. |
+| `previous_digest` | BLAKE3 digest (hex) of the prior manifest body. Verifiers recompute it with `b3sum` to prove immutability. |
+| `signatures` | Manifests are signed via Sigstore (`cosign sign-blob`). Ops must run `cosign verify-blob --bundle manifest.sigstore manifest.json` and enforce the governance identity/issuer constraints before rollout. |
 
-リリース オートメーションは `manifest.sigstore` と `checksums.sha256` を発行します
-JSON 本文の横にあります。 SoraFS にミラーリングするときにファイルをまとめて保存するか、
-HTTP エンドポイントにより、監査人は検証手順をそのまま再現できます。
+The release automation emits `manifest.sigstore` and `checksums.sha256`
+alongside the JSON body. Keep the files together when mirroring to SoraFS or
+HTTP endpoints so auditors can replay the verification steps verbatim.
 
-#### エントリの種類
+#### Entry types
 
-|タイプ |目的 |必須フィールド |
-|------|------|------|
-| `global_domain` |ドメインがグローバルに登録され、チェーン識別子と I105 プレフィックスにマップされる必要があることを宣言します。 | `{ "domain": "<label>", "chain": "sora:nexus:global", "i105_prefix": 753, "selector": "global" }` |
-| `tombstone` |エイリアス/セレクターを永久に廃止します。 Local‑8 ダイジェストを消去する場合、またはドメインを削除する場合に必要です。 | `{ "selector": {…}, "reason_code": "LOCAL8_RETIREMENT" \| …, "ticket": "<governance id>", "replaces_sequence": <number> }` |
+| Type | Purpose | Required fields |
+|------|---------|-----------------|
+| `global_domain` | Declares that a domain is registered globally and should map to a chain discriminant and I105 prefix. | `{ "domain": "<label>", "chain": "sora:nexus:global", "i105_prefix": 753, "selector": "global" }` |
+| `tombstone` | Retires an alias/selector permanently. Required when erasing Local‑8 digests or removing a domain. | `{ "selector": {…}, "reason_code": "LOCAL8_RETIREMENT" \| …, "ticket": "<governance id>", "replaces_sequence": <number> }` |
 
-`global_domain` エントリには、オプションで `manifest_url` または `sorafs_cid` を含めることができます。
-ウォレットを署名付きチェーンメタデータに向けますが、正規タプルは残ります
-`{domain, chain, discriminant/i105_prefix}`。 `tombstone` レコードは**引用する必要があります**
-廃止されたセレクターと、許可したチケット/ガバナンス アーティファクト
-変更により、監査証跡がオフラインで再構築可能になります。
+`global_domain` entries may optionally include a `manifest_url` or `sorafs_cid`
+to point wallets at signed chain metadata, but the canonical tuple remains
+`{domain, chain, discriminant/i105_prefix}`. `tombstone` records **must** cite
+the selector being retired and the ticket/governance artefact that authorised
+the change so the audit trail is reconstructable offline.
 
-#### エイリアス/トゥームストーンのワークフローとテレメトリ
+#### Alias/tombstone workflow & telemetry
 
-1. **ドリフトを検出します。** `torii_address_local8_total{endpoint}` を使用します。
-   `torii_address_local8_domain_total{endpoint,domain}`、
-   `torii_address_collision_total{endpoint,kind="local12_digest"}`、
-   `torii_address_collision_domain_total{endpoint,domain}`、
-   `torii_address_domain_total{endpoint,domain_kind}`、および
-   `torii_address_invalid_total{endpoint,reason}` (レンダリング形式)
-   `dashboards/grafana/address_ingest.json`) ローカル送信を確認し、
-   Local-12 の衝突は、トゥームストーンが提案されるまでゼロのままです。の
-   ドメインごとのカウンターにより、所有者は開発/テスト ドメインのみが Local‑8 を発行することを証明できます。
-   トラフィック（および Local‑12 コリジョンが既知のステージング ドメインにマッピングされること）
-   **Domain Kind Mix (5m)** パネルが含まれているため、SRE はその割合をグラフ化できます。
-   `domain_kind="local12"` トラフィックは残り、`AddressLocal12Traffic`
-   アラートは、
-   退職の門。
-2. **正規ダイジェストを取得します。** 実行します。
+1. **Detect drift.** Use `torii_address_local8_total{endpoint}`,
+   `torii_address_local8_domain_total{endpoint,domain}`,
+   `torii_address_collision_total{endpoint,kind="local12_digest"}`,
+   `torii_address_collision_domain_total{endpoint,domain}`,
+   `torii_address_domain_total{endpoint,domain_kind}`, and
+   `torii_address_invalid_total{endpoint,reason}` (rendered in
+   `dashboards/grafana/address_ingest.json`) to confirm Local submissions and
+   Local-12 collisions stay at zero before proposing a tombstone. The
+   per-domain counters let owners prove that only dev/test domains emit Local‑8
+   traffic (and that Local‑12 collisions map to known staging domains) while
+   includes the **Domain Kind Mix (5m)** panel so SREs can graph how much
+   `domain_kind="local12"` traffic remains, and the `AddressLocal12Traffic`
+   alert fires whenever production still sees Local-12 selectors despite the
+   retirement gate.
+2. **Derive canonical digests.** Run
    `iroha tools address convert <address> --format json --expect-prefix 753`
-   (または `fixtures/account/address_vectors.json` を介して消費します
-   `scripts/account_fixture_helper.py`) を使用して、正確な `digest_hex` をキャプチャします。
-   CLI は、I105、`i105`、および正規の `0x…` リテラルを受け入れます。追加する
-   `@<domain>` は、マニフェストのラベルを保持する必要がある場合のみ。
-   JSON 概要では、`input_domain` フィールドを介してそのドメインが表示されます。
-   `legacy  suffix` は、変換されたエンコーディングを `<address>@<domain>` (rejected legacy form) として再生します。
-   マニフェストの差分 (このサフィックスはメタデータであり、正規のアカウント ID ではありません)。
-   改行指向のエクスポートの場合は、次を使用します
-   `iroha tools address normalize --input <file> legacy-selector input mode` でローカルを一括変換します
-   スキップ中の正規 I105 (推奨)、圧縮 (`sora`、2 番目に良い)、16 進数、または JSON 形式へのセレクター
-   非ローカル行。監査人がスプレッドシートに適した証拠を必要とする場合は、次のコマンドを実行します。
-   `iroha tools address audit --input <file> --format csv` は CSV 概要を出力します
-   (`input,status,format,domain_kind,…`) ローカル セレクターを強調表示します。
-   正規のエンコーディング、および同じファイル内の解析エラー。
-3. **マニフェスト エントリを追加します。** `tombstone` レコード (およびフォローアップ) を下書きします。
-   `global_domain` グローバル レジストリに移行するときのレコード) を検証します
-   署名をリクエストする前に、マニフェストに `cargo xtask address-vectors` を付けてください。
-4. **検証して公開します。** ランブックのチェックリストに従います (ハッシュ、Sigstore、
-   シーケンス単調性) を確認してから、バンドルを SoraFS にミラーリングします。今の鳥居
-   バンドルが到着した直後に、canonical Katakana i105 / non-canonical Katakana i105 リテラルを正規化します。
-5. **監視とロールバック。** Local-8 および Local-12 コリジョン パネルをそのままにしておきます。
-   30日間はゼロ。回帰が発生した場合は、以前のマニフェストを再公開します
-   テレメトリが安定するまでは、影響を受ける非実稼働環境でのみ実行されます。
+   (or consume `fixtures/account/address_vectors.json` via
+   `scripts/account_fixture_helper.py`) to capture the exact `digest_hex`.
+  The CLI address tool accepts canonical Katakana i105 and the internal
+  canonical `0x…` envelope view; runtime `AccountId` parsers continue to accept
+  canonical Katakana i105 only.
+  The JSON summary reports the parsed format/domain kind plus canonical
+  encodings (I105 and canonical hex) for each input.
+  For newline-oriented exports use
+  `iroha tools address normalize --input <file>` to rewrite newline-separated
+  address lists into canonical Katakana i105, canonical hex, or JSON forms.
+  When auditors need spreadsheet-friendly evidence, run
+  `iroha tools address audit --input <file> --format csv` to emit a CSV summary
+  (`input,status,format,domain_kind,…`) that highlights domain kind,
+  canonical encodings, and parse failures in the same file.
+3. **Append manifest entries.** Draft the `tombstone` record (and the follow-up
+   `global_domain` record when migrating to the global registry) and validate
+   the manifest with `cargo xtask address-vectors` before requesting signatures.
+4. **Verify & publish.** Follow the runbook checklist (hashes, Sigstore,
+   sequence monotonicity) before mirroring the bundle to SoraFS. Torii now
+   canonicalizes account filters and path literals from canonical Katakana i105 input only.
+5. **Monitor & rollback.** Keep the Local‑8 and Local‑12 collision panels at
+   zero for 30 days; if regressions appear, republish the previous manifest
+   only in the affected non-production environment until telemetry stabilises.
 
-上記の手順はすべて、ADDR‑7c の必須証拠です。
-`cosign` 署名バンドル、または `previous_digest` 値が一致しない必要があります。
-は自動的に拒否され、オペレーターは検証ログを添付する必要があります。
-彼らの変更チケット。
+All of the steps above are mandatory evidence for ADDR‑7c: manifests without
+the `cosign` signature bundle or without matching `previous_digest` values must
+be rejected automatically, and operators must attach the verification logs to
+their change tickets.
 
-### 5. ウォレットと API の人間工学
+### 5. Wallet & API ergonomics
 
-- **デフォルトの表示:** ウォレットには I105 アドレス (短い、チェックサム付き) が表示されます。
-  さらに、レジストリからフェッチされたラベルとして解決されたドメインが追加されます。ドメインは
-  変更される可能性がある説明的なメタデータとして明確にマークされていますが、I105 は
-  安定したアドレス。
-- **入力の正規化:** Torii と SDK は canonical Katakana i105 / non-canonical Katakana i105/0x を受け入れます。
-  アドレスに加えて、`name@dataspace` or `name@domain.dataspace`、`uaid:…`、および
-  `opaque:…` フォームを作成し、出力用に I105 に正規化します。ありません
-  厳密モードの切り替え。生の電話/電子メール識別子は台帳から外しておく必要があります
-  UAID/不透明マッピング経由。
-- **エラー防止:** ウォレットは I105 プレフィックスを解析し、チェーン判別を強制します。
-  期待。チェーンの不一致によりハード障害が引き起こされ、実用的な診断が行われます。
-- **コーデック ライブラリ:** 公式 Rust、TypeScript/JavaScript、Python、Kotlin
-  ライブラリは、I105 エンコーディング/デコーディングと圧縮 (`sora`) のサポートを提供します。
-  断片化された実装を避けます。 CAIP-10 変換はまだ出荷されていません。
+- **Display defaults:** Wallets show the I105 address (short, checksummed)
+  plus the resolved domain as a label fetched from the registry. Domains are
+  clearly marked as descriptive metadata that may change, while I105 is the
+  stable address.
+- **Input canonicalization:** Torii and SDKs accept canonical Katakana i105 account IDs only and reject `@domain` suffixes, alias forms, non-canonical/legacy i105 literals, and canonical-hex account literals in runtime parser paths. There is no
+  strict-mode toggle; raw phone/email identifiers must be kept off-ledger
+  via UAID/opaque mappings.
+- **Error prevention:** Wallets parse I105 prefixes and enforce chain-discriminant
+  expectations. Chain mismatches trigger hard failures with actionable diagnostics.
+- **Codec libraries:** Official Rust, TypeScript/JavaScript, Python, and Kotlin
+  libraries provide I105 encoding/decoding plus I105 support to
+  avoid fragmented implementations. CAIP-10 conversions are not shipped yet.
 
-#### アクセシビリティと安全な共有に関するガイダンス
+#### Accessibility & Safe Sharing Guidance
 
-- 製品表面の実装ガイダンスはライブで追跡されます。
-  `docs/portal/docs/reference/address-safety.md`;いつでもそのチェックリストを参照してください
-  これらの要件をウォレットまたはエクスプローラーの UX に適応させます。
-- **安全な共有フロー:** アドレスをコピーまたは表示するサーフェスは、デフォルトで I105 形式になり、完全な文字列と同じペイロードから派生した QR コードの両方を表示する隣接する「共有」アクションを公開するため、ユーザーは目視またはスキャンによってチェックサムを確認できます。切り捨てが避けられない場合 (小さい画面など)、文字列の先頭と末尾を保持し、明確な省略記号を追加し、クリップボードへのコピーを介して完全なアドレスにアクセスできるようにして、誤って切り取られるのを防ぎます。
-- **IME セーフガード:** アドレス入力は、IME/IME スタイルのキーボードからの合成アーティファクトを拒否しなければなりません (MUST)。 ASCII のみの入力を強制し、全角またはカナ文字が検出されたときにインライン警告を表示し、検証前に結合マークを削除するプレーンテキストの貼り付けゾーンを提供するため、日本人と中国人のユーザーは進行状況を失うことなく IME を無効にできます。
-- **スクリーン リーダーのサポート:** 先頭の I105 プレフィックス数字を説明する視覚的に隠されたラベル (`aria-label`/`aria-describedby`) を提供し、I105 ペイロードを 4 文字または 8 文字のグループに分割するため、支援技術はランオン文字列の代わりにグループ化された文字を読み取ります。礼儀正しいライブ リージョンを通じてコピー/共有の成功を発表し、QR プレビューに説明的な代替テキスト (「チェーン 0x02F1 の <エイリアス> の I105 アドレス」) が含まれていることを確認します。
-- **Sora のみの圧縮の使用:** `i105` 圧縮ビューには必ず「Sora のみ」というラベルを付け、コピーする前に明示的な確認を行ってゲートします。 SDKとウォレットは、チェーン判別式がSora Nexus値ではない場合、圧縮された出力の表示を拒否しなければならず、資金の誤ったルーティングを避けるために、ユーザーをネットワーク間送金のためにI105に戻す必要があります。
+- Implementation guidance for product surfaces is tracked live in
+  `docs/portal/docs/reference/address-safety.md`; reference that checklist when
+  adapting these requirements to wallet or explorer UX.
+- **Safe sharing flows:** Surfaces that copy or display addresses default to the i105 form and expose an adjacent “share” action that presents both the full string and a QR code derived from the same payload so users can verify the checksum visually or by scanning. When truncation is unavoidable (e.g., small screens), retain the start and end of the string, add clear ellipses, and keep the full address accessible via copy-to-clipboard to prevent accidental clipping.
+- **IME safeguards:** Address inputs MUST reject composition artefacts from IME/IME-style keyboards. Enforce ASCII-only entry, present an inline warning when full-width or Kana characters are detected, and offer a plain-text paste zone that strips combining marks before validation so Japanese and Chinese users can disable their IME without losing progress.
+- **Screen-reader support:** Provide visually hidden labels (`aria-label`/`aria-describedby`) that describe the leading i105 digits and chunk the i105 payload into 4- or 8-character groups, so assistive technology reads grouped characters instead of a run-on string. Announce copy/share success via polite live regions and ensure QR previews include descriptive alt text (“i105 address for <alias> on chain 0x02F1”).
+- **Single-format usage:** Keep address sharing on canonical Katakana i105 only and avoid secondary account-literal formats in wallet/explorer copy flows.
 
-## 実装チェックリスト
+## Implementation Checklist
 
-- **I105 エンベロープ:** プレフィックスは、コンパクト形式を使用して `chain_discriminant` をエンコードします。
-  `encode_i105_prefix()` の 6/14 ビット スキーム、本文は正規のバイトです
-  (`AccountAddress::canonical_bytes()`)、チェックサムは最初の 2 バイトです
-  Blake2b-512 (`b"I105PRE"` || 接頭辞 || 本文) の。完全なペイロードは I105 です。
-  `bs58` 経由でエンコードされます。
-- **レジストリ契約:** 署名付き JSON (およびオプションの Merkle ルート) の公開
-  `{discriminant, i105_prefix, chain_alias, endpoints}` 24 時間 TTL と
-  回転キー。
-- **ドメイン ポリシー:** ASCII `Name` 今日; i18n を有効にする場合は、UTS-46 を適用します。
-  正規化と、紛らわしいチェックのための UTS-39。最大ラベル (63) を強制し、
-  合計 (255) の長さ。
-- **テキストヘルパー:** Rust で I105 ↔ 圧縮 (`i105`) コーデックを出荷、
-  共有テスト ベクトルを使用した TypeScript/JavaScript、Python、Kotlin (CAIP-10)
-  マッピングは今後の作業として残ります)。
-- **CLI ツール:** `iroha tools address convert` を介して決定論的なオペレーター ワークフローを提供します。
-  (`crates/iroha_cli/src/address.rs` を参照)。I105/`0x…` リテラルを受け入れます。
-  オプションの `<address>@<domain>` (rejected legacy form) ラベル。デフォルトは Sora Nexus プレフィックス (`753`) を使用した I105 出力です。
-  オペレーターが明示的に要求した場合にのみ、Sora のみの圧縮アルファベットを出力します。
-  `--format i105` または JSON サマリー モード。このコマンドは、プレフィックスの期待を強制します。
-  解析し、指定されたドメイン (JSON の `input_domain`) と `legacy  suffix` フラグを記録します
-  変換されたエンコーディングを `<address>@<domain>` (rejected legacy form) として再生するため、マニフェストの差分は人間工学に基づいたままになります。
-- **ウォレット/エクスプローラー UX:** [アドレス表示ガイドライン](source/sns/address_display_guidelines.md) に従ってください。
-  ADDR-6 に同梱 - デュアル コピー ボタンを提供し、I105 を QR ペイロードとして保持し、警告を表示します
-  ユーザーは、圧縮された `i105` フォームは Sora 専用であり、IME の書き換えの影響を受けやすいことを認識しています。
-- **Torii の統合:** TTL を考慮したキャッシュ Nexus マニフェスト、エミット
-  `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` を決定的に、そして
-  keep strict account-literal parsing canonical-i105-only (reject non-canonical Katakana i105 literals and any `@domain` suffix) with canonical Katakana i105 output.
+- **I105 envelope:** Prefix encodes the `chain_discriminant` using the compact
+  6-/14-bit scheme from `encode_i105_prefix()`, the body is the canonical bytes
+  (`AccountAddress::canonical_bytes()`), and the checksum is the first two bytes
+  of Blake2b-512(`b"I105PRE"` || prefix || body). The full payload is encoded
+  with the I105 alphabet via `bs58`.
+- **Registry contract:** Signed JSON (and optional Merkle root) publishing
+  `{discriminant, i105_prefix, chain_alias, endpoints}` with 24h TTL and
+  rotation keys.
+- **Domain policy:** ASCII `Name` today; if enabling i18n, apply UTS-46 for
+  normalization and UTS-39 for confusable checks. Enforce max label (63) and
+  total (255) lengths.
+- **Textual helpers:** Ship I105 ↔ canonical Katakana i105 codecs in Rust,
+  TypeScript/JavaScript, Python, and Kotlin with shared test vectors (CAIP-10
+  mappings remain future work).
+- **CLI tooling:** Provide a deterministic operator workflow via `iroha tools address convert`
+  (see `crates/iroha_cli/src/address.rs`), which accepts canonical Katakana i105 literals,
+  defaults to i105 output using the Sora Nexus prefix (`753`), enforces prefix
+  expectations on parse, and rejects `@domain` suffixes so operator pipelines
+  stay on canonical address literals only.
+- **Wallet/explorer UX:** Follow the [address display guidelines](source/sns/address_display_guidelines.md)
+  shipped with ADDR-6—keep canonical Katakana i105 as the single copy/QR payload and
+  apply IME-safe input/output handling.
+- **Torii integration:** Cache Nexus manifests respecting TTL, emit
+  `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` deterministically, and
+  keep strict account-literal parsing canonical-i105-only (reject non-canonical
+  forms and any `@domain` suffix) with canonical Katakana i105 output.
 
-### 鳥居応答フォーマット
+### Torii response formats
 
-- `GET /v1/accounts` は、オプションの `canonical Katakana i105 rendering` クエリ パラメータを受け入れ、
-  `POST /v1/accounts/query` は、JSON エンベロープ内の同じフィールドを受け入れます。
-  サポートされている値は次のとおりです。
-  - `i105` (デフォルト) — 応答は正規の I105 ペイロードを出力します (例:
-    `soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ`)。
-  - `i105` — 応答は Sora のみの `i105` 圧縮ビューを生成します。
-    フィルタ/パスパラメータを正規に保ちます。
-- 無効な値は `400` (`QueryExecutionFail::Conversion`) を返します。これにより、
-  ウォレットとエクスプローラーは、Sora のみの UX の圧縮文字列をリクエストします。
-  I105 を相互運用可能なデフォルトとして維持します。
-- アセットホルダーのリスト (`GET /v1/assets/{definition_id}/holders`) とその JSON
-  対応する封筒 (`POST …/holders/query`) も `canonical Katakana i105 rendering` を尊重します。
-  `items[*].account_id` フィールドは、
-  パラメータ/エンベロープ フィールドが `i105` に設定され、アカウントがミラーリングされます
-  エンドポイントを使用して、エクスプローラーがディレクトリ間で一貫した出力を表示できるようにします。
-- **テスト:** エンコーダー/デコーダーのラウンドトリップ、間違ったチェーンの単体テストを追加
-  失敗とマニフェスト検索。 Torii と SDK の統合範囲を追加
-  I105 フローの場合はエンドツーエンドです。
+- `GET /v1/accounts` and `POST /v1/accounts/query` emit canonical Katakana i105 account
+  literals in responses.
+- Asset holder listings (`GET /v1/assets/{definition_id}/holders`) and their JSON
+  envelope counterpart (`POST …/holders/query`) also emit canonical Katakana i105 account
+  identifiers in `items[*].account_id`.
+- **Testing:** Add unit tests for encoder/decoder round-trips, wrong-chain
+  failures, and manifest lookups; add integration coverage in Torii and SDKs
+  for I105 flows end to end.
 
-## エラーコードレジストリ
+## Error Code Registry
 
-アドレス エンコーダとデコーダは、次のような方法で障害を明らかにします。
-`AccountAddressError::code_str()`。次の表に安定したコードを示します。
-SDK、ウォレット、および Torii サーフェスは人間が判読できるものと並行して表示される必要がある
-メッセージと推奨される修復ガイダンス。
+Address encoders and decoders expose failures through
+`AccountAddressError::code_str()`. The following tables provide the stable codes
+that SDKs, wallets, and Torii surfaces should surface alongside human-readable
+messages, plus recommended remediation guidance.
 
-### 正規の構築
+### Canonical Construction
 
-|コード |失敗 |推奨される修復 |
-|------|------|----------------------|
-| `ERR_UNSUPPORTED_ALGORITHM` |エンコーダーは、レジストリまたはビルド機能でサポートされていない署名アルゴリズムを受け取りました。 |アカウントの構築を、レジストリと構成で有効になっている曲線に制限します。 |
-| `ERR_KEY_PAYLOAD_TOO_LONG` |署名キーのペイロードの長さがサポートされている制限を超えています。 |シングルキー コントローラは `u8` の長さに制限されています。大きな公開鍵にはマルチシグを使用します (ML‑DSA など)。 |
-| `ERR_INVALID_HEADER_VERSION` |アドレス ヘッダーのバージョンがサポートされている範囲外です。 | V1 アドレスのヘッダー バージョン `0` を出力します。新しいバージョンを採用する前にエンコーダをアップグレードしてください。 |
-| `ERR_INVALID_NORM_VERSION` |正規化バージョンフラグが認識されません。 |正規化バージョン `1` を使用し、予約ビットの切り替えを避けてください。 |
-| `ERR_INVALID_I105_PREFIX` |要求された I105 ネットワーク プレフィックスをエンコードできません。 |チェーン レジストリで公開されている `0..=16383` の範囲内でプレフィックスを選択してください。 |
-| `ERR_CANONICAL_HASH_FAILURE` |正規ペイロードのハッシュ化に失敗しました。 |操作を再試行してください。エラーが続く場合は、ハッシュ スタックの内部バグとして扱います。 |
+| Code | Failure | Recommended Remediation |
+|------|---------|-------------------------|
+| `ERR_UNSUPPORTED_ALGORITHM` | Encoder received a signing algorithm not supported by the registry or build features. | Restrict account construction to curves enabled in the registry and configuration. |
+| `ERR_KEY_PAYLOAD_TOO_LONG` | Signing key payload length exceeds the supported limit. | Single-key controllers are limited to `u8` lengths; use multisig for large public keys (e.g., ML‑DSA). |
+| `ERR_INVALID_HEADER_VERSION` | Address header version is outside the supported range. | Emit header version `0` for V1 addresses; upgrade encoders before adopting new versions. |
+| `ERR_INVALID_NORM_VERSION` | Normalisation version flag is not recognised. | Use normalisation version `1` and avoid toggling reserved bits. |
+| `ERR_INVALID_I105_PREFIX` | Requested I105 network prefix cannot be encoded. | Pick a prefix within the inclusive `0..=16383` range published in the chain registry. |
+| `ERR_CANONICAL_HASH_FAILURE` | Canonical payload hashing failed. | Retry the operation; if the error persists, treat it as an internal bug in the hashing stack. |
 
-### フォーマットのデコードと自動検出
+### Format Decoding and Auto Detection
 
-|コード |失敗 |推奨される修復 |
-|------|------|----------------------|
-| `ERR_INVALID_I105_ENCODING` | I105 文字列にアルファベット以外の文字が含まれています。 |アドレスが公開されている I105 アルファベットを使用しており、コピー/ペースト中に切り捨てられていないことを確認してください。 |
-| `ERR_INVALID_LENGTH` |ペイロードの長さが、セレクター/コントローラーの予想される標準サイズと一致しません。 |選択したドメイン セレクターとコントローラー レイアウトの完全な正規ペイロードを指定します。 |
-| `ERR_CHECKSUM_MISMATCH` | I105 (推奨) または圧縮 (`sora`、2 番目に良い) チェックサム検証が失敗しました。 |信頼できるソースからアドレスを再生成します。これは通常、コピー/貼り付けエラーを示します。 |
-| `ERR_INVALID_I105_PREFIX_ENCODING` | I105 プレフィックス バイトの形式が不正です。 |準拠したエンコーダを使用してアドレスを再エンコードします。先頭の I105 バイトを手動で変更しないでください。 |
-| `ERR_INVALID_HEX_ADDRESS` |正規の 16 進数形式をデコードできませんでした。 |公式エンコーダによって生成された、`0x` 接頭辞付きの偶数長の 16 進文字列を指定します。 |
-| `ERR_MISSING_COMPRESSED_SENTINEL` |圧縮形式は `sora` で始まりません。 |デコーダに渡す前に、圧縮された Sora アドレスに必要なセンチネルをプレフィックスとして付けます。 |
-| `ERR_COMPRESSED_TOO_SHORT` |圧縮された文字列には、ペイロードとチェックサムに十分な桁がありません。 |切り詰められたスニペットの代わりに、エンコーダーによって出力された完全な圧縮文字列を使用します。 |
-| `ERR_INVALID_COMPRESSED_CHAR` |圧縮されたアルファベット以外の文字が見つかりました。 |文字を、公開されている半角/全角テーブルの有効な Base-105 グリフに置き換えます。 |
-| `ERR_INVALID_COMPRESSED_BASE` |エンコーダがサポートされていない基数を使用しようとしました。 |エンコーダに対してバグを報告します。 V1 では、圧縮アルファベットは基数 105 に固定されています。 |
-| `ERR_INVALID_COMPRESSED_DIGIT` |数字の値が圧縮されたアルファベットのサイズを超えています。 |各桁が `0..105)` 以内であることを確認し、必要に応じてアドレスを再生成します。 |
-| `ERR_UNSUPPORTED_ADDRESS_FORMAT` |自動検出で入力形式を認識できませんでした。 |パーサーを呼び出すときは、I105 (推奨)、圧縮 (`sora`)、または正規の `0x` 16 進文字列を指定します。 |
+| Code | Failure | Recommended Remediation |
+|------|---------|-------------------------|
+| `ERR_INVALID_I105_ENCODING` | I105 string contains characters outside the alphabet. | Ensure the address uses the published I105 alphabet and has not been truncated during copy/paste. |
+| `ERR_INVALID_LENGTH` | Payload length does not match the expected canonical size for header/controller (or legacy decode-compat selector variants). | Supply the full canonical payload emitted by the official encoder, or a complete legacy payload when decoding historical data. |
+| `ERR_CHECKSUM_MISMATCH` | Canonical Katakana i105 checksum validation failed. | Regenerate the canonical Katakana i105 address from a trusted source; this typically indicates a copy/paste error. |
+| `ERR_INVALID_I105_PREFIX_ENCODING` | I105 prefix bytes are malformed. | Re-encode the address with a compliant encoder; do not alter the leading I105 bytes manually. |
+| `ERR_INVALID_HEX_ADDRESS` | Canonical hexadecimal form failed to decode. | Provide a `0x`-prefixed, even-length hex string produced by the official encoder. |
+| `ERR_MISSING_COMPRESSED_SENTINEL` | Legacy/non-canonical Katakana i105 form does not start with the expected sentinel. | Use canonical Katakana i105 output and avoid manual sentinel rewriting. |
+| `ERR_COMPRESSED_TOO_SHORT` | Legacy/non-canonical Katakana i105 string is truncated before payload+checksum complete. | Use the full canonical Katakana i105 string emitted by the encoder. |
+| `ERR_INVALID_COMPRESSED_CHAR` | Legacy/non-canonical Katakana i105 payload includes an invalid glyph. | Replace with canonical Katakana i105 output generated by official codecs. |
+| `ERR_INVALID_COMPRESSED_BASE` | Encoder attempted to use an unsupported legacy radix. | File a bug against the encoder; production flows must stay canonical Katakana i105. |
+| `ERR_INVALID_COMPRESSED_DIGIT` | Legacy/non-canonical digit value exceeds the supported legacy alphabet size. | Regenerate canonical Katakana i105 and avoid manual digit manipulation. |
+| `ERR_UNSUPPORTED_ADDRESS_FORMAT` | Auto-detection could not recognise the input format. | Provide canonical Katakana i105 on strict account-id parser paths; use canonical `0x` hex only in low-level/debug tooling that explicitly accepts it. |
 
-### ドメインとネットワークの検証
+### Domain and Network Validation
 
-|コード |失敗 |推奨される修復 |
-|------|------|----------------------|
-| `ERR_DOMAIN_MISMATCH` |ドメイン セレクターが予期されたドメインと一致しません。 |目的のドメインに対して発行されたアドレスを使用するか、期待値を更新します。 |
-| `ERR_INVALID_DOMAIN_LABEL` |ドメインラベルが正規化チェックに失敗しました。 |エンコード前に UTS-46 の非移行処理を使用してドメインを正規化します。 |
-| `ERR_UNEXPECTED_NETWORK_PREFIX` |デコードされた I105 ネットワーク プレフィックスが設定値と異なります。 |ターゲット チェーンのアドレスに切り替えるか、予期される識別子/プレフィックスを調整します。 |
-| `ERR_UNKNOWN_ADDRESS_CLASS` |アドレス クラス ビットが認識されません。 |デコーダを新しいクラスを理解できるリリースにアップグレードするか、ヘッダー ビットの改ざんを避けてください。 |
-| `ERR_UNKNOWN_DOMAIN_TAG` |ドメイン セレクター タグが不明です。 |新しいセレクター タイプをサポートするリリースに更新するか、V1 ノードで実験的なペイロードの使用を避けてください。 |
-| `ERR_UNEXPECTED_EXTENSION_FLAG` |予約された拡張ビットが設定されました。 |予約ビットをクリアします。将来の ABI で導入されるまで、ゲートされたままになります。 |
-| `ERR_UNKNOWN_CONTROLLER_TAG` |コントローラーのペイロード タグが認識されません。 |新しいコントローラー タイプを解析する前に認識できるようにデコーダーをアップグレードします。 |
-| `ERR_UNEXPECTED_TRAILING_BYTES` |正規ペイロードには、デコード後の末尾バイトが含まれていました。 |正規ペイロードを再生成します。文書化された長さのみが存在する必要があります。 |
+| Code | Failure | Recommended Remediation |
+|------|---------|-------------------------|
+| `ERR_DOMAIN_MISMATCH` | Domain selector does not match the expected domain. | Use an address issued for the intended domain or update the expectation. |
+| `ERR_INVALID_DOMAIN_LABEL` | Domain label failed normalisation checks. | Canonicalise the domain using UTS-46 non-transitional processing before encoding. |
+| `ERR_UNEXPECTED_NETWORK_PREFIX` | Decoded I105 network prefix differs from the configured value. | Switch to an address from the target chain or adjust the expected discriminant/prefix. |
+| `ERR_UNKNOWN_ADDRESS_CLASS` | Address class bits are not recognised. | Upgrade the decoder to a release that understands the new class, or avoid tampering with the header bits. |
+| `ERR_UNKNOWN_DOMAIN_TAG` | Domain selector tag is unknown. | Update to a release that supports the new selector type, or avoid using experimental payloads on V1 nodes. |
+| `ERR_UNEXPECTED_EXTENSION_FLAG` | Reserved extension bit was set. | Clear reserved bits; they remain gated until a future ABI introduces them. |
+| `ERR_UNKNOWN_CONTROLLER_TAG` | Controller payload tag not recognised. | Upgrade the decoder to recognise new controller types before parsing them. |
+| `ERR_UNEXPECTED_TRAILING_BYTES` | Canonical payload contained trailing bytes after decoding. | Regenerate the canonical payload; only the documented length should be present. |
 
-### コントローラーのペイロードの検証
+### Controller Payload Validation
 
-|コード |失敗 |推奨される修復 |
-|------|------|----------------------|
-| `ERR_INVALID_PUBLIC_KEY` |キーバイトが宣言されたカーブと一致しません。 |キー バイトが、選択したカーブに必要なとおりに正確にエンコードされていることを確認します (例: 32 バイト Ed25519)。 |
-| `ERR_UNKNOWN_CURVE` |曲線識別子が登録されていません。 |追加の曲線が承認され、レジストリで公開されるまで、曲線 ID `1` (Ed25519) を使用してください。 |
-| `ERR_MULTISIG_MEMBER_OVERFLOW` |マルチシグ コントローラーがサポートされている数を超えるメンバーを宣言しています。 |エンコードする前に、マルチシグ メンバーシップを文書化された制限まで減らします。 |
-| `ERR_INVALID_MULTISIG_POLICY` |マルチシグ ポリシー ペイロードの検証 (しきい値/重み/スキーマ) に失敗しました。 | CTAP2 スキーマ、重み制限、およびしきい値制約を満たすようにポリシーを再構築します。 |
+| Code | Failure | Recommended Remediation |
+|------|---------|-------------------------|
+| `ERR_INVALID_PUBLIC_KEY` | Key bytes do not match the declared curve. | Ensure the key bytes are encoded exactly as required for the selected curve (e.g., 32-byte Ed25519). |
+| `ERR_UNKNOWN_CURVE` | Curve identifier is not registered. | Use curve ID `1` (Ed25519) until additional curves are approved and published in the registry. |
+| `ERR_MULTISIG_MEMBER_OVERFLOW` | Multisig controller declares more members than supported. | Reduce the multisig membership to the documented limit before encoding. |
+| `ERR_INVALID_MULTISIG_POLICY` | Multisig policy payload failed validation (threshold/weights/schema). | Rebuild the policy so that it satisfies the CTAP2 schema, weight bounds, and threshold constraints. |
 
-## 検討された代替案
+## Alternatives Considered
 
-- **純粋な checksum envelope (ビットコイン スタイル)。** チェックサムは単純ですが、エラー検出は弱い
-  Blake2b 由来の I105 チェックサムよりも優れています (`encode_i105` は 512 ビット ハッシュを切り捨てます)
-  また、16 ビット判別式の明示的なプレフィックス セマンティクスがありません。
-- **ドメイン文字列にチェーン名を埋め込みます (例: `finance@chain`)。** ブレーク
-- **アドレスを変更せずに Nexus ルーティングのみに依存します。** ユーザーは引き続き
-  あいまいな文字列をコピー/ペーストします。アドレス自体にコンテキストを伝える必要があります。
-- **Bech32m エンベロープ。** QR フレンドリーで、人間が判読できるプレフィックスを提供しますが、
-  出荷時の I105 実装とは異なる可能性があります (`AccountAddress::to_i105`)
-  すべてのフィクスチャ/SDK を再作成する必要があります。現在のロードマップでは I105 + が維持されます。
-  将来の研究を継続しながら、圧縮 (`sora`) をサポート
-  Bech32m/QR レイヤ (CAIP-10 マッピングは延期されます)。
+- **Pure checksum envelope (Bitcoin-style).** Simpler checksum but weaker error detection
+  than the Blake2b-derived I105 checksum (`encode_i105` truncates a 512-bit hash)
+  and lacks explicit prefix semantics for 16-bit discriminants.
+- **Embedding chain name in the domain string (e.g., `finance@chain`).** Breaks
+- **Rely solely on Nexus routing without changing addresses.** Users would still
+  copy/paste ambiguous strings; we want the address itself to carry context.
+- **Bech32m envelope.** QR-friendly and offers a human-readable prefix, but
+  would diverge from the shipping I105 implementation (`AccountAddress::to_i105`)
+  and require recreating all fixtures/SDKs. The current roadmap keeps I105 +
+  I105 support while continuing research into future
+  Bech32m/QR layers (CAIP-10 mapping is deferred).
 
-## 未解決の質問
+## Open Questions
 
-- `u16` 判別式と予約された範囲が長期的な需要をカバーしていることを確認します。
-  それ以外の場合は、Variant エンコーディングを使用して `u32` を評価します。
-- レジストリ更新のためのマルチシグネチャ ガバナンス プロセスとその方法を最終決定する
-  取り消し/期限切れの割り当ては処理されます。
-- 正確なマニフェスト署名スキーム (Ed25519 マルチ署名など) を定義し、
-  Nexus ディストリビューションのトランスポート セキュリティ (HTTPS ピニング、IPFS ハッシュ形式)。
-- 移行のためにドメイン エイリアス/リダイレクトをサポートするかどうか、およびその方法を決定します。
-  決定論を壊すことなくそれらを表面化すること。
-- 言霊/IVM コントラクトが I105 ヘルパーにアクセスする方法を指定します (`to_address()`、
-  `parse_address()`)、およびオンチェーン ストレージが CAIP-10 を公開する必要があるかどうか
-  マッピング (現在では I105 が正規です)。
-- 外部レジストリ (I105 レジストリ、
-  CAIP 名前空間ディレクトリ）を使用して、より広範なエコシステムの連携を実現します。
+- Confirm that `u16` discriminants plus reserved ranges cover long-term demand;
+  otherwise evaluate `u32` with varint encoding.
+- Finalize the multi-signature governance process for registry updates and how
+  revocations/expired allocations are handled.
+- Define the exact manifest signature scheme (e.g., Ed25519 multi-sig) and
+  transport security (HTTPS pinning, IPFS hash format) for Nexus distribution.
+- Determine whether to support domain aliases/redirects for migrations and how
+  to surface them without breaking determinism.
+- Specify how Kotodama/IVM contracts access I105 helpers (`to_address()`,
+  `parse_address()`) and whether on-chain storage should ever expose CAIP-10
+  mappings (today I105 is canonical).
+- Explore registering Iroha chains in external registries (e.g., I105 registry,
+  CAIP namespace directory) for broader ecosystem alignment.
 
-## 次のステップ
+## Next Steps
 
-1. I105 エンコーディングは `iroha_data_model` (`AccountAddress::to_i105`,
-   `parse_encoded`);フィクスチャ/テストのすべての SDK への移植を続行し、すべての SDK をパージします。
-   Bech32m プレースホルダー。
-2. `chain_discriminant` を使用して構成スキーマを拡張し、適切なスキーマを導き出す
-  既存のテスト/開発セットアップのデフォルト。 **(完了: `common.chain_discriminant`
-  現在は `iroha_config` で出荷され、デフォルトはネットワークごとの `0x02F1` です
-  オーバーライドします。)**
-3. Nexus レジストリ スキーマと概念実証マニフェスト パブリッシャーの草案を作成します。
-4. ウォレットプロバイダーとカストディアンから人的要因に関するフィードバックを収集する
-   (HRP の命名、表示形式)。
-5. ドキュメント (`docs/source/data_model.md`、Torii API ドキュメント) を更新したら、
-   実装パスがコミットされています。
-6. 公式コーデック ライブラリ (Rust/TS/Python/Kotlin) を規範的なテストとともに出荷する
-   成功例と失敗例をカバーするベクトル。
+1. I105 encoding landed in `iroha_data_model` (`AccountAddress::to_i105`,
+   `parse_encoded`); continue porting fixtures/tests to every SDK and purge any
+   Bech32m placeholders.
+2. Extend configuration schema with `chain_discriminant` and derive sensible
+  defaults for existing test/dev setups. **(Done: `common.chain_discriminant`
+  now ships in `iroha_config`, defaulting to `0x02F1` with per-network
+  overrides.)**
+3. Draft the Nexus registry schema and proof-of-concept manifest publisher.
+4. Collect feedback from wallet providers and custodians on human-factor aspects
+   (HRP naming, display formatting).
+5. Update documentation (`docs/source/data_model.md`, Torii API docs) once the
+   implementation path is committed.
+6. Ship official codec libraries (Rust/TS/Python/Kotlin) with normative test
+   vectors covering success and failure cases.

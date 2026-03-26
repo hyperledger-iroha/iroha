@@ -8246,7 +8246,18 @@ mod accel_tests {
         let _guard = chain_guard();
         let chain = cstring("test-chain");
         let (authority, private) = sample_account("default", 0);
-        let scoped_account = cstring(&format!("{}@default", authority.to_str().unwrap()));
+        let authority_id = AccountId::parse_encoded(authority.to_str().unwrap())
+            .expect("authority account id")
+            .into_account_id();
+        let scoped_account = cstring(
+            &ScopedAccountId::from_account_id(
+                authority_id,
+                "governance.dataspace"
+                    .parse()
+                    .expect("governance.dataspace domain"),
+            )
+            .canonical_encoded(),
+        );
         let member_a_str = sample_destination("default", 2);
         let member_b_str = sample_destination("default", 3);
         let member_a = AccountId::parse_encoded(member_a_str.to_str().unwrap())
@@ -9388,10 +9399,11 @@ pub unsafe extern "C" fn connect_norito_decode_signed_transaction_json(
     }
 }
 
-/// Decode a canonical public `AssetId` literal into canonical readable JSON fields.
+/// Decode a canonical internal `AssetId` balance-bucket literal into readable JSON fields.
 ///
 /// Response JSON object fields:
-/// - `asset_id`: canonical public asset id (`<base58-asset-id>#<katakana-i105-account-id>`)
+/// - `asset_id`: canonical internal asset balance-bucket literal
+///   (`<base58-asset-definition-id>#<katakana-i105-account-id>`)
 /// - `asset_definition_id`: canonical asset definition id (unprefixed Base58 address)
 /// - `account_id`: canonical Katakana i105 account id (i105 literal)
 ///
@@ -12617,7 +12629,7 @@ mod signed_transaction_fixture_tests {
 
     use super::decode_signed_transaction;
 
-    // Matches account::address::DEFAULT_CHAIN_DISCRIMINANT (I105 discriminant) used by fixtures.
+    // Matches account::address::DEFAULT_CHAIN_DISCRIMINANT (i105 discriminant) used by fixtures.
     const FIXTURE_CHAIN_DISCRIMINANT: u16 = 0x02F1;
 
     struct ChainDiscriminantReset {

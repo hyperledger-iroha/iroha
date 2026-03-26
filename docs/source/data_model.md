@@ -27,7 +27,7 @@ String forms of IDs (round-trippable with `Display`/`FromStr`):
 - `DomainId`: `name` (e.g., `wonderland`).
 - `AccountId`: canonical domainless account identifier encoded via `AccountAddress` as Katakana i105 only. Strict parser inputs must be canonical Katakana i105; domain suffixes (`@domain`), account-alias literals, canonical hex parser input, legacy `norito:` payloads, and `uaid:`/`opaque:` account parser forms are rejected. On-chain account aliases use `name@domain.dataspace` or `name@dataspace` and resolve to canonical `AccountId` values.
 - `AssetDefinitionId`: canonical unprefixed Base58 address over the canonical asset-definition bytes. This is the public asset ID. On-chain asset aliases use `name#domain.dataspace` or `name#dataspace` and resolve only to this canonical Base58 asset ID.
-- `AssetId`: concrete asset-holding literal `<base58-asset-id>#<katakana-i105-account-id>` with an optional `#dataspace:<id>` suffix for scoped balances. CLI/Torii selectors may also expose split `asset + account + scope` fields where that is more ergonomic.
+- `AssetId`: concrete asset-holding identifier `<canonical-base58-asset-definition-id>#<canonical-katakana-i105-account-id>` with an optional `#dataspace:<id>` suffix for scoped balances. It is not a public asset ID. CLI/Torii selectors may also expose split `asset + account + scope` fields where that is more ergonomic.
 - `NftId`: `nft$domain` (e.g., `rose$garden`).
 - `PeerId`: `public_key` (peer equality is by public key).
 
@@ -270,7 +270,7 @@ iroha ledger asset definition register \
 # Mint using alias + account components
 iroha ledger asset mint \
   --definition-alias pkr#ubl.sbp \
-  --account sorauﾛ1P... \
+  --account soraゴヂ... \
   --quantity 500
 
 # Resolve alias to the canonical Base58 id via Torii

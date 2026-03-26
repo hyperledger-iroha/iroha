@@ -1575,7 +1575,7 @@ export class ToriiClient {
    * @returns {Promise<{items: Array<{asset_id: string, quantity: string}>, total: number}>}
    */
   async listAccountAssets(accountId, options = {}) {
-    const normalizedId = ToriiClient._normalizeAccountId(accountId);
+    const normalizedId = normalizeAccountPathLiteral(accountId, "accountId");
     const encodedId = encodeURIComponent(normalizedId);
     const { requirePermissions, options: rest } = ToriiClient._splitPermissionedIterableOptions(
       options,
@@ -1597,7 +1597,7 @@ export class ToriiClient {
    * @returns {Promise<{items: Array<{asset_id: string, quantity: string}>, total: number}>}
    */
   async queryAccountAssets(accountId, options = {}) {
-    const normalizedId = ToriiClient._normalizeAccountId(accountId);
+    const normalizedId = normalizeAccountPathLiteral(accountId, "accountId");
     const encodedId = encodeURIComponent(normalizedId);
     const { requirePermissions, options: rest } = ToriiClient._splitPermissionedIterableOptions(
       options,
@@ -1618,7 +1618,7 @@ export class ToriiClient {
    * @returns {AsyncGenerator<{asset_id: string, quantity: string}, void, unknown>}
    */
   iterateAccountAssets(accountId, options = {}) {
-    const normalizedId = ToriiClient._normalizeAccountId(accountId);
+    const normalizedId = normalizeAccountPathLiteral(accountId, "accountId");
     const { requirePermissions, options: rest } = ToriiClient._splitPermissionedIterableOptions(
       options,
       "iterateAccountAssets",
@@ -1634,7 +1634,7 @@ export class ToriiClient {
    * @returns {AsyncGenerator<{asset_id: string, quantity: string}, void, unknown>}
    */
   iterateAccountAssetsQuery(accountId, options = {}) {
-    const normalizedId = ToriiClient._normalizeAccountId(accountId);
+    const normalizedId = normalizeAccountPathLiteral(accountId, "accountId");
     const { requirePermissions, options: rest } = ToriiClient._splitPermissionedIterableOptions(
       options,
       "iterateAccountAssetsQuery",
@@ -1650,7 +1650,7 @@ export class ToriiClient {
    * @returns {Promise<{items: Array<object>, total: number}>}
    */
   async listAccountTransactions(accountId, options = {}) {
-    const normalizedId = ToriiClient._normalizeAccountId(accountId);
+    const normalizedId = normalizeAccountPathLiteral(accountId, "accountId");
     const encodedId = encodeURIComponent(normalizedId);
     return this._listIterable(
       `/v1/accounts/${encodedId}/transactions`,
@@ -1667,7 +1667,7 @@ export class ToriiClient {
    * @returns {Promise<{items: Array<object>, total: number}>}
    */
   async queryAccountTransactions(accountId, options = {}) {
-    const normalizedId = ToriiClient._normalizeAccountId(accountId);
+    const normalizedId = normalizeAccountPathLiteral(accountId, "accountId");
     const encodedId = encodeURIComponent(normalizedId);
     return this._queryIterable(
       `/v1/accounts/${encodedId}/transactions/query`,
@@ -1683,7 +1683,7 @@ export class ToriiClient {
    * @returns {AsyncGenerator<object, void, unknown>}
    */
   iterateAccountTransactions(accountId, options = {}) {
-    const normalizedId = ToriiClient._normalizeAccountId(accountId);
+    const normalizedId = normalizeAccountPathLiteral(accountId, "accountId");
     return this._iterateIterable(
       this.listAccountTransactions.bind(this, normalizedId),
       options,
@@ -1697,7 +1697,7 @@ export class ToriiClient {
    * @returns {AsyncGenerator<object, void, unknown>}
    */
   iterateAccountTransactionsQuery(accountId, options = {}) {
-    const normalizedId = ToriiClient._normalizeAccountId(accountId);
+    const normalizedId = normalizeAccountPathLiteral(accountId, "accountId");
     return this._iterateIterable(
       this.queryAccountTransactions.bind(this, normalizedId),
       options,
@@ -1766,7 +1766,7 @@ export class ToriiClient {
    * @returns {Promise<{items: Array<{name: string, payload: unknown}>, total: number}>}
    */
   async listAccountPermissions(accountId, options = {}) {
-    const normalizedId = ToriiClient._normalizeAccountId(accountId);
+    const normalizedId = normalizeAccountPathLiteral(accountId, "accountId");
     const encodedId = encodeURIComponent(normalizedId);
     const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
       options,
@@ -1795,7 +1795,7 @@ export class ToriiClient {
    * @returns {AsyncGenerator<{name: string, payload: unknown}, void, unknown>}
    */
   iterateAccountPermissions(accountId, options = {}) {
-    const normalizedId = ToriiClient._normalizeAccountId(accountId);
+    const normalizedId = normalizeAccountPathLiteral(accountId, "accountId");
     return this._iterateIterable(
       this.listAccountPermissions.bind(this, normalizedId),
       options,
@@ -2279,7 +2279,7 @@ export class ToriiClient {
    * @returns {Promise<Record<string, unknown> | null>}
    */
   async issueIdentifierClaimReceipt(accountId, options) {
-    const normalizedAccountId = ToriiClient._normalizeAccountId(accountId, "accountId");
+    const normalizedAccountId = normalizeAccountPathLiteral(accountId, "accountId");
     const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
       options,
       "issueIdentifierClaimReceipt",
@@ -4255,7 +4255,7 @@ export class ToriiClient {
    */
   async getExplorerAccountQr(accountId, options = {}) {
     const { signal } = normalizeExplorerRequestOptions(options);
-    const normalizedId = ToriiClient._normalizeAccountId(accountId, "accountId");
+    const normalizedId = normalizeAccountPathLiteral(accountId, "accountId");
     const response = await this._request(
       "GET",
       `/v1/explorer/accounts/${encodeURIComponent(normalizedId)}/qr`,
@@ -17525,6 +17525,14 @@ function normalizeMultisigAccountAliasLiteral(value, context) {
     );
   }
   return alias;
+}
+
+function normalizeAccountPathLiteral(value, context) {
+  const literal = requireNonEmptyString(value, context).trim();
+  if (literal.includes("@")) {
+    return normalizeMultisigAccountAliasLiteral(literal, context);
+  }
+  return normalizeAccountId(literal, context);
 }
 
 function hasDetachedPrivateKeyInput(record) {

@@ -2892,6 +2892,7 @@ fn slash_validator_for_model_host_violation(
         let recorded_at_ms = state_transaction.block_unix_timestamp_ms();
         apply_slash_to_validator(
             &mut state_transaction.world,
+            &state_transaction.nexus.dataspace_catalog,
             &state_transaction.nexus.staking,
             lane_id,
             validator_account_id,
@@ -3758,11 +3759,12 @@ fn resolve_fee_sink_account(
 ) -> Result<AccountId, InstructionExecutionError> {
     crate::block::parse_account_literal_with_world(
         &state_transaction.world,
+        &state_transaction.nexus.dataspace_catalog,
         &state_transaction.nexus.fees.fee_sink_account_id,
     )
     .ok_or_else(|| {
         InstructionExecutionError::InvariantViolation(
-            "invalid nexus.fees.fee_sink_account_id; expected canonical Katakana i105 account id"
+            "invalid nexus.fees.fee_sink_account_id; expected canonical Katakana i105 account id or on-chain alias"
                 .into(),
         )
     })

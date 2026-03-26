@@ -21,7 +21,7 @@ slug：/norito/examples/nft-flow
 
 ## 账本演练
 
-- 确保 NFT 定义（例如 `n0#wonderland`）与代码段中使用的所有者/接收者帐户（`i105...`、`i105...`）一起存在。
+- 确保 NFT 定义（例如 `n0#wonderland`）与代码段中使用的所有者/接收者帐户（`soraカタカナ...`、`soraカタカナ...`）一起存在。
 - 调用 `nft_issue_and_transfer` 入口点来铸造 NFT，将其从 Alice 转移到 Bob，并附加描述发行的元数据标志。
 - 使用 `iroha_cli ledger nfts list --account <id>` 或 SDK 等效项检查 NFT 账本状态以验证传输，然后在刻录指令运行后确认资产已被删除。
 

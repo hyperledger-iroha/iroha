@@ -249,7 +249,7 @@ os auditores podem se concentrar em um único CSV de execução.
   referências a arquivos são resoluções relativas à localização do CSV.
   Os metadados não objetos produzem um erro de validação.
 - **Controladores:** as células vêem o respeito `--default-controllers`. Fournissez
-  des listes explícitas (por exemplo `i105...;i105...`) quando você delega a des
+  des listes explícitas (por exemplo `soraカタカナ...;soraカタカナ...`) quando você delega a des
   atores não proprietários.
 
 Les echecs são sinalizados com números de linha contextuais (por exemplo

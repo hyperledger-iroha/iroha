@@ -160,7 +160,7 @@ impl DenylistEntry {
         self.issued_at
     }
 
-    /// Optional routing alias (if supplied alongside a canonical identifier).
+    /// Optional on-chain account alias (if supplied alongside a canonical identifier).
     #[must_use]
     pub fn alias(&self) -> Option<&str> {
         self.alias.as_deref()
@@ -735,7 +735,7 @@ impl GatewayDenylist {
         )
     }
 
-    /// Checks whether the given routing alias is blocked.
+    /// Checks whether the given on-chain account alias is blocked.
     #[must_use]
     pub fn check_account_alias<S: AsRef<str>>(
         &self,

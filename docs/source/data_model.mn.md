@@ -31,9 +31,9 @@ translator: machine-google-reviewed
 - `IdBox`: Ямар ч дэмжигдсэн ID-д зориулсан нийлбэр төрлийн дугтуй (`DomainId`, `AccountId`, `AssetDefinitionId`, `AssetId`, `AssetId`, Kotodama `TriggerId`, `RoleId`, `Permission`, `CustomParameterId`). Ерөнхий урсгал болон Norito кодчилолд нэг төрлийн хувьд хэрэгтэй.
 - `ChainId`: Гүйлгээнд дахин тоглуулах хамгаалалтад ашигладаг тунгалаг бус хэлхээ танигч.ID-н стринг маягтууд (`Display`/`FromStr`-ээр хоёр тийш эргэх боломжтой):
 - `DomainId`: `name` (жишээ нь, `wonderland`).
-- `AccountId`: `AccountAddress`-ээр зөвхөн I105 гэж кодлогдсон домэйнгүй каноник данс танигч. Шинжилгээний оролт нь каноник I105 байх ёстой; домэйны дагавар (`@domain`), каноник I105 литерал, өөр нэрийн литерал, каноник зургаан талт задлагч оролт, хуучин `norito:` ачааллыг болон `uaid:`/`opaque:` хаягийг задалсан.
+- `AccountId`: `AccountAddress`-ээр зөвхөн i105 гэж кодлогдсон домэйнгүй каноник данс танигч. Шинжилгээний оролт нь каноник i105 байх ёстой; домэйны дагавар (`@domain`), каноник i105 литерал, өөр нэрийн литерал, каноник зургаан талт задлагч оролт, хуучин `norito:` ачааллыг болон `uaid:`/`opaque:` хаягийг задалсан.
 - `AssetDefinitionId`: каноник `unprefixed Base58 address with versioning and checksum` (UUID-v4 байт).
-- `AssetId`: каноник кодлогдсон literal `<base58-asset-id>#<katakana-i105-account-id>` (эхний хувилбар дээр хуучин текст хэлбэрийг дэмждэггүй).
+- `AssetId`: каноник кодлогдсон literal `<canonical-base58-asset-definition-id>` (эхний хувилбар дээр хуучин текст хэлбэрийг дэмждэггүй).
 - `NftId`: `nft$domain` (жишээ нь, `rose$garden`).
 - `PeerId`: `public_key` (үе тэнгийн тэгш байдал нь нийтийн түлхүүрээр байдаг).
 
@@ -43,7 +43,7 @@ translator: machine-google-reviewed
 - `DomainId { name: Name }` – өвөрмөц нэр.
 - `Domain { id, logo: Option<SorafsUri>, metadata: Metadata, owned_by: AccountId }`.
 - Builder: `NewDomain` нь `with_logo`, `with_metadata`, дараа нь `Registrable::build(authority)` багцууд `owned_by`.### Данс
-- `AccountId` нь хянагчаар тохируулсан, каноник I105 гэж кодлогдсон домэйнгүй дансны таниулбар юм.
+- `AccountId` нь хянагчаар тохируулсан, каноник i105 гэж кодлогдсон домэйнгүй дансны таниулбар юм.
 - `ScopedAccountId { account: AccountId, domain: DomainId }` нь зөвхөн хамрах хүрээг харах шаардлагатай тохиолдолд тодорхой домэйн контекстийг агуулна.
 - `Account { id, metadata, label?, uaid? }` — `label` нь дахин түлхүүр бичлэгт ашигладаг нэмэлт тогтвортой нэр юм, `uaid` нь нэмэлт Nexus өргөн [Түгээмэл дансны ID](Kotodama) юм.
 - Барилгачин: `Account::new(id)`-ээр дамжуулан `NewAccount`; Бүртгэлийн хувьд тодорхой `ScopedAccountId` домэйн шаардлагатай бөгөөд анхдагчаас нэгийг нь гаргахгүй.
@@ -250,7 +250,7 @@ iroha ledger asset definition register \
 # Mint using alias + account components (no manual norito hex copy/paste)
 iroha ledger asset mint \
   --definition-alias pkr#ubl.sbp \
-  --account sorauﾛ1P... \
+  --account soraゴヂ... \
   --quantity 500
 
 # Resolve alias to canonical Base58 id via Torii
@@ -259,7 +259,7 @@ curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -d '{"alias":"pkr#ubl.sbp"}'
 ```Шилжилтийн тэмдэглэл:
 - Хуучин `name#domain` хөрөнгийн тодорхойлолтыг v1-д хүлээн зөвшөөрдөггүй.
-- Цутгах/шатаах/шилжүүлэх хөрөнгийн ID-ууд `<base58-asset-id>#<katakana-i105-account-id>` каноник хэвээр байна; тэдгээрийг бүтээх:
+- Цутгах/шатаах/шилжүүлэх хөрөнгийн ID-ууд `<canonical-base58-asset-definition-id>` каноник хэвээр байна; тэдгээрийг бүтээх:
   - `iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
   - эсвэл `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`.
 

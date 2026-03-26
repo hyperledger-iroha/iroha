@@ -29,7 +29,8 @@ object OfflineSpendReceiptPayloadEncoder {
      * @param txIdHex 32-byte transaction ID as hex (64 chars)
      * @param fromAccountId sender AccountId (e.g., "<sender_account_i105>")
      * @param toAccountId receiver AccountId
-     * @param assetId full asset ID (e.g., "token#domain#<sender_account_i105>")
+     * @param assetId internal asset balance-bucket literal
+     * (e.g., "<base58-asset-definition-id>#<sender_account_i105>"; public asset ids are bare Base58)
      * @param amount decimal amount string
      * @param issuedAtMs timestamp in milliseconds
      * @param invoiceId invoice identifier

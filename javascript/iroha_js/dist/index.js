@@ -8,7 +8,6 @@ export {
   AccountAddress,
   AccountAddressError,
   AccountAddressErrorCode,
-  DEFAULT_DOMAIN_NAME,
   decodeI105AccountAddress,
   encodeI105AccountAddress,
   inspectAccountId,

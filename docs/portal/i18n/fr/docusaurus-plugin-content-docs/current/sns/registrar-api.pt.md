@@ -113,7 +113,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/policies/{suffix_id}` | OBTENIR | -- | Busca `SuffixPolicyV1` actuel (cacheavel). |
 | `/v1/sns/names/{namespace}/{literal}` | OBTENIR | -- | Retorna `NameRecordV1` actuel + estado efetivo (Active, Grace, etc.). |
 
-**Codification du sélecteur :** le segment `{selector}` correspond à I105, compressé ou hexadécimal canonique conforme à ADDR-5 ; Torii normalise via `NameSelectorV1`.**Modèle d'erreur :** tous les points de terminaison renvoient le nom Norito JSON avec `code`, `message`, `details`. Les codes incluent `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
+**Codification du sélecteur :** le segment `{selector}` correspond à i105, compressé ou hexadécimal canonique conforme à ADDR-5 ; Torii normalise via `NameSelectorV1`.**Modèle d'erreur :** tous les points de terminaison renvoient le nom Norito JSON avec `code`, `message`, `details`. Les codes incluent `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
 
 ### 3.1 Helpers CLI (requis du manuel du registraire N0)
 
@@ -215,7 +215,7 @@ Falhas renvoie le nom `sns_err_governance_missing`.
 
 ### 6.1 Registre Padrao1. Le client consulte `/v1/sns/policies/{suffix_id}` pour obtenir des prix, grâce et niveaux disponibles.
 2. Le client monte `RegisterNameRequestV1` :
-   - `selector` dérivé du label I105 (préféré) ou compressé (segunda melhor opcao).
+   - `selector` dérivé du label i105 (préféré) ou compressé (segunda melhor opcao).
    - `term_years` dans les limites de la politique.
    - `payment` référence au transfert du répartiteur tesouraria/steward.
 3. Torii valide :

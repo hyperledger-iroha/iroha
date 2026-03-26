@@ -247,7 +247,7 @@ Shtat o'tishlari mos keladigan `RegistryEventKind` ni chiqarishi KERAK, shuning 
 Shlyuzlar `RegistryEventV1` ga obuna bo'lish va DNS/SoraFS bilan sinxronlash:
 
 1. Voqealar ketma-ketligi tomonidan havola qilingan eng oxirgi `NameRecordV1` olinmoqda.
-2. Regenerator shablonlari (afzal I105 + ikkinchi eng yaxshi siqilgan (`sora`) manzillar, matn yozuvlari).
+2. Regenerator shablonlari (afzal i105 + ikkinchi eng yaxshi siqilgan (`sora`) manzillar, matn yozuvlari).
 3. Yangilangan hudud maʼlumotlarini [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md) da tasvirlangan SoraDNS ish jarayoni orqali mahkamlash.
 
 Tadbirni yetkazib berish kafolatlari:

@@ -245,7 +245,7 @@ Dövlət keçidləri müvafiq `RegistryEventKind` yaymalıdır ki, aşağı axı
 Şlüzlər `RegistryEventV1`-ə abunə olun və DNS/SoraFS ilə sinxronizasiya edin:
 
 1. Hadisə ardıcıllığı ilə istinad edilən ən son `NameRecordV1` götürülür.
-2. Regenerasiya həlledici şablonları (üstünlük verilir I105 + ikinci ən yaxşı sıxılmış (`sora`) ünvanlar, mətn qeydləri).
+2. Regenerasiya həlledici şablonları (üstünlük verilir i105 + ikinci ən yaxşı sıxılmış (`sora`) ünvanlar, mətn qeydləri).
 3. [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md)-də təsvir edilən SoraDNS iş axını vasitəsilə yenilənmiş zona məlumatlarının bərkidilməsi.
 
 Tədbirin çatdırılmasına zəmanət:

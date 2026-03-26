@@ -113,9 +113,10 @@ bütün həmyaşıdları tərəfindən istifadə olunan kanonik imza dəsti.
 
 `iroha_data_model` qutusu bütün kitab obyektlərini, təlimatları, sorğuları və hadisələri müəyyən edir. Əsas məqamlar:
 
-- **Domenlər, hesablar və aktivlər** kanonik I105 hesab ID-lərindən istifadə edir (üstünlük verilir); `name@dataspace` / `name@domain.dataspace` marşrutlaşdırma olaraq qalır
-  açıq şəkildə təqdim edildikdə ləqəb. Metadata deterministikdir (`Metadata` xəritəsi). Rəqəmsal aktivlər sabit nöqtəni dəstəkləyir
-  əməliyyatlar; NFT-lər ixtiyari strukturlaşdırılmış metadata daşıyır.
+- **Domains, accounts, and assets** use canonical Katakana i105 account ids and canonical Base58 asset ids. Account aliases are separate on-chain
+  bindings in `name@dataspace` / `name@domain.dataspace` form that resolve to Katakana i105 account ids, and asset aliases are separate on-chain bindings in `name#dataspace` / `name#domain.dataspace` form that resolve to canonical Base58 asset ids. Metadata is deterministic (`Metadata` map). Numeric assets support fixed-point
+  operations; NFTs carry arbitrary structured metadata.
+
 - **Rollar və icazələr** Norito nömrəli tokenlərdən istifadə edir ki, onlar birbaşa icraçı yoxlamaları ilə əlaqələndirirlər.
 - **Tetiklər** (vaxt əsaslı, blok əsaslı və ya predikatla idarə olunan) zəncir üzərindən deterministik əməliyyatlar yayır
   icraçı.

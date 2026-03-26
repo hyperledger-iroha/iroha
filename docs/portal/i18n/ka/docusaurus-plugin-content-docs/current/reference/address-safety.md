@@ -1,78 +1,73 @@
 ---
-lang: ka
-direction: ltr
-source: docs/portal/docs/reference/address-safety.md
-status: complete
-generator: docs/portal/scripts/sync-i18n.mjs
 title: Address Safety & Accessibility
 description: UX requirements for presenting and sharing Iroha addresses safely (ADDR-6c).
-translator: machine-google-reviewed
-translation_last_reviewed: 2026-02-07
 ---
 
-ეს გვერდი ასახავს ADDR-6c დოკუმენტაციის მიწოდებას. გამოიყენეთ ესენი
-შეზღუდვები საფულეებზე, მკვლევარებზე, SDK ინსტრუმენტებზე და პორტალის ნებისმიერ ზედაპირზე
-აწვდის ან იღებს მისამართებს ადამიანის მიმართ. კანონიკური მონაცემთა მოდელი ცხოვრობს
-`docs/account_structure.md`; ქვემოთ მოცემული ჩამონათვალი განმარტავს, თუ როგორ უნდა გამოაშკარავოთ ისინი
-ფორმატები უსაფრთხოების ან ხელმისაწვდომობის კომპრომისის გარეშე.
+This page captures the ADDR-6c documentation deliverable. Apply these
+constraints to wallets, explorers, SDK tooling, and any portal surface that
+renders or accepts human-facing addresses. The canonical data model lives in
+`docs/account_structure.md`; the checklist below explains how to expose those
+formats without compromising safety or accessibility.
 
-## უსაფრთხო გაზიარების ნაკადები
+## Safe sharing flows
 
-- ნაგულისხმევი ყველა ასლი/გაზიარება მოქმედება I105 მისამართზე. მოგვარებულის ჩვენება
-  დომენი, როგორც დამხმარე კონტექსტი, ასე რომ შეჯამებული სტრიქონი რჩება წინ და ცენტრში.
-- შესთავაზეთ „გაზიარების“ ფასი, რომელიც აერთიანებს სრულ ტექსტურ მისამართს და QR-ს
-  კოდი, რომელიც მიღებულია იმავე დატვირთვისგან. მიეცით საშუალება მომხმარებლებს შეამოწმონ ორივე ჩადენამდე.
-- როდესაც სივრცე მოითხოვს შეკვეცას (პატარა ბარათები, შეტყობინებები), შეინარჩუნეთ ლიდერობა
-  ადამიანის წაკითხვადი პრეფიქსი, აჩვენე ელიფსები და შეინარჩუნე ბოლო 4-6 სიმბოლო
-  საკონტროლო ჯამის წამყვანი გადარჩა. მიაწოდეთ შეხების/კლავიატურის მალსახმობი სრული კოპირებისთვის
-  სტრიქონი შეკვეცის გარეშე.
-- ბუფერის დესინქრონიზაციის თავიდან აცილება დამადასტურებელი სადღეგრძელოს გამოცემით, რომელიც წინასწარ ათვალიერებს
-  ზუსტი I105 სტრიქონი, რომელიც დაკოპირდა. სადაც ტელემეტრია ხელმისაწვდომია, დათვალეთ ასლი
-  მცდელობები გაზიარების მოქმედებების წინააღმდეგ, რათა UX რეგრესია სწრაფად აღმოჩნდეს.
+- Default every copy/share action to the canonical Katakana i105 account id.
+  If an on-chain alias is present, display it as supporting metadata in a
+  separate labeled field.
+- Offer a “Share” affordance that bundles the full plain-text address and a QR
+  code derived from the same payload. Let users inspect both before committing.
+- When space requires truncation (tiny cards, notifications), keep the leading
+  human-readable prefix, show ellipses, and retain the final 4–6 characters so
+  the checksum anchor survives. Provide a tap/keyboard shortcut to copy the full
+  string without truncation.
+- Prevent clipboard desync by emitting a confirmation toast that previews the
+  exact i105 string that was copied. Where telemetry is available, count copy
+  attempts versus share actions so UX regressions surface quickly.
 
-## IME და შეყვანის დაცვა
+## IME & input safeguards
 
-- უარყოთ არა-ASCII შეყვანა მისამართის ველებში. როდესაც IME კომპოზიციის არტეფაქტები (სრული
-  სიგანე, კანა, ტონის ნიშნები) გამოჩნდება, ჩნდება შიდა გაფრთხილება, რომელიც განმარტავს როგორ
-  ხელახლა ცდამდე კლავიატურაზე ლათინურ შეყვანაზე გადართვა.
-- მიაწოდეთ უბრალო ტექსტის პასტის ზონა, რომელიც ამოიღებს კომბინირებულ ნიშნებს და ჩაანაცვლებს
-  ვალიდაციამდე ASCII სივრცეები. ეს იცავს მომხმარებლებს დაკარგვისგან
-  პროგრესი, როდესაც ისინი გამორთავს მათ IME შუა ნაკადს.
-- გამკაცრდეს ვალიდაცია ნულოვანი სიგანის შესაერთებლების, ვარიაციის სელექტორების და სხვა
-  სტელსი Unicode კოდის წერტილები. დაარეგისტრირეთ უარყოფილი კოდის წერტილის კატეგორია ისე ბუნდოვანი
-  კომპლექტებს შეუძლიათ ტელემეტრიის იმპორტი.
+- Validate account-id fields as canonical Katakana i105 only. Validate alias
+  entry fields separately as `name@dataspace` or `name@domain.dataspace`.
+- When IME composition artefacts or zero-width characters appear, surface an
+  inline warning instead of coercing the input into a different account-id
+  format.
+- Provide a plain-text paste zone that preserves the canonical i105 literal as
+  pasted while still stripping obviously invalid stealth code points before
+  validation.
+- Harden validation against zero-width joiners, variation selectors, and other
+  stealth Unicode code points. Log the rejected code point category so fuzzing
+  suites can import the telemetry.
 
-## დამხმარე ტექნოლოგიების მოლოდინი
+## Assistive technology expectations
 
-- მიანიშნეთ ყველა მისამართის ბლოკის ანოტირება `aria-label` ან `aria-describedby`
-  წერს ადამიანის მიერ წასაკითხ პრეფიქსს და ანაწილებს დატვირთვას 4–8 სიმბოლოდ
-  ჯგუფები („ih ტირე b სამი ორი…“). ეს აჩერებს ეკრანის მკითხველს აწარმოოს
-  პერსონაჟების გაუგებარი ნაკადი.
-- გამოაცხადეთ წარმატებული კოპირება/გაზიარება ღონისძიებები თავაზიანი ცოცხალი რეგიონის განახლების მეშვეობით. ჩართეთ
-  დანიშნულება (გაცვლის ბუფერი, გაზიარების ფურცელი, QR), რათა მომხმარებელმა იცოდეს მოქმედება
-  დასრულდა ფოკუსის გადაადგილების გარეშე.
-- მიაწოდეთ აღწერითი `alt` ტექსტი QR გადახედვისთვის (მაგ., „I105 მისამართი
-  `<account>` ჯაჭვზე `0x1234`”). მიუთითეთ „დააკოპირეთ მისამართი ტექსტად“
-  უკან დაბრუნება QR ტილოს მიმდებარედ დაბალი ხედვის მომხმარებლებისთვის.
+- Annotate every address block with `aria-label` or `aria-describedby` that
+  spells out the human-readable prefix and chunks the payload in 4–8 character
+  groups (“ih dash b three two …”). This stops screen readers from producing an
+  unintelligible stream of characters.
+- Announce successful copy/share events via a polite live region update. Include
+  the destination (clipboard, share sheet, QR) so the user knows the action
+  completed without moving focus.
+- Supply descriptive `alt` text for QR previews (e.g., “i105 address for
+  `<account>` on chain `0x1234`”). Provide a “Copy address as text”
+  fallback adjacent to the QR canvas for low-vision users.
 
-## მხოლოდ Sora-ზე შეკუმშული მისამართები
+## Single-format policy
 
-- კარიბჭე: დამალეთ `i105` შეკუმშული სტრიქონი აშკარა დადასტურების უკან.
-  დადასტურებამ უნდა გაიმეოროს, რომ ფორმა მუშაობს მხოლოდ Sora Nexus ჯაჭვებზე.
-- მარკირება: ყველა მოვლენა უნდა შეიცავდეს ხილულ "მხოლოდ სორას" სამკერდე ნიშანს და ა
-  ინსტრუმენტული მინიშნება, რომელიც აღწერს, რატომ მოითხოვს სხვა ქსელებს I105 ფორმა.
-- დაცვა: თუ აქტიური ჯაჭვის დისკრიმინანტი არ არის Nexus განაწილება,
-  უარი თქვას შეკუმშული მისამართის გენერირებაზე და მიმართეთ მომხმარებელს უკან
-  I105.
-- ტელემეტრია: ჩაწერეთ რამდენად ხშირად ხდება შეკუმშული ფორმის მოთხოვნა და კოპირება
-  ინციდენტის სათამაშო წიგნს შეუძლია აღმოაჩინოს შემთხვევითი გაზიარების მწვერვალები.
+- Keep canonical Katakana i105 as the only user-facing account-id format for
+  copy, share, and QR surfaces.
+- Treat `name@dataspace` and `name@domain.dataspace` as on-chain aliases that
+  point to canonical i105 account ids.
+- Do not expose alternate account-literal encodings in production wallet or
+  explorer UX.
+- Telemetry should track i105 copy/share usage, alias-resolution usage, and
+  validation failures only.
 
-## ხარისხის კარიბჭე
+## Quality gates
 
-- გააფართოვეთ ავტომატური ინტერფეისის ტესტები (ან მოთხრობების წიგნი a11y კომპლექტები) ამ მისამართის დასამტკიცებლად
-  კომპონენტები ავლენს საჭირო ARIA მეტამონაცემებს და IME-ს უარყოფის შეტყობინებებს
-  გამოჩნდება.
-- ჩართეთ ხელით QA სცენარები IME შეყვანისთვის (კანა, პინინი), ეკრანის წამკითხველის საშვი
-  (VoiceOver/NVDA) და QR კოპირება მაღალი კონტრასტის თემებზე გამოშვებამდე.
-- გადაიტანეთ ეს შემოწმებები გამოშვების საკონტროლო სიებში I105 პარიტეტის ტესტებთან ერთად
-  ასე რომ, რეგრესიები დაბლოკილია, სანამ არ გამოსწორდება.
+- Extend automated UI tests (or storybook a11y suites) to assert that address
+  components expose the required ARIA metadata and that IME rejection messages
+  appear.
+- Include manual QA scenarios for IME input (kana, pinyin), screen reader pass
+  (VoiceOver/NVDA), and QR copy on high-contrast themes before releasing.
+- Surface these checks in release checklists alongside the i105 parity tests
+  so regressions remain blocked until corrected.

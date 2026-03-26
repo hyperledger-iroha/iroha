@@ -245,7 +245,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
   CSV の場所を参照します。 相対解決。非オブジェクトメタデータ
   検証エラー دیتا ہے۔
 - **コントローラー:** セル `--default-controllers` 名誉 کرتے ہیں۔非所有者
-  アクター、デリゲート、明示的コントローラー リスト、 (مثال `i105...;i105...`)۔
+  アクター、デリゲート、明示的コントローラー リスト、 (مثال `soraカタカナ...;soraカタカナ...`)۔
 
 失敗コンテキスト行番号レポート ہوتے ہیں (مثال
 `error: row 12 term_years must be between 1 and 255`)。スクリプト検証エラー

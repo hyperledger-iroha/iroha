@@ -48,117 +48,25 @@ from urllib.parse import quote
 
 import requests
 
-I105_ASCII_ALPHABET = (
-    "1",
-    "2",
-    "3",
-    "4",
-    "5",
-    "6",
-    "7",
-    "8",
-    "9",
-    "A",
-    "B",
-    "C",
-    "D",
-    "E",
-    "F",
-    "G",
-    "H",
-    "J",
-    "K",
-    "L",
-    "M",
-    "N",
-    "P",
-    "Q",
-    "R",
-    "S",
-    "T",
-    "U",
-    "V",
-    "W",
-    "X",
-    "Y",
-    "Z",
-    "a",
-    "b",
-    "c",
-    "d",
-    "e",
-    "f",
-    "g",
-    "h",
-    "i",
-    "j",
-    "k",
-    "m",
-    "n",
-    "o",
-    "p",
-    "q",
-    "r",
-    "s",
-    "t",
-    "u",
-    "v",
-    "w",
-    "x",
-    "y",
-    "z",
+BASE58_ALPHABET = tuple("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
+IROHA_POEM_KANA_FULLWIDTH = (
+    "イ", "ロ", "ハ", "ニ", "ホ", "ヘ", "ト", "チ", "リ", "ヌ", "ル", "ヲ", "ワ", "カ", "ヨ", "タ",
+    "レ", "ソ", "ツ", "ネ", "ナ", "ラ", "ム", "ウ", "ヰ", "ノ", "オ", "ク", "ヤ", "マ", "ケ", "フ",
+    "コ", "エ", "テ", "ア", "サ", "キ", "ユ", "メ", "ミ", "シ", "ヱ", "ヒ", "モ", "セ", "ス",
 )
-I105_KANA_ALPHABET = (
-    "ｲ",
-    "ﾛ",
-    "ﾊ",
-    "ﾆ",
-    "ﾎ",
-    "ﾍ",
-    "ﾄ",
-    "ﾁ",
-    "ﾘ",
-    "ﾇ",
-    "ﾙ",
-    "ｦ",
-    "ﾜ",
-    "ｶ",
-    "ﾖ",
-    "ﾀ",
-    "ﾚ",
-    "ｿ",
-    "ﾂ",
-    "ﾈ",
-    "ﾅ",
-    "ﾗ",
-    "ﾑ",
-    "ｳ",
-    "ヰ",
-    "ﾉ",
-    "ｵ",
-    "ｸ",
-    "ﾔ",
-    "ﾏ",
-    "ｹ",
-    "ﾌ",
-    "ｺ",
-    "ｴ",
-    "ﾃ",
-    "ｱ",
-    "ｻ",
-    "ｷ",
-    "ﾕ",
-    "ﾒ",
-    "ﾐ",
-    "ｼ",
-    "ヱ",
-    "ﾋ",
-    "ﾓ",
-    "ｾ",
-    "ｽ",
+IROHA_POEM_KANA_HALFWIDTH = (
+    "ｲ", "ﾛ", "ﾊ", "ﾆ", "ﾎ", "ﾍ", "ﾄ", "ﾁ", "ﾘ", "ﾇ", "ﾙ", "ｦ", "ﾜ", "ｶ", "ﾖ", "ﾀ",
+    "ﾚ", "ｿ", "ﾂ", "ﾈ", "ﾅ", "ﾗ", "ﾑ", "ｳ", "ヰ", "ﾉ", "ｵ", "ｸ", "ﾔ", "ﾏ", "ｹ", "ﾌ",
+    "ｺ", "ｴ", "ﾃ", "ｱ", "ｻ", "ｷ", "ﾕ", "ﾒ", "ﾐ", "ｼ", "ヱ", "ﾋ", "ﾓ", "ｾ", "ｽ",
 )
-I105_ALPHABET = I105_ASCII_ALPHABET + I105_KANA_ALPHABET
+I105_ALPHABET = BASE58_ALPHABET + IROHA_POEM_KANA_FULLWIDTH
 I105_INDEX = {symbol: idx for idx, symbol in enumerate(I105_ALPHABET)}
+I105_INDEX.update(
+    {
+        symbol: len(BASE58_ALPHABET) + idx
+        for idx, symbol in enumerate(IROHA_POEM_KANA_HALFWIDTH)
+    }
+)
 I105_BASE = len(I105_ALPHABET)
 I105_CHECKSUM_LEN = 6
 I105_BECH32M_CONST = 0x2BC830A3
@@ -246,7 +154,7 @@ def _strip_i105_sentinel(encoded: str) -> str:
             index += 1
         if index > len(I105_NUMERIC_SENTINEL_PREFIX):
             return encoded[index:]
-    raise ValueError("I105 address is missing the expected chain-discriminant sentinel")
+    raise ValueError("i105 address is missing the expected chain-discriminant sentinel")
 
 
 def _decode_i105_string(encoded: str) -> bytes:
@@ -256,14 +164,14 @@ def _decode_i105_string(encoded: str) -> bytes:
         try:
             digits.append(I105_INDEX[symbol])
         except KeyError as exc:
-            raise ValueError("invalid character in I105 address") from exc
+            raise ValueError("invalid character in i105 address") from exc
     if len(digits) <= I105_CHECKSUM_LEN:
-        raise ValueError("I105 address too short")
+        raise ValueError("i105 address too short")
     data_digits = digits[:-I105_CHECKSUM_LEN]
     checksum_digits = digits[-I105_CHECKSUM_LEN:]
     canonical = _decode_base_n(data_digits, I105_BASE)
     if checksum_digits != _i105_checksum_digits(canonical):
-        raise ValueError("I105 checksum mismatch")
+        raise ValueError("i105 checksum mismatch")
     return canonical
 
 __all__ = [
@@ -2804,7 +2712,7 @@ class ToriiClient:
     ) -> ExplorerAccountQr:
         """Fetch QR metadata for an account (`GET /v1/explorer/accounts/{account_id}/qr`)."""
 
-        canonical = self._require_non_empty_string(account_id, "account_id")
+        canonical = self._normalize_canonical_account_id(account_id, "account_id")
         response = self._request(
             "GET",
             f"/v1/explorer/accounts/{quote(canonical, safe='')}/qr",
@@ -4114,9 +4022,10 @@ class ToriiClient:
     def get_kaigi_relay(self, relay_id: str) -> Optional[KaigiRelayDetail]:
         """Return detailed metadata for a specific relay via ``GET /v1/kaigi/relays/{relay_id}``."""
 
+        canonical = self._normalize_canonical_account_id(relay_id, "relay_id")
         response = self._request(
             "GET",
-            f"/v1/kaigi/relays/{relay_id}",
+            f"/v1/kaigi/relays/{quote(canonical, safe='')}",
             headers={"Accept": "application/json"},
         )
         self._expect_status(response, {200, 404})
@@ -4839,6 +4748,35 @@ class ToriiClient:
                 f"{context} must be {'non-negative' if allow_zero else 'positive'}"
             )
         return number
+
+    @staticmethod
+    def _normalize_canonical_account_id(value: Any, context: str) -> str:
+        literal = ToriiClient._require_non_empty_string(value, context)
+        if literal != value or any(ch.isspace() for ch in literal):
+            raise ValueError(
+                f"{context} must be a canonical Katakana i105 account id or on-chain account alias"
+            )
+        if "@" in literal:
+            label, separator, scope = literal.partition("@")
+            scope_parts = scope.split(".") if separator else []
+            if (
+                not label
+                or not separator
+                or not scope
+                or len(scope_parts) not in (1, 2)
+                or any(not part for part in scope_parts)
+            ):
+                raise ValueError(
+                    f"{context} must use canonical Katakana i105 account id or account alias `name@dataspace` / `name@domain.dataspace`"
+                )
+            return literal
+        try:
+            _decode_i105_string(literal)
+        except ValueError as exc:
+            raise ValueError(
+                f"{context} must be a canonical Katakana i105 account id or on-chain account alias"
+            ) from exc
+        return literal
 
     @staticmethod
     def _normalize_numeric_literal(

@@ -275,7 +275,7 @@ A telemetria do Explorer fornece auxiliares digitados para `/v1/explorer/metrics
 Endpoints `/v1/explorer/accounts/{account_id}/qr` para que os painéis possam reproduzir o
 mesmos instantâneos que alimentam o portal. `getExplorerMetrics()` normaliza o
 carga útil e retorna `null` quando a rota está desabilitada. Combine com
-`getExplorerAccountQr()` sempre que você precisar de literais I105 (preferencial)/sora (segundo melhor) mais inline
+`getExplorerAccountQr()` sempre que você precisar de literais i105 (preferencial)/sora (segundo melhor) mais inline
 SVG para botões de compartilhamento.
 
 ```ts
@@ -298,8 +298,8 @@ console.log(
 );
 ```
 
-Passar `I105` espelha o padrão compactado do Explorer
-seletores; omita a substituição para a saída I105 preferencial ou solicite `i105_qr`
+Passar `i105` espelha o padrão compactado do Explorer
+seletores; omita a substituição para a saída i105 preferencial ou solicite `i105_qr`
 quando você precisar da variante segura para QR. O literal compactado é o segundo melhor
 Opção somente Sora para UX. O auxiliar sempre retorna o identificador canônico,
 o literal selecionado e metadados (prefixo de rede, versão/módulos QR, erro
@@ -514,7 +514,7 @@ canonizá-los antes de enviar solicitações:- `getUaidPortfolio(uaid, { assetId
   agrupar ativos por IDs de contas canônicas; passe `assetId` para filtrar o
   portfólio até uma única instância de ativo.
 - `getUaidBindings(uaid)` enumera todos os espaços de dados ↔ contas
-  ligação (`I105` retorna os literais `i105`).
+  ligação (`i105` retorna os literais `i105`).
 - `getUaidManifests(uaid, { dataspaceId })` retorna cada manifesto de capacidade,
   status do ciclo de vida e contas vinculadas para auditoria.
 

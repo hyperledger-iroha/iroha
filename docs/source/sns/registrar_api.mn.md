@@ -112,7 +112,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/policies/{suffix_id}` | GET | — | Fetch current `SuffixPolicyV1` (cacheable). |
 | `/v1/sns/names/{namespace}/{literal}` | GET | — | Returns current `NameRecordV1` + effective state (Active, Grace, etc.). |
 
-**Selector encoding:** the `{selector}` path segment accepts I105, I105, or canonical hex per ADDR-5; Torii normalises it via `NameSelectorV1`.
+**Selector encoding:** the `{selector}` path segment accepts i105, i105, or canonical hex per ADDR-5; Torii normalises it via `NameSelectorV1`.
 
 **Error model:** all endpoints return Norito JSON with `code`, `message`, `details`. Codes include `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
 
@@ -159,7 +159,7 @@ iroha sns renew \
 # Transfer ownership (requires a GovernanceHookV1 JSON file)
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner soraカタカナ... \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows (guardian ticket and governance hook respectively)
@@ -221,7 +221,7 @@ Failed checks return `sns_err_governance_missing`.
 
 1. Client queries `/v1/sns/policies/{suffix_id}` to fetch pricing, grace, and available tiers.
 2. Client builds `RegisterNameRequestV1`:
-   - `selector` derived from the preferred I105 label.
+   - `selector` derived from the preferred i105 label.
    - `term_years` within policy bounds.
    - `payment` referencing the treasury/steward splitter transfer.
 3. Torii validates:

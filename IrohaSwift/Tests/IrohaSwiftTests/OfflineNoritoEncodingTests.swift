@@ -2,15 +2,13 @@ import XCTest
 @testable import IrohaSwift
 
 final class OfflineNoritoEncodingTests: XCTestCase {
-    private func makeAddress(seed: UInt8,
-                             domain: String = AccountAddress.defaultDomainName) throws -> AccountAddress {
+    private func makeAddress(seed: UInt8) throws -> AccountAddress {
         let keypair = try Keypair(privateKeyBytes: Data(repeating: seed, count: 32))
         return try AccountAddress.fromAccount(publicKey: keypair.publicKey)
     }
 
-    private func makeI105(seed: UInt8,
-                          domain: String = AccountAddress.defaultDomainName) throws -> String {
-        let address = try makeAddress(seed: seed, domain: domain)
+    private func makeI105(seed: UInt8) throws -> String {
+        let address = try makeAddress(seed: seed)
         return try address.toI105(networkPrefix: 0x02F1)
     }
 
@@ -26,10 +24,10 @@ final class OfflineNoritoEncodingTests: XCTestCase {
         assertInvalidAssetId("rose##alice@hbl.dataspace")
     }
 
-    func testEncodeAssetIdRejectsMalformedPublicLiterals() {
+    func testEncodeAssetIdRejectsMalformedPublicLiterals() throws {
         assertInvalidAssetId("not:an-asset")
         assertInvalidAssetId("62Fk4FPcMuLvW5QjDGNF2a4jAmjM#")
-        assertInvalidAssetId("62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauﾛ1NcﾐuﾛﾀKﾓhﾈgｽXｦDTﾏｴtﾔﾐ8PJPfSﾕPuﾃ884ｳﾇヰ4ﾇJKTL36#dataspace:")
+        assertInvalidAssetId("62Fk4FPcMuLvW5QjDGNF2a4jAmjM#\(try makeI105(seed: 9))#dataspace:")
     }
 
     func testEncodeAccountIdAcceptsI105() throws {
@@ -61,7 +59,7 @@ final class OfflineNoritoEncodingTests: XCTestCase {
     }
 
     func testEncodeAccountIdRejectsCanonicalHexLiteral() throws {
-        let address = try makeAddress(seed: 3, domain: "wonderland")
+        let address = try makeAddress(seed: 3)
         let canonical = try address.canonicalHex()
         assertInvalidAccountId(canonical, expected: canonical)
     }

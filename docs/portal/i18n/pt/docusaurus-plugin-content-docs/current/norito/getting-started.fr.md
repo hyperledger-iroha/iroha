@@ -71,7 +71,7 @@ Quando você estiver satisfeito com o contrato, implante-o em um nud por meio da
 
 ```sh
 iroha_cli app contracts deploy \
-  --authority i105... \
+  --authority soraカタカナ... \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
 ```

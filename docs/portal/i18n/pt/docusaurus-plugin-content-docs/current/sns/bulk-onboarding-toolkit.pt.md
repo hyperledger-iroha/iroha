@@ -244,7 +244,7 @@ submissões. O quadro filtrado por `release` para que os auditores possam focar 
   referencias a arquivos são resolvidos relativos à localização do CSV. Metadados
   nenhum objeto produz um erro de validação.
 - **Controladores:** celulas em branco respeitam `--default-controllers`. Forneca
-  listas explícitas (por exemplo `i105...;i105...`) ao delegar para atores não proprietário.
+  listas explícitas (por exemplo `soraカタカナ...;soraカタカナ...`) ao delegar para atores não proprietário.
 
 Falhas são reportadas com números de linha contextuais (por exemplo
 `error: row 12 term_years must be between 1 and 255`). O script sai com código

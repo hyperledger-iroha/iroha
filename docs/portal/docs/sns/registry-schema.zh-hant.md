@@ -247,7 +247,7 @@ Enum RegistryEventKind {
 網關通過以下方式訂閱 `RegistryEventV1` 並同步到 DNS/SoraFS：
 
 1. 獲取事件序列引用的最新 `NameRecordV1`。
-2.重新生成解析器模板（首選I105 +次優壓縮（`sora`）地址、文本記錄）。
+2.重新生成解析器模板（首選i105 +次優壓縮（`sora`）地址、文本記錄）。
 3. 通過 [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md) 中描述的 SoraDNS 工作流程固定更新的區域數據。
 
 活動交付保證：

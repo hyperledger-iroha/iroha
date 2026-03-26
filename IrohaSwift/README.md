@@ -183,7 +183,7 @@ headers.forEach { key, value in
 }
 ```
 
-> **Hard-cut account parser:** Account-scoped helpers (`ToriiClient.getAssets`, `getTransactions`, and matching `IrohaSDK` shortcuts) accept only canonical Katakana i105 account ids. Account aliases (`name@dataspace` / `name@domain.dataspace`) and legacy literals are rejected.
+> **Account selectors:** Account-scoped helpers (`ToriiClient.getAssets`, `getTransactions`, and matching `IrohaSDK` shortcuts) accept canonical Katakana i105 account ids or on-chain account aliases (`name@dataspace` / `name@domain.dataspace`). Torii resolves aliases to canonical account ids before serving the response.
 
 ### Explorer instruction history
 
@@ -256,7 +256,8 @@ if #available(iOS 15.0, macOS 12.0, *) {
 ```
 
 You can also pass `assetDefinitionId` or `assetId` to narrow results. The `assetId` filter matches
-the source asset id literal (definition + sender account) as reported by explorer transfers.
+the source internal asset balance-bucket literal (`<base58-asset-definition-id>#<canonical-katakana-i105-account-id>`) as reported by explorer
+transfers.
 Transaction-scoped helpers (`getExplorerTransactionTransferSummaries`,
 `streamTransactionTransferSummaries`) accept the same filters.
 

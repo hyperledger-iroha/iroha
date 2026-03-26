@@ -17,8 +17,7 @@ private func noncanonicalOwnerLiteral() throws -> String {
 }
 
 @available(macOS 10.15, iOS 13.0, *)
-private func canonicalAuthorityLiteral(from signingKey: SigningKey,
-                                       domain: String = AccountAddress.defaultDomainName) throws -> String {
+private func canonicalAuthorityLiteral(from signingKey: SigningKey) throws -> String {
     let publicKey = try signingKey.publicKey()
     let address = try AccountAddress.fromAccount(publicKey: publicKey)
     let i105 = try address.toI105(networkPrefix: 0x02F1)
@@ -96,9 +95,10 @@ final class TransactionEncoderValidationTests: XCTestCase {
     func testRemoveMetadataRejectsMalformedAssetTarget() throws {
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 3, count: 32))
         let authority = try canonicalAuthorityLiteral(from: signingKey)
+        let malformed = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#\(try canonicalOwnerLiteral())"
         let request = RemoveMetadataRequest(chainId: "chain",
                                             authority: authority,
-                                            target: .asset("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+                                            target: .asset(malformed),
                                             key: "profile",
                                             ttlMs: nil)
 
@@ -108,7 +108,7 @@ final class TransactionEncoderValidationTests: XCTestCase {
                                                              creationTimeMs: 5)
         ) { error in
             XCTAssertEqual(error as? TransactionInputError,
-                           .malformedAssetId("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"))
+                           .malformedAssetId(malformed))
         }
     }
 
@@ -135,12 +135,12 @@ final class TransactionEncoderValidationTests: XCTestCase {
 
     func testMetadataTargetAcceptsCanonicalAssetId() throws {
         let target = try TransactionInputValidator.sanitizeMetadataTarget(
-            .asset("62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ")
+            .asset("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
         )
         guard case let .asset(assetId) = target else {
             return XCTFail("expected asset target")
         }
-        XCTAssertEqual(assetId, "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ")
+        XCTAssertEqual(assetId, "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
     }
 
     func testCastZkBallotRejectsIncompleteLockHints() throws {
@@ -217,6 +217,9 @@ final class TransactionEncoderValidationTests: XCTestCase {
     }
 
     func testCastZkBallotAcceptsCanonicalHints() throws {
+        guard NoritoNativeBridge.shared.isAvailable else {
+            throw XCTSkip("NoritoBridge not available")
+        }
         let owner = try canonicalOwnerLiteral()
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 4, count: 32))
         let authority = try canonicalAuthorityLiteral(from: signingKey)

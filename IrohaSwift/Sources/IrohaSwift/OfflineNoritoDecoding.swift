@@ -89,7 +89,8 @@ extension OfflineNorito {
         guard !trimmed.isEmpty else {
             return nil
         }
-        guard AssetDefinitionAddress.decode(trimmed) != nil else {
+        guard !trimmed.contains("#"),
+              AssetDefinitionAddress.decode(trimmed) != nil else {
             return nil
         }
         return trimmed

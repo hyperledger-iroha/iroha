@@ -225,7 +225,7 @@ Todas las chaves serializan usando tuplas Norito para mantener o hash determiní
 Puertas de enlace asignadas `RegistryEventV1` y sincronizadas DNS/SoraFS ao:
 
 1. Buscar o ultimo `NameRecordV1` referenciado pela secuencia de eventos.
-2. Regenerar plantillas de resolución (enderecos I105 preferidos + comprimidos (`sora`) como segunda opción, registros de texto).
+2. Regenerar plantillas de resolución (enderecos i105 preferidos + comprimidos (`sora`) como segunda opción, registros de texto).
 3. Pincer los datos de zona actualizados a través del flujo SoraDNS descrito en [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
 
 Garantías de entrega de eventos:

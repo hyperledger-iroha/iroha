@@ -4484,6 +4484,38 @@ fn bind_permanent_asset_alias_for_test(
     block.commit().expect("commit permanent asset alias");
 }
 
+#[cfg(test)]
+fn bind_account_alias_for_test(
+    state: &std::sync::Arc<iroha_core::state::State>,
+    account_id: &AccountId,
+    alias_literal: &str,
+) {
+    let label = iroha_data_model::account::rekey::AccountLabel::from_literal(
+        alias_literal,
+        &state.nexus_snapshot().dataspace_catalog,
+    )
+    .expect("valid account alias");
+    let header = iroha_data_model::block::BlockHeader::new(
+        nonzero_ext::nonzero!(1_u64),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = state.block(header);
+    let mut tx = block.transaction();
+    tx.world
+        .account_aliases
+        .insert(label.clone(), account_id.clone());
+    tx.world.account_rekey_records.insert(
+        label.clone(),
+        iroha_data_model::account::rekey::AccountRekeyRecord::new(label, account_id.clone()),
+    );
+    tx.apply();
+    block.commit().expect("commit account alias for test");
+}
+
 #[cfg(all(test, feature = "app_api"))]
 mod zk_roots_selector_tests {
     use std::str::FromStr;
@@ -12306,7 +12338,7 @@ pub struct SubscriptionPlanCreateResponseDto {
 )]
 /// Query parameters for listing subscription plans.
 pub struct SubscriptionPlanListParams {
-    /// Optional plan provider filter.
+    /// Optional plan provider filter using a canonical Katakana i105 id or on-chain alias.
     pub provider: Option<String>,
     /// Optional limit for pagination.
     pub limit: Option<u64>,
@@ -12393,9 +12425,9 @@ pub struct SubscriptionCreateResponseDto {
 )]
 /// Query parameters for listing subscriptions.
 pub struct SubscriptionListParams {
-    /// Optional subscriber filter.
+    /// Optional subscriber filter using a canonical Katakana i105 id or on-chain alias.
     pub owned_by: Option<String>,
-    /// Optional provider filter.
+    /// Optional provider filter using a canonical Katakana i105 id or on-chain alias.
     pub provider: Option<String>,
     /// Optional status filter (active, paused, past_due, canceled, suspended).
     pub status: Option<String>,
@@ -13143,7 +13175,7 @@ pub struct RepairWorkerClaimDto {
     pub ticket_id: RepairTicketId,
     /// Hex-encoded manifest digest (BLAKE3-256).
     pub manifest_digest_hex: String,
-    /// Repair worker identifier.
+    /// Repair worker as canonical Katakana i105 or on-chain account alias.
     pub worker_id: String,
     /// Unix timestamp (seconds) when the claim was issued.
     pub claimed_at_unix: u64,
@@ -13166,7 +13198,7 @@ pub struct RepairWorkerHeartbeatDto {
     pub ticket_id: RepairTicketId,
     /// Hex-encoded manifest digest (BLAKE3-256).
     pub manifest_digest_hex: String,
-    /// Repair worker identifier.
+    /// Repair worker as canonical Katakana i105 or on-chain account alias.
     pub worker_id: String,
     /// Unix timestamp (seconds) when the heartbeat was recorded.
     pub heartbeat_at_unix: u64,
@@ -13189,7 +13221,7 @@ pub struct RepairWorkerCompleteDto {
     pub ticket_id: RepairTicketId,
     /// Hex-encoded manifest digest (BLAKE3-256).
     pub manifest_digest_hex: String,
-    /// Repair worker identifier.
+    /// Repair worker as canonical Katakana i105 or on-chain account alias.
     pub worker_id: String,
     /// Unix timestamp (seconds) when remediation completed.
     pub completed_at_unix: u64,
@@ -13215,7 +13247,7 @@ pub struct RepairWorkerFailDto {
     pub ticket_id: RepairTicketId,
     /// Hex-encoded manifest digest (BLAKE3-256).
     pub manifest_digest_hex: String,
-    /// Repair worker identifier.
+    /// Repair worker as canonical Katakana i105 or on-chain account alias.
     pub worker_id: String,
     /// Unix timestamp (seconds) when the failure was recorded.
     pub failed_at_unix: u64,
@@ -17823,7 +17855,7 @@ pub(crate) fn parse_tx_history_asset_selector(raw: &str) -> Result<TxHistoryAsse
         ));
     }
     Err(conversion_error(
-        "asset_id must be a valid asset id, canonical Base58 asset definition id, or active asset alias"
+        "asset_id must be a valid internal asset balance-bucket literal, canonical Base58 asset definition id, or active asset alias"
             .to_string(),
     ))
 }
@@ -19079,7 +19111,7 @@ fn resolve_parsed_account_against_world(
 }
 
 #[cfg(feature = "app_api")]
-fn parse_account_literal_with_state(
+pub(crate) fn parse_account_literal_with_state(
     state: &CoreState,
     literal: &str,
     telemetry: &MaybeTelemetry,
@@ -19096,9 +19128,11 @@ fn parse_account_literal_with_state(
             Ok((resolved.clone(), resolved.to_string()))
         }
         Err(base_err) => {
+            let nexus = state.nexus_snapshot();
             if let Ok(alias) =
-                account::rekey::AccountLabel::from_literal(trimmed, &state.nexus.dataspace_catalog)
-                && let Some(resolved) = world.account_aliases().get(&alias).cloned()
+                account::rekey::AccountLabel::from_literal(trimmed, &nexus.dataspace_catalog)
+                && let Some(resolved) =
+                    iroha_core::block::resolve_account_alias_in_world(world, &alias)
             {
                 record_account_literal_accept(telemetry, context, &resolved);
                 return Ok((resolved.clone(), resolved.to_string()));
@@ -19686,6 +19720,60 @@ mod account_path_metric_tests {
     }
 }
 
+#[cfg(all(test, feature = "app_api", feature = "telemetry"))]
+mod stateful_account_path_parser_tests {
+    use std::sync::Arc;
+
+    use iroha_core::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
+    use iroha_data_model::{
+        account::{Account, rekey::AccountLabel},
+        domain::{Domain, DomainId},
+        name::Name,
+    };
+    use iroha_test_samples::ALICE_ID;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn stateful_account_path_parser_resolves_bound_alias_literal() {
+        let domain_id: DomainId = "hbl".parse().expect("domain");
+        let authority = ALICE_ID.clone();
+        let account_id = authority.to_account_id(domain_id.clone());
+        let alias = AccountLabel::new(
+            domain_id.clone(),
+            Name::from_str("operator").expect("alias name"),
+        );
+        let world = World::with(
+            [Domain::new(domain_id).build(&authority)],
+            [Account::new(account_id)
+                .with_label(Some(alias))
+                .build(&authority)],
+            [],
+        );
+        let state = Arc::new(State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+        let telemetry = MaybeTelemetry::for_tests();
+
+        let (resolved, canonical) = parse_account_path_segment_with_state(
+            &state,
+            "operator@hbl.universal",
+            &telemetry,
+            ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY,
+        )
+        .expect("bound alias literal should resolve on account_id paths");
+
+        assert_eq!(resolved, account_id);
+        assert_eq!(canonical, account_id.to_string());
+    }
+}
+
 #[cfg(feature = "app_api")]
 fn committed_transactions_snapshot(
     state: &CoreState,
@@ -20143,20 +20231,19 @@ pub async fn handle_v1_account_transactions_get_with_policy(
         &telemetry,
         ENDPOINT_ACCOUNTS_TRANSACTIONS,
     )?;
-    let world = state.world_view();
-    let now_ms = asset_alias_observation_time_ms(&state);
-    let asset_filter = resolve_tx_history_asset_selector(
-        &world,
-        now_ms,
-        params.asset_id.as_deref(),
-        allowed_asset_definition_id.as_ref(),
-    )?;
     let cap = app_query_page_cap(&state);
-    let limits = app_query_limits();
-    let committed_txs = committed_transactions_snapshot(state.as_ref());
     let query_subject = account_id;
-
     let (items, total) = {
+        let limits = app_query_limits();
+        let committed_txs = committed_transactions_snapshot(state.as_ref());
+        let world = state.world_view();
+        let now_ms = asset_alias_observation_time_ms(&state);
+        let asset_filter = resolve_tx_history_asset_selector(
+            &world,
+            now_ms,
+            params.asset_id.as_deref(),
+            allowed_asset_definition_id.as_ref(),
+        )?;
         let pagination = enforce_app_pagination(
             params.limit,
             params.offset,
@@ -20188,6 +20275,8 @@ pub async fn handle_v1_account_transactions_get_with_policy(
             fetch_cap,
         )
     };
+    #[cfg(feature = "telemetry")]
+    let item_count = items.len();
     // Telemetry: observe metrics for the GET endpoint
     #[cfg(feature = "telemetry")]
     if telemetry.is_enabled() {
@@ -20209,7 +20298,7 @@ pub async fn handle_v1_account_transactions_get_with_policy(
         metrics
             .torii_stream_rows
             .with_label_values(&[endpoint])
-            .observe(items.len() as f64);
+            .observe(item_count as f64);
     }
     // Norito JSON response
     let items_json = tx_projections_to_json(&items);
@@ -20250,22 +20339,22 @@ pub async fn handle_v1_transactions_history_get(
     #[cfg(feature = "telemetry")]
     let start = Instant::now();
     let cap = app_query_page_cap(&state);
-    let limits = app_query_limits();
-    let committed_txs = committed_transactions_snapshot(state.as_ref());
-    let world = state.world_view();
-    let now_ms = asset_alias_observation_time_ms(&state);
-    let asset_filter = resolve_tx_history_asset_selector(
-        &world,
-        now_ms,
-        params.asset_id.as_deref(),
-        allowed_asset_definition_id.as_ref(),
-    )?;
     let dataspace_domain = visibility
         .allow_dataspace_wide
         .then(|| visibility.viewer_dataspace_id.parse::<DomainId>().ok())
         .flatten();
 
     let (items, total) = {
+        let limits = app_query_limits();
+        let committed_txs = committed_transactions_snapshot(state.as_ref());
+        let world = state.world_view();
+        let now_ms = asset_alias_observation_time_ms(&state);
+        let asset_filter = resolve_tx_history_asset_selector(
+            &world,
+            now_ms,
+            params.asset_id.as_deref(),
+            allowed_asset_definition_id.as_ref(),
+        )?;
         let pagination =
             enforce_app_pagination(params.limit, params.offset, cap, "/v1/transactions/history")?;
         let fetch_cap = limits
@@ -20301,6 +20390,8 @@ pub async fn handle_v1_transactions_history_get(
             fetch_cap,
         )
     };
+    #[cfg(feature = "telemetry")]
+    let item_count = items.len();
 
     #[cfg(feature = "telemetry")]
     if telemetry.is_enabled() {
@@ -20322,7 +20413,7 @@ pub async fn handle_v1_transactions_history_get(
         metrics
             .torii_stream_rows
             .with_label_values(&[endpoint])
-            .observe(items.len() as f64);
+            .observe(item_count as f64);
     }
 
     let items_json = tx_projections_to_json(&items);
@@ -25642,6 +25733,60 @@ mod app_api_integration_tests {
     }
 
     #[tokio::test]
+    async fn asset_holders_get_filters_by_account_alias() {
+        let _guard = app_query_limits_guard();
+        let (state, alice_id, _) = build_asset_holder_fixture_state();
+
+        use axum::routing::get;
+        let telemetry = MaybeTelemetry::for_tests();
+        let app = Router::new().route(
+            "/v1/assets/{definition_id}/holders",
+            get({
+                let state = state.clone();
+                let telemetry = telemetry.clone();
+                move |axum::extract::Path(def_id): axum::extract::Path<String>,
+                      crate::NoritoQuery(p): crate::NoritoQuery<AssetHolderGetParams>| {
+                    let telemetry = telemetry.clone();
+                    let state = state.clone();
+                    async move {
+                        handle_v1_asset_holders(
+                            state,
+                            axum::extract::Path(def_id),
+                            crate::NoritoQuery(p),
+                            telemetry,
+                        )
+                        .await
+                    }
+                }
+            }),
+        );
+
+        let req = http::Request::builder()
+            .method("GET")
+            .uri("/v1/assets/rose%23sbp/holders?account_id=treasury%40sbp")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        let status = resp.status();
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(
+            status,
+            http::StatusCode::OK,
+            "unexpected response body: {}",
+            String::from_utf8_lossy(&bytes)
+        );
+        let json: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
+        assert_eq!(json["total"].as_u64(), Some(1));
+        let items = json["items"].as_array().unwrap();
+        assert_eq!(items.len(), 1);
+        let expected_account = alice_id.to_string();
+        assert_eq!(
+            items[0]["account_id"].as_str(),
+            Some(expected_account.as_str())
+        );
+    }
+
+    #[tokio::test]
     async fn asset_holders_get_rejects_limit_above_cap() {
         let _guard = app_query_limits_guard();
         let (state, _, _) = build_asset_holder_fixture_state();
@@ -25976,6 +26121,73 @@ mod app_api_integration_tests {
         }
     }
 
+    #[tokio::test]
+    async fn asset_holders_query_filter_accepts_account_alias() {
+        let _guard = app_query_limits_guard();
+        use axum::routing::post;
+
+        let (state, alice_id, _) = build_asset_holder_fixture_state();
+        let telemetry = MaybeTelemetry::for_tests();
+        let app = Router::new().route(
+            "/v1/assets/{definition_id}/holders/query",
+            post({
+                let state = state.clone();
+                let telemetry = telemetry.clone();
+                move |axum::extract::Path(def_id): axum::extract::Path<String>,
+                      crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
+                        QueryEnvelope,
+                    >| {
+                    let telemetry = telemetry.clone();
+                    let state = state.clone();
+                    async move {
+                        handle_v1_asset_holders_query(
+                            state,
+                            axum::extract::Path(def_id),
+                            crate::utils::extractors::NoritoJson(env),
+                            telemetry,
+                        )
+                        .await
+                    }
+                }
+            }),
+        );
+
+        let body = json_string(obj(vec![
+            (
+                "filter",
+                obj(vec![
+                    ("op", val("eq")),
+                    ("args", arr(vec![val("account_id"), val("treasury@sbp")])),
+                ]),
+            ),
+            (
+                "pagination",
+                obj(vec![("limit", val(&8u64)), ("offset", val(&0u64))]),
+            ),
+        ]));
+        let req = http::Request::builder()
+            .method("POST")
+            .uri("/v1/assets/rose%23sbp/holders/query")
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(body))
+            .unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), http::StatusCode::OK);
+        let payload = resp.into_body().collect().await.unwrap().to_bytes();
+        let parsed: norito::json::Value =
+            norito::json::from_slice(&payload).expect("json response");
+        let items = parsed["items"]
+            .as_array()
+            .expect("items array should exist");
+        assert_eq!(parsed["total"].as_u64(), Some(1));
+        assert_eq!(items.len(), 1);
+        let expected_account = alice_id.to_string();
+        assert_eq!(
+            items[0]["account_id"].as_str(),
+            Some(expected_account.as_str())
+        );
+    }
+
     fn build_asset_holder_fixture_state() -> (Arc<iroha_core::state::State>, AccountId, AccountId) {
         let kp_a = iroha_crypto::KeyPair::random();
         let kp_b = iroha_crypto::KeyPair::random();
@@ -26015,6 +26227,7 @@ mod app_api_integration_tests {
             LiveQueryStore::start_test(),
         ));
         bind_permanent_asset_alias_for_test(&state, &alice_id, &rose_def, "rose#sbp");
+        bind_account_alias_for_test(&state, &alice_id, "treasury@sbp");
 
         (state, alice_id, bob_id)
     }
@@ -34170,7 +34383,7 @@ pub struct AssetHolderGetParams {
     /// Offset for pagination (default 0).
     #[norito(default)]
     pub offset: u64,
-    /// Filter holders by canonical Katakana i105 account identifier.
+    /// Filter holders by canonical Katakana i105 account identifier or on-chain account alias.
     pub account_id: Option<String>,
     /// Filter holders by balance scope (`global` or `dataspace:<id>`).
     pub scope: Option<String>,
@@ -37413,7 +37626,12 @@ pub async fn handle_v1_accounts(
         crate::filter::validate_filter(expr)
             .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
         validate_accounts_filter_adapter(expr)?;
-        canonicalize_accounts_filter_literals(expr, &telemetry, ENDPOINT_ACCOUNTS_LIST)?;
+        canonicalize_accounts_filter_literals_with_state(
+            expr,
+            state.as_ref(),
+            &telemetry,
+            ENDPOINT_ACCOUNTS_LIST,
+        )?;
     }
 
     let filter_ref = filter_expr.as_ref();
@@ -37933,7 +38151,8 @@ pub async fn handle_v1_nexus_dataspaces_account_summary(
         ));
     }
 
-    let parsed = parse_account_literal(
+    let (resolved_account_id, canonical_account_id) = parse_account_literal_with_state(
+        state.as_ref(),
         literal,
         &telemetry,
         ENDPOINT_NEXUS_DATASPACES_ACCOUNT_SUMMARY,
@@ -37944,21 +38163,9 @@ pub async fn handle_v1_nexus_dataspaces_account_summary(
             err.reason()
         ))
     })?;
-    let (account_id, canonical_account_id, _) = parsed.into_parts();
     record_account_literal_selection(&telemetry, ENDPOINT_NEXUS_DATASPACES_ACCOUNT_SUMMARY);
 
     let world = state.world_view();
-    let resolved_account_id = if world.account(&account_id).is_ok() {
-        account_id.clone()
-    } else {
-        world
-            .accounts()
-            .iter()
-            .find_map(|(candidate_id, _)| {
-                (candidate_id.controller() == account_id.controller()).then(|| candidate_id.clone())
-            })
-            .ok_or_else(explorer_not_found)?
-    };
     let account = world
         .account(&resolved_account_id)
         .map_err(|_| explorer_not_found())?;
@@ -38922,6 +39129,110 @@ mod accounts_query_tests {
         assert!(
             i105_result.is_err(),
             "non-canonical Katakana i105 literal `{non_canonical_i105_literal}` must be rejected"
+        );
+    }
+
+    #[tokio::test]
+    async fn accounts_list_filter_accepts_alias_and_returns_canonical_i105_ids() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(
+            World::default(),
+            kura.clone(),
+            query,
+        ));
+
+        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let _topology = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
+        let unverified = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(leader.private_key())
+            .unpack(|_| {});
+        let mut st_block = state.block(unverified.header());
+        let mut stx = st_block.transaction();
+        let domain_id: dm::DomainId = "aliases-list".parse().expect("valid domain");
+        let kp_exec = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let exec_id = dm::ScopedAccountId::new(domain_id.clone(), kp_exec.public_key().clone());
+        dm::Register::domain(dm::Domain::new(domain_id.clone()))
+            .execute(exec_id.account(), &mut stx)
+            .expect("register domain");
+        dm::Register::account(dm::Account::new(exec_id.clone()))
+            .execute(exec_id.account(), &mut stx)
+            .expect("register executor account");
+
+        let account_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let account_id =
+            dm::ScopedAccountId::new(domain_id.clone(), account_keypair.public_key().clone());
+        let label = dm::AccountLabel::new(
+            domain_id.clone(),
+            "primary".parse().expect("valid label name"),
+        );
+        let account = dm::Account::new(account_id.clone()).with_label(Some(label.clone()));
+        dm::Register::account(account)
+            .execute(exec_id.account(), &mut stx)
+            .expect("register labelled account");
+
+        stx.apply();
+        let valid: ValidBlock = unverified
+            .clone()
+            .validate_and_record_transactions(&mut st_block)
+            .unpack(|_| {});
+        let committed = valid.clone().commit_unchecked().unpack(|_| {});
+        crate::test_utils::finalize_committed_block(&state, st_block, committed);
+
+        let expected = account_id.account().to_string();
+        let alias_literal = label
+            .to_literal(&state.nexus_snapshot().dataspace_catalog)
+            .expect("canonical alias literal");
+        let filter = crate::filter::FilterExpr::Eq(
+            crate::filter::FieldPath("id".to_owned()),
+            Value::String(alias_literal.clone()),
+        );
+        let params = ListFilterParams {
+            filter: Some(norito::json::to_string(&filter).expect("filter JSON")),
+            limit: Some(8),
+            offset: 0,
+            sort: None,
+        };
+
+        let response = handle_v1_accounts(
+            state,
+            crate::NoritoQuery(params),
+            crate::routing::MaybeTelemetry::for_tests(),
+        )
+        .await
+        .expect("list handler ok")
+        .into_response();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "alias literal `{alias_literal}` should resolve on GET /v1/accounts"
+        );
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("response bytes")
+            .to_bytes();
+        let doc: norito::json::Value = norito::json::from_slice(&body).expect("valid list JSON");
+        let ids: Vec<String> = doc
+            .get("items")
+            .and_then(norito::json::Value::as_array)
+            .expect("items array")
+            .iter()
+            .filter_map(|item| {
+                item.get("id")
+                    .and_then(norito::json::Value::as_str)
+                    .map(str::to_owned)
+            })
+            .collect();
+        assert!(
+            ids.iter().any(|id| id == &expected),
+            "alias literal `{alias_literal}` should resolve to `{expected}`, got {ids:?}"
+        );
+        assert!(
+            ids.iter().all(|id| !id.contains('@')),
+            "GET /v1/accounts must still emit canonical account ids, got {ids:?}"
         );
     }
 }
@@ -42865,8 +43176,11 @@ impl OfflineAllowanceQueryFilters {
             .asset_id
             .as_deref()
             .map(|raw| {
-                AssetId::parse_literal(raw)
-                    .map_err(|_| Self::conversion_error("asset_id must be a valid asset id"))
+                AssetId::parse_literal(raw).map_err(|_| {
+                    Self::conversion_error(
+                        "asset_id must be a valid internal asset balance-bucket literal",
+                    )
+                })
             })
             .transpose()?;
         Self::validate_window(
@@ -43095,8 +43409,11 @@ impl OfflineTransferQueryFilters {
             .asset_id
             .as_deref()
             .map(|raw| {
-                AssetId::parse_literal(raw)
-                    .map_err(|_| Self::conversion_error("asset_id must be a valid asset id"))
+                AssetId::parse_literal(raw).map_err(|_| {
+                    Self::conversion_error(
+                        "asset_id must be a valid internal asset balance-bucket literal",
+                    )
+                })
             })
             .transpose()?;
         Self::validate_window(
@@ -44809,10 +45126,11 @@ pub async fn handle_v1_nexus_public_lane_rewards(
             )))
         })?;
     let asset_filter = match params.asset_id.as_deref() {
-        Some(raw) => Some(
-            AssetId::parse_literal(raw)
-                .map_err(|_| conversion_error("asset_id must be a valid asset id".to_owned()))?,
-        ),
+        Some(raw) => Some(AssetId::parse_literal(raw).map_err(|_| {
+            conversion_error(
+                "asset_id must be a valid internal asset balance-bucket literal".to_owned(),
+            )
+        })?),
         None => None,
     };
     record_account_literal_selection(&telemetry, ENDPOINT_NEXUS_PUBLIC_LANE_REWARDS);
@@ -45219,7 +45537,9 @@ mod public_lane_tests {
 mod nexus_dataspaces_summary_tests {
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
+        account::Account,
         block::BlockHeader,
+        domain::Domain,
         nexus::{AssetPermissionManifest, DataSpaceId, ManifestVersion, UniversalAccountId},
     };
 
@@ -45324,6 +45644,36 @@ mod nexus_dataspaces_summary_tests {
         assert_eq!(lane_ids.len(), 2);
         assert_eq!(lane_ids[0].as_u64(), Some(1));
         assert_eq!(lane_ids[1].as_u64(), Some(3));
+    }
+
+    #[tokio::test]
+    async fn handle_v1_nexus_dataspaces_account_summary_accepts_account_alias() {
+        let authority = ALICE_ID.clone();
+        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain = Domain::new(domain_id.clone()).build(&authority);
+        let account = Account::new(authority.clone().to_account_id(domain_id)).build(&authority);
+        let state = Arc::new(CoreState::new_for_testing(
+            World::with([domain], [account], []),
+            Kura::blank_kura_for_testing(),
+            iroha_core::query::store::LiveQueryStore::start_test(),
+        ));
+        bind_account_alias_for_test(&state, &authority, "summary@sbp");
+
+        let resp = handle_v1_nexus_dataspaces_account_summary(
+            state,
+            axum::extract::Path("summary@sbp".to_string()),
+            crate::NoritoQuery(NexusDataspacesAccountSummaryQueryParams::default()),
+            MaybeTelemetry::disabled(),
+        )
+        .await
+        .expect("summary should resolve alias")
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: Value = norito::json::from_slice(&body).expect("json response");
+        let canonical = authority.to_string();
+        assert_eq!(json["account_id"].as_str(), Some(canonical.as_str()));
+        assert_eq!(json["account"].as_str(), Some(canonical.as_str()));
     }
 }
 
@@ -49497,11 +49847,17 @@ pub async fn handle_v1_subscription_plans(
     state: Arc<CoreState>,
     crate::NoritoQuery(params): crate::NoritoQuery<SubscriptionPlanListParams>,
 ) -> Result<impl IntoResponse> {
+    let telemetry = MaybeTelemetry::disabled();
     let provider = match params.provider {
         Some(raw) if !raw.trim().is_empty() => Some(
-            AccountId::parse_encoded(&raw)
-                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                .map_err(|err| conversion_error(format!("invalid provider id: {err}")))?,
+            parse_account_literal_with_state(
+                state.as_ref(),
+                &raw,
+                &telemetry,
+                ENDPOINT_SUBSCRIPTION_PLANS_LIST,
+            )
+            .map(|(account_id, _)| account_id)
+            .map_err(|err| conversion_error(format!("invalid provider id: {err}")))?,
         ),
         _ => None,
     };
@@ -49698,19 +50054,30 @@ pub async fn handle_v1_subscriptions(
     state: Arc<CoreState>,
     crate::NoritoQuery(params): crate::NoritoQuery<SubscriptionListParams>,
 ) -> Result<impl IntoResponse> {
+    let telemetry = MaybeTelemetry::disabled();
     let owned_by = match params.owned_by {
         Some(raw) if !raw.trim().is_empty() => Some(
-            AccountId::parse_encoded(&raw)
-                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                .map_err(|err| conversion_error(format!("invalid subscriber id: {err}")))?,
+            parse_account_literal_with_state(
+                state.as_ref(),
+                &raw,
+                &telemetry,
+                ENDPOINT_SUBSCRIPTIONS_LIST,
+            )
+            .map(|(account_id, _)| account_id)
+            .map_err(|err| conversion_error(format!("invalid subscriber id: {err}")))?,
         ),
         _ => None,
     };
     let provider = match params.provider {
         Some(raw) if !raw.trim().is_empty() => Some(
-            AccountId::parse_encoded(&raw)
-                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                .map_err(|err| conversion_error(format!("invalid provider id: {err}")))?,
+            parse_account_literal_with_state(
+                state.as_ref(),
+                &raw,
+                &telemetry,
+                ENDPOINT_SUBSCRIPTIONS_LIST,
+            )
+            .map(|(account_id, _)| account_id)
+            .map_err(|err| conversion_error(format!("invalid provider id: {err}")))?,
         ),
         _ => None,
     };
@@ -50771,6 +51138,65 @@ mod subscription_api_tests {
     }
 
     #[tokio::test]
+    async fn handle_v1_subscription_plans_filters_provider_alias() {
+        let provider = ALICE_ID.clone();
+        let other = BOB_ID.clone();
+        let plan_primary_id: AssetDefinitionId =
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554401f4");
+        let plan_secondary_id: AssetDefinitionId =
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554401f5");
+        let plan_a = SubscriptionPlan {
+            provider: provider.clone(),
+            billing: SubscriptionBilling {
+                cadence: SubscriptionCadence::FixedPeriod(SubscriptionFixedPeriodCadence {
+                    period_ms: 1_000,
+                }),
+                bill_for: SubscriptionBillFor::NextPeriod,
+                retry_backoff_ms: 0,
+                max_failures: 0,
+                grace_ms: 0,
+            },
+            pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
+                amount: Numeric::new(10_u32, 0),
+                asset_definition: test_asset_definition_id_from_hex(
+                    "550e8400e29b41d4a7164466554401f1",
+                ),
+            }),
+        };
+        let plan_b = SubscriptionPlan {
+            provider: other.clone(),
+            ..plan_a.clone()
+        };
+        let state = state_with_plans_and_subscriptions(
+            provider.clone(),
+            other,
+            vec![
+                (plan_primary_id.clone(), plan_a),
+                (plan_secondary_id, plan_b),
+            ],
+            Vec::new(),
+        );
+        bind_account_alias_for_test(&state, &provider, "billing@sbp");
+
+        let params = SubscriptionPlanListParams {
+            provider: Some("billing@sbp".to_string()),
+            limit: None,
+            offset: 0,
+        };
+        let resp = handle_v1_subscription_plans(state, crate::NoritoQuery(params))
+            .await
+            .expect("handler ok")
+            .into_response();
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: Value = norito::json::from_slice(&body).unwrap();
+        let items = json["items"].as_array().unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(json["total"].as_u64(), Some(1));
+        let plan_id = plan_primary_id.to_string();
+        assert_eq!(items[0]["plan_id"].as_str(), Some(plan_id.as_str()));
+    }
+
+    #[tokio::test]
     async fn handle_v1_subscriptions_filters_status() {
         let provider = ALICE_ID.clone();
         let subscriber = BOB_ID.clone();
@@ -50827,6 +51253,88 @@ mod subscription_api_tests {
         let params = SubscriptionListParams {
             owned_by: Some(subscriber.to_string()),
             provider: None,
+            status: Some("paused".to_string()),
+            limit: None,
+            offset: 0,
+        };
+        let resp = handle_v1_subscriptions(state, crate::NoritoQuery(params))
+            .await
+            .expect("handler ok")
+            .into_response();
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: Value = norito::json::from_slice(&body).unwrap();
+        let items = json["items"].as_array().unwrap();
+        assert_eq!(items.len(), 1);
+        let paused_id_str = paused_id.to_string();
+        assert_eq!(
+            items[0]["subscription_id"].as_str(),
+            Some(paused_id_str.as_str())
+        );
+        let decoded_state: SubscriptionState =
+            norito::json::from_value(items[0]["subscription"].clone()).unwrap();
+        assert_eq!(decoded_state.status, SubscriptionStatus::Paused);
+    }
+
+    #[tokio::test]
+    async fn handle_v1_subscriptions_filters_account_aliases() {
+        let provider = ALICE_ID.clone();
+        let subscriber = BOB_ID.clone();
+        let plan_id: AssetDefinitionId =
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554401f6");
+        let plan = SubscriptionPlan {
+            provider: provider.clone(),
+            billing: SubscriptionBilling {
+                cadence: SubscriptionCadence::FixedPeriod(SubscriptionFixedPeriodCadence {
+                    period_ms: 1_000,
+                }),
+                bill_for: SubscriptionBillFor::NextPeriod,
+                retry_backoff_ms: 0,
+                max_failures: 0,
+                grace_ms: 0,
+            },
+            pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
+                amount: Numeric::new(1_u32, 0),
+                asset_definition: test_asset_definition_id_from_hex(
+                    "550e8400e29b41d4a7164466554401f1",
+                ),
+            }),
+        };
+        let active_id: NftId = "sub-alias-active$wonderland".parse().unwrap();
+        let paused_id: NftId = "sub-alias-paused$wonderland".parse().unwrap();
+        let active_state = SubscriptionState {
+            plan_id: plan_id.clone(),
+            provider: provider.clone(),
+            subscriber: subscriber.clone(),
+            status: SubscriptionStatus::Active,
+            current_period_start_ms: 0,
+            current_period_end_ms: 1_000,
+            next_charge_ms: 1_000,
+            cancel_at_period_end: false,
+            cancel_at_ms: None,
+            failure_count: 0,
+            usage_accumulated: std::collections::BTreeMap::new(),
+            billing_trigger_id: "bill_alias_active".parse().unwrap(),
+        };
+        let paused_state = SubscriptionState {
+            status: SubscriptionStatus::Paused,
+            billing_trigger_id: "bill_alias_paused".parse().unwrap(),
+            ..active_state.clone()
+        };
+        let state = state_with_plans_and_subscriptions(
+            provider.clone(),
+            subscriber.clone(),
+            vec![(plan_id, plan)],
+            vec![
+                (active_id, active_state, None),
+                (paused_id.clone(), paused_state, None),
+            ],
+        );
+        bind_account_alias_for_test(&state, &provider, "billing@sbp");
+        bind_account_alias_for_test(&state, &subscriber, "member@sbp");
+
+        let params = SubscriptionListParams {
+            owned_by: Some("member@sbp".to_string()),
+            provider: Some("billing@sbp".to_string()),
             status: Some("paused".to_string()),
             limit: None,
             offset: 0,
@@ -52694,17 +53202,19 @@ pub async fn handle_v1_asset_holders(
 ) -> Result<impl IntoResponse> {
     use std::collections::BTreeMap;
 
-    let account_filter = p
-        .account_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|raw| !raw.is_empty())
-        .map(|raw| {
-            parse_account_literal(raw, &telemetry, ENDPOINT_ASSET_HOLDERS)
-                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                .map_err(|err| conversion_error(format!("invalid account_id `{raw}`: {err}")))
-        })
-        .transpose()?;
+    let account_filter = canonicalize_query_account_literal(
+        "account_id",
+        p.account_id.as_deref(),
+        Some(state.as_ref()),
+        &telemetry,
+        ENDPOINT_ASSET_HOLDERS,
+    )?
+    .map(|canonical| {
+        AccountId::parse_encoded(&canonical)
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            .map_err(|err| conversion_error(format!("invalid account_id `{canonical}`: {err}")))
+    })
+    .transpose()?;
     let scope_filter = p
         .scope
         .as_deref()
@@ -52891,7 +53401,7 @@ pub async fn handle_v1_asset_holders_query(
         canonicalize_filter_account_literals(
             expr,
             "account_id",
-            None,
+            Some(state.as_ref()),
             &telemetry,
             ENDPOINT_ASSET_HOLDERS_QUERY,
         )?;

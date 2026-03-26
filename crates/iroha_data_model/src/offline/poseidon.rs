@@ -694,7 +694,7 @@ mod tests {
     fn fixture_asset(value: &str) -> AssetId {
         AssetId::parse_literal(value).unwrap_or_else(|err| {
             panic!(
-                "fixture asset `{value}` must use `<base58-asset-id>#<katakana-i105-account-id>` with optional `#dataspace:<id>` suffix: {err}"
+                "fixture asset bucket `{value}` must use internal `<base58-asset-definition-id>#<katakana-i105-account-id>` with optional `#dataspace:<id>` suffix; public asset ids are bare Base58: {err}"
             )
         })
     }

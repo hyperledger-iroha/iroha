@@ -32,9 +32,9 @@ translation_last_reviewed: 2026-03-12
 - `IdBox`: מעטפה מסוג סכום עבור כל מזהה נתמך (`DomainId`, `AccountId`, `AssetDefinitionId`, `AssetId`, Kotodama00006NI90, Kotodama0000690, `TriggerId`, `RoleId`, `Permission`, `CustomParameterId`). שימושי עבור זרימות גנריות וקידוד Norito כסוג יחיד.
 - `ChainId`: מזהה שרשרת אטום המשמש להגנה על שידור חוזר בעסקאות.מחרוזת צורות של מזהים (ניתנים להליכה הלוך ושוב עם `Display`/`FromStr`):
 - `DomainId`: `name` (לדוגמה, `wonderland`).
-- `AccountId`: מזהה חשבון קנוני ללא דומיין מקודד באמצעות `AccountAddress` כ-I105 בלבד. כניסות מנתח חייבות להיות קנוניות I105; סיומות תחום (`@domain`), מילוליות I105 קנוניות, מילוליות כינוי, קלט קנוני של מנתח hex, מטענים מדור קודם של `norito:` ו-`uaid:`/Norito הם טפסי חשבונות נדחים.
+- `AccountId`: מזהה חשבון קנוני ללא דומיין מקודד באמצעות `AccountAddress` כ-i105 בלבד. כניסות מנתח חייבות להיות קנוניות i105; סיומות תחום (`@domain`), מילוליות i105 קנוניות, מילוליות כינוי, קלט קנוני של מנתח hex, מטענים מדור קודם של `norito:` ו-`uaid:`/Norito הם טפסי חשבונות נדחים.
 - `AssetDefinitionId`: `unprefixed Base58 address with versioning and checksum` קנוני (UUID-v4 בתים).
-- `AssetId`: מילולית מקודדת קנונית `<base58-asset-id>#<katakana-i105-account-id>` (טפסים טקסטואליים מדור קודם אינם נתמכים במהדורה הראשונה).
+- `AssetId`: מילולית מקודדת קנונית `<canonical-base58-asset-definition-id>` (טפסים טקסטואליים מדור קודם אינם נתמכים במהדורה הראשונה).
 - `NftId`: `nft$domain` (לדוגמה, `rose$garden`).
 - `PeerId`: `public_key` (שוויון עמיתים הוא לפי מפתח ציבורי).
 
@@ -44,7 +44,7 @@ translation_last_reviewed: 2026-03-12
 - `DomainId { name: Name }` - שם ייחודי.
 - `Domain { id, logo: Option<SorafsUri>, metadata: Metadata, owned_by: AccountId }`.
 - Builder: `NewDomain` עם `with_logo`, `with_metadata`, ואז `Registrable::build(authority)` ערכות `owned_by`.### חשבון
-- `AccountId` היא זהות החשבון הקנונית ללא דומיין הממוקמת על ידי הבקר ומקודדת כ-I105 הקנונית.
+- `AccountId` היא זהות החשבון הקנונית ללא דומיין הממוקמת על ידי הבקר ומקודדת כ-i105 הקנונית.
 - `ScopedAccountId { account: AccountId, domain: DomainId }` נושא הקשר מפורש של תחום רק כאשר נדרשת תצוגה בהיקף.
 - `Account { id, metadata, label?, uaid? }` — `label` הוא כינוי יציב אופציונלי המשמש רשומות מפתח מחדש, `uaid` נושא את האופציונלי Nexus רחב [מזהה חשבון אוניברסלי](Norito).
 - Builder: `NewAccount` דרך `Account::new(id)`; הרישום מחייב דומיין `ScopedAccountId` מפורש ואינו מסיק כזה מברירות מחדל.
@@ -251,7 +251,7 @@ iroha ledger asset definition register \
 # Mint using alias + account components (no manual norito hex copy/paste)
 iroha ledger asset mint \
   --definition-alias pkr#ubl.sbp \
-  --account sorauﾛ1P... \
+  --account soraゴヂ... \
   --quantity 500
 
 # Resolve alias to canonical Base58 id via Torii
@@ -260,7 +260,7 @@ curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -d '{"alias":"pkr#ubl.sbp"}'
 ```הערת הגירה:
 - מזהי `name#domain` ישנים בהגדרת נכס אינם מתקבלים בגרסה 1.
-- מזהי נכסים עבור טביעה/צריבה/העברה נשארים קנוניים `<base58-asset-id>#<katakana-i105-account-id>`; בנה אותם עם:
+- מזהי נכסים עבור טביעה/צריבה/העברה נשארים קנוניים `<canonical-base58-asset-definition-id>`; בנה אותם עם:
   - `iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
   - או `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`.
 

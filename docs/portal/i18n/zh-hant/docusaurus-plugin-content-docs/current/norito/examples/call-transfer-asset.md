@@ -21,9 +21,9 @@ slug：/norito/examples/call-transfer-asset
 
 ## 賬本演練
 
-- 用其將轉移的資產為合同機構（例如 `i105...`）提供資金，並授予該機構 `CanTransfer` 角色或同等權限。
-- 調用 `call_transfer_asset` 入口點，將 5 個單位從合約賬戶轉移到 `i105...`，鏡像鏈上自動化包裝主機調用的方式。
-- 通過 `FindAccountAssets` 或 `iroha_cli ledger asset list --account i105...` 驗證餘額並檢查事件以確認元數據防護記錄了傳輸上下文。
+- 用其將轉移的資產為合同機構（例如 `soraカタカナ...`）提供資金，並授予該機構 `CanTransfer` 角色或同等權限。
+- 調用 `call_transfer_asset` 入口點，將 5 個單位從合約賬戶轉移到 `soraカタカナ...`，鏡像鏈上自動化包裝主機調用的方式。
+- 通過 `FindAccountAssets` 或 `iroha_cli ledger asset list --account soraカタカナ...` 驗證餘額並檢查事件以確認元數據防護記錄了傳輸上下文。
 
 ## 相關SDK指南
 

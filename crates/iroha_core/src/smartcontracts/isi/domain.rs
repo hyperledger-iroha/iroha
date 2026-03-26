@@ -685,15 +685,15 @@ pub mod isi {
 
     fn resolve_config_account_literal(
         world: &impl crate::state::WorldReadOnly,
+        dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
         raw: &str,
         field_path: &'static str,
     ) -> Result<AccountId, Error> {
-        let _ = world;
-        crate::block::parse_account_literal_with_world(world, raw)
+        crate::block::parse_account_literal_with_world(world, dataspace_catalog, raw)
             .ok_or_else(|| {
                 InstructionExecutionError::InvariantViolation(
                     format!(
-                        "invalid {field_path} account literal `{raw}`: expected canonical Katakana i105 account id"
+                        "invalid {field_path} account literal `{raw}`: expected canonical Katakana i105 account id or on-chain alias"
                     )
                     .into(),
                 )
@@ -703,11 +703,12 @@ pub mod isi {
 
     fn config_account_matches(
         world: &impl crate::state::WorldReadOnly,
+        dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
         raw: &str,
         account_id: &AccountId,
         field_path: &'static str,
     ) -> Result<bool, Error> {
-        let configured = resolve_config_account_literal(world, raw, field_path)?;
+        let configured = resolve_config_account_literal(world, dataspace_catalog, raw, field_path)?;
         Ok(configured == *account_id)
     }
 
@@ -1043,18 +1044,21 @@ pub mod isi {
             }
             let nexus_fee_sink_matches = config_account_matches(
                 &state_transaction.world,
+                &state_transaction.nexus.dataspace_catalog,
                 &state_transaction.nexus.fees.fee_sink_account_id,
                 &account_id,
                 "nexus.fees.fee_sink_account_id",
             )?;
             let nexus_stake_escrow_matches = config_account_matches(
                 &state_transaction.world,
+                &state_transaction.nexus.dataspace_catalog,
                 &state_transaction.nexus.staking.stake_escrow_account_id,
                 &account_id,
                 "nexus.staking.stake_escrow_account_id",
             )?;
             let nexus_slash_sink_matches = config_account_matches(
                 &state_transaction.world,
+                &state_transaction.nexus.dataspace_catalog,
                 &state_transaction.nexus.staking.slash_sink_account_id,
                 &account_id,
                 "nexus.staking.slash_sink_account_id",

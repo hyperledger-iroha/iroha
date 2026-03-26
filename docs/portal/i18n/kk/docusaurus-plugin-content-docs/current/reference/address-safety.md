@@ -1,78 +1,73 @@
 ---
-lang: kk
-direction: ltr
-source: docs/portal/docs/reference/address-safety.md
-status: complete
-generator: docs/portal/scripts/sync-i18n.mjs
 title: Address Safety & Accessibility
 description: UX requirements for presenting and sharing Iroha addresses safely (ADDR-6c).
-translator: machine-google-reviewed
-translation_last_reviewed: 2026-02-07
 ---
 
-Бұл бетте жеткізілетін ADDR-6c құжаттамасы жазылған. Осыларды қолданыңыз
-әмияндарға, зерттеушілерге, SDK құралдарына және кез келген портал бетіне шектеулер
-renders or accepts human-facing addresses. Канондық деректер моделі өмір сүреді
+This page captures the ADDR-6c documentation deliverable. Apply these
+constraints to wallets, explorers, SDK tooling, and any portal surface that
+renders or accepts human-facing addresses. The canonical data model lives in
 `docs/account_structure.md`; the checklist below explains how to expose those
-қауіпсіздік пен қол жетімділікке зиян келтірмейтін пішімдер.
+formats without compromising safety or accessibility.
 
-## Қауіпсіз бөлісу ағындары
+## Safe sharing flows
 
-- I105 мекенжайына әрбір көшіру/бөліс әрекетін әдепкі етіп жасаңыз. Шешілгенді көрсету
-  доменді қолдаушы контекст ретінде, бақылау қосындысы жолы алдыңғы және ортасында қалады.
-- Толық кәдімгі мекенжай мен QR жиынтығын біріктіретін «Бөлісу» мүмкіндігін ұсыныңыз.
+- Default every copy/share action to the canonical Katakana i105 account id.
+  If an on-chain alias is present, display it as supporting metadata in a
+  separate labeled field.
+- Offer a “Share” affordance that bundles the full plain-text address and a QR
   code derived from the same payload. Let users inspect both before committing.
-- Кеңістік қысқартуды қажет еткенде (кішкентай карталар, хабарландырулар), алдыңғы қатарды сақтаңыз
-  адам оқи алатын префикс, эллипстерді көрсетіңіз және соңғы 4-6 таңбаны сақтаңыз
+- When space requires truncation (tiny cards, notifications), keep the leading
+  human-readable prefix, show ellipses, and retain the final 4–6 characters so
   the checksum anchor survives. Provide a tap/keyboard shortcut to copy the full
   string without truncation.
-- Алдын ала қарайтын растау тосттарын шығару арқылы алмасу буферінің синхрондауына жол бермеңіз
-  exact I105 string that was copied. Where telemetry is available, count copy
-  әрекетті бөлісу әрекеттеріне қарсы UX регрессиялары тез пайда болуы үшін.
+- Prevent clipboard desync by emitting a confirmation toast that previews the
+  exact i105 string that was copied. Where telemetry is available, count copy
+  attempts versus share actions so UX regressions surface quickly.
 
 ## IME & input safeguards
 
-- Reject non-ASCII input in address fields. When IME composition artefacts (full
-  ені, Кана, тон белгілері) пайда болса, қалай екенін түсіндіретін кірістірілген ескерту пайда болады
-  әрекетті қайталаудан бұрын пернетақтаны латынша енгізуге ауыстыру үшін.
-- Біріктіретін белгілерді алып тастайтын және ауыстыратын кәдімгі мәтінді қою аймағын қамтамасыз етіңіз
-  whitespace with ASCII spaces before validation. This keeps users from losing
-  олар IME орта ағынын өшірген кезде прогресс.
-- Ені нөлдік біріктіргіштерге, вариация селекторларына және т.б. қарсы тексеруді күшейтіңіз
-  жасырын Юникод код нүктелері. Қабылданбаған код нүктесінің санатын бұлыңғыр етіп тіркеңіз
-  Suites телеметрияны импорттай алады.
+- Validate account-id fields as canonical Katakana i105 only. Validate alias
+  entry fields separately as `name@dataspace` or `name@domain.dataspace`.
+- When IME composition artefacts or zero-width characters appear, surface an
+  inline warning instead of coercing the input into a different account-id
+  format.
+- Provide a plain-text paste zone that preserves the canonical i105 literal as
+  pasted while still stripping obviously invalid stealth code points before
+  validation.
+- Harden validation against zero-width joiners, variation selectors, and other
+  stealth Unicode code points. Log the rejected code point category so fuzzing
+  suites can import the telemetry.
 
 ## Assistive technology expectations
 
-- Әрбір мекенжай блогына `aria-label` немесе `aria-describedby` арқылы түсініктеме беріңіз
-  адам оқи алатын префиксті айтып береді және пайдалы жүктемені 4–8 таңбаға бөледі
-  топтар («ih сызықша b үш екі ...»). This stops screen readers from producing an
-  түсініксіз кейіпкерлер легі.
-- Сәтті көшіру/бөлісу оқиғаларын сыпайы тірі аймақ жаңартуы арқылы хабарлаңыз. Қосу
-  тағайындалған орын (аралық сақтағыш, ортақ парақ, QR), сондықтан пайдаланушы әрекетті біледі
-  фокусты жылжытпай аяқталды.
-- QR алдын ала қарау үшін сипаттамалық `alt` мәтінін беріңіз (мысалы, «I105 мекенжайы үшін
-  `<account>` `0x1234` тізбегінде”). «Мекенжайды мәтін ретінде көшіру» қамтамасыз етіңіз
-  көру қабілеті нашар пайдаланушылар үшін QR кенепіне жақын орналасқан резерв.
+- Annotate every address block with `aria-label` or `aria-describedby` that
+  spells out the human-readable prefix and chunks the payload in 4–8 character
+  groups (“ih dash b three two …”). This stops screen readers from producing an
+  unintelligible stream of characters.
+- Announce successful copy/share events via a polite live region update. Include
+  the destination (clipboard, share sheet, QR) so the user knows the action
+  completed without moving focus.
+- Supply descriptive `alt` text for QR previews (e.g., “i105 address for
+  `<account>` on chain `0x1234`”). Provide a “Copy address as text”
+  fallback adjacent to the QR canvas for low-vision users.
 
-## Тек Sora үшін қысылған мекенжайлар
+## Single-format policy
 
-- Gating: `i105` қысылған жолды анық растаудың артына жасырыңыз.
-  Растау пішін тек Sora Nexus тізбектерінде жұмыс істейтінін қайталауы керек.
-- Белгілеу: әрбір оқиғада көрінетін "Тек Sora" белгісі және а
-  басқа желілер неге I105 пішінін қажет ететінін сипаттайтын кеңес.
-- Қорғаулар: егер белсенді тізбек дискриминанты Nexus бөлінуі болмаса,
-  қысылған мекенжайды толығымен жасаудан бас тарту және пайдаланушыны кері бағыттау
-  I105.
-- Телеметрия: қысылған пішіннің қаншалықты жиі сұралатынын және осылайша көшірілетінін жазып алыңыз
-  оқиғаны ойнату кітабы кездейсоқ бөлісу өсімдерін анықтай алады.
+- Keep canonical Katakana i105 as the only user-facing account-id format for
+  copy, share, and QR surfaces.
+- Treat `name@dataspace` and `name@domain.dataspace` as on-chain aliases that
+  point to canonical i105 account ids.
+- Do not expose alternate account-literal encodings in production wallet or
+  explorer UX.
+- Telemetry should track i105 copy/share usage, alias-resolution usage, and
+  validation failures only.
 
-## Сапалы қақпалар
+## Quality gates
 
-- Бұл мекенжайды бекіту үшін автоматтандырылған UI сынақтарын (немесе әңгімелер кітабы a11y люкстерін) кеңейтіңіз
-  құрамдас бөліктер қажетті ARIA метадеректерін және сол IME қабылдамау хабарларын көрсетеді
-  пайда болады.
-- IME енгізу (кана, пиньинь), экраннан оқу құралының өтуі үшін қолмен QA сценарийлерін қосыңыз
-  (VoiceOver/NVDA) және шығарар алдында жоғары контрастты тақырыптар бойынша QR көшірмелері.
-- Бұл тексерулерді I105 паритеттік сынақтарымен қатар шығарылымды тексеру парақтарында көрсетіңіз
-  сондықтан регрессиялар түзетілгенге дейін блокталған күйде қалады.
+- Extend automated UI tests (or storybook a11y suites) to assert that address
+  components expose the required ARIA metadata and that IME rejection messages
+  appear.
+- Include manual QA scenarios for IME input (kana, pinyin), screen reader pass
+  (VoiceOver/NVDA), and QR copy on high-contrast themes before releasing.
+- Surface these checks in release checklists alongside the i105 parity tests
+  so regressions remain blocked until corrected.

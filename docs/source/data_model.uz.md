@@ -31,9 +31,9 @@ Ushbu hujjat `iroha_data_model` kassasida tatbiq etilgan va ish maydoni bo'ylab 
 - `IdBox`: Har qanday qoʻllab-quvvatlanadigan identifikator uchun yigʻma turdagi konvert (`DomainId`, `AccountId`, `AssetDefinitionId`, `AssetId`, `AssetId`, Kotodama, Kotodama `TriggerId`, `RoleId`, `Permission`, `CustomParameterId`). Umumiy oqimlar va yagona turdagi Norito kodlash uchun foydalidir.
 - `ChainId`: tranzaktsiyalarda takroriy himoya qilish uchun foydalaniladigan noaniq zanjir identifikatori.Identifikatorlarning string shakllari (`Display`/`FromStr` bilan ikki tomonlama):
 - `DomainId`: `name` (masalan, `wonderland`).
-- `AccountId`: kanonik domensiz hisob identifikatori `AccountAddress` orqali faqat I105 sifatida kodlangan. Tahlil qiluvchi kirishlar kanonik I105 bo'lishi kerak; domen qo'shimchalari (`@domain`), kanonik i105 literallari, taxallus literallari, kanonik olti burchakli tahliliy kiritish, eski `norito:` foydali yuklari va `uaid:`/`opaque:` hisobi tahlil qilinadi.
+- `AccountId`: kanonik domensiz hisob identifikatori `AccountAddress` orqali faqat i105 sifatida kodlangan. Tahlil qiluvchi kirishlar kanonik i105 bo'lishi kerak; domen qo'shimchalari (`@domain`), kanonik i105 literallari, taxallus literallari, kanonik olti burchakli tahliliy kiritish, eski `norito:` foydali yuklari va `uaid:`/`opaque:` hisobi tahlil qilinadi.
 - `AssetDefinitionId`: kanonik `unprefixed Base58 address with versioning and checksum` (UUID-v4 bayt).
-- `AssetId`: kanonik kodlangan literal `<base58-asset-id>#<katakana-i105-account-id>` (eski matn shakllari birinchi versiyada qo'llab-quvvatlanmaydi).
+- `AssetId`: kanonik kodlangan literal `<canonical-base58-asset-definition-id>` (eski matn shakllari birinchi versiyada qo'llab-quvvatlanmaydi).
 - `NftId`: `nft$domain` (masalan, `rose$garden`).
 - `PeerId`: `public_key` (teng tengligi ochiq kalit orqali amalga oshiriladi).
 
@@ -43,7 +43,7 @@ Ushbu hujjat `iroha_data_model` kassasida tatbiq etilgan va ish maydoni bo'ylab 
 - `DomainId { name: Name }` - noyob nom.
 - `Domain { id, logo: Option<SorafsUri>, metadata: Metadata, owned_by: AccountId }`.
 - Quruvchi: `NewDomain`, `with_logo`, `with_metadata`, keyin `Registrable::build(authority)` to'plamlari `owned_by`.### Hisob
-- `AccountId` bu kontroller tomonidan kalitlangan va kanonik I105 sifatida kodlangan kanonik domensiz hisob identifikatoridir.
+- `AccountId` bu kontroller tomonidan kalitlangan va kanonik i105 sifatida kodlangan kanonik domensiz hisob identifikatoridir.
 - `ScopedAccountId { account: AccountId, domain: DomainId }` aniq domen kontekstini faqat qamrovli ko'rinish zarur bo'lganda olib boradi.
 - `Account { id, metadata, label?, uaid? }` — `label` is an optional stable alias used by rekey records, `uaid` carries the optional Nexus-wide [Universal Account ID](./universal_accounts_guide.md).
 - Quruvchi: `Account::new(id)` orqali `NewAccount`; ro'yxatdan o'tish aniq `ScopedAccountId` domenini talab qiladi va hech qanday sukut bo'yicha xulosa chiqarmaydi.
@@ -250,7 +250,7 @@ iroha ledger asset definition register \
 # Mint using alias + account components (no manual norito hex copy/paste)
 iroha ledger asset mint \
   --definition-alias pkr#ubl.sbp \
-  --account sorauﾛ1P... \
+  --account soraゴヂ... \
   --quantity 500
 
 # Resolve alias to canonical Base58 id via Torii
@@ -259,7 +259,7 @@ curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -d '{"alias":"pkr#ubl.sbp"}'
 ```Migratsiya eslatmasi:
 - Eski `name#domain` aktivlarni aniqlash identifikatorlari v1 da qabul qilinmaydi.
-- Yalpiz/yoqish/o'tkazish uchun aktiv identifikatorlari `<base58-asset-id>#<katakana-i105-account-id>` kanonik bo'lib qoladi; ularni yarating:
+- Yalpiz/yoqish/o'tkazish uchun aktiv identifikatorlari `<canonical-base58-asset-definition-id>` kanonik bo'lib qoladi; ularni yarating:
   - `iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
   - yoki `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`.
 

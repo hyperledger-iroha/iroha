@@ -1,46 +1,73 @@
 ---
-lang: ru
-direction: ltr
-source: docs/portal/docs/reference/address-safety.ar.md
-status: complete
-generator: docs/portal/scripts/sync-i18n.mjs
-translator: machine-google-reviewed
-translation_last_reviewed: 2026-02-07
+title: Address Safety & Accessibility
+description: UX requirements for presenting and sharing Iroha addresses safely (ADDR-6c).
 ---
 
----
-Название: سلامة العناوين واتاحة الوصول
-описание: متطلبات UX لعرض ومشاركة عناوين Iroha بأمان (ADDR-6c).
----
+This page captures the ADDR-6c documentation deliverable. Apply these
+constraints to wallets, explorers, SDK tooling, and any portal surface that
+renders or accepts human-facing addresses. The canonical data model lives in
+`docs/account_structure.md`; the checklist below explains how to expose those
+formats without compromising safety or accessibility.
 
-Он был создан для ADDR-6c. Откройте для себя приложение «Исследования» и «Исследователи» SDK и нажмите кнопку «Удалить в браузере». Сан-Франциско Миссисипи. Он был создан для `docs/account_structure.md`; В 1990-х годах он был назначен президентом США Дональдом Трампом. الوصول.
+## Safe sharing flows
 
-## تدفقات مشاركة آمنة
+- Default every copy/share action to the canonical Katakana i105 account id.
+  If an on-chain alias is present, display it as supporting metadata in a
+  separate labeled field.
+- Offer a “Share” affordance that bundles the full plain-text address and a QR
+  code derived from the same payload. Let users inspect both before committing.
+- When space requires truncation (tiny cards, notifications), keep the leading
+  human-readable prefix, show ellipses, and retain the final 4–6 characters so
+  the checksum anchor survives. Provide a tap/keyboard shortcut to copy the full
+  string without truncation.
+- Prevent clipboard desync by emitting a confirmation toast that previews the
+  exact i105 string that was copied. Where telemetry is available, count copy
+  attempts versus share actions so UX regressions surface quickly.
 
-- اجعل كل اجراء نسخ/مشاركة يستخدم عنوان I105 افتراضيا. Для этого необходимо получить контрольную сумму для проверки.
-- На экране "Миниатюра" появляется информация о полезной нагрузке QR-кода. Он был убит Джоном Уилсоном в 2007 году.
-- عند الحاجة للاختصار بسبب المساحة (بطاقات صغيرة, اشعارات), احتفظ بالبادئة 4–6 значений контрольной суммы. Он был отправлен в Лондон в 2007 году.
-- امنع عدم تطابق الحافظة عبر اظهار тост تأكيد يعرض سلسلة I105 المنسوخة بدقة. Вы можете воспользоваться телеметрией, получить доступ к данным по телеметрии и пользовательскому интерфейсу. بسرعة.
+## IME & input safeguards
 
-## Изменение IME
+- Validate account-id fields as canonical Katakana i105 only. Validate alias
+  entry fields separately as `name@dataspace` or `name@domain.dataspace`.
+- When IME composition artefacts or zero-width characters appear, surface an
+  inline warning instead of coercing the input into a different account-id
+  format.
+- Provide a plain-text paste zone that preserves the canonical i105 literal as
+  pasted while still stripping obviously invalid stealth code points before
+  validation.
+- Harden validation against zero-width joiners, variation selectors, and other
+  stealth Unicode code points. Log the rejected code point category so fuzzing
+  suites can import the telemetry.
 
-- Используйте ASCII в формате ASCII. Вы можете добавить IME (полная ширина, Кана, веб-сайт) и встроенный встроенный файл. Он был убит в Лас-Вегасе в 1980-х годах.
-- Написано в журнале "Старый мир" ASCII-код. Он был создан для использования IME в приложении.
-- Добавлены соединители нулевой ширины и селекторы вариантов, доступные в Unicode. Он создал систему фаззинга для телеметрии.
+## Assistive technology expectations
 
-## توقعات تقنيات المساعدة
+- Annotate every address block with `aria-label` or `aria-describedby` that
+  spells out the human-readable prefix and chunks the payload in 4–8 character
+  groups (“ih dash b three two …”). This stops screen readers from producing an
+  unintelligible stream of characters.
+- Announce successful copy/share events via a polite live region update. Include
+  the destination (clipboard, share sheet, QR) so the user knows the action
+  completed without moving focus.
+- Supply descriptive `alt` text for QR previews (e.g., “i105 address for
+  `<account>` on chain `0x1234`”). Provide a “Copy address as text”
+  fallback adjacent to the QR canvas for low-vision users.
 
-- `aria-label` и `aria-describedby` для проверки полезной нагрузки. الى مجموعات من 4–8 احرف («их тире б три два…»). Он был убит в 2008 году в Нью-Йорке.
-- اعلن عن نجاح النسخ/المشاركة عبر تحديث live регион بطريقة вежливый. الذكر الوجهة (название фильма QR) تحريك التركيز.
-- وفر نص `alt` и QR (например, «Адрес I105 для `<account>` в цепочке `0x1234`»). В фильме "Настоящий друг Кейна" Бреннан запустил QR-код для QR-кода.
+## Single-format policy
 
-## العناوين المضغوطة الخاصة بـ Sora فقط
+- Keep canonical Katakana i105 as the only user-facing account-id format for
+  copy, share, and QR surfaces.
+- Treat `name@dataspace` and `name@domain.dataspace` as on-chain aliases that
+  point to canonical i105 account ids.
+- Do not expose alternate account-literal encodings in production wallet or
+  explorer UX.
+- Telemetry should track i105 copy/share usage, alias-resolution usage, and
+  validation failures only.
 
-- Стробирование: установите флажок `i105`, чтобы установить его. Был создан в 2007 году в Сора Сора Nexus.
-- Маркировка: كل ظهور يجب ان يتضمن شارة مرئية "Sora-only" в соответствии с требованиями производителя. Откройте I105.
-- Ограждения: установлены на складе Nexus, установленном на сайте Nexus. Это было сделано в I105.
-- Телеметрия: вы можете получить доступ к игровой книге в формате playbook الحوادث من رصد. ارتفاعات المشاركة غير المقصودة.
+## Quality gates
 
-## بوابات الجودة- وسّع اختبارات UI الالية (по мотивам сборника рассказов a11y) Создан ARIA и создан для IME.
-- Отвечает за контроль качества в режиме IME (кана, пиньинь), а также в голосовом режиме (VoiceOver/NVDA) и QR. В Сэнсэй-Сити в Вашингтоне.
-- Он был отправлен в Нью-Йорк в 1990-х годах, когда он выступил в роли I105. تراجعات تصحح.
+- Extend automated UI tests (or storybook a11y suites) to assert that address
+  components expose the required ARIA metadata and that IME rejection messages
+  appear.
+- Include manual QA scenarios for IME input (kana, pinyin), screen reader pass
+  (VoiceOver/NVDA), and QR copy on high-contrast themes before releasing.
+- Surface these checks in release checklists alongside the i105 parity tests
+  so regressions remain blocked until corrected.

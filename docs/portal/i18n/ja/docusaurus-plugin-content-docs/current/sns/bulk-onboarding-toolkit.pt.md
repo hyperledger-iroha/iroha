@@ -246,7 +246,7 @@ CSV を実行します。
   CSV のローカル情報を参照して解決策を参照します。メタデータ
   正しいオブジェクトを作成し、検証します。
 - **コントローラー:** セルラス エム ブランコ レスペイタム `--default-controllers`。フォルネカ
-  listas明示的 (例`i105...;i105...`) 所有者パラアトレスのデレガー。
+  listas明示的 (例`soraカタカナ...;soraカタカナ...`) 所有者パラアトレスのデレガー。
 
 Falhas sao reportadas com numeros de linha contextuais (por exemplo)
 `error: row 12 term_years must be between 1 and 255`)。 O script sai com codigo

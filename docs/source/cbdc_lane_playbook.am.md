@@ -141,7 +141,7 @@ description = "Route CBDC contracts to the restricted lane"
 }
 ```
 
-ቁልፍ መስፈርቶች፡- አረጋጋጮች ** አለባቸው** ቀኖናዊ የI105 መለያ መታወቂያዎች (አይ18NI00000043X የለም፤ ​​`@domain` እንደ ግልጽ የማዞሪያ ፍንጭ ብቻ አባሪ) በካታሎግ ውስጥ አለ። `quorum` ወደ ባለብዙ ሲግ ገደብ (≥2) አዘጋጅ።
+ቁልፍ መስፈርቶች፡- አረጋጋጮች ** አለባቸው** ቀኖናዊ የi105 መለያ መታወቂያዎች (አይ18NI00000043X የለም፤ ​​`@domain` እንደ ግልጽ የማዞሪያ ፍንጭ ብቻ አባሪ) በካታሎግ ውስጥ አለ። `quorum` ወደ ባለብዙ ሲግ ገደብ (≥2) አዘጋጅ።
 - የተጠበቁ የስም ቦታዎች በ `Queue::push` (`crates/iroha_core/src/queue.rs` ይመልከቱ) ተፈጻሚዎች ናቸው, ስለዚህ ሁሉም የ CBDC ኮንትራቶች `gov_namespace` + `gov_contract_id` መግለጽ አለባቸው.
 - `composability_group` መስኮች በ `docs/source/nexus.md` §8.6 ውስጥ የተገለጸውን እቅድ ይከተላሉ; ባለቤቱ (CBDC ሌን) የተፈቀደላቸው ዝርዝር እና ኮታዎችን ያቀርባል። የተፈቀደላቸው DS አንጸባራቂዎች `group_id_hex` + `activation_epoch` ብቻ ይጠቅሳሉ።
 - አንጸባራቂውን ከገለበጡ በኋላ `LaneManifestRegistry::from_config` መጫኑን ለማረጋገጥ `cargo test -p integration_tests nexus::lane_registry -- --nocapture` ን ያሂዱ።

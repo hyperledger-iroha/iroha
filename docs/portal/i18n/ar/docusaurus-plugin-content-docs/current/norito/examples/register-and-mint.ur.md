@@ -19,9 +19,9 @@ translation_last_reviewed: 2026-02-07
 
 ## ليجر واک تھرو
 
-- هذا هو التطبيق المنزلي (مثل `i105...`) الموجود، وهو عبارة عن SDK Quickstart وهو عبارة عن رحلة مستمرة.
+- هذا هو التطبيق المنزلي (مثل `soraカタカナ...`) الموجود، وهو عبارة عن SDK Quickstart وهو عبارة عن رحلة مستمرة.
 - `register_and_mint` بطاقة ائتمان عبر الإنترنت من ROSE وهي عبارة عن أثاث من إيفينشن وأليس 250 يونيو.
-- `client.request(FindAccountAssets)` أو `iroha_cli ledger assets list --account i105...` هو ذريعة واحدة لفحص كريات الدم البيضاء.
+- `client.request(FindAccountAssets)` أو `iroha_cli ledger assets list --account soraカタカナ...` هو ذريعة واحدة لفحص كريات الدم البيضاء.
 
 ## مواضيع ذات صلة SDK
 

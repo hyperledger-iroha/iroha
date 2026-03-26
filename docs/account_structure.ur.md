@@ -1,144 +1,168 @@
-# اکاؤنٹ کا ڈھانچہ آر ایف سی
+# Account Structure RFC
 
-** حیثیت: ** قبول شدہ (EDDR-1)  
-** سامعین: ** ڈیٹا ماڈل ، توری ، گٹھ جوڑ ، پرس ، گورننس ٹیمیں  
-** متعلقہ مسائل: ** ٹی بی ڈی
+**Status:** Accepted (ADDR-1)  
+**Audience:** Data model, Torii, Nexus, Wallet, Governance teams  
+**Related issues:** TBD
 
-## خلاصہ
+## Summary
 
-اس دستاویز میں شپنگ اکاؤنٹ ایڈریسنگ اسٹیک کی وضاحت کی گئی ہے جس میں نافذ کیا گیا ہے
-inline_code_0 (inline_code_1) اور دی
-ساتھی ٹولنگ۔ یہ فراہم کرتا ہے:
+This document describes the shipping account-addressing stack implemented in
+`AccountAddress` (`crates/iroha_data_model/src/account/address.rs`) and the
+companion tooling. It provides:
 
-۔
-  inline_code_2 جو ایک چین کے امتیازی سلوک کو اکاؤنٹ میں پابند کرتا ہے
-  کنٹرولر اور پیش کش کرتا ہے کہ انٹروپ دوستانہ دوستانہ متن کی شکلیں۔
-- ضمنی ڈیفالٹ ڈومینز اور مقامی ڈائجسٹس کے لئے ڈومین سلیکٹرز ، ایک کے ساتھ
-  مستقبل میں گٹھ جوڑ سے حمایت یافتہ روٹنگ کے لئے محفوظ عالمی رجسٹری سلیکٹر ٹیگ (دی
-  رجسٹری کی تلاش ** ابھی نہیں بھیج دی گئی ہے **)۔
+- A checksummed, human-facing **Katakana I105 account address** produced by
+  `AccountAddress::to_i105` that binds a chain discriminant to the account
+  controller and offers deterministic interop-friendly textual forms.
+- A domainless canonical account payload keyed only by the controller.
+  Explicit domain context now lives outside the payload via
+  `ScopedAccountId { account, domain }` and domain-link state.
 
-## حوصلہ افزائی
+## Motivation
 
-بٹوے اور آف چین ٹولنگ RAW پر انحصار کرتے ہیں inline_code_3 کو آج ہی روٹنگ عرفات۔ یہ
-دو بڑی خرابیاں ہیں:
+Wallets and off-chain tooling rely on raw `name@dataspace` or `name@domain.dataspace` on-chain account aliases today. This
+has two major drawbacks:
 
-1. ** نیٹ ورک بائنڈنگ نہیں۔
-   فوری رائے کے بغیر غلط نیٹ ورک سے کسی پتے کو چسپاں کرسکتے ہیں۔
-   لین دین کو بالآخر مسترد کردیا جائے گا (چین کی مماثلت) یا بدتر ، کامیاب ہو جائے گا
-   کسی غیر ارادتا اکاؤنٹ کے خلاف اگر منزل مقامی طور پر موجود ہے۔
-2. ** ڈومین تصادم۔ ** ڈومین صرف نام کی جگہ ہیں اور ہر ایک پر دوبارہ استعمال کیا جاسکتا ہے
-   زنجیر فیڈریشن آف سروسز (کسٹوڈینز ، پل ، کراس چین ورک فلوز)
-   ٹوٹنے والا بن جاتا ہے کیونکہ inline_code_4 پر چین A غیر متعلق ہے inline_code_5 پر آن
-   چین بی۔
+1. **No network binding.** The string has no checksum or chain prefix, so users
+   can paste an address from the wrong network without immediate feedback. The
+   transaction will eventually be rejected (chain mismatch) or, worse, succeed
+   against an unintended account if the destination exists locally.
+2. **Domain collision.** Domains are namespace-only and can be reused on each
+   chain. Federation of services (custodians, bridges, cross-chain workflows)
+   becomes brittle because `finance` on chain A is unrelated to `finance` on
+   chain B.
 
-ہمیں ایک انسانی دوستانہ ایڈریس فارمیٹ کی ضرورت ہے جو کاپی/پیسٹ غلطیوں کے خلاف محافظ ہے
-اور ڈومین نام سے مستند چین تک ایک ڈٹرمینسٹک نقشہ سازی۔
+We need a human-friendly address format that guards against copy/paste errors
+and a deterministic mapping from an on-chain alias to the authoritative chain/account binding.
 
-## اہداف
+## Goals
 
-- ڈیٹا ماڈل اور اس میں لاگو I105 لفافے کی وضاحت کریں
-  کیننیکل پارسنگ/الیاس کے قواعد جو inline_code_6 اور inline_code_7 پر عمل کریں۔
-- تشکیل شدہ چین کے امتیازی سلوک کو براہ راست ہر پتے میں انکوڈ کریں اور
-  اس کی حکمرانی/رجسٹری کے عمل کی وضاحت کریں۔
-- بیان کریں کہ موجودہ کو توڑنے کے بغیر عالمی ڈومین رجسٹری کو کس طرح متعارف کرایا جائے
-  تعیناتی اور معمول کے مطابق/اینٹی اسپوفنگ قواعد کی وضاحت کریں۔
+- Describe the I105 envelope implemented in the data model and the
+  canonical parsing/alias rules that `AccountId` and `AccountAddress` follow.
+- Encode the configured chain discriminant directly into each address and
+  define its governance/registry process.
+- Describe how to introduce a global domain registry without breaking current
+  deployments and specify normalization/anti-spoofing rules.
 
-## نان گولز
+## Non-goals
 
-- کراس چین اثاثہ منتقلی پر عمل درآمد۔ روٹنگ پرت صرف لوٹتی ہے
-  ٹارگٹ چین۔
-- عالمی ڈومین کے اجراء کے لئے گورننس کو حتمی شکل دینا۔ یہ آر ایف سی ڈیٹا پر مرکوز ہے
-  ماڈل اور ٹرانسپورٹ کے قدیم۔
+- Implementing cross-chain asset transfers. The routing layer only returns the
+  target chain.
+- Finalising governance for global domain issuance. This RFC focuses on the data
+  model and transport primitives.
 
-## پس منظر
+## Background
 
-### موجودہ روٹنگ عرف
+### Current on-chain account alias
 
-کوڈ_بلاک_0@
+```
+AccountId {
+    controller: AccountController // single PublicKey or multisig policy
+}
+ScopedAccountId {
+    account: AccountId,
+    domain: DomainId,
+}
 
-inline_code_8@inline_code_9 کے باہر رہتا ہے۔ نوڈس ٹرانزیکشن کا چیک کریں inline_code_10
-داخلہ کے دوران تشکیل کے خلاف (inline_code_11)
-اور غیر ملکی لین دین کو مسترد کریں ، لیکن اکاؤنٹ کی تار خود نہیں ہے
-نیٹ ورک کا اشارہ۔
+Display / JSON text: canonical Katakana i105 literal only
+Parse accepts:
+- Canonical Katakana i105 account literals only.
+- Runtime parsers reject non-canonical/dotted i105 literals, legacy `norito:<hex>`,
+  canonical hex (`0x...`), any `@<domain>` suffix, and account-alias literals such as
+  `name@dataspace` or `name@domain.dataspace`.
 
-### ڈومین شناخت کار
+Domain context is explicit and out-of-band. There is no public
+`AccountSubjectId`; subject identity is `AccountId`.
+```
 
-inline_code_12 a a inline_code_13 (معمول کی تار) کو لپیٹتا ہے اور اسے مقامی چین میں کھڑا کردیا جاتا ہے۔
-ہر سلسلہ ان لائن_کوڈ_14 ، inline_code_15 ، وغیرہ آزادانہ طور پر رجسٹر ہوسکتا ہے۔
+`ChainId` lives outside of `AccountId`. Nodes check the transaction’s `ChainId`
+against configuration during admission (`AcceptTransactionFail::ChainIdMismatch`)
+and reject foreign transactions, but the account string itself carries no
+network hint.
 
-### گٹھ جوڑ سیاق و سباق
+### Domain identifiers
 
-گٹھ جوڑ کراس اجزاء کوآرڈینیشن (لین/ڈیٹا اسپیس) کے لئے ذمہ دار ہے۔ یہ
-فی الحال کراس چین ڈومین روٹنگ کا کوئی تصور نہیں ہے۔
+`DomainId` wraps a `Name` (normalized string) and is scoped to the local chain.
+Every chain can register `wonderland`, `finance`, etc. independently.
 
-## مجوزہ ڈیزائن
+### Nexus context
 
-### 1. تعصب کا سلسلہ امتیازی سلوک
+Nexus is responsible for cross-component coordination (lanes/data-spaces). It
+currently has no concept of cross-chain domain routing.
 
-inline_code_16 اب بے نقاب:
+## Proposed Design
 
-Code_block_1
+### 1. Deterministic chain discriminant
 
-- ** رکاوٹیں: **
-  - فی فعال نیٹ ورک منفرد ؛ ایک دستخط شدہ عوامی رجسٹری کے ساتھ انتظام کیا
-    واضح محفوظ حدود (جیسے ، inline_code_17 ٹیسٹ/dev ، inline_code_18
-    کمیونٹی کے مختص ، inline_code_19 گورننس- اپرویڈ ، inline_code_20
-    محفوظ)۔
-  - چلانے والی زنجیر کے لئے غیر منقولہ۔ اس کو تبدیل کرنے کے لئے ایک سخت کانٹا اور ایک کی ضرورت ہے
-    رجسٹری اپ ڈیٹ۔
-- ** گورننس اینڈ رجسٹری (منصوبہ بند): ** ایک کثیر دستخطی گورننس سیٹ مرضی
-  ایک دستخط شدہ JSON رجسٹری میپنگ امتیازی سلوک کو انسانی عرفی ناموں سے برقرار رکھیں اور
-  CAIP-2 شناخت کنندگان۔ یہ رجسٹری ابھی بھیجے گئے رن ٹائم کا حصہ نہیں ہے۔
-- ** استعمال: ** ریاستی داخلے ، توری ، ایس ڈی کے ، اور بٹوے APIs کے ذریعے تھریڈڈ
-  ہر جزو اس کو سرایت یا توثیق کرسکتا ہے۔ CAIP-2 کی نمائش مستقبل میں بنی ہوئی ہے
-  انٹرپ ٹاسک۔
+`iroha_config::parameters::actual::Common` now exposes:
 
-### 2. کیننیکل ایڈریس کوڈیکس
+```rust
+pub struct Common {
+    pub chain: ChainId,
+    pub chain_discriminant: u16, // globally coordinated
+    // ... existing fields
+}
+```
 
-مورچا ڈیٹا ماڈل ایک ہی کیننیکل پے لوڈ کی نمائندگی کو بے نقاب کرتا ہے
-(inline_code_21) اس کو کئی انسانی کھڑے ہونے والے فارمیٹس کے طور پر خارج کیا جاسکتا ہے۔ I105 ہے
-شیئرنگ اور کیننیکل آؤٹ پٹ کے لئے ترجیحی اکاؤنٹ کی شکل ؛ کمپریسڈ
-inline_code_22 فارم UX کے لئے ایک دوسرا بہترین ، سورا-صرف آپشن ہے جہاں کانا حرف تہجی
-قدر کا اضافہ کرتا ہے۔ کیننیکل ہیکس ایک ڈیبگنگ ایڈ ہے۔
+- **Constraints:**
+  - Unique per active network; managed through a signed public registry with
+    explicit reserved ranges (e.g., `0x0000–0x0FFF` test/dev, `0x1000–0x7FFF`
+    community allocations, `0x8000–0xFFEF` governance-approved, `0xFFF0–0xFFFF`
+    reserved).
+  - Immutable for a running chain. Changing it requires a hard fork and a
+    registry update.
+- **Governance & registry (planned):** A multi-signature governance set will
+  maintain a signed JSON registry mapping discriminants to human aliases and
+  CAIP-2 identifiers. This registry is not yet part of the shipped runtime.
+- **Usage:** Threaded through state admission, Torii, SDKs, and wallet APIs so
+  every component can embed or validate it. CAIP-2 exposure remains a future
+  interop task.
 
-- ** I105 ** - ایک بیس 58 لفافہ جو سلسلہ کو سرایت کرتا ہے
-  امتیازی سلوک ڈیکوڈرز پے لوڈ کو فروغ دینے سے پہلے سابقہ ​​کی توثیق کرتے ہیں
-  کیننیکل فارم
--** سورہ کمپریسڈ ویو **-** 105 علامتوں کا ایک سورہ حرف تہجی
-  آدھی چوڑائی イロハ نظم (بشمول ヰ اور ヱ) کو 58 کرداروں میں شامل کرنا
-  I105 سیٹ۔ سنڈینیل کے ساتھ اسٹرنگز شروع ہوتی ہیں inline_code_23 ، ایک بیچ 32m-dedived کو سرایت کرتی ہے
-  چیکسم ، اور نیٹ ورک کے سابقہ ​​کو چھوڑ دیں (سورہ گٹھ جوڑ سینٹینیل کے ذریعہ تیار کیا گیا ہے)۔
+### 2. Canonical address codecs
 
-Code_block_2
-- ** کیننیکل ہیکس **- ایک ڈیبگنگ-فرینڈلی ان لائن_کوڈ_24 کیننیکل بائٹ کا انکوڈنگ
-  لفافہ
+The Rust data model now distinguishes the public `AccountId` surface from the
+lower-level `AccountAddress` helper.
 
-inline_code_25 آٹو ڈیکٹس I105 (ترجیحی) ، کمپریسڈ (inline_code_26 ، دوسرا-- ہیکس) ، یا کیننیکل ہیکس
-(inline_code_27 صرف ؛ ننگے ہیکس کو مسترد کردیا گیا ہے) ان پٹ اور ڈیکوڈڈ پے لوڈ دونوں اور پتہ چلا دونوں کو واپس کرتا ہے
-inline_code_28. ISO 20022 ضمیمہ کے لئے توری اب inline_code_29 پر کال کرتا ہے
-کیننیکل ہیکس فارم کو پتے اور ذخیرہ کرتے ہیں لہذا میٹا ڈیٹا کا تعی .ن رہتا ہے
-قطع نظر اصل نمائندگی سے۔
+- `AccountId` text/JSON parsing is hard-cut to canonical Katakana i105 only.
+- `AccountAddress` remains the canonical binary envelope and can still be
+  rendered as I105. Canonical hex remains an internal envelope/debug view and
+  is not a public account identifier.
 
-#### 2.1 ہیڈر بائٹ لے آؤٹ (EDDR-1A)
+- **I105** – the canonical account-address envelope that embeds the chain
+  discriminant. Decoders validate the prefix before promoting the payload to
+  the canonical form.
+- **Canonical hex** – an internal `0x…` view of the canonical byte envelope for
+  debugging, fixtures, and low-level tooling only.
 
-ہر کیننیکل پے لوڈ کو inline_code_30 کے طور پر بچھایا جاتا ہے۔
-inline_code_31 ایک واحد بائٹ ہے جو بات کرتا ہے کہ کون سے پارسر قواعد بائٹس پر لاگو ہوتے ہیں
-عمل کریں:
+`AccountAddress::parse_encoded` accepts i105 forms for
+the raw address envelope. `AccountId::parse_encoded`, `FromStr`, and JSON
+deserialization accept only canonical Katakana i105 and reject non-canonical/legacy
+i105 forms, canonical hex, `norito:`, alias, and `@domain` forms.
 
-Code_block_3
+#### 2.1 Header byte layout (ADDR-1a)
 
-لہذا پہلا بائٹ بہاو ڈیکوڈرز کے لئے اسکیما میٹا ڈیٹا کو پیک کرتا ہے:
+Every canonical payload is laid out as `header · controller`. The
+`header` is a single byte that communicates which parser rules apply to the bytes that
+follow:
 
-| بٹس | فیلڈ | اجازت شدہ اقدار | خلاف ورزی پر غلطی |
-| ------ | ------- | ------------------ | ---------------------- |
-| 7-5 | inline_code_32 | inline_code_33 (v1)۔ اقدار inline_code_34 مستقبل میں نظرثانی کے لئے محفوظ ہیں۔ | اقدار سے باہر کی اقدار inline_code_35 trigger inline_code_36 ؛ نفاذ کو نان صفر ورژن کو آج غیر تعاون یافتہ سمجھنا چاہئے۔ |
-| 4-3 | inline_code_37 | | inline_code_38 = سنگل کلید ، inline_code_39 = ملٹی سیگ۔ | دیگر اقدار میں اضافہ ہوا ہے۔ inline_code_40۔ |
-| 2-1 | inline_code_41 | inline_code_42 (نورم V1)۔ اقدار inline_code_43 ، inline_code_44 ، inline_code_45 محفوظ ہیں۔ | INLINE_CODE_46 سے باہر کی اقدار INLINE_CODE_47 |
-| 0 | inline_code_48 | ہونا ضروری ہے inline_code_49۔ | سیٹ بٹ کو اٹھاتا ہے inline_code_50. |
+```
+bit index:   7        5 4      3 2      1 0
+             ┌─────────┬────────┬────────┬────┐
+payload bit: │version  │ class  │  norm  │ext │
+             └─────────┴────────┴────────┴────┘
+```
 
-سنگل کلیدی کنٹرولرز (ورژن 0 ، کلاس 0 ، کے لئے مورچا انکوڈر Inline_code_51 لکھتا ہے
-نورم V1 ، توسیع کا جھنڈا صاف ہوگیا) اور ملٹی سیگ کنٹرولرز کے لئے inline_code_52 (ورژن 0 ،
-کلاس 1 ، نورم V1 ، توسیع کا جھنڈا صاف ہوگیا)۔
+The first byte therefore packs the schema metadata for downstream decoders:
+
+| Bits | Field | Allowed values | Error on violation |
+|------|-------|----------------|--------------------|
+| 7-5  | `addr_version` | `0` (v1). Values `1-7` are reserved for future revisions. | Values outside `0-7` trigger `AccountAddressError::InvalidHeaderVersion`; implementations MUST treat non-zero versions as unsupported today. |
+| 4-3  | `addr_class` | `0` = single key, `1` = multisig. | Other values raise `AccountAddressError::UnknownAddressClass`. |
+| 2-1  | `norm_version` | `1` (Norm v1). Values `0`, `2`, `3` are reserved. | Values outside `0-3` raise `AccountAddressError::InvalidNormVersion`. |
+| 0    | `ext_flag` | MUST be `0`. | Set bit raises `AccountAddressError::UnexpectedExtensionFlag`. |
+
+The Rust encoder writes `0x02` for single-key controllers (version 0, class 0,
+norm v1, extension flag cleared) and `0x0A` for multisig controllers (version 0,
+class 1, norm v1, extension flag cleared).
 
 #### 2.2 Domainless payload semantics
 
@@ -147,600 +171,557 @@ with no selector segment, no implicit default-domain reconstruction, and no
 public decode fallback for legacy scoped-account literals.
 
 Explicit domain context is modeled separately as `ScopedAccountId { account,
-domain }` or separate API fields; it is not encoded into `AccountId` payload
-bytes.
+domain }` and via account-domain link state. Converting an `AccountAddress`
+into a scoped account therefore requires the caller to supply the domain
+explicitly. The public subject-identity surface is just `AccountId`;
+`AccountSubjectId` is not part of the public API.
 
-| Tag | Meaning | Payload | Notes |
-|-----|---------|---------|-------|
-| `0x00` | Domainless canonical scope | none | Canonical account payloads are domainless; explicit domain context lives outside the address payload. |
-| `0x01` | Local domain digest | 12 bytes | Digest = `blake2s_mac(key = "SORA-LOCAL-K:v1", canonical_label)[0..12]`. |
-| `0x02` | Global registry entry | 4 bytes | Big-endian `registry_id`; reserved until the global registry ships. |
+#### 2.3 Controller payload encodings (ADDR-1a)
 
-Domain labels are canonicalised (UTS-46 + STD3 + NFC) before hashing. Unknown tags raise `AccountAddressError::UnknownDomainTag`. When validating an address against a domain, mismatched selectors raise `AccountAddressError::DomainMismatch`.
+The controller payload is a tagged union appended immediately after the header in
+canonical payloads:
+
+| Tag | Controller | Layout | Notes |
+|-----|------------|--------|-------|
+| `0x00` | Single key | `curve_id:u8` · `key_len:u8` · `key_bytes` | `curve_id=0x01` maps to Ed25519 today. `key_len` is bounded to `u8`; larger values raise `AccountAddressError::KeyPayloadTooLong` (so single-key ML‑DSA public keys, which are >255 bytes, cannot be encoded and must use multisig). |
+| `0x01` | Multisig | `version:u8` · `threshold:u16` · `member_count:u16` · (`curve_id:u8` · `weight:u16` · `key_len:u16` · `key_bytes`)\* | The encoded member count is 16-bit; the old 255-member hard cap is gone. Unknown curves raise `AccountAddressError::UnknownCurve`; malformed policies bubble up as `AccountAddressError::InvalidMultisigPolicy`. |
+
+Multisig policies also expose a CTAP2-style CBOR map and canonical digest so
+hosts and SDKs can verify the controller deterministically. See
+`docs/source/references/multisig_policy_schema.md` (ADDR-1c) for the schema,
+validation rules, hashing procedure, and golden fixtures.
+
+All key bytes are encoded exactly as returned by `PublicKey::to_bytes`; decoders reconstruct `PublicKey` instances and raise `AccountAddressError::InvalidPublicKey` if the bytes do not match the declared curve.
+
+> **Ed25519 canonical enforcement (ADDR-3a):** curve `0x01` keys must decode to the exact byte string emitted by the signer and must not lie in the small-order subgroup. Nodes now reject non-canonical encodings (e.g., values reduced modulo `2^255-19`) and weak points such as the identity element, so SDKs should surface matching validation errors before submitting addresses.
+
+##### 2.3.1 Curve identifier registry (ADDR-1d)
+
+| ID (`curve_id`) | Algorithm | Feature gate | Notes |
+|-----------------|-----------|--------------|-------|
+| `0x00` | Reserved | — | MUST NOT be emitted; decoders surface `ERR_UNKNOWN_CURVE`. |
+| `0x01` | Ed25519 | — | Canonical v1 algorithm (`Algorithm::Ed25519`); enabled in the default config. |
+| `0x02` | ML‑DSA (Dilithium3) | — | Uses the Dilithium3 public key bytes (1952 bytes). Single‑key addresses cannot encode ML‑DSA because `key_len` is `u8`; multisig uses `u16` lengths. |
+| `0x03` | BLS12‑381 (normal) | `bls` | Public keys in G1 (48 bytes), signatures in G2 (96 bytes). |
+| `0x04` | secp256k1 | — | Deterministic ECDSA over SHA‑256; public keys use the 33‑byte SEC1 compressed form and signatures use the canonical 64‑byte `r∥s` layout. |
+| `0x05` | BLS12‑381 (small) | `bls` | Public keys in G2 (96 bytes), signatures in G1 (48 bytes). |
+| `0x0A` | GOST R 34.10‑2012 (256, set A) | `gost` | Available only when the `gost` feature is enabled. |
+| `0x0B` | GOST R 34.10‑2012 (256, set B) | `gost` | Available only when the `gost` feature is enabled. |
+| `0x0C` | GOST R 34.10‑2012 (256, set C) | `gost` | Available only when the `gost` feature is enabled. |
+| `0x0D` | GOST R 34.10‑2012 (512, set A) | `gost` | Available only when the `gost` feature is enabled. |
+| `0x0E` | GOST R 34.10‑2012 (512, set B) | `gost` | Available only when the `gost` feature is enabled. |
+| `0x0F` | SM2 | `sm` | DistID length (u16 BE) + DistID bytes + 65‑byte SEC1 uncompressed SM2 key; available only when `sm` is enabled. |
+
+Slots `0x06–0x09` remain unassigned for additional curves; introducing a new
+algorithm requires a roadmap update and matching SDK/host coverage. Encoders
+MUST reject any unsupported algorithm with `ERR_UNSUPPORTED_ALGORITHM`, and
+decoders MUST fail fast on unknown ids with `ERR_UNKNOWN_CURVE` to preserve
+fail-closed behaviour.
+
+The canonical registry (including a machine-readable JSON export) lives under
+[`docs/source/references/address_curve_registry.md`](source/references/address_curve_registry.md).
+Tooling SHOULD consume that dataset directly so curve identifiers remain
+consistent across SDKs and operator workflows.
+
+- **SDK gating:** SDKs default to Ed25519-only validation/encoding. Swift exposes
+  compile-time flags (`IROHASWIFT_ENABLE_MLDSA`, `IROHASWIFT_ENABLE_GOST`,
+  `IROHASWIFT_ENABLE_SM`); the Java/Android SDK requires
+  `AccountAddress.configureCurveSupport(...)`; the JavaScript SDK uses
+  `configureCurveSupport({ allowMlDsa: true, allowGost: true, allowSm2: true })`.
+  secp256k1 support is available but not enabled by default in the JS/Android
+  SDKs; callers must opt in explicitly when emitting non‑Ed25519 controllers.
+- **Host gating:** `Register<Account>` rejects controllers whose signatories use algorithms
+  missing from the node’s `crypto.allowed_signing` list **or** curve identifiers absent from
+  `crypto.curves.allowed_curve_ids`, so clusters must advertise support (configuration +
+  genesis) before ML‑DSA/GOST/SM controllers can be registered. BLS controller
+  algorithms are always allowed when compiled (consensus keys rely on them),
+  and the default configuration enables Ed25519 + secp256k1.【crates/iroha_core/src/smartcontracts/isi/domain.rs:32】
+
+##### 2.3.2 Multisig controller guidance
+
+`AccountController::Multisig` serialises policies via
+`crates/iroha_data_model/src/account/controller.rs` and enforces the schema
+documented in [`docs/source/references/multisig_policy_schema.md`](source/references/multisig_policy_schema.md).
+Key implementation details:
+
+- Policies are normalised and validated by `MultisigPolicy::validate()` before
+  being embedded. Thresholds must be ≥ 1 and ≤ Σ weight; duplicate members are
+  removed deterministically after sorting by `(algorithm || 0x00 || key_bytes)`.
+- The binary controller payload (`ControllerPayload::Multisig`) encodes
+  `version:u8`, `threshold:u16`, `member_count:u16`, then each member’s
+  `(curve_id, weight:u16, key_len:u16, key_bytes)`. This is exactly what
+  `AccountAddress::canonical_bytes()` writes to I105 payloads.
+- Multisig address encoding is no longer limited by an 8-bit member counter.
+  The binary field is `u16`, so the old 255-member hard cap no longer applies.
+- Hashing (`MultisigPolicy::digest_blake2b256()`) uses Blake2b-256 with the
+  `iroha-ms-policy` personalization string so governance manifests can bind to a
+  deterministic policy ID that matches the controller bytes embedded in I105.
+- Fixture coverage lives in `fixtures/account/address_vectors.json` (cases
+  `addr-multisig-*`). Wallets and SDKs should assert the generated fixture
+  bundle directly rather than copying inline literals into code or docs. The
+  canonical renderer now emits katakana-only I105 payload symbols after the
+  chain sentinel.
+
+#### 2.4 Failure rules (ADDR-1a)
+
+- Payloads shorter than the required canonical header+controller size emit
+  `AccountAddressError::InvalidLength` or
+  `AccountAddressError::UnexpectedTrailingBytes`.
+- Headers that set the reserved `ext_flag` or advertise unsupported versions/classes MUST be rejected using `UnexpectedExtensionFlag`, `InvalidHeaderVersion`, or `UnknownAddressClass`.
+- Unknown controller tags raise `UnknownControllerTag`.
+- Oversized or malformed key material raises `KeyPayloadTooLong` or `InvalidPublicKey`.
+- Multisig controllers that exceed the encodable `u16` member count raise
+  `MultisigMemberOverflow`; there is no 255-member limit.
+- Canonical rendering uses katakana-only I105 payload symbols after the chain
+  sentinel. Decoders may still read historical mixed payloads for compatibility,
+  but public renderers, JSON, and docs must emit the katakana canonical form.
+- `AccountId` text/JSON parsing does not attempt alias or domain fallback:
+  non-canonical/legacy i105 literals, `norito:<hex>`, canonical hex, `@domain`, and alias
+  forms are rejected up front in favor of canonical Katakana i105 only.
+
+#### 2.5 Normative binary vectors
+
+- **Selector-free canonical single-key payload (`seed byte 0x00`)**  
+  Canonical hex: `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.  
+  Breakdown: `0x02` header, `0x00` controller tag, `0x01` curve id (Ed25519),
+  `0x20` key length, followed by the 32-byte key payload.
+- **Canonical multisig payload layout**  
+  `0x0A | 0x01 | version:u8 | threshold:u16 | member_count:u16 | ...members`
+  where each member is encoded as `(curve_id:u8, weight:u16, key_len:u16,
+  key_bytes)`.
+
+The fixture bundle in `fixtures/account/address_vectors.json` still publishes
+i105 outputs plus non-canonical legacy-vector fixtures for the same canonical payloads.
+Public `AccountId` parser tests separately assert that only canonical Katakana i105 is
+accepted.
+
+Reviewed-by: Data Model WG, Cryptography WG — scope approved for ADDR-1a.
+
+##### Sora Nexus reference aliases
+
+Sora Nexus networks default to `chain_discriminant = 0x02F1`
+(`iroha_config::parameters::defaults::common::CHAIN_DISCRIMINANT`). The
+`AccountAddress::to_i105` helpers therefore emit
+consistent textual forms for every canonical payload. The authoritative sample
+literals now live only in `fixtures/account/address_vectors.json` so the CLI,
+Torii responses, and SDK helpers all consume one canonical katakana-I105 source
+of truth instead of duplicating stale inline strings.
+
+#### 2.6 Public textual forms
+
+- **Canonical account id:** a Katakana i105 literal only.
+- **On-chain account aliases:** `name@dataspace` or `name@domain.dataspace`.
+  These aliases resolve on-chain to canonical i105 account ids and are not a
+  second account-id codec.
+- **Out-of-band wrappers:** transport wrappers such as CAIP-style URIs or other
+  integration envelopes may exist in downstream systems, but they are not
+  public account ids. Any such wrapper must resolve to canonical i105 or an
+  on-chain alias before it reaches strict parser paths.
+- **Machine helpers:** Rust, TypeScript/JavaScript, Python, Swift, Kotlin, and
+  Java SDKs expose canonical Katakana i105 codecs
+  (`AccountAddress::to_i105`, `AccountAddress::parse_encoded`, and equivalents).
+
+#### 2.7 Deterministic i105 encoding
+
+- **Prefix mapping:** Reuse the `chain_discriminant` inside the same canonical
+  i105 codec. Well-known discriminants use sentinels such as `sora`, `test`,
+  or `dev` as part of the canonical i105 literal; there is no separate ASCII
+  account-id codec. The authoritative assignments live in
+  [`address_prefix_registry.md`](source/references/address_prefix_registry.md);
+  SDKs MUST keep the matching JSON registry in sync to avoid collisions.
+- **Account material:** I105 encodes the canonical payload built by
+  `AccountAddress::canonical_bytes()`—header byte and controller payload.
+  Domain-selector bytes are not emitted in canonical payloads. There is no additional hashing step; I105 embeds the
+  binary controller payload (single key or multisig) as produced by the Rust
+  encoder, not the CTAP2 map used for multisig policy digests.
+- **Encoding:** `encode_i105()` renders the canonical payload with the
+  105-symbol katakana alphabet and appends a six-symbol Bech32m-style checksum
+  over the canonical bytes. CLI/SDK helpers expose the same procedure, and
+  `AccountAddress::parse_encoded` reverses it via `decode_i105`.
+
+#### 2.8 Normative textual test vectors
+
+`fixtures/account/address_vectors.json` contains canonical i105 literals plus
+negative fixtures that exercise non-canonical and malformed inputs.
+Highlights:
+
+- **`addr-single-default-ed25519` (Sora Nexus, prefix `0x02F1`).**  
+  Torii emits the generated katakana-I105 literal from `AccountId`’s `Display`
+  implementation (canonical Katakana i105).
+- **Multisig controller payloads.**  
+  Canonical controller bytes now encode `member_count:u16`, so address encoding
+  no longer has the old 255-member hard cap.
+- **Failure case (`i105-prefix-mismatch`).**  
+  Parsing an i105 literal encoded with prefix `NETWORK_PREFIX + 1` on a node
+  expecting the default prefix yields
+  `AccountAddressError::UnexpectedNetworkPrefix { expected: 753, found: 754 }`
+  before domain routing is attempted. Negative-path `AccountId` tests also cover
+  rejected `norito:...`, `0x...`, alias, and `@domain` inputs. The
+  `i105-checksum-mismatch` fixture exercises tampering detection over the
+  katakana-I105 checksum.
+
+#### 2.9 Compliance fixtures
+
+ADDR‑2 ships a replayable fixture bundle covering positive and negative
+scenarios across canonical Katakana i105, non-canonical legacy-vector output, canonical
+`AccountAddress` hex renderings, selector-free payloads, multisignature
+controllers, and rejected legacy `AccountId` literal forms. The canonical JSON
+lives in `fixtures/account/address_vectors.json` and can be regenerated with:
 
 ```
-legacy selector segment
-┌──────────┬──────────────────────────────────────────────┐
-│ tag (u8) │ payload (depends on selector kind, see table)│
-└──────────┴──────────────────────────────────────────────┘
+cargo xtask address-vectors --out fixtures/account/address_vectors.json
+# verify without writing:
+cargo xtask address-vectors --verify
 ```
 
-When present, the selector is immediately adjacent to the controller payload, so
-a decoder can walk the wire format in order: read the tag byte, read the
-tag-specific payload, then move on to the controller bytes.
-
-**Legacy selector examples**
-
-- *Implicit default* (`tag = 0x00`). No payload. Example canonical hex for the default
-  domain using the deterministic test key:
-  `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.
-- *Local digest* (`tag = 0x01`). Payload is the 12-byte digest. Example (`treasury` seed
-  `0x01`): `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`.
-- *Global registry* (`tag = 0x02`). Payload is a big-endian `registry_id:u32`. The bytes
-  that follow the payload are identical to the implicit-default case; the selector simply
-  replaces the normalised domain string with a registry pointer. Example using
-  `registry_id = 0x0000_002A` (decimal 42) and the deterministic default controller:
-  `0x02020000002a000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201`.
-
-#### 2.3 کنٹرولر پے لوڈ انکوڈنگز (EDDR-1A)
-
-کنٹرولر پے لوڈ ڈومین سلیکٹر کے بعد شامل ایک اور ٹیگ یونین ہے:
-
-| ٹیگ | کنٹرولر | لے آؤٹ | نوٹ |
-| ----- | ------------ | -------- | ------- |
-| inline_code_77 | | سنگل کلید | inline_code_78 · inline_code_79 inline_code_80 | | آج ED25519 پر INLINE_CODE_81 کے نقشے۔ inline_code_82 پر پابند ہے inline_code_83 ؛ بڑی قدریں inline_code_84 (لہذا سنگل- کلیدی ML-DSA عوامی چابیاں ، جو> 255 بائٹس ہیں ، کو انکوڈ نہیں کیا جاسکتا ہے اور ملٹی سگ کا استعمال کرنا ضروری ہے)۔ |
-| inline_code_85 | | ملٹی سیگ | inline_code_86 · inline_code_87 inline_code_88@inline_code_89@inline_code_90@inline_code_91@inline_91@inline_92 255 ممبروں (inline_code_93) تک کی حمایت کرتا ہے۔ نامعلوم منحنی خطوط میں inline_code_94 ؛ خراب پالیسیاں بلبلا کے طور پر ان لائن_کوڈ_95 کے طور پر بلبلا اپ۔ |
-
-ملٹی سگ پالیسیاں سی ٹی اے پی 2 طرز کے سی بی او آر کے نقشے اور کیننیکل ڈائجسٹ کو بھی بے نقاب کرتی ہیں
-میزبان اور ایس ڈی کے کنٹرولر کو عزم سے تصدیق کرسکتے ہیں۔ دیکھو
-اسکیما کے لئے inline_code_96 (addr-1c) ،
-توثیق کے قواعد ، ہیشنگ کا طریقہ کار ، اور سنہری فکسچر۔
-
-تمام کلیدی بائٹس کو بالکل انکوڈ کیا گیا ہے جیسا کہ inline_code_97 کے ذریعہ واپس کیا گیا ہے ؛ ڈیکوڈرز ان لائن_کوڈ_98 کی تشکیل نو اور مثال کے طور پر اٹھائیں اور ان لائن_کوڈ_99 کو اٹھائیں اگر بائٹس اعلان کردہ وکر سے مماثل نہیں ہیں۔
-
-> ** ED25519 کینونیکل انفورسمنٹ (EDDR-3A): ** وکرو inline_code_100 keys کو دستخط کنندہ کے ذریعہ خارج ہونے والے عین مطابق بائٹ سٹرنگ میں ڈیکوڈ کرنا ہوگا اور اسے چھوٹے آرڈر کے ذیلی گروپ میں نہیں جھوٹ بولنا چاہئے۔ نوڈس اب غیر معمولی انکوڈنگز کو مسترد کرتے ہیں (جیسے ، اقدار کو کم ماڈیولو ان لائن_کوڈ_101) اور شناخت عنصر جیسے کمزور پوائنٹس ، لہذا ایس ڈی کے ایس ڈی کے ایڈریس جمع کرنے سے پہلے توثیق کی غلطیوں کی سطح کو سطح پر رکھنا چاہئے۔
-
-##### 2.3.1 منحنی شناخت کنندہ رجسٹری (EDDR-1D)
-
-| ID (inline_code_102) | الگورتھم | فیچر گیٹ | نوٹ |
-| ----------------- | ----------- | ---------------- | ------- |
-| inline_code_103 | محفوظ | - | خارج نہیں ہونا چاہئے ؛ ڈیکوڈرز کی سطح inline_code_104. |
-| inline_code_105 | | ED25519 | - | کیننیکل V1 الگورتھم (inline_code_106) ؛ پہلے سے طے شدہ ترتیب میں فعال. |
-| inline_code_107 | ایم ایل - ڈی ایس اے (ڈیلیٹیم 3) | - | Dilithium3 پبلک کلیدی بائٹس (1952 بائٹس) استعمال کرتا ہے۔ سنگل key کلیدی پتے ML - DSA کو انکوڈ نہیں کرسکتے ہیں کیونکہ inline_code_108 is inline_code_109 ؛ ملٹی سیگ inline_code_110 کی لمبائی کا استعمال کرتا ہے۔ |
-| inline_code_111 | | BLS12‐381 (عام) | inline_code_112 | جی 1 (48 بائٹس) میں عوامی چابیاں ، جی 2 (96 بائٹس) میں دستخط۔ |
-| inline_code_113 | SECP256K1 | - | SHA - 256 سے زیادہ کا تعی .ن ECDSA ؛ عوامی چابیاں 33 - بائٹ سیکنڈ سیکنڈ کمپریسڈ فارم کا استعمال کرتی ہیں اور دستخطوں کا استعمال کیننیکل 64 - byte inline_code_114 ترتیب استعمال کرتے ہیں۔ |
-| inline_code_115 | | BLS12‐381 (چھوٹا) | inline_code_116 | | جی 2 (96 بائٹس) میں عوامی چابیاں ، جی 1 (48 بائٹس) میں دستخط۔ |
-| inline_code_117 | GOST R 34.10‑2012 (256 ، سیٹ A) | inline_code_118 | صرف اس وقت دستیاب ہے جب inline_code_119 کی خصوصیت فعال ہو۔ |
-| inline_code_120 | | گوسٹ آر 34.10‑2012 (256 ، سیٹ بی) | inline_code_121 | | صرف اس وقت دستیاب ہے جب inline_code_122 کی خصوصیت فعال ہو۔ |
-| inline_code_123 | | گوسٹ آر 34.10‑2012 (256 ، سیٹ سی) | inline_code_124 | | صرف اس وقت دستیاب ہے جب inline_code_125 کی خصوصیت فعال ہو۔ |
-| inline_code_126 | | GOST R 34.10‑2012 (512 ، سیٹ A) | inline_code_127 | صرف اس وقت دستیاب ہے جب inline_code_128 کی خصوصیت فعال ہو۔ |
-| inline_code_129 | | گوسٹ آر 34.10‑2012 (512 ، سیٹ بی) | inline_code_130 | صرف اس وقت دستیاب ہے جب inline_code_131 کی خصوصیت فعال ہو۔ |
-| inline_code_132 | SM2 | inline_code_133 | | دور دراز کی لمبائی (U16 BE) + دور بائٹس + 65 - بائٹ سیک 1 غیر سنجیدہ SM2 کلید ؛ صرف اس وقت دستیاب ہے جب inline_code_134 فعال ہے۔ |
-
-سلاٹس inline_code_135 اضافی منحنی خطوط کے لئے غیر دستخط شدہ رہیں۔ ایک نیا متعارف کرانا
-الگورتھم کو روڈ میپ اپ ڈیٹ اور ایس ڈی کے/میزبان کوریج سے ملنے کی ضرورت ہے۔ انکوڈرز
-کسی بھی غیر تعاون یافتہ الگورتھم کو inline_code_136 کے ساتھ مسترد کرنا ہوگا ، اور
-ڈیکوڈرز کو نامعلوم IDs پر تیزی سے ناکام ہونا چاہئے جس کے ساتھ محفوظ رکھنے کے لئے inline_code_137
-ناکام بند سلوک۔
-
-کیننیکل رجسٹری (بشمول مشین سے پڑھنے کے قابل JSON برآمد) کے تحت زندہ ہے
-[inline_code_138] (ماخذ/حوالہ جات/ایڈریس_کورو_ریگسٹری.مڈی)۔
-ٹولنگ کو استعمال کرنا چاہئے کہ ڈیٹاسیٹ براہ راست لہذا وکر شناخت کرنے والے باقی ہیں
-ایس ڈی کے اور آپریٹر ورک فلوز میں مستقل۔
-
-- ** SDK گیٹنگ: ** ED25519 صرف توثیق/انکوڈنگ کے لئے SDKS ڈیفالٹ۔ سوئفٹ بے نقاب ہے
-  مرتب وقت کے جھنڈے (inline_code_139 ، inline_code_140 ،
-  inline_code_141) ؛ جاوا/اینڈروئیڈ ایس ڈی کے کی ضرورت ہے
-  inline_code_142 ؛ جاوا اسکرپٹ SDK استعمال کرتا ہے
-  inline_code_143.
-  SECP256K1 سپورٹ دستیاب ہے لیکن جے ایس/اینڈروئیڈ میں بطور ڈیفالٹ فعال نہیں ہے
-  ایس ڈی کے ؛ غیر - ایڈ 25519 کنٹرولرز کو خارج کرتے وقت کال کرنے والوں کو واضح طور پر انتخاب کرنا ہوگا۔
-- ** ہوسٹ گیٹنگ: ** inline_code_144 کنٹرولرز کو مسترد کرتا ہے جن کے دستخطی الگورتھم استعمال کرتے ہیں
-  نوڈ سے inline_code_145 کی فہرست ** یا ** منحنی شناخت کنندگان سے غائب
-  inline_code_146 ، لہذا کلسٹرز کو لازمی طور پر سپورٹ (تشکیل +
-  پیدائش) ایم ایل - ڈی ایس اے/گوسٹ/ایس ایم کنٹرولرز سے پہلے رجسٹرڈ ہوسکتے ہیں۔ BLS کنٹرولر
-  جب مرتب کیا جاتا ہے تو الگورتھم کی ہمیشہ اجازت ہوتی ہے (اتفاق رائے کی چابیاں ان پر انحصار کرتی ہیں) ،
-  اور پہلے سے طے شدہ ترتیب ED25519 + SECP256K1 کو قابل بناتی ہے۔ 【کریٹس/آئروہ_کور/ایس آر سی/اسمارٹ کنٹریکٹ/آئی ایس آئی/ڈومین۔ آر ایس: 32】
-
-##### 2.3.2 ملٹی سیگ کنٹرولر رہنمائی
-
-inline_code_147 کے ذریعے سیریلائزز پالیسیاں
-inline_code_148 اور اسکیما کو نافذ کرتا ہے
-[inline_code_149 میں دستاویزی دستاویزات] (ماخذ/حوالہ جات/ملٹی سیگ_پولیسی_سیما ڈاٹ ایم ڈی)۔
-عمل درآمد کی کلیدی تفصیلات:
-
-- پالیسیوں کو پہلے سے پہلے ان لائن_کوڈ_150 کے ذریعہ معمول اور توثیق کیا جاتا ہے
-  سرایت کرنا دہلیز کو ≥1 اور ≤σ وزن ہونا چاہئے۔ ڈپلیکیٹ ممبران ہیں
-  inline_code_151 کے ذریعہ چھانٹنے کے بعد عزم سے ہٹا دیا گیا۔
-- بائنری کنٹرولر پے لوڈ (inline_code_152) انکوڈس
-  inline_code_153 ، inline_code_154 ، inline_code_155 ، پھر ہر ممبر کی
-  inline_code_156. یہ بالکل وہی ہے
-  inline_code_157 I105 (ترجیحی)/SORA (دوسرا بہترین) پے لوڈ کو لکھتا ہے۔
-- ہیشنگ (inline_code_158) کے ساتھ Blake2b-256 استعمال کرتا ہے
-  inline_code_159 ذاتی نوعیت کی تار تاکہ گورننس منشور ایک کو باندھ سکتا ہے
-  آئی ایچ 58 میں سرایت شدہ کنٹرولر بائٹس سے مماثل پالیسی آئی ڈی۔
-- حقیقت میں کوریج Inline_code_160 میں رہتا ہے (مقدمات
-  inline_code_161)۔ بٹوے اور SDKs کو کیننیکل I105 ڈوروں پر زور دینا چاہئے
-  ذیل میں ان کے انکوڈرز کی تصدیق کے لئے زنگ کے نفاذ سے ملتے ہیں۔
-
-| کیس ID | دہلیز / ممبران | I105 لفظی (prefix inline_code_162) | سورہ کمپریسڈ (inline_code_163) لفظی | نوٹ |
-|---------|---------------------|--------------------------------|-------------------------|-------|
-| inline_code_164 | | inline_code_165 وزن ، ممبران inline_code_166 | | inline_code_167 | | inline_code_168 | کونسل ڈومین گورننس کورم۔ |
-| inline_code_169 | | inline_code_170 ، ممبران inline_code_171 | | inline_code_172 | | inline_code_173 | | دوہری دستخطی ونڈر لینڈ مثال (وزن 1 + 2)۔ |
-| inline_code_174 | inline_code_175 ، ممبران inline_code_176 | | inline_code_177 | | inline_code_178 | بیس گورننس کے لئے استعمال شدہ مضمر ڈیفالٹ ڈومین کورم۔
-
-#### 2.4 ناکامی کے قواعد (EDDR-1A)
-
-- مطلوبہ ہیڈر + سلیکٹر سے یا بچ جانے والے بائٹس کے ساتھ پے لوڈز ان لائن_کوڈ_179 یا ان لائن_کوڈ_180 کے ساتھ۔
-- ہیڈرز جو محفوظ شدہ ان لائن_کوڈ_181 کو ترتیب دیتے ہیں یا غیر تعاون یافتہ ورژن/کلاسوں کی تشہیر کریں inline_code_182 ، inline_code_183 ، یا inline_code_184 کا استعمال کرتے ہوئے اسے مسترد کردیا جانا چاہئے۔
-- نامعلوم سلیکٹر/کنٹرولر ٹیگس اٹھائیں inline_code_185 یا inline_code_186۔
-۔
-- 255 ممبروں سے زیادہ ملٹی سیگ کنٹرولرز ان لائن_کوڈ_189 کو بڑھائیں۔
--آئی ایم ای/این ایف کے سی تبادلوں: آدھی چوڑائی والے سورہ کانا کو بغیر کسی ضابطہ اخلاق کے ان کی مکمل چوڑائی کی شکلوں میں معمول بنایا جاسکتا ہے ، لیکن ASCII_CODE_190 سینٹینیل اور I105 ہندسوں/حرفوں کو ASCII رہنا چاہئے۔ فل وائیڈتھ یا کیس فولڈ سینٹینلز کی سطح inline_code_191 ، فل-وِڈتھ ASCII پے لوڈز میں اضافہ کریں inline_code_192 ، اور چیکم غیر ملحقہ بلبلا کے طور پر inline_code_193۔ ان لائنوں میں پراپرٹی ٹیسٹ Inline_code_194 ان راستوں کا احاطہ کریں تاکہ SDKs اور بٹوے عین مطابق ناکامیوں پر بھروسہ کرسکیں۔
-- توری اور ایس ڈی کے پارسنگ ان لائن_کوڈ_195 کے عرفات اب اسی طرح کا اخراج کرتے ہیں inline_code_196 کوڈز جب I105 (ترجیحی)/Sora (دوسرا بہترین) ان پٹ کو عرف فال بیک سے پہلے ہی ناکام ہوجاتا ہے (جیسے ، چکسم مماثل ، ڈومین ڈائجسٹ مائیسمچ)۔
-- مقامی سلیکٹر پے لوڈ 12 بائٹس سے کم سطح کی سطح Inline_code_197 ، لیگیسی لوکل - 8 ڈائجسٹس سے سخت کٹور کو محفوظ رکھتے ہوئے۔
--ڈومین لیس I105 (ترجیحی)/SORA (دوسری بہترین) لٹریلز ڈومین سلیکٹر حل کرنے والے کے ذریعہ سرایت شدہ سلیکٹر کو حل کریں۔ اگر کوئی انسٹال نہیں ہوا ہے (یا سلیکٹر کو حل نہیں کیا جاسکتا ہے) پارسنگ ناکام ہوجاتا ہے inline_code_198 کے ساتھ۔ ضمنی ڈیفالٹ سلیکٹر ترتیب دینے والے ڈیفالٹ ڈومین لیبل پر حل کرنے والے کی ضرورت کے بغیر حل کرتا ہے۔
-
-#### 2.5 معیاری بائنری ویکٹر
-
-- ** ضمنی ڈیفالٹ ڈومین (inline_code_19999 ، بیج بائٹ inline_code_200) **  
-  کیننیکل ہیکس: ​​inline_code_2011۔  
-  خرابی: inline_code_202 ہیڈر ، inline_code_203 سلیکٹر (ضمنی طور پر ڈیفالٹ) ، inline_code_204 کنٹرولر ٹیگ ، inline_code_205 curve ID (ED25519) ، inline_code_206 key کلیدی لمبائی ، 32-BLOAD کے ذریعہ پیروی کریں۔
-- ** لوکل ڈومین ڈائجسٹ (inline_code_207 ، بیج byte inline_code_208) **) **  
-  کیننیکل ہیکس: ​​inline_code_209.  
-  خرابی: inline_code_210 ہیڈر ، سلیکٹر ٹیگ inline_code_2111 پلس ڈائجسٹ inline_code_212 کے بعد ، سنگل- کلیدی پے لوڈ (inline_code_213 tag ، inline_code_214 ، inline_214 ، inline_214 ، inline_214 ، inline_214 ، inline_214 ، inline_213 کلید)۔
-
-یونٹ ٹیسٹ (inline_code_216) ذیل میں V1 ویکٹروں پر زور دیں ، inline_code_217 کے ذریعے ، اس بات کی ضمانت دیتے ہوئے کہ ٹولنگ ہیکس ، I105 (ترجیحی) ، اور کمپریسڈ (inline_code_218 ، سیکنڈ -یسٹ) فارموں میں کیننیکل پے لوڈ پر انحصار کرسکتا ہے۔ inline_code_219 کے ساتھ توسیعی حقیقت کے سیٹ کو دوبارہ تخلیق کریں۔
-
-| ڈومین | بیج بائٹ | کیننیکل ہیکس | کمپریسڈ (inline_code_220) |
-| ------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| ڈیفالٹ | inline_code_221 | inline_code_222 | | inline_code_223 | |
-| خزانہ | inline_code_224 | | inline_code_225 | | inline_code_226 | |
-| ونڈر لینڈ | inline_code_227 | inline_code_228 | inline_code_229 | |
-| Iroha | inline_code_230 | | inline_code_231 | inline_code_232 |
-| الفا | inline_code_233 | | inline_code_234 | | inline_code_235 | |
-| اومیگا | inline_code_236 | | inline_code_237 | inline_code_238 |
-| گورننس | inline_code_239 | inline_code_240 | | inline_code_241 |
-| جائز افراد | inline_code_242 | inline_code_243 | | inline_code_244 | |
-| ایکسپلورر | inline_code_245 | | inline_code_246 | | inline_code_247 | |
-| سورانیٹ | inline_code_248 | inline_code_249 | | inline_code_250 | |
-| Kitsune | inline_code_251 | inline_code_252 | | inline_code_253 | |
-| دا | inline_code_254 | | inline_code_2555 | | inline_code_256 | |
-
-جائزہ لینے کے ذریعہ: ڈیٹا ماڈل ڈبلیو جی ، کریپٹوگرافی ڈبلیو جی-ADDR-1A کے لئے دائرہ کار منظور شدہ۔
-
-##### sora گٹھ جوڑ حوالہ عرفی
-
-Sora Nexus نیٹ ورکس کو inline_code_257 پر ڈیفالٹ
-(inline_code_258)۔
-inline_code_259 اور inline_code_260 مدد فراہم کرنے والے اس لئے اخراج کرتے ہیں
-ہر کیننیکل پے لوڈ کے لئے مستقل متنی شکلیں۔ منتخب کردہ فکسچر سے
-inline_code_261 (کے ذریعے تیار کردہ
-فوری حوالہ کے لئے inline_code_262) ذیل میں دکھائے گئے ہیں:
-
-| اکاؤنٹ / سلیکٹر | I105 لفظی (prefix inline_code_263) |) | سورہ کمپریسڈ (inline_code_264) لفظی |
-| -------------------- | ------------------------------------ |
-| inline_code_265 ڈومین (ضمنی انتخاب کنندہ ، بیج inline_code_266666666666666) | inline_code_267 | inline_code_268 (اختیاری inline_code_269 لاحقہ جب واضح روٹنگ اشارے فراہم کرتے ہو) |
-| inline_code_270 (مقامی ڈائجسٹ سلیکٹر ، بیج inline_code_271) | inline_code_272 | | inline_code_273 | |
-| گلوبل رجسٹری پوائنٹر (inline_code_274 ، inline_code_275 کے برابر) | inline_code_276 | | inline_code_277 | |
-
-یہ ڈور CLI (inline_code_278) ، torii کے ذریعہ خارج ہونے والے سے ملتے ہیں
-جوابات (inline_code_279) ، اور SDK مددگار ، لہذا UX کاپی/پیسٹ کریں
-بہاؤ ان پر انحصار کرسکتا ہے جو زبانی ہے۔ ضمیمہ کریں inline_code_280 صرف اس وقت جب آپ کو کسی واضح روٹنگ اشارے کی ضرورت ہو۔ لاحقہ کیننیکل آؤٹ پٹ کا حصہ نہیں ہے۔
-
-#### 2.6 انٹرآپریبلٹی کے لئے متنی عرفی (منصوبہ بند)
-
-- ** چین-الیاس اسٹائل: ** لاگ اور انسان کے لئے inline_code_281
-  اندراج بٹوے کو لازمی طور پر تجزیہ کرنا چاہئے ، ایمبیڈڈ چین کی تصدیق کریں ، اور بلاک کریں
-  مماثلت
--** CAIP-10 فارم: ** inline_code_282 چین- agnostic کے لئے
-  انضمام یہ نقشہ سازی ** ابھی تک نافذ نہیں کی گئی ہے ** بھیجے گئے
-  ٹولچینز۔
-- ** مشین مددگار: ** زنگ ، ٹائپ اسکرپٹ/جاوا اسکرپٹ ، ازگر کے لئے کوڈیکس شائع کریں ،
-  اور کوٹلن I105 اور کمپریسڈ فارمیٹس (inline_code_283 کو ڈھانپ رہے ہیں ،
-  inline_code_284 ، اور ان کے SDK مساوی)۔ CAIP-10 مددگار ہیں
-  مستقبل کا کام۔
-
-#### 2.7 ڈٹرمینسٹک I105 عرف
-
-- ** پریفکس میپنگ: ** I105 نیٹ ورک کے سابقہ ​​کے طور پر inline_code_285 کو دوبارہ استعمال کریں۔
-  inline_code_286 (دیکھیں inline_code_287 دیکھیں)
-  اقدار کے لئے 6-بٹ پریفکس (سنگل بائٹ) کا اخراج کرتا ہے۔ inline_code_288 اور ایک 14-بٹ ، دو بائٹ
-  بڑے نیٹ ورکس کے لئے فارم. مستند اسائنمنٹ میں رہتے ہیں
-  [inline_code_289]] (ماخذ/حوالہ جات/ایڈریس_پریفکس_ریگسٹری. ایم ڈی) ؛
-  تصادم سے بچنے کے ل S SDKs کو مماثل JSON رجسٹری کو مطابقت پذیری میں رکھنا چاہئے۔
-- ** اکاؤنٹ کا مواد: ** I105 نے بنے ہوئے کیننیکل پے لوڈ کو انکوڈ کیا
-  inline_code_290 - ہیڈر بائٹ ، ڈومین سلیکٹر ، اور
-  کنٹرولر پے لوڈ۔ کوئی اضافی ہیشنگ قدم نہیں ہے۔ I105 کو سرایت کرتا ہے
-  بائنری کنٹرولر پے لوڈ (سنگل کلید یا ملٹیسیگ) جیسا کہ مورچا کے ذریعہ تیار کیا جاتا ہے
-  انکوڈر ، ملٹی سیگ پالیسی ہضم کے لئے استعمال ہونے والا CTAP2 نقشہ نہیں۔
-۔
-  پے لوڈ اور فکسڈ کے ساتھ Blake2b-512 سے اخذ کردہ 16 بٹ چیکم کو شامل کرتا ہے
-  prefix inline_code_292 (inline_code_293)۔ نتیجہ بیس 58-انکوڈڈ کے ذریعے inline_code_294 کے ذریعے ہے۔
-  CLI/SDK مددگار ایک ہی طریقہ کار کو بے نقاب کرتے ہیں ، اور inline_code_295
-  inline_code_296 کے ذریعے اس کو تبدیل کرتا ہے۔
-
-#### 2.8 معیاری متنی ٹیسٹ ویکٹر
-
-inline_code_297 پر مشتمل ہے مکمل I105 (ترجیحی) اور کمپریسڈ (inline_code_298 ، دوسرا--
-ہر کیننیکل پے لوڈ کے ل liters لغوی۔ جھلکیاں:
-
-- ** inline_code_299 (Sora nexus ، prefix inline_code_300). **  
-  i105 inline_code_301 ، کمپریسڈ (inline_code_302)
-  inline_code_303. توری ان لائن_کوڈ_304 سے ان عین تاروں کا اخراج کرتا ہے
-  inline_code_305 پر عمل درآمد (کیننیکل I105) اور inline_code_306۔
-- ** inline_code_307 (رجسٹری سلیکٹر → ٹریژری)۔ **  
-  i105 inline_code_308 ، کمپریسڈ (inline_code_309)
-  inline_code_310. یہ ظاہر کرتا ہے کہ رجسٹری سلیکٹرز اب بھی ڈیکوڈ کرتے ہیں
-  اسی طرح کے مقامی ہضم کی طرح ہی کیننیکل پے لوڈ۔
-- ** ناکامی کا معاملہ (inline_code_311). **  
-  ایک نوڈ پر inline_code_312 کے ساتھ ایک I105 لفظی انکوڈڈ
-  پہلے سے طے شدہ سابقہ ​​پیداوار کی توقع کرنا
-  inline_code_313
-  ڈومین روٹنگ کی کوشش کرنے سے پہلے۔ inline_code_314 فکسچر
-  بلیک 2 بی چیکسم پر چھیڑ چھاڑ کا پتہ لگانے کی مشقیں۔
-
-#### 2.9 تعمیل فکسچر
-
-ایڈرڈر - 2 جہازوں میں ایک ری پلے ایبل فکسچر بنڈل مثبت اور منفی کا احاطہ کرتا ہے
-کیننیکل ہیکس ، I105 (ترجیحی) ، کمپریسڈ (inline_code_315 ، نصف-/مکمل چوڑائی) ، مضمر
-پہلے سے طے شدہ سلیکٹرز ، عالمی رجسٹری عرفی ، اور ملٹی سائنچر کنٹرولرز۔
-کیننیکل JSON رہتا ہے inline_code_316 میں اور ہوسکتا ہے
-کے ساتھ دوبارہ تخلیق:
-
-Code_block_5
-
-ایڈہاک تجربات (مختلف راستے/فارمیٹس) کے لئے مثال بائنری اب بھی ہے
-دستیاب ہے:
-
-کوڈ_بلاک_6
-
-inline_code_317 میں مورچا یونٹ ٹیسٹ
-اور JS کے ساتھ ، inline_code_318 ، ایک ساتھ ،
-سوئفٹ ، اور اینڈروئیڈ ہارنس (inline_code_319
-inline_code_320 ، ،
-inline_code_321) ،) ،
-SDKs اور TORII کے داخلے میں کوڈیک برابری کی ضمانت کے لئے اسی حقیقت کا استعمال کریں۔
-
-### 3. عالمی سطح پر منفرد ڈومینز اور معمول پر
-
-یہ بھی ملاحظہ کریں: [inline_code_322]] (ماخذ/حوالہ جات/ایڈریس_نورم_V1.MD)
-توری ، ڈیٹا ماڈل ، اور ایس ڈی کے میں استعمال ہونے والے کیننیکل نورم V1 پائپ لائن کے لئے۔
-
-ٹیگڈ ٹپل کے طور پر inline_code_323 کو دوبارہ ترتیب دیں:
-
-کوڈ_بلاک_7
-
-inline_code_324 موجودہ چین کے زیر انتظام ڈومینز کے لئے موجودہ نام کو لپیٹتا ہے۔
-جب عالمی رجسٹری کے ذریعہ کوئی ڈومین رجسٹرڈ ہوتا ہے تو ، ہم ملکیت کو برقرار رکھتے ہیں
-چین کا امتیازی سلوک۔ ڈسپلے / پارسنگ ابھی کے لئے کوئی تبدیلی نہیں ہے ، لیکن
-توسیع شدہ ڈھانچہ روٹنگ کے فیصلوں کی اجازت دیتا ہے۔
-
-#### 3.1 معمول اور سپوفنگ دفاع
-
-نورم V1 کیننیکل پائپ لائن کی وضاحت کرتا ہے ہر جزو کو ڈومین سے پہلے استعمال کرنا چاہئے
-نام برقرار رہتا ہے یا کسی inline_code_325 میں سرایت کرتا ہے۔ مکمل واک تھرو
-[inline_code_326 میں رہتا ہے] (ماخذ/حوالہ جات/ایڈریس_نورم_V1.md) ؛
-ذیل میں خلاصہ ان اقدامات کو اپنی گرفت میں لے رہا ہے جو بٹوے ، توری ، ایس ڈی کے اور گورننس ہیں
-ٹولز کو نافذ کرنا چاہئے۔
-
-1. ** ان پٹ کی توثیق۔ ** خالی ڈور ، وائٹ اسپیس ، اور محفوظ کو مسترد کریں
-   ڈیلیمیٹرز inline_code_327 ، inline_code_328 ، inline_code_329. یہ ان حملہ آوروں سے مماثل ہے جس کے ذریعہ نافذ کیا گیا ہے
-   inline_code_330.
-2. ** یونیکوڈ این ایف سی کمپوزیشن۔
-   مساوی تسلسل کا تعین کرنا طے شدہ طور پر (جیسے ، inline_code_331 → inline_code_332)۔
-3. ** UTS-46 معمول پر لانا۔
-   inline_code_333 ، inline_code_334 ، اور
-   DNS لمبائی کا نفاذ فعال ہے۔ نتیجہ ایک کم کیس A-Label تسلسل ہے۔
-   ان پٹ جو STD3 قواعد کی خلاف ورزی کرتے ہیں وہ یہاں ناکام ہوجاتے ہیں۔
-4. ** لمبائی کی حدیں۔ ** ڈی این ایس طرز کی حدود کو نافذ کریں: ہر لیبل 1–63 ہونا چاہئے
-   بائٹس اور مکمل ڈومین مرحلہ 3 کے بعد 255 بائٹس سے زیادہ نہیں ہونا چاہئے۔
-5. ** اختیاری الجھن کی پالیسی۔
-   نورم V2 ؛ آپریٹرز انہیں جلدی سے اہل بنا سکتے ہیں ، لیکن چیک کو ناکام بنانے میں اس کا خاتمہ کرنا ضروری ہے
-   پروسیسنگ
-
-اگر ہر مرحلہ کامیاب ہوجاتا ہے تو ، نچلے کیس اے لیبل کے تار کیچ اور استعمال کیا جاتا ہے
-ایڈریس انکوڈنگ ، ترتیب ، ظاہر اور رجسٹری کی تلاش۔ مقامی ڈائجسٹ
-سلیکٹرز اپنی 12 بائٹ ویلیو کو `BLAKE2S_MAC (KEY =" SORA-LOCAL-K: V1 "کے طور پر اخذ کرتے ہیں ،
-کیننیکل_لیبل) [0..12] step مرحلہ 3 آؤٹ پٹ کا استعمال کرتے ہوئے۔ دوسری تمام کوششیں (مخلوط
-کیس ، اوپری کیس ، کچے یونیکوڈ ان پٹ) کو ساختی کے ساتھ مسترد کردیا جاتا ہے
-ان لائن_کوڈ_335 s کو حدود میں جہاں نام فراہم کیا گیا تھا۔
-
-ان اصولوں کا مظاہرہ کرنے والے کیننیکل فکسچر-جس میں پن کوڈ راؤنڈ ٹرپس بھی شامل ہیں
-اور غلط STD3 تسلسل - میں درج ہیں
-inline_code_336 اور SDK CI میں آئینہ دار ہیں
-EDDR - 2 کے تحت ٹریک کردہ ویکٹر سویٹس۔
-
-### 4. گٹھ جوڑ ڈومین رجسٹری اور روٹنگ
-
-- ** رجسٹری اسکیما: ** گٹھ جوڑ ایک دستخط شدہ نقشہ کو برقرار رکھتا ہے inline_code_337
-  جہاں inline_code_338 میں چین امتیازی سلوک ، اختیاری میٹا ڈیٹا (آر پی سی شامل ہے
-  اختتامی مقامات) ، اور اتھارٹی کا ثبوت (جیسے ، گورننس ملٹی سائنچر)۔
-- ** مطابقت پذیری کا طریقہ کار: **
-  - زنجیریں گٹھ جوڑ میں دستخط شدہ ڈومین کے دعوے جمع کروائیں (یا تو پیدائش کے دوران یا ویا
-    گورننس کی ہدایت)۔
-  - گٹھ جوڑ وقتا فوقتا شائع کرتا ہے (دستخط شدہ JSON پلس اختیاری مرکل کی جڑ)
-    زیادہ HTTPS اور مواد سے خطاب شدہ اسٹوریج (جیسے ، IPFs)۔ کلائنٹ پن کو پن کرتے ہیں
-    دستخطوں کی تازہ ترین اور تصدیق کریں۔
-- ** تلاش کا بہاؤ: **
-  - توری کو ایک لین دین کا حوالہ ملتا ہے جس کا حوالہ دیا جاتا ہے inline_code_339.
-  - اگر ڈومین مقامی طور پر نامعلوم ہے تو ، توری کیچڈ گٹھ جوڑ کے منشور سے استفسار کرتا ہے۔
-  - اگر منشور کسی غیر ملکی زنجیر کی نشاندہی کرتا ہے تو ، لین دین کو مسترد کردیا جاتا ہے
-    ایک ڈٹرمینسٹک inline_code_340 غلطی اور ریموٹ چین کی معلومات۔
-  - اگر ڈومین گٹھ جوڑ سے غائب ہے تو ، توری لوٹتا ہے inline_code_341۔
-- ** پر اعتماد اینکرز اور گردش: ** گورننس کی چابیاں سائن ظاہر ہوتی ہیں۔ گردش یا
-  منسوخی کو ایک نئے مینی فیسٹ انٹری کے طور پر شائع کیا گیا ہے۔ کلائنٹ منشور کو نافذ کرتے ہیں
-  ٹی ٹی ایل (جیسے ، 24 ایچ) اور اس ونڈو سے آگے باسی ڈیٹا سے مشورہ کرنے سے انکار کریں۔
-- ** ناکامی کے طریقوں: ** اگر منشور بازیافت ناکام ہوجاتا ہے تو ، توری واپس کیچ میں گر جاتا ہے
-  ٹی ٹی ایل کے اندر ڈیٹا ؛ ماضی کی ٹی ٹی ایل یہ خارج کرتی ہے inline_code_342 اور انکار کرتا ہے
-  متضاد حالت سے بچنے کے لئے کراس ڈومین روٹنگ۔
-
-### 4.1 رجسٹری کی عدم استحکام ، عرفیت ، اور مقبرے (EDDR-7C)
-
-گٹھ جوڑ ایک ** ضمیمہ صرف ظاہر ** شائع کرتا ہے لہذا ہر ڈومین یا عرف اسائنمنٹ
-آڈٹ اور دوبارہ چلایا جاسکتا ہے۔ آپریٹرز کو لازمی طور پر بیان کردہ بنڈل کا علاج کرنا چاہئے
-[ایڈریس مینی فیسٹ رن بک] (ماخذ/رن بوکس/ایڈریس_ مینفیسٹ_پس ڈاٹ ایم ڈی) بطور بطور
-سچائی کا واحد ذریعہ: اگر کوئی منشور غائب ہے یا توثیق میں ناکام ہے تو ، توری کو لازمی ہے
-متاثرہ ڈومین کو حل کرنے سے انکار کریں۔
-
-آٹومیشن سپورٹ: inline_code_343
-چیکس ، اسکیما ، اور پچھلے ایجسٹ چیکوں کو دوبارہ بھیج دیا
-رن بک ان لائن_کوڈ_344 کو ظاہر کرنے کے لئے تبدیلی کے ٹکٹوں میں کمانڈ آؤٹ پٹ شامل کریں
-اور inline_code_345 بنڈل شائع کرنے سے پہلے لنکج کی توثیق کی گئی تھی۔
-
-#### ظاہر ہیڈر اور دستخطی معاہدہ
-
-| فیلڈ | ضرورت |
-| ------- | --------------- |
-| inline_code_346 | | فی الحال inline_code_347۔ صرف ایک مماثل سپیکٹ اپ ڈیٹ کے ساتھ ٹکرانا۔ |
-| inline_code_348 | | ** بالکل ** فی اشاعت کے ذریعہ اضافہ۔ توری کیچز خلیجوں یا رجعت پسندی کے ساتھ نظرثانی سے انکار کرتے ہیں۔ |
-| inline_code_349 + + inline_code_350 | | کیشے کی تازگی (پہلے سے طے شدہ 24 ایچ) قائم کریں۔ اگر اگلی اشاعت سے پہلے ٹی ٹی ایل کی میعاد ختم ہوجاتی ہے تو ، توری پلٹ جاتا ہے ان لائن_کوڈ_351 پر۔ |
-| inline_code_352 | بلیک 3 ڈائجسٹ (ہیکس) پہلے سے ظاہر ہوتا ہے۔ ویریفائرز کو عدم استحکام کو ثابت کرنے کے لئے inline_code_353 کے ساتھ اس کی بازیافت کریں۔ |
-| inline_code_354 | | منشور پر سگ اسٹور (inline_code_3555) کے ذریعے دستخط کیے جاتے ہیں۔ او پی ایس کو لازمی طور پر inline_code_356 کو چلائیں اور رول آؤٹ سے پہلے گورننس کی شناخت/جاری کرنے والی رکاوٹوں کو نافذ کریں۔ |
-
-ریلیز آٹومیشن کا اخراج Inline_code_357 اور inline_code_358
-JSON جسم کے ساتھ ساتھ۔ جب sorafs یا
-HTTP اختتامی نکات تاکہ آڈیٹر توثیق کے اقدامات کو دوبارہ چلا سکتے ہیں۔
-
-#### اندراج کی اقسام
-
-| قسم | مقصد | مطلوبہ فیلڈز |
-| ------ | --------- | ------------------- |
-| inline_code_359 | | اعلان کرتا ہے کہ ایک ڈومین عالمی سطح پر رجسٹرڈ ہے اور اسے چین کے امتیازی سلوک اور I105 سابقہ ​​کا نقشہ بنانا چاہئے۔ | inline_code_360 | |
-| inline_code_361 | مستقل طور پر ایک عرف/سلیکٹر کو ریٹائر کرتا ہے۔ جب مقامی - 8 ڈائجسٹز کو مٹاتے ہو یا کسی ڈومین کو ہٹاتے ہو۔ | inline_code_362 | |
-
-inline_code_363 entries entries اختیاری طور پر a inline_code_364 یا inline_code_365 کو شامل کرسکتے ہیں
-دستخط شدہ چین میٹا ڈیٹا پر بٹوے کی نشاندہی کرنا ، لیکن کیننیکل ٹپل باقی ہے
-inline_code_366. inline_code_367 ریکارڈز ** لازمی طور پر ** حوالہ دینا ضروری ہے
-سلیکٹر ریٹائرڈ اور ٹکٹ/گورننس آرٹ فیکٹ جس کا اختیار ہے
-تبدیلی تو آڈٹ ٹریل دوبارہ تعمیر نو ہے۔
-
-#### عرف/ٹامبسٹون ورک فلو اور ٹیلی میٹری
-
-1. ** کا پتہ لگانے والے بڑھے ہوئے۔
-   inline_code_369
-   inline_code_370 ، ،
-   inline_code_371 ، ،
-   inline_code_372 ، اور
-   inline_code_373 (میں پیش کیا گیا
-   مقامی گذارشات کی تصدیق کرنے کے لئے اور
-   لوکل -12 تصادم قبر کے پتھر کی تجویز پیش کرنے سے پہلے صفر پر رہتے ہیں۔
-   فی ڈومین کاؤنٹرز مالکان کو یہ ثابت کرنے دیں کہ صرف دیو/ٹیسٹ ڈومین مقامی-8 کو خارج کرتے ہیں
-   ٹریفک (اور وہ مقامی - 12 تصادم معروف اسٹیجنگ ڈومینز کا نقشہ) جبکہ
-   ** ڈومین قسم مکس (5m) ** پینل پر مشتمل ہے تاکہ SREs کتنا گراف کرسکیں
-   inline_code_375 ٹریفک باقی ہے ، اور inline_code_376
-   جب بھی پیداوار اب بھی مقامی 12 سلیکٹرز کے باوجود دیکھتی ہے تو الرٹ فائر
-   ریٹائرمنٹ گیٹ
-2
-   inline_code_377
-   (یا استعمال کریں inline_code_378 کے ذریعے
-   عین مطابق inline_code_380 پر قبضہ کرنے کے لئے inline_code_379)۔
-   CLI I105 ، inline_code_381 ، اور کیننیکل کو قبول کرتا ہے ، اور inline_code_382 لفظی ؛ ضمیمہ
-   inline_code_383 صرف اس صورت میں جب آپ کو منشور کے ل a لیبل محفوظ کرنے کی ضرورت ہو۔
-   JSON کا خلاصہ سطحوں پر ہے جو ڈومین کے ذریعے inline_code_384 فیلڈ ، اور
-   inline_code_385 کو دوبارہ تبدیل شدہ انکوڈنگ کے طور پر inline_code_386 کے لئے دوبارہ تبدیل کریں
-   منشور میں فرق (یہ لاحقہ میٹا ڈیٹا ہے ، کیننیکل اکاؤنٹ کی شناخت نہیں)۔
-   نیو لائن پر مبنی برآمدات کے استعمال کے ل .۔
-   بڑے پیمانے پر مقامی لوکل سے inline_code_387
-   کیننیکل I105 (ترجیحی) میں سلیکٹرز ، کمپریسڈ (inline_code_38888888888888888 ، ہیکس ، یا JSON فارم چھوڑتے ہوئے
-   غیر مقامی قطاریں۔ جب آڈیٹرز کو اسپریڈشیٹ دوستانہ ثبوت کی ضرورت ہوتی ہے تو ، چلائیں
-   CSV خلاصہ خارج کرنے کے لئے inline_code_389
-   (inline_code_390) جو مقامی سلیکٹرز کو اجاگر کرتا ہے ،
-   کیننیکل انکوڈنگز ، اور اسی فائل میں ناکامیوں کی تجزیہ کریں۔
-3. ** مینی فیسٹ اندراجات کو شامل کریں۔
-   جب عالمی رجسٹری میں ہجرت کرتے ہو تو inline_code_392 ریکارڈ کریں) اور توثیق کریں
-   دستخطوں کی درخواست کرنے سے پہلے inline_code_393 کے ساتھ منشور۔
-4. ** تصدیق اور شائع کریں۔ ** رن بک چیک لسٹ (ہیشس ، سگ اسٹور ، پر عمل کریں
-   سرفس پر بنڈل کی عکسبندی سے پہلے ترتیب کی ایکیریٹونیٹی)۔ اب torii
-   بنڈل کی زمینوں کے فورا. بعد I105 (ترجیحی)/سورہ (دوسری بہترین) لٹریلز کی کیننیکلائزز۔
-5. ** مانیٹر اور رول بیک۔
-   30 دن کے لئے صفر ؛ اگر رجعتیں ظاہر ہوں تو ، پچھلے منشور کو دوبارہ شائع کریں
-   صرف متاثرہ غیر پیداواری ماحول میں جب تک ٹیلی میٹری مستحکم نہ ہو۔
-
-مذکورہ بالا تمام اقدامات EDDR - 7C کے لازمی ثبوت ہیں: بغیر ظاہر ہوتا ہے
-inline_code_394 پر دستخطی بنڈل یا بغیر مماثل ہوں inline_code_395
-خود بخود مسترد کردیا جائے ، اور آپریٹرز کو توثیق لاگ کو منسلک کرنا ہوگا
-ان کے تبدیلی کے ٹکٹ۔
-
-### 5. والیٹ اور API ایرگونومکس
-
-- ** ڈسپلے ڈیفالٹس: ** بٹوے I105 ایڈریس دکھاتے ہیں (مختصر ، چیکسمڈ)
-  پلس حل شدہ ڈومین کے طور پر رجسٹری سے لیبل لیبل کے طور پر۔ ڈومینز ہیں
-  واضح طور پر وضاحتی میٹا ڈیٹا کے طور پر نشان لگا دیا گیا ہے جو تبدیل ہوسکتا ہے ، جبکہ I105 ہے
-  مستحکم پتہ
-- ** ان پٹ کیننیکلائزیشن: ** توری اور ایس ڈی کے I105 (ترجیحی)/SORA (دوسرا بہترین)/0x
-  ایڈریس پلس پلس inline_code_396 ، inline_code_397 ، inline_code_398 ، اور ، اور
-  inline_code_399 فارم ، پھر آؤٹ پٹ کے لئے I105 پر کیننیکلائز کریں۔ نہیں ہے
-  سخت موڈ ٹوگل ؛ را فون/ای میل شناخت کنندگان کو آف لیجر رکھنا چاہئے
-  UAID/مبہم میپنگز کے ذریعے۔
-۔
-  توقعات چین کی مماثلت قابل عمل تشخیص کے ساتھ سخت ناکامیوں کو متحرک کرتی ہے۔
-- ** کوڈیک لائبریریاں: ** سرکاری زنگ ، ٹائپ اسکرپٹ/جاوا اسکرپٹ ، ازگر ، اور کوٹلن
-  لائبریریاں I105 انکوڈنگ/ڈیکوڈنگ پلس کمپریسڈ (inline_code_400) کی مدد فراہم کرتی ہیں
-  بکھری ہوئی نفاذ سے پرہیز کریں۔ CAIP-10 تبادلوں کو ابھی تک نہیں بھیج دیا گیا ہے۔
-
-#### رسائی اور محفوظ شیئرنگ رہنمائی
-
-- مصنوعات کی سطحوں کے لئے عمل درآمد کی رہنمائی کو براہ راست میں ٹریک کیا جاتا ہے
-  inline_code_401 ؛ حوالہ جو چیک لسٹ ہے
-  ان تقاضوں کو بٹوے یا ایکسپلورر UX میں ڈھالنا۔
-۔ جب تراشنا ناگزیر ہے (جیسے ، چھوٹی اسکرینیں) ، تار کے آغاز اور اختتام کو برقرار رکھیں ، واضح بیضویوں کو شامل کریں ، اور حادثاتی تراشنے کو روکنے کے لئے کاپی ٹو کلپ بورڈ کے ذریعے مکمل پتے کو قابل رسائی رکھیں۔
-۔ صرف ascii-intry کے اندراج کو نافذ کریں ، جب مکمل چوڑائی یا کانا کے کرداروں کا پتہ لگایا جاتا ہے تو ایک ان لائن انتباہ پیش کریں ، اور ایک سادہ ٹیکسٹ پیسٹ زون پیش کریں جو توثیق سے پہلے نمبروں کو جوڑتا ہے تاکہ جاپانی اور چینی صارفین ترقی کو کھونے کے بغیر اپنے IME کو غیر فعال کرسکیں۔
-۔ شائستہ براہ راست خطوں کے ذریعہ کاپی/شیئر کامیابی کا اعلان کریں اور یقینی بنائیں کہ کیو آر پیش نظارہ میں وضاحتی آلٹ ٹیکسٹ ("I105 ایڈریس برائے <الیاس> چین 0x02F1") شامل ہیں۔
-۔ ایس ڈی کے اور بٹوے کو کمپریسڈ آؤٹ پٹ کو ظاہر کرنے سے انکار کرنا ہوگا جب چین کا امتیازی سلوک سورہ گٹھ جوڑ کی قیمت نہیں ہے اور اسے فنڈز کو غلط استعمال کرنے سے بچنے کے ل inter انٹر نیٹ ورک کی منتقلی کے لئے صارفین کو I105 پر واپس بھیجنا چاہئے۔
-
-## عمل درآمد چیک لسٹ
-
-- ** I105 لفافہ: ** پریفکس نے کمپیکٹ کا استعمال کرتے ہوئے inline_code_405 کو انکوڈ کیا
-  6-/14-بٹ اسکیم سے inline_code_406 سے ، جسم کیننیکل بائٹس ہے
-  (inline_code_407) ، اور چیکسم پہلے دو بائٹس ہیں
-  Blake2b-512 (inline_code_408 || prefix || جسم) کے. مکمل پے لوڈ بیس 58 ہے-
-  inline_code_409 کے ذریعے انکوڈڈ۔
-- ** رجسٹری کا معاہدہ: ** دستخط شدہ JSON (اور اختیاری مرکل روٹ) اشاعت
-  24 ایچ ٹی ٹی ایل کے ساتھ inline_code_410 کے ساتھ
-  گردش کیز
-- ** ڈومین پالیسی: ** ascii inline_code_411 آج ؛ اگر I18N کو چالو کریں تو ، UTS-46 کے لئے لگائیں
-  الجھاؤ کے قابل چیکوں کے لئے معمول پر لینا اور UTS-39۔ زیادہ سے زیادہ لیبل (63) اور نافذ کریں
-  کل (255) لمبائی۔
-- ** متنی مددگار: ** جہاز I105 ↔ کمپریسڈ (inline_code_412) مورچا میں کوڈیکس ،
-  ٹائپ اسکرپٹ/جاوا اسکرپٹ ، ازگر ، اور مشترکہ ٹیسٹ ویکٹر (CAIP-10
-  میپنگز مستقبل کا کام باقی ہیں)۔
-- ** سی ایل آئی ٹولنگ: ** ایک عین مطابق آپریٹر ورک فلو کے ذریعے inline_code_413 کے ذریعے فراہم کریں
-  (see `crates/iroha_cli/src/address.rs`), which accepts I105/`0x…` literals and
-  اختیاری INLINE_CODE_417 لیبلز ، I105 آؤٹ پٹ کو پہلے سے طے شدہ SORA NEXUS سابقہ ​​(inline_code_418) کا استعمال کرتے ہوئے ،
-  اور صرف Sora صرف کمپریسڈ حروف تہجی کا اخراج کرتا ہے جب آپریٹرز واضح طور پر اس کی درخواست کریں
-  inline_code_419 یا JSON سمری وضع۔ کمانڈ سابقہ ​​توقعات کو نافذ کرتا ہے
-  پارس ، ریکارڈز فراہم کردہ ڈومین (JSON میں inline_code_420) ، اور inline_code_421 پرچم
-  تبدیل شدہ انکوڈنگ کو بطور inline_code_422 کے طور پر دوبارہ عمل کریں لہذا مینی فیسٹ ڈفنس ایرگونومک رہیں۔
-۔
-  ADDR-6 کے ساتھ بھیج دیا گیا dual ، دوہری کاپی بٹنوں کو پیش کریں ، I105 کو QR پے لوڈ کے طور پر رکھیں ، اور انتباہ کریں
-  وہ صارفین جو کمپریسڈ INLINE_CODE_423 فارم SORA-ONLY اور IME دوبارہ لکھنے کے لئے حساس ہیں۔
-- ** توری انضمام: ** کیشے گٹھ جوڑ ٹی ٹی ایل کا احترام کرتے ہوئے ظاہر ہوتا ہے ، اخراج
-  inline_code_424/inline_code_425/@inline_code_426 تعی .ن سے ، اور
-  inline_code_427 کو بے نقاب کریں canonicalize to inline_code_428 ،
-  inline_code_429 ، inline_code_430/@inline_code_431 لٹرلز ، یا انکوڈڈ پتے میں
-  I105 حل شدہ ڈومین اور ماخذ کو واپس کرتے وقت۔
-
-### torii رسپانس فارمیٹس
-
-- inline_code_432 ایک اختیاری قبول کرتا ہے inline_code_433 استفسار پیرامیٹر اور
-  inline_code_434 JSON لفافے کے اندر ایک ہی فیلڈ کو قبول کرتا ہے۔
-  تائید شدہ اقدار ہیں:
-  - inline_code_435 (پہلے سے طے شدہ) - ردعمل کا اخراج کیننیکل I105 پے لوڈ (جیسے ، جیسے ،
-    inline_code_436)۔
-  - inline_code_437- جوابات sora-only کا اخراج کرتے ہیں inline_code_438 کمپریسڈ ویو جبکہ
-    فلٹرز/پاتھ پیرامیٹرز کو کینونیکل رکھنا۔
-- infalid اقدار واپس کریں inline_code_439 (inline_code_440)۔ یہ اجازت دیتا ہے
-  بٹوے اور ایکسپلورر صرف سورہ UX کے لئے کمپریسڈ ڈور کی درخواست کریں گے
-  I105 کو انٹرآپریبل ڈیفالٹ کے طور پر رکھنا۔
-- اثاثہ ہولڈر کی فہرست (inline_code_441) اور ان کے JSON
-  لفافہ ہم منصب (inline_code_442) بھی اعزاز میں inline_code_443.
-  inline_code_444 فیلڈ جب بھی کمپریسڈ لٹریس کا اخراج کرتا ہے
-  پیرامیٹر/لفافہ فیلڈ اکاؤنٹس کی عکس بندی کرتے ہوئے ، inline_code_445 پر سیٹ کیا گیا ہے
-  اختتامی نکات تاکہ ایکسپلورر ڈائریکٹریوں میں مستقل آؤٹ پٹ پیش کرسکیں۔
--** جانچ: ** انکوڈر/ڈیکوڈر راؤنڈ ٹرپس ، غلط چین کے لئے یونٹ ٹیسٹ شامل کریں
-  ناکامیوں ، اور ظاہر کی تلاش ؛ توری اور ایس ڈی کے میں انضمام کی کوریج شامل کریں
-  I105 کے لئے ختم ہونے کے لئے آخر تک.
-
-## غلطی کوڈ رجسٹری
-
-ایڈریس انکوڈرز اور ڈیکوڈرز ناکامیوں کو بے نقاب کرتے ہیں
-inline_code_446. مندرجہ ذیل جدولیں مستحکم کوڈ فراہم کرتی ہیں
-کہ ایس ڈی کے ، بٹوے اور توری سطحیں انسانی پڑھنے کے قابل بھی ہونی چاہئیں
-پیغامات ، نیز تدارک کی رہنمائی کی سفارش کی گئی ہے۔
-
-### کیننیکل تعمیر
-
-| کوڈ | ناکامی | تجویز کردہ تدارک |
-| ------ | --------- | --------------------------- |
-| inline_code_447 | انکوڈر کو ایک دستخطی الگورتھم موصول ہوا جس کی حمایت رجسٹری یا تعمیراتی خصوصیات کے ذریعہ نہیں ہے۔ | رجسٹری اور ترتیب میں قابل منحنی خطوط تک اکاؤنٹ کی تعمیر کو محدود رکھیں۔ |
-| inline_code_448 | کلیدی پے لوڈ کی لمبائی پر دستخط کرنے سے معاون حد سے زیادہ ہے۔ | سنگل کلیدی کنٹرولرز محدود ہیں inline_code_449 لمبائی ؛ بڑی عوامی چابیاں (جیسے ، ایم ایل - ڈی ایس اے) کے لئے ملٹی سیگ کا استعمال کریں۔ |
-| inline_code_450 | | ایڈریس ہیڈر ورژن معاون حد سے باہر ہے۔ | v1 پتے کے لئے ہیڈر ورژن inline_code_451 ؛ نئے ورژن اپنانے سے پہلے انکوڈروں کو اپ گریڈ کریں۔ |
-| inline_code_452 | | نارملائزیشن ورژن پرچم کو تسلیم نہیں کیا گیا ہے۔ | نارملائزیشن ورژن استعمال کریں inline_code_453 اور ٹوگلنگ محفوظ بٹس سے پرہیز کریں۔ |
-| inline_code_454 | | درخواست کردہ I105 نیٹ ورک کے سابقہ ​​کو انکوڈ نہیں کیا جاسکتا۔ | چین رجسٹری میں شائع کردہ INLINE_CODE_455 کی حد میں شامل ہیں۔ |
-| inline_code_456 | | کیننیکل پے لوڈ ہیشنگ ناکام ہوگیا۔ | آپریشن کی دوبارہ کوشش کریں ؛ اگر غلطی برقرار رہتی ہے تو ، اسے ہیشنگ اسٹیک میں داخلی مسئلے کی طرح سلوک کریں۔ |
-
-### فارمیٹ ڈیکوڈنگ اور آٹو کا پتہ لگانا
-
-| کوڈ | ناکامی | تجویز کردہ تدارک |
-| ------ | --------- | --------------------------- |
-| inline_code_457 | I105 تار میں حروف تہجی کے باہر حروف شامل ہیں۔ | یقینی بنائیں کہ پتہ شائع شدہ I105 حروف تہجی کا استعمال کرتا ہے اور کاپی/پیسٹ کے دوران اس کو چھوٹا نہیں کیا گیا ہے۔ |
-| inline_code_458 | پے لوڈ کی لمبائی سلیکٹر/کنٹرولر کے لئے متوقع کیننیکل سائز سے مماثل نہیں ہے۔ | منتخب ڈومین سلیکٹر اور کنٹرولر لے آؤٹ کے لئے مکمل کیننیکل پے لوڈ کی فراہمی کریں۔ |
-| inline_code_459 | | I105 (ترجیحی) یا کمپریسڈ (inline_code_460 ، سیکنڈ- بیسٹ) چیکسم کی توثیق ناکام ہوگئی۔ | کسی قابل اعتماد ذریعہ سے پتہ دوبارہ تخلیق کریں۔ یہ عام طور پر ایک کاپی/پیسٹ غلطی کی نشاندہی کرتا ہے۔ |
-| inline_code_461 | | I105 پریفکس بائٹس خراب ہیں۔ | ایک تعمیری انکوڈر کے ساتھ ایڈریس کو دوبارہ انکوڈ کریں۔ معروف بیس 58 بائٹس کو دستی طور پر تبدیل نہ کریں۔ |
-| inline_code_462 | کیننیکل ہیکساڈیسیمل فارم ڈی کوڈ کرنے میں ناکام رہا۔ | A inline_code_463 فراہم کریں-سرکاری انکوڈر کے ذریعہ تیار کردہ ، سابقہ ​​لمبائی والے ہیکس اسٹرنگ کو تیار کریں۔ |
-| inline_code_464 | | کمپریسڈ فارم inline_code_465 سے شروع نہیں ہوتا ہے۔ | ڈیکوڈرز کے حوالے کرنے سے پہلے مطلوبہ سینٹینیل کے ساتھ پریفکس کمپریسڈ سورہ پتے۔ |
-| inline_code_466 | | کمپریسڈ سٹرنگ میں پے لوڈ اور چیکسم کے لئے کافی ہندسوں کا فقدان ہے۔ | کٹے ہوئے ٹکڑوں کی بجائے انکوڈر کے ذریعہ خارج ہونے والے مکمل کمپریسڈ سٹرنگ کا استعمال کریں۔ |
-| inline_code_467 | | کمپریسڈ حروف تہجی سے باہر کا کردار درپیش ہے۔ | شائع شدہ نصف چوڑائی/مکمل چوڑائی ٹیبلز سے ایک درست بیس-105 گلیف کے ساتھ کردار کو تبدیل کریں۔ |
-| inline_code_468 | انکوڈر نے غیر تعاون یافتہ ریڈکس کو استعمال کرنے کی کوشش کی۔ | انکوڈر کے خلاف ایک بگ فائل کریں۔ کمپریسڈ حروف تہجی V1 میں ریڈکس 105 پر طے ہے۔ |
-| inline_code_469 | | ہندسے کی قیمت کمپریسڈ حروف تہجی کے سائز سے زیادہ ہے۔ | یقینی بنائیں کہ ہر ہندسہ inline_code_470 کے اندر ہے ، اگر ضروری ہو تو ایڈریس کو دوبارہ تخلیق کرنا۔ |
-| inline_code_471 | | آٹو کا پتہ لگانے سے ان پٹ فارمیٹ کو تسلیم نہیں کیا جاسکا۔ | I105 (ترجیحی) ، کمپریسڈ (inline_code_472) ، یا Canonical_code_473 کو پارسر کی درخواست کرتے وقت ہیکس ڈور فراہم کریں۔ |
-
-### ڈومین اور نیٹ ورک کی توثیق
-
-| کوڈ | ناکامی | تجویز کردہ تدارک |
-| ------ | --------- | --------------------------- |
-| inline_code_474 | | ڈومین سلیکٹر متوقع ڈومین سے مماثل نہیں ہے۔ | مطلوبہ ڈومین کے لئے جاری کردہ پتے کا استعمال کریں یا توقع کو اپ ڈیٹ کریں۔ |
-| inline_code_475 | | ڈومین لیبل نے معمول کی جانچ پڑتال میں ناکام رہا۔ | انکوڈنگ سے پہلے UTS-46 غیر ٹرانزیشنل پروسیسنگ کا استعمال کرتے ہوئے ڈومین کو کیننیکلائز کریں۔ |
-| inline_code_476 | | ڈیکوڈڈ I105 نیٹ ورک کا سابقہ ​​تشکیل شدہ قیمت سے مختلف ہے۔ | ٹارگٹ چین سے کسی پتے پر جائیں یا متوقع امتیازی/سابقہ ​​کو ایڈجسٹ کریں۔ |
-| inline_code_477 | | ایڈریس کلاس بٹس کو تسلیم نہیں کیا جاتا ہے۔ | ڈیکوڈر کو ایک ریلیز میں اپ گریڈ کریں جو نئی کلاس کو سمجھتا ہو ، یا ہیڈر بٹس کے ساتھ چھیڑ چھاڑ سے بچیں۔ |
-| inline_code_478 | ڈومین سلیکٹر ٹیگ نامعلوم ہے۔ | کسی ریلیز کو اپ ڈیٹ کریں جو نئے سلیکٹر کی قسم کی حمایت کرتا ہے ، یا V1 نوڈس پر تجرباتی پے لوڈز استعمال کرنے سے گریز کریں۔ |
-| inline_code_479 | | محفوظ توسیع بٹ سیٹ کیا گیا تھا۔ | واضح محفوظ بٹس ؛ جب تک مستقبل میں ABI ان کا تعارف نہیں کرتا ہے تب تک وہ گستاخ رہتے ہیں۔ |
-| inline_code_480 | کنٹرولر پے لوڈ ٹیگ کو تسلیم نہیں کیا گیا۔ | ڈیکوڈر کو پارس کرنے سے پہلے نئی کنٹرولر کی اقسام کو پہچاننے کے لئے اپ گریڈ کریں۔ |
-| inline_code_481 | | ڈیکوڈنگ کے بعد کیننیکل پے لوڈ میں ٹریلنگ بائٹس موجود تھے۔ | کیننیکل پے لوڈ کو دوبارہ تخلیق کریں۔ صرف دستاویزی لمبائی ہی موجود ہونی چاہئے۔ |
-
-### کنٹرولر پے لوڈ کی توثیق
-
-| کوڈ | ناکامی | تجویز کردہ تدارک |
-| ------ | --------- | --------------------------- |
-| inline_code_482 | | کلیدی بائٹس اعلان کردہ وکر سے مماثل نہیں ہیں۔ | اس بات کو یقینی بنائیں کہ کلیدی بائٹس کو منتخب کردہ وکر (جیسے ، 32 بائٹ ED25519) کے لئے ضرورت کے مطابق انکوڈ کیا گیا ہے۔ |
-| inline_code_483 | منحنی شناخت کنندہ رجسٹرڈ نہیں ہے۔ | جب تک رجسٹری میں اضافی منحنی خطوط منظور اور شائع نہ ہوجائیں تب تک وکر ID inline_code_484 (ED25519) استعمال کریں۔ |
-| inline_code_485 | | ملٹی سیگ کنٹرولر تعاون سے زیادہ ممبروں کا اعلان کرتا ہے۔ | انکوڈنگ سے پہلے ملٹی سیگ ممبرشپ کو دستاویزی حد تک کم کریں۔ |
-| inline_code_486 | | ملٹی سیگ پالیسی پے لوڈ میں ناکام توثیق (حد/وزن/اسکیما)۔ | پالیسی کو دوبارہ تعمیر کریں تاکہ یہ CTAP2 اسکیما ، وزن کی حد اور حد کی رکاوٹوں کو پورا کرے۔ |
-
-## متبادلات پر غور کیا گیا
-
-- ** خالص بیس 58 چیک (بٹ کوائن اسٹائل)۔ ** آسان چیکسم لیکن کمزور غلطی کا پتہ لگانا
-  بلیک 2 بی سے ماخوذ I105 چیکسم (inline_code_487 کو 512-بٹ ہیش کو تراشتا ہے)
-  اور 16 بٹ امتیازی سلوک کے لئے واضح سابقہ ​​الفاظ کا فقدان ہے۔
-- ** ڈومین سٹرنگ میں چین کا نام ایمبیڈ کرنا (جیسے ، inline_code_488)۔ ** ٹوٹ جاتا ہے
-- ** مکمل طور پر گٹھ جوڑ روٹنگ پر بھروسہ کریں بغیر پتے کو تبدیل کیے۔ ** صارفین اب بھی ہوں گے
-  کاپی/چسپاں مبہم تاروں ؛ ہم چاہتے ہیں کہ پتہ خود سیاق و سباق کو لے کر جائے۔
--** بیچ 32 ایم لفافہ۔ ** کیو آر دوستانہ اور انسانی پڑھنے کے قابل سابقہ ​​پیش کرتا ہے ، لیکن
-  I105 کے نفاذ سے شپنگ سے ہٹ جائے گا (inline_code_489)
-  اور تمام فکسچر/ایس ڈی کے دوبارہ بنانے کی ضرورت ہے۔ موجودہ روڈ میپ I105 + رکھتا ہے
-  مستقبل میں تحقیق کو جاری رکھتے ہوئے کمپریسڈ (inline_code_490) سپورٹ
-  بیچ 32 ایم/کیو آر پرتیں (سی اے آئی پی -10 میپنگ موخر ہے)۔
-
-## سوالات کھولیں
-
-- تصدیق کریں کہ inline_code_491 امتیازی سلوک کے علاوہ محفوظ حدود طویل مدتی طلب کا احاطہ کرتے ہیں۔
-  ورنہ ورنٹ انکوڈنگ کے ساتھ inline_code_492 کا اندازہ کریں۔
-- رجسٹری کی تازہ کاریوں اور کس طرح کے لئے کثیر دستخطی حکمرانی کے عمل کو حتمی شکل دیں
-  منسوخ/میعاد ختم ہونے والی مختص کو سنبھالا جاتا ہے۔
-- عین مطابق منشور دستخطی اسکیم (جیسے ، ED25519 ملٹی سگ) اور کی وضاحت کریں
-  گٹھ جوڑ کی تقسیم کے لئے ٹرانسپورٹ سیکیورٹی (HTTPS پننگ ، IPFS ہیش فارمیٹ)۔
-- اس بات کا تعین کریں کہ آیا ہجرت کے لئے ڈومین عرفی/ری ڈائریکٹس کی حمایت کی جائے اور کیسے
-  عزم کو توڑے بغیر ان کی سطح پر۔
-- یہ بتائیں کہ کوٹوڈاما/IVM کس طرح معاہدہ کرتا ہے I105 مددگار (inline_code_493 تک رسائی حاصل کرتا ہے ،
-  inline_code_494)) اور کیا آن چین اسٹوریج کو کبھی بھی CAIP-10 کو بے نقاب کرنا چاہئے
-  میپنگز (آج I105 کیننیکل ہے)۔
-- بیرونی رجسٹریوں میں IROHA زنجیروں کو رجسٹر کرنے کی دریافت کریں (جیسے ، I105 رجسٹری ،
-  وسیع تر ماحولیاتی نظام کی سیدھ کے لئے CAIP نام اسپیس ڈائرکٹری)۔
-
-## اگلے اقدامات
-
-1. I105 انکوڈنگ inline_code_495 میں اتر گئی (inline_code_496 ،
-   inline_code_497) ؛ ہر SDK کو فکسچر/ٹیسٹ پورٹنگ جاری رکھیں اور کسی کو بھی صاف کریں
-   بیچ 32 ایم پلیس ہولڈرز۔
-2. inline_code_498 کے ساتھ کنفیگریشن اسکیما میں توسیع کریں اور سمجھدار اخذ کریں
-  موجودہ ٹیسٹ/دیو سیٹ اپ کے لئے پہلے سے طے شدہ۔ ** (کیا: inline_code_499
-  اب جہاز inline_code_500 میں جہاز ، inline_code_501 کو فی سے نیٹ ورک کے ساتھ ڈیفالٹ کرتے ہوئے
-  اوور رائڈز۔) **
-3. گٹھ جوڑ رجسٹری اسکیما اور پروف آف تصور کے منشور پبلشر کا مسودہ تیار کریں۔
-4. بٹوے فراہم کرنے والوں اور متولیوں سے انسانی عنصر کے پہلوؤں پر آراء جمع کریں
-   (HRP نام ، ڈسپلے فارمیٹنگ)۔
-5. اپ ڈیٹ دستاویزات (inline_code_502 ، torii API دستاویزات) ایک بار
-   نفاذ کا راستہ پرعزم ہے۔
-6. شپ آفیشل کوڈیک لائبریریاں (زنگ/ٹی ایس/ازگر/کوٹلن) معیاری ٹیسٹ کے ساتھ
-   کامیابی اور ناکامی کے معاملات کا احاطہ کرنے والے ویکٹر۔
+For ad-hoc experiments (different paths/formats) the example binary is still
+available:
+
+```
+cargo run -p iroha_data_model --example account_address_vectors > fixtures/account/address_vectors.json
+```
+
+Rust unit tests in `crates/iroha_data_model/tests/account_address_vectors.rs`
+and `crates/iroha_torii/tests/account_address_vectors.rs`, together with the JS,
+Swift, and Android harnesses (`javascript/iroha_js/test/address.test.js`,
+`IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift`,
+`java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java`),
+consume the same fixture to guarantee codec parity across SDKs and Torii admission.
+
+### 3. Globally unique domains & normalization
+
+See also: [`docs/source/references/address_norm_v1.md`](source/references/address_norm_v1.md)
+for the canonical Norm v1 pipeline used across Torii, the data model, and SDKs.
+
+Redefine `DomainId` as a tagged tuple:
+
+```
+DomainId {
+    name: Name,
+    authority: GlobalDomainAuthority, // new enum
+}
+
+enum GlobalDomainAuthority {
+    LocalChain,                  // default for the local chain
+    External { chain_discriminant: u16 },
+}
+```
+
+`LocalChain` wraps the existing Name for domains managed by the current chain.
+When a domain is registered through the global registry, we persist the owning
+chain’s discriminant. Display / parsing stays unchanged for now, but the
+expanded structure allows routing decisions.
+
+#### 3.1 Normalization & spoofing defenses
+
+Norm v1 defines the canonical pipeline every component must use before a domain
+name is persisted or embedded into an `AccountAddress`. The full walkthrough
+lives in [`docs/source/references/address_norm_v1.md`](source/references/address_norm_v1.md);
+the summary below captures the steps that wallets, Torii, SDKs, and governance
+tools must implement.
+
+1. **Input validation.** Reject empty strings, whitespace, and the reserved
+   delimiters `@`, `#`, `$`. This matches the invariants enforced by
+   `Name::validate_str`.
+2. **Unicode NFC composition.** Apply ICU-backed NFC normalisation so canonically
+   equivalent sequences collapse deterministically (e.g., `e\u{0301}` → `é`).
+3. **UTS-46 normalisation.** Run the NFC output through UTS‑46 with
+   `use_std3_ascii_rules = true`, `transitional_processing = false`, and
+   DNS-length enforcement enabled. The result is a lower-case A-label sequence;
+   inputs that violate STD3 rules fail here.
+4. **Length limits.** Enforce the DNS-style bounds: each label MUST be 1–63
+   bytes and the full domain MUST NOT exceed 255 bytes after step 3.
+5. **Optional confusable policy.** UTS‑39 script checks are tracked for
+   Norm v2; operators can enable them early, but failing the check must abort
+   processing.
+
+If every stage succeeds, the lower-case A-label string is cached and used for
+address encoding, configuration, manifests, and registry lookups. Local digest
+selectors derive their 12-byte value as `blake2s_mac(key = "SORA-LOCAL-K:v1",
+canonical_label)[0..12]` using the step 3 output. All other attempts (mixed
+case, upper-case, raw Unicode input) are rejected with structured
+`ParseError`s at the boundary where the name was supplied.
+
+Canonical fixtures demonstrating these rules — including punycode round-trips
+and invalid STD3 sequences — are listed in
+`docs/source/references/address_norm_v1.md` and are mirrored in the SDK CI
+vector suites tracked under ADDR‑2.
+
+### 4. Nexus domain registry & routing
+
+- **Registry schema:** Nexus maintains a signed map `DomainName -> ChainRecord`
+  where `ChainRecord` includes the chain discriminant, optional metadata (RPC
+  endpoints), and a proof of authority (e.g., governance multi-signature).
+- **Sync mechanism:**
+  - Chains submit signed domain claims to Nexus (either during genesis or via
+    governance instruction).
+  - Nexus publishes periodic manifests (signed JSON plus optional Merkle root)
+    over HTTPS and content-addressed storage (e.g., IPFS). Clients pin the
+    latest manifest and verify signatures.
+- **Lookup flow:**
+  - Torii receives a transaction referencing `DomainId`.
+  - If the domain is unknown locally, Torii queries the cached Nexus manifest.
+  - If the manifest indicates a foreign chain, the transaction is rejected with
+    a deterministic `ForeignDomain` error and the remote chain info.
+  - If the domain is missing from Nexus, Torii returns `UnknownDomain`.
+- **Trust anchors & rotation:** Governance keys sign manifests; rotation or
+  revocation is published as a new manifest entry. Clients enforce manifest
+  TTLs (e.g., 24h) and refuse to consult stale data beyond that window.
+- **Failure modes:** If manifest retrieval fails, Torii falls back to cached
+  data within TTL; past TTL it emits `RegistryUnavailable` and refuses
+  cross-domain routing to avoid inconsistent state.
+
+### 4.1 Registry immutability, aliases, and tombstones (ADDR-7c)
+
+Nexus publishes an **append-only manifest** so every domain or alias assignment
+can be audited and replayed. Operators must treat the bundle described in the
+[address manifest runbook](source/runbooks/address_manifest_ops.md) as the
+sole source of truth: if a manifest is missing or fails validation, Torii must
+refuse to resolve the affected domain.
+
+Automation support: `cargo xtask address-manifest verify --bundle <current_dir> --previous <previous_dir>`
+replays the checksum, schema, and previous-digest checks spelled out in the
+runbook. Include the command output in change tickets to show the `sequence`
+and `previous_digest` linkage was validated before publishing the bundle.
+
+#### Manifest header & signature contract
+
+| Field | Requirement |
+|-------|-------------|
+| `version` | Currently `1`. Bump only with a matching spec update. |
+| `sequence` | Increment by **exactly** one per publication. Torii caches refuse revisions with gaps or regressions. |
+| `generated_ms` + `ttl_hours` | Establish cache freshness (default 24 h). If the TTL expires before the next publication, Torii flips to `RegistryUnavailable`. |
+| `previous_digest` | BLAKE3 digest (hex) of the prior manifest body. Verifiers recompute it with `b3sum` to prove immutability. |
+| `signatures` | Manifests are signed via Sigstore (`cosign sign-blob`). Ops must run `cosign verify-blob --bundle manifest.sigstore manifest.json` and enforce the governance identity/issuer constraints before rollout. |
+
+The release automation emits `manifest.sigstore` and `checksums.sha256`
+alongside the JSON body. Keep the files together when mirroring to SoraFS or
+HTTP endpoints so auditors can replay the verification steps verbatim.
+
+#### Entry types
+
+| Type | Purpose | Required fields |
+|------|---------|-----------------|
+| `global_domain` | Declares that a domain is registered globally and should map to a chain discriminant and I105 prefix. | `{ "domain": "<label>", "chain": "sora:nexus:global", "i105_prefix": 753, "selector": "global" }` |
+| `tombstone` | Retires an alias/selector permanently. Required when erasing Local‑8 digests or removing a domain. | `{ "selector": {…}, "reason_code": "LOCAL8_RETIREMENT" \| …, "ticket": "<governance id>", "replaces_sequence": <number> }` |
+
+`global_domain` entries may optionally include a `manifest_url` or `sorafs_cid`
+to point wallets at signed chain metadata, but the canonical tuple remains
+`{domain, chain, discriminant/i105_prefix}`. `tombstone` records **must** cite
+the selector being retired and the ticket/governance artefact that authorised
+the change so the audit trail is reconstructable offline.
+
+#### Alias/tombstone workflow & telemetry
+
+1. **Detect drift.** Use `torii_address_local8_total{endpoint}`,
+   `torii_address_local8_domain_total{endpoint,domain}`,
+   `torii_address_collision_total{endpoint,kind="local12_digest"}`,
+   `torii_address_collision_domain_total{endpoint,domain}`,
+   `torii_address_domain_total{endpoint,domain_kind}`, and
+   `torii_address_invalid_total{endpoint,reason}` (rendered in
+   `dashboards/grafana/address_ingest.json`) to confirm Local submissions and
+   Local-12 collisions stay at zero before proposing a tombstone. The
+   per-domain counters let owners prove that only dev/test domains emit Local‑8
+   traffic (and that Local‑12 collisions map to known staging domains) while
+   includes the **Domain Kind Mix (5m)** panel so SREs can graph how much
+   `domain_kind="local12"` traffic remains, and the `AddressLocal12Traffic`
+   alert fires whenever production still sees Local-12 selectors despite the
+   retirement gate.
+2. **Derive canonical digests.** Run
+   `iroha tools address convert <address> --format json --expect-prefix 753`
+   (or consume `fixtures/account/address_vectors.json` via
+   `scripts/account_fixture_helper.py`) to capture the exact `digest_hex`.
+  The CLI address tool accepts canonical Katakana i105 and the internal
+  canonical `0x…` envelope view; runtime `AccountId` parsers continue to accept
+  canonical Katakana i105 only.
+  The JSON summary reports the parsed format/domain kind plus canonical
+  encodings (I105 and canonical hex) for each input.
+  For newline-oriented exports use
+  `iroha tools address normalize --input <file>` to rewrite newline-separated
+  address lists into canonical Katakana i105, canonical hex, or JSON forms.
+  When auditors need spreadsheet-friendly evidence, run
+  `iroha tools address audit --input <file> --format csv` to emit a CSV summary
+  (`input,status,format,domain_kind,…`) that highlights domain kind,
+  canonical encodings, and parse failures in the same file.
+3. **Append manifest entries.** Draft the `tombstone` record (and the follow-up
+   `global_domain` record when migrating to the global registry) and validate
+   the manifest with `cargo xtask address-vectors` before requesting signatures.
+4. **Verify & publish.** Follow the runbook checklist (hashes, Sigstore,
+   sequence monotonicity) before mirroring the bundle to SoraFS. Torii now
+   canonicalizes account filters and path literals from canonical Katakana i105 input only.
+5. **Monitor & rollback.** Keep the Local‑8 and Local‑12 collision panels at
+   zero for 30 days; if regressions appear, republish the previous manifest
+   only in the affected non-production environment until telemetry stabilises.
+
+All of the steps above are mandatory evidence for ADDR‑7c: manifests without
+the `cosign` signature bundle or without matching `previous_digest` values must
+be rejected automatically, and operators must attach the verification logs to
+their change tickets.
+
+### 5. Wallet & API ergonomics
+
+- **Display defaults:** Wallets show the I105 address (short, checksummed)
+  plus the resolved domain as a label fetched from the registry. Domains are
+  clearly marked as descriptive metadata that may change, while I105 is the
+  stable address.
+- **Input canonicalization:** Torii and SDKs accept canonical Katakana i105 account IDs only and reject `@domain` suffixes, alias forms, non-canonical/legacy i105 literals, and canonical-hex account literals in runtime parser paths. There is no
+  strict-mode toggle; raw phone/email identifiers must be kept off-ledger
+  via UAID/opaque mappings.
+- **Error prevention:** Wallets parse I105 prefixes and enforce chain-discriminant
+  expectations. Chain mismatches trigger hard failures with actionable diagnostics.
+- **Codec libraries:** Official Rust, TypeScript/JavaScript, Python, and Kotlin
+  libraries provide I105 encoding/decoding plus I105 support to
+  avoid fragmented implementations. CAIP-10 conversions are not shipped yet.
+
+#### Accessibility & Safe Sharing Guidance
+
+- Implementation guidance for product surfaces is tracked live in
+  `docs/portal/docs/reference/address-safety.md`; reference that checklist when
+  adapting these requirements to wallet or explorer UX.
+- **Safe sharing flows:** Surfaces that copy or display addresses default to the i105 form and expose an adjacent “share” action that presents both the full string and a QR code derived from the same payload so users can verify the checksum visually or by scanning. When truncation is unavoidable (e.g., small screens), retain the start and end of the string, add clear ellipses, and keep the full address accessible via copy-to-clipboard to prevent accidental clipping.
+- **IME safeguards:** Address inputs MUST reject composition artefacts from IME/IME-style keyboards. Enforce ASCII-only entry, present an inline warning when full-width or Kana characters are detected, and offer a plain-text paste zone that strips combining marks before validation so Japanese and Chinese users can disable their IME without losing progress.
+- **Screen-reader support:** Provide visually hidden labels (`aria-label`/`aria-describedby`) that describe the leading i105 digits and chunk the i105 payload into 4- or 8-character groups, so assistive technology reads grouped characters instead of a run-on string. Announce copy/share success via polite live regions and ensure QR previews include descriptive alt text (“i105 address for <alias> on chain 0x02F1”).
+- **Single-format usage:** Keep address sharing on canonical Katakana i105 only and avoid secondary account-literal formats in wallet/explorer copy flows.
+
+## Implementation Checklist
+
+- **I105 envelope:** Prefix encodes the `chain_discriminant` using the compact
+  6-/14-bit scheme from `encode_i105_prefix()`, the body is the canonical bytes
+  (`AccountAddress::canonical_bytes()`), and the checksum is the first two bytes
+  of Blake2b-512(`b"I105PRE"` || prefix || body). The full payload is encoded
+  with the I105 alphabet via `bs58`.
+- **Registry contract:** Signed JSON (and optional Merkle root) publishing
+  `{discriminant, i105_prefix, chain_alias, endpoints}` with 24h TTL and
+  rotation keys.
+- **Domain policy:** ASCII `Name` today; if enabling i18n, apply UTS-46 for
+  normalization and UTS-39 for confusable checks. Enforce max label (63) and
+  total (255) lengths.
+- **Textual helpers:** Ship I105 ↔ canonical Katakana i105 codecs in Rust,
+  TypeScript/JavaScript, Python, and Kotlin with shared test vectors (CAIP-10
+  mappings remain future work).
+- **CLI tooling:** Provide a deterministic operator workflow via `iroha tools address convert`
+  (see `crates/iroha_cli/src/address.rs`), which accepts canonical Katakana i105 literals,
+  defaults to i105 output using the Sora Nexus prefix (`753`), enforces prefix
+  expectations on parse, and rejects `@domain` suffixes so operator pipelines
+  stay on canonical address literals only.
+- **Wallet/explorer UX:** Follow the [address display guidelines](source/sns/address_display_guidelines.md)
+  shipped with ADDR-6—keep canonical Katakana i105 as the single copy/QR payload and
+  apply IME-safe input/output handling.
+- **Torii integration:** Cache Nexus manifests respecting TTL, emit
+  `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` deterministically, and
+  keep strict account-literal parsing canonical-i105-only (reject non-canonical
+  forms and any `@domain` suffix) with canonical Katakana i105 output.
+
+### Torii response formats
+
+- `GET /v1/accounts` and `POST /v1/accounts/query` emit canonical Katakana i105 account
+  literals in responses.
+- Asset holder listings (`GET /v1/assets/{definition_id}/holders`) and their JSON
+  envelope counterpart (`POST …/holders/query`) also emit canonical Katakana i105 account
+  identifiers in `items[*].account_id`.
+- **Testing:** Add unit tests for encoder/decoder round-trips, wrong-chain
+  failures, and manifest lookups; add integration coverage in Torii and SDKs
+  for I105 flows end to end.
+
+## Error Code Registry
+
+Address encoders and decoders expose failures through
+`AccountAddressError::code_str()`. The following tables provide the stable codes
+that SDKs, wallets, and Torii surfaces should surface alongside human-readable
+messages, plus recommended remediation guidance.
+
+### Canonical Construction
+
+| Code | Failure | Recommended Remediation |
+|------|---------|-------------------------|
+| `ERR_UNSUPPORTED_ALGORITHM` | Encoder received a signing algorithm not supported by the registry or build features. | Restrict account construction to curves enabled in the registry and configuration. |
+| `ERR_KEY_PAYLOAD_TOO_LONG` | Signing key payload length exceeds the supported limit. | Single-key controllers are limited to `u8` lengths; use multisig for large public keys (e.g., ML‑DSA). |
+| `ERR_INVALID_HEADER_VERSION` | Address header version is outside the supported range. | Emit header version `0` for V1 addresses; upgrade encoders before adopting new versions. |
+| `ERR_INVALID_NORM_VERSION` | Normalisation version flag is not recognised. | Use normalisation version `1` and avoid toggling reserved bits. |
+| `ERR_INVALID_I105_PREFIX` | Requested I105 network prefix cannot be encoded. | Pick a prefix within the inclusive `0..=16383` range published in the chain registry. |
+| `ERR_CANONICAL_HASH_FAILURE` | Canonical payload hashing failed. | Retry the operation; if the error persists, treat it as an internal bug in the hashing stack. |
+
+### Format Decoding and Auto Detection
+
+| Code | Failure | Recommended Remediation |
+|------|---------|-------------------------|
+| `ERR_INVALID_I105_ENCODING` | I105 string contains characters outside the alphabet. | Ensure the address uses the published I105 alphabet and has not been truncated during copy/paste. |
+| `ERR_INVALID_LENGTH` | Payload length does not match the expected canonical size for header/controller (or legacy decode-compat selector variants). | Supply the full canonical payload emitted by the official encoder, or a complete legacy payload when decoding historical data. |
+| `ERR_CHECKSUM_MISMATCH` | Canonical Katakana i105 checksum validation failed. | Regenerate the canonical Katakana i105 address from a trusted source; this typically indicates a copy/paste error. |
+| `ERR_INVALID_I105_PREFIX_ENCODING` | I105 prefix bytes are malformed. | Re-encode the address with a compliant encoder; do not alter the leading I105 bytes manually. |
+| `ERR_INVALID_HEX_ADDRESS` | Canonical hexadecimal form failed to decode. | Provide a `0x`-prefixed, even-length hex string produced by the official encoder. |
+| `ERR_MISSING_COMPRESSED_SENTINEL` | Legacy/non-canonical Katakana i105 form does not start with the expected sentinel. | Use canonical Katakana i105 output and avoid manual sentinel rewriting. |
+| `ERR_COMPRESSED_TOO_SHORT` | Legacy/non-canonical Katakana i105 string is truncated before payload+checksum complete. | Use the full canonical Katakana i105 string emitted by the encoder. |
+| `ERR_INVALID_COMPRESSED_CHAR` | Legacy/non-canonical Katakana i105 payload includes an invalid glyph. | Replace with canonical Katakana i105 output generated by official codecs. |
+| `ERR_INVALID_COMPRESSED_BASE` | Encoder attempted to use an unsupported legacy radix. | File a bug against the encoder; production flows must stay canonical Katakana i105. |
+| `ERR_INVALID_COMPRESSED_DIGIT` | Legacy/non-canonical digit value exceeds the supported legacy alphabet size. | Regenerate canonical Katakana i105 and avoid manual digit manipulation. |
+| `ERR_UNSUPPORTED_ADDRESS_FORMAT` | Auto-detection could not recognise the input format. | Provide canonical Katakana i105 on strict account-id parser paths; use canonical `0x` hex only in low-level/debug tooling that explicitly accepts it. |
+
+### Domain and Network Validation
+
+| Code | Failure | Recommended Remediation |
+|------|---------|-------------------------|
+| `ERR_DOMAIN_MISMATCH` | Domain selector does not match the expected domain. | Use an address issued for the intended domain or update the expectation. |
+| `ERR_INVALID_DOMAIN_LABEL` | Domain label failed normalisation checks. | Canonicalise the domain using UTS-46 non-transitional processing before encoding. |
+| `ERR_UNEXPECTED_NETWORK_PREFIX` | Decoded I105 network prefix differs from the configured value. | Switch to an address from the target chain or adjust the expected discriminant/prefix. |
+| `ERR_UNKNOWN_ADDRESS_CLASS` | Address class bits are not recognised. | Upgrade the decoder to a release that understands the new class, or avoid tampering with the header bits. |
+| `ERR_UNKNOWN_DOMAIN_TAG` | Domain selector tag is unknown. | Update to a release that supports the new selector type, or avoid using experimental payloads on V1 nodes. |
+| `ERR_UNEXPECTED_EXTENSION_FLAG` | Reserved extension bit was set. | Clear reserved bits; they remain gated until a future ABI introduces them. |
+| `ERR_UNKNOWN_CONTROLLER_TAG` | Controller payload tag not recognised. | Upgrade the decoder to recognise new controller types before parsing them. |
+| `ERR_UNEXPECTED_TRAILING_BYTES` | Canonical payload contained trailing bytes after decoding. | Regenerate the canonical payload; only the documented length should be present. |
+
+### Controller Payload Validation
+
+| Code | Failure | Recommended Remediation |
+|------|---------|-------------------------|
+| `ERR_INVALID_PUBLIC_KEY` | Key bytes do not match the declared curve. | Ensure the key bytes are encoded exactly as required for the selected curve (e.g., 32-byte Ed25519). |
+| `ERR_UNKNOWN_CURVE` | Curve identifier is not registered. | Use curve ID `1` (Ed25519) until additional curves are approved and published in the registry. |
+| `ERR_MULTISIG_MEMBER_OVERFLOW` | Multisig controller declares more members than supported. | Reduce the multisig membership to the documented limit before encoding. |
+| `ERR_INVALID_MULTISIG_POLICY` | Multisig policy payload failed validation (threshold/weights/schema). | Rebuild the policy so that it satisfies the CTAP2 schema, weight bounds, and threshold constraints. |
+
+## Alternatives Considered
+
+- **Pure checksum envelope (Bitcoin-style).** Simpler checksum but weaker error detection
+  than the Blake2b-derived I105 checksum (`encode_i105` truncates a 512-bit hash)
+  and lacks explicit prefix semantics for 16-bit discriminants.
+- **Embedding chain name in the domain string (e.g., `finance@chain`).** Breaks
+- **Rely solely on Nexus routing without changing addresses.** Users would still
+  copy/paste ambiguous strings; we want the address itself to carry context.
+- **Bech32m envelope.** QR-friendly and offers a human-readable prefix, but
+  would diverge from the shipping I105 implementation (`AccountAddress::to_i105`)
+  and require recreating all fixtures/SDKs. The current roadmap keeps I105 +
+  I105 support while continuing research into future
+  Bech32m/QR layers (CAIP-10 mapping is deferred).
+
+## Open Questions
+
+- Confirm that `u16` discriminants plus reserved ranges cover long-term demand;
+  otherwise evaluate `u32` with varint encoding.
+- Finalize the multi-signature governance process for registry updates and how
+  revocations/expired allocations are handled.
+- Define the exact manifest signature scheme (e.g., Ed25519 multi-sig) and
+  transport security (HTTPS pinning, IPFS hash format) for Nexus distribution.
+- Determine whether to support domain aliases/redirects for migrations and how
+  to surface them without breaking determinism.
+- Specify how Kotodama/IVM contracts access I105 helpers (`to_address()`,
+  `parse_address()`) and whether on-chain storage should ever expose CAIP-10
+  mappings (today I105 is canonical).
+- Explore registering Iroha chains in external registries (e.g., I105 registry,
+  CAIP namespace directory) for broader ecosystem alignment.
+
+## Next Steps
+
+1. I105 encoding landed in `iroha_data_model` (`AccountAddress::to_i105`,
+   `parse_encoded`); continue porting fixtures/tests to every SDK and purge any
+   Bech32m placeholders.
+2. Extend configuration schema with `chain_discriminant` and derive sensible
+  defaults for existing test/dev setups. **(Done: `common.chain_discriminant`
+  now ships in `iroha_config`, defaulting to `0x02F1` with per-network
+  overrides.)**
+3. Draft the Nexus registry schema and proof-of-concept manifest publisher.
+4. Collect feedback from wallet providers and custodians on human-factor aspects
+   (HRP naming, display formatting).
+5. Update documentation (`docs/source/data_model.md`, Torii API docs) once the
+   implementation path is committed.
+6. Ship official codec libraries (Rust/TS/Python/Kotlin) with normative test
+   vectors covering success and failure cases.

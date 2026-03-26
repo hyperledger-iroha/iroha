@@ -6,8 +6,11 @@ Roadmap reference: ADDR-2 — Canonical Katakana i105 Compliance Suite
 
 ### 1. Overview
 
-- Fixture: `fixtures/account/address_vectors.json` (I105 + multisig positive/negative cases).
-- Scope: deterministic V1 payloads spanning implicit-default, Local-12, Global registry, and multisig controllers with full error taxonomy.
+- Fixture: `fixtures/account/address_vectors.json` (canonical Katakana i105 +
+  multisig positive/negative cases).
+- Scope: deterministic V1 payloads covering canonical account-id rendering,
+  multisig controllers, and explicit rejection of non-canonical account-id
+  forms.
 - Distribution: shared across Rust data-model, Torii, JS/TS, Swift, and Android SDKs; CI fails if any consumer deviates.
 - Source of truth: the generator lives in `crates/iroha_data_model/src/account/address/compliance_vectors.rs` and is exposed via `cargo xtask address-vectors`.
 ### 2. Regeneration & Verification
@@ -31,9 +34,9 @@ Flags:
 | Surface | Enforcement | Notes |
 |---------|-------------|-------|
 | Rust data-model | `crates/iroha_data_model/tests/account_address_vectors.rs` | Parses the JSON, reconstructs canonical payloads, and checks canonical Katakana i105 plus canonical-hex conversions + structured errors. |
-| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` | Validates server-side codecs so Torii refuses malformed I105 payloads deterministically. |
-| JavaScript SDK | `javascript/iroha_js/test/address.test.js` | Mirrors V1 fixtures (I105/fullwidth) and asserts Norito-style error codes for every negative case. |
-| Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` | Exercises I105 decoding, multisig payloads, and error surfacing on Apple platforms. |
+| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` | Validates server-side codecs so Torii refuses malformed i105 payloads deterministically. |
+| JavaScript SDK | `javascript/iroha_js/test/address.test.js` | Mirrors V1 fixtures (i105/fullwidth) and asserts Norito-style error codes for every negative case. |
+| Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` | Exercises i105 decoding, multisig payloads, and error surfacing on Apple platforms. |
 | Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` | Ensures Kotlin/Java bindings stay aligned with the canonical fixture. |
 
 ### 4. Monitoring & Outstanding Work
@@ -41,7 +44,9 @@ Flags:
 - Status reporting: this document is linked from `status.md` and the roadmap so weekly reviews can verify fixture health.
 - Developer portal summary: see **Reference → Account address compliance** in the docs portal (`docs/portal/docs/reference/account-address-status.md`) for the externally-facing synopsis.
 - Prometheus and dashboards: whenever you verify an SDK copy, run the helper with `--metrics-out` (and optionally `--metrics-label`) so the Prometheus textfile collector can ingest `account_address_fixture_check_status{target=…}`. Grafana dashboard **Account Address Fixture Status** (`dashboards/grafana/account_address_fixture_status.json`) renders pass/fail counts per surface and surfaces the canonical SHA-256 digest for audit evidence. Alert when any target reports `0`.
-- Torii metrics: `torii_address_domain_total{endpoint,domain_kind}` now emits for every successfully parsed account literal, mirroring `torii_address_invalid_total`/`torii_address_local8_total`. Alert on any `domain_kind="local12"` traffic in production and mirror the counters into the SRE `address_ingest` dashboard so the Local-12 retirement gate has auditable evidence.
+- Torii metrics: monitor canonical i105 parse success/failure counters and
+  alias-resolution counters together so SRE reviews can prove that account-id
+  traffic stays canonical while alias traffic remains explicit.
 - Fixture helper: `scripts/account_fixture_helper.py` downloads or verifies the canonical JSON so SDK release automation can fetch/check the bundle without manual copy/paste while optionally writing Prometheus metrics. Example:
 
   ```bash

@@ -723,8 +723,8 @@ For higher-level walkthroughs, see:
   `getExplorerAccountQr(accountId:)`
   helper wraps `/v1/explorer/accounts/{account_id}/qr` and returns the inline SVG, literal, and
   metadata defined in {doc}`sns/address_display_guidelines` so explorers can embed share-ready
-  preferred I105 QR payloads without reimplementing the renderer
-  (omit the format to use I105 or use canonical Katakana i105 output).
+  preferred i105 QR payloads without reimplementing the renderer
+  (omit the format to use i105 or use canonical Katakana i105 output).
 - **Explorer:** `getExplorerInstructions` and `getExplorerTransactions` wrap
   `/v1/explorer/instructions` and `/v1/explorer/transactions` with
   `ToriiExplorerInstructionsParams`/`ToriiExplorerTransactionsParams` filters (including
@@ -811,7 +811,7 @@ let address = try AccountAddress.fromAccount(
 )
 let formats = address.displayFormats(networkPrefix: 753)
 
-print("I105", formats.i105)
+print("i105", formats.i105)
 ```
 
 Account address domain labels are canonicalized to lowercase ASCII and must not contain whitespace
@@ -819,7 +819,7 @@ or reserved characters (`@`, `#`, `$`). Use canonical ASCII/punycode labels when
 Account addresses also validate public key lengths for known algorithms (ed25519 requires 32 bytes;
 secp256k1 requires 33 bytes when enabled), and reject empty keys.
 
-Show I105 as the copy/share target (and QR payload), and highlight when the implicit `default` domain is in use. This keeps
+Show i105 as the copy/share target (and QR payload), and highlight when the implicit `default` domain is in use. This keeps
 Swift parity with the Android/JS samples and prevents IME corruption of half-width kana.
 
 To embed the share-ready SVG exposed by ADDR-6b, call

@@ -18,7 +18,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.hyperledger.iroha.android.IrohaKeyManager;
 import org.hyperledger.iroha.android.IrohaKeyManager.KeySecurityPreference;
-import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
 import org.hyperledger.iroha.android.client.queue.FilePendingTransactionQueue;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
@@ -37,6 +36,7 @@ import org.hyperledger.iroha.android.nexus.UaidManifestsResponse.UaidManifestSta
 import org.hyperledger.iroha.android.nexus.UaidPortfolioQuery;
 import org.hyperledger.iroha.android.nexus.UaidPortfolioResponse;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
+import org.hyperledger.iroha.android.testing.TestAssetDefinitionIds;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
 import org.hyperledger.iroha.android.tx.TransactionBuilder;
 import org.hyperledger.iroha.android.tx.SignedTransactionHasher;
@@ -726,7 +726,7 @@ public final class HttpClientTransportTests {
   private static void uaidPortfolioRequestParsesResponse() {
     final String hex =
         "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
-    final String assetDefinitionId = AssetDefinitionIdEncoder.encode("xor", "nexus");
+    final String assetDefinitionId = TestAssetDefinitionIds.TERTIARY;
     final String json =
         ("{"
             + "\"uaid\":\"uaid:"
@@ -795,7 +795,7 @@ public final class HttpClientTransportTests {
   private static void uaidPortfolioRequestSupportsQuery() {
     final String hex =
         "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff0102030405060708090a0b0c0d0e0f11";
-    final String assetDefinitionId = AssetDefinitionIdEncoder.encode("xor", "nexus");
+    final String assetDefinitionId = TestAssetDefinitionIds.TERTIARY;
     final String json =
         "{"
             + "\"uaid\":\"uaid:"

@@ -72,7 +72,7 @@ import {
 } from "@iroha/iroha-js";
 
 const mintInstruction = buildMintAssetInstruction({
-  assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
+  assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
   quantity: "10",
 });
 
@@ -85,7 +85,7 @@ const transferInstruction = buildTransferAssetInstruction({
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
   authority: "soraカタカナ...",
-  mint: { assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ", quantity: "10" },
+  mint: { assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM", quantity: "10" },
   transfers: [{ destinationAccountId: "soraカタカナ...", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
@@ -343,17 +343,17 @@ for await (const perm of torii.iterateAccountPermissions("soraカタカナ...", 
 }
 const holdings = await torii.listAccountAssets("soraカタカナ...", {
   limit: 5,
-  assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
+  assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
 });
 console.log("asset holdings", holdings.items);
 const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 5,
-  assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
+  assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
 });
 console.log("top holders", holders.items.map((entry) => entry.account_id));
 const txs = await torii.listAccountTransactions("soraカタカナ...", {
   limit: 3,
-  assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
+  assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
 });
 console.log("recent hashes", txs.items.map((tx) => tx.entrypoint_hash));
 
@@ -762,7 +762,7 @@ followed by `/v1/contracts/instance` when `CONTRACT_STAGE` includes `instance` (
 
 ```
 TORII_URL=https://torii.devnet.example \
-AUTHORITY=i105... \
+AUTHORITY=soraカタカナ... \
 PRIVATE_KEY_HEX=$(cat ~/.iroha/keys/alice.hex) \
 CONTRACT_CODE_PATH=./artifacts/demo_contract.to \
 CONTRACT_MANIFEST_PATH=./artifacts/demo_manifest.json \

@@ -162,9 +162,7 @@ const DOMAIN_ID = "wonderland";
 const ACCOUNT_SIGNATORY =
   "ED0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
 const ACCOUNT_PUBLIC_KEY = hexToBytes(ACCOUNT_SIGNATORY.slice(6));
-const ACCOUNT_ADDRESS = AccountAddress.fromAccount({
-  domain: DOMAIN_ID,
-  publicKey: ACCOUNT_PUBLIC_KEY,
+const ACCOUNT_ADDRESS = AccountAddress.fromAccount({ publicKey: ACCOUNT_PUBLIC_KEY,
 });
 const ACCOUNT_ID = ACCOUNT_ADDRESS.toI105();
 const ACCOUNT_ID_INPUT = ACCOUNT_ID;
@@ -185,9 +183,7 @@ const RWA_ID_INPUT =
 const SAMPLE_PUBLIC_KEY = hexToBytes(
   "641297079357229F295938A4B5A333DE35069BF47B9D0704E45805713D13C201",
 );
-const SAMPLE_ACCOUNT_ADDRESS = AccountAddress.fromAccount({
-  domain: DOMAIN_ID,
-  publicKey: SAMPLE_PUBLIC_KEY,
+const SAMPLE_ACCOUNT_ADDRESS = AccountAddress.fromAccount({ publicKey: SAMPLE_PUBLIC_KEY,
 });
 const SAMPLE_ACCOUNT_I105_LITERAL = SAMPLE_ACCOUNT_ADDRESS.toI105();
 const SAMPLE_ACCOUNT_COMPRESSED_LITERAL = SAMPLE_ACCOUNT_ADDRESS.toI105();
@@ -295,7 +291,7 @@ test("normalizeAccountId rejects Local-8 selectors", () => {
   );
 });
 
-test("normalizeAssetId exported canonicalizes public asset identifiers", () => {
+test("normalizeAssetId exported canonicalizes asset-holding identifiers", () => {
   const canonical = exportedNormalizeAssetId(ASSET_ID_INPUT);
   assert.equal(canonical, ASSET_ID_CANONICAL);
 });
@@ -303,7 +299,7 @@ test("normalizeAssetId exported canonicalizes public asset identifiers", () => {
 test("normalizeAssetId rejects malformed asset literals", () => {
   assert.throws(
     () => exportedNormalizeAssetId("not:an-asset"),
-    /must use '<base58-asset-id>#<katakana-i105-account-id>' with optional '#dataspace:<id>' suffix/,
+    /must use '<base58-asset-definition-id>#<katakana-i105-account-id>' with optional '#dataspace:<id>' suffix/,
   );
 });
 

@@ -225,7 +225,7 @@ Enum RegistryEventKind {
 تشترك البوابات في `RegistryEventV1` وتتزامن مع DNS/SoraFS في المتوسط:
 
 1. احصل على `NameRecordV1` المرجع الأخير لتأمين الأحداث.
-2. إعادة إنشاء قوالب المحلل (الاتجاهات المفضلة I105 + المضغوطة (`sora`) كخيار ثانٍ، والسجلات النصية).
+2. إعادة إنشاء قوالب المحلل (الاتجاهات المفضلة i105 + المضغوطة (`sora`) كخيار ثانٍ، والسجلات النصية).
 3. قم بتثبيت بيانات المنطقة التي تم تحديثها عبر التدفق الموصوف في SoraDNS في [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
 
 ضمانات متابعة الأحداث:

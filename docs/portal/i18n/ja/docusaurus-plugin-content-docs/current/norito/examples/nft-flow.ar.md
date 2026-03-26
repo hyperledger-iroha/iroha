@@ -19,7 +19,7 @@ NFT は、NFT を使用します。
 
 ## جولة دفتر الأستاذ
 
-- NFT (`n0#wonderland`) を使用して、NFT を使用してください。 (`i105...`、`i105...`)。
+- NFT (`n0#wonderland`) を使用して、NFT を使用してください。 (`soraカタカナ...`、`soraカタカナ...`)。
 - `nft_issue_and_transfer` と NFT とアリスとボブとの接続ああ。
 - セキュリティ NFT セキュリティ `iroha_cli ledger nfts list --account <id>` セキュリティ SDK セキュリティ セキュリティ セキュリティテストを実行してください。
 

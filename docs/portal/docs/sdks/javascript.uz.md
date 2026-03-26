@@ -276,7 +276,7 @@ Explorer telemetriyasi `/v1/explorer/metrics` va uchun yozilgan yordamchilarni t
 `/v1/explorer/accounts/{account_id}/qr` so'nggi nuqtalari, shuning uchun asboblar paneli qayta o'ynashi mumkin
 portalni quvvatlaydigan bir xil suratlar. `getExplorerMetrics()` normallashtiradi
 foydali yuk va marshrut o'chirilganida `null` ni qaytaradi. U bilan bog'lang
-`getExplorerAccountQr()` I105 (afzal)/sora (ikkinchi-eng yaxshi) literallar va inline kerak boʻlganda
+`getExplorerAccountQr()` i105 (afzal)/sora (ikkinchi-eng yaxshi) literallar va inline kerak boʻlganda
 Ulashish tugmalari uchun SVG.
 
 ```ts
@@ -299,8 +299,8 @@ console.log(
 );
 ```
 
-`I105` dan o'tish Explorerning standart siqilganini aks ettiradi
-selektorlar; afzal qilingan I105 chiqishi yoki `i105_qr` so'rovi uchun bekor qilishni o'tkazib yubormang
+`i105` dan o'tish Explorerning standart siqilganini aks ettiradi
+selektorlar; afzal qilingan i105 chiqishi yoki `i105_qr` so'rovi uchun bekor qilishni o'tkazib yubormang
 QR-xavfsiz variant kerak bo'lganda. Siqilgan literal ikkinchi eng yaxshisidir
 UX uchun faqat Sora varianti. Yordamchi har doim kanonik identifikatorni qaytaradi,
 tanlangan literal va metadata (tarmoq prefiksi, QR versiyasi/modullar, xato
@@ -519,7 +519,7 @@ so'rovlarni yuborishdan oldin ularni kanoniklashtiring:
   aktivlarni kanonik hisob identifikatorlari bo'yicha guruhlash; filtrlash uchun `assetId` dan o'ting
   portfelni bitta aktiv misoliga tushiring.
 - `getUaidBindings(uaid)` har bir maʼlumot maydoni ↔ hisobini sanab beradi
-  majburiy (`I105` `i105` harflarini qaytaradi).
+  majburiy (`i105` `i105` harflarini qaytaradi).
 - `getUaidManifests(uaid, { dataspaceId })` har bir qobiliyat manifestini qaytaradi,
   hayot aylanishi holati va audit uchun bog'langan hisoblar.Operator dalillar paketlari, manifest nashri/bekor qilish oqimlari va SDK migratsiyasi uchun
 yo'l-yo'riq, Universal Account Guide (`docs/source/universal_accounts_guide.md`) ga amal qiling

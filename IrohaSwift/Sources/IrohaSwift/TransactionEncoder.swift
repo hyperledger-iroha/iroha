@@ -26,7 +26,7 @@ public enum TransactionInputError: Error, LocalizedError, Equatable {
         case let .emptyAccountId(field):
             return "Account id for \(field) must not be empty."
         case let .malformedAccountId(field, value):
-            return "Account id for \(field) must be encoded-only (i105) with no whitespace (received '\(value)')."
+            return "Account id for \(field) must be a canonical bare Katakana i105 literal with no whitespace (received '\(value)')."
         case let .emptyRwaId(field):
             return "RWA id for \(field) must not be empty."
         case let .malformedRwaId(field, value):
@@ -46,7 +46,7 @@ public enum TransactionInputError: Error, LocalizedError, Equatable {
         case .emptyAssetId:
             return "Asset id must not be empty."
         case let .malformedAssetId(value):
-            return "Asset id must use '<base58-asset-id>#<katakana-i105-account-id>' public form with optional '#dataspace:<id>' suffix and no whitespace (received '\(value)')."
+            return "Asset id must use canonical unprefixed Base58 form with no whitespace (received '\(value)')."
         case let .invalidZkBallotPublicInputs(reason):
             return "Governance ZK public inputs are invalid: \(reason)"
         }
@@ -187,10 +187,11 @@ struct TransactionInputValidator {
         guard !trimmed.isEmpty else {
             throw TransactionInputError.emptyAssetId
         }
-        guard let canonical = try? OfflineNorito.canonicalAssetIdLiteral(trimmed) else {
+        do {
+            return try sanitizeAssetDefinitionId(trimmed)
+        } catch {
             throw TransactionInputError.malformedAssetId(trimmed)
         }
-        return canonical
     }
 
     static func sanitizeMetadataTarget(_ target: MetadataTarget) throws -> MetadataTarget {

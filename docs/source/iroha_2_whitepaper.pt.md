@@ -113,9 +113,10 @@ A caixa `iroha_crypto` permite gerenciamento de chaves, hashing e verificação 
 
 A caixa `iroha_data_model` define todos os objetos contábeis, instruções, consultas e eventos. Destaques:
 
-- **Domínios, contas e ativos** usam IDs de conta I105 canônicos (preferencial); `name@dataspace` / `name@domain.dataspace` continua sendo um roteamento
-  alias quando fornecido explicitamente. Os metadados são determinísticos (mapa `Metadata`). Ativos numéricos suportam ponto fixo
-  operações; Os NFTs carregam metadados estruturados arbitrários.
+- **Domains, accounts, and assets** use canonical Katakana i105 account ids and canonical Base58 asset ids. Account aliases are separate on-chain
+  bindings in `name@dataspace` / `name@domain.dataspace` form that resolve to Katakana i105 account ids, and asset aliases are separate on-chain bindings in `name#dataspace` / `name#domain.dataspace` form that resolve to canonical Base58 asset ids. Metadata is deterministic (`Metadata` map). Numeric assets support fixed-point
+  operations; NFTs carry arbitrary structured metadata.
+
 - **Funções e permissões** usam tokens enumerados por Norito que mapeiam diretamente para verificações do executor.
 - **Gatilhos** (baseados em tempo, baseados em blocos ou orientados por predicados) emitem transações determinísticas por meio da cadeia
   executor.

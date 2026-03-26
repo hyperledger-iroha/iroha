@@ -61,7 +61,7 @@ listadas em `roadmap.md`, vinculando cada fluxo de trabalho as evidencias
 | Carta + תוספת KPI | `docs/source/sns/governance_addenda/` | Cartas assinadas com control de versao, covenants KPI ecisoes de governanca referenciadas por votos da CLI. |
 | Esquema do registro | [`registry-schema.md`](./registry-schema.md) | Estruturas Norito canonicas (`NameRecordV1`, `SuffixPolicyV1`, `RevenueAccrualEventV1`). |
 | Contrato do רשם | [`registrar-api.md`](./registrar-api.md) | מטענים REST/gRPC, מדדים `sns_registrar_status_total` והוק ציפיות לממשל. |
-| Guia UX de enderecos | [`address-display-guidelines.md`](./address-display-guidelines.md) | Renderizacoes canonicas I105 (preferido) e comprimidas (segunda melhor opcao) refletidas por ארנקים/חוקרים. |
+| Guia UX de enderecos | [`address-display-guidelines.md`](./address-display-guidelines.md) | Renderizacoes canonicas i105 (preferido) e comprimidas (segunda melhor opcao) refletidas por ארנקים/חוקרים. |
 | Docs SoraDNS / GAR | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | Derivacao deterministica de hosts, fluxo do tailer de transparencia e regras de alerta. |
 | תזכירים רגולטוריים | `docs/source/sns/regulatory/` | Notas de entrada por jurisdicao (לדוגמה, DSA של האיחוד האירופי), תודות של דייל, מצורפים לתבנית. |
 | יומן מקדחה | `ops/drill-log.md` | Registro de ensaios de caos e IR requeridos antes de saidas de fase. |
@@ -103,7 +103,7 @@ acima para que auditores reconstruam o Rastro de decisao em 24 horas.
    GAR/zone se propagou (veja 4.5).
 6. **Divulgacao ao cliente:** Atualize o Ledger voltado ao cliente (ארנק/חוקר)
    via OS fixtures compartilhados em [`address-display-guidelines.md`](./address-display-guidelines.md),
-   garantindo que renderizacoes I105 e comprimidas correspondam and orientacoes de copy/QR.
+   garantindo que renderizacoes i105 e comprimidas correspondam and orientacoes de copy/QR.
 
 ### 4.3 Renovacoes, cobranca e reconciliacao da tesouraria
 
@@ -131,11 +131,11 @@ acima para que auditores reconstruam o Rastro de decisao em 24 horas.
 | פאזה | שו"ת | Acao e evidencia | SLA |
 |------|-------------|----------------|-----|
 | Pedido de freeze soft | דייל / תמיכה | Abrir כרטיס `SNS-DF-<id>` com provas de pagamento, referencia do bond de disputa e seletor(es) afetados. | <=4 שעות בהתחלה. |
-| אפוטרופוס כרטיס | אפוטרופוס קונסלו | `sns governance freeze --selector <I105> --reason <text> --until <ts>` פרודוז `GuardianFreezeTicketV1`. Armazene o JSON לעשות כרטיס עם `artifacts/sns/guardian/<id>.json`. | <=30 דקות ACK, <=2 שעות ביצוע. |
+| אפוטרופוס כרטיס | אפוטרופוס קונסלו | `sns governance freeze --selector <i105> --reason <text> --until <ts>` פרודוז `GuardianFreezeTicketV1`. Armazene o JSON לעשות כרטיס עם `artifacts/sns/guardian/<id>.json`. | <=30 דקות ACK, <=2 שעות ביצוע. |
 | Ratificacao do conselho | Conselho de governanca | Aprovar ou rejeitar congelamentos, documentar decisao com link ao guardian e digest do bond de disputa. | Proxima sessao do conselho או voto assincrono. |
 | Painel de arbitragem | Conformidade + דייל | Convocar painel de 7 jurads (תאם מפת הדרכים) com cedulas hasheadas דרך `sns governance dispute ballot`. Anexar recibos de voto anonimizados ao pacote de incidente. | Veredito <=7 dias apos deposito do bond. |
 | אפלסאו | אפוטרופוס + קונסלהו | Apelacoes dobram o bond e repetem o processo de jurados; מניפסט רשם Norito `DisputeAppealV1` e referenciar ticket primario. | <=10 dias. |
-| Descongelar e remediar | רשם + ops de resolver | מפעיל `sns governance unfreeze --selector <I105> --ticket <id>`, התקן את סטטוס הרשם וההפצה של GAR/פותר. | Imediatamente apos o veredito. |
+| Descongelar e remediar | רשם + ops de resolver | מפעיל `sns governance unfreeze --selector <i105> --ticket <id>`, התקן את סטטוס הרשם וההפצה של GAR/פותר. | Imediatamente apos o veredito. |
 
 Canones de emergencia (congelamentos acionados por guardian <=72 h) seguem o mesmo
 fluxo, mas exigem revisao retroativa do conselho e uma not de transparencia em

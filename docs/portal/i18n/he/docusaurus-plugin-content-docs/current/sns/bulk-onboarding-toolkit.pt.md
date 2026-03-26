@@ -244,7 +244,7 @@ unica execucao de CSV.
   רפרנסים א arquivos sao resolvidas relativo a localizacao do CSV. מטא נתונים
   nao objeto produz um erro de validacao.
 - **בקרים:** celulas em branco respeitam `--default-controllers`. פורנקה
-  רשימה מפורשת (לדוגמה `i105...;i105...`) ao delegar para atores nao הבעלים.
+  רשימה מפורשת (לדוגמה `soraカタカナ...;soraカタカナ...`) ao delegar para atores nao הבעלים.
 
 Falhas sao reportadas com numeros de linha contextuais (por exemplo
 `error: row 12 term_years must be between 1 and 255`). O script sai com codigo

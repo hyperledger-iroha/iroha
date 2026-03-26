@@ -114,7 +114,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/policies/{suffix_id}` | OBTENER | -- | Recupere el flujo `SuffixPolicyV1` (almacenable en caché). |
 | `/v1/sns/names/{namespace}/{literal}` | OBTENER | -- | Regrese el curso `NameRecordV1` + estado efectivo (Active, Grace, etc.). |
 
-**Codificación del selector:** el segmento `{selector}` acepta I105, comprimido o hexadecimal según ADDR-5; Torii archivo normalizado a través de `NameSelectorV1`.**Modelos de errores:** todos los puntos finales devuelven Norito JSON con `code`, `message`, `details`. Los códigos incluyen `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
+**Codificación del selector:** el segmento `{selector}` acepta i105, comprimido o hexadecimal según ADDR-5; Torii archivo normalizado a través de `NameSelectorV1`.**Modelos de errores:** todos los puntos finales devuelven Norito JSON con `code`, `message`, `details`. Los códigos incluyen `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
 
 ### 3.1 Ayudas CLI (exigencia del registrador manual N0)
 
@@ -216,7 +216,7 @@ Les controles en echec renvoient `sns_err_governance_missing`.
 
 1. El cliente interroga `/v1/sns/policies/{suffix_id}` para recuperar los precios, la gracia y los niveles disponibles.
 2. El cliente construye `RegisterNameRequestV1`:
-   - `selector` deriva la etiqueta I105 (preferir) o comprimir (segunda opción).
+   - `selector` deriva la etiqueta i105 (preferir) o comprimir (segunda opción).
    - `term_years` en los límites de la política.
    - `payment` referente a la transferencia del divisor tresorerie/steward.
 3. Torii válido:

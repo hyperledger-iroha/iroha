@@ -21,9 +21,9 @@ Ruxsat berilgan domen yaratish, aktivlarni ro'yxatdan o'tkazish va deterministik
 
 ## Buxgalteriya kitobi bo'yicha ko'rsatmalar
 
-- Har bir SDK tezkor ishga tushirishda sozlash bosqichini aks ettirgan holda maqsadli hisob qaydnomasi (masalan, `i105...`) mavjudligiga ishonch hosil qiling.
+- Har bir SDK tezkor ishga tushirishda sozlash bosqichini aks ettirgan holda maqsadli hisob qaydnomasi (masalan, `soraカタカナ...`) mavjudligiga ishonch hosil qiling.
 - ROSE aktivi ta'rifini yaratish uchun `register_and_mint` kirish nuqtasini chaqiring va bitta tranzaksiyada Elisga 250 birlik bering.
-- Yalpiz muvaffaqiyatli bo'lganligini tasdiqlash uchun `client.request(FindAccountAssets)` yoki `iroha_cli ledger asset list --account i105...` orqali balanslarni tekshiring.
+- Yalpiz muvaffaqiyatli bo'lganligini tasdiqlash uchun `client.request(FindAccountAssets)` yoki `iroha_cli ledger asset list --account soraカタカナ...` orqali balanslarni tekshiring.
 
 ## Tegishli SDK qo'llanmalari
 

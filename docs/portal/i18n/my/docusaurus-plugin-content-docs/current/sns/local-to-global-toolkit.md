@@ -16,7 +16,7 @@ mono-repo မှ။ လမ်းပြမြေပုံအကြောင်း
 
 - ထုတ်လုပ်ရန် `scripts/address_local_toolkit.sh` သည် `iroha` CLI ကို ထုပ်ပိုးထားသည်-
   - `audit.json` — `iroha tools address audit --format json` မှ ဖွဲ့စည်းပုံအထွက်။
-  - `normalized.txt` — Local-domain ရွေးပေးသူတိုင်းအတွက် နှစ်သက်ရာ I105 / ဒုတိယအကောင်းဆုံးချုံ့ထားသော (`sora`) literals များကို ပြောင်းထားသည်။
+  - `normalized.txt` — Local-domain ရွေးပေးသူတိုင်းအတွက် နှစ်သက်ရာ i105 / ဒုတိယအကောင်းဆုံးချုံ့ထားသော (`sora`) literals များကို ပြောင်းထားသည်။
 - လိပ်စာထည့်သွင်းထားသော ဒက်ရှ်ဘုတ် (`dashboards/grafana/address_ingest.json`) နှင့် ဇာတ်ညွှန်းကို တွဲပါ
   Local-8/ ကိုသက်သေပြရန် နှင့် Alertmanager စည်းမျဉ်းများ (`dashboards/alerts/address_ingest_rules.yml`)
   Local-12 cutover သည် ဘေးကင်းပါသည်။ Local-8 နှင့် Local-12 ယာဉ်တိုက်မှုအကန့်များ ပေါင်း၍ ကြည့်ရှုပါ။
@@ -37,7 +37,7 @@ scripts/address_local_toolkit.sh \
 
 ရွေးချယ်စရာများ-
 
-- I105 အစား `i105` အထွက်အတွက် `--format i105`။
+- i105 အစား `i105` အထွက်အတွက် `--format i105`။
 - စာလုံးဗလာများကိုထုတ်လွှတ်ရန် `domainless output (default)`။
 - ပြောင်းလဲခြင်းအဆင့်ကို ကျော်ရန် `--audit-only`။
 ပုံမမှန်သောအတန်းများပေါ်လာသောအခါ (CLI အပြုအမူနှင့် ကိုက်ညီသည်)။

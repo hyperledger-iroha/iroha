@@ -115,12 +115,11 @@ final class OfflineReceiptChallengeTests: XCTestCase {
 
     func testChallengePreimageCanonicalizesReceiverAccountId() throws {
         let publicKey = Data(repeating: 0x22, count: 32)
-        let domain = AccountAddress.defaultDomainName
         let address = try AccountAddress.fromAccount(publicKey: publicKey, algorithm: "ed25519")
         let rawAccountId = try address.toI105(networkPrefix: AccountId.defaultNetworkPrefix)
         let canonicalAccountId = try address.toI105(networkPrefix: 0x02F1)
-        let rawAssetId = try makeAssetId(name: "xor", domain: domain, accountId: rawAccountId)
-        let canonicalAssetId = try makeAssetId(name: "xor", domain: domain, accountId: canonicalAccountId)
+        let rawAssetId = try makeAssetId(name: "xor", domain: "sora", accountId: rawAccountId)
+        let canonicalAssetId = try makeAssetId(name: "xor", domain: "sora", accountId: canonicalAccountId)
         let nonceHex = IrohaHash.hash(Data("receipt-nonce".utf8)).hexUppercased()
         let nonce = try XCTUnwrap(Data(hexString: nonceHex))
         let senderCertificateId = IrohaHash.hash(Data("sender-certificate".utf8))
@@ -208,7 +207,7 @@ final class OfflineReceiptChallengeTests: XCTestCase {
                              accountId: String) throws -> String {
         let definitionId: String
         switch (name, domain) {
-        case ("xor", "sora"), ("xor", AccountAddress.defaultDomainName):
+        case ("xor", "sora"):
             definitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
         default:
             XCTFail("unsupported test asset definition \(name)#\(domain)")

@@ -63,13 +63,12 @@ function i105FromEd25519AccountId(raw) {
     return address.toI105();
   }
   const signatory = trimmed.slice(0, atIndex).trim().toUpperCase();
-  const domain = trimmed.slice(atIndex + 1).trim();
   if (!signatory.startsWith("ED0120")) {
     throw new Error("expected ed25519 multihash signatory");
   }
   const publicKeyHex = signatory.slice(6);
   const publicKey = Buffer.from(publicKeyHex, "hex");
-  return AccountAddress.fromAccount({ domain, publicKey }).toI105();
+  return AccountAddress.fromAccount({ publicKey }).toI105();
 }
 
 function encodeAssetIdForKnownAccount(assetDefinitionId, accountId) {

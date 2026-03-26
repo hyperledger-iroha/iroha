@@ -172,6 +172,11 @@ impl PushBridge {
         self.devices.len()
     }
 
+    #[cfg(test)]
+    pub(crate) fn registered_device(&self, token: &str) -> Option<RegisteredDevice> {
+        self.devices.get(token).map(|entry| entry.clone())
+    }
+
     fn has_credentials(&self, platform: Platform) -> bool {
         match platform {
             Platform::Fcm => self.config.fcm_api_key.is_some(),

@@ -236,7 +236,7 @@ Enum RegistryEventKind {
 گیٹ ویز شیئر `RegistryEventV1` اور DNS/SoraFS ہم وقت سازی کے ذریعے:
 
 1. آخری `NameRecordV1` کو واقعات کی ترتیب میں حوالہ دیا گیا۔
-2. دوبارہ حل کرنے والے ریزولور ٹیمپلیٹس (ترجیحی I105 ایڈریس + کمپریسڈ (`sora`) دوسرے آپشن کے طور پر ، ٹیکسٹ ریکارڈز)۔
+2. دوبارہ حل کرنے والے ریزولور ٹیمپلیٹس (ترجیحی i105 ایڈریس + کمپریسڈ (`sora`) دوسرے آپشن کے طور پر ، ٹیکسٹ ریکارڈز)۔
 3. [`soradns_registry_rfc.md`] (https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md) میں بیان کردہ Soradns فلو کے ذریعے زون کا ڈیٹا انسٹال کریں۔واقعہ کی فراہمی کی ضمانتیں:
 
 - `NameRecordV1` کو متاثر کرنے والے ہر ٹرانزیکشن کو * `version` کے ساتھ صرف ایک ہی پروگرام شامل کرنا ہوگا۔

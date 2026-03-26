@@ -141,7 +141,7 @@ Zolaq manifestləri `nexus.registry.manifest_directory` vasitəsilə konfiqurasi
 }
 ```
 
-Əsas tələblər:- Təsdiqləyicilər **qataloqda mövcud olan kanonik I105 hesab identifikatorları olmalıdır (`@domain` yoxdur; `@domain`-i yalnız açıq marşrut göstərişi kimi əlavə edin). `quorum`-i multisig həddinə təyin edin (≥2).
+Əsas tələblər:- Təsdiqləyicilər **qataloqda mövcud olan kanonik i105 hesab identifikatorları olmalıdır (`@domain` yoxdur; `@domain`-i yalnız açıq marşrut göstərişi kimi əlavə edin). `quorum`-i multisig həddinə təyin edin (≥2).
 - Qorunan ad məkanları `Queue::push` (bax: `crates/iroha_core/src/queue.rs`) tərəfindən tətbiq edilir, buna görə də bütün CBDC müqavilələrində `gov_namespace` + `gov_contract_id` göstərilməlidir.
 - `composability_group` sahələri `docs/source/nexus.md` §8.6-da təsvir edilən sxemə uyğundur; sahibi (CBDC zolağı) ağ siyahı və kvotaları təmin edir. Ağ siyahıya alınmış DS manifestləri yalnız `group_id_hex` + `activation_epoch`-i təyin edir.
 - Manifesti kopyaladıqdan sonra `LaneManifestRegistry::from_config`-in onu yüklədiyini təsdiqləmək üçün `cargo test -p integration_tests nexus::lane_registry -- --nocapture`-i işə salın.

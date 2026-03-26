@@ -21,9 +21,9 @@ Kotodama kirish nuqtasi qanday qilib ichki metadata tekshiruvi bilan `transfer_a
 
 ## Buxgalteriya kitobi bo'yicha ko'rsatmalar
 
-- Shartnoma organini (masalan, `i105...`) u o'tkazadigan aktiv bilan moliyalashtiring va vakolatga `CanTransfer` rolini yoki unga tenglashtirilgan ruxsatni beradi.
-- `call_transfer_asset` kirish punktiga qo'ng'iroq qiling va 5 birlikni kontrakt hisobidan `i105...` ga o'tkazing, bu zanjirdagi avtomatlashtirishning xost qo'ng'iroqlarini o'rash usulini aks ettiradi.
-- `FindAccountAssets` yoki `iroha_cli ledger asset list --account i105...` orqali balanslarni tekshiring va metadata himoyachisi uzatish kontekstini qayd etganligini tasdiqlash uchun voqealarni tekshiring.
+- Shartnoma organini (masalan, `soraカタカナ...`) u o'tkazadigan aktiv bilan moliyalashtiring va vakolatga `CanTransfer` rolini yoki unga tenglashtirilgan ruxsatni beradi.
+- `call_transfer_asset` kirish punktiga qo'ng'iroq qiling va 5 birlikni kontrakt hisobidan `soraカタカナ...` ga o'tkazing, bu zanjirdagi avtomatlashtirishning xost qo'ng'iroqlarini o'rash usulini aks ettiradi.
+- `FindAccountAssets` yoki `iroha_cli ledger asset list --account soraカタカナ...` orqali balanslarni tekshiring va metadata himoyachisi uzatish kontekstini qayd etganligini tasdiqlash uchun voqealarni tekshiring.
 
 ## Tegishli SDK qo'llanmalari
 

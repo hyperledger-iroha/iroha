@@ -120,7 +120,7 @@ cargo run
 Келесіге ұқсас журнал шығысын көруіңіз керек:
 
 ```
-i105... now holds:
+soraカタカナ... now holds:
   50 units of 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 

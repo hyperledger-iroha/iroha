@@ -75,7 +75,7 @@ dashboards et voies d'escalade.
 | Charte + addenda KPI | `docs/source/sns/governance_addenda/` | Chartes signees avec controle de version, covenants KPI et decisions de gouvernance referencees par les votes CLI. |
 | Schema du registre | [`registry-schema.md`](./registry-schema.md) | Structures Norito canoniques (`NameRecordV1`, `SuffixPolicyV1`, `RevenueAccrualEventV1`). |
 | Contrat du registrar | [`registrar-api.md`](./registrar-api.md) | Payloads REST/gRPC, metriques `sns_registrar_status_total` et attentes des hooks de gouvernance. |
-| Guide UX d'adresses | [`address-display-guidelines.md`](./address-display-guidelines.md) | Rendus canoniques I105 (prefere) et compresses (second choix) reproduits par les wallets/explorers. |
+| Guide UX d'adresses | [`address-display-guidelines.md`](./address-display-guidelines.md) | Rendus canoniques i105 (prefere) et compresses (second choix) reproduits par les wallets/explorers. |
 | Docs SoraDNS / GAR | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | Derivation deterministe des hosts, workflow du tailer de transparence et regles d'alerte. |
 | Memos reglementaires | `docs/source/sns/regulatory/` | Notes d'accueil par juridiction (ex. EU DSA), acknowledgements steward, annexes de modele. |
 | Journal de drill | `ops/drill-log.md` | Journal des rehearsals chaos et IR requis avant sorties de phase. |
@@ -120,7 +120,7 @@ decision en 24 heures.
    etat GAR/zone s'est propage (voir 4.5).
 6. **Divulgation client:** Mettre a jour le ledger oriente client (wallet/explorer)
    via les fixtures partages dans [`address-display-guidelines.md`](./address-display-guidelines.md),
-   en s'assurant que les rendus I105 et compresses correspondent aux guides copy/QR.
+   en s'assurant que les rendus i105 et compresses correspondent aux guides copy/QR.
 
 ### 4.3 Renouvellements, facturation et reconciliation tresorerie
 
@@ -154,11 +154,11 @@ decision en 24 heures.
 | Phase | Proprietaire | Action et preuve | SLA |
 |-------|--------------|------------------|-----|
 | Demande de gel soft | Steward / support | Deposer un ticket `SNS-DF-<id>` avec preuves de paiement, reference de bond de litige et selecteur(s) affecte(s). | <=4 h apres l'entree. |
-| Ticket guardian | Conseil guardian | `sns governance freeze --selector <I105> --reason <text> --until <ts>` produit `GuardianFreezeTicketV1`. Stocker le JSON du ticket sous `artifacts/sns/guardian/<id>.json`. | <=30 min ACK, <=2 h execution. |
+| Ticket guardian | Conseil guardian | `sns governance freeze --selector <i105> --reason <text> --until <ts>` produit `GuardianFreezeTicketV1`. Stocker le JSON du ticket sous `artifacts/sns/guardian/<id>.json`. | <=30 min ACK, <=2 h execution. |
 | Ratification du conseil | Conseil de gouvernance | Approuver ou rejeter les gels, documenter la decision avec lien vers le ticket guardian et le digest du bond de litige. | Prochaine session du conseil ou vote asynchrone. |
 | Panel d'arbitrage | Conformite + steward | Convoquer un panel de 7 jurors (selon roadmap) avec des bulletins hashes via `sns governance dispute ballot`. Joindre les recus de vote anonymises au paquet d'incident. | Verdict <=7 jours apres depot du bond. |
 | Appel | Guardian + conseil | Les appels doublent le bond et repetent le processus des jurors; enregistrer le manifeste Norito `DisputeAppealV1` et referencer le ticket primaire. | <=10 jours. |
-| Degel et remediation | Registrar + ops resolver | Executer `sns governance unfreeze --selector <I105> --ticket <id>`, mettre a jour le statut du registrar, et propager les diffs GAR/resolver. | Immediatement apres le verdict. |
+| Degel et remediation | Registrar + ops resolver | Executer `sns governance unfreeze --selector <i105> --ticket <id>`, mettre a jour le statut du registrar, et propager les diffs GAR/resolver. | Immediatement apres le verdict. |
 
 Les canons d'urgence (gels declenches par guardian <=72 h) suivent le meme flux
 mais exigent une revue retroactive du conseil et une note de transparence sous

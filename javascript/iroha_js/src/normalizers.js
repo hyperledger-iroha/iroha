@@ -3,7 +3,6 @@ import {
   AccountAddress,
   AccountAddressError,
   AccountAddressErrorCode,
-  DEFAULT_DOMAIN_NAME,
 } from "./address.js";
 import {
   createValidationError,
@@ -270,7 +269,7 @@ export function normalizeAccountId(value, name) {
   ) {
     fail(
       ValidationErrorCode.INVALID_ACCOUNT_ID,
-      `${name} must be an I105 account id`,
+      `${name} must be a canonical katakana i105 account id`,
       name,
     );
   }
@@ -282,7 +281,7 @@ export function normalizeAccountId(value, name) {
     if (error instanceof AccountAddressError) {
       fail(
         ValidationErrorCode.INVALID_ACCOUNT_ID,
-        `${name} must be an I105 account id`,
+        `${name} must be a canonical katakana i105 account id`,
         name,
       );
     }
@@ -347,7 +346,7 @@ export function normalizeAssetId(value, name) {
   if (parts.length < 2 || parts.length > 3) {
     fail(
       ValidationErrorCode.INVALID_ASSET_ID,
-      `${name} must use '<base58-asset-id>#<katakana-i105-account-id>' with optional '#dataspace:<id>' suffix`,
+      `${name} must use '<base58-asset-definition-id>#<katakana-i105-account-id>' with optional '#dataspace:<id>' suffix`,
       name,
     );
   }

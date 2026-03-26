@@ -2591,7 +2591,7 @@ fn push_error_response(
 #[cfg(all(feature = "app_api", feature = "push"))]
 async fn handler_push_register_device(
     State(app): State<SharedAppState>,
-    NoritoJson(req): NoritoJson<push::RegisterDeviceRequest>,
+    NoritoJson(mut req): NoritoJson<push::RegisterDeviceRequest>,
 ) -> AxResponse {
     if app.push.is_none() {
         return push_error_response(
@@ -2600,6 +2600,22 @@ async fn handler_push_register_device(
             "push bridge disabled",
         );
     }
+    let account_id = match routing::parse_account_literal_with_state(
+        app.state.as_ref(),
+        &req.account_id,
+        &app.telemetry,
+        "/v1/notify/devices",
+    ) {
+        Ok((account_id, _)) => account_id,
+        Err(_) => {
+            return push_error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_account",
+                format!("invalid account id `{}`", req.account_id.trim()),
+            );
+        }
+    };
+    req.account_id = account_id.to_string();
     let rate_key = format!("push:{}", req.account_id);
     if !app.push_rate_limiter.allow(&rate_key).await {
         return push_error_response(
@@ -3089,7 +3105,6 @@ async fn handler_account_assets_query(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
 async fn handler_account_transactions_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3135,7 +3150,6 @@ async fn handler_account_transactions_get(
 }
 
 #[cfg(feature = "app_api")]
-#[axum::debug_handler]
 async fn handler_transactions_history_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -10501,7 +10515,8 @@ async fn handler_kaigi_relays_sse(
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
     if let Some(ref relay_literal) = params.relay {
-        let parsed = routing::parse_account_literal(
+        let parsed = routing::parse_account_literal_with_state(
+            app.state.as_ref(),
             relay_literal,
             &app.telemetry,
             CONTEXT_KAIGI_RELAY_EVENTS_QUERY,
@@ -10514,7 +10529,7 @@ async fn handler_kaigi_relays_sse(
                 )),
             ))
         })?;
-        params.relay = Some(parsed.canonical().to_string());
+        params.relay = Some(parsed.1);
     }
 
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
@@ -14343,7 +14358,7 @@ fn enforce_sorafs_repair_worker_auth(
     idempotency_key: &str,
     action: RepairWorkerActionV1,
     signature: &SignatureOf<RepairWorkerSignaturePayloadV1>,
-) -> Result<(), Error> {
+) -> Result<AccountId, Error> {
     let record = app
         .sorafs_node
         .repair_task_record(ticket_id)
@@ -14379,9 +14394,14 @@ fn enforce_sorafs_repair_worker_auth(
         conversion_error(format!("invalid repair worker signature payload: {err}"))
     })?;
 
-    let account_id: AccountId = AccountId::parse_encoded(worker_id)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .map_err(|err| conversion_error(format!("invalid worker_id `{worker_id}`: {err}")))?;
+    let account_id = crate::routing::parse_account_literal_with_state(
+        app.state.as_ref(),
+        worker_id,
+        &app.telemetry,
+        "/v1/sorafs/audit/repair#worker_id",
+    )
+    .map(|(account_id, _)| account_id)
+    .map_err(|err| conversion_error(format!("invalid worker_id `{worker_id}`: {err}")))?;
     let permission = Permission::from(CanOperateSorafsRepair {
         provider_id: ProviderId::new(record.provider_id),
     });
@@ -14409,7 +14429,7 @@ fn enforce_sorafs_repair_worker_auth(
             "repair worker signature invalid: {err}",
         )))
     })?;
-    Ok(())
+    Ok(account_id)
 }
 
 #[cfg(feature = "app_api")]
@@ -14417,13 +14437,13 @@ async fn handler_post_sorafs_repair_claim(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(req): NoritoJson<crate::routing::RepairWorkerClaimDto>,
+    NoritoJson(mut req): NoritoJson<crate::routing::RepairWorkerClaimDto>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     let action = RepairWorkerActionV1::Claim {
         claimed_at_unix: req.claimed_at_unix,
     };
-    if let Err(err) = enforce_sorafs_repair_worker_auth(
+    let worker_account = match enforce_sorafs_repair_worker_auth(
         &app,
         &req.ticket_id,
         &req.manifest_digest_hex,
@@ -14432,10 +14452,14 @@ async fn handler_post_sorafs_repair_claim(
         action,
         &req.signature,
     ) {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-        return Err(err);
-    }
+        Ok(account_id) => account_id,
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
+            return Err(err);
+        }
+    };
+    req.worker_id = worker_account.to_string();
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -14470,13 +14494,13 @@ async fn handler_post_sorafs_repair_heartbeat(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(req): NoritoJson<crate::routing::RepairWorkerHeartbeatDto>,
+    NoritoJson(mut req): NoritoJson<crate::routing::RepairWorkerHeartbeatDto>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     let action = RepairWorkerActionV1::Heartbeat {
         heartbeat_at_unix: req.heartbeat_at_unix,
     };
-    if let Err(err) = enforce_sorafs_repair_worker_auth(
+    let worker_account = match enforce_sorafs_repair_worker_auth(
         &app,
         &req.ticket_id,
         &req.manifest_digest_hex,
@@ -14485,10 +14509,14 @@ async fn handler_post_sorafs_repair_heartbeat(
         action,
         &req.signature,
     ) {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-        return Err(err);
-    }
+        Ok(account_id) => account_id,
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
+            return Err(err);
+        }
+    };
+    req.worker_id = worker_account.to_string();
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -14523,14 +14551,14 @@ async fn handler_post_sorafs_repair_complete(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(req): NoritoJson<crate::routing::RepairWorkerCompleteDto>,
+    NoritoJson(mut req): NoritoJson<crate::routing::RepairWorkerCompleteDto>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     let action = RepairWorkerActionV1::Complete {
         completed_at_unix: req.completed_at_unix,
         resolution_notes: req.resolution_notes.clone(),
     };
-    if let Err(err) = enforce_sorafs_repair_worker_auth(
+    let worker_account = match enforce_sorafs_repair_worker_auth(
         &app,
         &req.ticket_id,
         &req.manifest_digest_hex,
@@ -14539,10 +14567,14 @@ async fn handler_post_sorafs_repair_complete(
         action,
         &req.signature,
     ) {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-        return Err(err);
-    }
+        Ok(account_id) => account_id,
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
+            return Err(err);
+        }
+    };
+    req.worker_id = worker_account.to_string();
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -14577,14 +14609,14 @@ async fn handler_post_sorafs_repair_fail(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(req): NoritoJson<crate::routing::RepairWorkerFailDto>,
+    NoritoJson(mut req): NoritoJson<crate::routing::RepairWorkerFailDto>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     let action = RepairWorkerActionV1::Fail {
         failed_at_unix: req.failed_at_unix,
         reason: req.reason.clone(),
     };
-    if let Err(err) = enforce_sorafs_repair_worker_auth(
+    let worker_account = match enforce_sorafs_repair_worker_auth(
         &app,
         &req.ticket_id,
         &req.manifest_digest_hex,
@@ -14593,10 +14625,14 @@ async fn handler_post_sorafs_repair_fail(
         action,
         &req.signature,
     ) {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-        return Err(err);
-    }
+        Ok(account_id) => account_id,
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
+            return Err(err);
+        }
+    };
+    req.worker_id = worker_account.to_string();
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -22324,6 +22360,38 @@ pub(crate) mod tests_runtime_handlers {
         World::with([domain], [account], [])
     }
 
+    #[cfg(all(feature = "app_api", feature = "push"))]
+    pub(crate) fn bind_account_alias_for_test(
+        app: &SharedAppState,
+        account_id: &AccountId,
+        alias: &str,
+    ) {
+        let label = iroha_data_model::account::rekey::AccountLabel::from_literal(
+            alias,
+            &app.state.nexus_snapshot().dataspace_catalog,
+        )
+        .expect("valid account alias");
+        let header = BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = app.state.block(header);
+        let mut tx = block.transaction();
+        tx.world
+            .account_aliases
+            .insert(label.clone(), account_id.clone());
+        tx.world.account_rekey_records.insert(
+            label.clone(),
+            iroha_data_model::account::rekey::AccountRekeyRecord::new(label, account_id.clone()),
+        );
+        tx.apply();
+        block.commit().expect("commit account alias for test");
+    }
+
     pub(crate) fn signed_app_headers(
         account: &AccountId,
         key_pair: &KeyPair,
@@ -23558,6 +23626,36 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(resp.status(), StatusCode::ACCEPTED);
         let bridge = app.push.as_ref().expect("push bridge configured");
         assert_eq!(bridge.device_count(), 1);
+    }
+
+    #[cfg(all(feature = "app_api", feature = "push"))]
+    #[tokio::test]
+    async fn push_registration_accepts_account_alias_and_stores_canonical_i105() {
+        let app = mk_app_state_for_tests_with_options(
+            None,
+            None,
+            None,
+            Some(iroha_config::parameters::actual::Push {
+                enabled: true,
+                fcm_api_key: Some("k".to_string()),
+                ..Default::default()
+            }),
+        );
+        let mut req = mk_push_request("t-alias");
+        let canonical_account = AccountId::parse_encoded(&req.account_id)
+            .expect("canonical test i105 should parse")
+            .into_account_id();
+        bind_account_alias_for_test(&app, &canonical_account, "wallet@sbp");
+        req.account_id = "wallet@sbp".to_string();
+
+        let resp = super::handler_push_register_device(State(app.clone()), NoritoJson(req)).await;
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+
+        let bridge = app.push.as_ref().expect("push bridge configured");
+        let device = bridge
+            .registered_device("t-alias")
+            .expect("registered device should exist");
+        assert_eq!(device.account_id, canonical_account.to_string());
     }
 
     fn make_signed_block(
@@ -28801,7 +28899,53 @@ mod tests {
             },
             &signature,
         );
-        assert!(auth.is_ok(), "signed worker should be accepted: {auth:?}");
+        assert_eq!(auth.expect("signed worker should be accepted"), worker_id);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn sorafs_repair_worker_auth_accepts_alias_worker() {
+        let app = mk_app_state_for_tests();
+        let report = repair_report("REP-900A", [0x21; 32], [0x32; 32], 1_701_000_050);
+        app.sorafs_node
+            .enqueue_repair_report(&report)
+            .expect("enqueue report");
+
+        let worker_key = KeyPair::random();
+        let worker_id = AccountId::new(worker_key.public_key().clone());
+        grant_repair_worker_permission(&app, &worker_id, report.evidence.provider_id);
+        bind_account_alias_for_test(&app, &worker_id, "repair@sbp");
+
+        let claimed_at = report.submitted_at_unix + 10;
+        let idempotency_key = "claim-900a";
+        let payload = RepairWorkerSignaturePayloadV1 {
+            version: REPAIR_WORKER_SIGNATURE_VERSION_V1,
+            ticket_id: report.ticket_id.clone(),
+            manifest_digest: report.evidence.manifest_digest,
+            provider_id: report.evidence.provider_id,
+            worker_id: "repair@sbp".to_string(),
+            idempotency_key: idempotency_key.to_string(),
+            action: RepairWorkerActionV1::Claim {
+                claimed_at_unix: claimed_at,
+            },
+        };
+        let signature = SignatureOf::new(worker_key.private_key(), &payload);
+
+        let auth = enforce_sorafs_repair_worker_auth(
+            &app,
+            &report.ticket_id,
+            &hex::encode(report.evidence.manifest_digest),
+            "repair@sbp",
+            idempotency_key,
+            RepairWorkerActionV1::Claim {
+                claimed_at_unix: claimed_at,
+            },
+            &signature,
+        );
+        assert_eq!(
+            auth.expect("signed alias worker should be accepted"),
+            worker_id
+        );
     }
 
     #[cfg(feature = "app_api")]

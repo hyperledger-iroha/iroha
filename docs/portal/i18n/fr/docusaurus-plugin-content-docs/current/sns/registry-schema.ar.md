@@ -228,7 +228,7 @@ Il s'agit d'un exemple de mise en cache `RegistryEventKind` qui met en cache les
 ## 5. Fonctions de synchronisation et de synchronisation
 
 Paramètres de `RegistryEventV1` et DNS/SoraFS:1. Utilisez le `NameRecordV1` المشار اليه في تسلسل الاحداث.
-2. Utilisez des modèles de résolveur (modèles I105 + compressés (`sora`) pour les enregistrements de texte).
+2. Utilisez des modèles de résolveur (modèles i105 + compressés (`sora`) pour les enregistrements de texte).
 3. Vous pouvez utiliser SoraDNS pour [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
 
 ضمانات تسليم الاحداث:

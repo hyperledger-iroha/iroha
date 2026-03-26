@@ -27,9 +27,9 @@ It covers CLI orchestration, SDK helpers, and the expected governance knobs so o
 iroha --config client.toml --output \
   repo initiate \
   --agreement-id daily_repo \
-  --initiator i105... \
-  --counterparty i105... \
-  --custodian i105... \
+  --initiator soraカタカナ... \
+  --counterparty soraカタカナ... \
+  --custodian soraカタカナ... \
   --cash-asset 7EAD8EFYUx1aVKZPUU1fyKvr8dF1 \
   --cash-quantity 1000 \
   --collateral-asset 4fEiy2n5VMFVfi6BzDJge519zAzg \
@@ -43,8 +43,8 @@ iroha --config client.toml --output \
 iroha --config client.toml --output \
   repo unwind \
   --agreement-id daily_repo \
-  --initiator i105... \
-  --counterparty i105... \
+  --initiator soraカタカナ... \
+  --counterparty soraカタカナ... \
   --cash-asset 7EAD8EFYUx1aVKZPUU1fyKvr8dF1 \
   --cash-quantity 1005 \
   --collateral-asset 4fEiy2n5VMFVfi6BzDJge519zAzg \
@@ -127,13 +127,13 @@ iroha --config client.toml --output \
   --settlement-id trade_dvp \
   --delivery-asset 4fEiy2n5VMFVfi6BzDJge519zAzg \
   --delivery-quantity 10 \
-  --delivery-from i105... \
-  --delivery-to i105... \
+  --delivery-from soraカタカナ... \
+  --delivery-to soraカタカナ... \
   --delivery-instrument-id US0378331005 \
   --payment-asset 7EAD8EFYUx1aVKZPUU1fyKvr8dF1 \
   --payment-quantity 1000 \
-  --payment-from i105... \
-  --payment-to i105... \
+  --payment-from soraカタカナ... \
+  --payment-to soraカタカナ... \
   --order payment-then-delivery \
   --atomicity all-or-nothing \
   --iso-reference-crosswalk /opt/iso/isin_crosswalk.json \
@@ -145,12 +145,12 @@ iroha --config client.toml --output \
   --settlement-id trade_pvp \
   --primary-asset 7EAD8EFYUx1aVKZPUU1fyKvr8dF1 \
   --primary-quantity 500 \
-  --primary-from i105... \
-  --primary-to i105... \
+  --primary-from soraカタカナ... \
+  --primary-to soraカタカナ... \
   --counter-asset 5tPkFK6s2zUcd1qUHyTmY7fDVa2n \
   --counter-quantity 460 \
-  --counter-from i105... \
-  --counter-to i105... \
+  --counter-from soraカタカナ... \
+  --counter-to soraカタカナ... \
   --iso-xml-out trade_pvp.xml
 ```
 

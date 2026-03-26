@@ -432,9 +432,9 @@ fn convert_volatility_bucket(volatility: GasVolatility) -> VolatilityBucket {
 
 fn parse_fee_sponsor(
     world: &impl WorldReadOnly,
+    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
     metadata: &Metadata,
 ) -> Result<Option<AccountId>, ValidationFail> {
-    let _ = world;
     let Some(raw) = metadata.get("fee_sponsor") else {
         return Ok(None);
     };
@@ -442,20 +442,27 @@ fn parse_fee_sponsor(
         Ok(sponsor) => Ok(Some(sponsor)),
         Err(err) => {
             if let Ok(literal) = raw.try_into_any_norito::<String>()
-                && let Ok(sponsor) = AccountId::parse_encoded(&literal)
+                && let Some(sponsor) = crate::block::parse_account_literal_with_world(
+                    world,
+                    dataspace_catalog,
+                    &literal,
+                )
             {
-                return Ok(Some(sponsor.into_account_id()));
+                return Ok(Some(sponsor));
             }
             Err(ValidationFail::NotPermitted(format!(
-                "invalid fee_sponsor metadata: expected canonical Katakana i105 account id ({err})"
+                "invalid fee_sponsor metadata: expected canonical Katakana i105 account id or on-chain alias ({err})"
             )))
         }
     }
 }
 
-fn parse_account_id_literal(world: &impl WorldReadOnly, literal: &str) -> Option<AccountId> {
-    let _ = world;
-    crate::block::parse_account_literal_with_world(world, literal)
+fn parse_account_id_literal(
+    world: &impl WorldReadOnly,
+    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+    literal: &str,
+) -> Option<AccountId> {
+    crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal)
 }
 
 /// Parse optional `gas_limit` from transaction metadata.
@@ -597,7 +604,11 @@ pub(crate) fn charge_fees_for_applied_overlay(
         })?;
 
     let md = transaction.metadata();
-    let fee_sponsor = parse_fee_sponsor(&state_transaction.world, md)?;
+    let fee_sponsor = parse_fee_sponsor(
+        &state_transaction.world,
+        &state_transaction.nexus.dataspace_catalog,
+        md,
+    )?;
 
     // Keep gas policy snapshots aligned with governance/custom parameter updates.
     Executor::refresh_gas_from_parameters(state_transaction);
@@ -704,11 +715,12 @@ pub(crate) fn charge_fees_for_applied_overlay(
         if gas_used > 0 && units_per_gas > 0 {
             let tech_account: AccountId = parse_account_id_literal(
                 &state_transaction.world,
+                &state_transaction.nexus.dataspace_catalog,
                 &state_transaction.pipeline.gas.tech_account_id,
             )
             .ok_or_else(|| {
                 ValidationFail::InternalError(
-                    "invalid pipeline.gas.tech_account_id; expected canonical Katakana i105 account id"
+                    "invalid pipeline.gas.tech_account_id; expected canonical Katakana i105 account id or on-chain alias"
                         .to_owned(),
                 )
             })?;
@@ -981,11 +993,12 @@ impl Executor {
 
         let sink_account = crate::block::parse_account_literal_with_world(
             &state_transaction.world,
+            &state_transaction.nexus.dataspace_catalog,
             &cfg.fee_sink_account_id,
         )
         .ok_or_else(|| {
             let reason =
-                "invalid nexus fee sink account id; expected canonical Katakana i105 account id"
+                "invalid nexus fee sink account id; expected canonical Katakana i105 account id or on-chain alias"
                     .to_owned();
             sumeragi_status::record_nexus_fee_event(NexusFeeEvent::ConfigInvalid {
                 reason: reason.clone(),
@@ -1214,11 +1227,12 @@ impl Executor {
                 // Parse tech account id
                 let tech_account: AccountId = parse_account_id_literal(
                     &state_transaction.world,
+                    &state_transaction.nexus.dataspace_catalog,
                     &state_transaction.pipeline.gas.tech_account_id,
                 )
                 .ok_or_else(|| {
                     ValidationFail::InternalError(
-                        "invalid pipeline.gas.tech_account_id; expected canonical Katakana i105 account id"
+                        "invalid pipeline.gas.tech_account_id; expected canonical Katakana i105 account id or on-chain alias"
                             .to_owned(),
                     )
                 })?;
@@ -1372,7 +1386,11 @@ impl Executor {
                     "failed to encode transaction for fee metering: {err}"
                 ))
             })?;
-        let fee_sponsor = parse_fee_sponsor(&state_transaction.world, transaction.metadata())?;
+        let fee_sponsor = parse_fee_sponsor(
+            &state_transaction.world,
+            &state_transaction.nexus.dataspace_catalog,
+            transaction.metadata(),
+        )?;
         // Bind the transaction call_hash for ISI event emitters to use in audit fields
         let call_hash = transaction.hash_as_entrypoint();
         state_transaction.tx_call_hash = Some(iroha_crypto::Hash::from(call_hash));
@@ -1818,11 +1836,12 @@ impl Executor {
                     // Parse tech account id
                     let tech_account: AccountId = parse_account_id_literal(
                         &state_transaction.world,
+                        &state_transaction.nexus.dataspace_catalog,
                         &state_transaction.pipeline.gas.tech_account_id,
                     )
                     .ok_or_else(|| {
                         ValidationFail::InternalError(
-                            "invalid pipeline.gas.tech_account_id; expected canonical Katakana i105 account id"
+                            "invalid pipeline.gas.tech_account_id; expected canonical Katakana i105 account id or on-chain alias"
                                 .to_owned(),
                         )
                     })?;

@@ -225,7 +225,7 @@ Toutes les clés sont sérialisées en utilisant les tuplas Norito pour mainteni
 Les passerelles sont inscrites à `RegistryEventV1` et synchronisées avec DNS/SoraFS intermédiaire :
 
 1. Obtenez la dernière référence `NameRecordV1` pour la sécurité des événements.
-2. Régénérer les modèles de résolveur (directions I105 préférées + compressé (`sora`) comme deuxième option, enregistrements de texte).
+2. Régénérer les modèles de résolveur (directions i105 préférées + compressé (`sora`) comme deuxième option, enregistrements de texte).
 3. Pinnear données de zone actualisées via le flux SoraDNS décrit en [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
 
 Garanties de participation aux événements :

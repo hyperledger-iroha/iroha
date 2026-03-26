@@ -1,40 +1,38 @@
----
-lang: az
-direction: ltr
-source: docs/account_structure_sdk_alignment.md
-status: complete
-generator: scripts/sync_docs_i18n.py
-source_hash: 164bd373091ae3280f9f90fcfd915a90088b0c79b8f3759ffd2548edb64d0a90
-source_last_modified: "2026-01-28T17:11:30.632934+00:00"
-translation_last_reviewed: 2026-02-07
-translator: machine-google-reviewed
----
+# Account/Asset Hard-Cut Alignment
 
-SDK və Codec Sahibləri üçün # I105 Yayım Qeydi
+Teams: Rust runtime, Rust/Swift/Android/JS SDKs, bridge/codec tooling.
 
-Komandalar: Rust SDK, TypeScript/JavaScript SDK, Python SDK, Kotlin SDK, Codec alətləri
+This repository ships strict first-release semantics. There is no compatibility
+path for legacy account/asset literals.
 
-Kontekst: `docs/account_structure.md` indi göndərmə I105 hesab ID-sini əks etdirir
-həyata keçirilməsi. Lütfən, SDK davranışını və testlərini kanonik spesifikasiya ilə uyğunlaşdırın.
+## Required behavior
+1. **Account parser contract (strict):**
+   - Accept only canonical Katakana i105 account literals.
+   - Reject all of:
+     - any `@domain` suffix
+     - alias literals
+     - canonical hex account literals in parser input
+    - non-canonical/legacy i105 literals
+     - legacy `norito:<hex>` account literals
+     - `uaid:` / `opaque:` account parser forms
+2. **Account identity surface:**
+   - Account-facing APIs are domainless and operate on subject identity.
+   - Domain context is represented only via explicit scoped/link records where needed.
+3. **Asset parser contract (strict):**
+   - Accept only canonical Base58 `AssetDefinitionId` values as public asset IDs.
+   - Accept asset aliases only in `name#domain.dataspace` / `name#dataspace` form, and resolve
+     them on-chain to a canonical Base58 asset-definition id.
+   - Treat `<base58-asset-definition-id>#<katakana-i105-account-id>[#dataspace:<id>]` as an
+     asset-holding identifier, not as a public asset id or alias target.
+   - Reject all prefixed/legacy forms (`norito:<hex>`, `aid:<hex>`,
+     owner-qualified asset-holding literals, `asset#domain#account`, `asset##account`, etc.).
+4. **Canonical output:**
+   - Render account IDs as canonical Katakana i105 in user-facing output.
+   - Canonical hex remains envelope/debug-only and is not accepted as parser input.
+5. **Compatibility policy:**
+   - No parser fallback branches.
+   - No parse-any account/asset entrypoints in runtime SDK paths.
 
-Əsas istinadlar:
-- Ünvan kodek + başlıq tərtibatı — `docs/account_structure.md` §2
-- Əyri reyestri — `docs/source/references/address_curve_registry.md`
-- Norm v1 domen idarəsi — `docs/source/references/address_norm_v1.md`
-- Armatur vektorları — `fixtures/account/address_vectors.json`
-
-Fəaliyyət elementləri:
-1. **Kanonik çıxış:** `AccountId::to_string()`/Ekran yalnız I105 yaymalıdır
-   (`@domain` şəkilçisi yoxdur). Kanonik hex sazlama üçündir (`0x...`).
-2. **Accepted inputs:** parsers MUST accept only canonical Katakana i105 account literals. Reject non-canonical Katakana i105 literals, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
-3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
-4. **I105 yoxlama məbləği:** `I105PRE || prefix || payload` üzərində Blake2b-512 istifadə edin, götürün
-   ilk 2 bayt. Sıxılmış əlifba bazası **105**-dir.
-5. **Əyri keçid:** SDK-lar defolt olaraq yalnız Ed25519-dur. üçün açıq seçim təmin edin
-   ML‑DSA/GOST/SM (Swift qurma bayraqları; JS/Android `configureCurveSupport`). Et
-   Secp256k1-in Rust xaricində defolt olaraq aktiv olduğunu düşünməyin.
-6. **CAIP-10 yoxdur:** göndərilmiş CAIP‑10 xəritəsi hələ yoxdur; ifşa etməyin və ya
-   CAIP‑10 çevrilmələrindən asılıdır.
-
-Kodeklər/testlər yeniləndikdən sonra təsdiq edin; açıq suallar izlənilə bilər
-hesab ünvanlayan RFC mövzusunda.
+## Validation closure
+- Include explicit rejection tests for all forbidden literal forms.
+- Keep legacy forms only in negative-path tests.

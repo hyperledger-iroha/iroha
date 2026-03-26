@@ -116,7 +116,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/policies/{suffix_id}` | حاصل کریں | - | موجودہ `SuffixPolicyV1` (کیچ ایبل) ملتا ہے۔ |
 | `/v1/sns/names/{namespace}/{literal}` | حاصل کریں | - | `NameRecordV1` موجودہ + اصل حالت (فعال ، فضل ، وغیرہ) کو لوٹاتا ہے۔ |
 
-** سلیکٹر انکوڈنگ: ** `{selector}` طبقہ I105 ، ADDR-5 کے مطابق کمپریسڈ یا معیاری ہیکس قبول کرتا ہے۔ Torii اسے `NameSelectorV1` کے ذریعے پرنٹ کرتا ہے۔
+** سلیکٹر انکوڈنگ: ** `{selector}` طبقہ i105 ، ADDR-5 کے مطابق کمپریسڈ یا معیاری ہیکس قبول کرتا ہے۔ Torii اسے `NameSelectorV1` کے ذریعے پرنٹ کرتا ہے۔
 
 ** غلطی کا نمونہ: ** تمام اختتامی نکات Norito ، `message` ، `details` کے ساتھ Norito JSON واپس کریں گے۔ کوڈز میں `sns_err_reserved` ، `sns_err_payment_mismatch` ، `sns_err_policy_violation` ، `sns_err_governance_missing` شامل ہیں۔
 
@@ -160,7 +160,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner soraカタカナ... \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -222,7 +222,7 @@ Torii جانچ پڑتال کرکے شواہد کی تصدیق کرتا ہے:
 
 1. قیمتیں ، فضل کی مدت ، اور دستیاب طبقات حاصل کرنے کے لئے کسٹمر `/v1/sns/policies/{suffix_id}` سے پوچھ گچھ کرتا ہے۔
 2. کلائنٹ بلڈ `RegisterNameRequestV1`:
-   - `selector` لیبل I105 (ترجیحی) یا سی ڈی (دوسرا آپشن) سے اخذ کیا گیا ہے۔
+   - `selector` لیبل i105 (ترجیحی) یا سی ڈی (دوسرا آپشن) سے اخذ کیا گیا ہے۔
    - پالیسی کی حدود میں `term_years`۔
    - `payment` ٹریژری اسپلٹر/اسٹیورڈ سوئچ سے مراد ہے۔
 3. Torii چیک:

@@ -113,7 +113,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/policies/{suffix_id}` | OBTENIR | -- | Получает текущую `SuffixPolicyV1` (кэшируемо). |
 | `/v1/sns/names/{namespace}/{literal}` | OBTENIR | -- | Возвращает текущий `NameRecordV1` + эффективное состояние (Active, Grace, и т. д.). |
 
-**Sélecteur de sélection :** le segment `{selector}` est composé d'I105, compressé (`sora`) ou hexadécimal canonique par ADDR-5 ; Torii est normalisé par rapport à `NameSelectorV1`.**Modèle d'ordinateur :** nos entreprises utilisent Norito JSON avec `code`, `message`, `details`. Les codes incluent `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
+**Sélecteur de sélection :** le segment `{selector}` est composé d'i105, compressé (`sora`) ou hexadécimal canonique par ADDR-5 ; Torii est normalisé par rapport à `NameSelectorV1`.**Modèle d'ordinateur :** nos entreprises utilisent Norito JSON avec `code`, `message`, `details`. Les codes incluent `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
 
 ### 3.1 CLI помощники (требование ручного регистратора N0)
 
@@ -215,7 +215,7 @@ Les tests récents concernent `sns_err_governance_missing`.
 
 ### 6.1 Enregistrement standard1. Le client choisit `/v1/sns/policies/{suffix_id}` pour pouvoir accéder aux niveaux de scène, de grâce et de livraison.
 2. Adresse client `RegisterNameRequestV1` :
-   - `selector` peut être utilisé avant l'étiquette I105 ou avant l'étiquette compressée (`sora`).
+   - `selector` peut être utilisé avant l'étiquette i105 ou avant l'étiquette compressée (`sora`).
    - `term_years` dans les politiques antérieures.
    - `payment` ссылается на перевод splitter trésor/intendant.
 3. Torii prouve :

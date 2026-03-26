@@ -3,6 +3,8 @@
 
 package org.hyperledger.iroha.android.address;
 
+import org.hyperledger.iroha.android.testing.TestAssetDefinitionIds;
+
 public final class AssetIdDecoderTests {
 
   private AssetIdDecoderTests() {}
@@ -17,19 +19,19 @@ public final class AssetIdDecoderTests {
   }
 
   private static void isCanonicalReturnsTrueForCanonicalDefinitionId() {
-    final String definitionAddress = AssetDefinitionIdEncoder.encode("rose", "wonderland");
+    final String definitionAddress = TestAssetDefinitionIds.PRIMARY;
     assert AssetIdDecoder.isCanonical(definitionAddress)
         : "isCanonical must accept canonical Base58 asset-definition ids";
   }
 
   private static void isCanonicalReturnsFalseForOwnerQualifiedLiteral() {
-    final String definitionAddress = AssetDefinitionIdEncoder.encode("rose", "wonderland");
+    final String definitionAddress = TestAssetDefinitionIds.PRIMARY;
     assert !AssetIdDecoder.isCanonical(definitionAddress + "#not-public")
         : "isCanonical must reject owner-qualified asset literals";
   }
 
   private static void decodeReturnsDefinitionOnly() {
-    final String definitionAddress = AssetDefinitionIdEncoder.encode("rose", "wonderland");
+    final String definitionAddress = TestAssetDefinitionIds.PRIMARY;
     final AssetIdDecoder.AssetId decoded = AssetIdDecoder.decode(definitionAddress);
 
     assert definitionAddress.equals(decoded.definition().address())
@@ -45,14 +47,14 @@ public final class AssetIdDecoderTests {
     } catch (final IllegalArgumentException ex) {
       threw =
           ex.getMessage() != null
-              && ex.getMessage().contains("canonical unprefixed Base58 asset-definition form");
+              && (ex.getMessage().contains("Base58") || ex.getMessage().contains("canonical"));
     }
 
     assert threw : "decode must reject malformed asset literals";
   }
 
   private static void decodeDefinitionAcceptsCanonicalAddress() {
-    final String definitionAddress = AssetDefinitionIdEncoder.encode("pkr", "sbp");
+    final String definitionAddress = TestAssetDefinitionIds.TERTIARY;
     final AssetIdDecoder.AssetDefinition decoded = AssetIdDecoder.decodeDefinition(definitionAddress);
 
     assert definitionAddress.equals(decoded.address())

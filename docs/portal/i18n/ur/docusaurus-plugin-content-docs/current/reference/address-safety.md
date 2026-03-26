@@ -1,46 +1,73 @@
 ---
-lang: ur
-direction: rtl
-source: docs/portal/docs/reference/address-safety.md
-status: complete
-generator: docs/portal/scripts/sync-i18n.mjs
+title: Address Safety & Accessibility
+description: UX requirements for presenting and sharing Iroha addresses safely (ADDR-6c).
 ---
 
----
-title: Address safety اور accessibility
-description: Iroha addresses کو محفوظ انداز میں پیش کرنے اور شیئر کرنے کیلئے UX requirements (ADDR-6c).
----
-
-یہ صفحہ ADDR-6c documentation deliverable کو ظاہر کرتا ہے۔ ان پابندیوں کو wallets، explorers، SDK tooling، اور کسی بھی portal surface پر لاگو کریں جو human-facing addresses کو render یا accept کرتا ہو۔ canonical data model `docs/account_structure.md` میں ہے؛ نیچے دیا گیا checklist بتاتا ہے کہ ان formats کو safety یا accessibility کو متاثر کئے بغیر کیسے expose کیا جائے۔
+This page captures the ADDR-6c documentation deliverable. Apply these
+constraints to wallets, explorers, SDK tooling, and any portal surface that
+renders or accepts human-facing addresses. The canonical data model lives in
+`docs/account_structure.md`; the checklist below explains how to expose those
+formats without compromising safety or accessibility.
 
 ## Safe sharing flows
 
-- ہر copy/share action کی default کو I105 address بنائیں۔ resolved domain کو supporting context کے طور پر دکھائیں تاکہ checksummed string سامنے رہے۔
-- ایک “Share” affordance فراہم کریں جو full plain-text address اور اسی payload سے بنے QR code کو bundle کرے۔ users کو commit کرنے سے پہلے دونوں inspect کرنے دیں۔
-- جب جگہ کم ہو (tiny cards, notifications)، human-readable prefix رکھیں، ellipses دکھائیں، اور آخری 4–6 characters برقرار رکھیں تاکہ checksum anchor قائم رہے۔ truncation کے بغیر full string copy کرنے کیلئے tap/keyboard shortcut دیں۔
-- clipboard desync کو روکنے کیلئے confirmation toast دیں جو بالکل وہی I105 string preview کرے جو copy ہوئی۔ جہاں telemetry دستیاب ہو، copy attempts کو share actions کے مقابل count کریں تاکہ UX regressions جلد سامنے آئیں۔
+- Default every copy/share action to the canonical Katakana i105 account id.
+  If an on-chain alias is present, display it as supporting metadata in a
+  separate labeled field.
+- Offer a “Share” affordance that bundles the full plain-text address and a QR
+  code derived from the same payload. Let users inspect both before committing.
+- When space requires truncation (tiny cards, notifications), keep the leading
+  human-readable prefix, show ellipses, and retain the final 4–6 characters so
+  the checksum anchor survives. Provide a tap/keyboard shortcut to copy the full
+  string without truncation.
+- Prevent clipboard desync by emitting a confirmation toast that previews the
+  exact i105 string that was copied. Where telemetry is available, count copy
+  attempts versus share actions so UX regressions surface quickly.
 
-## IME اور input safeguards
+## IME & input safeguards
 
-- address fields میں non-ASCII input reject کریں۔ جب IME composition artifacts (full width, Kana, tone marks) ظاہر ہوں تو inline warning دکھائیں جو بتائے کہ دوبارہ کوشش سے پہلے keyboard کو Latin input پر کیسے لایا جائے۔
-- ایک plain-text paste zone فراہم کریں جو combining marks ہٹائے اور whitespace کو ASCII spaces سے بدل دے، پھر validation کرے۔ اس سے users IME بند کرنے پر بھی progress نہیں کھوتے۔
-- zero-width joiners، variation selectors، اور دیگر stealth Unicode code points کے خلاف validation سخت کریں۔ rejected code point category log کریں تاکہ fuzzing suites telemetry import کر سکیں۔
+- Validate account-id fields as canonical Katakana i105 only. Validate alias
+  entry fields separately as `name@dataspace` or `name@domain.dataspace`.
+- When IME composition artefacts or zero-width characters appear, surface an
+  inline warning instead of coercing the input into a different account-id
+  format.
+- Provide a plain-text paste zone that preserves the canonical i105 literal as
+  pasted while still stripping obviously invalid stealth code points before
+  validation.
+- Harden validation against zero-width joiners, variation selectors, and other
+  stealth Unicode code points. Log the rejected code point category so fuzzing
+  suites can import the telemetry.
 
 ## Assistive technology expectations
 
-- ہر address block کو `aria-label` یا `aria-describedby` سے annotate کریں جو human-readable prefix spell کرے اور payload کو 4–8 character groups میں chunk کرے (“ih dash b three two …”). اس سے screen readers بے معنی کرداروں کی لڑی نہیں بولتے۔
-- successful copy/share events کو polite live region update کے ذریعے announce کریں۔ destination (clipboard, share sheet, QR) شامل کریں تاکہ user کو focus بدلے بغیر action مکمل ہونے کا پتا ہو۔
-- QR previews کیلئے descriptive `alt` text دیں (مثال: “I105 address for `<account>` on chain `0x1234`”). کم بصارت والے users کیلئے QR canvas کے ساتھ “Copy address as text” fallback دیں۔
+- Annotate every address block with `aria-label` or `aria-describedby` that
+  spells out the human-readable prefix and chunks the payload in 4–8 character
+  groups (“ih dash b three two …”). This stops screen readers from producing an
+  unintelligible stream of characters.
+- Announce successful copy/share events via a polite live region update. Include
+  the destination (clipboard, share sheet, QR) so the user knows the action
+  completed without moving focus.
+- Supply descriptive `alt` text for QR previews (e.g., “i105 address for
+  `<account>` on chain `0x1234`”). Provide a “Copy address as text”
+  fallback adjacent to the QR canvas for low-vision users.
 
-## Canonical Katakana i105 addresses
+## Single-format policy
 
-- Gating: canonical Katakana i105 string `i105` کو explicit confirmation کے پیچھے چھپائیں۔ confirmation میں دہرائیں کہ یہ form صرف Sora Nexus chains پر کام کرتی ہے۔
-- Labelling: ہر occurrence میں واضح “Sora-only” badge اور tooltip دیں جو بتائے کہ دوسری networks کو i105 form کیوں چاہیے۔
-- Guardrails: اگر active chain discriminant Nexus allocation نہ ہو تو i105 address generate کرنے سے مکمل انکار کریں اور user کو I105 پر واپس بھیجیں۔
-- Telemetry: i105 form کے request/copy کی frequency ریکارڈ کریں تاکہ incident playbook accidental sharing spikes کو detect کر سکے۔
+- Keep canonical Katakana i105 as the only user-facing account-id format for
+  copy, share, and QR surfaces.
+- Treat `name@dataspace` and `name@domain.dataspace` as on-chain aliases that
+  point to canonical i105 account ids.
+- Do not expose alternate account-literal encodings in production wallet or
+  explorer UX.
+- Telemetry should track i105 copy/share usage, alias-resolution usage, and
+  validation failures only.
 
 ## Quality gates
 
-- automated UI tests (یا storybook a11y suites) کو بڑھائیں تاکہ address components مطلوبہ ARIA metadata expose کریں اور IME rejection messages ظاہر ہوں۔
-- manual QA scenarios میں IME input (kana, pinyin)، screen reader pass (VoiceOver/NVDA)، اور high-contrast themes پر QR copy شامل کریں، release سے پہلے۔
-- ان checks کو release checklists میں I105 parity tests کے ساتھ شامل کریں تاکہ regressions درست ہونے تک blocked رہیں۔
+- Extend automated UI tests (or storybook a11y suites) to assert that address
+  components expose the required ARIA metadata and that IME rejection messages
+  appear.
+- Include manual QA scenarios for IME input (kana, pinyin), screen reader pass
+  (VoiceOver/NVDA), and QR copy on high-contrast themes before releasing.
+- Surface these checks in release checklists alongside the i105 parity tests
+  so regressions remain blocked until corrected.

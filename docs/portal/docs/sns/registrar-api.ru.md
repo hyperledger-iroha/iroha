@@ -118,7 +118,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/policies/{suffix_id}` | GET | -- | Получает текущую `SuffixPolicyV1` (кэшируемо). |
 | `/v1/sns/names/{namespace}/{literal}` | GET | -- | Возвращает текущий `NameRecordV1` + эффективное состояние (Active, Grace, и т. д.). |
 
-**Кодирование selector:** сегмент `{selector}` принимает I105, I105 или канонический hex по ADDR-5; Torii нормализует через `NameSelectorV1`.
+**Кодирование selector:** сегмент `{selector}` принимает i105, i105 или канонический hex по ADDR-5; Torii нормализует через `NameSelectorV1`.
 
 **Модель ошибок:** все эндпоинты возвращают Norito JSON с `code`, `message`, `details`. Коды включают `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
 
@@ -226,7 +226,7 @@ Torii проверяет доказательства, проверяя:
 
 1. Клиент запрашивает `/v1/sns/policies/{suffix_id}` чтобы получить цены, grace и доступные tiers.
 2. Клиент строит `RegisterNameRequestV1`:
-   - `selector` получен из предпочитаемого I105 или второго по предпочтению I105 label.
+   - `selector` получен из предпочитаемого i105 или второго по предпочтению i105 label.
    - `term_years` в пределах политики.
    - `payment` ссылается на перевод splitter treasury/steward.
 3. Torii проверяет:

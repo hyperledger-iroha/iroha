@@ -1323,12 +1323,12 @@ fn minimal_config_snapshot() {
                     withdraw_grace: 0ns,
                     max_slash_bps: 10000,
                     reward_dust_threshold: 0,
-                    stake_asset_id: "xor#nexus",
+                    stake_asset_id: "5YgScpPRRzqfu3R8DTJvTpDg6D9W",
                     stake_escrow_account_id: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
                     slash_sink_account_id: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
                 },
                 fees: NexusFees {
-                    fee_asset_id: "xor#universal",
+                    fee_asset_id: "5PeSrQmLNwwKtruJvDZrbrm9RuMw",
                     fee_sink_account_id: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
                     base_fee: Numeric {
                         mantissa: 0,

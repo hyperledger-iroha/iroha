@@ -276,7 +276,7 @@ Explorer 遥测为 `/v1/explorer/metrics` 和
 `/v1/explorer/accounts/{account_id}/qr` 端点，以便仪表板可以重播
 为门户提供支持的相同快照。 `getExplorerMetrics()` 标准化
 当路由被禁用时，有效负载并返回 `null`。与它配对
-`getExplorerAccountQr()` 每当您需要 I105（首选）/sora（第二好的）文字加上内联时
+`getExplorerAccountQr()` 每当您需要 i105（首选）/sora（第二好的）文字加上内联时
 用于共享按钮的 SVG。
 
 ```ts
@@ -299,8 +299,8 @@ console.log(
 );
 ```
 
-传递 `I105` 镜像资源管理器的默认压缩
-选择器；忽略首选 I105 输出的覆盖或请求 `i105_qr`
+传递 `i105` 镜像资源管理器的默认压缩
+选择器；忽略首选 i105 输出的覆盖或请求 `i105_qr`
 当您需要二维码安全版本时。压缩文字是第二好的
 仅 Sora 的 UX 选项。助手总是返回规范标识符，
 所选文字和元数据（网络前缀、QR 版本/模块、错误
@@ -519,7 +519,7 @@ for await (const event of torii.streamEvents({
   按规范账户 ID 对资产持有量进行分组；通过 `assetId` 来过滤
   投资组合缩减为单个资产实例。
 - `getUaidBindings(uaid)` 枚举每个数据空间↔帐户
-  绑定（`I105` 返回 `i105` 文字）。
+  绑定（`i105` 返回 `i105` 文字）。
 - `getUaidManifests(uaid, { dataspaceId })` 返回每个功能清单，
   生命周期状态，以及绑定账户进行审计。对于操作员证据包、清单发布/撤销流程和 SDK 迁移
 指导，遵循通用账户指南 (`docs/source/universal_accounts_guide.md`)

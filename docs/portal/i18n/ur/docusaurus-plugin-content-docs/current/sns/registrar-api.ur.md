@@ -117,7 +117,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/policies/{suffix_id}` | GET | -- | `SuffixPolicyV1` موجودہ حاصل کرتا ہے (cacheable)۔ |
 | `/v1/sns/names/{namespace}/{literal}` | GET | -- | موجودہ `NameRecordV1` + موثر حالت (Active, Grace وغیرہ) واپس کرتا ہے۔ |
 
-**Selector encoding:** `{selector}` path segment I105، I105 یا canonical hex ADDR-5 کے مطابق قبول کرتا ہے؛ Torii `NameSelectorV1` سے normalize کرتا ہے۔
+**Selector encoding:** `{selector}` path segment i105، i105 یا canonical hex ADDR-5 کے مطابق قبول کرتا ہے؛ Torii `NameSelectorV1` سے normalize کرتا ہے۔
 
 **Error model:** تمام endpoints Norito JSON `code`, `message`, `details` واپس کرتے ہیں۔ Codes میں `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing` شامل ہیں۔
 
@@ -163,7 +163,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner soraカタカナ... \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -225,7 +225,7 @@ Failed checks `sns_err_governance_missing` واپس کرتے ہیں۔
 
 1. Client `/v1/sns/policies/{suffix_id}` کو query کرتا ہے تاکہ pricing، grace اور دستیاب tiers حاصل کرے۔
 2. Client `RegisterNameRequestV1` بناتا ہے:
-   - `selector` ترجیحی I105 یا second‑best I105 label سے derived ہے۔
+   - `selector` ترجیحی i105 یا second‑best i105 label سے derived ہے۔
    - `term_years` پالیسی حدود میں۔
    - `payment` treasury/steward splitter transfer کو refer کرتا ہے۔
 3. Torii validate کرتا ہے:

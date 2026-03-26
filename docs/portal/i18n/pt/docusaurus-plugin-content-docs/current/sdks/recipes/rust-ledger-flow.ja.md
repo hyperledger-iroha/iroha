@@ -124,7 +124,7 @@ cargo run
 Você deve ver uma saída semelhante a:
 
 ```
-i105... now holds:
+soraカタカナ... now holds:
   50 units of 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 

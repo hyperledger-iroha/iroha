@@ -376,7 +376,7 @@ The CLI mirrors the Torii endpoints for plan and subscription management.
 Register a plan from a JSON file (or stdin when `--plan-json` is omitted):
 ```bash
 iroha_cli subscriptions plan create \
-  --authority i105... \
+  --authority soraカタカナ... \
   --private-key <hex> \
   --plan-id aws_compute#commerce \
   --plan-json plan.json
@@ -384,13 +384,13 @@ iroha_cli subscriptions plan create \
 
 List plans for a provider:
 ```bash
-iroha_cli subscriptions plan list --provider i105... --limit 10
+iroha_cli subscriptions plan list --provider soraカタカナ... --limit 10
 ```
 
 Create a subscription:
 ```bash
 iroha_cli subscriptions subscription create \
-  --authority i105... \
+  --authority soraカタカナ... \
   --private-key <hex> \
   --subscription-id sub-001$subscriptions \
   --plan-id aws_compute#commerce
@@ -399,21 +399,21 @@ iroha_cli subscriptions subscription create \
 Pause, resume, cancel, or charge now:
 ```bash
 iroha_cli subscriptions subscription pause --subscription-id sub-001$subscriptions \
-  --authority i105... --private-key <hex>
+  --authority soraカタカナ... --private-key <hex>
 iroha_cli subscriptions subscription resume --subscription-id sub-001$subscriptions \
-  --authority i105... --private-key <hex>
+  --authority soraカタカナ... --private-key <hex>
 iroha_cli subscriptions subscription cancel --subscription-id sub-001$subscriptions \
-  --authority i105... --private-key <hex> --cancel-at-period-end
+  --authority soraカタカナ... --private-key <hex> --cancel-at-period-end
 iroha_cli subscriptions subscription keep --subscription-id sub-001$subscriptions \
-  --authority i105... --private-key <hex>
+  --authority soraカタカナ... --private-key <hex>
 iroha_cli subscriptions subscription charge-now --subscription-id sub-001$subscriptions \
-  --authority i105... --private-key <hex>
+  --authority soraカタカナ... --private-key <hex>
 ```
 
 Record usage:
 ```bash
 iroha_cli subscriptions subscription usage --subscription-id sub-001$subscriptions \
-  --authority i105... --private-key <hex> \
+  --authority soraカタカナ... --private-key <hex> \
   --unit-key compute_ms --delta 3600000
 ```
 

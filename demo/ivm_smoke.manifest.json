@@ -4,13 +4,13 @@
     "read_keys": [
       "account:soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
       "account:34mSYnDgbaJM58rbLoif4Tkp7G8X4sSLRQ1VuDM4Xa7fZaxbUxK4ydX8eWfvieLgT3j8iJF4K",
-      "61CtjvNd9T3THAR65GsMVHr82Bjc#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+      "61CtjvNd9T3THAR65GsMVHr82Bjc",
       "61CtjvNd9T3THAR65GsMVHr82Bjc#34mSYnDgbaJM58rbLoif4Tkp7G8X4sSLRQ1VuDM4Xa7fZaxbUxK4ydX8eWfvieLgT3j8iJF4K",
       "asset_def:61CtjvNd9T3THAR65GsMVHr82Bjc",
       "domain:wonderland"
     ],
     "write_keys": [
-      "61CtjvNd9T3THAR65GsMVHr82Bjc#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+      "61CtjvNd9T3THAR65GsMVHr82Bjc",
       "61CtjvNd9T3THAR65GsMVHr82Bjc#34mSYnDgbaJM58rbLoif4Tkp7G8X4sSLRQ1VuDM4Xa7fZaxbUxK4ydX8eWfvieLgT3j8iJF4K"
     ]
   },
@@ -29,7 +29,7 @@
       "name": "main",
       "permission": "Admin",
       "read_keys": [
-        "61CtjvNd9T3THAR65GsMVHr82Bjc#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+        "61CtjvNd9T3THAR65GsMVHr82Bjc",
         "account:soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
         "domain:wonderland",
         "asset_def:61CtjvNd9T3THAR65GsMVHr82Bjc",
@@ -40,7 +40,7 @@
         
       ],
       "write_keys": [
-        "61CtjvNd9T3THAR65GsMVHr82Bjc#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+        "61CtjvNd9T3THAR65GsMVHr82Bjc",
         "61CtjvNd9T3THAR65GsMVHr82Bjc#34mSYnDgbaJM58rbLoif4Tkp7G8X4sSLRQ1VuDM4Xa7fZaxbUxK4ydX8eWfvieLgT3j8iJF4K"
       ]
     }

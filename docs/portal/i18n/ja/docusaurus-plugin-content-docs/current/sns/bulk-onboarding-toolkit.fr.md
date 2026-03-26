@@ -251,7 +251,7 @@ Auditeurs puissent se concentrer sur une seule execution CSV。
   CSV の配置に関連する解決策の決定を参照します。
   オブジェクトではないメタデータが検証に失敗する可能性があります。
 - **コントローラー:** セルセルは、関連する `--default-controllers` を参照します。フルニセズ
-  明示的なリスト (`i105...;i105...` など) は、完全に削除されたものです。
+  明示的なリスト (`soraカタカナ...;soraカタカナ...` など) は、完全に削除されたものです。
   俳優は所有者ではありません。
 
 Les echecs Sont signales avec des numeros de ligne contextuels (par example)

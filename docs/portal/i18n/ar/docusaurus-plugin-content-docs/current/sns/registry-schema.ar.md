@@ -228,7 +228,7 @@ Enum RegistryEventKind {
 ##5.الاحداث القياسية و المزامنة للبوابات
 
 اشترك البوابات في `RegistryEventV1` وتزامن DNS/SoraFS عبر:1. اخر جلب `NameRecordV1` ما اليه في سلسلة الاحداث.
-2. إعادة توليد قوالب المحلل (عناوين I105 المفضلة + المضغوطة (`sora`) كخيار ثانٍ، السجلات النصية).
+2. إعادة توليد قوالب المحلل (عناوين i105 المفضلة + المضغوطة (`sora`) كخيار ثانٍ، السجلات النصية).
 3. تثبيت بيانات المنطقة عبر تدفق SoraDNS الموضح في [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
 
 ضمانات تسليم الاحداث:

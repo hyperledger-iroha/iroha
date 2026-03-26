@@ -226,7 +226,7 @@ Ils sont désormais créés dans le journal rejouable (par exemple, dans le doma
 Les passerelles compatibles avec `RegistryEventV1` et synchronisation DNS/SoraFS correspondent :
 
 1. Connectez-vous après `NameRecordV1` pour que votre appareil soit correctement installé.
-2. Modèles de résolution de résolution (I105 précédemment + compressé (`sora`) pour votre utilisateur, enregistrements de texte).
+2. Modèles de résolution de résolution (i105 précédemment + compressé (`sora`) pour votre utilisateur, enregistrements de texte).
 3. Épinglez les zones actuelles du workflow SoraDNS via [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
 
 Garanties de livraison applicables :

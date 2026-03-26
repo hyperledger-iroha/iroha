@@ -27,66 +27,6 @@ const I105_BASE_U8: u8 = 105;
 const I105_CHECKSUM_LEN: usize = 6;
 
 fn i105_to_digits(payload: &str) -> Result<Vec<u8>, AccountAddressError> {
-    fn backtrack(
-        payload: &str,
-        char_indices: &[(usize, char)],
-        index: usize,
-        digits: &mut Vec<u8>,
-        saw_too_short: &mut bool,
-        saw_checksum_mismatch: &mut bool,
-        invalid_char: &mut Option<char>,
-    ) -> Result<Option<Vec<u8>>, AccountAddressError> {
-        if index == char_indices.len() {
-            if digits.len() <= I105_CHECKSUM_LEN {
-                *saw_too_short = true;
-                return Ok(None);
-            }
-            let split_at = digits.len() - I105_CHECKSUM_LEN;
-            let canonical = super::decode_base_n(&digits[..split_at], u32::from(I105_BASE_U8))?;
-            let expected = super::i105_checksum_digits(&canonical);
-            if digits[split_at..] == expected {
-                return Ok(Some(digits.clone()));
-            }
-            *saw_checksum_mismatch = true;
-            return Ok(None);
-        }
-
-        let (start, ch) = char_indices[index];
-        let mut matched = false;
-        for symbol_len in (1..=super::I105_MAX_SYMBOL_CHARS).rev() {
-            if index + symbol_len > char_indices.len() {
-                continue;
-            }
-            let end = if index + symbol_len < char_indices.len() {
-                char_indices[index + symbol_len].0
-            } else {
-                payload.len()
-            };
-            let Some(digit) = lookup_i105_digit(&payload[start..end]) else {
-                continue;
-            };
-            matched = true;
-            digits.push(digit);
-            if let Some(resolved) = backtrack(
-                payload,
-                char_indices,
-                index + symbol_len,
-                digits,
-                saw_too_short,
-                saw_checksum_mismatch,
-                invalid_char,
-            )? {
-                return Ok(Some(resolved));
-            }
-            digits.pop();
-        }
-
-        if !matched && invalid_char.is_none() {
-            *invalid_char = Some(ch);
-        }
-        Ok(None)
-    }
-
     let discriminant = super::i105_discriminant_from_sentinel(payload)
         .ok_or(AccountAddressError::MissingI105Sentinel)?;
     let payload = payload
@@ -96,31 +36,7 @@ fn i105_to_digits(payload: &str) -> Result<Vec<u8>, AccountAddressError> {
                 .and_then(|fullwidth| payload.strip_prefix(&fullwidth))
         })
         .ok_or(AccountAddressError::MissingI105Sentinel)?;
-    let char_indices: Vec<(usize, char)> = payload.char_indices().collect();
-    let mut digits = Vec::with_capacity(char_indices.len());
-    let mut saw_too_short = false;
-    let mut saw_checksum_mismatch = false;
-    let mut invalid_char = None;
-    if let Some(resolved) = backtrack(
-        payload,
-        &char_indices,
-        0,
-        &mut digits,
-        &mut saw_too_short,
-        &mut saw_checksum_mismatch,
-        &mut invalid_char,
-    )? {
-        return Ok(resolved);
-    }
-    if saw_checksum_mismatch {
-        Err(AccountAddressError::ChecksumMismatch)
-    } else if saw_too_short {
-        Err(AccountAddressError::I105TooShort)
-    } else if let Some(ch) = invalid_char {
-        Err(AccountAddressError::InvalidI105Char(ch))
-    } else {
-        Err(AccountAddressError::ChecksumMismatch)
-    }
+    super::i105_payload_digits(payload)
 }
 
 fn digits_to_i105_literal(digits: &[u8]) -> String {
@@ -131,15 +47,8 @@ fn digits_to_i105_literal(digits: &[u8]) -> String {
     out
 }
 
-fn lookup_i105_digit(symbol: &str) -> Option<u8> {
-    super::I105_KATAKANA_ALPHABET
-        .iter()
-        .position(|candidate| *candidate == symbol)
-        .and_then(|index| u8::try_from(index).ok())
-}
-
 fn i105_digit_symbol(digit: u8) -> &'static str {
-    super::I105_KATAKANA_ALPHABET[usize::from(digit)]
+    super::i105_digit_symbol(digit, false).expect("digit must be in range")
 }
 
 const VECTOR_SINGLE_DOMAINS: [(&str, u8); 12] = [

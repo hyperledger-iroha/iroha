@@ -120,7 +120,7 @@ cargo run
 Та дараахтай төстэй бүртгэлийн гаралтыг харах ёстой:
 
 ```
-i105... now holds:
+soraカタカナ... now holds:
   50 units of 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 

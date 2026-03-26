@@ -25,16 +25,12 @@ const {
   buildRemoveRwaKeyValueTransaction,
 } = await import("../src/transaction.js");
 
-const AUTHORITY = AccountAddress.fromAccount({
-  domain: "wonderland",
-  publicKey: Buffer.from(
+const AUTHORITY = AccountAddress.fromAccount({ publicKey: Buffer.from(
     "ce7fa46c9dce7ea4b125e2e36bdb63ea33073e7590ac92816ae1e861b7048b03",
     "hex",
   ),
 }).toI105();
-const DESTINATION = AccountAddress.fromAccount({
-  domain: "wonderland",
-  publicKey: Buffer.from(
+const DESTINATION = AccountAddress.fromAccount({ publicKey: Buffer.from(
     "641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201",
     "hex",
   ),

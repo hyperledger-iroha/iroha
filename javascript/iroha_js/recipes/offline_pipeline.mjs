@@ -36,9 +36,7 @@ const PRIVATE_KEY = Buffer.alloc(32, 0x11);
 const AUTHORITY_DOMAIN = process.env.OFFLINE_PIPELINE_AUTHORITY_DOMAIN ?? "wonderland";
 const AUTHORITY_ID =
   process.env.OFFLINE_PIPELINE_AUTHORITY ??
-  AccountAddress.fromAccount({
-    domain: AUTHORITY_DOMAIN,
-    publicKey: publicKeyFromPrivate(PRIVATE_KEY),
+  AccountAddress.fromAccount({ publicKey: publicKeyFromPrivate(PRIVATE_KEY),
   }).toI105();
 const OUT_DIR = process.env.OFFLINE_PIPELINE_OUT_DIR ?? path.join("artifacts", "js", "offline_pipeline");
 const USE_MOCK = (process.env.OFFLINE_PIPELINE_USE_MOCK ?? "1") !== "0";

@@ -238,7 +238,7 @@ Les transitions d'etat DOIVENT emettre le `RegistryEventKind` correspondant pour
 Les gateways s'abonnent a `RegistryEventV1` et synchronisent DNS/SoraFS via:
 
 1. Recuperer le dernier `NameRecordV1` reference par la sequence d'evenements.
-2. Regenerer les templates de resolver (adresses I105 preferees + I105 en second choix, text records).
+2. Regenerer les templates de resolver (adresses i105 preferees + i105 en second choix, text records).
 3. Pinner les donnees de zone mises a jour via le workflow SoraDNS decrit dans [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
 
 Garanties de livraison d'evenements:

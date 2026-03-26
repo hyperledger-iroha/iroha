@@ -8,7 +8,7 @@
         },
         "expected_prefix": 753,
         "format": "i105",
-        "input": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハ1",
+        "input": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハア",
         "note": "Checksum tampering on I105 alias for the default-domain vector."
       },
       {
@@ -39,7 +39,7 @@
           "kind": "ChecksumMismatch"
         },
         "format": "i105",
-        "input": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハa",
+        "input": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハァ",
         "note": "Checksum bytes replaced to trigger canonical Katakana i105 verification failure."
       },
       {

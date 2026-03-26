@@ -236,7 +236,7 @@ Enum RegistryEventKind {
 ゲートウェイは `RegistryEventV1` を維持せず、次の経由で DNS/SoraFS を同期します。
 
 1. 一連のイベントに関する Recuperer le dernier `NameRecordV1` 参照。
-2. リゾルバー テンプレートの再生成 (I105 優先 + 圧縮 (`sora`) の 2 番目の選択、テキスト レコードのアドレス)。
+2. リゾルバー テンプレートの再生成 (i105 優先 + 圧縮 (`sora`) の 2 番目の選択、テキスト レコードのアドレス)。
 3. ワークフロー SoraDNS の説明 [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md) を介して、ゾーンを 1 時間逃すピナー。
 
 保証期間の保証:

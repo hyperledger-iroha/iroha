@@ -45,9 +45,9 @@ asboblar holat hujjatlarini qirib tashlamasdan bir xil parametrlarni yuklashi mu
 
 | Suffiks | ID (`hex`) | Styuard | Fond ajratuvchi | Holati | To'lov aktivi | Yo'naltiruvchi chegara (bps) | Muddat (min – maks yillar) | Inoyat / To'lov (kunlar) | Narxlash darajalari (regex → asosiy narx / auktsion) | Zaxiralangan teglar | To'lovni taqsimlash (T/S/R/E bps) | Siyosat versiyasi |
 |--------|------------|---------|---------------|--------|---------------|--------------------|--------------------------|--------------------------|--------------------------|-----------------------------------|
-| `.sora` | `0x0001` | `i105...` | `i105...` | Faol | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 500 | 1 – 5 | 30 / 60 | `T0: ^[a-z0-9]{3,}$ → 120 XOR (Vickrey)` | `treasury → i105...` | `7000 / 3000 / 1000 / 0` | 1 |
-| `.nexus` | `0x0002` | `i105...` | `i105...` | To'xtatildi | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 300 | 1 – 3 | 15 / 30 | `T0: ^[a-z0-9]{4,}$ → 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ → 4000 XOR (Dutch floor 500)` | `treasury → i105...`, `guardian → i105...` | `6500 / 2500 / 800 / 200` | 2 |
-| `.dao` | `0x0003` | `i105...` | `i105...` | Bekor qilingan | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 0 | 1 – 2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ → 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
+| `.sora` | `0x0001` | `soraカタカナ...` | `soraカタカナ...` | Faol | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 500 | 1 – 5 | 30 / 60 | `T0: ^[a-z0-9]{3,}$ → 120 XOR (Vickrey)` | `treasury → soraカタカナ...` | `7000 / 3000 / 1000 / 0` | 1 |
+| `.nexus` | `0x0002` | `soraカタカナ...` | `soraカタカナ...` | To'xtatildi | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 300 | 1 – 3 | 15 / 30 | `T0: ^[a-z0-9]{4,}$ → 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ → 4000 XOR (Dutch floor 500)` | `treasury → soraカタカナ...`, `guardian → soraカタカナ...` | `6500 / 2500 / 800 / 200` | 2 |
+| `.dao` | `0x0003` | `soraカタカナ...` | `soraカタカナ...` | Bekor qilingan | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 0 | 1 – 2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ → 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
 
 ## JSON parchasi
 

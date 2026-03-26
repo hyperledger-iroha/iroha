@@ -1,57 +1,73 @@
 ---
-lang: ar
-direction: rtl
-source: docs/portal/i18n/ja/docusaurus-plugin-content-docs/current/reference/address-safety.md
-status: complete
-generator: scripts/sync_docs_i18n.py
-source_hash: 76bb38c4680bab26991a9156c9538f2e898a8e7be9cdcbaea891cfac65292601
-source_last_modified: "2026-01-28T17:58:57+00:00"
-translation_last_reviewed: 2026-01-30
+title: Address Safety & Accessibility
+description: UX requirements for presenting and sharing Iroha addresses safely (ADDR-6c).
 ---
 
----
-lang: ja
-direction: ltr
-source: docs/portal/docs/reference/address-safety.md
-status: complete
-generator: docs/portal/scripts/sync-i18n.mjs
----
+This page captures the ADDR-6c documentation deliverable. Apply these
+constraints to wallets, explorers, SDK tooling, and any portal surface that
+renders or accepts human-facing addresses. The canonical data model lives in
+`docs/account_structure.md`; the checklist below explains how to expose those
+formats without compromising safety or accessibility.
 
----
-title: アドレスの安全性とアクセシビリティ
-description: Iroha アドレスを安全に表示・共有するための UX 要件 (ADDR-6c)。
----
+## Safe sharing flows
 
-このページは ADDR-6c のドキュメント成果物をまとめたものです。ウォレット、エクスプローラ、SDK ツール、そして人間向けアドレスを表示または受け付けるポータルのあらゆる面にこれらの制約を適用してください。カノニカルなデータモデルは `docs/account_structure.md` にあり、以下のチェックリストは安全性とアクセシビリティを損なわずにこれらの形式を露出する方法を説明します。
+- Default every copy/share action to the canonical Katakana i105 account id.
+  If an on-chain alias is present, display it as supporting metadata in a
+  separate labeled field.
+- Offer a “Share” affordance that bundles the full plain-text address and a QR
+  code derived from the same payload. Let users inspect both before committing.
+- When space requires truncation (tiny cards, notifications), keep the leading
+  human-readable prefix, show ellipses, and retain the final 4–6 characters so
+  the checksum anchor survives. Provide a tap/keyboard shortcut to copy the full
+  string without truncation.
+- Prevent clipboard desync by emitting a confirmation toast that previews the
+  exact i105 string that was copied. Where telemetry is available, count copy
+  attempts versus share actions so UX regressions surface quickly.
 
-## 安全な共有フロー
+## IME & input safeguards
 
-- すべてのコピー/共有アクションは I105 アドレスをデフォルトにします。解決済みドメインを補助的なコンテキストとして表示し、チェックサム付き文字列が中心になるようにします。
-- “共有” アクションは、完全なプレーンテキストアドレスと同じ payload から生成した QR をまとめて提供します。確定前に両方を確認できるようにします。
-- スペース都合で省略が必要な場合（小さなカード、通知）、人間可読プレフィックスを残し、省略記号を表示し、最後の 4–6 文字を保持してチェックサムの手がかりを残します。省略なしで全文をコピーするためのタップ/キーボードショートカットを提供します。
-- クリップボードの不一致を防ぐため、コピーされた正確な I105 文字列をプレビューする確認トーストを表示します。テレメトリがある場合、コピー試行と共有アクションの数を記録して UX 回帰を迅速に検出します。
+- Validate account-id fields as canonical Katakana i105 only. Validate alias
+  entry fields separately as `name@dataspace` or `name@domain.dataspace`.
+- When IME composition artefacts or zero-width characters appear, surface an
+  inline warning instead of coercing the input into a different account-id
+  format.
+- Provide a plain-text paste zone that preserves the canonical i105 literal as
+  pasted while still stripping obviously invalid stealth code points before
+  validation.
+- Harden validation against zero-width joiners, variation selectors, and other
+  stealth Unicode code points. Log the rejected code point category so fuzzing
+  suites can import the telemetry.
 
-## IME と入力保護
+## Assistive technology expectations
 
-- アドレス入力では非 ASCII を拒否します。IME の合成アーティファクト（全角、かな、声調記号）が現れた場合、ラテン入力に切り替える方法を説明するインライン警告を表示します。
-- プレーンテキストのペースト領域を提供し、結合文字を取り除き、空白を ASCII スペースに置換してから検証します。これにより、IME を途中で無効にした場合でも進捗が失われません。
-- zero-width joiners、variation selectors、その他のステルス Unicode コードポイントを弾くよう検証を強化します。拒否したコードポイントのカテゴリを記録し、ファジングスイートがテレメトリを取り込めるようにします。
+- Annotate every address block with `aria-label` or `aria-describedby` that
+  spells out the human-readable prefix and chunks the payload in 4–8 character
+  groups (“ih dash b three two …”). This stops screen readers from producing an
+  unintelligible stream of characters.
+- Announce successful copy/share events via a polite live region update. Include
+  the destination (clipboard, share sheet, QR) so the user knows the action
+  completed without moving focus.
+- Supply descriptive `alt` text for QR previews (e.g., “i105 address for
+  `<account>` on chain `0x1234`”). Provide a “Copy address as text”
+  fallback adjacent to the QR canvas for low-vision users.
 
-## 支援技術の期待事項
+## Single-format policy
 
-- 各アドレスブロックに `aria-label` または `aria-describedby` を付け、人間可読プレフィックスを読み上げ、payload を 4–8 文字ごとに区切って読み上げられるようにします（“ih dash b three two …”）。これによりスクリーンリーダーが無意味な文字列の連続を読み上げるのを防ぎます。
-- コピー/共有の成功を polite な live region 更新で通知します。宛先（クリップボード、共有シート、QR）を含め、フォーカスを移さずに完了が分かるようにします。
-- QR プレビューには説明的な `alt` テキストを用意します（例: “I105 address for `<account>` on chain `0x1234`”）。視覚支援のため、QR キャンバスの横に “Copy address as text” のフォールバックを置きます。
+- Keep canonical Katakana i105 as the only user-facing account-id format for
+  copy, share, and QR surfaces.
+- Treat `name@dataspace` and `name@domain.dataspace` as on-chain aliases that
+  point to canonical i105 account ids.
+- Do not expose alternate account-literal encodings in production wallet or
+  explorer UX.
+- Telemetry should track i105 copy/share usage, alias-resolution usage, and
+  validation failures only.
 
-## Sora 専用の圧縮アドレス
+## Quality gates
 
-- Gating: 圧縮文字列 `i105` を明示的な確認の背後に隠します。確認はその形式が Sora Nexus チェーンでのみ動作することを再確認させます。
-- Labelling: すべての表示に “Sora-only” バッジを付け、他のネットワークでは I105 が必要な理由を説明するツールチップを付けます。
-- Guardrails: アクティブチェーンの識別子が Nexus の割り当てでない場合は、圧縮アドレスの生成を拒否し、I105 へ誘導します。
-- Telemetry: 圧縮形式の要求とコピー頻度を記録し、インシデントプレイブックが誤共有の急増を検知できるようにします。
-
-## 品質ゲート
-
-- 自動 UI テスト（または storybook の a11y スイート）を拡張し、アドレスコンポーネントが必要な ARIA メタデータを公開し、IME 拒否メッセージが表示されることを確認します。
-- リリース前に、IME 入力（かな、ピンイン）、スクリーンリーダーのパス（VoiceOver/NVDA）、高コントラストテーマでの QR コピーを含む手動 QA シナリオを実施します。
-- これらのチェックを I105 のパリティテストと並んでリリースチェックリストに含め、回帰が修正されるまでブロックされるようにします。
+- Extend automated UI tests (or storybook a11y suites) to assert that address
+  components expose the required ARIA metadata and that IME rejection messages
+  appear.
+- Include manual QA scenarios for IME input (kana, pinyin), screen reader pass
+  (VoiceOver/NVDA), and QR copy on high-contrast themes before releasing.
+- Surface these checks in release checklists alongside the i105 parity tests
+  so regressions remain blocked until corrected.

@@ -14,9 +14,9 @@ source: crates/ivm/docs/examples/13_register_and_mint.ko
 
 ## جولة دفتر الأستاذ
 
-- تأكد من وجود حساب الوجهة (مثل `i105...`) بما يعكس مرحلة الإعداد في كل بدء سريع للـ SDK.
+- تأكد من وجود حساب الوجهة (مثل `soraカタカナ...`) بما يعكس مرحلة الإعداد في كل بدء سريع للـ SDK.
 - استدعِ نقطة الدخول `register_and_mint` لإنشاء تعريف أصل ROSE وسك 250 وحدة لأليس في معاملة واحدة.
-- تحقق من الأرصدة عبر `client.request(FindAccountAssets)` أو `iroha_cli ledger assets list --account i105...` لتأكيد نجاح السك.
+- تحقق من الأرصدة عبر `client.request(FindAccountAssets)` أو `iroha_cli ledger assets list --account soraカタカナ...` لتأكيد نجاح السك.
 
 ## أدلة SDK ذات صلة
 

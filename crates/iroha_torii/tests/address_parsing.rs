@@ -1256,7 +1256,6 @@ async fn kaigi_relay_detail_local8_segment_increments_invalid_metric() {
 }
 
 #[tokio::test]
-#[ignore = "validator query-literal parsing rebaseline pending i105-only hard cut"]
 async fn nexus_public_lane_stake_accepts_validator_literals() {
     let app = test_router();
     for literal in accepted_account_segments() {
@@ -1304,7 +1303,6 @@ async fn nexus_public_lane_stake_rejects_invalid_validator_literal() {
 }
 
 #[tokio::test]
-#[ignore = "validator query-literal parsing rebaseline pending i105-only hard cut"]
 async fn nexus_public_lane_stake_accepts_default_domain_validator_literals() {
     let app = test_router();
     for literal in accepted_default_domain_segments() {
@@ -1333,7 +1331,6 @@ async fn nexus_public_lane_stake_accepts_default_domain_validator_literals() {
 }
 
 #[tokio::test]
-#[ignore = "validator query-literal parsing rebaseline pending i105-only hard cut"]
 async fn nexus_public_lane_stake_rejects_public_key_validator() {
     let (app, metrics) = test_router_with_metrics();
     let literal = format!("{ACCOUNT_SIGNATORY}@hbl.dataspace");
@@ -1367,7 +1364,6 @@ async fn nexus_public_lane_stake_rejects_public_key_validator() {
 }
 
 #[tokio::test]
-#[ignore = "validator query-literal parsing rebaseline pending i105-only hard cut"]
 async fn nexus_public_lane_stake_invalid_literal_increments_metric() {
     let (app, metrics) = test_router_with_metrics();
     let literal = "sorainvalid";
@@ -1397,7 +1393,6 @@ async fn nexus_public_lane_stake_invalid_literal_increments_metric() {
 }
 
 #[tokio::test]
-#[ignore = "validator query-literal parsing rebaseline pending i105-only hard cut"]
 async fn nexus_public_lane_stake_local8_literal_increments_invalid_metric() {
     let (app, metrics) = test_router_with_metrics();
     let literal = "sn1short";

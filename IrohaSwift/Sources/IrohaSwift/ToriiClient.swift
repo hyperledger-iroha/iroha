@@ -39,9 +39,7 @@ fileprivate func normalizeToriiAccountIdQueryValue(_ raw: String, field: String)
         throw ToriiClientError.invalidPayload("\(field) must be a non-empty string.")
     }
     if trimmed.contains("@") {
-        throw ToriiClientError.invalidPayload(
-            "\(field) must be an encoded account id (i105)."
-        )
+        return try normalizeToriiAccountAliasLiteral(trimmed, field: field)
     }
     if trimmed.contains("%") || trimmed.contains("/") || trimmed.contains("?") || trimmed.contains("#") {
         throw ToriiClientError.invalidPayload(
@@ -56,13 +54,22 @@ fileprivate func normalizeToriiAccountIdQueryValue(_ raw: String, field: String)
     )
 }
 
-fileprivate func normalizeMultisigAccountAliasLiteral(_ raw: String, field: String) throws -> String {
+fileprivate func normalizeToriiAccountAliasLiteral(_ raw: String, field: String) throws -> String {
     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else {
         throw ToriiClientError.invalidPayload("\(field) must be a non-empty string.")
     }
     guard !trimmed.contains(where: \.isWhitespace) else {
         throw ToriiClientError.invalidPayload("\(field) must not contain whitespace.")
+    }
+    guard !trimmed.contains("%"),
+          !trimmed.contains("/"),
+          !trimmed.contains("?"),
+          !trimmed.contains("#")
+    else {
+        throw ToriiClientError.invalidPayload(
+            "\(field) must use name@dataspace or name@domain.dataspace form."
+        )
     }
     let components = trimmed.split(separator: "@", omittingEmptySubsequences: false)
     let scopeComponents = components.count == 2
@@ -142,6 +149,18 @@ fileprivate func normalizeToriiAssetSelectorQueryValue(_ raw: String, field: Str
     return try normalizeToriiAssetAliasLiteral(trimmed, field: field)
 }
 
+fileprivate func canonicalPublicAssetDefinitionLiteral(_ raw: String?) -> String? {
+    let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    guard !trimmed.isEmpty else {
+        return nil
+    }
+    guard !trimmed.contains("#"),
+          AssetDefinitionAddress.decode(trimmed) != nil else {
+        return nil
+    }
+    return trimmed
+}
+
 public struct ToriiAssetBalance: Decodable, Sendable {
     public let asset: String
     public let accountId: String?
@@ -190,6 +209,18 @@ public struct ToriiAssetAliasResolution: Decodable, Sendable {
         case logo
         case source
         case aliasBinding = "alias_binding"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        alias = try container.decode(String.self, forKey: .alias)
+        let rawAssetDefinitionId = try container.decode(String.self, forKey: .assetDefinitionId)
+        assetDefinitionId = canonicalPublicAssetDefinitionLiteral(rawAssetDefinitionId) ?? rawAssetDefinitionId
+        assetName = try container.decode(String.self, forKey: .assetName)
+        description = try container.decodeIfPresent(String.self, forKey: .description)
+        logo = try container.decodeIfPresent(String.self, forKey: .logo)
+        source = try container.decodeIfPresent(String.self, forKey: .source)
+        aliasBinding = try container.decodeIfPresent(ToriiAssetDefinitionAliasBinding.self, forKey: .aliasBinding)
     }
 }
 
@@ -2562,10 +2593,11 @@ extension ToriiExplorerTransferDetails {
             }
             guard let sender = stringValue(entryMap["from"]),
                   let receiver = stringValue(entryMap["to"]),
-                  let assetDefinition = stringValue(entryMap["asset_definition"]),
+                  let rawAssetDefinition = stringValue(entryMap["asset_definition"]),
                   let amount = stringValue(entryMap["amount"]) else {
                 return nil
             }
+            let assetDefinition = canonicalPublicAssetDefinitionLiteral(rawAssetDefinition) ?? rawAssetDefinition
             entries.append(ToriiExplorerTransferBatchEntry(senderAccountId: sender,
                                                            receiverAccountId: receiver,
                                                            assetDefinitionId: assetDefinition,
@@ -2596,14 +2628,10 @@ extension ToriiExplorerTransferDetails {
         guard !trimmed.isEmpty else {
             return (nil, "")
         }
-        guard let canonical = try? OfflineNorito.canonicalAssetIdLiteral(trimmed) else {
-            return (nil, "")
+        if let canonical = canonicalPublicAssetDefinitionLiteral(trimmed) {
+            return (canonical, "")
         }
-        let parts = canonical.split(separator: "#", omittingEmptySubsequences: false)
-        guard parts.count >= 2 else {
-            return (nil, "")
-        }
-        return (String(parts[0]), String(parts[1]))
+        return (nil, "")
     }
 
     fileprivate struct DecodedToriiAssetIdFields {
@@ -2613,14 +2641,10 @@ extension ToriiExplorerTransferDetails {
 
     fileprivate static func decodeToriiAssetIdFields(_ literal: String) -> DecodedToriiAssetIdFields {
         let trimmed = literal.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let canonical = try? OfflineNorito.canonicalAssetIdLiteral(trimmed) else {
+        guard let canonical = canonicalPublicAssetDefinitionLiteral(trimmed) else {
             return DecodedToriiAssetIdFields(assetDefinitionId: nil, accountId: nil)
         }
-        let parts = canonical.split(separator: "#", omittingEmptySubsequences: false)
-        guard parts.count >= 2 else {
-            return DecodedToriiAssetIdFields(assetDefinitionId: nil, accountId: nil)
-        }
-        return DecodedToriiAssetIdFields(assetDefinitionId: String(parts[0]), accountId: String(parts[1]))
+        return DecodedToriiAssetIdFields(assetDefinitionId: canonical, accountId: nil)
     }
 }
 
@@ -4985,6 +5009,19 @@ public struct ToriiConfidentialAssetPolicy: Decodable, Sendable {
         case pedersenParamsId = "pedersen_params_id"
         case pendingTransition = "pending_transition"
     }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let rawAssetId = try container.decode(String.self, forKey: .assetId)
+        assetId = canonicalPublicAssetDefinitionLiteral(rawAssetId) ?? rawAssetId
+        blockHeight = try container.decode(UInt64.self, forKey: .blockHeight)
+        currentMode = try container.decode(String.self, forKey: .currentMode)
+        effectiveMode = try container.decode(String.self, forKey: .effectiveMode)
+        vkSetHashHex = try container.decodeIfPresent(String.self, forKey: .vkSetHashHex)
+        poseidonParamsId = try container.decodeIfPresent(UInt32.self, forKey: .poseidonParamsId)
+        pedersenParamsId = try container.decodeIfPresent(UInt32.self, forKey: .pedersenParamsId)
+        pendingTransition = try container.decodeIfPresent(ToriiConfidentialPolicyTransition.self, forKey: .pendingTransition)
+    }
 }
 
 public struct ToriiNodeCapabilities: Decodable, Sendable {
@@ -5442,6 +5479,15 @@ public struct ToriiUaidPortfolioAsset: Decodable, Sendable {
         case assetId = "asset_id"
         case assetDefinitionId = "asset_definition_id"
         case quantity
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let rawAssetId = try container.decode(String.self, forKey: .assetId)
+        let rawAssetDefinitionId = try container.decode(String.self, forKey: .assetDefinitionId)
+        assetId = canonicalPublicAssetDefinitionLiteral(rawAssetId) ?? rawAssetId
+        assetDefinitionId = canonicalPublicAssetDefinitionLiteral(rawAssetDefinitionId) ?? rawAssetDefinitionId
+        quantity = try container.decode(String.self, forKey: .quantity)
     }
 }
 
@@ -7560,7 +7606,7 @@ public struct ToriiMultisigAccountSelector: Encodable, Sendable, Equatable {
             try normalizeToriiAccountIdQueryValue($0, field: "\(field).multisig_account_id")
         }
         let normalizedAlias = try multisigAccountAlias.map {
-            try normalizeMultisigAccountAliasLiteral($0, field: "\(field).multisig_account_alias")
+            try normalizeToriiAccountAliasLiteral($0, field: "\(field).multisig_account_alias")
         }
         guard (normalizedAccountId == nil) != (normalizedAlias == nil) else {
             throw ToriiClientError.invalidPayload(

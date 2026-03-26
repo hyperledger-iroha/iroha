@@ -129,8 +129,6 @@ public struct AccountAddress {
         public let digestBlake2b256Hex: String
     }
 
-    public static let defaultDomainName = "default"
-
     public static func fromAccount(publicKey: Data, algorithm: String = "ed25519") throws -> AccountAddress {
         let header = try AddressHeader.new(version: 0, classId: .singleKey, normVersion: 1)
         let controller = try ControllerPayload.singleKey(publicKey: publicKey, algorithm: algorithm)
@@ -321,7 +319,7 @@ public struct AccountAddress {
 
     static let multisigPersonalisation = Data("iroha-ms-policy".utf8)
     private static let i105WarningMessage =
-        "I105 addresses are the canonical account literal encoding. " +
+        "i105 addresses are the canonical katakana account literal encoding. " +
         "Render and validate them with the intended chain discriminant."
 }
 
@@ -863,21 +861,21 @@ private enum CurveId: UInt8 {
 
 // MARK: - Encoding helpers
 
-private let i105MaxSymbolChars = 2
-private let i105KatakanaAlphabet: [String] = [
-    "ア", "イ", "ウ", "エ", "オ", "カ", "キ", "ク", "ケ", "コ", "サ", "シ", "ス", "セ", "ソ",
-    "タ", "チ", "ツ", "テ", "ト", "ナ", "ニ", "ヌ", "ネ", "ノ", "ハ", "ヒ", "フ", "ヘ", "ホ",
-    "マ", "ミ", "ム", "メ", "モ", "ヤ", "ユ", "ヨ", "ラ", "リ", "ル", "レ", "ロ", "ワ", "ヰ",
-    "ヱ", "ヲ", "ン", "ガ", "ギ", "グ", "ゲ", "ゴ", "ザ", "ジ", "ズ", "ゼ", "ゾ", "ダ", "ヂ",
-    "ヅ", "デ", "ド", "バ", "ビ", "ブ", "ベ", "ボ", "パ", "ピ", "プ", "ペ", "ポ", "ヴ", "ヷ",
-    "ヸ", "ヹ", "ヺ", "ァ", "ィ", "ゥ", "ェ", "ォ", "ャ", "ュ", "ョ", "ッ", "ヮ", "ヵ", "ヶ",
-    "キャ", "キュ", "キョ", "シャ", "シュ", "ショ", "チャ", "チュ", "チョ", "ニャ", "ニュ",
-    "ニョ", "ヒャ", "ヒュ", "ヒョ",
+private let base58Alphabet = Array("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz").map(String.init)
+private let irohaPoemKanaFullwidth: [String] = [
+    "イ", "ロ", "ハ", "ニ", "ホ", "ヘ", "ト", "チ", "リ", "ヌ", "ル", "ヲ", "ワ", "カ", "ヨ", "タ",
+    "レ", "ソ", "ツ", "ネ", "ナ", "ラ", "ム", "ウ", "ヰ", "ノ", "オ", "ク", "ヤ", "マ", "ケ", "フ",
+    "コ", "エ", "テ", "ア", "サ", "キ", "ユ", "メ", "ミ", "シ", "ヱ", "ヒ", "モ", "セ", "ス",
+]
+private let irohaPoemKanaHalfwidth: [String] = [
+    "ｲ", "ﾛ", "ﾊ", "ﾆ", "ﾎ", "ﾍ", "ﾄ", "ﾁ", "ﾘ", "ﾇ", "ﾙ", "ｦ", "ﾜ", "ｶ", "ﾖ", "ﾀ",
+    "ﾚ", "ｿ", "ﾂ", "ﾈ", "ﾅ", "ﾗ", "ﾑ", "ｳ", "ヰ", "ﾉ", "ｵ", "ｸ", "ﾔ", "ﾏ", "ｹ", "ﾌ",
+    "ｺ", "ｴ", "ﾃ", "ｱ", "ｻ", "ｷ", "ﾕ", "ﾒ", "ﾐ", "ｼ", "ヱ", "ﾋ", "ﾓ", "ｾ", "ｽ",
 ]
 private let localDomainKey = Data("SORA-LOCAL-K:v1".utf8)
 private let multisigMemberMax = 0xFF
 private let blake2bBlockLength = 128
-private let compressedAlphabet: [String] = i105KatakanaAlphabet
+private let compressedAlphabet: [String] = base58Alphabet + irohaPoemKanaFullwidth
 private let compressedChecksumLength = 6
 private let compressedBase = compressedAlphabet.count
 private let i105DiscriminantSora: UInt16 = 0x02F1
@@ -893,7 +891,13 @@ private let i105SentinelDevFullwidth = "ｄｅｖ"
 private let i105SentinelNumericPrefixFullwidth = "ｎ"
 
 private func lookupI105Digit(_ symbol: String) -> Int? {
-    i105KatakanaAlphabet.firstIndex(of: symbol)
+    if let canonical = compressedAlphabet.firstIndex(of: symbol) {
+        return canonical
+    }
+    if let halfwidth = irohaPoemKanaHalfwidth.firstIndex(of: symbol) {
+        return base58Alphabet.count + halfwidth
+    }
+    return nil
 }
 
 private func ensureCanonicalI105Literal(_ literal: String, address: AccountAddress) throws {
@@ -927,63 +931,24 @@ private func encodeI105String(discriminant: UInt16,
 }
 
 private func decodeI105Payload(_ payload: String) throws -> Data {
-    let units = Array(payload)
-    var digits: [Int] = []
-    var sawTooShort = false
-    var sawChecksumMismatch = false
-    var invalidChar: Character?
-
-    func backtrack(_ index: Int) throws -> Data? {
-        if index == units.count {
-            guard digits.count > compressedChecksumLength else {
-                sawTooShort = true
-                return nil
-            }
-            let dataDigits = Array(digits.dropLast(compressedChecksumLength))
-            let checksumDigits = Array(digits.suffix(compressedChecksumLength))
-            let canonicalBytes = try decodeBaseN(digits: dataDigits, base: compressedBase)
-            let expected = compressedChecksumDigits(canonical: Data(canonicalBytes))
-            guard checksumDigits.elementsEqual(expected) else {
-                sawChecksumMismatch = true
-                return nil
-            }
-            return Data(canonicalBytes)
+    let digits = try payload.map { symbol -> Int in
+        let string = String(symbol)
+        guard let value = lookupI105Digit(string) else {
+            throw AccountAddressError.invalidI105Char(symbol)
         }
-
-        let current = units[index]
-        var matched = false
-        for symbolLength in stride(from: i105MaxSymbolChars, through: 1, by: -1) {
-            guard index + symbolLength <= units.count else { continue }
-            let candidate = String(units[index..<(index + symbolLength)])
-            guard let value = lookupI105Digit(candidate) else { continue }
-            matched = true
-            digits.append(value)
-            if let canonical = try backtrack(index + symbolLength) {
-                digits.removeLast()
-                return canonical
-            }
-            digits.removeLast()
-        }
-
-        if !matched, invalidChar == nil {
-            invalidChar = current
-        }
-        return nil
+        return value
     }
-
-    if let canonical = try backtrack(0) {
-        return canonical
-    }
-    if sawChecksumMismatch {
-        throw AccountAddressError.checksumMismatch
-    }
-    if sawTooShort {
+    guard digits.count > compressedChecksumLength else {
         throw AccountAddressError.i105TooShort
     }
-    if let invalidChar {
-        throw AccountAddressError.invalidI105Char(invalidChar)
+    let dataDigits = Array(digits.dropLast(compressedChecksumLength))
+    let checksumDigits = Array(digits.suffix(compressedChecksumLength))
+    let canonicalBytes = try decodeBaseN(digits: dataDigits, base: compressedBase)
+    let expected = compressedChecksumDigits(canonical: Data(canonicalBytes))
+    guard checksumDigits.elementsEqual(expected) else {
+        throw AccountAddressError.checksumMismatch
     }
-    throw AccountAddressError.checksumMismatch
+    return Data(canonicalBytes)
 }
 
 private func encodeBaseN(bytes: [UInt8], base: Int) throws -> [Int] {

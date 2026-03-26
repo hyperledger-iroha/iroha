@@ -31,9 +31,9 @@ Este documento explica las estructuras, identificadores, rasgos y protocolos que
 - `IdBox`: Un sobre tipo suma para cualquier ID admitido (`DomainId`, `AccountId`, `AssetDefinitionId`, `AssetId`, `NftId`, `PeerId`, `TriggerId`, `RoleId`, `Permission`, `CustomParameterId`). Útil para flujos genéricos y codificación Norito como un solo tipo.
 - `ChainId`: Identificador de cadena opaco utilizado para protección de reproducción en transacciones.Formas de cadena de ID (ida y vuelta con `Display`/`FromStr`):
 - `DomainId`: `name` (por ejemplo, `wonderland`).
-- `AccountId`: identificador de cuenta canónica sin dominio codificado mediante `AccountAddress` como I105 únicamente. Las entradas del analizador deben ser canónicas I105; se rechazan los sufijos de dominio (`@domain`), los literales I105 canónicos, los literales de alias, la entrada del analizador hexadecimal canónico, las cargas útiles `norito:` heredadas y los formularios del analizador de cuentas `uaid:`/`opaque:`.
+- `AccountId`: identificador de cuenta canónica sin dominio codificado mediante `AccountAddress` como i105 únicamente. Las entradas del analizador deben ser canónicas i105; se rechazan los sufijos de dominio (`@domain`), los literales i105 canónicos, los literales de alias, la entrada del analizador hexadecimal canónico, las cargas útiles `norito:` heredadas y los formularios del analizador de cuentas `uaid:`/`opaque:`.
 - `AssetDefinitionId`: canónico `unprefixed Base58 address with versioning and checksum` (UUID-v4 bytes).
-- `AssetId`: literal codificado canónico `<base58-asset-id>#<katakana-i105-account-id>` (las formas textuales heredadas no se admiten en la primera versión).
+- `AssetId`: literal codificado canónico `<canonical-base58-asset-definition-id>` (las formas textuales heredadas no se admiten en la primera versión).
 - `NftId`: `nft$domain` (por ejemplo, `rose$garden`).
 - `PeerId`: `public_key` (la igualdad entre pares es por clave pública).
 
@@ -43,7 +43,7 @@ Este documento explica las estructuras, identificadores, rasgos y protocolos que
 - `DomainId { name: Name }` – nombre único.
 - `Domain { id, logo: Option<SorafsUri>, metadata: Metadata, owned_by: AccountId }`.
 - Constructor: `NewDomain` con `with_logo`, `with_metadata`, luego `Registrable::build(authority)` establece `owned_by`.### Cuenta
-- `AccountId` es la identidad de cuenta canónica sin dominio codificada por el controlador y codificada como I105 canónica.
+- `AccountId` es la identidad de cuenta canónica sin dominio codificada por el controlador y codificada como i105 canónica.
 - `ScopedAccountId { account: AccountId, domain: DomainId }` incluye contexto de dominio explícito solo cuando se requiere una vista con alcance.
 - `Account { id, metadata, label?, uaid? }`: `label` es un alias estable opcional utilizado por los registros de nueva clave, `uaid` lleva el [ID de cuenta universal] Nexus opcional (./universal_accounts_guide.md).
 - Constructor: `NewAccount` vía `Account::new(id)`; el registro requiere un dominio `ScopedAccountId` explícito y no infiere uno de los valores predeterminados.
@@ -250,7 +250,7 @@ iroha ledger asset definition register \
 # Mint using alias + account components (no manual norito hex copy/paste)
 iroha ledger asset mint \
   --definition-alias pkr#ubl.sbp \
-  --account sorauﾛ1P... \
+  --account soraゴヂ... \
   --quantity 500
 
 # Resolve alias to canonical Base58 id via Torii
@@ -259,7 +259,7 @@ curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -d '{"alias":"pkr#ubl.sbp"}'
 ```Nota de migración:
 - Los ID de definición de activos antiguos `name#domain` no se aceptan en v1.
-- Los ID de activos para acuñación/quema/transferencia siguen siendo canónicos `<base58-asset-id>#<katakana-i105-account-id>`; construirlos con:
+- Los ID de activos para acuñación/quema/transferencia siguen siendo canónicos `<canonical-base58-asset-definition-id>`; construirlos con:
   - `iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
   - o `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`.
 

@@ -1,248 +1,123 @@
 ---
-lang: ru
-direction: ltr
-source: docs/portal/docs/sns/address-display-guidelines.ru.md
-status: complete
-generator: docs/portal/scripts/sync-i18n.mjs
-translator: machine-google-reviewed
-translation_last_reviewed: 2026-02-07
+id: address-display-guidelines
+title: Sora Address Display Guidelines
+sidebar_label: Address display
+description: UX and CLI requirements for canonical i105 account ids and on-chain aliases (ADDR-6).
 ---
 
-импортируйте ExplorerAddressCard из @site/src/comComponents/ExplorerAddressCard;
+import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
 
-:::note Канонический источник
-Эта страница отражает `docs/source/sns/address_display_guidelines.md` и теперь
-Служба традиционной копии портала. Исходный файл остается для PR-переводов.
+:::note Canonical Source
+This page mirrors `docs/source/sns/address_display_guidelines.md` and now serves
+as the canonical portal copy. The source file sticks around for translation PRs.
 :::
 
-Кошельки, обозреватели и примеры SDK должны вести к адресам аккаунтов как
-к изменяемому полезному грузу. Пример Android-кошелька в
-`examples/android/retail-wallet` теперь требует требуемый UX-шаблон:
+Wallets, explorers, and SDK samples must treat the canonical Katakana i105
+literal as the only public account-id format. On-chain aliases are separate
+lookup keys:
 
-- **Две цели копирования.** Предоставьте две явные кнопки копирования: I105.
-  (предпочтительно) и сжатая форма только для Соры (`sora...`, второе по предпочтению). I105 всегда безопасно
-  С нетерпением жду, и он используется в полезной нагрузке QR. Сжатая форма должна включать
-  встроенное предупреждение, потому что работает только в приложениях, поддерживающих Sora.
-  Пример Android подключает обе кнопки Material и их всплывающие подсказки в
-  `examples/android/retail-wallet/src/main/res/layout/activity_main.xml`, а
-  демо iOS SwiftUI отображает тот же UX через `AddressPreviewCard` в
-  `examples/ios/NoritoDemo/Sources/ContentView.swift`.
-- **Моноширинный, выбираемый текст.** Отрисовывайте обе строки моноширинным.
-  шрифтом и с `textIsSelectable="true"`, чтобы пользователи могли проверять
-  значения без вызова IME. Избегайте редактируемые поля: IME может переписать
-  кана или внедрить нулевой диапазон кодовых точек.
-- **Подсказки для неявного домена по умолчанию.** Когда селектор указывает на
-  неявный домен `default`, показывайте, образуя действие, что
-  суффикс не требуется. Обозреватели также должны были услышать канонический доменный
-  Ярлык, когда селекторирует дайджест кода.
-- **QR для I105.** QR-коды должны кодировать символ I105. Если генерация QR
-  провалилась, укажите явную ошибку вместо пустого изображения.
-- **Сообщение буфера обмена.** После подписания сжатой формы отредактировать тост
-  или закусочная, учитывая посетителей, что она Сора-только и постоянна
-  восстановление IME.
+- `name@dataspace`
+- `name@domain.dataspace`
 
-Следование этим ограждениям представляет собой серьезное повреждение Unicode/IME и полезность
-Критерии получения дорожной карты ADDR-6 для UX кошельков/обозревателей.
+Those aliases resolve on-chain to the canonical i105 account id. They are not
+an alternate public account-id encoding.
 
-## Скриншоты для сверки
+## Required UX
 
-Используйте следующие фикстуры при локальных проверках, чтобы подключиться
-кнопки, всплывающие подсказки и рекомендации, согласованные между платформами:
+- **Copy/share only canonical i105.** Ship one primary copy action for the
+  canonical Katakana i105 account id. That same literal powers QR payloads,
+  deep links, and clipboard actions.
+- **Render aliases separately.** If a workflow includes an alias, show it in a
+  labeled field such as “Alias” or “Routing alias”. Do not concatenate it onto
+  the i105 literal.
+- **Monospace, selectable text.** Render the i105 literal with a monospace font
+  and `textIsSelectable="true"` so users can inspect it without invoking an
+  IME. Avoid editable fields: IMEs can rewrite kana or inject zero-width code
+  points.
+- **Confirm the exact copied value.** After copying the i105 form, emit a toast
+  or snackbar that quotes the canonical i105 literal.
+- **No alternate public encodings.** Canonical hex and legacy/non-canonical
+  address forms are tooling/debug inputs only and must not be marketed as
+  copy/share formats.
 
-- Справка Android: `/img/sns/address_copy_android.svg`
+## Screenshot fixtures
 
-  ![Справка Android двойного копирования](/img/sns/address_copy_android.svg)
+Use the following fixtures during localization reviews to ensure button labels,
+tooltips, and warnings stay aligned across platforms:
 
-- Справка iOS: `/img/sns/address_copy_ios.svg`
+- Android reference: `/img/sns/address_copy_android.svg`
 
-  ![Справка iOS двойного копирования](/img/sns/address_copy_ios.svg)
+  ![Android address copy reference](/img/sns/address_copy_android.svg)
 
-## Помощники SDK
+- iOS reference: `/img/sns/address_copy_ios.svg`
 
-Каждый SDK предоставляет удобный помощник возвращающейся формы I105 и сжатую.
-также текст обращения, чтобы UI-слои были согласованными:
+  ![iOS address copy reference](/img/sns/address_copy_ios.svg)
+
+## SDK helpers
+
+Each SDK exposes a convenience helper that returns canonical Katakana i105
+rendering plus warning text so UI layers can stay consistent:
 
 - JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)`
-  (И18НИ00000028Х)
-- Инспектор JavaScript: `inspectAccountId(...)` возвращает предупреждение.
-  сжатой формой и добавьте его в `warnings`, когда вызывающие передают литерал
-  `sora...`, чтобы обозреватели/панели кошельков могли показать предупреждение
-  Сора-только во время вставки/валидации, а не только при формировании упругой формы.
-- Питон: `AccountAddress.display_formats(network_prefix: int = 753)`
-- Свифт: `AccountAddress.displayFormats(networkPrefix: UInt16 = 753)`
-- Java/Котлин: `AccountAddress.displayFormats(int networkPrefix = 753)`
-  (И18НИ00000035Х)Используйте эти помощники вместо перереализации логики кодирования в UI-слоях.
-Помощник JavaScript также раскрывает полезную нагрузку `selector` в `domainSummary`.
-(`tag`, `digest_hex`, `registry_id`, `label`), чтобы пользовательский интерфейс мог указать, является
-Если селектор Local-12 или подкреплен реестром, не парьтесь сырой полезной нагрузкой повторно.
+  (`javascript/iroha_js/src/address.js`)
+- Python: `AccountAddress.display_formats(network_prefix: int = 753)`
+- Swift: `AccountAddress.displayFormats(networkPrefix: UInt16 = 753)`
+- Java/Kotlin: `AccountAddress.displayFormats(int networkPrefix = 753)`
+  (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountAddress.java`)
 
-## Демонстрация инструментов обозревателя
+Use these helpers instead of reimplementing the encode logic in UI layers.
+Use alias-aware Torii endpoints when you need to resolve `name@dataspace` or
+`name@domain.dataspace` into the canonical i105 account id.
 
+## Explorer instrumentation demo
 
+<ExplorerAddressCard />
 
-Наблюдатели должны отражать телеметрию и доступность кошелька:
+Explorers should mirror the wallet telemetry and accessibility work:
 
-- Добавьте `data-copy-mode="i105|qr"` на кнопку копирования, чтобы
-  фронтенды могли эмитировать счетчики использования рядом с метрикой Torii
-  `torii_address_format_total`. Демонстрационный компонент выше отправляется
-  событие `iroha:address-copy` с `{mode,timestamp}` - подключите его к своему
-  аналитическому/телеметрическому пайплайну (например, в Сегменте или NORITO
-  коллектор), чтобы информационные панели могли коррелировать использование форм
-  адресаты на территории Франции с режимами копирования клиента. Также зеркальте счетчики
-  доменов Torii (`torii_address_domain_total{domain_kind}`) в том же фиде, чтобы
-  результаты проверок Local-12 помогли экспортировать 30-дневное доказательство
-  `domain_kind="local12"` напрямую из панели Grafana `address_ingest`.
-- Сопоставление каждого средства управления изделием `aria-label`/`aria-describedby`,
-  объясняющие, безопасные для обмена (I105) или только для Соры
-  (сжатый). Включите подпись неявного домена в описание, чтобы вспомогательные
-  технологии показывали тот же контекст.
-- Экспонируйте live-регион (например, `<output aria-live="polite">...</output>`),
-  который объявляет результаты копирования и рассмотрения, совпадая с
-  поведением VoiceOver/TalkBack, уже настроенным в примерах Swift/Android.
+- Apply `data-copy-mode="i105|alias|qr"` to copy buttons so front-ends can emit
+  usage counters alongside server-side account-literal metrics.
+- Pair every control with distinct `aria-label`/`aria-describedby` hints that
+  explain whether a control copies the canonical i105 account id, views the
+  alias, or shares the QR payload.
+- Expose a live region (e.g., `<output aria-live="polite">…</output>`) announcing copy results and
+  warnings, matching the VoiceOver/TalkBack behaviour now wired into the Swift/Android samples.
 
-Это инструментирование обеспечивает ADDR-6b, электрод, который операторы могут
-наблюдать и принимать Torii, и режимы копирования клиента до отключения Local
-селекторов.
+## Enforcing canonical forms
 
-## Набор событий Локальный -> Глобальный
+Use the CLI workflow documented under ADDR-5:
 
-Используйте [Local -> Globaltoolkit](local-to-global-toolkit.md) для
-автоматизация аудита и конверсии конфиденциальных локальных селекторов. Помощник выводит и
-JSON-отчет аудита и конвертированный список I105/сжатых результатов, которые
-операторы прикладывают к билетам готовности, а также сопутствующий Runbook связывает
-панели Grafana и правила Alertmanager, которые ограничивают строгое переключение.
-
-## Быстрый справочник бинарной раскладки (ADDR-1a)
-
-Когда в SDK появятся продвинутые инструменты адресов (инспекторы, подсказки
-валидации, составители манифестов), направляйте разработчиков к каноническому
-проводной формат из `docs/account_structure.md`. Раскладка всегда
-`header · selector · controller`, где биты заголовка следующие:
-
-```
-bit index:   7        5 4      3 2      1 0
-             ┌─────────┬────────┬────────┬────┐
-payload bit: │version  │ class  │  norm  │ext │
-             └─────────┴────────┴────────┴────┘
-```
-
-- `addr_version = 0` (биты 7-5) сегодня; ненулевые значения зарезервированы и
-  должен приводить к `AccountAddressError::InvalidHeaderVersion`.
-- `addr_class` различает одиночные (`0`) и многоподписные (`1`) контроллеры.
-- `norm_version = 1` кодирует правила селектора Norm v1. Будущие нормы будут
-  переиспользовать то же 2-битовое поле.
-- `ext_flag` всегда `0`; Установленные биты означают неподдерживаемые расширения
-  полезная нагрузка.
-
-Селектор следует сразу после заголовка:```
-┌──────────┬──────────────────────────────────────────────┐
-│ tag (u8) │ payload (depends on selector kind)           │
-└──────────┴──────────────────────────────────────────────┘
-```
-
-Пользовательский интерфейс и SDK должны быть готовы. Показать селектор типа:
-
-- `0x00` = неявный домен по умолчанию (без полезной нагрузки).
-- `0x01` = локальный дайджест (12-байтовый `blake2s_mac("SORA-LOCAL-K:v1", label)`).
-- `0x02` = запись глобального реестра (`registry_id:u32`, обратный порядок байтов).
-
-Канонические шестнадцатеричные примеры, которые инструменты кошельков могут ссылать или
-настройки в документации/тестах:
-
-| Тип селектора | Канонический шестигранник |
-|---------------|---------------|
-| Неявный по умолчанию | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
-| Локальный дайджест (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
-| Глобальный реестр (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
-
-См. `docs/source/references/address_norm_v1.md` для полной таблицы селектора/состояния
-и `docs/account_structure.md` для полного байтового диаграммы.
-
-## Принуждение канонических форм
-
-Операторы, конвертирующие ограничения Местное кодирование в соответствии с каноническим I105 или
-короткие строки должны соответствовать CLI-флоу из ADDR-5:
-
-1. `iroha tools address inspect` теперь выдает структурированное JSON-резюме с I105,
-   сжатые и стандартные шестнадцатеричные полезные данные. Резюме также включает объект `domain`
-   с полями `kind`/`warning` и отправьте любой передаваемый домен через
-   `input_domain`. Когда `kind` соответствует `local12`, CLI выводит предупреждение в
-   stderr, JSON-резюме отражает ту же подсказку, чтобы пайплайны CI и SDK могли
-   ее шоу. Передавайте `legacy  suffix`, если хотите воспроизвести
-   конвертированная кодировка `<i105>@<domain>`.
-2. SDK может показать то же самое предупреждение/сводку через помощник JavaScript:
+1. Run `iroha tools address convert <address-or-account_id> --format json`.
+   The summary reports the detected format and canonical encodings (`i105`,
+   `canonical_hex`). Strict parser paths accept canonical Katakana i105 only.
+2. SDKs can surface the same summary via JavaScript:
 
    ```js
    import { inspectAccountId } from "@iroha/iroha-js";
 
-   const summary = inspectAccountId("sora...");
-   if (summary.domain.warning) {
-     console.warn(summary.domain.warning);
-   }
+   const summary = inspectAccountId(accountLiteral);
    console.log(summary.i105.value, summary.i105Warning);
    ```
-  Помощник сохраняет префикс I105, извлеченный из буквального значения, если только вы явно не
-  сформулированы `networkPrefix`, поэтому резюме для сетей не по умолчанию не перерисовываются
-  тихо с дефолтным префиксом.3. Конвертируйте канонический полезный груз, повторно используя `i105.value` или
-   `i105` из резюме (или запросите другую кодировку через `--format`). этический
-   звучит уже безопасно для внешнего обмена.
-4. Обновите манифесты, реестры и клиентские документы стандартной формы и
-   уведомите контрагентов, что местные селекторы будут отклоняться после переключения.
-5. Для больших наборов данных запустите
-   `iroha tools address audit --input addresses.txt --network-prefix 753`. Команда
-   читает литералы, разделенные строки перевода (комментарии с `#` отключаются,
-   а `--input -` или отсутствие флага использует STDIN), выдает JSON-отчет с
-   канонические/I105/сжатые резюме для каждой записи и считают ошибки анализа
-   и уважаю местный домен. Используйте `--allow-errors` при аудите
-   `strict CI post-check`, когда операторы готовы запретить локальные селекторы в CI.
-6. Когда нужна построчная перепись, воспользуйтесь
-  Для исправления таблиц Местные селекторы використовуют
-  для экспорта CSV `input,status,format,...`, который подсвечивает канонические
-  кодирования, отражения и ошибок анализа за один проход.
-   Помощник по умолчанию пропускает не-локальные строки, конвертирует все оставшиеся
-   запись в запрошенной кодировке (I105/сжатый/hex/JSON) и сохранение исходного домена
-   при `legacy  suffix`. Совмещайте с `--allow-errors`, чтобы продолжить сканирование даже
-   если дамп содержит поврежденные литералы.
-7. Автоматизация CI/lint может запустить `ci/check_address_normalize.sh`, которая
-   извлекает локальные селекторы из `fixtures/account/address_vectors.json`,
-   конвертирует их через `iroha tools address normalize` и повторно запускает
-   `iroha tools address audit`, чтобы подтвердить, что релизов больше нет
-   эмитируют Местные дайджесты.
+3. Resolve aliases through alias-aware APIs instead of feeding
+   `name@dataspace` or `name@domain.dataspace` into strict `AccountId`
+   parsers.
+4. Reuse `i105.value` from the summary (or request another encoding via
+   `--format`) in manifests and user-facing docs.
+4. For bulk data sets, run
+   `iroha tools address audit --input addresses.txt --network-prefix 753`.
+   Audit emits JSON/CSV summaries per row and fails on parse errors by default.
+   Use `--allow-errors` only for best-effort scans.
+5. For newline-to-newline rewrites, run
+   `iroha tools address normalize --input addresses.txt --network-prefix 753 --format i105`.
+   This rewrites each parsed row to the requested encoding
+   (canonical Katakana i105/hex/JSON). Pair with
+   `--allow-errors` for malformed dump triage.
 
-`torii_address_local8_total{endpoint}` вместе с
-`torii_address_collision_total{endpoint,kind="local12_digest"}`,
-`torii_address_collision_domain_total{endpoint,domain}` и панель Grafana
-`dashboards/grafana/address_ingest.json` подает сигнал принудительного исполнения: когда
-продакшн-дашборды показывает ноль легитимных местных отправок и ноль Local-12
-коллизий в течение 30 дней подряд, Torii переведет шлюз Local-8 в режим жесткого отказа на
-mainnet, а затем Local-12, когда глобальные домены получают соответствующие записи.
-реестр. Прочитайте вывод CLI операторским об этом замораживании -
-та же строка используется во всплывающих подсказках и средствах автоматизации SDK, чтобы
-сохранение паритета с критериями вывода дорожной карты. Torii теперь по умолчанию
-кластерах при диагностике регрессий. Продолжайте зеркалировать
-`torii_address_domain_total{domain_kind}` в Grafana
-(`dashboards/grafana/address_ingest.json`), чтобы пакет доказательства ADDR-7
-могла бы быть надежной, что `domain_kind="local12"` сохраняет нулевые значения в течение
-Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) добавлен три
-ограждения:- `AddressLocal8Resurgence` пейджит, когда контекст сообщает о свежем приращении
-  Местный-8. Остановите развертывание строгого режима, перейдите в дашборде и,
-  возврат сигнала к ошибке - затем восстановите дефолт (`true`).
-- `AddressLocal12Collision` реализуется, когда два лейбла Local-12 хэшируются в
-  один дайджест. Приостановите манифесты рекламных акций, запустите Local -> Global.
-  набор инструментов для аудита картографических дайджестов и координируйте их с управлением Nexus перед
-  перевыпуском записи в реестре или повторным включением последующих развертываний.
-- `AddressInvalidRatioSlo` предупреждает, когда флотский неверный коэффициент (исключающая
-  отказы Local-8/strict-mode) рассчитывает SLO 0,1% в течение десяти минут. Используйте
-  `torii_address_invalid_total` для поиска ответственного контекста/причины и
-  Прежде чем снова включать строгий режим, согласуйте свой бизнес с SDK.
+### Release note snippet (wallet & explorer)
 
-### Фрагмент релизной заметки (кошелек и обозреватель)
+Include the following bullet in wallet/explorer release notes when shipping the cutover:
 
-Включите следующий пункт в примечаниях к выпуску кошелька/обозревателя при переключении:
-
-> **Адреса:**Добавлен помощник `iroha tools address normalize`
-> и подключен в CI (`ci/check_address_normalize.sh`), чтобы пайплайны кошелька/
-> обозреватели могли конвертировать атмосферу Местные селекторы в канонические
-> I105/сжатые формы до блокировки Local-8/Local-12 в основной сети. Обновите любые
-> Кастомные экспорты, чтобы запустить команду и приложить нормализованный
-> список к релизу пакета доказательств.
+> **Addresses:** Copy/share flows now use canonical Katakana i105 account ids
+> only. On-chain aliases remain available as separate routing labels in
+> `name@dataspace` / `name@domain.dataspace` form and resolve to the same
+> canonical i105 account id.

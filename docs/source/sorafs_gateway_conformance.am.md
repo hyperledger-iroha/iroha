@@ -194,7 +194,7 @@ fixture contains:
 - a `cid` entry encoded in base64 alongside an expiry window.
 - a `url` entry for URL-level blocking.
 - an `account_id` entry using the canonical AccountAddress hex encoding to mirror governance suspensions.
-- an `account_alias` entry that blocks a routing alias (`name@dataspace` or `name@domain.dataspace`).
+- an `account_alias` entry that blocks an on-chain account alias (`name@dataspace` or `name@domain.dataspace`).
 - a `perceptual_family` entry that pairs a family/variant UUID with perceptual hash metadata (`perceptual_hash_hex`, `perceptual_hamming_radius`) so gateways can block near-duplicate content clusters.
 
 Each record follows the same Norito JSON layout used by the loader, including optional `issued_at`

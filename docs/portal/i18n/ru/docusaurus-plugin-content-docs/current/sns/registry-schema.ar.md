@@ -236,7 +236,7 @@ Enum RegistryEventKind {
 Зарегистрируйтесь для `RegistryEventV1` и DNS/SoraFS:
 
 1. Установите `NameRecordV1` в защитном чехле.
-2. Создание шаблонов сопоставителей (в формате I105 + сжатые (`sora`) текстовые записи).
+2. Создание шаблонов сопоставителей (в формате i105 + сжатые (`sora`) текстовые записи).
 3. Установите флажок SoraDNS в [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).Автор сообщения:
 
 - В качестве примера `NameRecordV1` *يجب* на сайте `version`. بصرامة.

@@ -113,9 +113,10 @@ Iroha თანატოლები ინარჩუნებენ მოწ
 
 `iroha_data_model` კრატი განსაზღვრავს წიგნის ყველა ობიექტს, ინსტრუქციას, მოთხოვნას და მოვლენას. მაჩვენებლები:
 
-- **დომენები, ანგარიშები და აქტივები** იყენებენ კანონიკურ I105 ანგარიშის ID-ებს (სასურველია); `name@dataspace` / `name@domain.dataspace` რჩება მარშრუტად
-  მეტსახელი, როდესაც აშკარად არის მიწოდებული. მეტამონაცემები დეტერმინისტულია (`Metadata` რუკა). რიცხვითი აქტივები მხარს უჭერს ფიქსირებულ წერტილს
-  ოპერაციები; NFT-ები ატარებენ თვითნებურ სტრუქტურირებულ მეტამონაცემებს.
+- **Domains, accounts, and assets** use canonical Katakana i105 account ids and canonical Base58 asset ids. Account aliases are separate on-chain
+  bindings in `name@dataspace` / `name@domain.dataspace` form that resolve to Katakana i105 account ids, and asset aliases are separate on-chain bindings in `name#dataspace` / `name#domain.dataspace` form that resolve to canonical Base58 asset ids. Metadata is deterministic (`Metadata` map). Numeric assets support fixed-point
+  operations; NFTs carry arbitrary structured metadata.
+
 - **როლები და ნებართვები** იყენებენ Norito-ით ჩამოთვლილ ჟეტონებს, რომლებიც პირდაპირ ასახავს შემსრულებლის ჩეკებს.
 - **ტრიგერები** (დროზე დაფუძნებული, ბლოკზე დაფუძნებული ან პრედიკატზე ორიენტირებული) ასხივებენ დეტერმინისტულ ტრანზაქციებს ჯაჭვის მეშვეობით
   შემსრულებელი.

@@ -58,8 +58,9 @@ object TransferWirePayloadEncoder {
     /**
      * Encodes an asset transfer instruction as a wire-framed InstructionBox.
      *
-     * @param assetId The full asset ID (`<base58-asset-id>#<katakana-i105-account-id>` with an optional
-     * `#dataspace:<id>` suffix)
+     * @param assetId The internal asset balance-bucket literal
+     * (`<base58-asset-definition-id>#<katakana-i105-account-id>` with an optional
+     * `#dataspace:<id>` suffix; public asset ids are bare Base58)
      * @param amount The amount to transfer as a string (e.g., "10" or "10.50")
      * @param destinationAccountId The recipient's account ID
      * @return InstructionBox with wire payload ready for Norito encoding
@@ -176,7 +177,7 @@ object TransferWirePayloadEncoder {
                         return AccountId(AccountController.multisig(multisig))
                     }
                 } catch (e: AccountAddressException) {
-                    throw IllegalArgumentException("Failed to extract controller from I105 address", e)
+                    throw IllegalArgumentException("Failed to extract controller from i105 address", e)
                 }
                 throw IllegalArgumentException("Address contains neither single-key nor multisig controller")
             }
@@ -205,7 +206,7 @@ object TransferWirePayloadEncoder {
             fun parse(assetIdStr: String): AssetId {
                 val parts = assetIdStr.split('#')
                 require(parts.size == 2 || parts.size == 3) {
-                    "AssetId must use '<base58-asset-id>#<katakana-i105-account-id>' with optional '#dataspace:<id>' suffix"
+                    "AssetId must use internal '<base58-asset-definition-id>#<katakana-i105-account-id>' with optional '#dataspace:<id>' suffix; public asset ids are bare Base58"
                 }
 
                 val assetDef = AssetDefinitionId.fromAddress(parts[0])

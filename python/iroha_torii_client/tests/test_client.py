@@ -23,7 +23,7 @@ from iroha_torii_client import (  # noqa: E402  (import depends on sys.path muta
 )
 
 CANONICAL_OWNER = "soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ"
-CANONICAL_ASSET_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ"
+CANONICAL_ASSET_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
 CANONICAL_ASSET_DEFINITION_ID = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
 
 
@@ -376,12 +376,38 @@ def test_get_explorer_account_qr_parses_payload_and_params() -> None:
     assert call["headers"]["Accept"] == "application/json"
 
 
+def test_get_explorer_account_qr_accepts_account_alias_path_literal() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "canonical_id": "soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ",
+                "literal": "operator@hbl.universal",
+                "network_prefix": 26,
+                "error_correction": "quartile",
+                "modules": 33,
+                "qr_version": 5,
+                "svg": "<svg></svg>",
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    qr = client.get_explorer_account_qr("operator@hbl.universal")
+
+    assert qr.literal == "operator@hbl.universal"
+    call = session.calls[0]
+    assert call["method"] == "GET"
+    assert call["url"].endswith("/v1/explorer/accounts/operator%40hbl.universal/qr")
+    assert call["params"] == {}
+
+
 def test_get_explorer_account_qr_normalizes_payload_variants() -> None:
     session = RecordingSession()
     session.queue(
         StubResponse(
             payload={
-                "canonicalId": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
+                "canonicalId": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
                 "literal": "sorabobacct",
                 "networkPrefix": 27,
                 "errorCorrection": "medium",
@@ -393,10 +419,10 @@ def test_get_explorer_account_qr_normalizes_payload_variants() -> None:
     )
     client = ToriiClient("http://node.test", session=session)
 
-    qr = client.get_explorer_account_qr("34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r")
+    qr = client.get_explorer_account_qr("soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ")
 
     assert qr == ExplorerAccountQr(
-        canonical_id="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
+        canonical_id="soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
         literal="sorabobacct",
         network_prefix=27,
         error_correction="medium",
@@ -543,7 +569,7 @@ def test_list_runtime_upgrades_parses_records() -> None:
                                 "end_height": 40,
                             },
                             "status": {"Proposed": None},
-                            "proposer": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
+                            "proposer": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
                             "created_height": 25,
                         },
                     },
@@ -708,7 +734,7 @@ def test_get_uaid_bindings_fetches_dataspace_accounts() -> None:
                     {
                         "dataspace_id": 9,
                         "dataspace_alias": "alpha",
-                        "accounts": ["soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ", " 34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r "],
+                        "accounts": ["soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ", " soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ "],
                     }
                 ],
             }
@@ -718,7 +744,7 @@ def test_get_uaid_bindings_fetches_dataspace_accounts() -> None:
 
     bindings = client.get_uaid_bindings(uaid_literal)
 
-    assert bindings.dataspaces[0].accounts == ["soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ", "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r"]
+    assert bindings.dataspaces[0].accounts == ["soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ", "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ"]
     assert session.calls[0]["params"] == {}
 
 
@@ -2325,8 +2351,8 @@ def test_list_offline_transfers_parses_payload() -> None:
                         "bundle_id_hex": "bead",
                         "controller_id": "soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ",
                         "controller_display": "soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ",
-                        "receiver_id": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
-                        "receiver_display": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
+                        "receiver_id": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
+                        "receiver_display": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
                         "deposit_account_id": "3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF",
                         "deposit_account_display": "3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF",
                         "asset_id": CANONICAL_ASSET_ID,
@@ -2778,7 +2804,7 @@ def test_list_subscriptions_encodes_params() -> None:
     client = ToriiClient("http://node.test", session=session)
 
     page = client.list_subscriptions(
-        owned_by="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
+        owned_by="soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
         provider="soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ",
         status="ACTIVE",
         limit=25,
@@ -2789,7 +2815,7 @@ def test_list_subscriptions_encodes_params() -> None:
     assert page.items[0].subscription_id == "sub-1$subscriptions"
     assert page.items[0].subscription["status"] == "active"
     assert session.calls[0]["params"] == {
-        "owned_by": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
+        "owned_by": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
         "provider": "soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ",
         "status": "active",
         "limit": 25,
@@ -2821,7 +2847,7 @@ def test_create_subscription_posts_payload() -> None:
     client = ToriiClient("http://node.test", session=session)
 
     result = client.create_subscription(
-        authority="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
+        authority="soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
         private_key="ed25519:priv",
         subscription_id="sub-1$subscriptions",
         plan_id="plan#subs",
@@ -2833,7 +2859,7 @@ def test_create_subscription_posts_payload() -> None:
 
     assert result.subscription_id == "sub-1$subscriptions"
     payload = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert payload["authority"] == "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r"
+    assert payload["authority"] == "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ"
     assert payload["private_key"] == "ed25519:priv"
     assert payload["billing_trigger_id"] == "sub-bill"
     assert payload["usage_trigger_id"] == "sub-usage"
@@ -2877,23 +2903,23 @@ def test_subscription_actions_post_payloads() -> None:
     session.queue(StubResponse(payload={"ok": True, "subscription_id": "sub-1", "tx_hash_hex": "d"}))
     client = ToriiClient("http://node.test", session=session)
 
-    client.pause_subscription("sub-1", authority="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r", private_key="ed25519:priv")
+    client.pause_subscription("sub-1", authority="soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ", private_key="ed25519:priv")
     client.resume_subscription(
         "sub-1",
-        authority="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
+        authority="soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
         private_key="ed25519:priv",
         charge_at_ms=1_704_067_200_000,
     )
-    client.cancel_subscription("sub-1", authority="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r", private_key="ed25519:priv")
+    client.cancel_subscription("sub-1", authority="soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ", private_key="ed25519:priv")
     client.charge_subscription_now(
         "sub-1",
-        authority="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
+        authority="soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
         private_key="ed25519:priv",
         charge_at_ms=1_704_067_200_000,
     )
 
     pause_body = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert pause_body["authority"] == "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r"
+    assert pause_body["authority"] == "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ"
     resume_body = json.loads(session.calls[1]["data"].decode("utf-8"))
     assert resume_body["charge_at_ms"] == 1_704_067_200_000
     cancel_body = json.loads(session.calls[2]["data"].decode("utf-8"))

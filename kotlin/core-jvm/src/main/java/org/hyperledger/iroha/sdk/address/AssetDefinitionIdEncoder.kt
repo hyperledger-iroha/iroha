@@ -20,26 +20,18 @@ private val BASE58_INDEX = IntArray(128) { -1 }.also { index ->
 private val BASE_58: BigInteger = BigInteger.valueOf(58L)
 
 /**
- * Computes and validates canonical unprefixed Base58 asset-definition addresses.
+ * Encodes and validates canonical unprefixed Base58 asset-definition addresses.
  *
  * Iroha represents `AssetDefinitionId` as canonical UUIDv4 bytes wrapped in a versioned
  * Base58 address with a BLAKE3 checksum:
  *
- * 1. BLAKE3(`"name#domain"`) -> 32 bytes
- * 2. Take the first 16 bytes
- * 3. Set UUIDv4 version bits
- * 4. Set RFC 4122 variant bits
- * 5. Wrap as `version_byte + 16 uuid bytes + 4-byte BLAKE3 checksum`
- * 6. Encode the 21-byte payload as unprefixed Base58
+ * 1. Take canonical 16-byte UUIDv4 payload bytes
+ * 2. Verify UUIDv4 version bits
+ * 3. Verify RFC 4122 variant bits
+ * 4. Wrap as `version_byte + 16 uuid bytes + 4-byte BLAKE3 checksum`
+ * 5. Encode the 21-byte payload as unprefixed Base58
  */
 object AssetDefinitionIdEncoder {
-
-    /**
-     * Computes the canonical asset-definition address from asset name and domain.
-     */
-    @JvmStatic
-    fun encode(name: String, domain: String): String =
-        encodeFromBytes(computeDefinitionBytes(name, domain))
 
     /**
      * Wraps canonical UUIDv4 bytes as a canonical unprefixed Base58 address.
@@ -56,19 +48,6 @@ object AssetDefinitionIdEncoder {
             "Asset definition bytes must encode RFC 4122 variant bits"
         }
         return encodeBase58(addressPayload(definitionBytes))
-    }
-
-    /**
-     * Computes the raw 16-byte UUIDv4 payload from asset name and domain.
-     */
-    @JvmStatic
-    fun computeDefinitionBytes(name: String, domain: String): ByteArray {
-        val input = "$name#$domain".toByteArray(Charsets.UTF_8)
-        val hash = Blake3.hash(input)
-        val definitionBytes = hash.copyOf(UUID_BYTES_LEN)
-        definitionBytes[6] = ((definitionBytes[6].toInt() and 0x0F) or 0x40).toByte()
-        definitionBytes[8] = ((definitionBytes[8].toInt() and 0x3F) or 0x80).toByte()
-        return definitionBytes
     }
 
     /**

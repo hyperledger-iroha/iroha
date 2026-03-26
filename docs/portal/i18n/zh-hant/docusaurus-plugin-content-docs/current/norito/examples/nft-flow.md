@@ -21,7 +21,7 @@ slug：/norito/examples/nft-flow
 
 ## 賬本演練
 
-- 確保 NFT 定義（例如 `n0#wonderland`）與代碼段中使用的所有者/接收者帳戶（`i105...`、`i105...`）一起存在。
+- 確保 NFT 定義（例如 `n0#wonderland`）與代碼段中使用的所有者/接收者帳戶（`soraカタカナ...`、`soraカタカナ...`）一起存在。
 - 調用 `nft_issue_and_transfer` 入口點來鑄造 NFT，將其從 Alice 轉移到 Bob，並附加描述發行的元數據標誌。
 - 使用 `iroha_cli ledger nfts list --account <id>` 或 SDK 等效項檢查 NFT 賬本狀態以驗證傳輸，然後在刻錄指令運行後確認資產已被刪除。
 

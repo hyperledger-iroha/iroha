@@ -30,7 +30,7 @@ scripts/address_local_toolkit.sh \
 
 Options:
 
-- `--format i105` for `i105` output instead of I105.
+- `--format i105` for `i105` output instead of i105.
 - `--audit-only` to skip the conversion step.
 - `--allow-errors` to keep scanning when malformed rows appear (matches the CLI behaviour).
 

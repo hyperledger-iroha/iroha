@@ -141,7 +141,7 @@ Lane manifestlari `nexus.registry.manifest_directory` orqali sozlangan katalog o
 }
 ```
 
-Asosiy talablar:- Validatorlar **katalogda mavjud bo'lgan kanonik I105 hisob identifikatorlari bo'lishi kerak (`@domain` yo'q; `@domain` ni faqat aniq marshrutlash ko'rsatmasi sifatida qo'shing). `quorum` ni multisig chegarasiga (≥2) o'rnating.
+Asosiy talablar:- Validatorlar **katalogda mavjud bo'lgan kanonik i105 hisob identifikatorlari bo'lishi kerak (`@domain` yo'q; `@domain` ni faqat aniq marshrutlash ko'rsatmasi sifatida qo'shing). `quorum` ni multisig chegarasiga (≥2) o'rnating.
 - Himoyalangan nom maydonlari `Queue::push` tomonidan amalga oshiriladi (qarang: `crates/iroha_core/src/queue.rs`), shuning uchun barcha CBDC shartnomalarida `gov_namespace` + `gov_contract_id` belgilanishi kerak.
 - `composability_group` maydonlari `docs/source/nexus.md` §8.6 da tasvirlangan sxemaga amal qiladi; egasi (CBDC yo'li) oq ro'yxat va kvotalar bilan ta'minlaydi. Oq ro'yxatga kiritilgan DS manifestlari faqat `group_id_hex` + `activation_epoch` ni belgilaydi.
 - Manifestdan nusxa olgandan so'ng, `LaneManifestRegistry::from_config` uni yuklashini tasdiqlash uchun `cargo test -p integration_tests nexus::lane_registry -- --nocapture` ni ishga tushiring.

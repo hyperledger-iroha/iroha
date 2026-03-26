@@ -234,7 +234,7 @@ Todas las claves se serializan usando tuplas Norito para mantener el hashing det
 שערי שערים נרשמו ב-`RegistryEventV1` ובאמצעות DNS/SoraFS:
 
 1. Obtener el ultimo `NameRecordV1` referenciado por la secuencia de eventos.
-2. Regenererar templates de resolver (directions I105 preferidas + דחוס (`sora`) como segunda opcion, רשומות טקסט).
+2. Regenererar templates de resolver (directions i105 preferidas + דחוס (`sora`) como segunda opcion, רשומות טקסט).
 3. Pnear datas de zona actualizados via el flujo SoraDNS descrito en [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
 
 Garantias de entrega de eventos:

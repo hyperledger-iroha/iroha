@@ -120,7 +120,7 @@ cargo run
 您應該看到類似於以下內容的日誌輸出：
 
 ```
-i105... now holds:
+soraカタカナ... now holds:
   50 units of 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 

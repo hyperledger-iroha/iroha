@@ -171,7 +171,7 @@ address-manifest-<REVISION>/
   - `AddressLocal12Collision` — 2 つの Local‑12 ラベルが同一 digest に
     なると即発火。マニフェスト昇格を停止し、`scripts/address_local_toolkit.sh`
     で digest マッピングを確認し、Nexus ガバナンスと調整して再発行します。
-  - `AddressInvalidRatioSlo` — 無効 I105/圧縮アドレスの割合が 10 分間 0.1% SLO
+  - `AddressInvalidRatioSlo` — 無効 i105/圧縮アドレスの割合が 10 分間 0.1% SLO
     を超えると警告（Local‑8/strict‑mode 拒否は除外）。`torii_address_invalid_total`
     を原因別に調査し、SDK オーナーと調整して strict‑mode を再開します。
 - ログ: Torii の `manifest_refresh` ログとガバナンスチケット番号を `notes.md`

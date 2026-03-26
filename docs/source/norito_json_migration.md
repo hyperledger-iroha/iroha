@@ -62,7 +62,7 @@ Serde derives, visitors, JSON DOM helpers, and config loaders.
 > migration paths.
 >
 > **Status (Jan 25, 2026):** `AccountId`/`AssetId` JSON is emitted in canonical
-> encoded literals (e.g., `I105`, `<base58-asset-id>#<katakana-i105-account-id>`), and decoding no longer relies
+> encoded literals (e.g., `i105`, `<canonical-base58-asset-definition-id>`), and decoding no longer relies
 > on a domain-selector resolver.
 
 > **Status (Nov 7, 2025):** `IpfsPath` gained Norito `FastJsonWrite` and

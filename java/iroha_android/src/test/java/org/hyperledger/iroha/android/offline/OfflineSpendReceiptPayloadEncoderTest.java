@@ -19,8 +19,8 @@ public final class OfflineSpendReceiptPayloadEncoderTest {
 
     // Test values derived from Rust unit test (encode_offline_spend_receipt_payload_matches_native)
     // These use canonical Katakana i105 AccountAddress literals
-    final String sender = "RnuaJGGDLA57fKeoK1TaFQWhYLxMXY9sEqWhSviYfXxDwTkLdBw3Khq2";
-    final String receiver = "RnuaJGGDL9ruds8g1c7AAz8cq1kS16u1LDptWe8FC3NLR4qs1RhLjNjk";
+    final String sender = "soraゴヂアヌメネヒョタルアキュカンコプヱガョラツゴヸナゥヘガヮザネチョヷニャヒュニョメヺェヅヤアキャヅアタタナイス";
+    final String receiver = "soraゴヂアヌプユドニャニョャニョユブゥワレボウュヒャメヌサネスヒダテガニャガュギィペジハネアヶァネフカアミキ";
     final String asset = "xor##" + sender;
 
     // tx_id must have LSB=1 (this is the hash from Rust test)

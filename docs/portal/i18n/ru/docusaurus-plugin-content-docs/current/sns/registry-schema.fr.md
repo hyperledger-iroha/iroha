@@ -234,7 +234,7 @@ Enum RegistryEventKind {
 Шлюзы подключены к `RegistryEventV1` и синхронизируют DNS/SoraFS через:
 
 1. Ссылка на Recuperer le dernier `NameRecordV1` для последовательности событий.
-2. Восстановите шаблоны преобразователя (адреса предпочтительных I105 + сжатые (`sora`) и второй выбор, текстовые записи).
+2. Восстановите шаблоны преобразователя (адреса предпочтительных i105 + сжатые (`sora`) и второй выбор, текстовые записи).
 3. Закрепите пользователей зоны в течение дня с помощью рабочего процесса SoraDNS, зарегистрированного в [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
 
 Гарантии вечерней оплаты:

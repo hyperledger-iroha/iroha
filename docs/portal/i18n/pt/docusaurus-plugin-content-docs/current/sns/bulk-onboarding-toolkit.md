@@ -247,7 +247,7 @@ unica execucao de CSV.
   referencias a arquivos sao resolvidas relativo a localizacao do CSV. Metadata
   nao objeto produz um erro de validacao.
 - **Controllers:** celulas em branco respeitam `--default-controllers`. Forneca
-  listas explicitas (por exemplo `i105...;i105...`) ao delegar para atores nao owner.
+  listas explicitas (por exemplo `soraカタカナ...;soraカタカナ...`) ao delegar para atores nao owner.
 
 Falhas sao reportadas com numeros de linha contextuais (por exemplo
 `error: row 12 term_years must be between 1 and 255`). O script sai com codigo

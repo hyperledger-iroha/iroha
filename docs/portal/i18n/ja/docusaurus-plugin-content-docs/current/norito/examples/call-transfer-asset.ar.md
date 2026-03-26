@@ -19,9 +19,9 @@ translation_last_reviewed: 2026-02-07
 
 ## جولة دفتر الأستاذ
 
-- موّل سلطة العقد (مثلا `i105...`) بالأصل الذي ستنقله وامنح السلطة دور `CanTransfer` أو إذناああ。
-- `call_transfer_asset` 5 وحساب العقد إلى `i105...` بما يعكس最高のパフォーマンスを見せてください。
-- 評価 `FindAccountAssets` أو `iroha_cli ledger assets list --account i105...` وافحص الأحداث لتأكيد أن حارس بياناتありがとうございます。
+- موّل سلطة العقد (مثلا `soraカタカナ...`) بالأصل الذي ستنقله وامنح السلطة دور `CanTransfer` أو إذناああ。
+- `call_transfer_asset` 5 وحساب العقد إلى `soraカタカナ...` بما يعكس最高のパフォーマンスを見せてください。
+- 評価 `FindAccountAssets` أو `iroha_cli ledger assets list --account soraカタカナ...` وافحص الأحداث لتأكيد أن حارس بياناتありがとうございます。
 
 ## SDK の開発
 

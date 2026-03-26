@@ -5,12 +5,12 @@ package org.hyperledger.iroha.android.address;
 
 import java.util.Objects;
 
-/** Parses canonical asset-holding identifiers. */
+/** Parses canonical public asset identifiers. */
 public final class AssetIdDecoder {
 
   private AssetIdDecoder() {}
 
-  /** Parsed canonical asset identifier. */
+  /** Parsed canonical public asset identifier. */
   public static final class AssetId {
     private final AssetDefinition definition;
     private final String accountId;
@@ -86,5 +86,4 @@ public final class AssetIdDecoder {
     AssetDefinitionIdEncoder.parseAddressBytes(trimmed);
     return new AssetDefinition(trimmed);
   }
-
 }

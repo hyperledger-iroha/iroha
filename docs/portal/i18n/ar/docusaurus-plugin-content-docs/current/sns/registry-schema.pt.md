@@ -225,7 +225,7 @@ Enum RegistryEventKind {
 البوابات تعمل `RegistryEventV1` ومزامنة DNS/SoraFS ao:
 
 1. ابحث عن `NameRecordV1` الأخير المرجعي على تسلسل الأحداث.
-2. إعادة إنشاء قوالب المحلل (المفضلات I105 المفضلة + المضغوطة (`sora`) مثل الخيار الثاني والسجلات النصية).
+2. إعادة إنشاء قوالب المحلل (المفضلات i105 المفضلة + المضغوطة (`sora`) مثل الخيار الثاني والسجلات النصية).
 3. قم بتثبيت بيانات المنطقة التي تم تحديثها عبر التدفق الموصوف من SoraDNS في [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
 
 ضمانات متابعة الأحداث:

@@ -146,7 +146,7 @@ fn download_qr() -> eyre::Result<()> {
 }
 ```
 
-`ExplorerAccountQrSnapshot` משקף את ה‑JSON `/v1/explorer/accounts/{id}/qr`: כולל מזהה חשבון קנוני, literal קנוני I105, מטא‑נתוני prefix/תיקון שגיאות, ממדי QR ו‑SVG inline שניתן להטמיע ישירות.
+`ExplorerAccountQrSnapshot` משקף את ה‑JSON `/v1/explorer/accounts/{id}/qr`: כולל מזהה חשבון קנוני, literal קנוני i105, מטא‑נתוני prefix/תיקון שגיאות, ממדי QR ו‑SVG inline שניתן להטמיע ישירות.
 
 ## 7. הירשמו לאירועים
 

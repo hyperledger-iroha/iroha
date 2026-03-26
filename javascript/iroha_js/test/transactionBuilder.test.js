@@ -64,9 +64,9 @@ const RWA_ID =
   "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities";
 const test = makeNativeTest(baseTest);
 
-function i105FromEd25519PublicKeyHex(publicKeyHex, domain = "hbl.sbp") {
+function i105FromEd25519PublicKeyHex(publicKeyHex) {
   const publicKey = Buffer.from(publicKeyHex.trim(), "hex");
-  return AccountAddress.fromAccount({ domain, publicKey }).toI105();
+  return AccountAddress.fromAccount({ publicKey }).toI105();
 }
 
 function encodeAssetIdForKnownAccount(assetDefinitionId, accountId) {

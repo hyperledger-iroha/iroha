@@ -19,9 +19,9 @@ translation_last_reviewed: 2026-02-07
 
 ## 市長のレコリード
 
-- Fondea la autoridad del contrato (por ejemplo `i105...`) con el activo que transferirá y otórgale el rol `CanTransfer` と同等の権限を与えられます。
-- ラマのエントリポイント `call_transfer_asset` は、`i105...` とコントラクトの 5 つのユニットを転送し、オンチェーンのエンボルバー ラマダのホストを参照して自動化されます。
-- 中央値 `FindAccountAssets` または `iroha_cli ledger assets list --account i105...` を検査し、メタデータ登録のメタデータを確認するための検査を行います。
+- Fondea la autoridad del contrato (por ejemplo `soraカタカナ...`) con el activo que transferirá y otórgale el rol `CanTransfer` と同等の権限を与えられます。
+- ラマのエントリポイント `call_transfer_asset` は、`soraカタカナ...` とコントラクトの 5 つのユニットを転送し、オンチェーンのエンボルバー ラマダのホストを参照して自動化されます。
+- 中央値 `FindAccountAssets` または `iroha_cli ledger assets list --account soraカタカナ...` を検査し、メタデータ登録のメタデータを確認するための検査を行います。
 
 ## SDK 関係に関する情報
 

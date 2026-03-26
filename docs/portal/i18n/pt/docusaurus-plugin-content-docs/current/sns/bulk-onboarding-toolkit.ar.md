@@ -233,7 +233,7 @@ Então.
 - **metadados e governança:** no JSON inline مباشرة؛ ويتم حل
   مراجع الملفات نسبة em formato CSV. metadata não está disponível.
 - **Controladores:** O controlador é o `--default-controllers`. قدم قوائم
-  O controlador de controle (como `i105...;i105...`) não funciona mais.
+  O controlador de controle (como `soraカタカナ...;soraカタカナ...`) não funciona mais.
 
 يتم الابلاغ عن الاخطاء مع ارقام صفوف سياقية (مثلا
 `error: row 12 term_years must be between 1 and 255`). Chave de fenda `1`

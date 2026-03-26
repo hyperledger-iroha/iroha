@@ -113,7 +113,7 @@ cargo run
 次のようなログ出力が表示されるはずです:
 
 ```
-i105... now holds:
+soraカタカナ... now holds:
   50 units of 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 

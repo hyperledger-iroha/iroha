@@ -48,7 +48,7 @@ TORII_URL=https://torii.testnet.sora node javascript/iroha_js/recipes/governance
 
 # Submit to a node and fetch the resulting state.
 TORII_URL=https://torii.testnet.sora \
-AUTHORITY=i105... \
+AUTHORITY=soraカタカナ... \
 PRIVATE_KEY_HEX="$(cat ~/.iroha/keys/alice.key)" \
 CHAIN_ID=7f2c...-prod \
 GOV_SUBMIT=1 GOV_FETCH=1 \

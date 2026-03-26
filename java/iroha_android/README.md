@@ -56,7 +56,7 @@ published coordinates when consuming from Maven.
 import org.hyperledger.iroha.android.address.AccountAddress;
 
 byte[] key = new byte[32];
-AccountAddress address = AccountAddress.fromAccount("default", key, "ed25519");
+AccountAddress address = AccountAddress.fromAccount(key, "ed25519");
 System.out.println(address.canonicalHex());
 System.out.println(address.toI105(753));
 

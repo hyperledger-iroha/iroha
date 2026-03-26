@@ -1,26 +1,38 @@
-# مذكرة طرح I105 لمالكي SDK والمرمزات
+# Account/Asset Hard-Cut Alignment
 
-الفرق: SDK ‏Rust، SDK ‏TypeScript/JavaScript، SDK ‏Python، SDK ‏Kotlin، أدوات الترميز
+Teams: Rust runtime, Rust/Swift/Android/JS SDKs, bridge/codec tooling.
 
-السياق: يعكس `docs/account_structure.md` الآن تنفيذ معرّف الحساب I105 المُشغَّل.
-يرجى مواءمة سلوك الـSDK والاختبارات مع المواصفة القياسية.
+This repository ships strict first-release semantics. There is no compatibility
+path for legacy account/asset literals.
 
-مراجع أساسية:
-- مُرمِّز العنوان + تخطيط الرأس — `docs/account_structure.md` §2
-- سجل المنحنيات — `docs/source/references/address_curve_registry.md`
-- معالجة النطاق Norm v1 — `docs/source/references/address_norm_v1.md`
-- متجهات الـfixtures — `fixtures/account/address_vectors.json`
+## Required behavior
+1. **Account parser contract (strict):**
+   - Accept only canonical Katakana i105 account literals.
+   - Reject all of:
+     - any `@domain` suffix
+     - alias literals
+     - canonical hex account literals in parser input
+    - non-canonical/legacy i105 literals
+     - legacy `norito:<hex>` account literals
+     - `uaid:` / `opaque:` account parser forms
+2. **Account identity surface:**
+   - Account-facing APIs are domainless and operate on subject identity.
+   - Domain context is represented only via explicit scoped/link records where needed.
+3. **Asset parser contract (strict):**
+   - Accept only canonical Base58 `AssetDefinitionId` values as public asset IDs.
+   - Accept asset aliases only in `name#domain.dataspace` / `name#dataspace` form, and resolve
+     them on-chain to a canonical Base58 asset-definition id.
+   - Treat `<base58-asset-definition-id>#<katakana-i105-account-id>[#dataspace:<id>]` as an
+     asset-holding identifier, not as a public asset id or alias target.
+   - Reject all prefixed/legacy forms (`norito:<hex>`, `aid:<hex>`,
+     owner-qualified asset-holding literals, `asset#domain#account`, `asset##account`, etc.).
+4. **Canonical output:**
+   - Render account IDs as canonical Katakana i105 in user-facing output.
+   - Canonical hex remains envelope/debug-only and is not accepted as parser input.
+5. **Compatibility policy:**
+   - No parser fallback branches.
+   - No parse-any account/asset entrypoints in runtime SDK paths.
 
-بنود العمل:
-1. **الإخراج القياسي:** يجب أن يُخرج `AccountId::to_string()`/Display قيمة I105 فقط
-   (بدون لاحقة `@domain`). الهيكس القياسي للتصحيح فقط (`0x...`).
-2. **Accepted inputs:** parsers MUST accept only canonical Katakana i105 account literals. Reject non-canonical Katakana i105 literals, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
-3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
-4. **مجموع التحقق I105:** استخدم Blake2b-512 على `I105PRE || prefix || payload` وخذ أول
-   بايتين. أساس الأبجدية المضغوطة هو **105**.
-5. **تقييد المنحنيات:** إعدادات SDK الافتراضية Ed25519 فقط. وفر opt‑in صريحًا لـ ML‑DSA/GOST/SM
-   (أعلام بناء Swift؛ `configureCurveSupport` في JS/Android). لا تفترض تفعيل secp256k1 افتراضيًا
-   خارج Rust.
-6. **لا CAIP-10:** لا يوجد ربط CAIP‑10 مُسلَّم بعد؛ لا تكشف أو تعتمد على تحويلات CAIP‑10.
-
-يرجى التأكيد بعد تحديث المُرمِّزات/الاختبارات؛ يمكن متابعة الأسئلة في سلسلة RFC الخاصة بعنونة الحسابات.
+## Validation closure
+- Include explicit rejection tests for all forbidden literal forms.
+- Keep legacy forms only in negative-path tests.

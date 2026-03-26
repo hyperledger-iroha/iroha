@@ -141,7 +141,7 @@ Lane သည် `nexus.registry.manifest_directory` (`crates/iroha_config/src/par
 }
 ```
 
-အဓိကလိုအပ်ချက်များ-- အတည်ပြုပေးသူများသည် ** ကက်တလောက်တွင်ရှိသော I105 အကောင့် ID များ (`@domain` မပါ၀င်ပါ၊ `@domain` ကို ထပ်ဖြည့်ပါ)** ဖြစ်ရမည်** ဖြစ်ရမည်။ `quorum` ကို multisig threshold (≥2) သို့ သတ်မှတ်ပါ။
+အဓိကလိုအပ်ချက်များ-- အတည်ပြုပေးသူများသည် ** ကက်တလောက်တွင်ရှိသော i105 အကောင့် ID များ (`@domain` မပါ၀င်ပါ၊ `@domain` ကို ထပ်ဖြည့်ပါ)** ဖြစ်ရမည်** ဖြစ်ရမည်။ `quorum` ကို multisig threshold (≥2) သို့ သတ်မှတ်ပါ။
 - Protected namespaces များကို `Queue::push` (`crates/iroha_core/src/queue.rs` တွင်ကြည့်ပါ) ဖြင့် ပြဋ္ဌာန်းထားသောကြောင့် CBDC စာချုပ်များအားလုံး `gov_namespace` + `gov_contract_id` ကို သတ်မှတ်ရပါမည်။
 - `composability_group` အကွက်များသည် `docs/source/nexus.md` §8.6 တွင်ဖော်ပြထားသော schema ကိုလိုက်နာသည်။ ပိုင်ရှင် (CBDC လမ်းသွား) သည် whitelist နှင့် quotas ကို ပေးဆောင်သည်။ Whitelisted DS manifests သည် `group_id_hex` + `activation_epoch` ကိုသာ သတ်မှတ်ပါသည်။
 - မန်နီးဖက်စ်ကို ကူးယူပြီးနောက်၊ `LaneManifestRegistry::from_config` တင်ကြောင်းအတည်ပြုရန် `cargo test -p integration_tests nexus::lane_registry -- --nocapture` ကိုဖွင့်ပါ။

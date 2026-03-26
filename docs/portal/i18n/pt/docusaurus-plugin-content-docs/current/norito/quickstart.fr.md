@@ -90,7 +90,7 @@ O executor imprimiu o log `info("Hello from Kotodama")` e efetuou o syscall `SET
 
 O novo durante todo o processo de execução, envia o bytecode compilado para Torii com a CLI. A identidade de desenvolvimento por padrão é derivada do código público em `defaults/client.toml`, já que a ID da conta é
 ```
-i105...
+soraカタカナ...
 ```
 
 Use o arquivo de configuração para fornecer o URL Torii, o ID da cadeia e a chave de assinatura:```sh
@@ -108,7 +108,7 @@ Use a CLI do perfil do meme para recuperar os detalhes da conta que você contra
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id i105... \
+  --id soraカタカナ... \
   --key example | jq .
 ```
 

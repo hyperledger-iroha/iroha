@@ -228,7 +228,7 @@ Il y a un journal rejouable (domaine `RegistryEvents`) qui ajoute un lien vers l
 Passerelles `RegistryEventV1` pour la synchronisation avec DNS/SoraFS pour la synchronisation :
 
 1. Séquence de séquence میں حوالہ کردہ تازہ ترین `NameRecordV1` حاصل کریں۔
-2. modèles de résolveur دوبارہ بنائیں (I105 ترجیحی + compressé (`sora`) deuxième meilleure adresse, enregistrements texte)۔
+2. modèles de résolveur دوبارہ بنائیں (i105 ترجیحی + compressé (`sora`) deuxième meilleure adresse, enregistrements texte)۔
 3. [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md) Pour le flux de travail SoraDNS et la broche de données de zone.
 
 Garanties de livraison d’événements :

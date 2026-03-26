@@ -420,7 +420,7 @@ Torii integration
 - `Torii::new_with_handle` accepts a `routing::MaybeTelemetry` gate that pairs the runtime `Telemetry` handle with the active `TelemetryProfile`. Use `routing::MaybeTelemetry::from_profile(runtime_handle, profile)` to construct the gate, or `routing::MaybeTelemetry::disabled()` when telemetry is unavailable.
 - `Torii::new` (when the `telemetry` feature is enabled) remains as a convenience wrapper; it now forwards to `new_with_handle` with an operator profile by default. Tests can use `routing::MaybeTelemetry::for_tests()` to obtain an in-process telemetry handle.
 
-- `torii_address_invalid_total{endpoint,reason}` increments whenever HTTP routes reject an account identifier (invalid I105 payloads, domain mismatches, etc.). Keep the `<0.1%` SLO by watching the dedicated Grafana board in `dashboards/grafana/address_ingest.json`.
+- `torii_address_invalid_total{endpoint,reason}` increments whenever HTTP routes reject an account identifier (invalid i105 payloads, domain mismatches, etc.). Keep the `<0.1%` SLO by watching the dedicated Grafana board in `dashboards/grafana/address_ingest.json`.
 - `torii_address_collision_total{endpoint,kind="local12_digest"}` and `torii_address_collision_domain_total{endpoint,domain}` record Local‑12 selector collisions. Both feed the collision panel/alert in `dashboards/grafana/address_ingest.json` so operators can tie spikes to specific domains. Production should stay flat; any increment blocks manifest promotions until governance signs off on the fix.
 
 Pipeline metrics

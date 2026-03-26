@@ -237,7 +237,7 @@ filtrado por `release`, seus auditores podem usar um programa CSV.
 - **Análise de metadados/governança:** JSON inline парсится напрямую; ссылки на файлы
   разрешаются относительно CSV. Os metadados não são fornecidos para validação.
 - **Controladores:** пустые ячейки соблюдают `--default-controllers`. Указывайте
-  Eu tenho controladores espiões (por exemplo `i105...;i105...`) para não ser proprietário.
+  Eu tenho controladores espiões (por exemplo `soraカタカナ...;soraカタカナ...`) para não ser proprietário.
 
 Ошибки сообщаются сонтекстными номерами строк (por exemplo
 `error: row 12 term_years must be between 1 and 255`). O script é usado com o código `1`

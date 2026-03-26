@@ -256,7 +256,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
   引用是相對於 CSV 位置解析的。非對像元數據
   產生驗證錯誤。
 - **控制器：** 空白單元符合 `--default-controllers`。提供明確的
-  委派給非所有者時的控制器列表（例如 `i105...;i105...`）
+  委派給非所有者時的控制器列表（例如 `soraカタカナ...;soraカタカナ...`）
   演員。
 
 使用上下文行號報告失敗（例如

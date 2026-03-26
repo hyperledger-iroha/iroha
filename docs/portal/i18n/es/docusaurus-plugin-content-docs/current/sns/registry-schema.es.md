@@ -225,7 +225,7 @@ Todas las claves se serializan usando tuplas Norito para mantener el hash determ
 Los gateways se suscriben a `RegistryEventV1` y sincronizan a DNS/SoraFS mediante:
 
 1. Obtener el último `NameRecordV1` referenciado por la secuencia de eventos.
-2. Regenerar plantillas de resolución (direcciones I105 preferidas + comprimidas (`sora`) como segunda opción, registros de texto).
+2. Regenerar plantillas de resolución (direcciones i105 preferidas + comprimidas (`sora`) como segunda opción, registros de texto).
 3. Pinnear datos de zona actualizados vía el flujo SoraDNS descrito en [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
 
 Garantías de entrega de eventos:

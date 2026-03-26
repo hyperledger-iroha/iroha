@@ -154,7 +154,7 @@ fn download_qr() -> eyre::Result<()> {
 }
 ```
 
-`ExplorerAccountQrSnapshot` отражает JSON `/v1/explorer/accounts/{id}/qr`: включает канонический account id, literal в каноническом формате I105, метаданные префикса/коррекции ошибок, размеры QR и inline SVG payload.
+`ExplorerAccountQrSnapshot` отражает JSON `/v1/explorer/accounts/{id}/qr`: включает канонический account id, literal в каноническом формате i105, метаданные префикса/коррекции ошибок, размеры QR и inline SVG payload.
 
 ## 7. Подпишитесь на события
 

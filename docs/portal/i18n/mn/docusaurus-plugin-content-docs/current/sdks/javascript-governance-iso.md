@@ -53,7 +53,7 @@ node javascript/iroha_js/recipes/governance.mjs
 
 # Submit + fetch using live credentials.
 TORII_URL=https://torii.testnet.sora \
-AUTHORITY=i105... \
+AUTHORITY=soraカタカナ... \
 PRIVATE_KEY_HEX="$(cat ~/.iroha/keys/alice.key)" \
 CHAIN_ID=7f2c...-prod \
 GOV_SUBMIT=1 GOV_FETCH=1 \

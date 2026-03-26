@@ -113,7 +113,7 @@ cargo run
 من المفترض أن ترى ناتجًا مشابهًا لما يلي:
 
 ```
-i105... now holds:
+soraカタカナ... now holds:
   50 units of 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 

@@ -245,7 +245,7 @@ corrida de CSV.
   referências a arquivos serão resolvidas em relação à localização do CSV. Metadados
   que nenhum objeto marinho produz um erro de validação.
 - **Controladores:** celdas em branco respetan `--default-controllers`. Proporção
-  listas de controladores explícitas (por exemplo `i105...;i105...`) para delegar a
+  listas de controladores explícitas (por exemplo `soraカタカナ...;soraカタカナ...`) para delegar a
   atores não têm dono.
 
 Los fallos são reportados com numerosos filas contextuais (por exemplo

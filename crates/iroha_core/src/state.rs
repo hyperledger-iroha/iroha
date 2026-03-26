@@ -915,6 +915,7 @@ struct AccountPermissionSummary {
 
 fn parse_permission_account_field(
     world: &impl WorldReadOnly,
+    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
     payload: &iroha_primitives::json::Json,
     field: &str,
 ) -> Option<iroha_data_model::account::AccountId> {
@@ -928,7 +929,8 @@ fn parse_permission_account_field(
         norito::json::Value::String(value) => value.as_str(),
         _ => return None,
     };
-    crate::block::parse_account_literal_with_world(world, literal).map(Into::into)
+    crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal)
+        .map(Into::into)
 }
 
 impl AccountPermissionSummary {
@@ -939,12 +941,20 @@ impl AccountPermissionSummary {
         self.fee_sponsors.clear();
     }
 
-    fn apply_grant(&mut self, world: &impl WorldReadOnly, permission: &Permission) {
+    fn apply_grant(
+        &mut self,
+        world: &impl WorldReadOnly,
+        dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+        permission: &Permission,
+    ) {
         match permission.name() {
             "CanRegisterTrigger" => {
-                if let Some(authority) =
-                    parse_permission_account_field(world, permission.payload(), "authority")
-                {
+                if let Some(authority) = parse_permission_account_field(
+                    world,
+                    dataspace_catalog,
+                    permission.payload(),
+                    "authority",
+                ) {
                     self.reg_trigger_authorities.insert(authority);
                 }
             }
@@ -957,9 +967,12 @@ impl AccountPermissionSummary {
                 }
             }
             "CanUseFeeSponsor" => {
-                if let Some(sponsor) =
-                    parse_permission_account_field(world, permission.payload(), "sponsor")
-                {
+                if let Some(sponsor) = parse_permission_account_field(
+                    world,
+                    dataspace_catalog,
+                    permission.payload(),
+                    "sponsor",
+                ) {
                     self.fee_sponsors.insert(sponsor);
                 }
             }
@@ -24357,8 +24370,16 @@ mod permission_cache_tests {
             let mut block = state.block(next_header);
             let mut stx = block.transaction();
             let mut summary = AccountPermissionSummary::default();
-            summary.apply_grant(&stx.world, &Permission::from(permission_register.clone()));
-            summary.apply_grant(&stx.world, &Permission::from(permission_execute.clone()));
+            summary.apply_grant(
+                &stx.world,
+                &stx.nexus.dataspace_catalog,
+                &Permission::from(permission_register.clone()),
+            );
+            summary.apply_grant(
+                &stx.world,
+                &stx.nexus.dataspace_catalog,
+                &Permission::from(permission_execute.clone()),
+            );
             stx.perm_cache.insert_summary(registrar.clone(), summary);
             assert!(
                 stx.can_register_trigger_for(&registrar, &owner),
@@ -25884,9 +25905,10 @@ impl StateTransaction<'_, '_> {
 
     fn build_permission_summary(&mut self, account: &AccountId) -> AccountPermissionSummary {
         let world = &self.world;
+        let dataspace_catalog = &self.nexus.dataspace_catalog;
         let mut summary = AccountPermissionSummary::default();
         let mut merge_permission = |permission: &Permission| {
-            summary.apply_grant(world, permission);
+            summary.apply_grant(world, dataspace_catalog, permission);
         };
         if let Some(perms) = world.account_permissions.get(account) {
             for permission in perms {
@@ -28155,12 +28177,14 @@ mod tests {
         let mut summary = AccountPermissionSummary::default();
         summary.apply_grant(
             &world_view,
+            &iroha_data_model::nexus::DataSpaceCatalog::default(),
             &Permission::from(CanRegisterTrigger {
                 authority: account_id.clone(),
             }),
         );
         summary.apply_grant(
             &world_view,
+            &iroha_data_model::nexus::DataSpaceCatalog::default(),
             &Permission::from(CanUseFeeSponsor {
                 sponsor: account_id.clone(),
             }),

@@ -49,7 +49,7 @@ public final class OfflineAuditLoggerTest {
             "tx_id": "tx1",
             "sender_id": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
             "receiver_id": "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
-            "asset_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+            "asset_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
             "amount": "10",
             "timestamp_ms": 1.5
           }

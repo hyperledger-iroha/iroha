@@ -75,7 +75,7 @@ sidebar_label: አስተዳደር playbook
 | ቻርተር + KPI addda | `docs/source/sns/governance_addenda/` | በስሪት ቁጥጥር የሚደረግባቸው የተፈረሙ ቻርተሮች፣ KPI ቃል ኪዳኖች እና የአስተዳደር ውሳኔዎች በCLI ድምጾች ተጠቅሰዋል። |
 | መዝገብ ቤት | [`registry-schema.md`](./registry-schema.md) | ቀኖናዊ Norito መዋቅሮች (I18NI0000067X, `SuffixPolicyV1`, I18NI0000069X). |
 | የመዝጋቢ ውል | [`registrar-api.md`](./registrar-api.md) | REST/gRPC የሚጫኑ ጭነቶች፣ `sns_registrar_status_total` መለኪያዎች እና የአስተዳደር መንጠቆ የሚጠበቁ ነገሮች። |
-| አድራሻ UX መመሪያ | [`address-display-guidelines.md`](./address-display-guidelines.md) | ቀኖናዊ I105 (ተመራጭ) + የታመቀ (`sora`፣ ሁለተኛ-ምርጥ) አተረጓጎም በኪስ ቦርሳ/አሳሾች የተንጸባረቀ። |
+| አድራሻ UX መመሪያ | [`address-display-guidelines.md`](./address-display-guidelines.md) | ቀኖናዊ i105 (ተመራጭ) + የታመቀ (`sora`፣ ሁለተኛ-ምርጥ) አተረጓጎም በኪስ ቦርሳ/አሳሾች የተንጸባረቀ። |
 | SoraDNS / GAR ሰነዶች | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | ቆራጥ አስተናጋጅ አመጣጥ፣ ግልጽነት ሰፋ ያለ የስራ ፍሰት እና የማንቂያ ደንቦች። |
 | የቁጥጥር ማስታወሻዎች | `docs/source/sns/regulatory/` | የዳኝነት ቅበላ ማስታወሻዎች (ለምሳሌ፣ EU DSA)፣ የመጋቢ እውቅናዎች፣ የአብነት ተጨማሪዎች። |
 | የመሰርሰሪያ መዝገብ | `ops/drill-log.md` | የምዕራፍ መውጣት ከመጀመሩ በፊት የሚያስፈልገው ትርምስ እና የIR ልምምዶች መዝገብ። |
@@ -118,7 +118,7 @@ sidebar_label: አስተዳደር playbook
    አዲሱን የጋር/የዞን ግዛት መስፋፋቱን ለማረጋገጥ የፍቺው ግልፅነት ቸርቻሪ
    (§4.5 ይመልከቱ)።
 6. **የደንበኛ ይፋ ማድረግ፡** ደንበኛን የሚመለከት ደብተር (ቦርሳ/አሳሽ) አዘምን
-   በ[`address-display-guidelines.md`](./address-display-guidelines.md)፣ I105 በማረጋገጥ እና
+   በ[`address-display-guidelines.md`](./address-display-guidelines.md)፣ i105 በማረጋገጥ እና
    የታመቀ አተረጓጎም ግልባጭ/QR መመሪያ።
 
 ### 4.3 እድሳት፣ የሂሳብ አከፋፈል እና የግምጃ ቤት ማስታረቅ- **የእድሳት የስራ ፍሰት፡** መዝጋቢዎች የ30 ቀን ጸጋን + የ60 ቀን መቤዠትን ያስገድዳሉ።
@@ -147,11 +147,11 @@ sidebar_label: አስተዳደር playbook
 | ደረጃ | ባለቤት | ድርጊት እና ማስረጃ | SLA |
 |-------|---
 | ለስላሳ የማቀዝቀዣ ጥያቄ | መጋቢ / ድጋፍ | የፋይል ቲኬት `SNS-DF-<id>` ከክፍያ ማረጋገጫዎች፣ ከክርክር ማስያዣ ማጣቀሻ እና ከተነካካ መራጭ(ዎች) ጋር። | ≤4ሰአት ከምግብ። |
-| ጠባቂ ቲኬት | ጠባቂ ሰሌዳ | `sns governance freeze --selector <I105> --reason <text> --until <ts>` የተፈረመ `GuardianFreezeTicketV1` ያመርታል። የሱቅ ቲኬት JSON በ `artifacts/sns/guardian/<id>.json` ስር። | ≤30ደቂቃ ACK፣ ≤2ሰአት አፈፃፀም። |
+| ጠባቂ ቲኬት | ጠባቂ ሰሌዳ | `sns governance freeze --selector <i105> --reason <text> --until <ts>` የተፈረመ `GuardianFreezeTicketV1` ያመርታል። የሱቅ ቲኬት JSON በ `artifacts/sns/guardian/<id>.json` ስር። | ≤30ደቂቃ ACK፣ ≤2ሰአት አፈፃፀም። |
 | ምክር ቤት ማጽደቅ | አስተዳደር ምክር ቤት | እገዳዎችን ማጽደቅ ወይም አለመቀበል፣ የአሳዳጊ ትኬት የውሳኔ ሰነድ እና የሙግት ማስያዣ መፍጨት። | የሚቀጥለው የምክር ቤት ስብሰባ ወይም ያልተመሳሰለ ድምጽ። |
 | የግሌግሌ ፓነል | ተገዢነት + መጋቢ | በ`sns governance dispute ballot` በኩል የቀረቡ ባለ 7-ጁሮር ፓነልን (በየፍተሻ ካርታ) በተጠለፉ የድምጽ መስጫ ወረቀቶች ሰብስብ። ስም-አልባ የድምፅ ደረሰኞችን ከክስተት ጥቅል ጋር ያያይዙ። | ማስያዣ ካስገባ በኋላ ≤7 ቀናትን ይወስኑ። |
 | ይግባኝ | ጠባቂ + ምክር ቤት | ይግባኝ ማስያዣውን በእጥፍ እና የዳኝነት ሂደቱን ይድገሙት; መዝገብ Norito አንጸባራቂ `DisputeAppealV1` እና የዋና ትኬት ማጣቀሻ። | ≤10 ቀናት። |
-| መፍታት እና ማረም | ሬጅስትራር + መፍትሄ ሰጪ ops | `sns governance unfreeze --selector <I105> --ticket <id>` ያስፈጽም፣ የመዝጋቢ ሁኔታን ያዘምኑ እና የGAR/መፍትሄ ልዩነቶችን ያሰራጩ። | ከፍርዱ በኋላ ወዲያውኑ። |
+| መፍታት እና ማረም | ሬጅስትራር + መፍትሄ ሰጪ ops | `sns governance unfreeze --selector <i105> --ticket <id>` ያስፈጽም፣ የመዝጋቢ ሁኔታን ያዘምኑ እና የGAR/መፍትሄ ልዩነቶችን ያሰራጩ። | ከፍርዱ በኋላ ወዲያውኑ። |
 
 የአደጋ ጊዜ ቀኖናዎች (በአሳዳጊ የሚቀሰቀሱ በረዶዎች ≤72 ሰ) ተመሳሳይ ፍሰት ይከተላሉ ነገር ግን
 ወደ ኋላ የተመለሰ የምክር ቤት ግምገማ እና ግልጽነት ማስታወሻ ይጠይቃል

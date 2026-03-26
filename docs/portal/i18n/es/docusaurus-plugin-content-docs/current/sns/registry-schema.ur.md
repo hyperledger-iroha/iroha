@@ -228,7 +228,7 @@ Enum RegistryEventKind {
 Puertas de enlace `RegistryEventV1` Configuración de sincronización y DNS/SoraFS Configuración de sincronización:
 
 1. Secuencia ایونٹ میں حوالہ کردہ تازہ ترین `NameRecordV1` حاصل کریں۔
-2. plantillas de resolución دوبارہ بنائیں (I105 ترجیحی + comprimido (`sora`) segunda mejor dirección, registros de texto) ۔
+2. plantillas de resolución دوبارہ بنائیں (i105 ترجیحی + comprimido (`sora`) segunda mejor dirección, registros de texto) ۔
 3. [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md) میں بیان کردہ Flujo de trabajo SoraDNS کے ذریعے pin de datos de zona کریں۔
 
 Garantías de entrega de eventos:

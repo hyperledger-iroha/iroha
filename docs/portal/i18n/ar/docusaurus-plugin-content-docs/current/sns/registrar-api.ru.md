@@ -113,7 +113,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/policies/{suffix_id}` | احصل على | -- | احصل على تيكويو `SuffixPolicyV1` (كشيريمو). |
 | `/v1/sns/names/{namespace}/{literal}` | احصل على | -- | تم تجديده `NameRecordV1` + مواد فعالة (Active، Grace، إلخ). |
 
-**محدد الإضافة:** الجزء `{selector}` يستخدم I105، مضغوط (`sora`) أو سداسي عشري قانوني بواسطة ADDR-5؛ تمت تسوية Torii من خلال `NameSelectorV1`.**نموذج أوشيبوك:** جميع نقاط الاتصال تتصل بـ Norito JSON مع `code`، `message`، `details`. تتضمن الرموز `sns_err_reserved`، و`sns_err_payment_mismatch`، و`sns_err_policy_violation`، و`sns_err_governance_missing`.
+**محدد الإضافة:** الجزء `{selector}` يستخدم i105، مضغوط (`sora`) أو سداسي عشري قانوني بواسطة ADDR-5؛ تمت تسوية Torii من خلال `NameSelectorV1`.**نموذج أوشيبوك:** جميع نقاط الاتصال تتصل بـ Norito JSON مع `code`، `message`، `details`. تتضمن الرموز `sns_err_reserved`، و`sns_err_payment_mismatch`، و`sns_err_policy_violation`، و`sns_err_governance_missing`.
 
 ### 3.1 تعزيزات CLI (المسجل الأفضل N0)
 
@@ -157,7 +157,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner soraカタカナ... \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -215,7 +215,7 @@ Torii يختبر التوثيق، يختبر:
 
 ### 6.1 التسجيل القياسي1. يطلب العميل `/v1/sns/policies/{suffix_id}` للحصول على الأسعار والمزايا والمستويات القابلة للاستكمال.
 2. جهاز العميل `RegisterNameRequestV1`:
-   - تم الحصول على `selector` من التصنيف I105 أو من الاقتراح المضغوط (`sora`).
+   - تم الحصول على `selector` من التصنيف i105 أو من الاقتراح المضغوط (`sora`).
    - `term_years` في السياسة السابقة.
    - `payment` يتصل بالخزانة/المضيف المقسم.
 3. Torii تحقق:

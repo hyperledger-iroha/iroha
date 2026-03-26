@@ -234,7 +234,7 @@ Todas as chaves serializam usando tuplas Norito para manter o hash determinísti
 Gateways assinam `RegistryEventV1` e sincronizam DNS/SoraFS ao:
 
 1. Buscar o último `NameRecordV1` referenciado pela sequência de eventos.
-2. Regenerar templates de resolvedor (endereços I105 preferidos + compactados (`sora`) como segunda opção, registros de texto).
+2. Regenerar templates de resolvedor (endereços i105 preferidos + compactados (`sora`) como segunda opção, registros de texto).
 3. Pinar dados de zona atualizados por meio do fluxo SoraDNS descrito em [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
 
 Garantias de entrega de eventos:

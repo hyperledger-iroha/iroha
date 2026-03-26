@@ -5494,7 +5494,7 @@ function randomAccountId(domainId) {
     .createHash("sha256")
     .update(`${domainId}:${label}`)
     .digest();
-  return AccountAddress.fromAccount({ domain: domainId, publicKey }).toI105();
+  return AccountAddress.fromAccount({ publicKey }).toI105();
 }
 
 function randomAssetDefinitionId(domainId) {

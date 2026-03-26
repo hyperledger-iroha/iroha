@@ -274,7 +274,7 @@ Explorer telemetriyası `/v1/explorer/metrics` və üçün tipli köməkçilər 
 `/v1/explorer/accounts/{account_id}/qr` son nöqtələr, beləliklə, tablosuna təkrar oxuya bilərsiniz
 portalı gücləndirən eyni görüntülər. `getExplorerMetrics()` normallaşdırır
 faydalı yük və marşrut qeyri-aktiv olduqda `null` qaytarır. ilə cütləşdirin
-`getExplorerAccountQr()` sizə lazım olduqda I105 (üstünlük verilir)/sora (ikinci ən yaxşı) literal üstəgəl inline
+`getExplorerAccountQr()` sizə lazım olduqda i105 (üstünlük verilir)/sora (ikinci ən yaxşı) literal üstəgəl inline
 Paylaşım düymələri üçün SVG.
 
 ```ts
@@ -297,8 +297,8 @@ console.log(
 );
 ```
 
-`I105`-dən keçmək Explorer-in defolt sıxılmışını əks etdirir
-seçicilər; üstünlük verilən I105 çıxışı üçün ləğvi buraxın və ya sorğu `i105_qr`
+`i105`-dən keçmək Explorer-in defolt sıxılmışını əks etdirir
+seçicilər; üstünlük verilən i105 çıxışı üçün ləğvi buraxın və ya sorğu `i105_qr`
 QR təhlükəsiz variantına ehtiyacınız olduqda. Sıxılmış hərf ikinci ən yaxşısıdır
 UX üçün yalnız Sora variantı. Köməkçi həmişə kanonik identifikatoru qaytarır,
 seçilmiş literal və metadata (şəbəkə prefiksi, QR versiyası/modulları, xəta
@@ -517,7 +517,7 @@ sorğu göndərməzdən əvvəl onları kanonikləşdirin:
   aktivlərin kanonik hesab identifikatorlarına görə qruplaşdırılması; filtrləmək üçün `assetId` keçir
   portfelin tək aktiv nümunəsinə qədər.
 - `getUaidBindings(uaid)` hər məlumat məkanını ↔ hesabını sadalayır
-  bağlama (`I105` `i105` literallarını qaytarır).
+  bağlama (`i105` `i105` literallarını qaytarır).
 - `getUaidManifests(uaid, { dataspaceId })` hər bir qabiliyyət manifestini qaytarır,
   həyat dövrü statusu və audit üçün bağlı hesablar.Operator sübut paketləri, manifest dərc/ləğv axınları və SDK miqrasiyası üçün
 təlimat, Universal Hesab Bələdçisinə əməl edin (`docs/source/universal_accounts_guide.md`)

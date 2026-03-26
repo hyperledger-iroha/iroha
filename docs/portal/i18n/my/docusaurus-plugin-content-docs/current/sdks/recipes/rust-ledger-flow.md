@@ -120,7 +120,7 @@ cargo run
 မှတ်တမ်းအထွက်ကို သင်မြင်ရပါမည်-
 
 ```
-i105... now holds:
+soraカタカナ... now holds:
   50 units of 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 

@@ -1,80 +1,73 @@
 ---
-lang: ba
-direction: ltr
-source: docs/portal/docs/reference/address-safety.md
-status: complete
-generator: scripts/sync_docs_i18n.py
-source_hash: d19690fde1b9e3c6f072cf1ac5ad89fb82578eb1b21e4d8dbc82d399518b4d42
-source_last_modified: "2026-01-28T17:11:30.641899+00:00"
-translation_last_reviewed: 2026-02-07
 title: Address Safety & Accessibility
 description: UX requirements for presenting and sharing Iroha addresses safely (ADDR-6c).
-translator: machine-google-reviewed
 ---
 
-Был биттә ADDR-6c документация тапшырыла ала. Был ҡулланыу .
-сроктары янсыҡтар, тикшеренүселәр, SDK инструменттары, һәм теләһә ниндәй порталь өҫтө, тип
-кеше менән осрашҡан адрестарҙы күрһәтә йәки ҡабул итә. Каноник мәғлүмәттәр моделе 2019 йылда йәшәй.
-`docs/account_structure.md`; түбәндәге тикшерелгән исемлек аңлата, нисек уларҙы фашлау
-форматтары хәүефһеҙлек йәки мөмкинлектәрҙе боҙмайынса.
+This page captures the ADDR-6c documentation deliverable. Apply these
+constraints to wallets, explorers, SDK tooling, and any portal surface that
+renders or accepts human-facing addresses. The canonical data model lives in
+`docs/account_structure.md`; the checklist below explains how to expose those
+formats without compromising safety or accessibility.
 
-## Хәүефһеҙ бүлешергә ағымдар
+## Safe sharing flows
 
-- I105 адресы буйынса һәр күсермә/акция ғәмәлдәре тураһында ғәҙәттән тыш хәл. Хәл ителгән хәлде күрһәтеү
-  домен ярҙамсы контекст булараҡ, шулай итеп, тикшерелгән йыйыла струнный ҡала алғы һәм үҙәк.
-- Тәҡдим “Предприятие” affordance, тип өйөлә тулы ябай текст адресы һәм QR .
-  код шул уҡ файҙалы йөктән алынған. Ҡулланыусыларҙы тикшерергә рөхсәт итегеҙ, ә һуңынан ҡылғансы.
-- Ҡасан урын ҡыҫҡартыу талап итә (бәләкәй генә карталар, хәбәрҙәр), етәксе һаҡлау
-  кеше менән уҡыла торған префикс, эллипс күрһәтеү, һәм һуңғы 4–6 символдарҙы һаҡлап ҡала
-  тикшерелгән сумма якорь иҫән ҡала. Кран/клавиатура ярлыҡ тәьмин итеү өсөн тулы күсермә
-  ҡыҫҡартыуһыҙ еп.
-- Һеҙҙең был һүҙҙәрҙе алдан ҡарау, тип раҫлау тост сығарыу, тип иҫкәртергә буфер десинх.
-  теүәл I105 еп, тип күсерелгән. Ҡайҙа телеметрия, иҫәп күсермәһе .
-  тырышлыҡ ҡаршы ғәмәлдәр менән бүлешергә шулай UX регрессиялар тиҙ өҫтө.
+- Default every copy/share action to the canonical Katakana i105 account id.
+  If an on-chain alias is present, display it as supporting metadata in a
+  separate labeled field.
+- Offer a “Share” affordance that bundles the full plain-text address and a QR
+  code derived from the same payload. Let users inspect both before committing.
+- When space requires truncation (tiny cards, notifications), keep the leading
+  human-readable prefix, show ellipses, and retain the final 4–6 characters so
+  the checksum anchor survives. Provide a tap/keyboard shortcut to copy the full
+  string without truncation.
+- Prevent clipboard desync by emitting a confirmation toast that previews the
+  exact i105 string that was copied. Where telemetry is available, count copy
+  attempts versus share actions so UX regressions surface quickly.
 
-## IME & инеү һаҡлау саралары
+## IME & input safeguards
 
-- ASCII булмаған индереү адрес ҡырҙарында кире ҡағыу. Ҡасан IME композиция артефакттары (тулы
-  киңлеге, Кана, тон билдәләре) барлыҡҡа килә, өҫкө рәт иҫкәрткән, тип аңлата, нисек
-  клавиатураны латин индереүгә күсерергә кәрәк, ҡабаттан эшләү алдынан.
-- Ябай текст пастаһы зонаһын бирегеҙ, ул билдәләрҙе берләштерә һәм алмаштыра
-  ASCII киңлектәр менән аҡ майҙанды раҫлау алдынан. Был ҡулланыусыларҙы юғалтыуҙан һаҡлай
-  прогресс, улар үҙҙәренең ММЭ урта ағымын өҙөү.
-- нуль киңлектәге данлаусылар, вариация селекторҙары һәм башҡаларға ҡаршы ҡаты раҫлау
-  стелт Юникод код мәрәйҙәре. Инжир кире ҡағылған код нөктәһе категорияһы шулай fuzzing
-  люкс телеметрияны импортлай ала.
+- Validate account-id fields as canonical Katakana i105 only. Validate alias
+  entry fields separately as `name@dataspace` or `name@domain.dataspace`.
+- When IME composition artefacts or zero-width characters appear, surface an
+  inline warning instead of coercing the input into a different account-id
+  format.
+- Provide a plain-text paste zone that preserves the canonical i105 literal as
+  pasted while still stripping obviously invalid stealth code points before
+  validation.
+- Harden validation against zero-width joiners, variation selectors, and other
+  stealth Unicode code points. Log the rejected code point category so fuzzing
+  suites can import the telemetry.
 
-## Технологиялар ярҙамы өмөттәре
+## Assistive technology expectations
 
-- Аннотация һәр адрес блогы менән I18NI0000000003X йәки I18NI000000004X тип
-  1990 йылдарҙа был йүнәлештәге эштәрҙең 4–8 символында файҙалы йөктө өлөштәр индерә.
-  төркөмдәре (“ih һыҙыҡ б өс ике ...”). Был экран уҡыусыларҙы етештереүҙән туҡтата
-  аңлашылмаған персонаждар ағымы.
-- Уңышлы күсермәһе/акцияларҙы әҙәпле йәшәй төбәк яңыртыу аша иғлан итегеҙ. Индерергә
-  тәғәйенләнеше (будка, бүлешергә, лит, QR) шулай ҡулланыусы ғәмәлде белә
-  күсерелгән фокусһыҙ тамамланды.
-- QR алдан ҡарауҙары өсөн тәҡдим ителгән `alt` тексты (мәҫәлән, “I105 адресы өсөн
-  I18NI000000006X селтәрендә I18NI000000007X”) “Текст булараҡ күсермә адресы” бирегеҙ.
-  QR полотноһына эргәләге fallback түбән күренеш ҡулланыусылар өсөн.
+- Annotate every address block with `aria-label` or `aria-describedby` that
+  spells out the human-readable prefix and chunks the payload in 4–8 character
+  groups (“ih dash b three two …”). This stops screen readers from producing an
+  unintelligible stream of characters.
+- Announce successful copy/share events via a polite live region update. Include
+  the destination (clipboard, share sheet, QR) so the user knows the action
+  completed without moving focus.
+- Supply descriptive `alt` text for QR previews (e.g., “i105 address for
+  `<account>` on chain `0x1234`”). Provide a “Copy address as text”
+  fallback adjacent to the QR canvas for low-vision users.
 
-## Сора-тик ҡыҫылған адрестар
+## Single-format policy
 
-- Ҡапҡа: йәшерергә I18NI000000008X ҡыҫылған еп артында асыҡ раҫлау.
-  Раҫлау ҡабатларға тейеш, тип форма ғына эшләй Sora I18NT00000000000X сылбырҙары.
-- Ярлыҡ: һәр осраҡ күренеп торған “Сора-тик” значогы һәм а үҙ эсенә алырға тейеш.
-  ни өсөн башҡа селтәрҙәр I105 формаһын талап итә, тип һүрәтләй.
-- Гвардия: әгәр әүҙем сылбыр дискриминант түгел I18NT000000001X бүленә,
-  ҡыҫылған адресты тулыһынса генерациялауҙан баш тарта һәм ҡулланыусыға кире йүнәлтергә
-  I105.
-- Телеметрия: яҙып алығыҙ, ни тиклем йыш ҡына ҡыҫылған форма һорала һәм күсерелгән, шулай итеп,
-  инцидент playbook асыҡлай ала осраҡлы бүлешеп шпилька.
+- Keep canonical Katakana i105 as the only user-facing account-id format for
+  copy, share, and QR surfaces.
+- Treat `name@dataspace` and `name@domain.dataspace` as on-chain aliases that
+  point to canonical i105 account ids.
+- Do not expose alternate account-literal encodings in production wallet or
+  explorer UX.
+- Telemetry should track i105 copy/share usage, alias-resolution usage, and
+  validation failures only.
 
-## Сифат ҡапҡалары
+## Quality gates
 
-- Автоматлаштырылған UI һынауҙары (йәки хикәйәләр китабы a11y люкс) был адресты раҫлау өсөн
-  компоненттар кәрәкле АРИА метамағлүмәттәрен фашлай һәм был IME кире ҡағыу хәбәрҙәре
-  күренергә.
-- Ҡул менән QA сценарийҙарын индереү өсөн IME индереү (кана, пиньин), экран уҡыусы үткән .
-  (VoiceOver/NVDA), һәм QR күсермәһе юғары контраст темалары өҫтөндә сығарыу алдынан.
-- Был тикшерелеүҙәрҙе I105 паритет һынауҙары менән бер рәттән сығарыу тикшерелгән исемлектәрҙә ер өҫтө .
-  шуға күрә регрессиялар төҙәтелгәнсе блоклана.
+- Extend automated UI tests (or storybook a11y suites) to assert that address
+  components expose the required ARIA metadata and that IME rejection messages
+  appear.
+- Include manual QA scenarios for IME input (kana, pinyin), screen reader pass
+  (VoiceOver/NVDA), and QR copy on high-contrast themes before releasing.
+- Surface these checks in release checklists alongside the i105 parity tests
+  so regressions remain blocked until corrected.

@@ -57,7 +57,7 @@ GET /v1/accounts/{uaid}/portfolio
           "label": null,
           "assets": [
             {
-              "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
+              "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
               "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
               "quantity": "500"
             }
@@ -70,16 +70,16 @@ GET /v1/accounts/{uaid}/portfolio
       "dataspace_alias": "cbdc",
       "accounts": [
         {
-          "account_id": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
+          "account_id": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
           "label": "primary-cbdc",
           "assets": [
             {
-              "asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc#34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
+              "asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
               "asset_definition_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
               "quantity": "250"
             },
             {
-              "asset_id": "5Pz9SwdN9eXPbiXPX9HRCpzCcE3o#34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
+              "asset_id": "5Pz9SwdN9eXPbiXPX9HRCpzCcE3o",
               "asset_definition_id": "5Pz9SwdN9eXPbiXPX9HRCpzCcE3o",
               "quantity": "25"
             }
@@ -160,7 +160,7 @@ Sample response:
     {
       "dataspace_id": 11,
       "dataspace_alias": "cbdc",
-      "accounts": ["34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r"]
+      "accounts": ["soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ"]
     }
   ]
 }
@@ -212,7 +212,7 @@ Sample response:
         "expired_epoch": null,
         "revocation": null
       },
-      "accounts": ["34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r"],
+      "accounts": ["soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ"],
       "manifest": {
         "version": 1,
         "uaid": "uaid:0f4d…ab11",

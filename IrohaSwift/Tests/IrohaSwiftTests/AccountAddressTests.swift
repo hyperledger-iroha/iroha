@@ -278,7 +278,7 @@ final class AccountAddressTests: XCTestCase {
 
         XCTAssertEqual(formats.networkPrefix, 753)
         XCTAssertEqual(formats.i105, try address.toI105(networkPrefix: 753))
-        XCTAssertTrue(formats.i105Warning.contains("canonical account literal encoding"))
+        XCTAssertTrue(formats.i105Warning.contains("canonical katakana account literal encoding"))
     }
 
     private func loadAddressFixture() throws -> Fixture {

@@ -239,7 +239,7 @@ Enum RegistryEventKind {
 ## 5. ቀኖናዊ ክስተቶች እና ጌትዌይ ማመሳሰልጌትዌይስ ለ`RegistryEventV1` ደንበኝነት ይመዝገቡ እና ከ DNS/SoraFS ጋር ያመሳስሉ በ፡
 
 1. በክስተቱ ቅደም ተከተል የተጠቀሰውን የቅርብ ጊዜውን `NameRecordV1` በማምጣት ላይ።
-2. የመፍታት አብነቶችን እንደገና ማመንጨት (የተመረጡ I105 + ሁለተኛ-ምርጥ የታመቁ (`sora`) አድራሻዎች ፣ የጽሑፍ መዝገቦች)።
+2. የመፍታት አብነቶችን እንደገና ማመንጨት (የተመረጡ i105 + ሁለተኛ-ምርጥ የታመቁ (`sora`) አድራሻዎች ፣ የጽሑፍ መዝገቦች)።
 3. በ[`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md) ውስጥ በተገለጸው በሶራዲኤንኤስ የስራ ፍሰት በኩል የዘመነውን የዞን መረጃ ማሰር።
 
 የክስተት ማቅረቢያ ዋስትናዎች;

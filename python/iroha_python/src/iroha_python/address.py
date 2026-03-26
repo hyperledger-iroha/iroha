@@ -21,119 +21,121 @@ CHAIN_DISCRIMINANT_SORA = DEFAULT_CHAIN_DISCRIMINANT
 CHAIN_DISCRIMINANT_TEST = 0x0171
 CHAIN_DISCRIMINANT_DEV = 0x0000
 I105_WARNING = (
-    "I105 addresses are the canonical account literal encoding. "
-    "Render and validate them with the intended chain discriminant."
+    "i105 addresses use the canonical I105 alphabet: Base58 plus the 47 "
+    "katakana from the Iroha poem. Render and validate them with the intended "
+    "chain discriminant."
 )
 
-I105_ALPHABET: Tuple[str, ...] = (
-    "ア",
-    "イ",
-    "ウ",
-    "エ",
-    "オ",
-    "カ",
-    "キ",
-    "ク",
-    "ケ",
-    "コ",
-    "サ",
-    "シ",
-    "ス",
-    "セ",
-    "ソ",
-    "タ",
-    "チ",
-    "ツ",
-    "テ",
-    "ト",
-    "ナ",
-    "ニ",
-    "ヌ",
-    "ネ",
-    "ノ",
-    "ハ",
-    "ヒ",
-    "フ",
-    "ヘ",
-    "ホ",
-    "マ",
-    "ミ",
-    "ム",
-    "メ",
-    "モ",
-    "ヤ",
-    "ユ",
-    "ヨ",
-    "ラ",
-    "リ",
-    "ル",
-    "レ",
-    "ロ",
-    "ワ",
-    "ヰ",
-    "ヱ",
-    "ヲ",
-    "ン",
-    "ガ",
-    "ギ",
-    "グ",
-    "ゲ",
-    "ゴ",
-    "ザ",
-    "ジ",
-    "ズ",
-    "ゼ",
-    "ゾ",
-    "ダ",
-    "ヂ",
-    "ヅ",
-    "デ",
-    "ド",
-    "バ",
-    "ビ",
-    "ブ",
-    "ベ",
-    "ボ",
-    "パ",
-    "ピ",
-    "プ",
-    "ペ",
-    "ポ",
-    "ヴ",
-    "ヷ",
-    "ヸ",
-    "ヹ",
-    "ヺ",
-    "ァ",
-    "ィ",
-    "ゥ",
-    "ェ",
-    "ォ",
-    "ャ",
-    "ュ",
-    "ョ",
-    "ッ",
-    "ヮ",
-    "ヵ",
-    "ヶ",
-    "キャ",
-    "キュ",
-    "キョ",
-    "シャ",
-    "シュ",
-    "ショ",
-    "チャ",
-    "チュ",
-    "チョ",
-    "ニャ",
-    "ニュ",
-    "ニョ",
-    "ヒャ",
-    "ヒュ",
-    "ヒョ",
+BASE58_ALPHABET: Tuple[str, ...] = tuple(
+    "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 )
+IROHA_POEM_KANA_FULLWIDTH: Tuple[str, ...] = (
+    "イ",
+    "ロ",
+    "ハ",
+    "ニ",
+    "ホ",
+    "ヘ",
+    "ト",
+    "チ",
+    "リ",
+    "ヌ",
+    "ル",
+    "ヲ",
+    "ワ",
+    "カ",
+    "ヨ",
+    "タ",
+    "レ",
+    "ソ",
+    "ツ",
+    "ネ",
+    "ナ",
+    "ラ",
+    "ム",
+    "ウ",
+    "ヰ",
+    "ノ",
+    "オ",
+    "ク",
+    "ヤ",
+    "マ",
+    "ケ",
+    "フ",
+    "コ",
+    "エ",
+    "テ",
+    "ア",
+    "サ",
+    "キ",
+    "ユ",
+    "メ",
+    "ミ",
+    "シ",
+    "ヱ",
+    "ヒ",
+    "モ",
+    "セ",
+    "ス",
+)
+IROHA_POEM_KANA_HALFWIDTH: Tuple[str, ...] = (
+    "ｲ",
+    "ﾛ",
+    "ﾊ",
+    "ﾆ",
+    "ﾎ",
+    "ﾍ",
+    "ﾄ",
+    "ﾁ",
+    "ﾘ",
+    "ﾇ",
+    "ﾙ",
+    "ｦ",
+    "ﾜ",
+    "ｶ",
+    "ﾖ",
+    "ﾀ",
+    "ﾚ",
+    "ｿ",
+    "ﾂ",
+    "ﾈ",
+    "ﾅ",
+    "ﾗ",
+    "ﾑ",
+    "ｳ",
+    "ヰ",
+    "ﾉ",
+    "ｵ",
+    "ｸ",
+    "ﾔ",
+    "ﾏ",
+    "ｹ",
+    "ﾌ",
+    "ｺ",
+    "ｴ",
+    "ﾃ",
+    "ｱ",
+    "ｻ",
+    "ｷ",
+    "ﾕ",
+    "ﾒ",
+    "ﾐ",
+    "ｼ",
+    "ヱ",
+    "ﾋ",
+    "ﾓ",
+    "ｾ",
+    "ｽ",
+)
+I105_ALPHABET: Tuple[str, ...] = BASE58_ALPHABET + IROHA_POEM_KANA_FULLWIDTH
 I105_BASE = len(I105_ALPHABET)
 I105_INDEX = {symbol: idx for idx, symbol in enumerate(I105_ALPHABET)}
+I105_INDEX.update(
+    {
+        symbol: len(BASE58_ALPHABET) + idx
+        for idx, symbol in enumerate(IROHA_POEM_KANA_HALFWIDTH)
+    }
+)
 
 
 class AccountAddressError(ValueError):
@@ -447,10 +449,10 @@ def strip_i105_sentinel(encoded: str, expected_discriminant: Optional[int] = Non
     found = i105_discriminant_from_sentinel(encoded)
     if found is not None:
         raise AccountAddressError(
-            f"unexpected I105 chain discriminant: expected {expected}, found {found}"
+            f"unexpected i105 chain discriminant: expected {expected}, found {found}"
         )
     raise AccountAddressError(
-        "I105 address is missing the expected chain-discriminant sentinel"
+        "i105 address is missing the expected chain-discriminant sentinel"
     )
 
 
@@ -465,23 +467,32 @@ def encode_i105_string(canonical: bytes, *, discriminant: int = DEFAULT_CHAIN_DI
 
 def decode_i105_string(encoded: str, *, expected_discriminant: Optional[int] = None) -> bytes:
     payload = strip_i105_sentinel(encoded, expected_discriminant=expected_discriminant)
-    if len(payload) <= I105_CHECKSUM_LEN:
-        raise AccountAddressError("I105 address too short")
-    digits = [i105_digit(symbol) for symbol in payload]
+    digits = decode_i105_digits(payload)
+    if len(digits) <= I105_CHECKSUM_LEN:
+        raise AccountAddressError("i105 address too short")
     data_digits = digits[:-I105_CHECKSUM_LEN]
     checksum_digits = digits[-I105_CHECKSUM_LEN:]
     canonical = decode_base_n(data_digits, I105_BASE)
     expected = i105_checksum_digits(canonical)
     if list(expected) != checksum_digits:
-        raise AccountAddressError("I105 checksum mismatch")
+        raise AccountAddressError("i105 checksum mismatch")
     return canonical
+
+
+def decode_i105_digits(payload: str) -> List[int]:
+    try:
+        return [I105_INDEX[symbol] for symbol in payload]
+    except KeyError as exc:
+        raise AccountAddressError(
+            f"invalid i105 alphabet symbol: {exc.args[0]}"
+        ) from exc
 
 
 def i105_digit(symbol: str) -> int:
     try:
         return I105_INDEX[symbol]
     except KeyError as exc:
-        raise AccountAddressError(f"invalid I105 alphabet symbol: {symbol}") from exc
+        raise AccountAddressError(f"invalid i105 alphabet symbol: {symbol}") from exc
 
 
 def encode_base_n(data: bytes, base: int) -> List[int]:

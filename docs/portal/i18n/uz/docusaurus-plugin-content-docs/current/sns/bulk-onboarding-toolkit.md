@@ -256,7 +256,7 @@ Kengash `release` tomonidan filtrlanadi, shuning uchun auditorlar bitta CSV ishg
   murojaatlar CSV manziliga nisbatan hal qilinadi. Ob'ekt bo'lmagan metama'lumotlar
   tekshirish xatosini keltirib chiqaradi.
 - **Kontrollerlar:** bo'sh hujayralar `--default-controllers` ni hurmat qiladi. Aniq taqdim eting
-  boshqaruvchi ro'yxatlari (masalan, `i105...;i105...`) egasi bo'lmaganlarga topshirilganda
+  boshqaruvchi ro'yxatlari (masalan, `soraカタカナ...;soraカタカナ...`) egasi bo'lmaganlarga topshirilganda
   aktyorlar.
 
 Xatolar kontekstli qator raqamlari bilan xabar qilinadi (masalan

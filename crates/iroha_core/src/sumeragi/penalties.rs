@@ -302,6 +302,7 @@ impl<'a> PenaltyApplier<'a> {
             let mut tx = block.trasaction(self.telemetry, lane_config.clone(), current_height);
             #[cfg(not(feature = "telemetry"))]
             let mut tx = block.trasaction(lane_config.clone(), current_height);
+            let nexus = self.state.nexus_snapshot();
             let mut applied_here = false;
             for locator in locators {
                 if let Some(amount) =
@@ -309,6 +310,7 @@ impl<'a> PenaltyApplier<'a> {
                 {
                     apply_slash_to_validator(
                         &mut tx,
+                        &nexus.dataspace_catalog,
                         &staking_cfg,
                         locator.lane_id,
                         &locator.validator,

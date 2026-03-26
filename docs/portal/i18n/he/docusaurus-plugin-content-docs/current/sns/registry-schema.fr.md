@@ -234,7 +234,7 @@ Toutes les cles sont serialisees via des tuples Norito pour garder un hashing de
 השערים נרשמים ל-`RegistryEventV1` ו-DNS/SoraFS סינכרון באמצעות:
 
 1. Recuperer le dernier `NameRecordV1` התייחסות par la sequence d'evenements.
-2. Regenerer les templates de resolver (כתובות I105 העדיפות + דחוסות (`sora`) ובחירה שנייה, רשומות טקסט).
+2. Regenerer les templates de resolver (כתובות i105 העדיפות + דחוסות (`sora`) ובחירה שנייה, רשומות טקסט).
 3. Pinner les donnees de zone mises a jour via le workflow SoraDNS decrit dans [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
 
 אחריות לאירועים:

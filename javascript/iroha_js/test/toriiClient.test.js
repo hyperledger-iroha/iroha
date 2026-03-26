@@ -102,9 +102,7 @@ function fixtureAccountAddress(label, domain = "fixture-domain") {
       .update(`fixture:${label}@${domain}:${attempt}`)
       .digest();
     try {
-      return AccountAddress.fromAccount({
-        domain: SAMPLE_ACCOUNT_DOMAIN,
-        publicKey: hash,
+      return AccountAddress.fromAccount({ publicKey: hash,
       });
     } catch (error) {
       if (
@@ -12229,7 +12227,7 @@ test("listAccountAssets rejects malformed asset filters", async () => {
 
   await assert.rejects(
     () => client.listAccountAssets(FIXTURE_ALICE_ID, { assetId: invalidAssetId }),
-    /must use '<base58-asset-id>#<katakana-i105-account-id>' with optional '#dataspace:<id>' suffix/,
+    /must use '<base58-asset-definition-id>#<katakana-i105-account-id>' with optional '#dataspace:<id>' suffix/,
   );
 });
 
@@ -18136,6 +18134,35 @@ test("getExplorerAccountQr normalizes payloads", async () => {
   const defaultSnapshot = await client.getExplorerAccountQr(accountId);
   assert.equal(defaultSnapshot.literal, "i105defaultliteral");
   assert.equal(callCount, 2);
+});
+
+test("getExplorerAccountQr accepts account aliases on account-id paths", async () => {
+  const alias = "operator@hbl.universal";
+  const fetchImpl = async (url, init = {}) => {
+    const requestUrl = new URL(url);
+    assert.equal(init.method, "GET");
+    assert.equal(
+      requestUrl.pathname,
+      `/v1/explorer/accounts/${encodeURIComponent(alias)}/qr`,
+    );
+    return createResponse({
+      status: 200,
+      jsonData: {
+        canonical_id: FIXTURE_ALICE_ID,
+        literal: "i105aliasresolved",
+        network_prefix: 73,
+        error_correction: "M",
+        modules: 192,
+        qr_version: 5,
+        svg: "<svg />",
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const snapshot = await client.getExplorerAccountQr(alias);
+  assert.equal(snapshot.canonicalId, FIXTURE_ALICE_ID);
+  assert.equal(snapshot.literal, "i105aliasresolved");
 });
 
 test("getExplorerAccountQr rejects non-object options", async () => {

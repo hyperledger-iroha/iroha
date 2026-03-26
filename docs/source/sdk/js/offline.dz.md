@@ -40,7 +40,7 @@ const { signedTransaction } = buildTransaction({
   authority: "soraカタカナ...",
   instructions: [
     buildMintAssetInstruction({
-      assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
+      assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
       quantity: "10",
     }),
   ],

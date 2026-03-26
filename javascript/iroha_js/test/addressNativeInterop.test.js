@@ -18,9 +18,7 @@ const SAMPLE_PUBLIC_KEY = Uint8Array.from([
 ]);
 
 test("AccountAddress lazily resolves injected native codecs after import", () => {
-  const canonical = AccountAddress.fromAccount({
-    domain: "wonderland",
-    publicKey: SAMPLE_PUBLIC_KEY,
+  const canonical = AccountAddress.fromAccount({ publicKey: SAMPLE_PUBLIC_KEY,
   }).canonicalBytes();
   let parseCalls = 0;
   let renderCalls = 0;
@@ -64,9 +62,7 @@ test("AccountAddress lazily resolves injected native codecs after import", () =>
 });
 
 test("normalizeAccountId accepts native-rendered i105 without an explicit prefix", () => {
-  const canonical = AccountAddress.fromAccount({
-    domain: "wonderland",
-    publicKey: SAMPLE_PUBLIC_KEY,
+  const canonical = AccountAddress.fromAccount({ publicKey: SAMPLE_PUBLIC_KEY,
   }).canonicalBytes();
   let parseCalls = 0;
 

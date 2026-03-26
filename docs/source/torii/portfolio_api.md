@@ -46,7 +46,7 @@ GET /v1/accounts/{uaid}/portfolio
           "label": null,
           "assets": [
             {
-              "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sora<katakana-i105-account-id>",
+              "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
               "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
               "quantity": "500"
             }
@@ -63,12 +63,12 @@ GET /v1/accounts/{uaid}/portfolio
           "label": "primary-cbdc",
           "assets": [
             {
-              "asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc#sora<katakana-i105-account-id-2>",
+              "asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
               "asset_definition_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
               "quantity": "250"
             },
             {
-              "asset_id": "5Pz9SwdN9eXPbiXPX9HRCpzCcE3o#sora<katakana-i105-account-id-2>",
+              "asset_id": "5Pz9SwdN9eXPbiXPX9HRCpzCcE3o",
               "asset_definition_id": "5Pz9SwdN9eXPbiXPX9HRCpzCcE3o",
               "quantity": "25"
             }
@@ -89,7 +89,7 @@ GET /v1/accounts/{uaid}/portfolio
   (`DataSpaceId::GLOBAL`).
 * Each account entry includes the optional stable label plus the sorted list of
   asset positions with their canonical identifiers and Norito numeric balances.
-  Account IDs are canonical katakana-I105 literals; asset definition IDs remain
+  Account IDs are canonical katakana-i105 literals; asset definition IDs remain
   canonical Base58.
 
 ## Notes
@@ -228,7 +228,7 @@ Sample response:
   present.
 - `accounts` reuse the `uaid_dataspaces` ledger map so operators can see which
   concrete account IDs are tied to the manifest’s dataspace. These account
-  literals are canonical katakana-I105 outputs suitable for offline or QR
+  literals are canonical katakana-i105 outputs suitable for offline or QR
   workflows.
 - The `manifest` object is the exact `AssetPermissionManifest` structure
   published to the Space Directory, making it easy for SDKs to replay the

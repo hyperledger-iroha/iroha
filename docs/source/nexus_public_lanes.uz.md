@@ -1,12 +1,4 @@
 ---
-lang: uz
-direction: ltr
-source: docs/source/nexus_public_lanes.md
-status: complete
-generator: scripts/sync_docs_i18n.py
-source_hash: 65540923620ca8a96dd0c0b07b3000b6c77e22deef4bd390725abbb3a6ed1193
-source_last_modified: "2026-01-31T19:25:45.077354+00:00"
-translation_last_reviewed: 2026-02-07
 title: Nexus Public Lane Staking
 description: NX-9 specification for permissionless validator admission, stake accounting, and reward records.
 ---
@@ -116,7 +108,7 @@ Reward distributions use `PublicLaneRewardRecord` and `PublicLaneRewardShare`:
   "total_reward": "250.0000",
   "shares": [
     { "account": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ", "role": "Validator", "amount": "150" },
-    { "account": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r", "role": "Nominator", "amount": "100" }
+    { "account": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ", "role": "Nominator", "amount": "100" }
   ],
   "metadata": {
     "telemetry_epoch_root": "0x4afe…",

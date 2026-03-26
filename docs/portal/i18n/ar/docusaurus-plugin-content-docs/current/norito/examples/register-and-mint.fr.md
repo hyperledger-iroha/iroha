@@ -19,9 +19,9 @@ translation_last_reviewed: 2026-02-07
 
 ## باركور دو ريجيستري
 
-- تأكد من وجود حساب الوجهة (على سبيل المثال `i105...`)، بما يعكس مرحلة الإعداد في كل Quickstart SDK.
+- تأكد من وجود حساب الوجهة (على سبيل المثال `soraカタカナ...`)، بما يعكس مرحلة الإعداد في كل Quickstart SDK.
 - قم باستدعاء نقطة الإدخال `register_and_mint` لإنشاء تعريف نشط ROSE وقم بإعداد 250 وحدة لـ Alice في معاملة واحدة.
-- تحقق من المبيعات عبر `client.request(FindAccountAssets)` أو `iroha_cli ledger assets list --account i105...` لتأكيد عملية الطحن.
+- تحقق من المبيعات عبر `client.request(FindAccountAssets)` أو `iroha_cli ledger assets list --account soraカタカナ...` لتأكيد عملية الطحن.
 
 ## أدلة شركاء SDK
 

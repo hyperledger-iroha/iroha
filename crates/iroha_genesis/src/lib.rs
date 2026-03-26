@@ -4895,7 +4895,7 @@ mod tests {
         let json = norito::json::to_json_pretty(&genesis)?;
         assert!(
             json.contains(&account_id.to_string()),
-            "expected I105 account id in genesis JSON"
+            "expected i105 account id in genesis JSON"
         );
         let genesis_path = tmp_dir.path().join("genesis.json");
         std::fs::write(&genesis_path, json)?;

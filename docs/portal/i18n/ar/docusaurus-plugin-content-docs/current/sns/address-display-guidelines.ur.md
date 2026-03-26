@@ -1,231 +1,123 @@
 ---
-lang: ar
-direction: rtl
-source: docs/portal/docs/sns/address-display-guidelines.ur.md
-status: complete
-generator: docs/portal/scripts/sync-i18n.mjs
-translator: machine-google-reviewed
-translation_last_reviewed: 2026-02-07
+id: address-display-guidelines
+title: Sora Address Display Guidelines
+sidebar_label: Address display
+description: UX and CLI requirements for canonical i105 account ids and on-chain aliases (ADDR-6).
 ---
 
-استيراد ExplorerAddressCard من '@site/src/components/ExplorerAddressCard'؛
+import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
 
-:::ملاحظة مستند ماخذ
-هذه الصفحة `docs/source/sns/address_display_guidelines.md` هي المقالة التالية وأحدثها
-يوجد دفتر ملاحظات. لقد ترجمت سورس فاميلي العلاقات العامة إلى قرار جديد.
+:::note Canonical Source
+This page mirrors `docs/source/sns/address_display_guidelines.md` and now serves
+as the canonical portal copy. The source file sticks around for translation PRs.
 :::
 
-والاس، وExplorers وSDK مثالان على الحمولة المتغيرة الأخرى.
-مثال على Android
-`examples/android/retail-wallet` مطلوب لطباعة UX:- **دو كابي واضح.** دو كابي بٹنز ديں: I105 (ترجيح) وصرف سورا والا.
-  مزرعة المزرعة (`sora...`، ثاني أفضل). I105 محفوظ بیرونی کے لئے محفوظ و QR
-  الحمولة بنات ہے۔ تحذير الشركة التجارية المضمنة ضروري أو مربح
-  Sora-aware ips هو المسؤول عن ذلك. مثال Android دونوں مادة بٹنز و ٹول ٹپس
-  هذا هو `examples/android/retail-wallet/src/main/res/layout/activity_main.xml`
-  نظام التشغيل Windows، وiOS SwiftUI `examples/ios/NoritoDemo/Sources/ContentView.swift`
-  تم تحديث اندرويد `AddressPreviewCard` إلى UX.
-- **Monospace، قابل لاختيار متن.** دونوں سلاسل کو monospace فونٹ و
-  `textIsSelectable="true"` كيفية استخدام أداة تسجيل الدخول IME في مقدار المبلغ
-  ديكو سكي. مدة زمنية معقولة للفيديو: يمكن لـ IME أن يكون متوافقًا مع النطاق أو العرض الصفري
-  نقطة واحدة داخل السكتا.
-- **غير ضمن مجموعة متنوعة من النصائح.** أداة التحديد ضمن `default` نصيحة
-  هل تود إضافة تسمية توضيحية توضيحية إلى سبب عدم إضافة لاحقة.
-  المستكشفون الذين يستخدمون أيضًا عنوانًا أساسيًا يشرحون ما هو مطلوب من المحدد
-  ترميز الملخص کرے۔
-- **حمولات I105 QR.** رمز الاستجابة السريعة QR هو ترميز سلسلة I105 كرنا چاہیے. إذا ريال قطري
-  إنشاء صورة فارغة خطأ واضح.
-- **كلبوري بيغام.** شركة فارم كابي بعد الخبز المحمص أو مطعم الوجبات الخفيفة.
-  لقد أدى المستخدم الجديد إلى استخدام Sora وIME بشكل جيد.
+Wallets, explorers, and SDK samples must treat the canonical Katakana i105
+literal as the only public account-id format. On-chain aliases are separate
+lookup keys:
 
-تحديث شبكة الريلز لفساد Unicode/IME وWal//Iksplorer UX
-قبول خارطة الطريق ADDR-6 هو أمر ضروري.
+- `name@dataspace`
+- `name@domain.dataspace`
 
-## سكرين شات فکسچرزمراجعات رائعة لدوائر درج فكسشيرز استخدام كريات بلاستيك ليبلز، ٹول ٹپس
-والتحذيرات من الرموز التعبيرية التي يتم تخزينها:
+Those aliases resolve on-chain to the canonical i105 account id. They are not
+an alternate public account-id encoding.
 
-- أندرويد ریفرنس: `/img/sns/address_copy_android.svg`
+## Required UX
 
-  ![أندرويد ڈوئل کاپی ريفرنس](/img/sns/address_copy_android.svg)
+- **Copy/share only canonical i105.** Ship one primary copy action for the
+  canonical Katakana i105 account id. That same literal powers QR payloads,
+  deep links, and clipboard actions.
+- **Render aliases separately.** If a workflow includes an alias, show it in a
+  labeled field such as “Alias” or “Routing alias”. Do not concatenate it onto
+  the i105 literal.
+- **Monospace, selectable text.** Render the i105 literal with a monospace font
+  and `textIsSelectable="true"` so users can inspect it without invoking an
+  IME. Avoid editable fields: IMEs can rewrite kana or inject zero-width code
+  points.
+- **Confirm the exact copied value.** After copying the i105 form, emit a toast
+  or snackbar that quotes the canonical i105 literal.
+- **No alternate public encodings.** Canonical hex and legacy/non-canonical
+  address forms are tooling/debug inputs only and must not be marketed as
+  copy/share formats.
 
-- ریفرنس iOS: `/img/sns/address_copy_ios.svg`
+## Screenshot fixtures
 
-  ![iOS جيل ريفرنس](/img/sns/address_copy_ios.svg)
+Use the following fixtures during localization reviews to ensure button labels,
+tooltips, and warnings stay aligned across platforms:
 
-## مساعدي SDK
+- Android reference: `/img/sns/address_copy_android.svg`
 
-هناك أداة مساعدة واحدة سريعة لـ SDK وتحذير من I105 ومزرعة الشركة
-سلسلة ديتا تحتوي على قائمة مضمنة لواجهة المستخدم:
+  ![Android address copy reference](/img/sns/address_copy_android.svg)
 
-- جافا سكريبت: `AccountAddress.displayFormats(networkPrefix?: number)`
+- iOS reference: `/img/sns/address_copy_ios.svg`
+
+  ![iOS address copy reference](/img/sns/address_copy_ios.svg)
+
+## SDK helpers
+
+Each SDK exposes a convenience helper that returns canonical Katakana i105
+rendering plus warning text so UI layers can stay consistent:
+
+- JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)`
   (`javascript/iroha_js/src/address.js`)
-- مفتش JavaScript: `inspectAccountId(...)` سلسلة تحذيرات الشركة
-  وهو `warnings` يشمل هذه الكلمات والأرقام `sora...` حرفيًا، كل الٹ/
-  لصق ايكسبلورر برونزي/التحقق من الصحة، تحذير سورا فقط، ليس كذلك
-  لقد تم إنفاقها على شركتك وشركتك.
-- بايثون: `AccountAddress.display_formats(network_prefix: int = 753)`
-- سويفت: `AccountAddress.displayFormats(networkPrefix: UInt16 = 753)`
-- جافا/كوتلين: `AccountAddress.displayFormats(int networkPrefix = 753)`
+- Python: `AccountAddress.display_formats(network_prefix: int = 753)`
+- Swift: `AccountAddress.displayFormats(networkPrefix: UInt16 = 753)`
+- Java/Kotlin: `AccountAddress.displayFormats(int networkPrefix = 753)`
   (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountAddress.java`)
 
-يتم استخدام المساعدين، وهو عبارة عن واجهة مستخدم تقوم بتشفير النسخ الاحتياطية. جافا سكريبت
-المساعد `domainSummary` الحمولة `selector` (`tag`, `digest_hex`, `registry_id`,
-`label`) قم بالنقر على واجهات المستخدم أو الضغط على محدد Local-12 أو المسجل
-قم بتحليل الحمولة الخام مرة أخرى.
+Use these helpers instead of reimplementing the encode logic in UI layers.
+Use alias-aware Torii endpoints when you need to resolve `name@dataspace` or
+`name@domain.dataspace` into the canonical i105 account id.
 
-## أجهزة ایکسپلورر ڈیمو
+## Explorer instrumentation demo
 
+<ExplorerAddressCard />
 
+Explorers should mirror the wallet telemetry and accessibility work:
 
-مرآة للقياس عن بعد وإمكانية الوصول تعكس كل ما تحتاج إليه:- غطاء بٹنز على `data-copy-mode="i105|I105|qr"` لفرن فرن Torii
-  العداد `torii_address_format_total` هو عدادات الاستخدام الساتلية. اوبر والا
-  تم تجهيز كل وحدة من الشركات `{mode,timestamp}` بـ `iroha:address-copy`؛
-  خط أنابيب التحليلات/القياس عن بعد (مثل المقطع أو المجمع المدعوم من NORITO)
-  سهولة استخدام لوحات المعلومات وتنسيق عنوان البريد الإلكتروني وشبكة الإنترنت
-  ما يرتبط بالموضوع. عدادات المجال Torii
-  (`torii_address_domain_total{domain_kind}`) والتي تتميز أيضًا بـ Local-12
-  ريبورتمنت ريووز `address_ingest` Grafana بورصة لمدة 30 يومًا
-  `domain_kind="local12"` .
-- قم بمتابعة `aria-label`/`aria-describedby`
-  الحرفي حرفيًا اسم المحفوظات (I105) أو Sora (كمپريسڈ). ضمنا
-  تتضمن التسمية التوضيحية والوصف تقنية مساعدة وتقنيات مساعدة
-  لقد نظرنا إلى هذا الرأي.
-- منطقة حية واحدة (مثلاً `<output aria-live="polite">...</output>`)
-  النتائج والإنذارات المتعلقة بإعلان النسخة التجريبية من Swift/Android موجودة في VoiceOver/TalkBack
-  رویے کے وفقا.
+- Apply `data-copy-mode="i105|alias|qr"` to copy buttons so front-ends can emit
+  usage counters alongside server-side account-literal metrics.
+- Pair every control with distinct `aria-label`/`aria-describedby` hints that
+  explain whether a control copies the canonical i105 account id, views the
+  alias, or shares the QR payload.
+- Expose a live region (e.g., `<output aria-live="polite">…</output>`) announcing copy results and
+  warnings, matching the VoiceOver/TalkBack behaviour now wired into the Swift/Android samples.
 
-إحدى أدوات القياس ADDR-6b هي عبارة عن أجهزة أو مستندات محلية
-المحددات غير فعالة في استيعاب Torii وأوضاع النسخ من جانب العميل
-لا داعي للقلق بشأن هذه المشكلة.
+## Enforcing canonical forms
 
-## محلي -> مجموعة أدوات الهجرة العالميةيقوم المحددون المحليون بمراجعة الحسابات والتحويل. تقرير تدقيق JSON المساعد و
-I105/الشركة تتبرع بتذاكر الاستعداد الخاصة بشركة بريميرز للحجز المسبق
-هذه هي أهم متطلبات دليل التشغيل Grafana ولوحات المعلومات ومتطلبات مدير التنبيهات
-لقد تم استخدام بطاقة القطع في الوضع الصارم كبوابة.
+Use the CLI workflow documented under ADDR-5:
 
-## تخطيط بائنری کا فوری حوالہ (ADDR-1a)
-
-أدوات العناوين المتقدمة لـ SDK (المفتشون، تلميحات التحقق من الصحة، منشئو البيانات)
-ادعم المطورين `docs/account_structure.md` بالسلك الكنسي الموجود
-هناك نوع آخر من المنتجات. تخطيط ہميشہ `header · selector · controller` ہے، جہاں
-بتات الرأس أو:
-
-```
-bit index:   7        5 4      3 2      1 0
-             ┌─────────┬────────┬────────┬────┐
-payload bit: │version  │ class  │  norm  │ext │
-             └─────────┴────────┴────────┴────┘
-```
-
-- `addr_version = 0` (البتات 7-5) موجودہ ہے؛ غير الصفر أقدار ريزرو ہیں و
-  `AccountAddressError::InvalidHeaderVersion`.
-- وحدات تحكم `addr_class` فردية (`0`) ومتعددة التوقيع (`1`) تعمل على فرق بتاتا .
-- `norm_version = 1` متطلبات محدد Norm v1 ترميز کرتا ہے؛ معايير المستقبل
-  يتم استخدام مقطع 2 بت مرة أخرى.
-- `ext_flag` ہميشہ `0` ہے؛ البتات النشطة غير معاون ملحقات الحمولة النافعة.
-
-المحدد فوراً الرأس بعد آتا ہے:
-
-```
-┌──────────┬──────────────────────────────────────────────┐
-│ tag (u8) │ payload (depends on selector kind)           │
-└──────────┴──────────────────────────────────────────────┘
-```
-
-واجهات المستخدم ومجموعات تطوير البرمجيات (SDKs) هي أداة التحديد في القسم الثاني من هذا الجزء:
-
-- `0x00` = ضمن حمولة الحمولة (لا يوجد حمولة).
-- `0x01` = ملخص لوکل (12 بايت `blake2s_mac("SORA-LOCAL-K:v1", label)`).
-- `0x02` = گلوبل رجسٹری انٹری (`registry_id:u32` big-endian).
-
-مثال سداسي عشري على الإنترنت في المستندات/الاختبارات يمكنك تضمينه أو تضمينه:| قسم المحدد | السداسي الكنسي |
-|---------------|---------------|
-| ضمني ڈيفالٹ | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
-| لوکل دايجست (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
-| گلوبل رجسٹری (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
-
-مكمل المحدد/الحالة ٹیبل کے لئے `docs/source/references/address_norm_v1.md` و
-مخطط البايت الكامل `docs/account_structure.md`.
-
-## الأشكال القانونية نافذ کرنا
-
-ما هي الخطوات التي يجب اتخاذها لسير عمل ADDR-5 على مستوى CLI:
-
-1. `iroha tools address inspect` على I105، والشركة، والحمولات السداسية الأساسية
-   ملخص JSON المنظم دیتا ہے۔ الملخص `kind`/`warning` والے `domain`
-   يتم أيضًا تشغيل المادة و`input_domain` مما يؤدي إلى ظهور صدى أيضًا
-   كرتا ہے۔ جب `kind` `local12` وTw CLI stderr للتحذير وJSON
-   الملخص والتحديثات هي خطوط أنابيب CI وSDK سطحية.
-   يمكنك أيضًا تحويل الترميز إلى `<i105>@<domain>` والذي يمكنك إعادة تشغيله
-   ماذا تفعل `legacy  suffix`.
-2. يتم تحديث التحذيرات/الملخص الخاص بمساعد JavaScript الخاص بـ SDK:
+1. Run `iroha tools address convert <address-or-account_id> --format json`.
+   The summary reports the detected format and canonical encodings (`i105`,
+   `canonical_hex`). Strict parser paths accept canonical Katakana i105 only.
+2. SDKs can surface the same summary via JavaScript:
 
    ```js
    import { inspectAccountId } from "@iroha/iroha-js";
 
-   const summary = inspectAccountId("sora...");
-   if (summary.domain.warning) {
-     console.warn(summary.domain.warning);
-   }
-   console.log(summary.i105.value, summary.I105);
+   const summary = inspectAccountId(accountLiteral);
+   console.log(summary.i105.value, summary.i105Warning);
    ```
-  المساعد الحرفي سے كشف بادئة I105 محفوظات رکھتا وجبه تک پ
-  `networkPrefix` ليس واضحًا تمامًا؛ هذا هو الشبكات غير الافتراضية
-  ملخصات خامش البادئة الافتراضية التي يتم عرضها مرة أخرى لن يتم عرضها.3. الحمولة الأساسية التي يتم إعادة استخدامها `i105.value` أو `I105`
-   كريول (أو `--format` هو آخر ترميز). هناك سلاسل
-   بيرو شيرنگ لئے محفوظات.
-4. البيانات والسجلات والمستندات التي تواجه العملاء هي السجل الأساسي
-   تزايد الوعي بالتغيير الشامل والسريع لسجل المحددات المحلية
-   ہوں گے۔
-5. قم بإضافة أي موقع
-   `iroha tools address audit --input addresses.txt --network-prefix 753` . کمانڈ
-   الحروف الحرفية المفصولة بالسطر الجديد ہے ( `#` سے بدء ہونے والے تعليقات
-   لا يوجد أي استخدام لـ STDIN و `--input -` أو كويت فلايغ،
-   اندراج کے لئے canonical/I105 (ترجیحی)/مضغوط (`sora`) (`sora`، ثاني أفضل) ملخصات کے ساتھ JSON رپورٹ بناتي
-   يتم استخدام الصفوف باستخدام `--allow-errors`، وعبر المحددات المحلية
-   تم إنشاء CI باللون الأسود من خلال `strict CI post-check` من خلال إنشاء محرك كهربائي.
-6. إذا قمت بإعادة كتابة سطر جديد إلى سطر جديد، فما عليك سوى إعادة الكتابة
-  جداول بيانات معالجة المحدد المحلي
-  استخدام `input,status,format,...` CSV للتشفيرات الأساسية،
-  التحذيرات وحالات فشل التحليل لا تسبب أي ضرر. مساعد ڈيفالٹ پر
-  الصفوف غير المحلية چھوڑ دیتا ہے، باقی الإدخالات کو مطلوبہ ترميز (I105 ترجیحی/مضغوط (`sora`) ثاني أفضل/ست عشري/JSON)
-  لقد قمت باستبدالها، و`legacy  suffix` في محفوظات اليوم الرئيسية. `--allow-errors`تعمل هذه اللعبة على حذف الأحرف الحرفية ومقالب البيانات من خلال مسح البيانات باستمرار.
-7. أتمتة CI/lint `ci/check_address_normalize.sh` نوع القماش، جو
-   `fixtures/account/address_vectors.json` سے المحددات المحلية غير محددة
-   `iroha tools address normalize` تم استبدال البطاقة، و
-   `iroha tools address audit` إعادة التدوير والثبات
-   الإصدارات اب الملخصات المحلية لا تحتوي على .
+3. Resolve aliases through alias-aware APIs instead of feeding
+   `name@dataspace` or `name@domain.dataspace` into strict `AccountId`
+   parsers.
+4. Reuse `i105.value` from the summary (or request another encoding via
+   `--format`) in manifests and user-facing docs.
+4. For bulk data sets, run
+   `iroha tools address audit --input addresses.txt --network-prefix 753`.
+   Audit emits JSON/CSV summaries per row and fails on parse errors by default.
+   Use `--allow-errors` only for best-effort scans.
+5. For newline-to-newline rewrites, run
+   `iroha tools address normalize --input addresses.txt --network-prefix 753 --format i105`.
+   This rewrites each parsed row to the requested encoding
+   (canonical Katakana i105/hex/JSON). Pair with
+   `--allow-errors` for malformed dump triage.
 
-`torii_address_local8_total{endpoint}` سات
-`torii_address_collision_total{endpoint,kind="local12_digest"}`،
-`torii_address_collision_domain_total{endpoint,domain}`، ولوحة Grafana
-`dashboards/grafana/address_ingest.json` إشارة التنفيذ: ج.
-لوحات معلومات الإنتاج مسلسل 30 دن تک صفر تقديمات محلية شرعية وصفر
-تصادم محلي 12 Torii بوابة محلية 8 للشبكة الرئيسية للفشل الشديد
-لقد أصبح الآن Local-12 متاحًا الآن عندما تتمكن النطاقات العالمية من مطابقة إدخالات التسجيل.
-تجميده لإخراج CLI وملاحظة المشغل التي تواجه المشغل - وسلسلة تحذير
-يمكن استخدام تلميحات أدوات SDK والأتمتة بالإضافة إلى معايير الخروج من خريطة الطريق
-ہے؛ يتم تشخيص الانحدارات من خلال استخدام مجموعات التطوير/الاختبار `false`.
-`torii_address_domain_total{domain_kind}` إلى Grafana (`dashboards/grafana/address_ingest.json`)
-تحتوي على بطاقة مرآة وحزمة أدلة ADDR-7 أو قرص ثابت
-المحددات کو تعطيل کرے۔ حزمة مدير التنبيهات
-(`dashboards/alerts/address_ingest_rules.yml`) تتضمن حواجز الحماية هذه ما يلي:- `AddressLocal8Resurgence` هذه الصفحة هي عبارة عن صفحة ذات سياق متوافق جديد Local-8
-  زيادة التقرير. عمليات طرح الوضع الصارم، ولوحة القيادة قد تسيء إلى SDK
-  لم تعد إشارة الصفر صفرًا، ولكنها افتراضية (`true`) بشكل افتراضي.
-- `AddressLocal12Collision` تب فري ہوتا ہے جب دو Local-12 labels ایك ہی ملخص
-  پر هاش ہوں۔ الترقيات الواضحة روکیں، محلي -> مجموعة الأدوات العالمية چلا کر دايجست
-  رسم الخرائط والحوكمة Nexus ينسقان الحركة باستمرار
-  يتم إعادة إدخال التسجيل باستمرار أو عمليات النشر النهائية.
-- `AddressInvalidRatioSlo` خبردار کرتا ہے جب نسبة غير صالحة على مستوى الأسطول (محلي-8/
-  رفض الوضع الصارم) 10 مرات 0.1% SLO مرتفع.
-  `torii_address_invalid_total` يستخدم في سياق الموضوع/السبب
-  يؤدي إنشاء SDK وامتلاكه إلى تنسيق ثابت للوضع الصارم مرة أخرى.
+### Release note snippet (wallet & explorer)
 
-### ريليز نوتة سنيپٹ (والٹ وايكسپلونر)
+Include the following bullet in wallet/explorer release notes when shipping the cutover:
 
-يتضمن برنامج القطع الذي تم إصداره في الوقت الحالي/إيكسبلورر أحدث درج من الرصاصة يتضمن:
-
-> **العناوين:** `iroha tools address normalize` مساعد شامل
-> هذا هو و CI (`ci/check_address_normalize.sh`) يعملان على الكمبيوتر
-> تم استبداله بالشبكة، قبل أن يصبح Local-8/Local-12 mainnet بلا حدود. شيء آخر
-> الصادرات المخصصة التي تتحكم في جميع عمليات التصدير والقائمة المقيسة
-> إطلاق سراح حزمة الأدلة التي تم إنشاؤها.
+> **Addresses:** Copy/share flows now use canonical Katakana i105 account ids
+> only. On-chain aliases remain available as separate routing labels in
+> `name@dataspace` / `name@domain.dataspace` form and resolve to the same
+> canonical i105 account id.

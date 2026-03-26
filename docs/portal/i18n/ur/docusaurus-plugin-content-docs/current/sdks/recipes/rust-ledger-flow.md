@@ -113,7 +113,7 @@ cargo run
 آپ کو کچھ اس طرح کا لاگ آؤٹ پٹ نظر آنا چاہیے:
 
 ```
-i105... now holds:
+soraカタカナ... now holds:
   50 units of 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 

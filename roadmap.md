@@ -2,6 +2,207 @@
 
 Last updated: 2026-03-26
 
+Latest sync (2026-03-26 identifier doc/spec/validation alignment):
+`docs/source/data_model.md`,
+`docs/source/data_model_and_isi_spec*.md`,
+`docs/source/sdk/js/validation*.md`,
+and
+`IrohaSwift/README.md`
+now carry the remaining public identifier wording cleanup:
+
+- public docs now distinguish canonical Base58 `AssetDefinitionId` values from
+  owner-qualified `AssetId` holdings;
+- translated/generated spec copies and JS validation guides now require
+  `<base58-asset-definition-id>#<canonical-katakana-i105-account-id>[#dataspace:<id>]`
+  wherever they describe asset identifiers; and
+- the Swift README examples now use the same canonical Katakana-i105 account
+  placeholder in `assetId` examples.
+
+Validation:
+- targeted `rg` sweeps over `docs/source/data_model*.md`, `docs/source/data_model_and_isi_spec*.md`, `docs/source/sdk/js/validation*.md`, and `IrohaSwift/README.md`
+- `rg -n -F '<canonical-base58-asset-definition-id>#<canonical-katakana-i105-account-id>' docs/source IrohaSwift/README.md`
+
+Open work for this slice now remains:
+- no additional public/docs identifier drift is known after the targeted
+  sweeps over the translated specs, JS validation guides, and Swift README.
+
+Latest sync (2026-03-26 Python i105 decoder fix + broader Python suite pass):
+`python/iroha_python/src/iroha_python/address.py`,
+`python/iroha_python/tests/test_address_format.py`,
+`python/iroha_python/src/iroha_python/client.py`,
+`python/iroha_python/src/iroha_python/query.py`,
+`python/iroha_python/src/iroha_python/__init__.py`,
+`python/iroha_python/src/iroha_python/crypto.py`,
+`python/iroha_python/tests/test_rwa_client.py`,
+and
+`python/iroha_python/iroha_python_rs/src/lib.rs`
+now carry the broader Python SDK validation follow-up:
+
+- the Python i105 decoder now tokenizes the Katakana alphabet greedily by
+  symbol, which fixes checksum/roundtrip failures for literals containing
+  multi-symbol entries such as `キョ` and `チャ`;
+- the governance ZK ballot owner-normalization path now accepts canonical
+  Python-generated i105 literals again;
+- the broader Python Torii RWA read surface remains green under the full
+  Python SDK test directory; and
+- the full `iroha_python_rs` crate test suite is now passing, not just the
+  focused `rwa_` subset.
+
+Validation:
+- `python3 -m py_compile python/iroha_python/src/iroha_python/address.py python/iroha_python/tests/test_address_format.py`
+- `source /tmp/iroha-py-tools/bin/activate && python -m pytest python/iroha_python/tests -q`
+- `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_py_full cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml -- --nocapture`
+
+Open work for this slice now remains:
+- thread the live dataspace catalog through the remaining
+  `WorldReadOnly`-only alias parsing call sites so non-default dataspace
+  account labels resolve without relying on the default-catalog fallback; and
+- decide whether Python should also mirror the JS/Swift iterator and
+  account-scoped explorer RWA convenience helpers, or stop at the raw/typed
+  list/query/detail surfaces now that end-to-end parity exists.
+
+Latest sync (2026-03-26 Python RWA Torii parity + binding verification):
+`python/iroha_python/src/iroha_python/client.py`,
+`python/iroha_python/src/iroha_python/query.py`,
+`python/iroha_python/src/iroha_python/__init__.py`,
+`python/iroha_python/src/iroha_python/crypto.py`,
+`python/iroha_python/tests/test_rwa_client.py`,
+`python/iroha_python/README.md`,
+and
+`python/iroha_python/iroha_python_rs/src/lib.rs`
+now carry the next dedicated-RWA Python SDK slice:
+
+- Python now exposes dedicated chain-state and explorer RWA read APIs
+  (`list_rwas`, `query_rwas`, `list_explorer_rwas`, `get_explorer_rwa_detail`)
+  with typed DTOs and a matching `rwa_query_envelope(...)` helper instead of
+  stopping at instruction-building support;
+- the focused `iroha_python_rs` RWA binding tests are green after fixing the
+  RWA metadata instruction downcast and importing `RwaParentRef` for the
+  richer register/merge payload parser; and
+- `crypto.py` now falls back to `typing.TypeAlias` on modern interpreters, so
+  the Python package does not unnecessarily require `typing_extensions` just to
+  import the client surface in those environments.
+
+Validation:
+- `python3 -m py_compile python/iroha_python/src/iroha_python/crypto.py python/iroha_python/src/iroha_python/client.py python/iroha_python/src/iroha_python/query.py python/iroha_python/src/iroha_python/__init__.py python/iroha_python/tests/test_rwa_client.py`
+- `source /tmp/iroha-py-tools/bin/activate && python -m pytest python/iroha_python/tests/test_rwa_client.py python/iroha_python/tests/test_tx_rwa.py -q`
+- `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_py_rwa_fresh cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml rwa_ -- --nocapture`
+
+Open work for this slice now remains:
+- thread the live dataspace catalog through the remaining
+  `WorldReadOnly`-only alias parsing call sites so non-default dataspace
+  account labels resolve without relying on the default-catalog fallback; and
+- decide whether Python should also mirror the JS/Swift iterator and
+  account-scoped explorer RWA convenience helpers, or stop at the raw/typed
+  list/query/detail surfaces now that end-to-end parity exists.
+
+Latest sync (2026-03-26 first-release identifier hard-cut):
+`crates/iroha_data_model/src/account/address.rs`,
+`crates/iroha_data_model/src/account/address/compliance_vectors.rs`,
+`crates/iroha_data_model/src/account/rekey.rs`,
+`crates/iroha_data_model/src/asset/id.rs`,
+`crates/iroha_cli/src/commands/alias.rs`,
+`crates/ivm/tests/tlv_examples.rs`,
+`IrohaSwift/Sources/IrohaSwift/AccountAddress.swift`,
+`IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift`,
+`IrohaSwift/README.md`,
+`kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/AccountAddress.kt`,
+`java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/{AccountAddress,AssetIdDecoder}.java`,
+`java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AssetIdDecoderTests.java`,
+`javascript/iroha_js/src/address.js`,
+`python/iroha_python/src/iroha_python/address.py`,
+`fixtures/account/address_vectors.json`,
+`docs/account_structure.md`,
+and
+`docs/account_structure_sdk_alignment.md`
+now carry the stricter first-release identifier contract:
+
+- canonical account ids are Katakana i105 only, with the legacy public decoder
+  alphabets removed across the core codecs and SDK helpers;
+- account aliases remain on-chain aliases in `name@domain.dataspace` /
+  `name@dataspace` form, and the CLI validator now enforces that syntax
+  directly;
+- public asset ids remain canonical Base58 `AssetDefinitionId` values, while
+  asset aliases remain `name#domain.dataspace` / `name#dataspace`; and
+- the Android SDK no longer mis-parses asset-holding literals as bare
+  definition ids.
+
+Validation:
+- `cargo fmt --all`
+- `CARGO_TARGET_DIR=/tmp/iroha_id_contract cargo check -p iroha_data_model --message-format short`
+- `CARGO_TARGET_DIR=/tmp/iroha_addr_vectors_fresh_20260326 cargo run -p iroha_data_model --example account_address_vectors` (run via a temporary output file and moved into place on success)
+- `cd IrohaSwift && swift test --filter AccountAddressTests`
+- `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :android:compileDebugUnitTestJavaWithJavac --console=plain`
+
+Open work for this slice now remains:
+- keep future generated/public docs aligned if new identifier wording is added
+  elsewhere; the targeted sweeps in this pass found no remaining bare-asset
+  `AssetId` wording in the translated/generated docs that had drifted.
+
+Latest sync (2026-03-26 account-selector alias consistency across core + Torii):
+`crates/iroha_core/src/block.rs`,
+`crates/iroha_torii/src/routing.rs`,
+and
+`crates/iroha_torii/src/openapi.rs`
+now carry the next account-selector cleanup slice:
+
+- strict `AccountId` parsing still accepts only canonical Katakana i105
+  literals, but the world/state-backed selector layer now resolves on-chain
+  account aliases in `name@domain.dataspace` / `name@dataspace` form against
+  the live dataspace catalog;
+- the live Torii account-id path layer (`/v1/accounts/{account_id}/...`,
+  `/v1/explorer/accounts/{account_id}...`, `/v1/kaigi/relays/{relay_id}`) is
+  alias-aware again, and the Swift/JS/Python/Kotlin/Rust client account-path
+  helpers now forward aliases instead of rejecting them client-side;
+- Torii account-list and account-query filters now share the same state-backed
+  canonicalization path, so alias filters no longer diverge between
+  `GET /v1/accounts` and `POST /v1/accounts/query`; and
+- the OpenAPI source documents those alias-capable selector surfaces so the
+  public contract matches the implementation.
+
+Validation:
+- `rustfmt --edition 2024 crates/iroha_core/src/block.rs crates/iroha_torii/src/routing.rs crates/iroha_torii/src/openapi.rs`
+- `env CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target4 cargo test -p iroha_core --lib parse_account_literal_resolves_aliases_in_non_default_dataspaces -- --exact --nocapture` (still compiling on a cold isolated target)
+
+Open work for this slice now remains:
+- finish the focused isolated Rust verification for the new core/Torii alias
+  regression tests once the cold cargo target completes; and
+- thread the same alias-capable selector wording into any remaining generated
+  API artifacts after the code-path verification is complete.
+
+Latest sync (2026-03-26 Python dedicated RWA instruction parity):
+`python/iroha_python/iroha_python_rs/src/lib.rs`,
+`python/iroha_python/src/iroha_python/tx.py`,
+`python/iroha_python/tests/test_tx_rwa.py`,
+`python/iroha_python/README.md`,
+and
+`crates/iroha_core/src/block.rs`
+now carry the next dedicated-RWA client slice:
+
+- Python no longer stops at `transfer_rwa(...)`; the Rust extension now exposes
+  the dedicated RWA register/merge/lifecycle/control/metadata instruction
+  family, and `TransactionDraft` mirrors that surface with high-level helpers;
+- the pure-Python draft wrapper now canonicalizes scalar Numeric quantities and
+  JSON-normalizes richer RWA payload objects before they reach the native
+  binding; and
+- `WorldReadOnly`-only account-selector helpers still need the live dataspace
+  catalog threaded through them before non-default dataspace account aliases
+  resolve consistently outside the state-backed Torii paths.
+
+Validation:
+- `python3 -m py_compile python/iroha_python/src/iroha_python/tx.py python/iroha_python/tests/test_tx_rwa.py`
+- `source /tmp/iroha-py-tools/bin/activate && python -m pytest python/iroha_python/tests/test_tx_rwa.py -q`
+- `rustfmt --edition 2024 crates/iroha_core/src/block.rs python/iroha_python/iroha_python_rs/src/lib.rs`
+- `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_py_rwa_fresh cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml rwa_ -- --nocapture`
+
+Open work for this slice now remains:
+- thread the live dataspace catalog through the remaining
+  `WorldReadOnly`-only alias parsing call sites so non-default dataspace
+  account labels resolve without relying on the baseline catalog fallback; and
+- decide whether Python should also mirror the JS/Swift iterator and
+  account-scoped explorer RWA convenience helpers, or stop at the raw/typed
+  list/query/detail surfaces now that end-to-end parity exists.
+
 Latest sync (2026-03-26 JS RWA metadata builder parity):
 `javascript/iroha_js/src/{instructionBuilders,transaction,index}.js`,
 `javascript/iroha_js/index.d.ts`,
@@ -37,8 +238,9 @@ Open work for this slice now remains:
   `parse_account_literal_with_world(...)` call sites that only expose
   `WorldReadOnly`, so non-default account-alias dataspaces keep working even on
   the broader `iroha_core` compile path; and
-- expand Python beyond `transfer_rwa(...)` if we want parity with the richer
-  JS/Swift/Kotlin/Java RWA metadata/control helper surface.
+- decide whether Python should also mirror the JS/Swift iterator and
+  account-scoped explorer RWA convenience helpers, or stop at the raw/typed
+  list/query/detail surfaces now that end-to-end parity exists.
 
 Latest sync (2026-03-26 native JS RWA host parity and dotted-domain i105 helper fix):
 `crates/iroha_js_host/src/lib.rs`,
@@ -299,7 +501,7 @@ surface:
   `ForceTransferRwaInstruction`, and `SetRwaControlsInstruction`;
 - both SDKs now treat RWAs as first-class metadata targets in
   `SetKeyValueInstruction` / `RemoveKeyValueInstruction`; and
-- Android-side canonical I105 validation now also covers `TransferRwa`
+- Android-side canonical i105 validation now also covers `TransferRwa`
   source/destination plus `ForceTransferRwa` destination account fields.
 
 Validation:
@@ -313,6 +515,35 @@ Open work for this slice now remains:
 - decide whether Swift should add native signed-envelope builders for the full
   non-metadata RWA instruction family instead of stopping at payload builders
   plus `.rwa(...)` metadata signing.
+
+Latest sync (2026-03-26 `iroha_python_rs` Linux test builds now discover versioned CPython shared libraries):
+`python/iroha_python/iroha_python_rs/build.rs`
+now falls back to Linux CPython SONAME candidates such as `INSTSONAME` and
+versioned `libpython*.so.*` siblings in `LIBDIR` when `sysconfig` reports an
+unversioned `LDLIBRARY` that does not actually exist on disk.
+
+- this closes the immediate PyO3 unresolved-symbol linker failure on this host,
+  where `cargo test -p iroha_python_rs` previously stopped after the build
+  script failed to find a CPython runtime even though
+  `/usr/lib/x86_64-linux-gnu/libpython3.12.so.1.0` was installed;
+- the Python binding crate no longer requires a manually created
+  `python-runtime-path` override file on Debian/Ubuntu-style installations just
+  to link lib tests and other executable targets; and
+- the existing override path (`IROHA_PYTHON_RUNTIME_PATH` /
+  `python-runtime-path`) remains available for nonstandard Python layouts.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p iroha_python_rs` (the previous unresolved `Py*` linker failure
+  is fixed; the suite now builds and runs, with one remaining unrelated test
+  failure in `repo_cash_leg_parser_validates_fields`)
+
+Open work for this Python-linking slice now remains:
+- triage the remaining non-linker runtime failure in
+  `repo_cash_leg_parser_validates_fields`; and
+- decide whether that test should be updated to use a currently valid asset
+  definition identifier or whether the parser behavior regressed independently
+  of this CPython runtime discovery fix.
 
 Latest sync (2026-03-26 permission JSON decode-time canonicalization and alias-scope schema alignment):
 `crates/iroha_data_model/src/permission.rs`,
@@ -332,6 +563,43 @@ Validation:
 
 Open work for this slice now remains:
 - no additional confirmed work remains in this permission/schema compatibility slice.
+
+Latest sync (2026-03-25 CUDA-featured `ivm` builds now link on this driver-only WSL host):
+`vendor/find_cuda_helper/src/lib.rs`
+now discovers driver-only CUDA library directories such as `/usr/lib/wsl/lib`
+instead of only toolkit-style install roots, and
+`crates/ivm/src/lib.rs`
+now treats CUDA runtime-error reporting correctly in the crate-level regression
+when the `cuda` feature is enabled but the backend is unavailable.
+
+- the focused `ivm --features cuda` slice now gets past the old unresolved
+  `cu*` symbol linker failure on this machine, because `cust` / `cust_raw`
+  now receive a real CUDA driver link search path even without `nvcc` or a
+  full `/usr/local/cuda` toolkit install;
+- the crate-level runtime-status regression no longer assumes
+  `errors.cuda == None` on all CUDA-featured builds, which was false on this
+  host as soon as the backend was allowed to probe live runtime state; and
+- rerunning the focused CUDA lib/integration tests now reaches execution on
+  this machine instead of dying in the linker, although the backend still
+  self-reports unavailable at runtime so the live-kernel tests currently take
+  their existing skip paths.
+
+Validation:
+- `cargo test --manifest-path vendor/find_cuda_helper/Cargo.toml`
+- `cargo fmt --all`
+- `cargo test -p ivm --features cuda acceleration_runtime_errors_default_none_or_hw_reason --lib -- --nocapture`
+- `cargo test -p ivm --features cuda --lib sha256_merkle_selftest_covers_cuda_kernels -- --nocapture`
+- `cargo test -p ivm --features cuda --test cuda -- --nocapture`
+- `cargo test -p ivm --features cuda --test cuda_disable_on_mismatch -- --nocapture`
+
+Open work for this CUDA slice now remains:
+- diagnose why `ivm::cuda_available()` is still false on this host even though
+  the CUDA driver loads and the focused CUDA test binaries now link and run;
+- once the backend is actually available, rerun the broader focused CUDA
+  runtime/self-test slice (`cuda_extra`, parity kernels, and other live-driver
+  regressions) and close the remaining “skipped because unavailable” backlog;
+- decide whether driver-only host discovery like `/usr/lib/wsl/lib` should be
+  pushed upstream beyond the vendored helper after this branch lands.
 
 Latest sync (2026-03-25 deterministic RWA generated IDs and Torii/MCP parity coverage):
 `crates/iroha_core/src/state.rs`,
@@ -3291,7 +3559,8 @@ Open work for this slice now remains:
   higher-level Torii validation path before the new faucet endpoint tests can
   execute end to end; and
 - decide whether the broader asset-definition config surface should also accept
-  human-readable `name#domain` literals like the new `torii.faucet` parser, or
+  on-chain asset aliases in `name#dataspace` / `name#domain.dataspace` form like
+  the new `torii.faucet` parser, or
   whether that convenience should stay scoped to the TAIRA faucet/operator flow.
 
 Latest sync (2026-03-24 shared Ed25519 GPU challenge preparation):
@@ -3413,7 +3682,7 @@ on-chain SNS work have been cleared across
 `javascript/iroha_js/test/toriiClient.test.js` and the `iroha_torii` crate:
 
 - the JS Torii client file now matches the current SDK/native contract for
-  SoraFS alias-proof fixtures, canonical/non-canonical I105 expectations, and
+  SoraFS alias-proof fixtures, canonical/non-canonical i105 expectations, and
   `label.suffix` SNS selector validation; and
 - a fresh `cargo check -p iroha_torii --lib` passes again, so the slice no
   longer has a focused Torii compile blocker.
@@ -9090,9 +9359,9 @@ This appendix tracks open TODO markers discovered in the repository. Items are g
 
 ## Asset ID Follow-up
 1. Completed: `AssetDefinitionId::from_str` and the public Rust selectors are Base58-only, the last checked-in capability fixtures were migrated from `aid:<hex>` to canonical Base58 addresses, and the remaining `aid:` literals in-tree are deliberate negative tests.
-2. Completed: the remaining public `norito:<hex>` `AssetId` helpers/examples in Swift offline encoding/decoding, Torii client parsing, bridge/docs wording, and Android/JVM transfer helpers were removed so the first release exposes a single canonical asset-id form: `<base58-asset-id>#<katakana-i105-account-id>` with optional `#dataspace:<id>` for scoped balances.
-3. Completed: translated data-model docs, Swift SDK docs/examples, Swift client references, and JS Torii typings/JSDoc no longer describe legacy `aid:` literals or the old `name#domain@dataspace` alias grammar.
-4. Completed: the dead `xtask` `rewrite-legacy-asset-literals` bin target and the old alias-shaped `asset_def:name#domain` access-hint compatibility path were removed, so workspace tooling and access hints no longer rely on any first-release asset-id compatibility shim.
+2. Completed: the remaining public `norito:<hex>` `AssetId` helpers/examples in Swift offline encoding/decoding, Torii client parsing, bridge/docs wording, and Android/JVM transfer helpers were removed so the first release exposes a single canonical owner-qualified asset-holding form: `<base58-asset-definition-id>#<katakana-i105-account-id>` with optional `#dataspace:<id>` for scoped balances.
+3. Completed: translated data-model docs, Swift SDK docs/examples, Swift client references, and JS Torii typings/JSDoc no longer describe legacy `aid:` literals or the old `name#domain.dataspace`-predecessor alias grammar.
+4. Completed: the dead `xtask` `rewrite-legacy-asset-literals` bin target and the old `asset_def:` access-hint compatibility path were removed, so workspace tooling and access hints no longer rely on any first-release asset-id compatibility shim.
 5. Completed: alias-hostile config/runtime selectors are now closed too; Torii faucet, ISO 20022 currency bindings, Nexus fee charging, and Nexus staking/slash flows resolve canonical Base58 ids or active on-chain asset aliases against world state, while non-alias-aware typed examples/tests now use canonical Base58 literals.
 6. Completed: remaining canonical-slot golden fixtures/tests/helpers were cleaned up too; the UAID portfolio snapshot now emits canonical `asset_id` + `asset_definition_id`, permission payload tests no longer serialize `name#domain#account`, Android offline-wallet allowance fixtures now use canonical asset literals, and helper scripts (`asset_flow.sh`, `deploy_localnet.sh`, `training_script_2.sh`) register canonical Base58 asset-definition ids with explicit names instead of legacy `name#domain` identifiers.
 

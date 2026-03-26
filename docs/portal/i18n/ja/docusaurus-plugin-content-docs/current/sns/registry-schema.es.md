@@ -236,7 +236,7 @@ Todas las claves se Serializan usando tuplas Norito para mantener el hashing det
 `RegistryEventV1` を購読しているゲートウェイが失われていて、DNS/SoraFS メディアンテが発生しています:
 
 1. イベントの最後まで `NameRecordV1` を参照してください。
-2. Regenerar テンプレート デ リゾルバー (指示 I105 優先 + 圧縮 (`sora`) コモ セグンダ オプション、テキスト レコード)。
+2. Regenerar テンプレート デ リゾルバー (指示 i105 優先 + 圧縮 (`sora`) コモ セグンダ オプション、テキスト レコード)。
 3. [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md) の SoraDNS 記述を介して、実際のデータを確認します。
 
 イベントの開催日:

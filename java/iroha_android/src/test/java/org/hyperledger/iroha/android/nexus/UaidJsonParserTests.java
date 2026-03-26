@@ -2,7 +2,7 @@ package org.hyperledger.iroha.android.nexus;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
-import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
+import org.hyperledger.iroha.android.testing.TestAssetDefinitionIds;
 
 public final class UaidJsonParserTests {
 
@@ -19,7 +19,7 @@ public final class UaidJsonParserTests {
   }
 
   private static void parsesPortfolioPayload() {
-    final String assetDefinitionId = AssetDefinitionIdEncoder.encode("usd", "wonderland");
+    final String assetDefinitionId = TestAssetDefinitionIds.SECONDARY;
     final String json =
         """
         {

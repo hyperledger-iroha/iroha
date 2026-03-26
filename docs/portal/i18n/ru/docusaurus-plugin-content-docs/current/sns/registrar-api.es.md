@@ -116,7 +116,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/names/{namespace}/{literal}/freeze` | УДАЛИТЬ | `GovernanceHookV1` | Разморозить tras remediation; asegura отменяет регистрацию совета. |
 | `/v1/sns/reserved/{selector}` | ПОСТ | `ReservedAssignmentRequestV1` | Назначение резервированных имен управляющего/совета. |
 | `/v1/sns/policies/{suffix_id}` | ПОЛУЧИТЬ | -- | Получить актуальный `SuffixPolicyV1` (кэшируемый). |
-| `/v1/sns/names/{namespace}/{literal}` | ПОЛУЧИТЬ | -- | Devuelve `NameRecordV1` актуально + estado efectivo (Active, Grace и т. д.). |**Кодификация селектора:** сегмент `{selector}` принимает I105, включая шестнадцатеричный канонический второй ADDR-5; Torii для нормализации через `NameSelectorV1`.
+| `/v1/sns/names/{namespace}/{literal}` | ПОЛУЧИТЬ | -- | Devuelve `NameRecordV1` актуально + estado efectivo (Active, Grace и т. д.). |**Кодификация селектора:** сегмент `{selector}` принимает i105, включая шестнадцатеричный канонический второй ADDR-5; Torii для нормализации через `NameSelectorV1`.
 
 **Модель ошибок:** все конечные точки в формате Norito JSON с `code`, `message`, `details`. В число кодов входят `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
 
@@ -162,7 +162,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner soraカタカナ... \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -222,7 +222,7 @@ Torii проверка подтвержденных ошибок:
 
 ### 6.1 Регистрация статуса1. Консультация клиента `/v1/sns/policies/{suffix_id}` для получения ценных, льготных и доступных уровней.
 2. Клиентская арматура `RegisterNameRequestV1`:
-   - `selector` является производным от метки I105 (предпочтительно) или компромиссным (второй лучший вариант).
+   - `selector` является производным от метки i105 (предпочтительно) или компромиссным (второй лучший вариант).
    - `term_years` в пределах границ политики.
    - `payment`, которая ссылается на передачу разделителя tesoreria/steward.
 3. Проверка Torii:

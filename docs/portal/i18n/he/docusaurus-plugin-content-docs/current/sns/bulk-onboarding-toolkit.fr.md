@@ -249,7 +249,7 @@ reussite/echec des soumissions. Le tableau filter par `release` pour que les
   הפניות a des fichiers sont resolues relativement a l'emplacement du CSV.
   Les metadata non-objet produisent une reur de validation.
 - **בקרים:** les cellules מגלה את `--default-controllers`. פורניסז
-  des lists explicites (לדוגמה `i105...;i105...`) quand vous deleguez a des
+  des lists explicites (לדוגמה `soraカタカナ...;soraカタカナ...`) quand vous deleguez a des
   שחקנים שאינם בעלי.
 
 Les echecs sont signales avec des numeros de ligne contextuels (לדוגמה

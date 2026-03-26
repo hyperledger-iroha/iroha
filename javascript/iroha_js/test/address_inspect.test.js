@@ -7,7 +7,6 @@ import {
   AccountAddress,
   AccountAddressError,
   AccountAddressErrorCode,
-  DEFAULT_DOMAIN_NAME,
   inspectAccountId,
 } from "../src/address.js";
 
@@ -18,9 +17,8 @@ const SAMPLE_KEY = Buffer.from(
 const DEFAULT_DOMAIN_CANONICAL_I105 =
   "soraゴヂアヌオブマセキュチャタロリチャヷドチャョブセゲヴウヹキャイリコトキャチュヨラバクストリヒュヲシヘタフミチハオ";
 
-function buildAccountForDomain(domain) {
+function buildAccount() {
   const address = AccountAddress.fromAccount({
-    domain,
     publicKey: SAMPLE_KEY,
   });
   return {
@@ -30,19 +28,16 @@ function buildAccountForDomain(domain) {
   };
 }
 
-test("inspectAccountId reports selector-free domain summary", () => {
-  const { i105, canonicalHex } = buildAccountForDomain("wonderland");
+test("inspectAccountId reports canonical i105 details", () => {
+  const { i105, canonicalHex } = buildAccount();
   const summary = inspectAccountId(i105);
 
-  assert.equal(summary.domain.kind, "default");
-  assert.equal(summary.domain.warning, null);
   assert.deepEqual(summary.warnings, []);
   assert.equal(summary.i105.value, i105);
   assert.equal(summary.i105.chainDiscriminant, 753);
   assert.equal(summary.i105Warning.length > 0, true);
   assert.equal(summary.canonicalHex, canonicalHex);
   assert.equal(summary.detectedFormat.kind, "i105");
-  assert.equal(summary.inputDomain, null);
 
   assert.throws(
     () => inspectAccountId(canonicalHex),
@@ -52,19 +47,16 @@ test("inspectAccountId reports selector-free domain summary", () => {
   );
 });
 
-test("inspectAccountId handles default-domain addresses without warnings", () => {
-  const { i105 } = buildAccountForDomain(DEFAULT_DOMAIN_NAME);
+test("inspectAccountId handles canonical i105 addresses without warnings", () => {
+  const { i105 } = buildAccount();
   const summary = inspectAccountId(i105, { chainDiscriminant: 7 });
-  assert.equal(summary.domain.kind, "default");
-  assert.equal(summary.domain.warning, null);
   assert.deepEqual(summary.warnings, []);
   assert.equal(summary.i105.chainDiscriminant, 7);
 });
 
-test("inspectAccountId accepts literals without domain suffix", () => {
-  const { i105 } = buildAccountForDomain("wonderland");
+test("inspectAccountId accepts canonical i105 literals", () => {
+  const { i105 } = buildAccount();
   const summary = inspectAccountId(i105);
-  assert.equal(summary.inputDomain, null);
   assert.equal(summary.detectedFormat.kind, "i105");
 });
 
@@ -90,8 +82,8 @@ test("inspectAccountId rejects malformed literals", () => {
 });
 
 test("inspectAccountId rejects encoded literals with domain suffix", () => {
-  const { i105 } = buildAccountForDomain("wonderland");
-  const mismatched = `${i105}@${DEFAULT_DOMAIN_NAME}`;
+  const { i105 } = buildAccount();
+  const mismatched = `${i105}@dataspace`;
   assert.throws(
     () => inspectAccountId(mismatched),
     (error) => error instanceof TypeError && error.message.includes("must not include '@domain'"),
@@ -99,7 +91,7 @@ test("inspectAccountId rejects encoded literals with domain suffix", () => {
 });
 
 test("inspectAccountId normalizes prefix options and enforces validation", () => {
-  const { address, i105 } = buildAccountForDomain("wonderland");
+  const { address, i105 } = buildAccount();
   const summary = inspectAccountId(i105, { expectDiscriminant: "753", chainDiscriminant: "7" });
   assert.equal(summary.i105.chainDiscriminant, 7);
   assert.equal(summary.i105.value, address.toI105(7));

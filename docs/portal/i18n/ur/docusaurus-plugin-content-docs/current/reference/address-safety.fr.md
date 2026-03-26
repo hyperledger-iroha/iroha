@@ -1,46 +1,73 @@
 ---
-lang: ur
-direction: rtl
-source: docs/portal/docs/reference/address-safety.fr.md
-status: complete
-generator: docs/portal/scripts/sync-i18n.mjs
-translator: machine-google-reviewed
-translation_last_reviewed: 2026-02-07
+title: Address Safety & Accessibility
+description: UX requirements for presenting and sharing Iroha addresses safely (ADDR-6c).
 ---
 
----
-عنوان: سیکیورٹی اور پتے کی رسائ
-تفصیل: Iroha ایکس ایڈریس کو محفوظ طریقے سے (EDDR-6C) پیش کرنے اور ان کا اشتراک کرنے کے لئے UX کی ضروریات۔
----
+This page captures the ADDR-6c documentation deliverable. Apply these
+constraints to wallets, explorers, SDK tooling, and any portal surface that
+renders or accepts human-facing addresses. The canonical data model lives in
+`docs/account_structure.md`; the checklist below explains how to expose those
+formats without compromising safety or accessibility.
 
-اس صفحے نے EDDR-6C دستاویزات کی فراہمی کے قابل قبضہ کیا ہے۔ ان رکاوٹوں کو بٹوے ، ایکسپلورر ، ایس ڈی کے ٹولز اور پورٹل کی کسی بھی سطح پر لگائیں جو انسانوں کے لئے ارادے کو پیش کرتا ہے یا قبول کرتا ہے۔ کیننیکل ڈیٹا ماڈل `docs/account_structure.md` میں پایا جاتا ہے۔ نیچے دیئے گئے چیک لسٹ میں بتایا گیا ہے کہ سیکیورٹی یا رسائ پر سمجھوتہ کیے بغیر ان فارمیٹس کو کس طرح بے نقاب کیا جائے۔
+## Safe sharing flows
 
-## محفوظ شیئرنگ فیڈز
+- Default every copy/share action to the canonical Katakana i105 account id.
+  If an on-chain alias is present, display it as supporting metadata in a
+  separate labeled field.
+- Offer a “Share” affordance that bundles the full plain-text address and a QR
+  code derived from the same payload. Let users inspect both before committing.
+- When space requires truncation (tiny cards, notifications), keep the leading
+  human-readable prefix, show ellipses, and retain the final 4–6 characters so
+  the checksum anchor survives. Provide a tap/keyboard shortcut to copy the full
+  string without truncation.
+- Prevent clipboard desync by emitting a confirmation toast that previews the
+  exact i105 string that was copied. Where telemetry is available, count copy
+  attempts versus share actions so UX regressions surface quickly.
 
-- پہلے سے طے شدہ طور پر ، کسی بھی کاپی/شیئر ایکشن کو I105 ایڈریس کا استعمال کرنا چاہئے۔ حل شدہ ڈومین کو معاون سیاق و سباق کے طور پر ڈسپلے کریں تاکہ چیکس کے ساتھ سلسلہ مرکز میں رہے۔
-- ایک "شیئر" ایکشن کی تجویز کریں جس میں سادہ متن میں پتے کو ایک ساتھ مل کر اور ایک ہی پے لوڈ سے اخذ کردہ کیو آر۔ تصدیق کرنے سے پہلے صارفین کو دونوں کا معائنہ کرنے کی اجازت دیں۔
-- جب جگہ تراش (نچلے کیس کارڈز ، اطلاعات) کا حکم دیتی ہے تو ، سابقہ ​​پڑھنے کے قابل رکھیں ، بیضوی ڈسپلے کریں اور آخری 4-6 حروف رکھیں تاکہ چیکسم اینکر زندہ رہے۔ بغیر کسی تراشے کے مکمل تار کو کاپی کرنے کے لئے اشارے/کی بورڈ شارٹ کٹ پیش کریں۔
-- تصدیق شدہ ٹوسٹ جاری کرکے کلپ بورڈ ڈیسینک کو روکیں جو عین مطابق کاپی شدہ I105 سٹرنگ کا پیش نظارہ کرتا ہے۔ جہاں ٹیلی میٹری موجود ہے ، کاؤنٹ کاپی کی کوششوں بمقابلہ شیئرنگ ایکشنز کو فوری طور پر UX رجعتوں کا پتہ لگانے کے لئے۔
+## IME & input safeguards
 
-## IME اور ان پٹ تحفظات
+- Validate account-id fields as canonical Katakana i105 only. Validate alias
+  entry fields separately as `name@dataspace` or `name@domain.dataspace`.
+- When IME composition artefacts or zero-width characters appear, surface an
+  inline warning instead of coercing the input into a different account-id
+  format.
+- Provide a plain-text paste zone that preserves the canonical i105 literal as
+  pasted while still stripping obviously invalid stealth code points before
+  validation.
+- Harden validation against zero-width joiners, variation selectors, and other
+  stealth Unicode code points. Log the rejected code point category so fuzzing
+  suites can import the telemetry.
 
-- ایڈریس فیلڈز میں کسی بھی غیر ASCII ان پٹ کو مسترد کریں۔ جب آئی ایم ای کمپوزیشن نمونے (مکمل چوڑائی ، کنا ، ٹونالائٹ مارکس) ظاہر ہوتے ہیں تو ، ایک ان لائن انتباہ ظاہر کریں جس میں یہ بتایا گیا ہے کہ دوبارہ کوشش کرنے سے پہلے کی بورڈ کو لاطینی ٹائپنگ میں کیسے تبدیل کیا جائے۔
-- ایک سادہ ٹیکسٹ پیسٹ باکس مہیا کریں جو مشترکہ نشانات کو ہٹاتا ہے اور توثیق سے پہلے خالی جگہوں کی جگہ ASCII خالی جگہوں سے لے جاتا ہے۔ اگر صارف بہاؤ کے دوران IME کو غیر فعال کردے تو یہ ترقی کو کھونے سے روکتا ہے۔
-- صفر چوڑائی کے جوائنرز ، تغیرات کے سلیکٹرز اور دیگر چپکے والے یونیکوڈ کوڈ پوائنٹس کے خلاف ہارڈن توثیق۔ مسترد شدہ کوڈ پوائنٹ کے زمرے کو لاگ ان کریں تاکہ فوزنگ سوئٹ ٹیلی میٹری کو درآمد کرسکیں۔
+## Assistive technology expectations
 
-## معاون ٹیکنالوجیز کے لئے توقعات- ہر ایڈریس بلاک کو `aria-label` یا `aria-describedby` کے ساتھ تشریح کریں جو پڑھنے کے قابل پریفکس اور حصوں کو 4-8 حروف ("IH ڈیش بی تین دو ...") کے گروپوں میں منتقل کرتا ہے۔ اس سے اسکرین کے قارئین کو کرداروں کے ناقابل فہم سلسلے کی تیاری سے روکتا ہے۔
-- شائستہ موڈ میں براہ راست خطے کی تازہ کاری کے ذریعہ کامیاب کاپی/شیئر ایکشنز کا اعلان کریں۔ منزل (کلپ بورڈ ، شیئر ، کیو آر) کو شامل کریں تاکہ صارف جانتا ہو کہ عمل بغیر کسی توجہ کے مکمل ہوچکا ہے۔
-- QR پیش نظارہ کے لئے وضاحتی `alt` متن فراہم کریں (جیسے ، چینل `0x1234` پر `<account>` کے لئے I105 ایڈریس ")۔ ضعف خراب صارفین کے لئے QR کینوس کے ساتھ ہی "متن میں کاپی ایڈریس" فال بیک پیش کریں۔
+- Annotate every address block with `aria-label` or `aria-describedby` that
+  spells out the human-readable prefix and chunks the payload in 4–8 character
+  groups (“ih dash b three two …”). This stops screen readers from producing an
+  unintelligible stream of characters.
+- Announce successful copy/share events via a polite live region update. Include
+  the destination (clipboard, share sheet, QR) so the user knows the action
+  completed without moving focus.
+- Supply descriptive `alt` text for QR previews (e.g., “i105 address for
+  `<account>` on chain `0x1234`”). Provide a “Copy address as text”
+  fallback adjacent to the QR canvas for low-vision users.
 
-## سورہ- صرف کمپریسڈ پتے
+## Single-format policy
 
-- گیٹنگ: ایک واضح تصدیق کے پیچھے کمپریسڈ سٹرنگ `sora...` کو چھپائیں۔ تصدیق کو اس بات کا اعادہ کرنا چاہئے کہ فارمیٹ صرف SORA Nexus چینلز پر کام کرتا ہے۔
-- لیبلنگ: ہر واقعے میں ایک مرئی "سورہ صرف" بیج اور ایک ٹول ٹپ شامل ہونا ضروری ہے جس میں بتایا گیا ہے کہ دوسرے نیٹ ورکس کو I105 فارم کی ضرورت کیوں ہے۔
-- محافظ: اگر فعال سٹرنگ امتیازی سلوک Nexus مختص نہیں ہے تو ، کمپریسڈ ایڈریس پیدا کرنے اور I105 پر ری ڈائریکٹ کرنے سے انکار کردیں۔
-- ٹیلی میٹری: کمپریسڈ فارم کی درخواستوں اور کاپیاں کی فریکوئنسی ریکارڈ کریں تاکہ واقعہ پلے بوک حادثاتی اشتراک میں اسپائکس کا پتہ لگائے۔
+- Keep canonical Katakana i105 as the only user-facing account-id format for
+  copy, share, and QR surfaces.
+- Treat `name@dataspace` and `name@domain.dataspace` as on-chain aliases that
+  point to canonical i105 account ids.
+- Do not expose alternate account-literal encodings in production wallet or
+  explorer UX.
+- Telemetry should track i105 copy/share usage, alias-resolution usage, and
+  validation failures only.
 
-## کوالٹی گیٹس
+## Quality gates
 
-- خودکار UI ٹیسٹ (یا A11y اسٹوری بوک سوٹ) میں توسیع کریں تاکہ اس بات کی تصدیق کی جاسکے کہ ایڈریس اجزاء مطلوبہ اریہ میٹا ڈیٹا کو بے نقاب کرتے ہیں اور یہ کہ آئی ایم ای مسترد ہونے والے پیغامات ظاہر ہوتے ہیں۔
-- آئی ایم ای ان پٹ (کانا ، پائنین) ، اسکرین ریڈر پاس تھرو (وائس اوور/این وی ڈی اے) اور کیو آر کے لئے دستی QA منظرنامے شامل کریں۔
-- I105 پیریٹی ٹیسٹوں کے ساتھ ساتھ ریلیز چیک لسٹ میں ان چیکوں کو شامل کریں تاکہ رجعتیں درست ہونے تک مسدود رہیں۔
+- Extend automated UI tests (or storybook a11y suites) to assert that address
+  components expose the required ARIA metadata and that IME rejection messages
+  appear.
+- Include manual QA scenarios for IME input (kana, pinyin), screen reader pass
+  (VoiceOver/NVDA), and QR copy on high-contrast themes before releasing.
+- Surface these checks in release checklists alongside the i105 parity tests
+  so regressions remain blocked until corrected.

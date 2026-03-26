@@ -1,7 +1,7 @@
 import React, {useState} from 'react';
 
 const SAMPLE_ADDRESS = {
-  i105: 'sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE',
+  i105: 'soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ',
 };
 
 export default function ExplorerAddressCard() {
@@ -55,8 +55,8 @@ export default function ExplorerAddressCard() {
           </button>
         </div>
 
-        <figure className="margin-top--md" role="img" aria-label={`I105 QR for ${SAMPLE_ADDRESS.i105}`}>
-          <img src="/img/sns/address_copy_ios.svg" alt="I105 QR reference" />
+        <figure className="margin-top--md" role="img" aria-label={`i105 QR for ${SAMPLE_ADDRESS.i105}`}>
+          <img src="/img/sns/address_copy_ios.svg" alt="i105 QR reference" />
           <figcaption>QR payloads must encode i105 account IDs.</figcaption>
         </figure>
         <output

@@ -106,7 +106,6 @@ const offline = Offline.buildOfflineEnvelope({ signedTransaction: encoded, metad
 import { AccountAddress } from "@iroha/iroha-js";
 
 const address = AccountAddress.fromAccount({
-  domain: "default",
   publicKey: new Uint8Array(32),
 });
 console.log(address.canonicalHex());
@@ -116,15 +115,14 @@ console.log(address.toI105());
 const formats = address.displayFormats(753);
 console.log(formats.i105);
 console.log(formats.i105Warning);
-console.log(formats.domainSummary.selector.label); // "default"
-console.log(formats.domainSummary.selector.registryId); // registry id when Global selectors are used
 ```
 
 > ℹ️ When showing addresses in wallets, explorers, or SDK samples, follow the
-> dual-format UX checklist captured in
+> single-format UX checklist captured in
 > [`docs/source/sns/address_display_guidelines.md`](../../docs/source/sns/address_display_guidelines.md):
-> I105 remains the default copy/share target, I105 strings need an inline
-> warning, and QR codes should always encode the I105 value.
+> i105 remains the copy/share target, aliases should be shown as
+> `name@dataspace` or `name@domain.dataspace`, and QR codes should always
+> encode the i105 value.
 
 ## Subscriptions
 
@@ -935,7 +933,7 @@ pinned to the configured base.
   bigint` but require plain decimal literals (no exponent), with up to 28
   fractional digits and a 512-bit mantissa.
 - Keep asset IDs in canonical holding form
-  (`<base58-asset-id>#<katakana-i105-account-id>` with optional `#dataspace:<id>`) when
+  (`<base58-asset-definition-id>#<katakana-i105-account-id>` with optional `#dataspace:<id>`) when
   chaining mint and transfer steps. The helpers do not guess missing account or
   scope suffixes, ensuring all peers derive the same destination.
 - Reuse the exported `normalizeAccountId()` / `normalizeAssetId()` helpers when you
@@ -1525,7 +1523,7 @@ helpers for all three surfaces:
 const uaidLiteral = "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11";
 
 const portfolio = await torii.getUaidPortfolio(uaidLiteral);
-// Optionally filter positions by a specific asset id.
+// Optionally filter positions by a specific asset-holding id.
 // const portfolio = await torii.getUaidPortfolio(uaidLiteral, { assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ" });
 for (const ds of portfolio.dataspaces) {
   console.log(`dataspace ${ds.dataspace_alias ?? ds.dataspace_id} accounts=${ds.accounts.length}`);
@@ -1945,19 +1943,11 @@ and encodes code bytes as base64 strings before signing:
 import { AccountAddress } from "@iroha/iroha-js";
 
 const address = AccountAddress.fromAccount({
-  domain: "default",
   publicKey: new Uint8Array(32),
 });
 console.log(address.canonicalHex());
 console.log(address.toI105(753));
 console.log(address.toI105());
-
-// Build a registry-backed selector when a global registry id is available.
-const registryAddress = AccountAddress.fromAccount({
-  registryId: 42,
-  publicKey: new Uint8Array(32),
-});
-console.log(registryAddress.domainSummary()); // { kind: "global", warning: null }
 ```
 
 ```js
@@ -2077,9 +2067,7 @@ normalisation, referendum windows, and ballot encoding:
 ```js
 import { AccountAddress } from "@iroha/iroha-js";
 
-const address = AccountAddress.fromAccount({
-  domain: "default",
-  publicKey: new Uint8Array(32),
+const address = AccountAddress.fromAccount({ publicKey: new Uint8Array(32),
 });
 console.log(address.canonicalHex());
 console.log(address.toI105(753));
@@ -2743,9 +2731,7 @@ console.log("histogram", status.rtt.buckets);
 ```js
 import { AccountAddress } from "@iroha/iroha-js";
 
-const address = AccountAddress.fromAccount({
-  domain: "default",
-  publicKey: new Uint8Array(32),
+const address = AccountAddress.fromAccount({ publicKey: new Uint8Array(32),
 });
 console.log(address.canonicalHex());
 console.log(address.toI105(753));
@@ -3293,7 +3279,7 @@ for await (const trigger of torii.iterateTriggersQuery({
 //     NFT_DEFINITION_ID=5Pz9SwdN9eXPbiXPX9HRCpzCcE3o
 ```
 
-> **Hard-cut account parser:** Account-scoped helpers (`listAccountAssets`, `listAccountPermissions`, `listAccountTransactions`, and query/iterator variants) accept only canonical Katakana i105 account ids. Account aliases (`name@dataspace` / `name@domain.dataspace`) and legacy compatibility literals are rejected.
+> **Account selectors:** Account-scoped helpers (`listAccountAssets`, `listAccountPermissions`, `listAccountTransactions`, and query/iterator variants) accept canonical Katakana i105 account ids or on-chain account aliases (`name@dataspace` / `name@domain.dataspace`). Torii resolves aliases to canonical account ids before returning the result set.
 
 Use the SNS helpers to manage Sora Name Service records without hand-crafting JSON:
 
@@ -3331,9 +3317,7 @@ retained only as explicit validation stubs that reject immediately.
 ```js
 import { AccountAddress } from "@iroha/iroha-js";
 
-const address = AccountAddress.fromAccount({
-  domain: "default",
-  publicKey: new Uint8Array(32),
+const address = AccountAddress.fromAccount({ publicKey: new Uint8Array(32),
 });
 console.log(address.canonicalHex());
 console.log(address.toI105(753));
@@ -3676,9 +3660,7 @@ for `null`.
 ```js
 import { AccountAddress } from "@iroha/iroha-js";
 
-const address = AccountAddress.fromAccount({
-  domain: "default",
-  publicKey: new Uint8Array(32),
+const address = AccountAddress.fromAccount({ publicKey: new Uint8Array(32),
 });
 console.log(address.canonicalHex());
 console.log(address.toI105(753));

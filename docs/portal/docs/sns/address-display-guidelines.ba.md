@@ -1,247 +1,123 @@
 ---
-lang: ba
-direction: ltr
-source: docs/portal/docs/sns/address-display-guidelines.md
-status: complete
-generator: scripts/sync_docs_i18n.py
-source_hash: 91a1116d82eb9845a26805effed00ad8cd13c1ebd034aef3827aebfa4e1eb846
-source_last_modified: "2026-01-28T17:11:30.700223+00:00"
-translation_last_reviewed: 2026-02-07
 id: address-display-guidelines
 title: Sora Address Display Guidelines
 sidebar_label: Address display
-description: UX and CLI requirements for I105 vs I105 Sora address presentation (ADDR-6).
-translator: machine-google-reviewed
+description: UX and CLI requirements for canonical i105 account ids and on-chain aliases (ADDR-6).
 ---
 
-импорт ExplorererAddrescard '@site/src/компоненттар/ЭксплорерАдрескард';
+import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
 
-:::иҫкәртергә канонлы сығанаҡ
-Был бит көҙгө I18NI000000017X һәм хәҙер хеҙмәт итә
-канонлы портал күсермәһе булараҡ. Сығанаҡ файлы тәржемә пиарҙары өсөн тирә-яҡҡа йәбешә.
-::: 1990 й.
+:::note Canonical Source
+This page mirrors `docs/source/sns/address_display_guidelines.md` and now serves
+as the canonical portal copy. The source file sticks around for translation PRs.
+:::
 
-Батырҙар, тикшеренүселәр һәм SDK өлгөләре иҫәп-хисап адрестарын үҙгәрмәй торған тип ҡарарға тейеш.
-файҙалы йөктәр. Android ваҡлап һатыу янсыҡ өлгөһө 2019 йылда.
-I18NI000000018X хәҙер кәрәкле UX өлгөһөн күрһәтә:
+Wallets, explorers, and SDK samples must treat the canonical Katakana i105
+literal as the only public account-id format. On-chain aliases are separate
+lookup keys:
 
-- **Икенсе күсермә маҡсаттары.** Ике асыҡ күсермә төймәләрен ташыу — I105 (өҫтөнлөк) һәм
-  ҡыҫылған Сора-тик форма (`i105`, икенсе-иң яҡшы). I105 һәр ваҡыт хәүефһеҙ тышҡы бүлешергә
-  һәм QR файҙалы йөктө тәьмин итә. Ҡыҫылған вариант 1990 йылда 1-се рәтте үҙ эсенә алырға тейеш.
-  иҫкәртмә, сөнки ул тик эсендә эшләй Сора-аңлы ҡушымталар. Андроид ваҡлап һатыу
-  янсыҡ өлгөһө сымдар һәм Материал төймәләре һәм уларҙы инструменттар 2019 йылда .
-  `examples/android/retail-wallet/src/main/res/layout/activity_main.xml`, һәм
-  iOS SwiftUI демо көҙгө шул уҡ UX аша I18NI000000021X эсендә
-  `examples/ios/NoritoDemo/Sources/ContentView.swift`.
-- **Монокоспат, һайланған текст.** Ике ептәрҙе лә бер киңлек шрифты һәм
-  `textIsSelectable="true"` шулай ҡулланыусылар ҡиммәттәрен тикшерә ала, тип өндәшмәйенсә, IME.
-  Ҡотолоу өсөн мөхәррирләнгән яландар: IMEs кана йәки нуль киңлектәге код нөктәләрен индереү мөмкин.
-- **Тиҙ булмаған домен кәңәштәре.** Ҡасан селектор нөктәләре асыҡтан-асыҡ .
-  `default` домены, ер өҫтө операторҙарға бер ниндәй ҙә ялғау кәрәкмәй.
-  Эксплорерҙар шулай уҡ канонлы домен ярлығын айырып күрһәтергә тейеш, ҡасан селектор .
-  үҙләштереүҙе кодлай.
-- **I105 QR файҙалы йөкләмәләр.** QR-кодтар I105 строкаһын кодларға тейеш. Әгәр QR быуын
-  уңышһыҙлыҡҡа осрай, буш һүрәт урынына асыҡ хата күрһәтеү.
-- **Бизлук хәбәрҙәре.** Ҡыҫылған форманы күсергәндән һуң, тост йәки .
-  snackbar иҫкә төшөрөп ҡулланыусылар, тип, был Сора-тик һәм склонный IME mangling.
+- `name@dataspace`
+- `name@domain.dataspace`
 
-Был ҡоршауҙарҙан һуң Юникод/IME коррупцияһына ҡамасаулай һәм ҡәнәғәтләндерә
-ADDR-6 юл картаһы ҡабул итеү критерийҙары өсөн янсыҡ/тикшерергә UX.
+Those aliases resolve on-chain to the canonical i105 account id. They are not
+an alternate public account-id encoding.
 
-## Скриншот ҡоролмалары
+## Required UX
 
-Түбәндәге ҡорамалдар ҡулланыу ваҡытында локализация тикшерелгән тәьмин итеү өсөн төймә ярлыҡтары,
-ҡоралдар, һәм иҫкәртмәләр платформалар буйынса тура килтереп ҡала:
+- **Copy/share only canonical i105.** Ship one primary copy action for the
+  canonical Katakana i105 account id. That same literal powers QR payloads,
+  deep links, and clipboard actions.
+- **Render aliases separately.** If a workflow includes an alias, show it in a
+  labeled field such as “Alias” or “Routing alias”. Do not concatenate it onto
+  the i105 literal.
+- **Monospace, selectable text.** Render the i105 literal with a monospace font
+  and `textIsSelectable="true"` so users can inspect it without invoking an
+  IME. Avoid editable fields: IMEs can rewrite kana or inject zero-width code
+  points.
+- **Confirm the exact copied value.** After copying the i105 form, emit a toast
+  or snackbar that quotes the canonical i105 literal.
+- **No alternate public encodings.** Canonical hex and legacy/non-canonical
+  address forms are tooling/debug inputs only and must not be marketed as
+  copy/share formats.
 
-- Андроид белешмә: I18NI000000025X
+## Screenshot fixtures
 
-  ![Android ике күсермәһе һылтанма](/img/sns/address_copy_android.svg)
+Use the following fixtures during localization reviews to ensure button labels,
+tooltips, and warnings stay aligned across platforms:
 
-- iOS белешмә: I18NI000000026X
+- Android reference: `/img/sns/address_copy_android.svg`
 
-  ![iOS ике күсермә һылтанма](/img/sns/address_copy_ios.svg)
+  ![Android address copy reference](/img/sns/address_copy_android.svg)
 
-## SDK ярҙамсылары
+- iOS reference: `/img/sns/address_copy_ios.svg`
 
-Һәр SDK I105 (өҫтөнлөклө) һәм ҡыҫылған (`sora`, икенсе иң яҡшы) ҡайтарып торған уңайлыҡ ярҙамсыһын фашлай.
-формалары менән бергә иҫкәрткес еп, шулай итеп, UI ҡатламдары эҙмә-эҙлекле ҡала ала:
+  ![iOS address copy reference](/img/sns/address_copy_ios.svg)
 
-- JavaScript: I18NI000000028X
+## SDK helpers
+
+Each SDK exposes a convenience helper that returns canonical Katakana i105
+rendering plus warning text so UI layers can stay consistent:
+
+- JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)`
   (`javascript/iroha_js/src/address.js`)
-- JavaScript инспекторы: I18NI0000000030X ҡыҫылған иҫкәртмә ҡайтара
-  струна һәм уны I18NI000000031X-ға ҡуша, ҡасан да булһа шылтыратыусылар `i105` тәьмин итә.
-  туранан-тура, шулай итеп, тикшеренүселәр/конференция приборҙар таҡталары өҫтөндә өҫтөндә була ала Сора-тик иҫкәртмә
-  паста/валидация ваҡытында улар генерациялағанда ғына түгел, ә аға.
-  үҙҙәре ҡыҫылған форма.
-- Питон: `AccountAddress.display_formats(network_prefix: int = 753)`
-- Свифт: `AccountAddress.displayFormats(networkPrefix: UInt16 = 753)`
-- Ява/Котлин: I18NI000000035X
-  (I18NI000000036X)
+- Python: `AccountAddress.display_formats(network_prefix: int = 753)`
+- Swift: `AccountAddress.displayFormats(networkPrefix: UInt16 = 753)`
+- Java/Kotlin: `AccountAddress.displayFormats(int networkPrefix = 753)`
+  (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountAddress.java`)
 
-Был ярҙамсыларҙы ҡулланыу урынына, логиканы ҡабаттан тормошҡа ашырыу өсөн UI ҡатламдарында.
-JavaScript ярҙамсыһы шулай уҡ `selector` файҙалы йөкләмәһен фашлай I18NI000000038X.
-(I18NI000000039X, I18NI000000040X, I18NI000000041X, I18NI000000042X) шулай итеп, UIs күрһәтә ала, тип,
-селектор — урындағы-12 йәки сеймал файҙалы йөктө ҡабаттан анализламайынса, реестр-арҡа.
+Use these helpers instead of reimplementing the encode logic in UI layers.
+Use alias-aware Torii endpoints when you need to resolve `name@dataspace` or
+`name@domain.dataspace` into the canonical i105 account id.
 
-## Эксплорер приборҙары демо
+## Explorer instrumentation demo
 
-<ЭксплорерАдрескард />
+<ExplorerAddressCard />
 
-Эксплорерҙар янсыҡ телеметрияһын һәм ҡулайлылыҡ эшен көҙгөләргә тейеш:
+Explorers should mirror the wallet telemetry and accessibility work:
 
-- I18NI000000043X төймәләрен күсерергә ҡушыу, шулай итеп, фронт-эндтар ҡулланыу иҫәпләүселәр сығара ала
-  менән бер рәттән Torii-яҡта `torii_address_format_total` метрикаһы. Демо-компонент өҫтөндә диспетчер
-  I18NI0000000045X ваҡиға менән I18NI00000000046X-был сым һеҙҙең аналитика/телеметрия
-  торба (мәҫәлән, сегмент йәки NORITO-арҡалы коллекционерға этәрергә) шулай приборҙар таҡталары серверҙы корреляциялай ала
-  адрес-формат ҡулланыу менән клиент күсермәһе тәртибе. Шулай уҡ көҙгө I18NT00000000006X домен иҫәпләүселәр
-  (I18NI000000047X) шул уҡ каналда шулай урындағы-12 пенсияға сығыу отзывы ала
-  экспорт 30-көнлөк I18NI000000048X нуль-ҡулланыу дәлиле туранан-тура I18NI000000049X .
-  I18NNT00000000X платаһы.
-- Пар һәр контроль менән айырым I18NI000000005000X/I18NI0000000051X аңлата, тип аңлата, тип а
-  туранан-тура хәүефһеҙ бүлешергә (`I105`) йәки Сора-тик (ҡыҫылған `sora`). 2012 йылда йәшерен доменлы титулды индерегеҙ.
-  тасуирлама шулай ярҙамсы технологиялар өҫтөндә шул уҡ контекста күрһәтелгән визуаль.
-- Тере төбәкте фашлау (мәҫәлән, `<output aria-live="polite">…</output>`) күсермә һөҙөмтәләре һәм
-  иҫкәртмәләр, тап килтереп VoiceOver/TalkBack тәртибе хәҙер проводка Swift/Android өлгөләре.
+- Apply `data-copy-mode="i105|alias|qr"` to copy buttons so front-ends can emit
+  usage counters alongside server-side account-literal metrics.
+- Pair every control with distinct `aria-label`/`aria-describedby` hints that
+  explain whether a control copies the canonical i105 account id, views the
+  alias, or shares the QR payload.
+- Expose a live region (e.g., `<output aria-live="polite">…</output>`) announcing copy results and
+  warnings, matching the VoiceOver/TalkBack behaviour now wired into the Swift/Android samples.
 
-Был приборҙар ADDR-6b-ны иҫбатлаусы операторҙар тарафынан ҡәнәғәтләндерә ала, улар I18NT000000007X ингестияһын һәм
-клиент яғынан күсермә режимдары Урындағы селекторҙар өҙөлгәнсе.
+## Enforcing canonical forms
 
-## Урындағы → Глобаль миграция инструменты
+Use the CLI workflow documented under ADDR-5:
 
-Ҡулланыу [Урындағы → Глобаль инструменттар] (local-to-global-toolkit.md) автоматлаштырыу өсөн
-JSON аудит отчеты һәм үҙгәртелгән өҫтөнлөк I105 / икенсе иң яҡшы ҡыҫылған (I18NI000000055X) исемлеге, операторҙар беркетергә
-әҙерлек билеттары, шул уҡ ваҡытта оҙатыусы runbook һылтанмалар I18NT0000000001X
-приборҙар таҡталары һәм иҫкәртмәнсе ҡағиҙәләре, улар ҡәтғи режимда өҙөклөк ҡапҡаһы.
-
-## Бинар макеты тиҙ һылтанма (ADDR-1a)
-
-Ҡасан SDKs өҫтө алдынғы адресы адресы инструменттары (инспекторҙар, валидация кәңәштәре,
-манифест төҙөүселәр), 1990 йылда төшөрөлгән канонлы сым форматында нөктә эшләүселәр.
-`docs/account_structure.md`. Макет һәр ваҡыт .
-I18NI000000057X, унда баш биттар:
-
-```
-bit index:   7        5 4      3 2      1 0
-             ┌─────────┬────────┬────────┬────┐
-payload bit: │version  │ class  │  norm  │ext │
-             └─────────┴────────┴────────┴────┘
-```
-
-- `addr_version = 0` (бис7‐5) бөгөн; нуль булмаған ҡиммәттәр һаҡлана һәм тейеш
-  йыйыу I18NI000000059X.
-- I18NI000000060X бер (I18NI000000061X) vs мультисиг (I18NI000000062X) контроллерҙарын айыра.
-- `norm_version = 1` Normv1 селектор ҡағиҙәләрен кодлай. Киләсәк нормалары ҡабаттан файҙаланасаҡ.
-  шул уҡ 2 битлы ялан.
-- I18NI000000064X һәр ваҡыт I18NI000000065X — ҡуйылған биттар ярҙамһыҙ файҙалы йөктәрҙе киңәйтеүҙәрҙе күрһәтә.
-
-Һайлаусы шунда уҡ баш эйәреп:
-
-```
-┌──────────┬──────────────────────────────────────────────┐
-│ tag (u8) │ payload (depends on selector kind)           │
-└──────────┴──────────────────────────────────────────────┘
-```
-
-UI һәм SDK өҫтө селектор төрөн күрһәтергә әҙер булырға тейеш:
-
-- `0x00` = йәшерен домен (файҙа юҡ).
-- `0x01` = локаль һеңдерелгән (12 байт `blake2s_mac("SORA-LOCAL-K:v1", label)`X).
-- `0x02`X = глобаль реестрға инеү (ҙур-андиан I18NI0000070X).
-
-Канонлы hex миҫалдары, тип янсыҡ инструменттары бәйләй ала йәки docs/тесттарҙа һеңдерелгән:
-
-| Һайлаусы төрө | Канон гекс |
-|--------------|----------------|
-| Иғтибарһыҙ ғәҙәттәгесә | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
-| Урындағы һеңдерелгән (`treasury`) | I18NI0000073X |
-| Глобаль реестр (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
-
-Һылтанма I18NI0000000076X өсөн тулы селектор/дәүләт
-таблица һәм `docs/account_structure.md` өсөн тулы байт схемаһы.
-
-## Канон формаларын үтәү
-
-ҡылдар ADDR-5 буйынса документлаштырылған CLI эш ағымын үтәргә тейеш:
-
-1. `iroha tools address inspect` хәҙер I105 менән структуралы JSON резюме сығара,
-   ҡыҫылған, һәм канон гекс файҙалы йөктәр. Йыйынтыҡҡа шулай уҡ I18NI000000079X XX .
-   I18NI000000080X/I18NI000000081X яландары менән объект
-   `input_domain` яланы. Ҡасан I18NI0000000083X `local12` X, CLI баҫтырып сығара иҫкәртмә .
-   stderr һәм JSON резюме яңғырай, шул уҡ йүнәлештәр, шулай итеп, CI торбалар һәм SDKs
-   уны өҫкә күтәрә ала. Үткәреү I18NI0000000085X ҡасан һеҙ теләйһегеҙ, үҙгәртеп ҡоролған
-   кодлау I18NI000000086X тип ҡабатланған.
-2. SDKs өҫтөндә шул уҡ иҫкәртмә/йыйынтыҡ JavaScript ярҙамсыһы аша өҫтөндә:
+1. Run `iroha tools address convert <address-or-account_id> --format json`.
+   The summary reports the detected format and canonical encodings (`i105`,
+   `canonical_hex`). Strict parser paths accept canonical Katakana i105 only.
+2. SDKs can surface the same summary via JavaScript:
 
    ```js
    import { inspectAccountId } from "@iroha/iroha-js";
 
-   const summary = inspectAccountId("sora...");
-   if (summary.domain.warning) {
-     console.warn(summary.domain.warning);
-   }
+   const summary = inspectAccountId(accountLiteral);
    console.log(summary.i105.value, summary.i105Warning);
    ```
-  Ярҙам һаҡлай I105 префикс асыҡланған туранан-тура, әгәр һеҙ
-  асыҡтан-асыҡ тәьмин итеү I18NI00000000087X, шуға күрә резюме өсөн өсөн ғәҙәттән тыш селтәрҙәр эшләй
-  өнһөҙ генә ҡабаттан рендер менән ғәҙәттәгесә префикс.
+3. Resolve aliases through alias-aware APIs instead of feeding
+   `name@dataspace` or `name@domain.dataspace` into strict `AccountId`
+   parsers.
+4. Reuse `i105.value` from the summary (or request another encoding via
+   `--format`) in manifests and user-facing docs.
+4. For bulk data sets, run
+   `iroha tools address audit --input addresses.txt --network-prefix 753`.
+   Audit emits JSON/CSV summaries per row and fails on parse errors by default.
+   Use `--allow-errors` only for best-effort scans.
+5. For newline-to-newline rewrites, run
+   `iroha tools address normalize --input addresses.txt --network-prefix 753 --format i105`.
+   This rewrites each parsed row to the requested encoding
+   (canonical Katakana i105/hex/JSON). Pair with
+   `--allow-errors` for malformed dump triage.
 
-3. Каноник файҙалы йөктө үҙгәртеп, I18NI000000088X йәки `i105` X
-   йүнәлештән (йәки I18NI0000000090X аша тағы ла бер кодлауҙы һорап) баҫыуҙары). Былар
-   ҡылдар инде тышҡы яҡтан бүлешергә хәүефһеҙ.
-4. Яңыртыу нәфис, реестрҙар, һәм клиенттарға ҡаршы документтар менән
-   канон формаһы һәм контрагенттарҙы Урындағы селекторҙар буласаҡ тип хәбәр итә
-   өҙөклөк тамамланғас, кире ҡағыла.
-5. Мәғлүмәттәрҙең күмәкләп йыйылмаһы өсөн, эшләгеҙ
-   `iroha tools address audit --input addresses.txt --network-prefix 753`. Команда
-   яңы юл менән айырылған тура һүҙлеләрҙе уҡый (I18NI000000092X менән башланған комментарийҙар иғтибарға алынмай, ә
-   I18NI000000093X йәки флагһыҙ STDIN ҡуллана, JSON отчеты менән сыға.
-   канон/өҫтөнлөклө I105/икенсе иң яҡшы ҡыҫылған (I18NI0000000094X) һәр яҙма өсөн резюме
-   ҡалдыҡтар рәттәре, һәм ҡапҡа автоматлаштырыу менән I18NI00000000955
-   бер тапҡыр операторҙар әҙер блокировать Урындағы селекторҙар CI.
-6. Ҡасан һеҙгә кәрәк яңы линия-яңы линейка перезагрузка, ҡулланыу .
-  Урындағы һайлаусылар өсөн rememedial таблицалар, ҡулланыу .
-  экспортлау өсөн I18NI00000000966 CSV, был канонлы кодлау, иҫкәртмәләр, һәм анализлау етешһеҙлектәрен бер үткәреү айырып күрһәтә.
-   Ярҙам рәтһеҙ рәттәрҙе үтәп үтә, ҡалған һәр яҙманы үҙгәртә.
-   Һорау алынған кодлау (I105 өҫтөнлөк/ҡыҫылған (I18NI000000097X) икенсе-иң яҡшы/hex/JSON), һәм һаҡлай
-   оригиналь домен ҡасан I18NI0000000098X ҡуйылған. Пар уны I18NI0000000099X менән
-   сканерлауҙы һаҡлау өсөн хатта ҡасан дампта дөрөҫ булмаған литералдар булғанда.
-7. CI/lint автоматлаштырыу I18NI000001000Х эшләй ала, был экстракт
-   `fixtures/account/address_vectors.json`-тан урындағы селекторҙар, дингә ҡайтҡандар
-   уларҙы I18NI000000102X аша, һәм реплей
-   I18NI000000103X иҫбатлау өсөн релиздар башҡа сығармай
-   Урындағы үҙләштереүҙәр.`torii_address_local8_total{endpoint}` плюс
-`torii_address_collision_total{endpoint,kind="local12_digest"}`,
-`torii_address_collision_domain_total{endpoint,domain}`, һәм
-Grafana идаралығы I18NI000000107X идара итеүҙе тәьмин итеү
-сигнал: бер тапҡыр етештереү приборҙар таҡталары нуль законлы урындағы тапшырыуҙар һәм
-30 көн рәттән нуль урындағы-12 бәрелештәр, Torii X Урындағы-8
-Ҡапҡа ҡаты-маждает өҫтөндә төп селтәр, унан һуң урындағы-12 бер тапҡыр глобаль домендар бар
-тап килгән реестр яҙмалары. Ҡарап сығығыҙ CLI сығарыу оператор-йөҙ иҫкәртмә .
-был туңдырыу өсөн — шул уҡ иҫкәрткес телмәр SDK инструменттары буйынса ҡулланыла һәм
-автоматлаштырыу өсөн паритет һаҡлау өсөн юл картаһы сығыу критерийҙары. I18NT000000009X X хәҙер ғәҙәттәгесә.
-регрессияларҙы диагностикалауҙа. `torii_address_domain_total{domain_kind}` көҙгөһөн һаҡлау
-I18NT0000000003X (I18NI000000109X), шуға күрә ADDR-7 дәлилдәр пакеты
-иҫбатлай ала I18NI0000000110X нуль ҡалды өсөн кәрәкле 30 көнлөк тәҙрәгә тиклем .
-(`dashboards/alerts/address_ingest_rules.yml`) өс ҡоршау өҫтәй:
+### Release note snippet (wallet & explorer)
 
-- I18NI000000112X биттәре ҡасан ғына контекста яңы урындағы-8 хәбәр итә.
-  өҫтәү. Туҡтатыу ҡәтғи режимлы таратыу, рәнйеш SDK өҫтөн урынлаштырыу 2019 йылда.
-  тиклем сигнал нулгә ҡайта — һуңынан тергеҙелә ғәҙәттәгесә (`true`).
-- I18NI000000114X уттары, ҡасан ике урындағы-12 лейбл хеш шул уҡ
-  үҙләштереү. Пауза манифест акциялары, Урындағы → Глобаль инструменталь аудит үткәреү өсөн идара итеү
-  deragest картаһы, һәм I18NT0000000004X идара итеү менән координациялау, ҡабаттан сығарыу алдынан
-  теркәү йәки ҡабаттан инеү мөмкинлеге аҫҡа ағымдар йәйелдерелгән.
-- I18NI000000115X флот киң дөрөҫ булмаған нисбәте (уҡыуҙан тыш
-  Урындағы-8/ҡусты режимда кире ҡағыуҙар) ун минут дауамында 0,1% СЛО-нан артып китә. Файҙаланыу
-  I18NI000000116X яуаплы контексты/аҡыл һәм
-  ҡәтғи режимды ҡабаттан мөмкинлек биргәнсе SDK командаһы менән координациялау.
+Include the following bullet in wallet/explorer release notes when shipping the cutover:
 
-### Релиз иҫкәрмәһе фрагменты (корвокат & эксплуатация)
-
-Түбәндәге пуля янсыҡҡа/тикшерерсегә ебәрелгән иҫкәрмәләр ҡасан ташыу .
-өҙгөс:
-
-> **Адрестар:** I18NI000000117X өҫтәлгән.
-> ярҙамсы һәм уны CI (I18NI000000118X) шулай итеп, шулай янсыҡ/тикшерерсе
-> Урындағы-8/Local-12 тиклем төп селтәрҙә блоклана. Яңыртыу теләһә ниндәй ҡулланыусылар экспорты
-> команданы йөрөтөү һәм нормалаштырылған исемлекте сығарыу дәлилдәр өйөмөнә беркетергә.
+> **Addresses:** Copy/share flows now use canonical Katakana i105 account ids
+> only. On-chain aliases remain available as separate routing labels in
+> `name@dataspace` / `name@domain.dataspace` form and resolve to the same
+> canonical i105 account id.

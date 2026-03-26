@@ -236,7 +236,7 @@ Enum RegistryEventKind {
 ## 5. 正規イベントとゲートウェイ同期
 
 ゲートウェイ `RegistryEventV1` と同期 DNS/SoraFS と同期:1. ایونٹ sequence میں حوالہ کردہ تازہ ترین `NameRecordV1` حاصل کریں۔
-2. リゾルバー テンプレート (I105 バージョン + 圧縮 (`sora`) 2 番目に最適なアドレス、テキスト レコード)
+2. リゾルバー テンプレート (i105 バージョン + 圧縮 (`sora`) 2 番目に最適なアドレス、テキスト レコード)
 3. [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md) ゾーンデータピンのSoraDNSワークフロー
 
 イベント配信の保証:

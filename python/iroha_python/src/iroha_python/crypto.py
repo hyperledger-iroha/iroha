@@ -5,7 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, Final, Iterable, Mapping, Optional
 
-from typing_extensions import TypeAlias
+try:
+    from typing import TypeAlias
+except ImportError:  # pragma: no cover - Python <3.10 compatibility path
+    from typing_extensions import TypeAlias
 
 from ._native import load_crypto_extension
 from .address import AccountAddress

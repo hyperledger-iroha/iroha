@@ -1,46 +1,73 @@
 ---
-lang: ru
-direction: ltr
-source: docs/portal/docs/reference/address-safety.fr.md
-status: complete
-generator: docs/portal/scripts/sync-i18n.mjs
-translator: machine-google-reviewed
-translation_last_reviewed: 2026-02-07
+title: Address Safety & Accessibility
+description: UX requirements for presenting and sharing Iroha addresses safely (ADDR-6c).
 ---
 
----
-Название: Безопасность и доступность адресов
-описание: Требования UX для презентатора и разделения адресов Iroha в безопасном режиме (ADDR-6c).
----
+This page captures the ADDR-6c documentation deliverable. Apply these
+constraints to wallets, explorers, SDK tooling, and any portal surface that
+renders or accepts human-facing addresses. The canonical data model lives in
+`docs/account_structure.md`; the checklist below explains how to expose those
+formats without compromising safety or accessibility.
 
-Захват этой страницы из документации ADDR-6c. Appliquez ces contraintes aux кошельки, исследователи, утилиты SDK и все поверхности du portail, которые можно получить или принять адреса предназначения aux Humans. Le modele de donnees canonique se trouve dans `docs/account_structure.md`; контрольный список с поясняющими комментариями, раскрывающий эти форматы без компромиссов, безопасность или доступность.
+## Safe sharing flows
 
-## Flux de partage surs
+- Default every copy/share action to the canonical Katakana i105 account id.
+  If an on-chain alias is present, display it as supporting metadata in a
+  separate labeled field.
+- Offer a “Share” affordance that bundles the full plain-text address and a QR
+  code derived from the same payload. Let users inspect both before committing.
+- When space requires truncation (tiny cards, notifications), keep the leading
+  human-readable prefix, show ellipses, and retain the final 4–6 characters so
+  the checksum anchor survives. Provide a tap/keyboard shortcut to copy the full
+  string without truncation.
+- Prevent clipboard desync by emitting a confirmation toast that previews the
+  exact i105 string that was copied. Where telemetry is available, count copy
+  attempts versus share actions so UX regressions surface quickly.
 
-- По умолчанию все действия по копированию/частичному копированию выполняются с использованием адреса I105. Подтвердите разрешение домена в контексте приложения, где будет цепочка с контрольной суммой, оставшейся в центре.
-- Предлагайте действие «Partager», которое перегруппирует адрес в текстовом виде и получит QR-код для полезной нагрузки мема. Разрешите пользователям проверить два перед подтверждением.
-- Lorsque l'espace накладывает la troncature (карты minuscules, уведомления), сохраняет префикс lisible, добавляет эллипсы и следит за 4-6 последними символами, чтобы сохранить контрольную сумму. Offrez un geste/raccourci clavier для копировального аппарата la Chaine Complete sans troncature.
-- Выполните десинхронизацию печатной бумаги и выведите тост с подтверждением, которое предварительно визуализирует цепочку точных копий I105. В телеметрии или телеметрии сравниваются попытки копирования и действия по частям для ускорения обнаружения регрессий UX.
+## IME & input safeguards
 
-## IME и защита входа
+- Validate account-id fields as canonical Katakana i105 only. Validate alias
+  entry fields separately as `name@dataspace` or `name@domain.dataspace`.
+- When IME composition artefacts or zero-width characters appear, surface an
+  inline warning instead of coercing the input into a different account-id
+  format.
+- Provide a plain-text paste zone that preserves the canonical i105 literal as
+  pasted while still stripping obviously invalid stealth code points before
+  validation.
+- Harden validation against zero-width joiners, variation selectors, and other
+  stealth Unicode code points. Log the rejected code point category so fuzzing
+  suites can import the telemetry.
 
-- Rejetez toute entree not ASCII на адресных полях. Устройство для отображения артефактов композиции IME (полная ширина, кана, марки де тоналита), affichez un avertissement, встроенный поясняющий комментарий, передающий клавир и латиницу перед повторением.
-- Fournissez une Zone de Collage en texte brut qui supprime les Marques Jointes et remplace les espaces par des espaces ASCII avant validation. Это предотвратит прогресс, если пользователь отключится от IME в процессе изменения.
-- Дополнительная проверка для контроля соединений нулевой ширины, селекторов вариантов и других точек кода для обеспечения совместимости с Юникодом. Journalisez la categorie du point de code rejete for que les suites de fuzzing puissent importer la telemetry.
+## Assistive technology expectations
 
-## Помощь в технологиях- Annotez chaque bloc d'adresse avec `aria-label` или `aria-describedby`, который epelle le prefixe lisible и сегментирует полезную нагрузку в группах из 4-8 символов ("ih тире b три два ..."). Cela evite que les lecteurs d'ecran производит поток невразумительных символов.
-- Объявляйте о действиях по копированию/частичному повторению через une Mise a Jour de Live Region в вежливом режиме. Включите пункт назначения (печатная бумага, часть, QR), чтобы пользователь знал, что действие завершается без смещения фокуса.
-- Fournissez un texte `alt`, описывающий для Apercus QR (например, «Адрес I105 для `<account>` sur la Chaine `0x1234`»). Предлагает запасной вариант «Копирование адреса в тексте» на холсте QR для злоумышленников.
+- Annotate every address block with `aria-label` or `aria-describedby` that
+  spells out the human-readable prefix and chunks the payload in 4–8 character
+  groups (“ih dash b three two …”). This stops screen readers from producing an
+  unintelligible stream of characters.
+- Announce successful copy/share events via a polite live region update. Include
+  the destination (clipboard, share sheet, QR) so the user knows the action
+  completed without moving focus.
+- Supply descriptive `alt` text for QR previews (e.g., “i105 address for
+  `<account>` on chain `0x1234`”). Provide a “Copy address as text”
+  fallback adjacent to the QR canvas for low-vision users.
 
-## Адреса компрессов только для Sora
+## Single-format policy
 
-- Gating: cachez la Chaine Compressee `sora...` после явного подтверждения. Подтверждение повторения того, что формат не работает в цепочках Sora Nexus.
-- Этикет: каждое появление включает видимый значок «Только для Соры» и всплывающую подсказку, объясняющую другие требования, необходимые для формы I105.
-- Ограждения: если дискриминант цепочки активен не в выделении Nexus, отказ от создания сжатого адреса и повторного использования в соответствии с I105.
-- Телеметрия: зарегистрируйте требуемую частоту и скопируйте сжатую форму, чтобы в плейбуке были обнаружены случайные фотографии.
+- Keep canonical Katakana i105 as the only user-facing account-id format for
+  copy, share, and QR surfaces.
+- Treat `name@dataspace` and `name@domain.dataspace` as on-chain aliases that
+  point to canonical i105 account ids.
+- Do not expose alternate account-literal encodings in production wallet or
+  explorer UX.
+- Telemetry should track i105 copy/share usage, alias-resolution usage, and
+  validation failures only.
 
-## Качественные ворота
+## Quality gates
 
-- Etendez les tests UI автоматизирует (или les Suites a11y de Storybook) для проверки того, что составители адреса выставляют метадоны, необходимые ARIA, и que les messages de rejet IME Apparaissent.
-- Включает сценарии руководств по контролю качества для входа в IME (кана, пиньинь), отрывок из текста (VoiceOver/NVDA) и копирование QR в темах, наиболее контрастных перед выпуском.
-- Выполняйте ремонт этих проверок в контрольных списках выпуска и дополнительных тестах I105 для того, чтобы оставшиеся регрессии были заблокированы только для исправления.
+- Extend automated UI tests (or storybook a11y suites) to assert that address
+  components expose the required ARIA metadata and that IME rejection messages
+  appear.
+- Include manual QA scenarios for IME input (kana, pinyin), screen reader pass
+  (VoiceOver/NVDA), and QR copy on high-contrast themes before releasing.
+- Surface these checks in release checklists alongside the i105 parity tests
+  so regressions remain blocked until corrected.

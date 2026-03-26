@@ -59,7 +59,7 @@ use iroha_data_model::{
     prelude::{AccountId, ChainId},
     proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox},
     repo::prelude::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
-    rwa::{NewRwa, RwaControlPolicy, RwaId},
+    rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
     transaction::{
         Executable, IvmBytecode, SignedTransaction, TransactionBuilder as ModelTransactionBuilder,
         TransactionSubmissionReceipt,
@@ -271,14 +271,6 @@ struct TimeTriggerKwargsParsed<'py> {
     period_ms: Option<u64>,
     repeats: Option<u32>,
     metadata: Option<Bound<'py, PyAny>>,
-}
-
-#[derive(norito::derive::JsonDeserialize)]
-struct MergeRwasPayload {
-    parents: Vec<iroha_data_model::rwa::RwaParentRef>,
-    primary_reference: String,
-    status: Option<Name>,
-    metadata: Metadata,
 }
 
 fn parse_time_trigger_kwargs<'py>(
@@ -4064,16 +4056,16 @@ mod tests {
             else {
                 panic!("expected UnfreezeRwa");
             };
-            let Some(set_box) = set_ref
+            let Some(iroha_data_model::isi::rwa::RwaInstructionBox::SetKeyValue(set_box)) = set_ref
                 .as_any()
-                .downcast_ref::<iroha_data_model::isi::SetKeyValue<iroha_data_model::rwa::Rwa>>()
+                .downcast_ref::<iroha_data_model::isi::rwa::RwaInstructionBox>()
             else {
                 panic!("expected SetRwaKeyValue");
             };
-            let Some(remove_box) = remove_ref
-                .as_any()
-                .downcast_ref::<iroha_data_model::isi::RemoveKeyValue<iroha_data_model::rwa::Rwa>>(
-                )
+            let Some(iroha_data_model::isi::rwa::RwaInstructionBox::RemoveKeyValue(remove_box)) =
+                remove_ref
+                    .as_any()
+                    .downcast_ref::<iroha_data_model::isi::rwa::RwaInstructionBox>()
             else {
                 panic!("expected RemoveRwaKeyValue");
             };
@@ -5213,6 +5205,159 @@ where
         .map_err(|err| PyValueError::new_err(format!("invalid {context} value: {err}")))
 }
 
+fn json_required_value(
+    fields: &mut std::collections::BTreeMap<String, json::Value>,
+    key: &str,
+    context: &str,
+) -> PyResult<json::Value> {
+    fields
+        .remove(key)
+        .ok_or_else(|| PyValueError::new_err(format!("{context}.{key} is required")))
+}
+
+fn json_string_value(value: json::Value, context: &str) -> PyResult<String> {
+    match value {
+        json::Value::String(value) => Ok(value),
+        _ => Err(PyValueError::new_err(format!("{context} must be a string"))),
+    }
+}
+
+fn json_rwa_id_value(value: json::Value, context: &str) -> PyResult<RwaId> {
+    let literal = json_string_value(value, context)?;
+    literal
+        .parse()
+        .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{literal}`: {err}")))
+}
+
+fn json_rwa_parent_refs_value(value: json::Value, context: &str) -> PyResult<Vec<RwaParentRef>> {
+    let json::Value::Array(entries) = value else {
+        return Err(PyValueError::new_err(format!("{context} must be an array")));
+    };
+
+    let mut parents = Vec::with_capacity(entries.len());
+    for (index, entry) in entries.into_iter().enumerate() {
+        let entry_context = format!("{context}[{index}]");
+        let json::Value::Object(mut fields) = entry else {
+            return Err(PyValueError::new_err(format!(
+                "{entry_context} must be an object"
+            )));
+        };
+        let rwa = json_rwa_id_value(
+            json_required_value(&mut fields, "rwa", &entry_context)?,
+            &format!("{entry_context}.rwa"),
+        )?;
+        let quantity = json::from_value::<Numeric>(json_required_value(
+            &mut fields,
+            "quantity",
+            &entry_context,
+        )?)
+        .map_err(|err| {
+            PyValueError::new_err(format!("invalid {entry_context}.quantity value: {err}"))
+        })?;
+        parents.push(RwaParentRef::new(rwa, quantity));
+    }
+    Ok(parents)
+}
+
+fn parse_new_rwa_payload(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<NewRwa> {
+    let dumped = py_to_json_string(py, value, "rwa")?;
+    let json::Value::Object(mut fields) = json::from_str::<json::Value>(&dumped)
+        .map_err(|err| PyValueError::new_err(format!("invalid rwa value: {err}")))?
+    else {
+        return Err(PyValueError::new_err("rwa must be a JSON object"));
+    };
+
+    let domain =
+        json::from_value::<DomainId>(json_required_value(&mut fields, "domain", "rwa")?)
+            .map_err(|err| PyValueError::new_err(format!("invalid rwa.domain value: {err}")))?;
+    let quantity =
+        json::from_value::<Numeric>(json_required_value(&mut fields, "quantity", "rwa")?)
+            .map_err(|err| PyValueError::new_err(format!("invalid rwa.quantity value: {err}")))?;
+    let spec = json::from_value::<NumericSpec>(json_required_value(&mut fields, "spec", "rwa")?)
+        .map_err(|err| PyValueError::new_err(format!("invalid rwa.spec value: {err}")))?;
+    let primary_reference = json_string_value(
+        json_required_value(&mut fields, "primary_reference", "rwa")?,
+        "rwa.primary_reference",
+    )?;
+    let status = fields
+        .remove("status")
+        .map_or(Ok(None), |value| match value {
+            json::Value::Null => Ok(None),
+            other => json::from_value(other)
+                .map(Some)
+                .map_err(|err| PyValueError::new_err(format!("invalid rwa.status value: {err}"))),
+        })?;
+    let metadata = fields
+        .remove("metadata")
+        .map_or(Ok(Metadata::default()), |value| {
+            json::from_value(value)
+                .map_err(|err| PyValueError::new_err(format!("invalid rwa.metadata value: {err}")))
+        })?;
+    let parents = fields.remove("parents").map_or(Ok(Vec::new()), |value| {
+        json_rwa_parent_refs_value(value, "rwa.parents")
+    })?;
+    let controls = fields
+        .remove("controls")
+        .map_or(Ok(RwaControlPolicy::default()), |value| {
+            json::from_value(value)
+                .map_err(|err| PyValueError::new_err(format!("invalid rwa.controls value: {err}")))
+        })?;
+
+    Ok(NewRwa::new(
+        domain,
+        quantity,
+        spec,
+        primary_reference,
+        status,
+        metadata,
+        parents,
+        controls,
+    ))
+}
+
+fn parse_merge_rwas_payload(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<iroha_data_model::isi::rwa::MergeRwas> {
+    let dumped = py_to_json_string(py, value, "merge")?;
+    let json::Value::Object(mut fields) = json::from_str::<json::Value>(&dumped)
+        .map_err(|err| PyValueError::new_err(format!("invalid merge value: {err}")))?
+    else {
+        return Err(PyValueError::new_err("merge must be a JSON object"));
+    };
+
+    let parents = json_rwa_parent_refs_value(
+        json_required_value(&mut fields, "parents", "merge")?,
+        "merge.parents",
+    )?;
+    let primary_reference = json_string_value(
+        json_required_value(&mut fields, "primary_reference", "merge")?,
+        "merge.primary_reference",
+    )?;
+    let status = fields
+        .remove("status")
+        .map_or(Ok(None), |value| match value {
+            json::Value::Null => Ok(None),
+            other => json::from_value(other)
+                .map(Some)
+                .map_err(|err| PyValueError::new_err(format!("invalid merge.status value: {err}"))),
+        })?;
+    let metadata = fields
+        .remove("metadata")
+        .map_or(Ok(Metadata::default()), |value| {
+            json::from_value(value).map_err(|err| {
+                PyValueError::new_err(format!("invalid merge.metadata value: {err}"))
+            })
+        })?;
+
+    Ok(iroha_data_model::isi::rwa::MergeRwas {
+        parents,
+        primary_reference,
+        status,
+        metadata,
+    })
+}
+
 fn py_to_json_value(py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<Json> {
     match value {
         None => Ok(Json::default()),
@@ -5892,20 +6037,14 @@ impl Instruction {
 
     #[classmethod]
     fn register_rwa<'py>(cls: &Bound<'py, PyType>, rwa: &Bound<'py, PyAny>) -> PyResult<Self> {
-        let rwa = py_to_json_model::<NewRwa>(cls.py(), rwa, "rwa")?;
+        let rwa = parse_new_rwa_payload(cls.py(), rwa)?;
         let instruction = iroha_data_model::isi::rwa::RegisterRwa { rwa };
         Ok(Instruction::new(instruction.into()))
     }
 
     #[classmethod]
     fn merge_rwas<'py>(cls: &Bound<'py, PyType>, merge: &Bound<'py, PyAny>) -> PyResult<Self> {
-        let merge = py_to_json_model::<MergeRwasPayload>(cls.py(), merge, "merge")?;
-        let instruction = iroha_data_model::isi::rwa::MergeRwas {
-            parents: merge.parents,
-            primary_reference: merge.primary_reference,
-            status: merge.status,
-            metadata: merge.metadata,
-        };
+        let instruction = parse_merge_rwas_payload(cls.py(), merge)?;
         Ok(Instruction::new(instruction.into()))
     }
 

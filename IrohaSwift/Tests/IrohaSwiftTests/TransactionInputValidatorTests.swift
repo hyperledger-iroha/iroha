@@ -4,8 +4,7 @@ import XCTest
 final class TransactionInputValidatorTests: XCTestCase {
     private let sampleAid = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
 
-    private func i105(seed: UInt8 = 1,
-                      domain: String = AccountAddress.defaultDomainName) throws -> String {
+    private func i105(seed: UInt8 = 1) throws -> String {
         let keypair = try Keypair(privateKeyBytes: Data(repeating: seed, count: 32))
         let address = try AccountAddress.fromAccount(publicKey: keypair.publicKey)
         return try address.toI105(networkPrefix: AccountId.defaultNetworkPrefix)
@@ -49,10 +48,10 @@ final class TransactionInputValidatorTests: XCTestCase {
         XCTAssertThrowsError(
             try TransactionInputValidator.validate(chainId: "0000",
                                                    authorityId: authority,
-                                                   assetDefinitionId: "rose")
+                                                   assetDefinitionId: "pkr#hbl")
         ) { error in
             XCTAssertEqual(error as? TransactionInputError,
-                           .malformedAssetDefinitionId("rose"))
+                           .malformedAssetDefinitionId("pkr#hbl"))
         }
     }
 
@@ -84,9 +83,10 @@ final class TransactionInputValidatorTests: XCTestCase {
     }
 
     func testSanitizeMetadataTargetRejectsMalformedAssetId() {
-        XCTAssertThrowsError(try TransactionInputValidator.sanitizeMetadataTarget(.asset("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"))) { error in
+        let malformed = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"
+        XCTAssertThrowsError(try TransactionInputValidator.sanitizeMetadataTarget(.asset(malformed))) { error in
             XCTAssertEqual(error as? TransactionInputError,
-                           .malformedAssetId("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"))
+                           .malformedAssetId(malformed))
         }
     }
 
@@ -115,7 +115,7 @@ final class TransactionInputValidatorTests: XCTestCase {
 
     func testSanitizeAssetIdAcceptsCanonicalPublicLiteral() throws {
         let literal =
-            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"
+            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
         let target = try TransactionInputValidator.sanitizeMetadataTarget(.asset(literal))
         XCTAssertEqual(target.objectId, literal)
     }

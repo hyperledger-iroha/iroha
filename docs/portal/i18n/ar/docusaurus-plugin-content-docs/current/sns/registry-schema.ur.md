@@ -228,7 +228,7 @@ Enum RegistryEventKind {
 تقوم البوابات `RegistryEventV1` بمزامنة البيانات الرئيسية وDNS/SoraFS:
 
 1. تم تحويل التسلسل الإلكتروني بشكل أفضل إلى `NameRecordV1`.
-2. قوالب المحلل المزدوجة (I105 ترجيح + مضغوط (`sora`) ثاني أفضل العناوين والسجلات النصية).
+2. قوالب المحلل المزدوجة (i105 ترجيح + مضغوط (`sora`) ثاني أفضل العناوين والسجلات النصية).
 3. [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md) يدعم سير عمل SoraDNS وهو دبوس بيانات المنطقة.
 
 ضمانات تسليم الحدث:

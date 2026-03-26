@@ -3,7 +3,7 @@ package org.hyperledger.iroha.android.offline;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
-import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
+import org.hyperledger.iroha.android.testing.TestAssetDefinitionIds;
 
 public final class OfflineJsonParserTest {
 
@@ -28,7 +28,7 @@ public final class OfflineJsonParserTest {
   }
 
   private static void parsesAllowancePayload() {
-    final String assetDefinitionId = AssetDefinitionIdEncoder.encode("usd", "wonderland");
+    final String assetDefinitionId = TestAssetDefinitionIds.SECONDARY;
     final String json =
         """
         {
@@ -38,7 +38,7 @@ public final class OfflineJsonParserTest {
               "certificate_id_hex": "deadbeef",
               "controller_id": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
               "controller_display": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
-              "asset_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+              "asset_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
               "asset_definition_id": "%s",
               "asset_definition_name": "USD",
               "asset_definition_alias": null,
@@ -62,7 +62,7 @@ public final class OfflineJsonParserTest {
     final OfflineAllowanceList.OfflineAllowanceItem item = list.items().get(0);
     assert "deadbeef".equals(item.certificateIdHex()) : "certificate id mismatch";
     assert "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".equals(item.controllerId()) : "controller mismatch";
-    assert "7EAD8EFYUx1aVKZPUU1fyKvr8dF1#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".equals(item.assetId()) : "asset mismatch";
+    assert "7EAD8EFYUx1aVKZPUU1fyKvr8dF1".equals(item.assetId()) : "asset mismatch";
     assert assetDefinitionId.equals(item.assetDefinitionId()) : "asset definition id mismatch";
     assert "USD".equals(item.assetDefinitionName()) : "asset definition name mismatch";
     assert item.assetDefinitionAlias() == null : "asset definition alias mismatch";
@@ -88,7 +88,7 @@ public final class OfflineJsonParserTest {
               "receiver_display": "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
               "deposit_account_id": "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
               "deposit_account_display": "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
-              "asset_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1#soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
+              "asset_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
               "receipt_count": 2,
               "total_amount": "15",
               "claimed_delta": "15",
@@ -137,7 +137,7 @@ public final class OfflineJsonParserTest {
           "receiver_display": "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
           "deposit_account_id": "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
           "deposit_account_display": "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
-          "asset_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1#soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
+          "asset_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
           "receipt_count": 1,
           "total_amount": "5",
           "claimed_delta": "5",
@@ -226,7 +226,7 @@ public final class OfflineJsonParserTest {
               "receiver_display": "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
               "deposit_account_id": "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
               "deposit_account_display": "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
-              "asset_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1#soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
+              "asset_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
               "receipt_count": 1,
               "total_amount": "7.5",
               "claimed_delta": "7.5",
@@ -236,7 +236,7 @@ public final class OfflineJsonParserTest {
                     "tx_id": "offline-tx-1",
                     "from": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
                     "to": "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
-                    "asset": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1#soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
+                    "asset": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
                     "amount": "7.5"
                   }
                 ],
@@ -255,7 +255,7 @@ public final class OfflineJsonParserTest {
     assert summary.isPresent() : "receipt summary missing";
     assert "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".equals(summary.get().senderId()) : "sender mismatch";
     assert "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ".equals(summary.get().receiverId()) : "receiver mismatch";
-    assert "7EAD8EFYUx1aVKZPUU1fyKvr8dF1#soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ".equals(summary.get().assetId())
+    assert "7EAD8EFYUx1aVKZPUU1fyKvr8dF1".equals(summary.get().assetId())
         : "asset mismatch";
     assert "7.5".equals(summary.get().amount()) : "amount mismatch";
   }
@@ -300,7 +300,7 @@ public final class OfflineJsonParserTest {
           "certificate": {
             "controller": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
             "operator": "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
-            "allowance": { "asset": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ", "amount": "10", "commitment": [1, 2, 3] },
+            "allowance": { "asset": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "amount": "10", "commitment": [1, 2, 3] },
             "spend_public_key": "ed0120deadbeef",
             "attestation_report": [4, 5, 6],
             "issued_at_ms": 1700000000000,
@@ -360,7 +360,7 @@ public final class OfflineJsonParserTest {
 
   private static void draftJsonOmitsOperator() {
     final OfflineAllowanceCommitment allowance =
-        new OfflineAllowanceCommitment("7EAD8EFYUx1aVKZPUU1fyKvr8dF1#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ", "10", new byte[] {1, 2, 3});
+        new OfflineAllowanceCommitment("7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "10", new byte[] {1, 2, 3});
     final OfflineWalletPolicy policy = new OfflineWalletPolicy("10", "5", 1700500000000L);
     final OfflineWalletCertificateDraft draft =
         new OfflineWalletCertificateDraft(
@@ -381,7 +381,7 @@ public final class OfflineJsonParserTest {
 
   private static void draftJsonCarriesDeviceBoundReserveFields() {
     final OfflineAllowanceCommitment allowance =
-        new OfflineAllowanceCommitment("7EAD8EFYUx1aVKZPUU1fyKvr8dF1#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ", "10", new byte[] {1, 2, 3});
+        new OfflineAllowanceCommitment("7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "10", new byte[] {1, 2, 3});
     final OfflineWalletPolicy policy = new OfflineWalletPolicy("10", "5", 1700500000000L);
     final OfflineWalletCertificateDraft draft =
         new OfflineWalletCertificateDraft(
@@ -428,7 +428,7 @@ public final class OfflineJsonParserTest {
   }
 
   private static void rejectsFractionalOptionalTimestamp() {
-    final String assetDefinitionId = AssetDefinitionIdEncoder.encode("usd", "wonderland");
+    final String assetDefinitionId = TestAssetDefinitionIds.SECONDARY;
     final String json =
         """
         {
@@ -438,7 +438,7 @@ public final class OfflineJsonParserTest {
               "certificate_id_hex": "deadbeef",
               "controller_id": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
               "controller_display": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
-              "asset_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+              "asset_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
               "asset_definition_id": "%s",
               "asset_definition_name": "USD",
               "asset_definition_alias": null,

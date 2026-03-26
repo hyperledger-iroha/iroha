@@ -55,14 +55,14 @@ def main() -> None:
     parser.add_argument(
         "--authority",
         required=True,
-        help="Signing account id (I105 canonical literal, e.g. sora...)",
+        help="Signing account id (canonical katakana i105 literal, e.g. sora...)",
     )
     parser.add_argument("--private-key-hex", required=True, help="Hex-encoded Ed25519 private key")
     parser.add_argument("--domain-id", default="playground", help="Domain id to register")
     parser.add_argument(
         "--account-id",
         default="sora...",
-        help="Account id to register (I105 canonical literal)",
+        help="Account id to register (canonical katakana i105 literal)",
     )
     parser.add_argument(
         "--asset-definition-id",

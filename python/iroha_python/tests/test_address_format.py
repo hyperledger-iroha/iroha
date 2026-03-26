@@ -8,6 +8,7 @@ import requests
 from requests.structures import CaseInsensitiveDict
 
 from iroha_python import ToriiClient, account_query_envelope, asset_holders_query_envelope
+from iroha_python.address import AccountAddress
 
 
 class StubResponse(requests.Response):
@@ -117,6 +118,15 @@ def test_query_asset_holders_omits_canonical_i105() -> None:
 
     body = json.loads(session.calls[0]["data"].decode("utf-8"))
     assert "canonical_i105" not in body
+
+
+def test_i105_roundtrip_accepts_multicodepoint_symbols() -> None:
+    address = AccountAddress.from_account(domain="wonderland", public_key=bytes([0x11] * 32))
+    literal = address.to_i105(0x02F1)
+
+    parsed = AccountAddress.parse_encoded(literal, expected_discriminant=0x02F1)
+
+    assert parsed.to_i105(0x02F1) == literal
 
 
 def test_query_asset_holders_rejects_removed_canonical_i105_arg() -> None:

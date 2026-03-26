@@ -12,7 +12,7 @@
       "balance_proof": {
         "claimed_delta": "45.00",
         "initial_amount": "250.00",
-        "initial_asset": "6sLdgCzX8t3h4cU4cinuyqHVivrr#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+        "initial_asset": "6sLdgCzX8t3h4cU4cinuyqHVivrr",
         "initial_commitment_hex": "C6BD0E817F1D9ABDF72B1844A2A928D281F0100E3AE107BD86E7247308164140",
         "resulting_commitment_hex": "72954CFFEC45DA48B52B4356DDB147AF813BD1DAEDEEA74E430462E0607E4E2F",
         "zk_proof_hex": null
@@ -25,7 +25,7 @@
       "receipts": [
         {
           "amount": "25.00",
-          "asset": "6sLdgCzX8t3h4cU4cinuyqHVivrr#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+          "asset": "6sLdgCzX8t3h4cU4cinuyqHVivrr",
           "from": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
           "invoice_id": "INV-1001",
           "issued_at_ms": 1730314876000,
@@ -45,7 +45,7 @@
         },
         {
           "amount": "20.00",
-          "asset": "6sLdgCzX8t3h4cU4cinuyqHVivrr#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+          "asset": "6sLdgCzX8t3h4cU4cinuyqHVivrr",
           "from": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
           "invoice_id": "INV-1002",
           "issued_at_ms": 1730314877000,

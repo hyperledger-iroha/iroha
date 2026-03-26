@@ -21,12 +21,14 @@ path for legacy account/asset literals.
 3. **Asset parser contract (strict):**
    - Accept only canonical Base58 `AssetDefinitionId` values as public asset IDs.
    - Accept asset aliases only in `name#domain.dataspace` / `name#dataspace` form, and resolve
-     them on-chain to a canonical Base58 asset-definition ID.
+     them on-chain to a canonical Base58 asset-definition id.
+   - Treat `<base58-asset-definition-id>#<katakana-i105-account-id>[#dataspace:<id>]` as an
+     asset-holding identifier, not as a public asset id or alias target.
    - Reject all prefixed/legacy forms (`norito:<hex>`, `aid:<hex>`,
      owner-qualified asset-holding literals, `asset#domain#account`, `asset##account`, etc.).
 4. **Canonical output:**
    - Render account IDs as canonical Katakana i105 in user-facing output.
-   - Canonical hex remains debug/render-only and is not accepted as parser input.
+   - Canonical hex remains envelope/debug-only and is not accepted as parser input.
 5. **Compatibility policy:**
    - No parser fallback branches.
    - No parse-any account/asset entrypoints in runtime SDK paths.

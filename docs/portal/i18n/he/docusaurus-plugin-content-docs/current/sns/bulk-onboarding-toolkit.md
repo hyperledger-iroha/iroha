@@ -234,7 +234,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
 - **Parsing של metadata או governance:** JSON inline מפוענח ישירות; הפניות לקבצים
   נפתרות יחסית למיקום ה-CSV. metadata שאינו אובייקט מייצר שגיאת ולידציה.
 - **Controllers:** תאים ריקים מכבדים את `--default-controllers`. ספקו רשימות
-  controller מפורשות (למשל `i105...;i105...`) בעת האצלה לגורמים שאינם owner.
+  controller מפורשות (למשל `soraカタカナ...;soraカタカナ...`) בעת האצלה לגורמים שאינם owner.
 
 כשלונות מדווחים עם מספרי שורה הקשריים (למשל
 `error: row 12 term_years must be between 1 and 255`). הסקריפט יוצא עם קוד `1`

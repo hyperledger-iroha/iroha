@@ -234,7 +234,7 @@ Transições de estado لازمی طور پر متعلقہ `RegistryEventKind` e
 Gateways `RegistryEventV1` کو سبسکرائب کرتے ہیں اور DNS/SoraFS کو یوں sincronização کرتے ہیں:
 
 1. ایونٹ sequência میں حوالہ کردہ تازہ ترین `NameRecordV1` حاصل کریں۔
-2. resolver templates دوبارہ بنائیں (I105 ترجیحی + I105 second‑best addresses, text records)۔
+2. resolver templates دوبارہ بنائیں (i105 ترجیحی + i105 second‑best addresses, text records)۔
 3. [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md) میں بیان کردہ Fluxo de trabalho SoraDNS کے ذریعے pino de dados da zona کریں۔
 
 Garantias de entrega de eventos:
