@@ -71,7 +71,7 @@ provided together; omitting them keeps HPKE disabled. Operators running with a
 non-Ed25519 validator key (for example TC26 GOST) can still satisfy the Ed25519
 requirement for control-plane signatures by supplying `streaming.identity_public_key`
 and `streaming.identity_private_key`; these fields expect Ed25519 multihash
-strings (matching the format returned by `kagami crypto`). When omitted, the
+strings (matching the format returned by `kagami keys`). When omitted, the
 node’s main key pair is reused, preserving the previous behaviour. The
 `streaming.session_store_dir` parameter selects the directory where encrypted
 session snapshots land (default `./storage/streaming`). The runtime derives the

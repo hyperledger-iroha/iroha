@@ -2791,7 +2791,7 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) internal_event_buf: Vec<Arc<DataEvent>>,
 }
 
-impl<'block, 'world> WorldTransaction<'block, 'world> {
+impl WorldTransaction<'_, '_> {
     #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to durable smart-contract state for tests and API scaffolding.
     pub fn smart_contract_state_mut_for_testing(

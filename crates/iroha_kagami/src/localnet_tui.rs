@@ -88,7 +88,7 @@ fn consensus_mode_prompt(
     }
     ConsensusModePrompt {
         choices: vec![ConsensusModeChoice::Permissioned, ConsensusModeChoice::Npos],
-        default_index: 1,
+        default_index: 0,
         locked: false,
     }
 }
@@ -257,6 +257,6 @@ mod tests {
             prompt.choices,
             vec![ConsensusModeChoice::Permissioned, ConsensusModeChoice::Npos]
         );
-        assert_eq!(prompt.default_index, 1);
+        assert_eq!(prompt.default_index, 0);
     }
 }

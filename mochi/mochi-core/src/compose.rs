@@ -1721,6 +1721,7 @@ mod tests {
         let asset_id = AssetId::new(asset_def.clone(), ALICE_ID.clone());
         let asset_id_str = asset_literal(&asset_id);
         let account = account_literal(&ALICE_ID);
+        let scoped_account = format!("{account}@wonderland");
 
         let mint = InstructionDraft::mint_from_input(&asset_id_str, "10").expect("mint draft");
         let burn = InstructionDraft::burn_from_input(&asset_id_str, "1").expect("burn draft");
@@ -1729,7 +1730,7 @@ mod tests {
         let register_domain =
             InstructionDraft::register_domain_from_input("wonderland").expect("domain draft");
         let register_account =
-            InstructionDraft::register_account_from_input(&account).expect("account draft");
+            InstructionDraft::register_account_from_input(&scoped_account).expect("account draft");
         let register_definition = InstructionDraft::register_asset_definition_from_input(
             "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
             Mintable::Once,

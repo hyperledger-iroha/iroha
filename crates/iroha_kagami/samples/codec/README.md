@@ -1,6 +1,6 @@
 # Codec Samples
 
-This directory stores sample JSON files and their Norito-encoded binary counterparts used by the `kagami codec` tool (enable the `codec` feature when running `kagami`).
+This directory stores sample JSON files and their Norito-encoded binary counterparts used by the `kagami advanced codec` tool (enable the `codec` feature when running `kagami`).
 
 ## Regenerating binaries
 
@@ -10,7 +10,7 @@ Use the codec sample regeneration tool to keep these binaries in sync with their
 cargo run --manifest-path scripts/regenerate_codec_samples/Cargo.toml --
 ```
 
-The tool invokes `kagami codec json-to-norito` for each JSON file and writes the resulting `.bin` into this directory. Run it whenever the JSON schema or the sample JSON changes.
+The tool invokes `kagami advanced codec json-to-norito` for each JSON file and writes the resulting `.bin` into this directory. Run it whenever the JSON schema or the sample JSON changes.
 
 ## Requirements
 

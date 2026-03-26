@@ -18,11 +18,12 @@
 
 mod chaos;
 mod config;
-mod faults;
 mod instructions;
 mod persistence;
 mod smart_contracts;
 mod tui;
+
+pub use izanami::faults;
 
 use clap::{ArgMatches, CommandFactory, FromArgMatches, parser::ValueSource};
 use color_eyre::Result;
