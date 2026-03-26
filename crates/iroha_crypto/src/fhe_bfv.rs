@@ -1194,10 +1194,12 @@ fn add_mod_prime(lhs: u64, rhs: u64, modulus: u64) -> u64 {
 
 #[cfg(feature = "bfv-accel")]
 fn sub_mod_prime(lhs: u64, rhs: u64, modulus: u64) -> u64 {
+    let lhs = lhs % modulus;
+    let rhs = rhs % modulus;
     if lhs >= rhs {
         lhs - rhs
     } else {
-        lhs + modulus - rhs
+        modulus - (rhs - lhs)
     }
 }
 
@@ -1311,6 +1313,24 @@ mod tests {
         let sum = add_ciphertexts(&params, &lhs, &rhs).expect("add");
         let plaintext = decrypt(&params, &secret_key, &sum).expect("decrypt");
         assert_eq!(plaintext[0], 46);
+    }
+
+    #[cfg(feature = "bfv-accel")]
+    #[test]
+    fn sub_mod_prime_handles_large_modulus_without_overflow() {
+        let modulus = u64::MAX - 58;
+        let lhs = 7;
+        let rhs = modulus - 11;
+        assert_eq!(sub_mod_prime(lhs, rhs, modulus), 18);
+    }
+
+    #[cfg(feature = "bfv-accel")]
+    #[test]
+    fn sub_mod_prime_reduces_unbounded_rhs_before_subtracting() {
+        let modulus = 17;
+        let lhs = 3;
+        let rhs = 41;
+        assert_eq!(sub_mod_prime(lhs, rhs, modulus), 13);
     }
 
     #[test]
