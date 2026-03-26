@@ -75,7 +75,7 @@ N1 (အများပြည်သူ စတင်ရောင်းချခြ
 | Charter + KPI addenda | `docs/source/sns/governance_addenda/` | ဗားရှင်းထိန်းချုပ်ထားသော ပဋိညာဉ်စာချုပ်များ၊ KPI ပဋိညာဉ်များနှင့် CLI မဲများဖြင့် ကိုးကားထားသော အုပ်ချုပ်မှုဆုံးဖြတ်ချက်များ။ |
 | မှတ်ပုံတင်ခြင်း အစီအစဉ် | [`registry-schema.md`](./registry-schema.md) | Canonical Norito တည်ဆောက်ပုံများ (`NameRecordV1`, `SuffixPolicyV1`, `RevenueAccrualEventV1`)။ |
 | မှတ်ပုံတင်စာချုပ် | [`registrar-api.md`](./registrar-api.md) | REST/gRPC ပေးချေမှုများ၊ `sns_registrar_status_total` မက်ထရစ်များနှင့် အုပ်ချုပ်မှုဆိုင်ရာ မျှော်လင့်ချက်များ ချိတ်ထားသည်။ |
-| လိပ်စာ UX လမ်းညွှန် | [`address-display-guidelines.md`](./address-display-guidelines.md) | Canonical i105 (ဦးစားပေး) + ဖိသိပ်ထားသော (`sora`၊ ဒုတိယအကောင်းဆုံး) သရုပ်ဖော်မှုများကို ပိုက်ဆံအိတ်/ရှာဖွေသူများမှ ရောင်ပြန်ဟပ်ထားသည်။ |
+| လိပ်စာ UX လမ်းညွှန် | [`address-display-guidelines.md`](./address-display-guidelines.md) | Canonical Katakana i105 (ဦးစားပေး) + ဖိသိပ်ထားသော (`sora`၊ ဒုတိယအကောင်းဆုံး) သရုပ်ဖော်မှုများကို ပိုက်ဆံအိတ်/ရှာဖွေသူများမှ ရောင်ပြန်ဟပ်ထားသည်။ |
 | SoraDNS / GAR စာရွက်စာတမ်း | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | လက်ခံသူ၏ ဆင်းသက်လာခြင်းကို အဆုံးအဖြတ်ပေးခြင်း၊ ပွင့်လင်းမြင်သာမှု tailer အလုပ်အသွားအလာနှင့် သတိပေးချက် စည်းမျဉ်းများ။ |
 | စည်းကမ်းမှတ်စုများ | `docs/source/sns/regulatory/` | တရားစီရင်ပိုင်ခွင့်ဆိုင်ရာ မှတ်စုများ (ဥပမာ၊ EU DSA)၊ ဘဏ္ဍာစိုးအသိအမှတ်ပြုချက်များ၊ နမူနာပုံစံ နောက်ဆက်တွဲများ။ |
 | တူးလော့ဂ် | `ops/drill-log.md` | အဆင့်မ၀င်မီ ပရမ်းပတာနှင့် IR အစမ်းလေ့ကျင့်မှုများ မှတ်တမ်းလိုအပ်သည်။ |

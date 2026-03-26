@@ -90,7 +90,7 @@ reparser le payload brut.
 החוקרים לא מתארים את העבודה
 fait pour le portefeuille:
 
-- Appliquez `data-copy-mode="i105|i105_default|qr"` aux boutons de copie afin que
+- Appliquez `data-copy-mode="i105|qr"` aux boutons de copie afin que
   les front-ends puissent emettre des compteurs d'usage en parallele de la
   metrique Torii `torii_address_format_total`. Le composant demo ci-dessus
   envoie un evenement `iroha:address-copy` avec `{mode,timestamp}` - reliez cela
@@ -196,7 +196,7 @@ Les operators qui convertissent les encodages local herites in I105 canonique
   non defaut ne sont pas re-rendus silencieusement avec le prefixe par defaut.
 
 3. Convertissez le payload canonique en reutilisant les champs `i105.value` ou
-   `i105_default` אתה קורות חיים (אתה דורש קידוד אמיתי דרך `--format`). Ces
+   `i105` אתה קורות חיים (אתה דורש קידוד אמיתי דרך `--format`). Ces
    chaines sont deja sures a partager en externe.
 4. Mettez a jour les manifests, registers and documents orients client with la
    forme canonique et notifiez les contreparties que les selecteurs Seront מקומי

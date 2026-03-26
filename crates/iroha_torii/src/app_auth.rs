@@ -686,7 +686,7 @@ mod tests {
 
     use super::*;
 
-    const TEST_ACCOUNT_I105: &str = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
+    const TEST_ACCOUNT_I105: &str = "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ";
 
     fn minimal_state_with_account(account: &AccountId) -> Arc<State> {
         let domain_id: DomainId = "wonderland".parse().unwrap();

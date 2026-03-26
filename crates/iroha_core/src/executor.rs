@@ -431,9 +431,10 @@ fn convert_volatility_bucket(volatility: GasVolatility) -> VolatilityBucket {
 }
 
 fn parse_fee_sponsor(
-    _world: &impl WorldReadOnly,
+    world: &impl WorldReadOnly,
     metadata: &Metadata,
 ) -> Result<Option<AccountId>, ValidationFail> {
+    let _ = world;
     let Some(raw) = metadata.get("fee_sponsor") else {
         return Ok(None);
     };
@@ -441,19 +442,19 @@ fn parse_fee_sponsor(
         Ok(sponsor) => Ok(Some(sponsor)),
         Err(err) => {
             if let Ok(literal) = raw.try_into_any_norito::<String>()
-                && let Some(sponsor) =
-                    crate::block::parse_account_literal_with_world(_world, &literal)
+                && let Ok(sponsor) = AccountId::parse_encoded(&literal)
             {
-                return Ok(Some(sponsor));
+                return Ok(Some(sponsor.into_account_id()));
             }
             Err(ValidationFail::NotPermitted(format!(
-                "invalid fee_sponsor metadata: {err}"
+                "invalid fee_sponsor metadata: expected canonical Katakana i105 account id ({err})"
             )))
         }
     }
 }
 
 fn parse_account_id_literal(world: &impl WorldReadOnly, literal: &str) -> Option<AccountId> {
+    let _ = world;
     crate::block::parse_account_literal_with_world(world, literal)
 }
 
@@ -707,7 +708,8 @@ pub(crate) fn charge_fees_for_applied_overlay(
             )
             .ok_or_else(|| {
                 ValidationFail::InternalError(
-                    "invalid pipeline.gas.tech_account_id; expected account identifier".to_owned(),
+                    "invalid pipeline.gas.tech_account_id; expected canonical Katakana i105 account id"
+                        .to_owned(),
                 )
             })?;
 
@@ -983,7 +985,8 @@ impl Executor {
         )
         .ok_or_else(|| {
             let reason =
-                "invalid nexus fee sink account id; expected account identifier".to_owned();
+                "invalid nexus fee sink account id; expected canonical Katakana i105 account id"
+                    .to_owned();
             sumeragi_status::record_nexus_fee_event(NexusFeeEvent::ConfigInvalid {
                 reason: reason.clone(),
             });
@@ -1215,7 +1218,7 @@ impl Executor {
                 )
                 .ok_or_else(|| {
                     ValidationFail::InternalError(
-                        "invalid pipeline.gas.tech_account_id; expected account identifier"
+                        "invalid pipeline.gas.tech_account_id; expected canonical Katakana i105 account id"
                             .to_owned(),
                     )
                 })?;
@@ -1819,7 +1822,7 @@ impl Executor {
                     )
                     .ok_or_else(|| {
                         ValidationFail::InternalError(
-                            "invalid pipeline.gas.tech_account_id; expected account identifier"
+                            "invalid pipeline.gas.tech_account_id; expected canonical Katakana i105 account id"
                                 .to_owned(),
                         )
                     })?;

@@ -84,7 +84,7 @@ en brut.
 
 
 Les explorateurs doivent réfléchir au travail de télémétrie et à l'accessibilité de la
-billetera:- Appliquer `data-copy-mode="i105|i105_default|qr"` aux boutons de copie pour cela
+billetera:- Appliquer `data-copy-mode="i105|qr"` aux boutons de copie pour cela
   Les frontaux peuvent émettre des contadores d'utilisation avec la métrique Torii
   `torii_address_format_total`. La démo du composant avant d'envoyer un événement
   `iroha:address-copy` avec `{mode,timestamp}` : connectez-le à votre pipeline de
@@ -186,7 +186,7 @@ Les chaînes compressées doivent suivre le flux CLI documenté dans ADDR-5 :1.
   proportions explicitamente `networkPrefix`, pour que les résumés para
   redes no default ne se restitue silencieusement avec le préfixe por
   défaut.3. Convertir la charge utile canonique en réutilisant les champs `i105.value` ou
-   `i105_default` du CV (ou solliciter une autre codification via `--format`). Estas
+   `i105` du CV (ou solliciter une autre codification via `--format`). Estas
    cadenas ya son seguras para partager externamente.
 4. Actualiser les manifestes, registres et documents de cara al cliente con la
    forme canonique et notification aux partenaires que les sélecteurs locaux seront

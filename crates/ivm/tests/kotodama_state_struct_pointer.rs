@@ -19,7 +19,7 @@ fn encode_pointer_tlv(ty: PointerType, payload: Vec<u8>) -> Vec<u8> {
 fn parse_account_id_literal(id: &str) -> AccountId {
     AccountId::parse_encoded(id)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .expect("account literal must be canonical i105")
+        .expect("account literal must be canonical Katakana i105")
 }
 
 fn encode_account_id_pointer(id: &str) -> Vec<u8> {
@@ -55,7 +55,7 @@ fn encode_account_id_pointer_without_inner_hash(id: &str) -> Vec<u8> {
 
 #[test]
 fn pointer_from_norito_syscall_returns_pointer() {
-    const OWNER_ID: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+    const OWNER_ID: &str = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
     let pointer_bytes = encode_account_id_pointer(OWNER_ID);
 
     let mut vm = IVM::new(u64::MAX);
@@ -83,7 +83,7 @@ fn pointer_from_norito_syscall_returns_pointer() {
 
 #[test]
 fn pointer_from_norito_rejects_inner_tlv_without_hash() {
-    const OWNER_ID: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+    const OWNER_ID: &str = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
     let pointer_bytes = encode_account_id_pointer_without_inner_hash(OWNER_ID);
 
     let mut vm = IVM::new(u64::MAX);
@@ -102,7 +102,7 @@ fn pointer_from_norito_rejects_inner_tlv_without_hash() {
 
 #[test]
 fn pointer_from_norito_rejects_wrong_expected_type() {
-    const OWNER_ID: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+    const OWNER_ID: &str = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
     let pointer_bytes = encode_account_id_pointer(OWNER_ID);
 
     let mut vm = IVM::new(u64::MAX);

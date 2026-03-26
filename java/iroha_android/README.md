@@ -95,7 +95,7 @@ System.out.println("expires at: " + preview.expiresAtMs());
 `enforceProposalTtl` rejects TTL overrides above the policy cap (`transaction_ttl_ms`) before
 submission so apps can surface the same error Torii would return. Use
 `previewProposalExpiry` when you only need a preview (cap + expiry) without throwing.
-When registering a multisig controller, supply an explicit canonical i105 account id for a random
+When registering a multisig controller, supply an explicit canonical Katakana i105 account id for a random
 controller key (the controller must never be used for direct signing). Nodes now quarantine
 deterministically derived controller ids and will reject registration and subsequent
 propose/approve attempts that use them.

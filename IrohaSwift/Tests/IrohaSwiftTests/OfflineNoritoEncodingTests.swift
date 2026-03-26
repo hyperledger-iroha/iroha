@@ -15,35 +15,32 @@ final class OfflineNoritoEncodingTests: XCTestCase {
     }
 
     func testEncodeAssetIdAcceptsCanonicalPublicLiteral() throws {
-        let assetId =
-            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+        let assetId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#\(try makeI105(seed: 1))"
         let encoded = try OfflineNorito.encodeAssetId(assetId)
         XCTAssertFalse(encoded.isEmpty)
     }
 
     func testEncodeAssetIdRejectsTextualForms() {
-        assertInvalidAssetId("62Fk4FPcMuLvW5QjDGNF2a4jAmjM#alice@hbl.sbp")
-        assertInvalidAssetId("xor##alice@hbl.sbp")
-        assertInvalidAssetId("rose##alice@hbl.sbp")
+        assertInvalidAssetId("62Fk4FPcMuLvW5QjDGNF2a4jAmjM#alice@hbl.dataspace")
+        assertInvalidAssetId("xor##alice@hbl.dataspace")
+        assertInvalidAssetId("rose##alice@hbl.dataspace")
     }
 
     func testEncodeAssetIdRejectsMalformedPublicLiterals() {
         assertInvalidAssetId("not:an-asset")
         assertInvalidAssetId("62Fk4FPcMuLvW5QjDGNF2a4jAmjM#")
-        assertInvalidAssetId("62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn#dataspace:")
+        assertInvalidAssetId("62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauﾛ1NcﾐuﾛﾀKﾓhﾈgｽXｦDTﾏｴtﾔﾐ8PJPfSﾕPuﾃ884ｳﾇヰ4ﾇJKTL36#dataspace:")
     }
 
-    func testEncodeAccountIdAcceptsI105AndI105DefaultForms() throws {
+    func testEncodeAccountIdAcceptsI105() throws {
         let address = try makeAddress(seed: 1)
         let i105 = try address.toI105(networkPrefix: 0x02F1)
-        let i105Default = try address.toI105Default()
         let encodedFromI105 = try OfflineNorito.encodeAccountId(i105)
-        let encodedFromI105Default = try OfflineNorito.encodeAccountId(i105Default)
-        XCTAssertEqual(encodedFromI105Default, encodedFromI105)
+        XCTAssertFalse(encodedFromI105.isEmpty)
     }
 
     func testEncodeAccountIdRejectsAliasLiteral() {
-        let literal = "alice@hbl.sbp"
+        let literal = "alice@hbl.dataspace"
         assertInvalidAccountId(literal, expected: literal)
     }
 

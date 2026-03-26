@@ -45,14 +45,14 @@ Endpoints
 
 Contracts API (deploy)
 - POST `/v1/contracts/deploy`
-  - Request: { "authority": "i105...", "private_key": "…", "code_b64": "…" }
+  - Request: { "authority": "soraカタカナ...", "private_key": "…", "code_b64": "…" }
   - Behavior: Verifies the embedded `CNTR` contract interface, derives the canonical manifest from the artifact, computes `code_hash` from the full artifact body after the fixed IVM header and `abi_hash` from the enforced ABI policy, then submits `RegisterSmartContractCode` (derived manifest) and `RegisterSmartContractBytes` (full `.to` bytes) on behalf of `authority`.
   - Response: { "ok": true, "code_hash_hex": "…", "abi_hash_hex": "…" }
   - Related:
     - GET `/v1/contracts/code/{code_hash}` → returns stored manifest
     - GET `/v1/contracts/code-bytes/{code_hash}` → returns `{ code_b64 }`
 - POST `/v1/contracts/instance`
-  - Request: { "authority": "i105...", "private_key": "…", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "…" }
+  - Request: { "authority": "soraカタカナ...", "private_key": "…", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "…" }
   - Behavior: Deploys the supplied bytecode and immediately activates the `(namespace, contract_id)` mapping via `ActivateContractInstance`.
   - Response: { "ok": true, "namespace": "apps", "contract_id": "calc.v1", "code_hash_hex": "…", "abi_hash_hex": "…" }
 
@@ -65,11 +65,11 @@ Alias Service
   - Errors: HTTP `400` on malformed hex input. Torii returns a Norito `ValidationFail::QueryFailed::Conversion` envelope with the decoder error message.
 - POST `/v1/aliases/resolve`
   - Request: { "alias": "GB82 WEST 1234 5698 7654 32" }
-  - Response: { "alias": "GB82WEST12345698765432", "account_id": "i105...", "index": 0, "source": "iso_bridge" }
+  - Response: { "alias": "GB82WEST12345698765432", "account_id": "soraカタカナ...", "index": 0, "source": "iso_bridge" }
   - Notes: Requires the ISO bridge runtime staging (`[iso_bridge.account_aliases]` in `iroha_config`). Torii normalises aliases by stripping whitespace and upper-casing before lookup. Returns 404 when the alias is absent and 503 when the ISO bridge runtime is disabled.
 - POST `/v1/aliases/resolve_index`
   - Request: { "index": 0 }
-  - Response: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "i105...", "source": "iso_bridge" }
+  - Response: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "soraカタカナ...", "source": "iso_bridge" }
   - Notes: Alias indices are assigned deterministically from configuration order (0-based). Clients can cache responses offline to build audit trails for alias attestation events.
 
 Code Size Cap
@@ -79,7 +79,7 @@ Code Size Cap
   - Operators can adjust by submitting `SetParameter(Custom)` with `id = "max_contract_code_bytes"` and a numeric payload.
 
 - POST `/v1/gov/ballots/zk`
-  - Request: { "authority": "i105...", "private_key": "…?", "chain_id": "…", "election_id": "e1", "proof_b64": "…", "public": {…} }
+  - Request: { "authority": "soraカタカナ...", "private_key": "…?", "chain_id": "…", "election_id": "e1", "proof_b64": "…", "public": {…} }
   - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
   - Notes:
     - When the circuit’s public inputs include `owner`, `amount`, and `duration_blocks`, and the proof verifies against the configured VK, the node creates or extends a governance lock for `election_id` with that `owner`. Direction remains hidden (`unknown`); only amount/expiry are updated. Re-votes are monotonic: amount and expiry only increase (the node applies max(amount, prev.amount) and max(expiry, prev.expiry)).
@@ -87,7 +87,7 @@ Code Size Cap
     - Contract execution must call `ZK_VOTE_VERIFY_BALLOT` prior to enqueuing `SubmitBallot`; hosts enforce a one-shot latch.
 
 - POST `/v1/gov/ballots/plain`
-  - Request: { "authority": "i105...", "private_key": "…?", "chain_id": "…", "referendum_id": "r1", "owner": "i105...", "amount": "1000", "duration_blocks": 6000, "direction": "Aye|Nay|Abstain" }
+  - Request: { "authority": "soraカタカナ...", "private_key": "…?", "chain_id": "…", "referendum_id": "r1", "owner": "soraカタカナ...", "amount": "1000", "duration_blocks": 6000, "direction": "Aye|Nay|Abstain" }
   - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
   - Notes: Re-votes are extend-only — a new ballot cannot reduce the existing lock’s amount or expiry. The `owner` must equal the transaction authority. Minimum duration is `conviction_step_blocks`.
 
@@ -205,16 +205,16 @@ CLI Helpers
     - An enacted governance proposal exists for `(namespace, contract_id, code_hash, abi_hash)` as derived by the same proposal-id hashing the node uses.
   - Outputs a JSON report with `results[]` per contract (issues, manifest/code/proposal summaries) plus a one-line summary unless suppressed (`--no-summary`).
   - Useful for auditing protected namespaces or verifying governance-controlled deploy workflows.
-- `iroha app gov deploy meta --namespace apps --contract-id calc.v1 [--approver i105... --approver i105...]`
+- `iroha app gov deploy meta --namespace apps --contract-id calc.v1 [--approver soraカタカナ... --approver soraカタカナ...]`
   - Emits the JSON metadata skeleton used when submitting deployments into protected namespaces, including optional `gov_manifest_approvers` for satisfying manifest quorum rules.
-- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner i105... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — lock hints are required when `min_bond_amount > 0`, and any provided hint set must include `owner`, `amount`, and `duration_blocks`.
-  - Validates canonical i105 account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
+- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner soraカタカナ... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]` — lock hints are required when `min_bond_amount > 0`, and any provided hint set must include `owner`, `amount`, and `duration_blocks`.
+  - Validates canonical Katakana i105 account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
   - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier` is validated against the proof when supplied.
   - The one-line summary now surfaces a deterministic `fingerprint=<hex>` derived from the encoded `CastZkBallot` along with any decoded hints (`owner`, `amount`, `duration_blocks`, `direction` when provided).
   - CLI responses annotate `tx_instructions[]` with `payload_fingerprint_hex` plus decoded fields so downstream tooling can verify the skeleton without reimplementing Norito decoding.
   - Supplying the lock hints allows the node to emit `LockCreated`/`LockExtended` events for ZK ballots once the circuit exposes the same values.
-- `iroha app gov vote --mode plain --referendum-id <id> --owner i105... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
-  - `--owner` accepts canonical i105 account ids only; account aliases (label@dataspace or label@domain.dataspace) are separate on-chain names and are not accepted here.
+- `iroha app gov vote --mode plain --referendum-id <id> --owner soraカタカナ... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
+  - `--owner` accepts canonical Katakana i105 account ids only; account aliases (name@dataspace or name@domain.dataspace) are separate on-chain names and are not accepted here.
   - Aliases `--lock-amount`/`--lock-duration-blocks` mirror the ZK flag names for scripting parity.
   - Summary output mirrors `vote --mode zk` by including the encoded instruction fingerprint and human-readable ballot fields (`owner`, `amount`, `duration_blocks`, `direction`), providing quick confirmation before signing the skeleton.
 
@@ -235,7 +235,7 @@ Unlock Sweep (Operator/Audit)
 - POST `/v1/gov/ballots/zk-v1`
   - Request (v1-style DTO):
     {
-      "authority": "i105...",
+      "authority": "soraカタカナ...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "private_key": "…?",
       "election_id": "ref-1",
@@ -254,7 +254,7 @@ Unlock Sweep (Operator/Audit)
   - Accepts a `BallotProof` JSON directly and returns a `CastZkBallot` skeleton.
   - Request:
     {
-      "authority": "i105...",
+      "authority": "soraカタカナ...",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "private_key": "…?",
       "election_id": "ref-1",

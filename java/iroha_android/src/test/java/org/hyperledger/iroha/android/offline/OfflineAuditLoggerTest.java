@@ -21,10 +21,10 @@ public final class OfflineAuditLoggerTest {
     final OfflineAuditLogger logger = new OfflineAuditLogger(logFile, true);
     logger.record(
         new OfflineAuditEntry(
-            "tx1", "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn", "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", "7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "10", 1));
+            "tx1", "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ", "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ", "7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "10", 1));
     logger.record(
         new OfflineAuditEntry(
-            "tx2", "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn", "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", "7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "20", 2));
+            "tx2", "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ", "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ", "7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "20", 2));
 
     final List<OfflineAuditEntry> entries = logger.entries();
     assert entries.size() == 2 : "entries size mismatch";
@@ -47,9 +47,9 @@ public final class OfflineAuditLoggerTest {
         [
           {
             "tx_id": "tx1",
-            "sender_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
-            "receiver_id": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
-            "asset_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
+            "sender_id": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+            "receiver_id": "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
+            "asset_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
             "amount": "10",
             "timestamp_ms": 1.5
           }

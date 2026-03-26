@@ -60,8 +60,9 @@ use iroha_data_model::{
     isi::{
         Burn, BurnBox, CreateKaigi, CustomInstruction, EndKaigi, Instruction as InstructionTrait,
         InstructionBox, JoinKaigi, LeaveKaigi, Mint, MintBox, RecordKaigiUsage, Register,
-        RegisterBox, RegisterKaigiRelay, RegisterPeerWithPop, ReportKaigiRelayHealth,
-        SetKaigiRelayManifest, Transfer, TransferBox, Unregister, UnregisterBox,
+        RegisterBox, RegisterKaigiRelay, RegisterPeerWithPop, RemoveKeyValue,
+        ReportKaigiRelayHealth, SetKaigiRelayManifest, SetKeyValue, Transfer, TransferBox,
+        Unregister, UnregisterBox,
         governance::{
             CastPlainBallot, CastZkBallot, CouncilDerivationKind, EnactReferendum,
             FinalizeReferendum, PersistCouncilForEpoch, ProposeDeployContract, RegisterCitizen,
@@ -95,7 +96,7 @@ use iroha_data_model::{
     oracle::KeyedHash,
     peer::{Peer, PeerId},
     role::{NewRole, Role, RoleId},
-    rwa::{NewRwa, Rwa, RwaControlPolicy, RwaId, RwaParentRef},
+    rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
     smart_contract::manifest::ContractManifest,
     transaction::{
         Executable, TransactionSubmissionReceipt,
@@ -107,6 +108,7 @@ use iroha_data_model::{
     },
 };
 use iroha_primitives::{
+    json::Json,
     numeric::Numeric,
     soradns::{GatewayHostBindings, derive_gateway_hosts},
 };
@@ -294,8 +296,6 @@ pub struct JsAccountAddressRender {
     pub canonical_hex: String,
     /// I105 encoding generated with the supplied network prefix.
     pub i105: String,
-    /// Canonical default-discriminant I105 encoding.
-    pub i105_default: String,
 }
 
 /// Deterministic gateway host bindings exposed to JavaScript callers.
@@ -433,7 +433,7 @@ pub fn soradns_derive_gateway_hosts(fqdn: String) -> napi::Result<JsGatewayHosts
     })
 }
 
-/// Parse an account address string in strict encoded form (canonical i105).
+/// Parse an account address string in strict encoded form (canonical Katakana i105).
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // napi-rs requires owned `String` for bindings
 pub fn account_address_parse_encoded(
@@ -470,11 +470,9 @@ pub fn account_address_render(
     let i105 = address
         .to_i105_for_discriminant(network_prefix)
         .map_err(account_address_err)?;
-    let i105_default = address.to_i105().map_err(account_address_err)?;
     Ok(JsAccountAddressRender {
         canonical_hex,
         i105,
-        i105_default,
     })
 }
 
@@ -4678,6 +4676,130 @@ fn parse_account_id_value(value: json::Value, context: &str) -> napi::Result<Acc
     parse_account_id(&literal, context)
 }
 
+fn parse_rwa_id_value(value: json::Value, context: &str) -> napi::Result<RwaId> {
+    let literal = parse_string_value(value, context)?;
+    literal.parse().map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid RWA id `{literal}`: {err}"),
+        )
+    })
+}
+
+fn account_id_to_canonical_i105(account_id: &AccountId) -> napi::Result<String> {
+    account_id.canonical_i105().map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("failed to encode account id as canonical Katakana i105: {err}"),
+        )
+    })
+}
+
+fn parse_rwa_parent_refs_value(
+    value: json::Value,
+    context: &str,
+) -> napi::Result<Vec<RwaParentRef>> {
+    let json::Value::Array(entries) = value else {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} must be an array"),
+        ));
+    };
+    let mut parents = Vec::with_capacity(entries.len());
+    for (index, entry) in entries.into_iter().enumerate() {
+        let entry_context = format!("{context}[{index}]");
+        let json::Value::Object(mut fields) = entry else {
+            return Err(napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("{entry_context} must be an object"),
+            ));
+        };
+        let rwa = parse_rwa_id_value(
+            required_value(&mut fields, "rwa", &entry_context)?,
+            &format!("{entry_context}.rwa"),
+        )?;
+        let quantity: Numeric =
+            json::from_value(required_value(&mut fields, "quantity", &entry_context)?)
+                .map_err(norito_to_napi)?;
+        parents.push(RwaParentRef::new(rwa, quantity));
+    }
+    Ok(parents)
+}
+
+fn rwa_parent_refs_to_json(parents: &[RwaParentRef]) -> json::Value {
+    json::Value::Array(
+        parents
+            .iter()
+            .map(|parent| {
+                norito_json!({
+                    "rwa": parent.rwa().to_string(),
+                    "quantity": parent.quantity(),
+                })
+            })
+            .collect(),
+    )
+}
+
+fn rwa_status_to_json(status: Option<&Name>) -> json::Value {
+    status.map_or(json::Value::Null, |status| {
+        json::Value::String(status.to_string())
+    })
+}
+
+fn rwa_control_policy_to_json(policy: &RwaControlPolicy) -> napi::Result<json::Value> {
+    let controller_accounts = policy
+        .controller_accounts()
+        .iter()
+        .map(account_id_to_canonical_i105)
+        .collect::<napi::Result<Vec<_>>>()?;
+    let mut payload = json::Map::new();
+    payload.insert(
+        "controller_accounts".to_owned(),
+        json::to_value(&controller_accounts).map_err(norito_to_napi)?,
+    );
+    payload.insert(
+        "controller_roles".to_owned(),
+        json::to_value(
+            &policy
+                .controller_roles()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+        )
+        .map_err(norito_to_napi)?,
+    );
+    payload.insert(
+        "freeze_enabled".to_owned(),
+        json::Value::Bool(*policy.freeze_enabled()),
+    );
+    payload.insert(
+        "hold_enabled".to_owned(),
+        json::Value::Bool(*policy.hold_enabled()),
+    );
+    payload.insert(
+        "force_transfer_enabled".to_owned(),
+        json::Value::Bool(*policy.force_transfer_enabled()),
+    );
+    payload.insert(
+        "redeem_enabled".to_owned(),
+        json::Value::Bool(*policy.redeem_enabled()),
+    );
+    Ok(json::Value::Object(payload))
+}
+
+fn new_rwa_to_json(rwa: &NewRwa) -> napi::Result<json::Value> {
+    Ok(norito_json!({
+        "domain": rwa.domain(),
+        "quantity": rwa.quantity(),
+        "spec": rwa.spec(),
+        "primary_reference": rwa.primary_reference(),
+        "status": rwa_status_to_json(rwa.status().as_ref()),
+        "metadata": rwa.metadata(),
+        "parents": rwa_parent_refs_to_json(rwa.parents()),
+        "controls": rwa_control_policy_to_json(rwa.controls())?,
+    }))
+}
+
 fn normalize_zk_ballot_public_inputs_json(raw: &str, context: &str) -> napi::Result<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -4760,7 +4882,7 @@ fn ensure_zk_public_input_owner_canonical(map: &json::Map, context: &str) -> nap
     let owner = value.as_str().ok_or_else(|| {
         napi::Error::new(
             napi::Status::InvalidArg,
-            format!("{context}.owner must be a canonical i105 account id"),
+            format!("{context}.owner must be a canonical Katakana i105 account id"),
         )
     })?;
     let canonical = AccountId::parse_encoded(owner)
@@ -4769,13 +4891,13 @@ fn ensure_zk_public_input_owner_canonical(map: &json::Map, context: &str) -> nap
         .map_err(|_| {
             napi::Error::new(
                 napi::Status::InvalidArg,
-                format!("{context}.owner must be a canonical i105 account id"),
+                format!("{context}.owner must be a canonical Katakana i105 account id"),
             )
         })?;
     if canonical != owner {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
-            format!("{context}.owner must use canonical i105 account id form"),
+            format!("{context}.owner must use canonical Katakana i105 account id form"),
         ));
     }
     Ok(())
@@ -5326,17 +5448,25 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 ));
             }
             if let Some(json::Value::Object(mut fields)) = map.remove("RegisterRwa") {
+                let rwa_value = required_value(&mut fields, "rwa", "RegisterRwa")?;
+                let json::Value::Object(mut fields) = rwa_value else {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        "RegisterRwa.rwa must be an object",
+                    ));
+                };
                 let domain: DomainId =
-                    json::from_value(required_value(&mut fields, "domain", "RegisterRwa")?)
+                    json::from_value(required_value(&mut fields, "domain", "RegisterRwa.rwa")?)
                         .map_err(norito_to_napi)?;
                 let quantity: Numeric =
-                    json::from_value(required_value(&mut fields, "quantity", "RegisterRwa")?)
+                    json::from_value(required_value(&mut fields, "quantity", "RegisterRwa.rwa")?)
                         .map_err(norito_to_napi)?;
-                let spec = json::from_value(required_value(&mut fields, "spec", "RegisterRwa")?)
-                    .map_err(norito_to_napi)?;
+                let spec =
+                    json::from_value(required_value(&mut fields, "spec", "RegisterRwa.rwa")?)
+                        .map_err(norito_to_napi)?;
                 let primary_reference = parse_string_value(
-                    required_value(&mut fields, "primary_reference", "RegisterRwa")?,
-                    "RegisterRwa.primary_reference",
+                    required_value(&mut fields, "primary_reference", "RegisterRwa.rwa")?,
+                    "RegisterRwa.rwa.primary_reference",
                 )?;
                 let status: Option<Name> =
                     fields
@@ -5350,35 +5480,37 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     .map_or(Ok(Metadata::default()), |value| {
                         json::from_value(value).map_err(norito_to_napi)
                     })?;
-                let parents: Vec<RwaParentRef> =
-                    fields.remove("parents").map_or(Ok(Vec::new()), |value| {
-                        json::from_value(value).map_err(norito_to_napi)
-                    })?;
+                let parents = fields.remove("parents").map_or(Ok(Vec::new()), |value| {
+                    parse_rwa_parent_refs_value(value, "RegisterRwa.rwa.parents")
+                })?;
                 let controls = fields
                     .remove("controls")
                     .map_or(Ok(RwaControlPolicy::default()), |value| {
                         json::from_value(value).map_err(norito_to_napi)
                     })?;
-                let register = RegisterRwa::new(NewRwa::new(
-                    domain,
-                    quantity,
-                    spec,
-                    primary_reference,
-                    status,
-                    metadata,
-                    parents,
-                    controls,
-                ));
-                return Ok(Box::new(register).into_instruction_box());
+                let register = RegisterRwa {
+                    rwa: NewRwa::new(
+                        domain,
+                        quantity,
+                        spec,
+                        primary_reference,
+                        status,
+                        metadata,
+                        parents,
+                        controls,
+                    ),
+                };
+                return Ok(InstructionBox::from(RwaInstructionBox::from(register)));
             }
             if let Some(json::Value::Object(mut fields)) = map.remove("TransferRwa") {
                 let source = parse_account_id_value(
                     required_value(&mut fields, "source", "TransferRwa")?,
                     "TransferRwa.source",
                 )?;
-                let rwa: RwaId =
-                    json::from_value(required_value(&mut fields, "rwa", "TransferRwa")?)
-                        .map_err(norito_to_napi)?;
+                let rwa = parse_rwa_id_value(
+                    required_value(&mut fields, "rwa", "TransferRwa")?,
+                    "TransferRwa.rwa",
+                )?;
                 let quantity: Numeric =
                     json::from_value(required_value(&mut fields, "quantity", "TransferRwa")?)
                         .map_err(norito_to_napi)?;
@@ -5386,15 +5518,18 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     required_value(&mut fields, "destination", "TransferRwa")?,
                     "TransferRwa.destination",
                 )?;
-                return Ok(
-                    Box::new(TransferRwa::new(source, rwa, quantity, destination))
-                        .into_instruction_box(),
-                );
+                return Ok(InstructionBox::from(RwaInstructionBox::from(TransferRwa {
+                    source,
+                    rwa,
+                    quantity,
+                    destination,
+                })));
             }
             if let Some(json::Value::Object(mut fields)) = map.remove("MergeRwas") {
-                let parents: Vec<RwaParentRef> =
-                    json::from_value(required_value(&mut fields, "parents", "MergeRwas")?)
-                        .map_err(norito_to_napi)?;
+                let parents = parse_rwa_parent_refs_value(
+                    required_value(&mut fields, "parents", "MergeRwas")?,
+                    "MergeRwas.parents",
+                )?;
                 let primary_reference = parse_string_value(
                     required_value(&mut fields, "primary_reference", "MergeRwas")?,
                     "MergeRwas.primary_reference",
@@ -5411,51 +5546,75 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     .map_or(Ok(Metadata::default()), |value| {
                         json::from_value(value).map_err(norito_to_napi)
                     })?;
-                return Ok(
-                    Box::new(MergeRwas::new(parents, primary_reference, status, metadata))
-                        .into_instruction_box(),
-                );
+                return Ok(InstructionBox::from(RwaInstructionBox::from(MergeRwas {
+                    parents,
+                    primary_reference,
+                    status,
+                    metadata,
+                })));
             }
             if let Some(json::Value::Object(mut fields)) = map.remove("RedeemRwa") {
-                let rwa: RwaId = json::from_value(required_value(&mut fields, "rwa", "RedeemRwa")?)
-                    .map_err(norito_to_napi)?;
+                let rwa = parse_rwa_id_value(
+                    required_value(&mut fields, "rwa", "RedeemRwa")?,
+                    "RedeemRwa.rwa",
+                )?;
                 let quantity: Numeric =
                     json::from_value(required_value(&mut fields, "quantity", "RedeemRwa")?)
                         .map_err(norito_to_napi)?;
-                return Ok(Box::new(RedeemRwa::new(rwa, quantity)).into_instruction_box());
+                return Ok(InstructionBox::from(RwaInstructionBox::from(RedeemRwa {
+                    rwa,
+                    quantity,
+                })));
             }
             if let Some(json::Value::Object(mut fields)) = map.remove("FreezeRwa") {
-                let rwa: RwaId = json::from_value(required_value(&mut fields, "rwa", "FreezeRwa")?)
-                    .map_err(norito_to_napi)?;
-                return Ok(Box::new(FreezeRwa::new(rwa)).into_instruction_box());
+                let rwa = parse_rwa_id_value(
+                    required_value(&mut fields, "rwa", "FreezeRwa")?,
+                    "FreezeRwa.rwa",
+                )?;
+                return Ok(InstructionBox::from(RwaInstructionBox::from(FreezeRwa {
+                    rwa,
+                })));
             }
             if let Some(json::Value::Object(mut fields)) = map.remove("UnfreezeRwa") {
-                let rwa: RwaId =
-                    json::from_value(required_value(&mut fields, "rwa", "UnfreezeRwa")?)
-                        .map_err(norito_to_napi)?;
-                return Ok(Box::new(UnfreezeRwa::new(rwa)).into_instruction_box());
+                let rwa = parse_rwa_id_value(
+                    required_value(&mut fields, "rwa", "UnfreezeRwa")?,
+                    "UnfreezeRwa.rwa",
+                )?;
+                return Ok(InstructionBox::from(RwaInstructionBox::from(UnfreezeRwa {
+                    rwa,
+                })));
             }
             if let Some(json::Value::Object(mut fields)) = map.remove("HoldRwa") {
-                let rwa: RwaId = json::from_value(required_value(&mut fields, "rwa", "HoldRwa")?)
-                    .map_err(norito_to_napi)?;
+                let rwa = parse_rwa_id_value(
+                    required_value(&mut fields, "rwa", "HoldRwa")?,
+                    "HoldRwa.rwa",
+                )?;
                 let quantity: Numeric =
                     json::from_value(required_value(&mut fields, "quantity", "HoldRwa")?)
                         .map_err(norito_to_napi)?;
-                return Ok(Box::new(HoldRwa::new(rwa, quantity)).into_instruction_box());
+                return Ok(InstructionBox::from(RwaInstructionBox::from(HoldRwa {
+                    rwa,
+                    quantity,
+                })));
             }
             if let Some(json::Value::Object(mut fields)) = map.remove("ReleaseRwa") {
-                let rwa: RwaId =
-                    json::from_value(required_value(&mut fields, "rwa", "ReleaseRwa")?)
-                        .map_err(norito_to_napi)?;
+                let rwa = parse_rwa_id_value(
+                    required_value(&mut fields, "rwa", "ReleaseRwa")?,
+                    "ReleaseRwa.rwa",
+                )?;
                 let quantity: Numeric =
                     json::from_value(required_value(&mut fields, "quantity", "ReleaseRwa")?)
                         .map_err(norito_to_napi)?;
-                return Ok(Box::new(ReleaseRwa::new(rwa, quantity)).into_instruction_box());
+                return Ok(InstructionBox::from(RwaInstructionBox::from(ReleaseRwa {
+                    rwa,
+                    quantity,
+                })));
             }
             if let Some(json::Value::Object(mut fields)) = map.remove("ForceTransferRwa") {
-                let rwa: RwaId =
-                    json::from_value(required_value(&mut fields, "rwa", "ForceTransferRwa")?)
-                        .map_err(norito_to_napi)?;
+                let rwa = parse_rwa_id_value(
+                    required_value(&mut fields, "rwa", "ForceTransferRwa")?,
+                    "ForceTransferRwa.rwa",
+                )?;
                 let quantity: Numeric =
                     json::from_value(required_value(&mut fields, "quantity", "ForceTransferRwa")?)
                         .map_err(norito_to_napi)?;
@@ -5463,17 +5622,52 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     required_value(&mut fields, "destination", "ForceTransferRwa")?,
                     "ForceTransferRwa.destination",
                 )?;
-                return Ok(Box::new(ForceTransferRwa::new(rwa, quantity, destination))
-                    .into_instruction_box());
+                return Ok(InstructionBox::from(RwaInstructionBox::from(
+                    ForceTransferRwa {
+                        rwa,
+                        quantity,
+                        destination,
+                    },
+                )));
             }
             if let Some(json::Value::Object(mut fields)) = map.remove("SetRwaControls") {
-                let rwa: RwaId =
-                    json::from_value(required_value(&mut fields, "rwa", "SetRwaControls")?)
-                        .map_err(norito_to_napi)?;
+                let rwa = parse_rwa_id_value(
+                    required_value(&mut fields, "rwa", "SetRwaControls")?,
+                    "SetRwaControls.rwa",
+                )?;
                 let controls: RwaControlPolicy =
                     json::from_value(required_value(&mut fields, "controls", "SetRwaControls")?)
                         .map_err(norito_to_napi)?;
-                return Ok(Box::new(SetRwaControls::new(rwa, controls)).into_instruction_box());
+                return Ok(InstructionBox::from(RwaInstructionBox::from(
+                    SetRwaControls { rwa, controls },
+                )));
+            }
+            if let Some(json::Value::Object(mut fields)) = map.remove("SetRwaKeyValue") {
+                let rwa = parse_rwa_id_value(
+                    required_value(&mut fields, "rwa", "SetRwaKeyValue")?,
+                    "SetRwaKeyValue.rwa",
+                )?;
+                let key: Name =
+                    json::from_value(required_value(&mut fields, "key", "SetRwaKeyValue")?)
+                        .map_err(norito_to_napi)?;
+                let value: Json =
+                    json::from_value(required_value(&mut fields, "value", "SetRwaKeyValue")?)
+                        .map_err(norito_to_napi)?;
+                return Ok(InstructionBox::from(RwaInstructionBox::from(
+                    SetKeyValue::rwa(rwa, key, value),
+                )));
+            }
+            if let Some(json::Value::Object(mut fields)) = map.remove("RemoveRwaKeyValue") {
+                let rwa = parse_rwa_id_value(
+                    required_value(&mut fields, "rwa", "RemoveRwaKeyValue")?,
+                    "RemoveRwaKeyValue.rwa",
+                )?;
+                let key: Name =
+                    json::from_value(required_value(&mut fields, "key", "RemoveRwaKeyValue")?)
+                        .map_err(norito_to_napi)?;
+                return Ok(InstructionBox::from(RwaInstructionBox::from(
+                    RemoveKeyValue::rwa(rwa, key),
+                )));
             }
             if let Some(json::Value::Object(mut kaigi_map)) = map.remove("Kaigi") {
                 if let Some(json::Value::Object(mut create_fields)) =
@@ -6388,46 +6582,96 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         let (label, payload) = match rwa_box {
             RwaInstructionBox::Register(register) => (
                 "RegisterRwa",
-                norito_json!({ "rwa": register.rwa().clone() }),
+                norito_json!({ "rwa": new_rwa_to_json(register.rwa())? }),
             ),
             RwaInstructionBox::Transfer(transfer) => (
                 "TransferRwa",
-                json::to_value(transfer).map_err(norito_to_napi)?,
+                norito_json!({
+                    "source": account_id_to_canonical_i105(transfer.source())?,
+                    "rwa": transfer.rwa().to_string(),
+                    "quantity": transfer.quantity(),
+                    "destination": account_id_to_canonical_i105(transfer.destination())?,
+                }),
             ),
             RwaInstructionBox::Merge(merge) => {
-                ("MergeRwas", json::to_value(merge).map_err(norito_to_napi)?)
+                let mut payload = json::Map::new();
+                payload.insert(
+                    "parents".to_owned(),
+                    rwa_parent_refs_to_json(merge.parents()),
+                );
+                payload.insert(
+                    "primary_reference".to_owned(),
+                    json::Value::String(merge.primary_reference().clone()),
+                );
+                payload.insert(
+                    "status".to_owned(),
+                    rwa_status_to_json(merge.status().as_ref()),
+                );
+                payload.insert(
+                    "metadata".to_owned(),
+                    json::to_value(merge.metadata()).map_err(norito_to_napi)?,
+                );
+                ("MergeRwas", json::Value::Object(payload))
             }
-            RwaInstructionBox::Redeem(redeem) => {
-                ("RedeemRwa", json::to_value(redeem).map_err(norito_to_napi)?)
-            }
-            RwaInstructionBox::Freeze(freeze) => {
-                ("FreezeRwa", json::to_value(freeze).map_err(norito_to_napi)?)
-            }
+            RwaInstructionBox::Redeem(redeem) => (
+                "RedeemRwa",
+                norito_json!({
+                    "rwa": redeem.rwa().to_string(),
+                    "quantity": redeem.quantity(),
+                }),
+            ),
+            RwaInstructionBox::Freeze(freeze) => (
+                "FreezeRwa",
+                norito_json!({ "rwa": freeze.rwa().to_string() }),
+            ),
             RwaInstructionBox::Unfreeze(unfreeze) => (
                 "UnfreezeRwa",
-                json::to_value(unfreeze).map_err(norito_to_napi)?,
+                norito_json!({ "rwa": unfreeze.rwa().to_string() }),
             ),
-            RwaInstructionBox::Hold(hold) => {
-                ("HoldRwa", json::to_value(hold).map_err(norito_to_napi)?)
-            }
+            RwaInstructionBox::Hold(hold) => (
+                "HoldRwa",
+                norito_json!({
+                    "rwa": hold.rwa().to_string(),
+                    "quantity": hold.quantity(),
+                }),
+            ),
             RwaInstructionBox::Release(release) => (
                 "ReleaseRwa",
-                json::to_value(release).map_err(norito_to_napi)?,
+                norito_json!({
+                    "rwa": release.rwa().to_string(),
+                    "quantity": release.quantity(),
+                }),
             ),
             RwaInstructionBox::ForceTransfer(force_transfer) => (
                 "ForceTransferRwa",
-                json::to_value(force_transfer).map_err(norito_to_napi)?,
+                norito_json!({
+                    "rwa": force_transfer.rwa().to_string(),
+                    "quantity": force_transfer.quantity(),
+                    "destination": account_id_to_canonical_i105(force_transfer.destination())?,
+                }),
             ),
             RwaInstructionBox::SetControls(set_controls) => (
                 "SetRwaControls",
-                json::to_value(set_controls).map_err(norito_to_napi)?,
+                norito_json!({
+                    "rwa": set_controls.rwa().to_string(),
+                    "controls": rwa_control_policy_to_json(set_controls.controls())?,
+                }),
             ),
-            RwaInstructionBox::SetKeyValue(_set) | RwaInstructionBox::RemoveKeyValue(_set) => {
-                return Err(napi::Error::new(
-                    napi::Status::InvalidArg,
-                    "unsupported RWA metadata instruction variant; JSON conversion is not yet implemented for this instruction",
-                ));
-            }
+            RwaInstructionBox::SetKeyValue(set) => (
+                "SetRwaKeyValue",
+                norito_json!({
+                    "rwa": set.object().to_string(),
+                    "key": set.key().clone(),
+                    "value": json::to_value(set.value()).map_err(norito_to_napi)?,
+                }),
+            ),
+            RwaInstructionBox::RemoveKeyValue(remove) => (
+                "RemoveRwaKeyValue",
+                norito_json!({
+                    "rwa": remove.object().to_string(),
+                    "key": remove.key().clone(),
+                }),
+            ),
         };
         let mut outer = json::Map::new();
         outer.insert(label.to_owned(), payload);
@@ -6443,6 +6687,131 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
                 )
             })?;
         return Ok(custom_json_value(payload_json));
+    }
+
+    if let Some(register) = instruction_ref.as_any().downcast_ref::<RegisterRwa>() {
+        let mut outer = json::Map::new();
+        outer.insert(
+            "RegisterRwa".to_owned(),
+            norito_json!({ "rwa": new_rwa_to_json(register.rwa())? }),
+        );
+        return Ok(json::Value::Object(outer));
+    }
+
+    if let Some(transfer) = instruction_ref.as_any().downcast_ref::<TransferRwa>() {
+        let mut outer = json::Map::new();
+        outer.insert(
+            "TransferRwa".to_owned(),
+            norito_json!({
+                "source": account_id_to_canonical_i105(transfer.source())?,
+                "rwa": transfer.rwa().to_string(),
+                "quantity": transfer.quantity(),
+                "destination": account_id_to_canonical_i105(transfer.destination())?,
+            }),
+        );
+        return Ok(json::Value::Object(outer));
+    }
+
+    if let Some(merge) = instruction_ref.as_any().downcast_ref::<MergeRwas>() {
+        let mut payload = json::Map::new();
+        payload.insert(
+            "parents".to_owned(),
+            rwa_parent_refs_to_json(merge.parents()),
+        );
+        payload.insert(
+            "primary_reference".to_owned(),
+            json::Value::String(merge.primary_reference().clone()),
+        );
+        payload.insert(
+            "status".to_owned(),
+            rwa_status_to_json(merge.status().as_ref()),
+        );
+        payload.insert(
+            "metadata".to_owned(),
+            json::to_value(merge.metadata()).map_err(norito_to_napi)?,
+        );
+        let mut outer = json::Map::new();
+        outer.insert("MergeRwas".to_owned(), json::Value::Object(payload));
+        return Ok(json::Value::Object(outer));
+    }
+
+    if let Some(redeem) = instruction_ref.as_any().downcast_ref::<RedeemRwa>() {
+        let mut outer = json::Map::new();
+        outer.insert(
+            "RedeemRwa".to_owned(),
+            norito_json!({
+                "rwa": redeem.rwa().to_string(),
+                "quantity": redeem.quantity(),
+            }),
+        );
+        return Ok(json::Value::Object(outer));
+    }
+
+    if let Some(freeze) = instruction_ref.as_any().downcast_ref::<FreezeRwa>() {
+        let mut outer = json::Map::new();
+        outer.insert(
+            "FreezeRwa".to_owned(),
+            norito_json!({ "rwa": freeze.rwa().to_string() }),
+        );
+        return Ok(json::Value::Object(outer));
+    }
+
+    if let Some(unfreeze) = instruction_ref.as_any().downcast_ref::<UnfreezeRwa>() {
+        let mut outer = json::Map::new();
+        outer.insert(
+            "UnfreezeRwa".to_owned(),
+            norito_json!({ "rwa": unfreeze.rwa().to_string() }),
+        );
+        return Ok(json::Value::Object(outer));
+    }
+
+    if let Some(hold) = instruction_ref.as_any().downcast_ref::<HoldRwa>() {
+        let mut outer = json::Map::new();
+        outer.insert(
+            "HoldRwa".to_owned(),
+            norito_json!({
+                "rwa": hold.rwa().to_string(),
+                "quantity": hold.quantity(),
+            }),
+        );
+        return Ok(json::Value::Object(outer));
+    }
+
+    if let Some(release) = instruction_ref.as_any().downcast_ref::<ReleaseRwa>() {
+        let mut outer = json::Map::new();
+        outer.insert(
+            "ReleaseRwa".to_owned(),
+            norito_json!({
+                "rwa": release.rwa().to_string(),
+                "quantity": release.quantity(),
+            }),
+        );
+        return Ok(json::Value::Object(outer));
+    }
+
+    if let Some(force_transfer) = instruction_ref.as_any().downcast_ref::<ForceTransferRwa>() {
+        let mut outer = json::Map::new();
+        outer.insert(
+            "ForceTransferRwa".to_owned(),
+            norito_json!({
+                "rwa": force_transfer.rwa().to_string(),
+                "quantity": force_transfer.quantity(),
+                "destination": account_id_to_canonical_i105(force_transfer.destination())?,
+            }),
+        );
+        return Ok(json::Value::Object(outer));
+    }
+
+    if let Some(set_controls) = instruction_ref.as_any().downcast_ref::<SetRwaControls>() {
+        let mut outer = json::Map::new();
+        outer.insert(
+            "SetRwaControls".to_owned(),
+            norito_json!({
+                "rwa": set_controls.rwa().to_string(),
+                "controls": rwa_control_policy_to_json(set_controls.controls())?,
+            }),
+        );
+        return Ok(json::Value::Object(outer));
     }
 
     if let Some(propose) = instruction_ref
@@ -8747,110 +9116,80 @@ mod tests {
             vec![parent.clone()],
             controls.clone(),
         );
-        let merge = MergeRwas::new(
-            vec![parent.clone()],
-            "blend-001".to_owned(),
-            None,
-            Metadata::default(),
-        );
         let cases = vec![
-            norito_json!({ "RegisterRwa": norito_json!({ "rwa": new_rwa.clone() }) }),
-            json::Value::Object({
-                let mut outer = json::Map::new();
-                outer.insert(
-                    "TransferRwa".to_owned(),
-                    json::to_value(TransferRwa::new(
-                        source_account.clone(),
-                        rwa_id.clone(),
-                        Numeric::from_str("2.5").expect("valid numeric"),
-                        destination.clone(),
-                    ))
-                    .expect("serialize transfer rwa"),
-                );
-                outer
+            norito_json!({
+                "RegisterRwa": norito_json!({
+                    "rwa": new_rwa_to_json(&new_rwa).expect("render new rwa"),
+                })
             }),
-            json::Value::Object({
-                let mut outer = json::Map::new();
-                outer.insert(
-                    "MergeRwas".to_owned(),
-                    json::to_value(merge).expect("serialize merge rwas"),
-                );
-                outer
+            norito_json!({
+                "TransferRwa": norito_json!({
+                    "source": source_account.canonical_i105().expect("canonical Katakana i105 source"),
+                    "rwa": rwa_id.to_string(),
+                    "quantity": Numeric::from_str("2.5").expect("valid numeric"),
+                    "destination": destination
+                        .canonical_i105()
+                        .expect("canonical Katakana i105 destination"),
+                })
             }),
-            json::Value::Object({
-                let mut outer = json::Map::new();
-                outer.insert(
-                    "RedeemRwa".to_owned(),
-                    json::to_value(RedeemRwa::new(
-                        rwa_id.clone(),
-                        Numeric::from_str("1").expect("valid numeric"),
-                    ))
-                    .expect("serialize redeem rwa"),
-                );
-                outer
+            norito_json!({
+                "MergeRwas": norito_json!({
+                    "parents": rwa_parent_refs_to_json(&[parent.clone()]),
+                    "primary_reference": "blend-001".to_owned(),
+                    "status": Value::Null,
+                    "metadata": Metadata::default(),
+                })
             }),
-            json::Value::Object({
-                let mut outer = json::Map::new();
-                outer.insert(
-                    "FreezeRwa".to_owned(),
-                    json::to_value(FreezeRwa::new(rwa_id.clone())).expect("serialize freeze rwa"),
-                );
-                outer
+            norito_json!({
+                "RedeemRwa": norito_json!({
+                    "rwa": rwa_id.to_string(),
+                    "quantity": Numeric::from_str("1").expect("valid numeric"),
+                })
             }),
-            json::Value::Object({
-                let mut outer = json::Map::new();
-                outer.insert(
-                    "UnfreezeRwa".to_owned(),
-                    json::to_value(UnfreezeRwa::new(rwa_id.clone()))
-                        .expect("serialize unfreeze rwa"),
-                );
-                outer
+            norito_json!({ "FreezeRwa": norito_json!({ "rwa": rwa_id.to_string() }) }),
+            norito_json!({ "UnfreezeRwa": norito_json!({ "rwa": rwa_id.to_string() }) }),
+            norito_json!({
+                "HoldRwa": norito_json!({
+                    "rwa": rwa_id.to_string(),
+                    "quantity": Numeric::from_str("0.5").expect("valid numeric"),
+                })
             }),
-            json::Value::Object({
-                let mut outer = json::Map::new();
-                outer.insert(
-                    "HoldRwa".to_owned(),
-                    json::to_value(HoldRwa::new(
-                        rwa_id.clone(),
-                        Numeric::from_str("0.5").expect("valid numeric"),
-                    ))
-                    .expect("serialize hold rwa"),
-                );
-                outer
+            norito_json!({
+                "ReleaseRwa": norito_json!({
+                    "rwa": rwa_id.to_string(),
+                    "quantity": Numeric::from_str("0.25").expect("valid numeric"),
+                })
             }),
-            json::Value::Object({
-                let mut outer = json::Map::new();
-                outer.insert(
-                    "ReleaseRwa".to_owned(),
-                    json::to_value(ReleaseRwa::new(
-                        rwa_id.clone(),
-                        Numeric::from_str("0.25").expect("valid numeric"),
-                    ))
-                    .expect("serialize release rwa"),
-                );
-                outer
+            norito_json!({
+                "ForceTransferRwa": norito_json!({
+                    "rwa": rwa_id.to_string(),
+                    "quantity": Numeric::from_str("1.5").expect("valid numeric"),
+                    "destination": destination
+                        .canonical_i105()
+                        .expect("canonical Katakana i105 destination"),
+                })
             }),
-            json::Value::Object({
-                let mut outer = json::Map::new();
-                outer.insert(
-                    "ForceTransferRwa".to_owned(),
-                    json::to_value(ForceTransferRwa::new(
-                        rwa_id.clone(),
-                        Numeric::from_str("1.5").expect("valid numeric"),
-                        destination.clone(),
-                    ))
-                    .expect("serialize force transfer rwa"),
-                );
-                outer
+            norito_json!({
+                "SetRwaControls": norito_json!({
+                    "rwa": rwa_id.to_string(),
+                    "controls": controls.clone(),
+                })
             }),
-            json::Value::Object({
-                let mut outer = json::Map::new();
-                outer.insert(
-                    "SetRwaControls".to_owned(),
-                    json::to_value(SetRwaControls::new(rwa_id.clone(), controls.clone()))
-                        .expect("serialize set controls"),
-                );
-                outer
+            norito_json!({
+                "SetRwaKeyValue": norito_json!({
+                    "rwa": rwa_id.to_string(),
+                    "key": Name::from_str("grade").expect("valid key"),
+                    "value": norito_json!({
+                        "origin": "AE",
+                        "score": Numeric::from_str("9").expect("valid numeric"),
+                    }),
+                })
+            }),
+            norito_json!({
+                "RemoveRwaKeyValue": norito_json!({
+                    "rwa": rwa_id.to_string(),
+                    "key": Name::from_str("grade").expect("valid key"),
+                })
             }),
         ];
 

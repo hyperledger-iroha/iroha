@@ -32,8 +32,8 @@ slug: /norito/ledger-walkthrough
 לאורך המדריך החליפו את `$ADMIN_ACCOUNT` ו-`$RECEIVER_ACCOUNT` במזהי החשבונות שבהם תשתמשו. ה-bundle ברירת המחדל כבר כולל שני חשבונות שנגזרו מהמפתחות של הדמו:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="soraカタカナ..."
+export RECEIVER_ACCOUNT="soraカタカナ..."
 ```
 
 אמתו את הערכים על ידי הצגת החשבונות הראשונים:

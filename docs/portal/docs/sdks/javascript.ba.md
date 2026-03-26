@@ -118,11 +118,11 @@ const defs = await torii.queryAssetDefinitions({
 console.log("filtered definitions", defs.items);
 
 const assetId = "norito:4e52543000000001";
-const balances = await torii.listAccountAssets("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const balances = await torii.listAccountAssets("soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ", {
   limit: 10,
   assetId,
 });
-const txs = await torii.listAccountTransactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const txs = await torii.listAccountTransactions("soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ", {
   limit: 5,
   assetId,
 });
@@ -229,7 +229,7 @@ if (!snapshot) {
   console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
 }
 
-const qr = await torii.getExplorerAccountQr("i105...");
+const qr = await torii.getExplorerAccountQr("soraカタカナ...");
 console.log("explorer literal", qr.literal);
 await fs.writeFile("alice.svg", qr.svg, "utf8");
 console.log(

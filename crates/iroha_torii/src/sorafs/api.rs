@@ -9426,11 +9426,11 @@ mod advert_tests {
         );
         fetch_headers.insert(
             header::HeaderName::from_static(HEADER_SORA_NAME),
-            HeaderValue::from_static("alice@hbl.sbp"),
+            HeaderValue::from_static("alice@hbl.dataspace"),
         );
         fetch_headers.insert(
             header::HeaderName::from_static(HEADER_SORA_PROOF),
-            alias_proof_header("alice@hbl.sbp"),
+            alias_proof_header("alice@hbl.dataspace"),
         );
 
         let fetch_request = StorageFetchRequestDto {
@@ -10011,11 +10011,11 @@ mod advert_tests {
         );
         fetch_headers.insert(
             header::HeaderName::from_static(HEADER_SORA_NAME),
-            HeaderValue::from_static("alice@hbl.sbp"),
+            HeaderValue::from_static("alice@hbl.dataspace"),
         );
         fetch_headers.insert(
             header::HeaderName::from_static(HEADER_SORA_PROOF),
-            alias_proof_header("alice@hbl.sbp"),
+            alias_proof_header("alice@hbl.dataspace"),
         );
 
         let fetch_request = StorageFetchRequestDto {
@@ -11856,11 +11856,11 @@ mod advert_tests {
             );
             headers.insert(
                 header::HeaderName::from_static(HEADER_SORA_NAME),
-                HeaderValue::from_static("alias@capability"),
+                HeaderValue::from_static("alias@capability.dataspace"),
             );
             headers.insert(
                 header::HeaderName::from_static(HEADER_SORA_PROOF),
-                alias_proof_header("alias@capability"),
+                alias_proof_header("alias@capability.dataspace"),
             );
             headers.insert(
                 header::HeaderName::from_static(HEADER_SORA_MANIFEST_ENVELOPE),

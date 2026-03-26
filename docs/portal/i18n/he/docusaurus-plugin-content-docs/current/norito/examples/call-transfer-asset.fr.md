@@ -19,9 +19,9 @@ slug: /norito/examples/call-transfer-asset
 
 ## Parcours du registre
 
-- Approvisionnez l'autorité du contrat (לדוגמה `i105...`) avec l'actif qu'elle transférera et accordez-lui le rôle `CanTransfer` ou une permission équivalente.
-- Appelez le point d'entrée `call_transfer_asset` pour transférer 5 unités du compte du contrat vers `i105...`, en reflétant la manière dont l'automatisation on-chain peut encapsuler des appels hôte.
-- Vérifiez les soldes via `FindAccountAssets` ou `iroha_cli ledger assets list --account i105...` et inspectez les événements pour confirmer que le garde de métadonnées a journalisé le contexte du transfert.
+- Approvisionnez l'autorité du contrat (לדוגמה `soraカタカナ...`) avec l'actif qu'elle transférera et accordez-lui le rôle `CanTransfer` ou une permission équivalente.
+- Appelez le point d'entrée `call_transfer_asset` pour transférer 5 unités du compte du contrat vers `soraカタカナ...`, en reflétant la manière dont l'automatisation on-chain peut encapsuler des appels hôte.
+- Vérifiez les soldes via `FindAccountAssets` ou `iroha_cli ledger assets list --account soraカタカナ...` et inspectez les événements pour confirmer que le garde de métadonnées a journalisé le contexte du transfert.
 
 ## מנחה את חברי SDK
 
@@ -36,8 +36,8 @@ slug: /norito/examples/call-transfer-asset
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("i105..."),
-      account!("i105..."),
+      account!("soraカタカナ..."),
+      account!("soraカタカナ..."),
       asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );

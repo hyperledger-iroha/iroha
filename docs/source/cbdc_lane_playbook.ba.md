@@ -104,10 +104,10 @@ Lane манифестар каталог аҫтында тура эфирҙа к
   "version": 1,
   "governance": "central_bank_multisig",
   "validators": [
-    "i105...",
-    "i105...",
-    "i105...",
-    "i105..."
+    "soraカタカナ...",
+    "soraカタカナ...",
+    "soraカタカナ...",
+    "soraカタカナ..."
   ],
   "quorum": 3,
   "protected_namespaces": [
@@ -246,7 +246,7 @@ iroha app space-directory manifest audit-bundle \
   curl -X POST https://torii.soranexus/v1/space-directory/manifests \
        -H 'Content-Type: application/json' \
        -d '{
-            "authority": "i105...",
+            "authority": "soraカタカナ...",
             "private_key": "ed25519:CiC7…",
             "manifest": '"'"'$(cat fixtures/space_directory/capability/cbdc_wholesale.manifest.json)'"'"',
             "reason": "CBDC onboarding wave 4"
@@ -262,7 +262,7 @@ iroha app space-directory manifest audit-bundle \
   curl -X POST https://torii.soranexus/v1/space-directory/manifests/revoke \
        -H 'Content-Type: application/json' \
        -d '{
-            "authority": "i105...",
+            "authority": "soraカタカナ...",
             "private_key": "ed25519:CiC7…",
             "uaid": "uaid:0f4d…ab11",
             "dataspace": 11,

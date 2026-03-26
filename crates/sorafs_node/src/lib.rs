@@ -3125,7 +3125,7 @@ mod tests {
         let report = RepairReportV1 {
             version: REPAIR_REPORT_VERSION_V1,
             ticket_id: RepairTicketId("REP-351".into()),
-            auditor_account: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            auditor_account: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
             submitted_at_unix: 1_700_100_000,
             evidence: RepairEvidenceV1 {
                 version: REPAIR_EVIDENCE_VERSION_V1,
@@ -3155,7 +3155,7 @@ mod tests {
             .mark_repair_in_progress(
                 &report.ticket_id,
                 report.submitted_at_unix + 45,
-                Some("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".into()),
+                Some("soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ".into()),
             )
             .expect("mark repair in progress");
         assert!(matches!(
@@ -3186,7 +3186,7 @@ mod tests {
         let escalated_report = RepairReportV1 {
             version: REPAIR_REPORT_VERSION_V1,
             ticket_id: RepairTicketId("REP-352".into()),
-            auditor_account: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            auditor_account: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
             submitted_at_unix: 1_700_200_000,
             evidence: RepairEvidenceV1 {
                 version: REPAIR_EVIDENCE_VERSION_V1,
@@ -3212,7 +3212,7 @@ mod tests {
             ticket_id: escalated_report.ticket_id.clone(),
             provider_id: escalated_report.evidence.provider_id,
             manifest_digest: escalated_report.evidence.manifest_digest,
-            auditor_account: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            auditor_account: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
             proposed_penalty_nano: 500_000_000,
             submitted_at_unix: escalated_report.submitted_at_unix + 1_200,
             rationale: "Repeated PoR failures without acknowledgement".into(),
@@ -3238,7 +3238,7 @@ mod tests {
         let report = RepairReportV1 {
             version: REPAIR_REPORT_VERSION_V1,
             ticket_id: RepairTicketId("REP-451".into()),
-            auditor_account: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            auditor_account: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
             submitted_at_unix: 1_700_300_000,
             evidence: RepairEvidenceV1 {
                 version: REPAIR_EVIDENCE_VERSION_V1,
@@ -3296,7 +3296,7 @@ mod tests {
         let failed_report = RepairReportV1 {
             version: REPAIR_REPORT_VERSION_V1,
             ticket_id: RepairTicketId("REP-452".into()),
-            auditor_account: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            auditor_account: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
             submitted_at_unix: 1_700_400_000,
             evidence: RepairEvidenceV1 {
                 version: REPAIR_EVIDENCE_VERSION_V1,
@@ -3359,7 +3359,7 @@ mod tests {
         let report = RepairReportV1 {
             version: REPAIR_REPORT_VERSION_V1,
             ticket_id: RepairTicketId("REP-460".into()),
-            auditor_account: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            auditor_account: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
             submitted_at_unix: 1_700_500_000,
             evidence: RepairEvidenceV1 {
                 version: REPAIR_EVIDENCE_VERSION_V1,
@@ -3455,7 +3455,7 @@ mod tests {
         let report_complete = RepairReportV1 {
             version: REPAIR_REPORT_VERSION_V1,
             ticket_id: RepairTicketId("REP-470".into()),
-            auditor_account: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            auditor_account: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
             submitted_at_unix: 1_700_600_000,
             evidence: RepairEvidenceV1 {
                 version: REPAIR_EVIDENCE_VERSION_V1,
@@ -3473,7 +3473,7 @@ mod tests {
         let report_missing = RepairReportV1 {
             version: REPAIR_REPORT_VERSION_V1,
             ticket_id: RepairTicketId("REP-471".into()),
-            auditor_account: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            auditor_account: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
             submitted_at_unix: 1_700_600_100,
             evidence: RepairEvidenceV1 {
                 version: REPAIR_EVIDENCE_VERSION_V1,
@@ -3618,7 +3618,7 @@ mod tests {
         let report = RepairReportV1 {
             version: REPAIR_REPORT_VERSION_V1,
             ticket_id: RepairTicketId("REP-472".into()),
-            auditor_account: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            auditor_account: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
             submitted_at_unix: 1_700_700_000,
             evidence: RepairEvidenceV1 {
                 version: REPAIR_EVIDENCE_VERSION_V1,
@@ -3716,7 +3716,7 @@ mod tests {
         let report = RepairReportV1 {
             version: REPAIR_REPORT_VERSION_V1,
             ticket_id: RepairTicketId("REP-473".into()),
-            auditor_account: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            auditor_account: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
             submitted_at_unix: 1_700_700_300,
             evidence: RepairEvidenceV1 {
                 version: REPAIR_EVIDENCE_VERSION_V1,
@@ -3927,7 +3927,7 @@ mod tests {
         let report = RepairReportV1 {
             version: REPAIR_REPORT_VERSION_V1,
             ticket_id: RepairTicketId("REP-601".into()),
-            auditor_account: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            auditor_account: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
             submitted_at_unix: 1_700_000_100,
             evidence: RepairEvidenceV1 {
                 version: REPAIR_EVIDENCE_VERSION_V1,
@@ -4037,7 +4037,7 @@ mod tests {
         let report = RepairReportV1 {
             version: REPAIR_REPORT_VERSION_V1,
             ticket_id: RepairTicketId("REP-GC-001".into()),
-            auditor_account: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            auditor_account: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
             submitted_at_unix: retention_epoch,
             evidence: RepairEvidenceV1 {
                 version: REPAIR_EVIDENCE_VERSION_V1,

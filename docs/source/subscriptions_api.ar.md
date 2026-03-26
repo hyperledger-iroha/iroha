@@ -40,7 +40,7 @@ match the JSON layouts below (Norito JSON).
 ```json
 {
   "subscription_plan": {
-    "provider": "i105...",
+    "provider": "soraカタカナ...",
     "billing": {
       "cadence": {
         "kind": "monthly_calendar",
@@ -70,7 +70,7 @@ Fixed-price plans use:
 ```json
 {
   "subscription_plan": {
-    "provider": "i105...",
+    "provider": "soraカタカナ...",
     "billing": {
       "cadence": {
         "kind": "monthly_calendar",
@@ -100,8 +100,8 @@ Fixed-price plans use:
 {
   "subscription": {
     "plan_id": "aws_compute#commerce",
-    "provider": "i105...",
-    "subscriber": "i105...",
+    "provider": "soraカタカナ...",
+    "subscriber": "soraカタカナ...",
     "status": { "status": "active", "value": null },
     "current_period_start_ms": 1730419200000,
     "current_period_end_ms": 1733011200000,
@@ -242,10 +242,10 @@ Alternative:
 Registers a plan on an asset definition. `authority` must match `plan.provider`.
 ```json
 {
-  "authority": "i105...",
+  "authority": "soraカタカナ...",
   "private_key": "<hex>",
   "plan_id": "aws_compute#subscriptions",
-  "plan": { "provider": "i105...", "billing": { "...": "..." }, "pricing": { "...": "..." } }
+  "plan": { "provider": "soraカタカナ...", "billing": { "...": "..." }, "pricing": { "...": "..." } }
 }
 ```
 Response:
@@ -266,7 +266,7 @@ Response:
 Creates a subscription NFT and billing trigger. `authority` must be the subscriber (NFT owner).
 ```json
 {
-  "authority": "i105...",
+  "authority": "soraカタカナ...",
   "private_key": "<hex>",
   "subscription_id": "sub-6f3a9c$subscriptions",
   "plan_id": "aws_compute#subscriptions",
@@ -321,24 +321,24 @@ Returns the subscription state, latest invoice (if any), and plan metadata (if p
 
 ### POST /v1/subscriptions/{subscription_id}/pause
 ```json
-{ "authority": "i105...", "private_key": "<hex>" }
+{ "authority": "soraカタカナ...", "private_key": "<hex>" }
 ```
 Sets `status=paused` and unregisters the billing trigger.
 
 ### POST /v1/subscriptions/{subscription_id}/resume
 ```json
-{ "authority": "i105...", "private_key": "<hex>", "charge_at_ms": 1704067200000 }
+{ "authority": "soraカタカナ...", "private_key": "<hex>", "charge_at_ms": 1704067200000 }
 ```
 Sets `status=active`, resets `failure_count`, recomputes the current period, and re-schedules billing.
 `charge_at_ms` follows the same defaults as `first_charge_ms` when omitted.
 
 ### POST /v1/subscriptions/{subscription_id}/cancel
 ```json
-{ "authority": "i105...", "private_key": "<hex>", "cancel_mode": "immediate" }
+{ "authority": "soraカタカナ...", "private_key": "<hex>", "cancel_mode": "immediate" }
 ```
 or
 ```json
-{ "authority": "i105...", "private_key": "<hex>", "cancel_mode": "period_end" }
+{ "authority": "soraカタカナ...", "private_key": "<hex>", "cancel_mode": "period_end" }
 ```
 `cancel_mode=immediate` sets `status=canceled` and unregisters the billing trigger.
 `cancel_mode=period_end` keeps the subscription active until the current period ends, then stops
@@ -346,7 +346,7 @@ future billing without charging the next period.
 
 ### POST /v1/subscriptions/{subscription_id}/keep
 ```json
-{ "authority": "i105...", "private_key": "<hex>" }
+{ "authority": "soraカタカナ...", "private_key": "<hex>" }
 ```
 Clears `cancel_at_period_end` and keeps the subscription active for future billing cycles. Returns
 an error if the subscription is not scheduled to cancel at period end.
@@ -354,7 +354,7 @@ an error if the subscription is not scheduled to cancel at period end.
 ### POST /v1/subscriptions/{subscription_id}/usage
 ```json
 {
-  "authority": "i105...",
+  "authority": "soraカタカナ...",
   "private_key": "<hex>",
   "unit_key": "compute_ms",
   "delta": "3600000",
@@ -365,7 +365,7 @@ Executes the usage trigger with `SubscriptionUsageDelta`. `delta` must be non-ne
 
 ### POST /v1/subscriptions/{subscription_id}/charge-now
 ```json
-{ "authority": "i105...", "private_key": "<hex>", "charge_at_ms": 1704067200000 }
+{ "authority": "soraカタカナ...", "private_key": "<hex>", "charge_at_ms": 1704067200000 }
 ```
 Updates `next_charge_ms` and re-registers the billing trigger to execute at `charge_at_ms`
 (defaults to current network time when omitted).
@@ -376,7 +376,7 @@ The CLI mirrors the Torii endpoints for plan and subscription management.
 Register a plan from a JSON file (or stdin when `--plan-json` is omitted):
 ```bash
 iroha_cli subscriptions plan create \
-  --authority i105... \
+  --authority soraカタカナ... \
   --private-key <hex> \
   --plan-id aws_compute#commerce \
   --plan-json plan.json
@@ -384,13 +384,13 @@ iroha_cli subscriptions plan create \
 
 List plans for a provider:
 ```bash
-iroha_cli subscriptions plan list --provider i105... --limit 10
+iroha_cli subscriptions plan list --provider soraカタカナ... --limit 10
 ```
 
 Create a subscription:
 ```bash
 iroha_cli subscriptions subscription create \
-  --authority i105... \
+  --authority soraカタカナ... \
   --private-key <hex> \
   --subscription-id sub-001$subscriptions \
   --plan-id aws_compute#commerce
@@ -399,21 +399,21 @@ iroha_cli subscriptions subscription create \
 Pause, resume, cancel, or charge now:
 ```bash
 iroha_cli subscriptions subscription pause --subscription-id sub-001$subscriptions \
-  --authority i105... --private-key <hex>
+  --authority soraカタカナ... --private-key <hex>
 iroha_cli subscriptions subscription resume --subscription-id sub-001$subscriptions \
-  --authority i105... --private-key <hex>
+  --authority soraカタカナ... --private-key <hex>
 iroha_cli subscriptions subscription cancel --subscription-id sub-001$subscriptions \
-  --authority i105... --private-key <hex> --cancel-at-period-end
+  --authority soraカタカナ... --private-key <hex> --cancel-at-period-end
 iroha_cli subscriptions subscription keep --subscription-id sub-001$subscriptions \
-  --authority i105... --private-key <hex>
+  --authority soraカタカナ... --private-key <hex>
 iroha_cli subscriptions subscription charge-now --subscription-id sub-001$subscriptions \
-  --authority i105... --private-key <hex>
+  --authority soraカタカナ... --private-key <hex>
 ```
 
 Record usage:
 ```bash
 iroha_cli subscriptions subscription usage --subscription-id sub-001$subscriptions \
-  --authority i105... --private-key <hex> \
+  --authority soraカタカナ... --private-key <hex> \
   --unit-key compute_ms --delta 3600000
 ```
 

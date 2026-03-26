@@ -1978,7 +1978,7 @@ mod tests {
         let context = IsoMessageContext {
             ledger_id: Some("ledger-A".to_string()),
             source_account_id: Some(
-                "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU".to_string(),
+                "soraゴヂアニラショリャヒャャサピテヶベチュヲボヹヂギタクアニョロホドチャヘヱヤジヶハシャウンベニョャルフハケネキカ".to_string(),
             ),
             ..IsoMessageContext::default()
         };
@@ -1989,7 +1989,9 @@ mod tests {
         assert_eq!(status.ledger_id(), Some("ledger-A"));
         assert_eq!(
             status.source_account_id(),
-            Some("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU")
+            Some(
+                "soraゴヂアニラショリャヒャャサピテヶベチュヲボヹヂギタクアニョロホドチャヘヱヤジヶハシャウンベニョャルフハケネキカ"
+            )
         );
         assert_eq!(status.transaction_hash(), Some("hash-ctx"));
     }

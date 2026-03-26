@@ -298,7 +298,7 @@ export function ensureCanonicalAccountId(value, name) {
   if (raw.includes("@")) {
     fail(
       ValidationErrorCode.INVALID_ACCOUNT_ID,
-      `${name} must be a canonical i105 account id`,
+      `${name} must be a canonical Katakana i105 account id`,
       name,
     );
   }
@@ -309,7 +309,7 @@ export function ensureCanonicalAccountId(value, name) {
   ) {
     fail(
       ValidationErrorCode.INVALID_ACCOUNT_ID,
-      `${name} must be a canonical i105 account id`,
+      `${name} must be a canonical Katakana i105 account id`,
       name,
     );
   }
@@ -320,7 +320,7 @@ export function ensureCanonicalAccountId(value, name) {
     if (error instanceof AccountAddressError) {
       throw createValidationError(
         ValidationErrorCode.INVALID_ACCOUNT_ID,
-        `${name} must be a canonical i105 account id`,
+        `${name} must be a canonical Katakana i105 account id`,
         name,
         error,
       );
@@ -331,7 +331,7 @@ export function ensureCanonicalAccountId(value, name) {
   if (raw !== canonical) {
     fail(
       ValidationErrorCode.INVALID_ACCOUNT_ID,
-      `${name} must use canonical i105 account id form`,
+      `${name} must use canonical Katakana i105 account id form`,
       name,
     );
   }
@@ -347,7 +347,7 @@ export function normalizeAssetId(value, name) {
   if (parts.length < 2 || parts.length > 3) {
     fail(
       ValidationErrorCode.INVALID_ASSET_ID,
-      `${name} must use '<asset-definition-id>#<i105-account-id>' with optional '#dataspace:<id>' suffix`,
+      `${name} must use '<base58-asset-id>#<katakana-i105-account-id>' with optional '#dataspace:<id>' suffix`,
       name,
     );
   }

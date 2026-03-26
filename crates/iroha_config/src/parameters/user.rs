@@ -17753,11 +17753,11 @@ mod offline_cfg_tests {
             "enabled": true,
             "dedupe_ttl_secs": 120,
             "signer": {
-                "account_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+                "account_id": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
                 "private_key": "802620282ED9F3CF92811C3818DBC4AE594ED59DC1A2F78E4241E31924E101D6B1FB83"
             },
             "account_aliases": [
-                {"iban": "DE137017", "account_id": "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU"}
+                {"iban": "DE137017", "account_id": "soraゴヂアニラショリャヒャャサピテヶベチュヲボヹヂギタクアニョロホドチャヘヱヤジヶハシャウンベニョャルフハケネキカ"}
             ],
             "currency_assets": [
                 {"currency": "USD", "asset_definition": "__ASSET_DEFINITION__"}
@@ -17778,7 +17778,7 @@ mod offline_cfg_tests {
         let signer = parsed.signer.expect("signer present");
         assert_eq!(
             signer.account_id,
-            "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+            "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"
         );
         assert_eq!(parsed.account_aliases[0].iban, "DE137017");
         assert_eq!(parsed.currency_assets[0].currency, "USD");

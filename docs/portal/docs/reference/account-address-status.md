@@ -5,7 +5,7 @@ description: Summary of the ADDR-2 fixture workflow and how SDK teams stay in sy
 ---
 
 The canonical ADDR-2 bundle (`fixtures/account/address_vectors.json`) captures
-canonical i105, multisignature, and negative fixtures.
+canonical Katakana i105, multisignature, and negative fixtures.
 Every SDK + Torii surface relies on the same JSON so we can detect any codec
 drift before it hits production. This page mirrors the internal status brief
 (`docs/source/account_address_status.md` in the root repository) so portal

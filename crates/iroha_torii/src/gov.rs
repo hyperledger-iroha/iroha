@@ -340,9 +340,9 @@ fn reject_zk_public_input_aliases(map: &json::Map) -> Result<(), String> {
 
 fn ensure_owner_canonical(owner: &str) -> Result<(), String> {
     let canonical = iroha_data_model::account::AccountId::canonicalize(owner)
-        .map_err(|_| "owner must be a canonical i105 account id".to_string())?;
+        .map_err(|_| "owner must be a canonical Katakana i105 account id".to_string())?;
     if canonical != owner {
-        return Err("owner must use canonical i105 account id form".to_string());
+        return Err("owner must use canonical Katakana i105 account id form".to_string());
     }
     Ok(())
 }
@@ -356,7 +356,7 @@ fn reject_zk_public_input_owner(map: &json::Map) -> Result<(), String> {
     }
     let owner = value
         .as_str()
-        .ok_or_else(|| "owner must be a canonical i105 account id".to_string())?;
+        .ok_or_else(|| "owner must be a canonical Katakana i105 account id".to_string())?;
     ensure_owner_canonical(owner)
 }
 
@@ -2688,8 +2688,8 @@ mod tests {
     use super::*;
     use crate::routing::MaybeTelemetry;
 
-    const ACCOUNT_AUTHORITY: &str = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
-    const ACCOUNT_OWNER_ALT: &str = "6cmzPVPX7WxKCts6hciUhyLdu7eZ7ZoHVuXXQ4YijdycaXbKykgP8jV";
+    const ACCOUNT_AUTHORITY: &str = "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ";
+    const ACCOUNT_OWNER_ALT: &str = "soraゴヂアヌメネヒョタルアキュカンコプヱガョラツゴヸナゥヘガヮザネチョヷニャヒュニョメヺェヅヤアキャヅアタタナイス";
 
     #[test]
     fn hint_present_handles_nulls() {
@@ -2718,7 +2718,7 @@ mod tests {
     #[test]
     fn parse_candidates_rejects_invalid_account_id_literal() {
         let candidates = vec![VrfCandidateDto {
-            account_id: "not-an-i105@invalid-domain".to_string(),
+            account_id: "not-an-i105@hbl.dataspace".to_string(),
             variant: "Normal".to_string(),
             pk_b64: "AQ==".to_string(),
             proof_b64: "AQ==".to_string(),
@@ -2756,13 +2756,10 @@ mod tests {
     }
 
     fn noncanonical_literal(raw: &str) -> String {
-        let account_id = AccountId::parse_encoded(raw)
+        AccountId::parse_encoded(raw)
             .expect("literal parses")
-            .into_account_id();
-        account_id
-            .to_account_address()
-            .and_then(|address| address.to_i105())
-            .expect("non-canonical i105 literal")
+            .canonical()
+            .replacen("sora", "ｓｏｒａ", 1)
     }
 
     fn mk_basic_context() -> (Arc<State>, Arc<Queue>, Arc<ChainId>) {
@@ -3319,7 +3316,7 @@ mod tests {
         assert!(!body.accepted);
         assert_eq!(
             body.reason.as_deref(),
-            Some("owner must use canonical i105 account id form")
+            Some("owner must use canonical Katakana i105 account id form")
         );
     }
 
@@ -3998,7 +3995,7 @@ mod tests {
         assert!(!body.accepted);
         assert_eq!(
             body.reason.as_deref(),
-            Some("owner must use canonical i105 account id form")
+            Some("owner must use canonical Katakana i105 account id form")
         );
     }
 
@@ -4191,7 +4188,7 @@ mod tests {
         assert!(!body.accepted);
         assert_eq!(
             body.reason.as_deref(),
-            Some("owner must use canonical i105 account id form")
+            Some("owner must use canonical Katakana i105 account id form")
         );
     }
 

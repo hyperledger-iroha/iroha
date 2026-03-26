@@ -122,7 +122,7 @@ Space Directory 操作は 2 つの形で提供される。1) バイナリ内 CLI
 
 オペレーター/SDK は HTTPS 経由でも同様の操作が可能。Torii は同じ権限チェックを行い、指定 authority のためにトランザクションへ署名する（秘密鍵は Torii セキュアハンドラのメモリ内のみで扱う）。
 
-- `GET /v1/space-directory/uaids/{uaid}` — UAID の現在の dataspace bindings を解決（正規化アドレス、dataspace ids、program bindings）。Sora Name Service 形式には `canonical i105 output` を付与（I105 推奨、i105-default（`sora`）は Sora 専用の次善）。
+- `GET /v1/space-directory/uaids/{uaid}` — UAID の現在の dataspace bindings を解決（正規化アドレス、dataspace ids、program bindings）。Sora Name Service 形式には `canonical Katakana i105 output` を付与（canonical Katakana i105 のみ）。
 - `GET /v1/accounts/{uaid}/portfolio` — Norito バックの aggregator。`ToriiClient.getUaidPortfolio` をミラーし、wallet が dataspace 横断保有を表示できる。単一アセットに絞る場合は `asset_id=<asset#definition::owner>` を指定する。
 - `GET /v1/space-directory/uaids/{uaid}/manifests?dataspace={id}` — 正規マニフェスト JSON、ライフサイクル metadata、hash を取得。
 - `POST /v1/space-directory/manifests` — JSON から新規/置換マニフェストを送信（`authority`, `private_key`, `manifest`, optional `reason`）。Torii は `202 Accepted` を返す。

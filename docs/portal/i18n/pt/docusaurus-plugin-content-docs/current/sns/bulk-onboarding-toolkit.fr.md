@@ -36,7 +36,7 @@ O analisador exige a seguinte linha de texto (a ordem é flexível):
 |--------|--------|-------------|
 | `label` | Oui | Libelle demande (casse mixte acceptee; l'outil normalize de acordo com Norm v1 e UTS-46). |
 | `suffix_id` | Oui | Identificador numérico do sufixo (decimal ou `0x` hex). |
-| `owner` | Oui | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
+| `owner` | Oui | AccountId string (domainless encoded literal; canonical Katakana i105 only; no `@<domain>` suffix). |
 | `term_years` | Oui | Nível `1..=255`. |
 | `payment_asset_id` | Oui | Ato de liquidação (por exemplo `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Oui | Entiers non signes representant des unites nativos do ativo. |
@@ -77,9 +77,9 @@ Em caso de sucesso, o script escreveu um manifesto agregado:
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "soraカタカナ...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"soraカタカナ...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -88,7 +88,7 @@ Em caso de sucesso, o script escreveu um manifesto agregado:
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"soraカタカナ...",
         "signature":"alpha-signature"
       },
       "governance": null,

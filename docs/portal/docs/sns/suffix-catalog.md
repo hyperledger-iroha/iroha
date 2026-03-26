@@ -38,9 +38,9 @@ tooling can load the same parameters without scraping status docs.
 
 | Suffix | ID (`hex`) | Steward | Fund splitter | Status | Payment asset | Referral cap (bps) | Term (min – max years) | Grace / Redemption (days) | Pricing tiers (regex → base price / auction) | Reserved labels | Fee split (T/S/R/E bps) | Policy version |
 |--------|------------|---------|---------------|--------|---------------|--------------------|--------------------------|---------------------------|----------------------------------------------|-----------------|-------------------------|----------------|
-| `.sora` | `0x0001` | `i105...` | `i105...` | Active | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 500 | 1 – 5 | 30 / 60 | `T0: ^[a-z0-9]{3,}$ → 120 XOR (Vickrey)` | `treasury → i105...` | `7000 / 3000 / 1000 / 0` | 1 |
-| `.nexus` | `0x0002` | `i105...` | `i105...` | Paused | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 300 | 1 – 3 | 15 / 30 | `T0: ^[a-z0-9]{4,}$ → 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ → 4000 XOR (Dutch floor 500)` | `treasury → i105...`, `guardian → i105...` | `6500 / 2500 / 800 / 200` | 2 |
-| `.dao` | `0x0003` | `i105...` | `i105...` | Revoked | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 0 | 1 – 2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ → 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
+| `.sora` | `0x0001` | `soraカタカナ...` | `soraカタカナ...` | Active | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 500 | 1 – 5 | 30 / 60 | `T0: ^[a-z0-9]{3,}$ → 120 XOR (Vickrey)` | `treasury → soraカタカナ...` | `7000 / 3000 / 1000 / 0` | 1 |
+| `.nexus` | `0x0002` | `soraカタカナ...` | `soraカタカナ...` | Paused | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 300 | 1 – 3 | 15 / 30 | `T0: ^[a-z0-9]{4,}$ → 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ → 4000 XOR (Dutch floor 500)` | `treasury → soraカタカナ...`, `guardian → soraカタカナ...` | `6500 / 2500 / 800 / 200` | 2 |
+| `.dao` | `0x0003` | `soraカタカナ...` | `soraカタカナ...` | Revoked | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 0 | 1 – 2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ → 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
 
 ## JSON excerpt
 
@@ -53,7 +53,7 @@ tooling can load the same parameters without scraping status docs.
       "suffix": ".sora",
       "suffix_id": 1,
       "status": "active",
-      "fund_splitter_account": "i105...",
+      "fund_splitter_account": "soraカタカナ...",
       "payment_asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
       "referral_cap_bps": 500,
       "pricing": [

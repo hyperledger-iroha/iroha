@@ -89,7 +89,7 @@ en bruto.
 Los exploradores deben reflejar el trabajo de telemetria y accesibilidad de la
 בילטרה:
 
-- Aplica `data-copy-mode="i105|i105_default|qr"` a los botones de copia para que
+- Aplica `data-copy-mode="i105|qr"` a los botones de copia para que
   los-front-ends puedan emitir contadores de uso junto con la metrica Torii
   `torii_address_format_total`. El componente demo anterior despacha un evento
   `iroha:address-copy` con `{mode,timestamp}`: conecta esto a tu pipeline de
@@ -195,7 +195,7 @@ selector/estado y `docs/account_structure.md` לדיאגרמה מלאה של ב�
   proporciones explicitamente `networkPrefix`, por lo que los resumenes para
   redes no default no se re-renderizan silenciosamente con el prefijo por
   דפקטו.3. Convierte el payload canonico reutilizando los campos `i105.value` o
-   `i105_default` del resume (o solicita otra codificacion דרך `--format`). אסטאס
+   `i105` del resume (o solicita otra codificacion דרך `--format`). אסטאס
    cadenas ya son seguras para compartir externamente.
 4. מניפיסטוס אקטואליזציה, רישום ומסמכים דה קארה אל לקוחות עם לה
    forma canonica y notifica a las contrapartes que los selectores Seran מקומי

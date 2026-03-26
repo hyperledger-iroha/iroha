@@ -3,7 +3,7 @@
     "name": "swift_transfer_asset_basic",
     "payload": {
       "chain": "00000042",
-      "authority": "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV",
+      "authority": "soraゴヂアニダベェユヌサヨニャノヲョネイッリニャネガヨペバヒョブルノホイキャヸムケチャピファノマオニツミチオウ",
       "creation_time_ms": 1736000000000,
       "executable": {
         "Instructions": [
@@ -13,7 +13,7 @@
               "action": "TransferAsset",
               "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
               "quantity": "15.7500",
-              "destination": "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV"
+              "destination": "soraゴヂアニダベェユヌサヨニャノヲョネイッリニャネガヨペバヒョブルノホイキャヸムケチャピファノマオニツミチオウ"
             }
           }
         ]
@@ -27,7 +27,7 @@
     "name": "swift_mint_asset_basic",
     "payload": {
       "chain": "00000043",
-      "authority": "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV",
+      "authority": "soraゴヂアニダベェユヌサヨニャノヲョネイッリニャネガヨペバヒョブルノホイキャヸムケチャピファノマオニツミチオウ",
       "creation_time_ms": 1736001000000,
       "executable": {
         "Instructions": [
@@ -37,7 +37,7 @@
               "action": "MintAsset",
               "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
               "quantity": "42.0100",
-              "destination": "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV"
+              "destination": "soraゴヂアニダベェユヌサヨニャノヲョネイッリニャネガヨペバヒョブルノホイキャヸムケチャピファノマオニツミチオウ"
             }
           }
         ]
@@ -51,7 +51,7 @@
     "name": "swift_burn_asset_basic",
     "payload": {
       "chain": "00000044",
-      "authority": "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV",
+      "authority": "soraゴヂアニダベェユヌサヨニャノヲョネイッリニャネガヨペバヒョブルノホイキャヸムケチャピファノマオニツミチオウ",
       "creation_time_ms": 1736002000000,
       "executable": {
         "Instructions": [
@@ -61,7 +61,7 @@
               "action": "BurnAsset",
               "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
               "quantity": "5.2500",
-              "destination": "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV"
+              "destination": "soraゴヂアニダベェユヌサヨニャノヲョネイッリニャネガヨペバヒョブルノホイキャヸムケチャピファノマオニツミチオウ"
             }
           }
         ]

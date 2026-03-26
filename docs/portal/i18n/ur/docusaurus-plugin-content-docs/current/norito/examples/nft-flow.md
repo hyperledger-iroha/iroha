@@ -30,11 +30,11 @@ NFT کے لائف سائیکل کو ابتدا سے انتہا تک دکھاتا
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
 seiyaku NftFlow {
   kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
-    let owner = account!("i105...");
+    let owner = account!("soraカタカナ...");
     let nft = nft_id!("n0$wonderland");
     nft_mint_asset(nft, owner);
 
-    let to = account!("i105...");
+    let to = account!("soraカタカナ...");
     nft_transfer_asset(owner, nft, to);
     nft_set_metadata(nft, json!{ issued: "demo" });
     nft_burn_asset(nft);

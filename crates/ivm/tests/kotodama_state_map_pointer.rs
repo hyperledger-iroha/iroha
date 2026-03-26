@@ -21,7 +21,7 @@ fn encode_pointer_tlv(ty: PointerType, payload: &[u8]) -> Vec<u8> {
 fn parse_account_id_literal(id: &str) -> AccountId {
     AccountId::parse_encoded(id)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .expect("account literal must be canonical i105")
+        .expect("account literal must be canonical Katakana i105")
 }
 
 fn account_pointer_tlvs(id: &str) -> (Vec<u8>, Vec<u8>) {
@@ -49,7 +49,7 @@ fn encode_int_norito(value: i64) -> Vec<u8> {
 
 #[test]
 fn durable_map_account_id_path_hashes() {
-    const OWNER_ID: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+    const OWNER_ID: &str = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
     let (raw_ptr, _norito_ptr) = account_pointer_tlvs(OWNER_ID);
     let path = map_path("balances", &raw_ptr);
     assert!(path.starts_with("balances/"));
@@ -79,7 +79,7 @@ fn durable_map_name_value_roundtrip() {
 
 #[test]
 fn durable_map_account_id_value_roundtrip() {
-    const OWNER_ID: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+    const OWNER_ID: &str = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
     let (_raw_ptr, norito_ptr) = account_pointer_tlvs(OWNER_ID);
     let mut host = CoreHost::new();
     host.insert_state_value("owners/7", norito_ptr.clone());

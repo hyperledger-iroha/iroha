@@ -70,7 +70,7 @@ TransactionBuilder builder = new TransactionBuilder(codec, keyManager);
 
 TransactionPayload payload = TransactionPayload.builder()
     .setChainId("00000000")
-    .setAuthority("i105...")
+    .setAuthority("soraカタカナ...")
     .setCreationTimeMs(System.currentTimeMillis())
     .setExecutable(Executable.ivm(new byte[] { /* Kotodama bytecode */ }))
     .build();
@@ -118,7 +118,7 @@ transport exposes typed helpers in `org.hyperledger.iroha.android.nexus`:
   that accepts a `UaidPortfolioQuery` when you need to filter by `asset_id`.
 - `HttpClientTransport.getUaidBindings(String uaid)` hits
   `/v1/space-directory/uaids/{uaid}` when only the account bindings are needed.
-  Supply a `UaidBindingsQuery` for forward-compatible query options (the endpoint currently returns canonical i105 literals only).
+  Supply a `UaidBindingsQuery` for forward-compatible query options (the endpoint currently returns canonical Katakana i105 literals only).
 - `HttpClientTransport.getUaidManifests(String uaid, UaidManifestQuery query)`
   fetches `/v1/space-directory/uaids/{uaid}/manifests`; the query builder lets
   you filter by dataspace, status (`active`, `inactive`, `all`), and paging offsets.
@@ -136,7 +136,7 @@ import org.hyperledger.iroha.android.nexus.UaidPortfolioResponse;
 
 String uaid = UaidLiteral.canonicalize("  UAID:DEADBEEF...  ", "lookup uaid");
 UaidPortfolioQuery portfolioQuery =
-    UaidPortfolioQuery.builder().setAssetId("61CtjvNd9T3THAR65GsMVHr82Bjc#6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw").build();
+    UaidPortfolioQuery.builder().setAssetId("61CtjvNd9T3THAR65GsMVHr82Bjc#soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ").build();
 UaidPortfolioResponse portfolio = transport.getUaidPortfolio(uaid, portfolioQuery).join();
 portfolio.dataspaces().forEach(ds -> {
     String alias = ds.dataspaceAlias();

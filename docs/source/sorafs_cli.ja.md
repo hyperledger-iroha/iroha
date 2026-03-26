@@ -238,7 +238,7 @@ cargo run -p sorafs_car --features cli --bin sorafs_cli -- \
   --chunk-plan artifacts/chunk_plan.json \
   --torii-url https://localhost:8080 \
   --submitted-epoch=42 \
-  --authority=i105... \
+  --authority=soraカタカナ... \
   --private-key=ed25519:0123...cafe \
   --summary-out artifacts/manifest.submit.json \
   --response-out artifacts/manifest.submit.body
@@ -511,7 +511,7 @@ iroha app sorafs gateway merkle proof \
   - `entries[]` — `{index, kind, descriptor, hash_hex, policy_tier}` for every
     entry so auditors can map registry indexes back to the source file.
 - `account_id` entries are validated locally as encoded account literals
-  (canonical i105 only). Alias, UAID, opaque, and
+  (canonical Katakana i105 only). Alias, UAID, opaque, and
   `` literals are rejected by the validator.
 - `merkle proof` recomputes the tree for the given denylist and produces a
   membership proof for the zero-based `--index` requested. The JSON artefact
@@ -612,12 +612,12 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   --deposit=420 \
   --outcome=withdrawn_before_panel \
   --panel-size=7 \
-  --refund-account=i105... \
-  --treasury-account=i105... \
-  --escrow-account=i105... \
-  --juror=i105... --juror=i105... --juror=i105... \
-  --juror=i105... --juror=i105... --juror=i105... --juror=i105... \
-  --no-show=i105... --no-show=i105... \
+  --refund-account=soraカタカナ... \
+  --treasury-account=soraカタカナ... \
+  --escrow-account=soraカタカナ... \
+  --juror=soraカタカナ... --juror=soraカタカナ... --juror=soraカタカナ... \
+  --juror=soraカタカナ... --juror=soraカタカナ... --juror=soraカタカナ... --juror=soraカタカナ... \
+  --no-show=soraカタカナ... --no-show=soraカタカナ... \
   --format=json
 ```
 

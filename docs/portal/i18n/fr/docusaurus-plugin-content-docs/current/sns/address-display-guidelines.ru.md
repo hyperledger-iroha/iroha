@@ -76,7 +76,7 @@ Si vous utilisez le sélecteur Local-12 ou le registre, vous ne pouvez pas utili
 
 
 
-Les utilisateurs doivent utiliser le téléphone et installer le téléphone :- Ajoutez `data-copy-mode="i105|i105_default|qr"` aux boutons de copie, qui sont
+Les utilisateurs doivent utiliser le téléphone et installer le téléphone :- Ajoutez `data-copy-mode="i105|qr"` aux boutons de copie, qui sont
   Les frontends peuvent émettre des signaux en utilisant une fréquence métrique Torii
   `torii_address_format_total`. Le composant de démonstration doit être utilisé
   associer `iroha:address-copy` à `{mode,timestamp}` - vous connecter à votre compte
@@ -174,7 +174,7 @@ Si vous utilisez des touches, vous devez simplement sélectionner le fichier CLI
   Helper сохраняет I105 префикс, извлеченный из littéral, если только вы явно не
   Si vous utilisez le `networkPrefix`, la reprise n'est pas effectuée par défaut et n'est pas configurée par défaut.
   тихо с дефолтным префиксом.3. Convertissez la charge utile canonique en utilisant `i105.value` ou
-   `i105_default` à partir du résumé (ou à utiliser le codage suivant pour `--format`). Eti
+   `i105` à partir du résumé (ou à utiliser le codage suivant pour `--format`). Eti
    Les coups sont parfaits pour tout le monde.
 4. Ouvrir les manifestes, les registres et les documents clients sous forme canonique et
    Vous pouvez également activer les sélecteurs locaux après le basculement.

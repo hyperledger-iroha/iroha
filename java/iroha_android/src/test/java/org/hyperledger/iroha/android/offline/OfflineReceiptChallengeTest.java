@@ -29,8 +29,8 @@ public final class OfflineReceiptChallengeTest {
     OfflineReceiptChallenge.compute(
         "testnet",
         "inv-frac",
-        "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
-        "7EAD8EFYUx1aVKZPUU1fyKvr8dF1#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+        "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
+        "7EAD8EFYUx1aVKZPUU1fyKvr8dF1#soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
         "12.5",
         1_700_000_000_000L,
         SAMPLE_CERTIFICATE_ID_HEX,
@@ -49,8 +49,8 @@ public final class OfflineReceiptChallengeTest {
         OfflineReceiptChallenge.compute(
             "testnet",
             "inv-android-tests",
-            "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
-            "7EAD8EFYUx1aVKZPUU1fyKvr8dF1#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
+            "7EAD8EFYUx1aVKZPUU1fyKvr8dF1#soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
             "100",
             1_700_000_000_000L,
             SAMPLE_CERTIFICATE_ID_HEX,

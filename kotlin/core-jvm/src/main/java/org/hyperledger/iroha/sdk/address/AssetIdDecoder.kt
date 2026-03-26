@@ -4,7 +4,7 @@
 package org.hyperledger.iroha.sdk.address
 
 /**
- * Parses canonical public asset identifiers.
+ * Parses canonical asset-holding identifiers.
  */
 object AssetIdDecoder {
 
@@ -15,7 +15,7 @@ object AssetIdDecoder {
     )
 
     /**
-     * Checks whether the given value is a canonical public asset literal.
+     * Checks whether the given value is a canonical asset-holding literal.
      */
     @JvmStatic
     fun isCanonical(value: String?): Boolean {
@@ -31,18 +31,18 @@ object AssetIdDecoder {
     }
 
     /**
-     * Parses `<asset-definition-id>#<i105-account-id>` with an optional `#dataspace:<id>` suffix.
+     * Parses `<base58-asset-id>#<katakana-i105-account-id>` with an optional `#dataspace:<id>` suffix.
      */
     @JvmStatic
     fun decode(assetId: String): AssetId {
         val trimmed = assetId.trim()
         require(trimmed == assetId && trimmed.isNotEmpty()) {
-            "AssetId must use canonical public form"
+            "AssetId must use canonical holding form"
         }
 
         val parts = trimmed.split('#')
         require(parts.size == 2 || parts.size == 3) {
-            "AssetId must use '<asset-definition-id>#<i105-account-id>' with optional '#dataspace:<id>' suffix"
+            "AssetId must use '<base58-asset-id>#<katakana-i105-account-id>' with optional '#dataspace:<id>' suffix"
         }
 
         val definitionAddress = parts[0]
@@ -51,12 +51,12 @@ object AssetIdDecoder {
         val parsedAccount = try {
             AccountAddress.parseEncodedIgnoringCurveSupport(parts[1], null).address
         } catch (ex: AccountAddressException) {
-            throw IllegalArgumentException("AssetId.account must use canonical i105 form", ex)
+            throw IllegalArgumentException("AssetId.account must use canonical Katakana i105 form", ex)
         }
         val canonicalAccountId = try {
             parsedAccount.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
         } catch (ex: AccountAddressException) {
-            throw IllegalArgumentException("AssetId.account must use canonical i105 form", ex)
+            throw IllegalArgumentException("AssetId.account must use canonical Katakana i105 form", ex)
         }
 
         val dataspaceId = when (parts.size) {

@@ -14,7 +14,7 @@ translator: machine-google-reviewed
 ---
 
 The canonical ADDR-2 bundle (`fixtures/account/address_vectors.json`) captures
-I105 and i105-default (`sora`; half/full width), multisignature, and negative fixtures.
+canonical Katakana i105, multisignature, and negative fixtures.
 Every SDK + Torii surface relies on the same JSON so we can detect any codec
 drift before it hits production. This page mirrors the internal status brief
 (`docs/source/account_address_status.md` in the root repository) so portal

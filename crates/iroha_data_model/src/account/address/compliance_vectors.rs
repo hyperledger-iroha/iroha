@@ -24,13 +24,12 @@ macro_rules! json_obj {
 }
 
 const NETWORK_PREFIX: u16 = 753;
-const BASE58_ALPHABET: &str = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+const I105_CHECKSUM_MUTATION_CANDIDATES: &str = "アイウエオカキクケコサシスセソタチツテトナニヌネノ";
 
 struct PositiveEncodings {
     canonical_hex: String,
     canonical_bytes: Vec<u8>,
     i105: String,
-    i105_default: String,
 }
 
 struct SingleCase {
@@ -98,7 +97,7 @@ fn canonical_bytes(hex_value: &str) -> Vec<u8> {
 }
 
 fn selector_value() -> Value {
-    // Canonical i105 payloads are globally scoped and no longer embed domain selectors.
+    // Canonical Katakana i105 payloads are globally scoped and no longer embed domain selectors.
     json_obj!({ "kind": "default" })
 }
 
@@ -147,15 +146,11 @@ fn encodings(address: &AccountAddress) -> PositiveEncodings {
     let i105 = address
         .to_i105_for_discriminant(NETWORK_PREFIX)
         .expect("I105 encoding must succeed");
-    let i105_default = address
-        .to_i105()
-        .expect("i105_default encoding must succeed");
 
     PositiveEncodings {
         canonical_hex,
         canonical_bytes,
         i105,
-        i105_default,
     }
 }
 
@@ -182,8 +177,7 @@ fn build_single_case(case_id: &str, seed: u8, raw_domain: &str, note: &str) -> S
             "i105": json_obj!({
                 "prefix": NETWORK_PREFIX,
                 "string": encodings.i105.clone(),
-            }),
-            "i105_default": encodings.i105_default.clone(),
+            })
         })
     });
 
@@ -258,8 +252,7 @@ fn build_multisig_cases() -> Vec<MultisigCase> {
                     "i105": json_obj!({
                         "prefix": NETWORK_PREFIX,
                         "string": encodings.i105.clone(),
-                    }),
-                    "i105_default": encodings.i105_default.clone(),
+                    })
                 })
             });
 
@@ -320,7 +313,7 @@ fn mutate_last_char(input: &str, replacement: char) -> String {
         .last_mut()
         .expect("address strings are non-empty for compliance vectors");
     if *last == replacement {
-        *last = if replacement == '1' { '2' } else { '1' };
+        *last = if replacement == 'ア' { 'イ' } else { 'ア' };
     } else {
         *last = replacement;
     }
@@ -331,7 +324,7 @@ fn find_i105_checksum_mismatch(
     input: &str,
     expected_prefix: Option<u16>,
 ) -> (String, AccountAddressError) {
-    for candidate in BASE58_ALPHABET.chars() {
+    for candidate in I105_CHECKSUM_MUTATION_CANDIDATES.chars() {
         let mutated = mutate_last_char(input, candidate);
         if let Err(err) = AccountAddress::from_i105_for_discriminant(&mutated, expected_prefix)
             && matches!(err, AccountAddressError::ChecksumMismatch)
@@ -342,13 +335,13 @@ fn find_i105_checksum_mismatch(
     panic!("failed to derive deterministic I105 checksum-mismatch vector");
 }
 
-fn find_i105_default_checksum_mismatch(input: &str) -> (String, AccountAddressError) {
+fn find_i105_checksum_mismatch_any(input: &str) -> (String, AccountAddressError) {
     let mut preferred_candidates: Vec<char> = input.chars().collect();
     preferred_candidates.sort_unstable();
     preferred_candidates.dedup();
     for candidate in preferred_candidates
         .into_iter()
-        .chain(BASE58_ALPHABET.chars())
+        .chain(I105_CHECKSUM_MUTATION_CANDIDATES.chars())
     {
         let mutated = mutate_last_char(input, candidate);
         if let Err(err) = AccountAddress::from_i105(&mutated)
@@ -357,7 +350,7 @@ fn find_i105_default_checksum_mismatch(input: &str) -> (String, AccountAddressEr
             return (mutated, err);
         }
     }
-    panic!("failed to derive deterministic i105-default checksum-mismatch vector");
+    panic!("failed to derive deterministic i105 checksum-mismatch vector");
 }
 
 fn find_i105_invalid_char(input: &str) -> (String, AccountAddressError) {
@@ -415,11 +408,10 @@ pub fn compliance_vectors_json() -> Value {
         AccountAddress::from_i105_for_discriminant(&i105_wrong_prefix, Some(NETWORK_PREFIX))
             .unwrap_err();
 
-    let (i105_default_bad_char, err_bad_char) =
-        find_i105_invalid_char(&single_default.encodings.i105_default);
+    let (i105_bad_char, err_bad_char) = find_i105_invalid_char(&single_default.encodings.i105);
 
-    let (i105_default_bad_checksum, err_bad_checksum) =
-        find_i105_default_checksum_mismatch(&single_default.encodings.i105_default);
+    let (i105_bad_checksum, err_bad_checksum) =
+        find_i105_checksum_mismatch_any(&single_default.encodings.i105);
 
     let canonical_invalid = canonical_invalid_hex(&single_default.encodings);
     let err_invalid_hex = AccountAddress::parse_encoded(&canonical_invalid, None).unwrap_err();
@@ -454,17 +446,17 @@ pub fn compliance_vectors_json() -> Value {
             "expected_error": error_to_json(&err_prefix),
         }),
         json_obj!({
-            "case_id": "i105_default-invalid-character",
-            "format": "i105_default",
-            "note": "Introduces a glyph outside the canonical i105 alphabet.",
-            "input": i105_default_bad_char,
+            "case_id": "i105-invalid-character",
+            "format": "i105",
+            "note": "Introduces a glyph outside the canonical Katakana i105 alphabet.",
+            "input": i105_bad_char,
             "expected_error": error_to_json(&err_bad_char),
         }),
         json_obj!({
-            "case_id": "i105_default-checksum-mismatch",
-            "format": "i105_default",
-            "note": "Checksum bytes replaced to trigger canonical i105 verification failure.",
-            "input": i105_default_bad_checksum,
+            "case_id": "i105-checksum-mismatch-default-sentinel",
+            "format": "i105",
+            "note": "Checksum bytes replaced to trigger canonical Katakana i105 verification failure.",
+            "input": i105_bad_checksum,
             "expected_error": error_to_json(&err_bad_checksum),
         }),
         json_obj!({

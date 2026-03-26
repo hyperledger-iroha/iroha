@@ -19,9 +19,9 @@ Mostra como un punto de entrada Kotodama puede seguir las instrucciones del host
 
 ## Roteiro do livro razao
 
-- Financie a autoridade do contrato (por ejemplo `i105...`) con o activo que ela transferira e conceda a autoridade o papel `CanTransfer` o permiso equivalente.
-- Chame o Entrypoint `call_transfer_asset` para transferir 5 unidades del contacto del contrato para `i105...`, reflejando como un automático en cadena que puede involucrar chamadas do host.
-- Verifique saldos vía `FindAccountAssets` o `iroha_cli ledger assets list --account i105...` e inspeccione eventos para confirmar que o guard de metadados registrou o contexto da transferencia.
+- Financie a autoridade do contrato (por ejemplo `soraカタカナ...`) con o activo que ela transferira e conceda a autoridade o papel `CanTransfer` o permiso equivalente.
+- Chame o Entrypoint `call_transfer_asset` para transferir 5 unidades del contacto del contrato para `soraカタカナ...`, reflejando como un automático en cadena que puede involucrar chamadas do host.
+- Verifique saldos vía `FindAccountAssets` o `iroha_cli ledger assets list --account soraカタカナ...` e inspeccione eventos para confirmar que o guard de metadados registrou o contexto da transferencia.
 
 ## Guías de SDK relacionadas
 
@@ -36,8 +36,8 @@ Mostra como un punto de entrada Kotodama puede seguir las instrucciones del host
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("i105..."),
-      account!("i105..."),
+      account!("soraカタカナ..."),
+      account!("soraカタカナ..."),
       asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );

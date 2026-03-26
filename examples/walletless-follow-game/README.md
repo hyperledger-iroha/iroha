@@ -30,7 +30,7 @@ sponsor account to pay/submit. No browser extensions or middleware are required.
    ```bash
   TORII_URL=http://127.0.0.1:8080 \
   CHAIN_ID=dev-chain \
-  SPONSOR_ID=6cmzPVPXA9wQAqZuZTNQr7fWhci8nVVkG6zQBHnHVK7RPo2Dfe1WG9B \
+  SPONSOR_ID=soraゴヂアネタアニャヴウザニキニョゾビバヤチョトテスシコダオョキュロッベイゴビチャヰショチャパヨツサツホキマイニキ \
   SESSION_KEY_HEX=<private key hex> \
   node javascript/iroha_js/recipes/walletlessFollowGame.mjs \
      --binding '{"KeyedHash":{"pepper_id":"twitter_follow","digest_hex":"abcd...","uaid_hex":"...","tweet_id":"12345"}}' \

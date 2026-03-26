@@ -20,9 +20,9 @@ source: crates/ivm/docs/examples/08_call_transfer_asset.ko
 
 ## لیجر واک تھرو
 
-- کنٹریکٹ اتھارٹی (مثلا `i105...`) کو اس اثاثے سے فنڈ کریں جسے وہ منتقل کرے گی اور اتھارٹی کو `CanTransfer` رول یا مساوی اجازت دیں۔
-- `call_transfer_asset` انٹری پوائنٹ کال کریں تاکہ کنٹریکٹ اکاؤنٹ سے `i105...` کو 5 یونٹس منتقل ہوں، یہ اس طریقے کی عکاسی کرتا ہے کہ آن چین آٹومیشن ہوسٹ کالز کو لپیٹ سکتی ہے۔
-- `FindAccountAssets` یا `iroha_cli ledger assets list --account i105...` کے ذریعے بیلنس دیکھیں اور ایونٹس چیک کریں تاکہ تصدیق ہو کہ میٹا ڈیٹا گارڈ نے ٹرانسفر کانٹیکسٹ لاگ کیا ہے۔
+- کنٹریکٹ اتھارٹی (مثلا `soraカタカナ...`) کو اس اثاثے سے فنڈ کریں جسے وہ منتقل کرے گی اور اتھارٹی کو `CanTransfer` رول یا مساوی اجازت دیں۔
+- `call_transfer_asset` انٹری پوائنٹ کال کریں تاکہ کنٹریکٹ اکاؤنٹ سے `soraカタカナ...` کو 5 یونٹس منتقل ہوں، یہ اس طریقے کی عکاسی کرتا ہے کہ آن چین آٹومیشن ہوسٹ کالز کو لپیٹ سکتی ہے۔
+- `FindAccountAssets` یا `iroha_cli ledger assets list --account soraカタカナ...` کے ذریعے بیلنس دیکھیں اور ایونٹس چیک کریں تاکہ تصدیق ہو کہ میٹا ڈیٹا گارڈ نے ٹرانسفر کانٹیکسٹ لاگ کیا ہے۔
 
 ## متعلقہ SDK گائیڈز
 
@@ -37,8 +37,8 @@ source: crates/ivm/docs/examples/08_call_transfer_asset.ko
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("i105..."),
-      account!("i105..."),
+      account!("soraカタカナ..."),
+      account!("soraカタカナ..."),
       asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );

@@ -32,7 +32,7 @@ nəşr edilmiş `@iroha/iroha-js` paketinə qarşı və parçaları əks etdirir
 ```bash
 npm install @iroha/iroha-js
 export TORII_URL="https://torii.nexus.example"
-export AUTHORITY="i105..."
+export AUTHORITY="soraカタカナ..."
 export PRIVATE_KEY_HEX="$(cat ~/.iroha/keys/alice.key)"
 export CHAIN_ID="00000000-0000-0000-0000-000000000000"
 # optional lookups for GOV_FETCH
@@ -62,7 +62,7 @@ import {
 
 const TORII_URL = process.env.TORII_URL ?? "http://127.0.0.1:8080";
 const CHAIN_ID = process.env.CHAIN_ID ?? "00000000-0000-0000-0000-000000000000";
-const AUTHORITY = process.env.AUTHORITY ?? "i105...";
+const AUTHORITY = process.env.AUTHORITY ?? "soraカタカナ...";
 const PRIVATE_KEY = process.env.PRIVATE_KEY_HEX
   ? Buffer.from(process.env.PRIVATE_KEY_HEX, "hex")
   : Buffer.alloc(32, 0x11);

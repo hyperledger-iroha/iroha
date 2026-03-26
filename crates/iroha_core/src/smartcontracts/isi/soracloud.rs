@@ -3760,14 +3760,10 @@ fn resolve_fee_sink_account(
         &state_transaction.world,
         &state_transaction.nexus.fees.fee_sink_account_id,
     )
-    .or_else(|| {
-        AccountId::parse_encoded(&state_transaction.nexus.fees.fee_sink_account_id)
-            .map(|parsed| parsed.into_account_id())
-            .ok()
-    })
     .ok_or_else(|| {
         InstructionExecutionError::InvariantViolation(
-            "invalid nexus.fees.fee_sink_account_id; expected account identifier".into(),
+            "invalid nexus.fees.fee_sink_account_id; expected canonical Katakana i105 account id"
+                .into(),
         )
     })
 }

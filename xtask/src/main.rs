@@ -5543,9 +5543,9 @@ where
             let mut catalog_path: Option<PathBuf> = None;
             let mut guardrails_path: Option<PathBuf> = None;
             let mut output_dir: Option<PathBuf> = None;
-            let mut payer = "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_string();
+            let mut payer = "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ".to_string();
             let mut treasury =
-                "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_string();
+                "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ".to_string();
             let mut asset = "4cuvDVPuLBKJyN6dPbRQhmLh68sU".to_string();
             let mut allow_hard_cap = false;
             let mut pending = args.peekable();

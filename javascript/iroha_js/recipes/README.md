@@ -39,7 +39,7 @@ Run with:
 ```bash
 npm install
 TORII_URL=http://127.0.0.1:8080 \
-ACCOUNT_ID=6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT \
+ACCOUNT_ID=soraゴヂアニヴヒュルロヒュキンムメタケトキキュヰサヱョモポケォグェエユガヰァキャヰブドイエシェュセコセケトエ \
 TORII_AUTH_TOKEN=token \
 node ./recipes/nft_account_iteration.mjs
 ```
@@ -163,7 +163,7 @@ Run with:
 npm install
 node ./recipes/contracts.mjs \
   TORII_URL=https://torii.devnet.example \
-  AUTHORITY=6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT \
+  AUTHORITY=soraゴヂアニヴヒュルロヒュキンムメタケトキキュヰサヱョモポケォグェエユガヰァキャヰブドイエシェュセコセケトエ \
   PRIVATE_KEY_HEX=$(cat ~/.iroha/keys/alice.hex) \
   CONTRACT_CODE_PATH=./artifacts/demo_contract.to \
   CONTRACT_MANIFEST_PATH=./artifacts/demo_manifest.json \
@@ -221,8 +221,8 @@ Run with:
 ```bash
 npm install
 TORII_URL=http://localhost:8080 \
-ACCOUNT_ID=6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT \
-NFT_ID=61CtjvNd9T3THAR65GsMVHr82Bjc#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9 \
+ACCOUNT_ID=soraゴヂアニヴヒュルロヒュキンムメタケトキキュヰサヱョモポケォグェエユガヰァキャヰブドイエシェュセコセケトエ \
+NFT_ID=61CtjvNd9T3THAR65GsMVHr82Bjc#soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ \
 PAGE_SIZE=25 \
 MAX_ITEMS=100 \
 node ./recipes/assets_iterators.mjs
@@ -232,7 +232,7 @@ Environment variables:
 
 - `TORII_URL` — Torii endpoint (defaults to `http://localhost:8080`).
 - `ACCOUNT_ID` — account literal for asset iteration.
-- `NFT_ID` — optional canonical NFT id (`<asset-definition-id>#<i105-account-id>`) to filter on (exact match).
+- `NFT_ID` — optional canonical NFT id (`<base58-asset-id>#<katakana-i105-account-id>`) to filter on (exact match).
 - `PAGE_SIZE` / `MAX_ITEMS` — pagination controls.
 - `TORII_API_TOKEN` / `TORII_AUTH_TOKEN` — credentials for permissioned nodes.
 - `ALLOW_INSECURE=1` — allow HTTP while sending credentials (dev/test only).

@@ -89,7 +89,7 @@ JavaScript のヘルパーとペイロードの説明 `selector` と `domainSumm
 <エクスプローラーアドレスカード />
 
 ロス・エクスプロラドーレス・デベン・リフレハル・エル・トラバホ・デ・テレメトリアとアクセス
-ビルテラ:- Aplica `data-copy-mode="i105|i105_default|qr"` a los botones de copia para que
+ビルテラ:- Aplica `data-copy-mode="i105|qr"` a los botones de copia para que
   ロス フロント エンド プエダン エミミル コンタドレス デ ユーソ ジュント コン ラ メトリカ Torii
   `torii_address_format_total`。イベント前のコンポーネントのデモ
   `iroha:address-copy` con `{mode,timestamp}`: パイプラインへの接続
@@ -197,7 +197,7 @@ ADDR-5 の CLI ドキュメントに含まれるカデナ:
   欠陥品。
 
 3. Convierte el payload canonico reutilizando los Campos `i105.value` o
-   `i105_default` は再開します (`--format` を介して文書の提出を求めます)。エスタス
+   `i105` は再開します (`--format` を介して文書の提出を求めます)。エスタス
    カデナスやソンセグラスパラコンパルティルエクステルナメンテ。
 4. クライアントの実際のマニフェスト、レジストリ、ドキュメント
    正規の形式と通知を対照的にローカルのセレクターに表示します

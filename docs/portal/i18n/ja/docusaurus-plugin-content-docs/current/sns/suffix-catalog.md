@@ -56,7 +56,7 @@ SNS のロードマップは承認済みサフィックス (SN-1/SN-2) をすべ
       "suffix": ".sora",
       "suffix_id": 1,
       "status": "active",
-      "fund_splitter_account": "i105...",
+      "fund_splitter_account": "soraカタカナ...",
       "payment_asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
       "referral_cap_bps": 500,
       "pricing": [

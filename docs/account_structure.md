@@ -10,7 +10,7 @@ This document describes the shipping account-addressing stack implemented in
 `AccountAddress` (`crates/iroha_data_model/src/account/address.rs`) and the
 companion tooling. It provides:
 
-- A checksummed, human-facing **I105 account address** produced by
+- A checksummed, human-facing **Katakana I105 account address** produced by
   `AccountAddress::to_i105` that binds a chain discriminant to the account
   controller and offers deterministic interop-friendly textual forms.
 - A domainless canonical account payload keyed only by the controller.
@@ -19,7 +19,7 @@ companion tooling. It provides:
 
 ## Motivation
 
-Wallets and off-chain tooling rely on raw `alias@domain` (rejected legacy form) routing aliases today. This
+Wallets and off-chain tooling rely on raw `name@dataspace` or `name@domain.dataspace` routing aliases today. This
 has two major drawbacks:
 
 1. **No network binding.** The string has no checksum or chain prefix, so users
@@ -63,12 +63,12 @@ ScopedAccountId {
     domain: DomainId,
 }
 
-Display / JSON text: canonical i105 literal only
+Display / JSON text: canonical Katakana i105 literal only
 Parse accepts:
-- Canonical i105 account literals only.
-- Runtime parsers reject non-canonical/legacy dotted i105 literals, legacy `norito:<hex>`,
+- Canonical Katakana i105 account literals only.
+- Runtime parsers reject non-canonical/dotted i105 literals, legacy `norito:<hex>`,
   canonical hex (`0x...`), any `@<domain>` suffix, and account-alias literals such as
-  `label@dataspace` or `label@domain.dataspace`.
+  `name@dataspace` or `name@domain.dataspace`.
 
 Domain context is explicit and out-of-band. There is no public
 `AccountSubjectId`; subject identity is `AccountId`.
@@ -122,7 +122,7 @@ pub struct Common {
 The Rust data model now distinguishes the public `AccountId` surface from the
 lower-level `AccountAddress` helper.
 
-- `AccountId` text/JSON parsing is hard-cut to canonical i105 only.
+- `AccountId` text/JSON parsing is hard-cut to canonical Katakana i105 only.
 - `AccountAddress` remains the canonical binary envelope and can still be
   rendered as I105 or as canonical hex for low-level debugging and
   address-envelope JSON.
@@ -135,7 +135,7 @@ lower-level `AccountAddress` helper.
 
 `AccountAddress::parse_encoded` accepts i105 forms for
 the raw address envelope. `AccountId::parse_encoded`, `FromStr`, and JSON
-deserialization accept only canonical i105 and reject non-canonical/legacy
+deserialization accept only canonical Katakana i105 and reject non-canonical/legacy
 i105 forms, canonical hex, `norito:`, alias, and `@domain` forms.
 
 #### 2.1 Header byte layout (ADDR-1a)
@@ -257,14 +257,10 @@ Key implementation details:
   `iroha-ms-policy` personalization string so governance manifests can bind to a
   deterministic policy ID that matches the controller bytes embedded in I105.
 - Fixture coverage lives in `fixtures/account/address_vectors.json` (cases
-  `addr-multisig-*`). Wallets and SDKs should assert the canonical i105 strings
-  below to confirm their encoders match the Rust implementation.
-
-| Case ID | Threshold / members | i105 literal (prefix `0x02F1`) | Sora i105 literal | Notes |
-|---------|---------------------|--------------------------------|-------------------------|-------|
-| `addr-multisig-council-threshold3` | `≥3` weight, members `(2,1,1)` | `SRfSHsrH3tEmYaaAYyD248F3vfT1oQ3WEGS22MaD8W9bLefF7rsoKLYGcpbcM9EcSus5ZhCAZU7ztn2BCsyeCAdfRncAVmVsipd4ibk6CBLF3Nrzcw8P7VKJg6mtFgEhWVTjfDkUMoc63oeEmaWyV6cyiphwk8ZgKAJUe4TyVtmKm1WWcg7qZ6i` | `sora3vﾑ2zkaoUwﾋﾅGﾘﾚyﾂe3ﾖfﾙヰｶﾘﾉwｷnoWﾛYicaUr3ﾔｲﾖ2Ado3TﾘYQﾉJqﾜﾇｳﾑﾐd8dDjRGｦ3Vﾃ9HcﾀMヰR8ﾎﾖgEqGｵEｾDyc5ﾁ1ﾔﾉ31sUﾑﾀﾖaｸxﾘ3ｲｷMEuFｺｿﾉBQSVQnxﾈeJzrXLヰhｿｹ5SEEﾅPﾂﾗｸdヰﾋ1bUGHｲVXBWNNJ6K` | Council-domain governance quorum. |
-| `addr-multisig-wonderland-threshold2` | `≥2`, members `(1,2)` | `3xsmkps1KPBn9dtpE5qHRhHEZCpiAe8d9j6H9A42TV6kc1TpaqdwnSksKgQrsSEHznqvWKBMc1os69BELzkLjsR7EV2gjV14d9JMzo97KEmYoKtxCrFeKFAcy7ffQdboV1uRt` | `sora2ﾖZﾘeｴAdx3ﾂﾉﾔXhnｹﾀ2ﾉｱﾋxﾅﾄﾌヱwﾐmﾊvEﾐCﾏﾎｦ1ﾑHﾋso2GKﾔﾕﾁwﾂﾃP6ﾁｼﾙﾖｺ9ｻｦbﾈ4wFdﾑFヰ3HaﾘｼMｷﾌHWtｷﾋLﾙﾖQ4D3XﾊﾜXmpktﾚｻ5ﾅﾅﾇ1gkﾏsCFQGH9` | Dual-signature wonderland example (weight 1 + 2). |
-| `addr-multisig-default-quorum3` | `≥3`, members `(1,1,1,1)` | `nA2bDNhMqXz7ERkHNoEWbvJGyR1aDRsw32LaUWLgbK3vcpzohmdFCLvdotxUWWDY3aZeX4ptLk4Z6TjF5ossnJm8VrNo6daxmGTkqUyP4MxJxiNyPFxsEE5DLnsoLWUcxaWNpZ76tmkbiGS31Gv8tejKpuiHUMaQ1s5ohWyZvDnpycNkBK8AEfGJqn5yc9zAzfWbVhpDwkPj8ScnzvH1Echr5` | `soraﾐ38ﾅｴｸﾜ8ﾃzwBrqﾘｺ4yﾄv6kqJp1ｳｱﾛｿrzﾄﾃﾘﾒRﾗtV9ｼﾔPｽcヱEﾌVVVｼﾘｲZAｦﾓﾅｦeﾒN76vﾈcuｶuﾛL54rzﾙﾏX2zMﾌRLﾃﾋpﾚpｲcHﾑﾅﾃﾔzｵｲVfAﾃﾚﾎﾚCヰﾔｲｽｦw9ﾔﾕ8bGGkﾁ6sNｼaｻRﾖﾜYﾕﾚU18ﾅHヰﾌuMeﾊtﾂrｿj95Ft8ﾜ3fﾄkNiｴuﾈrCﾐQt8ヱｸｸmﾙﾒgUbﾑEKTTCM` | Implicit-default domain quorum used for base governance.
+  `addr-multisig-*`). Wallets and SDKs should assert the generated fixture
+  bundle directly rather than copying inline literals into code or docs. The
+  canonical renderer now emits katakana-only I105 payload symbols after the
+  chain sentinel.
 
 #### 2.4 Failure rules (ADDR-1a)
 
@@ -276,10 +272,12 @@ Key implementation details:
 - Oversized or malformed key material raises `KeyPayloadTooLong` or `InvalidPublicKey`.
 - Multisig controllers that exceed the encodable `u16` member count raise
   `MultisigMemberOverflow`; there is no 255-member limit.
-- IME/NFKC conversions: half-width Sora kana can be normalised to their full-width forms without breaking decoding, but the ASCII `sora` sentinel and I105 digits/letters MUST stay ASCII. Full-width or case-folded sentinels surface `ERR_MISSING_COMPRESSED_SENTINEL`, full-width ASCII payloads raise `ERR_INVALID_COMPRESSED_CHAR`, and checksum mismatches bubble up as `ERR_CHECKSUM_MISMATCH`. Property tests in `crates/iroha_data_model/src/account/address.rs` cover these paths so SDKs and wallets can rely on deterministic failures.
+- Canonical rendering uses katakana-only I105 payload symbols after the chain
+  sentinel. Decoders may still read historical mixed payloads for compatibility,
+  but public renderers, JSON, and docs must emit the katakana canonical form.
 - `AccountId` text/JSON parsing does not attempt alias or domain fallback:
   non-canonical/legacy i105 literals, `norito:<hex>`, canonical hex, `@domain`, and alias
-  forms are rejected up front in favor of canonical i105 only.
+  forms are rejected up front in favor of canonical Katakana i105 only.
 
 #### 2.5 Normative binary vectors
 
@@ -294,7 +292,7 @@ Key implementation details:
 
 The fixture bundle in `fixtures/account/address_vectors.json` still publishes
 i105 outputs plus non-canonical legacy-vector fixtures for the same canonical payloads.
-Public `AccountId` parser tests separately assert that only canonical i105 is
+Public `AccountId` parser tests separately assert that only canonical Katakana i105 is
 accepted.
 
 Reviewed-by: Data Model WG, Cryptography WG — scope approved for ADDR-1a.
@@ -304,39 +302,30 @@ Reviewed-by: Data Model WG, Cryptography WG — scope approved for ADDR-1a.
 Sora Nexus networks default to `chain_discriminant = 0x02F1`
 (`iroha_config::parameters::defaults::common::CHAIN_DISCRIMINANT`). The
 `AccountAddress::to_i105` helpers therefore emit
-consistent textual forms for every canonical payload. Selected fixtures from
-`fixtures/account/address_vectors.json` (generated via
-`cargo xtask address-vectors`) are shown below for quick reference:
-
-| Account label / note | i105 literal (prefix `0x02F1`) | Sora i105 literal |
-|--------------------|--------------------------------|-------------------------|
-| `default` account (selector-free canonical payload, seed `0x00`) | `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE` |
-| `treasury` account (selector-free canonical payload, seed `0x01`) | `34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
-
-These strings match the ones emitted by the CLI (`iroha tools address convert`), Torii
-responses (`canonical i105 literal rendering`), and SDK helpers, so UX copy/paste
-flows can rely on them verbatim. Canonical i105 is the only public `AccountId`
-text/JSON input form.
+consistent textual forms for every canonical payload. The authoritative sample
+literals now live only in `fixtures/account/address_vectors.json` so the CLI,
+Torii responses, and SDK helpers all consume one canonical katakana-I105 source
+of truth instead of duplicating stale inline strings.
 
 #### 2.6 Textual aliases for interoperability (planned)
 
-- **Chain-alias style:** `ih:<chain-alias>:<alias@domain>` for logs and human
+- **Chain-alias style:** `ih:<chain-alias>:<name@domain.dataspace>` for logs and human
   entry. Wallets must parse the prefix, verify the embedded chain, and block
   mismatches.
 - **CAIP-10 form:** `iroha:<caip-2-id>:<i105-addr>` for chain-agnostic
   integrations. This mapping is **not yet implemented** in the shipped
   toolchains.
 - **Machine helpers:** Publish codecs for Rust, TypeScript/JavaScript, Python,
-  and Kotlin covering canonical i105 (`AccountAddress::to_i105`,
+  and Kotlin covering canonical Katakana i105 (`AccountAddress::to_i105`,
   `AccountAddress::parse_encoded`, and their SDK equivalents). CAIP-10 helpers are
   future work.
 
 #### 2.7 Deterministic I105 alias
 
-- **Prefix mapping:** Reuse the `chain_discriminant` as the I105 network prefix.
-  `encode_i105_prefix()` (see `crates/iroha_data_model/src/account/address.rs`)
-  emits a 6‑bit prefix (single byte) for values `<64` and a 14‑bit, two-byte
-  form for larger networks. The authoritative assignments live in
+- **Prefix mapping:** Reuse the `chain_discriminant` as the I105 network
+  sentinel. The Rust codec renders well-known discriminants as `sora`, `test`,
+  or `dev`, with numeric fallback sentinels for other chains. The authoritative
+  assignments live in
   [`address_prefix_registry.md`](source/references/address_prefix_registry.md);
   SDKs MUST keep the matching JSON registry in sync to avoid collisions.
 - **Account material:** I105 encodes the canonical payload built by
@@ -344,12 +333,10 @@ text/JSON input form.
   Domain-selector bytes are not emitted in canonical payloads. There is no additional hashing step; I105 embeds the
   binary controller payload (single key or multisig) as produced by the Rust
   encoder, not the CTAP2 map used for multisig policy digests.
-- **Encoding:** `encode_i105()` concatenates the prefix bytes with the canonical
-  payload and appends a 16-bit checksum derived from Blake2b-512 with the fixed
-  prefix `I105PRE` (`b"I105PRE" || prefix || payload`). The result is encoded
-  with the I105 alphabet via `bs58`.
-  CLI/SDK helpers expose the same procedure, and `AccountAddress::parse_encoded`
-  reverses it via `decode_i105`.
+- **Encoding:** `encode_i105()` renders the canonical payload with the
+  105-symbol katakana alphabet and appends a six-symbol Bech32m-style checksum
+  over the canonical bytes. CLI/SDK helpers expose the same procedure, and
+  `AccountAddress::parse_encoded` reverses it via `decode_i105`.
 
 #### 2.8 Normative textual test vectors
 
@@ -358,8 +345,8 @@ I105 helper literals for canonical payloads.
 Highlights:
 
 - **`addr-single-default-ed25519` (Sora Nexus, prefix `0x02F1`).**  
-  I105 `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`. Torii emits this exact
-  string from `AccountId`’s `Display` implementation (canonical i105).
+  Torii emits the generated katakana-I105 literal from `AccountId`’s `Display`
+  implementation (canonical Katakana i105).
 - **Multisig controller payloads.**  
   Canonical controller bytes now encode `member_count:u16`, so address encoding
   no longer has the old 255-member hard cap.
@@ -368,14 +355,14 @@ Highlights:
   expecting the default prefix yields
   `AccountAddressError::UnexpectedNetworkPrefix { expected: 753, found: 754 }`
   before domain routing is attempted. Negative-path `AccountId` tests also cover
-  rejected `sora...`, `norito:...`, `0x...`, alias, and `@domain` inputs. The
-  `i105-checksum-mismatch` fixture exercises tampering detection over the Blake2b
-  checksum.
+  rejected `norito:...`, `0x...`, alias, and `@domain` inputs. The
+  `i105-checksum-mismatch` fixture exercises tampering detection over the
+  katakana-I105 checksum.
 
 #### 2.9 Compliance fixtures
 
 ADDR‑2 ships a replayable fixture bundle covering positive and negative
-scenarios across canonical i105, non-canonical legacy-vector output, canonical
+scenarios across canonical Katakana i105, non-canonical legacy-vector output, canonical
 `AccountAddress` hex renderings, selector-free payloads, multisignature
 controllers, and rejected legacy `AccountId` literal forms. The canonical JSON
 lives in `fixtures/account/address_vectors.json` and can be regenerated with:
@@ -543,13 +530,13 @@ the change so the audit trail is reconstructable offline.
    `iroha tools address convert <address> --format json --expect-prefix 753`
    (or consume `fixtures/account/address_vectors.json` via
    `scripts/account_fixture_helper.py`) to capture the exact `digest_hex`.
-  The CLI address tool accepts canonical i105 and canonical `0x…` literals;
-  runtime `AccountId` parsers continue to accept canonical i105 only.
+  The CLI address tool accepts canonical Katakana i105 and canonical `0x…` literals;
+  runtime `AccountId` parsers continue to accept canonical Katakana i105 only.
   The JSON summary reports the parsed format/domain kind plus canonical
   encodings (I105 and canonical hex) for each input.
   For newline-oriented exports use
   `iroha tools address normalize --input <file>` to rewrite newline-separated
-  address lists into canonical i105, canonical hex, or JSON forms.
+  address lists into canonical Katakana i105, canonical hex, or JSON forms.
   When auditors need spreadsheet-friendly evidence, run
   `iroha tools address audit --input <file> --format csv` to emit a CSV summary
   (`input,status,format,domain_kind,…`) that highlights domain kind,
@@ -559,7 +546,7 @@ the change so the audit trail is reconstructable offline.
    the manifest with `cargo xtask address-vectors` before requesting signatures.
 4. **Verify & publish.** Follow the runbook checklist (hashes, Sigstore,
    sequence monotonicity) before mirroring the bundle to SoraFS. Torii now
-   canonicalizes account filters and path literals from canonical i105 input only.
+   canonicalizes account filters and path literals from canonical Katakana i105 input only.
 5. **Monitor & rollback.** Keep the Local‑8 and Local‑12 collision panels at
    zero for 30 days; if regressions appear, republish the previous manifest
    only in the affected non-production environment until telemetry stabilises.
@@ -575,7 +562,7 @@ their change tickets.
   plus the resolved domain as a label fetched from the registry. Domains are
   clearly marked as descriptive metadata that may change, while I105 is the
   stable address.
-- **Input canonicalization:** Torii and SDKs accept canonical i105 account IDs only and reject `@domain` suffixes, alias forms, non-canonical/legacy i105 literals, and canonical-hex account literals in runtime parser paths. There is no
+- **Input canonicalization:** Torii and SDKs accept canonical Katakana i105 account IDs only and reject `@domain` suffixes, alias forms, non-canonical/legacy i105 literals, and canonical-hex account literals in runtime parser paths. There is no
   strict-mode toggle; raw phone/email identifiers must be kept off-ledger
   via UAID/opaque mappings.
 - **Error prevention:** Wallets parse I105 prefixes and enforce chain-discriminant
@@ -592,7 +579,7 @@ their change tickets.
 - **Safe sharing flows:** Surfaces that copy or display addresses default to the i105 form and expose an adjacent “share” action that presents both the full string and a QR code derived from the same payload so users can verify the checksum visually or by scanning. When truncation is unavoidable (e.g., small screens), retain the start and end of the string, add clear ellipses, and keep the full address accessible via copy-to-clipboard to prevent accidental clipping.
 - **IME safeguards:** Address inputs MUST reject composition artefacts from IME/IME-style keyboards. Enforce ASCII-only entry, present an inline warning when full-width or Kana characters are detected, and offer a plain-text paste zone that strips combining marks before validation so Japanese and Chinese users can disable their IME without losing progress.
 - **Screen-reader support:** Provide visually hidden labels (`aria-label`/`aria-describedby`) that describe the leading i105 digits and chunk the i105 payload into 4- or 8-character groups, so assistive technology reads grouped characters instead of a run-on string. Announce copy/share success via polite live regions and ensure QR previews include descriptive alt text (“i105 address for <alias> on chain 0x02F1”).
-- **Single-format usage:** Keep address sharing on canonical i105 only and avoid secondary account-literal formats in wallet/explorer copy flows.
+- **Single-format usage:** Keep address sharing on canonical Katakana i105 only and avoid secondary account-literal formats in wallet/explorer copy flows.
 
 ## Implementation Checklist
 
@@ -607,28 +594,28 @@ their change tickets.
 - **Domain policy:** ASCII `Name` today; if enabling i18n, apply UTS-46 for
   normalization and UTS-39 for confusable checks. Enforce max label (63) and
   total (255) lengths.
-- **Textual helpers:** Ship I105 ↔ canonical i105 codecs in Rust,
+- **Textual helpers:** Ship I105 ↔ canonical Katakana i105 codecs in Rust,
   TypeScript/JavaScript, Python, and Kotlin with shared test vectors (CAIP-10
   mappings remain future work).
 - **CLI tooling:** Provide a deterministic operator workflow via `iroha tools address convert`
-  (see `crates/iroha_cli/src/address.rs`), which accepts canonical i105 literals,
+  (see `crates/iroha_cli/src/address.rs`), which accepts canonical Katakana i105 literals,
   defaults to i105 output using the Sora Nexus prefix (`753`), enforces prefix
   expectations on parse, and rejects `@domain` suffixes so operator pipelines
   stay on canonical address literals only.
 - **Wallet/explorer UX:** Follow the [address display guidelines](source/sns/address_display_guidelines.md)
-  shipped with ADDR-6—keep canonical i105 as the single copy/QR payload and
+  shipped with ADDR-6—keep canonical Katakana i105 as the single copy/QR payload and
   apply IME-safe input/output handling.
 - **Torii integration:** Cache Nexus manifests respecting TTL, emit
   `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` deterministically, and
   keep strict account-literal parsing canonical-i105-only (reject non-canonical
-  forms and any `@domain` suffix) with canonical i105 output.
+  forms and any `@domain` suffix) with canonical Katakana i105 output.
 
 ### Torii response formats
 
-- `GET /v1/accounts` and `POST /v1/accounts/query` emit canonical i105 account
+- `GET /v1/accounts` and `POST /v1/accounts/query` emit canonical Katakana i105 account
   literals in responses.
 - Asset holder listings (`GET /v1/assets/{definition_id}/holders`) and their JSON
-  envelope counterpart (`POST …/holders/query`) also emit canonical i105 account
+  envelope counterpart (`POST …/holders/query`) also emit canonical Katakana i105 account
   identifiers in `items[*].account_id`.
 - **Testing:** Add unit tests for encoder/decoder round-trips, wrong-chain
   failures, and manifest lookups; add integration coverage in Torii and SDKs
@@ -658,14 +645,14 @@ messages, plus recommended remediation guidance.
 |------|---------|-------------------------|
 | `ERR_INVALID_I105_ENCODING` | I105 string contains characters outside the alphabet. | Ensure the address uses the published I105 alphabet and has not been truncated during copy/paste. |
 | `ERR_INVALID_LENGTH` | Payload length does not match the expected canonical size for header/controller (or legacy decode-compat selector variants). | Supply the full canonical payload emitted by the official encoder, or a complete legacy payload when decoding historical data. |
-| `ERR_CHECKSUM_MISMATCH` | Canonical i105 checksum validation failed. | Regenerate the canonical i105 address from a trusted source; this typically indicates a copy/paste error. |
+| `ERR_CHECKSUM_MISMATCH` | Canonical Katakana i105 checksum validation failed. | Regenerate the canonical Katakana i105 address from a trusted source; this typically indicates a copy/paste error. |
 | `ERR_INVALID_I105_PREFIX_ENCODING` | I105 prefix bytes are malformed. | Re-encode the address with a compliant encoder; do not alter the leading I105 bytes manually. |
 | `ERR_INVALID_HEX_ADDRESS` | Canonical hexadecimal form failed to decode. | Provide a `0x`-prefixed, even-length hex string produced by the official encoder. |
-| `ERR_MISSING_COMPRESSED_SENTINEL` | Legacy/non-canonical i105 form does not start with the expected sentinel. | Use canonical i105 output and avoid manual sentinel rewriting. |
-| `ERR_COMPRESSED_TOO_SHORT` | Legacy/non-canonical i105 string is truncated before payload+checksum complete. | Use the full canonical i105 string emitted by the encoder. |
-| `ERR_INVALID_COMPRESSED_CHAR` | Legacy/non-canonical i105 payload includes an invalid glyph. | Replace with canonical i105 output generated by official codecs. |
-| `ERR_INVALID_COMPRESSED_BASE` | Encoder attempted to use an unsupported legacy radix. | File a bug against the encoder; production flows must stay canonical i105. |
-| `ERR_INVALID_COMPRESSED_DIGIT` | Legacy/non-canonical digit value exceeds the supported legacy alphabet size. | Regenerate canonical i105 and avoid manual digit manipulation. |
+| `ERR_MISSING_COMPRESSED_SENTINEL` | Legacy/non-canonical Katakana i105 form does not start with the expected sentinel. | Use canonical Katakana i105 output and avoid manual sentinel rewriting. |
+| `ERR_COMPRESSED_TOO_SHORT` | Legacy/non-canonical Katakana i105 string is truncated before payload+checksum complete. | Use the full canonical Katakana i105 string emitted by the encoder. |
+| `ERR_INVALID_COMPRESSED_CHAR` | Legacy/non-canonical Katakana i105 payload includes an invalid glyph. | Replace with canonical Katakana i105 output generated by official codecs. |
+| `ERR_INVALID_COMPRESSED_BASE` | Encoder attempted to use an unsupported legacy radix. | File a bug against the encoder; production flows must stay canonical Katakana i105. |
+| `ERR_INVALID_COMPRESSED_DIGIT` | Legacy/non-canonical digit value exceeds the supported legacy alphabet size. | Regenerate canonical Katakana i105 and avoid manual digit manipulation. |
 | `ERR_UNSUPPORTED_ADDRESS_FORMAT` | Auto-detection could not recognise the input format. | Provide I105, I105, or canonical `0x` hex strings when invoking parsers. |
 
 ### Domain and Network Validation

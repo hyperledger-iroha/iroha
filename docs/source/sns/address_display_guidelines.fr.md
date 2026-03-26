@@ -16,8 +16,8 @@ payloads. The Android retail wallet sample in
 `examples/android/retail-wallet` now demonstrates the required UX pattern:
 
 - **Dual copy targets.** Ship two explicit copy buttons—I105 and the
-  i105-default Sora-only form (`i105`). I105 is always safe to share externally
-  and powers the QR payload. The i105-default variant must include an inline
+  i105 Sora-only form (`i105`). I105 is always safe to share externally
+  and powers the QR payload. The canonical Katakana i105 variant must include an inline
   warning because it only works inside Sora-aware apps. The Android retail wallet
   sample wires both Material buttons and their tooltips in
   `examples/android/retail-wallet/src/main/res/layout/activity_main.xml`, and the
@@ -32,7 +32,7 @@ payloads. The Android retail wallet sample in
   selector encodes a digest.
 - **I105 QR payloads.** QR codes must encode the I105 string. If QR generation
   fails, display an explicit error instead of a blank image.
-- **Clipboard messaging.** After copying the i105-default form, emit a toast or
+- **Clipboard messaging.** After copying the i105 form, emit a toast or
   snackbar reminding users that it is Sora-only and prone to IME mangling.
 
 Following these guardrails prevents Unicode/IME corruption and satisfies the
@@ -77,10 +77,10 @@ without re-parsing the canonical payload.
 - JavaScript inspector: `inspectAccountId(...)` returns the `i105Warning`
   string and appends it to `warnings` whenever a `i105` literal is provided, so
   explorers and wallet dashboards can surface the Sora-only notice during paste/
-  validation flows instead of only when they generate the i105-default form
+  validation flows instead of only when they generate the i105 form
   themselves.
 The JavaScript parser accepts the same canonical formats as Torii (I105,
-i105-default `sora`, and canonical `0x…` hex). Bare hex without the `0x` sentinel
+i105 `sora`, and canonical `0x…` hex). Bare hex without the `0x` sentinel
 is rejected by Torii, so SDKs must preserve the prefix when emitting hex
 literals.
 
@@ -101,13 +101,13 @@ below so wallet/explorer UIs can surface them inline without spelunking the code
 > ℹ️ I105 deliberately omits `0`, `O`, `I`, and `l` to avoid look‑alike glyphs. Surface that rule
 > in inline help text when users type an unsupported character so validation failures are actionable.
 
-### i105-default Sora alphabet (47 symbols)
+### i105 Sora alphabet (47 symbols)
 
 | Half-width glyphs | Count |
 |-------------------|-------|
 | `ｲ ﾛ ﾊ ﾆ ﾎ ﾍ ﾄ ﾁ ﾘ ﾇ ﾙ ｦ ﾜ ｶ ﾖ ﾀ ﾚ ｿ ﾂ ﾈ ﾅ ﾗ ﾑ ｳ ヰ ﾉ ｵ ｸ ﾔ ﾏ ｹ ﾌ ｺ ｴ ﾃ ｱ ｻ ｷ ﾕ ﾒ ﾐ ｼ ヱ ﾋ ﾓ ｾ ｽ` | 47 |
 
-The i105-default alphabet accepts both half-width and full-width kana, and the `sora` sentinel
+The canonical Katakana i105 alphabet accepts both half-width and full-width kana, and the `sora` sentinel
 may also be typed in full-width form (`ｓｏｒａ`). Render the half-width glyphs in UI copy while
 allowing screen readers to expand the descriptive text (see Accessibility guidance below). When
 exposing printable cheat-sheets or QR legends, include both tables so operators can validate
@@ -129,10 +129,10 @@ return `HTTP 400` so misconfigured SDKs fail fast.
 
 Requests always accept I105 selectors. Canonical
 I105 strings remain the wire format for manifests, telemetry, and QR payloads,
-so only opt into `canonical i105 output` when rendering UX where the Sora
+so only opt into `canonical Katakana i105 output` when rendering UX where the Sora
 alphabet offers material ergonomic wins.
 
-Offline reserve endpoints use the same canonical account-literal rules. `/v1/offline/reserve/setup`, `/v1/offline/reserve/topup`, `/v1/offline/reserve/renew`, `/v1/offline/reserve/sync`, `/v1/offline/reserve/defund`, `/v1/offline/revocations`, and `/v1/offline/transfers{,/query}` accept canonical i105 `AccountId` selectors wherever account literals appear. Only canonical i105 literals are accepted; `i105-default`, `@<domain>` suffixes, and implicit default-domain reconstruction remain invalid.
+Offline reserve endpoints use the same canonical account-literal rules. `/v1/offline/reserve/setup`, `/v1/offline/reserve/topup`, `/v1/offline/reserve/renew`, `/v1/offline/reserve/sync`, `/v1/offline/reserve/defund`, `/v1/offline/revocations`, and `/v1/offline/transfers{,/query}` accept canonical Katakana i105 `AccountId` selectors wherever account literals appear. Only canonical Katakana i105 literals are accepted; `@<domain>` suffixes and implicit default-domain reconstruction remain invalid.
 If a workflow needs domain context, carry it in separate fields (for example domain filters,
 `ScopedAccountId`-bearing records, or resolver metadata), not by decorating strict `AccountId`
 input literals.
@@ -140,8 +140,8 @@ input literals.
 ## Accessibility + implicit domain metadata
 
 - **Copy mode controls.** When rendering the I105/I105/QR toggle, mark each button with
-  `aria-pressed` and an explicit `aria-label` (for example, “Copy canonical i105 account address”
-  vs “Copy i105-default Sora address—works only inside Sora-aware apps”). Include a visually-hidden
+  `aria-pressed` and an explicit `aria-label` (for example, “Copy canonical Katakana i105 account address”
+  vs “Copy i105 Sora address—works only inside Sora-aware apps”). Include a visually-hidden
   `(safe to share)` or `(Sora-only)` suffix so screen readers convey the warnings present in the UI.
 - **Implicit domain hints.** Reuse the caption text from the main layout but also expose it via
   `aria-describedby` on the address container (e.g., “Default domain: omit `.wonderland` in Sora
@@ -152,7 +152,7 @@ input literals.
   can reference the literal field when announcing the image. If QR rendering fails, surface a
   live-region alert that quotes the i105 literal instead of leaving a blank canvas.
 - **Telemetry hooks.** Tag each copy button or context menu entry with `data-copy-mode="i105"`,
-  `"i105-default"`, or `"qr"` and emit those values alongside the `torii_address_format_total` counter
+  `"i105"`, or `"qr"` and emit those values alongside the `torii_address_format_total` counter
   to the `address_ingest` dashboard. The roadmap’s ADDR-6b acceptance test reads that telemetry to
   prove wallets/explorers actually expose all three formats. Also surface the Torii counters that
   prove Local-12 retirement progress (`torii_address_domain_total{domain_kind="local12"}` and
@@ -219,10 +219,10 @@ cross‑check Local vs global selectors without spelunking the RFC every time.
 
 ## Torii response knobs
 
-- Explorers consuming Torii via `/v1/accounts` and `/v1/accounts/query` always receive canonical i105 literals in `items[*].id`.
-- `GET /v1/accounts/{account_id}/transactions` and `POST .../transactions/query` also emit canonical i105 in `items[*].authority`.
-- `GET /v1/explorer/accounts/{account_id}/qr` returns canonical i105 payload metadata (`canonical_id`, `literal`, `modules`, `error_correction`, `qr_version`, `svg`) without any format override.
-- Asset-holder listings (`GET /v1/assets/{definition_id}/holders`) and `POST .../holders/query` return canonical i105 `items[*].account_id` values consistently.
+- Explorers consuming Torii via `/v1/accounts` and `/v1/accounts/query` always receive canonical Katakana i105 literals in `items[*].id`.
+- `GET /v1/accounts/{account_id}/transactions` and `POST .../transactions/query` also emit canonical Katakana i105 in `items[*].authority`.
+- `GET /v1/explorer/accounts/{account_id}/qr` returns canonical Katakana i105 payload metadata (`canonical_id`, `literal`, `modules`, `error_correction`, `qr_version`, `svg`) without any format override.
+- Asset-holder listings (`GET /v1/assets/{definition_id}/holders`) and `POST .../holders/query` return canonical Katakana i105 `items[*].account_id` values consistently.
 
 ## Local selector cutover toolkit (ADDR-5c)
 
@@ -260,7 +260,7 @@ through the migration:
    automation with `strict CI post-check` once operators are ready to block Local selectors in CI.
 6. When you need a newline-to-newline rewrite, use
    The helper skips non-Local rows by default, converts every remaining entry into the requested encoding
-   (canonical i105/hex/JSON), and preserves the original domain when `legacy  suffix` is set. Pair it with
+   (canonical Katakana i105/hex/JSON), and preserves the original domain when `legacy  suffix` is set. Pair it with
    `--allow-errors` to keep scanning even when a dump contains malformed literals.
 7. CI/lint automation can run `ci/check_address_normalize.sh`, which extracts the Local selectors from
    `fixtures/account/address_vectors.json`, converts them via `iroha tools address normalize`, and replays
@@ -288,9 +288,9 @@ Alertmanager pack (`dashboards/alerts/address_ingest_rules.yml`) surfaces three 
   responsible SDK team before declaring the incident resolved.
 
 `torii_address_format_total{endpoint,format}` complements the ingest metrics by counting every
-`canonical i105 literal rendering` request that Torii serves. Dashboard the metric alongside
+`canonical Katakana i105 literal rendering` request that Torii serves. Dashboard the metric alongside
 `torii_address_invalid_total` to prove that wallet/explorer traffic is gradually switching to the
-i105-default output before you disable Local selectors, and wire alert thresholds to catch any sudden
+i105 output before you disable Local selectors, and wire alert thresholds to catch any sudden
 fallback to the default I105 responses.
 
 ### Release note snippet (wallet & explorer)

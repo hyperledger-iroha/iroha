@@ -30,10 +30,10 @@ public final class OfflineSpendReceiptPayloadEncoder {
    * Encode OfflineSpendReceiptPayload to Norito bytes for signing.
    *
    * @param txIdHex 32-byte transaction ID as hex (64 chars)
-   * @param fromAccountId sender canonical i105 AccountId
-   * @param toAccountId receiver canonical i105 AccountId
-   * @param assetId canonical public asset ID
-   *     ({@code <asset-definition-id>#<i105-account-id>} with an optional
+   * @param fromAccountId sender canonical Katakana i105 AccountId
+   * @param toAccountId receiver canonical Katakana i105 AccountId
+   * @param assetId canonical asset-holding ID
+   *     ({@code <base58-asset-id>#<katakana-i105-account-id>} with an optional
    *     {@code #dataspace:<id>} suffix)
    * @param amount decimal amount string
    * @param issuedAtMs timestamp in milliseconds

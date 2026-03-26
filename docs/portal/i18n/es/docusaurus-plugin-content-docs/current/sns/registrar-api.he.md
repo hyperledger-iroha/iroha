@@ -174,7 +174,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner soraカタカナ... \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows

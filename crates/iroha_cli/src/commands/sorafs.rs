@@ -10387,7 +10387,7 @@ impl GatewayDenylistRecord {
                 if trimmed.is_empty() {
                     return Err(eyre!("`account_id` must not be empty"));
                 }
-                // Validate as a strict canonical i105 account literal.
+                // Validate as a strict canonical Katakana i105 account literal.
                 resolve(trimmed).wrap_err("failed to resolve `account_id`")?;
                 if let Some(alias) = self.account_alias.as_deref()
                     && alias.trim().is_empty()
@@ -10882,7 +10882,7 @@ mod gateway_tests {
             {
                 "kind": "account_id",
                 "account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                "account_alias": "routing@sora",
+                "account_alias": "routing@dataspace",
                 "policy_tier": "standard",
                 "issued_at": "2025-01-01T00:00:00Z",
                 "expires_at": "2025-02-01T00:00:00Z"
@@ -10923,7 +10923,7 @@ mod gateway_tests {
             {
                 "kind": "account_id",
                 "account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                "account_alias": "routing@sora",
+                "account_alias": "routing@dataspace",
                 "policy_tier": "standard",
                 "issued_at": "2025-01-01T00:00:00Z",
                 "expires_at": "2025-02-01T00:00:00Z"
@@ -10966,7 +10966,7 @@ mod gateway_tests {
             {
                 "kind": "account_id",
                 "account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                "account_alias": "routing@sora",
+                "account_alias": "routing@dataspace",
                 "policy_tier": "standard",
                 "issued_at": "2025-01-01T00:00:00Z",
                 "expires_at": "2025-02-01T00:00:00Z"
@@ -11019,7 +11019,7 @@ mod gateway_tests {
         [
             {
                 "kind": "account_alias",
-                "account_alias": "alias@sora",
+                "account_alias": "alias@dataspace",
                 "policy_tier": "standard",
                 "issued_at": "2026-01-01T00:00:00Z",
                 "expires_at": "2026-06-01T00:00:00Z"
@@ -11051,7 +11051,7 @@ mod gateway_tests {
         let args = GatewayUpdateDenylistArgs {
             base_path: base_path.clone(),
             add_paths: vec![add_path],
-            remove_descriptors: vec!["account_alias:alias@sora".to_owned()],
+            remove_descriptors: vec!["account_alias:alias@dataspace".to_owned()],
             output_path: Some(output_path.clone()),
             snapshot_out: Some(snapshot_json.clone()),
             snapshot_norito_out: Some(snapshot_norito.clone()),
@@ -12087,7 +12087,7 @@ mod tests {
             .expect("i105 encode");
         let non_canonical_i105 = address
             .to_i105_for_discriminant(address::chain_discriminant().wrapping_add(1))
-            .expect("non-canonical i105 encode");
+            .expect("non-canonical Katakana i105 encode");
         (canonical, i105, non_canonical_i105)
     }
 
@@ -12293,7 +12293,7 @@ mod tests {
         let record = denylist_record_for_account(&non_canonical_i105);
         assert!(
             record.validate(&resolve_account_literal).is_err(),
-            "non-canonical i105 literal should be rejected"
+            "non-canonical Katakana i105 literal should be rejected"
         );
     }
 

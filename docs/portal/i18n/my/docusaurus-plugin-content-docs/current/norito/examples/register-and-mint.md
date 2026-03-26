@@ -21,9 +21,9 @@ slug- /norito/examples/register-and-mint
 
 ## လယ်ဂျာရှင်းလင်းချက်
 
-- ဦးတည်ရာအကောင့် (ဥပမာ၊ `i105...`) ရှိနှင့်ပြီး SDK အမြန်စတင်တိုင်းတွင် တပ်ဆင်မှုအဆင့်ကို ထင်ဟပ်စေပါသည်။
+- ဦးတည်ရာအကောင့် (ဥပမာ၊ `soraカタカナ...`) ရှိနှင့်ပြီး SDK အမြန်စတင်တိုင်းတွင် တပ်ဆင်မှုအဆင့်ကို ထင်ဟပ်စေပါသည်။
 - ROSE ပိုင်ဆိုင်မှု အဓိပ္ပါယ်ဖွင့်ဆိုချက် ဖန်တီးရန် `register_and_mint` ကို တောင်းခံပြီး အရောင်းအ၀ယ်တစ်ခုတွင် Alice သို့ ယူနစ် 250 mintပါ။
-- mint အောင်မြင်ကြောင်း အတည်ပြုရန် `client.request(FindAccountAssets)` သို့မဟုတ် `iroha_cli ledger asset list --account i105...` မှတဆင့် လက်ကျန်များကို စစ်ဆေးပါ။
+- mint အောင်မြင်ကြောင်း အတည်ပြုရန် `client.request(FindAccountAssets)` သို့မဟုတ် `iroha_cli ledger asset list --account soraカタカナ...` မှတဆင့် လက်ကျန်များကို စစ်ဆေးပါ။
 
 ## သက်ဆိုင်ရာ SDK လမ်းညွှန်များ
 
@@ -45,7 +45,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("i105...");
+    let to = account!("soraカタカナ...");
     let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     mint_asset(to, asset, 250);
   }

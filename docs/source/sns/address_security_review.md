@@ -83,7 +83,7 @@ while Local‑8 would have produced a measurable ~2.7 % collision probability.
 
 - i105 literals use the `I105` alphabet and the Bech32m checksum described in
   the Account Structure RFC (§2.2, `docs/account_structure.md:124`).
-- The canonical i105 representation appends the half-width イロハ poem to
+- The canonical Katakana i105 representation appends the half-width イロハ poem to
   the same alphabet (`docs/account_structure.md:125`) so IME/Kana inputs can be
   rendered deterministically across locales.
 - All domain labels (for both Local selectors and Global registry entries) run
@@ -92,7 +92,7 @@ while Local‑8 would have produced a measurable ~2.7 % collision probability.
   confusables and mixed-normalization inputs.
 - Wallet/explorer UX requirements in
   `docs/source/sns/address_display_guidelines.md:34` mandate the dual-format
-  display (canonical i105) plus localized copy helpers so operators can
+  display (canonical Katakana i105) plus localized copy helpers so operators can
   reconcile what users see with what Torii enforces.
 
 ## 4. Registry immutability & tombstones

@@ -2472,7 +2472,7 @@ pub mod pipeline {
     /// BLS-specific batch size (0 disables batching).
     pub const SIGNATURE_BATCH_MAX_BLS: usize = 16;
     /// Default gas-collection technical account identifier (encoded-only literal).
-    pub const GAS_TECH_ACCOUNT_ID: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+    pub const GAS_TECH_ACCOUNT_ID: &str = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
     /// Admission-time upper bound for `max_cycles` embedded in IVM bytecode headers.
     pub const IVM_MAX_CYCLES_UPPER_BOUND: u64 = 1_000_000;
     /// Maximum decoded Kotodama instructions accepted during admission (0 = unlimited).
@@ -3068,7 +3068,7 @@ pub mod governance {
     }
 
     fn account_literal_from_account_id(account_id: &AccountId) -> String {
-        // Configuration parsing accepts canonical i105 account literals.
+        // Configuration parsing accepts canonical Katakana i105 account literals.
         account_id
             .canonical_i105()
             .expect("default governance account literal")

@@ -217,7 +217,7 @@ register_trigger wake {
 - `proof_blob(string|0xhex) -> ProofBlob*`
 
 توفر ماكروهات الـ Prelude أ aliases أقصر وتحققًا داخليًا لهذه البناة:
-- `account!("i105...")`, `account_id!("i105...")`
+- `account!("soraカタカナ...")`, `account_id!("soraカタカナ...")`
 - `asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`, `asset_id!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`
 - `domain!("wonderland")`, `domain_id!("wonderland")`
 - `name!("example")`

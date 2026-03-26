@@ -259,7 +259,7 @@ public final class AndroidOkHttpClientRefactorTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId(String.format("%08x", seed))
-            .setAuthority("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+            .setAuthority("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ")
             .setCreationTimeMs(1_700_000_000_000L + (seed & 0xFF))
             .setInstructionBytes(new byte[] {seed, (byte) (seed + 1)})
             .setTimeToLiveMs(5_000L)

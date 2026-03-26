@@ -32,7 +32,7 @@ CLI لا يتوسع، لذا يقدم SN-3b builder حتمي من CSV إلى Nor
 |--------|-------|-------|
 | `label` | نعم | التسمية المطلوبة (يقبل حالة التباين؛ الاداءة تطبع حسب Norm v1 و UTS-46). |
 | `suffix_id` | نعم | معرف لاحق رئيسي (عشري او `0x` hex). |
-| `owner` | نعم | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
+| `owner` | نعم | AccountId string (domainless encoded literal; canonical Katakana i105 only; no `@<domain>` suffix). |
 | `term_years` | نعم | العدد صحيح `1..=255`. |
 | `payment_asset_id` | نعم | اصل التوريد (مثل `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | نعم | الرقم الصحيح غير الموقع يمثل الوحدات الاصلية. |
@@ -71,9 +71,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "soraカタカナ...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"soraカタカナ...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -82,7 +82,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"soraカタカナ...",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -227,7 +227,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
 - **تحليل البيانات الوصفية او الحكم:** يتم تحليل JSON مباشرة؛ الحل النهائي
   المراجع الملفات نسبة الى موقع CSV. البيانات الوصفية غير الناشئة لا تتحقق.
 - **المتحكمون:** خلايا الفارغة تلتزم بـ `--default-controllers`. قوائم المقدمة
-  وحدة التحكم صريحة (مثل `i105...;i105...`) عند التفويض غير الرسمي.
+  وحدة التحكم صريحة (مثل `soraカタカナ...;soraカタカナ...`) عند التفويض غير الرسمي.
 
 يتم الابلاغ عن الاخطاء باستخدام ارقام الترتيب المنهجية (مثلا
 `error: row 12 term_years must be between 1 and 255`). يخرج السكربت بالكود `1`

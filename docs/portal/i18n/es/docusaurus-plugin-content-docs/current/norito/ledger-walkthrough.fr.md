@@ -30,8 +30,8 @@ ID de cuenta que vas a utilizar. El paquete por defecto incluye deja dos cuentas
 issus des cles de demo:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="soraカタカナ..."
+export RECEIVER_ACCOUNT="soraカタカナ..."
 ```
 
 Confirme los valores en la lista de las primeras cuentas:

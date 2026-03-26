@@ -2506,7 +2506,7 @@ mod tests {
                 call run;
                 on time pre_commit;
                 repeats 3;
-                authority "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+                authority "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
                 metadata { tag: "alpha"; count: 1; enabled: true; }
             }
         }
@@ -2525,7 +2525,9 @@ mod tests {
         assert!(matches!(trigger.filter, TriggerFilter::Time(_)));
         assert_eq!(
             trigger.authority.as_deref(),
-            Some("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+            Some(
+                "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"
+            )
         );
         assert_eq!(trigger.metadata.len(), 3);
     }
@@ -2601,7 +2603,7 @@ mod tests {
 
     #[test]
     fn parse_trigger_decl_with_structured_data_filters_for_core_families() {
-        let account = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".to_string();
+        let account = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".to_string();
         let peer =
             "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D".to_string();
         let domain = "wonderland".to_string();

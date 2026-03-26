@@ -37,10 +37,10 @@ import {
 
 const { signedTransaction } = buildTransaction({
   chainId: "offline-demo",
-  authority: "i105...",
+  authority: "soraカタカナ...",
   instructions: [
     buildMintAssetInstruction({
-      assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+      assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
       quantity: "10",
     }),
   ],

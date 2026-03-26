@@ -122,8 +122,8 @@ const SAMPLE_ALICE_PUBLIC_KEY: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
 const SAMPLE_OTHER_PUBLIC_KEY: &str =
     "ed0120E9F632D3034BAB6BB26D92AC8FD93EF878D9C5E69E01B61B4C47101884EE2F99";
-const SAMPLE_ALICE_ACCOUNT_ID: &str = "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9";
-const SAMPLE_BOB_ACCOUNT_ID: &str = "6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ";
+const SAMPLE_ALICE_ACCOUNT_ID: &str = "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ";
+const SAMPLE_BOB_ACCOUNT_ID: &str = "soraゴヂアヌョシペギゥルゼプキュビルェッハガヌイタソタィニュチョヵボヮゾバュチョナボポビワグツニュノノツマヘサ";
 
 static CLI_OVERRIDES: LazyLock<Mutex<CliOverrides>> =
     LazyLock::new(|| Mutex::new(CliOverrides::default()));
@@ -1170,7 +1170,7 @@ impl ComposerTemplate {
                         (fallback.account_id(), fallback.label())
                     });
                 app.composer_asset_id = template_asset_id("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", owner)
-                    .unwrap_or_else(|| "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_owned());
+                    .unwrap_or_else(|| "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ".to_owned());
                 app.composer_quantity = "10".to_owned();
                 app.composer_destination_account.clear();
                 app.last_info = Some(format!("Loaded rose mint template for {label}."));
@@ -1186,7 +1186,7 @@ impl ComposerTemplate {
                         (fallback.account_id(), fallback.label())
                     });
                 app.composer_asset_id = template_asset_id("5CJ6HCMxWw9xhuHmxDrzEfWGeE7M", owner)
-                    .unwrap_or_else(|| "61CtjvNd9T3THAR65GsMVHr82Bjc#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_owned());
+                    .unwrap_or_else(|| "61CtjvNd9T3THAR65GsMVHr82Bjc#soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ".to_owned());
                 app.composer_quantity = "5".to_owned();
                 app.composer_destination_account.clear();
                 app.last_info = Some(format!("Loaded cabbage mint template for {label}."));
@@ -1202,7 +1202,7 @@ impl ComposerTemplate {
                         (fallback.account_id(), fallback.label())
                     });
                 app.composer_asset_id = template_asset_id("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", owner)
-                    .unwrap_or_else(|| "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_owned());
+                    .unwrap_or_else(|| "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ".to_owned());
                 app.composer_quantity = "1".to_owned();
                 app.composer_destination_account.clear();
                 app.last_info = Some(format!("Loaded rose burn template for {label}."));
@@ -1216,7 +1216,7 @@ impl ComposerTemplate {
                 });
                 app.composer_asset_id =
                     template_asset_id("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", signer.account_id())
-                        .unwrap_or_else(|| "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_owned());
+                        .unwrap_or_else(|| "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ".to_owned());
                 app.composer_quantity = "2".to_owned();
                 let destination = signers
                     .iter()
@@ -1238,7 +1238,7 @@ impl ComposerTemplate {
                 });
                 app.composer_asset_id =
                     template_asset_id("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", signer.account_id())
-                        .unwrap_or_else(|| "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_owned());
+                        .unwrap_or_else(|| "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ".to_owned());
                 app.composer_quantity = "1".to_owned();
                 app.composer_destination_account = sample_account_id(SAMPLE_OTHER_PUBLIC_KEY);
                 app.last_info = Some("Loaded implicit receive transfer template.".to_owned());
@@ -9917,7 +9917,7 @@ impl MochiApp {
             ui.add(
                 egui::TextEdit::multiline(&mut self.composer_multisig_instructions)
                     .desired_rows(6)
-                    .hint_text("[ { \"kind\": \"mint_asset\", \"asset\": \"62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9\", \"quantity\": \"1\" } ]"),
+                    .hint_text("[ { \"kind\": \"mint_asset\", \"asset\": \"62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ\", \"quantity\": \"1\" } ]"),
             );
             ui.horizontal(|ui| {
                 ui.checkbox(
@@ -9936,7 +9936,7 @@ impl MochiApp {
             ui.add(
                 egui::TextEdit::multiline(&mut self.composer_multisig_policy_json)
                     .desired_rows(4)
-                    .hint_text("{ \"signatories\": { \"6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9\": 1 }, \"quorum\": 1, \"transaction_ttl_ms\": 3600000 }"),
+                    .hint_text("{ \"signatories\": { \"soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ\": 1 }, \"quorum\": 1, \"transaction_ttl_ms\": 3600000 }"),
             );
             if !self.composer_multisig_policy_json.trim().is_empty() {
                 match Self::parse_multisig_policy(&self.composer_multisig_policy_json) {
@@ -13310,8 +13310,8 @@ mod tests {
                 manifest_ready: true,
                 manifest_path: Some("/etc/iroha/lanes/alpha.json".to_owned()),
                 validator_ids: vec![
-                    "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_owned(),
-                    "6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ".to_owned(),
+                    "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ".to_owned(),
+                    "soraゴヂアヌョシペギゥルゼプキュビルェッハガヌイタソタィニュチョヵボヮゾバュチョナボポビワグツニュノノツマヘサ".to_owned(),
                 ],
                 quorum: Some(2),
                 protected_namespaces: vec!["finance".to_owned()],
@@ -13446,11 +13446,11 @@ mod tests {
     fn collect_state_json_exports_array() {
         let entries = [
             sample_state_entry(
-                "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+                "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
                 vec![0xAA, 0x01],
             ),
             sample_state_entry(
-                "6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ",
+                "soraゴヂアヌョシペギゥルゼプキュビルェッハガヌイタソタィニュチョヵボヮゾバュチョナボポビワグツニュノノツマヘサ",
                 vec![0xBB, 0x02],
             ),
         ];
@@ -13463,24 +13463,28 @@ mod tests {
         assert_eq!(array.len(), 2, "expected two exported state entries");
         assert_eq!(
             array[0].get("title").and_then(Value::as_str),
-            Some("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9")
+            Some(
+                "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ"
+            )
         );
         assert_eq!(
             array[1].get("title").and_then(Value::as_str),
-            Some("6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ")
+            Some(
+                "soraゴヂアヌョシペギゥルゼプキュビルェッハガヌイタソタィニュチョヵボヮゾバュチョナボポビワグツニュノノツマヘサ"
+            )
         );
     }
 
     #[test]
     fn collect_state_norito_exports_hex_dump() {
         let entries = [sample_state_entry(
-            "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
             vec![0xAB, 0xCD],
         )];
         let refs: Vec<&super::StateEntry> = entries.iter().collect();
         let dump = super::collect_state_norito(&refs).expect("export filtered state to norito");
         assert!(
-            dump.contains("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"),
+            dump.contains("soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ"),
             "export should include the entry title"
         );
         let mut parts = dump.split(':');
@@ -13503,7 +13507,7 @@ mod tests {
     #[test]
     fn save_state_json_to_file_writes_filtered_entries() {
         let entries = [sample_state_entry(
-            "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
             vec![0x01, 0x02],
         )];
         let refs: Vec<&super::StateEntry> = entries.iter().collect();
@@ -13516,7 +13520,7 @@ mod tests {
         );
         let written = std::fs::read_to_string(&path).expect("read exported state json");
         assert!(
-            written.contains("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"),
+            written.contains("soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ"),
             "exported JSON should include entry identifier"
         );
     }
@@ -13533,7 +13537,7 @@ mod tests {
     #[test]
     fn save_state_norito_to_file_writes_filtered_entries() {
         let entries = [sample_state_entry(
-            "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
             vec![0x0A, 0x0B],
         )];
         let refs: Vec<&super::StateEntry> = entries.iter().collect();
@@ -13546,7 +13550,7 @@ mod tests {
         );
         let written = std::fs::read_to_string(&path).expect("read exported state norito");
         assert!(
-            written.contains("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"),
+            written.contains("soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ"),
             "exported Norito dump should include entry identifier"
         );
     }
@@ -13564,11 +13568,11 @@ mod tests {
     fn state_tab_select_page_updates_entries_and_remaining() {
         let mut tab = super::StateTabState::new(StateQueryKind::Accounts);
         let first = sample_state_entry(
-            "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
             vec![0xAA],
         );
         let second = sample_state_entry(
-            "6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ",
+            "soraゴヂアヌョシペギゥルゼプキュビルェッハガヌイタソタィニュチョヵボヮゾバュチョナボポビワグツニュノノツマヘサ",
             vec![0xBB],
         );
         tab.pages = vec![
@@ -13586,7 +13590,9 @@ mod tests {
         assert_eq!(tab.entries.len(), 1, "expected a single entry on page 0");
         assert_eq!(
             tab.entries.first().map(|entry| entry.title.as_str()),
-            Some("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"),
+            Some(
+                "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ"
+            ),
             "selecting first page should surface corresponding entries"
         );
         assert_eq!(
@@ -13599,7 +13605,9 @@ mod tests {
         assert_eq!(tab.entries.len(), 1, "expected a single entry on page 1");
         assert_eq!(
             tab.entries.first().map(|entry| entry.title.as_str()),
-            Some("6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ"),
+            Some(
+                "soraゴヂアヌョシペギゥルゼプキュビルェッハガヌイタソタィニュチョヵボヮゾバュチョナボポビワグツニュノノツマヘサ"
+            ),
             "switching pages should update visible entries"
         );
         assert_eq!(
@@ -13614,12 +13622,12 @@ mod tests {
         let tab = tabs.get_mut(StateQueryKind::Accounts);
         tab.filter.search = "alice".to_owned();
         tab.entries.push(sample_state_entry(
-            "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
             vec![0x01],
         ));
         tab.pages.push(StatePageCache {
             entries: vec![sample_state_entry(
-                "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+                "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
                 vec![0x02],
             )],
             remaining: 1,
@@ -13663,7 +13671,7 @@ mod tests {
         let mut filter = super::StateFilter {
             search: "peer".to_owned(),
             domain: "wonderland".to_owned(),
-            owner: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_owned(),
+            owner: "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ".to_owned(),
             asset_definition: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".to_owned(),
         };
         filter.adapt_to_kind(StateQueryKind::Peers);
@@ -13688,11 +13696,11 @@ mod tests {
     #[test]
     fn filter_state_entries_collects_cached_matches() {
         let entry_page0 = sample_state_entry(
-            "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
             vec![0xAA],
         );
         let entry_page1 = sample_state_entry(
-            "6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ",
+            "soraゴヂアヌョシペギゥルゼプキュビルェッハガヌイタソタィニュチョヵボヮゾバュチョナボポビワグツニュノノツマヘサ",
             vec![0xBB],
         );
         let pages = vec![
@@ -13717,7 +13725,7 @@ mod tests {
         );
         assert!(
             page_indices.is_empty(),
-            "6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ is not present on the selected page"
+            "soraゴヂアヌョシペギゥルゼプキュビルェッハガヌイタソタィニュチョヵボヮゾバュチョナボポビワグツニュノノツマヘサ is not present on the selected page"
         );
         assert_eq!(
             cached_matches.len(),
@@ -13725,15 +13733,16 @@ mod tests {
             "expected a cached match sourced from another page"
         );
         assert_eq!(
-            cached_matches[0].title, "6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ",
-            "cached match should reference the 6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ entry"
+            cached_matches[0].title,
+            "soraゴヂアヌョシペギゥルゼプキュビルェッハガヌイタソタィニュチョヵボヮゾバュチョナボポビワグツニュノノツマヘサ",
+            "cached match should reference the soraゴヂアヌョシペギゥルゼプキュビルェッハガヌイタソタィニュチョヵボヮゾバュチョナボポビワグツニュノノツマヘサ entry"
         );
     }
 
     #[test]
     fn filter_state_entries_falls_back_to_current_page() {
         let entry_page0 = sample_state_entry(
-            "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
             vec![0xAC],
         );
         let current_entries = vec![entry_page0.clone()];
@@ -13750,7 +13759,7 @@ mod tests {
         assert_eq!(
             page_indices,
             vec![0],
-            "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9 should be matched on the current page"
+            "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ should be matched on the current page"
         );
         assert_eq!(
             cached_matches.len(),
@@ -13758,7 +13767,8 @@ mod tests {
             "fallback to current page should return a single match"
         );
         assert_eq!(
-            cached_matches[0].title, "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            cached_matches[0].title,
+            "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
             "cached results should include the local page entry"
         );
     }
@@ -13766,12 +13776,12 @@ mod tests {
     #[test]
     fn filter_state_entries_respects_domain_filter() {
         let entry_page0 = sample_state_entry_with_domain(
-            "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
             "wonderland",
             vec![0xDE, 0x01],
         );
         let entry_page1 = sample_state_entry_with_domain(
-            "6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ",
+            "soraゴヂアヌョシペギゥルゼプキュビルェッハガヌイタソタィニュチョヵボヮゾバュチョナボポビワグツニュノノツマヘサ",
             "narnia",
             vec![0xDE, 0x02],
         );

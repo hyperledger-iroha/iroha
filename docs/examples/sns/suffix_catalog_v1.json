@@ -9,7 +9,7 @@
       "status": "active",
       "steward_account": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
       "fund_splitter_account": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-      "payment_asset_id": "xor#sora",
+      "payment_asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
       "referral_cap_bps": 500,
       "min_term_years": 1,
       "max_term_years": 5,
@@ -29,7 +29,7 @@
           "tier_id": 0,
           "label_regex": "^[a-z0-9]{3,}$",
           "base_price": {
-            "asset_id": "xor#sora",
+            "asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
             "amount": 120
           },
           "auction_kind": "vickrey_commit_reveal",
@@ -51,7 +51,7 @@
       "status": "paused",
       "steward_account": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
       "fund_splitter_account": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-      "payment_asset_id": "xor#sora",
+      "payment_asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
       "referral_cap_bps": 300,
       "min_term_years": 1,
       "max_term_years": 3,
@@ -77,7 +77,7 @@
           "tier_id": 0,
           "label_regex": "^[a-z0-9]{4,}$",
           "base_price": {
-            "asset_id": "xor#sora",
+            "asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
             "amount": 480
           },
           "auction_kind": "vickrey_commit_reveal",
@@ -89,12 +89,12 @@
           "tier_id": 1,
           "label_regex": "^[a-z]{2}$",
           "base_price": {
-            "asset_id": "xor#sora",
+            "asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
             "amount": 4000
           },
           "auction_kind": "dutch_reopen",
           "dutch_floor": {
-            "asset_id": "xor#sora",
+            "asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
             "amount": 500
           },
           "min_duration_years": 1,
@@ -114,7 +114,7 @@
       "status": "revoked",
       "steward_account": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
       "fund_splitter_account": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-      "payment_asset_id": "xor#sora",
+      "payment_asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
       "referral_cap_bps": 0,
       "min_term_years": 1,
       "max_term_years": 2,
@@ -134,7 +134,7 @@
           "tier_id": 0,
           "label_regex": "^[a-z0-9]{3,}$",
           "base_price": {
-            "asset_id": "xor#sora",
+            "asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
             "amount": 60
           },
           "auction_kind": "vickrey_commit_reveal",

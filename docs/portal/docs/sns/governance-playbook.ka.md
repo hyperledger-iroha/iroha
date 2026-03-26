@@ -75,7 +75,7 @@ sidebar_label: მმართველობის სათამაშო წ
 | ქარტია + KPI დამატებები | `docs/source/sns/governance_addenda/` | ვერსიით კონტროლირებადი ხელმოწერილი წესდება, KPI შეთანხმებები და მმართველობის გადაწყვეტილებები, რომლებიც მითითებულია CLI ხმებით. |
 | რეესტრის სქემა | [`registry-schema.md`](./registry-schema.md) | კანონიკური Norito სტრუქტურები (`NameRecordV1`, `SuffixPolicyV1`, `RevenueAccrualEventV1`). |
 | რეგისტრატორის ხელშეკრულება | [`registrar-api.md`](./registrar-api.md) | REST/gRPC დატვირთვა, `sns_registrar_status_total` მეტრიკა და მმართველობის კვალის მოლოდინი. |
-| მისამართი UX სახელმძღვანელო | [`address-display-guidelines.md`](./address-display-guidelines.md) | Canonical i105 (სასურველია) + შეკუმშული (`sora`, მეორე საუკეთესო) რენდერები, რომლებიც ასახულია საფულეების/გამომძიებლების მიერ. |
+| მისამართი UX სახელმძღვანელო | [`address-display-guidelines.md`](./address-display-guidelines.md) | Canonical Katakana i105 (სასურველია) + შეკუმშული (`sora`, მეორე საუკეთესო) რენდერები, რომლებიც ასახულია საფულეების/გამომძიებლების მიერ. |
 | SoraDNS / GAR დოკუმენტები | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | განმსაზღვრელი მასპინძლის დერივაცია, გამჭვირვალობის შემსრულებლის სამუშაო პროცესი და გაფრთხილების წესები. |
 | მარეგულირებელი მემორანდუმი | `docs/source/sns/regulatory/` | იურისდიქციის მიღების შენიშვნები (მაგ., EU DSA), მმართველის აღიარება, შაბლონის დანართები. |
 | საბურღი ჟურნალი | `ops/drill-log.md` | ფაზის გასვლამდე საჭიროა ქაოსისა და IR რეპეტიციების ჩანაწერი. |

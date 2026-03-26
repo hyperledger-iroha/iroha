@@ -183,7 +183,7 @@ headers.forEach { key, value in
 }
 ```
 
-> **Hard-cut account parser:** Account-scoped helpers (`ToriiClient.getAssets`, `getTransactions`, and matching `IrohaSDK` shortcuts) accept only canonical i105 account ids. Account aliases (`label@dataspace` / `label@domain.dataspace`) and legacy literals are rejected.
+> **Hard-cut account parser:** Account-scoped helpers (`ToriiClient.getAssets`, `getTransactions`, and matching `IrohaSDK` shortcuts) accept only canonical Katakana i105 account ids. Account aliases (`name@dataspace` / `name@domain.dataspace`) and legacy literals are rejected.
 
 ### Explorer instruction history
 

@@ -36,7 +36,7 @@ Le parseur exige la ligne d'en-tete suivante (柔軟な選択):
 |----------|----------|---------------|
 | `label` |おうい |リベル要求 (casse mixte acceptee; l'outil 正規化 selon Norm v1 et UTS-46)。 |
 | `suffix_id` |おうい |接尾辞の識別子 (10 進数または `0x` 16 進数)。 |
-| `owner` |おうい | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
+| `owner` |おうい | AccountId string (domainless encoded literal; canonical Katakana i105 only; no `@<domain>` suffix). |
 | `term_years` |おうい |エンティア `1..=255`。 |
 | `payment_asset_id` |おうい |和解行為 (`61CtjvNd9T3THAR65GsMVHr82Bjc` など)。 |
 | `payment_gross` / `payment_net` |おうい | Entiers nonsignes 代表者 des 団結ネイティブ de l'actif。 |
@@ -77,9 +77,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "soraカタカナ...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"soraカタカナ...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -88,7 +88,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"soraカタカナ...",
         "signature":"alpha-signature"
       },
       "governance": null,

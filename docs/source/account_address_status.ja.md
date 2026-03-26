@@ -45,10 +45,10 @@ cargo xtask address-vectors --verify
 
 | 対象 | 施行 | 備考 |
 |---------|-------------|-------|
-| Rust data-model | `crates/iroha_data_model/tests/account_address_vectors.rs` | JSON を解析し、canonical payloads を再構築し、I105（推奨）/i105-default（`sora`、次善）/canonical 変換 + 構造化エラーを検証する。 |
-| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` | サーバー側 codec を検証し、Torii が不正な I105（推奨）/i105-default（`sora`、次善） payloads を決定論的に拒否するようにする。 |
-| JavaScript SDK | `javascript/iroha_js/test/address.test.js` | V1 fixtures (I105 推奨/i105-default（`sora`）次善/fullwidth) をミラーし、全ての負ケースで Norito 風のエラーコードを検証する。 |
-| Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` | I105（推奨）/i105-default（`sora`、次善）のデコード、multisig payloads、Apple プラットフォームでのエラー露出を確認する。 |
+| Rust data-model | `crates/iroha_data_model/tests/account_address_vectors.rs` | JSON を解析し、canonical payloads を再構築し、I105（推奨）/i105（`sora`、次善）/canonical 変換 + 構造化エラーを検証する。 |
+| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` | サーバー側 codec を検証し、Torii が不正な I105（推奨）/i105（`sora`、次善） payloads を決定論的に拒否するようにする。 |
+| JavaScript SDK | `javascript/iroha_js/test/address.test.js` | V1 fixtures (I105 推奨/i105（`sora`）次善/fullwidth) をミラーし、全ての負ケースで Norito 風のエラーコードを検証する。 |
+| Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` | I105（推奨）/i105（`sora`、次善）のデコード、multisig payloads、Apple プラットフォームでのエラー露出を確認する。 |
 | Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` | Kotlin/Java バインディングが canonical fixture と一致し続けることを確認する。 |
 
 ### 4. 監視と残タスク

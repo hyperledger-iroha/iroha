@@ -73,7 +73,7 @@ public final class OfflineWalletPlayIntegrityTests {
         """;
     return new OfflineAllowanceList.OfflineAllowanceItem(
         "deadbeef",
-        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+        "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
         "Alice",
         "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
         "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",

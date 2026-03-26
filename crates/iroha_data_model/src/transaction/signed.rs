@@ -1712,7 +1712,7 @@ mod attachments_tests {
         }
         let chain: ChainId = "test-chain".parse().unwrap();
         let authority =
-            AccountId::parse_encoded("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw")
+            AccountId::parse_encoded("soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ")
                 .expect("valid authority")
                 .into_account_id();
         let private_key: iroha_crypto::PrivateKey =

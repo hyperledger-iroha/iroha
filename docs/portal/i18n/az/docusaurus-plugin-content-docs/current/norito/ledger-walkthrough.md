@@ -32,8 +32,8 @@ istifadə etməyi planlaşdırdığınız hesab identifikatorları. Defolt paket
 demo açarlarından əldə edilmişdir:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="soraカタカナ..."
+export RECEIVER_ACCOUNT="soraカタカナ..."
 ```
 
 İlk bir neçə hesabı sadalayaraq dəyərləri təsdiqləyin:

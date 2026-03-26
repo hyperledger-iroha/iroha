@@ -42,9 +42,9 @@ scraper les docs de statut.
 
 | Suffixe | ID (`hex`) | Steward | Fund splitter | Statut | Actif de paiement | Plafond referral (bps) | Terme (min - max ans) | Grace / Redemption (jours) | Tiers de prix (regex -> prix de base / enchere) | Labels reserves | Repartition des fees (T/S/R/E bps) | Version de politique |
 |---------|------------|---------|---------------|--------|------------------|------------------------|------------------------|----------------------------|------------------------------------------------|----------------|-----------------------------------|--------------------|
-| `.sora` | `0x0001` | `i105...` | `i105...` | Actif | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 500 | 1-5 | 30 / 60 | `T0: ^[a-z0-9]{3,}$ -> 120 XOR (Vickrey)` | `treasury -> i105...` | `7000 / 3000 / 1000 / 0` | 1 |
-| `.nexus` | `0x0002` | `i105...` | `i105...` | En pause | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 300 | 1-3 | 15 / 30 | `T0: ^[a-z0-9]{4,}$ -> 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ -> 4000 XOR (Dutch floor 500)` | `treasury -> i105...`, `guardian -> i105...` | `6500 / 2500 / 800 / 200` | 2 |
-| `.dao` | `0x0003` | `i105...` | `i105...` | Revoque | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 0 | 1-2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ -> 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
+| `.sora` | `0x0001` | `soraカタカナ...` | `soraカタカナ...` | Actif | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 500 | 1-5 | 30 / 60 | `T0: ^[a-z0-9]{3,}$ -> 120 XOR (Vickrey)` | `treasury -> soraカタカナ...` | `7000 / 3000 / 1000 / 0` | 1 |
+| `.nexus` | `0x0002` | `soraカタカナ...` | `soraカタカナ...` | En pause | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 300 | 1-3 | 15 / 30 | `T0: ^[a-z0-9]{4,}$ -> 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ -> 4000 XOR (Dutch floor 500)` | `treasury -> soraカタカナ...`, `guardian -> soraカタカナ...` | `6500 / 2500 / 800 / 200` | 2 |
+| `.dao` | `0x0003` | `soraカタカナ...` | `soraカタカナ...` | Revoque | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 0 | 1-2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ -> 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
 
 ## Extrait JSON
 
@@ -57,7 +57,7 @@ scraper les docs de statut.
       "suffix": ".sora",
       "suffix_id": 1,
       "status": "active",
-      "fund_splitter_account": "i105...",
+      "fund_splitter_account": "soraカタカナ...",
       "payment_asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
       "referral_cap_bps": 500,
       "pricing": [

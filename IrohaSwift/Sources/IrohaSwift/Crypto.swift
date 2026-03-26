@@ -415,7 +415,7 @@ public enum AccountId {
     /// Normalizes account id literals for equality checks.
     ///
     /// Semantics:
-    /// - If the literal is an encoded `AccountAddress`, returns the canonical i105 rendering.
+    /// - If the literal is an encoded `AccountAddress`, returns the canonical Katakana i105 rendering.
     /// - Otherwise, returns the trimmed literal unchanged.
     public static func normalizeForComparison(
         _ literal: String,

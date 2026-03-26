@@ -1399,7 +1399,7 @@ pub struct World {
     /// Index from UAID to bound account (1:1).
     #[norito(skip)]
     pub(crate) uaid_accounts: Storage<UniversalAccountId, AccountId>,
-    /// Index from account alias to canonical i105 account id.
+    /// Index from account alias to canonical Katakana i105 account id.
     #[norito(skip)]
     pub(crate) account_aliases: Storage<AccountLabel, AccountId>,
     /// Index from opaque identifiers to UAIDs.
@@ -1808,7 +1808,7 @@ pub struct WorldBlock<'world> {
     pub(crate) domain_account_subjects: StorageBlock<'world, DomainId, BTreeSet<AccountId>>,
     /// Index from UAID to bound account (1:1).
     pub(crate) uaid_accounts: StorageBlock<'world, UniversalAccountId, AccountId>,
-    /// Index from account alias to canonical i105 account id.
+    /// Index from account alias to canonical Katakana i105 account id.
     pub(crate) account_aliases: StorageBlock<'world, AccountLabel, AccountId>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids: StorageBlock<'world, OpaqueAccountId, UniversalAccountId>,
@@ -2351,7 +2351,7 @@ pub struct WorldTransaction<'block, 'world> {
         StorageTransaction<'block, 'world, DomainId, BTreeSet<AccountId>>,
     /// Index from UAID to bound account (1:1).
     pub(crate) uaid_accounts: StorageTransaction<'block, 'world, UniversalAccountId, AccountId>,
-    /// Index from account alias to canonical i105 account id.
+    /// Index from account alias to canonical Katakana i105 account id.
     pub(crate) account_aliases: StorageTransaction<'block, 'world, AccountLabel, AccountId>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids:
@@ -3007,7 +3007,7 @@ pub struct WorldView<'world> {
     pub(crate) domain_account_subjects: StorageView<'world, DomainId, BTreeSet<AccountId>>,
     /// Index from UAID to bound account (1:1).
     pub(crate) uaid_accounts: StorageView<'world, UniversalAccountId, AccountId>,
-    /// Index from account alias to canonical i105 account id.
+    /// Index from account alias to canonical Katakana i105 account id.
     pub(crate) account_aliases: StorageView<'world, AccountLabel, AccountId>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids: StorageView<'world, OpaqueAccountId, UniversalAccountId>,
@@ -10771,39 +10771,16 @@ impl World {
         }
 
         for (definition_id, definition) in definitions.iter() {
-            if by_definition.contains_key(definition_id) {
-                continue;
-            }
-
-            let Some(alias) = definition.alias().as_ref().cloned() else {
-                continue;
-            };
-            if let Some(existing) = by_alias.get(&alias)
-                && existing != definition_id
-            {
+            if let Some(alias) = definition.alias().as_ref() {
                 return Err(format!(
-                    "Asset alias `{alias}` already bound to asset definition {existing}"
+                    "Asset definition {definition_id} stores inline alias `{alias}`; persist aliases only in asset_definition_alias_bindings"
                 ));
             }
-            by_alias.insert(alias.clone(), definition_id.clone());
-            by_definition.insert(
-                definition_id.clone(),
-                AssetDefinitionAliasBindingRecord {
-                    alias: alias.clone(),
-                    lease_expiry_ms: None,
-                    grace_until_ms: None,
-                    bound_at_ms: 0,
-                },
-            );
         }
         self.asset_definition_aliases = by_alias.into_iter().collect();
         let normalized_definitions: BTreeMap<AssetDefinitionId, AssetDefinition> = definitions
             .iter()
-            .map(|(definition_id, definition)| {
-                let mut definition = definition.clone();
-                definition.alias = None;
-                (definition_id.clone(), definition)
-            })
+            .map(|(definition_id, definition)| (definition_id.clone(), definition.clone()))
             .collect();
         if normalized_definitions.len() != definitions.iter().count() {
             return Err("asset definition rebuild lost entries".to_owned());
@@ -23690,15 +23667,20 @@ mod replay_validation_tests {
 
 #[cfg(test)]
 mod permission_cache_tests {
+    use std::collections::BTreeSet;
+
     use iroha_data_model::{
         account::AccountId,
         domain::DomainId,
         isi::{Grant, Revoke},
+        nexus::DataSpaceId,
+        permission::Permission,
         prelude::{Account, Domain},
         role::{Role, RoleId},
         trigger::TriggerId,
     };
     use iroha_executor_data_model::permission::{
+        account::{AccountAliasPermissionScope, CanManageAccountAlias},
         nexus::CanUseFeeSponsor,
         trigger::{CanExecuteTrigger, CanRegisterTrigger},
     };
@@ -23770,8 +23752,6 @@ mod permission_cache_tests {
 
     #[test]
     fn trigger_permission_payload_with_whitespace_decodes() {
-        use std::collections::BTreeSet;
-
         let (registrar, _) = gen_account_in("wonderland");
 
         let domain: Domain = Domain::new(wonderland_domain_id()).build(&registrar);
@@ -23801,6 +23781,33 @@ mod permission_cache_tests {
             "Norito decoder should handle non-canonical JSON payloads"
         );
         assert!(stx.can_execute_trigger_for(&registrar, &trigger_id));
+    }
+
+    #[test]
+    fn permission_deserialized_from_json_matches_canonical_permission() {
+        let stored: Permission = norito::json::from_str(
+            r#"{
+                "name": "CanManageAccountAlias",
+                "payload": { "scope": { "scope": "dataspace", "value": 0 } }
+            }"#,
+        )
+        .expect("deserialize permission");
+        let target = Permission::from(CanManageAccountAlias {
+            scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::GLOBAL),
+        });
+
+        let permissions = BTreeSet::from([stored]);
+
+        assert!(
+            permissions.contains(&target),
+            "deserialized permissions should use canonical JSON payloads: stored={}, target={}",
+            permissions
+                .first()
+                .expect("stored permission")
+                .payload()
+                .get(),
+            target.payload().get(),
+        );
     }
 
     #[test]
@@ -27414,25 +27421,20 @@ mod tests {
     #[cfg(feature = "telemetry")]
     use crate::telemetry::StateTelemetry;
 
-    fn asset_alias_test_world(
-        alias: Option<AssetDefinitionAlias>,
-    ) -> (World, AssetDefinitionId, AssetDefinitionAlias) {
+    fn asset_alias_test_world() -> (World, AssetDefinitionId) {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
         let domain_id: DomainId = "issuer".parse().expect("domain");
         let definition_id =
             AssetDefinitionId::new(domain_id.clone(), "usd".parse().expect("asset name"));
-        let mut definition = AssetDefinition::numeric(definition_id.clone())
+        let definition = AssetDefinition::numeric(definition_id.clone())
             .with_name("usd".to_owned())
             .build(&authority);
-        let legacy_alias = alias.unwrap_or_else(|| "usd#legacy".parse().expect("legacy alias"));
-        definition.alias = Some(legacy_alias.clone());
 
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = Account::new(authority.clone().to_account_id(domain_id)).build(&authority);
         (
             World::with([domain], [account], [definition]),
             definition_id,
-            legacy_alias,
         )
     }
 
@@ -27504,7 +27506,7 @@ mod tests {
 
     #[test]
     fn rebuild_asset_definition_alias_indexes_prefers_persisted_bindings() {
-        let (mut world, definition_id, legacy_alias) = asset_alias_test_world(None);
+        let (mut world, definition_id) = asset_alias_test_world();
         let persisted_alias: AssetDefinitionAlias = "usd#canonical".parse().expect("alias");
         let binding = AssetDefinitionAliasBindingRecord {
             alias: persisted_alias.clone(),
@@ -27516,16 +27518,6 @@ mod tests {
         world.asset_definition_aliases = Storage::default();
         world.asset_definition_alias_bindings =
             std::iter::once((definition_id.clone(), binding.clone())).collect();
-        let mut stored_definition = world
-            .asset_definitions
-            .view()
-            .get(&definition_id)
-            .expect("stored definition")
-            .clone();
-        stored_definition.alias = Some(legacy_alias.clone());
-        world
-            .asset_definitions
-            .insert(definition_id.clone(), stored_definition);
         world
             .rebuild_asset_definition_alias_indexes()
             .expect("rebuild should succeed");
@@ -27534,10 +27526,6 @@ mod tests {
         assert_eq!(
             view.asset_definition_aliases().get(&persisted_alias),
             Some(&definition_id)
-        );
-        assert!(
-            view.asset_definition_aliases().get(&legacy_alias).is_none(),
-            "stale inline alias must not override the persisted binding"
         );
         assert_eq!(
             view.asset_definition_alias_bindings()
@@ -27560,13 +27548,14 @@ mod tests {
                 .expect("stored definition")
                 .alias()
                 .is_none(),
-            "stored asset definition alias must be derived from bindings"
+            "stored asset definition alias must stay empty; bindings drive alias reads"
         );
     }
 
     #[test]
-    fn rebuild_asset_definition_alias_indexes_synthesizes_legacy_bindings() {
-        let (mut world, definition_id, legacy_alias) = asset_alias_test_world(None);
+    fn rebuild_asset_definition_alias_indexes_rejects_inline_alias_without_binding() {
+        let (mut world, definition_id) = asset_alias_test_world();
+        let legacy_alias: AssetDefinitionAlias = "usd#legacy".parse().expect("legacy alias");
         world.asset_definition_aliases = Storage::default();
         world.asset_definition_alias_bindings = Storage::default();
         let mut stored_definition = world
@@ -27580,45 +27569,57 @@ mod tests {
             .asset_definitions
             .insert(definition_id.clone(), stored_definition);
 
-        world
+        let err = world
             .rebuild_asset_definition_alias_indexes()
-            .expect("rebuild should synthesize a permanent binding");
-        let view = world.view();
+            .expect_err("rebuild must reject inline asset-definition aliases");
+        assert_eq!(
+            err,
+            format!(
+                "Asset definition {definition_id} stores inline alias `{legacy_alias}`; persist aliases only in asset_definition_alias_bindings"
+            )
+        );
+    }
 
-        let binding = view
-            .asset_definition_alias_bindings()
+    #[test]
+    fn rebuild_asset_definition_alias_indexes_rejects_inline_alias_even_with_binding() {
+        let (mut world, definition_id) = asset_alias_test_world();
+        let inline_alias: AssetDefinitionAlias = "usd#legacy".parse().expect("inline alias");
+        world.asset_definition_aliases = Storage::default();
+        world.asset_definition_alias_bindings = std::iter::once((
+            definition_id.clone(),
+            AssetDefinitionAliasBindingRecord {
+                alias: "usd#canonical".parse().expect("persisted alias"),
+                lease_expiry_ms: None,
+                grace_until_ms: None,
+                bound_at_ms: 100,
+            },
+        ))
+        .collect();
+        let mut stored_definition = world
+            .asset_definitions
+            .view()
             .get(&definition_id)
-            .expect("binding");
-        assert_eq!(binding.alias, legacy_alias);
-        assert_eq!(binding.lease_expiry_ms, None);
-        assert_eq!(binding.grace_until_ms, None);
-        assert_eq!(binding.bound_at_ms, 0);
+            .expect("stored definition")
+            .clone();
+        stored_definition.alias = Some(inline_alias.clone());
+        world
+            .asset_definitions
+            .insert(definition_id.clone(), stored_definition);
+
+        let err = world
+            .rebuild_asset_definition_alias_indexes()
+            .expect_err("rebuild must reject inline asset-definition aliases");
         assert_eq!(
-            view.asset_definition_aliases().get(&legacy_alias),
-            Some(&definition_id)
-        );
-        assert_eq!(
-            view.asset_definition(&definition_id)
-                .expect("definition")
-                .alias()
-                .as_ref(),
-            Some(&legacy_alias)
-        );
-        assert!(
-            world
-                .asset_definitions
-                .view()
-                .get(&definition_id)
-                .expect("stored definition")
-                .alias()
-                .is_none(),
-            "stored asset definition alias must be normalized away"
+            err,
+            format!(
+                "Asset definition {definition_id} stores inline alias `{inline_alias}`; persist aliases only in asset_definition_alias_bindings"
+            )
         );
     }
 
     #[test]
     fn asset_definition_alias_lookup_stops_after_grace_even_before_sweep() {
-        let (mut world, definition_id, _) = asset_alias_test_world(None);
+        let (mut world, definition_id) = asset_alias_test_world();
         let alias: AssetDefinitionAlias = "usd#lease".parse().expect("alias");
         world.asset_definition_aliases = Storage::default();
         world.asset_definition_alias_bindings = std::iter::once((
@@ -27658,7 +27659,7 @@ mod tests {
 
     #[test]
     fn asset_definition_alias_bindings_roundtrip_through_state_json() {
-        let (mut world, definition_id, _) = asset_alias_test_world(None);
+        let (mut world, definition_id) = asset_alias_test_world();
         let alias: AssetDefinitionAlias = "usd#durable".parse().expect("alias");
         let binding = AssetDefinitionAliasBindingRecord {
             alias: alias.clone(),

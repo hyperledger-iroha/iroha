@@ -70,7 +70,7 @@ description: SoraFS の容量紛争を提出し、失効を調整し、データ
      --base64-out=dispute.b64 \
      --json-out=dispute_summary.json \
      --request-out=dispute_request.json \
-     --authority=i105... \
+     --authority=soraカタカナ... \
      --private-key=ed25519:<key>
    ```
 

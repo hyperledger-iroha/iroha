@@ -737,7 +737,7 @@ public final class HttpClientTransportTests {
             + "\"dataspace_id\":42,"
             + "\"dataspace_alias\":\"sandbox\","
             + "\"accounts\":[{"
-            + "\"account_id\":\"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn\","
+            + "\"account_id\":\"soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ\","
             + "\"label\":\"Primary\","
             + "\"assets\":[{"
             + "\"asset\":\""
@@ -770,7 +770,7 @@ public final class HttpClientTransportTests {
     assert dataspace.accounts().size() == 1 : "Expected single account entry";
     final UaidPortfolioResponse.UaidPortfolioAccount account =
         dataspace.accounts().get(0);
-    assert "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".equals(account.accountId())
+    assert "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".equals(account.accountId())
         : "Account ID mismatch";
     assert "Primary".equals(account.label()) : "Account label mismatch";
     assert account.assets().size() == 1 : "Expected single asset entry";
@@ -864,7 +864,7 @@ public final class HttpClientTransportTests {
             + "\"dataspaces\":[{"
             + "\"dataspace_id\":7,"
             + "\"dataspace_alias\":null,"
-            + "\"accounts\":[\"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn\",\"6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9\"]"
+            + "\"accounts\":[\"soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ\",\"soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ\"]"
             + "}]"
             + "}";
     final StubResponseExecutor executor =
@@ -908,7 +908,7 @@ public final class HttpClientTransportTests {
             + "\"expired_epoch\":null,"
             + "\"revocation\":{\"epoch\":15,\"reason\":\"policy\"}"
             + "},"
-            + "\"accounts\":[\"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn\"],"
+            + "\"accounts\":[\"soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ\"],"
             + "\"manifest\":{"
             + "\"version\":\"1\","
             + "\"uaid\":\"uaid:"
@@ -946,7 +946,7 @@ public final class HttpClientTransportTests {
     assert record.lifecycle().revocation() != null : "Revocation should be present";
     assert record.lifecycle().revocation().epoch() == 15L : "Revocation epoch mismatch";
     assert "policy".equals(record.lifecycle().revocation().reason()) : "Revocation reason mismatch";
-    assert record.accounts().contains("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn") : "Accounts must surface";
+    assert record.accounts().contains("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ") : "Accounts must surface";
     assert record.manifestJson().contains("\"version\":\"1\"") : "Manifest JSON should be stored";
     final Map<String, Object> manifestMap = record.manifestAsMap();
     assert "1".equals(manifestMap.get("version")) : "Manifest map mismatch";
@@ -971,7 +971,7 @@ public final class HttpClientTransportTests {
             + "\"total\":1,"
             + "\"items\":[{"
             + "\"policy_id\":\"phone#retail\","
-            + "\"owner\":\"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn\","
+            + "\"owner\":\"soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ\","
             + "\"active\":true,"
             + "\"normalization\":\"phone_e164\","
             + "\"resolver_public_key\":\"ed25519:resolver-key\","
@@ -998,7 +998,7 @@ public final class HttpClientTransportTests {
     assert response.items().size() == 1 : "Expected one identifier policy";
     final IdentifierPolicySummary item = response.items().get(0);
     assert "phone#retail".equals(item.policyId()) : "Policy id mismatch";
-    assert "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".equals(item.owner()) : "Owner mismatch";
+    assert "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".equals(item.owner()) : "Owner mismatch";
     assert item.active() : "Policy should be active";
     assert item.normalization() == IdentifierNormalization.PHONE_E164
         : "Normalization mismatch";
@@ -1027,7 +1027,7 @@ public final class HttpClientTransportTests {
             + "\"total\":1,"
             + "\"items\":[{"
             + "\"program_id\":\"identifier_lookup_retail\","
-            + "\"owner\":\"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn\","
+            + "\"owner\":\"soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ\","
             + "\"active\":true,"
             + "\"resolver_public_key\":\"ed25519:resolver-key\","
             + "\"backend\":\"bfv-programmed-sha3-256-v1\","
@@ -1054,7 +1054,7 @@ public final class HttpClientTransportTests {
     assert response.items().size() == 1 : "Expected one RAM-LFE program policy";
     final RamLfeProgramPolicySummary item = response.items().get(0);
     assert "identifier_lookup_retail".equals(item.programId()) : "Program id mismatch";
-    assert "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".equals(item.owner()) : "Owner mismatch";
+    assert "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".equals(item.owner()) : "Owner mismatch";
     assert item.active() : "Program policy should be active";
     assert "signed".equals(item.verificationMode()) : "Verification mode mismatch";
     assert "bfv-v1".equals(item.inputEncryption()) : "Input encryption mismatch";
@@ -1099,7 +1099,7 @@ public final class HttpClientTransportTests {
   }
 
   private static void identifierResolveRequestParsesResponse() {
-    final String accountId = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+    final String accountId = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
     final IdentifierReceiptFixture signed = signedIdentifierReceiptFixture(42L, 142L);
     final String json =
         "{"
@@ -1222,7 +1222,7 @@ public final class HttpClientTransportTests {
   }
 
   private static void identifierClaimReceiptUsesAccountPath() {
-    final String accountId = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+    final String accountId = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
     final IdentifierReceiptFixture signed = signedIdentifierReceiptFixture(7L, null);
     final String json =
         "{"
@@ -1436,7 +1436,7 @@ public final class HttpClientTransportTests {
     final IdentifierPolicySummary policy =
         new IdentifierPolicySummary(
             "phone#retail",
-            "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+            "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
             true,
             IdentifierNormalization.PHONE_E164,
             "ed25519:ed0120" + "11".repeat(32),
@@ -1455,7 +1455,7 @@ public final class HttpClientTransportTests {
     final IdentifierPolicySummary policy =
         new IdentifierPolicySummary(
             "string#retail",
-            "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+            "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
             true,
             IdentifierNormalization.EXACT,
             "ed25519:ed0120" + "11".repeat(32),
@@ -1483,7 +1483,7 @@ public final class HttpClientTransportTests {
   }
 
   private static void identifierReceiptVerifierAcceptsEd25519Receipt() {
-    final String accountId = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+    final String accountId = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
     final IdentifierReceiptFixture signed = signedIdentifierReceiptFixture(42L, 142L);
     final IdentifierResolutionReceipt receipt =
         new IdentifierResolutionReceipt(

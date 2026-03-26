@@ -843,14 +843,10 @@ impl Execute for ClaimPublicLaneRewards {
             &state_transaction.world,
             &state_transaction.nexus.fees.fee_sink_account_id,
         )
-        .or_else(|| {
-            AccountId::parse_encoded(&state_transaction.nexus.fees.fee_sink_account_id)
-                .map(|parsed| parsed.into_account_id())
-                .ok()
-        })
         .ok_or_else(|| {
             Error::InvariantViolation(
-                "invalid nexus.fees.fee_sink_account_id; expected account identifier".into(),
+                "invalid nexus.fees.fee_sink_account_id; expected canonical Katakana i105 account id"
+                    .into(),
             )
         })?;
         let fee_asset = resolve_nexus_fee_asset_definition(state_transaction)?;
@@ -1161,14 +1157,10 @@ fn validate_reward_sink(
         &state_transaction.world,
         &state_transaction.nexus.fees.fee_sink_account_id,
     )
-    .or_else(|| {
-        AccountId::parse_encoded(&state_transaction.nexus.fees.fee_sink_account_id)
-            .map(|parsed| parsed.into_account_id())
-            .ok()
-    })
     .ok_or_else(|| {
         Error::InvariantViolation(
-            "invalid nexus.fees.fee_sink_account_id; expected account identifier".into(),
+            "invalid nexus.fees.fee_sink_account_id; expected canonical Katakana i105 account id"
+                .into(),
         )
     })?;
     let fee_asset = resolve_nexus_fee_asset_definition(state_transaction)?;
@@ -1584,42 +1576,15 @@ fn parse_staking_account_literal(
     }
 
     let reason = match AccountId::parse_encoded(literal) {
-        Ok(encoded) => {
-            let account = encoded.into_account_id();
-            let linked_domains = world.domains_for_subject(&account);
-            if linked_domains.len() > 1 {
-                format!(
-                    "literal resolves to a subject linked to multiple domains ({})",
-                    linked_domains
-                        .iter()
-                        .map(ToString::to_string)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
-            } else if linked_domains.is_empty() {
-                let owner_domains: Vec<_> = world
-                    .domains_iter()
-                    .filter(|domain| domain.owned_by() == &account)
-                    .map(|domain| domain.id().to_string())
-                    .collect();
-                if owner_domains.len() > 1 {
-                    format!(
-                        "literal resolves to a subject that owns multiple domains ({})",
-                        owner_domains.join(", ")
-                    )
-                } else {
-                    "literal decoded but could not be resolved in the current world state"
-                        .to_owned()
-                }
-            } else {
-                "literal decoded but failed world-state disambiguation".to_owned()
-            }
-        }
+        Ok(_) => "literal must use canonical Katakana i105 account-id form".to_owned(),
         Err(err) => format!("decode failed: {err}"),
     };
 
     Err(Error::InvariantViolation(
-        format!("invalid nexus.staking.{field}; expected account identifier ({reason})").into(),
+        format!(
+            "invalid nexus.staking.{field}; expected canonical Katakana i105 account id ({reason})"
+        )
+        .into(),
     ))
 }
 

@@ -73,9 +73,9 @@ public final class OfflineWalletTest {
           {
             "receipts": [
               {
-                "from": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
-                "to": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
-                "asset": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+                "from": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+                "to": "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
+                "asset": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1#soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
                 "amount": "3.14"
               }
             ],
@@ -87,10 +87,10 @@ public final class OfflineWalletTest {
       final OfflineTransferList.OfflineTransferItem item =
           new OfflineTransferList.OfflineTransferItem(
               "bundle",
-              "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
-              "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
-              "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
-              "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+              "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
+              "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
+              "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
+              "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
               "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
               1,
               "3.14",
@@ -103,9 +103,9 @@ public final class OfflineWalletTest {
       assert entries.size() == 1 : "expected single audit entry";
       final OfflineAuditEntry entry = entries.get(0);
       assert "bundle".equals(entry.txId()) : "tx id mismatch";
-      assert "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".equals(entry.senderId()) : "sender mismatch";
-      assert "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".equals(entry.receiverId()) : "receiver mismatch";
-      assert "7EAD8EFYUx1aVKZPUU1fyKvr8dF1#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".equals(entry.assetId()) : "asset mismatch";
+      assert "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".equals(entry.senderId()) : "sender mismatch";
+      assert "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ".equals(entry.receiverId()) : "receiver mismatch";
+      assert "7EAD8EFYUx1aVKZPUU1fyKvr8dF1#soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ".equals(entry.assetId()) : "asset mismatch";
       assert "3.14".equals(entry.amount()) : "amount mismatch";
     } finally {
       Files.deleteIfExists(logFile);
@@ -169,11 +169,11 @@ public final class OfflineWalletTest {
       final OfflineAllowanceList.OfflineAllowanceItem allowance =
           new OfflineAllowanceList.OfflineAllowanceItem(
               "deadbeef",
-              "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+              "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
               "Alice",
-              "xor#wonderland",
-              "xor#wonderland",
-              "XOR",
+              "7EAD8EFYUx1aVKZPUU1fyKvr8dF1#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+              "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
+              "USD",
               null,
               0L,
               5_000L,
@@ -292,9 +292,9 @@ public final class OfflineWalletTest {
                       {
                         "certificate_id_hex": "deadbeef",
                         "certificate": {
-                          "controller": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
-                          "operator": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
-                          "allowance": { "asset": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "amount": "10", "commitment": [1, 2] },
+                          "controller": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+                          "operator": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+                          "allowance": { "asset": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ", "amount": "10", "commitment": [1, 2] },
                           "spend_public_key": "ed0120deadbeef",
                           "attestation_report": [3, 4],
                           "issued_at_ms": 100,
@@ -322,11 +322,11 @@ public final class OfflineWalletTest {
               .build();
       final OfflineWallet wallet = new OfflineWallet(client, logFile, false);
       final OfflineAllowanceCommitment allowance =
-          new OfflineAllowanceCommitment("7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "10", new byte[] {1, 2});
+          new OfflineAllowanceCommitment("7EAD8EFYUx1aVKZPUU1fyKvr8dF1#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ", "10", new byte[] {1, 2});
       final OfflineWalletPolicy policy = new OfflineWalletPolicy("10", "5", 200L);
       final OfflineWalletCertificateDraft draft =
           new OfflineWalletCertificateDraft(
-              "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+              "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
               allowance,
               "ed0120deadbeef",
               new byte[] {3, 4},
@@ -337,7 +337,7 @@ public final class OfflineWalletTest {
               null,
               null,
               null);
-      wallet.topUpAllowance(draft, "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", "deadbeef").join();
+      wallet.topUpAllowance(draft, "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ", "deadbeef").join();
       final Optional<OfflineVerdictMetadata> verdict = wallet.verdictMetadata("deadbeef");
       assert verdict.isPresent() : "expected cached verdict metadata";
       assert "10".equals(verdict.get().remainingAmount()) : "remaining amount mismatch";
@@ -376,7 +376,7 @@ public final class OfflineWalletTest {
       final OfflineAllowanceList.OfflineAllowanceItem allowance =
           new OfflineAllowanceList.OfflineAllowanceItem(
               "deadbeef",
-              "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+              "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
               "Merchant Wonderland",
               "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
               "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
@@ -402,7 +402,7 @@ public final class OfflineWalletTest {
       assert records.containsKey("deadbeef") : "missing certificate entry";
       @SuppressWarnings("unchecked")
       final Map<String, Object> entry = (Map<String, Object>) records.get("deadbeef");
-      assert "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".equals(entry.get("controller_id"))
+      assert "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ".equals(entry.get("controller_id"))
           : "controller id missing from export";
       assert entry.get("policy_expires_at_ms") instanceof Number
           : "policy deadline missing";
@@ -468,7 +468,7 @@ public final class OfflineWalletTest {
             .formatted(maxTokenAgeMs);
     return new OfflineAllowanceList.OfflineAllowanceItem(
         certificateId,
-        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+        "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
         "Alice",
         "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
         "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",

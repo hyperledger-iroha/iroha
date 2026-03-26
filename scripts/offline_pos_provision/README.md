@@ -20,7 +20,7 @@ so every run records a timestamped entry in `<output>/rotation_drill.log`.
 ```jsonc
 {
   "operator": {
-    "account": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+    "account": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
     "private_key": "ed25519:..."        // optional, --operator-key takes precedence
   },
   "manifests": [
@@ -32,7 +32,7 @@ so every run records a timestamped entry in `<output>/rotation_drill.log`.
       "valid_from_ms": 1730314876000,
       "valid_until_ms": 1745900000000,
       "rotation_hint_ms": 1736000000000,  // optional refresh hint
-      "operator_account": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn", // optional override per manifest
+      "operator_account": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ", // optional override per manifest
       "operator_key": "ed25519:...",        // optional override per manifest
       "metadata": { "jurisdiction": "EU" }, // optional metadata inline or via metadata_file
       "roots": [
@@ -66,7 +66,7 @@ optional operator overrides/metadata) and references either an inline
 [
   {
     "verdict_id_hex": "0000000000000000000000000000000000000000000000000000000000000001",
-    "issuer": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+    "issuer": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
     "revoked_at_ms": 1730314876000,
     "reason": "device_compromised",
     "note": "Retail device reported stolen",

@@ -30,14 +30,6 @@ final class AccountAddressFixtureTests: XCTestCase {
         let i105 = try address.toI105(networkPrefix: vector.encodings.i105.prefix)
         XCTAssertEqual(i105, vector.encodings.i105.string, "\(vector.caseId): i105 mismatch")
 
-        let i105Default = try address.toI105Default()
-        XCTAssertEqual(
-            try AccountAddress.fromI105Default(i105Default).canonicalHex(),
-            vector.encodings.canonicalHex.lowercased().hasPrefix("0x") ? vector.encodings.canonicalHex : "0x\(vector.encodings.canonicalHex)",
-            "\(vector.caseId): i105-default canonical mismatch"
-        )
-        XCTAssertEqual(i105Default, vector.encodings.i105Default, "\(vector.caseId): i105-default mismatch")
-
         // Parse entry points should lead back to the same canonical bytes.
         let parsedI105 = try AccountAddress.parseEncoded(vector.encodings.i105.string,
                                                      expectedPrefix: vector.encodings.i105.prefix)
@@ -45,13 +37,6 @@ final class AccountAddressFixtureTests: XCTestCase {
             try parsedI105.canonicalHex(),
             try address.canonicalHex(),
             "\(vector.caseId): i105 parse canonical mismatch"
-        )
-
-        let parsedI105Default = try AccountAddress.parseEncoded(vector.encodings.i105Default)
-        XCTAssertEqual(
-            try parsedI105Default.canonicalHex(),
-            try address.canonicalHex(),
-            "\(vector.caseId): i105-default parse canonical mismatch"
         )
 
         XCTAssertThrowsError(try AccountAddress.parseEncoded(vector.encodings.canonicalHex)) { error in
@@ -228,19 +213,16 @@ private struct AccountAddressPositiveCase: Decodable {
         }
 
         let canonicalHex: String
-        let i105Default: String
         let i105: I105
 
         private enum CodingKeys: String, CodingKey {
             case canonicalHex
-            case i105Default
             case i105
         }
 
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             canonicalHex = try container.decode(String.self, forKey: .canonicalHex)
-            i105Default = try container.decode(String.self, forKey: .i105Default)
             i105 = try container.decode(I105.self, forKey: .i105)
         }
     }

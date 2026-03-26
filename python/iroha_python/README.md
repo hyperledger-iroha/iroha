@@ -21,7 +21,7 @@ from iroha_python import (
 )
 
 pair = derive_ed25519_keypair_from_seed(b"demo-seed")
-authority = pair.default_account_id("wonderland")  # Canonical i105 account id
+authority = pair.default_account_id("wonderland")  # Canonical Katakana i105 account id
 instruction = Instruction.register_domain("wonderland")
 
 client = ToriiClient("http://127.0.0.1:8080", auth_token="dev-token")
@@ -102,7 +102,7 @@ If you already have a signed certificate, call `register_offline_allowance` or
 ## Account addresses
 
 The `iroha_python.address` module mirrors the Rust codecs so applications can
-round-trip canonical bytes and canonical i105 account literals without bespoke conversions:
+round-trip canonical bytes and canonical Katakana i105 account literals without bespoke conversions:
 
 ```python
 from iroha_python.address import AccountAddress
@@ -294,11 +294,11 @@ print(params.block_time_ms, params.next_mode)
 trigger_payload = {
     "id": "notify-admins",
     "action": {"Mint": {"asset_id": "norito:<alert-asset-id-hex>", "value": 1}},
-    "authority": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+    "authority": "soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ",
     "filter": {"ByTime": {"schedule_ms": 60_000}},
 }
 client.register_trigger(trigger_payload)
-for row in client.query_triggers(filter={"authority": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL"})["items"]:
+for row in client.query_triggers(filter={"authority": "soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ"})["items"]:
     print("Trigger row", row)
 client.delete_trigger("notify-admins")
 
@@ -322,17 +322,17 @@ for provider in ingestion.providers:
 
 # Account listings
 assets = client.list_account_assets(
-    "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+    "soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ",
     limit=10,
     asset_id="norito:<asset-id-hex>",
 )
 txs = client.list_account_transactions(
-    "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+    "soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ",
     limit=5,
     asset_id="norito:<asset-id-hex>",
 )
 query_txs = client.query_account_transactions(
-    "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+    "soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ",
     filter={"status": {"Eq": "Committed"}},
     sort={"timestamp": "DESC"},
     limit=3,
@@ -365,13 +365,13 @@ Build transactions with ergonomic helpers that wrap the low-level `Instruction` 
 ```python
 from iroha_python import TransactionConfig, TransactionDraft, Ed25519KeyPair
 
-config = TransactionConfig(chain_id="dev-chain", authority="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL", ttl_ms=120_000)
+config = TransactionConfig(chain_id="dev-chain", authority="soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ", ttl_ms=120_000)
 draft = TransactionDraft(config)
 draft.register_domain("wonderland") \
-     .register_account("6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL", metadata={"role": "admin"}) \
+     .register_account("soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ", metadata={"role": "admin"}) \
      .register_asset_definition_numeric(
         "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-        owner="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+        owner="soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ",
         scale=2,
         mintable="Infinitely",
         metadata={"sym": "ROS"},
@@ -416,7 +416,7 @@ governance = RepoGovernance(haircut_bps=1500, margin_frequency_secs=86_400)
 
 draft.repo_initiate(
     agreement_id="daily_repo",
-    initiator="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+    initiator="soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ",
     counterparty="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
     cash_leg=cash,
     collateral_leg=collateral,
@@ -426,7 +426,7 @@ draft.repo_initiate(
 )
 draft.repo_unwind(
     agreement_id="daily_repo",
-    initiator="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+    initiator="soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ",
     counterparty="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
     cash_leg=cash,
     collateral_leg=collateral,
@@ -466,7 +466,7 @@ from iroha_python import (
 delivery_leg = SettlementLeg(
     asset_definition_id="<bond_asset_definition_base58>",
     quantity="10",
-    from_account="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+    from_account="soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ",
     to_account="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
     metadata={"isin": "ABC123"},
 )
@@ -474,7 +474,7 @@ payment_leg = SettlementLeg(
     asset_definition_id="<cash_asset_definition_base58>",
     quantity="1000",
     from_account="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
-    to_account="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+    to_account="soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ",
 )
 plan = SettlementPlan(
     order=SettlementExecutionOrder.PAYMENT_THEN_DELIVERY,
@@ -493,7 +493,7 @@ counter_leg = SettlementLeg(
     asset_definition_id="<counter_asset_definition_base58>",
     quantity="900",
     from_account="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
-    to_account="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+    to_account="soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ",
 )
 draft.settlement_pvp(
     settlement_id="trade_pvp",
@@ -923,7 +923,7 @@ for record in manifests.manifests:
 # Publish or revoke capability manifests directly from Python.
 client.publish_space_directory_manifest(
     {
-        "authority": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+        "authority": "soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ",
         "privateKeyHex": "ed0123...",
         "manifest": manifest_payload,  # matches AssetPermissionManifest JSON
         "reason": "CBDC onboarding wave",
@@ -931,7 +931,7 @@ client.publish_space_directory_manifest(
 )
 client.revoke_space_directory_manifest(
     {
-        "authority": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+        "authority": "soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ",
         "privateKeyBytes": bytes.fromhex("11" * 32),
         "uaid": uaid_literal,
         "dataspace": 11,
@@ -957,7 +957,7 @@ trigger_id = "hourly-reward"
 # 1) Build the instruction with the high-level helper.
 register = Instruction.register_time_trigger(
     trigger_id=trigger_id,
-    authority="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+    authority="soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ",
     action=Instruction.mint_asset(
         asset_id="norito:<reward-asset-id-hex>",
         account_id="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
@@ -970,7 +970,7 @@ register = Instruction.register_time_trigger(
 # 2) Submit the transaction and wait for confirmation.
 envelope, status = client.build_and_submit_transaction(
     chain_id="local",
-    authority="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+    authority="soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ",
     private_key="ed25519:...",
     instructions=[register],
     wait=True,
@@ -987,7 +987,7 @@ for event in client.stream_trigger_events(trigger_id=trigger_id, resume=True):
     break  # demonstration
 
 # 5) Query triggers with pagination helpers.
-page = client.query_triggers(filter={"authority": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL"}, limit=10)
+page = client.query_triggers(filter={"authority": "soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ"}, limit=10)
 for item in page["items"]:
     print(item["id"])
 

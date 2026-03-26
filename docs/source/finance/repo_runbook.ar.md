@@ -91,11 +91,11 @@ collateral = RepoCollateralLeg(
 )
 governance = RepoGovernance(haircut_bps=1500, margin_frequency_secs=86_400)
 
-draft = TransactionDraft(TransactionConfig(chain_id="dev-chain", authority="i105..."))
+draft = TransactionDraft(TransactionConfig(chain_id="dev-chain", authority="soraカタカナ..."))
 draft.repo_initiate(
     agreement_id="daily_repo",
-    initiator="i105...",
-    counterparty="i105...",
+    initiator="soraカタカナ...",
+    counterparty="soraカタカナ...",
     cash_leg=cash,
     collateral_leg=collateral,
     rate_bps=250,
@@ -178,19 +178,19 @@ from iroha_python import (
     TransactionDraft,
 )
 
-draft = TransactionDraft(TransactionConfig(chain_id="dev-chain", authority="i105..."))
+draft = TransactionDraft(TransactionConfig(chain_id="dev-chain", authority="soraカタカナ..."))
 delivery = SettlementLeg(
     asset_definition_id="4fEiy2n5VMFVfi6BzDJge519zAzg",
     quantity="10",
-    from_account="i105...",
-    to_account="i105...",
+    from_account="soraカタカナ...",
+    to_account="soraカタカナ...",
     metadata={"isin": "ABC123"},
 )
 payment = SettlementLeg(
     asset_definition_id="7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
     quantity="1000",
-    from_account="i105...",
-    to_account="i105...",
+    from_account="soraカタカナ...",
+    to_account="soraカタカナ...",
 )
 plan = SettlementPlan(order=SettlementExecutionOrder.PAYMENT_THEN_DELIVERY)
 
@@ -200,14 +200,14 @@ draft.settlement_pvp(
     SettlementLeg(
         asset_definition_id="7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
         quantity="500",
-        from_account="i105...",
-        to_account="i105...",
+        from_account="soraカタカナ...",
+        to_account="soraカタカナ...",
     ),
     SettlementLeg(
         asset_definition_id="5tPkFK6s2zUcd1qUHyTmY7fDVa2n",
         quantity="460",
-        from_account="i105...",
-        to_account="i105...",
+        from_account="soraカタカナ...",
+        to_account="soraカタカナ...",
     ),
 )
 ```

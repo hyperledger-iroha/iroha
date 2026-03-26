@@ -20,7 +20,9 @@ public final class AccountAddressTests {
     AccountAddress.configureCurveSupport(AccountAddress.CurveSupportConfig.ed25519Only());
     complianceFixtureSuite();
     goldenVectorsRoundTrip();
+    ambiguousKatakanaLiteralRoundTrip();
     i105PrefixMismatchThrows();
+    i105RejectsFullwidthSentinel();
     i105RejectsInvalidCharacters();
     curveSupportDefaults();
     curveSupportConfigurationToggle();
@@ -59,7 +61,6 @@ public final class AccountAddressTests {
     final Map<String, Object> i105 = asMap(encodings.get("i105"), caseId + ".encodings.i105", caseId);
     final int prefix = asNumber(i105.get("prefix"), caseId + ".encodings.i105.prefix", caseId).intValue();
     final String i105String = asString(i105.get("string"), caseId + ".encodings.i105.string", caseId);
-    final String defaultI105 = asString(encodings.get("i105_default"), caseId + ".encodings.i105_default", caseId);
 
     final AccountAddress canonical = AccountAddress.fromCanonicalHex(canonicalHex);
     final byte[] canonicalBytes = canonical.canonicalBytes();
@@ -68,19 +69,8 @@ public final class AccountAddressTests {
     assert Arrays.equals(i105Parsed.address.canonicalBytes(), canonicalBytes)
         : caseId + ": i105 parse canonical mismatch";
 
-    final AccountAddress decoded = AccountAddress.fromI105(defaultI105, null);
-    assert Arrays.equals(decoded.canonicalBytes(), canonicalBytes)
-        : caseId + ": i105_default canonical mismatch";
-
-    final AccountAddress.ParseResult parsedDefault = AccountAddress.parseEncoded(defaultI105, null);
-    assert parsedDefault.format == AccountAddress.Format.I105
-        : caseId + ": i105_default parse format mismatch";
-    assert Arrays.equals(parsedDefault.address.canonicalBytes(), canonicalBytes)
-        : caseId + ": i105_default parse canonical mismatch";
-
     final String reencodedI105 = canonical.toI105(prefix);
     assert reencodedI105.equals(i105String) : caseId + ": i105 re-encode mismatch";
-    assert reencodedI105.equals(defaultI105) : caseId + ": i105_default re-encode mismatch";
     assert canonical.canonicalHex().equalsIgnoreCase(canonicalHex)
         : caseId + ": canonical hex re-encode mismatch";
 
@@ -93,8 +83,8 @@ public final class AccountAddressTests {
     final AccountAddress.DisplayFormats defaultFormats = canonical.displayFormats();
     assert defaultFormats.discriminant == AccountAddress.DEFAULT_I105_DISCRIMINANT
         : caseId + ": default displayFormats discriminant mismatch";
-    assert defaultFormats.i105.equals(defaultI105)
-        : caseId + ": default displayFormats i105 mismatch";
+    assert defaultFormats.i105.startsWith("sora")
+        : caseId + ": default displayFormats should render the Sora sentinel";
     assert defaultFormats.i105Warning.equals(AccountAddress.i105WarningMessage())
         : caseId + ": default displayFormats warning mismatch";
   }
@@ -116,10 +106,6 @@ public final class AccountAddressTests {
       case "i105":
         expectError(caseId, expected, () -> AccountAddress.parseEncoded(input, expectedPrefix));
         break;
-      case "i105_default":
-        expectError(caseId, expected, () -> AccountAddress.fromI105(input, null));
-        expectError(caseId, expected, () -> AccountAddress.parseEncoded(input, null));
-        break;
       case "canonical_hex":
         expectError(caseId, expected, () -> AccountAddress.parseAny(input, null));
         expectError(caseId, expected, () -> AccountAddress.parseEncoded(input, null));
@@ -138,7 +124,7 @@ public final class AccountAddressTests {
 
     assert canonical.equals("0x020001200000000000000000000000000000000000000000000000000000000000000000")
         : "canonical encoding mismatch";
-    assert i105.equals("6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCify")
+    assert i105.equals("soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ")
         : "I105 encoding mismatch";
 
     final AccountAddress.ParseResult i105Parsed =
@@ -146,6 +132,18 @@ public final class AccountAddressTests {
     assert i105Parsed.format == AccountAddress.Format.I105 : "expected i105 format";
     assert Arrays.equals(address.canonicalBytes(), i105Parsed.address.canonicalBytes())
         : "I105 round-trip mismatch";
+  }
+
+  private static void ambiguousKatakanaLiteralRoundTrip() throws Exception {
+    final String literal =
+        "soraゴヂアヌプユドニャニョャニョユブゥワレボウュヒャメヌサネスヒダテガニャガュギィペジハネアヶァネフカアミキ";
+    final AccountAddress address =
+        AccountAddress.fromI105(literal, AccountAddress.DEFAULT_I105_DISCRIMINANT);
+    assert address.canonicalHex().equals(
+            "0x02000120bc717326224e4b4119298e7b1db8133cb27d6cdf6b3e04d75a6d27b29a34c1cf")
+        : "ambiguous literal canonical mismatch";
+    assert address.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT).equals(literal)
+        : "ambiguous literal round-trip mismatch";
   }
 
   private static void i105PrefixMismatchThrows() throws Exception {
@@ -162,6 +160,31 @@ public final class AccountAddressTests {
     assert threw : "expected prefix mismatch to throw";
   }
 
+  private static void i105RejectsFullwidthSentinel() throws Exception {
+    final byte[] key = new byte[32];
+    Arrays.fill(key, (byte) 0x31);
+    final AccountAddress address = AccountAddress.fromAccount("default", key, "ed25519");
+    final String canonical = address.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+    final String noncanonical = canonical.replaceFirst("sora", "ｓｏｒａ");
+
+    boolean parseThrew = false;
+    try {
+      AccountAddress.parseEncoded(noncanonical, AccountAddress.DEFAULT_I105_DISCRIMINANT);
+    } catch (final AccountAddress.AccountAddressException ex) {
+      parseThrew = ex.getCode() == AccountAddress.AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT;
+    }
+    assert parseThrew : "fullwidth sentinel literal must be rejected";
+
+    boolean fromI105Threw = false;
+    try {
+      AccountAddress.fromI105(noncanonical, AccountAddress.DEFAULT_I105_DISCRIMINANT);
+    } catch (final AccountAddress.AccountAddressException ex) {
+      fromI105Threw =
+          ex.getCode() == AccountAddress.AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT;
+    }
+    assert fromI105Threw : "fullwidth sentinel literal must be rejected by fromI105";
+  }
+
   private static void singleKeyPayloadExtraction() throws Exception {
     final byte[] key = new byte[32];
     for (int i = 0; i < key.length; i++) {
@@ -176,9 +199,19 @@ public final class AccountAddressTests {
   }
 
   private static void i105RejectsInvalidCharacters() {
+    final byte[] key = new byte[32];
+    final String literal;
+    try {
+      literal =
+          AccountAddress.fromAccount("default", key, "ed25519")
+              .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+    } catch (final AccountAddress.AccountAddressException ex) {
+      throw new AssertionError("failed to build canonical Katakana i105 literal", ex);
+    }
+    final String malformed = literal.substring(0, literal.length() - 1) + "!";
     boolean threw = false;
     try {
-      AccountAddress.fromI105("invalid", null);
+      AccountAddress.fromI105(malformed, null);
     } catch (final AccountAddress.AccountAddressException ex) {
       threw = ex.getCode() == AccountAddress.AccountAddressErrorCode.INVALID_I105_CHAR;
     }

@@ -11,7 +11,7 @@ fn sample_ticket() -> StreamingTicket {
     };
     StreamingTicket {
         ticket_id: [0x44; 32],
-        owner: "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw".to_owned(),
+        owner: "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ".to_owned(),
         dsid: 7,
         lane_id: 5,
         settlement_bucket: 2_048,

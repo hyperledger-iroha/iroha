@@ -40,7 +40,7 @@ final class DemoConnectViewModelTests: XCTestCase {
       "CONNECT_ROLE": "wallet",
       "CONNECT_PEER_PUB_B64": "cGVlci1wdWI=",
       "CONNECT_SHARED_KEY_B64": "c2hhcmVkLWtleQ==",
-      "CONNECT_APPROVE_ACCOUNT_ID": "6cmzPVPXA9wQAqZuZTNQr7fWhci8nVVkG6zQBHnHVK7RPo2Dfe1WG9B",
+      "CONNECT_APPROVE_ACCOUNT_ID": "soraゴヂアネタアニャヴウザニキニョゾビバヤチョトテスシコダオョキュロッベイゴビチャヰショチャパヨツサツホキマイニキ",
       "CONNECT_APPROVE_PRIVATE_KEY_B64": "cHJpdmF0ZS1rZXk=",
       "CONNECT_APPROVE_SIGNATURE_B64": "c2lnbmF0dXJl"
     ]
@@ -65,7 +65,7 @@ final class DemoConnectViewModelTests: XCTestCase {
     XCTAssertEqual(viewModel.aeadKeyB64, "c2hhcmVkLWtleQ==")
     XCTAssertEqual(
       viewModel.approveAccountId,
-      "6cmzPVPXA9wQAqZuZTNQr7fWhci8nVVkG6zQBHnHVK7RPo2Dfe1WG9B"
+      "soraゴヂアネタアニャヴウザニキニョゾビバヤチョトテスシコダオョキュロッベイゴビチャヰショチャパヨツサツホキマイニキ"
     )
     XCTAssertEqual(viewModel.approvePrivKeyB64, "cHJpdmF0ZS1rZXk=")
     XCTAssertEqual(viewModel.approveSigB64, "c2lnbmF0dXJl")
@@ -79,7 +79,7 @@ final class DemoConnectViewModelTests: XCTestCase {
       return
     }
     XCTAssertFalse(preview.i105.isEmpty)
-    XCTAssertTrue(preview.i105Default.hasPrefix("sora"))
+    XCTAssertFalse(preview.i105.contains("@"))
     XCTAssertTrue(preview.i105Warning.lowercased().contains("i105"))
 #else
     throw XCTSkip("IrohaSwift framework is unavailable on this platform")

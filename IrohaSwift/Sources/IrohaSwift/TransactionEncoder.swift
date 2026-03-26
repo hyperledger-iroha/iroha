@@ -46,7 +46,7 @@ public enum TransactionInputError: Error, LocalizedError, Equatable {
         case .emptyAssetId:
             return "Asset id must not be empty."
         case let .malformedAssetId(value):
-            return "Asset id must use '<asset-definition-id>#<i105-account-id>' public form with optional '#dataspace:<id>' suffix and no whitespace (received '\(value)')."
+            return "Asset id must use '<base58-asset-id>#<katakana-i105-account-id>' public form with optional '#dataspace:<id>' suffix and no whitespace (received '\(value)')."
         case let .invalidZkBallotPublicInputs(reason):
             return "Governance ZK public inputs are invalid: \(reason)"
         }
@@ -1192,13 +1192,13 @@ struct SwiftTransactionEncoder {
         if case .null = value { return }
         guard case let .string(owner) = value else {
             throw TransactionInputError.invalidZkBallotPublicInputs(
-                "owner must be a canonical i105 account id"
+                "owner must be a canonical Katakana i105 account id"
             )
         }
         let canonical = try canonicalizeZkBallotOwnerLiteral(owner)
         if canonical != owner {
             throw TransactionInputError.invalidZkBallotPublicInputs(
-                "owner must use canonical i105 account id form"
+                "owner must use canonical Katakana i105 account id form"
             )
         }
     }
@@ -1207,17 +1207,17 @@ struct SwiftTransactionEncoder {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed == raw else {
             throw TransactionInputError.invalidZkBallotPublicInputs(
-                "owner must be a canonical i105 account id"
+                "owner must be a canonical Katakana i105 account id"
             )
         }
         if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
             throw TransactionInputError.invalidZkBallotPublicInputs(
-                "owner must be a canonical i105 account id"
+                "owner must be a canonical Katakana i105 account id"
             )
         }
         if trimmed.contains("@") {
             throw TransactionInputError.invalidZkBallotPublicInputs(
-                "owner must be a canonical i105 account id"
+                "owner must be a canonical Katakana i105 account id"
             )
         }
         let address: AccountAddress
@@ -1228,7 +1228,7 @@ struct SwiftTransactionEncoder {
             )
         } catch {
             throw TransactionInputError.invalidZkBallotPublicInputs(
-                "owner must be a canonical i105 account id"
+                "owner must be a canonical Katakana i105 account id"
             )
         }
         let i105 = try address.toI105(networkPrefix: 0x02F1)

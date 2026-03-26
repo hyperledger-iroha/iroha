@@ -19,9 +19,9 @@ Le lecteur Kotodama est en ligne pour le lecteur `transfer_asset` en ligne. ڈی
 
 ## لیجر واک تھرو
 
-- کنٹریکٹ اتھارٹی (مثلا `i105...`) کو اس اثاثے سے فنڈ کریں جسے وہ منتقل کرے گی اور اتھارٹی کو `CanTransfer` رول یا مساوی اجازت دیں۔
-- `call_transfer_asset` انٹری پوائنٹ کال کریں تاکہ کنٹریکٹ اکاؤنٹ سے `i105...` کو 5 یونٹس منتقل ہوں، یہ اس طریقے کی عکاسی کرتا ہے کہ آن چین آٹومیشن ہوسٹ کالز کو لپیٹ سکتی ہے۔
-- `FindAccountAssets` et `iroha_cli ledger assets list --account i105...` sont en cours de mise à jour et sont en cours de réalisation. کہ میٹا ڈیٹا گارڈ نے ٹرانسفر کانٹیکسٹ لاگ کیا ہے۔
+- کنٹریکٹ اتھارٹی (مثلا `soraカタカナ...`) کو اس اثاثے سے فنڈ کریں جسے وہ منتقل کرے گی اور اتھارٹی کو `CanTransfer` رول یا مساوی اجازت دیں۔
+- `call_transfer_asset` انٹری پوائنٹ کال کریں تاکہ کنٹریکٹ اکاؤنٹ سے `soraカタカナ...` کو 5 یونٹس منتقل ہوں، یہ اس طریقے کی عکاسی کرتا ہے کہ آن چین آٹومیشن ہوسٹ کالز کو لپیٹ سکتی ہے۔
+- `FindAccountAssets` et `iroha_cli ledger assets list --account soraカタカナ...` sont en cours de mise à jour et sont en cours de réalisation. کہ میٹا ڈیٹا گارڈ نے ٹرانسفر کانٹیکسٹ لاگ کیا ہے۔
 
 ## Utiliser le SDK
 
@@ -36,8 +36,8 @@ Le lecteur Kotodama est en ligne pour le lecteur `transfer_asset` en ligne. ڈی
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("i105..."),
-      account!("i105..."),
+      account!("soraカタカナ..."),
+      account!("soraカタカナ..."),
       asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );

@@ -138,7 +138,6 @@ export class AccountAddress {
     encoded: string,
     expectedPrefix?: number | string | bigint,
   ): AccountAddress;
-  static fromI105Default(encoded: string): AccountAddress;
   static parseEncoded(
     input: string,
     expectedPrefix?: number | string | bigint,
@@ -147,7 +146,6 @@ export class AccountAddress {
   canonicalBytes(): Uint8Array;
   canonicalHex(): string;
   toI105(prefix?: number | string | bigint): string;
-  toI105Default(): string;
   toString(): string;
   displayFormats(chainDiscriminant?: number | string | bigint): AccountAddressDisplay;
   domainSummary(): AccountAddressDomainSummary;
@@ -4581,6 +4579,31 @@ export interface SetRwaControlsInput {
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
 }
 
+export interface SetRwaKeyValueInput {
+  chainId: string;
+  authority: string;
+  rwaId: string;
+  key: string;
+  value: JsonValue;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  ttlMs?: number | null;
+  nonce?: number | null;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+}
+
+export interface RemoveRwaKeyValueInput {
+  chainId: string;
+  authority: string;
+  rwaId: string;
+  key: string;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  ttlMs?: number | null;
+  nonce?: number | null;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+}
+
 /**
  * Parameters for {@link buildMintAndTransferTransaction}. Provide either
  * `transfer` or `transfers`; when `sourceAssetId` is omitted on a transfer the
@@ -7982,6 +8005,12 @@ export function buildForceTransferRwaTransaction(
 export function buildSetRwaControlsTransaction(
   input: SetRwaControlsInput,
 ): SignedTransactionResult;
+export function buildSetRwaKeyValueTransaction(
+  input: SetRwaKeyValueInput,
+): SignedTransactionResult;
+export function buildRemoveRwaKeyValueTransaction(
+  input: RemoveRwaKeyValueInput,
+): SignedTransactionResult;
 /**
  * Compose a mint followed by one or more transfers. Provide either `transfer`
  * or `transfers`; transfers without an explicit `sourceAssetId` reuse the mint's
@@ -8334,6 +8363,24 @@ export function buildSetRwaControlsInstruction(options: {
   rwaId: string;
   controls?: RwaControlPolicyInput | string;
   controlsJson?: RwaControlPolicyInput | string;
+}): object;
+
+export function buildSetRwaKeyValueInstruction({
+  rwaId,
+  key,
+  value,
+}: {
+  rwaId: string;
+  key: string;
+  value: JsonValue;
+}): object;
+
+export function buildRemoveRwaKeyValueInstruction({
+  rwaId,
+  key,
+}: {
+  rwaId: string;
+  key: string;
 }): object;
 
 export function buildCreateKaigiInstruction(call: CreateKaigiInput): object;

@@ -147,8 +147,8 @@ public final class OfflineVerdictJournalTest {
     final String json =
         """
         {
-          "controller_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
-          "controller_display": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+          "controller_id": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+          "controller_display": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
           "certificate_expires_at_ms": 1700000000000.5,
           "policy_expires_at_ms": 1700000000000,
           "recorded_at_ms": 1700000000000
@@ -167,8 +167,8 @@ public final class OfflineVerdictJournalTest {
     final String json =
         """
         {
-          "controller_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
-          "controller_display": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+          "controller_id": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+          "controller_display": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
           "certificate_expires_at_ms": 1700000000000,
           "policy_expires_at_ms": 1700000000000,
           "recorded_at_ms": 1700000000000,
@@ -192,8 +192,8 @@ public final class OfflineVerdictJournalTest {
     final String json =
         """
         {
-          "controller_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
-          "controller_display": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+          "controller_id": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+          "controller_display": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
           "certificate_expires_at_ms": 1700000000000,
           "policy_expires_at_ms": 1700000000000,
           "recorded_at_ms": 1700000000000,
@@ -216,8 +216,8 @@ public final class OfflineVerdictJournalTest {
     final String json =
         """
         {
-          "controller_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
-          "controller_display": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+          "controller_id": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+          "controller_display": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
           "certificate_expires_at_ms": 1700000000000,
           "policy_expires_at_ms": 1700000000000,
           "recorded_at_ms": 1700000000000,
@@ -266,8 +266,8 @@ public final class OfflineVerdictJournalTest {
   private static OfflineAllowanceList.OfflineAllowanceItem sampleAllowance() {
     return new OfflineAllowanceList.OfflineAllowanceItem(
         "deadbeef",
-        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
-        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+        "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+        "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
         "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
         "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
         "USD",
@@ -285,8 +285,8 @@ public final class OfflineVerdictJournalTest {
   private static OfflineAllowanceList.OfflineAllowanceItem provisionedAllowance() {
     return new OfflineAllowanceList.OfflineAllowanceItem(
         "cafebabe",
-        "inspector@nexus",
-        "inspector@nexus",
+        "inspector@ops.dataspace",
+        "inspector@ops.dataspace",
         "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
         "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
         "USD",
@@ -304,7 +304,7 @@ public final class OfflineVerdictJournalTest {
   private static OfflineAllowanceList.OfflineAllowanceItem playIntegrityAllowance() {
     return new OfflineAllowanceList.OfflineAllowanceItem(
         "baddcafe",
-        "play@integrity",
+        "play@integrity.dataspace",
         "Play Integrity",
         "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
         "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
@@ -323,7 +323,7 @@ public final class OfflineVerdictJournalTest {
   private static OfflineAllowanceList.OfflineAllowanceItem fractionalPlayIntegrityAllowance() {
     return new OfflineAllowanceList.OfflineAllowanceItem(
         "fractional-play",
-        "play@integrity",
+        "play@integrity.dataspace",
         "Play Integrity",
         "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
         "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
@@ -342,8 +342,8 @@ public final class OfflineVerdictJournalTest {
   private static OfflineAllowanceList.OfflineAllowanceItem fractionalProvisionedAllowance() {
     return new OfflineAllowanceList.OfflineAllowanceItem(
         "fractional-prov",
-        "inspector@nexus",
-        "inspector@nexus",
+        "inspector@ops.dataspace",
+        "inspector@ops.dataspace",
         "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
         "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
         "USD",

@@ -32,8 +32,8 @@ translation_last_reviewed: 2026-02-07
 ከማሳያ ቁልፎች የተወሰደ፡-
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="soraカタカナ..."
+export RECEIVER_ACCOUNT="soraカタカナ..."
 ```
 
 የመጀመሪያዎቹን ጥቂት መለያዎች በመዘርዘር እሴቶቹን ያረጋግጡ፡-

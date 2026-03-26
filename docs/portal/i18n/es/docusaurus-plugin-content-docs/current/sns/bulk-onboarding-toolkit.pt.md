@@ -34,7 +34,7 @@ El analizador exige la siguiente línea de cabecalho (a orden y flexivel):| Colu
 |--------|-------------|-----------|
 | `label` | Sim | Etiqueta solicitada (aceita de caso mixto; a ferramenta normaliza conforme Norma v1 e UTS-46). |
 | `suffix_id` | Sim | Identificador numérico de sufijo (decimal o `0x` hexadecimal). |
-| `owner` | Sim | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
+| `owner` | Sim | AccountId string (domainless encoded literal; canonical Katakana i105 only; no `@<domain>` suffix). |
 | `term_years` | Sim | Inteiro `1..=255`. |
 | `payment_asset_id` | Sim | Activo de liquidación (por ejemplo `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Sim | Inteiros sinal representando unidades nativas do ativo. |
@@ -73,9 +73,9 @@ En caso de éxito del script se grava un manifiesto agregado:
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "soraカタカナ...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"soraカタカナ...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -84,7 +84,7 @@ En caso de éxito del script se grava un manifiesto agregado:
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"soraカタカナ...",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -236,7 +236,7 @@ sumisos. El cuadro filtrado por `release` para que los auditores puedan enfocars
   referencias a arquivos sao resolvidas relativas a localizacao do CSV. Metadatos
   nao objeto produz um error de validación.
 - **Controladores:** celulas em branco respeitam `--default-controllers`. Forneca
-  listas explícitas (por ejemplo `i105...;i105...`) ao delegar para atores nao propietario.
+  listas explícitas (por ejemplo `soraカタカナ...;soraカタカナ...`) ao delegar para atores nao propietario.
 
 Falhas sao reportadas com numeros de linha contextuais (por ejemplo
 `error: row 12 term_years must be between 1 and 255`). O script sai com código

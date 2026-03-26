@@ -86,7 +86,7 @@ Local-12 או מחזיר את הרישום לתיקון או מטען מטען.
 Exploradores devem espelhar o trabalho de telemetria e acessibilidade da
 carteira:
 
-- Aplique `data-copy-mode="i105|i105_default|qr"` aos botoes de copia para que
+- Aplique `data-copy-mode="i105|qr"` aos botoes de copia para que
   חזיתות possam emitir contadores de uso junto com a metrica Torii
   `torii_address_format_total`. O componente demo acima dispara um evento
   `iroha:address-copy` com `{mode,timestamp}`; conecte isso ao seu pipeline de
@@ -188,7 +188,7 @@ Operadores que convertem codificacoes חלופות מקומיות עבור I105 
   O helper preserva o prefixo I105 detectado do letteral a menos que voce forneca
   מפורש `networkPrefix`, קורות חיים מפורטים עבור נאו פדראו נאו סאו
   re-renderizados silenciosamente com o prefixo padrao.3. המרת מטען שימוש canonico reutilizando os campos `i105.value` ou
-   `i105_default` לעשות רזומה (אתה מבקש קוד קוד דרך `--format`). Essas
+   `i105` לעשות רזומה (אתה מבקש קוד קוד דרך `--format`). Essas
    מיתרים וסאו סגוראס עבור קומפרטילהמנטו חיצוני.
 4. אטואלי מניפסטים, רישום ומסמכים וולטאדוס ולקוחות com a forma
    canonica e notifique as contrapartes de que seletores Local serao rejeitados

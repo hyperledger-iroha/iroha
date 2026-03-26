@@ -4,15 +4,13 @@ Wallets, explorers, and SDK samples must treat account addresses as immutable
 payloads. The Android retail wallet sample in
 `examples/android/retail-wallet` now demonstrates the required UX pattern:
 
-- **Dual copy targets.** Ship two explicit copy buttons—I105 and the
-  i105-default Sora-only form (`i105`). I105 is always safe to share externally
-  and powers the QR payload. The i105-default variant must include an inline
-  warning because it only works inside Sora-aware apps. The Android retail wallet
-  sample wires both Material buttons and their tooltips in
-  `examples/android/retail-wallet/src/main/res/layout/activity_main.xml`, and the
-  iOS SwiftUI demo mirrors the same UX via `AddressPreviewCard` inside
+- **Single canonical copy target.** Ship one explicit copy button for the
+  canonical `i105` account id. That same literal powers the QR payload. The
+  Android retail wallet sample wires the Material button and tooltip in
+  `examples/android/retail-wallet/src/main/res/layout/activity_main.xml`, and
+  the iOS SwiftUI demo mirrors the same UX via `AddressPreviewCard` inside
   `examples/ios/NoritoDemo/Sources/ContentView.swift`.
-- **Monospace, selectable text.** Render both strings with a monospace font and
+- **Monospace, selectable text.** Render the `i105` string with a monospace font and
   `textIsSelectable="true"` so users can inspect values without invoking an IME.
   Avoid editable fields: IMEs can rewrite kana or inject zero-width code points.
 - **Domainless address hints.** Canonical account literals are domainless; when
@@ -22,8 +20,8 @@ payloads. The Android retail wallet sample in
   domain label encoded by a selector digest when that context matters.
 - **I105 QR payloads.** QR codes must encode the I105 string. If QR generation
   fails, display an explicit error instead of a blank image.
-- **Clipboard messaging.** After copying the i105-default form, emit a toast or
-  snackbar reminding users that it is Sora-only and prone to IME mangling.
+- **Clipboard messaging.** After copying the canonical `i105` form, emit a
+  toast or snackbar confirming the shareable account id was copied.
 
 Following these guardrails prevents Unicode/IME corruption and satisfies the
 ADDR-6 roadmap acceptance criteria for wallet/explorer UX.
@@ -31,7 +29,7 @@ ADDR-6 roadmap acceptance criteria for wallet/explorer UX.
 ## Screenshot fixtures
 
 Use the following fixtures during localization reviews to ensure button labels,
-tooltips, and warnings stay aligned across platforms:
+tooltips, and QR captions stay aligned across platforms:
 
 - Android reference: `images/address_copy_android.svg`
 
@@ -43,8 +41,8 @@ tooltips, and warnings stay aligned across platforms:
 
 ## SDK helpers
 
-Each SDK now exposes a convenience helper that returns the i105 forms alongside
-the warning string so UI layers can stay consistent:
+Each SDK now exposes a convenience helper that returns canonical `i105`
+rendering alongside the warning string so UI layers can stay consistent:
 
 - JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)` (`javascript/iroha_js/src/address.js`)
 - Python: `AccountAddress.display_formats(network_prefix: int = 753)`
@@ -52,8 +50,8 @@ the warning string so UI layers can stay consistent:
 - Java/Kotlin: `AccountAddress.displayFormats(int networkPrefix = 753)` (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountAddress.java`)
 
 Use these helpers instead of reimplementing the encode logic in UI layers.
-Every helper returns a `domainSummary` payload alongside the I105
-strings. The summary exposes `kind` (`default`, `local12`, `global`, `unknown`)
+Every helper returns a `domainSummary` payload alongside the `i105`
+string. The summary exposes `kind` (`default`, `local12`, `global`, `unknown`)
 and an optional `warning` message that mirrors the Local-12 compatibility guidance in
 this document. Canonical payloads emitted by current SDKs are selector-free and
 therefore report `default`; `local12`/`global` are legacy decode diagnostics only.
@@ -61,12 +59,11 @@ The JavaScript helper also exposes selector details (`tag`, `digest_hex`, `regis
 surface whether an imported legacy literal carried a selector prefix without re-parsing the canonical payload.
 - JavaScript inspector: `inspectAccountId(...)` returns the `i105Warning`
   string and appends it to `warnings` whenever a `i105` literal is provided, so
-  explorers and wallet dashboards can surface the Sora-only notice during paste/
-  validation flows instead of only when they generate the i105-default form
-  themselves.
+  explorers and wallet dashboards can surface parse/render caveats during paste/
+  validation flows.
 JavaScript `AccountId` parsing now matches Torii’s strict hard-cut contract:
-canonical i105 only. i105-default strings and canonical `0x…` hex remain
-address-display helpers, not `AccountId` parser inputs.
+canonical Katakana i105 only. Non-canonical literals and canonical `0x…` hex remain
+diagnostic helpers, not `AccountId` parser inputs.
 
 ## Alphabet reference
 
@@ -85,18 +82,6 @@ below so wallet/explorer UIs can surface them inline without spelunking the code
 > ℹ️ I105 deliberately omits `0`, `O`, `I`, and `l` to avoid look‑alike glyphs. Surface that rule
 > in inline help text when users type an unsupported character so validation failures are actionable.
 
-### i105-default Sora alphabet (47 symbols)
-
-| Half-width glyphs | Count |
-|-------------------|-------|
-| `ｲ ﾛ ﾊ ﾆ ﾎ ﾍ ﾄ ﾁ ﾘ ﾇ ﾙ ｦ ﾜ ｶ ﾖ ﾀ ﾚ ｿ ﾂ ﾈ ﾅ ﾗ ﾑ ｳ ヰ ﾉ ｵ ｸ ﾔ ﾏ ｹ ﾌ ｺ ｴ ﾃ ｱ ｻ ｷ ﾕ ﾒ ﾐ ｼ ヱ ﾋ ﾓ ｾ ｽ` | 47 |
-
-The i105-default alphabet accepts both half-width and full-width kana, and the `sora` sentinel
-may also be typed in full-width form (`ｓｏｒａ`). Render the half-width glyphs in UI copy while
-allowing screen readers to expand the descriptive text (see Accessibility guidance below). When
-exposing printable cheat-sheets or QR legends, include both tables so operators can validate
-telemetry exports offline.
-
 ## Torii API account literal contract
 
 Torii/Explorer endpoints emit i105 literals by default and accept the optional
@@ -111,15 +96,14 @@ transaction participants, account summaries, telemetry DTOs) using the
 underlying identifiers. Unknown override values (for example `base64`)
 return `HTTP 400` so misconfigured SDKs fail fast.
 
-Account-bearing requests accept canonical i105 `AccountId` literals only.
-Canonical i105 strings remain the wire format for manifests, telemetry, and QR
-payloads, so use `canonical i105 output` only for rendered output where the
-Sora alphabet offers material ergonomic wins.
+Account-bearing requests accept canonical Katakana i105 `AccountId` literals only.
+Canonical Katakana i105 strings remain the wire format for manifests, telemetry, and QR
+payloads.
 
 Offline reserve endpoints use the same canonical account-literal rules. `/v1/offline/reserve/setup`,
 `/v1/offline/reserve/topup`, `/v1/offline/reserve/renew`, `/v1/offline/reserve/sync`,
 `/v1/offline/reserve/defund`, `/v1/offline/revocations`, and `/v1/offline/transfers{,/query}`
-accept canonical i105 `AccountId` selectors wherever account literals appear, so clients do not need
+accept canonical Katakana i105 `AccountId` selectors wherever account literals appear, so clients do not need
 to hand-normalize controller, receiver, or deposit-account values before submission.
 Canonical `AccountId` literals remain domainless even when a workflow also carries domain context;
 render or transport that context separately instead of appending `@<domain>` or relying on
@@ -127,10 +111,10 @@ implicit default-domain reconstruction.
 
 ## Accessibility + explicit domain metadata
 
-- **Copy mode controls.** When rendering the I105/I105/QR toggle, mark each button with
-  `aria-pressed` and an explicit `aria-label` (for example, “Copy canonical i105 account address”
-  vs “Copy i105-default Sora address—works only inside Sora-aware apps”). Include a visually-hidden
-  `(safe to share)` or `(Sora-only)` suffix so screen readers convey the warnings present in the UI.
+- **Copy mode controls.** When rendering the I105/QR controls, mark each button with
+  `aria-pressed` and an explicit `aria-label` (for example, “Copy canonical Katakana i105 account address”
+  or “Share i105 QR”). Include a visually-hidden `(safe to share)` suffix so screen readers
+  convey the same guidance present in the UI.
 - **Domain context hints.** Reuse the caption text from the main layout but also expose it via
   `aria-describedby` on the address container (for example, “Domain context: wonderland”).
   Keep domain context separate from the canonical account literal instead of showing `@domain`
@@ -139,16 +123,16 @@ implicit default-domain reconstruction.
   payload. Wrap the SVG with `<figure role="img" aria-label="I105 QR for snx…">` so assistive tech
   can reference the literal field when announcing the image. If QR rendering fails, surface a
   live-region alert that quotes the i105 literal instead of leaving a blank canvas.
-- **Telemetry hooks.** Tag each copy button or context menu entry with `data-copy-mode="i105"`,
-  `"i105-default"`, or `"qr"` and emit those values alongside the `torii_address_format_total` counter
-  to the `address_ingest` dashboard. The roadmap’s ADDR-6b acceptance test reads that telemetry to
-  prove wallets/explorers actually expose all three formats. Also surface the Torii counters that
+- **Telemetry hooks.** Tag each copy button or context menu entry with `data-copy-mode="i105"`
+  or `"qr"` and emit those values alongside the `torii_address_format_total` counter to the
+  `address_ingest` dashboard. The roadmap’s ADDR-6b acceptance test reads that telemetry to
+  prove wallets/explorers expose the canonical copy/share surfaces. Also surface the Torii counters that
   prove Local-12 retirement progress (`torii_address_domain_total{domain_kind="local12"}` and
   `torii_address_local8_total`). Grafana board `dashboards/grafana/address_ingest.json` plus the
   alert bundle `dashboards/alerts/address_ingest_rules.yml` expect those labels so operators can
   attach a 30-day zero-usage export to the ADDR-7 readiness review.
 - **Reduced-motion + keyboard flows.** Respect `prefers-reduced-motion` when animating QR refreshes,
-  and ensure keyboard users can tab through I105/I105/QR controls without losing the focus
+  and ensure keyboard users can tab through I105/QR controls without losing the focus
   ring. Tooltips should be paired with aria hints so that high-contrast and screen-reader users get
   the same warnings as pointer users.
 
@@ -206,10 +190,10 @@ Legacy (decode-only) selector-bearing examples:
 
 ## Torii response knobs
 
-- Explorers consuming Torii via `/v1/accounts` and `/v1/accounts/query` always receive canonical i105 literals in `items[*].id`.
-- `GET /v1/accounts/{account_id}/transactions` and `POST .../transactions/query` also emit canonical i105 in `items[*].authority`.
-- `GET /v1/explorer/accounts/{account_id}/qr` returns canonical i105 payload metadata (`canonical_id`, `literal`, `modules`, `error_correction`, `qr_version`, `svg`) without any format override.
-- Asset-holder listings (`GET /v1/assets/{definition_id}/holders`) and `POST .../holders/query` return canonical i105 `items[*].account_id` values consistently.
+- Explorers consuming Torii via `/v1/accounts` and `/v1/accounts/query` always receive canonical Katakana i105 literals in `items[*].id`.
+- `GET /v1/accounts/{account_id}/transactions` and `POST .../transactions/query` also emit canonical Katakana i105 in `items[*].authority`.
+- `GET /v1/explorer/accounts/{account_id}/qr` returns canonical Katakana i105 payload metadata (`canonical_id`, `literal`, `modules`, `error_correction`, `qr_version`, `svg`) without any format override.
+- Asset-holder listings (`GET /v1/assets/{definition_id}/holders`) and `POST .../holders/query` return canonical Katakana i105 `items[*].account_id` values consistently.
 
 ## Local selector cutover toolkit (ADDR-5c)
 
@@ -218,9 +202,11 @@ domain is backed by the Nexus registry. To detect lingering Local payloads and g
 through the migration:
 
 1. Run `iroha tools address convert <address-or-account_id> --format json`. The payload includes
-   `detected_format`, `domain.kind`, and canonical encodings (`i105`, `i105_default`, `canonical_hex`).
-   Inputs must be canonical i105 account literals; i105-default `sora...`, canonical hex, and `@<domain>`
-   suffixes are rejected on strict parser paths.
+   `detected_format`, `domain.kind`, the canonical `i105` account id, and diagnostic
+   `canonical_hex`.
+   Strict account-id parser paths accept only canonical `i105` literals. Account aliases
+   (`name@dataspace` or `name@domain.dataspace`) are separate on-chain aliases and are not
+   accepted as account ids on strict parser paths.
 2. SDKs can surface the same summary via the JavaScript helper:
 
    ```js
@@ -246,7 +232,7 @@ through the migration:
    audit fails on parse errors; use `--allow-errors` only for best-effort scans.
 6. For newline-to-newline rewrites, run `iroha tools address normalize --input addresses.txt --network-prefix 753 --format i105`.
    The helper rewrites each parsed row into the requested encoding
-   (canonical i105/hex/JSON). Pair it with `--allow-errors` to keep scanning
+   (canonical Katakana i105/hex/JSON). Pair it with `--allow-errors` to keep scanning
    malformed dumps.
 7. CI/lint automation can run `ci/check_address_normalize.sh`, which extracts the Local selectors from
    `fixtures/account/address_vectors.json`, converts them via `iroha tools address normalize`, and audits
@@ -273,9 +259,9 @@ Alertmanager pack (`dashboards/alerts/address_ingest_rules.yml`) surfaces three 
   responsible SDK team before declaring the incident resolved.
 
 `torii_address_format_total{endpoint,format}` complements the ingest metrics by counting every
-`canonical i105 literal rendering` request that Torii serves. Dashboard the metric alongside
+`canonical Katakana i105 literal rendering` request that Torii serves. Dashboard the metric alongside
 `torii_address_invalid_total` to prove that wallet/explorer traffic is gradually switching to the
-i105-default output before you disable Local selectors, and wire alert thresholds to catch any sudden
+i105 output before you disable Local selectors, and wire alert thresholds to catch any sudden
 fallback to the default I105 responses.
 
 ### Release note snippet (wallet & explorer)

@@ -14,8 +14,6 @@ const SAMPLE_KEY = Buffer.from(
   "B935AAF1F4E44B3DB79E5E5A9BA4569E6F3E2310C219F3DDD56D3277828D5480",
   "hex",
 );
-const DEFAULT_DOMAIN_SORA_I105 =
-  "sorauﾛ1P5ﾁXEｴﾕGjgﾕﾚﾎﾕｸﾁEtﾀ3ﾂｺ2gALｺﾒefﾍ8DLgｾoCVGUYHS5";
 
 test("normalizeAccountId exposes ValidationError metadata", () => {
   assert.throws(
@@ -75,9 +73,13 @@ test("normalizeAccountId rejects canonical hex account literals", () => {
   );
 });
 
-test("normalizeAccountId accepts i105Default default-domain literal without suffix", () => {
-  const normalized = normalizeAccountId(DEFAULT_DOMAIN_SORA_I105, "accountId");
-  const address = AccountAddress.fromI105(DEFAULT_DOMAIN_SORA_I105, 753);
+test("normalizeAccountId accepts i105 default-domain literal without suffix", () => {
+  const address = AccountAddress.fromAccount({
+    domain: DEFAULT_DOMAIN_NAME,
+    publicKey: SAMPLE_KEY,
+  });
+  const canonicalI105 = address.toI105();
+  const normalized = normalizeAccountId(canonicalI105, "accountId");
 
   const parsed = AccountAddress.parseEncoded(normalized, undefined, DEFAULT_DOMAIN_NAME).address;
   assert.deepEqual(
@@ -86,14 +88,14 @@ test("normalizeAccountId accepts i105Default default-domain literal without suff
   );
 });
 
-test("normalizeAccountId canonicalizes i105Default literal without suffix for non-default domain", () => {
+test("normalizeAccountId canonicalizes i105 literal without suffix for non-default domain", () => {
   const address = AccountAddress.fromAccount({
     domain: "wonderland",
     publicKey: SAMPLE_KEY,
   });
-  const i105Default = address.toI105Default();
+  const i105 = address.toI105();
 
-  const normalized = normalizeAccountId(i105Default, "accountId");
+  const normalized = normalizeAccountId(i105, "accountId");
   const parsed = AccountAddress.parseEncoded(normalized, undefined, "wonderland").address;
   assert.deepEqual(
     Buffer.from(parsed.canonicalBytes()),

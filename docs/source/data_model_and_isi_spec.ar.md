@@ -30,7 +30,7 @@ translator: machine-google-reviewed
 - `AssetDefinitionId` - `unprefixed Base58 address with versioning and checksum` الأساسي (UUID-v4 بايت). التعريف: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. يجب أن تكون القيم الحرفية `alias` هي `<name>#<domain>.<dataspace>` أو `<name>#<dataspace>`، وأن يكون `<name>` مساوٍ لاسم تعريف الأصل. الكود: `crates/iroha_data_model/src/asset/definition.rs`.
 
   - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`, where `status` is `permanent`, `leased_active`, `leased_grace`, or `expired_pending_cleanup`. Alias selectors resolve against the latest committed block creation time and stop resolving after grace even before sweep removes stale bindings.
-- `AssetId`: `<asset-definition-id>#<i105-account-id>` الحرفي المشفر بشكل أساسي (النماذج النصية القديمة غير مدعومة في الإصدار الأول).- `NftId` — `nft$domain`. إن إف تي: `{ id, content: Metadata, owned_by }`. الكود: `crates/iroha_data_model/src/nft.rs`.
+- `AssetId`: `<base58-asset-id>#<katakana-i105-account-id>` الحرفي المشفر بشكل أساسي (النماذج النصية القديمة غير مدعومة في الإصدار الأول).- `NftId` — `nft$domain`. إن إف تي: `{ id, content: Metadata, owned_by }`. الكود: `crates/iroha_data_model/src/nft.rs`.
 - `RoleId` — `name`. الدور: `{ id, permissions: BTreeSet<Permission> }` مع المنشئ `NewRole { inner: Role, grant_to }`. الكود: `crates/iroha_data_model/src/role.rs`.
 - `Permission` — `{ name: Ident, payload: Json }`. الكود: `crates/iroha_data_model/src/permission.rs`.
 - `PeerId`/`Peer` — هوية النظير (المفتاح العام) والعنوان. الرمز: `crates/iroha_data_model/src/peer.rs`.
@@ -206,7 +206,7 @@ translator: machine-google-reviewed
 
 مذكرة الهجرة:
 - معرفات تعريف الأصول النصية `name#domain` غير مدعومة عمدًا في الإصدار الأول.
-- تظل معرفات الأصول عند حدود النعناع/الحرق/النقل أساسية `<asset-definition-id>#<i105-account-id>`؛ استخدم `iroha tools encode asset-id` مع `--definition <base58-asset-definition-id>` أو `--alias ...` بالإضافة إلى `--account`.
+- تظل معرفات الأصول عند حدود النعناع/الحرق/النقل أساسية `<base58-asset-id>#<katakana-i105-account-id>`؛ استخدم `iroha tools encode asset-id` مع `--definition <base58-asset-definition-id>` أو `--alias ...` بالإضافة إلى `--account`.
 
 ---
 

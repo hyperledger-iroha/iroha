@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
 from enum import IntEnum
 from typing import Iterable, List, Mapping, Optional, Sequence, Tuple
 
 DEFAULT_DOMAIN_NAME = "default"
 
-LOCAL_DOMAIN_KEY = b"SORA-LOCAL-K:v1"
 HEADER_VERSION_V1 = 0
 HEADER_NORM_VERSION_V1 = 1
 I105_SENTINEL_SORA = "sora"
@@ -24,121 +22,116 @@ CHAIN_DISCRIMINANT_TEST = 0x0171
 CHAIN_DISCRIMINANT_DEV = 0x0000
 I105_WARNING = (
     "I105 addresses are the canonical account literal encoding. "
-    "Use the chain-discriminant sentinel (for example, `sora` on discriminant 753)."
+    "Render and validate them with the intended chain discriminant."
 )
 
-I105_ASCII_ALPHABET: Tuple[str, ...] = (
-    "1",
-    "2",
-    "3",
-    "4",
-    "5",
-    "6",
-    "7",
-    "8",
-    "9",
-    "A",
-    "B",
-    "C",
-    "D",
-    "E",
-    "F",
-    "G",
-    "H",
-    "J",
-    "K",
-    "L",
-    "M",
-    "N",
-    "P",
-    "Q",
-    "R",
-    "S",
-    "T",
-    "U",
-    "V",
-    "W",
-    "X",
-    "Y",
-    "Z",
-    "a",
-    "b",
-    "c",
-    "d",
-    "e",
-    "f",
-    "g",
-    "h",
-    "i",
-    "j",
-    "k",
-    "m",
-    "n",
-    "o",
-    "p",
-    "q",
-    "r",
-    "s",
-    "t",
-    "u",
-    "v",
-    "w",
-    "x",
-    "y",
-    "z",
-)
-
-SORA_KANA: Tuple[str, ...] = (
-    "ｲ",
-    "ﾛ",
-    "ﾊ",
-    "ﾆ",
-    "ﾎ",
-    "ﾍ",
-    "ﾄ",
-    "ﾁ",
-    "ﾘ",
-    "ﾇ",
-    "ﾙ",
-    "ｦ",
-    "ﾜ",
-    "ｶ",
-    "ﾖ",
-    "ﾀ",
-    "ﾚ",
-    "ｿ",
-    "ﾂ",
-    "ﾈ",
-    "ﾅ",
-    "ﾗ",
-    "ﾑ",
-    "ｳ",
+I105_ALPHABET: Tuple[str, ...] = (
+    "ア",
+    "イ",
+    "ウ",
+    "エ",
+    "オ",
+    "カ",
+    "キ",
+    "ク",
+    "ケ",
+    "コ",
+    "サ",
+    "シ",
+    "ス",
+    "セ",
+    "ソ",
+    "タ",
+    "チ",
+    "ツ",
+    "テ",
+    "ト",
+    "ナ",
+    "ニ",
+    "ヌ",
+    "ネ",
+    "ノ",
+    "ハ",
+    "ヒ",
+    "フ",
+    "ヘ",
+    "ホ",
+    "マ",
+    "ミ",
+    "ム",
+    "メ",
+    "モ",
+    "ヤ",
+    "ユ",
+    "ヨ",
+    "ラ",
+    "リ",
+    "ル",
+    "レ",
+    "ロ",
+    "ワ",
     "ヰ",
-    "ﾉ",
-    "ｵ",
-    "ｸ",
-    "ﾔ",
-    "ﾏ",
-    "ｹ",
-    "ﾌ",
-    "ｺ",
-    "ｴ",
-    "ﾃ",
-    "ｱ",
-    "ｻ",
-    "ｷ",
-    "ﾕ",
-    "ﾒ",
-    "ﾐ",
-    "ｼ",
     "ヱ",
-    "ﾋ",
-    "ﾓ",
-    "ｾ",
-    "ｽ",
+    "ヲ",
+    "ン",
+    "ガ",
+    "ギ",
+    "グ",
+    "ゲ",
+    "ゴ",
+    "ザ",
+    "ジ",
+    "ズ",
+    "ゼ",
+    "ゾ",
+    "ダ",
+    "ヂ",
+    "ヅ",
+    "デ",
+    "ド",
+    "バ",
+    "ビ",
+    "ブ",
+    "ベ",
+    "ボ",
+    "パ",
+    "ピ",
+    "プ",
+    "ペ",
+    "ポ",
+    "ヴ",
+    "ヷ",
+    "ヸ",
+    "ヹ",
+    "ヺ",
+    "ァ",
+    "ィ",
+    "ゥ",
+    "ェ",
+    "ォ",
+    "ャ",
+    "ュ",
+    "ョ",
+    "ッ",
+    "ヮ",
+    "ヵ",
+    "ヶ",
+    "キャ",
+    "キュ",
+    "キョ",
+    "シャ",
+    "シュ",
+    "ショ",
+    "チャ",
+    "チュ",
+    "チョ",
+    "ニャ",
+    "ニュ",
+    "ニョ",
+    "ヒャ",
+    "ヒュ",
+    "ヒョ",
 )
-
-I105_ALPHABET: Tuple[str, ...] = I105_ASCII_ALPHABET + SORA_KANA
 I105_BASE = len(I105_ALPHABET)
 I105_INDEX = {symbol: idx for idx, symbol in enumerate(I105_ALPHABET)}
 
@@ -212,10 +205,8 @@ class DomainSelector:
 
     @classmethod
     def from_domain(cls, domain: str) -> "DomainSelector":
-        if domain.lower() == DEFAULT_DOMAIN_NAME:
-            return cls.default()
-        digest = compute_local_digest(domain)
-        return cls.local12(digest)
+        _ = domain
+        return cls.default()
 
     def encode_into(self, out: bytearray) -> None:
         out.append(self.tag)
@@ -341,12 +332,12 @@ class AccountAddress:
     def from_account(
         cls, *, domain: str, public_key: bytes, algorithm: str = "ed25519"
     ) -> "AccountAddress":
+        _ = domain
         header = AddressHeader.new(
             version=HEADER_VERSION_V1, class_=AddressClass.SINGLE_KEY, norm_version=HEADER_NORM_VERSION_V1
         )
-        selector = DomainSelector.from_domain(domain)
         controller = ControllerPayload.single_key(public_key, algorithm)
-        return cls(header=header, domain=selector, controller=controller)
+        return cls(header=header, domain=DomainSelector.default(), controller=controller)
 
     @classmethod
     def from_canonical_bytes(cls, payload: bytes) -> "AccountAddress":
@@ -354,18 +345,22 @@ class AccountAddress:
             raise AccountAddressError("invalid length for address payload")
         header = AddressHeader.decode(payload[0])
         cursor = 1
-        domain, cursor = DomainSelector.decode(payload, cursor)
         controller, cursor = ControllerPayload.decode(payload, cursor)
         if cursor != len(payload):
             raise AccountAddressError("unexpected trailing bytes in canonical payload")
-        return cls(header=header, domain=domain, controller=controller)
+        return cls(header=header, domain=DomainSelector.default(), controller=controller)
 
     @classmethod
     def from_i105(
         cls, encoded: str, expected_discriminant: Optional[int] = None
     ) -> "AccountAddress":
-        payload = decode_i105_string(encoded, expected_discriminant=expected_discriminant)
-        return cls.from_canonical_bytes(payload)
+        literal = encoded.strip()
+        payload = decode_i105_string(literal, expected_discriminant=expected_discriminant)
+        address = cls.from_canonical_bytes(payload)
+        discriminant = i105_discriminant_from_sentinel(literal)
+        if discriminant is not None and address.to_i105(discriminant) != literal:
+            raise AccountAddressError("account address literals must use canonical Katakana i105 form")
+        return address
 
     @classmethod
     def parse_encoded(
@@ -375,17 +370,18 @@ class AccountAddress:
         if not token:
             raise AccountAddressError("invalid length for address payload")
         if "@" in token:
-            raise AccountAddressError("account id must not include '@domain'")
+            raise AccountAddressError(
+                "account address literals must not include @domain; use canonical Katakana i105 form"
+            )
         if token.startswith(("0x", "0X")):
             raise AccountAddressError(
-                "canonical hex account literals are not accepted; use canonical i105 forms"
+                "canonical hex account addresses are not accepted; use canonical Katakana i105 form"
             )
         return cls.from_i105(token, expected_discriminant=expected_discriminant)
 
     def canonical_bytes(self) -> bytes:
         out = bytearray()
         out.append(self.header.encode())
-        self.domain.encode_into(out)
         self.controller.encode_into(out)
         return bytes(out)
 
@@ -404,12 +400,7 @@ class AccountAddress:
         }
 
     def __str__(self) -> str:
-        return self.canonical_hex()
-
-
-def compute_local_digest(label: str) -> bytes:
-    mac = hashlib.blake2s(label.encode("utf-8"), key=LOCAL_DOMAIN_KEY, digest_size=32)
-    return mac.digest()[:12]
+        return self.to_i105()
 
 
 def i105_sentinel_for_discriminant(discriminant: int) -> str:

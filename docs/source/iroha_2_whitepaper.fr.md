@@ -113,7 +113,7 @@ La caisse `iroha_crypto` permet la gestion des clés, le hachage et la vérifica
 
 La caisse `iroha_data_model` définit tous les objets, instructions, requêtes et événements du grand livre. Points forts :
 
-- **Les domaines, comptes et actifs** utilisent les identifiants de compte canoniques I105 (de préférence) ; `name@domain` reste un routage
+- **Les domaines, comptes et actifs** utilisent les identifiants de compte canoniques I105 (de préférence) ; `name@dataspace` / `name@domain.dataspace` reste un routage
   alias lorsqu'il est explicitement fourni. Les métadonnées sont déterministes (carte `Metadata`). Les actifs numériques prennent en charge la virgule fixe
   opérations ; Les NFT contiennent des métadonnées structurées arbitraires.
 - **Les rôles et autorisations** utilisent des jetons énumérés Norito qui correspondent directement aux contrôles de l'exécuteur.

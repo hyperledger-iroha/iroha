@@ -14,7 +14,7 @@ title: اکاؤنٹ ایڈریس تعمیل
 description: ADDR-2 fixture ورک فلو کا خلاصہ اور SDK ٹیموں کی ہم آہنگی کیسے برقرار رہتی ہے۔
 ---
 
-canonical ADDR-2 bundle (`fixtures/account/address_vectors.json`) I105 and i105-default (`sora`; half/full width), multisignature, اور negative fixtures کو capture کرتا ہے۔ ہر SDK + Torii surface اسی JSON پر انحصار کرتی ہے تاکہ codec drift پروڈکشن تک پہنچنے سے پہلے پکڑا جا سکے۔ یہ صفحہ اندرونی status brief (`docs/source/account_address_status.md` ریپوزٹری روٹ میں) کو mirror کرتا ہے تاکہ portal readers بغیر mono-repo میں کھوج لگائے workflow دیکھ سکیں۔
+canonical ADDR-2 bundle (`fixtures/account/address_vectors.json`) canonical Katakana i105, multisignature, اور negative fixtures کو capture کرتا ہے۔ ہر SDK + Torii surface اسی JSON پر انحصار کرتی ہے تاکہ codec drift پروڈکشن تک پہنچنے سے پہلے پکڑا جا سکے۔ یہ صفحہ اندرونی status brief (`docs/source/account_address_status.md` ریپوزٹری روٹ میں) کو mirror کرتا ہے تاکہ portal readers بغیر mono-repo میں کھوج لگائے workflow دیکھ سکیں۔
 
 ## Bundle کو regenerate یا verify کریں
 

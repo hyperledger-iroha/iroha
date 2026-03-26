@@ -72,7 +72,7 @@ and a predicate payload:
     },
     "predicate": {
       "equals": [
-        {"field": "authority", "value": "i105..."}
+        {"field": "authority", "value": "soraカタカナ..."}
       ],
       "in": [
         {"field": "metadata.tier", "values": [1, 2, 3]}

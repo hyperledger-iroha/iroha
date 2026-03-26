@@ -89,7 +89,7 @@ selektor Local-12 yoki xom yukni qayta tahlil qilmasdan registr tomonidan qo'lla
 
 Tadqiqotchilar hamyon telemetriyasi va foydalanish imkoniyatini aks ettirishi kerak:
 
-- Nusxalash tugmalari uchun `data-copy-mode="i105|i105_default|qr"` ni qo'llang, shunda old qismlar foydalanish hisoblagichlarini chiqarishi mumkin
+- Nusxalash tugmalari uchun `data-copy-mode="i105|qr"` ni qo'llang, shunda old qismlar foydalanish hisoblagichlarini chiqarishi mumkin
   Torii tomoni `torii_address_format_total` metrikasi bilan birga. Yuqoridagi demo komponenti yuboriladi
   `iroha:address-copy` hodisasi `{mode,timestamp}` bilan - buni analitika/telemetriyaga ulang
   asboblar paneli serverni o'zaro bog'lashi uchun quvur liniyasi (masalan, Segmentga surish yoki NORITO tomonidan qo'llab-quvvatlanadigan kollektor)
@@ -185,7 +185,7 @@ satrlar ADDR-5 ostida hujjatlashtirilgan CLI ish jarayoniga mos kelishi kerak:
   `networkPrefix` ni aniq taqdim eting, shuning uchun standart bo'lmagan tarmoqlar uchun xulosalar
   standart prefiks bilan jimgina qayta ko'rsatmang.
 
-3. `i105.value` yoki `i105_default` dan qayta foydalanish orqali kanonik foydali yukni aylantiring.
+3. `i105.value` yoki `i105` dan qayta foydalanish orqali kanonik foydali yukni aylantiring.
    Xulosadagi maydonlarni (yoki `--format` orqali boshqa kodlashni talab qiling). Bular
    strings allaqachon tashqaridan almashish uchun xavfsiz.
 4. Manifestlar, registrlar va mijozlarga tegishli hujjatlarni yangilang

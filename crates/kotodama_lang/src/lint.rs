@@ -1579,7 +1579,7 @@ mod tests {
     #[test]
     fn lint_duplicate_pointer_literals_warns() {
         let program = parse(
-            "fn main() { let a = account_id(\"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn\"); let b = account_id(\"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn\"); }",
+            "fn main() { let a = account_id(\"soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ\"); let b = account_id(\"soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ\"); }",
         )
         .unwrap();
         let warnings = lint_program(&program);
@@ -1593,7 +1593,7 @@ mod tests {
     #[test]
     fn lint_unused_pointer_constructor_warns() {
         let program =
-            parse("fn main() { account_id(\"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn\"); }")
+            parse("fn main() { account_id(\"soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ\"); }")
                 .unwrap();
         let warnings = lint_program(&program);
         assert!(

@@ -12201,9 +12201,8 @@ mod tests {
     static MCP_ASYNC_JOBS_TEST_LOCK: LazyLock<std::sync::Mutex<()>> =
         LazyLock::new(|| std::sync::Mutex::new(()));
 
-    const TEST_ACCOUNT_I105: &str = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
-    const TEST_ASSET_ID: &str =
-        "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
+    const TEST_ACCOUNT_I105: &str = "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ";
+    const TEST_ASSET_ID: &str = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ";
 
     fn sample_tool(name: &str, method: Method) -> ToolSpec {
         ToolSpec {

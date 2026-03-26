@@ -34,7 +34,7 @@ CLI для запуска SN-3b builder в формате CSV Norito для за
 |--------|-------|-------|
 | `label` | نعم | Приложение для проверки (в стандартном исполнении; стандартная версия Norm v1 и UTS-46). |
 | `suffix_id` | نعم | Введите код (код `0x` hex). |
-| `owner` | نعم | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
+| `owner` | نعم | AccountId string (domainless encoded literal; canonical Katakana i105 only; no `@<domain>` suffix). |
 | `term_years` | نعم | عدد صحيح `1..=255`. |
 | `payment_asset_id` | نعم | Это приложение (код `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | نعم | Это было сделано для того, чтобы покончить с собой. |
@@ -75,9 +75,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "soraカタカナ...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"soraカタカナ...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -86,7 +86,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"soraカタカナ...",
         "signature":"alpha-signature"
       },
       "governance": null,

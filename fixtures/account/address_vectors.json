@@ -8,7 +8,7 @@
         },
         "expected_prefix": 753,
         "format": "i105",
-        "input": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwpvk1",
+        "input": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハ1",
         "note": "Checksum tampering on I105 alias for the default-domain vector."
       },
       {
@@ -20,27 +20,27 @@
         },
         "expected_prefix": 753,
         "format": "i105",
-        "input": "6ff91gwbcoSQu5EZt4B6V3hFDeynTASvSARovra1qMeGHWgtvXux2BV",
+        "input": "n754ゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
         "note": "Encoded with prefix NETWORK_PREFIX + 1 while validators expect NETWORK_PREFIX."
       },
       {
-        "case_id": "i105_default-invalid-character",
+        "case_id": "i105-invalid-character",
         "expected_error": {
           "char": "0",
           "kind": "InvalidI105Char"
         },
-        "format": "i105_default",
-        "input": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwpvk0",
-        "note": "Introduces a glyph outside the canonical I105 alphabet."
+        "format": "i105",
+        "input": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハ0",
+        "note": "Introduces a glyph outside the canonical Katakana i105 alphabet."
       },
       {
-        "case_id": "i105_default-checksum-mismatch",
+        "case_id": "i105-checksum-mismatch-default-sentinel",
         "expected_error": {
           "kind": "ChecksumMismatch"
         },
-        "format": "i105_default",
-        "input": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwpvk1",
-        "note": "Checksum bytes replaced to trigger canonical I105 verification failure."
+        "format": "i105",
+        "input": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハa",
+        "note": "Checksum bytes replaced to trigger canonical Katakana i105 verification failure."
       },
       {
         "case_id": "canonical-invalid-hex",
@@ -85,9 +85,8 @@
           "canonical_hex": "0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29",
           "i105": {
             "prefix": 753,
-            "string": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwpvk6"
-          },
-          "i105_default": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwpvk6"
+            "string": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ"
+          }
         },
         "input": {
           "normalized_domain": "default",
@@ -113,9 +112,8 @@
           "canonical_hex": "0x020001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
           "i105": {
             "prefix": 753,
-            "string": "6cmzPVPX7WxKCts6hciUhyLdu7eZ7ZoHVuXXQ4YijdycaXbKykgNz4N"
-          },
-          "i105_default": "6cmzPVPX7WxKCts6hciUhyLdu7eZ7ZoHVuXXQ4YijdycaXbKykgNz4N"
+            "string": "soraゴヂアヌメネヒョタルアキュカンコプヱガョラツゴヸナゥヘガヮザネチョヷニャヒュニョメヺェヅヤアキャヅアタタナイス"
+          }
         },
         "input": {
           "normalized_domain": "treasury",
@@ -164,9 +162,8 @@
           "canonical_hex": "0x0a010100030003010001002068f4b6017d0f876a55c80a82b8388a54aad264d367269e2de8be079c935b5f9601000100207ea0e3bd52e207c9d3b0eba65c0704e66fca2d8e165a175218b174fc4160e4130100020020884b8857f4eaa1613c61504db34d4beaf346517a0e31de3cddd4d9b4201d9d0b",
           "i105": {
             "prefix": 753,
-            "string": "6GFicP73LBKijpLkJuhjgBxMUAnoyqmpo84YsQSAkp814P4NzFSMDxD8s59pTz7rtHKKBPwD1Qq2aqYn93wmQUYqa1UcAtYqhBYLxtzMqd9KCSCpxz3rqinK9wVZi3K8ofvv6Y8foNCg7hEVPEsab3G6xUPcN3izdFKU52i"
-          },
-          "i105_default": "6GFicP73LBKijpLkJuhjgBxMUAnoyqmpo84YsQSAkp814P4NzFSMDxD8s59pTz7rtHKKBPwD1Qq2aqYn93wmQUYqa1UcAtYqhBYLxtzMqd9KCSCpxz3rqinK9wVZi3K8ofvv6Y8foNCg7hEVPEsab3G6xUPcN3izdFKU52i"
+            "string": "soraブショヘナマラワコジヨスソキョガハワルマェギユフダニョデエヨミガシュシャミグチョォピゲエュシュェショチォワニブピチュチョジロネリヰプユヱョケルオサハワニュプパザヒュカシュゼホゲハポヂコペメニュヂヷシュズビチュニャナコゼヒョクヸロスムァダヒョナジブサヒャォケドォヂノチャネキャワウショデベニャヰスィゼレノタチャラタキャチメヮヘミオンルヒテネウアカ"
+          }
         },
         "input": {
           "member_keys_hex": [
@@ -218,9 +215,8 @@
           "canonical_hex": "0x0a01010002000201000100205c9c6df261c9cb840475776aaefcd944b405328fab28f9b3a95ef40490d3de840100020020d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
           "i105": {
             "prefix": 753,
-            "string": "caXWiTjgTvrAzejrVJY3ytk7YAAxr52CjpHoZ1A5X11uBkdcn3C2xoxwZjxhzjAPMTxDbDKNrMZrNQzNRFjhXxeALCZWtJAXh5oGPtBY3sUbRNoGCUUc"
-          },
-          "i105_default": "caXWiTjgTvrAzejrVJY3ytk7YAAxr52CjpHoZ1A5X11uBkdcn3C2xoxwZjxhzjAPMTxDbDKNrMZrNQzNRFjhXxeALCZWtJAXh5oGPtBY3sUbRNoGCUUc"
+            "string": "soraヰミマワヸゴスピナデチツヷシャワビエムキョキョミムムッニュアチャヸニヹヱトヰゼァヒョヨヺウョブアマョルプヘヒュガィピアセゼドヂコチャグビテヂゲリゼドヒュッカャオギロゲバレヨィヱロチャデキゾヒョセァダコアガヮコバヸペニノエエマヘ"
+          }
         },
         "input": {
           "member_keys_hex": [
@@ -284,9 +280,8 @@
           "canonical_hex": "0x0a010100030004010001002065e8f9b0bc6eae124169f0576f97362d295a8cf5f770b45e14357ce647d33eec0100010020acf12b4acc1c660a8326aed34039efb728a5e496488240f50a932ab7aba517510100010020b533d8ad9fcfbdde0b481c1b334ddc3c53412fd614564e7e5afd020368d382c30100010020bc7cbcb5636375fa1d82434d466724d92377f53b980695dd49d26d0ce12205a5",
           "i105": {
             "prefix": 753,
-            "string": "nA2bDeKjmcqFpkM23XMF3HRggvyYnsPKaW74bQ6mXYRM73QRjn4r4XrktQhzWk4Pt85rG42HyPDxcJPDDQ48VDHSrYqBgo6za9LVYV7Bcu7KVkK73cmrJjwoRzwVgxTbt7298kGQ2UEE4Ba3VDWVW8CDEe4SSaT5Z1vYA14P478YHuMFaAGZS7UFxSd77F1t4XLBPs76Q2SHLFUeqNEXBHxb7"
-          },
-          "i105_default": "nA2bDeKjmcqFpkM23XMF3HRggvyYnsPKaW74bQ6mXYRM73QRjn4r4XrktQhzWk4Pt85rG42HyPDxcJPDDQ48VDHSrYqBgo6za9LVYV7Bcu7KVkK73cmrJjwoRzwVgxTbt7298kGQ2UEE4Ba3VDWVW8CDEe4SSaT5Z1vYA14P478YHuMFaAGZS7UFxSd77F1t4XLBPs76Q2SHLFUeqNEXBHxb7"
+            "string": "soraチョキコキョロソポニョソニュセワチュクヨオニドヒゥョポシュゲヸレヌプヴヶメルイヸセヶピキュコツピクニュヴォシュガダズュシャテヨヹェワショメユツリマキュッサィェタキチャゲヺキャログギヘプゴゲヒョノヒョムソグダブボガピノバニャヷビッマウプソヒュニワニャゼァムチャチリブィピグンチリセヒャヤヱビヸウキュオジピショキャドヨボワイビネフメリアニュニャヂデヵションマレゾズボブモキャナヷニュノテシレヱヲピヒブシヒゲッゥヲヶロテャゼテダホヷコタナネチイ"
+          }
         },
         "input": {
           "member_keys_hex": [

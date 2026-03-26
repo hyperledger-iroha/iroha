@@ -13,10 +13,6 @@
     <string name="wallet_copy_i105">Copy I105</string>
     <string name="wallet_copy_i105_tooltip">Copy the canonical I105 form (safe to share).</string>
     <string name="wallet_copy_i105_content_description">Copy I105 address to the clipboard (safe to share).</string>
-    <string name="wallet_address_compressed_label">i105-default Sora-only address</string>
-    <string name="wallet_copy_compressed">Copy i105-default</string>
-    <string name="wallet_copy_compressed_tooltip">Copy the Sora-only i105-default form (warn users before sharing).</string>
-    <string name="wallet_copy_compressed_content_description">Copy i105-default Sora-only address to the clipboard (warn recipients before sharing).</string>
     <string name="wallet_qr_caption">I105 QR payload (shareable with wallets/explorers)</string>
     <string name="wallet_qr_content_description">QR code encoding I105 %1$s</string>
     <string name="wallet_copy_success">Copied %1$s address</string>

@@ -19,6 +19,8 @@ import {
   buildReleaseRwaInstruction,
   buildForceTransferRwaInstruction,
   buildSetRwaControlsInstruction,
+  buildSetRwaKeyValueInstruction,
+  buildRemoveRwaKeyValueInstruction,
   buildRegisterDomainInstruction,
   buildRegisterAccountInstruction,
   buildRegisterMultisigInstruction,
@@ -1393,6 +1395,61 @@ export function buildSetRwaControlsTransaction({
     controls,
     controlsJson,
   });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing a `SetRwaKeyValue` instruction.
+ */
+export function buildSetRwaKeyValueTransaction({
+  chainId,
+  authority,
+  rwaId,
+  key,
+  value,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildSetRwaKeyValueInstruction({ rwaId, key, value });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing a `RemoveRwaKeyValue` instruction.
+ */
+export function buildRemoveRwaKeyValueTransaction({
+  chainId,
+  authority,
+  rwaId,
+  key,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildRemoveRwaKeyValueInstruction({ rwaId, key });
   return buildTransaction({
     chainId,
     authority,

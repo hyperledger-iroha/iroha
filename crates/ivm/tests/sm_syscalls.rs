@@ -7,7 +7,7 @@ use ivm::{
     mock_wsv::{AssetDefinitionId, MockWorldStateView, ScopedAccountId, WsvHost},
 };
 
-const TEST_CALLER_ID: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+const TEST_CALLER_ID: &str = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
 
 fn test_caller_account() -> ScopedAccountId {
     ScopedAccountId::parse_encoded(TEST_CALLER_ID)

@@ -15,7 +15,7 @@ title: アカウントアドレス準拠
 description: ADDR-2 フィクスチャのワークフロー概要と SDK チームの同期方法のまとめ。
 ---
 
-カノニカルな ADDR-2 バンドル（`fixtures/account/address_vectors.json`）には、I105、i105-default (`sora`; half/full width)、multisignature、negative の fixtures が含まれます。すべての SDK + Torii のサーフェスは同じ JSON に依存しており、本番に到達する前に codec のドリフトを検知できます。このページは内部のステータス・ブリーフ（リポジトリルートの `docs/source/account_address_status.md`）を反映しており、ポータル読者が mono-repo を掘らずにワークフローを参照できます。
+カノニカルな ADDR-2 バンドル（`fixtures/account/address_vectors.json`）には、I105、i105 (`sora`; half/full width)、multisignature、negative の fixtures が含まれます。すべての SDK + Torii のサーフェスは同じ JSON に依存しており、本番に到達する前に codec のドリフトを検知できます。このページは内部のステータス・ブリーフ（リポジトリルートの `docs/source/account_address_status.md`）を反映しており、ポータル読者が mono-repo を掘らずにワークフローを参照できます。
 
 ## バンドルの再生成または検証
 

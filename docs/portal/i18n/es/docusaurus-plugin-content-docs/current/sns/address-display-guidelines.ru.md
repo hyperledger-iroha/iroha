@@ -76,7 +76,7 @@ El selector Local-12 o el registro de podkreplen no requieren ninguna carga úti
 
 
 
-Las siguientes opciones son colocar teléfonos y dispositivos de descarga:- Pulse `data-copy-mode="i105|i105_default|qr"` en los botones de copia, чтобы
+Las siguientes opciones son colocar teléfonos y dispositivos de descarga:- Pulse `data-copy-mode="i105|qr"` en los botones de copia, чтобы
   Los principales fabricantes de interfaces emiten datos de configuración con un sistema métrico Torii.
   `torii_address_format_total`. El componente demostrativo está disponible
   событие `iroha:address-copy` с `{mode,timestamp}` - подключите его к своему
@@ -174,7 +174,7 @@ Para obtener más información, utilice la línea CLI en ADDR-5:
   Ayudante сохраняет I105 префикс, извлеченный из literal, если только вы явно не
   указали `networkPrefix`, la opción de configuración no predeterminada no es necesaria
   тихо с дефолтным префиксом.3. Conversión de carga útil canónica, versión inicial `i105.value` o
-   `i105_default` es una respuesta (o se utiliza una codificación diferente para `--format`). Эти
+   `i105` es una respuesta (o se utiliza una codificación diferente para `--format`). Эти
    строки уже безопасны для внешнего обмена.
 4. Обновите manifiestos, registros y documentos de clientes formularios canónicos y
    Utilice los controles locales para seleccionar los selectores locales después de la transición.

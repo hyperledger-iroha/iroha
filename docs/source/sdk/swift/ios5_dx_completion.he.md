@@ -26,7 +26,7 @@ IOS5 מסיים את מסלול חוויית המפתחים של Swift עם מת
   var cancellables: Set<AnyCancellable> = []
   let client = ToriiClient(baseURL: URL(string: "https://torii.dev")!)
 
-  client.assetsPublisher(accountId: "i105...")
+  client.assetsPublisher(accountId: "soraカタカナ...")
       .sink(receiveCompletion: { completion in
           print("Finished: \(completion)")
       }, receiveValue: { balances in

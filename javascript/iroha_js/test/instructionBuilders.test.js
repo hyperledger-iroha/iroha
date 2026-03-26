@@ -24,6 +24,8 @@ import {
   buildReleaseRwaInstruction,
   buildForceTransferRwaInstruction,
   buildSetRwaControlsInstruction,
+  buildSetRwaKeyValueInstruction,
+  buildRemoveRwaKeyValueInstruction,
   buildCreateKaigiInstruction,
   buildJoinKaigiInstruction,
   buildLeaveKaigiInstruction,
@@ -188,7 +190,7 @@ const SAMPLE_ACCOUNT_ADDRESS = AccountAddress.fromAccount({
   publicKey: SAMPLE_PUBLIC_KEY,
 });
 const SAMPLE_ACCOUNT_I105_LITERAL = SAMPLE_ACCOUNT_ADDRESS.toI105();
-const SAMPLE_ACCOUNT_COMPRESSED_LITERAL = SAMPLE_ACCOUNT_ADDRESS.toI105Default();
+const SAMPLE_ACCOUNT_COMPRESSED_LITERAL = SAMPLE_ACCOUNT_ADDRESS.toI105();
 const SAMPLE_ACCOUNT_CANONICAL = exportedNormalizeAccountId(SAMPLE_ACCOUNT_I105_LITERAL);
 const SAMPLE_ACCOUNT_LOCAL8_LITERAL = buildLocal8Literal(SAMPLE_ACCOUNT_ADDRESS);
 
@@ -275,7 +277,7 @@ test("normalizeAccountId exported accepts encoded account IDs", () => {
   assert.equal(canonical, ACCOUNT_ID_CANONICAL);
 });
 
-test("normalizeAccountId canonicalizes I105 and i105Default (`sora`) encodings", () => {
+test("normalizeAccountId canonicalizes I105 and i105 (`sora`) encodings", () => {
   const canonicalI105 = exportedNormalizeAccountId(SAMPLE_ACCOUNT_I105_LITERAL);
   assert.equal(canonicalI105, SAMPLE_ACCOUNT_CANONICAL);
   const canonicalCompressed = exportedNormalizeAccountId(SAMPLE_ACCOUNT_COMPRESSED_LITERAL);
@@ -301,7 +303,7 @@ test("normalizeAssetId exported canonicalizes public asset identifiers", () => {
 test("normalizeAssetId rejects malformed asset literals", () => {
   assert.throws(
     () => exportedNormalizeAssetId("not:an-asset"),
-    /must use '<asset-definition-id>#<i105-account-id>' with optional '#dataspace:<id>' suffix/,
+    /must use '<base58-asset-id>#<katakana-i105-account-id>' with optional '#dataspace:<id>' suffix/,
   );
 });
 
@@ -633,6 +635,29 @@ test("rwa scalar instruction builders cover lifecycle operations", () => {
         force_transfer_enabled: false,
         redeem_enabled: true,
       },
+    },
+  });
+
+  const setMetadata = buildSetRwaKeyValueInstruction({
+    rwaId: RWA_ID,
+    key: "grade",
+    value: { country: "AE", sequence: BigInt(7) },
+  });
+  const removeMetadata = buildRemoveRwaKeyValueInstruction({
+    rwaId: RWA_ID,
+    key: "grade",
+  });
+  assert.deepEqual(encodeAndDecode(setMetadata), {
+    SetRwaKeyValue: {
+      rwa: RWA_ID,
+      key: "grade",
+      value: { country: "AE", sequence: "7" },
+    },
+  });
+  assert.deepEqual(encodeAndDecode(removeMetadata), {
+    RemoveRwaKeyValue: {
+      rwa: RWA_ID,
+      key: "grade",
     },
   });
 });

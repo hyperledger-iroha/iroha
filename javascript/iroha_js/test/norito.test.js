@@ -7,7 +7,7 @@ import { noritoEncodeInstruction, noritoDecodeInstruction } from "../src/norito.
 import { makeNativeTest, noritoRequiredMethods } from "./helpers/native.js";
 
 const test = makeNativeTest(baseTest, { require: noritoRequiredMethods });
-const ACCOUNT_ID = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+const ACCOUNT_ID = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
 
 const REGISTER_DOMAIN = {
   Register: {

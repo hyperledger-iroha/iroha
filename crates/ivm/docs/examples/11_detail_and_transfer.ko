@@ -5,8 +5,8 @@ seiyaku DetailAndTransfer {
     set_account_detail(authority(), name!("cursor"), json!{ q: "sc_dummy", c: 1 });
 
     // Transfer 10 ROSE from Alice to Bob
-    let from = account!("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn");
-    let to = account!("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU");
+    let from = account!("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ");
+    let to = account!("soraゴヂアニラショリャヒャャサピテヶベチュヲボヹヂギタクアニョロホドチャヘヱヤジヶハシャウンベニョャルフハケネキカ");
     let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     transfer_asset(from, to, asset, 10);
   }

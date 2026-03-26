@@ -31,7 +31,7 @@ translator: machine-google-reviewed
 
 ## བརྒྱུད༌སྐུལ
 
-གྱང་ཁོག་དང་ རིམ་སྒྲིག་ལག་ཆ་ཚུ་ ད་རེས་ `alias@domain` (rejected legacy form) འགྲུལ་ལམ་གཞན་ལུ་བརྟེན་ཏེ་ཨིན། ཨ་ནཱི
+གྱང་ཁོག་དང་ རིམ་སྒྲིག་ལག་ཆ་ཚུ་ ད་རེས་ `name@dataspace` or `name@domain.dataspace` འགྲུལ་ལམ་གཞན་ལུ་བརྟེན་ཏེ་ཨིན། ཨ་ནཱི
 སྐྱོན་ཆེ་ཤོས་གཉིས་ཡོད།
 
 1. **ཡོངས་འབྲེལ་བཱའིན་ཌིང་མེད།** ཡིག་རྒྱུན་འདི་ལུ་ ཅེག་སམ་ཡང་ན་ རིམ་སྒྲིག་སྔོན་སྒྲིག་མེདཔ་ལས་ ལག་ལེན་པ་ཚུ་ལུ་ ལག་ལེན་པ་ཚུ་ལུ་
@@ -72,16 +72,16 @@ AccountId {
     controller: AccountController // single PublicKey or multisig policy
 }
 
-Display: canonical i105 literal (no `@domain` suffix)
+Display: canonical Katakana i105 literal (no `@domain` suffix)
 Parse accepts:
 - Encoded account identifiers only: i105.
-- Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and account-alias literals such as label@dataspace or label@domain.dataspace.
+- Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and account-alias literals such as name@dataspace or name@domain.dataspace.
 
 Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
 and `0x` prefixes are not accepted.
 
 Account aliases are separate on-chain bindings. They use
-label@dataspace or label@domain.dataspace and resolve to canonical
+name@dataspace or name@domain.dataspace and resolve to canonical
 i105 `AccountId` values. Strict `AccountId` parsers never accept alias literals directly.
 ```
 
@@ -320,9 +320,9 @@ decoders ཉམས་སྲུང་འབད་ནི་ལུ་ `ERR_UNKNOWN_
 - ཚད་ལས་བརྒལ་བ་དང་ ཡང་ན་ ནོར་འཁྲུལ་ཅན་གྱི་ ལྡེ་མིག་རྒྱུ་ཆ་ཚུ་ `KeyPayloadTooLong` ཡང་ན་ `InvalidPublicKey` ཡར་སེང་འབདཝ་ཨིན།
 - འཐུས་མི་༢༥༥ ལས་ལྷག་སྟེ་ཡོད་མི་ སྣ་མང་ཚད་འཛིན་ཚུ་གིས་ `MultisigMemberOverflow` བསྡུ་ལེན་འབདཝ་ཨིན།
 - IME5NFKC བསྒྱུར་བཅོས: ཕྱེད་ཀ་ སོ་ར་ཀ་ན་འདི་ ཌིཀ་མ་བཅད་པར་ ཁོང་རའི་ རྒྱ་ཚད་ཆ་ཚང་སྦེ་ སྤྱིར་བཏང་བཟོ་ཚུགས་ནི་ཨིན་རུང་ ཨེ་ཨེསི་སི་ཨའི་ `sora` sensinel དང་ I105 ཨང་གྲངས་/ཡི་གུ་ཚུ་ ASCI ལུ་སྡོད་དགོ། རྒྱ་ཚད་ཡང་ན་ གནས་སྟངས་ཀྱིས་ བཀབ་ཡོད་པའི་ བརྡ་མཚོན་ཚུ་ ཁ་ཐོག་ལུ་ `ERR_MISSING_COMPRESSED_SENTINEL`, རྒྱ་ཚད་ཆ་ཚང་ ASCII གིས་ I18NI000000264X ཡར་སེང་འབདཝ་ཨིནམ་དང་ ཞིབ་དཔྱད་མ་མཐུནམ་ཚུ་ I18NI000000265X སྦེ་ ཡར་སེང་འབདཝ་ཨིན། `crates/iroha_data_model/src/account/address.rs` ནང་ རྒྱུ་དངོས་བརྟག་དཔྱད་ཚུ་གིས་ ལམ་འདི་ཚུ་ ཁྱབ་ཚུགསཔ་ལས་ SDKs དང་ དངུལ་ཁུག་ཚུ་ ཐག་བཅད་མ་ཚུགས་པའི་ འཐུས་ཤོར་ཚུ་ལུ་ བློ་གཏད་ཚུགས།
-- Torii དང་ I18NI000000267X གི་ I105 (porder)/sora (secd-beest) ཨིན་པུཊི་ཚུ་ འདྲ་མཚུངས་སྦེ་ བཏོནམ་ཨིན། ༼དཔེར་ན་ མ་མཐུནམ་, dight digest digest༽ མཉེན་ཆས་ཚུ་ འབད་ཚུགས། བརྡ་དོན་གྱི་ཡིག་རྒྱུན་ཚུ་ལས་ ཕོ་ཚོད་དཔག་མ་དགོ་པར་ བཟོ་བཀོད་འབད་ཡོད་པའི་རྒྱུ་མཚན་ཚུ་ རི་ལེ་ཨིན།
+- Torii དང་ I18NI000000267X གི་ canonical Katakana i105 / non-canonical Katakana i105 ཨིན་པུཊི་ཚུ་ འདྲ་མཚུངས་སྦེ་ བཏོནམ་ཨིན། ༼དཔེར་ན་ མ་མཐུནམ་, dight digest digest༽ མཉེན་ཆས་ཚུ་ འབད་ཚུགས། བརྡ་དོན་གྱི་ཡིག་རྒྱུན་ཚུ་ལས་ ཕོ་ཚོད་དཔག་མ་དགོ་པར་ བཟོ་བཀོད་འབད་ཡོད་པའི་རྒྱུ་མཚན་ཚུ་ རི་ལེ་ཨིན།
 - ས་གནས་ཀྱི་འདེམས་སྒྲུག་འབད་མི་ཚུ་གིས་ བཱའིཊི་༡༢ ལས་ཐུང་ཀུ་སྦེ་ཡོད་མི་ `ERR_LOCAL8_DEPRECATED` གིས་ སྲོལ་རྒྱུན་ལས་ ཧརཌི་སིཊི་ཝར་ཅིག་ ཉམས་སྲུང་འབདཝ་ཨིན།
-- Domainless canonical i105 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
+- Domainless canonical Katakana i105 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
 
 #### 2.5 རྒྱུན་སྐྱོང་གཉིས་ལྡན་བེག་ཊར་ཚུ།
 
@@ -361,12 +361,12 @@ I18NI000000334X) གཤམ་གསལ་གྱི་མགྱོགས་དྲ
 
 | རྩིས་ཁྲ་ / འདེམས་སྒྲུག་ | I105 ལི་ཊར་ (སྔོན་འཇུག་ `0x02F1`) | སོ་ར་བསྡམ་བཞག་ (`sora`) དངོས་ཡོད་ |
 | |
-| `default` མངའ་ཁོངས་ (plict སེལ་འཐུ་འབད་མི་, སོན་ I18NI000000338X) | `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE` (གདམ་ཁ་ཅན་གྱི་ I18NI000000341X གསལ་སྟོན་ལམ་སྟོན་བརྡ་སྟོན་ཚུ་བྱིན་པའི་སྐབས་ རྗེས་འཇུག་) |
+| `default` མངའ་ཁོངས་ (plict སེལ་འཐུ་འབད་མི་, སོན་ I18NI000000338X) | `soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE` (གདམ་ཁ་ཅན་གྱི་ I18NI000000341X གསལ་སྟོན་ལམ་སྟོན་བརྡ་སྟོན་ཚུ་བྱིན་པའི་སྐབས་ རྗེས་འཇུག་) |
 | `treasury` (ས་གནས་ཀྱི་བཞུ་ཁུའི་འདེམས་སྒྲུག་, སོན་ `0x01`) | `34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
 | འཛམ་གླིང་ཐོ་བཀོད་ཀྱི་དཔག་བྱེད་ (`registry_id = 0x0000_002A`, དང་འདྲན་འདྲ་ `treasury`) | `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF` | `sorakXｹ6NｻﾍﾀﾖSﾜﾖｱ3ﾚ5WﾘﾋQﾅｷｦxgﾛｸcﾁｵﾋkﾋvﾏ8SPﾓﾀｹdｴｴｲW9iCM6AEP` |
 
 འ་ནི་ཡིག་རྒྱུན་ཚུ་ སི་ཨེལ་ཨའི་ (`iroha tools address convert`) གིས་ བཏོན་ཡོད་མི་ཚུ་དང་ མཐུན་སྒྲིག་འབདཝ་ཨིན།
-ལན་ཚུ་ (`canonical i105 literal rendering`) དང་ ཨེསི་ཌི་ཀེ་གྲོགས་རམ་པ་ དེ་ལས་ ཡུ་ཨེགསི་འདྲ་བཤུས་/སྦྱར།
+ལན་ཚུ་ (`canonical Katakana i105 literal rendering`) དང་ ཨེསི་ཌི་ཀེ་གྲོགས་རམ་པ་ དེ་ལས་ ཡུ་ཨེགསི་འདྲ་བཤུས་/སྦྱར།
 flows of the of the proben ལ་བརྟེན་ཐུབ། ཁྱོད་ལུ་གསལ་ཏོག་ཏོ་སྦེ་ རའུ་ཊིང་བརྡ་སྟོན་དགོ་པའི་སྐབས་ལུ་རྐྱངམ་ཅིག་ `<address>@<domain>` (rejected legacy form) སྦྱར་དགོ། རྗེས་འཇུག་འདི་ ཁྲིམས་ལུགས་ཨའུཊི་པུཊི་གི་ཆ་ཤས་ཅིག་མེན།
 
 #### ༢.༦ ཕན་ཚུན་འབྲེལ་བའི་དོན་ལུ་ ཚིག་དོན་གྱི་མིང་གཞན་ (འཆར་གཞི་བཟོ་ཡོདཔ་)
@@ -407,7 +407,7 @@ I18NI000000369X ནང་ I105 (དགའ་གདམ་) དང་ བསྡམ
 ཆ་རྐྱེན་རེ་རེ་གི་དོན་ལུ་ དངོས་གཞི། གཙོ་བསྟེན།
 
 - **I18NI0000371X (སོ་ར་ Nexus, སྔོན་སྒྲིག་ `0x02F1`,**  
-  I105 I105 `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`, བསྡམ་བཞག་ (`sora`)
+  I105 I105 `soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ`, བསྡམ་བཞག་ (`sora`)
   `sora2QG…U4N5E5`. Torii གིས་ `AccountId`’s ལས་ ཡིག་རྒྱུན་ངོ་མ་འདི་ཚུ་ བཏོནམ་ཨིན།
   `Display` ལག་ལེན་འཐབ་ (ཀེན་ནོ་ཀལ་ཨའི་ཨེཆ་༥༨) དང་ `AccountAddress::to_i105`.
 - **`addr-global-registry-002a` (ཐོ་བཀོད་འདེམས་སྒྲུག་ → བང་མཛོད་)**  
@@ -607,7 +607,7 @@ JSON གཟུགས་པོའི་སྦོམ། SoraFS ཡང་ན་ ལ
    མཚན་རྟགས་མ་ཞུ་བའི་ཧེ་མ་ `cargo xtask address-vectors` དང་བཅས་པའི་གསལ་སྟོན་འདི།
 4. **བདེན་དཔྱད་དང་དཔར་བསྐྲུན་འབད།
    རིམ་པ་གཅིག་པའི་རྐྱང་པ།) I18NT0000004X ད་ལྟ་།
-   I105 (forfered)/sora (དྲག་ཤོས་གཉིས་པ) འདི་ ས་གཞི་ཚུ་གི་ཤུལ་ལས་ དེ་འཕྲོ་ལས་ ཡིག་དོན་བཟོཝ་ཨིན།
+   canonical Katakana i105 / non-canonical Katakana i105 འདི་ ས་གཞི་ཚུ་གི་ཤུལ་ལས་ དེ་འཕྲོ་ལས་ ཡིག་དོན་བཟོཝ་ཨིན།
 5. **Monitor & sourbet.** ས་གནས་ཀྱི་-༨ དང་ ས་གནས་ཀྱི་‐༡༢ ཁ་ཐུག་རྐྱབ་མི་ པེ་ནཱལ་ཚུ་ .
    ཉིནམ་༣༠ གི་དོན་ལུ་ ཀླད་ཀོར་; ག་དེམ་ཅིག་སྦེ་ རི་གེ་རེ་ཤཱན་ འཐོན་པ་ཅིན་ ཧེ་མའི་ གསལ་སྟོན་འདི་ ལོག་དཔར་བསྐྲུན་འབད།
    བརྡ་འཕྲིན་བརྟན་ཏོག་ཏོ་མ་འགྱོ་ཚུན་ཚོད་ ཐོན་སྐྱེད་མེད་པའི་མཐའ་འཁོར་ནང་རྐྱངམ་ཅིག།
@@ -670,24 +670,24 @@ JSON གཟུགས་པོའི་སྦོམ། SoraFS ཡང་ན་ ལ
   ལག་ལེན་པ་ཚུ་གིས་ `i105` འབྲི་ཤོག་འདི་ Sora-only དང་ IME བསྐྱར་འབྲི་ཚུ་ལུ་ འཚོར་སྣང་བྱུང་ཚུགས།
 - **I18NT0000049X མཉམ་བསྡོམས་:** འདྲ་མཛོད་ Nexus གིས་ ཊི་ཊི་ཨེལ་ལུ་གུས་ཞབས་འབད་མི་ བཏོན་གཏང་།
   `ForeignDomain`/I18NI0000497X/`RegistryUnavailable` དང་ དེ་ལས་
-  keep strict account-literal parsing canonical-i105-only (reject compressed and any `@domain` suffix) with canonical i105 output.
+  keep strict account-literal parsing canonical-i105-only (reject non-canonical Katakana i105 literals and any `@domain` suffix) with canonical Katakana i105 output.
 
 ### Torii ལན་འདེབས་རྩ་སྒྲིག་ཚུ།
 
-- `GET /v1/accounts` གིས་ གདམ་ཁ་ཅན་གྱི་ `canonical i105 rendering` འདྲི་དཔྱད་ཚད་བཟུང་དང་ དང་ལེན་འབདཝ་ཨིན།
+- `GET /v1/accounts` གིས་ གདམ་ཁ་ཅན་གྱི་ `canonical Katakana i105 rendering` འདྲི་དཔྱད་ཚད་བཟུང་དང་ དང་ལེན་འབདཝ་ཨིན།
   `POST /v1/accounts/query` གིས་ JSON ཡིག་ཤུབས་ནང་ན་ཡོད་པའི་ས་སྒོ་གཅིག་པ་ངོས་ལེན་འབདཝ་ཨིན།
   རྒྱབ་སྐྱོར་ཡོད་པའི་གནས་གོང་ཚུ་:
   - I18NI000000507X (སྔོན་སྒྲིག་) — ལན་འདེབས་ཚུ་ ཁྲིམས་མཐུན་གྱི་ I105 གླ་ཆ་ (དཔེར་ན་,
-    `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`).
+    `soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ`).
   - I18NI0000059X — ལན་འདེབས་ཚུ་གིས་ སོ་ར་རྐྱངམ་ཅིག་ `i105` བསྡམ་བཞག་ཡོད་པའི་མཐོང་སྣང་འདི་ བཏོནམ་ཨིན།
     ཚགས་མ་/འགྲུལ་ལམ་ཚད་བཟུང་ཚུ་ ཀེ་ནོ་ནིཀ་བཞག་དོ་ཡོདཔ།
 - ནུས་མེད་གནས་གོང་ཚུ་ `400` སླར་ལོག་འབད་ (I18NI000000512X). འདི་གིས་ ཆོག་ཐམ་
   སོ་ར་རྐྱངམ་ཅིག་ཡུ་ཨེགསི་གི་དོན་ལུ་ བསྡམ་བཞག་ཡོད་པའི་ཡིག་རྒྱུན་ཚུ་ ཞུ་བ་འབད་ནིའི་དོན་ལུ་ དངུལ་ཁུག་དང་ འཚོལ་ཞིབ་པ་ཚུ་གིས་ ཨིན།
   I105 འདི་ ཕན་ཚུན་ཁ་ཕྱེ་བཏུབ་པའི་སྔོན་སྒྲིག་སྦེ་བཞག་དོ།
 - རྒྱུ་དངོས་ཐོ་ཡིག་ (`GET /v1/assets/{definition_id}/holders`) དང་ཁོང་ཚོའི་JSON
-  ཡིག་ཤུབས་ཀྱི་མཉམ་འབྲེལ་ (`POST …/holders/query`) ཡང་ `canonical i105 rendering` ཡང་གུས་ཞབས་ཡོད།
+  ཡིག་ཤུབས་ཀྱི་མཉམ་འབྲེལ་ (`POST …/holders/query`) ཡང་ `canonical Katakana i105 rendering` ཡང་གུས་ཞབས་ཡོད།
   I18NI000000516X ས་སྒོ་འདི་གིས་ ག་དུས་འབད་རུང་ ཚིག་དོན་ཚུ་ བཤུབ་བཏང་ཡོདཔ་ཨིན།
-  པེ་ར་མི་ཊར་/ཡིག་ཤུབས་ས་སྒོ་འདི་ `i105_default` ལུ་གཞི་སྒྲིག་འབད་དེ་ རྩིས་ཐོ་ཚུ་མེ་ལོང་བཟོཝ་ཨིན།
+  པེ་ར་མི་ཊར་/ཡིག་ཤུབས་ས་སྒོ་འདི་ `i105` ལུ་གཞི་སྒྲིག་འབད་དེ་ རྩིས་ཐོ་ཚུ་མེ་ལོང་བཟོཝ་ཨིན།
   མཇུག་ཚུ་ འཚོལ་ཞིབ་འབད་མི་ཚུ་གིས་ སྣོད་ཐོ་ཚུ་ནང་ ཐོན་འབྲས་ཚུ་ རིམ་མཐུན་སྦེ་ གསལ་བཀོད་འབད་ཚུགས།
 - **བརྟག་དཔྱད་:** ཨིན་ཀོ་ཌར་/ཌི་ཀོཌར་སྒོར་སྒོརམ་འགྲུལ་སྐྱོད་ཀྱི་དོན་ལུ་ ཡུ་ནིཊི་བརྟག་དཔྱད་ཚུ་ཁ་སྐོང་བརྐྱབས་ཏེ་, འཛོལ་བ་-རིམ་སྒྲིག་།
   འཐུས་ཤོར་དང་ གསལ་སྟོན་ཚུ་; Torii དང་ SDKs ཚུ་ནང་ མཉམ་བསྡོམས་ཁྱབ་ཚད་ཁ་སྐོང་འབད།

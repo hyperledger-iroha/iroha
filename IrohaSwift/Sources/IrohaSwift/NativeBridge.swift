@@ -49,6 +49,10 @@ enum NoritoBridgeLoader {
         let hashes: [String: String]
     }
 
+    private static func packagedBinaryRelativePaths(for identifier: String = currentIdentifier()) -> [String] {
+        return ["libNoritoBridge.a", "NoritoBridge.framework/NoritoBridge"]
+    }
+
     static func openHandle() -> (UnsafeMutableRawPointer?, ValidationStatus) {
         // Xcode 26 debug-dylib: app code lives in <name>.debug.dylib, not the main executable.
         // dlopen(nil) returns a handle to the 57 KB stub. The stub may re-export a few symbols
@@ -176,19 +180,51 @@ enum NoritoBridgeLoader {
     }
 
     private static func artifactManifest(near binaryURL: URL) -> ArtifactManifest? {
-        let frameworkDir = binaryURL.deletingLastPathComponent()
-        let platformDir = frameworkDir.deletingLastPathComponent()
-        let xcframeworkDir = platformDir.deletingLastPathComponent()
-        let candidates = [
-            xcframeworkDir.appendingPathComponent("NoritoBridge.artifacts.json"),
-            xcframeworkDir.deletingLastPathComponent().appendingPathComponent("NoritoBridge.artifacts.json")
-        ]
+        let candidates = candidateArtifactManifestURLs(near: binaryURL)
         for candidate in candidates {
             if let manifest = parseArtifactManifest(at: candidate) {
                 return manifest
             }
         }
         return nil
+    }
+
+    private static func candidateArtifactManifestURLs(near binaryURL: URL) -> [URL] {
+        var seen = Set<String>()
+        var candidates: [URL] = []
+        var cursor = binaryURL.deletingLastPathComponent()
+
+        while true {
+            if cursor.pathExtension == "xcframework" {
+                let urls = [
+                    cursor.appendingPathComponent("NoritoBridge.artifacts.json"),
+                    cursor.deletingLastPathComponent().appendingPathComponent("NoritoBridge.artifacts.json")
+                ]
+                for url in urls where !seen.contains(url.path) {
+                    seen.insert(url.path)
+                    candidates.append(url)
+                }
+            }
+            let parent = cursor.deletingLastPathComponent()
+            if parent.path == cursor.path {
+                break
+            }
+            cursor = parent
+        }
+
+        if candidates.isEmpty {
+            let fallback = [
+                binaryURL.deletingLastPathComponent().appendingPathComponent("NoritoBridge.artifacts.json"),
+                binaryURL.deletingLastPathComponent().deletingLastPathComponent()
+                    .appendingPathComponent("NoritoBridge.artifacts.json")
+            ]
+            for url in fallback where !seen.contains(url.path) {
+                seen.insert(url.path)
+                candidates.append(url)
+            }
+        }
+
+        return candidates
     }
 
     private static func parseArtifactManifest(at url: URL) -> ArtifactManifest? {
@@ -256,7 +292,9 @@ enum NoritoBridgeLoader {
         }
 
         for root in trustedSearchRoots() {
-            addIfExisting(root.appendingPathComponent("NoritoBridge.framework/NoritoBridge"))
+            for relativePath in packagedBinaryRelativePaths() {
+                addIfExisting(root.appendingPathComponent(relativePath))
+            }
         }
 
         return paths
@@ -325,11 +363,16 @@ enum NoritoBridgeLoader {
         for _ in 0..<4 {
             root.deleteLastPathComponent()
         }
-        return root
+        let sliceRoot = root
             .appendingPathComponent("dist/NoritoBridge.xcframework")
             .appendingPathComponent(currentIdentifier())
-            .appendingPathComponent("NoritoBridge.framework/NoritoBridge")
-            .path
+        for relativePath in packagedBinaryRelativePaths() {
+            let candidate = sliceRoot.appendingPathComponent(relativePath)
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                return candidate.path
+            }
+        }
+        return sliceRoot.appendingPathComponent(packagedBinaryRelativePaths().first ?? "libNoritoBridge.a").path
     }
 }
 
@@ -390,7 +433,6 @@ struct NativeAccountAddressParseResult {
 struct NativeAccountAddressRenderResult {
     let canonicalHex: String
     let i105: String
-    let i105Default: String
 }
 
 enum NativeBridgeError: Error, Equatable {
@@ -1190,7 +1232,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private typealias AccountAddressRenderFn = @convention(c) (
         UnsafePointer<UInt8>?, UInt,
         UInt16,
-        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<UInt>?,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<UInt>?,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<UInt>?,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<UInt>?
@@ -2928,8 +2969,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         var hexLen: UInt = 0
         var i105Ptr: UnsafeMutablePointer<UInt8>? = nil
         var i105Len: UInt = 0
-        var i105DefaultPtr: UnsafeMutablePointer<UInt8>? = nil
-        var i105DefaultLen: UInt = 0
         var errorPtr: UnsafeMutablePointer<UInt8>? = nil
         var errorLen: UInt = 0
 
@@ -2942,8 +2981,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 &hexLen,
                 &i105Ptr,
                 &i105Len,
-                &i105DefaultPtr,
-                &i105DefaultLen,
                 &errorPtr,
                 &errorLen
             )
@@ -2952,28 +2989,24 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         if status == 0 {
             guard
                 let canonicalHex = takeString(pointer: hexPtr, length: hexLen),
-                let i105 = takeString(pointer: i105Ptr, length: i105Len),
-                let i105Default = takeString(pointer: i105DefaultPtr, length: i105DefaultLen)
+                let i105 = takeString(pointer: i105Ptr, length: i105Len)
             else {
                 return nil
             }
             return NativeAccountAddressRenderResult(
                 canonicalHex: canonicalHex,
-                i105: i105,
-                i105Default: i105Default
+                i105: i105
             )
         }
 
         if let error = consumeAccountAddressError(pointer: errorPtr, length: errorLen) {
             if let hexPtr { freeFn?(hexPtr) }
             if let i105Ptr { freeFn?(i105Ptr) }
-            if let i105DefaultPtr { freeFn?(i105DefaultPtr) }
             throw error
         }
 
         if let hexPtr { freeFn?(hexPtr) }
         if let i105Ptr { freeFn?(i105Ptr) }
-        if let i105DefaultPtr { freeFn?(i105DefaultPtr) }
         return nil
         #else
         return nil

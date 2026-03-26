@@ -506,11 +506,11 @@ iroha ledger domain register --id "Soramitsu"
 
 ### Create new Account
 
-To create an account, specify the entity type (`account`) and the command (`register`). Then pass a canonical i105 `AccountId` via `--id` and the explicit account scope via `--domain`:
+To create an account, specify the entity type (`account`) and the command (`register`). Then pass a canonical Katakana i105 `AccountId` via `--id` and the explicit account scope via `--domain`:
 
 ```bash
 iroha ledger account register \
-  --id "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw" \
+  --id "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ" \
   --domain "Soramitsu"
 ```
 

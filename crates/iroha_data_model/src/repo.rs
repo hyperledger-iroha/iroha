@@ -251,7 +251,7 @@ impl JsonKeyCodec for RepoAgreementId {
 mod tests {
     use super::*;
 
-    const ALICE_ID_STR: &str = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
+    const ALICE_ID_STR: &str = "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ";
     fn sample_agreement(initiated_ms: u64, margin_frequency_secs: u64) -> RepoAgreement {
         let initiator = AccountId::parse_encoded(ALICE_ID_STR)
             .expect("valid initiator account")

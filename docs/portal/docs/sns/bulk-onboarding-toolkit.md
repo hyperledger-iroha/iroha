@@ -35,7 +35,7 @@ The parser requires the following header row (order is flexible):
 |--------|----------|-------------|
 | `label` | Yes | Requested label (mixed case accepted; tool normalises per Norm v1 and UTS-46). |
 | `suffix_id` | Yes | Numeric namespace identifier (`0x1001` account-alias, `0x1002` domain, `0x1003` dataspace; decimal or `0x` hex accepted). |
-| `owner` | Yes | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
+| `owner` | Yes | AccountId string (domainless encoded literal; canonical Katakana i105 only; no `@<domain>` suffix). |
 | `term_years` | Yes | Integer `1..=255`. |
 | `payment_asset_id` | Yes | Settlement asset (for example `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Yes | Unsigned integers representing asset-native units. |
@@ -76,9 +76,9 @@ On success the script writes an aggregated manifest:
   "requests": [
     {
       "selector": {"version":1,"suffix_id":4098,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "soraカタカナ...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"soraカタカナ...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -87,7 +87,7 @@ On success the script writes an aggregated manifest:
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"soraカタカナ...",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -244,7 +244,7 @@ The board filters by `release` so auditors can drill into a single CSV run.
   references are resolved relative to the CSV location. Non-object metadata
   produces a validation error.
 - **Controllers:** blank cells honour `--default-controllers`. Provide explicit
-  controller lists (for example `i105...;i105...`) when delegating to non-owner
+  controller lists (for example `soraカタカナ...;soraカタカナ...`) when delegating to non-owner
   actors.
 
 Failures are reported with contextual row numbers (for example

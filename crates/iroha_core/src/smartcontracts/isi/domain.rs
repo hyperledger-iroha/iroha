@@ -688,16 +688,12 @@ pub mod isi {
         raw: &str,
         field_path: &'static str,
     ) -> Result<AccountId, Error> {
+        let _ = world;
         crate::block::parse_account_literal_with_world(world, raw)
-            .or_else(|| {
-                AccountId::parse_encoded(raw)
-                    .ok()
-                    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-            })
             .ok_or_else(|| {
                 InstructionExecutionError::InvariantViolation(
                     format!(
-                        "invalid {field_path} account literal `{raw}`: expected account identifier"
+                        "invalid {field_path} account literal `{raw}`: expected canonical Katakana i105 account id"
                     )
                     .into(),
                 )

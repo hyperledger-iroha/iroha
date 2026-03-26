@@ -30,8 +30,8 @@ translation_last_reviewed: 2026-02-07
 ڈیمو کیز سے ماخوذ:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="soraカタカナ..."
+export RECEIVER_ACCOUNT="soraカタカナ..."
 ```
 
 پہلے اکاؤنٹس کی فہرست دے کر اقدار کی تصدیق کریں:

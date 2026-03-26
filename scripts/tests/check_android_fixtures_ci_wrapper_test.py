@@ -32,7 +32,7 @@ def _write_fixture_set(base: Path) -> tuple[Path, Path, Path]:
     payloads_path = base / "transaction_payloads.json"
     creation_time_ms = 1_735_000_000_111
     chain = "00000002"
-    authority = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+    authority = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"
     time_to_live_ms = 5000
     nonce = 42
     payloads_path.write_text(

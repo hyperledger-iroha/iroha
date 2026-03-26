@@ -89,7 +89,7 @@ em bruto.
 Os exploradores devem refletir sobre o trabalho de telemetria e a acessibilidade do
 boleto:
 
-- Aplique `data-copy-mode="i105|i105_default|qr"` aos botões de cópia para que
+- Aplique `data-copy-mode="i105|qr"` aos botões de cópia para que
   os front-ends podem emitir contadores de uso junto com a métrica Torii
   `torii_address_format_total`. El componente demo anterior despacha un evento
   `iroha:address-copy` com `{mode,timestamp}`: conecte este ao seu pipeline de
@@ -195,7 +195,7 @@ Cadenas comprimidas devem seguir o fluxo CLI documentado em ADDR-5:
   proporciones explicitamente `networkPrefix`, por isso que os currículos para
   redes no default não se re-renderizan silenciosamente com o prefijo por
   defeito.3. Converta o payload canônico reutilizando os campos `i105.value` ou
-   `i105_default` do currículo (ou solicitação de outra codificação via `--format`). Estas
+   `i105` do currículo (ou solicitação de outra codificação via `--format`). Estas
    Cadenas são seguras para compartilhar externamente.
 4. Atualize manifestos, registros e documentos de rosto do cliente com o
    forma canônica e notificar as contrapartes que os seletores locais serão

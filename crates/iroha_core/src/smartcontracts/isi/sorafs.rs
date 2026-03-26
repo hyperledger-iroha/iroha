@@ -245,7 +245,7 @@ fn enforce_provider_owner(
     }
 
     Err(invalid_parameter(format!(
-        "capacity declaration metadata `{PROVIDER_OWNER_METADATA_KEY}` for provider {provider_hex} must be a valid account id matching the submitting authority"
+        "capacity declaration metadata `{PROVIDER_OWNER_METADATA_KEY}` for provider {provider_hex} must be a canonical Katakana i105 account id matching the submitting authority"
     )))
 }
 

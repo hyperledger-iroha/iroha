@@ -86,7 +86,7 @@ Local-12 は、ペイロード ブルートのレジストリ テストの解析
 <エクスプローラーアドレスカード />
 
 Exploradores devem espelhar o trabalho de telemetria と accessibilidade da
-カルテイラ:- アップリケ `data-copy-mode="i105|i105_default|qr"` aos botoes de copia para que
+カルテイラ:- アップリケ `data-copy-mode="i105|qr"` aos botoes de copia para que
   フロントエンド ポッサム エミミール コンタドール デ ユーソ ジュント コム ア メトリカ Torii
   `torii_address_format_total`。 O コンポーネント デモ アシマ ディスパラ ウム イベント
   `iroha:address-copy` com `{mode,timestamp}`;パイプラインを接続します
@@ -190,7 +190,7 @@ ADDR-5 のワークフロー CLI ドキュメントに含まれる文字列:
   O helper preserva o prefixo I105 detectado 文字通りの a menos que voce forneca
   明示的 `networkPrefix`、エントリ レコード パラ レデス ナオ パドラオ ナオ サオ
   プレフィックス パドラオを再レンダリングします。3. ペイロード canonico reutilizando os Campos `i105.value` ou を変換します
-   `i105_default` は resumo を実行します (`--format` 経由で外部コードを要求します)。エッサス
+   `i105` は resumo を実行します (`--format` 経由で外部コードを要求します)。エッサス
    外部コンパルティリハメントの文字列を使用します。
 4. マニフェスト、レジストリ、ドキュメント、ボルタドス、クライアント コムの形式を認証します。
    地元のセラオレジェイタドスと対照的なものとして正規化と通知

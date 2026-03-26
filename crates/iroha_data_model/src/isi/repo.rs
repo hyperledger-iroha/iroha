@@ -183,8 +183,8 @@ mod tests {
     use super::*;
     use crate::repo::RepoGovernance;
 
-    const INITIATOR: &str = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
-    const COUNTERPARTY: &str = "6cmzPVPX7WxKCts6hciUhyLdu7eZ7ZoHVuXXQ4YijdycaXbKykgP8jV";
+    const INITIATOR: &str = "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ";
+    const COUNTERPARTY: &str = "soraゴヂアヌメネヒョタルアキュカンコプヱガョラツゴヸナゥヘガヮザネチョヷニャヒュニョメヺェヅヤアキャヅアタタナイス";
     const CUSTODIAN: &str = "2CAE42qVd4hgS46pNUbsbgpK9UvsYSvnRkz15xzUiGc4QWLVzjpjhpg3KFuUyM3zDYfc7kc5QD3ct3BWmQgPDTa13kdC1k52T3Wgw7bUdccEKbhvMmX42d7tktNVdHSR8YjVJ3NyPN5jqBWWFCu6eefZ6E9nSw41JV4oRg";
 
     fn parse_account(raw: &str) -> AccountId {

@@ -103,7 +103,7 @@ translator: manual
 
 - **Risk intake** – `POST /v1/fraud/query` は `RiskQuery` スキーマを受理:
   - `query_id` (`[u8; 32]`, hex エンコード)
-  - `subject` (`AccountId`, `domainless encoded literal; canonical i105 only (i105-default `sora...` rejected)`)
+  - `subject` (`AccountId`, `domainless encoded literal; canonical Katakana i105 only (non-canonical Katakana i105 literals rejected)`)
   - `operation` (`RiskOperation` に対応するタグ付き enum。JSON の `type` は変種名と一致)
   - `related_asset` (`AssetId`, 任意)
   - `features`（`FeatureInput` からマッピングされた `{ key: String, value_hash: hex32 }` の配列）

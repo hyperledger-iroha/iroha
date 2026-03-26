@@ -36,11 +36,11 @@ final class TransactionInputValidatorTests: XCTestCase {
     func testValidateRejectsAuthorityWithReservedCharacters() {
         XCTAssertThrowsError(
             try TransactionInputValidator.validate(chainId: "0000",
-                                                   authorityId: "alice#bad@hbl.sbp",
+                                                   authorityId: "alice#bad@hbl.dataspace",
                                                    assetDefinitionId: sampleAid)
         ) { error in
             XCTAssertEqual(error as? TransactionInputError,
-                           .malformedAccountId(field: "authority", value: "alice#bad@hbl.sbp"))
+                           .malformedAccountId(field: "authority", value: "alice#bad@hbl.dataspace"))
         }
     }
 
@@ -91,9 +91,9 @@ final class TransactionInputValidatorTests: XCTestCase {
     }
 
     func testSanitizeMetadataTargetRejectsTextualAssetId() {
-        XCTAssertThrowsError(try TransactionInputValidator.sanitizeMetadataTarget(.asset("ro$se#wonderland#alice@hbl.sbp"))) { error in
+        XCTAssertThrowsError(try TransactionInputValidator.sanitizeMetadataTarget(.asset("ro$se#wonderland#alice@hbl.dataspace"))) { error in
             XCTAssertEqual(error as? TransactionInputError,
-                           .malformedAssetId("ro$se#wonderland#alice@hbl.sbp"))
+                           .malformedAssetId("ro$se#wonderland#alice@hbl.dataspace"))
         }
     }
 
@@ -115,7 +115,7 @@ final class TransactionInputValidatorTests: XCTestCase {
 
     func testSanitizeAssetIdAcceptsCanonicalPublicLiteral() throws {
         let literal =
-            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"
         let target = try TransactionInputValidator.sanitizeMetadataTarget(.asset(literal))
         XCTAssertEqual(target.objectId, literal)
     }
@@ -137,19 +137,18 @@ final class TransactionInputValidatorTests: XCTestCase {
         XCTAssertEqual(ids.authorityId, i105)
     }
 
-    func testValidateAcceptsI105DefaultAuthorityAndCanonicalizesToI105() throws {
+    func testValidateAcceptsSoraSentinelAuthority() throws {
         let address = try AccountAddress.fromAccount(publicKey: Data(repeating: 0xAD, count: 32))
-        let i105Default = try address.toI105Default()
         let i105 = try address.toI105(networkPrefix: AccountId.defaultNetworkPrefix)
         let ids = try TransactionInputValidator.validate(chainId: "0000",
-                                                         authorityId: i105Default)
+                                                         authorityId: i105)
         XCTAssertEqual(ids.authorityId, i105)
     }
 
     func testValidateRejectsI105WithDomainSuffix() throws {
         let publicKey = Data(repeating: 0xAC, count: 32)
         let i105 = try AccountId.makeI105(publicKey: publicKey)
-        let literal = "\(i105)@hbl.sbp"
+        let literal = "\(i105)@hbl.dataspace"
         XCTAssertThrowsError(
             try TransactionInputValidator.validate(chainId: "0000",
                                                    authorityId: literal)

@@ -35,7 +35,7 @@ O analisador requer o seguinte fio encabezado (a ordem é flexível):
 |--------|-----------|-------------|
 | `label` | Si | Etiqueta solicitada (aceita mayus/minus; a herramienta normaliza conforme Norm v1 e UTS-46). |
 | `suffix_id` | Sim | Identificador numérico de sufixo (decimal ou `0x` hex). |
-| `owner` | Si | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
+| `owner` | Si | AccountId string (domainless encoded literal; canonical Katakana i105 only; no `@<domain>` suffix). |
 | `term_years` | Si | Entero `1..=255`. |
 | `payment_asset_id` | Si | Ativo de liquidação (por exemplo `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Si | Enteros sem sinal que representa unidades nativas do ativo. |
@@ -76,9 +76,9 @@ No caso de saída, o script descreve uma manifestação agregada:
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "soraカタカナ...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"soraカタカナ...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -87,7 +87,7 @@ No caso de saída, o script descreve uma manifestação agregada:
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"soraカタカナ...",
         "signature":"alpha-signature"
       },
       "governance": null,

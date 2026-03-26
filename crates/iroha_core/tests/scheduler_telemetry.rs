@@ -664,7 +664,7 @@ fn nexus_config_diff_counter_and_event_emitted() {
             dataspace: Some(DataSpaceId::new(1)),
             matcher: LaneRoutingMatcher {
                 account: Some(
-                    "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".to_string(),
+                    "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".to_string(),
                 ),
                 ..LaneRoutingMatcher::default()
             },

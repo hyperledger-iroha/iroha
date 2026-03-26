@@ -19,7 +19,7 @@
 
 ## الدافع
 
-تعتمد المحافظ والأدوات خارج السلسلة على الأسماء المستعارة للتوجيه الخام `alias@domain` (rejected legacy form) اليوم. هذا
+تعتمد المحافظ والأدوات خارج السلسلة على الأسماء المستعارة للتوجيه الخام `name@dataspace` or `name@domain.dataspace` اليوم. هذا
 له عيبان رئيسيان:
 
 1. **لا يوجد ربط بالشبكة.** لا تحتوي السلسلة على مجموع اختباري أو بادئة سلسلة، لذا فإن المستخدمين
@@ -60,16 +60,16 @@ AccountId {
     controller: AccountController // single PublicKey or multisig policy
 }
 
-Display: canonical i105 literal (no `@domain` suffix)
+Display: canonical Katakana i105 literal (no `@domain` suffix)
 Parse accepts:
 - Encoded account identifiers only: i105.
-- Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and account-alias literals such as label@dataspace or label@domain.dataspace.
+- Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and account-alias literals such as name@dataspace or name@domain.dataspace.
 
 Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
 and `0x` prefixes are not accepted.
 
 Account aliases are separate on-chain bindings. They use
-label@dataspace or label@domain.dataspace and resolve to canonical
+name@dataspace or name@domain.dataspace and resolve to canonical
 i105 `AccountId` values. Strict `AccountId` parsers never accept alias literals directly.
 ```
 
@@ -286,7 +286,7 @@ tag-specific payload, then move on to the controller bytes.
 - يتم تشفير حمولة وحدة التحكم الثنائية (`ControllerPayload::Multisig`).
   `version:u8`، `threshold:u16`، `member_count:u8`، ثم كل عضو
   `(curve_id, weight:u16, key_len:u16, key_bytes)`. هذا هو بالضبط ما
-  `AccountAddress::canonical_bytes()` يكتب إلى حمولات I105 (المفضل)/sora (ثاني أفضل).
+  `AccountAddress::canonical_bytes()` يكتب إلى حمولات canonical Katakana i105 / non-canonical Katakana i105.
 - التجزئة (`MultisigPolicy::digest_blake2b256()`) تستخدم Blake2b-256 مع
   `iroha-ms-policy` سلسلة التخصيص بحيث يمكن ربط بيانات الإدارة بـ
   معرف السياسة الحتمية الذي يطابق وحدات بايت وحدة التحكم المضمنة في I105.
@@ -308,9 +308,9 @@ tag-specific payload, then move on to the controller bytes.
 - المواد الرئيسية كبيرة الحجم أو المشوهة ترفع `KeyPayloadTooLong` أو `InvalidPublicKey`.
 - وحدات تحكم Multisig التي يتجاوز عددها 255 عضوًا ترفع `MultisigMemberOverflow`.
 - تحويلات IME/NFKC: يمكن تسوية Sora kana بنصف العرض إلى أشكال العرض الكامل الخاصة بها دون كسر فك التشفير، ولكن يجب أن يظل ASCII `sora` وأرقام/حروف I105 ASCII. سطح حراس كامل العرض أو مطوي على الحالة `ERR_MISSING_COMPRESSED_SENTINEL`، وترفع حمولات ASCII كاملة العرض `ERR_INVALID_COMPRESSED_CHAR`، وتظهر حالات عدم تطابق المجموع الاختباري كـ `ERR_CHECKSUM_MISMATCH`. تغطي اختبارات الخصائص في `crates/iroha_data_model/src/account/address.rs` هذه المسارات حتى تتمكن مجموعات SDK والمحافظ من الاعتماد على حالات الفشل الحتمية.
-- يقوم تحليل Torii وSDK للأسماء المستعارة `address@domain` (rejected legacy form) بإصدار نفس الرموز `ERR_*` عندما تفشل مدخلات I105 (المفضل)/sora (ثاني أفضل) قبل إرجاع الاسم المستعار (على سبيل المثال، عدم تطابق المجموع الاختباري، عدم تطابق ملخص المجال)، بحيث يمكن للعملاء ترحيل الأسباب المنظمة دون التخمين من سلاسل النثر.
+- يقوم تحليل Torii وSDK للأسماء المستعارة `name@dataspace` or `name@domain.dataspace` بإصدار نفس الرموز `ERR_*` عندما تفشل مدخلات canonical Katakana i105 / non-canonical Katakana i105 قبل إرجاع الاسم المستعار (على سبيل المثال، عدم تطابق المجموع الاختباري، عدم تطابق ملخص المجال)، بحيث يمكن للعملاء ترحيل الأسباب المنظمة دون التخمين من سلاسل النثر.
 - حمولات المحدد المحلي التي يقل حجمها عن 12 بايت `ERR_LOCAL8_DEPRECATED`، مع الحفاظ على التحويل الثابت من ملخصات Local‑8 القديمة.
-- Domainless canonical i105 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
+- Domainless canonical Katakana i105 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
 
 #### 2.5 المتجهات الثنائية المعيارية
 
@@ -351,17 +351,17 @@ tag-specific payload, then move on to the controller bytes.
 
 | الحساب / المحدد | I105 حرفي (البادئة `0x02F1`) | سورا مضغوط (`sora`) حرفي |
 |--------------------|--------------------------------|-------------------------|
-| `default` المجال (محدد ضمني، أولي `0x00`) | `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE` (اختياري `@default` لاحقة عند تقديم تلميحات توجيه صريحة) |
+| `default` المجال (محدد ضمني، أولي `0x00`) | `soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE` |
 | `treasury` (محدد الملخص المحلي، المصدر `0x01`) | `34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
 | مؤشر التسجيل العمومي (`registry_id = 0x0000_002A`، أي ما يعادل `treasury`) | `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF` | `sorakXｹ6NｻﾍﾀﾖSﾜﾖｱ3ﾚ5WﾘﾋQﾅｷｦxgﾛｸcﾁｵﾋkﾋvﾏ8SPﾓﾀｹdｴｴｲW9iCM6AEP` |
 
 تتطابق هذه السلاسل مع تلك الصادرة عن واجهة سطر الأوامر (`iroha tools address convert`)، Torii
-الاستجابات (`canonical i105 literal rendering`)، ومساعدي SDK، لذا قم بنسخ/لصق تجربة المستخدم
+الاستجابات (`canonical Katakana i105 literal rendering`)، ومساعدي SDK، لذا قم بنسخ/لصق تجربة المستخدم
 التدفقات يمكن الاعتماد عليها حرفيا. قم بإلحاق `<address>@<domain>` (rejected legacy form) فقط عندما تحتاج إلى تلميح توجيه صريح؛ اللاحقة ليست جزءًا من الإخراج الأساسي.
 
 #### 2.6 الأسماء المستعارة النصية لقابلية التشغيل البيني (مخطط لها)
 
-- **نمط الاسم المستعار للسلسلة:** `ih:<chain-alias>:<alias@domain>` للسجلات والبشر
+- **نمط الاسم المستعار للسلسلة:** `ih:<chain-alias>:<name@domain.dataspace>` للسجلات والبشر
   دخول. يجب أن تقوم المحافظ بتحليل البادئة والتحقق من السلسلة المضمنة والحظر
   عدم التطابق.
 - **نموذج CAIP-10:** `iroha:<caip-2-id>:<i105-addr>` لعدم معرفة السلسلة
@@ -397,7 +397,7 @@ tag-specific payload, then move on to the controller bytes.
 حرفية لكل حمولة قانونية. أبرز النقاط:
 
 - **`addr-single-default-ed25519` (Sora Nexus، البادئة `0x02F1`).**  
-  I105 `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`، مضغوط (`sora`)
+  I105 `soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ`، مضغوط (`sora`)
   `sora2QG…U4N5E5`. يُصدر Torii هذه السلاسل الدقيقة من `AccountId`
   تنفيذ `Display` (I105 الأساسي) و`AccountAddress::to_i105`.
 - **`addr-global-registry-002a` (محدد التسجيل → الخزانة).**  
@@ -599,7 +599,7 @@ runbook. قم بتضمين إخراج الأمر في تذاكر التغيير 
    البيان مع `cargo xtask address-vectors` قبل طلب التوقيعات.
 4. **التحقق والنشر.** اتبع قائمة التحقق من دليل التشغيل (التجزئة، Sigstore،
    رتابة التسلسل) قبل عكس الحزمة إلى SoraFS. توري الآن
-   تحديد معايير I105 (المفضل)/sora (ثاني أفضل) مباشرة بعد وصول الحزمة.
+   تحديد معايير canonical Katakana i105 / non-canonical Katakana i105 مباشرة بعد وصول الحزمة.
 5. **المراقبة والتراجع.** احتفظ بلوحات التصادم المحلية 8 والمحلية 12 في وضع التشغيل
    صفر لمدة 30 يومًا؛ إذا ظهرت التراجعات، قم بإعادة نشر البيان السابق
    فقط في البيئة غير الإنتاجية المتأثرة حتى يستقر القياس عن بعد.
@@ -615,8 +615,8 @@ runbook. قم بتضمين إخراج الأمر في تذاكر التغيير 
   بالإضافة إلى المجال الذي تم حله كتسمية تم جلبها من السجل. المجالات هي
   تم وضع علامة واضحة على أنها بيانات تعريف وصفية قد تتغير، في حين أن I105 هو
   عنوان مستقر.
-- **تحديد الإدخال الأساسي:** تقبل Torii وSDKs I105 (المفضل)/sora (ثاني أفضل)/0x
-  العناوين بالإضافة إلى `alias@domain` (rejected legacy form) و `uaid:…` و
+- **تحديد الإدخال الأساسي:** تقبل Torii وSDKs canonical Katakana i105 / non-canonical Katakana i105/0x
+  العناوين بالإضافة إلى `name@dataspace` or `name@domain.dataspace` و `uaid:…` و
   نماذج `opaque:…`، ثم قم بتحويلها إلى I105 للإخراج. لا يوجد
   تبديل الوضع الصارم؛ يجب أن تظل معرفات الهاتف/البريد الإلكتروني الأولية خارج دفتر الأستاذ
   عبر UAID/تعيينات غير شفافة.
@@ -663,24 +663,24 @@ runbook. قم بتضمين إخراج الأمر في تذاكر التغيير 
   المستخدمين أن النموذج `i105` المضغوط هو Sora فقط وهو عرضة لإعادة كتابة IME.
 - **تكامل Torii:** يظهر Cache Nexus احترام TTL، والإصدار
   `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` بشكل حتمي، و
-  keep strict account-literal parsing canonical-i105-only (reject compressed and any `@domain` suffix) with canonical i105 output.
+  keep strict account-literal parsing canonical-i105-only (reject non-canonical Katakana i105 literals and any `@domain` suffix) with canonical Katakana i105 output.
 
 ### تنسيقات استجابة توري
 
-- `GET /v1/accounts` يقبل معلمة استعلام اختيارية `canonical i105 rendering` و
+- `GET /v1/accounts` يقبل معلمة استعلام اختيارية `canonical Katakana i105 rendering` و
   `POST /v1/accounts/query` يقبل نفس الحقل داخل مغلف JSON.
   القيم المدعومة هي:
   - `i105` (افتراضي) — تصدر الاستجابات حمولات I105 الأساسية (على سبيل المثال،
-    `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`).
-  - `i105_default` - تصدر الاستجابات عرض Sora فقط `i105` المضغوط أثناء
+    `soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ`).
+  - `i105` - تصدر الاستجابات عرض Sora فقط `i105` المضغوط أثناء
     الحفاظ على المرشحات/معلمات المسار الأساسية.
 - تُرجع القيم غير الصالحة `400` (`QueryExecutionFail::Conversion`). هذا يسمح
   المحافظ والمستكشفون لطلب سلاسل مضغوطة لـ Sora-only UX بينما
   الاحتفاظ بـ I105 كإعداد افتراضي قابل للتشغيل البيني.
 - قوائم أصحاب الأصول (`GET /v1/assets/{definition_id}/holders`) وJSON الخاصة بهم
-  نظيره المغلف (`POST …/holders/query`) يكرم أيضًا `canonical i105 rendering`.
+  نظيره المغلف (`POST …/holders/query`) يكرم أيضًا `canonical Katakana i105 rendering`.
   يقوم الحقل `items[*].account_id` بإصدار قيم حرفية مضغوطة عندما يكون
-  تم تعيين حقل المعلمة/المغلف على `i105_default`، مما يعكس الحسابات
+  تم تعيين حقل المعلمة/المغلف على `i105`، مما يعكس الحسابات
   نقاط النهاية حتى يتمكن المستكشفون من تقديم مخرجات متسقة عبر الدلائل.
 - **الاختبار:** إضافة اختبارات الوحدة لرحلات الذهاب والإياب لجهاز التشفير/وحدة فك التشفير، والسلسلة الخاطئة
   حالات الفشل وعمليات البحث الواضحة؛ إضافة تغطية التكامل في Torii وSDKs

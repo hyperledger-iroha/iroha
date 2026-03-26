@@ -36,7 +36,7 @@ El parser requiere la siguiente fila de encabezado (el orden es flexible):
 |---------|-----------|-------------|
 | `label` | Si | Etiqueta solicitada (se acepta mayus/minus; la herramienta normaliza segun Norm v1 y UTS-46). |
 | `suffix_id` | Si | Identificador numerico de sufijo (decimal o `0x` hex). |
-| `owner` | Si | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
+| `owner` | Si | AccountId string (domainless encoded literal; canonical Katakana i105 only; no `@<domain>` suffix). |
 | `term_years` | Si | Entero `1..=255`. |
 | `payment_asset_id` | Si | Activo de settlement (por ejemplo `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Si | Enteros sin signo que representan unidades nativas del activo. |
@@ -77,9 +77,9 @@ En caso de exito el script escribe un manifiesto agregado:
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "soraカタカナ...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"soraカタカナ...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -88,7 +88,7 @@ En caso de exito el script escribe un manifiesto agregado:
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"soraカタカナ...",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -250,7 +250,7 @@ corrida de CSV.
   referencias a archivos se resuelven relativo a la ubicacion del CSV. Metadata
   que no sea objeto produce un error de validacion.
 - **Controllers:** celdas en blanco respetan `--default-controllers`. Proporcione
-  listas de controller explicitas (por ejemplo `i105...;i105...`) al delegar a
+  listas de controller explicitas (por ejemplo `soraカタカナ...;soraカタカナ...`) al delegar a
   actores no owner.
 
 Los fallos se reportan con numeros de fila contextuales (por ejemplo

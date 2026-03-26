@@ -82,7 +82,7 @@ JavaScript חושף גם payload `selector` ב-`domainSummary` (`tag`, `digest_h
 
 סיירים צריכים לשקף את עבודת הטלמטריה והנגישות של הארנק:
 
-- יישמו `data-copy-mode="i105|i105_default|qr"` על כפתורי ההעתקה כדי שהחזיתות
+- יישמו `data-copy-mode="i105|qr"` על כפתורי ההעתקה כדי שהחזיתות
   יוכלו לשגר מוני שימוש לצד מדד Torii `torii_address_format_total`. רכיב הדמו
   למעלה שולח אירוע `iroha:address-copy` עם `{mode,timestamp}` - חברו זאת לצינור
   האנליטיקה/טלמטריה שלכם (למשל, שליחה ל-Segment או לאוסף מבוסס NORITO) כדי
@@ -178,7 +178,7 @@ payload bit: │version  │ class  │  norm  │ext │
   `networkPrefix`, ולכן תקצירים לרשתות שאינן ברירת מחדל לא נבנים מחדש בשקט עם
   הקידומת ברירת המחדל.
 
-3. המירו את ה-payload הקנוני בעזרת השדות `i105.value` או `i105_default` מהתקציר
+3. המירו את ה-payload הקנוני בעזרת השדות `i105.value` או `i105` מהתקציר
    (או בקשו קידוד אחר דרך `--format`). מחרוזות אלו כבר בטוחות לשיתוף חיצוני.
 4. עדכנו manifests, registries ומסמכים מול לקוח עם הצורה הקנונית והודיעו
    לשותפים שסלקטורים Local יידחו לאחר השלמת ה-cutover.

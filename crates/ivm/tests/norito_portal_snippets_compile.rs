@@ -134,8 +134,8 @@ fn account(domain: &str, public_key: &str) -> ScopedAccountId {
     ScopedAccountId::new(domain, public_key)
 }
 
-const ACCOUNT_A_LITERAL: &str = "6cmzPVPX8F5t35VB7wQQ68PAW8Wb1iAEr4PZHPLTQ3p69JAGG9oifzi";
-const ACCOUNT_B_LITERAL: &str = "6cmzPVPX8dTmJWnCc8X5MpcZLb7UjrvR5Y1VdRmfj9pbb93hFbJfpLb";
+const ACCOUNT_A_LITERAL: &str = "soraゴヂアヌゾセヤョムワラタヅアヷケチョヹノチャスコゴマニョゼッォォウヘリコョエボヵホトカレマシセミスシホ";
+const ACCOUNT_B_LITERAL: &str = "soraゴヂアヌピッツユチョジジカデラリヒュキウズツワキャヒャキャヴセヸタゾネゴビリウチョヨチャェペチュヷシュミアソシクテ";
 
 fn parse_account_literal(raw: &str) -> ScopedAccountId {
     ScopedAccountId::parse_encoded(raw).expect("valid encoded account literal")

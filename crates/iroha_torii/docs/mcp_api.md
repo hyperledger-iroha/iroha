@@ -292,7 +292,7 @@ Notes:
     "name": "torii.get_v1_accounts_account_id_transactions",
     "arguments": {
       "path": {
-        "account_id": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw"
+        "account_id": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ"
       },
       "query": {
         "limit": 20,
@@ -312,7 +312,7 @@ Notes:
   "params": {
     "name": "iroha.accounts.transactions",
     "arguments": {
-      "account_id": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
+      "account_id": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
       "limit": 20,
       "offset": 0
     }

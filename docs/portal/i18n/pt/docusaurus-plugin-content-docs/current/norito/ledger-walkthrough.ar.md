@@ -26,8 +26,8 @@ slug: /norito/ledger-passo a passo
 Para obter mais informações, verifique `$ADMIN_ACCOUNT` e `$RECEIVER_ACCOUNT`. يتضمن الـ bundle الافتراضي بالفعل حسابين مشتقين من مفاتيح العرض:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="soraカタカナ..."
+export RECEIVER_ACCOUNT="soraカタカナ..."
 ```
 
 اكد القيم عبر سرد اولى الحسابات:

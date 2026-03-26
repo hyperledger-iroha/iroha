@@ -32,8 +32,8 @@ SampleDownload-г '@site/src/components/SampleDownload'-аас импортло�
    `defaults/client.toml`:
 
    ```bash
-   export ADMIN_ACCOUNT="i105..."
-   export RECEIVER_ACCOUNT="i105..."
+   export ADMIN_ACCOUNT="soraカタカナ..."
+   export RECEIVER_ACCOUNT="soraカタカナ..."
    export ADMIN_PRIVATE_KEY="802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
    ```
 

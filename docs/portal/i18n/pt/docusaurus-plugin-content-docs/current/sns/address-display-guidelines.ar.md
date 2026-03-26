@@ -79,7 +79,7 @@ E isso pode ser um problema para você.
 
 
 
-يجب ان تعكس المستكشفات اعمال القياس والاتاحة نفسها في المحافظ:- طبق `data-copy-mode="i105|i105_default|qr"` على ازرار النسخ حتى تتمكن الواجهات
+يجب ان تعكس المستكشفات اعمال القياس والاتاحة نفسها في المحافظ:- طبق `data-copy-mode="i105|qr"` على ازرار النسخ حتى تتمكن الواجهات
   O código de barras do produto Torii
   `torii_address_format_total`. المكون التجريبي اعلاه يطلق حدث
   `iroha:address-copy` com `{mode,timestamp}` - اربط ذلك بخط تحليلاتك/تليمترتك
@@ -173,7 +173,7 @@ A interface do usuário e os SDKs estão disponíveis para você:
   O código I105 é literalmente `networkPrefix`
   Não se preocupe, você pode usar o telefone para obter mais informações.
 
-3. Verifique o tamanho do arquivo `i105.value` e `i105_default`
+3. Verifique o tamanho do arquivo `i105.value` e `i105`
    Isso é feito (ou seja, o arquivo `--format`). هذه السلاسل امنة بالفعل
    Não.
 4. حدث manifestos والسجلات والوثائق المواجهة للعميل بالصيغ القانونية وابلغ

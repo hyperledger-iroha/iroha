@@ -30,7 +30,7 @@ ID-lər `Display`/`FromStr` gediş-gəliş ilə sabit sətir formalarına malikd
 - `AssetDefinitionId` — kanonik `unprefixed Base58 address with versioning and checksum` (UUID-v4 bayt). Tərif: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. `alias` hərfi `<name>#<domain>.<dataspace>` və ya `<name>#<dataspace>` olmalıdır, `<name>` aktivin tərifinin adına bərabərdir. Kod: `crates/iroha_data_model/src/asset/definition.rs`.
 
   - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`, where `status` is `permanent`, `leased_active`, `leased_grace`, or `expired_pending_cleanup`. Alias selectors resolve against the latest committed block creation time and stop resolving after grace even before sweep removes stale bindings.
-- `AssetId`: kanonik kodlaşdırılmış literal `<asset-definition-id>#<i105-account-id>` (ilk buraxılışda köhnə mətn formaları dəstəklənmir).- `NftId` — `nft$domain`. NFT: `{ id, content: Metadata, owned_by }`. Kod: `crates/iroha_data_model/src/nft.rs`.
+- `AssetId`: kanonik kodlaşdırılmış literal `<base58-asset-id>#<katakana-i105-account-id>` (ilk buraxılışda köhnə mətn formaları dəstəklənmir).- `NftId` — `nft$domain`. NFT: `{ id, content: Metadata, owned_by }`. Kod: `crates/iroha_data_model/src/nft.rs`.
 - `RoleId` — `name`. Rol: `{ id, permissions: BTreeSet<Permission> }` inşaatçı ilə `NewRole { inner: Role, grant_to }`. Kodu: `crates/iroha_data_model/src/role.rs`.
 - `Permission` — `{ name: Ident, payload: Json }`. Kodu: `crates/iroha_data_model/src/permission.rs`.
 - `PeerId`/`Peer` — həmyaşıd şəxsiyyəti (ictimai açar) və ünvan. Kod: `crates/iroha_data_model/src/peer.rs`.
@@ -206,7 +206,7 @@ Növ: `ExecuteTrigger { trigger: TriggerId, args: Json }`.
 
 Miqrasiya qeydi:
 - `name#domain` mətn aktivi tərifi identifikatorları ilk buraxılışda qəsdən dəstəklənmir.
-- Nanə/yandırma/köçürmə sərhədlərində aktiv identifikatorları kanonik olaraq qalır `<asset-definition-id>#<i105-account-id>`; `iroha tools encode asset-id` ilə `--definition <base58-asset-definition-id>` və ya `--alias ...` plus `--account` istifadə edin.
+- Nanə/yandırma/köçürmə sərhədlərində aktiv identifikatorları kanonik olaraq qalır `<base58-asset-id>#<katakana-i105-account-id>`; `iroha tools encode asset-id` ilə `--definition <base58-asset-definition-id>` və ya `--alias ...` plus `--account` istifadə edin.
 
 ---
 

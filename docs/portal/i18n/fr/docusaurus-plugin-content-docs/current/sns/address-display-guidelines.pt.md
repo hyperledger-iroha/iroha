@@ -81,7 +81,7 @@ Local-12 ou répondu par l'enregistrement lors de la réparation de la charge ut
 
 
 Les explorateurs doivent investir dans le travail de télémétrie et l'accessibilité de
-carteira:- Aplique `data-copy-mode="i105|i105_default|qr"` sur les bottes de copie pour cela
+carteira:- Aplique `data-copy-mode="i105|qr"` sur les bottes de copie pour cela
   les frontaux peuvent émettre des contadores d'utilisation avec une métrique Torii
   `torii_address_format_total`. La démo du composant disparait complètement d'un événement
   `iroha:address-copy` avec `{mode,timestamp}` ; connectez-le à votre pipeline de
@@ -179,7 +179,7 @@ les chaînes compressées doivent être développées pour suivre la CLI du flux
   L'assistant préserve le préfixe I105 détecté au sens littéral au moins que votre voix forneca
   explicitement `networkPrefix`, entrez votre CV pour le réseau nao padrao nao sao
   re-rendu silencieusement avec le préfixe padrao.3. Convertir la charge utile en canon en réutilisant les champs `i105.value` ou
-   `i105_default` faire un CV (ou solliciter une codification externe via `--format`). Essas
+   `i105` faire un CV (ou solliciter une codification externe via `--format`). Essas
    les cordes sont sécurisées pour le compartiment externe.
 4. Actualiser les manifestes, les registres et les documents relatifs au client sous forme
    canonica e notifique as contrapartes de que seletores Local serao rejeitados

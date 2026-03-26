@@ -81,16 +81,18 @@ final class AccountIdTests: XCTestCase {
         XCTAssertFalse(accountId.contains("@"))
     }
 
-    func testNormalizeForComparisonLeavesDomainSuffixedLiteralsUntouched() throws {
+    func testNormalizeForComparisonLeavesAccountAliasesUntouched() throws {
         let publicKey = Data(repeating: 0x11, count: 32)
         let i105 = try AccountId.makeI105(publicKey: publicKey)
+        let alias = "alice@dataspace"
+        let scopedAlias = "alice@hbl.dataspace"
 
         XCTAssertEqual(AccountId.normalizeForComparison(i105), i105)
-        XCTAssertEqual(AccountId.normalizeForComparison("\(i105)@default"), "\(i105)@default")
-        XCTAssertEqual(AccountId.normalizeForComparison("\(i105)@HBL.SBP"), "\(i105)@HBL.SBP")
+        XCTAssertEqual(AccountId.normalizeForComparison(alias), alias)
+        XCTAssertEqual(AccountId.normalizeForComparison(scopedAlias), scopedAlias)
 
-        XCTAssertFalse(AccountId.matchesForComparison(i105, "\(i105)@default"))
-        XCTAssertFalse(AccountId.matchesForComparison("\(i105)@default", "\(i105)@hbl.sbp"))
+        XCTAssertFalse(AccountId.matchesForComparison(i105, alias))
+        XCTAssertFalse(AccountId.matchesForComparison(alias, scopedAlias))
     }
 
     func testNormalizeForComparisonDoesNotCanonicalizeLegacyLiterals() {

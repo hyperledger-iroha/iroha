@@ -248,7 +248,7 @@ mod tests {
 
     impl Visit for NoopVisitor {}
 
-    const ALICE_ACCOUNT_ID_STR: &str = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
+    const ALICE_ACCOUNT_ID_STR: &str = "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ";
 
     #[test]
     fn visit_find_parameters_dispatches() {

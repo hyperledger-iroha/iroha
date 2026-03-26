@@ -40,20 +40,20 @@ La auditoria inspecciona las reexportaciones publicas en `crates/iroha_torii/src
 - דוגמאות:
 ```ts
 import { buildCanonicalRequestHeaders } from "@iroha2/iroha-js";
-const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v1/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
-await fetch(`${torii}/v1/accounts/i105.../assets?limit=5`, { headers });
+const headers = buildCanonicalRequestHeaders({ accountId: "soraカタカナ...", method: "get", path: "/v1/accounts/soraカタカナ.../assets", query: "limit=5", body: "", privateKey });
+await fetch(`${torii}/v1/accounts/soraカタカナ.../assets?limit=5`, { headers });
 ```
 ```swift
-let headers = try CanonicalRequest.signingHeaders(accountId: "i105...",
+let headers = try CanonicalRequest.signingHeaders(accountId: "soraカタカナ...",
                                                   method: "get",
-                                                  path: "/v1/accounts/i105.../assets",
+                                                  path: "/v1/accounts/soraカタカナ.../assets",
                                                   query: "limit=5",
                                                   body: Data(),
                                                   signer: signingKey)
 ```
 ```kotlin
 val signer = Ed25519Signer(privateKey, publicKey)
-val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
+val headers = CanonicalRequestSigner.signingHeaders("soraカタカナ...", "get", "/v1/accounts/soraカタカナ.../assets", "limit=5", ByteArray(0), signer)
 ```
 
 ## ממצאי נקודות קצה

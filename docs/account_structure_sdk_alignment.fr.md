@@ -14,7 +14,7 @@ Références clés :
 Actions :
 1. **Sortie canonique :** `AccountId::to_string()`/Display DOIT émettre uniquement I105
    (sans suffixe `@domain`). Le hex canonique est réservé au débogage (`0x...`).
-2. **Accepted inputs:** parsers MUST accept only canonical i105 account literals. Reject i105-default `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+2. **Accepted inputs:** parsers MUST accept only canonical Katakana i105 account literals. Reject non-canonical Katakana i105 literals, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
 3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
 4. **Checksum I105 :** utiliser Blake2b‑512 sur `I105PRE || prefix || payload`,
    prendre les 2 premiers octets. La base de l’alphabet compressé est **105**.

@@ -850,7 +850,7 @@ mod tests {
             file_hash: [5; 32],
         };
         let creator =
-            AccountId::parse_encoded("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw")
+            AccountId::parse_encoded("soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ")
                 .map(|parsed| parsed.into_account_id())
                 .expect("valid account id");
         let bundle = ContentBundleRecord {

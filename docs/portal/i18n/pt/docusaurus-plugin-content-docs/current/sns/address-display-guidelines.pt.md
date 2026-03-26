@@ -86,7 +86,7 @@ Local-12 ou respaldado por registro sem reparar o payload bruto.
 Exploradores devem espelhar o trabalho de telemetria e acessibilidade da
 carteira:
 
-- Aplique `data-copy-mode="i105|i105_default|qr"` aos botões de cópia para que
+- Aplique `data-copy-mode="i105|qr"` aos botões de cópia para que
   front-ends podem emitir contadores de uso junto com a métrica Torii
   `torii_address_format_total`. O componente demo acima é diferente de um evento
   `iroha:address-copy` com `{mode,timestamp}`; conecte isso ao seu pipeline de
@@ -188,7 +188,7 @@ strings comprimidas devem seguir a CLI do fluxo de trabalho documentada em ADDR-
   O helper preserva o prefixo I105 detectado do literal a menos que você forneca
   explicitamente `networkPrefix`, entao resumos para redes não padrão não são
   re-renderizados silenciosamente com o prefixo padrão.3. Converta o payload canônico reutilizando os campos `i105.value` ou
-   `i105_default` do resumo (ou solicitar outra codificação via `--format`). Esses
+   `i105` do resumo (ou solicitar outra codificação via `--format`). Esses
    strings ja são seguras para compartilhamento externo.
 4. Atualizar manifestos, registros e documentos específicos ao cliente com a forma
    canonica e notifique as contrapartes de que seletores Locais serão rejeitados

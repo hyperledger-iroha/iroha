@@ -33,7 +33,7 @@ translator: machine-google-reviewed
 - `DomainId`: `name` (например, `wonderland`).
 - `AccountId`: канонический идентификатор учетной записи без домена, закодированный с помощью `AccountAddress` только как I105. Входные данные парсера должны быть каноническими I105; суффиксы домена (`@domain`), канонические литералы I105, литералы псевдонимов, канонические входные данные шестнадцатеричного анализатора, устаревшие полезные нагрузки `norito:` и формы анализатора учетных записей `uaid:`/`opaque:` отклоняются.
 - `AssetDefinitionId`: канонический `unprefixed Base58 address with versioning and checksum` (байты UUID-v4).
-- `AssetId`: канонический литерал `<asset-definition-id>#<i105-account-id>` (устаревшие текстовые формы не поддерживаются в первом выпуске).
+- `AssetId`: канонический литерал `<base58-asset-id>#<katakana-i105-account-id>` (устаревшие текстовые формы не поддерживаются в первом выпуске).
 - `NftId`: `nft$domain` (например, `rose$garden`).
 - `PeerId`: `public_key` (равенство одноранговых узлов осуществляется по открытому ключу).
 
@@ -259,7 +259,7 @@ curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -d '{"alias":"pkr#ubl.sbp"}'
 ```Примечание по миграции:
 — Старые идентификаторы определения актива `name#domain` не принимаются в версии 1.
-— Идентификаторы активов для выпуска/сжигания/передачи остаются каноническими `<asset-definition-id>#<i105-account-id>`; создайте их с помощью:
+— Идентификаторы активов для выпуска/сжигания/передачи остаются каноническими `<base58-asset-id>#<katakana-i105-account-id>`; создайте их с помощью:
   - `iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
   - или `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`.
 

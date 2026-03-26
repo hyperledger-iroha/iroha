@@ -39,7 +39,7 @@ pub struct RegisterArgs {
     /// Lane id to register against
     #[arg(long)]
     pub lane_id: u32,
-    /// Validator account identifier (canonical i105 account literal)
+    /// Validator account identifier (canonical Katakana i105 account literal)
     #[arg(long, value_name = "ACCOUNT_ID")]
     pub validator: String,
     /// Optional staking account (defaults to validator)
@@ -79,7 +79,7 @@ pub struct ActivateArgs {
     /// Lane id containing the pending validator
     #[arg(long)]
     pub lane_id: u32,
-    /// Validator account identifier (canonical i105 account literal)
+    /// Validator account identifier (canonical Katakana i105 account literal)
     #[arg(long, value_name = "ACCOUNT_ID")]
     pub validator: String,
 }
@@ -98,7 +98,7 @@ pub struct ExitArgs {
     /// Lane id containing the validator
     #[arg(long)]
     pub lane_id: u32,
-    /// Validator account identifier (canonical i105 account literal)
+    /// Validator account identifier (canonical Katakana i105 account literal)
     #[arg(long, value_name = "ACCOUNT_ID")]
     pub validator: String,
     /// Release timestamp in milliseconds (must not precede current block timestamp)

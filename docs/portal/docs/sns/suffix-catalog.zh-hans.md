@@ -47,9 +47,9 @@ SNS 路线图跟踪每个批准的后缀 (SN-1/SN-2)。此页面反映了
 
 |后缀 | ID (`hex`) |管家|资金分割 |状态 |支付资产|推荐上限 (bps) |期限（最短 – 最长年）|恩典/救赎（天）|定价等级（正则表达式 → 基本价格/拍卖）|保留标签|费用分割（T/S/R/E bps）|政策版本|
 |--------|------------|---------|-------------|--------|----------------|--------------------|--------------------------|----------------------------|------------------------------------------------------------|-----------------|----------------------------------------|----------------|
-| `.sora` | `0x0001` | `i105...` | `i105...` |活跃| `61CtjvNd9T3THAR65GsMVHr82Bjc` | 500 | 1 – 5 | 30 / 60 | `T0: ^[a-z0-9]{3,}$ → 120 XOR (Vickrey)` | `treasury → i105...` | `7000 / 3000 / 1000 / 0` | 1 |
-| `.nexus` | `0x0002` | `i105...` | `i105...` |暂停 | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 300 | 300 1 – 3 | 15 / 30 | `T0: ^[a-z0-9]{4,}$ → 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ → 4000 XOR (Dutch floor 500)` | `treasury → i105...`、`guardian → i105...` | `6500 / 2500 / 800 / 200` | 2 |
-| `.dao` | `0x0003` | `i105...` | `i105...` |撤销| `61CtjvNd9T3THAR65GsMVHr82Bjc` | 0 | 1 – 2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ → 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
+| `.sora` | `0x0001` | `soraカタカナ...` | `soraカタカナ...` |活跃| `61CtjvNd9T3THAR65GsMVHr82Bjc` | 500 | 1 – 5 | 30 / 60 | `T0: ^[a-z0-9]{3,}$ → 120 XOR (Vickrey)` | `treasury → soraカタカナ...` | `7000 / 3000 / 1000 / 0` | 1 |
+| `.nexus` | `0x0002` | `soraカタカナ...` | `soraカタカナ...` |暂停 | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 300 | 300 1 – 3 | 15 / 30 | `T0: ^[a-z0-9]{4,}$ → 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ → 4000 XOR (Dutch floor 500)` | `treasury → soraカタカナ...`、`guardian → soraカタカナ...` | `6500 / 2500 / 800 / 200` | 2 |
+| `.dao` | `0x0003` | `soraカタカナ...` | `soraカタカナ...` |撤销| `61CtjvNd9T3THAR65GsMVHr82Bjc` | 0 | 1 – 2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ → 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
 
 ## JSON 摘录
 
@@ -62,7 +62,7 @@ SNS 路线图跟踪每个批准的后缀 (SN-1/SN-2)。此页面反映了
       "suffix": ".sora",
       "suffix_id": 1,
       "status": "active",
-      "fund_splitter_account": "i105...",
+      "fund_splitter_account": "soraカタカナ...",
       "payment_asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
       "referral_cap_bps": 500,
       "pricing": [

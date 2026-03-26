@@ -97,7 +97,7 @@ Local-12 ou respaldado por registro sem reparsear o payload bruto.
 Exploradores devem espelhar o trabalho de telemetria e acessibilidade da
 carteira:
 
-- Aplique `data-copy-mode="i105|i105_default|qr"` aos botoes de copia para que
+- Aplique `data-copy-mode="i105|qr"` aos botoes de copia para que
   front-ends possam emitir contadores de uso junto com a metrica Torii
   `torii_address_format_total`. O componente demo acima dispara um evento
   `iroha:address-copy` com `{mode,timestamp}`; conecte isso ao seu pipeline de
@@ -203,7 +203,7 @@ strings comprimidas devem seguir o workflow CLI documentado em ADDR-5:
   re-renderizados silenciosamente com o prefixo padrao.
 
 3. Converta o payload canonico reutilizando os campos `i105.value` ou
-   `i105_default` do resumo (ou solicite outra codificacao via `--format`). Essas
+   `i105` do resumo (ou solicite outra codificacao via `--format`). Essas
    strings ja sao seguras para compartilhamento externo.
 4. Atualize manifests, registros e documentos voltados ao cliente com a forma
    canonica e notifique as contrapartes de que seletores Local serao rejeitados

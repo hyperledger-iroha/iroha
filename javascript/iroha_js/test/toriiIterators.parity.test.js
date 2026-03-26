@@ -5,7 +5,7 @@ import { ToriiClient, ToriiHttpError } from "../src/toriiClient.js";
 import { ValidationError, ValidationErrorCode } from "../src/index.js";
 
 const BASE_URL = "http://localhost:8080";
-const FIXTURE_ACCOUNT_ID = "6cmzPVPX8e5qQsHdB57DhqFT9wp2MiMoXsvt9LYUtypj1nx96bF5s8W";
+const FIXTURE_ACCOUNT_ID = "soraゴヂアヌプテニィキニャキャメイホョニャチュチョネドモキャビヲヤデブォツメシャモリカグヒュリダポヌラマキホコホノミ";
 const FIXTURE_RWA_ID =
   "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities";
 

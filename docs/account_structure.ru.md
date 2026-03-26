@@ -19,7 +19,7 @@
 
 ## Мотивация
 
-Сегодня кошельки и инструменты вне сети полагаются на необработанные псевдонимы маршрутизации `alias@domain` (rejected legacy form). Это
+Сегодня кошельки и инструменты вне сети полагаются на необработанные псевдонимы маршрутизации `name@dataspace` or `name@domain.dataspace`. Это
 имеет два существенных недостатка:
 
 1. **Нет привязки к сети.** Строка не имеет контрольной суммы или префикса цепочки, поэтому пользователи
@@ -60,16 +60,16 @@ AccountId {
     controller: AccountController // single PublicKey or multisig policy
 }
 
-Display: canonical i105 literal (no `@domain` suffix)
+Display: canonical Katakana i105 literal (no `@domain` suffix)
 Parse accepts:
 - Encoded account identifiers only: i105.
-- Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and account-alias literals such as label@dataspace or label@domain.dataspace.
+- Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and account-alias literals such as name@dataspace or name@domain.dataspace.
 
 Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
 and `0x` prefixes are not accepted.
 
 Account aliases are separate on-chain bindings. They use
-label@dataspace or label@domain.dataspace and resolve to canonical
+name@dataspace or name@domain.dataspace and resolve to canonical
 i105 `AccountId` values. Strict `AccountId` parsers never accept alias literals directly.
 ```
 
@@ -286,7 +286,7 @@ tag-specific payload, then move on to the controller bytes.
 - Полезная нагрузка двоичного контроллера (`ControllerPayload::Multisig`) кодирует
   `version:u8`, `threshold:u16`, `member_count:u8`, затем
   `(curve_id, weight:u16, key_len:u16, key_bytes)`. Это именно то, что
-  `AccountAddress::canonical_bytes()` записывает в полезные данные I105 (предпочтительный)/sora (второй лучший).
+  `AccountAddress::canonical_bytes()` записывает в полезные данные canonical Katakana i105 / non-canonical Katakana i105.
 - Для хеширования (`MultisigPolicy::digest_blake2b256()`) используется Blake2b-256 с
   `iroha-ms-policy` строка персонализации, чтобы манифесты управления могли быть привязаны к
   Идентификатор детерминированной политики, соответствующий байтам контроллера, встроенным в I105.
@@ -308,9 +308,9 @@ tag-specific payload, then move on to the controller bytes.
 - Слишком большой или неправильно сформированный ключевой материал вызывает `KeyPayloadTooLong` или `InvalidPublicKey`.
 - Контроллеры с мультиподписью, число участников которых превышает 255, поднимают `MultisigMemberOverflow`.
 - Преобразования IME/NFKC: сора-кана половинной ширины можно нормализовать до их полноширинных форм без нарушения декодирования, но сигнальный индикатор ASCII `sora` и цифры/буквы I105 ДОЛЖНЫ оставаться ASCII. Полноэкранные индикаторы или свернутые в регистр символы отображают `ERR_MISSING_COMPRESSED_SENTINEL`, полезные данные ASCII во всю ширину поднимают `ERR_INVALID_COMPRESSED_CHAR`, а несовпадения контрольных сумм появляются как `ERR_CHECKSUM_MISMATCH`. Тесты свойств в `crates/iroha_data_model/src/account/address.rs` охватывают эти пути, поэтому SDK и кошельки могут полагаться на детерминированные сбои.
-- При анализе псевдонимов `address@domain` (rejected legacy form) Torii и SDK теперь выдаются одни и те же коды `ERR_*`, когда входные данные I105 (предпочтительный)/sora (второй лучший) терпят неудачу перед откатом псевдонима (например, несовпадение контрольной суммы, несоответствие дайджеста домена), поэтому клиенты могут передавать структурированные причины, не догадываясь из прозаических строк.
+- При анализе псевдонимов `name@dataspace` or `name@domain.dataspace` Torii и SDK теперь выдаются одни и те же коды `ERR_*`, когда входные данные canonical Katakana i105 / non-canonical Katakana i105 терпят неудачу перед откатом псевдонима (например, несовпадение контрольной суммы, несоответствие дайджеста домена), поэтому клиенты могут передавать структурированные причины, не догадываясь из прозаических строк.
 - Полезные данные локального селектора длиной менее 12 байт отображаются `ERR_LOCAL8_DEPRECATED`, сохраняя жесткое переключение по сравнению с устаревшими дайджестами Local‑8.
-- Domainless canonical i105 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
+- Domainless canonical Katakana i105 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
 
 #### 2.5 Нормативные бинарные векторы
 
@@ -351,17 +351,17 @@ tag-specific payload, then move on to the controller bytes.
 
 | Аккаунт/селектор | Литерал I105 (префикс `0x02F1`) | Сора сжата (`sora`) литерал |
 |----|--------------------------------|-------------------------|
-| `default` домен (неявный селектор, начальное значение `0x00`) | `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE` (необязательный суффикс `@default` при предоставлении явных подсказок по маршрутизации) |
+| `default` домен (неявный селектор, начальное значение `0x00`) | `soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE` |
 | `treasury` (селектор локального дайджеста, начальное значение `0x01`) | `34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
 | Указатель глобального реестра (`registry_id = 0x0000_002A`, эквивалент `treasury`) | `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF` | `sorakXｹ6NｻﾍﾀﾖSﾜﾖｱ3ﾚ5WﾘﾋQﾅｷｦxgﾛｸcﾁｵﾋkﾋvﾏ8SPﾓﾀｹdｴｴｲW9iCM6AEP` |
 
 Эти строки соответствуют строкам, выдаваемым CLI (`iroha tools address convert`), Torii
-ответы (`canonical i105 literal rendering`) и помощники SDK, поэтому копирование/вставка UX
+ответы (`canonical Katakana i105 literal rendering`) и помощники SDK, поэтому копирование/вставка UX
 потоки могут полагаться на них дословно. Добавляйте `<address>@<domain>` (rejected legacy form) только тогда, когда вам нужна явная подсказка маршрутизации; суффикс не является частью канонического вывода.
 
 #### 2.6 Текстовые псевдонимы для совместимости (планируется)
 
-- **Стиль псевдонима цепочки:** `ih:<chain-alias>:<alias@domain>` для журналов и людей.
+- **Стиль псевдонима цепочки:** `ih:<chain-alias>:<name@domain.dataspace>` для журналов и людей.
   вход. Кошельки должны проанализировать префикс, проверить встроенную цепочку и заблокировать
   несоответствия.
 - **Форма CAIP-10:** `iroha:<caip-2-id>:<i105-addr>` для независимости от цепочки
@@ -397,7 +397,7 @@ tag-specific payload, then move on to the controller bytes.
 литералы для каждой канонической полезной нагрузки. Основные моменты:
 
 - **`addr-single-default-ed25519` (Сора Нексус, префикс `0x02F1`).**  
-  I105 `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`, сжатый (`sora`)
+  I105 `soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ`, сжатый (`sora`)
   `sora2QG…U4N5E5`. Тории генерирует именно эти строки из `AccountId`
   реализация `Display` (канонический I105) и `AccountAddress::to_i105`.
 - **`addr-global-registry-002a` (селектор реестра → казначейство).**  
@@ -599,7 +599,7 @@ Nexus публикует **манифест, предназначенный то
    манифест с `cargo xtask address-vectors` перед запросом подписей.
 4. **Проверка и публикация.** Следуйте контрольному списку Runbook (хеши, Sigstore,
    монотонность последовательности) перед зеркалированием пакета в SoraFS. Тории сейчас
-   канонизирует литералы I105 (предпочтительный)/sora (второй лучший) сразу после доставки пакета.
+   канонизирует литералы canonical Katakana i105 / non-canonical Katakana i105 сразу после доставки пакета.
 5. **Мониторинг и откат.** Оставьте панели столкновений Local‑8 и Local‑12 на уровне
    ноль на 30 дней; если появляются регрессии, повторно опубликуйте предыдущий манифест
    только в затронутой непроизводственной среде, пока телеметрия не стабилизируется.
@@ -615,8 +615,8 @@ Nexus публикует **манифест, предназначенный то
   плюс разрешенный домен в виде метки, полученной из реестра. Домены
   четко обозначены как описательные метаданные, которые могут меняться, тогда как I105 является
   стабильный адрес.
-- **Канонизация входных данных:** Torii и SDK принимают I105 (предпочтительно)/sora (второй лучший)/0x.
-  адреса плюс `alias@domain` (rejected legacy form), `uaid:…` и
+- **Канонизация входных данных:** Torii и SDK принимают canonical Katakana i105 / non-canonical Katakana i105/0x.
+  адреса плюс `name@dataspace` or `name@domain.dataspace`, `uaid:…` и
   `opaque:…` формируется, затем канонизируется в I105 для вывода. Нет
   переключение строгого режима; необработанные идентификаторы телефона/электронной почты должны храниться вне реестра.
   через UAID/непрозрачные сопоставления.
@@ -663,24 +663,24 @@ Nexus публикует **манифест, предназначенный то
   Пользователи отмечают, что сжатая форма `i105` предназначена только для Sora и допускает перезапись IME.
 - **Интеграция Тори:** Кэшируйте манифесты Nexus с соблюдением TTL,
   `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` детерминированно, и
-  keep strict account-literal parsing canonical-i105-only (reject compressed and any `@domain` suffix) with canonical i105 output.
+  keep strict account-literal parsing canonical-i105-only (reject non-canonical Katakana i105 literals and any `@domain` suffix) with canonical Katakana i105 output.
 
 ### Форматы ответов Тории
 
-- `GET /v1/accounts` принимает необязательный параметр запроса `canonical i105 rendering` и
+- `GET /v1/accounts` принимает необязательный параметр запроса `canonical Katakana i105 rendering` и
   `POST /v1/accounts/query` принимает то же поле внутри конверта JSON.
   Поддерживаемые значения:
   - `i105` (по умолчанию) — ответы выдают канонические полезные данные I105 (например,
-    `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`).
-  - `i105_default` — ответы выдают сжатое представление `i105` только для Sora, пока
+    `soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ`).
+  - `i105` — ответы выдают сжатое представление `i105` только для Sora, пока
     сохранение канонических параметров фильтров/путей.
 - Неверные значения возвращают `400` (`QueryExecutionFail::Conversion`). Это позволяет
   кошельки и исследователи запрашивать сжатые строки для UX только для Sora, в то время как
   сохранение I105 в качестве совместимого значения по умолчанию.
 - Списки владельцев активов (`GET /v1/assets/{definition_id}/holders`) и их JSON.
-  аналог конверта (`POST …/holders/query`) также соблюдает `canonical i105 rendering`.
+  аналог конверта (`POST …/holders/query`) также соблюдает `canonical Katakana i105 rendering`.
   Поле `items[*].account_id` генерирует сжатые литералы всякий раз, когда
-  Поле параметра/конверта имеет значение `i105_default`, что отражает учетные записи.
+  Поле параметра/конверта имеет значение `i105`, что отражает учетные записи.
   конечные точки, чтобы исследователи могли предоставлять согласованные выходные данные во всех каталогах.
 - **Тестирование:** Добавлены модульные тесты для двусторонних обходов кодера/декодера, неправильной цепочки.
   сбои и поиск манифеста; добавить интеграцию в Torii и SDK

@@ -1670,8 +1670,6 @@ pub unsafe extern "C" fn connect_norito_account_address_render(
     out_hex_len: *mut c_ulong,
     out_i105_ptr: *mut *mut c_uchar,
     out_i105_len: *mut c_ulong,
-    out_i105_default_ptr: *mut *mut c_uchar,
-    out_i105_default_len: *mut c_ulong,
     out_error_json_ptr: *mut *mut c_uchar,
     out_error_json_len: *mut c_ulong,
 ) -> c_int {
@@ -1680,8 +1678,6 @@ pub unsafe extern "C" fn connect_norito_account_address_render(
         || out_hex_len.is_null()
         || out_i105_ptr.is_null()
         || out_i105_len.is_null()
-        || out_i105_default_ptr.is_null()
-        || out_i105_default_len.is_null()
     {
         return ERR_NULL_PTR;
     }
@@ -1707,25 +1703,12 @@ pub unsafe extern "C" fn connect_norito_account_address_render(
             return write_account_address_error(err, out_error_json_ptr, out_error_json_len);
         }
     };
-    let i105_default = match address.to_i105() {
-        Ok(value) => value,
-        Err(err) => {
-            return write_account_address_error(err, out_error_json_ptr, out_error_json_len);
-        }
-    };
 
     unsafe {
         if let Err(code) = write_bytes(out_hex_ptr, out_hex_len, canonical_hex.as_bytes()) {
             return code;
         }
         if let Err(code) = write_bytes(out_i105_ptr, out_i105_len, i105.as_bytes()) {
-            return code;
-        }
-        if let Err(code) = write_bytes(
-            out_i105_default_ptr,
-            out_i105_default_len,
-            i105_default.as_bytes(),
-        ) {
             return code;
         }
     }
@@ -9408,9 +9391,9 @@ pub unsafe extern "C" fn connect_norito_decode_signed_transaction_json(
 /// Decode a canonical public `AssetId` literal into canonical readable JSON fields.
 ///
 /// Response JSON object fields:
-/// - `asset_id`: canonical public asset id (`<asset-definition-id>#<i105-account-id>`)
+/// - `asset_id`: canonical public asset id (`<base58-asset-id>#<katakana-i105-account-id>`)
 /// - `asset_definition_id`: canonical asset definition id (unprefixed Base58 address)
-/// - `account_id`: canonical i105 account id (i105 literal)
+/// - `account_id`: canonical Katakana i105 account id (i105 literal)
 ///
 /// # Safety
 /// All pointer arguments must be valid and non-null.
@@ -12157,7 +12140,7 @@ mod tests {
         let mut map = JsonMap::new();
         map.insert(
             "owner".to_owned(),
-            JsonValue::from("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
+            JsonValue::from("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"),
         );
         let mut value = JsonValue::Object(map);
         assert!(normalize_zk_ballot_public_inputs(&mut value).is_err());
@@ -12182,7 +12165,7 @@ mod tests {
         let mut map = JsonMap::new();
         map.insert(
             "owner".to_owned(),
-            JsonValue::from("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
+            JsonValue::from("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"),
         );
         map.insert("amount".to_owned(), JsonValue::from("100"));
         map.insert("duration_blocks".to_owned(), JsonValue::from(64u64));
@@ -12426,8 +12409,6 @@ mod tests {
         let mut hex_len: c_ulong = 0;
         let mut i105_ptr: *mut c_uchar = ptr::null_mut();
         let mut i105_len: c_ulong = 0;
-        let mut i105_default_ptr: *mut c_uchar = ptr::null_mut();
-        let mut i105_default_len: c_ulong = 0;
         let mut render_err_ptr: *mut c_uchar = ptr::null_mut();
         let mut render_err_len: c_ulong = 0;
 
@@ -12440,8 +12421,6 @@ mod tests {
                 &mut hex_len,
                 &mut i105_ptr,
                 &mut i105_len,
-                &mut i105_default_ptr,
-                &mut i105_default_len,
                 &mut render_err_ptr,
                 &mut render_err_len,
             )
@@ -12453,7 +12432,6 @@ mod tests {
 
         connect_norito_free(hex_ptr);
         connect_norito_free(i105_ptr);
-        connect_norito_free(i105_default_ptr);
 
         let canonical_literal =
             CString::new(address.canonical_hex().expect("canonical hex")).expect("cstring");

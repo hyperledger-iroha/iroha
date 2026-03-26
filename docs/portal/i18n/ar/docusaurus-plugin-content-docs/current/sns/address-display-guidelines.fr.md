@@ -85,7 +85,7 @@ translation_last_reviewed: 2026-02-07
 
 
 يجب على المستكشفين إعادة إنتاج عمل القياس عن بعد وإمكانية الوصول إليه
-fait pour le portefeuille:- Appliquez `data-copy-mode="i105|i105_default|qr"` aux boutons de copie afin que
+fait pour le portefeuille:- Appliquez `data-copy-mode="i105|qr"` aux boutons de copie afin que
   يمكن للواجهات الأمامية أن تطلق حاسبات الاستخدام بالتوازي
   متري Torii `torii_address_format_total`. العرض التوضيحي للمؤلف
   أرسل حدثًا `iroha:address-copy` مع `{mode,timestamp}` - تخلص من هذا
@@ -187,7 +187,7 @@ Voir `docs/source/references/address_norm_v1.md` pour la table complet
   يقوم المساعد في الحفاظ على البادئة I105 بالكشف عن الحرفي إذا كنت ترغب في ذلك
   قم بتقديم `networkPrefix` بشكل واضح، قم بإرسال السيرة الذاتية للأبحاث
   Non defaut ne sont pas rerendus silencieusement avec le prefixe par defaut.3. قم بتحويل الحمولة الكنسي إلى إعادة استخدام الأبطال `i105.value` ou
-   `i105_default` من السيرة الذاتية (أو تطلب تشفيرًا آخر عبر `--format`). سيس
+   `i105` من السيرة الذاتية (أو تطلب تشفيرًا آخر عبر `--format`). سيس
    السلاسل هي بالتأكيد مشاركة خارجية.
 4. قم بإعداد البيانات والسجلات والمستندات الموجهة يوميًا من قبل العميل
    النموذج القانوني وإخطار المشاركين بأن المحددات المحلية ستظهر

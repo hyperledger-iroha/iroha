@@ -24,7 +24,7 @@ The Torii client now exposes the `/v1/explorer/accounts/{account_id}/qr` route
 so wallets and explorers can render canonical account QR codes without re‑implementing
 the encoder. Call
 `ToriiClient.get_explorer_account_qr_typed(account_id)`
-to receive an `ExplorerAccountQrSnapshot`, which includes the canonical i105 account id,
+to receive an `ExplorerAccountQrSnapshot`, which includes the canonical Katakana i105 account id,
 the Norito literal used for the QR payload, the network prefix, error‑correction
 setting, module count, QR version, and the inline SVG rendering emitted by Torii.
 described in the ADDR‑6b roadmap item; omit it to keep the preferred i105 output
@@ -69,10 +69,10 @@ transactions, and asset holder listings without building a full query envelope:
 from iroha_python import ToriiClient
 
 client = ToriiClient("https://torii.sora.example")
-asset_id = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"
+asset_id = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ"
 
-assets = client.list_account_assets("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", asset_id=asset_id, limit=10)
-txs = client.list_account_transactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", asset_id=asset_id, limit=5)
+assets = client.list_account_assets("soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ", asset_id=asset_id, limit=10)
+txs = client.list_account_transactions("soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ", asset_id=asset_id, limit=5)
 holders = client.list_asset_holders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", asset_id=asset_id, limit=5)
 print(assets, txs, holders)
 ```
@@ -102,7 +102,7 @@ draft = {
 
 top_up = client.top_up_offline_allowance(
     certificate=draft,
-    authority="6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ",
+    authority="soraゴヂアヌョシペギゥルゼプキュビルェッハガヌイタソタィニュチョヵボヮゾバュチョナボポビワグツニュノノツマヘサ",
     private_key="operator-private-key",
 )
 print(top_up.registration.certificate_id_hex)
@@ -115,7 +115,7 @@ For renewals, use `top_up_offline_allowance_renewal` with the existing
 renewed = client.top_up_offline_allowance_renewal(
     certificate_id_hex=top_up.registration.certificate_id_hex,
     certificate=draft,
-    authority="6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ",
+    authority="soraゴヂアヌョシペギゥルゼプキュビルェッハガヌイタソタィニュチョヵボヮゾバュチョナボポビワグツニュノノツマヘサ",
     private_key="operator-private-key",
 )
 print(renewed.registration.certificate_id_hex)

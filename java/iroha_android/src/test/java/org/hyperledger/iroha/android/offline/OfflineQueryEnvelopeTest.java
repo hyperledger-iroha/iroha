@@ -15,7 +15,7 @@ public final class OfflineQueryEnvelopeTest {
   private static void encodesEnvelopeAsJson() {
     final OfflineQueryEnvelope envelope =
         OfflineQueryEnvelope.builder()
-            .filterJson("{\"op\":\"eq\",\"args\":[\"receiver_id\",\"6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9\"]}")
+            .filterJson("{\"op\":\"eq\",\"args\":[\"receiver_id\",\"soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ\"]}")
             .sortJson("[{\"key\":\"bundle_id_hex\",\"order\":\"asc\"}]")
             .setLimit(25L)
             .setOffset(10L)
@@ -30,7 +30,7 @@ public final class OfflineQueryEnvelopeTest {
   private static void fromListParamsParsesJson() {
     final OfflineListParams params =
         OfflineListParams.builder()
-            .filter("{\"op\":\"eq\",\"args\":[\"controller_id\",\"6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9\"]}")
+            .filter("{\"op\":\"eq\",\"args\":[\"controller_id\",\"soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ\"]}")
             .sort("[{\"key\":\"certificate_id_hex\",\"order\":\"desc\"}]")
             .limit(5L)
             .build();

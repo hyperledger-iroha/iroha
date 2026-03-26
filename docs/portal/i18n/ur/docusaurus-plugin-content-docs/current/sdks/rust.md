@@ -135,7 +135,7 @@ use iroha::client::{
 fn download_qr() -> eyre::Result<()> {
  let client = Client::new(ClientConfiguration::test())?;
  let snapshot = client.get_explorer_account_qr(
- "i105...",
+ "soraカタカナ...",
  )?;
  println!("Canonical literal: {}", snapshot.literal);
  println!("SVG payload: {}", snapshot.svg);
@@ -143,7 +143,7 @@ fn download_qr() -> eyre::Result<()> {
 }
 ```
 
-`ExplorerAccountQrSnapshot` `/v1/explorer/accounts/{id}/qr` JSON کی عکاسی کرتا ہے: اس میں canonical i105 account id، معیاری i105 literal، نیٹ ورک prefix/error-correction میٹاڈیٹا، QR dimensions، اور inline SVG payload شامل ہوتا ہے جسے wallets/explorers براہ راست embed کر سکتے ہیں۔
+`ExplorerAccountQrSnapshot` `/v1/explorer/accounts/{id}/qr` JSON کی عکاسی کرتا ہے: اس میں canonical Katakana i105 account id، معیاری i105 literal، نیٹ ورک prefix/error-correction میٹاڈیٹا، QR dimensions، اور inline SVG payload شامل ہوتا ہے جسے wallets/explorers براہ راست embed کر سکتے ہیں۔
 
 ## 7. ایونٹس سبسکرائب کریں
 

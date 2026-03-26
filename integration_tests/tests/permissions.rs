@@ -594,14 +594,15 @@ fn stored_vs_granted_permission_payload() {
         .submit_all_blocking::<InstructionBox>([register_mouse_account.into(), create_asset.into()])
         .expect("Failed to register mouse");
 
+    let mouse_asset = AssetId::new(asset_definition_id, mouse_id.clone());
+
     // Allow alice to mint mouse asset and mint initial value
     let value_json = Json::from_string_unchecked(format!(
         // NOTE: Permissions is created explicitly as a json string to introduce additional whitespace
         // This way, if the executor compares permissions just as JSON strings, the test will fail
-        r#"{{ "asset"   :   "xor#wonderland#{mouse_id}" }}"#
+        r#"{{ "asset"   :   "{mouse_asset}" }}"#
     ));
 
-    let mouse_asset = AssetId::new(asset_definition_id, mouse_id.clone());
     let allow_alice_to_mint_mouse_asset = Grant::account_permission(
         Permission::new("CanMintAsset".parse().unwrap(), value_json),
         alice_id,

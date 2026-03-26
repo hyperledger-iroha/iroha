@@ -113,7 +113,7 @@ La caja `iroha_crypto` potencia la gestión de claves, el hashing y la verificac
 
 La caja `iroha_data_model` define todos los objetos, instrucciones, consultas y eventos del libro mayor. Aspectos destacados:
 
-- **Dominios, cuentas y activos** utilizan ID de cuenta canónicas I105 (preferido); `name@domain` sigue siendo una ruta
+- **Dominios, cuentas y activos** utilizan ID de cuenta canónicas I105 (preferido); `name@dataspace` / `name@domain.dataspace` sigue siendo una ruta
   alias cuando se proporciona explícitamente. Los metadatos son deterministas (mapa `Metadata`). Los activos numéricos admiten punto fijo
   operaciones; Las NFT contienen metadatos estructurados arbitrarios.
 - **Roles y permisos** utilizan tokens enumerados Norito que se asignan directamente a las comprobaciones del ejecutor.

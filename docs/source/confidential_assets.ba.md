@@ -279,7 +279,7 @@ import {
 
 const unsigned = buildRegisterZkAssetTransaction({
   registration: {
-    authority: "i105...",
+    authority: "soraカタカナ...",
     assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: {
       commit_params: "vk_shield",
@@ -444,7 +444,7 @@ import {
 
 const unsigned = buildRegisterZkAssetTransaction({
   registration: {
-    authority: "i105...",
+    authority: "soraカタカナ...",
     assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: {
       commit_params: "vk_shield",

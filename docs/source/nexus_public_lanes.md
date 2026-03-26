@@ -107,7 +107,7 @@ Reward distributions use `PublicLaneRewardRecord` and `PublicLaneRewardShare`:
   "asset": "4cuvDVPuLBKJyN6dPbRQhmLh68sU",
   "total_reward": "250.0000",
   "shares": [
-    { "account": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw", "role": "Validator", "amount": "150" },
+    { "account": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ", "role": "Validator", "amount": "150" },
     { "account": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r", "role": "Nominator", "amount": "100" }
   ],
   "metadata": {
@@ -141,8 +141,8 @@ Registers a validator and bonds an initial stake:
 ```norito
 {
   "lane_id": 1,
-  "validator": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
-  "stake_account": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
+  "validator": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
+  "stake_account": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
   "initial_stake": "150000",
   "metadata": {
     "commission_bps": 750,
@@ -247,21 +247,21 @@ This ISI is idempotent per `(lane_id, epoch)` and underpins nightly accounting.
   - `iroha_cli app nexus public-lane validators --lane <id> [--summary]`
     surfaces lifecycle/activation markers (pending target epoch, `activation_epoch` /
     `activation_height`, exit release, slash id) alongside bonded/self stake.
-    `iroha_cli app nexus public-lane stake --lane <id> [--validator i105...] [--summary]`
+    `iroha_cli app nexus public-lane stake --lane <id> [--validator soraカタカナ...] [--summary]`
     mirrors the `/stake` endpoint with pending-unbond hints per `(validator, staker)` pair.
   - Torii snapshots for dashboards and SDKs:
     - `GET /v1/nexus/public_lanes/{lane}/validators` – metadata, status
       (`PendingActivation`/`Active`/`Exiting`/`Exited`/`Slashed`), activation
       epoch/height, release timers, bonded stake, last reward epoch.
-      Optional `canonical i105 literal rendering` controls the literal rendering
-      (canonical i105 output only).
+      Optional `canonical Katakana i105 literal rendering` controls the literal rendering
+      (canonical Katakana i105 output only).
     - `GET /v1/nexus/public_lanes/{lane}/stake` – stake shares (`validator`,
       `staker`, bonded amount) plus pending unbond timers. Optional
-      `?validator=i105...` filters the response for dashboards that focus
-      on a single validator; `canonical i105 rendering` applies to all literals.
+      `?validator=soraカタカナ...` filters the response for dashboards that focus
+      on a single validator; `canonical Katakana i105 rendering` applies to all literals.
     - `GET /v1/nexus/public_lanes/{lane}/rewards/pending` – pending rewards per
-      asset for the requested account. Requires `account=i105...` and accepts
-      optional `asset_id` and `upto_epoch` filters; `canonical i105 rendering` applies to
+      asset for the requested account. Requires `account=soraカタカナ...` and accepts
+      optional `asset_id` and `upto_epoch` filters; `canonical Katakana i105 rendering` applies to
       the account literal in the response.
   - Lifecycle ISIs use the standard transaction path (Torii
     `/v1/transactions` or the CLI instruction pipeline). Example Norito JSON
@@ -269,11 +269,11 @@ This ISI is idempotent per `(lane_id, epoch)` and underpins nightly accounting.
 
     ```jsonc
     [
-      { "ActivatePublicLaneValidator": { "lane_id": 1, "validator": "i105..." } },
+      { "ActivatePublicLaneValidator": { "lane_id": 1, "validator": "soraカタカナ..." } },
       {
         "ExitPublicLaneValidator": {
           "lane_id": 1,
-          "validator": "i105...",
+          "validator": "soraカタカナ...",
           "release_at_ms": 1730000000000
         }
       }

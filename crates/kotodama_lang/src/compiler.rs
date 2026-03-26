@@ -1446,8 +1446,8 @@ seiyaku Test {
             domain::DomainId,
         };
 
-        let from_literal = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
-        let to_literal = "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU";
+        let from_literal = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
+        let to_literal = "soraゴヂアニラショリャヒャャサピテヶベチュヲボヹヂギタクアニョロホドチャヘヱヤジヶハシャウンベニョャルフハケネキカ";
         let to = AccountId::parse_encoded(to_literal)
             .map(ParsedAccountId::into_account_id)
             .expect("recipient account literal");
@@ -1544,7 +1544,7 @@ seiyaku Test {
   register_trigger wake {
     call run;
     on time pre_commit;
-    authority "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+    authority "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
   }
 }
 "#;
@@ -1563,7 +1563,7 @@ seiyaku Test {
         assert_eq!(
             trigger.authority,
             Some(
-                AccountId::parse_encoded("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+                AccountId::parse_encoded("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ")
                     .map(ParsedAccountId::into_account_id)
                     .expect("authority literal"),
             )
@@ -1985,7 +1985,7 @@ seiyaku Test {{
             trigger::TriggerId,
         };
 
-        let account_literal = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+        let account_literal = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
         let account = AccountId::parse_encoded(account_literal)
             .map(ParsedAccountId::into_account_id)
             .expect("account");
@@ -2289,10 +2289,10 @@ seiyaku Test {
 
     #[test]
     fn manifest_access_set_hints_include_explicit_access() {
-        const ACCOUNT_KEY: &str = "account:6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+        const ACCOUNT_KEY: &str = "account:soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
         let src = r#"
 seiyaku Test {
-  #[access(read="account:6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn", write="account:6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")]
+  #[access(read="account:soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ", write="account:soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ")]
   kotoage fn move(from: AccountId, to: AccountId, asset: AssetDefinitionId, amount: int) permission(Admin) {
     transfer_asset(from, to, asset, amount);
   }

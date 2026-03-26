@@ -32,10 +32,9 @@ fn seeded_state() -> (Arc<State>, dm::AssetDefinitionId, dm::AssetDefinitionId) 
         "wonderland".parse().expect("domain id"),
         "pkr".parse().expect("asset name"),
     );
-    let mut pkr = dm::AssetDefinition::numeric(pkr_id.clone())
+    let pkr = dm::AssetDefinition::numeric(pkr_id.clone())
         .with_name("PKR".to_owned())
         .build(&authority);
-    pkr.alias = Some("pkr#sbp".parse().expect("asset alias"));
 
     let usd_id = dm::AssetDefinitionId::new(
         "wonderland".parse().expect("domain id"),
@@ -45,15 +44,32 @@ fn seeded_state() -> (Arc<State>, dm::AssetDefinitionId, dm::AssetDefinitionId) 
         .with_name("USD".to_owned())
         .build(&authority);
 
-    (
-        Arc::new(State::new_for_testing(
-            World::with([domain], [account], [pkr, usd]),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        )),
-        pkr_id,
-        usd_id,
+    let state = Arc::new(State::new_for_testing(
+        World::with([domain], [account], [pkr, usd]),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    ));
+    let header = iroha_data_model::block::BlockHeader::new(
+        NonZeroU64::new(1).expect("non-zero height"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = state.block(header);
+    let mut tx = block.transaction();
+    SetAssetDefinitionAlias::bind(
+        pkr_id.clone(),
+        "pkr#sbp".parse().expect("asset alias"),
+        None,
     )
+    .execute(&authority, &mut tx)
+    .expect("bind permanent asset alias");
+    tx.apply();
+    block.commit().expect("commit permanent asset alias");
+
+    (state, pkr_id, usd_id)
 }
 
 fn build_app(state: Arc<State>) -> axum::Router {
@@ -215,10 +231,9 @@ async fn asset_definitions_query_supports_alias_binding_sort() {
         dm::Account::new(authority.clone().to_account_id(domain_id.clone())).build(&authority);
 
     let pkr_id = dm::AssetDefinitionId::new(domain_id.clone(), "pkr".parse().expect("asset name"));
-    let mut pkr = dm::AssetDefinition::numeric(pkr_id.clone())
+    let pkr = dm::AssetDefinition::numeric(pkr_id.clone())
         .with_name("PKR".to_owned())
         .build(&authority);
-    pkr.alias = Some("pkr#sbp".parse().expect("asset alias"));
 
     let usd_id = dm::AssetDefinitionId::new(domain_id.clone(), "usd".parse().expect("asset name"));
     let usd = dm::AssetDefinition::numeric(usd_id.clone())
@@ -230,7 +245,26 @@ async fn asset_definitions_query_supports_alias_binding_sort() {
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     ));
-    commit_alias_lease(&state, &authority, &usd_id, "usd#lease", 5_000, 1, 1_000);
+    let header = iroha_data_model::block::BlockHeader::new(
+        NonZeroU64::new(1).expect("non-zero height"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = state.block(header);
+    let mut tx = block.transaction();
+    SetAssetDefinitionAlias::bind(
+        pkr_id.clone(),
+        "pkr#sbp".parse().expect("asset alias"),
+        None,
+    )
+    .execute(&authority, &mut tx)
+    .expect("bind permanent asset alias");
+    tx.apply();
+    block.commit().expect("commit permanent asset alias");
+    commit_alias_lease(&state, &authority, &usd_id, "usd#lease", 5_000, 2, 1_000);
     let app = build_app(state);
 
     let resp = app

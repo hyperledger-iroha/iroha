@@ -18,7 +18,7 @@ translator: machine-google-reviewed
 
 ### 1. ခြုံငုံသုံးသပ်ချက်
 
-- Fixture- `fixtures/account/address_vectors.json` (I105 (ဦးစားပေး) + i105-default (`sora`၊ ဒုတိယအကောင်းဆုံး) + multisig positive/negative case)။
+- Fixture- `fixtures/account/address_vectors.json` (I105 (ဦးစားပေး) + i105 (`sora`၊ ဒုတိယအကောင်းဆုံး) + multisig positive/negative case)။
 - နယ်ပယ်- သတ်မှတ်ပြဋ္ဌာန်းထားသော V1 ပေးချေမှုများသည် implicit-default, Local-12, Global registry, နှင့် multisig controllers များကို အမှားအယွင်းအစီအစဥ်အပြည့်အစုံဖြင့် လွှမ်းခြုံထားသည်။
 - ဖြန့်ဝေမှု- Rust data-model၊ Torii၊ JS/TS၊ Swift နှင့် Android SDKs တို့တွင် မျှဝေထားသည်။ စားသုံးသူများသွေဖည်ပါက CI ပျက်ကွက်သည်။
 - အမှန်တရား၏ရင်းမြစ်- မီးစက်သည် `crates/iroha_data_model/src/account/address/compliance_vectors.rs` တွင်နေထိုင်ပြီး `cargo xtask address-vectors` မှတဆင့် ဖော်ထုတ်ပါသည်။

@@ -635,7 +635,7 @@ pub enum ConnectControlV1 {
     Approve {
         /// Wallet ephemeral X25519 public key (32 bytes).
         wallet_pk: [u8; 32],
-        /// Wallet account identifier (canonical i105 string).
+        /// Wallet account identifier (canonical Katakana i105 string).
         account_id: String,
         /// Accepted (possibly narrowed) permissions/namespaces.
         permissions: Option<PermissionsV1>,

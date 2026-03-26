@@ -898,7 +898,7 @@ fn explorer_assets_query_parameters() -> Vec<Value> {
     let mut params = explorer_pagination_query_parameters();
     params.push(string_query_param(
         "owned_by",
-        "Filter assets by account owner (accepts canonical i105 account literals).",
+        "Filter assets by account owner (accepts canonical Katakana i105 account literals).",
     ));
     params.push(string_query_param(
         "definition",
@@ -915,7 +915,7 @@ fn explorer_transactions_query_parameters() -> Vec<Value> {
     let mut params = explorer_pagination_query_parameters();
     params.push(string_query_param(
         "authority",
-        "Filter transactions by authority account (accepts canonical i105 account literals).",
+        "Filter transactions by authority account (accepts canonical Katakana i105 account literals).",
     ));
     params.push(integer_query_param(
         "block",
@@ -937,11 +937,11 @@ fn explorer_instructions_query_parameters() -> Vec<Value> {
     let mut params = explorer_pagination_query_parameters();
     params.push(string_query_param(
         "authority",
-        "Filter instructions by authority account (accepts canonical i105 account literals).",
+        "Filter instructions by authority account (accepts canonical Katakana i105 account literals).",
     ));
     params.push(string_query_param(
         "account",
-        "Filter instructions by referenced account (transfer participants, asset-owner scoped mint/burn/asset-metadata updates, multisig accounts, and public-lane reward assets; accepts canonical i105 account literals).",
+        "Filter instructions by referenced account (transfer participants, asset-owner scoped mint/burn/asset-metadata updates, multisig accounts, and public-lane reward assets; accepts canonical Katakana i105 account literals).",
     ));
     params.push(string_query_param(
         "transaction_hash",
@@ -993,7 +993,7 @@ fn asset_holders_list_query_parameters() -> Vec<Value> {
     let mut params = pagination_query_parameters();
     params.push(string_query_param(
         "account_id",
-        "Filter holders by canonical i105 account identifier.",
+        "Filter holders by canonical Katakana i105 account identifier.",
     ));
     params.push(string_query_param(
         "scope",
@@ -1006,7 +1006,7 @@ fn offline_allowance_query_parameters() -> Vec<Value> {
     vec![
         string_query_param(
             "controller_id",
-            "Filter allowances by controller account (accepts canonical i105 account literals).",
+            "Filter allowances by controller account (accepts canonical Katakana i105 account literals).",
         ),
         string_query_param("asset_id", "Filter allowances by asset identifier."),
         integer_query_param(
@@ -1066,15 +1066,15 @@ fn offline_transfer_query_parameters() -> Vec<Value> {
     vec![
         string_query_param(
             "controller_id",
-            "Filter bundles by originating controller account (accepts canonical i105 account literals).",
+            "Filter bundles by originating controller account (accepts canonical Katakana i105 account literals).",
         ),
         string_query_param(
             "receiver_id",
-            "Filter bundles by receiver account (accepts canonical i105 account literals).",
+            "Filter bundles by receiver account (accepts canonical Katakana i105 account literals).",
         ),
         string_query_param(
             "deposit_account_id",
-            "Filter bundles by deposit account (accepts canonical i105 account literals).",
+            "Filter bundles by deposit account (accepts canonical Katakana i105 account literals).",
         ),
         string_query_param("asset_id", "Filter bundles by asset identifier."),
         string_query_param(
@@ -1138,11 +1138,11 @@ fn offline_receipt_query_parameters() -> Vec<Value> {
     vec![
         string_query_param(
             "controller_id",
-            "Filter receipts by sender/controller account (accepts canonical i105 account literals).",
+            "Filter receipts by sender/controller account (accepts canonical Katakana i105 account literals).",
         ),
         string_query_param(
             "receiver_id",
-            "Filter receipts by receiver account (accepts canonical i105 account literals).",
+            "Filter receipts by receiver account (accepts canonical Katakana i105 account literals).",
         ),
         string_query_param(
             "bundle_id_hex",
@@ -2640,17 +2640,13 @@ fn account_paths() -> Map {
         Value::Object({
             let mut params = vec![string_path_param("uaid", "User account identifier.")];
             params.push(string_query_param(
-                "asset",
-                "Filter portfolio positions by asset definition selector.",
-            ));
-            params.push(string_query_param(
-                "scope",
-                "Filter portfolio positions by balance scope (`global` or `dataspace:<id>`).",
+                "asset_id",
+                "Filter portfolio positions by exact canonical asset identifier.",
             ));
             json_get_operation(
                 "Accounts",
                 "Fetch account portfolio.",
-                "Fetch the asset portfolio for an account identifier (supports optional `asset` and `scope` filtering).",
+                "Fetch the asset portfolio for an account identifier (supports optional `asset_id` filtering).",
                 "#/components/schemas/JsonValue",
                 params,
             )
@@ -5183,7 +5179,7 @@ fn nexus_public_lane_stake_operation() -> Map {
             Value::Object(lane_id_parameter()),
             string_query_param(
                 "validator",
-                "Optional validator account literal to filter stake entries (canonical i105 only).",
+                "Optional validator account literal to filter stake entries (canonical Katakana i105 only).",
             ),
         ]),
     );
@@ -5229,7 +5225,7 @@ fn nexus_public_lane_rewards_operation() -> Map {
         "description".into(),
         Value::String(
             "Returns the unclaimed reward amount per asset for the requested account in the \
-             given public lane. Requires an `account` query parameter (canonical i105) and \
+             given public lane. Requires an `account` query parameter (canonical Katakana i105) and \
              accepts optional `asset_id` and `upto_epoch` filters."
                 .to_owned(),
         ),
@@ -5256,7 +5252,7 @@ fn nexus_public_lane_rewards_operation() -> Map {
             Value::Object(lane_id_parameter()),
             string_query_param(
                 "account",
-                "Account literal to evaluate pending rewards for (canonical i105 only).",
+                "Account literal to evaluate pending rewards for (canonical Katakana i105 only).",
             ),
             string_query_param("asset_id", "Filter pending rewards by asset identifier."),
             Value::Object(upto_epoch_param),
@@ -5303,7 +5299,7 @@ fn nexus_dataspaces_account_summary_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Resolves the supplied canonical i105 account literal \
+            "Resolves the supplied canonical Katakana i105 account literal \
              and returns a joined view of UAID bindings, space-directory manifests, \
              portfolio counters, and per-dataspace consensus commitments."
                 .to_owned(),
@@ -5317,7 +5313,7 @@ fn nexus_dataspaces_account_summary_operation() -> Map {
         "parameters".into(),
         Value::Array(vec![string_path_param(
             "literal",
-            "Account literal to resolve (canonical i105 only).",
+            "Account literal to resolve (canonical Katakana i105 only).",
         )]),
     );
     operation.insert(
@@ -5389,7 +5385,8 @@ fn kaigi_relay_id_parameter() -> Map {
     param.insert(
         "description".into(),
         Value::String(
-            "Relay account identifier encoded as a canonical i105 account literal.".to_owned(),
+            "Relay account identifier encoded as a canonical Katakana i105 account literal."
+                .to_owned(),
         ),
     );
     let mut schema = Map::new();
@@ -7621,7 +7618,7 @@ fn openapi_schemas() -> Map {
                 },
                 "controller_display": {
                     "type": "string",
-                    "description": "Controller rendered as canonical i105 account literal."
+                    "description": "Controller rendered as canonical Katakana i105 account literal."
                 },
                 "receiver_id": {
                     "type": "string",
@@ -7629,7 +7626,7 @@ fn openapi_schemas() -> Map {
                 },
                 "receiver_display": {
                     "type": "string",
-                    "description": "Receiver rendered as canonical i105 account literal."
+                    "description": "Receiver rendered as canonical Katakana i105 account literal."
                 },
                 "deposit_account_id": {
                     "type": "string",
@@ -7637,7 +7634,7 @@ fn openapi_schemas() -> Map {
                 },
                 "deposit_account_display": {
                     "type": "string",
-                    "description": "Deposit account rendered as canonical i105 account literal."
+                    "description": "Deposit account rendered as canonical Katakana i105 account literal."
                 },
                 "asset_id": {
                     "type": "string",
@@ -8435,7 +8432,7 @@ fn openapi_schemas() -> Map {
             "properties": {
                 "relay_id": {
                     "type": "string",
-                    "description": "Relay account identifier rendered as canonical i105 literal."
+                    "description": "Relay account identifier rendered as canonical Katakana i105 literal."
                 },
                 "domain": {
                     "type": "string",
@@ -8842,7 +8839,7 @@ fn openapi_schemas() -> Map {
                 },
                 "validator": {
                     "type": "string",
-                    "description": "Validator account literal rendered as canonical i105."
+                    "description": "Validator account literal rendered as canonical Katakana i105."
                 },
                 "stake_account": {
                     "type": "string",
@@ -8946,11 +8943,11 @@ fn openapi_schemas() -> Map {
                 },
                 "validator": {
                     "type": "string",
-                    "description": "Validator account literal rendered as canonical i105."
+                    "description": "Validator account literal rendered as canonical Katakana i105."
                 },
                 "staker": {
                     "type": "string",
-                    "description": "Staker account literal rendered as canonical i105."
+                    "description": "Staker account literal rendered as canonical Katakana i105."
                 },
                 "bonded": {
                     "type": "string",
@@ -9371,7 +9368,7 @@ fn openapi_schemas() -> Map {
                 },
                 "multisig_account_alias": {
                     "type": "string",
-                    "description": "Stable multisig alias in label@dataspace or label@domain.dataspace format."
+                    "description": "Stable multisig alias in name@dataspace or name@domain.dataspace format."
                 }
             },
             "oneOf": [

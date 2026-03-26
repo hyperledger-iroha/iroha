@@ -722,7 +722,7 @@ impl GatewayDenylist {
         self.lookup(&DenylistKind::Url(url.as_ref().to_owned()), now)
     }
 
-    /// Checks whether the given canonical i105 account identifier is blocked.
+    /// Checks whether the given canonical Katakana i105 account identifier is blocked.
     #[must_use]
     pub fn check_account_id<S: AsRef<str>>(
         &self,

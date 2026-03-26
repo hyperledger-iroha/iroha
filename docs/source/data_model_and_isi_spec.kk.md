@@ -30,7 +30,7 @@ translator: machine-google-reviewed
 - `AssetDefinitionId` — канондық `unprefixed Base58 address with versioning and checksum` (UUID-v4 байт). Анықтама: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. `alias` литералдары `<name>#<domain>.<dataspace>` немесе `<name>#<dataspace>` болуы керек, `<name>` актив анықтамасының атауына тең. Код: `crates/iroha_data_model/src/asset/definition.rs`.
 
   - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`, where `status` is `permanent`, `leased_active`, `leased_grace`, or `expired_pending_cleanup`. Alias selectors resolve against the latest committed block creation time and stop resolving after grace even before sweep removes stale bindings.
-- `AssetId`: канондық кодталған литерал `<asset-definition-id>#<i105-account-id>` (бұрынғы мәтіндік пішіндерге бірінші шығарылымда қолдау көрсетілмейді).- `NftId` — `nft$domain`. NFT: `{ id, content: Metadata, owned_by }`. Код: `crates/iroha_data_model/src/nft.rs`.
+- `AssetId`: канондық кодталған литерал `<base58-asset-id>#<katakana-i105-account-id>` (бұрынғы мәтіндік пішіндерге бірінші шығарылымда қолдау көрсетілмейді).- `NftId` — `nft$domain`. NFT: `{ id, content: Metadata, owned_by }`. Код: `crates/iroha_data_model/src/nft.rs`.
 - `RoleId` — `name`. Рөл: `{ id, permissions: BTreeSet<Permission> }` `NewRole { inner: Role, grant_to }` құрастырушымен. Код: `crates/iroha_data_model/src/role.rs`.
 - `Permission` — `{ name: Ident, payload: Json }`. Код: `crates/iroha_data_model/src/permission.rs`.
 - `PeerId`/`Peer` — теңді сәйкестендіру (ашық кілт) және мекенжай. Код: `crates/iroha_data_model/src/peer.rs`.
@@ -206,7 +206,7 @@ translator: machine-google-reviewed
 
 Көшіру жазбасы:
 - `name#domain` мәтіндік актив анықтамасының идентификаторларына бірінші шығарылымда әдейі қолдау көрсетілмейді.
-- Жалға беру/жаю/тасымалдау шекараларындағы актив идентификаторлары канондық `<asset-definition-id>#<i105-account-id>` болып қалады; `iroha tools encode asset-id` `--definition <base58-asset-definition-id>` немесе `--alias ...` плюс `--account` арқылы пайдаланыңыз.
+- Жалға беру/жаю/тасымалдау шекараларындағы актив идентификаторлары канондық `<base58-asset-id>#<katakana-i105-account-id>` болып қалады; `iroha tools encode asset-id` `--definition <base58-asset-definition-id>` немесе `--alias ...` плюс `--account` арқылы пайдаланыңыз.
 
 ---
 

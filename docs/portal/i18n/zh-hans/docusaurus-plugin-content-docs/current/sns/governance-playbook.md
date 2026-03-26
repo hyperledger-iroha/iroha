@@ -73,7 +73,7 @@ N1（公开发布）之前面向运营商的参考。
 |章程 + KPI 附录 | `docs/source/sns/governance_addenda/` | CLI 投票引用的版本控制的签署章程、KPI 契约和治理决策。 |
 |注册表架构| [`registry-schema.md`](./registry-schema.md) |规范 Norito 结构（`NameRecordV1`、`SuffixPolicyV1`、`RevenueAccrualEventV1`）。 |
 |注册商合同 | [`registrar-api.md`](./registrar-api.md) | REST/gRPC 负载、`sns_registrar_status_total` 指标和治理挂钩期望。 |
-|地址用户体验指南 | [`address-display-guidelines.md`](./address-display-guidelines.md) | Canonical i105（首选）+ 压缩（`sora`，第二好）钱包/浏览器镜像的渲染。 |
+|地址用户体验指南 | [`address-display-guidelines.md`](./address-display-guidelines.md) | Canonical Katakana i105（首选）+ 压缩（`sora`，第二好）钱包/浏览器镜像的渲染。 |
 | SoraDNS / GAR 文档 | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) |确定性主机派生、透明尾部工作流程和警报规则。 |
 |监管备忘录| `docs/source/sns/regulatory/` |司法管辖区接收说明（例如，EU DSA）、管理员确认、模板附件。 |
 |钻井日志| `ops/drill-log.md` |阶段退出前需要记录混乱情况和 IR 排练。 |

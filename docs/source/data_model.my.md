@@ -31,9 +31,9 @@ translator: machine-google-reviewed
 - `IdBox`- မည်သည့် ID အတွက်မဆို ပေါင်းလဒ်အမျိုးအစား စာအိတ် (`DomainId`, `AccountId`, `AssetDefinitionId`, `AssetId`, Norito, Norito `TriggerId`, `RoleId`, `Permission`, `CustomParameterId`)။ generic flows နှင့် Norito encoding အမျိုးအစားတစ်ခုတည်းအတွက် အသုံးဝင်သည်။
 - `ChainId`- အရောင်းအ၀ယ်များတွင် ပြန်ဖွင့်ခြင်းအား အကာအကွယ်အတွက် အသုံးပြုသော ရောင်စုံကွင်းဆက်အမှတ်အသား။ID လိုင်းပုံစံများ (`Display`/`FromStr` ဖြင့် အသွားအပြန်သုံးနိုင်သော)
 - `DomainId`: `name` (e.g., `wonderland`)။
-- `AccountId`- I105 အဖြစ် `AccountAddress` မှတဆင့် ကုဒ်လုပ်ထားသော canonical domainless အကောင့် identifier ပါဆာထည့်သွင်းမှုများသည် Canonical i105 ဖြစ်ရပါမည်။ domain suffixes (`@domain`)၊ canonical i105 literals၊ alias literals၊ canonical hex parser input၊ legacy `norito:` payloads နှင့် `uaid:`/Norito များသည် forms
+- `AccountId`- I105 အဖြစ် `AccountAddress` မှတဆင့် ကုဒ်လုပ်ထားသော canonical domainless အကောင့် identifier ပါဆာထည့်သွင်းမှုများသည် Canonical Katakana i105 ဖြစ်ရပါမည်။ domain suffixes (`@domain`)၊ canonical Katakana i105 literals၊ alias literals၊ canonical hex parser input၊ legacy `norito:` payloads နှင့် `uaid:`/Norito များသည် forms
 - `AssetDefinitionId`- canonical `unprefixed Base58 address with versioning and checksum` (UUID-v4 bytes)။
-- `AssetId`- canonical encoded ပကတိ `<asset-definition-id>#<i105-account-id>` (ပထမထုတ်ဝေမှုတွင် အမွေအနှစ်စာသားပုံစံများကို ပံ့ပိုးမထားပါ။)
+- `AssetId`- canonical encoded ပကတိ `<base58-asset-id>#<katakana-i105-account-id>` (ပထမထုတ်ဝေမှုတွင် အမွေအနှစ်စာသားပုံစံများကို ပံ့ပိုးမထားပါ။)
 - `NftId`: `nft$domain` (e.g., `rose$garden`)။
 - `PeerId`: `public_key` (ရွယ်တူတန်းတူရေးသည် အများသူငှာသော့အားဖြင့်)။
 
@@ -43,7 +43,7 @@ translator: machine-google-reviewed
 - `DomainId { name: Name }` - ထူးခြားသောအမည်။
 - `Domain { id, logo: Option<SorafsUri>, metadata: Metadata, owned_by: AccountId }`။
 - တည်ဆောက်သူ- `NewDomain`၊ `with_logo`၊ `with_metadata`၊ ထို့နောက် `Registrable::build(authority)` သည် `owned_by` ကို သတ်မှတ်ပေးသည်။### အကောင့်
-- `AccountId` သည် ထိန်းချုပ်ကိရိယာမှသော့ခတ်ထားသော canonical domainless အကောင့်အထောက်အထားဖြစ်ပြီး canonical i105 အဖြစ် ကုဒ်လုပ်ထားသည်။
+- `AccountId` သည် ထိန်းချုပ်ကိရိယာမှသော့ခတ်ထားသော canonical domainless အကောင့်အထောက်အထားဖြစ်ပြီး canonical Katakana i105 အဖြစ် ကုဒ်လုပ်ထားသည်။
 - `ScopedAccountId { account: AccountId, domain: DomainId }` သည် ကန့်သတ်ထားသော မြင်ကွင်းတစ်ခု လိုအပ်မှသာ တိကျပြတ်သားသော ဒိုမိန်းအကြောင်းအရာကို သယ်ဆောင်သည်။
 - `Account { id, metadata, label?, uaid? }` — `label` သည် rekey မှတ်တမ်းများအသုံးပြုသော ရွေးချယ်နိုင်ဖွယ်တည်ငြိမ်သော alias တစ်ခုဖြစ်ပြီး၊ `uaid` သည် ရွေးချယ်နိုင်သော Nexus-wide [Universal Account ID](Norito) ကို သယ်ဆောင်ပါသည်။
 - တည်ဆောက်သူ- `NewAccount` မှတဆင့် `Account::new(id)`; မှတ်ပုံတင်ခြင်းသည် တိကျပြတ်သားသော `ScopedAccountId` ဒိုမိန်းတစ်ခု လိုအပ်ပြီး ၎င်းကို ပုံသေများမှ ကောက်ချက်မချပါ။
@@ -259,7 +259,7 @@ curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -d '{"alias":"pkr#ubl.sbp"}'
 ```ပြောင်းရွှေ့မှုမှတ်စု-
 - `name#domain` ပိုင်ဆိုင်မှု-အဓိပ္ပါယ်ဖွင့်ဆိုချက် ID အဟောင်းများကို v1 တွင် လက်မခံပါ။
-- mint/burn/transfer အတွက် ပိုင်ဆိုင်မှု ID များသည် canonical `<asset-definition-id>#<i105-account-id>` တွင် ရှိနေသည် ။ ၎င်းတို့ကို တည်ဆောက်ပါ-
+- mint/burn/transfer အတွက် ပိုင်ဆိုင်မှု ID များသည် canonical `<base58-asset-id>#<katakana-i105-account-id>` တွင် ရှိနေသည် ။ ၎င်းတို့ကို တည်ဆောက်ပါ-
   - `iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
   - သို့မဟုတ် `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`။
 

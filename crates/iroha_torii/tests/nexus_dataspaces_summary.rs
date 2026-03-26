@@ -207,7 +207,7 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
     assert_eq!(
         row["accounts"][0],
         Value::from(i105_literal.as_str()),
-        "dataspace row should render canonical i105 account literal"
+        "dataspace row should render canonical Katakana i105 account literal"
     );
     assert_eq!(row["manifest"]["status"], Value::from("Active"));
     assert_eq!(row["portfolio"]["positions"], Value::from(1));

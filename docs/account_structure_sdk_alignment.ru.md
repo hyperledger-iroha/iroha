@@ -14,7 +14,7 @@
 Задачи:
 1. **Канонический вывод:** `AccountId::to_string()`/Display ДОЛЖЕН выдавать только I105
    (без суффикса `@domain`). Канонический hex — только для отладки (`0x...`).
-2. **Accepted inputs:** parsers MUST accept only canonical i105 account literals. Reject i105-default `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+2. **Accepted inputs:** parsers MUST accept only canonical Katakana i105 account literals. Reject non-canonical Katakana i105 literals, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
 3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
 4. **Контрольная сумма I105:** используйте Blake2b‑512 над `I105PRE || prefix || payload`,
    берите первые 2 байта. Основание сжатого алфавита — **105**.

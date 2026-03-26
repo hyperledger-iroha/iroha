@@ -622,7 +622,7 @@ mod tools {
 
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
-        /// Account address helpers (canonical i105 conversions)
+        /// Account address helpers (canonical Katakana i105 conversions)
         #[command(subcommand)]
         Address(crate::address::Command),
         /// Cryptography helpers (SM2/SM3/SM4)
@@ -1562,10 +1562,10 @@ mod domain {
         /// Domain name
         #[arg(short, long)]
         pub id: DomainId,
-        /// Source account identifier (canonical i105 literal)
+        /// Source account identifier (canonical Katakana i105 literal)
         #[arg(short, long)]
         pub from: String,
-        /// Destination account identifier (canonical i105 literal)
+        /// Destination account identifier (canonical Katakana i105 literal)
         #[arg(short, long)]
         pub to: String,
     }
@@ -1828,14 +1828,14 @@ mod account {
 
     #[derive(clap::Args, Debug)]
     pub struct Id {
-        /// Account identifier (canonical i105 literal)
+        /// Account identifier (canonical Katakana i105 literal)
         #[arg(short, long)]
         id: String,
     }
 
     #[derive(clap::Args, Debug)]
     pub struct RegisterId {
-        /// Canonical domainless account identifier for registration (canonical i105 literal)
+        /// Canonical domainless account identifier for registration (canonical Katakana i105 literal)
         #[arg(short, long)]
         id: String,
         /// Domain in which to materialize the account link
@@ -1845,7 +1845,7 @@ mod account {
 
     #[derive(clap::Args, Debug)]
     pub struct RoleList {
-        /// Account identifier (canonical i105 literal)
+        /// Account identifier (canonical Katakana i105 literal)
         #[arg(short, long)]
         id: String,
         /// Maximum number of items to return (server-side limit)
@@ -1861,7 +1861,7 @@ mod account {
 
     #[derive(clap::Args, Debug)]
     pub struct PermissionList {
-        /// Account identifier (canonical i105 literal)
+        /// Account identifier (canonical Katakana i105 literal)
         #[arg(short, long)]
         id: String,
         /// Maximum number of items to return (server-side limit)
@@ -1877,7 +1877,7 @@ mod account {
 
     #[derive(clap::Args, Debug)]
     pub struct IdRole {
-        /// Account identifier (canonical i105 literal)
+        /// Account identifier (canonical Katakana i105 literal)
         #[arg(short, long)]
         pub id: String,
         /// Role name
@@ -2296,10 +2296,10 @@ mod asset {
             /// Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`).
             #[arg(long, required_unless_present = "id", conflicts_with = "id")]
             pub alias: Option<AssetDefinitionAlias>,
-            /// Source account identifier (canonical i105 literal)
+            /// Source account identifier (canonical Katakana i105 literal)
             #[arg(short, long)]
             pub from: String,
-            /// Destination account identifier (canonical i105 literal)
+            /// Destination account identifier (canonical Katakana i105 literal)
             #[arg(short, long)]
             pub to: String,
         }
@@ -2568,13 +2568,13 @@ mod asset {
         /// with `--account`.
         #[arg(long, requires = "account", conflicts_with = "definition")]
         pub definition_alias: Option<AssetDefinitionAlias>,
-        /// Source account identifier (canonical i105), required with asset selectors.
+        /// Source account identifier (canonical Katakana i105), required with asset selectors.
         #[arg(long)]
         pub account: Option<String>,
         /// Optional balance scope (`global` or `dataspace:<id>`).
         #[arg(long, value_parser = parse_asset_balance_scope_literal)]
         pub scope: Option<iroha::data_model::asset::AssetBalanceScope>,
-        /// Destination account identifier (canonical i105 literal)
+        /// Destination account identifier (canonical Katakana i105 literal)
         #[arg(short, long)]
         pub to: String,
         /// Transfer amount (integer or decimal)
@@ -2594,7 +2594,7 @@ mod asset {
         /// with `--account`.
         #[arg(long, requires = "account", conflicts_with = "definition")]
         pub definition_alias: Option<AssetDefinitionAlias>,
-        /// Account identifier (canonical i105), required with asset selectors.
+        /// Account identifier (canonical Katakana i105), required with asset selectors.
         #[arg(long)]
         pub account: Option<String>,
         /// Optional balance scope (`global` or `dataspace:<id>`).
@@ -2611,7 +2611,7 @@ mod asset {
         /// with `--account`.
         #[arg(long, requires = "account", conflicts_with = "definition")]
         pub definition_alias: Option<AssetDefinitionAlias>,
-        /// Account identifier (canonical i105), required with asset selectors.
+        /// Account identifier (canonical Katakana i105), required with asset selectors.
         #[arg(long)]
         pub account: Option<String>,
         /// Optional balance scope (`global` or `dataspace:<id>`).
@@ -2894,10 +2894,10 @@ mod nft {
         /// NFT in the format "name$domain"
         #[arg(short, long)]
         pub id: NftId,
-        /// Source account identifier (canonical i105 literal)
+        /// Source account identifier (canonical Katakana i105 literal)
         #[arg(short, long)]
         pub from: String,
-        /// Destination account identifier (canonical i105 literal)
+        /// Destination account identifier (canonical Katakana i105 literal)
         #[arg(short, long)]
         pub to: String,
     }
@@ -3016,6 +3016,14 @@ mod rwa {
         Meta(metadata::rwa::Command),
     }
 
+    #[derive(crate::json_macros::JsonDeserialize)]
+    struct MergeInput {
+        parents: Vec<RwaParentRef>,
+        primary_reference: String,
+        status: Option<Name>,
+        metadata: Metadata,
+    }
+
     impl Run for Command {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use self::Command::*;
@@ -3045,39 +3053,67 @@ mod rwa {
                     let to = resolve_account_id(context, &args.to)
                         .wrap_err("failed to resolve --to account")?;
                     context
-                        .finish([TransferRwa::new(from, args.id, args.quantity, to)])
+                        .finish([TransferRwa {
+                            source: from,
+                            rwa: args.id,
+                            quantity: args.quantity,
+                            destination: to,
+                        }])
                         .wrap_err("Failed to transfer RWA")
                 }
                 Merge => {
-                    let merge: MergeRwas = parse_json_stdin(context)?;
-                    context.finish([merge]).wrap_err("Failed to merge RWAs")
+                    let merge: MergeInput = parse_json_stdin(context)?;
+                    context
+                        .finish([MergeRwas {
+                            parents: merge.parents,
+                            primary_reference: merge.primary_reference,
+                            status: merge.status,
+                            metadata: merge.metadata,
+                        }])
+                        .wrap_err("Failed to merge RWAs")
                 }
                 Redeem(args) => context
-                    .finish([RedeemRwa::new(args.id, args.quantity)])
+                    .finish([RedeemRwa {
+                        rwa: args.id,
+                        quantity: args.quantity,
+                    }])
                     .wrap_err("Failed to redeem RWA"),
                 Freeze(args) => context
-                    .finish([FreezeRwa::new(args.id)])
+                    .finish([FreezeRwa { rwa: args.id }])
                     .wrap_err("Failed to freeze RWA"),
                 Unfreeze(args) => context
-                    .finish([UnfreezeRwa::new(args.id)])
+                    .finish([UnfreezeRwa { rwa: args.id }])
                     .wrap_err("Failed to unfreeze RWA"),
                 Hold(args) => context
-                    .finish([HoldRwa::new(args.id, args.quantity)])
+                    .finish([HoldRwa {
+                        rwa: args.id,
+                        quantity: args.quantity,
+                    }])
                     .wrap_err("Failed to hold RWA quantity"),
                 Release(args) => context
-                    .finish([ReleaseRwa::new(args.id, args.quantity)])
+                    .finish([ReleaseRwa {
+                        rwa: args.id,
+                        quantity: args.quantity,
+                    }])
                     .wrap_err("Failed to release RWA hold"),
                 ForceTransfer(args) => {
                     let to = resolve_account_id(context, &args.to)
                         .wrap_err("failed to resolve --to account")?;
                     context
-                        .finish([ForceTransferRwa::new(args.id, args.quantity, to)])
+                        .finish([ForceTransferRwa {
+                            rwa: args.id,
+                            quantity: args.quantity,
+                            destination: to,
+                        }])
                         .wrap_err("Failed to force-transfer RWA")
                 }
                 SetControls(args) => {
                     let controls: RwaControlPolicy = parse_json_stdin(context)?;
                     context
-                        .finish([SetRwaControls::new(args.id, controls)])
+                        .finish([SetRwaControls {
+                            rwa: args.id,
+                            controls,
+                        }])
                         .wrap_err("Failed to update RWA controls")
                 }
                 Meta(cmd) => cmd.run(context),
@@ -3107,13 +3143,13 @@ mod rwa {
         /// RWA identifier in the format `hash$domain`
         #[arg(short, long)]
         pub id: RwaId,
-        /// Source account identifier (canonical i105 literal)
+        /// Source account identifier (canonical Katakana i105 literal)
         #[arg(short, long)]
         pub from: String,
         /// Quantity to transfer
         #[arg(short, long)]
         pub quantity: Numeric,
-        /// Destination account identifier (canonical i105 literal)
+        /// Destination account identifier (canonical Katakana i105 literal)
         #[arg(short, long)]
         pub to: String,
     }
@@ -3126,7 +3162,7 @@ mod rwa {
         /// Quantity to transfer
         #[arg(short, long)]
         pub quantity: Numeric,
-        /// Destination account identifier (canonical i105 literal)
+        /// Destination account identifier (canonical Katakana i105 literal)
         #[arg(short, long)]
         pub to: String,
     }
@@ -3385,7 +3421,7 @@ mod multisig {
     }
     #[derive(clap::Args, Debug)]
     pub struct Register {
-        /// List of signatories for the multisig account (canonical i105 literal)
+        /// List of signatories for the multisig account (canonical Katakana i105 literal)
         #[arg(short, long, num_args(2..))]
         pub signatories: Vec<String>,
         /// Relative weights of signatories' responsibilities
@@ -5115,7 +5151,7 @@ mod trigger {
         /// Number of permitted executions (default: indefinitely)
         #[arg(short, long)]
         pub repeats: Option<u32>,
-        /// Account executing the trigger (canonical i105 literal)
+        /// Account executing the trigger (canonical Katakana i105 literal)
         #[arg(long)]
         pub authority: Option<String>,
         /// Filter type for the trigger
@@ -5133,14 +5169,14 @@ mod trigger {
         /// Data filter preset: events within a domain
         #[arg(long)]
         pub data_domain: Option<DomainId>,
-        /// Data filter preset: events for an account (canonical i105 literal)
+        /// Data filter preset: events for an account (canonical Katakana i105 literal)
         #[arg(long)]
         pub data_account: Option<String>,
         /// Data filter preset: events for a specific asset definition; use with
         /// `--data-asset-account` for a concrete ownership bucket.
         #[arg(long, requires = "data_asset_account", conflicts_with = "data_asset_definition")]
         pub data_asset: Option<AssetDefinitionId>,
-        /// Data filter preset: account owning the selected asset bucket (canonical i105 literal).
+        /// Data filter preset: account owning the selected asset bucket (canonical Katakana i105 literal).
         #[arg(long, requires = "data_asset")]
         pub data_asset_account: Option<String>,
         /// Data filter preset: balance scope for the selected asset bucket (`global` or
@@ -7127,16 +7163,16 @@ fn resolve_account_id_with(literal: &str) -> Result<AccountId> {
     }
 
     if trimmed.contains('@') {
-        eyre::bail!("account literal must not include '@domain'; use canonical i105 only");
+        eyre::bail!("account literal must not include '@domain'; use canonical Katakana i105 only");
     }
     if trimmed
         .get(..2)
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case("0x"))
     {
-        eyre::bail!("account literal must be canonical i105; canonical hex is not accepted");
+        eyre::bail!("account literal must be canonical Katakana i105; canonical hex is not accepted");
     }
     let parsed = AccountId::parse_encoded(trimmed)
-        .map_err(|err| eyre!("account literal must be canonical i105: {err}"))?;
+        .map_err(|err| eyre!("account literal must be canonical Katakana i105: {err}"))?;
     Ok(parsed.into_account_id())
 }
 
@@ -7226,7 +7262,7 @@ fn parse_asset_definition_literal(literal: &str) -> Result<AssetDefinitionId> {
 fn parse_register_account_id(literal: &str, domain: &DomainId) -> Result<ScopedAccountId> {
     let trimmed = literal.trim();
     if trimmed.is_empty() {
-        eyre::bail!("`ledger account register --id` must be a canonical i105 account id");
+        eyre::bail!("`ledger account register --id` must be a canonical Katakana i105 account id");
     }
     if trimmed.contains('@') {
         eyre::bail!(
@@ -7238,11 +7274,11 @@ fn parse_register_account_id(literal: &str, domain: &DomainId) -> Result<ScopedA
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case("0x"))
     {
         eyre::bail!(
-            "`ledger account register --id` must be canonical i105; canonical hex is not accepted"
+            "`ledger account register --id` must be canonical Katakana i105; canonical hex is not accepted"
         );
     }
     let parsed = AccountId::parse_encoded(trimmed).map_err(|err| {
-        eyre!("`ledger account register --id` must be a canonical i105 account id: {err}")
+        eyre!("`ledger account register --id` must be a canonical Katakana i105 account id: {err}")
     })?;
     Ok(ScopedAccountId::from_account_id(
         parsed.into_account_id(),
@@ -7527,13 +7563,13 @@ mod tests {
 
     #[test]
     fn resolve_account_id_with_rejects_non_canonical_i105_literal() {
-        let literal = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+        let literal = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
 
         let err =
-            resolve_account_id_with(&literal).expect_err("non-canonical i105 literal should fail");
+            resolve_account_id_with(&literal).expect_err("non-canonical Katakana i105 literal should fail");
 
         assert!(
-            err.to_string().contains("must be canonical i105"),
+            err.to_string().contains("must be canonical Katakana i105"),
             "unexpected error: {err}"
         );
     }
@@ -7544,7 +7580,7 @@ mod tests {
         let key_pair = KeyPair::from_seed(vec![11_u8; 32], Algorithm::Ed25519);
         let literal = AccountId::new(key_pair.public_key().clone())
             .canonical_i105()
-            .expect("canonical i105");
+            .expect("canonical Katakana i105");
         let resolved = parse_register_account_id(&literal, &domain).expect("register account id");
         assert_eq!(
             resolved,
@@ -7567,12 +7603,12 @@ mod tests {
     #[test]
     fn parse_register_account_id_rejects_non_canonical_i105_literal() {
         let domain: DomainId = "wonderland".parse().expect("domain");
-        let literal = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+        let literal = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
         let err = parse_register_account_id(&literal, &domain)
-            .expect_err("non-canonical i105 literal should fail");
+            .expect_err("non-canonical Katakana i105 literal should fail");
         assert!(
             err.to_string()
-                .contains("must be a canonical i105 account id"),
+                .contains("must be a canonical Katakana i105 account id"),
             "unexpected error: {err}"
         );
     }
@@ -7669,7 +7705,7 @@ mod tests {
     fn resolve_account_id_with_resolves_encoded_literal() {
         let key_pair = KeyPair::from_seed(vec![9_u8; 32], Algorithm::Ed25519);
         let account = AccountId::new(key_pair.public_key().clone());
-        let canonical = account.canonical_i105().expect("canonical i105");
+        let canonical = account.canonical_i105().expect("canonical Katakana i105");
         let resolved = resolve_account_id_with(&canonical).expect("local resolve");
 
         assert_eq!(resolved.to_string(), account.to_string());

@@ -90,7 +90,7 @@ reparser le payload brut.
 Les explorers doivent воспроизводят тяжелую работу телеметрии и доступа
 fait pour le portefeuille:
 
-- Appliquez `data-copy-mode="i105|i105_default|qr"` для бутонов для копирования в ближайшее время
+- Appliquez `data-copy-mode="i105|qr"` для бутонов для копирования в ближайшее время
   les front-ends puissent emettre des compteurs d'usage en Paralele de la
   метрика Torii `torii_address_format_total`. Le composant demo ci-dessus
   Отправь вечер `iroha:address-copy` с `{mode,timestamp}` - освободите место
@@ -196,7 +196,7 @@ selecteur/etat et `docs/account_structure.md` для полной диаграм
   не по умолчанию не требуется повторная передача молчания с префиксом по умолчанию.
 
 3. Преобразуйте каноническую полезную нагрузку в повторно используемую на полях `i105.value` или
-   `i105_default` для возобновления (или требуется другое кодирование через `--format`). Цес
+   `i105` для возобновления (или требуется другое кодирование через `--format`). Цес
    Chaines sont Deja Sures a Partager En Externe.
 4. Регистрация манифестов, регистров и документов в течение дня, ориентированных на клиента с учетом
    формировать канон и уведомлять контрагентов, выбранных локальным сервером

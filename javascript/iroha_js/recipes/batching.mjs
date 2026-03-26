@@ -14,9 +14,9 @@ import {
 
 const chainId = "batching-sample-chain";
 const authority =
-  "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9";
+  "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ";
 const recipient =
-  "6cmzPVPX8kKbxWFadZoh6wnVFcy1Po6PtHt5KJ8i9j6ovCJWDM7rWN7";
+  "soraゴヂアヌヴヷヸアバペグソダコラヒュヨサウヒョニュニュェヤゼヅゼヵアヹヺォォカヂォセコキョシャェポトヌニエマナ";
 const assetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 const assetId = `${assetDefinitionId}#${authority}`;
 const privateKey = Buffer.alloc(32, 0x11);

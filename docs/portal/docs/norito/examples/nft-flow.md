@@ -11,7 +11,7 @@ Walks through an NFT lifecycle end to end: minting to the owner, transferring, t
 
 ## Ledger walkthrough
 
-- Ensure the NFT definition (for example `n0#wonderland`) exists alongside the owner/recipient accounts used in the snippet (`i105...` for Alice, `i105...` for Bob).
+- Ensure the NFT definition (for example `n0#wonderland`) exists alongside the owner/recipient accounts used in the snippet (`soraカタカナ...` for Alice, `soraカタカナ...` for Bob).
 - Invoke the `nft_issue_and_transfer` entrypoint to mint the NFT, transfer it from Alice to Bob, and attach a metadata flag describing the issuance.
 - Inspect the NFT ledger state with `iroha_cli ledger nft list --account <id>` or the SDK equivalents to verify the transfer, then confirm the asset is removed once the burn instruction runs.
 
@@ -28,11 +28,11 @@ Walks through an NFT lifecycle end to end: minting to the owner, transferring, t
 seiyaku NftFlow {
   #[access(read="*", write="*")]
   kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
-    let owner = account!("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn");
+    let owner = account!("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ");
     let nft = nft_id!("n0$wonderland");
     nft_mint_asset(nft, owner);
 
-    let to = account!("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU");
+    let to = account!("soraゴヂアニラショリャヒャャサピテヶベチュヲボヹヂギタクアニョロホドチャヘヱヤジヶハシャウンベニョャルフハケネキカ");
     nft_transfer_asset(owner, nft, to);
     nft_set_metadata(nft, json!{ issued: "demo" });
     nft_burn_asset(nft);

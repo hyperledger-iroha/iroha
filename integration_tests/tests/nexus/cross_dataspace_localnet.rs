@@ -131,7 +131,7 @@ fn cross_dataspace_gas_account_id() -> AccountId {
 fn localnet_builder() -> NetworkBuilder {
     let gas_account_str = cross_dataspace_gas_account_id()
         .canonical_i105()
-        .expect("canonical i105 escrow account literal");
+        .expect("canonical Katakana i105 escrow account literal");
     NetworkBuilder::new()
         .with_peers(TOTAL_PEERS)
         .without_npos_genesis_bootstrap()

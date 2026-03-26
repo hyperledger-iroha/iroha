@@ -11,7 +11,7 @@ Examples (hex, spaces added for readability)
 
 - AccountId (type_id=0x0001, version=1)
   - Payload (UTF‑8): canonical encoded account literal (I105), for example:
-    - `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`
+    - `soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ`
   - TLV (no hash filled):
     - `00 01` | `01` | `<len:be u32>` | `<utf8 bytes of encoded literal>` | `00..00 (32 bytes)`
 
@@ -34,7 +34,7 @@ Examples (hex, spaces added for readability)
 - AssetId (0x0007, v1)
   - Payload: Norito-encoded `AssetId { definition, account }` bytes.
   - Textual API representation is the public form:
-    `<asset-definition-id>#<i105-account-id>` with optional `#dataspace:<id>` suffix.
+    `<base58-asset-id>#<katakana-i105-account-id>` with optional `#dataspace:<id>` suffix.
   - TLV: `00 07 01 <len:be u32> <payload bytes> <hash:32>`
 
 - DomainId (0x0008, v1)

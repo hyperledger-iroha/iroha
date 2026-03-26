@@ -10,7 +10,7 @@ set -euo pipefail
 #
 # Configuration (env vars):
 # - CLI_CONFIG: optional path to client config TOML (passed via --config)
-# - AUTHORITY: account id like '6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9' (required for VK ops)
+# - AUTHORITY: account id like 'soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ' (required for VK ops)
 # - PRIVATE_KEY: ExposedPrivateKey string (multihash) for AUTHORITY (required for VK ops)
 # - ELECTION_ID: optional vote id (default: demo-election-1)
 

@@ -26,8 +26,8 @@ translation_last_reviewed: 2026-02-07
 アカウント `$ADMIN_ACCOUNT` `$RECEIVER_ACCOUNT` アカウント ID アカウント ID アカウント ID アカウント ID アカウント ID アカウント ID アカウント ID アカウント ID アカウント ID アカウント ID アカウント ID アカウント ID アカウント ID アカウント ID アカウント IDやあデフォルトバンドル پہلے ہی デモキー سے اخذ کیے گئے دو アカウント شامل کرتا ہے:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="soraカタカナ..."
+export RECEIVER_ACCOUNT="soraカタカナ..."
 ```
 
 アカウントの数:

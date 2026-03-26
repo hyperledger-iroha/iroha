@@ -34,7 +34,7 @@ translation_last_reviewed: 2026-02-07
 | -------- | ------- | ------- |
 | `label` | ہاں | مطلوبہ لیبل (مخلوط کیس کو قبول کرتا ہے ؛ نورم V1 اور UTS-46 کے مطابق ٹول پرنٹس)۔ |
 | `suffix_id` | ہاں | عددی لاحقہ شناخت کنندہ (اعشاریہ یا `0x` ہیکس)۔ |
-| `owner` | ہاں | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
+| `owner` | ہاں | AccountId string (domainless encoded literal; canonical Katakana i105 only; no `@<domain>` suffix). |
 | `term_years` | ہاں | انٹیجر `1..=255`۔ |
 | `payment_asset_id` | ہاں | تصفیہ کی اصل (جیسے `61CtjvNd9T3THAR65GsMVHr82Bjc`)۔ |
 | `payment_gross` / `payment_net` | ہاں | کارڈنلٹی کے اکائیوں کی نمائندگی کرنے والے دستخط شدہ عدد۔ |
@@ -75,9 +75,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "soraカタカナ...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"soraカタカナ...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -86,7 +86,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"soraカタカナ...",
         "signature":"alpha-signature"
       },
       "governance": null,

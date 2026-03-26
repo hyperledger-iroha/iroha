@@ -59,7 +59,7 @@ pub fn canonical_abi_hex() -> String {
 fn governance_escrow_account_literal() -> String {
     ALICE_ID
         .canonical_i105()
-        .expect("alice account id should encode to canonical i105")
+        .expect("alice account id should encode to canonical Katakana i105")
 }
 
 fn governance_asset_definition_id() -> AssetDefinitionId {

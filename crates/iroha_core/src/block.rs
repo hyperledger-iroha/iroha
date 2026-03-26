@@ -772,27 +772,11 @@ pub(crate) fn parse_account_literal_with_world(
         return None;
     }
 
-    let account = parse_account_literal_relaxed(literal)?;
-
-    let linked_domains = world.domains_for_subject(&account);
-    if linked_domains.len() > 1 {
-        return None;
+    if let Some(account) = parse_account_literal_relaxed(literal) {
+        return Some(account);
     }
-
-    // Some test fixtures construct worlds directly and rely on domain ownership
-    // as the only available domain-disambiguation signal.
-    if linked_domains.is_empty()
-        && world
-            .domains_iter()
-            .filter(|domain| domain.owned_by() == &account)
-            .take(2)
-            .count()
-            > 1
-    {
-        return None;
-    }
-
-    Some(account)
+    let _ = world;
+    None
 }
 
 pub(crate) fn parse_asset_definition_literal_with_world(
@@ -819,16 +803,28 @@ fn parse_account_literal_relaxed(literal: &str) -> Option<AccountId> {
         return Some(parsed.into_account_id());
     }
 
-    let expected = address::chain_discriminant();
-    let parsed = match AccountAddress::from_i105_for_discriminant(literal, Some(expected)) {
-        Ok(address) => Some(address),
-        Err(AccountAddressError::UnexpectedNetworkPrefix { found, .. }) => {
-            AccountAddress::from_i105_for_discriminant(literal, Some(found)).ok()
+    fn decode_account_literal_for_discriminant(
+        literal: &str,
+        discriminant: u16,
+    ) -> Option<AccountId> {
+        let parsed =
+            AccountAddress::from_i105_for_discriminant(literal, Some(discriminant)).ok()?;
+        let canonical = parsed.to_i105_for_discriminant(discriminant).ok()?;
+        if canonical != literal {
+            return None;
         }
-        Err(_) => None,
-    }?;
+        parsed.to_account_id().ok()
+    }
 
-    parsed.to_account_id().ok()
+    let expected = address::chain_discriminant();
+    decode_account_literal_for_discriminant(literal, expected).or_else(|| {
+        match AccountAddress::from_i105_for_discriminant(literal, Some(expected)) {
+            Err(AccountAddressError::UnexpectedNetworkPrefix { found, .. }) => {
+                decode_account_literal_for_discriminant(literal, found)
+            }
+            Err(_) | Ok(_) => None,
+        }
+    })
 }
 
 fn parse_account_from_access_key(world: &impl WorldReadOnly, key: &str) -> Option<AccountId> {
@@ -901,7 +897,7 @@ mod prefetch_tests {
         domain::{Domain, DomainId},
         isi::{InstructionBox, Log},
         name::Name,
-        nexus::LaneConfig,
+        nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneConfig},
         role::RoleId,
     };
     use iroha_logger::Level;
@@ -977,7 +973,7 @@ mod prefetch_tests {
     }
 
     #[test]
-    fn parse_account_literal_rejects_ambiguous_encoded_subject() {
+    fn parse_account_literal_accepts_canonical_i105_even_for_multi_domain_subject() {
         let signatory = ALICE_ID.signatory().clone();
         let alpha: DomainId = "alpha".parse().expect("alpha domain");
         let beta: DomainId = "beta".parse().expect("beta domain");
@@ -998,16 +994,16 @@ mod prefetch_tests {
         let encoded = alpha_account
             .account()
             .canonical_i105()
-            .expect("canonical i105 account literal");
+            .expect("canonical Katakana i105 account literal");
         assert_eq!(
             parse_account_literal_with_world(&world_view, &encoded),
-            None,
-            "domainless literals must not resolve when a subject exists in multiple domains"
+            Some(alpha_account.account().clone()),
+            "canonical Katakana i105 account ids must remain valid even when the subject is linked across domains"
         );
     }
 
     #[test]
-    fn parse_account_literal_rejects_alias_domain_literals() {
+    fn parse_account_literal_resolves_on_chain_alias_literals() {
         let domain_id: DomainId = "ivm".parse().expect("domain");
         let account_id = ScopedAccountId::new(domain_id.clone(), ALICE_ID.signatory().clone());
         let alias = AccountLabel::new(
@@ -1024,8 +1020,44 @@ mod prefetch_tests {
         let world_view = world.view();
 
         assert_eq!(
-            parse_account_literal_with_world(&world_view, "gas@ivm"),
-            None
+            parse_account_literal_with_world(&world_view, "gas@ivm.universal"),
+            Some(account_id.account().clone())
+        );
+    }
+
+    #[test]
+    fn parse_account_literal_resolves_aliases_in_non_default_dataspaces() {
+        let domain_id: DomainId = "ops".parse().expect("domain");
+        let account_id = ScopedAccountId::new(domain_id, ALICE_ID.signatory().clone());
+        let alias = AccountLabel::domainless(
+            Name::from_str("treasury").expect("alias name"),
+            DataSpaceId::new(7),
+        );
+        let world = World::with(
+            [],
+            [Account::new_domainless(account_id.account().clone())
+                .with_label(Some(alias))
+                .build(account_id.account())],
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(world, kura, query);
+        state.nexus.write().dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: DataSpaceId::new(7),
+                alias: "retail".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        let world_view = state.view().world();
+
+        assert_eq!(
+            parse_account_literal_with_world(&world_view, "treasury@retail"),
+            Some(account_id.account().clone())
         );
     }
 
@@ -12739,9 +12771,8 @@ mod commit {
             state::{State, World},
         };
 
-        const ACCOUNT_FROM_LITERAL: &str =
-            "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
-        const ACCOUNT_TO_LITERAL: &str = "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU";
+        const ACCOUNT_FROM_LITERAL: &str = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
+        const ACCOUNT_TO_LITERAL: &str = "soraゴヂアニラショリャヒャャサピテヶベチュヲボヹヂギタクアニョロホドチャヘヱヤジヶハシャウンベニョャルフハケネキカ";
 
         fn binding_for_descriptor(descriptor: &AxtDescriptor) -> AxtBinding {
             descriptor.binding().expect("descriptor binding")

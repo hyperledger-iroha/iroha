@@ -33,7 +33,7 @@ translator: machine-google-reviewed
 - `DomainId`: `name` (على سبيل المثال، `wonderland`).
 - `AccountId`: معرف الحساب الأساسي بدون نطاق المشفر عبر `AccountAddress` كـ I105 فقط. يجب أن تكون مدخلات المحلل اللغوي I105 الأساسية؛ يتم رفض لاحقات المجال (`@domain`)، وأحرف I105 الأساسية، وأحرف الاسم المستعار، وإدخال المحلل اللغوي السداسي الكنسي، وحمولات `norito:` القديمة، ونماذج محلل الحساب `uaid:`/`opaque:`.
 - `AssetDefinitionId`: `unprefixed Base58 address with versioning and checksum` الأساسي (UUID-v4 بايت).
-- `AssetId`: `<asset-definition-id>#<i105-account-id>` الحرفي المشفر الأساسي (النماذج النصية القديمة غير مدعومة في الإصدار الأول).
+- `AssetId`: `<base58-asset-id>#<katakana-i105-account-id>` الحرفي المشفر الأساسي (النماذج النصية القديمة غير مدعومة في الإصدار الأول).
 - `NftId`: `nft$domain` (على سبيل المثال، `rose$garden`).
 - `PeerId`: `public_key` (تتم المساواة بين الأقران عن طريق المفتاح العام).
 
@@ -259,7 +259,7 @@ curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -d '{"alias":"pkr#ubl.sbp"}'
 ```مذكرة الهجرة:
 - لا يتم قبول معرفات تعريف الأصول `name#domain` القديمة في الإصدار 1.
-- تظل معرفات الأصول الخاصة بالنعناع/النسخ/النقل هي `<asset-definition-id>#<i105-account-id>` الأساسية؛ بناء لهم مع:
+- تظل معرفات الأصول الخاصة بالنعناع/النسخ/النقل هي `<base58-asset-id>#<katakana-i105-account-id>` الأساسية؛ بناء لهم مع:
   -`iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
   - أو `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`.
 

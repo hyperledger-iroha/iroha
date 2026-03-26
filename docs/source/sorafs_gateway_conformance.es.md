@@ -194,7 +194,7 @@ contiene:
 - una entrada `cid` codificada en base64 junto a una ventana de expiración.
 - una entrada `url` para bloqueo a nivel de URL.
 - una entrada `account_id` usando el encoding hex canónico de AccountAddress para reflejar suspensiones de gobernanza.
-- una entrada `account_alias` que bloquea un alias de ruteo (`alias@domain`).
+- una entrada `account_alias` que bloquea un alias de ruteo (`name@dataspace` or `name@domain.dataspace`).
 - una entrada `perceptual_family` que empareja un UUID de familia/variante con metadata de hash perceptual (`perceptual_hash_hex`, `perceptual_hamming_radius`) para que los gateways bloqueen clusters de contenido casi duplicado.
 
 Cada registro sigue el mismo layout Norito JSON que usa el loader, incluyendo campos opcionales

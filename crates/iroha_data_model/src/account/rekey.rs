@@ -54,7 +54,7 @@ impl AccountLabel {
 
     /// Parse a canonical account alias literal.
     ///
-    /// Supported forms are `label@domain.dataspace` and `label@dataspace`.
+    /// Supported forms are `name@domain.dataspace` and `name@dataspace`.
     ///
     /// # Errors
     /// Returns [`ParseError`] when the literal is malformed or the dataspace alias is unknown.
@@ -129,9 +129,7 @@ struct AliasSegments<'a> {
 
 fn split_alias_segments(input: &str) -> Result<AliasSegments<'_>, ParseError> {
     let (label, right) = input.split_once('@').ok_or_else(|| {
-        ParseError::new(
-            "account alias must use `label@domain.dataspace` or `label@dataspace` format",
-        )
+        ParseError::new("account alias must use `name@domain.dataspace` or `name@dataspace` format")
     })?;
     if right.contains('@') {
         return Err(ParseError::new(

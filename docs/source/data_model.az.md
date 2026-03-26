@@ -33,7 +33,7 @@ Bu sənəd `iroha_data_model` qutusunda həyata keçirilən və iş sahəsində 
 - `DomainId`: `name` (məsələn, `wonderland`).
 - `AccountId`: yalnız I105 olaraq `AccountAddress` vasitəsilə kodlaşdırılmış kanonik domensiz hesab identifikatoru. Parser girişləri kanonik I105 olmalıdır; domen şəkilçiləri (`@domain`), kanonik i105 literalları, ləqəb literalları, kanonik hex təhlil girişi, köhnə `norito:` faydalı yükləri və `uaid:`/`opaque:` hesaba buraxılır.
 - `AssetDefinitionId`: kanonik `unprefixed Base58 address with versioning and checksum` (UUID-v4 bayt).
-- `AssetId`: kanonik kodlaşdırılmış literal `<asset-definition-id>#<i105-account-id>` (ilk buraxılışda köhnə mətn formaları dəstəklənmir).
+- `AssetId`: kanonik kodlaşdırılmış literal `<base58-asset-id>#<katakana-i105-account-id>` (ilk buraxılışda köhnə mətn formaları dəstəklənmir).
 - `NftId`: `nft$domain` (məsələn, `rose$garden`).
 - `PeerId`: `public_key` (peer bərabərliyi açıq açarladır).
 
@@ -259,7 +259,7 @@ curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -d '{"alias":"pkr#ubl.sbp"}'
 ```Miqrasiya qeydi:
 - Köhnə `name#domain` aktiv tərifi identifikatorları v1-də qəbul edilmir.
-- Nanə/yandırma/köçürmə üçün aktiv identifikatorları kanonik `<asset-definition-id>#<i105-account-id>` olaraq qalır; onları qurun:
+- Nanə/yandırma/köçürmə üçün aktiv identifikatorları kanonik `<base58-asset-id>#<katakana-i105-account-id>` olaraq qalır; onları qurun:
   - `iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
   - və ya `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`.
 

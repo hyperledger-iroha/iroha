@@ -103,7 +103,7 @@ translator: machine-google-reviewed
     - يقبل JSON إما المفتاح `"perms"` أو `"permissions"`، وكل منهما عبارة عن مجموعة سلسلة من أسماء الأذونات.
     - أمثلة:
       -`{ "perms": [ "mint_asset:rose#wonder" ] }`
-      -`{ "permissions": [ "read_assets:i105...", "transfer_asset:rose#wonder" ] }`
+      -`{ "permissions": [ "read_assets:soraカタカナ...", "transfer_asset:rose#wonder" ] }`
     - بادئات اسم الإذن المدعومة في النسخة الوهمية:
       - `register_domain`، `register_account`، `register_asset_definition`
       -`read_assets:<account_id>`

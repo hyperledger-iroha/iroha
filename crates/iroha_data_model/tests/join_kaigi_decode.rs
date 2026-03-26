@@ -15,7 +15,7 @@ fn join_kaigi_roundtrip_preserves_optional_fields() {
         "kaigi".parse::<Name>().expect("call name"),
     );
     let participant =
-        AccountId::parse_encoded("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw")
+        AccountId::parse_encoded("soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ")
             .expect("participant account id")
             .into_account_id();
     let commitment = KaigiParticipantCommitment {

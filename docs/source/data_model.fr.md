@@ -33,7 +33,7 @@ Ce document explique les structures, les identifiants, les caractéristiques et 
 - `DomainId` : `name` (par exemple, `wonderland`).
 - `AccountId` : identifiant canonique de compte sans domaine codé via `AccountAddress` en I105 uniquement. Les entrées de l'analyseur doivent être canoniques I105 ; les suffixes de domaine (`@domain`), les littéraux canoniques I105, les littéraux d'alias, l'entrée de l'analyseur hexadécimal canonique, les charges utiles `norito:` héritées et les formulaires d'analyseur de compte `uaid:`/`opaque:` sont rejetés.
 - `AssetDefinitionId` : canonique `unprefixed Base58 address with versioning and checksum` (UUID-v4 octets).
-- `AssetId` : littéral codé canonique `<asset-definition-id>#<i105-account-id>` (les formes textuelles héritées ne sont pas prises en charge dans la première version).
+- `AssetId` : littéral codé canonique `<base58-asset-id>#<katakana-i105-account-id>` (les formes textuelles héritées ne sont pas prises en charge dans la première version).
 - `NftId` : `nft$domain` (par exemple, `rose$garden`).
 - `PeerId` : `public_key` (l'égalité des pairs se fait par clé publique).
 
@@ -259,7 +259,7 @@ curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -d '{"alias":"pkr#ubl.sbp"}'
 ```Remarque sur la migration :
 - Les anciens ID de définition d'actif `name#domain` ne sont pas acceptés dans la v1.
-- Les ID d'actifs pour la création/gravure/transfert restent canoniques `<asset-definition-id>#<i105-account-id>` ; construisez-les avec :
+- Les ID d'actifs pour la création/gravure/transfert restent canoniques `<base58-asset-id>#<katakana-i105-account-id>` ; construisez-les avec :
   -`iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
   - ou `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`.
 

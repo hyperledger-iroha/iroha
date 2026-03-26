@@ -85,7 +85,7 @@ réparer le payload brut.
 
 
 Les explorateurs doivent reproduire le travail de télémétrie et d'accessibilité
-fait pour le portefeuille:- Appliquez `data-copy-mode="i105|i105_default|qr"` aux boutons de copie afin que
+fait pour le portefeuille:- Appliquez `data-copy-mode="i105|qr"` aux boutons de copie afin que
   les front-ends peuvent mettre des compteurs d'usage en parallèle de la
   métrique Torii `torii_address_format_total`. Le composant démo ci-dessus
   envoie un événement `iroha:address-copy` avec `{mode,timestamp}` - reliez cela
@@ -187,7 +187,7 @@ ou en chaînes compressées doivent suivre le workflow CLI documenté sous ADDR-
   Le helper préserve le préfixe I105 détecté depuis le littéral sauf si vous
   fournissez préciser `networkPrefix`, donc les CV pour des réseaux
   non par défaut ne sont pas re-rendus silencieusement avec le préfixe par défaut.3. Convertissez le payload canonique en réutilisant les champs `i105.value` ou
-   `i105_default` du CV (ou demandez un autre encodage via `--format`). Ces
+   `i105` du CV (ou demandez un autre encodage via `--format`). Ces
    les chaines sont déjà sures à partager en externe.
 4. Mettez à jour les manifestes, registres et documents orientes client avec la
    forme canonique et notifiez les contreparties que les sélecteurs locaux seront

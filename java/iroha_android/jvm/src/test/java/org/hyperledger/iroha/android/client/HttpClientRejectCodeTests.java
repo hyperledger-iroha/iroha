@@ -38,7 +38,7 @@ public final class HttpClientRejectCodeTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000001")
-            .setAuthority("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+            .setAuthority("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ")
             .setCreationTimeMs(1L)
             .setExecutable(Executable.ivm(new byte[] {0x01}))
             .build();

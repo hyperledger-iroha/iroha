@@ -147,7 +147,7 @@ use iroha::client::{
 fn download_qr() -> eyre::Result<()> {
  let client = Client::new(ClientConfiguration::test())?;
  let snapshot = client.get_explorer_account_qr(
- "i105...",
+ "soraカタカナ...",
  )?;
  println!("Canonical literal: {}", snapshot.literal);
  println!("SVG payload: {}", snapshot.svg);

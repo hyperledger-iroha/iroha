@@ -22,6 +22,9 @@ public enum AccountAddressError: Error, Equatable {
     case unknownCurve(UInt8)
     case unexpectedTrailingBytes
     case invalidI105PrefixEncoding(UInt8)
+    case missingI105Sentinel
+    case invalidI105Base
+    case invalidI105Digit(Int)
     case i105TooShort
     case invalidI105Char(Character)
     case unsupportedAddressFormat
@@ -73,6 +76,12 @@ public enum AccountAddressError: Error, Equatable {
             return "ERR_UNEXPECTED_TRAILING_BYTES"
         case .invalidI105PrefixEncoding:
             return "ERR_INVALID_I105_PREFIX_ENCODING"
+        case .missingI105Sentinel:
+            return "ERR_MISSING_I105_SENTINEL"
+        case .invalidI105Base:
+            return "ERR_INVALID_I105_BASE"
+        case .invalidI105Digit:
+            return "ERR_INVALID_I105_DIGIT"
         case .i105TooShort:
             return "ERR_I105_TOO_SHORT"
         case .invalidI105Char:
@@ -90,7 +99,6 @@ public enum AccountAddressError: Error, Equatable {
 /// Structured representation of i105 outputs used by wallet/explorer UX.
 public struct AccountAddressDisplayFormats: Equatable {
     public let i105: String
-    public let i105Default: String
     public let networkPrefix: UInt16
     public let i105Warning: String
 }
@@ -154,7 +162,9 @@ public struct AccountAddress {
             throw AccountAddressError.unsupportedAddressFormat
         }
         let (_, canonical) = try decodeI105String(trimmed, expectedDiscriminant: expectedPrefix)
-        return try AccountAddress.fromCanonicalBytes(canonical)
+        let address = try AccountAddress.fromCanonicalBytes(canonical)
+        try ensureCanonicalI105Literal(trimmed, address: address)
+        return address
     }
 
     public static func fromI105(_ encoded: String, expectedPrefix: UInt16? = nil) throws -> AccountAddress {
@@ -167,14 +177,12 @@ public struct AccountAddress {
                 literal: trimmed,
                 expectedPrefix: expectedPrefix
             ) {
-                return try AccountAddress.fromCanonicalBytes(bridged.canonicalBytes)
+                let address = try AccountAddress.fromCanonicalBytes(bridged.canonicalBytes)
+                try ensureCanonicalI105Literal(trimmed, address: address)
+                return address
             }
             throw error
         }
-    }
-
-    public static func fromI105Default(_ encoded: String) throws -> AccountAddress {
-        try fromI105(encoded, expectedPrefix: AccountId.defaultNetworkPrefix)
     }
 
     public static func parseEncoded(_ input: String, expectedPrefix: UInt16? = nil) throws -> AccountAddress {
@@ -190,7 +198,9 @@ public struct AccountAddress {
                 literal: trimmed,
                 expectedPrefix: expectedPrefix
             ) {
-                return try AccountAddress.fromCanonicalBytes(bridged.canonicalBytes)
+                let address = try AccountAddress.fromCanonicalBytes(bridged.canonicalBytes)
+                try ensureCanonicalI105Literal(trimmed, address: address)
+                return address
             }
             throw error
         }
@@ -248,21 +258,13 @@ public struct AccountAddress {
         try toI105(networkPrefix: chainDiscriminant)
     }
 
-    public func toI105Default() throws -> String {
-        try toI105(chainDiscriminant: AccountId.defaultNetworkPrefix)
-    }
-
-    /// Returns canonical i105 output plus the UX warning required by
+    /// Returns canonical Katakana i105 output plus the UX warning required by
     /// `docs/source/sns/address_display_guidelines.md`.
     public func displayFormats(networkPrefix: UInt16 = 753) throws -> AccountAddressDisplayFormats {
         let canonical = try canonicalBytes()
         do {
             return AccountAddressDisplayFormats(
                 i105: try encodeI105String(discriminant: networkPrefix, canonical: canonical),
-                i105Default: try encodeI105String(
-                    discriminant: AccountId.defaultNetworkPrefix,
-                    canonical: canonical
-                ),
                 networkPrefix: networkPrefix,
                 i105Warning: AccountAddress.i105WarningMessage
             )
@@ -273,7 +275,6 @@ public struct AccountAddress {
             ) {
                 return AccountAddressDisplayFormats(
                     i105: render.i105,
-                    i105Default: render.i105Default,
                     networkPrefix: networkPrefix,
                     i105Warning: AccountAddress.i105WarningMessage
                 )
@@ -862,65 +863,131 @@ private enum CurveId: UInt8 {
 
 // MARK: - Encoding helpers
 
-private let i105AsciiAlphabet: [String] = [
-    "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F", "G", "H", "J", "K",
-    "L", "M", "N", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "a", "b", "c", "d", "e",
-    "f", "g", "h", "i", "j", "k", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y",
-    "z",
+private let i105MaxSymbolChars = 2
+private let i105KatakanaAlphabet: [String] = [
+    "ア", "イ", "ウ", "エ", "オ", "カ", "キ", "ク", "ケ", "コ", "サ", "シ", "ス", "セ", "ソ",
+    "タ", "チ", "ツ", "テ", "ト", "ナ", "ニ", "ヌ", "ネ", "ノ", "ハ", "ヒ", "フ", "ヘ", "ホ",
+    "マ", "ミ", "ム", "メ", "モ", "ヤ", "ユ", "ヨ", "ラ", "リ", "ル", "レ", "ロ", "ワ", "ヰ",
+    "ヱ", "ヲ", "ン", "ガ", "ギ", "グ", "ゲ", "ゴ", "ザ", "ジ", "ズ", "ゼ", "ゾ", "ダ", "ヂ",
+    "ヅ", "デ", "ド", "バ", "ビ", "ブ", "ベ", "ボ", "パ", "ピ", "プ", "ペ", "ポ", "ヴ", "ヷ",
+    "ヸ", "ヹ", "ヺ", "ァ", "ィ", "ゥ", "ェ", "ォ", "ャ", "ュ", "ョ", "ッ", "ヮ", "ヵ", "ヶ",
+    "キャ", "キュ", "キョ", "シャ", "シュ", "ショ", "チャ", "チュ", "チョ", "ニャ", "ニュ",
+    "ニョ", "ヒャ", "ヒュ", "ヒョ",
 ]
 private let localDomainKey = Data("SORA-LOCAL-K:v1".utf8)
 private let multisigMemberMax = 0xFF
 private let blake2bBlockLength = 128
-private let i105AlphabetIndex: [Character: Int] = Dictionary(
-    uniqueKeysWithValues: i105AsciiAlphabet.enumerated().compactMap { index, symbol in
-        guard let character = symbol.first else { return nil }
-        return (character, index)
-    }
-)
-private let i105Base = i105AsciiAlphabet.count
-private let i105LiteralChecksumLength = 2
-private let i105ChecksumPrefix = Data("I105PRE".utf8)
+private let compressedAlphabet: [String] = i105KatakanaAlphabet
+private let compressedChecksumLength = 6
+private let compressedBase = compressedAlphabet.count
+private let i105DiscriminantSora: UInt16 = 0x02F1
+private let i105DiscriminantTest: UInt16 = 0x0171
+private let i105DiscriminantDev: UInt16 = 0x0000
+private let i105SentinelSora = "sora"
+private let i105SentinelTest = "test"
+private let i105SentinelDev = "dev"
+private let i105SentinelNumericPrefix = "n"
+private let i105SentinelSoraFullwidth = "ｓｏｒａ"
+private let i105SentinelTestFullwidth = "ｔｅｓｔ"
+private let i105SentinelDevFullwidth = "ｄｅｖ"
+private let i105SentinelNumericPrefixFullwidth = "ｎ"
+
+private func lookupI105Digit(_ symbol: String) -> Int? {
+    i105KatakanaAlphabet.firstIndex(of: symbol)
+}
+
+private func ensureCanonicalI105Literal(_ literal: String, address: AccountAddress) throws {
+    guard let (discriminant, _) = parseI105SentinelAndPayload(literal) else { return }
+    let canonical = try address.toI105(networkPrefix: discriminant)
+    guard canonical == literal else { throw AccountAddressError.unsupportedAddressFormat }
+}
 
 private func decodeI105String(_ encoded: String,
                               expectedDiscriminant: UInt16? = nil) throws -> (UInt16, Data) {
-    var digits: [Int] = []
-    digits.reserveCapacity(encoded.count)
-    for symbol in encoded {
-        guard let value = i105AlphabetIndex[symbol] else {
-            throw AccountAddressError.invalidI105Char(symbol)
-        }
-        digits.append(value)
+    guard let (discriminant, payload) = parseI105SentinelAndPayload(encoded) else {
+        throw AccountAddressError.missingI105Sentinel
     }
-    let payload = Data(try decodeBaseN(digits: digits, base: i105Base))
-    guard payload.count >= 1 + i105LiteralChecksumLength else {
-        throw AccountAddressError.i105TooShort
-    }
-    let checksumStart = payload.count - i105LiteralChecksumLength
-    let body = payload.prefix(checksumStart)
-    let checksum = payload.suffix(i105LiteralChecksumLength)
-    guard i105ChecksumBytes(body: Data(body)) == checksum else {
-        throw AccountAddressError.checksumMismatch
-    }
-    let (discriminant, prefixLength) = try decodeI105Prefix(payload: Data(body))
     if let expectedDiscriminant, discriminant != expectedDiscriminant {
         throw AccountAddressError.unexpectedNetworkPrefix(expected: expectedDiscriminant,
                                                           found: discriminant)
     }
-    return (discriminant, Data(body.dropFirst(prefixLength)))
+    return (discriminant, try decodeI105Payload(String(payload)))
 }
 
 private func encodeI105String(discriminant: UInt16,
-                              canonical: Data) throws -> String {
-    var body = try encodeI105Prefix(discriminant: discriminant)
-    body.append(canonical)
-    var payload = body
-    payload.append(i105ChecksumBytes(body: body))
-    let digits = try encodeBaseN(bytes: Array(payload), base: i105Base)
-    return digits.map { i105AsciiAlphabet[$0] }.joined()
+                              canonical: Data,
+                              fullWidth: Bool = false) throws -> String {
+    let digits = try encodeBaseN(bytes: Array(canonical), base: compressedBase)
+    let checksum = compressedChecksumDigits(canonical: canonical)
+    let alphabet = compressedAlphabet
+    var parts = [i105Sentinel(for: discriminant)]
+    parts.append(contentsOf: digits.map { alphabet[$0] })
+    parts.append(contentsOf: checksum.map { alphabet[$0] })
+    return parts.joined()
+}
+
+private func decodeI105Payload(_ payload: String) throws -> Data {
+    let units = Array(payload)
+    var digits: [Int] = []
+    var sawTooShort = false
+    var sawChecksumMismatch = false
+    var invalidChar: Character?
+
+    func backtrack(_ index: Int) throws -> Data? {
+        if index == units.count {
+            guard digits.count > compressedChecksumLength else {
+                sawTooShort = true
+                return nil
+            }
+            let dataDigits = Array(digits.dropLast(compressedChecksumLength))
+            let checksumDigits = Array(digits.suffix(compressedChecksumLength))
+            let canonicalBytes = try decodeBaseN(digits: dataDigits, base: compressedBase)
+            let expected = compressedChecksumDigits(canonical: Data(canonicalBytes))
+            guard checksumDigits.elementsEqual(expected) else {
+                sawChecksumMismatch = true
+                return nil
+            }
+            return Data(canonicalBytes)
+        }
+
+        let current = units[index]
+        var matched = false
+        for symbolLength in stride(from: i105MaxSymbolChars, through: 1, by: -1) {
+            guard index + symbolLength <= units.count else { continue }
+            let candidate = String(units[index..<(index + symbolLength)])
+            guard let value = lookupI105Digit(candidate) else { continue }
+            matched = true
+            digits.append(value)
+            if let canonical = try backtrack(index + symbolLength) {
+                digits.removeLast()
+                return canonical
+            }
+            digits.removeLast()
+        }
+
+        if !matched, invalidChar == nil {
+            invalidChar = current
+        }
+        return nil
+    }
+
+    if let canonical = try backtrack(0) {
+        return canonical
+    }
+    if sawChecksumMismatch {
+        throw AccountAddressError.checksumMismatch
+    }
+    if sawTooShort {
+        throw AccountAddressError.i105TooShort
+    }
+    if let invalidChar {
+        throw AccountAddressError.invalidI105Char(invalidChar)
+    }
+    throw AccountAddressError.checksumMismatch
 }
 
 private func encodeBaseN(bytes: [UInt8], base: Int) throws -> [Int] {
-    precondition(base >= 2, "base must be at least 2")
+    guard base >= 2 else { throw AccountAddressError.invalidI105Base }
     if bytes.isEmpty { return [0] }
     var value = bytes
     var leadingZeros = 0
@@ -947,10 +1014,10 @@ private func encodeBaseN(bytes: [UInt8], base: Int) throws -> [Int] {
 }
 
 private func decodeBaseN(digits: [Int], base: Int) throws -> [UInt8] {
-    precondition(base >= 2, "base must be at least 2")
+    guard base >= 2 else { throw AccountAddressError.invalidI105Base }
     guard !digits.isEmpty else { throw AccountAddressError.invalidLength }
     for digit in digits where digit < 0 || digit >= base {
-        throw AccountAddressError.unsupportedAddressFormat
+        throw AccountAddressError.invalidI105Digit(digit)
     }
     var value = digits
     var leadingZeros = 0
@@ -976,46 +1043,139 @@ private func decodeBaseN(digits: [Int], base: Int) throws -> [UInt8] {
     return bytes.reversed()
 }
 
-private func encodeI105Prefix(discriminant: UInt16) throws -> Data {
-    guard discriminant <= 0x3FFF else {
-        throw AccountAddressError.invalidI105Prefix(discriminant)
+private func i105Sentinel(for discriminant: UInt16) -> String {
+    switch discriminant {
+    case i105DiscriminantSora:
+        return i105SentinelSora
+    case i105DiscriminantTest:
+        return i105SentinelTest
+    case i105DiscriminantDev:
+        return i105SentinelDev
+    default:
+        return "\(i105SentinelNumericPrefix)\(discriminant)"
     }
-    if discriminant <= 63 {
-        return Data([UInt8(discriminant)])
-    }
-    let lower = UInt8((discriminant & 0x3F) | 0x40)
-    let upper = UInt8(discriminant >> 6)
-    return Data([lower, upper])
 }
 
-private func decodeI105Prefix(payload: Data) throws -> (UInt16, Int) {
-    guard let first = payload.first else {
-        throw AccountAddressError.invalidLength
+private func parseI105SentinelAndPayload(_ encoded: String) -> (UInt16, Substring)? {
+    if encoded.hasPrefix(i105SentinelSora) {
+        return (i105DiscriminantSora, encoded.dropFirst(i105SentinelSora.count))
     }
-    if first <= 63 {
-        return (UInt16(first), 1)
+    if encoded.hasPrefix(i105SentinelSoraFullwidth) {
+        return (i105DiscriminantSora, encoded.dropFirst(i105SentinelSoraFullwidth.count))
     }
-    if (first & 0x40) != 0 {
-        guard payload.count >= 2 else {
-            throw AccountAddressError.invalidLength
-        }
-        let second = payload[1]
-        let discriminant = (UInt16(second) << 6) | UInt16(first & 0x3F)
-        return (discriminant, 2)
+    if encoded.hasPrefix(i105SentinelTest) {
+        return (i105DiscriminantTest, encoded.dropFirst(i105SentinelTest.count))
     }
-    throw AccountAddressError.invalidI105PrefixEncoding(first)
+    if encoded.hasPrefix(i105SentinelTestFullwidth) {
+        return (i105DiscriminantTest, encoded.dropFirst(i105SentinelTestFullwidth.count))
+    }
+    if encoded.hasPrefix(i105SentinelDev) {
+        return (i105DiscriminantDev, encoded.dropFirst(i105SentinelDev.count))
+    }
+    if encoded.hasPrefix(i105SentinelDevFullwidth) {
+        return (i105DiscriminantDev, encoded.dropFirst(i105SentinelDevFullwidth.count))
+    }
+
+    let tail: Substring
+    if encoded.hasPrefix(i105SentinelNumericPrefix) {
+        tail = encoded.dropFirst(i105SentinelNumericPrefix.count)
+    } else if encoded.hasPrefix(i105SentinelNumericPrefixFullwidth) {
+        tail = encoded.dropFirst(i105SentinelNumericPrefixFullwidth.count)
+    } else {
+        return nil
+    }
+
+    var digits = ""
+    var index = tail.startIndex
+    while index < tail.endIndex, let value = asciiDigit(from: tail[index]) {
+        digits.append(value)
+        index = tail.index(after: index)
+    }
+    guard !digits.isEmpty, let parsed = UInt16(digits) else { return nil }
+    return (parsed, tail[index...])
 }
 
-private func i105ChecksumBytes(body: Data) -> Data {
-    var input = Data()
-    input.append(i105ChecksumPrefix)
-    input.append(body)
-    return Blake2b.hash512(input).prefix(i105LiteralChecksumLength)
+private func asciiDigit(from character: Character) -> Character? {
+    guard let scalar = character.unicodeScalars.first,
+          character.unicodeScalars.count == 1 else {
+        return nil
+    }
+    switch scalar.value {
+    case 0x30...0x39:
+        return character
+    case 0xFF10...0xFF19:
+        let ascii = scalar.value - 0xFEE0
+        return Character(UnicodeScalar(ascii)!)
+    default:
+        return nil
+    }
 }
 
 private func computeLocalDigest(label: String) -> Data {
     let digest = Blake2s.hash(data: Data(label.utf8), key: localDomainKey, outputLength: 32)
     return Data(digest.prefix(12))
+}
+
+private func convertToBase32(data: Data) -> [Int] {
+    var acc = 0
+    var bits = 0
+    var out: [Int] = []
+    for byte in data {
+        acc = (acc << 8) | Int(byte)
+        bits += 8
+        while bits >= 5 {
+            bits -= 5
+            out.append((acc >> bits) & 0x1F)
+        }
+    }
+    if bits > 0 {
+        out.append((acc << (5 - bits)) & 0x1F)
+    }
+    return out
+}
+
+private func bech32Polymod(values: [Int]) -> UInt32 {
+    let generators: [UInt32] = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3]
+    var chk: UInt32 = 1
+    for value in values {
+        let top = chk >> 25
+        chk = ((chk & 0x1ff_ffff) << 5) ^ UInt32(value)
+        for (index, generator) in generators.enumerated() where ((top >> index) & 1) == 1 {
+            chk ^= generator
+        }
+    }
+    return chk
+}
+
+private func expandHrp(_ hrp: String) -> [Int] {
+    var out: [Int] = []
+    for character in hrp {
+        let code = Int(character.unicodeScalars.first!.value)
+        out.append(code >> 5)
+    }
+    out.append(0)
+    for character in hrp {
+        let code = Int(character.unicodeScalars.first!.value)
+        out.append(code & 0x1F)
+    }
+    return out
+}
+
+private func bech32mChecksum(data: Data) -> [Int] {
+    var values = expandHrp("snx")
+    values.append(contentsOf: convertToBase32(data: data))
+    values.append(contentsOf: Array(repeating: 0, count: compressedChecksumLength))
+    let polymod = bech32Polymod(values: values) ^ 0x2bc830a3
+    var checksum: [Int] = []
+    for i in 0..<compressedChecksumLength {
+        let shift = 5 * (compressedChecksumLength - 1 - i)
+        checksum.append(Int((polymod >> shift) & 0x1F))
+    }
+    return checksum
+}
+
+private func compressedChecksumDigits(canonical: Data) -> [Int] {
+    bech32mChecksum(data: canonical)
 }
 
 extension AccountAddressError {
@@ -1106,6 +1266,14 @@ extension AccountAddressError {
         case "ERR_INVALID_I105_PREFIX_ENCODING":
             if let value = uInt8Field("value", fields: fields) {
                 return AccountAddressError.invalidI105PrefixEncoding(value)
+            }
+        case "ERR_MISSING_I105_SENTINEL":
+            return AccountAddressError.missingI105Sentinel
+        case "ERR_INVALID_I105_BASE":
+            return AccountAddressError.invalidI105Base
+        case "ERR_INVALID_I105_DIGIT":
+            if let digit = intField("digit", fields: fields) {
+                return AccountAddressError.invalidI105Digit(digit)
             }
         case "ERR_I105_TOO_SHORT":
             return AccountAddressError.i105TooShort

@@ -108,7 +108,7 @@ Hooks של מחזור חיים (נאכפים ב‑runtime):
   "asset": "4cuvDVPuLBKJyN6dPbRQhmLh68sU",
   "total_reward": "250.0000",
   "shares": [
-    { "account": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw", "role": "Validator", "amount": "150" },
+    { "account": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ", "role": "Validator", "amount": "150" },
     { "account": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r", "role": "Nominator", "amount": "100" }
   ],
   "metadata": {
@@ -142,8 +142,8 @@ Guardrails של runtime:
 ```norito
 {
   "lane_id": 1,
-  "validator": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
-  "stake_account": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
+  "validator": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
+  "stake_account": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
   "initial_stake": "150000",
   "metadata": {
     "commission_bps": 750,
@@ -230,26 +230,26 @@ ISI זה idempotent לכל `(lane_id, epoch)` ומהווה בסיס לחשבונ
   - `iroha_cli app nexus public-lane validators --lane <id> [--summary]`
     מציג סמני lifecycle/activation (pending target epoch, `activation_epoch` / `activation_height`,
     exit release, slash id) לצד stake bonded/self.
-    `iroha_cli app nexus public-lane stake --lane <id> [--validator i105...] [--summary]` משקף את
+    `iroha_cli app nexus public-lane stake --lane <id> [--validator soraカタカナ...] [--summary]` משקף את
     endpoint `/stake` עם רמזי pending-unbond לכל זוג `(validator, staker)`.
   - Torii snapshots ל‑dashboards ו‑SDKs:
     - `GET /v1/nexus/public_lanes/{lane}/validators` – metadata, status
       (`PendingActivation`/`Active`/`Exiting`/`Exited`/`Slashed`), activation epoch/height,
       release timers, bonded stake, last reward epoch.
-      `canonical i105 literal rendering` שולט בהצגת literals (I105 מועדף; I105 הוא אפשרות שנייה ל-Sora בלבד).
+      `canonical Katakana i105 literal rendering` שולט בהצגת literals (I105 מועדף; I105 הוא אפשרות שנייה ל-Sora בלבד).
     - `GET /v1/nexus/public_lanes/{lane}/stake` – stake shares (`validator`,
-      `staker`, bonded amount) בתוספת pending unbond timers. `?validator=i105...`
-      מסנן את התגובה ל‑dashboards שממוקדים במאמת יחיד; `canonical i105 rendering` חל על כל literals.
+      `staker`, bonded amount) בתוספת pending unbond timers. `?validator=soraカタカナ...`
+      מסנן את התגובה ל‑dashboards שממוקדים במאמת יחיד; `canonical Katakana i105 rendering` חל על כל literals.
   - Lifecycle ISIs משתמשים בנתיב טרנזקציה סטנדרטי (Torii `/v1/transactions`
     או CLI instruction pipeline). דוגמאות payloads של Norito JSON:
 
     ```jsonc
     [
-      { "ActivatePublicLaneValidator": { "lane_id": 1, "validator": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw" } },
+      { "ActivatePublicLaneValidator": { "lane_id": 1, "validator": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ" } },
       {
         "ExitPublicLaneValidator": {
           "lane_id": 1,
-          "validator": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
+          "validator": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
           "release_at_ms": 1730000000000
         }
       }

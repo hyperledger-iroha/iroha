@@ -61,21 +61,21 @@ import {
 } from "@iroha/iroha-js";
 
 const mintInstruction = buildMintAssetInstruction({
-  assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+  assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
   quantity: "10",
 });
 
 const transferInstruction = buildTransferAssetInstruction({
   sourceAssetId: "<base58-asset-definition-id>#<i105-account-id>",
-  destinationAccountId: "i105...",
+  destinationAccountId: "soraカタカナ...",
   quantity: "5",
 });
 
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
-  authority: "i105...",
-  mint: { assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", quantity: "10" },
-  transfers: [{ destinationAccountId: "i105...", quantity: "5" }],
+  authority: "soraカタカナ...",
+  mint: { assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ", quantity: "10" },
+  transfers: [{ destinationAccountId: "soraカタカナ...", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
 ```
@@ -98,16 +98,16 @@ import {
 const registerDomain = noritoEncodeInstruction(
   buildRegisterDomainInstruction({ domainId: "wonderland" }),
 );
-const registerAccount = buildRegisterAccountInstruction({ accountId: "i105..." });
+const registerAccount = buildRegisterAccountInstruction({ accountId: "soraカタカナ..." });
 const transfer = buildTransferAssetInstruction({
   sourceAssetId: "<base58-asset-definition-id>#<i105-account-id>",
-  destinationAccountId: "i105...",
+  destinationAccountId: "soraカタカナ...",
   quantity: "5",
 });
 
 const tx = buildTransaction({
   chainId: "demo-chain",
-  authority: "i105...",
+  authority: "soraカタカナ...",
   instructions: [registerAccount, transfer],
   privateKey: Buffer.alloc(32, 0x42),
 });
@@ -167,7 +167,7 @@ const nftPage = await torii.listNfts({
 });
 console.log("nfts:", nftPage.items.map((it) => it.id));
 
-for await (const holding of torii.iterateAccountAssetsQuery("i105...", {
+for await (const holding of torii.iterateAccountAssetsQuery("soraカタカナ...", {
   requirePermissions: true,
   pageSize: 2,
   filter: { Gte: ["quantity", 1] },
@@ -288,9 +288,9 @@ import { ToriiClient, generateKeyPair } from "@iroha/iroha-js";
 const torii = new ToriiClient("https://torii.nexus.example");
 const { privateKey } = generateKeyPair({ seed: Buffer.alloc(32, 7) });
 
-const { items } = await torii.listAccountAssets("i105...", {
+const { items } = await torii.listAccountAssets("soraカタカナ...", {
   limit: 10,
-  canonicalAuth: { accountId: "i105...", privateKey },
+  canonicalAuth: { accountId: "soraカタカナ...", privateKey },
 });
 ```
 
@@ -325,28 +325,28 @@ const defs = await torii.queryAssetDefinitions({
 });
 console.log("filtered definitions", defs.items);
 
-const perms = await torii.listAccountPermissions("i105...", {
+const perms = await torii.listAccountPermissions("soraカタカナ...", {
   limit: 10,
 });
 console.log("direct permissions", perms.items);
-for await (const perm of torii.iterateAccountPermissions("i105...", {
+for await (const perm of torii.iterateAccountPermissions("soraカタカナ...", {
   pageSize: 5,
 })) {
   console.log("iterated permission", perm.name);
 }
-const holdings = await torii.listAccountAssets("i105...", {
+const holdings = await torii.listAccountAssets("soraカタカナ...", {
   limit: 5,
-  assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+  assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
 });
 console.log("asset holdings", holdings.items);
 const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 5,
-  assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+  assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
 });
 console.log("top holders", holders.items.map((entry) => entry.account_id));
-const txs = await torii.listAccountTransactions("i105...", {
+const txs = await torii.listAccountTransactions("soraカタカナ...", {
   limit: 3,
-  assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+  assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
 });
 console.log("recent hashes", txs.items.map((tx) => tx.entrypoint_hash));
 
@@ -358,7 +358,7 @@ for await (const nft of torii.iterateNfts({
   console.log("nft:", nft.id);
 }
 
-for await (const holding of torii.iterateAccountAssetsQuery("i105...", {
+for await (const holding of torii.iterateAccountAssetsQuery("soraカタカナ...", {
   pageSize: 8,
   filter: { Eq: ["asset_id.definition_id", "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"] },
   select: [{ Fields: ["asset_id", "quantity"] }],
@@ -371,13 +371,13 @@ for await (const holding of torii.iterateAccountAssetsQuery("i105...", {
 
 `iterateNfts` and `iterateAccountAssets` wrap the same Norito filter/sort
 envelopes as the POST query endpoints while handling pagination for you. Pass
-`pageSize`/`maxItems` to bound the iteration. Responses use canonical i105 account identifiers. Torii returns permission errors as
+`pageSize`/`maxItems` to bound the iteration. Responses use canonical Katakana i105 account identifiers. Torii returns permission errors as
 `ToriiHttpError` (status/`code`/`message`); catch them to surface deny reasons
 in UI flows.
 
 ```js
 const assets = [];
-for await (const holding of torii.iterateAccountAssets("i105...", {
+for await (const holding of torii.iterateAccountAssets("soraカタカナ...", {
   pageSize: 2,
   maxItems: 10,
   sort: [{ key: "quantity", order: "desc" }],
@@ -407,7 +407,7 @@ try {
 }
 
 try {
-  await torii.listAccountAssets("i105...", { limit: 1 });
+  await torii.listAccountAssets("soraカタカナ...", { limit: 1 });
 } catch (error) {
   if (error instanceof ToriiHttpError && error.code === "permission_denied") {
     console.warn("missing asset read permission", error.errorMessage);
@@ -416,13 +416,13 @@ try {
   }
 }
 
-const ownedNfts = await torii.listAccountNfts("i105...", {
+const ownedNfts = await torii.listAccountNfts("soraカタカナ...", {
   domainId: "wonderland",
   limit: 5,
 });
 console.log("alice NFTs", ownedNfts.items.map((entry) => entry.id));
 
-for await (const nft of torii.iterateAccountNfts("i105...", {
+for await (const nft of torii.iterateAccountNfts("soraカタカナ...", {
   domainId: "wonderland",
   pageSize: 10,
   maxItems: 20,
@@ -502,7 +502,7 @@ if (!snapshot) {
   console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
 }
 
-const qr = await torii.getExplorerAccountQr("i105...");
+const qr = await torii.getExplorerAccountQr("soraカタカナ...");
 console.log("explorer literal", qr.literal);
 await fs.promises.writeFile("alice.svg", qr.svg, "utf8");
 console.log(
@@ -510,8 +510,8 @@ console.log(
 );
 ```
 
-`getExplorerAccountQr()` returns canonical i105 output. The helper trims invalid
-combinations locally and always returns the canonical i105 account identifier,
+`getExplorerAccountQr()` returns canonical Katakana i105 output. The helper trims invalid
+combinations locally and always returns the canonical Katakana i105 account identifier,
 selected literal, and QR metadata (version, error correction level, module count,
 network prefix, and inline SVG) so automation can cache or embed the same payloads the
 Explorer renders.

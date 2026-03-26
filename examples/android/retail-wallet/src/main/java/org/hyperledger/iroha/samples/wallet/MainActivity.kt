@@ -56,8 +56,7 @@ class MainActivity : AppCompatActivity() {
             binding.addressI105Label.text =
                 getString(R.string.wallet_address_i105_label, address.networkPrefix)
             binding.addressI105Value.text = address.i105
-            binding.addressI105DefaultValue.text = address.i105Default
-            binding.addressI105DefaultWarning.text = address.i105Warning
+            binding.addressI105Warning.text = address.i105Warning
 
             binding.addressCopyI105.setOnClickListener {
                 copyAddressToClipboard(
@@ -71,19 +70,6 @@ class MainActivity : AppCompatActivity() {
             binding.addressCopyI105.setTag(
                 R.id.copy_mode_tag,
                 AddressCopyTelemetry.CopyMode.I105.analyticsLabel
-            )
-            binding.addressCopyI105Default.setOnClickListener {
-                copyAddressToClipboard(
-                    label = "i105_default",
-                    address = address.i105Default,
-                    successMessage = getString(R.string.wallet_copy_success, "i105_default"),
-                    warning = address.i105Warning,
-                    mode = AddressCopyTelemetry.CopyMode.I105_DEFAULT
-                )
-            }
-            binding.addressCopyI105Default.setTag(
-                R.id.copy_mode_tag,
-                AddressCopyTelemetry.CopyMode.I105_DEFAULT.analyticsLabel
             )
 
             val qrBitmap = generateQrBitmap(address.i105)

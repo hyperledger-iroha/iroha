@@ -54,7 +54,7 @@ fn grant_revoke_permission_with_tlv() {
         .expect("account id string")
         .to_owned();
     let alice = ScopedAccountId::parse_encoded(&alice_literal)
-        .expect("canonical i105 account id must parse");
+        .expect("canonical Katakana i105 account id must parse");
     let bob = account(
         "wonderland",
         "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",

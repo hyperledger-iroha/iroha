@@ -10,7 +10,7 @@ import {
 } from "../src/offlineCounterJournal.js";
 
 const FIXTURE_ALICE_I105 =
-  "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+  "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
 
 async function withTempDir(prefix, fn) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));

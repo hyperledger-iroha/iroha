@@ -89,7 +89,7 @@ en bruto.
 Los exploradores deben reflejar el trabajo de telemetria y accesibilidad de la
 billetera:
 
-- Aplica `data-copy-mode="i105|i105_default|qr"` a los botones de copia para que
+- Aplica `data-copy-mode="i105|qr"` a los botones de copia para que
   los front-ends puedan emitir contadores de uso junto con la metrica Torii
   `torii_address_format_total`. El componente demo anterior despacha un evento
   `iroha:address-copy` con `{mode,timestamp}`: conecta esto a tu pipeline de
@@ -199,7 +199,7 @@ cadenas comprimidas deben seguir el flujo CLI documentado en ADDR-5:
   defecto.
 
 3. Convierte el payload canonico reutilizando los campos `i105.value` o
-   `i105_default` del resumen (o solicita otra codificacion via `--format`). Estas
+   `i105` del resumen (o solicita otra codificacion via `--format`). Estas
    cadenas ya son seguras para compartir externamente.
 4. Actualiza manifiestos, registros y documentos de cara al cliente con la
    forma canonica y notifica a las contrapartes que los selectores Local seran

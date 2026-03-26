@@ -72,7 +72,7 @@ sorafs_cli manifest submit \
   --manifest artifacts/video.manifest.to \
   --chunk-plan artifacts/video.plan.json \
   --torii-url https://gateway.example/v1 \
-  --authority i105... \
+  --authority soraカタカナ... \
   --private-key ed25519:0123...beef \
   --alias-namespace sora \
   --alias-name video::launch \

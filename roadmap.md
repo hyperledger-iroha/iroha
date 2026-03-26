@@ -2,6 +2,86 @@
 
 Last updated: 2026-03-26
 
+Latest sync (2026-03-26 JS RWA metadata builder parity):
+`javascript/iroha_js/src/{instructionBuilders,transaction,index}.js`,
+`javascript/iroha_js/index.d.ts`,
+`javascript/iroha_js/test/{instructionBuilders,rwaBuilders.pure,transactionBuilder}.test.js`,
+`javascript/iroha_js/README.md`,
+`crates/iroha_js_host/src/lib.rs`,
+and
+`crates/iroha_core/src/block.rs`
+now carry the next dedicated-RWA client slice:
+
+- JS now exposes dedicated builders and signed-transaction wrappers for
+  `SetRwaKeyValue` and `RemoveRwaKeyValue`, matching the earlier lifecycle and
+  control helpers instead of leaving RWA metadata edits to ad hoc payload
+  assembly;
+- the native JS host now round-trips those RWA metadata instructions through
+  `RwaInstructionBox`, removing the last explicit "unsupported RWA metadata
+  instruction variant" error from the host JSON bridge; and
+- the isolated Python binding test is no longer blocked by the RWA binding
+  implementation itself, but it still pulls in an unrelated `iroha_core`
+  compile path whose `WorldReadOnly` account-alias parsing only has the default
+  dataspace catalog available today.
+
+Validation:
+- `cargo fmt --all`
+- `cd javascript/iroha_js && node --test --test-name-pattern "buildTransferRwaInstruction covers rwa transfer|rwa scalar instruction builders cover lifecycle operations" test/instructionBuilders.test.js`
+- `cd javascript/iroha_js && IROHA_JS_DISABLE_NATIVE=1 node --test test/rwaBuilders.pure.test.js`
+- `cd javascript/iroha_js && node --test --test-name-pattern "buildTransferRwaTransaction returns canonical hash|buildRegisterRwaTransaction forwards canonical instruction payload|buildRwaKeyValueTransactions forward canonical instruction payloads" test/transactionBuilder.test.js`
+- `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_js_host cargo test -p iroha_js_host rwa_instruction_json_roundtrip -- --nocapture`
+- `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_py_rwa cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml transfer_rwa_instruction_classmethod_serializes_canonical_numeric_payload -- --nocapture`
+
+Open work for this slice now remains:
+- thread the live dataspace catalog through the remaining
+  `parse_account_literal_with_world(...)` call sites that only expose
+  `WorldReadOnly`, so non-default account-alias dataspaces keep working even on
+  the broader `iroha_core` compile path; and
+- expand Python beyond `transfer_rwa(...)` if we want parity with the richer
+  JS/Swift/Kotlin/Java RWA metadata/control helper surface.
+
+Latest sync (2026-03-26 native JS RWA host parity and dotted-domain i105 helper fix):
+`crates/iroha_js_host/src/lib.rs`,
+`crates/iroha_data_model/src/account/address/vectors.rs`,
+`javascript/iroha_js/scripts/copy-native.mjs`,
+`javascript/iroha_js/src/address.js`,
+`javascript/iroha_js/test/address.test.js`,
+and the existing JS/Python RWA regression tests now move the dedicated RWA
+client slice past the pure-JS-only fallback path:
+
+- the copied macOS addon is ad-hoc signed automatically, so
+  `javascript/iroha_js/native/iroha_js_host.node` now loads under Node instead
+  of failing code-signature validation at `dlopen` time;
+- the native JS host now parses JS RWA payloads into `RwaInstructionBox`
+  variants and renders the JS-facing RWA JSON shape manually for parent edges,
+  control policies, and the other dedicated RWA instructions, so the focused
+  native instruction and transaction tests now execute against the real Norito
+  addon path instead of skipping or failing as unsupported;
+- `AccountAddress.fromAccount({ domain })` now accepts dotted domain ids such
+  as `hbl.sbp` by validating each label separately, which restores the JS
+  transaction-builder helper path that derives sample i105 authorities for the
+  native RWA transaction tests; and
+- the account-address vector helper in `iroha_data_model` now matches the
+  current `AccountAddressError` enum, removing a native-addon rebuild blocker
+  that surfaced while validating the JS host changes.
+
+Validation:
+- `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_js_host cargo build -p iroha_js_host --lib`
+- `cd javascript/iroha_js && CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_js_host npm run build:native`
+- `cd javascript/iroha_js && node -e 'import("./src/native.js").then((m)=>{ const binding = m.getNativeBinding(); console.log("binding", !!binding, typeof binding?.noritoEncodeInstruction, typeof binding?.buildTransaction); }).catch((err)=>{ console.error(err); process.exit(1); })'`
+- `cd javascript/iroha_js && node --test --test-name-pattern "buildRegisterRwaInstruction normalizes richer lot payloads|buildTransferRwaInstruction covers rwa transfer|rwa scalar instruction builders cover lifecycle operations" test/instructionBuilders.test.js`
+- `cd javascript/iroha_js && node --test --test-name-pattern "buildTransferRwaTransaction returns canonical hash|buildRegisterRwaTransaction forwards canonical instruction payload" test/transactionBuilder.test.js`
+- `cd javascript/iroha_js && node --test --test-name-pattern "fromAccount accepts dotted domain ids without changing canonical payloads" test/address.test.js`
+- `source /tmp/iroha-py-tools/bin/activate && python -m pytest python/iroha_python/tests/test_tx_rwa.py -q`
+
+Open work for this slice now remains:
+- finish and rerun the isolated Rust-side Python extension test for
+  `Instruction.transfer_rwa(...)` under its separate target dir, then fold that
+  result back into the status notes once it completes cleanly; and
+- decide whether the JS client should expose first-class builders for RWA
+  metadata edits as well, instead of stopping at the dedicated lifecycle and
+  control instructions.
+
 Latest sync (2026-03-26 JS/Python RWA client parity and JS address lazy native fallback):
 `javascript/iroha_js/src/{address,normalizers,instructionBuilders,transaction,toriiClient,index}.js`,
 `javascript/iroha_js/index.d.ts`,
@@ -37,14 +117,13 @@ Validation:
 - `source /tmp/iroha-py-tools/bin/activate && python -m pytest python/iroha_python/tests/test_tx_rwa.py -q`
 
 Open work for this slice now remains:
-- debug the JS native host crash that still occurs when the actual
-  `iroha_js_host.node` addon is loaded in this environment, so the older
-  native-dependent JS suites can move from "skip cleanly / pure-JS coverage
-  only" back to reliable native execution; and
 - rerun the targeted Rust test for
   `python/iroha_python/iroha_python_rs::Instruction::transfer_rwa(...)` once
-  unrelated cargo lock contention clears, so the extension-side serializer path
-  is also validated locally.
+  the isolated-target compile completes, so the extension-side serializer path
+  is also validated locally; and
+- decide whether the JS client should expose first-class builders for dedicated
+  RWA metadata edits as well, now that the native lifecycle/control path is in
+  place.
 
 Latest sync (2026-03-26 Swift RWA builders and metadata target parity):
 `IrohaSwift/Sources/IrohaSwift/RwaInstructionBuilders.swift`,
@@ -234,6 +313,25 @@ Open work for this slice now remains:
 - decide whether Swift should add native signed-envelope builders for the full
   non-metadata RWA instruction family instead of stopping at payload builders
   plus `.rwa(...)` metadata signing.
+
+Latest sync (2026-03-26 permission JSON decode-time canonicalization and alias-scope schema alignment):
+`crates/iroha_data_model/src/permission.rs`,
+`crates/iroha_executor_data_model/src/permission.rs`,
+and
+`crates/iroha_core/src/state.rs`
+now keep `Permission` equality/order exact while canonicalizing only
+insignificant payload whitespace during JSON decode, preserving duplicate
+payload keys on the parser path, and publishing `AccountAliasPermissionScope`
+schema tags as `domain` / `dataspace` again.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p iroha_data_model permission --lib`
+- `cargo test -p iroha_executor_data_model alias_scope_ --lib`
+- `cargo test -p iroha_core permission_deserialized_from_json_matches_canonical_permission --lib`
+
+Open work for this slice now remains:
+- no additional confirmed work remains in this permission/schema compatibility slice.
 
 Latest sync (2026-03-25 deterministic RWA generated IDs and Torii/MCP parity coverage):
 `crates/iroha_core/src/state.rs`,
@@ -3632,7 +3730,7 @@ Latest sync (2026-03-24 unified dataspace-aware account alias groundwork):
 now implement the first unified alias slice:
 
 - canonical account-alias parsing/formatting now supports
-  `label@domain.dataspace` and exact domainless `label@dataspace` literals,
+  `name@domain.dataspace` and exact domainless `name@dataspace` literals,
   with `DataSpaceId` stored internally and catalog aliases used only at the
   boundary;
 - account registration is now domain-optional in the data model/core register
@@ -4015,9 +4113,9 @@ was fixed:
   - `java/iroha_android/:jvm:test`
   - `java/iroha_android/:samples-android:testDebugUnitTest`
 - the account-address fixture/harness drift is now closed: the checked-in
-  compliance vectors and Android loaders both use canonical `i105` /
-  `i105_default` encodings, and the stale `ih58`/compressed fixture schema is
-  gone from the Java SDK surface.
+  compliance vectors and Android loaders both use canonical `i105`
+  encodings, and the stale `ih58`/alternate-literal fixture schema is gone
+  from the Java SDK surface.
 - remaining red in the legacy baseline:
   - `GradleHarnessTests[org.hyperledger.iroha.android.client.OfflineToriiClientTests]`
     because `listAllowancesParsesResponse()` still expects a different
@@ -8992,10 +9090,14 @@ This appendix tracks open TODO markers discovered in the repository. Items are g
 
 ## Asset ID Follow-up
 1. Completed: `AssetDefinitionId::from_str` and the public Rust selectors are Base58-only, the last checked-in capability fixtures were migrated from `aid:<hex>` to canonical Base58 addresses, and the remaining `aid:` literals in-tree are deliberate negative tests.
-2. Completed: the remaining public `norito:<hex>` `AssetId` helpers/examples in Swift offline encoding/decoding, Torii client parsing, bridge/docs wording, and Android/JVM transfer helpers were removed so the first release exposes a single canonical asset-id form: `<asset-definition-id>#<i105-account-id>` with optional `#dataspace:<id>` for scoped balances.
+2. Completed: the remaining public `norito:<hex>` `AssetId` helpers/examples in Swift offline encoding/decoding, Torii client parsing, bridge/docs wording, and Android/JVM transfer helpers were removed so the first release exposes a single canonical asset-id form: `<base58-asset-id>#<katakana-i105-account-id>` with optional `#dataspace:<id>` for scoped balances.
 3. Completed: translated data-model docs, Swift SDK docs/examples, Swift client references, and JS Torii typings/JSDoc no longer describe legacy `aid:` literals or the old `name#domain@dataspace` alias grammar.
 4. Completed: the dead `xtask` `rewrite-legacy-asset-literals` bin target and the old alias-shaped `asset_def:name#domain` access-hint compatibility path were removed, so workspace tooling and access hints no longer rely on any first-release asset-id compatibility shim.
 5. Completed: alias-hostile config/runtime selectors are now closed too; Torii faucet, ISO 20022 currency bindings, Nexus fee charging, and Nexus staking/slash flows resolve canonical Base58 ids or active on-chain asset aliases against world state, while non-alias-aware typed examples/tests now use canonical Base58 literals.
+6. Completed: remaining canonical-slot golden fixtures/tests/helpers were cleaned up too; the UAID portfolio snapshot now emits canonical `asset_id` + `asset_definition_id`, permission payload tests no longer serialize `name#domain#account`, Android offline-wallet allowance fixtures now use canonical asset literals, and helper scripts (`asset_flow.sh`, `deploy_localnet.sh`, `training_script_2.sh`) register canonical Base58 asset-definition ids with explicit names instead of legacy `name#domain` identifiers.
+
+## Account Literal Follow-up
+1. Completed: the canonical-slot sweep no longer leaves checked-in JSON `account_id` examples using `@domain` forms; remaining `@...` hits are short/long on-chain alias examples (`name@dataspace`, `name@domain.dataspace`), explicit negative tests, or documentation describing rejected legacy forms.
 
 ## Asset Alias Lease Follow-up
 1. Completed: translated docs and SDK-facing API references now describe the current `alias_binding` response payload, the persisted lease statuses (`permanent`, `leased_active`, `leased_grace`, `expired_pending_cleanup`), the chain-time-based alias cutoff, and the post-grace `expired_pending_cleanup` readback semantics.

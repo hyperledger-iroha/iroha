@@ -1889,7 +1889,7 @@ mod tests {
         };
 
         let controller =
-            AccountId::parse_encoded("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw")
+            AccountId::parse_encoded("soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ")
                 .map(crate::account::ParsedAccountId::into_account_id)
                 .unwrap();
         let receiver = AccountId::new(

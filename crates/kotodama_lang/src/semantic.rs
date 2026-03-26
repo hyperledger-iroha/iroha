@@ -6409,7 +6409,7 @@ mod tests {
                     call run;
                     on time pre_commit;
                     repeats 2;
-                    authority "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+                    authority "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
                     metadata { tag: "alpha"; count: 1; enabled: true; }
                 }
             }
@@ -6425,7 +6425,7 @@ mod tests {
         assert_eq!(
             trigger.authority,
             Some(
-                AccountId::parse_encoded("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+                AccountId::parse_encoded("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ")
                     .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                     .expect("authority literal"),
             )
@@ -6513,7 +6513,7 @@ mod tests {
             trigger::TriggerId,
         };
 
-        let account_literal = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+        let account_literal = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
         let account = AccountId::parse_encoded(account_literal)
             .map(ParsedAccountId::into_account_id)
             .expect("account");

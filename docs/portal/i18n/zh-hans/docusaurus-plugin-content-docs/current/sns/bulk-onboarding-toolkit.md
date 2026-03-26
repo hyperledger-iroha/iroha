@@ -45,7 +45,7 @@ Torii 或 CLI。助手验证前面的每一行，发出两个
 |--------|----------|-------------|
 | `label` |是的 |请求的标签（接受混合大小写；工具根据 Norm v1 和 UTS-46 进行标准化）。 |
 | `suffix_id` |是的 |数字后缀标识符（十进制或 `0x` 十六进制）。 |
-| `owner` |是的 | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
+| `owner` |是的 | AccountId string (domainless encoded literal; canonical Katakana i105 only; no `@<domain>` suffix). |
 | `term_years` |是的 |整数 `1..=255`。 |
 | `payment_asset_id` |是的 |结算资产（例如 `61CtjvNd9T3THAR65GsMVHr82Bjc`）。 |
 | `payment_gross` / `payment_net` |是的 |表示资产本机单位的无符号整数。 |
@@ -86,9 +86,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "soraカタカナ...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"soraカタカナ...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -97,7 +97,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"soraカタカナ...",
         "signature":"alpha-signature"
       },
       "governance": null,

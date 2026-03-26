@@ -27,7 +27,7 @@ fn join_kaigi_accepts_canonical_commitment_literal() {
         Name::from_str("weekly-sync").expect("call name"),
     );
     let participant =
-        AccountId::parse_encoded("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw")
+        AccountId::parse_encoded("soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ")
             .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .expect("account id");
     let commitment_literal =

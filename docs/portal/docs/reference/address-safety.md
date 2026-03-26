@@ -50,7 +50,7 @@ formats without compromising safety or accessibility.
 
 ## Single-format policy
 
-- Keep canonical i105 as the only user-facing account literal format for copy,
+- Keep canonical Katakana i105 as the only user-facing account literal format for copy,
   share, and QR surfaces.
 - Do not expose alternate account-literal encodings in production wallet or
   explorer UX.

@@ -8,6 +8,7 @@ import {
   AccountAddress,
   __resetAddressNativeStateForTests,
 } from "../src/address.js";
+import { normalizeAccountId } from "../src/normalizers.js";
 
 const SAMPLE_PUBLIC_KEY = Uint8Array.from([
   0x64, 0x12, 0x97, 0x07, 0x93, 0x57, 0x22, 0x9f,
@@ -42,7 +43,6 @@ test("AccountAddress lazily resolves injected native codecs after import", () =>
         return {
           canonical_hex: "0xsynthetic",
           i105: "synthetic-i105",
-          i105_default: "synthetic-i105-default",
         };
       },
     };
@@ -56,7 +56,44 @@ test("AccountAddress lazily resolves injected native codecs after import", () =>
     );
     assert.equal(parsed.address.toI105(753), "synthetic-i105");
     assert.equal(parseCalls, 1);
-    assert.equal(renderCalls, 1);
+    assert.equal(renderCalls, 2);
+  } finally {
+    delete globalThis.__IROHA_NATIVE_BINDING__;
+    __resetAddressNativeStateForTests();
+  }
+});
+
+test("normalizeAccountId accepts native-rendered i105 without an explicit prefix", () => {
+  const canonical = AccountAddress.fromAccount({
+    domain: "wonderland",
+    publicKey: SAMPLE_PUBLIC_KEY,
+  }).canonicalBytes();
+  let parseCalls = 0;
+
+  try {
+    globalThis.__IROHA_NATIVE_BINDING__ = {
+      accountAddressParseEncoded(input, expectedPrefix) {
+        parseCalls += 1;
+        assert.equal(input, "synthetic-i105");
+        assert.equal(expectedPrefix, null);
+        return {
+          canonical_bytes: canonical,
+          network_prefix: 753,
+        };
+      },
+      accountAddressRender(bytes, prefix) {
+        assert.deepEqual(Buffer.from(bytes), Buffer.from(canonical));
+        assert.equal(prefix, 753);
+        return {
+          canonical_hex: "0xsynthetic",
+          i105: "synthetic-i105",
+        };
+      },
+    };
+    __resetAddressNativeStateForTests();
+
+    assert.equal(normalizeAccountId("synthetic-i105"), "synthetic-i105");
+    assert.equal(parseCalls, 1);
   } finally {
     delete globalThis.__IROHA_NATIVE_BINDING__;
     __resetAddressNativeStateForTests();

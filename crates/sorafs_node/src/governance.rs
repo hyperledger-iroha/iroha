@@ -641,14 +641,14 @@ mod tests {
             provider_id: [0x22; 32],
             status: RepairTaskStatusV1::Queued,
             occurred_at_unix: 1_700_000_111,
-            actor: Some("auditor#sora".into()),
+            actor: Some("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into()),
             message: Some("queued".into()),
         };
         let digest = iroha_crypto::Hash::new(payload.encode());
         let header = SorafsAuditHeaderV1 {
             sequence: 42,
             occurred_at_unix: payload.occurred_at_unix,
-            signer: "auditor#sora".into(),
+            signer: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
             payload_digest: *digest.as_ref(),
         };
         let event = RepairAuditEventV1 {
@@ -714,7 +714,7 @@ mod tests {
             ticket_id: RepairTicketId("REP-902".into()),
             provider_id: [0x11; 32],
             manifest_digest: [0x22; 32],
-            auditor_account: "auditor#sora".into(),
+            auditor_account: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
             proposed_penalty_nano: 50_000,
             submitted_at_unix: 1_700_000_222,
             rationale: "missed SLA".into(),

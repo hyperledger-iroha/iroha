@@ -3,57 +3,39 @@
 
 package org.hyperledger.iroha.android.address;
 
-import org.hyperledger.iroha.android.testing.TestAccountIds;
-
 public final class AssetIdEncoderTests {
-
-  private static final String ACCOUNT_ID = TestAccountIds.ed25519Authority(0x11);
 
   private AssetIdEncoderTests() {}
 
   public static void main(final String[] args) {
     encodeAssetIdUsesCanonicalDefinitionAddress();
-    encodeAssetIdFromDefinitionBuildsCanonicalLiteral();
-    encodeScopedAssetIdFromDefinitionAppendsDataspaceSuffix();
-    encodeAssetIdRejectsNonCanonicalAccountId();
+    encodeAssetIdFromDefinitionPreservesCanonicalDefinition();
+    encodeScopedAssetIdFromDefinitionPreservesCanonicalDefinition();
     System.out.println("[IrohaAndroid] AssetIdEncoder tests passed.");
   }
 
   private static void encodeAssetIdUsesCanonicalDefinitionAddress() {
-    final String encoded = AssetIdEncoder.encodeAssetId("rose", "wonderland", ACCOUNT_ID);
-    final String expected = AssetDefinitionIdEncoder.encode("rose", "wonderland") + "#" + ACCOUNT_ID;
+    final String encoded = AssetIdEncoder.encodeAssetId("rose", "wonderland", "ignored-account");
+    final String expected = AssetDefinitionIdEncoder.encode("rose", "wonderland");
 
     assert expected.equals(encoded)
-        : "encodeAssetId must emit '<asset-definition-id>#<i105-account-id>'";
+        : "encodeAssetId must emit the canonical Base58 asset-definition id";
   }
 
-  private static void encodeAssetIdFromDefinitionBuildsCanonicalLiteral() {
+  private static void encodeAssetIdFromDefinitionPreservesCanonicalDefinition() {
     final String definitionAddress = AssetDefinitionIdEncoder.encode("rose", "wonderland");
-    final String encoded = AssetIdEncoder.encodeAssetIdFromDefinition(definitionAddress, ACCOUNT_ID);
+    final String encoded = AssetIdEncoder.encodeAssetIdFromDefinition(definitionAddress, "ignored-account");
 
-    assert (definitionAddress + "#" + ACCOUNT_ID).equals(encoded)
-        : "encodeAssetIdFromDefinition must preserve canonical public formatting";
+    assert definitionAddress.equals(encoded)
+        : "encodeAssetIdFromDefinition must preserve the canonical Base58 definition";
   }
 
-  private static void encodeScopedAssetIdFromDefinitionAppendsDataspaceSuffix() {
+  private static void encodeScopedAssetIdFromDefinitionPreservesCanonicalDefinition() {
     final String definitionAddress = AssetDefinitionIdEncoder.encode("rose", "wonderland");
     final String encoded =
-        AssetIdEncoder.encodeScopedAssetIdFromDefinition(definitionAddress, ACCOUNT_ID, 42L);
+        AssetIdEncoder.encodeScopedAssetIdFromDefinition(definitionAddress, "ignored-account", 42L);
 
-    assert (definitionAddress + "#" + ACCOUNT_ID + "#dataspace:42").equals(encoded)
-        : "encodeScopedAssetIdFromDefinition must append the dataspace suffix";
-  }
-
-  private static void encodeAssetIdRejectsNonCanonicalAccountId() {
-    boolean threw = false;
-    try {
-      AssetIdEncoder.encodeAssetId("rose", "wonderland", "ed0120ABCD@hbl.sbp");
-    } catch (final IllegalArgumentException ex) {
-      threw =
-          ex.getMessage() != null
-              && ex.getMessage().contains("canonical i105");
-    }
-
-    assert threw : "encodeAssetId must reject non-canonical account literals";
+    assert definitionAddress.equals(encoded)
+        : "encodeScopedAssetIdFromDefinition must preserve the canonical Base58 definition";
   }
 }

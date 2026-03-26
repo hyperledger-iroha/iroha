@@ -2,6 +2,83 @@
 
 Last updated: 2026-03-26
 
+## 2026-03-26 Follow-up: JS now exposes dedicated RWA metadata builders, and the native host round-trips them
+- Extended
+  `javascript/iroha_js/src/{instructionBuilders,transaction,index}.js`,
+  `javascript/iroha_js/index.d.ts`,
+  `javascript/iroha_js/test/{instructionBuilders,rwaBuilders.pure,transactionBuilder}.test.js`,
+  `javascript/iroha_js/README.md`,
+  `crates/iroha_js_host/src/lib.rs`,
+  and
+  `crates/iroha_core/src/block.rs`
+  so the JS SDK no longer stops at RWA lifecycle/control instructions.
+- The shipped behavior in this slice:
+  - JS now exposes dedicated `buildSetRwaKeyValueInstruction`,
+    `buildRemoveRwaKeyValueInstruction`,
+    `buildSetRwaKeyValueTransaction`, and
+    `buildRemoveRwaKeyValueTransaction` helpers with matching TypeScript
+    declarations and README coverage;
+  - the native Norito host now parses and renders `SetRwaKeyValue` and
+    `RemoveRwaKeyValue` through `RwaInstructionBox` instead of rejecting RWA
+    metadata edits as unsupported during JSON conversion; and
+  - the previously blocked isolated Python Rust test is no longer stuck on the
+    RWA binding itself, but it still depends on a broader `iroha_core` compile
+    path that currently falls back to the default dataspace catalog for
+    `WorldReadOnly`-only account-alias parsing until the live catalog is
+    threaded through those callers.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cd javascript/iroha_js && node --test --test-name-pattern "buildTransferRwaInstruction covers rwa transfer|rwa scalar instruction builders cover lifecycle operations" test/instructionBuilders.test.js` (pass)
+  - `cd javascript/iroha_js && IROHA_JS_DISABLE_NATIVE=1 node --test test/rwaBuilders.pure.test.js` (pass)
+  - `cd javascript/iroha_js && node --test --test-name-pattern "buildTransferRwaTransaction returns canonical hash|buildRegisterRwaTransaction forwards canonical instruction payload|buildRwaKeyValueTransactions forward canonical instruction payloads" test/transactionBuilder.test.js` (pass)
+  - `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_js_host cargo test -p iroha_js_host rwa_instruction_json_roundtrip -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_py_rwa cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml transfer_rwa_instruction_classmethod_serializes_canonical_numeric_payload -- --nocapture` (still blocked by an unrelated `iroha_core` compile path outside the Python binding itself)
+
+## 2026-03-26 Follow-up: native JS RWA encoding/decoding now works end to end, and dotted-domain i105 helpers no longer fail in transaction tests
+- Extended
+  `crates/iroha_js_host/src/lib.rs`,
+  `crates/iroha_data_model/src/account/address/vectors.rs`,
+  `javascript/iroha_js/scripts/copy-native.mjs`,
+  `javascript/iroha_js/src/address.js`,
+  `javascript/iroha_js/test/address.test.js`,
+  `javascript/iroha_js/test/addressNativeInterop.test.js`,
+  and the previously added JS/Python RWA tests so the dedicated RWA client
+  surface now survives the actual native-addon path instead of only the
+  pure-JS fallback path.
+- The shipped behavior in this slice:
+  - the macOS native addon copy step now ad-hoc signs
+    `javascript/iroha_js/native/iroha_js_host.node` after copying, which fixes
+    the earlier `ERR_DLOPEN_FAILED` code-signature rejection when Node tried to
+    load the built addon;
+  - `iroha_js_host` now parses JS RWA payloads into `RwaInstructionBox`
+    variants, manually decodes/renderers parent-edge and control-policy JSON in
+    the JS-friendly shape, and round-trips native `RegisterRwa`,
+    `TransferRwa`, `MergeRwas`, `RedeemRwa`, `FreezeRwa`, `UnfreezeRwa`,
+    `HoldRwa`, `ReleaseRwa`, `ForceTransferRwa`, and `SetRwaControls`
+    instructions through the real Norito host path;
+  - `AccountAddress.fromAccount({ domain })` now accepts dotted domain ids such
+    as `hbl.dataspace` by validating each label separately, which restores the
+    transaction-builder helper path used to mint deterministic i105 authorities
+    in the JS native transaction tests; and
+  - the account-address vector helper in
+    `crates/iroha_data_model/src/account/address/vectors.rs` now covers the
+    recently added `MissingI105Sentinel`, `InvalidI105Base`, and
+    `InvalidI105Digit` error variants, unblocking the native addon rebuild
+    under the current crate graph.
+- Validation:
+  - `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_js_host cargo build -p iroha_js_host --lib` (pass)
+  - `cd javascript/iroha_js && CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_js_host npm run build:native` (pass)
+  - `cd javascript/iroha_js && node -e 'import("./src/native.js").then((m)=>{ const binding = m.getNativeBinding(); console.log("binding", !!binding, typeof binding?.noritoEncodeInstruction, typeof binding?.buildTransaction); }).catch((err)=>{ console.error(err); process.exit(1); })'` (pass)
+  - `cd javascript/iroha_js && node --test --test-name-pattern "buildRegisterRwaInstruction normalizes richer lot payloads|buildTransferRwaInstruction covers rwa transfer|rwa scalar instruction builders cover lifecycle operations" test/instructionBuilders.test.js` (pass)
+  - `cd javascript/iroha_js && node --test --test-name-pattern "buildTransferRwaTransaction returns canonical hash|buildRegisterRwaTransaction forwards canonical instruction payload" test/transactionBuilder.test.js` (pass)
+  - `cd javascript/iroha_js && node --test --test-name-pattern "fromAccount accepts dotted domain ids without changing canonical payloads" test/address.test.js` (pass)
+  - `source /tmp/iroha-py-tools/bin/activate && python -m pytest python/iroha_python/tests/test_tx_rwa.py -q` (pass)
+- Remaining implementation gap:
+  - the isolated Rust-side Python extension test
+    `transfer_rwa_instruction_classmethod_serializes_canonical_numeric_payload`
+    is still compiling under a fresh target dir and was not counted as passing
+    in this update; broader workspace verification also remains outstanding.
+
 ## 2026-03-26 Follow-up: JS and Python clients now expose dedicated RWA helpers, and the JS address codec no longer hard-crashes on import
 - Extended
   `javascript/iroha_js/src/{normalizers,instructionBuilders,transaction,toriiClient,index}.js`,
@@ -53,7 +130,7 @@ Last updated: 2026-03-26
 - Normalized the remaining CLI, Torii, core, JS, Python, Swift, Java, Kotlin,
   OpenAPI, docs, status, and roadmap wording so public account-id text now uses
   `i105` consistently, while asset-id placeholders now use
-  `<asset-definition-id>#<i105-account-id>`.
+  `<base58-asset-id>#<katakana-i105-account-id>`.
 - This follow-up also removed the last stale generic account-id validation
   messages from governance paths and aligned the generated/documented Torii
   account-id query descriptions with the same `i105` wording.
@@ -182,6 +259,26 @@ Last updated: 2026-03-26
   - Swift still does not expose dedicated RWA instruction builders or typed
     `NewRwa` / `MergeRwas` / `RwaControlPolicy` value objects; this pass only
     closes the Torii client/list-detail parity layer.
+
+## 2026-03-26 Follow-up: permission JSON normalization moved to decode time and alias-scope schema tags are back in sync
+- Hardened `crates/iroha_data_model/src/permission.rs` so `Permission`
+  equality/order semantics are exact again, while JSON decoding now
+  canonicalizes only insignificant payload whitespace, rejects duplicate
+  top-level `name` / `payload` fields on the parser path, and preserves
+  duplicate keys inside the payload instead of reparsing through
+  `norito::json::Value`.
+- Restored the Norito enum metadata on
+  `crates/iroha_executor_data_model/src/permission.rs` so
+  `AccountAliasPermissionScope` publishes the same snake-case schema tags that
+  the manual JSON codec already emits and accepts.
+- Kept the focused end-to-end regression in `crates/iroha_core/src/state.rs`
+  proving that a permission deserialized from JSON still matches the canonical
+  typed alias-management permission in the permission cache path.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_data_model permission --lib` (pass)
+  - `cargo test -p iroha_executor_data_model alias_scope_ --lib` (pass)
+  - `cargo test -p iroha_core permission_deserialized_from_json_matches_canonical_permission --lib` (pass)
 
 ## 2026-03-26 Follow-up: address canonicalisation integration assertions now validate canonical account literals instead of a stale `sora` prefix
 - Tightened `integration_tests/tests/address_canonicalisation.rs` so the
@@ -1377,7 +1474,7 @@ Last updated: 2026-03-26
     not become a new live runtime finding in this pass.
 
 ## 2026-03-25 Follow-up: final first-release asset-id legacy literals removed from live sources and fixtures
-- Completed the last live public asset-id cleanup so first-release user-facing paths now consistently use a single canonical asset literal form: `<asset-definition-id>#<i105-account-id>` with optional `#dataspace:<id>` for scoped balances.
+- Completed the last live public asset-id cleanup so first-release user-facing paths now consistently use a single canonical asset literal form: `<base58-asset-id>#<katakana-i105-account-id>` with optional `#dataspace:<id>` for scoped balances.
 - The shipped behavior in this slice:
   - Swift offline encoding/decoding and Torii client parsing now build, validate, and render canonical public `AssetId` literals instead of `norito:<hex>` wrappers; `TransactionEncoder`, `OfflineNoritoEncoding`, `OfflineNoritoDecoding`, and Torii explorer parsing all share the same public-form validation path;
   - the remaining live Rust/JS host/bridge/docs wording in `iroha_js_host`, `connect_norito_bridge`, Torii MCP tests, the tutorial example, and the IVM TLV examples no longer describe `norito:<hex>` or `aid:` as current asset-id interfaces;
@@ -1413,7 +1510,7 @@ Last updated: 2026-03-26
 
 ## 2026-03-24 Follow-up: public asset ids now use one canonical text form
 - Switched `iroha_data_model::asset::AssetId` display/`FromStr`/JSON behavior to
-  the public literal `<asset-definition-id>#<i105-account-id>` with optional
+  the public literal `<base58-asset-id>#<katakana-i105-account-id>` with optional
   `#dataspace:<id>` for scoped balances. This entry originally still mentioned
   internal `norito:<hex>` helpers; those helpers were removed in the
   2026-03-25 follow-up above.
@@ -1595,7 +1692,7 @@ Last updated: 2026-03-26
   - result: failed during peer startup, before block 1 and before any meaningful soak progress could be measured.
   - concrete genesis failures from peer stdout:
     `InstructionFailed(InvariantViolation("active SNS domain-name lease is required before registering \`wonderland\`"))`,
-    `InstructionFailed(Find(Account(6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnZaK)))`,
+    `InstructionFailed(Find(Account(soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ)))`,
     `InstructionFailed(InvariantViolation("active SNS domain-name lease is required before registering \`chaosnet\`"))`.
 - NPoS attempt:
   - log:
@@ -4009,8 +4106,8 @@ Last updated: 2026-03-26
   - updated `test/address.test.js`, `index.d.ts`, and regenerated
     `dist/address.js`.
 - Swift (`IrohaSwift`):
-  - removed the last exported full-width helper
-    `AccountAddress.toI105DefaultFullWidth()`;
+  - removed the last exported alternate-literal helper; account-address
+    rendering now exposes canonical `i105` only;
   - `swift build` now completes cleanly after the account-address cleanup.
 - Android (`java/iroha_android`):
   - `AccountAddress` now exposes only canonical I105 render/parse helpers;
@@ -4185,7 +4282,7 @@ Last updated: 2026-03-26
     parser plus explicit alias-manage permission instead of a special
     onboarding-only domain assumption;
   - multisig onboarding accepts canonical domainless aliases
-    (`label@dataspace`) and stores the same unified alias semantics as the
+    (`name@dataspace`) and stores the same unified alias semantics as the
     steady-state alias index; and
   - `POST /v1/multisig/spec`, `POST /v1/multisig/proposals/list`, and
     `POST /v1/multisig/proposals/get` now require canonical signed app-auth
@@ -4431,8 +4528,8 @@ Last updated: 2026-03-26
     `403`, and no longer fall back to the old alias-service / ISO bridge for
     account aliases.
 - Kotodama / IVM account-alias resolution now uses one canonical alias string:
-  - `resolve_account_alias("label@domain.dataspace")`
-  - `resolve_account_alias("label@dataspace")`
+  - `resolve_account_alias("name@domain.dataspace")`
+  - `resolve_account_alias("name@dataspace")`
   The compiler now publishes that single alias-string TLV into INPUT before
   invoking the syscall so trigger/runtime execution still receives a valid
   Norito envelope.
@@ -4535,8 +4632,8 @@ Last updated: 2026-03-26
 ## 2026-03-24 Follow-up: unified dataspace-aware account alias groundwork now spans the data model, core state, executor, and Torii
 - Replaced the old domain-only `AccountLabel` shape with a unified structured
   alias key carrying `label`, `Option<DomainId>`, and `DataSpaceId`, plus
-  canonical parse/format helpers for `label@domain.dataspace` and
-  `label@dataspace` backed by the current `DataSpaceCatalog`.
+  canonical parse/format helpers for `name@domain.dataspace` and
+  `name@dataspace` backed by the current `DataSpaceCatalog`.
 - Made account registration domain-optional in the core data model:
   `NewAccount.domain` is now optional, `Account::new_domainless` /
   `NewAccount::new_domainless` preserve empty linked-domain state, and
@@ -8301,7 +8398,7 @@ Last updated: 2026-03-26
     network, which previously could starve queued tests and trigger 300s permit wait timeouts.
 - Validation (this follow-up):
   - `cargo fmt --all` (pass)
-  - `cargo test -p integration_tests --test address_canonicalisation accounts_listing_filter_rejects_legacy_dotted_i105_literals -- --nocapture` (pass in sandbox; network startup skipped due loopback bind restrictions)
+  - `cargo test -p integration_tests --test address_canonicalisation accounts_listing_filter_rejects_dotted_i105_literals -- --nocapture` (pass in sandbox; network startup skipped due loopback bind restrictions)
 
 ## 2026-03-14 Follow-up: Norito burn/mint fixture parity re-sync
 - Fixed stale Norito instruction fixtures under `fixtures/norito_instructions` that no
@@ -9141,7 +9238,8 @@ Last updated: 2026-03-26
   - Fixed stale strict-parser wording in all `docs/account_structure*.md` variants:
     - replaced incorrect `reject canonical I105 and any @domain suffix` text with `reject compressed and any @domain suffix`.
   - Fixed `clippy -D warnings` doc lint fallout in:
-    - `crates/iroha_data_model/src/account/address/vectors.rs` (`i105_default` in docs now wrapped in backticks).
+    - `crates/iroha_data_model/src/account/address/vectors.rs` (account-address
+      format docs updated to the canonical `i105` wording).
 - Search acceptance sweeps (this pass):
   - `integration_tests/tests`: no stale bare `*_ID.domain()` callsites; `Account::new(...)` callsites are scoped via `to_account_id(...)` (plus existing `ScopedAccountId` callsites).
   - docs sweeps for stale strict-input phrases (`reject canonical I105`, `optional @domain hint`, `compressed accepted`, `second-best compressed`, strict parser accepting compressed/@domain) returned no active matches in docs surfaces.
@@ -9239,13 +9337,20 @@ Last updated: 2026-03-26
 
 ## 2026-03-11 I105 Hard-Cut Gap Closure (Explorer DTO + SNS/contract docs final sweep)
 - Closed the remaining runtime naming gap on Explorer account payloads:
-  - `crates/iroha_torii/src/explorer.rs`: renamed `compressed_address` to `i105_default_address`.
-  - `mochi/mochi-core/src/torii.rs`: aligned parser/model/tests/fixtures to `i105_default_address`.
+  - `crates/iroha_torii/src/explorer.rs`: renamed the legacy alternate-literal
+    field to canonical `i105_address`.
+  - `mochi/mochi-core/src/torii.rs`: aligned parser/model/tests/fixtures to the
+    canonical `i105_address` field.
 - Cleared residual legacy wording from final SNS/contract docs and static illustrations:
   - `docs/source/torii_contracts_api*.md`: strict parser sentence now says canonical I105 only (no `@<domain>` suffix), without `reject compressed` artifact text.
-  - `docs/source/sns/address_display_guidelines*.md`: replaced `Compressed Sora alphabet`/`Compressed I105 literals` phrasing with `i105-default` wording and removed stale `address_format` toggle block drift in Torii response knobs.
-  - `docs/source/references/address_norm_v1*.md`: replaced `compressed-Sora` with `i105-default-Sora`.
-  - `docs/source/sns/images/address_copy_*.svg` + `docs/portal/static/img/sns/address_copy_*.svg`: updated remaining “Compressed (`sora`)”/“Copy Compressed” labels to `i105-default`.
+  - `docs/source/sns/address_display_guidelines*.md`: removed transitional
+    second-format wording and stale `address_format` toggle drift in Torii
+    response knobs.
+  - `docs/source/references/address_norm_v1*.md`: removed the last alternate
+    account-literal wording.
+  - `docs/source/sns/images/address_copy_*.svg` +
+    `docs/portal/static/img/sns/address_copy_*.svg`: updated remaining copy
+    labels to canonical `I105`.
 - Validation (this pass):
   - `cargo test -p mochi-core explorer_account_record_decodes_payload -- --nocapture` (pass)
   - `cargo test -p mochi-core fetch_explorer_accounts_page_applies_filters -- --nocapture` (pass)
@@ -9256,25 +9361,32 @@ Last updated: 2026-03-26
 ## 2026-03-11 I105 Hard-Cut Gap Closure (example apps + docs alias purge)
 - Finished another hard-cut cleanup sweep focused on remaining user-facing legacy wording and stale alias docs:
   - iOS demo (`examples/ios/NoritoDemo`):
-    - renamed preview fields from `compressed`/`compressedWarning` to `i105Default`/`i105Warning`.
-    - updated copy mode telemetry label from `compressed` to `i105_default`.
-    - updated UI copy to “i105-default Sora-only”.
+    - collapsed preview fields and copy telemetry to canonical `i105`.
+    - removed the extra alternate-literal panel and button from the sample UI.
   - Android retail-wallet sample:
-    - updated `strings.xml` labels/tooltips/content descriptions from “compressed” wording to `i105-default`.
-    - renamed layout IDs/bindings from `address_*_compressed*` to `address_*_i105_default*` in:
+    - updated `strings.xml` labels/tooltips/content descriptions to canonical
+      `I105` wording.
+    - renamed layout IDs/bindings from legacy alternate-literal names to the
+      canonical `address_*_i105*` surface in:
       - `examples/android/retail-wallet/src/main/res/layout/activity_main.xml`
       - `examples/android/retail-wallet/src/main/java/org/hyperledger/iroha/samples/wallet/MainActivity.kt`
   - JS tests:
     - removed legacy QR payload `address_format` fixture fields and dropped the “ignores payload address_format field” compatibility test.
-    - renamed `maybeTestCompressed` helper in validation tests to `maybeTestI105Default`.
+    - renamed legacy helper/test wording to canonical `i105`.
   - Swift/Android test wording:
-    - normalized local variable/error message wording from `compressed` to `i105-default` in:
+    - normalized local variable/error message wording from legacy alternate
+      forms to canonical `i105` in:
       - `IrohaSwift/Tests/IrohaSwiftTests/{AccountAddressTests,AccountAddressFixtureTests,OfflineNoritoEncodingTests,TransactionInputValidatorTests}.swift`
       - `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java`
   - docs + portal surfaces:
-    - removed stale alias list text (`i105`, `compressed`, `ih-b32`, `sora`) from `docs/source/sdk/python/connect_end_to_end*.md` in favor of canonical-I105 wording.
-    - removed obsolete CLI docs option `--address-format {i105,compressed}` from `docs/source/nexus_public_lanes*.md`.
-    - replaced remaining account-address-status wording (`I105, compressed ('sora'...)`) with `I105 and i105-default ('sora'...)` across `docs/source`, `docs/portal/docs/reference`, and `docs/portal/i18n/.../reference`.
+    - removed stale alias list text (`i105`, `compressed`, `ih-b32`, `sora`)
+      from `docs/source/sdk/python/connect_end_to_end*.md` in favor of
+      canonical-I105 wording.
+    - removed obsolete CLI docs option `--address-format {i105,compressed}`
+      from `docs/source/nexus_public_lanes*.md`.
+    - replaced remaining account-address-status wording about a second account
+      literal across `docs/source`, `docs/portal/docs/reference`, and
+      `docs/portal/i18n/.../reference` with canonical-`I105` wording only.
     - updated portal UI copy surfaces:
       - `docs/portal/src/components/ExplorerAddressCard.jsx`
       - `docs/portal/static/img/sns/address_copy_android.svg`
@@ -9304,7 +9416,7 @@ Last updated: 2026-03-26
     - `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressFixtureTests.swift`
     - `javascript/iroha_js/test/address.test.js`
   - Android sample parity update:
-    - `java/iroha_android/samples-android/src/test/java/org/hyperledger/iroha/android/samples/SampleAddressTest.java` now asserts `formats.i105Default`.
+    - `java/iroha_android/samples-android/src/test/java/org/hyperledger/iroha/android/samples/SampleAddressTest.java` now asserts `formats.i105`.
   - JavaScript test naming/fixtures normalized away from `compressed` property labels in active suites:
     - `javascript/iroha_js/test/address.test.js`
     - `javascript/iroha_js/test/validationError.test.js`
@@ -9327,9 +9439,8 @@ Last updated: 2026-03-26
 
 ## 2026-03-11 I105 Hard-Cut Gap Closure (JavaScript SDK public symbols)
 - Removed remaining legacy JS SDK public method names tied to compressed-era wording:
-  - `AccountAddress.fromCompressedSora(...)` -> `AccountAddress.fromI105Default(...)`
-  - `AccountAddress.toCompressedSora()` -> `AccountAddress.toI105Default()`
-  - `AccountAddress.toCompressedSoraFullWidth()` -> `AccountAddress.toI105DefaultFullWidth()`
+  - removed the remaining alternate-literal entry points so the SDK exposes
+    canonical `i105` parse/render helpers only.
 - Updated corresponding type docs and package docs:
   - `javascript/iroha_js/index.d.ts`
   - `javascript/iroha_js/README.md`
@@ -9348,18 +9459,20 @@ Last updated: 2026-03-26
 ## 2026-03-11 I105 Hard-Cut Gap Closure (Swift/Android + Fixture Schema)
 - Closed the remaining SDK/schema gaps from the hard-cut follow-up:
   - Swift (`IrohaSwift`):
-    - `NativeAccountAddressRenderResult` now uses `i105Default`/`i105DefaultFullWidth` (removed legacy `compressed` field name).
-    - `AccountAddress.displayFormats(...)` now returns `i105Default` consistently (bridge and fallback paths aligned).
-    - fixture decoders/tests now read `encodings.i105_default` and `encodings.i105_default_fullwidth`, and negative fixture handling uses `format: "i105_default"`.
+    - `NativeAccountAddressRenderResult` now exposes canonical `i105` only.
+    - `AccountAddress.displayFormats(...)` returns `i105` consistently (bridge
+      and fallback paths aligned).
+    - fixture decoders/tests now read `encodings.i105`, and negative fixture
+      handling uses `format: "i105"`.
   - Android (`java/iroha_android`):
-    - renamed legacy API surface in `AccountAddress` to I105-default naming:
-      - `fromI105Default(...)`, `toI105Default()`, `toI105DefaultFullWidth()`, `i105WarningMessage()`.
-      - `DisplayFormats` fields now expose `i105Default` + `i105Warning`.
-      - parser format marker now uses `Format.I105_DEFAULT` for sentinel forms (legacy `COMPRESSED` symbol removed).
-    - updated Android address tests + retail-wallet sample callsites to the same names.
+    - removed the last alternate-literal API surface in `AccountAddress`.
+      `DisplayFormats` now exposes `i105` + `i105Warning`, and parser format
+      markers/tests use `I105` only.
+    - updated Android address tests + retail-wallet sample callsites to the
+      canonical names.
   - Fixture/schema hard-cut:
-    - compliance/vector generators now emit `i105_default` / `i105_default_fullwidth` keys.
-    - negative vectors now use `format: "i105_default"` and `i105_default-*` case ids.
+    - compliance/vector generators now emit `i105` keys only.
+    - negative vectors now use `format: "i105"` case ids.
     - refreshed fixture bundle: `fixtures/account/address_vectors.json`.
   - Consumer alignment:
     - updated Rust vector consumers:
@@ -9424,7 +9537,7 @@ Last updated: 2026-03-26
   - `cargo run -p iroha_cli --bin iroha -- tools markdown-help > crates/iroha_cli/CommandLineHelp.md`
 - Continued SDK docs hard-cut cleanup:
   - removed stale `addressFormat`/`address_format` argument examples from JS/Python/Swift SDK docs where APIs are now canonical I105-only.
-  - normalized `docs/source/sdk/js/quickstart*.md` explorer QR snippets to no-option `getExplorerAccountQr("i105...")` usage and canonical I105 wording.
+  - normalized `docs/source/sdk/js/quickstart*.md` explorer QR snippets to no-option `getExplorerAccountQr("soraカタカナ...")` usage and canonical I105 wording.
   - normalized `docs/source/sdk/python/index*.md` and `connect_end_to_end*.md` QR helper wording to canonical I105 output.
   - normalized `docs/source/sdk/swift/index*.md` QR/address sections to canonical I105 wording and removed stale `addressFormat: .compressed` snippets.
   - applied a follow-up docs sweep across `docs/`, `docs/source/`, and `docs/portal/` to remove remaining explicit `second-best`/`compressed (`sora`)` account-literal wording on address-format examples and QR snippets.
@@ -11077,3 +11190,21 @@ Last updated: 2026-03-26
   - `cargo test -p iroha_torii --lib asset_alias_resolve -- --nocapture`
   - `cargo test -p iroha_torii --lib asset_definition_get_returns_full_definition_by_base58_id -- --nocapture`
   - `cargo test -p iroha_torii --test asset_definitions_endpoints -- --nocapture`
+
+## 2026-03-26 Account and Asset Literal Consistency Cleanup
+- Closed the remaining canonical-slot fixture/script/test drift surfaced during the account-id and asset-id sweep:
+  - `fixtures/nexus/uaid_portfolio/global_default_portfolio.json` now uses canonical `asset_id` + `asset_definition_id` fields for the deterministic `portfolio_fixture` holdings.
+  - `integration_tests/tests/permissions.rs` now serializes `CanMintAsset.asset` as a canonical `AssetId` instead of `name#domain#account`.
+  - `java/iroha_android/.../OfflineWalletTest.java` now uses canonical `asset_id` / `asset_definition_id` literals for offline allowance fixtures.
+  - `scripts/asset_flow.sh`, `scripts/deploy_localnet.sh`, and `scripts/training_script_2.sh` no longer try to register asset definitions with legacy `name#domain` ids; they now register canonical Base58 ids and pass the required `--name` metadata explicitly.
+- Fixed a Torii compile regression uncovered while rerunning the portfolio snapshot tests: `/v1/accounts/{uaid}/portfolio` now maps `asset_id` query parse failures into Torii query conversion errors instead of leaking `ParseError` through `?`.
+- Validation:
+  - `cargo fmt --all`
+  - `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.OfflineWalletTest ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --rerun-tasks`
+    - currently fails in pre-existing `OfflineWalletTest.topUpRecordsVerdictMetadata` because `/v1/offline/allowances` no longer accepts server-side signing inputs; unrelated to this literal-cleanup patch.
+  - `cargo test -p iroha --lib get_uaid_portfolio -- --nocapture`
+    - recompiling in-progress during this update.
+  - `CARGO_TARGET_DIR=/tmp/iroha-portfolio-check cargo test -p iroha_torii --test accounts_portfolio accounts_portfolio_snapshot_matches_fixture -- --nocapture`
+    - recompiling in-progress during this update.
+  - `CARGO_TARGET_DIR=/tmp/iroha-permissions-check cargo test -p integration_tests stored_vs_granted_permission_payload -- --nocapture`
+    - recompiling in-progress during this update.

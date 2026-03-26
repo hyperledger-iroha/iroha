@@ -34,7 +34,7 @@ El parseur exige la línea de ente siguiente (el orden es flexible):| columna | 
 |---------|--------|-------------|
 | `label` | Sí | Libelle demande (caso mixto aceptado; la herramienta se normaliza según la norma v1 y UTS-46). |
 | `suffix_id` | Sí | Número de sufijo identificador (decimal o `0x` hexadecimal). |
-| `owner` | Sí | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
+| `owner` | Sí | AccountId string (domainless encoded literal; canonical Katakana i105 only; no `@<domain>` suffix). |
 | `term_years` | Sí | Entier `1..=255`. |
 | `payment_asset_id` | Sí | Actif de liquidación (por ejemplo `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Sí | Entiers non signes representant des unites nativos de l'actif. |
@@ -73,9 +73,9 @@ En caso de éxito, el guión escribe un manifiesto agregado:
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "soraカタカナ...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"soraカタカナ...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -84,7 +84,7 @@ En caso de éxito, el guión escribe un manifiesto agregado:
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"soraカタカナ...",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -241,7 +241,7 @@ Los auditores pueden concentrarse en una sola ejecución CSV.
   Las referencias a los archivos son resoluciones relativas a la ubicación del CSV.
   Los metadatos no objeto producen un error de validación.
 - **Controladores:** les cellules vides respectent `--default-controllers`. Fournissez
-  des listes explicites (por ejemplo `i105...;i105...`) quand vous deleguez a des
+  des listes explicites (por ejemplo `soraカタカナ...;soraカタカナ...`) quand vous deleguez a des
   actores no propietarios.
 
 Les echecs sont signales avec des numeros de ligne contextuels (por ejemplo

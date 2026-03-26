@@ -33,7 +33,7 @@ translator: machine-google-reviewed
 - `DomainId`: `name` (მაგ., `wonderland`).
 - `AccountId`: ანგარიშის კანონიკური დომენის იდენტიფიკატორი, კოდირებული მხოლოდ `AccountAddress`-ით, როგორც I105. პარსერის შეყვანები უნდა იყოს კანონიკური I105; დომენის სუფიქსები (`@domain`), კანონიკური I105 ლიტერალები, მეტსახელის ლიტერალები, კანონიკური თექვსმეტობითი პარსერის შეყვანა, ძველი `norito:` დატვირთვა და `uaid:`/`opaque:` არის ანგარიშის რეჟიმები.
 - `AssetDefinitionId`: კანონიკური `unprefixed Base58 address with versioning and checksum` (UUID-v4 ბაიტი).
-- `AssetId`: კანონიკური კოდირებული ლიტერალი `<asset-definition-id>#<i105-account-id>` (მემკვიდრეობითი ტექსტური ფორმები არ არის მხარდაჭერილი პირველ გამოშვებაში).
+- `AssetId`: კანონიკური კოდირებული ლიტერალი `<base58-asset-id>#<katakana-i105-account-id>` (მემკვიდრეობითი ტექსტური ფორმები არ არის მხარდაჭერილი პირველ გამოშვებაში).
 - `NftId`: `nft$domain` (მაგ., `rose$garden`).
 - `PeerId`: `public_key` (თანასწორობა არის საჯარო გასაღებით).
 
@@ -259,7 +259,7 @@ curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -d '{"alias":"pkr#ubl.sbp"}'
 ```მიგრაციის შენიშვნა:
 - ძველი `name#domain` აქტივების განსაზღვრის ID არ არის მიღებული v1-ში.
-- ზარაფხანის/დაწვის/გადაცემის აქტივების ID-ები რჩება კანონიკური `<asset-definition-id>#<i105-account-id>`; ააშენეთ ისინი:
+- ზარაფხანის/დაწვის/გადაცემის აქტივების ID-ები რჩება კანონიკური `<base58-asset-id>#<katakana-i105-account-id>`; ააშენეთ ისინი:
   - `iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
   - ან `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`.
 

@@ -4241,7 +4241,7 @@ fn resolve_asset_definition_selector(
     asset_literal: &str,
     now_ms: u64,
 ) -> Result<iroha_data_model::asset::id::AssetDefinitionId, Error> {
-    const INVALID_SELECTOR_MSG: &str = "invalid asset selector; expected an unprefixed Base58 asset definition id or `<name>#<domain>.<dataspace>` / `<name>#<dataspace>`";
+    const INVALID_SELECTOR_MSG: &str = "invalid asset selector; expected a canonical Base58 asset id or an on-chain asset alias `<name>#<domain>.<dataspace>` / `<name>#<dataspace>`";
 
     let selector = asset_literal.trim();
     if selector.is_empty() {
@@ -4454,6 +4454,36 @@ fn test_asset_definition_literal_from_hex(hex_literal: &str) -> String {
     test_asset_definition_id_from_hex(hex_literal).to_string()
 }
 
+#[cfg(test)]
+fn bind_permanent_asset_alias_for_test(
+    state: &std::sync::Arc<iroha_core::state::State>,
+    authority: &AccountId,
+    definition_id: &AssetDefinitionId,
+    alias: &str,
+) {
+    use iroha_core::smartcontracts::Execute as _;
+
+    let header = iroha_data_model::block::BlockHeader::new(
+        nonzero_ext::nonzero!(1_u64),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = state.block(header);
+    let mut tx = block.transaction();
+    iroha_data_model::isi::SetAssetDefinitionAlias::bind(
+        definition_id.clone(),
+        alias.parse().expect("valid asset alias"),
+        None,
+    )
+    .execute(authority, &mut tx)
+    .expect("bind permanent asset alias");
+    tx.apply();
+    block.commit().expect("commit permanent asset alias");
+}
+
 #[cfg(all(test, feature = "app_api"))]
 mod zk_roots_selector_tests {
     use std::str::FromStr;
@@ -4461,28 +4491,32 @@ mod zk_roots_selector_tests {
     use super::*;
     use iroha_crypto::KeyPair;
 
-    fn selector_world() -> (iroha_core::state::World, AssetDefinitionId) {
+    fn selector_state() -> (std::sync::Arc<iroha_core::state::State>, AssetDefinitionId) {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
         let domain_id: DomainId = "issuer".parse().expect("domain id");
         let definition_id = AssetDefinitionId::new(
             domain_id.clone(),
             Name::from_str("usd").expect("asset name"),
         );
-        let mut definition = AssetDefinition::numeric(definition_id.clone())
+        let definition = AssetDefinition::numeric(definition_id.clone())
             .with_name("usd".to_owned())
             .build(&authority);
-        definition.alias = Some("usd#main".parse().expect("alias"));
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account =
             Account::new(authority.clone().to_account_id(domain_id.clone())).build(&authority);
-        let world = iroha_core::state::World::with([domain], [account], [definition]);
-        (world, definition_id)
+        let state = std::sync::Arc::new(iroha_core::state::State::new_for_testing(
+            iroha_core::state::World::with([domain], [account], [definition]),
+            iroha_core::kura::Kura::blank_kura_for_testing(),
+            iroha_core::query::store::LiveQueryStore::start_test(),
+        ));
+        bind_permanent_asset_alias_for_test(&state, &authority, &definition_id, "usd#main");
+        (state, definition_id)
     }
 
     #[test]
     fn resolve_asset_definition_selector_accepts_alias_literal() {
-        let (world, definition_id) = selector_world();
-        let view = world.view();
+        let (state, definition_id) = selector_state();
+        let view = state.world_view();
         let resolved =
             resolve_asset_definition_selector(&view, "usd#main", 0).expect("alias should resolve");
         assert_eq!(resolved, definition_id);
@@ -4490,8 +4524,8 @@ mod zk_roots_selector_tests {
 
     #[test]
     fn resolve_asset_definition_selector_accepts_base58_literal() {
-        let (world, definition_id) = selector_world();
-        let view = world.view();
+        let (state, definition_id) = selector_state();
+        let view = state.world_view();
         let resolved = resolve_asset_definition_selector(&view, &definition_id.to_string(), 0)
             .expect("base58 id should resolve");
         assert_eq!(resolved, definition_id);
@@ -4499,8 +4533,8 @@ mod zk_roots_selector_tests {
 
     #[test]
     fn resolve_asset_definition_selector_rejects_prefixed_literal() {
-        let (world, _) = selector_world();
-        let view = world.view();
+        let (state, _) = selector_state();
+        let view = state.world_view();
         let err =
             resolve_asset_definition_selector(&view, "prefix:550e8400e29b11d4a7164466554400dd", 0)
                 .expect_err("prefixed literal should fail");
@@ -4512,8 +4546,8 @@ mod zk_roots_selector_tests {
 
     #[test]
     fn resolve_asset_definition_selector_rejects_unknown_alias() {
-        let (world, _) = selector_world();
-        let view = world.view();
+        let (state, _) = selector_state();
+        let view = state.world_view();
         let err = resolve_asset_definition_selector(&view, "usd#missing", 0)
             .expect_err("unknown alias should fail");
         assert!(matches!(
@@ -11798,7 +11832,7 @@ pub struct MultisigAccountSelectorDto {
     /// Active concrete multisig account id.
     #[norito(default)]
     pub multisig_account_id: Option<iroha_data_model::account::AccountId>,
-    /// Stable alias in canonical `label@domain.dataspace` or `label@dataspace` format.
+    /// Stable alias in canonical `name@domain.dataspace` or `name@dataspace` format.
     #[norito(default)]
     pub multisig_account_alias: Option<String>,
 }
@@ -14341,12 +14375,12 @@ fn ensure_canonical_repair_account_id(value: &str, field: &str) -> Result<(), Er
     let trimmed = value.trim();
     if trimmed != value {
         return Err(conversion_error(format!(
-            "invalid {field} `{value}`: expected canonical i105 account id without surrounding whitespace"
+            "invalid {field} `{value}`: expected canonical Katakana i105 account id without surrounding whitespace"
         )));
     }
     AccountId::parse_encoded(trimmed).map_err(|err| {
         conversion_error(format!(
-            "invalid {field} `{value}`: expected canonical i105 account id ({err})"
+            "invalid {field} `{value}`: expected canonical Katakana i105 account id ({err})"
         ))
     })?;
     Ok(())
@@ -14925,7 +14959,7 @@ mod repair_query_tests {
     use sorafs_node::config::StorageConfig;
     use tokio::runtime::Runtime;
 
-    const TEST_AUDITOR_I105: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+    const TEST_AUDITOR_I105: &str = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
 
     fn report(
         ticket: &str,
@@ -15068,9 +15102,9 @@ mod repair_worker_tests {
     use sorafs_node::config::StorageConfig;
     use tokio::runtime::Runtime;
 
-    const TEST_AUDITOR_I105: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
-    const TEST_WORKER_A_I105: &str = "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9";
-    const TEST_WORKER_B_I105: &str = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
+    const TEST_AUDITOR_I105: &str = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
+    const TEST_WORKER_A_I105: &str = "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ";
+    const TEST_WORKER_B_I105: &str = "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ";
 
     fn report(
         ticket: &str,
@@ -15305,7 +15339,7 @@ mod repair_worker_tests {
             let claim = RepairWorkerClaimDto {
                 ticket_id: report.ticket_id.clone(),
                 manifest_digest_hex: hex::encode(report.evidence.manifest_digest),
-                worker_id: "worker@hbl.sbp".into(),
+                worker_id: "worker@hbl.dataspace".into(),
                 claimed_at_unix: report.submitted_at_unix + 10,
                 idempotency_key: "claim-invalid".into(),
                 signature: sign_worker_action(
@@ -15313,7 +15347,7 @@ mod repair_worker_tests {
                     &report.ticket_id,
                     report.evidence.manifest_digest,
                     report.evidence.provider_id,
-                    "worker@hbl.sbp",
+                    "worker@hbl.dataspace",
                     "claim-invalid",
                     RepairWorkerActionV1::Claim {
                         claimed_at_unix: report.submitted_at_unix + 10,
@@ -15321,14 +15355,20 @@ mod repair_worker_tests {
                 ),
             };
 
-            let err = handle_post_sorafs_repair_claim(
+            let err = match handle_post_sorafs_repair_claim(
                 MaybeTelemetry::disabled(),
                 node,
                 NoritoJson(claim),
             )
             .await
-            .expect_err("alias worker id must be rejected");
-            assert!(err.to_string().contains("canonical i105 account id"));
+            {
+                Ok(_) => panic!("alias worker id must be rejected"),
+                Err(err) => err,
+            };
+            assert!(
+                err.to_string()
+                    .contains("canonical Katakana i105 account id")
+            );
         });
     }
 }
@@ -19046,6 +19086,7 @@ fn parse_account_literal_with_state(
     context: &'static str,
 ) -> Result<(iroha_data_model::account::AccountId, String), iroha_data_model::error::ParseError> {
     let trimmed = literal.trim();
+    let world = state.world_view();
     match AccountId::parse_encoded(trimmed) {
         Ok(parsed) => {
             let parsed_id = parsed.into_account_id();
@@ -19055,6 +19096,13 @@ fn parse_account_literal_with_state(
             Ok((resolved.clone(), resolved.to_string()))
         }
         Err(base_err) => {
+            if let Ok(alias) =
+                account::rekey::AccountLabel::from_literal(trimmed, &state.nexus.dataspace_catalog)
+                && let Some(resolved) = world.account_aliases().get(&alias).cloned()
+            {
+                record_account_literal_accept(telemetry, context, &resolved);
+                return Ok((resolved.clone(), resolved.to_string()));
+            }
             record_account_literal_reject(telemetry, context, literal, base_err.reason());
             Err(base_err)
         }
@@ -19227,38 +19275,42 @@ fn canonicalize_repo_filter_literals(
 #[cfg(feature = "app_api")]
 fn canonicalize_offline_allowance_filter_literals(
     expr: &mut FilterExpr,
+    state: Option<&CoreState>,
     telemetry: &MaybeTelemetry,
     context: &'static str,
 ) -> Result<()> {
-    canonicalize_filter_account_literals(expr, "controller_id", None, telemetry, context)
+    canonicalize_filter_account_literals(expr, "controller_id", state, telemetry, context)
 }
 
 #[cfg(feature = "app_api")]
 fn canonicalize_offline_revocation_filter_literals(
     expr: &mut FilterExpr,
+    state: Option<&CoreState>,
     telemetry: &MaybeTelemetry,
     context: &'static str,
 ) -> Result<()> {
-    canonicalize_filter_account_literals(expr, "issuer_id", None, telemetry, context)
+    canonicalize_filter_account_literals(expr, "issuer_id", state, telemetry, context)
 }
 
 #[cfg(feature = "app_api")]
 fn canonicalize_offline_summary_filter_literals(
     expr: &mut FilterExpr,
+    state: Option<&CoreState>,
     telemetry: &MaybeTelemetry,
     context: &'static str,
 ) -> Result<()> {
-    canonicalize_filter_account_literals(expr, "controller_id", None, telemetry, context)
+    canonicalize_filter_account_literals(expr, "controller_id", state, telemetry, context)
 }
 
 #[cfg(feature = "app_api")]
 fn canonicalize_offline_transfer_filter_literals(
     expr: &mut FilterExpr,
+    state: Option<&CoreState>,
     telemetry: &MaybeTelemetry,
     context: &'static str,
 ) -> Result<()> {
     for field in ["controller_id", "receiver_id", "deposit_account_id"] {
-        canonicalize_filter_account_literals(expr, field, None, telemetry, context)?;
+        canonicalize_filter_account_literals(expr, field, state, telemetry, context)?;
     }
     Ok(())
 }
@@ -19266,11 +19318,12 @@ fn canonicalize_offline_transfer_filter_literals(
 #[cfg(feature = "app_api")]
 fn canonicalize_offline_receipt_filter_literals(
     expr: &mut FilterExpr,
+    state: Option<&CoreState>,
     telemetry: &MaybeTelemetry,
     context: &'static str,
 ) -> Result<()> {
     for field in ["controller_id", "receiver_id"] {
-        canonicalize_filter_account_literals(expr, field, None, telemetry, context)?;
+        canonicalize_filter_account_literals(expr, field, state, telemetry, context)?;
     }
     Ok(())
 }
@@ -19279,26 +19332,27 @@ fn canonicalize_offline_receipt_filter_literals(
 fn canonicalize_query_account_literal(
     label: &'static str,
     literal: Option<&str>,
+    state: Option<&CoreState>,
     telemetry: &MaybeTelemetry,
     context: &'static str,
 ) -> Result<Option<String>> {
     use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
 
     literal
-        .map(|raw| match AccountId::parse_encoded(raw) {
-            Ok(parsed) => {
-                record_account_literal_accept(telemetry, context, parsed.account_id());
-                Ok(parsed.canonical().to_string())
-            }
-            Err(err) => {
-                record_account_literal_reject(telemetry, context, raw, err.reason());
-                Err(Error::Query(ValidationFail::QueryFailed(
-                    QueryExecutionFail::Conversion(format!(
-                        "invalid `{label}` literal `{raw}`: {}",
-                        err.reason()
-                    )),
+        .map(|raw| {
+            let canonical = match state {
+                Some(state) => parse_account_literal_with_state(state, raw, telemetry, context)
+                    .map(|(_, canonical)| canonical),
+                None => parse_account_literal(raw, telemetry, context).map(|parsed| {
+                    let (_, canonical, _) = parsed.into_parts();
+                    canonical
+                }),
+            };
+            canonical.map_err(|err| {
+                Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(
+                    format!("invalid `{label}` literal `{raw}`: {}", err.reason()),
                 )))
-            }
+            })
         })
         .transpose()
 }
@@ -19590,7 +19644,7 @@ mod address_metrics_tests {
     #[tokio::test(flavor = "current_thread")]
     async fn kaigi_sse_accepts_i105_literal() {
         let telemetry = MaybeTelemetry::for_tests();
-        let literal = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
+        let literal = "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ";
 
         let parsed = parse_account_literal(&literal, &telemetry, KAIGI_SSE_CONTEXT)
             .expect("i105 literal should parse");
@@ -19618,7 +19672,7 @@ mod account_path_metric_tests {
                 .get()
         };
         assert!(
-            parse_account_path_segment("bad@hbl.sbp", &telemetry, endpoint).is_err(),
+            parse_account_path_segment("bad@hbl.dataspace", &telemetry, endpoint).is_err(),
             "literal should be rejected"
         );
         let after = {
@@ -19701,8 +19755,8 @@ fn committed_transactions_snapshot(
 ///   curl -X POST \
 ///     -H 'Content-Type: application/json' \
 ///     -H 'Accept: application/json' \
-///     -d '{"filter": {"op":"eq","args":[{"FieldPath":"authority"},"6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw"]}, "pagination": {"limit": 50}}' \
-///     http://127.0.0.1:8080/v1/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/transactions/query
+///     -d '{"filter": {"op":"eq","args":[{"FieldPath":"authority"},"soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ"]}, "pagination": {"limit": 50}}' \
+///     http://127.0.0.1:8080/v1/accounts/soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ/transactions/query
 ///
 /// Returns: `{ "items": [ {"authority": "...", "timestamp_ms": 0, "entrypoint_hash": "...", "result_ok": true } ], "total": N }`
 ///
@@ -21978,7 +22032,7 @@ mod tx_query_integration_smoke {
     use super::*;
     // use tower::ServiceExt; // not needed in this module
 
-    const TEST_ACCOUNT: &str = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
+    const TEST_ACCOUNT: &str = "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ";
 
     #[must_use]
     struct DebugEnvGuard {
@@ -22045,7 +22099,7 @@ mod tx_query_integration_smoke {
             filter: Some(crate::filter::FilterExpr::Eq(
                 crate::filter::FieldPath("authority".into()),
                 norito::json::Value::String(
-                    "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw".into(),
+                    "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ".into(),
                 ),
             )),
             select: None,
@@ -22059,7 +22113,7 @@ mod tx_query_integration_smoke {
 
         let resp = handle_v1_account_transactions(
             Arc::new(state),
-            axum::extract::Path("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw".into()),
+            axum::extract::Path("soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ".into()),
             crate::utils::extractors::NoritoJson(env),
             crate::routing::MaybeTelemetry::for_tests(),
         )
@@ -24477,7 +24531,7 @@ mod app_api_integration_tests {
         ]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/transactions/query")
+            .uri("/v1/accounts/soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ/transactions/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(req_body))
             .unwrap();
@@ -24623,7 +24677,7 @@ mod app_api_integration_tests {
         ]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/transactions/query")
+            .uri("/v1/accounts/soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ/transactions/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -24667,7 +24721,7 @@ mod app_api_integration_tests {
         )]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/transactions/query")
+            .uri("/v1/accounts/soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ/transactions/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -24684,7 +24738,7 @@ mod app_api_integration_tests {
         )]));
         let req2 = http::Request::builder()
             .method("POST")
-            .uri("/v1/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/transactions/query")
+            .uri("/v1/accounts/soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ/transactions/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body2))
             .unwrap();
@@ -24721,7 +24775,7 @@ mod app_api_integration_tests {
         let mut set = Vec::new();
         for _ in 0..300 {
             set.push(norito::json::Value::String(
-                "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw".into(),
+                "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ".into(),
             ));
         }
         let body = json_string(obj(vec![(
@@ -24733,7 +24787,7 @@ mod app_api_integration_tests {
         )]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/transactions/query")
+            .uri("/v1/accounts/soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ/transactions/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -24752,7 +24806,7 @@ mod app_api_integration_tests {
         let body2 = json_string(obj(vec![("filter", deep)]));
         let req2 = http::Request::builder()
             .method("POST")
-            .uri("/v1/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/transactions/query")
+            .uri("/v1/accounts/soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ/transactions/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body2))
             .unwrap();
@@ -24796,7 +24850,7 @@ mod app_api_integration_tests {
         )]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/transactions/query")
+            .uri("/v1/accounts/soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ/transactions/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -24843,7 +24897,7 @@ mod app_api_integration_tests {
         let req = http::Request::builder()
             .method("POST")
             .uri(
-                "/v1/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/assets/query",
+                "/v1/accounts/soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ/assets/query",
             )
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
@@ -25071,7 +25125,7 @@ mod app_api_integration_tests {
         let req = http::Request::builder()
             .method("POST")
             .uri(
-                "/v1/accounts/6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw/assets/query",
+                "/v1/accounts/soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ/assets/query",
             )
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
@@ -25731,13 +25785,12 @@ mod app_api_integration_tests {
         let domain_id: DomainId = "wonderland".parse().unwrap();
         let domain = Domain::new(domain_id.clone()).build(&alice_id);
         let account = Account::new(alice_id.to_account_id(domain_id)).build(&alice_id);
-        let mut asset_def = AssetDefinition::numeric(AssetDefinitionId::new(
+        let asset_def = AssetDefinition::numeric(AssetDefinitionId::new(
             "wonderland".parse().unwrap(),
             "rose".parse().unwrap(),
         ))
         .confidential_policy(policy)
         .build(&alice_id);
-        asset_def.alias = Some("rose#sbp".parse().expect("asset alias literal"));
         let expected_asset_id = asset_def.id().to_string();
         let world = World::with([domain], [account], [asset_def]);
         let state = Arc::new(iroha_core::state::State::new_for_testing(
@@ -25745,6 +25798,12 @@ mod app_api_integration_tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         ));
+        bind_permanent_asset_alias_for_test(
+            &state,
+            &alice_id,
+            &test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd"),
+            "rose#sbp",
+        );
 
         let app = Router::new().route(
             "/v1/confidential/assets/{definition_id}/transitions",
@@ -25926,10 +25985,9 @@ mod app_api_integration_tests {
         let domain_id: DomainId = "wonderland".parse().unwrap();
         let rose_def: AssetDefinitionId =
             test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
-        let mut rose_definition = AssetDefinition::numeric(rose_def.clone())
+        let rose_definition = AssetDefinition::numeric(rose_def.clone())
             .with_name("rose".to_owned())
             .build(&alice_id);
-        rose_definition.alias = Some("rose#sbp".parse().expect("asset alias literal"));
         let assets = vec![
             Asset::new(
                 AssetId::new(rose_def.clone(), alice_id.clone()),
@@ -25956,6 +26014,7 @@ mod app_api_integration_tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         ));
+        bind_permanent_asset_alias_for_test(&state, &alice_id, &rose_def, "rose#sbp");
 
         (state, alice_id, bob_id)
     }
@@ -26237,7 +26296,7 @@ mod query_endpoint_tests {
         let isi: dm::InstructionBox = isi::zk::VerifyProof::new(attachment).into();
 
         let authority: dm::AccountId =
-            dm::AccountId::parse_encoded("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw")
+            dm::AccountId::parse_encoded("soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ")
                 .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                 .expect("valid account id");
         isi.execute(&authority, &mut stx)
@@ -33530,7 +33589,7 @@ struct OfflineAllowanceListParams {
     pub offset: u64,
     /// Optional compact sort string.
     pub sort: Option<String>,
-    /// Filter allowances by controller account literal (canonical i105 only).
+    /// Filter allowances by controller account literal (canonical Katakana i105 only).
     pub controller_id: Option<String>,
     /// Filter allowances by asset identifier.
     pub asset_id: Option<String>,
@@ -33579,11 +33638,11 @@ pub struct OfflineTransferListParams {
     pub offset: u64,
     /// Optional compact sort string.
     pub sort: Option<String>,
-    /// Filter transfers by originating controller (canonical i105 only).
+    /// Filter transfers by originating controller (canonical Katakana i105 only).
     pub controller_id: Option<String>,
-    /// Filter transfers by receiver account literal (canonical i105 only).
+    /// Filter transfers by receiver account literal (canonical Katakana i105 only).
     pub receiver_id: Option<String>,
-    /// Filter transfers by deposit account literal (canonical i105 only).
+    /// Filter transfers by deposit account literal (canonical Katakana i105 only).
     pub deposit_account_id: Option<String>,
     /// Filter transfers by asset identifier.
     pub asset_id: Option<String>,
@@ -34025,11 +34084,11 @@ struct OfflineReceiptListItem {
     pub certificate_id_hex: String,
     /// Sender/controller account literal.
     pub controller_id: String,
-    /// Sender/controller display literal (canonical i105 rendering).
+    /// Sender/controller display literal (canonical Katakana i105 rendering).
     pub controller_display: String,
     /// Receiver account literal.
     pub receiver_id: String,
-    /// Receiver display literal (canonical i105 rendering).
+    /// Receiver display literal (canonical Katakana i105 rendering).
     pub receiver_display: String,
     /// Asset identifier being transferred.
     pub asset_id: String,
@@ -34111,7 +34170,7 @@ pub struct AssetHolderGetParams {
     /// Offset for pagination (default 0).
     #[norito(default)]
     pub offset: u64,
-    /// Filter holders by canonical i105 account identifier.
+    /// Filter holders by canonical Katakana i105 account identifier.
     pub account_id: Option<String>,
     /// Filter holders by balance scope (`global` or `dataspace:<id>`).
     pub scope: Option<String>,
@@ -34454,8 +34513,11 @@ fn tx_projections_to_json(items: &[TxProjection]) -> Vec<norito::json::Value> {
         .map(|it| {
             let mut m = norito::json::Map::new();
             if let Some(ref authority_literal) = it.authority {
-                let display = crate::account_literal::display_from_literal(authority_literal);
-                m.insert("authority".into(), norito::json::Value::from(display));
+                if let Some(display) =
+                    crate::account_literal::display_from_literal(authority_literal)
+                {
+                    m.insert("authority".into(), norito::json::Value::from(display));
+                }
             }
             if let Some(ts) = it.timestamp_ms {
                 m.insert("timestamp_ms".into(), norito::json::Value::from(ts));
@@ -34514,6 +34576,21 @@ mod tx_projection_display_tests {
             .and_then(norito::json::Value::as_str)
             .expect("authority field");
         assert_eq!(authority, account.to_string());
+    }
+
+    #[test]
+    fn projections_omit_invalid_authority_literals() {
+        let projection = TxProjection {
+            authority: Some("operator1@hbl".to_string()),
+            timestamp_ms: Some(123),
+            entrypoint_hash: "deadbeef".into(),
+            result_ok: true,
+        };
+        let items = tx_projections_to_json(&[projection]);
+        assert!(
+            items[0].get("authority").is_none(),
+            "invalid non-i105 authority literals must not leak into explorer output"
+        );
     }
 }
 
@@ -35338,7 +35415,7 @@ async fn repo_agreements_list_uses_canonical_i105_literals() {
     let expected = crate::account_literal::display_literal(&fixture.initiator_id);
     assert_eq!(
         first, expected,
-        "initiator literal should be rendered as canonical i105"
+        "initiator literal should be rendered as canonical Katakana i105"
     );
 }
 
@@ -35604,7 +35681,7 @@ mod pagination_enforcement_tests {
 
     use super::*;
 
-    const TEST_ACCOUNT: &str = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
+    const TEST_ACCOUNT: &str = "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ";
 
     fn test_state() -> Arc<CoreState> {
         Arc::new(State::new_for_testing(
@@ -37515,16 +37592,15 @@ pub async fn handle_v1_accounts_query(
 pub async fn handle_v1_accounts_portfolio(
     state: Arc<CoreState>,
     axum::extract::Path(raw_uaid): axum::extract::Path<String>,
-    asset: Option<AssetDefinitionId>,
-    scope: Option<iroha_data_model::asset::AssetBalanceScope>,
+    asset_id: Option<AssetId>,
     _telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     let uaid = parse_uaid_literal(&raw_uaid)?;
     let world = state.world_view();
     let nexus = state.nexus_snapshot();
     let mut snapshot = portfolio::collect_portfolio_from_world_and_nexus(&world, &nexus, uaid);
-    if let Some(expected) = asset.as_ref() {
-        filter_portfolio_by_asset_selector(&mut snapshot, expected, scope.as_ref());
+    if let Some(expected) = asset_id.as_ref() {
+        filter_portfolio_by_asset_id(&mut snapshot, expected);
     }
     drop(world);
     let body =
@@ -37564,19 +37640,15 @@ pub(crate) fn parse_asset_balance_scope_literal(
 }
 
 #[cfg(feature = "app_api")]
-fn filter_portfolio_by_asset_selector(
+fn filter_portfolio_by_asset_id(
     snapshot: &mut iroha_data_model::nexus::portfolio::UniversalPortfolio,
-    asset_definition_id: &AssetDefinitionId,
-    scope_filter: Option<&iroha_data_model::asset::AssetBalanceScope>,
+    asset_id: &AssetId,
 ) {
     let mut accounts = 0u64;
     let mut positions = 0u64;
     for dataspace in &mut snapshot.dataspaces {
         for account in &mut dataspace.accounts {
-            account.assets.retain(|asset| {
-                asset.asset_definition_id == *asset_definition_id
-                    && scope_filter.is_none_or(|scope| asset.asset_id.scope() == scope)
-            });
+            account.assets.retain(|asset| asset.asset_id == *asset_id);
             if !account.assets.is_empty() {
                 accounts = accounts.saturating_add(1);
                 positions = positions.saturating_add(account.assets.len() as u64);
@@ -37642,8 +37714,8 @@ fn dataspaces_accounts_to_json(
                 .iter()
                 .map(|asset| {
                     json_object(vec![
-                        json_entry("asset", asset.asset_definition_id.to_string()),
-                        json_entry("scope", asset_balance_scope_literal(asset.asset_id.scope())),
+                        json_entry("asset_id", asset.asset_id.to_string()),
+                        json_entry("asset_definition_id", asset.asset_definition_id.to_string()),
                         json_entry("quantity", asset.quantity.to_string()),
                     ])
                 })
@@ -38663,7 +38735,7 @@ mod accounts_query_tests {
     }
 
     #[tokio::test]
-    async fn accounts_query_filter_accepts_canonical_and_rejects_alias_and_non_canonical_i105_literals()
+    async fn accounts_query_filter_accepts_canonical_and_alias_and_rejects_non_canonical_i105_literals()
      {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -38712,12 +38784,7 @@ mod accounts_query_tests {
         crate::test_utils::finalize_committed_block(&state, st_block, committed);
 
         let expected = account_id.account().to_string();
-        let non_canonical_i105_literal = account_id
-            .account()
-            .to_account_address()
-            .expect("account address")
-            .to_i105()
-            .expect("i105 encoding");
+        let non_canonical_i105_literal = expected.replacen("sora", "ｓｏｒａ", 1);
 
         let alias_literal = label
             .to_literal(&state.nexus_snapshot().dataspace_catalog)
@@ -38741,10 +38808,40 @@ mod accounts_query_tests {
             crate::utils::extractors::NoritoJson(alias_env),
             crate::routing::MaybeTelemetry::for_tests(),
         )
-        .await;
+        .await
+        .expect("alias handler ok")
+        .into_response();
+        assert_eq!(
+            alias_result.status(),
+            StatusCode::OK,
+            "alias literal `{alias_literal}` should resolve to the canonical account id"
+        );
+        let alias_body = alias_result
+            .into_body()
+            .collect()
+            .await
+            .expect("alias body bytes")
+            .to_bytes();
+        let alias_doc: norito::json::Value =
+            norito::json::from_slice(&alias_body).expect("valid alias JSON");
+        let alias_ids: Vec<String> = alias_doc
+            .get("items")
+            .and_then(norito::json::Value::as_array)
+            .expect("alias items array")
+            .iter()
+            .filter_map(|item| {
+                item.get("id")
+                    .and_then(norito::json::Value::as_str)
+                    .map(str::to_owned)
+            })
+            .collect();
         assert!(
-            alias_result.is_err(),
-            "alias literal `{alias_literal}` must be rejected"
+            alias_ids.iter().any(|id| id == &expected),
+            "alias literal `{alias_literal}` should resolve to `{expected}`, got {alias_ids:?}"
+        );
+        assert!(
+            alias_ids.iter().all(|id| !id.contains('@')),
+            "alias queries must still return canonical account ids, got {alias_ids:?}"
         );
 
         let canonical_env = crate::filter::QueryEnvelope {
@@ -38824,7 +38921,7 @@ mod accounts_query_tests {
         .await;
         assert!(
             i105_result.is_err(),
-            "non-canonical i105 literal `{non_canonical_i105_literal}` must be rejected"
+            "non-canonical Katakana i105 literal `{non_canonical_i105_literal}` must be rejected"
         );
     }
 }
@@ -38853,13 +38950,11 @@ mod asset_definitions_query_tests {
 
         let mut pkr_metadata = dm::Metadata::default();
         pkr_metadata.insert("rank".parse().expect("metadata key"), 2_u32);
-        let mut pkr = dm::AssetDefinition::numeric(test_asset_definition_id_from_hex(
-            "550e8400e29b41d4a7164466554400dd",
-        ))
-        .with_name("PKR".to_owned())
-        .with_metadata(pkr_metadata)
-        .build(&authority);
-        pkr.alias = Some("pkr#sbp".parse().expect("asset alias"));
+        let pkr_id = test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
+        let pkr = dm::AssetDefinition::numeric(pkr_id.clone())
+            .with_name("PKR".to_owned())
+            .with_metadata(pkr_metadata)
+            .build(&authority);
 
         let mut usd_metadata = dm::Metadata::default();
         usd_metadata.insert("rank".parse().expect("metadata key"), 1_u32);
@@ -38870,11 +38965,13 @@ mod asset_definitions_query_tests {
         .with_metadata(usd_metadata)
         .build(&authority);
 
-        Arc::new(State::new_for_testing(
+        let state = Arc::new(State::new_for_testing(
             World::with([domain], [account], [pkr, usd]),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
-        ))
+        ));
+        bind_permanent_asset_alias_for_test(&state, &authority, &pkr_id, "pkr#sbp");
+        state
     }
 
     async fn response_json(response: impl IntoResponse) -> norito::json::Value {
@@ -42741,6 +42838,7 @@ impl OfflineAllowanceQueryFilters {
     fn from_params(
         params: &OfflineAllowanceListParams,
         now_ms: u64,
+        state: Option<&CoreState>,
         telemetry: &MaybeTelemetry,
         context: &'static str,
     ) -> Result<Self> {
@@ -42759,6 +42857,7 @@ impl OfflineAllowanceQueryFilters {
         let controller_id = canonicalize_query_account_literal(
             "controller_id",
             params.controller_id.as_deref(),
+            state,
             telemetry,
             context,
         )?;
@@ -42955,6 +43054,7 @@ struct OfflineTransferQueryFilters {
 impl OfflineTransferQueryFilters {
     fn from_params(
         params: &OfflineTransferListParams,
+        state: Option<&CoreState>,
         telemetry: &MaybeTelemetry,
         context: &'static str,
     ) -> Result<Self> {
@@ -42973,18 +43073,21 @@ impl OfflineTransferQueryFilters {
         let controller_id = canonicalize_query_account_literal(
             "controller_id",
             params.controller_id.as_deref(),
+            state,
             telemetry,
             context,
         )?;
         let receiver_id = canonicalize_query_account_literal(
             "receiver_id",
             params.receiver_id.as_deref(),
+            state,
             telemetry,
             context,
         )?;
         let deposit_account_id = canonicalize_query_account_literal(
             "deposit_account_id",
             params.deposit_account_id.as_deref(),
+            state,
             telemetry,
             context,
         )?;
@@ -44325,6 +44428,7 @@ async fn handle_v1_offline_allowances(
     let extra_filters = OfflineAllowanceQueryFilters::from_params(
         &p,
         now_ms,
+        Some(state.as_ref()),
         &telemetry,
         ENDPOINT_OFFLINE_ALLOWANCES_LIST,
     )?;
@@ -44339,6 +44443,7 @@ async fn handle_v1_offline_allowances(
         validate_offline_allowances_filter_adapter(expr)?;
         canonicalize_offline_allowance_filter_literals(
             expr,
+            Some(state.as_ref()),
             &telemetry,
             ENDPOINT_OFFLINE_ALLOWANCES_LIST,
         )?;
@@ -44425,6 +44530,7 @@ pub async fn handle_v1_offline_revocations(
         validate_offline_revocations_filter_adapter(expr)?;
         canonicalize_offline_revocation_filter_literals(
             expr,
+            Some(state.as_ref()),
             &telemetry,
             ENDPOINT_OFFLINE_REVOCATIONS_LIST,
         )?;
@@ -44514,6 +44620,7 @@ async fn handle_v1_offline_allowances_query(
         validate_offline_allowances_filter_adapter(expr)?;
         canonicalize_offline_allowance_filter_literals(
             expr,
+            Some(state.as_ref()),
             &telemetry,
             ENDPOINT_OFFLINE_ALLOWANCES_QUERY,
         )?;
@@ -44623,6 +44730,7 @@ pub async fn handle_v1_nexus_public_lane_stake(
     let canonical_validator = canonicalize_query_account_literal(
         "validator",
         params.validator.as_deref(),
+        Some(state.as_ref()),
         &telemetry,
         CONTEXT_NEXUS_PUBLIC_LANE_STAKE,
     )?;
@@ -44684,6 +44792,7 @@ pub async fn handle_v1_nexus_public_lane_rewards(
     let canonical_account = canonicalize_query_account_literal(
         "account",
         params.account.as_deref(),
+        Some(state.as_ref()),
         &telemetry,
         CONTEXT_NEXUS_PUBLIC_LANE_REWARDS,
     )?;
@@ -45012,12 +45121,12 @@ mod public_lane_tests {
         assert_eq!(
             obj.get("validator").and_then(Value::as_str),
             Some(expected_validator.as_str()),
-            "validator literal should use canonical i105 rendering"
+            "validator literal should use canonical Katakana i105 rendering"
         );
         assert_eq!(
             obj.get("stake_account").and_then(Value::as_str),
             Some(expected_stake.as_str()),
-            "stake account literal should use canonical i105 rendering"
+            "stake account literal should use canonical Katakana i105 rendering"
         );
         assert_eq!(
             obj.get("lane_id").and_then(Value::as_u64),
@@ -45252,6 +45361,7 @@ pub async fn handle_v1_offline_revocations_query(
         validate_offline_revocations_filter_adapter(expr)?;
         canonicalize_offline_revocation_filter_literals(
             expr,
+            Some(state.as_ref()),
             &telemetry,
             ENDPOINT_OFFLINE_REVOCATIONS_QUERY,
         )?;
@@ -45341,6 +45451,7 @@ async fn handle_v1_offline_summaries(
         validate_offline_summaries_filter_adapter(expr)?;
         canonicalize_offline_summary_filter_literals(
             expr,
+            Some(state.as_ref()),
             &telemetry,
             ENDPOINT_OFFLINE_SUMMARIES_LIST,
         )?;
@@ -45415,6 +45526,7 @@ async fn handle_v1_offline_summaries_query(
         validate_offline_summaries_filter_adapter(expr)?;
         canonicalize_offline_summary_filter_literals(
             expr,
+            Some(state.as_ref()),
             &telemetry,
             ENDPOINT_OFFLINE_SUMMARIES_QUERY,
         )?;
@@ -46577,8 +46689,12 @@ pub async fn handle_v1_offline_transfers(
 
     let sort_spec = p.sort.as_deref().map(parse_sort_spec).unwrap_or_default();
     let selectors = compile_offline_transfer_sort_spec(&sort_spec);
-    let extra_filters =
-        OfflineTransferQueryFilters::from_params(&p, &telemetry, ENDPOINT_OFFLINE_TRANSFERS_LIST)?;
+    let extra_filters = OfflineTransferQueryFilters::from_params(
+        &p,
+        Some(state.as_ref()),
+        &telemetry,
+        ENDPOINT_OFFLINE_TRANSFERS_LIST,
+    )?;
 
     let mut filter_expr = p
         .filter
@@ -46590,6 +46706,7 @@ pub async fn handle_v1_offline_transfers(
         validate_offline_transfers_filter_adapter(expr)?;
         canonicalize_offline_transfer_filter_literals(
             expr,
+            Some(state.as_ref()),
             &telemetry,
             ENDPOINT_OFFLINE_TRANSFERS_LIST,
         )?;
@@ -46682,6 +46799,7 @@ pub async fn handle_v1_offline_transfers_query(
         validate_offline_transfers_filter_adapter(expr)?;
         canonicalize_offline_transfer_filter_literals(
             expr,
+            Some(state.as_ref()),
             &telemetry,
             ENDPOINT_OFFLINE_TRANSFERS_QUERY,
         )?;
@@ -46799,6 +46917,7 @@ async fn handle_v1_offline_receipts(
         validate_offline_receipts_filter_adapter(expr)?;
         canonicalize_offline_receipt_filter_literals(
             expr,
+            Some(state.as_ref()),
             &telemetry,
             ENDPOINT_OFFLINE_RECEIPTS_LIST,
         )?;
@@ -46812,12 +46931,14 @@ async fn handle_v1_offline_receipts(
     let controller_filter = canonicalize_query_account_literal(
         "controller_id",
         p.controller_id.as_deref(),
+        Some(state.as_ref()),
         &telemetry,
         ENDPOINT_OFFLINE_RECEIPTS_LIST,
     )?;
     let receiver_filter = canonicalize_query_account_literal(
         "receiver_id",
         p.receiver_id.as_deref(),
+        Some(state.as_ref()),
         &telemetry,
         ENDPOINT_OFFLINE_RECEIPTS_LIST,
     )?;
@@ -46969,6 +47090,7 @@ async fn handle_v1_offline_receipts_query(
         validate_offline_receipts_filter_adapter(expr)?;
         canonicalize_offline_receipt_filter_literals(
             expr,
+            Some(state.as_ref()),
             &telemetry,
             ENDPOINT_OFFLINE_RECEIPTS_QUERY,
         )?;
@@ -51082,7 +51204,9 @@ mod adapter_filter_tests {
                 "args",
                 arr(vec![
                     val("id"),
-                    val("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw"),
+                    val(
+                        "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
+                    ),
                 ]),
             ),
         ]);
@@ -51770,6 +51894,7 @@ mod adapter_filter_tests {
         };
         let filters = OfflineTransferQueryFilters::from_params(
             &params,
+            None,
             &telemetry,
             ENDPOINT_OFFLINE_TRANSFERS_LIST,
         )
@@ -51783,6 +51908,7 @@ mod adapter_filter_tests {
         };
         let filters = OfflineTransferQueryFilters::from_params(
             &params,
+            None,
             &telemetry,
             ENDPOINT_OFFLINE_TRANSFERS_LIST,
         )
@@ -51795,6 +51921,7 @@ mod adapter_filter_tests {
         };
         let filters = OfflineTransferQueryFilters::from_params(
             &params,
+            None,
             &telemetry,
             ENDPOINT_OFFLINE_TRANSFERS_LIST,
         )
@@ -51807,6 +51934,7 @@ mod adapter_filter_tests {
         };
         let filters = OfflineTransferQueryFilters::from_params(
             &params,
+            None,
             &telemetry,
             ENDPOINT_OFFLINE_TRANSFERS_LIST,
         )
@@ -51832,6 +51960,7 @@ mod adapter_filter_tests {
         };
         let filters = OfflineTransferQueryFilters::from_params(
             &params,
+            None,
             &telemetry,
             ENDPOINT_OFFLINE_TRANSFERS_LIST,
         )
@@ -51847,6 +51976,7 @@ mod adapter_filter_tests {
         };
         let filters = OfflineTransferQueryFilters::from_params(
             &params,
+            None,
             &telemetry,
             ENDPOINT_OFFLINE_TRANSFERS_LIST,
         )
@@ -51866,6 +51996,7 @@ mod adapter_filter_tests {
         assert!(
             OfflineTransferQueryFilters::from_params(
                 &params,
+                None,
                 &telemetry,
                 ENDPOINT_OFFLINE_TRANSFERS_LIST,
             )
@@ -51880,6 +52011,7 @@ mod adapter_filter_tests {
         assert!(
             OfflineTransferQueryFilters::from_params(
                 &params,
+                None,
                 &telemetry,
                 ENDPOINT_OFFLINE_TRANSFERS_LIST,
             )
@@ -51893,6 +52025,7 @@ mod adapter_filter_tests {
         assert!(
             OfflineTransferQueryFilters::from_params(
                 &params,
+                None,
                 &telemetry,
                 ENDPOINT_OFFLINE_TRANSFERS_LIST,
             )
@@ -51906,6 +52039,7 @@ mod adapter_filter_tests {
         assert!(
             OfflineTransferQueryFilters::from_params(
                 &params,
+                None,
                 &telemetry,
                 ENDPOINT_OFFLINE_TRANSFERS_LIST,
             )
@@ -51931,6 +52065,7 @@ mod adapter_filter_tests {
         };
         let filters = OfflineTransferQueryFilters::from_params(
             &params,
+            None,
             &telemetry,
             ENDPOINT_OFFLINE_TRANSFERS_LIST,
         )
@@ -51944,6 +52079,7 @@ mod adapter_filter_tests {
         assert!(
             OfflineTransferQueryFilters::from_params(
                 &params,
+                None,
                 &telemetry,
                 ENDPOINT_OFFLINE_TRANSFERS_LIST,
             )
@@ -51968,6 +52104,7 @@ mod adapter_filter_tests {
 
         canonicalize_offline_transfer_filter_literals(
             &mut expr,
+            None,
             &MaybeTelemetry::for_tests(),
             ENDPOINT_OFFLINE_TRANSFERS_LIST,
         )
@@ -52005,6 +52142,7 @@ mod adapter_filter_tests {
 
         canonicalize_offline_summary_filter_literals(
             &mut expr,
+            None,
             &MaybeTelemetry::for_tests(),
             ENDPOINT_OFFLINE_SUMMARIES_LIST,
         )
@@ -52055,7 +52193,7 @@ fn sample_transfer_record() -> OfflineTransferRecord {
             commitment: vec![0xAB; 32],
         },
         spend_public_key: PublicKey::from_str(
-            "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
+            "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
         )
         .expect("public key"),
         attestation_report: Vec::new(),

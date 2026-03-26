@@ -79,7 +79,7 @@ JavaScript による `selector` `domainSummary` (`tag`, `digest_hex`,
 
 
 
-評価:- طبق `data-copy-mode="i105|i105_default|qr"` على ازرار النسخ حتى تتمكن الواجهات
+評価:- طبق `data-copy-mode="i105|qr"` على ازرار النسخ حتى تتمكن الواجهات
   عرض المزيد مز مقياس Torii
   `torii_address_format_total`。 और देखें
   `iroha:address-copy` مع `{mode,timestamp}` - اربط ذلك بخط تحليلاتك/تليمترتك
@@ -173,7 +173,7 @@ CLI と ADDR-5:1. `iroha tools address inspect` يصدر الان ملخص JSON 
   يحافظ المساعد على بادئة I105 المكتشفة من literal ما لم تقدم `networkPrefix`
   最高のパフォーマンスを見せてください。
 
-3. テスト `i105.value` テスト `i105_default`
+3. テスト `i105.value` テスト `i105`
    من الملخص (او اطلب ترميزا اخر عبر `--format`)。 هذه السلاسل امنة بالفعل
    意味。
 4. マニフェストは、マニフェストをマニフェストします。

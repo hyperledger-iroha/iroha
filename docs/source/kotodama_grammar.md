@@ -140,7 +140,7 @@ register_trigger wake {
   call run;
   on time pre_commit;
   repeats 2;
-  authority "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+  authority "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
   metadata { tag: "alpha"; count: 1; enabled: true; }
 }
 ```
@@ -225,7 +225,7 @@ Pointer constructors (emit Norito TLV into INPUT and return a typed pointer)
 - `proof_blob(string|0xhex) -> ProofBlob*`
 
 Prelude macros provide shorter aliases and inline validation for these constructors:
-- `account!("i105...")`, `account_id!("i105...")`
+- `account!("soraカタカナ...")`, `account_id!("soraカタカナ...")`
 - `asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`, `asset_id!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`
 - `domain!("wonderland")`, `domain_id!("wonderland")`
 - `name!("example")`

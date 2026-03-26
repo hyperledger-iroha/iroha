@@ -19,7 +19,7 @@ Percorre o ciclo de vida de um NFT do início ao fim: cunhagem para o dono, tran
 
 ## Roteiro do livro razão
 
-- Garanta que a definição do NFT (por exemplo `n0#wonderland`) exista junto com as contas de dono/destinatário usadas no trecho (`i105...`, `i105...`).
+- Garanta que a definição do NFT (por exemplo `n0#wonderland`) exista junto com as contas de dono/destinatário usadas no trecho (`soraカタカナ...`, `soraカタカナ...`).
 - Invoque o ponto de entrada `nft_issue_and_transfer` para cunhar o NFT, transfira-o de Alice para Bob e fixe um sinal de metadados que descreva a emissão.
 - Inspecione o estado do livro razão de NFT com `iroha_cli ledger nfts list --account <id>` ou os equivalentes do SDK para verificar a transferência, depois confirme que o ativo e removido quando a instrução de queima de roda.
 
@@ -35,11 +35,11 @@ Percorre o ciclo de vida de um NFT do início ao fim: cunhagem para o dono, tran
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
 seiyaku NftFlow {
   kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
-    let owner = account!("i105...");
+    let owner = account!("soraカタカナ...");
     let nft = nft_id!("n0$wonderland");
     nft_mint_asset(nft, owner);
 
-    let to = account!("i105...");
+    let to = account!("soraカタカナ...");
     nft_transfer_asset(owner, nft, to);
     nft_set_metadata(nft, json!{ issued: "demo" });
     nft_burn_asset(nft);

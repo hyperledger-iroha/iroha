@@ -15,10 +15,14 @@ const {
   buildReleaseRwaInstruction,
   buildForceTransferRwaInstruction,
   buildSetRwaControlsInstruction,
+  buildSetRwaKeyValueInstruction,
+  buildRemoveRwaKeyValueInstruction,
 } = await import("../src/instructionBuilders.js");
 const {
   buildRegisterRwaTransaction,
   buildTransferRwaTransaction,
+  buildSetRwaKeyValueTransaction,
+  buildRemoveRwaKeyValueTransaction,
 } = await import("../src/transaction.js");
 
 const AUTHORITY = AccountAddress.fromAccount({
@@ -81,6 +85,15 @@ test("RWA instruction builders normalize canonical payloads in JS-only mode", ()
       controllerAccounts: [AUTHORITY],
       freezeEnabled: true,
     },
+  });
+  const setMetadata = buildSetRwaKeyValueInstruction({
+    rwaId: RWA_ID,
+    key: "grade",
+    value: { origin: "AE", lot: BigInt(3) },
+  });
+  const removeMetadata = buildRemoveRwaKeyValueInstruction({
+    rwaId: RWA_ID,
+    key: "grade",
   });
 
   assert.deepEqual(register, {
@@ -145,6 +158,19 @@ test("RWA instruction builders normalize canonical payloads in JS-only mode", ()
       },
     },
   });
+  assert.deepEqual(setMetadata, {
+    SetRwaKeyValue: {
+      rwa: RWA_ID,
+      key: "grade",
+      value: { origin: "AE", lot: "3" },
+    },
+  });
+  assert.deepEqual(removeMetadata, {
+    RemoveRwaKeyValue: {
+      rwa: RWA_ID,
+      key: "grade",
+    },
+  });
 });
 
 test("RWA transaction builders serialize canonical instructions through injected native binding", () => {
@@ -202,16 +228,35 @@ test("RWA transaction builders serialize canonical instructions through injected
       destinationAccountId: DESTINATION,
       privateKey: PRIVATE_KEY,
     });
+    const setMetadata = buildSetRwaKeyValueTransaction({
+      chainId: "test-chain",
+      authority: AUTHORITY,
+      rwaId: RWA_ID,
+      key: "grade",
+      value: { score: BigInt(9) },
+      privateKey: PRIVATE_KEY,
+    });
+    const removeMetadata = buildRemoveRwaKeyValueTransaction({
+      chainId: "test-chain",
+      authority: AUTHORITY,
+      rwaId: RWA_ID,
+      key: "grade",
+      privateKey: PRIVATE_KEY,
+    });
 
     assert.equal(register.hash.length, 32);
     assert.equal(transfer.hash.length, 32);
+    assert.equal(setMetadata.hash.length, 32);
+    assert.equal(removeMetadata.hash.length, 32);
     assert.deepEqual(register.signedTransaction, Buffer.from([0x01, 0x02, 0x03]));
     assert.deepEqual(transfer.signedTransaction, Buffer.from([0x01, 0x02, 0x03]));
+    assert.deepEqual(setMetadata.signedTransaction, Buffer.from([0x01, 0x02, 0x03]));
+    assert.deepEqual(removeMetadata.signedTransaction, Buffer.from([0x01, 0x02, 0x03]));
   } finally {
     delete globalThis.__IROHA_NATIVE_BINDING__;
   }
 
-  assert.equal(captures.length, 2);
+  assert.equal(captures.length, 4);
   assert.equal(captures[0].chainId, "test-chain");
   assert.equal(captures[0].authority, AUTHORITY);
   assert.equal(captures[0].metadataPayload, JSON.stringify({ tag: "register" }));
@@ -246,6 +291,19 @@ test("RWA transaction builders serialize canonical instructions through injected
       rwa: RWA_ID,
       quantity: "2.5",
       destination: DESTINATION,
+    },
+  });
+  assert.deepEqual(JSON.parse(captures[2].instructions[0]), {
+    SetRwaKeyValue: {
+      rwa: RWA_ID,
+      key: "grade",
+      value: { score: "9" },
+    },
+  });
+  assert.deepEqual(JSON.parse(captures[3].instructions[0]), {
+    RemoveRwaKeyValue: {
+      rwa: RWA_ID,
+      key: "grade",
     },
   });
 });

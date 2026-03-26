@@ -4,23 +4,23 @@
 package org.hyperledger.iroha.sdk.address
 
 /**
- * Composes canonical public asset identifiers.
+ * Composes canonical asset-holding identifiers.
  *
  * Public asset literals use:
- * - `<asset-definition-id>#<i105-account-id>`
- * - `<asset-definition-id>#<i105-account-id>#dataspace:<id>`
+ * - `<base58-asset-id>#<katakana-i105-account-id>`
+ * - `<base58-asset-id>#<katakana-i105-account-id>#dataspace:<id>`
  */
 object AssetIdEncoder {
 
     /**
-     * Computes a canonical public asset identifier from asset name, domain, and account id.
+     * Computes a canonical asset-holding identifier from asset name, domain, and account id.
      */
     @JvmStatic
     fun encodeAssetId(assetName: String, domainName: String, accountId: String): String =
         encodeAssetIdFromDefinition(AssetDefinitionIdEncoder.encode(assetName, domainName), accountId)
 
     /**
-     * Composes a canonical public asset identifier from a definition address and account id.
+     * Composes a canonical asset-holding identifier from a definition address and account id.
      */
     @JvmStatic
     fun encodeAssetIdFromDefinition(definitionAddress: String, accountId: String): String =
@@ -31,7 +31,7 @@ object AssetIdEncoder {
         }
 
     /**
-     * Composes a dataspace-scoped canonical public asset identifier.
+     * Composes a dataspace-scoped canonical asset-holding identifier.
      */
     @JvmStatic
     fun encodeScopedAssetIdFromDefinition(
@@ -55,17 +55,17 @@ object AssetIdEncoder {
     private fun canonicalAccountId(accountId: String): String {
         val trimmed = accountId.trim()
         require(trimmed == accountId && trimmed.isNotEmpty()) {
-            "accountId must use canonical i105 form"
+            "accountId must use canonical Katakana i105 form"
         }
         val parsed = try {
             AccountAddress.parseEncodedIgnoringCurveSupport(trimmed, null).address
         } catch (ex: AccountAddressException) {
-            throw IllegalArgumentException("accountId must use canonical i105 form", ex)
+            throw IllegalArgumentException("accountId must use canonical Katakana i105 form", ex)
         }
         return try {
             parsed.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
         } catch (ex: AccountAddressException) {
-            throw IllegalArgumentException("accountId must use canonical i105 form", ex)
+            throw IllegalArgumentException("accountId must use canonical Katakana i105 form", ex)
         }
     }
 }

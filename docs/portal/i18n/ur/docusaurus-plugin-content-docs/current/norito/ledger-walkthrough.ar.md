@@ -26,8 +26,8 @@ translation_last_reviewed: 2026-02-07
 گائیڈ کے دوران ، `$ADMIN_ACCOUNT` اور `$RECEIVER_ACCOUNT` کو اکاؤنٹ IDs کے ساتھ تبدیل کریں جس کا آپ استعمال کرنے کا ارادہ رکھتے ہیں۔ پہلے سے طے شدہ بنڈل میں پہلے ہی ڈسپلے کی چابیاں سے اخذ کردہ دو حساب کتاب شامل ہیں:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="soraカタカナ..."
+export RECEIVER_ACCOUNT="soraカタカナ..."
 ```
 
 پہلے حساب کتاب کی فہرست دے کر اقدار کی تصدیق کریں:

@@ -6862,20 +6862,20 @@ class ToriiClient:
         if owner is None:
             return
         if not isinstance(owner, str):
-            raise RuntimeError(f"{context}.owner must be a canonical i105 account id")
+            raise RuntimeError(f"{context}.owner must be a canonical Katakana i105 account id")
         trimmed = owner.strip()
         if not trimmed or trimmed != owner:
-            raise RuntimeError(f"{context}.owner must be a canonical i105 account id")
+            raise RuntimeError(f"{context}.owner must be a canonical Katakana i105 account id")
         if any(ch.isspace() for ch in trimmed):
-            raise RuntimeError(f"{context}.owner must be a canonical i105 account id")
+            raise RuntimeError(f"{context}.owner must be a canonical Katakana i105 account id")
         if "@" in trimmed:
-            raise RuntimeError(f"{context}.owner must be a canonical i105 account id")
+            raise RuntimeError(f"{context}.owner must be a canonical Katakana i105 account id")
         if trimmed.lower().startswith("0x"):
-            raise RuntimeError(f"{context}.owner must be a canonical i105 account id")
+            raise RuntimeError(f"{context}.owner must be a canonical Katakana i105 account id")
         try:
             _decode_i105_string(trimmed)
         except ValueError as exc:
-            raise RuntimeError(f"{context}.owner must be a canonical i105 account id") from exc
+            raise RuntimeError(f"{context}.owner must be a canonical Katakana i105 account id") from exc
 
     @classmethod
     def _normalize_governance_zk_public_inputs(

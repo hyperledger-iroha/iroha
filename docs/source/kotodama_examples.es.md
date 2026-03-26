@@ -47,8 +47,8 @@ Fuente: `examples/transfer/transfer.ko`
 seiyaku TransferDemo {
   kotoage fn do_transfer() permission(AssetTransferRole) {
     transfer_asset(
-      account!("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
-      account!("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU"),
+      account!("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"),
+      account!("soraゴヂアニラショリャヒャャサピテヶベチュヲボヹヂギタクアニョロホドチャヘヱヤジヶハシャウンベニョャルフハケネキカ"),
       asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );
@@ -66,14 +66,14 @@ Fuente: `examples/nft/nft.ko`
 ```
 seiyaku NftDemo {
   kotoage fn create() permission(NftAuthority) {
-    let owner = account!("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn");
+    let owner = account!("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ");
     let nft = nft_id!("dragon$wonderland");
     nft_mint_asset(nft, owner);
   }
 
   kotoage fn transfer() permission(NftAuthority) {
-    let owner = account!("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn");
-    let recipient = account!("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU");
+    let owner = account!("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ");
+    let recipient = account!("soraゴヂアニラショリャヒャャサピテヶベチュヲボヹヂギタクアニョロホドチャヘヱヤジヶハシャウンベニョャルフハケネキカ");
     let nft = nft_id!("dragon$wonderland");
     nft_transfer_asset(owner, nft, recipient);
   }
@@ -96,12 +96,12 @@ seiyaku PointerDemo {
   state Owners: Map<int, AccountId>;
 
   fn hajimari() {
-    let alice = account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn");
+    let alice = account_id("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ");
     let first = get_or_insert_default(Owners, 7, alice);
     assert(first == alice);
 
     // The second call decodes the stored pointer and re-encodes the input.
-    let bob = account_id("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU");
+    let bob = account_id("soraゴヂアニラショリャヒャャサピテヶベチュヲボヹヂギタクアニョロホドチャヘヱヤジヶハシャウンベニョャルフハケネキカ");
     let again = get_or_insert_default(Owners, 7, bob);
     assert(again == alice);
   }

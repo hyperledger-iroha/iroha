@@ -65,7 +65,7 @@ fn make_handle(
     AssetHandle {
         scope: vec!["transfer".into()],
         subject: HandleSubject {
-            account: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            account: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
             origin_dsid: None,
         },
         budget: HandleBudget {
@@ -189,8 +189,8 @@ fn core_host_handles_axt_syscalls_with_valid_tlvs() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
-            to: "6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH".into(),
+            from: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
+            to: "soraゴヂアネイョサテゾギニャハゲヅミゼマヶアヵチヸヒュワハザヨャゼシュヺチィヸゴリキゾホゥォゼノナチククク".into(),
             amount: "100".into(),
         },
     };
@@ -419,8 +419,8 @@ fn core_host_enforces_space_directory_policy_on_handles() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
-            to: "6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH".into(),
+            from: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
+            to: "soraゴヂアネイョサテゾギニャハゲヅミゼマヶアヵチヸヒュワハザヨャゼシュヺチィヸゴリキゾホゥォゼノナチククク".into(),
             amount: "50".into(),
         },
     };
@@ -458,8 +458,8 @@ fn fixture_intent(dsid: DataSpaceId) -> RemoteSpendIntent {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
-            to: "6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH".into(),
+            from: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
+            to: "soraゴヂアネイョサテゾギニャハゲヅミゼマヶアヵチヸヒュワハザヨャゼシュヺチィヸゴリキゾホゥォゼノナチククク".into(),
             amount: "50".into(),
         },
     }
@@ -567,8 +567,8 @@ fn run_policy_snapshot_case(
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
-            to: "6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH".into(),
+            from: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
+            to: "soraゴヂアネイョサテゾギニャハゲヅミゼマヶアヵチヸヒュワハザヨャゼシュヺチィヸゴリキゾホゥォゼノナチククク".into(),
             amount: "50".into(),
         },
     };
@@ -683,8 +683,8 @@ fn run_wsv_policy_case(
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
-            to: "6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH".into(),
+            from: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
+            to: "soraゴヂアネイョサテゾギニャハゲヅミゼマヶアヵチヸヒュワハザヨャゼシュヺチィヸゴリキゾホゥォゼノナチククク".into(),
             amount: "50".into(),
         },
     };
@@ -830,8 +830,8 @@ fn core_host_enforces_policy_snapshot() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
-            to: "6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH".into(),
+            from: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
+            to: "soraゴヂアネイョサテゾギニャハゲヅミゼマヶアヵチヸヒュワハザヨャゼシュヺチィヸゴリキゾホゥォゼノナチククク".into(),
             amount: "1".into(),
         },
     };
@@ -926,8 +926,8 @@ fn core_host_rejects_inline_proof_manifest_mismatch() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
-            to: "6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH".into(),
+            from: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
+            to: "soraゴヂアネイョサテゾギニャハゲヅミゼマヶアヵチヸヒュワハザヨャゼシュヺチィヸゴリキゾホゥォゼノナチククク".into(),
             amount: "2".into(),
         },
     };
@@ -1047,8 +1047,8 @@ fn core_host_rejects_inline_proof_zero_expiry_slot() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
-            to: "6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH".into(),
+            from: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
+            to: "soraゴヂアネイョサテゾギニャハゲヅミゼマヶアヵチヸヒュワハザヨャゼシュヺチィヸゴリキゾホゥォゼノナチククク".into(),
             amount: "1".into(),
         },
     };

@@ -41,8 +41,9 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
 
     func testOfflineCashEndpointsRejectRemovedServerSideSigningFlowsAndKeepRevocationReads() async throws {
         let client = makeClient()
-        let aliceId = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
-        let bobId = "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"
+        let aliceId = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"
+        let bobId = "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ"
+        let assetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
         let deviceBinding = ToriiOfflineDeviceBinding(
             platform: "ios",
             attestationKeyId: "attest-key",
@@ -78,7 +79,7 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
             accountId: aliceId,
             deviceId: "device-1",
             offlinePublicKey: "offline-public-key",
-            assetDefinitionId: "xor#pk",
+            assetDefinitionId: assetDefinitionId,
             balance: "97.50",
             lockedBalance: "0",
             serverRevision: 4,
@@ -183,7 +184,7 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
                 _ = try await client.setupOfflineCash(
                     ToriiOfflineCashSetupRequest(
                         accountId: aliceId,
-                        assetDefinitionId: "xor#pk",
+                        assetDefinitionId: assetDefinitionId,
                         deviceBinding: deviceBinding,
                         deviceProof: deviceProof
                     )
@@ -195,7 +196,7 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
                         operationId: "load-1",
                         lineageId: "lineage-1",
                         accountId: aliceId,
-                        assetDefinitionId: "xor#pk",
+                        assetDefinitionId: assetDefinitionId,
                         amount: "100.00",
                         deviceBinding: deviceBinding,
                         deviceProof: deviceProof
@@ -241,7 +242,7 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
             operationId: "redeem-1",
             accountId: aliceId,
             lineageId: "lineage-1",
-            assetDefinitionId: "xor#pk",
+            assetDefinitionId: assetDefinitionId,
             amount: "30.00",
             offlinePublicKey: deviceBinding.offlinePublicKey,
             authorizationId: authorization.authorizationId,

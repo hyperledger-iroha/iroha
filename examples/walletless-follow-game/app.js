@@ -73,13 +73,13 @@ function buildCommand() {
   }
 
   const sponsorId =
-    sponsorInput.value.trim() || "6cmzPVPXA9wQAqZuZTNQr7fWhci8nVVkG6zQBHnHVK7RPo2Dfe1WG9B";
+    sponsorInput.value.trim() || "soraゴヂアネタアニャヴウザニキニョゾビバヤチョトテスシコダオョキュロッベイゴビチャヰショチャパヨツサツホキマイニキ";
   const torii = toriiInput.value.trim() || "http://localhost:8080";
   const chainId = chainInput.value.trim() || "dev-chain";
   const amount = amountInput.value.trim() || "10";
   const sessionAccount =
     sessionAccountInput.value.trim() ||
-    "6cmzPVPX4dvqvHwePuzkRqyn6qVMHNkGgjHcFLict547HbtMBuPBdWY";
+    "soraゴヂアニワグヹツムチョトヹヒョロポギフンルシハドクホャヒョヮブヒャギウゥトヒュボニョミガジヶャマアアミサヘ";
 
   const payload = {
     chain_id: chainId,

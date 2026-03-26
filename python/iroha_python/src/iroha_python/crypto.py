@@ -201,7 +201,7 @@ class Ed25519KeyPair:
         return load_ed25519_keypair_from_hex(private_key_hex)
 
     def default_account_id(self, domain: str, discriminant: int = _DEFAULT_I105_DISCRIMINANT) -> str:
-        """Return the canonical i105 account id using the public key and `domain`."""
+        """Return the canonical Katakana i105 account id using the public key and `domain`."""
 
         return ed25519_public_key_account_id(
             self.public_key, domain, discriminant=discriminant
@@ -429,7 +429,7 @@ def ed25519_public_key_account_id(
     *,
     discriminant: int = _DEFAULT_I105_DISCRIMINANT,
 ) -> str:
-    """Return the canonical i105 account id using the public key within `domain`."""
+    """Return the canonical Katakana i105 account id using the public key within `domain`."""
 
     domain = domain.strip()
     if not domain or "@" in domain:
@@ -525,7 +525,7 @@ def build_signed_transaction(
         Target chain identifier.
     authority:
         Transaction authority account identifier (domainless encoded account
-        literal: canonical i105 only).
+        literal: canonical Katakana i105 only).
     private_key:
         Ed25519 private key bytes aligned with `authority`.
     instructions:

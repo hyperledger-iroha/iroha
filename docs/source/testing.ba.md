@@ -28,7 +28,7 @@ This guide explains how to reproduce integration scenarios, what infrastructure 
        "chain" : "testnet",
        "peers" : ["127.0.0.1:1337"],
        "accounts" : [{
-           "id" : "i105...",
+           "id" : "soraカタカナ...",
            "public_key" : "ed0120..."
        }]
    }))?;

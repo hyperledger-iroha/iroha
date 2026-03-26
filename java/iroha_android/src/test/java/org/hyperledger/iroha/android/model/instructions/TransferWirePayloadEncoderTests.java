@@ -84,7 +84,7 @@ public final class TransferWirePayloadEncoderTests {
     boolean threw = false;
     try {
       TransferWirePayloadEncoder.encodeAssetTransfer(
-          "rose#wonderland##alice@hbl.sbp", "10", ACCOUNT_ID);
+          "rose#wonderland##alice@hbl.dataspace", "10", ACCOUNT_ID);
     } catch (final IllegalArgumentException ex) {
       threw =
           ex.getMessage() != null

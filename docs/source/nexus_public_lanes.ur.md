@@ -111,7 +111,7 @@ Reward distributions کے لئے `PublicLaneRewardRecord` اور `PublicLaneRewa
   "asset": "4cuvDVPuLBKJyN6dPbRQhmLh68sU",
   "total_reward": "250.0000",
   "shares": [
-    { "account": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw", "role": "Validator", "amount": "150" },
+    { "account": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ", "role": "Validator", "amount": "150" },
     { "account": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r", "role": "Nominator", "amount": "100" }
   ],
   "metadata": {
@@ -144,8 +144,8 @@ Runtime guards:
 ```norito
 {
   "lane_id": 1,
-  "validator": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
-  "stake_account": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
+  "validator": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
+  "stake_account": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
   "initial_stake": "150000",
   "metadata": {
     "commission_bps": 750,
@@ -233,26 +233,26 @@ NX-9 کے بعد runtime logic `PublicLaneRewardRecord` annotations emit کرے 
   - `iroha_cli app nexus public-lane validators --lane <id> [--summary]`
     lifecycle/activation markers (pending target epoch, `activation_epoch` / `activation_height`, exit release, slash id)
     کو bonded/self stake کے ساتھ دکھاتا ہے۔
-    `iroha_cli app nexus public-lane stake --lane <id> [--validator i105...] [--summary]`
+    `iroha_cli app nexus public-lane stake --lane <id> [--validator soraカタカナ...] [--summary]`
     `/stake` endpoint کو `(validator, staker)` جوڑی کے pending-unbond hints کے ساتھ mirror کرتا ہے۔
   - Torii snapshots for dashboards and SDKs:
     - `GET /v1/nexus/public_lanes/{lane}/validators` – metadata, status
       (`PendingActivation`/`Active`/`Exiting`/`Exited`/`Slashed`), activation epoch/height,
       release timers, bonded stake, last reward epoch.
-      `canonical i105 literal rendering` literal rendering کو کنٹرول کرتا ہے۔
+      `canonical Katakana i105 literal rendering` literal rendering کو کنٹرول کرتا ہے۔
     - `GET /v1/nexus/public_lanes/{lane}/stake` – stake shares (`validator`,
-      `staker`, bonded amount) کے ساتھ pending unbond timers۔ `?validator=i105...` response کو
-      ایک validator فوکس والے dashboards کے لئے filter کرتا ہے؛ `canonical i105 rendering` سب literals پر لاگو ہوتا ہے۔
+      `staker`, bonded amount) کے ساتھ pending unbond timers۔ `?validator=soraカタカナ...` response کو
+      ایک validator فوکس والے dashboards کے لئے filter کرتا ہے؛ `canonical Katakana i105 rendering` سب literals پر لاگو ہوتا ہے۔
   - Lifecycle ISIs standard transaction path استعمال کرتے ہیں (Torii `/v1/transactions`
     یا CLI instruction pipeline)۔ مثال Norito JSON payloads:
 
     ```jsonc
     [
-      { "ActivatePublicLaneValidator": { "lane_id": 1, "validator": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw" } },
+      { "ActivatePublicLaneValidator": { "lane_id": 1, "validator": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ" } },
       {
         "ExitPublicLaneValidator": {
           "lane_id": 1,
-          "validator": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
+          "validator": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
           "release_at_ms": 1730000000000
         }
       }

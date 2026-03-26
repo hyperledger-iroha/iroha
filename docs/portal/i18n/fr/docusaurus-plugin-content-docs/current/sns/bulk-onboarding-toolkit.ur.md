@@ -34,7 +34,7 @@ L'analyseur analyse la ligne d'en-tête ici (commande flexible ici) :| Colonne 
 |--------|----------|-------------|
 | `label` | Oui | Étiquette demandée (cas mixte accepté ; outil Norm v1 et UTS-46 pour normaliser les choses). |
 | `suffix_id` | Oui | Identificateur de suffixe numérique (décimal یا `0x` hex). |
-| `owner` | Oui | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
+| `owner` | Oui | AccountId string (domainless encoded literal; canonical Katakana i105 only; no `@<domain>` suffix). |
 | `term_years` | Oui | Entier `1..=255`. |
 | `payment_asset_id` | Oui | Actif de règlement (مثال `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Oui | Les entiers non signés et les unités natives de l'actif représentent کریں۔ |
@@ -73,9 +73,9 @@ Voici le manifeste agrégé du script :
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "soraカタカナ...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"soraカタカナ...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -84,7 +84,7 @@ Voici le manifeste agrégé du script :
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"soraカタカナ...",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -237,7 +237,7 @@ filtre les auditeurs et l'exécution CSV pour les exercices
   références emplacement CSV et résolution relative ہوتی ہیں۔ Métadonnées non-objet
   erreur de validation دیتا ہے۔
 - **Contrôleurs :** Cellules `--default-controllers` et Honor Honor non-propriétaire
-  acteurs et délégués et listes de contrôleurs explicites (`i105...;i105...`)
+  acteurs et délégués et listes de contrôleurs explicites (`soraカタカナ...;soraカタカナ...`)
 
 Numéros de ligne contextuels des échecs rapport de rapport ہوتے ہیں (مثال
 `error: row 12 term_years must be between 1 and 255`). Erreurs de validation de script ici

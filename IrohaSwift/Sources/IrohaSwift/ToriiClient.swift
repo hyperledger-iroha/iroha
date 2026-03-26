@@ -51,9 +51,6 @@ fileprivate func normalizeToriiAccountIdQueryValue(_ raw: String, field: String)
     if let address = try? AccountAddress.parseEncoded(trimmed) {
         return try address.toI105(networkPrefix: 0x02F1)
     }
-    if trimmed.unicodeScalars.allSatisfy(legacyIh58Alphabet.contains(_:)) {
-        return trimmed
-    }
     throw ToriiClientError.invalidPayload(
         "\(field) must be an encoded account id (i105)."
     )
@@ -78,51 +75,60 @@ fileprivate func normalizeMultisigAccountAliasLiteral(_ raw: String, field: Stri
           !scopeComponents.contains(where: \.isEmpty)
     else {
         throw ToriiClientError.invalidPayload(
-            "\(field) must use label@dataspace or label@domain.dataspace form."
+            "\(field) must use name@dataspace or name@domain.dataspace form."
         )
     }
     return trimmed
 }
 
-private let legacyIh58Alphabet = CharacterSet(charactersIn: "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
-
-fileprivate func normalizeToriiAssetIdQueryValue(_ raw: String, field: String) throws -> String {
+fileprivate func normalizeToriiAssetDefinitionIdValue(_ raw: String, field: String) throws -> String {
     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else {
         throw ToriiClientError.invalidPayload("\(field) must be a non-empty string.")
     }
-    let components = trimmed.split(separator: "#", omittingEmptySubsequences: false)
-    guard components.count == 2 || components.count == 3,
-          !components[0].isEmpty,
-          !components[1].isEmpty else {
-        throw ToriiClientError.invalidPayload(
-            "\(field) must use '<asset-definition-id>#<i105-account-id>' with optional '#dataspace:<id>' suffix."
-        )
-    }
-    let definition = String(components[0])
-    guard !definition.contains(where: \.isWhitespace),
-          !definition.contains("%"),
-          !definition.contains("/"),
-          !definition.contains("?"),
-          !definition.contains(":") else {
+    guard !trimmed.contains(where: \.isWhitespace),
+          !trimmed.contains("@"),
+          !trimmed.contains("#"),
+          !trimmed.contains("%"),
+          !trimmed.contains("/"),
+          !trimmed.contains("?"),
+          !trimmed.contains(":"),
+          AssetDefinitionAddress.decode(trimmed) != nil else {
         throw ToriiClientError.invalidPayload(
             "\(field) must use a canonical unprefixed Base58 asset definition id."
         )
     }
-    let account = try normalizeToriiAccountIdQueryValue(String(components[1]), field: "\(field).account_id")
-    guard components.count == 3 else {
-        return "\(definition)#\(account)"
+    return trimmed
+}
+
+fileprivate func normalizeToriiAssetAliasLiteral(_ raw: String, field: String) throws -> String {
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+        throw ToriiClientError.invalidPayload("\(field) must be a non-empty string.")
     }
-    let scope = String(components[2])
-    guard let dataspace = scope.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false).dropFirst().first,
-          scope.lowercased().hasPrefix("dataspace:"),
-          !dataspace.isEmpty,
-          dataspace.allSatisfy({ $0.isNumber }) else {
+    guard !trimmed.contains(where: \.isWhitespace) else {
+        throw ToriiClientError.invalidPayload("\(field) must not contain whitespace.")
+    }
+    let components = trimmed.split(separator: "#", omittingEmptySubsequences: false)
+    let scopeComponents = components.count == 2
+        ? components[1].split(separator: ".", omittingEmptySubsequences: false)
+        : []
+    guard components.count == 2,
+          !components[0].isEmpty,
+          !components[1].isEmpty,
+          (1...2).contains(scopeComponents.count),
+          !scopeComponents.contains(where: \.isEmpty),
+          !components[0].contains("@")
+    else {
         throw ToriiClientError.invalidPayload(
-            "\(field) scope must use 'dataspace:<id>' when present."
+            "\(field) must use name#dataspace or name#domain.dataspace form."
         )
     }
-    return "\(definition)#\(account)#dataspace:\(dataspace)"
+    return trimmed.lowercased()
+}
+
+fileprivate func normalizeToriiAssetIdQueryValue(_ raw: String, field: String) throws -> String {
+    try normalizeToriiAssetDefinitionIdValue(raw, field: field)
 }
 
 fileprivate func normalizeToriiAssetSelectorQueryValue(_ raw: String, field: String) throws -> String {
@@ -130,16 +136,10 @@ fileprivate func normalizeToriiAssetSelectorQueryValue(_ raw: String, field: Str
     guard !trimmed.isEmpty else {
         throw ToriiClientError.invalidPayload("\(field) must be a non-empty string.")
     }
-    guard !trimmed.contains(where: \.isWhitespace),
-          !trimmed.contains("%"),
-          !trimmed.contains("/"),
-          !trimmed.contains("?"),
-          !trimmed.contains(":") else {
-        throw ToriiClientError.invalidPayload(
-            "\(field) must be a canonical asset definition id or alias."
-        )
+    if AssetDefinitionAddress.decode(trimmed) != nil {
+        return try normalizeToriiAssetDefinitionIdValue(trimmed, field: field)
     }
-    return trimmed
+    return try normalizeToriiAssetAliasLiteral(trimmed, field: field)
 }
 
 public struct ToriiAssetBalance: Decodable, Sendable {
@@ -5434,13 +5434,13 @@ public struct ToriiUaidPortfolioTotals: Decodable, Sendable {
 }
 
 public struct ToriiUaidPortfolioAsset: Decodable, Sendable {
-    public let asset: String
-    public let scope: String
+    public let assetId: String
+    public let assetDefinitionId: String
     public let quantity: String
 
     private enum CodingKeys: String, CodingKey {
-        case asset
-        case scope
+        case assetId = "asset_id"
+        case assetDefinitionId = "asset_definition_id"
         case quantity
     }
 }
@@ -5546,24 +5546,18 @@ public struct ToriiUaidBindingsQuery: Sendable, Equatable {
 }
 
 public struct ToriiUaidPortfolioQuery: Sendable, Equatable {
-    public var asset: String?
-    public var scope: String?
+    public var assetId: String?
 
-    public init(asset: String? = nil, scope: String? = nil) {
-        self.asset = asset
-        self.scope = scope
+    public init(assetId: String? = nil) {
+        self.assetId = assetId
     }
 
     public func queryItems() throws -> [URLQueryItem]? {
         var items: [URLQueryItem] = []
-        if let asset = asset?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !asset.isEmpty {
-            let normalized = try normalizeToriiAssetSelectorQueryValue(asset, field: "asset")
-            items.append(URLQueryItem(name: "asset", value: normalized))
-        }
-        if let scope = scope?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !scope.isEmpty {
-            items.append(URLQueryItem(name: "scope", value: scope))
+        if let assetId = assetId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !assetId.isEmpty {
+            let normalized = try normalizeToriiAssetIdQueryValue(assetId, field: "asset_id")
+            items.append(URLQueryItem(name: "asset_id", value: normalized))
         }
         return items.isEmpty ? nil : items
     }
@@ -8433,24 +8427,24 @@ fileprivate func ensureGovernanceZkOwnerCanonical(_ inputs: [String: ToriiJSONVa
     guard let value = inputs["owner"] else { return }
     if case .null = value { return }
     guard case let .string(owner) = value else {
-        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical i105 account id.")
+        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical Katakana i105 account id.")
     }
     let canonical = try canonicalizeGovernanceZkOwnerLiteral(owner, field: field)
     if canonical != owner {
-        throw ToriiClientError.invalidPayload("\(field).owner must use canonical i105 account id form.")
+        throw ToriiClientError.invalidPayload("\(field).owner must use canonical Katakana i105 account id form.")
     }
 }
 
 fileprivate func canonicalizeGovernanceZkOwnerLiteral(_ raw: String, field: String) throws -> String {
     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty, trimmed == raw else {
-        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical i105 account id.")
+        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical Katakana i105 account id.")
     }
     if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
-        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical i105 account id.")
+        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical Katakana i105 account id.")
     }
     if trimmed.contains("@") {
-        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical i105 account id.")
+        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical Katakana i105 account id.")
     }
     let address: AccountAddress
     do {
@@ -8459,7 +8453,7 @@ fileprivate func canonicalizeGovernanceZkOwnerLiteral(_ raw: String, field: Stri
             expectedPrefix: 0x02F1
         )
     } catch {
-        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical i105 account id.")
+        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical Katakana i105 account id.")
     }
     let i105 = try address.toI105(networkPrefix: 0x02F1)
     return i105

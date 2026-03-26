@@ -87,7 +87,7 @@ seçici xam yükü yenidən təhlil etmədən Local-12 və ya reyestr tərəfind
 
 Tədqiqatçılar pul kisəsinin telemetriyasını və əlçatanlıq işini əks etdirməlidirlər:
 
-- Düymələri kopyalamaq üçün `data-copy-mode="i105|i105_default|qr"` tətbiq edin ki, ön hissələr istifadə sayğaclarını yaysın
+- Düymələri kopyalamaq üçün `data-copy-mode="i105|qr"` tətbiq edin ki, ön hissələr istifadə sayğaclarını yaysın
   Torii tərəfi `torii_address_format_total` metrikası ilə yanaşı. Yuxarıdakı demo komponenti göndərir
   `iroha:address-copy` hadisəsi `{mode,timestamp}` ilə - bunu analitika/telemetriyaya köçürün
   boru kəməri (məsələn, Seqmentə və ya NORITO tərəfindən dəstəklənən kollektora itələyin) beləliklə, tablosuna server korrelyasiya edilə bilər
@@ -183,7 +183,7 @@ sətirlər ADDR-5 altında sənədləşdirilmiş CLI iş axınına əməl etməl
   açıq şəkildə `networkPrefix` təmin edir, beləliklə defolt olmayan şəbəkələr üçün xülasələr edir
   səssizcə standart prefikslə yenidən göstərməyin.
 
-3. `i105.value` və ya `i105_default`-dən təkrar istifadə etməklə kanonik faydalı yükü çevirin.
+3. `i105.value` və ya `i105`-dən təkrar istifadə etməklə kanonik faydalı yükü çevirin.
    xülasədən sahələr (və ya `--format` vasitəsilə başqa kodlaşdırma tələb edin). Bunlar
    strings xaricdən paylaşmaq üçün artıq təhlükəsizdir.
 4. Manifestləri, reyestrləri və müştəri ilə bağlı sənədləri yeniləyin

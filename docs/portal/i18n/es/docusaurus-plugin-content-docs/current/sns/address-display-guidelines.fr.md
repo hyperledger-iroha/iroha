@@ -85,7 +85,7 @@ Reparser le payload brut.
 
 
 Los exploradores no deben reproducir el trabajo de telemetría y accesibilidad
-hecho para el portefeuille:- Apliques `data-copy-mode="i105|i105_default|qr"` con botones de copia después de que
+hecho para el portefeuille:- Apliques `data-copy-mode="i105|qr"` con botones de copia después de que
   Los front-ends pueden configurar los ordenadores de uso en paralelo
   Métrica Torii `torii_address_format_total`. Le composant demo ci-dessus
   envoie un event `iroha:address-copy` con `{mode,timestamp}` - reliez cela
@@ -187,7 +187,7 @@ Cualquier cadena comprimida debe seguir el flujo de trabajo CLI documentado en A
   El ayudante conserva el prefijo I105 y detecta después del literal sauf si vous
   Fournissez explícitamente `networkPrefix`, donc les resumes pour des reseaux
   non defaut ne sont pas re-rendus silencieusement avec le prefixe par defaut.3. Convierta la carga útil canónica en reutilizando los campos `i105.value` o
-   `i105_default` del currículum (o solicita otra codificación a través de `--format`). ces
+   `i105` del currículum (o solicita otra codificación a través de `--format`). ces
    Chaines sont deja sures a partager en externo.
 4. Mettez a jour les manifests, registres et documents orientes client avec la
    forme canonique et notifiez les contraparties que les selecteurs Local seront

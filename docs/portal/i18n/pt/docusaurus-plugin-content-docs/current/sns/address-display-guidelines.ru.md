@@ -82,7 +82,7 @@ No seletor Local-12 ou no registro, não é possível analisar a carga útil nec
 
 Обозреватели должны отражать телеметрию и доступность кошелька:
 
-- Coloque `data-copy-mode="i105|i105_default|qr"` em um botão de cópia, чтобы
+- Coloque `data-copy-mode="i105|qr"` em um botão de cópia, чтобы
   Os frontais podem ser usados ​​para obter uma conexão de rede com sistema métrico Torii
   `torii_address_format_total`. O componente de demonstração será ativado
   событие `iroha:address-copy` com `{mode,timestamp}` - подключите его к своему
@@ -184,7 +184,7 @@ Selecione o ícone, use a interface CLI do ADDR-5:
   Helper сохраняет I105 префикс, извлеченный из literal, если только вы явно не
   указали `networkPrefix`, поэтому резюме para не-default сетей не перерисовываются
   Este é o perfil padrão.3. Converta a carga útil canônica, usando `i105.value` ou
-   `i105_default` из резюме (или запросите другой encoding через `--format`). Эти
+   `i105` из резюме (или запросите другой encoding через `--format`). Эти
    As barras são adequadas para o seu trabalho.
 4. Abra manifestos, registros e documentos de clientes, formulários canônicos e
    уведомите контрагентов, что Local селекторы будут отклоняться после cutover.

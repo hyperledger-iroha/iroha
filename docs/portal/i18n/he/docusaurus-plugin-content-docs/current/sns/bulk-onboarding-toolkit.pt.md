@@ -36,7 +36,7 @@ O parser exige a seguinte linha de cabecalho (a ordem e flexivel):
 |--------|-------------|--------|
 | `label` | סים | תווית solicitada (מקרה מעורב aceita; a ferramenta normaliza conforme Norm v1 e UTS-46). |
 | `suffix_id` | סים | מזהה מספרי סופיקסו (עשרוני או `0x` hex). |
-| `owner` | סים | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
+| `owner` | סים | AccountId string (domainless encoded literal; canonical Katakana i105 only; no `@<domain>` suffix). |
 | `term_years` | סים | Inteiro `1..=255`. |
 | `payment_asset_id` | סים | Ativo de settlement (por exemplo `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | סים | אינטירוס סם מייצג את הדמויות היחידות. |
@@ -77,9 +77,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "soraカタカナ...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"soraカタカナ...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -88,7 +88,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"soraカタカナ...",
         "signature":"alpha-signature"
       },
       "governance": null,

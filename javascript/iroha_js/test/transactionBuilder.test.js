@@ -10,6 +10,8 @@ import {
   buildTransferAssetTransaction,
   buildRegisterRwaTransaction,
   buildTransferRwaTransaction,
+  buildSetRwaKeyValueTransaction,
+  buildRemoveRwaKeyValueTransaction,
   buildCreateKaigiTransaction,
   buildJoinKaigiTransaction,
   buildRegisterKaigiRelayTransaction,
@@ -42,15 +44,15 @@ import {
 import { AccountAddress } from "../src/address.js";
 import { makeNativeTest } from "./helpers/native.js";
 
-const AUTHORITY_ID_RAW =
-  "ED0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03@hbl.sbp";
-const AUTHORITY_ID = i105FromEd25519AccountId(AUTHORITY_ID_RAW);
-const AUTHORITY_ID_INPUT = i105FromEd25519AccountId(AUTHORITY_ID_RAW);
+const AUTHORITY_PUBLIC_KEY_HEX =
+  "CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
+const AUTHORITY_ID = i105FromEd25519PublicKeyHex(AUTHORITY_PUBLIC_KEY_HEX);
+const AUTHORITY_ID_INPUT = i105FromEd25519PublicKeyHex(AUTHORITY_PUBLIC_KEY_HEX);
 const PRIVATE_KEY = Buffer.alloc(32, 0x11);
-const RELAY_ACCOUNT_ID_RAW =
-  "ED0120641297079357229F295938A4B5A333DE35069BF47B9D0704E45805713D13C201@hbl.sbp";
-const RELAY_ACCOUNT_ID = i105FromEd25519AccountId(RELAY_ACCOUNT_ID_RAW);
-const RELAY_ACCOUNT_ID_INPUT = i105FromEd25519AccountId(RELAY_ACCOUNT_ID_RAW);
+const RELAY_PUBLIC_KEY_HEX =
+  "641297079357229F295938A4B5A333DE35069BF47B9D0704E45805713D13C201";
+const RELAY_ACCOUNT_ID = i105FromEd25519PublicKeyHex(RELAY_PUBLIC_KEY_HEX);
+const RELAY_ACCOUNT_ID_INPUT = i105FromEd25519PublicKeyHex(RELAY_PUBLIC_KEY_HEX);
 const ASSET_DEFINITION_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 const LILY_ASSET_DEFINITION_ID = "61CtjvNd9T3THAR65GsMVHr82Bjc";
 const CANONICAL_ASSET_ID_INPUT = `${ASSET_DEFINITION_ID}#${AUTHORITY_ID}`;
@@ -62,20 +64,8 @@ const RWA_ID =
   "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities";
 const test = makeNativeTest(baseTest);
 
-function i105FromEd25519AccountId(raw) {
-  const trimmed = raw.trim();
-  const atIndex = trimmed.lastIndexOf("@");
-  if (atIndex === -1) {
-    const { address } = AccountAddress.parseEncoded(trimmed);
-    return address.toI105();
-  }
-  const signatory = trimmed.slice(0, atIndex).trim().toUpperCase();
-  const domain = trimmed.slice(atIndex + 1).trim();
-  if (!signatory.startsWith("ED0120")) {
-    throw new Error("expected ed25519 multihash signatory");
-  }
-  const publicKeyHex = signatory.slice(6);
-  const publicKey = Buffer.from(publicKeyHex, "hex");
+function i105FromEd25519PublicKeyHex(publicKeyHex, domain = "hbl.sbp") {
+  const publicKey = Buffer.from(publicKeyHex.trim(), "hex");
   return AccountAddress.fromAccount({ domain, publicKey }).toI105();
 }
 
@@ -332,6 +322,53 @@ test("buildRegisterRwaTransaction forwards canonical instruction payload", () =>
   });
 });
 
+test("buildRwaKeyValueTransactions forward canonical instruction payloads", () => {
+  const captures = [];
+  withNativeBinding(
+    {
+      buildTransaction: (_chain, authority, instructions) => {
+        captures.push({ authority, instructions: instructions.map((json) => JSON.parse(json)) });
+        return {
+          signed_transaction: Buffer.from([0x45]),
+          hash: Buffer.alloc(32, 0xee),
+        };
+      },
+    },
+    () => {
+      buildSetRwaKeyValueTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        rwaId: RWA_ID,
+        key: "grade",
+        value: { origin: "AE", score: BigInt(9) },
+        privateKey: PRIVATE_KEY,
+      });
+      buildRemoveRwaKeyValueTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        rwaId: RWA_ID,
+        key: "grade",
+        privateKey: PRIVATE_KEY,
+      });
+    },
+  );
+  assert.equal(captures.length, 2);
+  assert.equal(captures[0].authority, AUTHORITY_ID);
+  assert.deepEqual(captures[0].instructions[0], {
+    SetRwaKeyValue: {
+      rwa: RWA_ID,
+      key: "grade",
+      value: { origin: "AE", score: "9" },
+    },
+  });
+  assert.deepEqual(captures[1].instructions[0], {
+    RemoveRwaKeyValue: {
+      rwa: RWA_ID,
+      key: "grade",
+    },
+  });
+});
+
 test("buildMintAndTransferTransaction composes instructions in order", () => {
   const captures = [];
   const fakeResult = {
@@ -421,10 +458,10 @@ test("buildRegisterDomainAndMintTransaction supports mint arrays", () => {
 
 test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer arrays", () => {
   const captures = [];
-  const secondAccountIdRaw =
-    "ED01201AA70BFDE38BFD7CBE6AD29E59F290D4A4B0DD02792C0CE7371477C4E0D62759@hbl.sbp";
-  const secondAccountId = i105FromEd25519AccountId(secondAccountIdRaw);
-  const secondAccountIdInput = i105FromEd25519AccountId(secondAccountIdRaw);
+  const secondAccountIdPublicKeyHex =
+    "1AA70BFDE38BFD7CBE6AD29E59F290D4A4B0DD02792C0CE7371477C4E0D62759";
+  const secondAccountId = i105FromEd25519PublicKeyHex(secondAccountIdPublicKeyHex);
+  const secondAccountIdInput = i105FromEd25519PublicKeyHex(secondAccountIdPublicKeyHex);
   withNativeBinding(
     {
       buildTransaction: (_chain, authority, instructions) => {

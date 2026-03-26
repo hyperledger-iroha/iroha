@@ -191,7 +191,6 @@ pub(crate) struct ExplorerPaginationMeta {
 pub(crate) struct ExplorerAccountDto {
     pub id: String,
     pub i105_address: String,
-    pub i105_default_address: String,
     pub network_prefix: u16,
     pub metadata: Value,
     pub owned_domains: u32,
@@ -209,7 +208,6 @@ impl ExplorerAccountDto {
             i105_address: address
                 .to_i105_for_discriminant(network_prefix)
                 .unwrap_or_else(|_| entry.id().to_string()),
-            i105_default_address: address.to_i105().unwrap_or_else(|_| entry.id().to_string()),
             network_prefix,
             metadata: metadata_to_json(entry.value().metadata()),
             owned_domains: counts.domains,

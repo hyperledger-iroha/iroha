@@ -171,7 +171,7 @@ console.log(proposal?.kind, proposal?.status);
 အောက်တွင်ဖော်ပြထားသော POST အကူအညီပေးသူတိုင်းအတွက် ရွေးချယ်နိုင်သော `{ signal }` အရာဝတ္ထုတစ်ခုကို လက်ခံသည်။
 
 ```ts
-const authority = "i105...";
+const authority = "soraカタカナ...";
 const privateKey = Buffer.alloc(32, 0xaa);
 
 // All governance writes accept optional `{ signal }` options for cancellation.
@@ -200,7 +200,7 @@ if (!ballot.accepted) {
   console.warn("ballot rejected", ballot.reason);
 }
 
-const zkOwner = "i105..."; // canonical i105 account id for ZK public inputs
+const zkOwner = "soraカタカナ..."; // canonical Katakana i105 account id for ZK public inputs
 await torii.governanceSubmitZkBallot({
   authority,
   chainId: "00000000-0000-0000-0000-000000000000",
@@ -228,7 +228,7 @@ const derived = await torii.governanceDeriveCouncilVrf({
   committeeSize: 2,
   candidates: [
     {
-      accountId: "i105...",
+      accountId: "soraカタカナ...",
       variant: "Normal",
       pk: validatorPk,
       proof: validatorProof,
@@ -275,9 +275,9 @@ const settlement = buildPacs008Message({
   instigatingAgent: { bic: "DEUTDEFF", lei: "529900ODI3047E2LIV03" },
   instructedAgent: { bic: "COBADEFF" },
   debtorAccount: { iban: "DE89370400440532013000" },
-  creditorAccount: { otherId: "i105..." },
+  creditorAccount: { otherId: "soraカタカナ..." },
   purposeCode: "SECU",
-  supplementaryData: { account_id: "i105...", leg: "delivery" },
+  supplementaryData: { account_id: "soraカタカナ...", leg: "delivery" },
 });
 ```
 

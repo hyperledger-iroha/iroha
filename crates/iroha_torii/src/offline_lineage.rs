@@ -4864,9 +4864,8 @@ fn operation_key(kind: &str, operation_id: &str) -> String {
 mod tests {
     use super::*;
 
-    const TEST_ACCOUNT_I105: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
-    const TEST_COUNTERPARTY_ACCOUNT_I105: &str =
-        "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9";
+    const TEST_ACCOUNT_I105: &str = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
+    const TEST_COUNTERPARTY_ACCOUNT_I105: &str = "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ";
 
     #[test]
     fn sync_request_hash_is_stable_for_reordered_receipts() {
@@ -5032,7 +5031,10 @@ mod tests {
     fn canonical_account_helper_rejects_alias_literals() {
         let err = ensure_canonical_account_id_literal("alice@wallets", "account_id")
             .expect_err("aliases must be rejected");
-        assert!(err.to_string().contains("canonical i105 account id"));
+        assert!(
+            err.to_string()
+                .contains("canonical Katakana i105 account id")
+        );
     }
 
     #[test]
@@ -5195,7 +5197,7 @@ fn ensure_canonical_account_id_literal(value: &str, field_name: &str) -> Result<
     let trimmed = value.trim();
     AccountId::parse_encoded(trimmed).map_err(|err| {
         conversion_error(format!(
-            "{field_name} must be a canonical i105 account id: {err}"
+            "{field_name} must be a canonical Katakana i105 account id: {err}"
         ))
     })?;
     Ok(())

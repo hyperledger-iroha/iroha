@@ -49,10 +49,10 @@ cargo xtask address-vectors --verify
 
 | שכבה | אכיפה | הערות |
 |---------|-------------|-------|
-| Rust data-model | `crates/iroha_data_model/tests/account_address_vectors.rs` | מפרש את ה-JSON, משחזר payloads קנוניים, ובודק המרות I105 (מועדף)/i105-default (`sora`, אפשרות שנייה)/canonical + שגיאות מובנות. |
-| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` | מאמת codecs בצד השרת כך ש-Torii דוחה payloads I105 (מועדף)/i105-default (`sora`, אפשרות שנייה) פגומים באופן דטרמיניסטי. |
+| Rust data-model | `crates/iroha_data_model/tests/account_address_vectors.rs` | מפרש את ה-JSON, משחזר payloads קנוניים, ובודק המרות I105 (מועדף)/i105 (`sora`, אפשרות שנייה)/canonical + שגיאות מובנות. |
+| Torii | `crates/iroha_torii/tests/account_address_vectors.rs` | מאמת codecs בצד השרת כך ש-Torii דוחה payloads I105 (מועדף)/i105 (`sora`, אפשרות שנייה) פגומים באופן דטרמיניסטי. |
 | JavaScript SDK | `javascript/iroha_js/test/address.test.js` | משקף fixtures V1 (I105 מועדף/I105 אפשרות שנייה/fullwidth) ומאמת קודי שגיאה בסגנון Norito לכל מקרה שלילי. |
-| Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` | בודק decoding של I105 (מועדף)/i105-default (`sora`, אפשרות שנייה), payloads של multisig והצפת שגיאות בפלטפורמות Apple. |
+| Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` | בודק decoding של I105 (מועדף)/i105 (`sora`, אפשרות שנייה), payloads של multisig והצפת שגיאות בפלטפורמות Apple. |
 | Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` | מבטיח שביינדינגים Kotlin/Java נשארים מיושרים עם ה-fixture הקנוני. |
 
 ### 4. ניטור ועבודה פתוחה

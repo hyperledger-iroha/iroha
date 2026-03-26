@@ -132,7 +132,7 @@ const CHAIN_ID =
   process.env.IROHA_TORII_INTEGRATION_CHAIN_ID ?? "00000000-0000-0000-0000-000000000000";
 const AUTHORITY_ACCOUNT_ID =
   process.env.IROHA_TORII_INTEGRATION_ACCOUNT_ID ??
-  "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+  "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
 const PRIVATE_KEY_HEX =
   process.env.IROHA_TORII_INTEGRATION_PRIVATE_KEY_HEX ??
   "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53";
@@ -5809,7 +5809,7 @@ async function iteratorIncludes(iterator, predicate) {
   return false;
 }
 
-function i105DefaultLiteralForAccount(accountId) {
+function i105LiteralForAccount(accountId) {
   const literal = String(accountId);
   const separator = literal.lastIndexOf("@");
   if (separator === -1) {

@@ -12,7 +12,7 @@
   },
   "tryIt": {
     "proxyUrl": "https://tryit-preview.sora",
-    "samplePath": "/proxy/v1/accounts/6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn/assets?limit=1",
+    "samplePath": "/proxy/v1/accounts/soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ/assets?limit=1",
     "method": "GET",
     "timeoutMs": 7000,
     "token": "${TRYIT_BEARER}",

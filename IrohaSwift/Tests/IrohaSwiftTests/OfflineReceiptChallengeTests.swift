@@ -117,7 +117,7 @@ final class OfflineReceiptChallengeTests: XCTestCase {
         let publicKey = Data(repeating: 0x22, count: 32)
         let domain = AccountAddress.defaultDomainName
         let address = try AccountAddress.fromAccount(publicKey: publicKey, algorithm: "ed25519")
-        let rawAccountId = try address.toI105Default()
+        let rawAccountId = try address.toI105(networkPrefix: AccountId.defaultNetworkPrefix)
         let canonicalAccountId = try address.toI105(networkPrefix: 0x02F1)
         let rawAssetId = try makeAssetId(name: "xor", domain: domain, accountId: rawAccountId)
         let canonicalAssetId = try makeAssetId(name: "xor", domain: domain, accountId: canonicalAccountId)

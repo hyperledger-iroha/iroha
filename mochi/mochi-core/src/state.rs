@@ -813,11 +813,13 @@ mod tests {
     #[test]
     fn summary_json_handles_optional_fields() {
         let json_text = build_summary_json(
-            "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
             "Signatory alice",
             "Metadata keys: foo",
             Some("test"),
-            Some("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"),
+            Some(
+                "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
+            ),
             None,
         );
         let parsed: json::Value = json::from_str(&json_text).expect("summary json");
@@ -826,12 +828,16 @@ mod tests {
         };
         assert_eq!(
             map.get("title").and_then(|v| v.as_str()),
-            Some("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9")
+            Some(
+                "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ"
+            )
         );
         assert_eq!(map.get("domain").and_then(|v| v.as_str()), Some("test"));
         assert_eq!(
             map.get("owner").and_then(|v| v.as_str()),
-            Some("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9")
+            Some(
+                "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ"
+            )
         );
         assert!(!map.contains_key("asset_definition"));
 

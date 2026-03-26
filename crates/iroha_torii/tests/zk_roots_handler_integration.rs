@@ -128,13 +128,18 @@ async fn zk_roots_endpoint_returns_bounded_recent_roots() {
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-        let mut definition =
+        let definition =
             AssetDefinition::numeric(asset_def_id.clone()).with_name("rose".to_owned());
-        definition.alias = Some(asset_alias.parse().expect("asset alias literal"));
-        let init_instrs: [InstructionBox; 5] = [
+        let init_instrs: [InstructionBox; 6] = [
             Register::domain(Domain::new(domain_id.clone())).into(),
             Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
             Register::asset_definition(definition).into(),
+            iroha_data_model::isi::SetAssetDefinitionAlias::bind(
+                asset_def_id.clone(),
+                asset_alias.parse().expect("asset alias literal"),
+                None,
+            )
+            .into(),
             Mint::asset_numeric(10_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
             iroha_data_model::isi::zk::RegisterZkAsset::new(
                 asset_def_id.clone(),

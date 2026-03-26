@@ -20,7 +20,7 @@ use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, test_utils};
 use norito::json::Value;
 use tower::ServiceExt as _;
 
-const TEST_ACCOUNT_I105: &str = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
+const TEST_ACCOUNT_I105: &str = "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ";
 
 fn build_router(cfg: iroha_config::parameters::actual::Root) -> axum::Router {
     let (kiso, _child) = KisoHandle::start(cfg.clone());

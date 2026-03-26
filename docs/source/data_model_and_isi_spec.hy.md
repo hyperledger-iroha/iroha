@@ -30,7 +30,7 @@ ID-ներն ունեն կայուն լարային ձևեր `Display`/`FromStr` 
 - `AssetDefinitionId` — կանոնական `unprefixed Base58 address with versioning and checksum` (UUID-v4 բայթ): Սահմանում. `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`: `alias` բառացիները պետք է լինեն `<name>#<domain>.<dataspace>` կամ `<name>#<dataspace>`, որոնց դեպքում `<name>` հավասար է ակտիվի սահմանման անվանմանը: Կոդ՝ `crates/iroha_data_model/src/asset/definition.rs`։
 
   - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`, where `status` is `permanent`, `leased_active`, `leased_grace`, or `expired_pending_cleanup`. Alias selectors resolve against the latest committed block creation time and stop resolving after grace even before sweep removes stale bindings.
-- `AssetId`. կանոնական կոդավորված բառացի `<asset-definition-id>#<i105-account-id>` (նախնական տեքստային ձևերը չեն ապահովվում առաջին թողարկումում):- `NftId` — `nft$domain`. NFT՝ `{ id, content: Metadata, owned_by }`: Կոդ՝ `crates/iroha_data_model/src/nft.rs`։
+- `AssetId`. կանոնական կոդավորված բառացի `<base58-asset-id>#<katakana-i105-account-id>` (նախնական տեքստային ձևերը չեն ապահովվում առաջին թողարկումում):- `NftId` — `nft$domain`. NFT՝ `{ id, content: Metadata, owned_by }`: Կոդ՝ `crates/iroha_data_model/src/nft.rs`։
 - `RoleId` — `name`. Դերը՝ `{ id, permissions: BTreeSet<Permission> }` շինարարով `NewRole { inner: Role, grant_to }`: Կոդ՝ `crates/iroha_data_model/src/role.rs`։
 - `Permission` — `{ name: Ident, payload: Json }`. Կոդ՝ `crates/iroha_data_model/src/permission.rs`։
 - `PeerId`/`Peer` — հասակակիցների ինքնությունը (հանրային բանալի) և հասցեն: Կոդ՝ `crates/iroha_data_model/src/peer.rs`։
@@ -206,7 +206,7 @@ ID-ներն ունեն կայուն լարային ձևեր `Display`/`FromStr` 
 
 Միգրացիոն նշում.
 - `name#domain` տեքստային ակտիվների սահմանման ID-ները միտումնավոր չեն աջակցվում առաջին թողարկումում:
-- Ակտիվների ID-ները դրամահատարանի/այրման/փոխանցման սահմաններում մնում են կանոնական `<asset-definition-id>#<i105-account-id>`; օգտագործել `iroha tools encode asset-id` `--definition <base58-asset-definition-id>` կամ `--alias ...` գումարած `--account` հետ:
+- Ակտիվների ID-ները դրամահատարանի/այրման/փոխանցման սահմաններում մնում են կանոնական `<base58-asset-id>#<katakana-i105-account-id>`; օգտագործել `iroha tools encode asset-id` `--definition <base58-asset-definition-id>` կամ `--alias ...` գումարած `--account` հետ:
 
 ---
 

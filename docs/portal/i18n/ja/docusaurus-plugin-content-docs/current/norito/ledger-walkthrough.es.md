@@ -30,8 +30,8 @@ translation_last_reviewed: 2026-02-07
 ラス クラーベスのデリバダのデモ:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="soraカタカナ..."
+export RECEIVER_ACCOUNT="soraカタカナ..."
 ```
 
 ロス・ヴァローレス・リストアンド・ラス・プリメラス・クエンタスを確認:

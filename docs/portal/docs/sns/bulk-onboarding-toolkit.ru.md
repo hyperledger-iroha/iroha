@@ -36,7 +36,7 @@ payloads автоматически, записывая структуриров
 |---------|-------------|----------|
 | `label` | Да | Запрошенная метка (допускается mixed case; инструмент нормализует по Norm v1 и UTS-46). |
 | `suffix_id` | Да | Числовой идентификатор суффикса (десятичный или `0x` hex). |
-| `owner` | Да | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
+| `owner` | Да | AccountId string (domainless encoded literal; canonical Katakana i105 only; no `@<domain>` suffix). |
 | `term_years` | Да | Целое число `1..=255`. |
 | `payment_asset_id` | Да | Актив settlement (например `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Да | Беззнаковые целые, представляющие единицы актива. |
@@ -77,9 +77,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "soraカタカナ...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"soraカタカナ...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -88,7 +88,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"soraカタカナ...",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -242,7 +242,7 @@ importer), чтобы registrars, stewards и governance peers видели со
 - **Metadata/governance parsing:** inline JSON парсится напрямую; ссылки на файлы
   разрешаются относительно CSV. Metadata не-объект приводит к ошибке валидации.
 - **Controllers:** пустые ячейки соблюдают `--default-controllers`. Указывайте
-  явные списки controllers (например `i105...;i105...`) при делегировании не-owner.
+  явные списки controllers (например `soraカタカナ...;soraカタカナ...`) при делегировании не-owner.
 
 Ошибки сообщаются с контекстными номерами строк (например
 `error: row 12 term_years must be between 1 and 255`). Скрипт выходит с кодом `1`

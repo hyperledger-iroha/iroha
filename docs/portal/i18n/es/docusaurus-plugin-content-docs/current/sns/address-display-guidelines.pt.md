@@ -81,7 +81,7 @@ Local-12 o respaldado por registro sin reparar la carga útil bruta.
 
 
 Exploradores deben desarrollar o trabajar en telemetría y accesibilidad
-carteira:- Aplique `data-copy-mode="i105|i105_default|qr"` aos botoes de copia para que
+carteira:- Aplique `data-copy-mode="i105|qr"` aos botoes de copia para que
   front-ends possam emitir contadores de uso junto con métrica Torii
   `torii_address_format_total`. O componente demo acima dispara um evento
   `iroha:address-copy` con `{mode,timestamp}`; conectar isso ao su tubería de
@@ -179,7 +179,7 @@ Las cadenas comprimidas deben seguir el flujo de trabajo CLI documentado en ADDR
   O helper preserva o prefixo I105 detectado do literal a menos que voce forneca
   explícitamente `networkPrefix`, entao resumos para redes nao padrao nao sao
   re-renderizados silenciosamente con el prefijo padrao.3. Convierta la carga útil canónica reutilizando los campos `i105.value` o
-   `i105_default` do resumo (o solicita otra codificación a través de `--format`). essas
+   `i105` do resumo (o solicita otra codificación a través de `--format`). essas
    strings ja sao seguras para compartilhamento externo.
 4. Actualizar manifiestos, registros y documentos voltados al cliente con forma
    canonica e notifique as contrapartes de que seletores Local serao rejeitados

@@ -22,7 +22,7 @@ fn struct_fields_lower_to_syscall_args() {
             fn main() {
                 let args = TransferArgs(
                     domain("wonderland"),
-                    account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+                    account_id("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ")
                 );
                 transfer_domain(authority(), args.domain, args.to);
             }

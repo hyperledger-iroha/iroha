@@ -68,15 +68,15 @@ const mint = buildMintAssetInstruction({
 
 const transfer = buildTransferAssetInstruction({
   sourceAssetId: "norito:4e52543000000001",
-  destinationAccountId: "i105...",
+  destinationAccountId: "soraカタカナ...",
   quantity: "5",
 });
 
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
-  authority: "i105...",
+  authority: "soraカタカナ...",
   mint: { assetId: "norito:4e52543000000001", quantity: "10" },
-  transfers: [{ destinationAccountId: "i105...", quantity: "5" }],
+  transfers: [{ destinationAccountId: "soraカタカナ...", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
 ```
@@ -241,7 +241,7 @@ if (!snapshot) {
   console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
 }
 
-const qr = await torii.getExplorerAccountQr("i105...");
+const qr = await torii.getExplorerAccountQr("soraカタカナ...");
 console.log("explorer literal", qr.literal);
 await fs.writeFile("alice.svg", qr.svg, "utf8");
 console.log(
@@ -462,7 +462,7 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "soraカタカナ...",
     manifest,
     privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
     reason: "Attester v2 rollout",
@@ -472,7 +472,7 @@ await torii.publishSpaceDirectoryManifest(
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "soraカタカナ...",
     privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
     uaid,
     dataspaceId: 11,

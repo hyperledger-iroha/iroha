@@ -31,7 +31,7 @@ yoldaş alətlər. O, təmin edir:
 
 ## Motivasiya
 
-Pul kisələri və zəncirdənkənar alətlər bu gün xam `alias@domain` (rejected legacy form) marşrutlaşdırma ləqəblərinə əsaslanır. Bu
+Pul kisələri və zəncirdənkənar alətlər bu gün xam `name@dataspace` or `name@domain.dataspace` marşrutlaşdırma ləqəblərinə əsaslanır. Bu
 iki əsas çatışmazlıq var:
 
 1. **Şəbəkə bağlaması yoxdur.** Sətirdə yoxlama məbləği və ya zəncir prefiksi yoxdur, ona görə də istifadəçilər
@@ -72,16 +72,16 @@ AccountId {
     controller: AccountController // single PublicKey or multisig policy
 }
 
-Display: canonical i105 literal (no `@domain` suffix)
+Display: canonical Katakana i105 literal (no `@domain` suffix)
 Parse accepts:
 - Encoded account identifiers only: i105.
-- Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and account-alias literals such as label@dataspace or label@domain.dataspace.
+- Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and account-alias literals such as name@dataspace or name@domain.dataspace.
 
 Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
 and `0x` prefixes are not accepted.
 
 Account aliases are separate on-chain bindings. They use
-label@dataspace or label@domain.dataspace and resolve to canonical
+name@dataspace or name@domain.dataspace and resolve to canonical
 i105 `AccountId` values. Strict `AccountId` parsers never accept alias literals directly.
 ```
 
@@ -298,7 +298,7 @@ SDK-lar və operator iş axınları arasında ardıcıl.
 - İkili nəzarətçinin faydalı yükü (`ControllerPayload::Multisig`) kodlayır
   `version:u8`, `threshold:u16`, `member_count:u8`, sonra hər bir üzvün
   `(curve_id, weight:u16, key_len:u16, key_bytes)`. Bu məhz budur
-  `AccountAddress::canonical_bytes()` I105 (üstünlük verilir)/sora (ikinci ən yaxşı) faydalı yüklərə yazır.
+  `AccountAddress::canonical_bytes()` canonical Katakana i105 / non-canonical Katakana i105 faydalı yüklərə yazır.
 - Hashing (`MultisigPolicy::digest_blake2b256()`) Blake2b-256 ilə birlikdə
   `iroha-ms-policy` fərdiləşdirmə sətri beləliklə idarəetmə manifestləri
   I105-ə daxil edilmiş nəzarətçi baytlarına uyğun gələn deterministik siyasət ID-si.
@@ -320,9 +320,9 @@ SDK-lar və operator iş axınları arasında ardıcıl.
 - Böyük ölçülü və ya qüsurlu əsas material `KeyPayloadTooLong` və ya `InvalidPublicKey`-i qaldırır.
 - 255 üzvdən çox olan Multisig nəzarətçiləri `MultisigMemberOverflow`-i qaldırır.
 - IME/NFKC çevrilmələri: yarım eni Sora kana kodlaşdırmanı pozmadan tam enli formalarına normallaşdırıla bilər, lakin ASCII `sora` sentinel və I105 rəqəmləri/hərfləri ASCII olaraq qalmalıdır. Tam enli və ya qutu qatlanmış gözətçilər səthi `ERR_MISSING_COMPRESSED_SENTINEL`, tam enli ASCII faydalı yükləri `ERR_INVALID_COMPRESSED_CHAR` artırır və yoxlama məbləği uyğunsuzluqları `ERR_CHECKSUM_MISMATCH` kimi qabarır. `crates/iroha_data_model/src/account/address.rs`-də mülkiyyət testləri bu yolları əhatə edir ki, SDK-lar və pul kisələri deterministik uğursuzluqlara arxalana bilsin.
-- Torii və `address@domain` (rejected legacy form) ləqəblərinin SDK təhlili indi I105 (üstünlük verilir)/sora (ikinci-ən yaxşı) daxiletmələr ləqəbdən əvvəl uğursuz olduqda (məsələn, domen strukturunda səhv səhvlər ola bilməyəndə) eyni `ERR_*` kodlarını buraxır. nəsr sətirlərindən təxmin etmək.
+- Torii və `name@dataspace` or `name@domain.dataspace` ləqəblərinin SDK təhlili indi canonical Katakana i105 / non-canonical Katakana i105 daxiletmələr ləqəbdən əvvəl uğursuz olduqda (məsələn, domen strukturunda səhv səhvlər ola bilməyəndə) eyni `ERR_*` kodlarını buraxır. nəsr sətirlərindən təxmin etmək.
 - `ERR_LOCAL8_DEPRECATED` səthi 12 baytdan qısa olan yerli selektorun faydalı yükləri köhnə Local‑8 həzmlərindən sərt kəsimi qoruyur.
-- Domainless canonical i105 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
+- Domainless canonical Katakana i105 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
 
 #### 2.5 Normativ ikili vektorlar
 
@@ -361,17 +361,17 @@ hər kanonik yük üçün ardıcıl mətn formaları. Seçilmiş qurğular
 
 | Hesab / seçici | I105 hərfi (prefiks `0x02F1`) | Sora sıxılmış (`sora`) hərfi |
 |--------------------------------|--------------------------------|-------------------------|
-| `default` domeni (örtülü seçici, toxum `0x00`) | `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE` (açıq marşrut göstərişləri təmin edərkən isteğe bağlı `@default` şəkilçisi) |
+| `default` domeni (örtülü seçici, toxum `0x00`) | `soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE` |
 | `treasury` (yerli həzm seçicisi, toxum `0x01`) | `34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
 | Qlobal reyestr göstəricisi (`registry_id = 0x0000_002A`, `treasury` ekvivalenti) | `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF` | `sorakXｹ6NｻﾍﾀﾖSﾜﾖｱ3ﾚ5WﾘﾋQﾅｷｦxgﾛｸcﾁｵﾋkﾋvﾏ8SPﾓﾀｹdｴｴｲW9iCM6AEP` |
 
 Bu sətirlər CLI (`iroha tools address convert`), Torii tərəfindən buraxılanlara uyğundur
-cavablar (`canonical i105 literal rendering`) və SDK köməkçiləri, buna görə də UX kopyalayın/yapışdırın
+cavablar (`canonical Katakana i105 literal rendering`) və SDK köməkçiləri, buna görə də UX kopyalayın/yapışdırın
 axınlar onlara sözlü etibar edə bilər. Yalnız açıq marşrut göstərişinə ehtiyacınız olduqda `<address>@<domain>` (rejected legacy form) əlavə edin; şəkilçi kanonik çıxışın bir hissəsi deyil.
 
 #### 2.6 Qarşılıqlı fəaliyyət üçün mətn ləqəbləri (planlaşdırılmış)
 
-- ** Zəncir ləqəbi üslubu:** loglar və insan üçün `ih:<chain-alias>:<alias@domain>`
+- ** Zəncir ləqəbi üslubu:** loglar və insan üçün `ih:<chain-alias>:<name@domain.dataspace>`
   giriş. Pulqabılar prefiksi təhlil etməli, daxil edilmiş zənciri doğrulamalı və bloklamalıdır
   uyğunsuzluqlar.
 - **CAIP-10 forması:** Zəncirsiz aqnostik üçün `iroha:<caip-2-id>:<i105-addr>`
@@ -407,7 +407,7 @@ axınlar onlara sözlü etibar edə bilər. Yalnız açıq marşrut göstərişi
 hər kanonik faydalı yük üçün hərflər. Əsas məqamlar:
 
 - **`addr-single-default-ed25519` (Sora Nexus, prefiks `0x02F1`).**  
-  I105 `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`, sıxılmış (`sora`)
+  I105 `soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ`, sıxılmış (`sora`)
   `sora2QG…U4N5E5`. Torii bu dəqiq sətirləri `AccountId`-dən yayır
   `Display` tətbiqi (kanonik I105) və `AccountAddress::to_i105`.
 - **`addr-global-registry-002a` (reyestr seçicisi → xəzinə).**  
@@ -607,7 +607,7 @@ audit cığırının oflayn olaraq yenidən qurulması üçün dəyişiklik.
    imza tələb etməzdən əvvəl `cargo xtask address-vectors` ilə manifest.
 4. **Doğrulayın və dərc edin.** Runbook yoxlama siyahısına əməl edin (heşlər, Sigstore,
    ardıcıllığın monotonluğu) paketi SoraFS-ə əks etdirməzdən əvvəl. Torii indi
-   Paketdən dərhal sonra I105 (üstünlük verilir)/sora (ikinci ən yaxşı) literalları kanonikləşdirir.
+   Paketdən dərhal sonra canonical Katakana i105 / non-canonical Katakana i105 literalları kanonikləşdirir.
 5. **Monitor və geri qaytarın.** Local‑8 və Local‑12 toqquşma panellərini aşağıda saxlayın
    30 gün ərzində sıfır; reqressiyalar görünsə, əvvəlki manifesti yenidən dərc edin
    telemetriya sabitləşənə qədər yalnız təsirə məruz qalmış qeyri-istehsal mühitində.
@@ -623,8 +623,8 @@ onların dəyişmə biletləri.
   üstəgəl həll edilmiş domen reyestrdən alınan etiket kimi. Domenlərdir
   aydın şəkildə dəyişə bilən təsviri metadata kimi qeyd olunur, I105 isə
   sabit ünvan.
-- **Daxiletmənin kanonikləşdirilməsi:** Torii və SDK-lar I105 (üstünlük verilir)/sora (ikinci ən yaxşı)/0x qəbul edir
-  ünvanlar üstəgəl `alias@domain` (rejected legacy form), `uaid:…` və
+- **Daxiletmənin kanonikləşdirilməsi:** Torii və SDK-lar canonical Katakana i105 / non-canonical Katakana i105/0x qəbul edir
+  ünvanlar üstəgəl `name@dataspace` or `name@domain.dataspace`, `uaid:…` və
   `opaque:…` formalaşdırır, sonra çıxış üçün I105-ə kanonikləşir. yoxdur
   ciddi rejimdə keçid; xam telefon/e-poçt identifikatorları kitabdan kənar saxlanılmalıdır
   UAID/şəffaf xəritələr vasitəsilə.
@@ -670,24 +670,24 @@ onların dəyişmə biletləri.
   istifadəçilər sıxılmış i105 formasının yalnız Sora-dır və IME-nin yenidən yazılmasına həssasdır.
 - **Torii inteqrasiyası:** Keş Nexus TTL-ə uyğun olaraq təzahür edir, yayır
   `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` deterministik və
-  keep strict account-literal parsing canonical-i105-only (reject compressed and any `@domain` suffix) with canonical i105 output.
+  keep strict account-literal parsing canonical-i105-only (reject non-canonical Katakana i105 literals and any `@domain` suffix) with canonical Katakana i105 output.
 
 ### Torii cavab formatları
 
-- `GET /v1/accounts` isteğe bağlı `canonical i105 rendering` sorğu parametrini qəbul edir və
+- `GET /v1/accounts` isteğe bağlı `canonical Katakana i105 rendering` sorğu parametrini qəbul edir və
   `POST /v1/accounts/query` JSON zərfində eyni sahəni qəbul edir.
   Dəstəklənən dəyərlər bunlardır:
   - `i105` (defolt) — cavablar kanonik I105 faydalı yükləri yayır (məsələn,
-    `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`).
-  - `i105_default` — cavablar yalnız Sora üçün `i105` sıxılmış görünüşünü yayır.
+    `soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ`).
+  - `i105` — cavablar yalnız Sora üçün `i105` sıxılmış görünüşünü yayır.
     filtrlərin/yol parametrlərinin kanonik saxlanması.
 - Yanlış dəyərlər `400` (`QueryExecutionFail::Conversion`) qaytarır. Bu imkan verir
   cüzdanlar və tədqiqatçılar yalnız Sora-da UX üçün sıxılmış sətirlər tələb etsinlər
   I105-i qarşılıqlı işləyə bilən standart olaraq saxlayır.
 - Aktiv sahibi siyahıları (`GET /v1/assets/{definition_id}/holders`) və onların JSON
-  zərf həmkarı (`POST …/holders/query`) də `canonical i105 rendering`-i şərəfləndirir.
+  zərf həmkarı (`POST …/holders/query`) də `canonical Katakana i105 rendering`-i şərəfləndirir.
   `items[*].account_id` sahəsi hər dəfə sıxılmış hərflər buraxır
-  parametr/zərf sahəsi hesabları əks etdirərək `i105_default` olaraq təyin edilib
+  parametr/zərf sahəsi hesabları əks etdirərək `i105` olaraq təyin edilib
   tədqiqatçıların qovluqlar arasında ardıcıl çıxış təqdim edə bilməsi üçün son nöqtələr.
 - **Sınaq:** Kodlayıcı/dekoderin gediş-gəlişi, səhv zəncir üçün vahid testləri əlavə edin
   uğursuzluqlar və açıq axtarışlar; Torii və SDK-larda inteqrasiya əhatəsini əlavə edin

@@ -33,7 +33,7 @@ translator: machine-google-reviewed
 - `DomainId`: `name` (e.g., `wonderland`).
 - `AccountId`: کیننیکل ڈومین لیس اکاؤنٹ شناخت کنندہ `AccountAddress` کے ذریعے صرف I105 کے طور پر انکوڈ کیا گیا ہے۔ تجزیہ کار ان پٹ کو کینونیکل I105 ہونا چاہیے؛ ڈومین لاحقے (`@domain`)، کیننیکل I105 لٹریلز، عرفی لٹریلز، کینونیکل ہیکس پارسر ان پٹ، لیگیسی `norito:` پے لوڈز، اور `uaid:`/`opaque:` اکاؤنٹس کو دوبارہ ترتیب دیا گیا ہے۔
 - `AssetDefinitionId`: کیننیکل `unprefixed Base58 address with versioning and checksum` (UUID-v4 بائٹس)۔
-- `AssetId`: کیننیکل انکوڈ شدہ لٹریل `<asset-definition-id>#<i105-account-id>` (میراثی متنی شکلیں پہلی ریلیز میں تعاون یافتہ نہیں ہیں)۔
+- `AssetId`: کیننیکل انکوڈ شدہ لٹریل `<base58-asset-id>#<katakana-i105-account-id>` (میراثی متنی شکلیں پہلی ریلیز میں تعاون یافتہ نہیں ہیں)۔
 - `NftId`: `nft$domain` (جیسے، `rose$garden`)۔
 - `PeerId`: `public_key` (ہم مرتبہ کی مساوات عوامی کلید کے ذریعہ ہے)۔
 
@@ -259,7 +259,7 @@ curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -d '{"alias":"pkr#ubl.sbp"}'
 ```نقل مکانی نوٹ:
 - پرانی `name#domain` اثاثہ کی تعریف کی IDs v1 میں قبول نہیں کی جاتی ہیں۔
-- ٹکسال/برن/منتقلی کے لیے اثاثہ IDs کیننیکل `<asset-definition-id>#<i105-account-id>` رہیں۔ ان کے ساتھ بنائیں:
+- ٹکسال/برن/منتقلی کے لیے اثاثہ IDs کیننیکل `<base58-asset-id>#<katakana-i105-account-id>` رہیں۔ ان کے ساتھ بنائیں:
   - `iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
   - یا `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`۔
 

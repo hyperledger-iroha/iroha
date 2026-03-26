@@ -33,9 +33,9 @@ Grafana + Alertmanager para que revisores de economia e governanca possam audita
 
    sorafs reserve ledger \
      --quote artifacts/sorafs_reserve/quotes/provider-alpha-apr.json \
-     --provider-account i105... \
-     --treasury-account i105... \
-     --reserve-account i105... \
+     --provider-account soraカタカナ... \
+     --treasury-account soraカタカナ... \
+     --reserve-account soraカタカナ... \
      --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc \
      --json-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.json
    ```

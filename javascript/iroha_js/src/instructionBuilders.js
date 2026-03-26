@@ -2153,6 +2153,35 @@ export function buildSetRwaControlsInstruction(options) {
 }
 
 /**
+ * Build a `SetRwaKeyValue` instruction payload.
+ * @param {{ rwaId: string, key: string, value: unknown }} options
+ * @returns {{SetRwaKeyValue: {rwa: string, key: string, value: unknown}}}
+ */
+export function buildSetRwaKeyValueInstruction({ rwaId, key, value }) {
+  return {
+    SetRwaKeyValue: {
+      rwa: normalizeRwaId(rwaId, "rwaId"),
+      key: assertString(key, "key"),
+      value: normalizeJsonValue(value, "value"),
+    },
+  };
+}
+
+/**
+ * Build a `RemoveRwaKeyValue` instruction payload.
+ * @param {{ rwaId: string, key: string }} options
+ * @returns {{RemoveRwaKeyValue: {rwa: string, key: string}}}
+ */
+export function buildRemoveRwaKeyValueInstruction({ rwaId, key }) {
+  return {
+    RemoveRwaKeyValue: {
+      rwa: normalizeRwaId(rwaId, "rwaId"),
+      key: assertString(key, "key"),
+    },
+  };
+}
+
+/**
  * Build a `Register::Domain` instruction payload.
  * @param {{ domainId: string, logo?: string | null, metadata?: object | null }} options
  * @returns {{Register: {Domain: {id: string, logo: string | null, metadata: object}}}}

@@ -46,7 +46,7 @@ fn account(domain: &str, public_key: &str) -> ScopedAccountId {
 fn canonical_account(account: ScopedAccountId) -> ScopedAccountId {
     let value = norito::json::to_value(&account).expect("serialize account");
     let literal = value.as_str().expect("account literal");
-    ScopedAccountId::parse_encoded(literal).expect("canonical i105 account id must parse")
+    ScopedAccountId::parse_encoded(literal).expect("canonical Katakana i105 account id must parse")
 }
 
 fn run_env_result(vm: &mut IVM, env: norito::json::Value) -> Result<(), VMError> {

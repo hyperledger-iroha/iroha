@@ -19,9 +19,9 @@ En montrant le point d'entrée Kotodama, vous pouvez demander aux instructions d
 
 ## Roteiro do livro razão
 
-- Financer l'autorisation du contrat (par exemple `i105...`) avec l'objectif du transfert et la concession de l'autorisation du papier `CanTransfer` ou autorisation équivalente.
-- Choisissez le point d'entrée `call_transfer_asset` pour transférer 5 unités du contrat pour `i105...`, reflétant la possibilité d'envoyer automatiquement des commandes en chaîne à l'hôte.
-- Vérifiez les saldos via `FindAccountAssets` ou `iroha_cli ledger assets list --account i105...` et inspectez les événements pour confirmer que le garde de métadonnées enregistré ou le contexte du transfert.
+- Financer l'autorisation du contrat (par exemple `soraカタカナ...`) avec l'objectif du transfert et la concession de l'autorisation du papier `CanTransfer` ou autorisation équivalente.
+- Choisissez le point d'entrée `call_transfer_asset` pour transférer 5 unités du contrat pour `soraカタカナ...`, reflétant la possibilité d'envoyer automatiquement des commandes en chaîne à l'hôte.
+- Vérifiez les saldos via `FindAccountAssets` ou `iroha_cli ledger assets list --account soraカタカナ...` et inspectez les événements pour confirmer que le garde de métadonnées enregistré ou le contexte du transfert.
 
 ## Guides des utilisateurs du SDK
 
@@ -36,8 +36,8 @@ En montrant le point d'entrée Kotodama, vous pouvez demander aux instructions d
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("i105..."),
-      account!("i105..."),
+      account!("soraカタカナ..."),
+      account!("soraカタカナ..."),
       asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );

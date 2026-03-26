@@ -812,7 +812,7 @@ struct TxHistoryAccessPolicy {
 impl TxHistoryAccessPolicy {
     fn is_mandatory_alias(&self, dataspace_id: &str, alias: &str) -> bool {
         let dataspace = dataspace_id.trim().to_ascii_lowercase();
-        let canonical_alias = canonical_tx_history_alias(alias);
+        let canonical_alias = normalize_tx_history_alias(alias);
         self.mandatory_aliases
             .get(&dataspace)
             .is_some_and(|aliases| aliases.contains(&canonical_alias))
@@ -868,18 +868,8 @@ fn parse_tx_history_jwt_algorithm(value: &str) -> Option<JwtAlgorithm> {
 }
 
 #[cfg(feature = "app_api")]
-fn canonical_tx_history_alias(alias: &str) -> String {
-    let normalized = alias.trim().to_ascii_lowercase();
-    let Some((label, scope)) = normalized.split_once('@') else {
-        return normalized;
-    };
-    if scope.contains('.') {
-        return normalized;
-    }
-    match scope {
-        "hbl" | "ubl" => format!("{label}@{scope}.sbp"),
-        _ => normalized,
-    }
+fn normalize_tx_history_alias(alias: &str) -> String {
+    alias.trim().to_ascii_lowercase()
 }
 
 #[cfg(feature = "app_api")]
@@ -919,7 +909,7 @@ fn parse_tx_history_mandatory_aliases(path: &Path) -> HashMap<String, HashSet<St
                     path.display()
                 )
             });
-            let canonical = canonical_tx_history_alias(alias_literal);
+            let canonical = normalize_tx_history_alias(alias_literal);
             if !canonical.is_empty() {
                 normalized_aliases.insert(canonical);
             }
@@ -3099,6 +3089,7 @@ async fn handler_account_assets_query(
 }
 
 #[cfg(feature = "app_api")]
+#[axum::debug_handler]
 async fn handler_account_transactions_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3144,6 +3135,7 @@ async fn handler_account_transactions_get(
 }
 
 #[cfg(feature = "app_api")]
+#[axum::debug_handler]
 async fn handler_transactions_history_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -3479,9 +3471,7 @@ async fn handler_accounts_onboard_multisig(
 #[derive(JsonDeserialize)]
 struct AccountsPortfolioQuery {
     #[norito(default)]
-    asset: Option<String>,
-    #[norito(default)]
-    scope: Option<String>,
+    asset_id: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -3494,22 +3484,21 @@ async fn handler_accounts_portfolio(
     AxQuery(query): AxQuery<AccountsPortfolioQuery>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    let asset = query
-        .asset
+    let asset_id = query
+        .asset_id
         .as_deref()
-        .map(|raw| parse_asset_definition_id(app.as_ref(), raw))
-        .transpose()?;
-    let scope = query
-        .scope
-        .as_deref()
-        .map(crate::routing::parse_asset_balance_scope_literal)
-        .transpose()?;
+        .map(iroha_data_model::asset::AssetId::parse_literal)
+        .transpose()
+        .map_err(|err| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
+            ))
+        })?;
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_accounts_portfolio(
             app.state.clone(),
             AxPath(uaid_literal),
-            asset,
-            scope,
+            asset_id,
             app.telemetry.clone(),
         )
         .await;
@@ -3529,8 +3518,7 @@ async fn handler_accounts_portfolio(
     routing::handle_v1_accounts_portfolio(
         app.state.clone(),
         AxPath(uaid_literal),
-        asset,
-        scope,
+        asset_id,
         app.telemetry.clone(),
     )
     .await
@@ -17043,12 +17031,12 @@ fn tx_history_subject_alias_candidates(subject: &str, dataspace_id: &str) -> Vec
         return Vec::new();
     }
     if normalized_subject.contains('@') {
-        return vec![canonical_tx_history_alias(&normalized_subject)];
+        return vec![normalize_tx_history_alias(&normalized_subject)];
     }
     if normalized_subject.contains(':') {
         return Vec::new();
     }
-    vec![canonical_tx_history_alias(&format!(
+    vec![normalize_tx_history_alias(&format!(
         "{normalized_subject}@{}",
         dataspace_id.trim().to_ascii_lowercase()
     ))]
@@ -21589,7 +21577,7 @@ mod gateway_denylist_loader_tests {
         )
     }
 
-    fn sample_account_literals() -> (String, String, String) {
+    pub(super) fn sample_account_literals() -> (String, String, String) {
         let _domain: DomainId = "wonderland".parse().expect("domain parses");
         let public_key: PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
@@ -21631,7 +21619,7 @@ mod gateway_denylist_loader_tests {
         let (sample_canonical, sample_i105, _) = sample_account_literals();
         let mut entry = base_account_entry();
         entry.account_id = Some(sample_i105);
-        entry.account_alias = Some("routing@sora".to_string());
+        entry.account_alias = Some("routing@dataspace".to_string());
         entry.jurisdiction = Some("US".to_string());
         entry.reason = Some("test".to_string());
         entry.issued_at = Some("2025-01-01T00:00:00Z".to_string());
@@ -21646,7 +21634,7 @@ mod gateway_denylist_loader_tests {
             other => panic!("unexpected denylist kind: {other:?}"),
         }
 
-        assert_eq!(metadata.alias(), Some("routing@sora"));
+        assert_eq!(metadata.alias(), Some("routing@dataspace"));
         assert_eq!(metadata.jurisdiction(), Some("US"));
         assert_eq!(metadata.reason(), Some("test"));
     }
@@ -21668,7 +21656,7 @@ mod gateway_denylist_loader_tests {
     fn account_id_entries_reject_encoded_literals_with_domain_suffix() {
         let (_, i105, _) = sample_account_literals();
         let mut entry = base_account_entry();
-        entry.account_id = Some(format!("{i105}@hbl.sbp"));
+        entry.account_id = Some(format!("{i105}@hbl.dataspace"));
         entry.issued_at = Some("2025-01-01T00:00:00Z".to_string());
 
         let policy = sample_policy();
@@ -21688,7 +21676,7 @@ mod gateway_denylist_loader_tests {
             cid_utf8: None,
             url: None,
             account_id: None,
-            account_alias: Some("alias@sora".to_string()),
+            account_alias: Some("alias@dataspace".to_string()),
             jurisdiction: None,
             reason: Some("alias".to_string()),
             issued_at: Some("2025-04-15T00:00:00Z".to_string()),
@@ -21704,12 +21692,12 @@ mod gateway_denylist_loader_tests {
 
         match kind {
             sorafs::gateway::DenylistKind::AccountAlias(ref alias) => {
-                assert_eq!(alias, "alias@sora");
+                assert_eq!(alias, "alias@dataspace");
             }
             other => panic!("unexpected denylist kind: {other:?}"),
         }
 
-        assert_eq!(metadata.alias(), Some("alias@sora"));
+        assert_eq!(metadata.alias(), Some("alias@dataspace"));
         assert_eq!(metadata.reason(), Some("alias"));
     }
 
@@ -21738,7 +21726,7 @@ mod gateway_denylist_loader_tests {
 
         let policy = sample_policy();
         let err = build_account_id_denylist_entry(&entry, &policy)
-            .expect_err("non-canonical i105 account_id must be rejected");
+            .expect_err("non-canonical Katakana i105 account_id must be rejected");
         assert!(err.contains("invalid account_id"));
     }
 }
@@ -23489,7 +23477,7 @@ pub(crate) mod tests_runtime_handlers {
     #[cfg(all(feature = "app_api", feature = "push"))]
     fn mk_push_request(token: &str) -> push::RegisterDeviceRequest {
         push::RegisterDeviceRequest {
-            account_id: "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw".to_string(),
+            account_id: "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ".to_string(),
             platform: "FCM".to_string(),
             token: token.to_string(),
             topics: Some(vec!["orders".into()]),
@@ -28037,6 +28025,36 @@ mod tests {
     };
     use iroha_core::smartcontracts::Execute;
 
+    fn bind_asset_alias_for_test(
+        app: &SharedAppState,
+        authority: &AccountId,
+        definition_id: &AssetDefinitionId,
+        alias: &AssetDefinitionAlias,
+        lease_expiry_ms: Option<u64>,
+        height: u64,
+        creation_time_ms: u64,
+    ) {
+        let header = BlockHeader::new(
+            NonZeroU64::new(height).expect("non-zero height"),
+            None,
+            None,
+            None,
+            creation_time_ms,
+            0,
+        );
+        let mut block = app.state.block(header);
+        let mut tx = block.transaction();
+        iroha_data_model::isi::SetAssetDefinitionAlias::bind(
+            definition_id.clone(),
+            alias.clone(),
+            lease_expiry_ms,
+        )
+        .execute(authority, &mut tx)
+        .expect("bind asset alias for test");
+        tx.apply();
+        block.commit().expect("commit asset alias for test");
+    }
+
     fn sample_iso_bridge_config(alias: &str, account_id: &AccountId) -> actual::IsoBridge {
         let signer_keypair = KeyPair::random();
         actual::IsoBridge {
@@ -28393,7 +28411,7 @@ mod tests {
         let response = tx_history_alias_resolution_reject(Error::AppConflict {
             code: "account_alias_conflict",
             message:
-                "account alias `operator1@hbl.sbp` is bound to multiple accounts: account-a and account-b"
+                "account alias `operator1@hbl` is bound to multiple accounts: account-a and account-b"
                     .to_string(),
         });
 
@@ -28416,32 +28434,26 @@ mod tests {
 
     #[cfg(feature = "app_api")]
     #[test]
-    fn canonical_tx_history_alias_maps_fi_domains_into_sbp_dataspace() {
+    fn normalize_tx_history_alias_preserves_on_chain_literals() {
+        assert_eq!(normalize_tx_history_alias("operator1@hbl"), "operator1@hbl");
+        assert_eq!(normalize_tx_history_alias("operator2@ubl"), "operator2@ubl");
+        assert_eq!(normalize_tx_history_alias("banking@sbp"), "banking@sbp");
         assert_eq!(
-            canonical_tx_history_alias("operator1@hbl"),
-            "operator1@hbl.sbp"
-        );
-        assert_eq!(
-            canonical_tx_history_alias("operator2@ubl"),
-            "operator2@ubl.sbp"
-        );
-        assert_eq!(canonical_tx_history_alias("banking@sbp"), "banking@sbp");
-        assert_eq!(
-            canonical_tx_history_alias("operator1@hbl.sbp"),
-            "operator1@hbl.sbp"
+            normalize_tx_history_alias("operator1@hbl.dataspace"),
+            "operator1@hbl.dataspace"
         );
     }
 
     #[cfg(feature = "app_api")]
     #[test]
-    fn tx_history_subject_alias_candidates_canonicalize_short_fi_aliases() {
+    fn tx_history_subject_alias_candidates_preserve_short_alias_literals() {
         assert_eq!(
             tx_history_subject_alias_candidates("operator1@hbl", "hbl"),
-            vec!["operator1@hbl.sbp".to_string()]
+            vec!["operator1@hbl".to_string()]
         );
         assert_eq!(
             tx_history_subject_alias_candidates("operator2", "ubl"),
-            vec!["operator2@ubl.sbp".to_string()]
+            vec!["operator2@ubl".to_string()]
         );
         assert_eq!(
             tx_history_subject_alias_candidates("banking", "sbp"),
@@ -28452,7 +28464,7 @@ mod tests {
     #[cfg(feature = "app_api")]
     #[test]
     fn offline_cash_mode_extraction_accepts_ios_binding_and_proof() {
-        let (_, account_i105, _) = sample_account_literals();
+        let (_, account_i105, _) = super::gateway_denylist_loader_tests::sample_account_literals();
         let request = norito::json!({
             "account_id": account_i105,
             "device_binding": {
@@ -28489,7 +28501,7 @@ mod tests {
     #[cfg(feature = "app_api")]
     #[test]
     fn translate_cash_request_to_lineage_json_injects_canonical_attestation_fields() {
-        let (_, account_i105, _) = sample_account_literals();
+        let (_, account_i105, _) = super::gateway_denylist_loader_tests::sample_account_literals();
         let mut request = norito::json!({
             "account_id": account_i105,
             "lineage_id": "lineage-1",
@@ -28630,7 +28642,7 @@ mod tests {
         RepairReportV1 {
             version: REPAIR_REPORT_VERSION_V1,
             ticket_id: RepairTicketId(ticket.to_string()),
-            auditor_account: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            auditor_account: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
             submitted_at_unix,
             evidence: RepairEvidenceV1 {
                 version: REPAIR_EVIDENCE_VERSION_V1,
@@ -29907,16 +29919,15 @@ mod tests {
             Name::from_str("usd").expect("asset name token"),
         );
         let alias: AssetDefinitionAlias = "usd#issuer.main".parse().expect("asset alias");
-        let mut definition =
-            iroha_data_model::asset::AssetDefinition::numeric(definition_id.clone())
-                .with_name("usd".to_owned())
-                .build(&authority);
-        definition.alias = Some(alias.clone());
+        let definition = iroha_data_model::asset::AssetDefinition::numeric(definition_id.clone())
+            .with_name("usd".to_owned())
+            .build(&authority);
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account =
             Account::new(authority.clone().to_account_id(domain_id.clone())).build(&authority);
         let world = World::with([domain], [account], [definition]);
         let app = mk_app_state_for_tests_with_world(world);
+        bind_asset_alias_for_test(&app, &authority, &definition_id, &alias, None, 1, 0);
 
         let response = handler_asset_alias_resolve(
             State(app),
@@ -29961,16 +29972,15 @@ mod tests {
             Name::from_str("usd").expect("asset name token"),
         );
         let alias: AssetDefinitionAlias = "usd#main".parse().expect("asset alias");
-        let mut definition =
-            iroha_data_model::asset::AssetDefinition::numeric(definition_id.clone())
-                .with_name("usd".to_owned())
-                .build(&authority);
-        definition.alias = Some(alias.clone());
+        let definition = iroha_data_model::asset::AssetDefinition::numeric(definition_id.clone())
+            .with_name("usd".to_owned())
+            .build(&authority);
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account =
             Account::new(authority.clone().to_account_id(domain_id.clone())).build(&authority);
         let world = World::with([domain], [account], [definition]);
         let app = mk_app_state_for_tests_with_world(world);
+        bind_asset_alias_for_test(&app, &authority, &definition_id, &alias, None, 1, 0);
 
         let response = handler_asset_alias_resolve(
             State(app),
@@ -30013,17 +30023,16 @@ mod tests {
             Name::from_str("usd").expect("asset name token"),
         );
         let alias: AssetDefinitionAlias = "usd#issuer.main".parse().expect("asset alias");
-        let mut definition =
-            iroha_data_model::asset::AssetDefinition::numeric(definition_id.clone())
-                .with_name("usd".to_owned())
-                .with_description(Some("Treasury settlement token".to_owned()))
-                .build(&authority);
-        definition.alias = Some(alias.clone());
+        let definition = iroha_data_model::asset::AssetDefinition::numeric(definition_id.clone())
+            .with_name("usd".to_owned())
+            .with_description(Some("Treasury settlement token".to_owned()))
+            .build(&authority);
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account =
             Account::new(authority.clone().to_account_id(domain_id.clone())).build(&authority);
         let world = World::with([domain], [account], [definition.clone()]);
         let app = mk_app_state_for_tests_with_world(world);
+        bind_asset_alias_for_test(&app, &authority, &definition_id, &alias, None, 1, 0);
 
         let response = handler_asset_definition_get(
             State(app),
@@ -30047,10 +30056,7 @@ mod tests {
             Some(definition_id_literal.as_str())
         );
         assert_eq!(returned["name"].as_str(), Some(definition.name().as_str()));
-        assert_eq!(
-            returned["alias"].as_str(),
-            definition.alias().as_ref().map(AsRef::as_ref)
-        );
+        assert_eq!(returned["alias"].as_str(), Some(alias.as_ref()));
         assert_eq!(
             returned["description"].as_str(),
             definition.description().as_deref()
@@ -30082,18 +30088,15 @@ mod tests {
             Account::new(authority.clone().to_account_id(domain_id.clone())).build(&authority);
         let world = World::with([domain], [account], [definition]);
         let app = mk_app_state_for_tests_with_world(world);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1_000, 0);
-        let mut block = app.state.block(header);
-        let mut tx = block.transaction();
-        iroha_data_model::isi::SetAssetDefinitionAlias::bind(
-            definition_id.clone(),
-            alias.clone(),
+        bind_asset_alias_for_test(
+            &app,
+            &authority,
+            &definition_id,
+            &alias,
             Some(2_000),
-        )
-        .execute(&authority, &mut tx)
-        .expect("bind expired alias fixture");
-        tx.apply();
-        block.commit().expect("commit block");
+            1,
+            1_000,
+        );
 
         let after_grace = 2_000_u64 + 369_u64 * 60 * 60 * 1_000 + 1;
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, after_grace, 0);
@@ -30132,18 +30135,15 @@ mod tests {
             Account::new(authority.clone().to_account_id(domain_id.clone())).build(&authority);
         let world = World::with([domain], [account], [definition]);
         let app = mk_app_state_for_tests_with_world(world);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1_000, 0);
-        let mut block = app.state.block(header);
-        let mut tx = block.transaction();
-        iroha_data_model::isi::SetAssetDefinitionAlias::bind(
-            definition_id.clone(),
-            alias.clone(),
+        bind_asset_alias_for_test(
+            &app,
+            &authority,
+            &definition_id,
+            &alias,
             Some(2_000),
-        )
-        .execute(&authority, &mut tx)
-        .expect("bind expired alias fixture");
-        tx.apply();
-        block.commit().expect("commit block");
+            1,
+            1_000,
+        );
 
         let after_grace = 2_000_u64 + 369_u64 * 60 * 60 * 1_000 + 1;
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, after_grace, 0);
@@ -30192,18 +30192,15 @@ mod tests {
             Account::new(authority.clone().to_account_id(domain_id.clone())).build(&authority);
         let world = World::with([domain], [account], [definition]);
         let app = mk_app_state_for_tests_with_world(world);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1_000, 0);
-        let mut block = app.state.block(header);
-        let mut tx = block.transaction();
-        iroha_data_model::isi::SetAssetDefinitionAlias::bind(
-            definition_id,
-            alias.clone(),
+        bind_asset_alias_for_test(
+            &app,
+            &authority,
+            &definition_id,
+            &alias,
             Some(2_000),
-        )
-        .execute(&authority, &mut tx)
-        .expect("bind alias");
-        tx.apply();
-        block.commit().expect("commit block");
+            1,
+            1_000,
+        );
 
         let after_grace = 2_000_u64 + 369_u64 * 60 * 60 * 1_000 + 1;
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, after_grace, 0);
@@ -30234,24 +30231,38 @@ mod tests {
             domain_id.clone(),
             Name::from_str("usd").expect("asset name token"),
         );
-        let mut long_definition =
-            iroha_data_model::asset::AssetDefinition::numeric(long_id.clone())
-                .with_name("pkr".to_owned())
-                .build(&authority);
-        long_definition.alias = Some("pkr#ubl.sbp".parse().expect("alias"));
-        let mut short_definition =
-            iroha_data_model::asset::AssetDefinition::numeric(short_id.clone())
-                .with_name("usd".to_owned())
-                .build(&authority);
-        short_definition.alias = Some("usd#sbp".parse().expect("alias"));
+        let long_definition = iroha_data_model::asset::AssetDefinition::numeric(long_id.clone())
+            .with_name("pkr".to_owned())
+            .build(&authority);
+        let short_definition = iroha_data_model::asset::AssetDefinition::numeric(short_id.clone())
+            .with_name("usd".to_owned())
+            .build(&authority);
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account =
             Account::new(authority.clone().to_account_id(domain_id.clone())).build(&authority);
         let world = World::with([domain], [account], [long_definition, short_definition]);
         let app = mk_app_state_for_tests_with_world(world);
+        bind_asset_alias_for_test(
+            &app,
+            &authority,
+            &long_id,
+            &"pkr#ubl.dataspace".parse().expect("alias"),
+            None,
+            1,
+            0,
+        );
+        bind_asset_alias_for_test(
+            &app,
+            &authority,
+            &short_id,
+            &"usd#sbp".parse().expect("alias"),
+            None,
+            2,
+            0,
+        );
 
         assert_eq!(
-            parse_asset_definition_id(app.as_ref(), "pkr#ubl.sbp")
+            parse_asset_definition_id(app.as_ref(), "pkr#ubl.dataspace")
                 .expect("long alias should resolve"),
             long_id
         );

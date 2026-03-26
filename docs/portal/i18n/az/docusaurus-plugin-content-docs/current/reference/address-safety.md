@@ -55,7 +55,7 @@ təhlükəsizlik və ya əlçatanlığa xələl gətirmədən formatlar.
   `<account>` on chain `0x1234`”). “Ünvanı mətn kimi kopyalayın” təmin edin
   zəif görmə qabiliyyəti olan istifadəçilər üçün QR kətanına bitişik geri dönüş.
 
-## Sora-only i105-default addresses
+## Canonical Katakana i105 addresses
 
 - Gating: `i105` sıxılmış simli açıq təsdiqin arxasında gizlədin.
   Təsdiq formanın yalnız Sora Nexus zəncirlərində işlədiyini təkrar etməlidir.

@@ -2,12 +2,12 @@
 
 seiyaku NftDemo {
   fn owner_id() -> AccountId {
-    let owner = account!("6cmzPVPXA9wQAqZuZTNQr7fWhci8nVVkG6zQBHnHVK7RPo2Dfe1WG9B");
+    let owner = account!("soraゴヂアネタアニャヴウザニキニョゾビバヤチョトテスシコダオョキュロッベイゴビチャヰショチャパヨツサツホキマイニキ");
     return owner;
   }
 
   fn recipient_id() -> AccountId {
-    let recipient = account!("6cmzPVPX4dvqvHwePuzkRqyn6qVMHNkGgjHcFLict547HbtMBuPBdWY");
+    let recipient = account!("soraゴヂアニワグヹツムチョトヹヒョロポギフンルシハドクホャヒョヮブヒャギウゥトヒュボニョミガジヶャマアアミサヘ");
     return recipient;
   }
 

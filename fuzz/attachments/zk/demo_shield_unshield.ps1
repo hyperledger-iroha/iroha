@@ -14,13 +14,13 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ConfigArg = @()
 if ($env:CLI_CONFIG) { $ConfigArg = @('--config', $env:CLI_CONFIG) }
 
-$AUTHORITY = if ($env:AUTHORITY) { $env:AUTHORITY } else { '6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9' }
+$AUTHORITY = if ($env:AUTHORITY) { $env:AUTHORITY } else { 'soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ' }
 $PRIVATE_KEY = if ($env:PRIVATE_KEY) { $env:PRIVATE_KEY } else { 'ed0120...' }
 $BACKEND = if ($env:BACKEND) { $env:BACKEND } else { 'halo2/ipa' }
-$FROM = if ($env:FROM) { $env:FROM } else { '6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9' }
+$FROM = if ($env:FROM) { $env:FROM } else { 'soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ' }
 $ASSET_DEFINITION_ID = if ($env:ASSET_DEFINITION_ID) { $env:ASSET_DEFINITION_ID } else { '62Fk4FPcMuLvW5QjDGNF2a4jAmjM' }
 $ASSET_ID = if ($env:ASSET_ID) { $env:ASSET_ID } else { "$ASSET_DEFINITION_ID#$FROM" }
-$TO = if ($env:TO) { $env:TO } else { '6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9' }
+$TO = if ($env:TO) { $env:TO } else { 'soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ' }
 $AMOUNT = if ($env:AMOUNT) { [uint64]$env:AMOUNT } else { 1000 }
 $NOTE_COMMITMENT_HEX = if ($env:NOTE_COMMITMENT_HEX) { $env:NOTE_COMMITMENT_HEX } else { '0000000000000000000000000000000000000000000000000000000000000000' }
 $VK_TRANSFER_NAME = if ($env:VK_TRANSFER_NAME) { $env:VK_TRANSFER_NAME } else { 'vk_transfer' }

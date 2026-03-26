@@ -81,7 +81,7 @@ Local-12 أو يتم إصلاحه من خلال التسجيل دون إصلاح
 
 
 يجب على المستكشفين أن يستكشفوا أو يعملون في مجال القياس عن بعد وإمكانية الوصول
-كارتيرا:- قم بنسخ `data-copy-mode="i105|i105_default|qr"` لنسخ الأحذية لذلك
+كارتيرا:- قم بنسخ `data-copy-mode="i105|qr"` لنسخ الأحذية لذلك
   يمكن للواجهات الأمامية أن تُصدر قواطع الاستخدام جنبًا إلى جنب مع المقياس Torii
   `torii_address_format_total`. هذا الجزء من العرض التوضيحي يختلف عن الحدث
   `iroha:address-copy` كوم `{mode,timestamp}`; قم بتوصيل خط الأنابيب الخاص بك
@@ -179,7 +179,7 @@ Veja `docs/source/references/address_norm_v1.md` للوحة كاملة
   يقوم المساعد بحفظ البادئة I105 المكتشفة بشكل حرفي بما لا يقل عن ذلك
   بشكل صريح `networkPrefix`، بما في ذلك السيرة الذاتية لـ Redes Nao Padrao Nao Sao
   يتم إعادة عرضه بشكل صامت باستخدام البادئة.3. قم بتحويل الحمولة النافعة من Canon وإعادة استخدام المجلدات `i105.value` ou
-   `i105_default` للاستئناف (أو تطلب ترميزًا آخر عبر `--format`). عيسى
+   `i105` للاستئناف (أو تطلب ترميزًا آخر عبر `--format`). عيسى
    Strings ja sao seguras para compartilhamento externo.
 4. تحديث البيانات والسجلات والمستندات الرائعة للعميل بشكل
    canonica and notification as counterparts de que seletores local serao rejeitados

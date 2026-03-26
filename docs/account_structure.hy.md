@@ -31,7 +31,7 @@ translator: machine-google-reviewed
 
 ## Մոտիվացիա
 
-Դրամապանակներն ու շղթայից դուրս գործիքավորումն այսօր հիմնված են չմշակված `alias@domain` (rejected legacy form) երթուղային այլանունների վրա: Սա
+Դրամապանակներն ու շղթայից դուրս գործիքավորումն այսօր հիմնված են չմշակված `name@dataspace` or `name@domain.dataspace` երթուղային այլանունների վրա: Սա
 ունի երկու հիմնական թերություն.
 
 1. **Ցանցային կապ չկա:** Տողը չունի ստուգիչ գումար կամ շղթայի նախածանց, ուստի օգտվողները
@@ -72,16 +72,16 @@ AccountId {
     controller: AccountController // single PublicKey or multisig policy
 }
 
-Display: canonical i105 literal (no `@domain` suffix)
+Display: canonical Katakana i105 literal (no `@domain` suffix)
 Parse accepts:
 - Encoded account identifiers only: i105.
-- Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and account-alias literals such as label@dataspace or label@domain.dataspace.
+- Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and account-alias literals such as name@dataspace or name@domain.dataspace.
 
 Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
 and `0x` prefixes are not accepted.
 
 Account aliases are separate on-chain bindings. They use
-label@dataspace or label@domain.dataspace and resolve to canonical
+name@dataspace or name@domain.dataspace and resolve to canonical
 i105 `AccountId` values. Strict `AccountId` parsers never accept alias literals directly.
 ```
 
@@ -296,7 +296,7 @@ Multisig-ի քաղաքականությունը նաև բացահայտում է 
 - Երկուական կարգավորիչի օգտակար բեռը (`ControllerPayload::Multisig`) կոդավորում է
   `version:u8`, `threshold:u16`, `member_count:u8`, ապա յուրաքանչյուր անդամի
   `(curve_id, weight:u16, key_len:u16, key_bytes)`. Սա հենց այն է
-  `AccountAddress::canonical_bytes()`-ը գրում է I105 (նախընտրելի)/sora (երկրորդ լավագույն) օգտակար բեռներին:
+  `AccountAddress::canonical_bytes()`-ը գրում է canonical Katakana i105 / non-canonical Katakana i105 օգտակար բեռներին:
 - Հաշինգը (`MultisigPolicy::digest_blake2b256()`) օգտագործում է Blake2b-256-ը
   `iroha-ms-policy` անհատականացման տողը, որպեսզի կառավարման դրսևորումները կարողանան կապվել a
   դետերմինիստական քաղաքականության ID, որը համապատասխանում է I105-ում ներկառուցված վերահսկիչ բայթերին:
@@ -318,9 +318,9 @@ Multisig-ի քաղաքականությունը նաև բացահայտում է 
 - Չափազանց մեծ կամ սխալ ձևավորված հիմնական նյութը բարձրացնում է `KeyPayloadTooLong` կամ `InvalidPublicKey`:
 - Multisig կարգավորիչները, որոնք գերազանցում են 255 անդամները, բարձրացնում են `MultisigMemberOverflow`:
 - IME/NFKC փոխարկումներ. կիսալայնությամբ Sora kana-ն կարող է նորմալացվել իրենց ամբողջ լայնության ձևերին՝ առանց վերծանման խախտելու, սակայն ASCII `sora` պահակային և I105 թվանշանները/տառերը ՊԵՏՔ Է մնան ASCII: Ամբողջ լայնությամբ կամ պատյանով ծալված պահապանների մակերեսը `ERR_MISSING_COMPRESSED_SENTINEL`, ամբողջ լայնությամբ ASCII օգտակար բեռները բարձրացնում են `ERR_INVALID_COMPRESSED_CHAR`, իսկ ստուգիչ գումարի անհամապատասխանությունները՝ որպես `ERR_CHECKSUM_MISMATCH`: `crates/iroha_data_model/src/account/address.rs`-ի սեփականության թեստերը ծածկում են այս ուղիները, որպեսզի SDK-ները և դրամապանակները կարողանան հիմնվել որոշիչ ձախողումների վրա:
-- Torii և `address@domain` (rejected legacy form) փոխանունների Torii և SDK վերլուծությունը այժմ թողարկում են նույն `ERR_*` կոդերը, երբ I105 (նախընտրելի)/sora (երկրորդ լավագույն) մուտքերը ձախողվում են, նախքան կեղծանունը կարող է կրկնել տիրույթի սխալները, ստուգել տիրույթի պատճառները (օր. առանց արձակ տողերից գուշակելու.
+- Torii և `name@dataspace` or `name@domain.dataspace` փոխանունների Torii և SDK վերլուծությունը այժմ թողարկում են նույն `ERR_*` կոդերը, երբ canonical Katakana i105 / non-canonical Katakana i105 մուտքերը ձախողվում են, նախքան կեղծանունը կարող է կրկնել տիրույթի սխալները, ստուգել տիրույթի պատճառները (օր. առանց արձակ տողերից գուշակելու.
 - `ERR_LOCAL8_DEPRECATED` 12 բայթից ավելի կարճ տեղային ընտրիչով օգտակար բեռներ՝ պահպանելով հին Local‑8 մարսողությունների կոշտ անջատումը:
-- Domainless canonical i105 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
+- Domainless canonical Katakana i105 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
 
 #### 2.5 Նորմատիվ երկուական վեկտորներ
 
@@ -359,17 +359,17 @@ Sora Nexus ցանցերը կանխադրված են `chain_discriminant = 0x02F1
 
 | Հաշիվ / ընտրիչ | I105 բառացի (նախածանց `0x02F1`) | Սորա սեղմված (`sora`) բառացի |
 |--------------------------------------------------------------------------------------|
-| `default` տիրույթ (իմպլիցիտ ընտրիչ, սերմ `0x00`) | `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE` (ըստ ցանկության `@default` վերջածանց, երբ հստակ երթուղային ակնարկներ է տրվում) |
+| `default` տիրույթ (իմպլիցիտ ընտրիչ, սերմ `0x00`) | `soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE` |
 | `treasury` (տեղական մարսողության ընտրիչ, սերմ `0x01`) | `34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
 | Համաշխարհային ռեգիստրի ցուցիչ (`registry_id = 0x0000_002A`, համարժեք `treasury`) | `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF` | `sorakXｹ6NｻﾍﾀﾖSﾜﾖｱ3ﾚ5WﾘﾋQﾅｷｦxgﾛｸcﾁｵﾋkﾋvﾏ8SPﾓﾀｹdｴｴｲW9iCM6AEP` |
 
 Այս տողերը համընկնում են CLI-ի (`iroha tools address convert`), Torii-ի թողարկված տողերի հետ
-պատասխաններ (`canonical i105 literal rendering`) և SDK օգնականներ, այնպես որ UX պատճենեք/տեղադրեք
+պատասխաններ (`canonical Katakana i105 literal rendering`) և SDK օգնականներ, այնպես որ UX պատճենեք/տեղադրեք
 հոսքերը կարող են բառացիորեն հենվել դրանց վրա: Կցել `<address>@<domain>` (rejected legacy form) միայն այն դեպքում, երբ ձեզ անհրաժեշտ է հստակ երթուղային հուշում. վերջածանցը կանոնական ելքի մաս չէ։
 
 #### 2.6 Փոխգործունակության տեքստային այլանուններ (պլանավորված)
 
-- ** Շղթայական կեղծանունների ոճ.** `ih:<chain-alias>:<alias@domain>` գերանների և մարդկանց համար
+- ** Շղթայական կեղծանունների ոճ.** `ih:<chain-alias>:<name@domain.dataspace>` գերանների և մարդկանց համար
   մուտք. Դրամապանակները պետք է վերլուծեն նախածանցը, ստուգեն ներկառուցված շղթան և արգելափակեն
   անհամապատասխանություններ.
 - **CAIP-10 ձև:** `iroha:<caip-2-id>:<i105-addr>` շղթայական-ագնոստիկայի համար
@@ -405,7 +405,7 @@ Sora Nexus ցանցերը կանխադրված են `chain_discriminant = 0x02F1
 բառացի յուրաքանչյուր կանոնական բեռի համար: Առանձնահատկություններ.
 
 - **`addr-single-default-ed25519` (Sora Nexus, նախածանց `0x02F1`):**  
-  I105 `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`, սեղմված (`sora`)
+  I105 `soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ`, սեղմված (`sora`)
   `sora2QG…U4N5E5`. Torii-ն արտանետում է այս ճշգրիտ տողերը `AccountId`-ից
   `Display` իրականացում (կանոնական I105) և `AccountAddress::to_i105`:
 - **`addr-global-registry-002a` (ռեգիստրի ընտրիչ → գանձարան):**  
@@ -621,8 +621,8 @@ HTTP-ի վերջնակետերը, որպեսզի աուդիտորները կար
   գումարած լուծված տիրույթը որպես ռեեստրից բերված պիտակ: Դոմեններն են
   հստակ նշված է որպես նկարագրական մետատվյալներ, որոնք կարող են փոխվել, մինչդեռ I105-ը այն է
   կայուն հասցե.
-- **Մուտքի կանոնականացում.** Torii և SDK-ներն ընդունում են I105 (նախընտրելի)/sora (երկրորդ լավագույն)/0x
-  հասցեները գումարած `alias@domain` (rejected legacy form), `uaid:…` և
+- **Մուտքի կանոնականացում.** Torii և SDK-ներն ընդունում են canonical Katakana i105 / non-canonical Katakana i105/0x
+  հասցեները գումարած `name@dataspace` or `name@domain.dataspace`, `uaid:…` և
   `opaque:…` ձևավորվում է, այնուհետև ելքի համար կանոնականացվում է I105-ին: Չկա
   խիստ ռեժիմի անջատում; չմշակված հեռախոսի/էլփոստի նույնացուցիչները պետք է պահվեն մատյանից դուրս
   UAID/անթափանց քարտեզագրումների միջոցով:
@@ -668,24 +668,24 @@ HTTP-ի վերջնակետերը, որպեսզի աուդիտորները կար
   օգտվողներ, որոնց սեղմված `i105` ձևը միայն Sora-ի համար է և ենթակա է IME-ի վերաշարադրումների:
 - **Torii ինտեգրում.** Cache Nexus դրսևորվում է TTL-ի նկատմամբ, արտանետում
   `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` դետերմինիստորեն, և
-  keep strict account-literal parsing canonical-i105-only (reject compressed and any `@domain` suffix) with canonical i105 output.
+  keep strict account-literal parsing canonical-i105-only (reject non-canonical Katakana i105 literals and any `@domain` suffix) with canonical Katakana i105 output.
 
 ### Torii պատասխանի ձևաչափեր
 
-- `GET /v1/accounts` ընդունում է կամընտիր `canonical i105 rendering` հարցման պարամետրը և
+- `GET /v1/accounts` ընդունում է կամընտիր `canonical Katakana i105 rendering` հարցման պարամետրը և
   `POST /v1/accounts/query`-ն ընդունում է նույն դաշտը JSON ծրարի ներսում:
   Աջակցվող արժեքներն են.
   - `i105` (կանխադրված) — պատասխանները թողարկում են կանոնական I105 օգտակար բեռներ (օրինակ.
-    `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`):
-  - `i105_default` — պատասխանները թողարկում են միայն Sora-ի համար նախատեսված `i105` սեղմված տեսքը, մինչդեռ
+    `soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ`):
+  - `i105` — պատասխանները թողարկում են միայն Sora-ի համար նախատեսված `i105` սեղմված տեսքը, մինչդեռ
     ֆիլտրերի/ուղու պարամետրերի կանոնական պահպանում:
 - Անվավեր արժեքներ են վերադարձվում `400` (`QueryExecutionFail::Conversion`): Սա թույլ է տալիս
   դրամապանակներ և հետազոտողներ՝ սեղմված տողեր պահանջելու միայն Sora-ի UX-ի համար, մինչդեռ
   պահպանելով I105-ը որպես փոխգործունակ լռելյայն:
 - Ակտիվների սեփականատերերի ցուցակները (`GET /v1/assets/{definition_id}/holders`) և դրանց JSON-ը
-  ծրար գործընկերը (`POST …/holders/query`) նույնպես պատվում է `canonical i105 rendering`:
+  ծրար գործընկերը (`POST …/holders/query`) նույնպես պատվում է `canonical Katakana i105 rendering`:
   `items[*].account_id` դաշտն արտանետում է սեղմված տառեր, երբ
-  պարամետր/ծրար դաշտը սահմանվել է `i105_default`՝ արտացոլելով հաշիվները
+  պարամետր/ծրար դաշտը սահմանվել է `i105`՝ արտացոլելով հաշիվները
   վերջնակետեր, որպեսզի հետազոտողները կարողանան հետևողական արդյունք ներկայացնել դիրեկտորիաներում:
 - ** Փորձարկում. ** Ավելացրեք միավորի թեստեր կոդավորիչի / ապակոդավորիչի հետադարձ կապի, սխալ շղթայի համար
   ձախողումներ և բացահայտ որոնումներ; ավելացնել ինտեգրացիոն ծածկույթը Torii-ում և SDK-ներում

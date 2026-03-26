@@ -69,7 +69,7 @@ Lorsque vous contractez, vous pouvez l'utiliser en utilisant CLI. Recherchez l'a
 
 ```sh
 iroha_cli app contracts deploy \
-  --authority i105... \
+  --authority soraカタカナ... \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
 ```

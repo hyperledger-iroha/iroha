@@ -31,7 +31,7 @@ translator: machine-google-reviewed
 
 ## 動機
 
-如今，錢包和鏈下工具依賴於原始 `alias@domain` (rejected legacy form) 路由別名。這個
+如今，錢包和鏈下工具依賴於原始 `name@dataspace` or `name@domain.dataspace` 路由別名。這個
 有兩個主要缺點：
 
 1. **無網絡綁定。 ** 該字符串沒有校驗和或鏈前綴，因此用戶
@@ -72,16 +72,16 @@ AccountId {
     controller: AccountController // single PublicKey or multisig policy
 }
 
-Display: canonical i105 literal (no `@domain` suffix)
+Display: canonical Katakana i105 literal (no `@domain` suffix)
 Parse accepts:
 - Encoded account identifiers only: i105.
-- Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and account-alias literals such as label@dataspace or label@domain.dataspace.
+- Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and account-alias literals such as name@dataspace or name@domain.dataspace.
 
 Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
 and `0x` prefixes are not accepted.
 
 Account aliases are separate on-chain bindings. They use
-label@dataspace or label@domain.dataspace and resolve to canonical
+name@dataspace or name@domain.dataspace and resolve to canonical
 i105 `AccountId` values. Strict `AccountId` parsers never accept alias literals directly.
 ```
 
@@ -296,7 +296,7 @@ tag-specific payload, then move on to the controller bytes.
 - 二進制控制器有效負載 (`ControllerPayload::Multisig`) 編碼
   `version:u8`、`threshold:u16`、`member_count:u8`，然後是每個成員的
   `(curve_id, weight:u16, key_len:u16, key_bytes)`。這正是
-  `AccountAddress::canonical_bytes()` 寫入 I105（首選）/sora（第二佳）有效負載。
+  `AccountAddress::canonical_bytes()` 寫入 canonical Katakana i105 / non-canonical Katakana i105有效負載。
 - 散列 (`MultisigPolicy::digest_blake2b256()`) 使用 Blake2b-256 和
   `iroha-ms-policy` 個性化字符串，以便治理清單可以綁定到
   與 I105 中嵌入的控制器字節匹配的確定性策略 ID。
@@ -318,9 +318,9 @@ tag-specific payload, then move on to the controller bytes.
 - 過大或畸形的密鑰材料會引發 `KeyPayloadTooLong` 或 `InvalidPublicKey`。
 - 超過 255 個成員的多重簽名控制器籌集了 `MultisigMemberOverflow`。
 - IME/NFKC 轉換：半角 Sora 假名可以標準化為其全角形式，而不會破壞解碼，但 ASCII `sora` 哨兵和 I105 數字/字母必須保持 ASCII。全角或大小寫折疊標記表面為 `ERR_MISSING_COMPRESSED_SENTINEL`，全角 ASCII 有效負載引發 `ERR_INVALID_COMPRESSED_CHAR`，校驗和不匹配冒泡為 `ERR_CHECKSUM_MISMATCH`。 `crates/iroha_data_model/src/account/address.rs` 中的屬性測試涵蓋了這些路徑，因此 SDK 和錢包可以依賴確定性故障。
-- 當 I105（首選）/sora（第二佳）輸入在別名回退之前失敗（例如，校驗和不匹配、域摘要不匹配）時，Torii 和 `address@domain` (rejected legacy form) 別名的 SDK 解析現在會發出相同的 `ERR_*` 代碼，因此客戶端可以中繼結構化原因，而無需從散文字符串中猜測。
+- 當 canonical Katakana i105 / non-canonical Katakana i105輸入在別名回退之前失敗（例如，校驗和不匹配、域摘要不匹配）時，Torii 和 `name@dataspace` or `name@domain.dataspace` 別名的 SDK 解析現在會發出相同的 `ERR_*` 代碼，因此客戶端可以中繼結構化原因，而無需從散文字符串中猜測。
 - 本地選擇器有效負載短於 12 字節表面 `ERR_LOCAL8_DEPRECATED`，保留傳統 Local-8 摘要的硬切換。
-- Domainless canonical i105 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
+- Domainless canonical Katakana i105 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
 
 #### 2.5 規範二元向量
 
@@ -359,17 +359,17 @@ Sora Nexus 網絡默認為 `chain_discriminant = 0x02F1`
 
 |帳戶/選擇器 | I105 文字（前綴 `0x02F1`）| Sora 壓縮 (`sora`) 文字 |
 |--------------------------------|--------------------------------|-------------------------|
-| `default` 域（隱式選擇器，種子 `0x00`）| `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE`（提供顯式路由提示時可選 `@default` 後綴）|
+| `default` 域（隱式選擇器，種子 `0x00`）| `soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE`|
 | `treasury`（本地摘要選擇器，種子 `0x01`）| `34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
 |全局註冊表指針（`registry_id = 0x0000_002A`，相當於 `treasury`）| `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF` | `sorakXｹ6NｻﾍﾀﾖSﾜﾖｱ3ﾚ5WﾘﾋQﾅｷｦxgﾛｸcﾁｵﾋkﾋvﾏ8SPﾓﾀｹdｴｴｲW9iCM6AEP` |
 
 這些字符串與 CLI (`iroha tools address convert`)、Torii 發出的字符串匹配
-響應 (`canonical i105 literal rendering`) 和 SDK 幫助程序，因此 UX 複製/粘貼
+響應 (`canonical Katakana i105 literal rendering`) 和 SDK 幫助程序，因此 UX 複製/粘貼
 流量可以逐字依賴它們。僅當您需要顯式路由提示時才附加 `<address>@<domain>` (rejected legacy form)；後綴不是規範輸出的一部分。
 
 #### 2.6 用於互操作性的文本別名（計劃）
 
-- **鏈別名樣式：** `ih:<chain-alias>:<alias@domain>` 用於日誌和人類
+- **鏈別名樣式：** `ih:<chain-alias>:<name@domain.dataspace>` 用於日誌和人類
   條目。錢包必須解析前綴，驗證嵌入的鏈，並阻止
   不匹配。
 - **CAIP-10 形式：** `iroha:<caip-2-id>:<i105-addr>` 與鏈無關
@@ -405,7 +405,7 @@ Sora Nexus 網絡默認為 `chain_discriminant = 0x02F1`
 每個規範有效負載的文字。亮點：
 
 - **`addr-single-default-ed25519`（Sora Nexus，前綴 `0x02F1`）。 **  
-  I105 `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`，壓縮 (`sora`)
+  I105 `soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ`，壓縮 (`sora`)
   `sora2QG…U4N5E5`。 Torii 從 `AccountId` 發出這些確切的字符串
   `Display` 實現（規範 I105）和 `AccountAddress::to_i105`。
 - **`addr-global-registry-002a`（註冊表選擇器→財務）。 **  
@@ -605,7 +605,7 @@ HTTP 端點，以便審核員可以逐字重播驗證步驟。
    在請求籤名之前使用 `cargo xtask address-vectors` 的清單。
 4. **驗證並發布。 ** 遵循運行手冊清單（哈希值、Sigstore、
    序列單調性），然後將包鏡像到 SoraFS。現在 Torii
-   捆綁包落地後立即規範化 I105（首選）/sora（第二佳）文字。
+   捆綁包落地後立即規範化 canonical Katakana i105 / non-canonical Katakana i105文字。
 5. **監控和回滾。 ** 將 Local-8 和 Local-12 碰撞面板保持在
    30天歸零；如果出現回歸，請重新發布之前的清單
    僅在受影響的非生產環境中，直到遙測穩定為止。
@@ -621,8 +621,8 @@ HTTP 端點，以便審核員可以逐字重播驗證步驟。
   加上從註冊表中獲取的解析域作為標籤。域名是
   明確標記為可能更改的描述性元數據，而 I105 是
   穩定的地址。
-- **輸入規範化：** Torii 和 SDK 接受 I105（首選）/sora（次佳）/0x
-  地址加上 `alias@domain` (rejected legacy form)、`uaid:…` 和
+- **輸入規範化：** Torii 和 SDK 接受 canonical Katakana i105 / non-canonical Katakana i105/0x
+  地址加上 `name@dataspace` or `name@domain.dataspace`、`uaid:…` 和
   `opaque:…` 形式，然後規範化為 I105 進行輸出。沒有
   嚴格模式切換；原始電話/電子郵件標識符必須保留在賬本之外
   通過 UAID/不透明映射。
@@ -667,24 +667,24 @@ HTTP 端點，以便審核員可以逐字重播驗證步驟。
   用戶認為壓縮的 `i105` 形式僅適用於 Sora，並且容易受到 IME 重寫。
 - **Torii 集成：** 緩存 Nexus 體現尊重 TTL，發出
   `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` 確定性地，並且
-  keep strict account-literal parsing canonical-i105-only (reject compressed and any `@domain` suffix) with canonical i105 output.
+  keep strict account-literal parsing canonical-i105-only (reject non-canonical Katakana i105 literals and any `@domain` suffix) with canonical Katakana i105 output.
 
 ### Torii 響應格式
 
-- `GET /v1/accounts` 接受可選的 `canonical i105 rendering` 查詢參數並且
+- `GET /v1/accounts` 接受可選的 `canonical Katakana i105 rendering` 查詢參數並且
   `POST /v1/accounts/query` 接受 JSON 信封內的相同字段。
   支持的值為：
   - `i105`（默認）——響應發出規範的 I105 有效負載（例如，
-    `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`）。
-  - `i105_default` — 響應發出僅 Sora 的 `i105` 壓縮視圖，同時
+    `soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ`）。
+  - `i105` — 響應發出僅 Sora 的 `i105` 壓縮視圖，同時
     保持過濾器/路徑參數規範。
 - 無效值返回 `400` (`QueryExecutionFail::Conversion`)。這允許
   錢包和瀏覽器請求壓縮字符串以獲得僅限 Sora 的 UX，同時
   將 I105 保留為可互操作的默認值。
 - 資產持有者列表 (`GET /v1/assets/{definition_id}/holders`) 及其 JSON
-  對應的信封 (`POST …/holders/query`) 也兌現 `canonical i105 rendering`。
+  對應的信封 (`POST …/holders/query`) 也兌現 `canonical Katakana i105 rendering`。
   每當 `items[*].account_id` 字段發出壓縮文字
-  參數/信封字段設置為 `i105_default`，鏡像帳戶
+  參數/信封字段設置為 `i105`，鏡像帳戶
   端點，以便瀏覽器可以跨目錄呈現一致的輸出。
 - **測試：** 添加編碼器/解碼器往返、錯誤鏈的單元測試
   失敗和明顯的查找；在 Torii 和 SDK 中添加集成覆蓋範圍

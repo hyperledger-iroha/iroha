@@ -27,10 +27,11 @@ private func canonicalAuthorityLiteral(from signingKey: SigningKey,
 
 final class TransactionEncoderValidationTests: XCTestCase {
     func testSetMetadataRejectsMalformedAuthority() throws {
+        let targetAccount = try canonicalOwnerLiteral()
         let value = try NoritoJSON(["profile": "demo"])
         let request = SetMetadataRequest(chainId: "chain",
                                          authority: "alice",
-                                         target: .account("bob@hbl.sbp"),
+                                         target: .account(targetAccount),
                                          key: "profile",
                                          value: value,
                                          ttlMs: nil)
@@ -50,11 +51,12 @@ final class TransactionEncoderValidationTests: XCTestCase {
         let keypair = try Keypair(privateKeyBytes: Data(repeating: 9, count: 32))
         let address = try AccountAddress.fromAccount(publicKey: keypair.publicKey)
         let i105 = try address.toI105(networkPrefix: AccountId.defaultNetworkPrefix)
-        let authority = "\(i105)@hbl.sbp"
+        let authority = "\(i105)@hbl.dataspace"
+        let targetAccount = try canonicalOwnerLiteral()
         let value = try NoritoJSON(["profile": "demo"])
         let request = SetMetadataRequest(chainId: "chain",
                                          authority: authority,
-                                         target: .account("bob@hbl.sbp"),
+                                         target: .account(targetAccount),
                                          key: "profile",
                                          value: value,
                                          ttlMs: nil)
@@ -133,12 +135,12 @@ final class TransactionEncoderValidationTests: XCTestCase {
 
     func testMetadataTargetAcceptsCanonicalAssetId() throws {
         let target = try TransactionInputValidator.sanitizeMetadataTarget(
-            .asset("62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+            .asset("62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ")
         )
         guard case let .asset(assetId) = target else {
             return XCTFail("expected asset target")
         }
-        XCTAssertEqual(assetId, "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+        XCTAssertEqual(assetId, "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ")
     }
 
     func testCastZkBallotRejectsIncompleteLockHints() throws {
@@ -265,7 +267,7 @@ final class TransactionEncoderValidationTests: XCTestCase {
                                                            creationTimeMs: 1)
         ) { error in
             XCTAssertEqual(error as? TransactionInputError,
-                           .invalidZkBallotPublicInputs("owner must be a canonical i105 account id"))
+                           .invalidZkBallotPublicInputs("owner must be a canonical Katakana i105 account id"))
         }
     }
 }

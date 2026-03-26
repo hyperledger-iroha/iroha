@@ -81,7 +81,7 @@ function sampleAccountForms() {
   return Object.freeze({
     canonical,
     i105: i105Literal,
-    i105Default: address.toI105Default(),
+    i105: address.toI105(),
     nonCanonicalI105,
     local8,
   });
@@ -127,7 +127,7 @@ function fixtureAccountForms(label, domain = "fixture-domain") {
   const address = fixtureAccountAddress(label, domain);
   return {
     i105: address.toI105(SORA_I105_DISCRIMINANT),
-    i105Default: address.toI105Default(),
+    i105: address.toI105(),
   };
 }
 
@@ -362,11 +362,11 @@ function createOfflineTransferPayload(overrides = {}) {
   const baseItem = {
     bundle_id_hex: "ff00",
     controller_id: controller.i105,
-    controller_display: controller.i105Default,
+    controller_display: controller.i105,
     receiver_id: receiver.i105,
-    receiver_display: receiver.i105Default,
+    receiver_display: receiver.i105,
     deposit_account_id: deposit.i105,
-    deposit_account_display: deposit.i105Default,
+    deposit_account_display: deposit.i105,
     asset_id: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
     receipt_count: 1,
     total_amount: "1",
@@ -404,7 +404,7 @@ function createOfflineAllowanceItem(overrides = {}) {
   return {
     certificate_id_hex: "aa".repeat(32),
     controller_id: SAMPLE_ACCOUNT_ID,
-    controller_display: SAMPLE_ACCOUNT_FORMS.i105Default,
+    controller_display: SAMPLE_ACCOUNT_FORMS.i105,
     asset_id: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
     asset_definition_id: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
     asset_definition_name: "USD",
@@ -423,7 +423,7 @@ function createOfflineSummaryItem(overrides = {}) {
   return {
     certificate_id_hex: "aa".repeat(32),
     controller_id: SAMPLE_ACCOUNT_ID,
-    controller_display: SAMPLE_ACCOUNT_FORMS.i105Default,
+    controller_display: SAMPLE_ACCOUNT_FORMS.i105,
     summary_hash_hex: "11".repeat(32),
     ...overrides,
   };
@@ -433,7 +433,7 @@ function createOfflineRevocationItem(overrides = {}) {
   return {
     verdict_id_hex: "bb".repeat(32),
     issuer_id: SAMPLE_ACCOUNT_ID,
-    issuer_display: SAMPLE_ACCOUNT_FORMS.i105Default,
+    issuer_display: SAMPLE_ACCOUNT_FORMS.i105,
     revoked_at_ms: 10,
     reason: "certificate_revoked",
     note: null,
@@ -454,7 +454,7 @@ test("listAccountAssets canonicalizes encoded account ids", async () => {
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await client.listAccountAssets(forms.i105Default);
+  await client.listAccountAssets(forms.i105);
   assert.ok(
     capturedUrl?.includes(encodeURIComponent(forms.canonical)),
     `expected ${capturedUrl} to include canonical segment ${forms.canonical}`,
@@ -2230,7 +2230,10 @@ test("getUaidPortfolio normalizes UAID literals and dataspace payloads", async (
   assert.equal(result.uaid, canonical);
   assert.equal(result.totals.accounts, 2);
   assert.equal(result.dataspaces.length, 2);
-  assert.equal(result.dataspaces[1].accounts[0].assets[1].asset_definition_id, "fx#cbdc");
+  assert.equal(
+    result.dataspaces[1].accounts[0].assets[1].asset_definition_id,
+    "5Pz9SwdN9eXPbiXPX9HRCpzCcE3o",
+  );
   await assert.rejects(() => client.getUaidPortfolio("short"), /uaid/);
 });
 
@@ -11768,7 +11771,7 @@ test("iterateAccountsQuery paginates structured filters", async () => {
     const parsed = new URL(url);
     assert.equal(parsed.pathname, "/v1/accounts/query");
     const body = JSON.parse(init.body);
-    assert.deepEqual(body.filter, { Eq: ["id", SAMPLE_ACCOUNT_FORMS.i105Default] });
+    assert.deepEqual(body.filter, { Eq: ["id", SAMPLE_ACCOUNT_FORMS.i105] });
     const offset = Number(body.pagination?.offset ?? 0);
     const limit = Number(body.pagination?.limit ?? 0);
     if (callCount === 0) {
@@ -11792,7 +11795,7 @@ test("iterateAccountsQuery paginates structured filters", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const seen = [];
   for await (const account of client.iterateAccountsQuery({
-    filter: { Eq: ["id", SAMPLE_ACCOUNT_FORMS.i105Default] },
+    filter: { Eq: ["id", SAMPLE_ACCOUNT_FORMS.i105] },
     pageSize: 2,
   })) {
     seen.push(account.id);
@@ -12160,9 +12163,9 @@ test("listAccountPermissions validates entry names", async () => {
   );
 });
 
-test("listAccountPermissions normalizes I105 and i105Default (`sora`) account ids", async () => {
+test("listAccountPermissions normalizes I105 and i105 (`sora`) account ids", async () => {
   const forms = sampleAccountForms();
-  for (const literal of [forms.i105, forms.i105Default]) {
+  for (const literal of [forms.i105, forms.i105]) {
     let requestedPath = null;
     const fetchImpl = async (url) => {
       requestedPath = new URL(url).pathname;
@@ -12199,7 +12202,7 @@ test("listAccountAssets encodes pagination params", async () => {
 });
 
 test("listAccountAssets encodes assetId filters", async () => {
-  const assetId = `62Fk4FPcMuLvW5QjDGNF2a4jAmjM#${FIXTURE_ALICE_FORMS.i105Default}`;
+  const assetId = `62Fk4FPcMuLvW5QjDGNF2a4jAmjM#${FIXTURE_ALICE_FORMS.i105}`;
   const normalizedAssetId = FIXTURE_ASSET_ID_A;
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
@@ -12226,7 +12229,7 @@ test("listAccountAssets rejects malformed asset filters", async () => {
 
   await assert.rejects(
     () => client.listAccountAssets(FIXTURE_ALICE_ID, { assetId: invalidAssetId }),
-    /must use '<asset-definition-id>#<i105-account-id>' with optional '#dataspace:<id>' suffix/,
+    /must use '<base58-asset-id>#<katakana-i105-account-id>' with optional '#dataspace:<id>' suffix/,
   );
 });
 
@@ -12514,7 +12517,7 @@ test("listAccountTransactions encodes pagination params", async () => {
 });
 
 test("listAccountTransactions encodes assetId filters", async () => {
-  const assetId = `62Fk4FPcMuLvW5QjDGNF2a4jAmjM#${FIXTURE_ALICE_FORMS.i105Default}`;
+  const assetId = `62Fk4FPcMuLvW5QjDGNF2a4jAmjM#${FIXTURE_ALICE_FORMS.i105}`;
   const normalizedAssetId = FIXTURE_ASSET_ID_A;
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
@@ -12714,7 +12717,7 @@ test("listAssetHolders encodes definition id", async () => {
 });
 
 test("listAssetHolders encodes assetId filters", async () => {
-  const assetId = `62Fk4FPcMuLvW5QjDGNF2a4jAmjM#${FIXTURE_ALICE_FORMS.i105Default}`;
+  const assetId = `62Fk4FPcMuLvW5QjDGNF2a4jAmjM#${FIXTURE_ALICE_FORMS.i105}`;
   const normalizedAssetId = FIXTURE_ASSET_ID_A;
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
@@ -13575,7 +13578,7 @@ test("listKaigiRelays normalizes summary payloads", async () => {
         total: "2",
         items: [
           {
-            relay_id: "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
+            relay_id: "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
             domain: "kaigi",
             bandwidth_class: 5,
             hpke_fingerprint_hex: "aa".repeat(32),
@@ -13766,17 +13769,17 @@ test("streamKaigiRelayEvents encodes filters and normalizes payloads", async () 
     assert.equal(init.headers["Last-Event-ID"], "cursor");
     return createSseResponse([
       'event: kaigi\n',
-      `data: {"kind":"registration","domain":"kaigi","relay_id":"6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw","bandwidth_class":1,"hpke_fingerprint_hex":"${"aa".repeat(32)}"}\n`,
+      `data: {"kind":"registration","domain":"kaigi","relay_id":"soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ","bandwidth_class":1,"hpke_fingerprint_hex":"${"aa".repeat(32)}"}\n`,
       "\n",
       'event: kaigi\n',
-      'data: {"kind":"health","domain":"kaigi","relay_id":"6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw","status":"degraded","reported_at_ms":5000,"call":{"domain":"kaigi","name":"demo"}}\n',
+      'data: {"kind":"health","domain":"kaigi","relay_id":"soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ","status":"degraded","reported_at_ms":5000,"call":{"domain":"kaigi","name":"demo"}}\n',
       "\n",
     ]);
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const iterator = client.streamKaigiRelayEvents({
     domain: "Kaigi",
-    relay: "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
+    relay: "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
     kind: ["registration", "health"],
     lastEventId: "cursor",
   });
@@ -13787,7 +13790,7 @@ test("streamKaigiRelayEvents encodes filters and normalizes payloads", async () 
   assert.equal(second.value?.data?.call.name, "demo");
   assert.ok(requested?.includes("domain=kaigi"));
   assert.ok(
-    requested?.includes("relay=6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw"),
+    requested?.includes("relay=soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ"),
   );
   assert.ok(requested?.includes("kind=registration%2Chealth"));
 });
@@ -15362,7 +15365,7 @@ test("getMultisigSpec accepts domain-scoped aliases and rejects unsupported alia
       client.getMultisigSpec({
         multisigAccountAlias: "cbdc@hbl.universal.extra",
       }),
-    /must use label@dataspace or label@domain.dataspace form/,
+    /must use name@dataspace or name@domain.dataspace form/,
   );
 });
 
@@ -16145,7 +16148,7 @@ test("listOfflineAllowances captures hms safety detect metadata", async () => {
 
 test("listOfflineTransfers normalizes payloads and metadata", async () => {
   let capturedUrl = null;
-  const assetId = `62Fk4FPcMuLvW5QjDGNF2a4jAmjM#${FIXTURE_ALICE_FORMS.i105Default}`;
+  const assetId = `62Fk4FPcMuLvW5QjDGNF2a4jAmjM#${FIXTURE_ALICE_FORMS.i105}`;
   const normalizedAssetId = FIXTURE_ASSET_ID_A;
   const receiverId = normalizeAccountId(
     FIXTURE_VAULT_ID,
@@ -17008,7 +17011,7 @@ test("topUpOfflineAllowanceRenewal chains issue and renew", async () => {
 
 test("listOfflineAllowances encodes convenience query params", async () => {
   let capturedUrl = null;
-  const assetId = `62Fk4FPcMuLvW5QjDGNF2a4jAmjM#${FIXTURE_ALICE_FORMS.i105Default}`;
+  const assetId = `62Fk4FPcMuLvW5QjDGNF2a4jAmjM#${FIXTURE_ALICE_FORMS.i105}`;
   const normalizedAssetId = FIXTURE_ASSET_ID_A;
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async (url) => {
@@ -17667,7 +17670,7 @@ test("iterateOfflineAllowances paginates and honours maxItems", async () => {
     }),
     createOfflineAllowanceItem({
       certificate_id_hex: "cc".repeat(32),
-      controller_id: SAMPLE_ACCOUNT_FORMS.i105Default,
+      controller_id: SAMPLE_ACCOUNT_FORMS.i105,
     }),
     createOfflineAllowanceItem({
       certificate_id_hex: "dd".repeat(32),
@@ -17709,7 +17712,7 @@ test("iterateOfflineSummariesQuery paginates structured responses", async () => 
     createOfflineSummaryItem({
       summary_hash_hex: "22".repeat(32),
       controller_id: SAMPLE_ACCOUNT_FORMS.i105,
-      controller_display: SAMPLE_ACCOUNT_FORMS.i105Default,
+      controller_display: SAMPLE_ACCOUNT_FORMS.i105,
     }),
   ];
   const capturedRequests = [];
@@ -17747,9 +17750,9 @@ test("iterateOfflineTransfersQuery walks paginated transfer responses", async ()
       recorded_at_height: 1,
       controller_id: SAMPLE_ACCOUNT_ID,
       receiver_id: SAMPLE_ACCOUNT_FORMS.i105,
-      receiver_display: SAMPLE_ACCOUNT_FORMS.i105Default,
-      deposit_account_id: SAMPLE_ACCOUNT_FORMS.i105Default,
-      deposit_account_display: SAMPLE_ACCOUNT_FORMS.i105Default,
+      receiver_display: SAMPLE_ACCOUNT_FORMS.i105,
+      deposit_account_id: SAMPLE_ACCOUNT_FORMS.i105,
+      deposit_account_display: SAMPLE_ACCOUNT_FORMS.i105,
     },
     {
       ...cloneFixture(baseTransfer),
@@ -17757,19 +17760,19 @@ test("iterateOfflineTransfersQuery walks paginated transfer responses", async ()
       recorded_at_height: 2,
       controller_id: SAMPLE_ACCOUNT_FORMS.i105,
       receiver_id: SAMPLE_ACCOUNT_FORMS.canonical,
-      receiver_display: SAMPLE_ACCOUNT_FORMS.i105Default,
+      receiver_display: SAMPLE_ACCOUNT_FORMS.i105,
       deposit_account_id: SAMPLE_ACCOUNT_FORMS.canonical,
-      deposit_account_display: SAMPLE_ACCOUNT_FORMS.i105Default,
+      deposit_account_display: SAMPLE_ACCOUNT_FORMS.i105,
     },
     {
       ...cloneFixture(baseTransfer),
       bundle_id_hex: "cc00",
       recorded_at_height: 3,
-      controller_id: SAMPLE_ACCOUNT_FORMS.i105Default,
+      controller_id: SAMPLE_ACCOUNT_FORMS.i105,
       receiver_id: SAMPLE_ACCOUNT_ID,
-      receiver_display: SAMPLE_ACCOUNT_FORMS.i105Default,
+      receiver_display: SAMPLE_ACCOUNT_FORMS.i105,
       deposit_account_id: SAMPLE_ACCOUNT_ID,
-      deposit_account_display: SAMPLE_ACCOUNT_FORMS.i105Default,
+      deposit_account_display: SAMPLE_ACCOUNT_FORMS.i105,
     },
   ];
   const capturedRequests = [];

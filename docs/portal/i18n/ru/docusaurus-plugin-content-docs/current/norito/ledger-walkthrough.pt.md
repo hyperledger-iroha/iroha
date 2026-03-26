@@ -30,8 +30,8 @@ Conta que voce planeja usar. O Bundle Padrao ja Inclui Duas Contas Derivadas Das
 демо-версия:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="soraカタカナ..."
+export RECEIVER_ACCOUNT="soraカタカナ..."
 ```
 
 Подтвердите список значений в качестве первых сведений:

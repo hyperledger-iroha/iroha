@@ -111,7 +111,7 @@ const address = AccountAddress.fromAccount({
 });
 console.log(address.canonicalHex());
 console.log(address.toI105(753));
-console.log(address.toI105Default());
+console.log(address.toI105());
 
 const formats = address.displayFormats(753);
 console.log(formats.i105);
@@ -163,28 +163,28 @@ const usagePlan = {
 };
 
 await torii.createSubscriptionPlan({
-  authority: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
+  authority: "soraゴヂアニヴヒュルロヒュキンムメタケトキキュヰサヱョモポケォグェエユガヰァキャヰブドイエシェュセコセケトエ",
   private_key: "provider-private-key-hex",
   plan_id: "aws_compute#commerce",
   plan: usagePlan,
 });
 
 await torii.createSubscription({
-  authority: "6cmzPVPX4ZZ37ssFtJnQzouYHC9YVUEsVZUWF966ToXNoKUsfX1qgpC",
+  authority: "soraゴヂアニレアコアヰミダゾェヷヅタデダリュエプヒュチュッゾキャバゾカヴソヲヘスボマゾヵシワパエシネヘマト",
   private_key: "subscriber-private-key-hex",
   subscription_id: "sub-001",
   plan_id: "aws_compute#commerce",
 });
 
 await torii.recordSubscriptionUsage("sub-001", {
-  authority: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
+  authority: "soraゴヂアニヴヒュルロヒュキンムメタケトキキュヰサヱョモポケォグェエユガヰァキャヰブドイエシェュセコセケトエ",
   private_key: "provider-private-key-hex",
   unit_key: "compute_ms",
   delta: "3600000",
 });
 
 await torii.chargeSubscriptionNow("sub-001", {
-  authority: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
+  authority: "soraゴヂアニヴヒュルロヒュキンムメタケトキキュヰサヱョモポケォグェエユガヰァキャヰブドイエシェュセコセケトエ",
   private_key: "provider-private-key-hex",
 });
 ```
@@ -197,8 +197,8 @@ import { MultisigSpecBuilder, buildProposeMultisigInstruction } from "@iroha/iro
 const spec = new MultisigSpecBuilder()
   .setQuorum(3)
   .setTransactionTtlMs(86_400_000)
-  .addSignatory("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", 2)
-  .addSignatory("6cmzPVPX9CDKZ7zp4XqnygVMaXeKCZHvBaeZNTPuH1TvtP7SvKbSzxA", 1)
+  .addSignatory("soraゴヂアニヴヒュルロヒュキンムメタケトキキュヰサヱョモポケォグェエユガヰァキャヰブドイエシェュセコセケトエ", 2)
+  .addSignatory("soraゴヂアヌヵレキャヌポヸノルリィアセキャベニヸヱルヷユニャチャコミタジプキョミガヵタトデジテバメネフツテホア", 1)
   .build();
 
 // Preview the effective TTL (clamped to the policy cap) and expiry time
@@ -207,7 +207,7 @@ console.log(preview.effectiveTtlMs, preview.expiresAtMs, preview.wasCapped);
 
 // Build a multisig proposal while enforcing the policy TTL cap client-side
 const propose = buildProposeMultisigInstruction({
-  accountId: "6cmzPVPX4ZZ37ssFtJnQzouYHC9YVUEsVZUWF966ToXNoKUsfX1qgpC",
+  accountId: "soraゴヂアニレアコアヰミダゾェヷヅタデダリュエプヒュチュッゾキャバゾカヴソヲヘスボマゾヵシワパエシネヘマト",
   spec,
   instructions: [{ Log: { Level: "INFO", message: "hello" } }],
   transactionTtlMs: 45_000, // throws if above spec.transaction_ttl_ms
@@ -216,8 +216,8 @@ const propose = buildProposeMultisigInstruction({
 // Register the multisig controller with an explicit (non-derived) account id
 const register = buildRegisterMultisigTransaction({
   chainId: "wonderland",
-  authority: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
-  accountId: "6cmzPVPX4ZZ37ssFtJnQzouYHC9YVUEsVZUWF966ToXNoKUsfX1qgpC",
+  authority: "soraゴヂアニヴヒュルロヒュキンムメタケトキキュヰサヱョモポケォグェエユガヰァキャヰブドイエシェュセコセケトエ",
+  accountId: "soraゴヂアニレアコアヰミダゾェヷヅタデダリュエプヒュチュッゾキャバゾカヴソヲヘスボマゾヵシワパエシネヘマト",
   spec,
   privateKey: generateKeyPair().privateKey, // controller key is NOT used for signing
 });
@@ -266,9 +266,9 @@ import {
 
 const { publicKey, privateKey } = generateKeyPair();
 const authorityInput =
-  "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+  "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
 const newAccountIdInput =
-  "6cmzPVPX8e5qQsHdB57DhqFT9wp2MiMoXsvt9LYUtypj1nx96bF5s8W";
+  "soraゴヂアヌプテニィキニャキャメイホョニャチュチョネドモキャビヲヤデブォツメシャモリカグヒュリダポヌラマキホコホノミ";
 const authority = normalizeAccountId(authorityInput);
 const newAccountId = normalizeAccountId(newAccountIdInput);
 const roseAssetId = normalizeAssetId("<base58-asset-definition-id>#<i105-account-id>");
@@ -412,7 +412,7 @@ for await (const lot of torii.iterateAccountRwas(authority, {
   console.log(`${lot.id} => ${lot.quantity}`);
 }
 
-for await (const holding of torii.iterateAccountAssetsQuery("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", {
+for await (const holding of torii.iterateAccountAssetsQuery("soraゴヂアニヴヒュルロヒュキンムメタケトキキュヰサヱョモポケォグェエユガヰァキャヰブドイエシェュセコセケトエ", {
   requirePermissions: true,
   pageSize: 2,
   filter: { Gte: ["quantity", 1] },
@@ -504,17 +504,17 @@ const registerDomain = noritoEncodeInstruction(
   buildRegisterDomainInstruction({ domainId: "wonderland" }),
 );
 const registerAccount = buildRegisterAccountInstruction({
-  accountId: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
+  accountId: "soraゴヂアニヴヒュルロヒュキンムメタケトキキュヰサヱョモポケォグェエユガヰァキャヰブドイエシェュセコセケトエ",
 });
 const transfer = buildTransferAssetInstruction({
   sourceAssetId: "<base58-asset-definition-id>#<i105-account-id>",
-  destinationAccountId: "6cmzPVPX9CDKZ7zp4XqnygVMaXeKCZHvBaeZNTPuH1TvtP7SvKbSzxA",
+  destinationAccountId: "soraゴヂアヌヵレキャヌポヸノルリィアセキャベニヸヱルヷユニャチャコミタジプキョミガヵタトデジテバメネフツテホア",
   quantity: "5",
 });
 
 const transferTx = buildTransaction({
   chainId: "demo-chain",
-  authority: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
+  authority: "soraゴヂアニヴヒュルロヒュキンムメタケトキキュヰサヱョモポケォグェエユガヰァキャヰブドイエシェュセコセケトエ",
   instructions: [transfer],
   privateKey,
 });
@@ -649,6 +649,13 @@ const transferRwa = buildTransferRwaInstruction({
   destinationAccountId: newAccountId,
 });
 console.log(noritoDecodeInstruction(transferRwa));
+
+const setRwaMetadata = buildSetRwaKeyValueInstruction({
+  rwaId: vaultLotId,
+  key: "grade",
+  value: { origin: "AE", score: 9n },
+});
+console.log(noritoDecodeInstruction(setRwaMetadata));
 
 const mintAndTransferTx = buildMintAndTransferTransaction({
   chainId: "test-chain",
@@ -927,8 +934,8 @@ pinned to the configured base.
   JavaScript floating-point pitfalls; the builders accept `string | number |
   bigint` but require plain decimal literals (no exponent), with up to 28
   fractional digits and a 512-bit mantissa.
-- Keep asset IDs in canonical public form
-  (`<asset-definition-id>#<i105-account-id>` with optional `#dataspace:<id>`) when
+- Keep asset IDs in canonical holding form
+  (`<base58-asset-id>#<katakana-i105-account-id>` with optional `#dataspace:<id>`) when
   chaining mint and transfer steps. The helpers do not guess missing account or
   scope suffixes, ensuring all peers derive the same destination.
 - Reuse the exported `normalizeAccountId()` / `normalizeAssetId()` helpers when you
@@ -1294,7 +1301,7 @@ const pinResult = await torii.pinSorafsManifest({
 console.log(`manifest=${pinResult.manifest_id_hex} digest=${pinResult.payload_digest_hex}`);
 
 const registerRequest = {
-  authority: process.env.SORAFS_OPERATOR_ID ?? "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
+  authority: process.env.SORAFS_OPERATOR_ID ?? "soraゴヂアニヴヒュルロヒュキンムメタケトキキュヰサヱョモポケォグェエユガヰァキャヰブドイエシェュセコセケトエ",
   privateKey: process.env.SORAFS_OPERATOR_KEY ?? "ed25519:deadbeef",
   manifestDigestHex: pinResult.manifest_id_hex,
   chunkDigestSha3_256Hex: process.env.SORAFS_CHUNK_DIGEST ?? "1".repeat(64),
@@ -1519,7 +1526,7 @@ const uaidLiteral = "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f2
 
 const portfolio = await torii.getUaidPortfolio(uaidLiteral);
 // Optionally filter positions by a specific asset id.
-// const portfolio = await torii.getUaidPortfolio(uaidLiteral, { assetId: "cash#portfolio::..." });
+// const portfolio = await torii.getUaidPortfolio(uaidLiteral, { assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ" });
 for (const ds of portfolio.dataspaces) {
   console.log(`dataspace ${ds.dataspace_alias ?? ds.dataspace_id} accounts=${ds.accounts.length}`);
   ds.accounts.forEach((account) => {
@@ -1580,7 +1587,7 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
+    authority: "soraゴヂアニヴヒュルロヒュキンムメタケトキキュヰサヱョモポケォグェエユガヰァキャヰブドイエシェュセコセケトエ",
     privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
     manifest,
     reason: "Rotation to attester set v2",
@@ -1590,7 +1597,7 @@ await torii.publishSpaceDirectoryManifest(
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
+    authority: "soraゴヂアニヴヒュルロヒュキンムメタケトキキュヰサヱョモポケォグェエユガヰァキャヰブドイエシェュセコセケトエ",
     privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
     uaid: "uaid:c2b61dd6bb73e91ee6d0949508d491bbc1b2a347a3f41b5cd35d733c1e751111",
     dataspaceId: 11,
@@ -1674,7 +1681,7 @@ relays.items.forEach((relay) => {
   console.log(`${relay.relay_id} (${relay.domain}) status=${relay.status ?? "unknown"}`);
 });
 
-const detail = await torii.getKaigiRelay(relays.items[0]?.relay_id ?? "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw");
+const detail = await torii.getKaigiRelay(relays.items[0]?.relay_id ?? "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ");
 if (detail?.metrics) {
   console.log(`${detail.metrics.domain} registrations=${detail.metrics.registrations_total}`);
 }
@@ -1878,9 +1885,9 @@ const settlement = buildPacs008Message({
   instigatingAgent: { bic: "DEUTDEFF", lei: "529900ODI3047E2LIV03" },
   instructedAgent: { bic: "COBADEFF" },
   debtorAccount: { iban: "DE89370400440532013000" },
-  creditorAccount: { otherId: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT" },
+  creditorAccount: { otherId: "soraゴヂアニヴヒュルロヒュキンムメタケトキキュヰサヱョモポケォグェエユガヰァキャヰブドイエシェュセコセケトエ" },
   purposeCode: "SECU",
-  supplementaryData: { account_id: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", leg: "delivery" },
+  supplementaryData: { account_id: "soraゴヂアニヴヒュルロヒュキンムメタケトキキュヰサヱョモポケォグェエユガヰァキャヰブドイエシェュセコセケトエ", leg: "delivery" },
 });
 
 const torii = new ToriiClient("http://localhost:8080");
@@ -1943,7 +1950,7 @@ const address = AccountAddress.fromAccount({
 });
 console.log(address.canonicalHex());
 console.log(address.toI105(753));
-console.log(address.toI105Default());
+console.log(address.toI105());
 
 // Build a registry-backed selector when a global registry id is available.
 const registryAddress = AccountAddress.fromAccount({
@@ -1969,7 +1976,7 @@ const manifestTx = buildRegisterSmartContractCodeTransaction({
     abiHash: "hash:…",
     compilerFingerprint: "kotodama-1.2 rustc-1.79",
     accessSetHints: {
-      readKeys: ["account:6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT"],
+      readKeys: ["account:soraゴヂアニヴヒュルロヒュキンムメタケトキキュヰサヱョモポケォグェエユガヰァキャヰブドイエシェュセコセケトエ"],
       writeKeys: ["contract:apps:ledger"],
     },
   },
@@ -2076,7 +2083,7 @@ const address = AccountAddress.fromAccount({
 });
 console.log(address.canonicalHex());
 console.log(address.toI105(753));
-console.log(address.toI105Default());
+console.log(address.toI105());
 ```
 
 ```js
@@ -2102,7 +2109,7 @@ const proposalTx = buildProposeDeployContractTransaction({
   privateKey,
 });
 
-const zkOwner = "6cmzPVPX4ZZ37ssFtJnQzouYHC9YVUEsVZUWF966ToXNoKUsfX1qgpC"; // canonical i105 account id for ZK public inputs
+const zkOwner = "soraゴヂアニレアコアヰミダゾェヷヅタデダリュエプヒュチュッゾキャバゾカヴソヲヘスボマゾヵシワパエシネヘマト"; // canonical Katakana i105 account id for ZK public inputs
 
 const zkBallotTx = buildCastZkBallotTransaction({
   chainId: "test-chain",
@@ -2241,7 +2248,7 @@ const detail = await torii.getVerifyingKeyTyped("halo2/ipa", "vk_main");
 console.log(detail.record.status); // "Active"
 
 await torii.registerVerifyingKey({
-  authority: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
+  authority: "soraゴヂアニヴヒュルロヒュキンムメタケトキキュヰサヱョモポケォグェエユガヰァキャヰブドイエシェュセコセケトエ",
   private_key: "ed0120…",
   backend: "halo2/ipa",
   name: "vk_main",
@@ -2440,7 +2447,7 @@ import {
 
 const { signedTransaction } = buildTransaction({
   chainId: "offline-demo",
-  authority: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
+  authority: "soraゴヂアニヴヒュルロヒュキンムメタケトキキュヰサヱョモポケォグェエユガヰァキャヰブドイエシェュセコセケトエ",
   instructions: [
     buildMintAssetInstruction({
       assetId: "<base58-asset-definition-id>#<i105-account-id>",
@@ -2742,7 +2749,7 @@ const address = AccountAddress.fromAccount({
 });
 console.log(address.canonicalHex());
 console.log(address.toI105(753));
-console.log(address.toI105Default());
+console.log(address.toI105());
 ```
 
 ```js
@@ -3219,18 +3226,18 @@ const defs = await torii.queryAssetDefinitions({
 });
 console.log("filtered definitions", defs.items);
 
-const perms = await torii.listAccountPermissions("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", {
+const perms = await torii.listAccountPermissions("soraゴヂアニヴヒュルロヒュキンムメタケトキキュヰサヱョモポケォグェエユガヰァキャヰブドイエシェュセコセケトエ", {
   limit: 5,
 });
 console.log("direct permissions", perms.items.map((item) => item.name));
-for await (const perm of torii.iterateAccountPermissions("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", {
+for await (const perm of torii.iterateAccountPermissions("soraゴヂアニヴヒュルロヒュキンムメタケトキキュヰサヱョモポケォグェエユガヰァキャヰブドイエシェュセコセケトエ", {
   pageSize: 2,
 })) {
   console.log("paged permission", perm.name);
 }
 const nfts = await torii.listNfts({ limit: 10 });
 console.log("first NFT ids", nfts.items.map((nft) => nft.id));
-const balances = await torii.listAccountAssets("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", {
+const balances = await torii.listAccountAssets("soraゴヂアニヴヒュルロヒュキンムメタケトキキュヰサヱョモポケォグェエユガヰァキャヰブドイエシェュセコセケトエ", {
   limit: 3,
   assetId: "<base58-asset-definition-id>#<i105-account-id>",
 });
@@ -3240,7 +3247,7 @@ const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   assetId: "<base58-asset-definition-id>#<i105-account-id>",
 });
 console.log("top holders", holders.items.map((entry) => entry.account_id));
-const history = await torii.listAccountTransactions("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", {
+const history = await torii.listAccountTransactions("soraゴヂアニヴヒュルロヒュキンムメタケトキキュヰサヱョモポケォグェエユガヰァキャヰブドイエシェュセコセケトエ", {
   limit: 2,
   assetId: "<base58-asset-definition-id>#<i105-account-id>",
 });
@@ -3251,13 +3258,13 @@ console.log(
 
 for await (const account of torii.iterateAccountsQuery({
   pageSize: 100,
-  filter: { Eq: ["id", "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT"] },
+  filter: { Eq: ["id", "soraゴヂアニヴヒュルロヒュキンムメタケトキキュヰサヱョモポケォグェエユガヰァキャヰブドイエシェュセコセケトエ"] },
   select: [{ Fields: ["id", "metadata.display_name"] }],
 })) {
   console.log("matching account", account.id);
 }
 
-for await (const balance of torii.iterateAccountAssetsQuery("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", {
+for await (const balance of torii.iterateAccountAssetsQuery("soraゴヂアニヴヒュルロヒュキンムメタケトキキュヰサヱョモポケォグェエユガヰァキャヰブドイエシェュセコセケトエ", {
   pageSize: 32,
   filter: { Eq: ["asset_id.definition_id", "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"] },
 })) {
@@ -3273,7 +3280,7 @@ for await (const instance of torii.iterateGovernanceInstances("apps", {
 
 for await (const trigger of torii.iterateTriggersQuery({
   pageSize: 50,
-  filter: { Eq: ["object.authority", "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT"] },
+  filter: { Eq: ["object.authority", "soraゴヂアニヴヒュルロヒュキンムメタケトキキュヰサヱョモポケォグェエユガヰァキャヰブドイエシェュセコセケトエ"] },
 })) {
   console.log("trigger id:", trigger.id);
 }
@@ -3281,12 +3288,12 @@ for await (const trigger of torii.iterateTriggersQuery({
 // Or mirror the same calls from the runnable recipe:
 //   node ./recipes/nft_account_iteration.mjs \
 //     TORII_URL=http://127.0.0.1:8080 \
-//     ACCOUNT_ID=6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT \
+//     ACCOUNT_ID=soraゴヂアニヴヒュルロヒュキンムメタケトキキュヰサヱョモポケォグェエユガヰァキャヰブドイエシェュセコセケトエ \
 //     ASSET_DEFINITION_ID=62Fk4FPcMuLvW5QjDGNF2a4jAmjM \
 //     NFT_DEFINITION_ID=5Pz9SwdN9eXPbiXPX9HRCpzCcE3o
 ```
 
-> **Hard-cut account parser:** Account-scoped helpers (`listAccountAssets`, `listAccountPermissions`, `listAccountTransactions`, and query/iterator variants) accept only canonical i105 account ids. Account aliases (`label@dataspace` / `label@domain.dataspace`) and legacy compatibility literals are rejected.
+> **Hard-cut account parser:** Account-scoped helpers (`listAccountAssets`, `listAccountPermissions`, `listAccountTransactions`, and query/iterator variants) accept only canonical Katakana i105 account ids. Account aliases (`name@dataspace` / `name@domain.dataspace`) and legacy compatibility literals are rejected.
 
 Use the SNS helpers to manage Sora Name Service records without hand-crafting JSON:
 
@@ -3296,13 +3303,13 @@ console.log(policy.suffix, policy.pricing.length);
 
 const registration = await torii.registerSnsName({
   selector: { suffix_id: 0x1002, label: "demo" },
-  owner: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
+  owner: "soraゴヂアニヴヒュルロヒュキンムメタケトキキュヰサヱョモポケォグェエユガヰァキャヰブドイエシェュセコセケトエ",
   payment: {
     asset_id: "<base58-asset-definition-id>#<i105-account-id>",
     gross_amount: 120,
     net_amount: 120,
     settlement_tx: { tx: "hash" },
-    payer: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
+    payer: "soraゴヂアニヴヒュルロヒュキンムメタケトキキュヰサヱョモポケォグェエユガヰァキャヰブドイエシェュセコセケトエ",
     signature: "sig-json",
   },
 });
@@ -3330,7 +3337,7 @@ const address = AccountAddress.fromAccount({
 });
 console.log(address.canonicalHex());
 console.log(address.toI105(753));
-console.log(address.toI105Default());
+console.log(address.toI105());
 ```
 
 ```js
@@ -3350,7 +3357,7 @@ if (explorerMetrics) {
   console.log("explorer metrics disabled on this node");
 }
 
-const qr = await torii.getExplorerAccountQr("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT");
+const qr = await torii.getExplorerAccountQr("soraゴヂアニヴヒュルロヒュキンムメタケトキキュヰサヱョモポケォグェエユガヰァキャヰブドイエシェュセコセケトエ");
 console.log(qr.literal); // i105 literal embedded in the QR SVG
 console.log(qr.svg); // inline SVG (192x192) ready to drop into your UI
 
@@ -3367,7 +3374,7 @@ for (const entry of recentBlocks.items) {
 
 // NFT and account-asset iteration mirrors the Torii JSON envelopes while handling pagination.
 const holdings = [];
-for await (const holding of torii.iterateAccountAssets("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", {
+for await (const holding of torii.iterateAccountAssets("soraゴヂアニヴヒュルロヒュキンムメタケトキキュヰサヱョモポケォグェエユガヰァキャヰブドイエシェュセコセケトエ", {
   pageSize: 2,
   maxItems: 5,
   sort: [{ key: "quantity", order: "desc" }],
@@ -3387,7 +3394,7 @@ for await (const nft of torii.iterateNftsQuery({
 console.log("matching NFTs", nftIds);
 
 const ownedNfts = [];
-for await (const nft of torii.iterateAccountNfts("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", {
+for await (const nft of torii.iterateAccountNfts("soraゴヂアニヴヒュルロヒュキンムメタケトキキュヰサヱョモポケォグェエユガヰァキャヰブドイエシェュセコセケトエ", {
   domainId: "wonderland",
   pageSize: 10,
 })) {
@@ -3476,7 +3483,7 @@ if (!ballot.accepted) {
   console.warn("ballot rejected:", ballot.reason);
 }
 
-const zkOwner = "6cmzPVPX4ZZ37ssFtJnQzouYHC9YVUEsVZUWF966ToXNoKUsfX1qgpC"; // canonical i105 account id for ZK public inputs
+const zkOwner = "soraゴヂアニレアコアヰミダゾェヷヅタデダリュエプヒュチュッゾキャバゾカヴソヲヘスボマゾヵシワパエシネヘマト"; // canonical Katakana i105 account id for ZK public inputs
 await torii.governanceSubmitZkBallot({
   authority,
   chainId: "00000000-0000-0000-0000-000000000000",
@@ -3502,7 +3509,7 @@ const deriveResponse = await torii.governanceDeriveCouncilVrf({
   committeeSize: 2,
   candidates: [
     {
-      accountId: "6cmzPVPX9CDKZ7zp4XqnygVMaXeKCZHvBaeZNTPuH1TvtP7SvKbSzxA",
+      accountId: "soraゴヂアヌヵレキャヌポヸノルリィアセキャベニヸヱルヷユニャチャコミタジプキョミガヵタトデジテバメネフツテホア",
       variant: "Normal",
       pk: validatorPublicKeyBytes,
       proof: validatorProofBytes,
@@ -3548,7 +3555,7 @@ console.log(`enact instructions=${enactDraft.tx_instructions.length}`);
 
 const registeredTriggers = await torii.listTriggers({
   namespace: "apps",
-  authority: "6cmzPVPX8e5qQsHdB57DhqFT9wp2MiMoXsvt9LYUtypj1nx96bF5s8W",
+  authority: "soraゴヂアヌプテニィキニャキャメイホョニャチュチョネドモキャビヲヤデブォツメシャモリカグヒュリダポヌラマキホコホノミ",
   limit: 5,
 });
 registeredTriggers.items.forEach((trigger) => {
@@ -3564,7 +3571,7 @@ if (!trigger) {
       Mint: {
         Asset: {
           object: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-          destination_id: "6cmzPVPX8e5qQsHdB57DhqFT9wp2MiMoXsvt9LYUtypj1nx96bF5s8W",
+          destination_id: "soraゴヂアヌプテニィキニャキャメイホョニャチュチョネドモキャビヲヤデブォツメシャモリカグヒュリダポヌラマキホコホノミ",
           value: "5",
         },
       },
@@ -3577,7 +3584,7 @@ if (!trigger) {
       Mint: {
         Asset: {
           object: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-          destination_id: "6cmzPVPX8e5qQsHdB57DhqFT9wp2MiMoXsvt9LYUtypj1nx96bF5s8W",
+          destination_id: "soraゴヂアヌプテニィキニャキャメイホョニャチュチョネドモキャビヲヤデブォツメシャモリカグヒュリダポヌラマキホコホノミ",
           value: "5",
         },
       },
@@ -3633,7 +3640,7 @@ await torii.registerTrigger({
 });
 ```
 
-`list*`/`query*` helpers and explorer QR snapshots now emit canonical i105 account
+`list*`/`query*` helpers and explorer QR snapshots now emit canonical Katakana i105 account
 literals only; address-format hints are no longer supported.
 
 `governanceFinalizeReferendumTyped` and `governanceEnactProposalTyped` normalise
@@ -3675,7 +3682,7 @@ const address = AccountAddress.fromAccount({
 });
 console.log(address.canonicalHex());
 console.log(address.toI105(753));
-console.log(address.toI105Default());
+console.log(address.toI105());
 ```
 
 ```js

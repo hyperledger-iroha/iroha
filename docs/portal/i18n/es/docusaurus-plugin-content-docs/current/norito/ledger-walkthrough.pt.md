@@ -30,8 +30,8 @@ conta que voce planeja usar. O bundle padrao ja inclui duas contas derivadas das
 chaves de demostración:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="soraカタカナ..."
+export RECEIVER_ACCOUNT="soraカタカナ..."
 ```
 
 Confirme los valores listados como primeras cuentas:

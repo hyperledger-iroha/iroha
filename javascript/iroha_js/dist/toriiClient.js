@@ -17513,7 +17513,7 @@ function normalizeMultisigAccountAliasLiteral(value, context) {
   ) {
     throw createValidationError(
       ValidationErrorCode.INVALID_STRING,
-      `${context} must use label@dataspace or label@domain.dataspace form`,
+      `${context} must use name@dataspace or name@domain.dataspace form`,
       normalizeErrorPath(context),
     );
   }

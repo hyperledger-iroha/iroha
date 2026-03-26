@@ -328,9 +328,8 @@ fn path_name(path: &Path, root: &Path) -> String {
 mod tests {
     use super::*;
 
-    const RECEIVER: &str = "6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ";
-    const ASSET: &str =
-        "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9";
+    const RECEIVER: &str = "soraゴヂアヌョシペギゥルゼプキュビルェッハガヌイタソタィニュチョヵボヮゾバュチョナボポビワグツニュノノツマヘサ";
+    const ASSET: &str = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ";
     const NONCE_HEX: &str = "1111111111111111111111111111111111111111111111111111111111111111";
 
     fn sample_challenge(issued_at_ms: Option<u64>) -> ChallengeSpec {

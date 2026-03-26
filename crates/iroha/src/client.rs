@@ -129,7 +129,7 @@ fn ensure_canonical_i105_account_id(value: &str, field: &str) -> Result<()> {
         return Err(eyre!("{field} must not contain surrounding whitespace"));
     }
     AccountId::parse_encoded(trimmed)
-        .map_err(|err| eyre!("{field} must be a canonical i105 account id: {err}"))?;
+        .map_err(|err| eyre!("{field} must be a canonical Katakana i105 account id: {err}"))?;
     Ok(())
 }
 
@@ -630,10 +630,10 @@ pub struct UaidPortfolioTotals {
 /// Asset position grouped under a UAID-backed account.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UaidPortfolioAsset {
-    /// Asset definition selector.
-    pub asset: String,
-    /// Balance scope selector (`global` or `dataspace:<id>`).
-    pub scope: String,
+    /// Concrete canonical asset identifier.
+    pub asset_id: String,
+    /// Canonical asset definition identifier.
+    pub asset_definition_id: String,
     /// Norito numeric quantity (string encoded to preserve precision).
     pub quantity: String,
 }
@@ -758,6 +758,25 @@ impl ExplorerAccountQrSnapshot {
             qr_version,
             svg,
         })
+    }
+}
+
+/// Query parameters accepted by the UAID portfolio endpoint.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UaidPortfolioQuery {
+    /// Optional exact asset-id filter.
+    pub asset_id: Option<String>,
+}
+
+impl UaidPortfolioQuery {
+    fn apply(&self, mut builder: DefaultRequestBuilder) -> Result<DefaultRequestBuilder> {
+        if let Some(asset_id) = self.asset_id.as_deref() {
+            let normalized = iroha_data_model::asset::AssetId::parse_literal(asset_id)
+                .map_err(|err| eyre!("uaid portfolio query.asset_id is invalid: {err}"))?
+                .to_string();
+            builder = builder.param("asset_id", &normalized);
+        }
+        Ok(builder)
     }
 }
 
@@ -1014,13 +1033,18 @@ impl UaidPortfolioAsset {
         let JsonValue::Object(map) = value else {
             return Err(eyre!("{context} must be an object"));
         };
-        let asset = require_string(map.get("asset"), &format!("{context}.asset"))?.to_owned();
-        let scope = require_string(map.get("scope"), &format!("{context}.scope"))?.to_owned();
+        let asset_id =
+            require_string(map.get("asset_id"), &format!("{context}.asset_id"))?.to_owned();
+        let asset_definition_id = require_string(
+            map.get("asset_definition_id"),
+            &format!("{context}.asset_definition_id"),
+        )?
+        .to_owned();
         let quantity =
             require_string(map.get("quantity"), &format!("{context}.quantity"))?.to_owned();
         Ok(Self {
-            asset,
-            scope,
+            asset_id,
+            asset_definition_id,
             quantity,
         })
     }
@@ -3426,7 +3450,7 @@ mod evidence_http_tests {
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, "{}");
-        let literal = "alice@hbl.sbp";
+        let literal = "alice@hbl.dataspace";
 
         with_mock_http(respond_with(&snapshots, response), || {
             let resp = client
@@ -8918,13 +8942,30 @@ impl Client {
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_uaid_portfolio(&self, uaid: &str) -> Result<UaidPortfolioResponse> {
+        self.get_uaid_portfolio_with_query(uaid, None)
+    }
+
+    /// GET `/v1/accounts/{uaid}/portfolio` — aggregated holdings for a UAID with query parameters.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
+    pub fn get_uaid_portfolio_with_query(
+        &self,
+        uaid: &str,
+        query: Option<UaidPortfolioQuery>,
+    ) -> Result<UaidPortfolioResponse> {
         let canonical = canonicalize_uaid_literal(uaid, "get_uaid_portfolio.uaid")?;
         let path = format!("v1/accounts/{canonical}/portfolio");
         let url = join_torii_url(&self.torii_url, &path);
-        let resp = self.send_builder(
-            self.default_request(HttpMethod::GET, url)
-                .header("Accept", APPLICATION_JSON),
-        )?;
+        let builder = self
+            .default_request(HttpMethod::GET, url)
+            .header("Accept", APPLICATION_JSON);
+        let builder = if let Some(options) = query {
+            options.apply(builder)?
+        } else {
+            builder
+        };
+        let resp = self.send_builder(builder)?;
         let payload = Self::parse_json_ok_response(&resp, "uaid portfolio request")?;
         UaidPortfolioResponse::from_value(payload)
     }
@@ -11584,8 +11625,8 @@ mod tests {
     const PASSWORD: &str = "ilovetea";
     // `mad_hatter:ilovetea` encoded with base64
     const ENCRYPTED_CREDENTIALS: &str = "bWFkX2hhdHRlcjppbG92ZXRlYQ==";
-    const TEST_WORKER_I105: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
-    const TEST_AUDITOR_I105: &str = "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9";
+    const TEST_WORKER_I105: &str = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
+    const TEST_AUDITOR_I105: &str = "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ";
 
     fn sample_commit_qc(block_header: &BlockHeader) -> Qc {
         let validator_set: Vec<PeerId> = Vec::new();
@@ -11829,7 +11870,7 @@ mod tests {
                 manifest_ready: true,
                 manifest_path: Some("/etc/iroha/lanes/alpha.toml".to_owned()),
                 validator_ids: vec![
-                    "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".to_owned(),
+                    "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".to_owned(),
                 ],
                 quorum: Some(2),
                 protected_namespaces: vec!["finance".to_owned()],
@@ -13314,12 +13355,12 @@ mod tests {
       "dataspace_alias":"retail",
       "accounts":[
         {{
-          "account_id":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+          "account_id":"soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
           "label":"primary",
           "assets":[
             {{
-              "asset":"cash#nexus",
-              "scope":"global",
+              "asset_id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+              "asset_definition_id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
               "quantity":"500"
             }}
           ]
@@ -13345,6 +13386,14 @@ mod tests {
         assert_eq!(dataspace.dataspace_alias.as_deref(), Some("retail"));
         assert_eq!(dataspace.accounts.len(), 1);
         assert_eq!(dataspace.accounts[0].assets.len(), 1);
+        assert_eq!(
+            dataspace.accounts[0].assets[0].asset_id,
+            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"
+        );
+        assert_eq!(
+            dataspace.accounts[0].assets[0].asset_definition_id,
+            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+        );
         assert_eq!(dataspace.accounts[0].assets[0].quantity, "500");
 
         let snapshot = snapshots
@@ -13369,6 +13418,40 @@ mod tests {
     }
 
     #[test]
+    fn get_uaid_portfolio_with_query_encodes_asset_id_filter() {
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let client = client_with_base_url(base_url());
+        let uaid_hex = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543211";
+        let asset_id = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
+        let payload = format!(
+            r#"{{
+  "uaid":"uaid:{uaid_hex}",
+  "totals":{{"accounts":0,"positions":0}},
+  "dataspaces":[]
+}}"#
+        );
+        let response = json_response(StatusCode::OK, &payload);
+        with_mock_http(respond_with(&snapshots, response), || {
+            client.get_uaid_portfolio_with_query(
+                &format!("uaid:{uaid_hex}"),
+                Some(UaidPortfolioQuery {
+                    asset_id: Some(asset_id.to_owned()),
+                }),
+            )
+        })
+        .expect("portfolio call succeeds");
+
+        let snapshot = snapshots
+            .lock()
+            .expect("snapshot lock")
+            .first()
+            .cloned()
+            .expect("snapshot captured");
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(snapshot.url.query(), Some(&format!("asset_id={asset_id}")));
+    }
+
+    #[test]
     fn get_uaid_bindings_parses_payload() {
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let client = client_with_base_url(base_url());
@@ -13380,14 +13463,14 @@ mod tests {
     {{
       "dataspace_id":0,
       "dataspace_alias":"universal",
-      "accounts":["6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"]
+      "accounts":["soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"]
     }},
     {{
       "dataspace_id":11,
       "dataspace_alias":"cbdc",
       "accounts":[
-        "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU",
-        "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV"
+        "soraゴヂアニラショリャヒャャサピテヶベチュヲボヹヂギタクアニョロホドチャヘヱヤジヶハシャウンベニョャルフハケネキカ",
+        "soraゴヂアニダベェユヌサヨニャノヲョネイッリニャネガヨペバヒョブルノホイキャヸムケチャピファノマオニツミチオウ"
       ]
     }}
   ]
@@ -13433,7 +13516,7 @@ mod tests {
       "manifest_hash":"{hash}",
       "status":"Active",
       "lifecycle":{{"activated_epoch":4097,"expired_epoch":null,"revocation":null}},
-      "accounts":["6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU"],
+      "accounts":["soraゴヂアニラショリャヒャャサピテヶベチュヲボヹヂギタクアニョロホドチャヘヱヤジヶハシャウンベニョャルフハケネキカ"],
       "manifest":{manifest}
     }}
   ]
@@ -13508,7 +13591,7 @@ mod tests {
         let payload = with_mock_http(respond_with(&snapshot_store, response), || {
             client.get_public_lane_stake(
                 LaneId::new(1),
-                Some("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw"),
+                Some("soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ"),
             )
         })
         .expect("request succeeds");
@@ -13523,7 +13606,7 @@ mod tests {
         assert!(snapshot.url.query_pairs().any(|pair| pair
             == (
                 "validator".into(),
-                "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw".into()
+                "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ".into()
             )));
     }
 
@@ -13536,7 +13619,7 @@ mod tests {
         let payload = with_mock_http(respond_with(&snapshot_store, response), || {
             client.get_public_lane_pending_rewards(
                 LaneId::new(0),
-                "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
+                "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
                 Some(5),
             )
         })
@@ -13555,7 +13638,7 @@ mod tests {
         let pairs: Vec<_> = snapshot.url.query_pairs().collect();
         assert!(pairs.contains(&(
             "account".into(),
-            "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw".into()
+            "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ".into()
         )));
         assert!(pairs.contains(&("upto_epoch".into(), "5".into())));
     }
@@ -14814,7 +14897,7 @@ mod tests {
                 manifest_ready: true,
                 manifest_path: Some("/etc/iroha/lanes/alpha.toml".to_owned()),
                 validator_ids: vec![
-                    "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".to_owned(),
+                    "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".to_owned(),
                 ],
                 quorum: Some(2),
                 protected_namespaces: vec!["finance".to_owned()],
@@ -15044,7 +15127,7 @@ mod tests {
                 .first()
                 .and_then(Value::as_str)
                 .map(str::to_owned),
-            Some("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".to_owned()),
+            Some("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".to_owned()),
             "validator id mismatch"
         );
         let runtime_hook = lane_entry
@@ -16013,7 +16096,7 @@ mod tests {
         let ticket_id = RepairTicketId("REP-405".to_string());
         let manifest_digest = [0x11; 32];
         let provider_id = [0x22; 32];
-        let worker_id = "worker@hbl.sbp".to_string();
+        let worker_id = "worker@hbl.dataspace".to_string();
         let idempotency_key = "claim-405".to_string();
         let claimed_at_unix = 1_700_000_005;
         let payload = RepairWorkerSignaturePayloadV1 {
@@ -16038,7 +16121,10 @@ mod tests {
         let err = client
             .post_sorafs_repair_claim(&request)
             .expect_err("alias worker id must be rejected");
-        assert!(err.to_string().contains("canonical i105 account id"));
+        assert!(
+            err.to_string()
+                .contains("canonical Katakana i105 account id")
+        );
     }
 
     #[test]
@@ -16049,7 +16135,7 @@ mod tests {
             ticket_id: RepairTicketId("REP-406".to_string()),
             provider_id: [0x77; 32],
             manifest_digest: [0x88; 32],
-            auditor_account: "auditor@hbl.sbp".to_string(),
+            auditor_account: "auditor@hbl.dataspace".to_string(),
             proposed_penalty_nano: 500,
             submitted_at_unix: 1_700_000_006,
             rationale: "sla_missed".to_string(),
@@ -16059,7 +16145,10 @@ mod tests {
         let err = client
             .post_sorafs_repair_slash(&proposal)
             .expect_err("alias auditor account must be rejected");
-        assert!(err.to_string().contains("canonical i105 account id"));
+        assert!(
+            err.to_string()
+                .contains("canonical Katakana i105 account id")
+        );
     }
 
     #[test]

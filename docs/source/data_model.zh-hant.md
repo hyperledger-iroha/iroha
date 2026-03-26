@@ -33,7 +33,7 @@ translator: machine-google-reviewed
 - `DomainId`：`name`（例如，`wonderland`）。
 - `AccountId`：僅透過 `AccountAddress` 編碼為 I105 的規範無域帳戶識別碼。解析器輸入必須是規範的 I105；域後綴 (`@domain`)、規範 I105 文字、別名文字、規範十六進位解析器輸入、舊版 `norito:` 有效負載和 `uaid:`/I1800000000000000 帳戶形式將被拒絕。
 - `AssetDefinitionId`：規格 `unprefixed Base58 address with versioning and checksum`（UUID-v4 位元組）。
-- `AssetId`：規範編碼文字 `<asset-definition-id>#<i105-account-id>`（第一個版本不支援舊文字形式）。
+- `AssetId`：規範編碼文字 `<base58-asset-id>#<katakana-i105-account-id>`（第一個版本不支援舊文字形式）。
 - `NftId`：`nft$domain`（例如，`rose$garden`）。
 - `PeerId`：`public_key`（對等平等由公鑰決定）。
 
@@ -259,7 +259,7 @@ curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -d '{"alias":"pkr#ubl.sbp"}'
 ```遷移注意事項：
 - v1 中不接受舊的 `name#domain` 資產定義 ID。
-- 用於鑄幣/銷毀/轉移的資產 ID 仍然是規範的 `<asset-definition-id>#<i105-account-id>`；建造它們：
+- 用於鑄幣/銷毀/轉移的資產 ID 仍然是規範的 `<base58-asset-id>#<katakana-i105-account-id>`；建造它們：
   - `iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
   - 或 `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`。
 

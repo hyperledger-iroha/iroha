@@ -26,8 +26,8 @@ translation_last_reviewed: 2026-02-07
 Если вы хотите использовать `$ADMIN_ACCOUNT` или `$RECEIVER_ACCOUNT`, вы можете указать идентификаторы учетных записей. چاہتے ہیں۔ Пакет настроек по умолчанию и демо-ключи, а также учетные записи и учетные записи:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="soraカタカナ..."
+export RECEIVER_ACCOUNT="soraカタカナ..."
 ```
 
 Ниже приведены учетные записи, которые могут быть использованы для:

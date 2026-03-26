@@ -65,7 +65,7 @@ Iroha は署名付きフレームを受け付ける Norito ベースの `/query`
     },
     "predicate": {
       "equals": [
-        {"field": "authority", "value": "i105..."}
+        {"field": "authority", "value": "soraカタカナ..."}
       ],
       "in": [
         {"field": "metadata.tier", "values": [1, 2, 3]}

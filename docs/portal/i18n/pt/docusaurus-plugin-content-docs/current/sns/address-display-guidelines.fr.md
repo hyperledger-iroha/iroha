@@ -90,7 +90,7 @@ reanalisa a carga útil bruta.
 Os exploradores devem reproduzir o trabalho de telemetria e acessibilidade
 fato para a carteira:
 
-- Aplique `data-copy-mode="i105|i105_default|qr"` nos botões de cópia para que
+- Aplique `data-copy-mode="i105|qr"` nos botões de cópia para que
   os front-ends podem emetre des compteurs d'usage em paralelo com o
   métrica Torii `torii_address_format_total`. Le composant demo ci-dessus
   enviar um evento `iroha:address-copy` com `{mode,timestamp}` - reliez cela
@@ -196,7 +196,7 @@ Ou em cadeias compactadas, você deve seguir o documento CLI do fluxo de trabalh
   non defaut ne sont pas re-rendus silencieusement com o prefixo par defaut.
 
 3. Converta a carga útil canônica e utilize os campos `i105.value` ou
-   `i105_default` você continua (ou exige outra codificação via `--format`). Ces
+   `i105` você continua (ou exige outra codificação via `--format`). Ces
    chaines sont deja sures a partager en externe.
 4. Mantenha atualizados os manifestos, registros e documentos orientados pelo cliente com
    forme canônico e notifique os contrapartes que os seletores locais serão

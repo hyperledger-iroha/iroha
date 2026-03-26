@@ -26,7 +26,7 @@ translator: machine-google-reviewed
 Эш пункттары:
 1. **Каноник сығыш:** I18NI000000005X/Display I105 ғына Эй
    (юҡ I18NI000000006X суффиксы). Канон hex өсөн отладка (`0x...`).
-2. **Accepted inputs:** parsers MUST accept only canonical i105 account literals. Reject i105-default `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+2. **Accepted inputs:** parsers MUST accept only canonical Katakana i105 account literals. Reject non-canonical Katakana i105 literals, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
 3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
 4. **I105 тикшерелгән сумма:** ҡулланыу Blak2b-512 өҫтөндә I18NI000000015X, алыу
    тәүге 2 байт. Ҡыҫылған алфавит базаһы **105**.

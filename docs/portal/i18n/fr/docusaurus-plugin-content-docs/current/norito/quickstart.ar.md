@@ -88,7 +88,7 @@ ivm_run target/quickstart/hello.to --args '{}'
 
 Vous pouvez utiliser le bytecode Torii pour la CLI. Il s'agit d'un lien vers l'application `defaults/client.toml`, qui correspond à l'article suivant :
 ```
-i105...
+soraカタカナ...
 ```
 
 Utilisez l'URL de votre URL vers Torii et l'ID de chaîne pour votre recherche :
@@ -108,7 +108,7 @@ iroha --config defaults/client.toml \
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id i105... \
+  --id soraカタカナ... \
   --key example | jq .
 ```J'utilise la charge utile JSON pour Norito :
 

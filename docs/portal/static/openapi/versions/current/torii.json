@@ -1311,7 +1311,7 @@
             "type": "string"
           },
           "relay_id": {
-            "description": "Relay account identifier rendered as canonical i105 literal.",
+            "description": "Relay account identifier rendered as canonical Katakana i105 literal.",
             "type": "string"
           },
           "reported_at_ms": {
@@ -1399,7 +1399,7 @@
         ],
         "properties": {
           "multisig_account_alias": {
-            "description": "Stable multisig alias in label@dataspace or label@domain.dataspace format.",
+            "description": "Stable multisig alias in name@dataspace or name@domain.dataspace format.",
             "type": "string"
           },
           "multisig_account_id": {
@@ -1969,7 +1969,7 @@
             "type": "string"
           },
           "controller_display": {
-            "description": "Controller rendered as canonical i105 account literal.",
+            "description": "Controller rendered as canonical Katakana i105 account literal.",
             "type": "string"
           },
           "controller_id": {
@@ -1977,7 +1977,7 @@
             "type": "string"
           },
           "deposit_account_display": {
-            "description": "Deposit account rendered as canonical i105 account literal.",
+            "description": "Deposit account rendered as canonical Katakana i105 account literal.",
             "type": "string"
           },
           "deposit_account_id": {
@@ -2006,7 +2006,7 @@
             "type": "integer"
           },
           "receiver_display": {
-            "description": "Receiver rendered as canonical i105 account literal.",
+            "description": "Receiver rendered as canonical Katakana i105 account literal.",
             "type": "string"
           },
           "receiver_id": {
@@ -2361,11 +2361,11 @@
             "type": "array"
           },
           "staker": {
-            "description": "Staker account literal rendered as canonical i105.",
+            "description": "Staker account literal rendered as canonical Katakana i105.",
             "type": "string"
           },
           "validator": {
-            "description": "Validator account literal rendered as canonical i105.",
+            "description": "Validator account literal rendered as canonical Katakana i105.",
             "type": "string"
           }
         },
@@ -2477,7 +2477,7 @@
             "type": "string"
           },
           "validator": {
-            "description": "Validator account literal rendered as canonical i105.",
+            "description": "Validator account literal rendered as canonical Katakana i105.",
             "type": "string"
           }
         },
@@ -4694,7 +4694,7 @@
             }
           },
           {
-            "description": "Filter holders by canonical i105 account identifier.",
+            "description": "Filter holders by canonical Katakana i105 account identifier.",
             "in": "query",
             "name": "account_id",
             "required": false,
@@ -6106,7 +6106,7 @@
             }
           },
           {
-            "description": "Filter assets by account owner (accepts canonical i105 account literals).",
+            "description": "Filter assets by account owner (accepts canonical Katakana i105 account literals).",
             "in": "query",
             "name": "owned_by",
             "required": false,
@@ -6335,7 +6335,7 @@
             }
           },
           {
-            "description": "Filter instructions by authority account (accepts canonical i105 account literals).",
+            "description": "Filter instructions by authority account (accepts canonical Katakana i105 account literals).",
             "in": "query",
             "name": "authority",
             "required": false,
@@ -6344,7 +6344,7 @@
             }
           },
           {
-            "description": "Filter instructions by referenced account (transfer participants, asset-owner scoped mint/burn/asset-metadata updates, multisig accounts, and public-lane reward assets; accepts canonical i105 account literals).",
+            "description": "Filter instructions by referenced account (transfer participants, asset-owner scoped mint/burn/asset-metadata updates, multisig accounts, and public-lane reward assets; accepts canonical Katakana i105 account literals).",
             "in": "query",
             "name": "account",
             "required": false,
@@ -6579,7 +6579,7 @@
             }
           },
           {
-            "description": "Filter transactions by authority account (accepts canonical i105 account literals).",
+            "description": "Filter transactions by authority account (accepts canonical Katakana i105 account literals).",
             "in": "query",
             "name": "authority",
             "required": false,
@@ -7600,7 +7600,7 @@
         "operationId": "kaigiRelayDetail",
         "parameters": [
           {
-            "description": "Relay account identifier encoded as a canonical i105 account literal.",
+            "description": "Relay account identifier encoded as a canonical Katakana i105 account literal.",
             "in": "path",
             "name": "relay_id",
             "required": true,
@@ -8190,11 +8190,11 @@
     },
     "/v1/nexus/dataspaces/accounts/{literal}/summary": {
       "get": {
-        "description": "Resolves the supplied canonical i105 account literal and returns a joined view of UAID bindings, space-directory manifests, portfolio counters, and per-dataspace consensus commitments.",
+        "description": "Resolves the supplied canonical Katakana i105 account literal and returns a joined view of UAID bindings, space-directory manifests, portfolio counters, and per-dataspace consensus commitments.",
         "operationId": "nexusDataspacesAccountSummary",
         "parameters": [
           {
-            "description": "Account literal to resolve (canonical i105 only).",
+            "description": "Account literal to resolve (canonical Katakana i105 only).",
             "in": "path",
             "name": "literal",
             "required": true,
@@ -8274,7 +8274,7 @@
     },
     "/v1/nexus/public_lanes/{lane_id}/rewards/pending": {
       "get": {
-        "description": "Returns the unclaimed reward amount per asset for the requested account in the given public lane. Requires an `account` query parameter (canonical i105) and accepts optional `asset_id` and `upto_epoch` filters.",
+        "description": "Returns the unclaimed reward amount per asset for the requested account in the given public lane. Requires an `account` query parameter (canonical Katakana i105) and accepts optional `asset_id` and `upto_epoch` filters.",
         "operationId": "nexusPublicLaneRewards",
         "parameters": [
           {
@@ -8288,7 +8288,7 @@
             }
           },
           {
-            "description": "Account literal to evaluate pending rewards for (canonical i105 only).",
+            "description": "Account literal to evaluate pending rewards for (canonical Katakana i105 only).",
             "in": "query",
             "name": "account",
             "required": false,
@@ -8360,7 +8360,7 @@
             }
           },
           {
-            "description": "Optional validator account literal to filter stake entries (canonical i105 only).",
+            "description": "Optional validator account literal to filter stake entries (canonical Katakana i105 only).",
             "in": "query",
             "name": "validator",
             "required": false,
@@ -8841,7 +8841,7 @@
             }
           },
           {
-            "description": "Filter bundles by originating controller account (accepts canonical i105 account literals).",
+            "description": "Filter bundles by originating controller account (accepts canonical Katakana i105 account literals).",
             "in": "query",
             "name": "controller_id",
             "required": false,
@@ -8850,7 +8850,7 @@
             }
           },
           {
-            "description": "Filter bundles by receiver account (accepts canonical i105 account literals).",
+            "description": "Filter bundles by receiver account (accepts canonical Katakana i105 account literals).",
             "in": "query",
             "name": "receiver_id",
             "required": false,
@@ -8859,7 +8859,7 @@
             }
           },
           {
-            "description": "Filter bundles by deposit account (accepts canonical i105 account literals).",
+            "description": "Filter bundles by deposit account (accepts canonical Katakana i105 account literals).",
             "in": "query",
             "name": "deposit_account_id",
             "required": false,

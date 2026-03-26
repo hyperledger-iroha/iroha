@@ -35,7 +35,7 @@ El parser requiere la siguiente fila de encabezado (柔軟な順序で):
 |----------|-----------|---------------|
 | `label` |シ | Etiqueta solicitada (安全性を保証する/マイナス; ラ・ヘルラミエンタ・ノーマルリザ・セグン・ノルムv1 y UTS-46)。 |
 | `suffix_id` |シ |識別番号 (10 進数または `0x` 16 進数)。 |
-| `owner` |シ | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
+| `owner` |シ | AccountId string (domainless encoded literal; canonical Katakana i105 only; no `@<domain>` suffix). |
 | `term_years` |シ |エンテロ `1..=255`。 |
 | `payment_asset_id` |シ |決済活動 (por ejemplo `61CtjvNd9T3THAR65GsMVHr82Bjc`)。 |
 | `payment_gross` / `payment_net` |シ | Enteros sin signo que は、unidades nativas del activo を表します。 |
@@ -76,9 +76,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "soraカタカナ...",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"soraカタカナ...","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -87,7 +87,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"soraカタカナ...",
         "signature":"alpha-signature"
       },
       "governance": null,

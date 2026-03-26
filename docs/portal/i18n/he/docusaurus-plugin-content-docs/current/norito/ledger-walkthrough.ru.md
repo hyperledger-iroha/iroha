@@ -29,8 +29,8 @@ slug: /norito/ledger-walkthrough
 ID аккаунтов. חבילת ה-дефолтном уже есть два аккаунта, полученных из demo-ключей:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="soraカタカナ..."
+export RECEIVER_ACCOUNT="soraカタカナ..."
 ```
 
 Подтвердите значения, выведя первые аккаунты:
