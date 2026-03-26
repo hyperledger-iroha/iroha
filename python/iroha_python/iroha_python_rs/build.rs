@@ -91,25 +91,57 @@ fn python_runtime_via_interpreter() -> Option<PathBuf> {
 import os
 import sys
 import sysconfig
+from pathlib import Path
 
 def candidates():
-    lib_name = sysconfig.get_config_var("LDLIBRARY") or sysconfig.get_config_var("PY3LIBRARY")
+    seen = set()
+
+    def emit(path):
+        if not path:
+            return
+        path = os.path.abspath(path)
+        if path in seen:
+            return
+        seen.add(path)
+        yield path
+
+    def emit_libdir_candidate(lib_dir, name):
+        if not lib_dir or not name:
+            return
+        path = os.path.abspath(os.path.join(lib_dir, name))
+        yield from emit(path)
+        if os.path.exists(path):
+            return
+        # Debian/Ubuntu often install only the SONAME, while sysconfig reports
+        # the unversioned .so name. Probe the versioned variants in the same dir.
+        stem = Path(name).name
+        if stem.endswith(".so"):
+            prefix = stem + "."
+            for child in sorted(Path(lib_dir).glob(prefix + "*")):
+                yield from emit(str(child))
+
     lib_dir = sysconfig.get_config_var("LIBDIR") or sysconfig.get_config_var("LIBPL")
-    if lib_name and lib_dir:
-        yield os.path.abspath(os.path.join(lib_dir, lib_name))
-    if lib_name and os.path.isabs(lib_name):
-        yield lib_name
+    for lib_name in (
+        sysconfig.get_config_var("LDLIBRARY"),
+        sysconfig.get_config_var("PY3LIBRARY"),
+        sysconfig.get_config_var("INSTSONAME"),
+        sysconfig.get_config_var("LIBRARY"),
+    ):
+        if lib_name and os.path.isabs(lib_name):
+            yield from emit(lib_name)
+        yield from emit_libdir_candidate(lib_dir, lib_name)
+
     framework = sysconfig.get_config_var("PYTHONFRAMEWORK")
     install_dir = sysconfig.get_config_var("PYTHONFRAMEWORKINSTALLDIR")
     version = sysconfig.get_config_var("VERSION")
     if framework and install_dir:
         versions_dir = os.path.join(install_dir, "Versions")
         if version:
-            yield os.path.join(versions_dir, version, framework)
-        yield os.path.join(versions_dir, "Current", framework)
+            yield from emit(os.path.join(versions_dir, version, framework))
+        yield from emit(os.path.join(versions_dir, "Current", framework))
     libpython = sysconfig.get_config_var("LIBPYTHON")
     if libpython:
-        yield os.path.abspath(libpython)
+        yield from emit(libpython)
 
 for candidate in candidates():
     if candidate and os.path.exists(candidate):

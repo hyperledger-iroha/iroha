@@ -1,6 +1,72 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-03-25
+Last updated: 2026-03-26
+
+Latest sync (2026-03-26 `iroha_python_rs` Linux test builds now discover versioned CPython shared libraries):
+`python/iroha_python/iroha_python_rs/build.rs`
+now falls back to Linux CPython SONAME candidates such as `INSTSONAME` and
+versioned `libpython*.so.*` siblings in `LIBDIR` when `sysconfig` reports an
+unversioned `LDLIBRARY` that does not actually exist on disk.
+
+- this closes the immediate PyO3 unresolved-symbol linker failure on this host,
+  where `cargo test -p iroha_python_rs` previously stopped after the build
+  script failed to find a CPython runtime even though
+  `/usr/lib/x86_64-linux-gnu/libpython3.12.so.1.0` was installed;
+- the Python binding crate no longer requires a manually created
+  `python-runtime-path` override file on Debian/Ubuntu-style installations just
+  to link lib tests and other executable targets; and
+- the existing override path (`IROHA_PYTHON_RUNTIME_PATH` /
+  `python-runtime-path`) remains available for nonstandard Python layouts.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p iroha_python_rs` (the previous unresolved `Py*` linker failure
+  is fixed; the suite now builds and runs, with one remaining unrelated test
+  failure in `repo_cash_leg_parser_validates_fields`)
+
+Open work for this Python-linking slice now remains:
+- triage the remaining non-linker runtime failure in
+  `repo_cash_leg_parser_validates_fields`; and
+- decide whether that test should be updated to use a currently valid asset
+  definition identifier or whether the parser behavior regressed independently
+  of this CPython runtime discovery fix.
+
+Latest sync (2026-03-25 CUDA-featured `ivm` builds now link on this driver-only WSL host):
+`vendor/find_cuda_helper/src/lib.rs`
+now discovers driver-only CUDA library directories such as `/usr/lib/wsl/lib`
+instead of only toolkit-style install roots, and
+`crates/ivm/src/lib.rs`
+now treats CUDA runtime-error reporting correctly in the crate-level regression
+when the `cuda` feature is enabled but the backend is unavailable.
+
+- the focused `ivm --features cuda` slice now gets past the old unresolved
+  `cu*` symbol linker failure on this machine, because `cust` / `cust_raw`
+  now receive a real CUDA driver link search path even without `nvcc` or a
+  full `/usr/local/cuda` toolkit install;
+- the crate-level runtime-status regression no longer assumes
+  `errors.cuda == None` on all CUDA-featured builds, which was false on this
+  host as soon as the backend was allowed to probe live runtime state; and
+- rerunning the focused CUDA lib/integration tests now reaches execution on
+  this machine instead of dying in the linker, although the backend still
+  self-reports unavailable at runtime so the live-kernel tests currently take
+  their existing skip paths.
+
+Validation:
+- `cargo test --manifest-path vendor/find_cuda_helper/Cargo.toml`
+- `cargo fmt --all`
+- `cargo test -p ivm --features cuda acceleration_runtime_errors_default_none_or_hw_reason --lib -- --nocapture`
+- `cargo test -p ivm --features cuda --lib sha256_merkle_selftest_covers_cuda_kernels -- --nocapture`
+- `cargo test -p ivm --features cuda --test cuda -- --nocapture`
+- `cargo test -p ivm --features cuda --test cuda_disable_on_mismatch -- --nocapture`
+
+Open work for this CUDA slice now remains:
+- diagnose why `ivm::cuda_available()` is still false on this host even though
+  the CUDA driver loads and the focused CUDA test binaries now link and run;
+- once the backend is actually available, rerun the broader focused CUDA
+  runtime/self-test slice (`cuda_extra`, parity kernels, and other live-driver
+  regressions) and close the remaining “skipped because unavailable” backlog;
+- decide whether driver-only host discovery like `/usr/lib/wsl/lib` should be
+  pushed upstream beyond the vendored helper after this branch lands.
 
 Latest sync (2026-03-25 Soracloud private-model publish drafts now prepare encrypted bundle plans locally):
 `crates/iroha_cli/src/soracloud.rs`,

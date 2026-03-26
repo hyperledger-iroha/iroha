@@ -1,6 +1,74 @@
 # Status
 
-Last updated: 2026-03-25
+Last updated: 2026-03-26
+
+## 2026-03-26 Follow-up: `iroha_python_rs` now finds Linux CPython SONAMEs during test linking
+- Fixed `python/iroha_python/iroha_python_rs/build.rs` so PyO3 test/executable
+  builds no longer depend on an unversioned `libpython*.so` symlink existing on
+  Linux hosts.
+- The build script now probes additional `sysconfig` candidates such as
+  `INSTSONAME` and versioned `libpython*.so.*` siblings in `LIBDIR` when
+  `LDLIBRARY` points at a non-existent unversioned shared object. This matches
+  Debian/Ubuntu-style installs where only `libpython3.x.so.1` or
+  `libpython3.x.so.1.0` may be present.
+- This closes the immediate `cargo test -p iroha_python_rs` linker blocker on
+  this machine, where the previous build died with unresolved `Py*` symbols
+  after the build script warned that it could not locate the CPython shared
+  library.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_python_rs` (linker issue fixed; test binary builds and
+    runs, but the suite still reports one unrelated failure in
+    `repo_cash_leg_parser_validates_fields`)
+
+## 2026-03-25 Follow-up: CUDA-featured `ivm` builds now link on driver-only WSL hosts
+- Fixed the vendored CUDA locator in `vendor/find_cuda_helper/src/lib.rs` so
+  CUDA-featured builds also discover driver-only library directories such as
+  `/usr/lib/wsl/lib` instead of requiring a full toolkit-style root like
+  `/usr/local/cuda`.
+- This closes the immediate `--features cuda` blocker on this machine:
+  `cust`/`cust_raw` now receive a real `-L ... -lcuda` link path, so focused
+  `ivm` CUDA tests link and execute instead of failing with unresolved `cu*`
+  symbols.
+- Tightened the `ivm` crate-level runtime-status regression in
+  `crates/ivm/src/lib.rs` so CUDA-enabled builds now accept the correct
+  contract: `errors.cuda` is `None` only when CUDA is actually available, and
+  otherwise carries a sticky unavailable/disable reason.
+- Validation:
+  - `cargo test --manifest-path vendor/find_cuda_helper/Cargo.toml` (pass)
+  - `cargo fmt --all` (pass)
+  - `cargo test -p ivm --features cuda acceleration_runtime_errors_default_none_or_hw_reason --lib -- --nocapture` (pass)
+  - `cargo test -p ivm --features cuda --lib sha256_merkle_selftest_covers_cuda_kernels -- --nocapture` (pass; binary links and executes, CUDA backend still reports unavailable on this host so the focused self-test exits through the existing skip path)
+  - `cargo test -p ivm --features cuda --test cuda -- --nocapture` (pass; focused CUDA integration tests now link and run, but skip because `ivm::cuda_available()` is still false at runtime)
+  - `cargo test -p ivm --features cuda --test cuda_disable_on_mismatch -- --nocapture` (pass)
+
+## 2026-03-25 Follow-up: `ivm` now re-exports Metal helper stubs on non-macOS targets
+- Fixed the crate-root `ivm` public API so the Metal helper surface is exported
+  on every target instead of only on macOS:
+  - `crates/ivm/src/lib.rs` now re-exports `metal_available`,
+    `metal_disabled`, `release_metal_state`,
+    `reset_metal_backend_for_tests`, and `bit_pipe_compile_count`
+    unconditionally from `vector.rs`, matching the existing cross-platform
+    no-op fallback implementations.
+  - Added a regression test that exercises those public exports so Linux/CUDA
+    hosts keep compiling examples such as
+    `crates/ivm/examples/merkle_threshold.rs`.
+- Validation:
+  - `cargo build -p ivm --example merkle_threshold` (pass)
+  - `cargo test -p ivm metal_api_exports_are_available_on_all_targets --lib` (pass)
+
+## 2026-03-25 Follow-up: Linux workspace builds no longer require `libclang` just to compile `gpuzstd_metal`
+- Removed the redundant direct `zstd-sys` dependency with the `experimental`
+  feature from `crates/gpuzstd_metal/Cargo.toml`.
+- `gpuzstd_metal` already uses the safe `zstd` crate for its CPU fallback and
+  does not reference `zstd-sys` directly, so the extra dependency only forced
+  `bindgen` and a host `libclang` requirement during `cargo build --workspace`
+  on Linux.
+- Validation:
+  - `cargo build -p gpuzstd_metal` (pass)
+  - `cargo build --workspace --message-format short` (confirmed to progress
+    past the prior `bindgen`/`libclang` failure point and compile `norito`;
+    full workspace build still in progress at the time of this status update)
 
 ## 2026-03-25 Follow-up: FASTPQ transfer golden fixtures refreshed for canonical asset/account identifiers
 - Refreshed the checked-in transfer regression fixture and its derived golden
