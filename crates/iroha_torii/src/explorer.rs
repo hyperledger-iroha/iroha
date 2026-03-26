@@ -26,6 +26,7 @@ use iroha_data_model::{
     metadata::Metadata,
     nft::{NftEntry, NftId},
     peer::Peer,
+    rwa::RwaEntry,
     transaction::{
         error::TransactionRejectionReason,
         executable::Executable,
@@ -524,6 +525,40 @@ impl ExplorerNftDto {
 pub(crate) struct ExplorerNftsPage {
     pub pagination: ExplorerPaginationMeta,
     pub items: Vec<ExplorerNftDto>,
+}
+
+#[derive(Clone, Debug, JsonSerialize)]
+pub(crate) struct ExplorerRwaDto {
+    pub id: String,
+    pub owned_by: String,
+    pub quantity: String,
+    pub held_quantity: String,
+    pub primary_reference: String,
+    pub status: Option<String>,
+    pub is_frozen: bool,
+    pub metadata: Value,
+}
+
+impl ExplorerRwaDto {
+    pub(crate) fn from_entry(entry: RwaEntry<'_>) -> Self {
+        let value = entry.value();
+        Self {
+            id: entry.id().to_string(),
+            owned_by: value.owned_by.to_string(),
+            quantity: value.quantity.to_string(),
+            held_quantity: value.held_quantity.to_string(),
+            primary_reference: value.primary_reference.clone(),
+            status: value.status.as_ref().map(ToString::to_string),
+            is_frozen: value.is_frozen,
+            metadata: metadata_to_json(&value.metadata),
+        }
+    }
+}
+
+#[derive(Clone, Debug, JsonSerialize)]
+pub(crate) struct ExplorerRwasPage {
+    pub pagination: ExplorerPaginationMeta,
+    pub items: Vec<ExplorerRwaDto>,
 }
 
 #[derive(Clone, Debug, JsonSerialize)]
@@ -1470,6 +1505,35 @@ where
     ExplorerNftsPage { pagination, items }
 }
 
+pub(crate) fn rwas_page<'world, I>(
+    rwas: I,
+    owned_by: Option<&AccountId>,
+    domain_filter: Option<&DomainId>,
+    page: u64,
+    per_page: u64,
+) -> ExplorerRwasPage
+where
+    I: IntoIterator<Item = RwaEntry<'world>>,
+{
+    let mut items = Vec::new();
+    for rwa in rwas {
+        if let Some(owner) = owned_by {
+            if rwa.value().owned_by != *owner {
+                continue;
+            }
+        }
+        if let Some(domain) = domain_filter {
+            if rwa.id().domain() != domain {
+                continue;
+            }
+        }
+        items.push(ExplorerRwaDto::from_entry(rwa));
+    }
+    items.sort_by(|lhs, rhs| lhs.id.cmp(&rhs.id));
+    let (items, pagination) = paginate(items, page, per_page);
+    ExplorerRwasPage { pagination, items }
+}
+
 pub(crate) fn block_created_at(duration: Duration) -> String {
     duration_to_rfc3339(duration)
 }
@@ -1506,6 +1570,7 @@ mod tests {
         isi::{Register, Transfer},
         metadata::Metadata,
         nft::{NftData, NftId},
+        rwa::{RwaControlPolicy, RwaData, RwaId},
         transaction::{
             error::TransactionRejectionReason,
             signed::{TransactionBuilder, TransactionResultInner},
@@ -1987,6 +2052,81 @@ mod tests {
         );
         assert_eq!(domain_page.items.len(), 1);
         assert_eq!(domain_page.items[0].id, nft_beta.to_string());
+    }
+
+    #[test]
+    fn rwas_page_filters_by_owner_and_domain() {
+        let rwa_alpha: RwaId = format!(
+            "{}$wonderland",
+            iroha_crypto::Hash::prehashed([7; iroha_crypto::Hash::LENGTH])
+        )
+        .parse()
+        .expect("rwa id");
+        let rwa_beta: RwaId = format!(
+            "{}$garden_of_live_flowers",
+            iroha_crypto::Hash::prehashed([8; iroha_crypto::Hash::LENGTH])
+        )
+        .parse()
+        .expect("rwa id");
+
+        let mut alpha_data = RwaData {
+            quantity: "10".parse().unwrap(),
+            spec: iroha_primitives::numeric::NumericSpec::integer(),
+            primary_reference: "https://example.test/rwa/alpha".to_owned(),
+            status: Some("vaulted".parse().unwrap()),
+            metadata: Metadata::default(),
+            parents: Vec::new(),
+            controls: RwaControlPolicy::default(),
+            owned_by: ALICE_ID.clone(),
+            is_frozen: false,
+            held_quantity: Numeric::zero(),
+        };
+        alpha_data.metadata.insert(
+            "series".parse().unwrap(),
+            json::Value::String("alpha".into()),
+        );
+        let alpha_value = Owned::new(alpha_data);
+        let beta_value = Owned::new(RwaData {
+            quantity: "6".parse().unwrap(),
+            spec: iroha_primitives::numeric::NumericSpec::integer(),
+            primary_reference: "https://example.test/rwa/beta".to_owned(),
+            status: None,
+            metadata: Metadata::default(),
+            parents: Vec::new(),
+            controls: RwaControlPolicy::default(),
+            owned_by: BOB_ID.clone(),
+            is_frozen: true,
+            held_quantity: "2".parse().unwrap(),
+        });
+
+        let owner_page = rwas_page(
+            vec![
+                Ref::new(&rwa_alpha, &alpha_value),
+                Ref::new(&rwa_beta, &beta_value),
+            ],
+            Some(&*ALICE_ID),
+            None,
+            1,
+            10,
+        );
+        assert_eq!(owner_page.items.len(), 1);
+        assert_eq!(owner_page.items[0].id, rwa_alpha.to_string());
+
+        let domain_filter = rwa_beta.domain().clone();
+        let domain_page = rwas_page(
+            vec![
+                Ref::new(&rwa_alpha, &alpha_value),
+                Ref::new(&rwa_beta, &beta_value),
+            ],
+            None,
+            Some(&domain_filter),
+            1,
+            10,
+        );
+        assert_eq!(domain_page.items.len(), 1);
+        assert_eq!(domain_page.items[0].id, rwa_beta.to_string());
+        assert_eq!(domain_page.items[0].held_quantity, "2");
+        assert!(domain_page.items[0].is_frozen);
     }
 
     #[test]

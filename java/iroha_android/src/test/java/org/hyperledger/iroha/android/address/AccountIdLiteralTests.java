@@ -40,7 +40,7 @@ public final class AccountIdLiteralTests {
     try {
       AccountIdLiteral.requireCanonicalI105Address(
           "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9", "accountId");
-      throw new AssertionError("expected legacy base58 literal to be rejected");
+      throw new AssertionError("expected legacy non-I105 literal to be rejected");
     } catch (final IllegalArgumentException expected) {
       assert expected.getMessage().contains("canonical I105")
           : "legacy rejection must mention canonical I105";

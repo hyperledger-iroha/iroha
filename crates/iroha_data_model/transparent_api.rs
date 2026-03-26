@@ -11,6 +11,7 @@ pub use crate::metadata::Metadata;
 pub use crate::nft::{NewNft, Nft, NftId};
 pub use crate::peer::{Peer, PeerId};
 pub use crate::permission::Permission;
+pub use crate::rwa::{NewRwa, Rwa, RwaControlPolicy, RwaId, RwaParentRef};
 pub use crate::query::{
     AnyQueryBox, CommittedTransaction, QueryBox, QueryOutput, QueryOutputBatchBox,
     QueryOutputBatchBoxTuple, QueryRequest, QueryRequestWithAuthority, QueryResponse,

@@ -25,7 +25,7 @@ public final class AccountAddress {
   private static final int I105_LITERAL_CHECKSUM_LEN = 2;
   private static final byte[] I105_CHECKSUM_PREFIX = "I105PRE".getBytes(StandardCharsets.UTF_8);
   private static final String I105_WARNING =
-      "I105 addresses are the canonical Base58 account literal encoding. "
+      "I105 addresses are the canonical account literal encoding. "
           + "Render and validate them with the intended chain discriminant.";
 
   private static final String[] I105_ASCII_ALPHABET = {

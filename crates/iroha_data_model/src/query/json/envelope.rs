@@ -623,6 +623,12 @@ impl IterableQueryJson {
                     Box::new(crate::query::nft::prelude::FindNfts)
                 })
             }
+            IterableQueryKind::FindRwas => {
+                type Item = crate::rwa::Rwa;
+                self.build_for_kind::<Item, _>(params.clone(), || {
+                    Box::new(crate::query::rwa::prelude::FindRwas)
+                })
+            }
             IterableQueryKind::FindRoles => {
                 type Item = crate::role::Role;
                 self.build_for_kind::<Item, _>(params.clone(), || {
@@ -654,6 +660,8 @@ pub enum IterableQueryKind {
     FindAssetsDefinitions,
     /// Enumerate registered NFTs.
     FindNfts,
+    /// Enumerate registered RWA lots.
+    FindRwas,
     /// Enumerate defined roles.
     FindRoles,
     /// Enumerate role identifiers only.
@@ -671,6 +679,7 @@ impl IterableQueryKind {
             IterableQueryKind::FindAccountIds => "FindAccountIds",
             IterableQueryKind::FindAssetsDefinitions => "FindAssetsDefinitions",
             IterableQueryKind::FindNfts => "FindNfts",
+            IterableQueryKind::FindRwas => "FindRwas",
             IterableQueryKind::FindRoles => "FindRoles",
             IterableQueryKind::FindRoleIds => "FindRoleIds",
             IterableQueryKind::FindRepoAgreements => "FindRepoAgreements",
@@ -689,6 +698,7 @@ impl FromStr for IterableQueryKind {
             "FindAccountIds" => Ok(IterableQueryKind::FindAccountIds),
             "FindAssetsDefinitions" => Ok(IterableQueryKind::FindAssetsDefinitions),
             "FindNfts" => Ok(IterableQueryKind::FindNfts),
+            "FindRwas" => Ok(IterableQueryKind::FindRwas),
             "FindRoles" => Ok(IterableQueryKind::FindRoles),
             "FindRoleIds" => Ok(IterableQueryKind::FindRoleIds),
             "FindRepoAgreements" => Ok(IterableQueryKind::FindRepoAgreements),

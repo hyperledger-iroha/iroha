@@ -4,7 +4,7 @@ use crate::{
     isi::{
         InstructionRegistry, RegisterPeerWithPop, asset_alias, bridge, consensus_keys, domain_link,
         endorsement, identifier, kaigi, nexus, offline, oracle, ram_lfe, repo, runtime_upgrade,
-        settlement, smart_contract_code, social, soracloud, sorafs, space_directory,
+        rwa, settlement, smart_contract_code, social, soracloud, sorafs, space_directory,
         transparent::{
             AddSignatory, InvalidInstruction, RemoveAssetKeyValue, RemoveSignatory,
             SetAccountQuorum, SetAssetKeyValue,
@@ -47,6 +47,7 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<Transfer<Account, NftId, Account>>,
     InstructionRegistry::register::<TransferAssetBatch>,
     InstructionRegistry::register::<TransferBox>,
+    InstructionRegistry::register::<rwa::RwaInstructionBox>,
     InstructionRegistry::register::<repo::RepoInstructionBox>,
     InstructionRegistry::register::<repo::RepoIsi>,
     InstructionRegistry::register::<repo::ReverseRepoIsi>,
@@ -284,6 +285,7 @@ fn with_core_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistr
     registry = registry.register_with_id::<BurnBox>(BurnBox::WIRE_ID);
     registry = registry.register_with_id::<TransferBox>(TransferBox::WIRE_ID);
     registry = registry.register_with_id::<TransferAssetBatch>(TransferAssetBatch::WIRE_ID);
+    registry = registry.register_with_id::<rwa::RwaInstructionBox>(rwa::RwaInstructionBox::WIRE_ID);
     registry = registry.register_with_id::<repo::RepoIsi>(repo::RepoIsi::WIRE_ID);
     registry = registry.register_with_id::<repo::ReverseRepoIsi>(repo::ReverseRepoIsi::WIRE_ID);
     registry = registry.register_with_id::<settlement::DvpIsi>(settlement::DvpIsi::WIRE_ID);

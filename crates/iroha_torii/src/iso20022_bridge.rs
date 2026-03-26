@@ -1314,8 +1314,17 @@ mod tests {
         (account, literal, private_key)
     }
 
+    fn sample_asset_definition_literal() -> String {
+        AssetDefinitionId::new(
+            "test".parse().expect("domain"),
+            "usd".parse().expect("name"),
+        )
+        .to_string()
+    }
+
     fn sample_config() -> actual::IsoBridge {
         let (_account_id, account_literal, private_key) = sample_account_bundle();
+        let asset_definition = sample_asset_definition_literal();
         actual::IsoBridge {
             enabled: true,
             dedupe_ttl_secs: 60,
@@ -1329,7 +1338,7 @@ mod tests {
             }],
             currency_assets: vec![actual::IsoCurrencyAsset {
                 currency: "USD".to_string(),
-                asset_definition: "usd#test".to_string(),
+                asset_definition,
             }],
             reference_data: actual::IsoReferenceData::default(),
         }
@@ -1499,7 +1508,11 @@ mod tests {
             context.target_account_id.as_deref(),
             Some(canonical_account.as_str())
         );
-        assert_eq!(context.asset_definition_id.as_deref(), Some("usd#test"));
+        let asset_definition = sample_asset_definition_literal();
+        assert_eq!(
+            context.asset_definition_id.as_deref(),
+            Some(asset_definition.as_str())
+        );
         assert_eq!(context.source_account_address.as_deref(), Some("0xdebtor"));
         assert_eq!(
             context.target_account_address.as_deref(),
@@ -1529,7 +1542,7 @@ mod tests {
             .get(&asset_key)
             .and_then(|json| json.try_into_any_norito::<String>().ok())
             .expect("asset metadata");
-        assert_eq!(stored_asset, "usd#test");
+        assert_eq!(stored_asset, asset_definition);
 
         let asset_id_key = Name::from_str("iso20022_asset_id").unwrap();
         let stored_asset_id = metadata
@@ -1649,7 +1662,11 @@ mod tests {
             context.target_account_id.as_deref(),
             Some(canonical_account.as_str())
         );
-        assert_eq!(context.asset_definition_id.as_deref(), Some("usd#test"));
+        let asset_definition = sample_asset_definition_literal();
+        assert_eq!(
+            context.asset_definition_id.as_deref(),
+            Some(asset_definition.as_str())
+        );
 
         let metadata = tx.metadata();
         let purpose_key = Name::from_str("iso20022_category_purpose").unwrap();

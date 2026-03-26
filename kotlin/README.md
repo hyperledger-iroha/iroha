@@ -129,6 +129,14 @@ ls ~/.m2/repository/org/hyperledger/iroha/sdk/offline-wallet-android/0.1-SNAPSHO
 
 ## Motivation
 
+`core-jvm` now ships typed builders for the first dedicated RWA instruction
+slice alongside the existing NFT helpers: `RegisterRwaInstruction`,
+`TransferRwaInstruction`, `MergeRwasInstruction`, `RedeemRwaInstruction`,
+`FreezeRwaInstruction`, `UnfreezeRwaInstruction`, `HoldRwaInstruction`,
+`ReleaseRwaInstruction`, `ForceTransferRwaInstruction`,
+`SetRwaControlsInstruction`, and RWA-aware `SetKeyValueInstruction` /
+`RemoveKeyValueInstruction` targets.
+
 ### Kotlin as the standard
 
 Kotlin is the default language for Android development. Migrating from Java makes the SDK consistent with the Android ecosystem and eliminates the friction of Java/Kotlin interop at the call site. 
@@ -165,4 +173,3 @@ The Java SDK required defensive null checks at every Kotlin call site (`!!`, `?:
 |-----------|---------|---------|------|
 | `org.bouncycastle:bcprov-jdk18on` | 1.78.1 | `core-jvm` (3 files: MultisigSeedHelper, ConnectCrypto, IdentifierReceiptVerifier) | **Binary compatibility** — BouncyCastle releases are not always backward-compatible. Consumer apps that bundle a different BC version may hit `NoSuchMethodError` at runtime. The SDK loads BC via reflection with try/catch fallback; core crypto (Blake2b/2s/3, Ed25519, IrohaHash) uses only JCA and does not require BC. |
 | `com.github.luben:zstd-jni` | 1.5.7-7 | `core-jvm` (Norito compression) | **Native library** — zstd-jni bundles platform-specific `.so`/`.dylib`. On Android, the JNI natives may conflict with other zstd consumers. Compression is optional; the codec falls back gracefully if zstd is unavailable. |
-

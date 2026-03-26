@@ -10371,6 +10371,21 @@ pub mod isi {
                 .map(|nft| nft.id().clone())
                 .collect();
 
+            if let Some(rwa_id) = state_transaction
+                .world
+                .rwas_in_domain_iter(&domain_id)
+                .map(|rwa| rwa.id().clone())
+                .next()
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister domain {domain_id}: RWA {rwa_id} still exists in the domain; transfer or redeem all RWAs first"
+                    )
+                    .into(),
+                )
+                .into());
+            }
+
             for nft_id in remove_nfts {
                 crate::smartcontracts::isi::nft::isi::remove_nft_associated_permissions(
                     state_transaction,

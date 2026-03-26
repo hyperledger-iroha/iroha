@@ -95,6 +95,7 @@ use iroha_data_model::{
     ram_lfe::{RamLfeProgramId, RamLfeProgramPolicy},
     repo::{RepoAgreement, RepoAgreementId},
     role::RoleId,
+    rwa::{RwaEntry, RwaId, RwaValue},
     social::{ViralCampaignBudget, ViralDailyCounter, ViralEscrowRecord, ViralRewardBudget},
     soracloud::{
         SoraAgentApartmentAuditEventV1, SoraAgentApartmentRecordV1, SoraDecryptionRequestRecordV1,
@@ -370,6 +371,7 @@ macro_rules! build_world_block {
             assets: $state.assets.$method(),
             asset_metadata: $state.asset_metadata.$method(),
             nfts: $state.nfts.$method(),
+            rwas: $state.rwas.$method(),
             roles: $state.roles.$method(),
             account_permissions: $state.account_permissions.$method(),
             account_roles: $state.account_roles.$method(),
@@ -550,6 +552,7 @@ macro_rules! build_world_transaction {
             assets: $state.assets.transaction(),
             asset_metadata: $state.asset_metadata.transaction(),
             nfts: $state.nfts.transaction(),
+            rwas: $state.rwas.transaction(),
             roles: $state.roles.transaction(),
             account_permissions: $state.account_permissions.transaction(),
             account_roles: $state.account_roles.transaction(),
@@ -1433,6 +1436,8 @@ pub struct World {
     pub(crate) asset_metadata: Storage<AssetId, Metadata>,
     /// Non fungible assets.
     pub(crate) nfts: Storage<NftId, NftValue>,
+    /// Registered real-world asset lots.
+    pub(crate) rwas: Storage<RwaId, RwaValue>,
     /// Roles. [`Role`] pairs.
     pub(crate) roles: Storage<RoleId, Role>,
     /// Permission tokens of an account.
@@ -1837,6 +1842,8 @@ pub struct WorldBlock<'world> {
     pub(crate) asset_metadata: StorageBlock<'world, AssetId, Metadata>,
     /// Registered NFTs.
     pub(crate) nfts: StorageBlock<'world, NftId, NftValue>,
+    /// Registered RWA lots.
+    pub(crate) rwas: StorageBlock<'world, RwaId, RwaValue>,
     /// Roles. [`Role`] pairs.
     pub(crate) roles: StorageBlock<'world, RoleId, Role>,
     /// Permission tokens of an account.
@@ -2208,6 +2215,7 @@ impl<'world> WorldBlock<'world> {
         collect_reverts!(self.assets, Asset);
         collect_reverts!(self.asset_metadata, AssetMetadata);
         collect_reverts!(self.nfts, Nft);
+        collect_reverts!(self.rwas, Rwa);
         collect_reverts!(self.roles, Role);
         collect_reverts!(self.account_permissions, AccountPermission);
         collect_reverts!(self.account_roles, AccountRole);
@@ -2265,6 +2273,7 @@ impl<'world> WorldBlock<'world> {
         collect_payload!(self.assets, Asset);
         collect_payload!(self.asset_metadata, AssetMetadata);
         collect_payload!(self.nfts, Nft);
+        collect_payload!(self.rwas, Rwa);
         collect_payload!(self.roles, Role);
         collect_payload!(self.account_permissions, AccountPermission);
         collect_payload!(self.account_roles, AccountRole);
@@ -2383,6 +2392,8 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) asset_metadata: StorageTransaction<'block, 'world, AssetId, Metadata>,
     /// Registered NFTs.
     pub(crate) nfts: StorageTransaction<'block, 'world, NftId, NftValue>,
+    /// Registered RWA lots.
+    pub(crate) rwas: StorageTransaction<'block, 'world, RwaId, RwaValue>,
     /// Roles. [`Role`] pairs.
     pub(crate) roles: StorageTransaction<'block, 'world, RoleId, Role>,
     /// Permission tokens of an account.
@@ -3029,6 +3040,8 @@ pub struct WorldView<'world> {
     pub(crate) asset_metadata: StorageView<'world, AssetId, Metadata>,
     /// Registered NFTs.
     pub(crate) nfts: StorageView<'world, NftId, NftValue>,
+    /// Registered RWA lots.
+    pub(crate) rwas: StorageView<'world, RwaId, RwaValue>,
     /// Roles. [`Role`] pairs.
     pub(crate) roles: StorageView<'world, RoleId, Role>,
     /// Permission tokens of an account.
@@ -6153,6 +6166,8 @@ pub struct StateTransaction<'block, 'state> {
     /// Hash of the current transaction entrypoint (`call_hash`), when executing a transaction.
     /// Not set for ad-hoc instruction execution in tests.
     pub tx_call_hash: Option<iroha_crypto::Hash>,
+    /// Deterministic per-transaction ordinal used when generating canonical RWA lot ids.
+    pub(crate) rwa_generated_id_ordinal: u64,
     /// Remaining executor fuel budget for runtime executor validation in this transaction.
     pub(crate) executor_fuel_remaining: Option<u64>,
     /// Optional view of block-level preverified proofs (`proof_hash` -> ok)
@@ -10384,6 +10399,7 @@ impl World {
             assets,
             asset_metadata: Storage::default(),
             nfts,
+            rwas: Storage::default(),
             proofs: Storage::default(),
             contract_manifests: Storage::default(),
             contract_code: Storage::default(),
@@ -11021,6 +11037,7 @@ impl World {
             assets: self.assets.view(),
             asset_metadata: self.asset_metadata.view(),
             nfts: self.nfts.view(),
+            rwas: self.rwas.view(),
             roles: self.roles.view(),
             account_permissions: self.account_permissions.view(),
             account_roles: self.account_roles.view(),
@@ -11276,6 +11293,8 @@ pub trait WorldReadOnly {
     fn asset_metadata(&self) -> &impl StorageReadOnly<AssetId, Metadata>;
     /// NFT storage (read-only).
     fn nfts(&self) -> &impl StorageReadOnly<NftId, NftValue>;
+    /// RWA storage (read-only).
+    fn rwas(&self) -> &impl StorageReadOnly<RwaId, RwaValue>;
     /// Role storage (read-only).
     fn roles(&self) -> &impl StorageReadOnly<RoleId, Role>;
     /// Account permissions mapping (read-only).
@@ -12057,6 +12076,31 @@ pub trait WorldReadOnly {
             .map(|(id, value)| NftEntry::new(id, value))
     }
 
+    /// Get `Rwa` immutable view.
+    ///
+    /// # Errors
+    /// - RWA entry not found
+    fn rwa<'a>(&'a self, rwa_id: &'a RwaId) -> Result<RwaEntry<'a>, FindError> {
+        self.rwas()
+            .get(rwa_id)
+            .map(|value| RwaEntry::new(rwa_id, value))
+            .ok_or_else(|| FindError::Rwa(rwa_id.clone()))
+    }
+
+    /// Returns reference for RWAs map.
+    #[inline]
+    fn rwas_iter(&self) -> impl Iterator<Item = RwaEntry<'_>> {
+        self.rwas()
+            .iter()
+            .map(|(id, value)| RwaEntry::new(id, value))
+    }
+
+    /// Iterate RWAs in domain.
+    fn rwas_in_domain_iter<'a>(&'a self, id: &'a DomainId) -> impl Iterator<Item = RwaEntry<'a>> {
+        self.rwas_iter()
+            .filter(move |entry| entry.id().domain() == id)
+    }
+
     // Role-related methods
 
     /// Get `Role` and return reference to it.
@@ -12183,6 +12227,9 @@ macro_rules! impl_world_ro {
             }
             fn nfts(&self) -> &impl StorageReadOnly<NftId, NftValue> {
                 &self.nfts
+            }
+            fn rwas(&self) -> &impl StorageReadOnly<RwaId, RwaValue> {
+                &self.rwas
             }
             fn roles(&self) -> &impl StorageReadOnly<RoleId, Role> {
                 &self.roles
@@ -14647,6 +14694,16 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         self.nfts
             .get_mut(id)
             .ok_or_else(|| FindError::Nft(id.clone()))
+    }
+
+    /// Get mutable reference to [`Rwa`].
+    ///
+    /// # Errors
+    /// If RWA not found
+    pub fn rwa_mut(&mut self, id: &RwaId) -> Result<&mut RwaValue, FindError> {
+        self.rwas
+            .get_mut(id)
+            .ok_or_else(|| FindError::Rwa(id.clone()))
     }
 
     /// Set executor data model.
@@ -20696,6 +20753,7 @@ impl<'state> StateBlock<'state> {
             confidential_gas_used_in_tx: 0,
             confidential_gas_used_in_block_so_far: self.confidential_gas_used_in_block,
             tx_call_hash: None,
+            rwa_generated_id_ordinal: 0,
             executor_fuel_remaining: None,
             preverified_batch: self.preverified_batch.clone(),
             fastpq_transcripts: &mut self.fastpq_transcripts,
@@ -24942,6 +25000,29 @@ impl StateTransaction<'_, '_> {
         self.pending_transfer_transcripts.push(transcript);
     }
 
+    /// Generate the next canonical RWA identifier for this transaction scope.
+    ///
+    /// The id is derived from the current transaction entrypoint hash when available and
+    /// falls back to a deterministic synthetic batch hash for ad-hoc execution contexts.
+    #[must_use]
+    pub fn next_generated_rwa_id(&mut self, domain: &DomainId, purpose: &str) -> RwaId {
+        let batch_hash = self
+            .tx_call_hash
+            .unwrap_or_else(|| self.ensure_synthetic_batch_hash_with(|_| {}));
+        let ordinal = self.rwa_generated_id_ordinal;
+        self.rwa_generated_id_ordinal = self.rwa_generated_id_ordinal.saturating_add(1);
+
+        let mut bytes = Vec::with_capacity(
+            b"iroha:rwa:id:v2|".len() + purpose.len() + batch_hash.as_ref().len() + 8,
+        );
+        bytes.extend_from_slice(b"iroha:rwa:id:v2|");
+        bytes.extend_from_slice(purpose.as_bytes());
+        bytes.push(0xff);
+        bytes.extend_from_slice(batch_hash.as_ref());
+        bytes.extend_from_slice(&ordinal.to_le_bytes());
+        RwaId::generated(domain.clone(), Hash::new(bytes))
+    }
+
     /// Record a completed AXT envelope for persistence within the current block.
     pub fn record_axt_envelope(&mut self, record: AxtEnvelopeRecord) {
         self.update_axt_policies_from_envelope(&record);
@@ -26324,6 +26405,7 @@ pub(crate) mod deserialize {
         let account_rekey_records = take_optional_default(&mut map, "account_rekey_records")?;
         let asset_metadata = take_optional_default(&mut map, "asset_metadata")?;
         let nfts: Storage<NftId, NftValue> = take_required(&mut map, "nfts")?;
+        let rwas: Storage<RwaId, RwaValue> = take_optional_default(&mut map, "rwas")?;
         let roles: Storage<RoleId, Role> = take_required(&mut map, "roles")?;
         let account_permissions: Storage<AccountId, Permissions> =
             take_required(&mut map, "account_permissions")?;
@@ -26481,6 +26563,7 @@ pub(crate) mod deserialize {
             assets,
             asset_metadata,
             nfts,
+            rwas,
             roles,
             account_permissions,
             account_roles,

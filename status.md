@@ -1,6 +1,149 @@
 # Status
 
-Last updated: 2026-03-25
+Last updated: 2026-03-26
+
+## 2026-03-26 Follow-up: Base58-only asset-definition literals are now enforced on the remaining Torii config and Kotodama sample paths
+- Tightened the remaining positive legacy asset-definition literal paths in
+  `crates/iroha_config/src/parameters/user.rs`,
+  `crates/iroha_torii/src/iso20022_bridge.rs`,
+  `crates/ivm/tests/kotodama.rs`,
+  `crates/ivm/tests/data/mfc.ko`,
+  and
+  `crates/kotodama_lang/src/samples/asset_ops.ko`.
+- The shipped behavior in this slice:
+  - `torii.faucet.asset_definition_id` and
+    `iso_bridge.currency_assets[].asset_definition` now reject legacy
+    `name#domain` literals during config parsing and require canonical Base58
+    asset-definition literals;
+  - the ISO 20022 bridge test/runtime fixtures now use canonical Base58 asset
+    definition strings instead of stale config literals, while explicit
+    alias-aware query/app surfaces elsewhere remain unchanged; and
+  - the remaining in-tree Kotodama/IVM positive samples/tests that feed typed
+    `asset_definition(...)` constructors now use canonical Base58 literals
+    instead of `aid:` or `name#domain` forms.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-asset-config cargo test -p iroha_config asset_definition_literal -- --nocapture` (pass)
+  - `/tmp/iroha-asset-torii/debug/deps/iroha_torii-8898d567bed74bfc extracts_transfer --nocapture` (pass)
+  - `/tmp/iroha-asset-ivm/debug/deps/kotodama-3bb1a49477da1132 parse_mfc_example --nocapture` (pass)
+  - `/tmp/iroha-asset-ivm/debug/deps/kotodama-3bb1a49477da1132 compile_kotodama_samples_supported --nocapture` (pass)
+  - `/tmp/iroha-asset-ivm/debug/deps/kotodama-3bb1a49477da1132 namespaced_host_calls_and_std_map_new_parse_and_type --nocapture` (pass)
+  - `/tmp/iroha-asset-ivm/debug/deps/kotodama-3bb1a49477da1132 indirect_sensitive_calls_require_permission --nocapture` (pass)
+- Remaining implementation gap:
+  - the targeted Base58-hardening slice is closed in-tree; broader
+    workspace-wide verification still remains if we want full repo coverage
+    beyond the focused config/Torii/IVM regressions above.
+
+## 2026-03-26 Security audit: targeted report added for Torii, SDK transport, attachment sanitizer, and P2P transport
+- Added a repository-root audit report at `security_audit_report.md`.
+- Highest-priority findings in this pass:
+  - Torii currently logs inbound HTTP request headers, which can expose auth material to logs.
+  - Multiple public Torii/SDK flows still accept raw `private_key` payloads so the server can sign on behalf of callers.
+  - Confidential seed derivation, SDK transport sensitivity checks, the attachment sanitizer isolation model, and optional P2P TLS/QUIC certificate verification still need hardening.
+- Validation:
+  - `cargo check -p iroha_torii --lib --message-format short` (pass)
+  - `cargo check -p iroha_p2p --message-format short` (pass)
+  - `cargo test -p iroha_torii --lib confidential_derive_keyset_endpoint_roundtrip -- --nocapture` (pass)
+  - `cargo deny check advisories bans sources --hide-inclusion-graph` (pass; duplicate-version warnings only)
+- Remaining implementation gap:
+  - this pass produced the audit report and prioritized remediation backlog, but did not implement fixes yet.
+
+## 2026-03-26 Follow-up: account-id wording now treats I105 as the only public standard
+- Removed the remaining public account-id wording that still described account
+  identifiers with outdated non-I105 terminology across the Rust data-model
+  docs/comments, the main
+  account-structure RFC, and the Swift/Kotlin/Java mobile SDK warning strings.
+- The shipped behavior in this slice:
+  - `AccountId` parsing/docs now describe canonical account literals strictly as
+    I105 and keep the hard cut on non-I105 account-id forms;
+  - the account-structure RFC now presents I105 as the sole public account-id
+    standard while keeping low-level encoding details explicit where needed; and
+  - the Swift/Kotlin/Java SDK user-facing warning strings now refer to
+    canonical account literals rather than legacy alternate terminology.
+- Validation:
+  - `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.address.AccountIdLiteralTest --console=plain` (pass)
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.address.AccountAddressTests --tests org.hyperledger.iroha.android.model.instructions.AccountLiteralHardCutTests --console=plain` (pass)
+  - `cd IrohaSwift && swift test --filter AccountAddressTests` (build completed; suite hit the pre-existing `xctest` unexpected signal 10 in this environment after running selected tests)
+  - `cd IrohaSwift && swift test --filter AccountAddressTests/testDisplayFormats` (build completed; targeted run hit the pre-existing `xctest` unexpected signal 11 in this environment)
+  - `CARGO_TARGET_DIR=/tmp/iroha_target_i105_wording cargo test -p iroha_data_model from_str_rejects_i105_alphabet_alias -- --nocapture` (still compiling the cold isolated target at the time of this note; no test result yet)
+- Remaining implementation gap:
+  - a completed Rust test result is still pending because the isolated
+    `iroha_data_model` run had to rebuild a large dependency graph; broader
+    workspace verification remains out of scope for this wording-only cleanup.
+
+## 2026-03-26 Follow-up: Kotlin/Java mobile SDKs now expose the dedicated RWA builder family
+- Extended the Android/JVM client surfaces in
+  `kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/`,
+  `java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/`,
+  and the focused SDK docs/README surfaces so the first RWA-specific builders
+  ship alongside the existing NFT helpers.
+- The shipped behavior in this slice:
+  - Kotlin `core-jvm` and Java/Android now both ship dedicated builders for
+    `RegisterRwa`, `TransferRwa`, `MergeRwas`, `RedeemRwa`, `FreezeRwa`,
+    `UnfreezeRwa`, `HoldRwa`, `ReleaseRwa`, `ForceTransferRwa`, and
+    `SetRwaControls`;
+  - the simple quantity/lifecycle operations use explicit scalar fields while
+    the richer `RegisterRwa`, `MergeRwas`, and `SetRwaControls` payloads carry
+    canonical JSON strings so callers can pass through the full Rust-side data
+    model without losing structure;
+  - Java/Android enforces canonical I105 account validation on
+    `TransferRwaInstruction` source/destination and
+    `ForceTransferRwaInstruction` destination fields just like the existing
+    transfer builders;
+  - generic metadata helpers in both SDKs now understand RWA targets via
+    `SetRwaKeyValue` / `RemoveRwaKeyValue`; and
+  - the Android SDK docs now explicitly mention the current RWA builder slice
+    so public documentation matches the shipped surface.
+- Validation:
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.core.model.instructions.RwaInstructionBuildersTest --console=plain` (pass)
+  - `./gradlew :core:test --tests org.hyperledger.iroha.android.model.instructions.RwaInstructionBuilderTests --tests org.hyperledger.iroha.android.model.instructions.AccountLiteralHardCutTests --console=plain` (pass)
+- Remaining implementation gap:
+  - the Kotlin/Java builder family now covers the RWA instruction set used in
+    the current tree; remaining parity work is mostly about whether Swift
+    should gain matching helpers and whether the mobile SDKs should eventually
+    expose typed `NewRwa` / `MergeRwas` / `RwaControlPolicy` value objects
+    instead of the current JSON-carrying wrappers.
+
+## 2026-03-25 Follow-up: RWA lots now generate deterministic unique IDs and Torii/MCP parity coverage is in place
+- Completed the missing first-class RWA follow-up across
+  `crates/iroha_core/src/state.rs`,
+  `crates/iroha_core/src/smartcontracts/isi/rwa.rs`,
+  `crates/iroha_data_model/src/norito_slice_decode.rs`,
+  `crates/iroha_data_model/tests/query_response_roundtrip.rs`,
+  `crates/iroha_data_model/tests/instruction_impls.rs`,
+  `crates/iroha_torii/src/lib.rs`,
+  `crates/iroha_torii/src/mcp.rs`,
+  `crates/iroha_torii/tests/mcp_endpoints.rs`,
+  `crates/iroha_torii/tests/nfts_endpoints.rs`,
+  and
+  `crates/iroha_torii/tests/rwas_endpoints.rs`.
+- The shipped behavior in this slice:
+  - generated `RwaId`s are now derived from the transaction context plus a
+    per-transaction ordinal, so repeated register/split/merge/force-transfer
+    flows create peer-deterministic but collision-free child lots inside the
+    same transaction;
+  - the RWA data-model surface now has Norito slice decoding coverage,
+    iterable query-response roundtrips, and instruction trait coverage
+    alongside the existing NFT-style families;
+  - Torii now has focused `/v1/rwas` and `/v1/rwas/query` smoke coverage plus
+    MCP alias coverage for `iroha.rwas.{chain.list,list,get,query}`; and
+  - the Torii integration harness now dispatches `ConnectInfo`-dependent
+    routes through `into_make_service_with_connect_info::<SocketAddr>()`, so
+    MCP, NFT, and RWA endpoint tests exercise the same shape the live server
+    uses instead of failing on missing transport metadata.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p iroha_data_model --test instruction_impls --test query_response_roundtrip -- --nocapture` (pass)
+  - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=target_tmp_rwa_core cargo test -p iroha_core repeated_ -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --test rwas_endpoints -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --test nfts_endpoints -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --test mcp_endpoints mcp_jsonrpc_tools_call_agent_alias_rwas -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --test mcp_endpoints mcp_jsonrpc_tools_call_agent_alias_nfts -- --nocapture` (pass)
+  - `cargo test -p iroha_torii --test mcp_endpoints mcp_tools_list_exposes_account_and_transaction_interfaces -- --nocapture` (pass)
+- Remaining implementation gap:
+  - the targeted RWA slice is covered in-tree; broader workspace verification
+    still remains if we want to promote this beyond focused crate/test
+    coverage.
 
 ## 2026-03-25 Follow-up: FASTPQ transfer golden fixtures refreshed for canonical asset/account identifiers
 - Refreshed the checked-in transfer regression fixture and its derived golden
@@ -3665,11 +3808,11 @@ Last updated: 2026-03-25
 ## 2026-03-24 Account-address first-release hard cut (JS/Swift/Android)
 - Removed the remaining compressed/sentinel/full-width account-address
   compatibility surface from the public JS, Swift, and Android SDKs so the
-  first-release literal model is just canonical I105 Base58.
+  first-release literal model is just canonical I105.
 - JavaScript (`javascript/iroha_js`):
   - the pure-JS fallback codec now matches Rust exactly: 14-bit prefix bytes
     + canonical payload + 2-byte `I105PRE` checksum, encoded with the standard
-    Base58 alphabet and no textual sentinel;
+    I105 alphabet and no textual sentinel;
   - removed the leftover public error codes tied to the sentinel-era codec
     (`MISSING_I105_SENTINEL`, `INVALID_I105_BASE`,
     `INVALID_I105_DIGIT`);

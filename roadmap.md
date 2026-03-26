@@ -1,6 +1,119 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-03-25
+Last updated: 2026-03-26
+
+Latest sync (2026-03-26 Base58-only asset-definition literal hardening):
+`crates/iroha_config/src/parameters/user.rs`,
+`crates/iroha_torii/src/iso20022_bridge.rs`,
+`crates/ivm/tests/kotodama.rs`,
+`crates/ivm/tests/data/mfc.ko`,
+and
+`crates/kotodama_lang/src/samples/asset_ops.ko`
+now remove the remaining positive legacy asset-definition literal acceptance in
+the current tree:
+
+- Torii config parsing now requires canonical Base58 asset-definition literals
+  for faucet and ISO 20022 currency bindings instead of accepting
+  `name#domain` compatibility inputs;
+- the ISO 20022 bridge fixtures now use canonical Base58 literals, while
+  alias-aware query/app paths stay unchanged; and
+- the remaining in-tree Kotodama/IVM positive samples/tests that passed typed
+  `asset_definition(...)` constructors now use canonical Base58 literals
+  instead of `aid:` or `name#domain` forms.
+
+Validation:
+- `cargo fmt --all`
+- `CARGO_TARGET_DIR=/tmp/iroha-asset-config cargo test -p iroha_config asset_definition_literal -- --nocapture`
+- `/tmp/iroha-asset-torii/debug/deps/iroha_torii-8898d567bed74bfc extracts_transfer --nocapture`
+- `/tmp/iroha-asset-ivm/debug/deps/kotodama-3bb1a49477da1132 parse_mfc_example --nocapture`
+- `/tmp/iroha-asset-ivm/debug/deps/kotodama-3bb1a49477da1132 compile_kotodama_samples_supported --nocapture`
+- `/tmp/iroha-asset-ivm/debug/deps/kotodama-3bb1a49477da1132 namespaced_host_calls_and_std_map_new_parse_and_type --nocapture`
+- `/tmp/iroha-asset-ivm/debug/deps/kotodama-3bb1a49477da1132 indirect_sensitive_calls_require_permission --nocapture`
+
+Open work for this slice now remains:
+- rerun broader workspace verification (`cargo build --workspace`,
+  `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`)
+  when we can afford the full repo-wide build/test budget; and
+- keep the remaining public alias-oriented docs/examples as-is unless those
+  API surfaces stop resolving on-chain aliases, in which case they should be
+  migrated to canonical Base58 literals too.
+
+Latest sync (2026-03-26 security audit report added):
+`security_audit_report.md`
+now tracks the current prioritized security backlog from a targeted audit pass.
+
+Open work from this audit now is:
+- remove or redact Torii request-header logging so auth material does not reach traces/logs;
+- deprecate public request DTOs that carry raw `private_key` values and move signing fully client-side;
+- remove or narrow remote confidential seed derivation, stop echoing seeds in responses, and classify seed-bearing requests as sensitive in all SDK transport guards;
+- replace the attachment sanitizer's current subprocess-plus-`setrlimit` isolation with a real sandbox or rename/re-scope it to match its actual guarantees; and
+- decide whether optional P2P TLS/QUIC must provide authenticated transport or remain explicitly documented as unauthenticated encrypted tunneling.
+
+Latest sync (2026-03-26 Kotlin/Java mobile SDKs now ship the dedicated RWA builder family):
+`kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/`,
+`java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/`,
+and the touched Android SDK docs now expose the first dedicated mobile RWA
+surface:
+
+- Kotlin `core-jvm` and Java/Android now both ship
+  `RegisterRwaInstruction`, `TransferRwaInstruction`,
+  `MergeRwasInstruction`, `RedeemRwaInstruction`,
+  `FreezeRwaInstruction`, `UnfreezeRwaInstruction`,
+  `HoldRwaInstruction`, `ReleaseRwaInstruction`,
+  `ForceTransferRwaInstruction`, and `SetRwaControlsInstruction`;
+- both SDKs now treat RWAs as first-class metadata targets in
+  `SetKeyValueInstruction` / `RemoveKeyValueInstruction`; and
+- Android-side canonical I105 validation now also covers `TransferRwa`
+  source/destination plus `ForceTransferRwa` destination account fields.
+
+Validation:
+- `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.core.model.instructions.RwaInstructionBuildersTest --console=plain`
+- `./gradlew :core:test --tests org.hyperledger.iroha.android.model.instructions.RwaInstructionBuilderTests --tests org.hyperledger.iroha.android.model.instructions.AccountLiteralHardCutTests --console=plain`
+
+Open work for this slice now remains:
+- decide whether Swift should gain matching RWA explorer/builder helpers or
+  stay REST-only for this asset family; and
+- decide whether the mobile SDKs should grow typed `NewRwa` / `MergeRwas` /
+  `RwaControlPolicy` value objects instead of the current JSON-carrying
+  wrappers for the richer RWA payloads.
+
+Latest sync (2026-03-25 deterministic RWA generated IDs and Torii/MCP parity coverage):
+`crates/iroha_core/src/state.rs`,
+`crates/iroha_core/src/smartcontracts/isi/rwa.rs`,
+`crates/iroha_data_model/tests/query_response_roundtrip.rs`,
+`crates/iroha_data_model/tests/instruction_impls.rs`,
+`crates/iroha_torii/src/lib.rs`,
+`crates/iroha_torii/src/mcp.rs`,
+`crates/iroha_torii/tests/mcp_endpoints.rs`,
+`crates/iroha_torii/tests/nfts_endpoints.rs`,
+and
+`crates/iroha_torii/tests/rwas_endpoints.rs`
+now close the missing RWA follow-up in the current tree:
+
+- generated `RwaId`s now use transaction-scoped deterministic ordinals so
+  repeated issue/split/merge/force-transfer flows do not collide inside a
+  single transaction;
+- the RWA data-model/query-response surface now has focused Norito and trait
+  coverage; and
+- Torii/MCP now have parity smoke coverage for RWA list/get/query aliases,
+  with the integration harness updated to supply `ConnectInfo` the same way as
+  the live server.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p iroha_data_model --test instruction_impls --test query_response_roundtrip -- --nocapture`
+- `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=target_tmp_rwa_core cargo test -p iroha_core repeated_ -- --nocapture`
+- `cargo test -p iroha_torii --test rwas_endpoints -- --nocapture`
+- `cargo test -p iroha_torii --test nfts_endpoints -- --nocapture`
+- `cargo test -p iroha_torii --test mcp_endpoints mcp_jsonrpc_tools_call_agent_alias_rwas -- --nocapture`
+- `cargo test -p iroha_torii --test mcp_endpoints mcp_jsonrpc_tools_call_agent_alias_nfts -- --nocapture`
+- `cargo test -p iroha_torii --test mcp_endpoints mcp_tools_list_exposes_account_and_transaction_interfaces -- --nocapture`
+
+Open work for this slice now remains:
+- run broader workspace verification for the RWA path when we can afford the
+  full repo-wide test time; and
+- extend client/CLI parity verification beyond the focused Torii/MCP/data
+  model coverage shipped in this pass.
 
 Latest sync (2026-03-25 active cargo-deny dependency findings are closed):
 `Cargo.toml`

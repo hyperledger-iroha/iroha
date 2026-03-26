@@ -135,6 +135,8 @@ pub mod repo;
 pub mod role;
 /// Runtime upgrade payloads and manifests.
 pub mod runtime;
+/// Real-world asset lot structures and controls.
+pub mod rwa;
 /// Smart contract descriptors and execution metadata.
 pub mod smart_contract;
 /// Sora Name Service registrar data structures.
@@ -365,6 +367,7 @@ pub mod prelude {
         ram_lfe::prelude::*,
         repo::prelude::*,
         role::prelude::*,
+        rwa::prelude::*,
         sns::prelude::*,
         social::prelude::*,
         sorafs_uri::SorafsUri,

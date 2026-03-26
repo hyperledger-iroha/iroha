@@ -10,7 +10,7 @@ This document describes the shipping account-addressing stack implemented in
 `AccountAddress` (`crates/iroha_data_model/src/account/address.rs`) and the
 companion tooling. It provides:
 
-- A checksummed, human-facing **Iroha Base58 address (I105)** produced by
+- A checksummed, human-facing **I105 account address** produced by
   `AccountAddress::to_i105` that binds a chain discriminant to the account
   controller and offers deterministic interop-friendly textual forms.
 - A domainless canonical account payload keyed only by the controller.
@@ -36,7 +36,7 @@ and a deterministic mapping from domain name to the authoritative chain.
 
 ## Goals
 
-- Describe the I105 Base58 envelope implemented in the data model and the
+- Describe the I105 envelope implemented in the data model and the
   canonical parsing/alias rules that `AccountId` and `AccountAddress` follow.
 - Encode the configured chain discriminant directly into each address and
   define its governance/registry process.
@@ -127,7 +127,7 @@ lower-level `AccountAddress` helper.
   rendered as I105 or as canonical hex for low-level debugging and
   address-envelope JSON.
 
-- **I105 (Iroha Base58)** – a Base58 envelope that embeds the chain
+- **I105** – the canonical account-address envelope that embeds the chain
   discriminant. Decoders validate the prefix before promoting the payload to
   the canonical form.
 - **Canonical hex** – a debugging-friendly `0x…` encoding of the canonical byte
@@ -346,7 +346,8 @@ text/JSON input form.
   encoder, not the CTAP2 map used for multisig policy digests.
 - **Encoding:** `encode_i105()` concatenates the prefix bytes with the canonical
   payload and appends a 16-bit checksum derived from Blake2b-512 with the fixed
-  prefix `I105PRE` (`b"I105PRE" || prefix || payload`). The result is Base58-encoded via `bs58`.
+  prefix `I105PRE` (`b"I105PRE" || prefix || payload`). The result is encoded
+  with the I105 alphabet via `bs58`.
   CLI/SDK helpers expose the same procedure, and `AccountAddress::parse_encoded`
   reverses it via `decode_i105`.
 
@@ -590,7 +591,7 @@ their change tickets.
   adapting these requirements to wallet or explorer UX.
 - **Safe sharing flows:** Surfaces that copy or display addresses default to the I105 form and expose an adjacent “share” action that presents both the full string and a QR code derived from the same payload so users can verify the checksum visually or by scanning. When truncation is unavoidable (e.g., small screens), retain the start and end of the string, add clear ellipses, and keep the full address accessible via copy-to-clipboard to prevent accidental clipping.
 - **IME safeguards:** Address inputs MUST reject composition artefacts from IME/IME-style keyboards. Enforce ASCII-only entry, present an inline warning when full-width or Kana characters are detected, and offer a plain-text paste zone that strips combining marks before validation so Japanese and Chinese users can disable their IME without losing progress.
-- **Screen-reader support:** Provide visually hidden labels (`aria-label`/`aria-describedby`) that describe the leading Base58 prefix digits and chunk the I105 payload into 4- or 8-character groups, so assistive technology reads grouped characters instead of a run-on string. Announce copy/share success via polite live regions and ensure QR previews include descriptive alt text (“I105 address for <alias> on chain 0x02F1”).
+- **Screen-reader support:** Provide visually hidden labels (`aria-label`/`aria-describedby`) that describe the leading I105 digits and chunk the I105 payload into 4- or 8-character groups, so assistive technology reads grouped characters instead of a run-on string. Announce copy/share success via polite live regions and ensure QR previews include descriptive alt text (“I105 address for <alias> on chain 0x02F1”).
 - **Single-format usage:** Keep address sharing on canonical I105 only and avoid secondary account-literal formats in wallet/explorer copy flows.
 
 ## Implementation Checklist
@@ -598,8 +599,8 @@ their change tickets.
 - **I105 envelope:** Prefix encodes the `chain_discriminant` using the compact
   6-/14-bit scheme from `encode_i105_prefix()`, the body is the canonical bytes
   (`AccountAddress::canonical_bytes()`), and the checksum is the first two bytes
-  of Blake2b-512(`b"I105PRE"` || prefix || body). The full payload is Base58-
-  encoded via `bs58`.
+  of Blake2b-512(`b"I105PRE"` || prefix || body). The full payload is encoded
+  with the I105 alphabet via `bs58`.
 - **Registry contract:** Signed JSON (and optional Merkle root) publishing
   `{discriminant, i105_prefix, chain_alias, endpoints}` with 24h TTL and
   rotation keys.
@@ -658,7 +659,7 @@ messages, plus recommended remediation guidance.
 | `ERR_INVALID_I105_ENCODING` | I105 string contains characters outside the alphabet. | Ensure the address uses the published I105 alphabet and has not been truncated during copy/paste. |
 | `ERR_INVALID_LENGTH` | Payload length does not match the expected canonical size for header/controller (or legacy decode-compat selector variants). | Supply the full canonical payload emitted by the official encoder, or a complete legacy payload when decoding historical data. |
 | `ERR_CHECKSUM_MISMATCH` | Canonical I105 checksum validation failed. | Regenerate the canonical I105 address from a trusted source; this typically indicates a copy/paste error. |
-| `ERR_INVALID_I105_PREFIX_ENCODING` | I105 prefix bytes are malformed. | Re-encode the address with a compliant encoder; do not alter the leading Base58 bytes manually. |
+| `ERR_INVALID_I105_PREFIX_ENCODING` | I105 prefix bytes are malformed. | Re-encode the address with a compliant encoder; do not alter the leading I105 bytes manually. |
 | `ERR_INVALID_HEX_ADDRESS` | Canonical hexadecimal form failed to decode. | Provide a `0x`-prefixed, even-length hex string produced by the official encoder. |
 | `ERR_MISSING_COMPRESSED_SENTINEL` | Legacy/non-canonical I105 form does not start with the expected sentinel. | Use canonical I105 output and avoid manual sentinel rewriting. |
 | `ERR_COMPRESSED_TOO_SHORT` | Legacy/non-canonical I105 string is truncated before payload+checksum complete. | Use the full canonical I105 string emitted by the encoder. |
@@ -691,7 +692,7 @@ messages, plus recommended remediation guidance.
 
 ## Alternatives Considered
 
-- **Pure Base58Check (Bitcoin-style).** Simpler checksum but weaker error detection
+- **Pure checksum envelope (Bitcoin-style).** Simpler checksum but weaker error detection
   than the Blake2b-derived I105 checksum (`encode_i105` truncates a 512-bit hash)
   and lacks explicit prefix semantics for 16-bit discriminants.
 - **Embedding chain name in the domain string (e.g., `finance@chain`).** Breaks

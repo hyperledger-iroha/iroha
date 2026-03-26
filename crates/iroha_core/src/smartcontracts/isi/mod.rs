@@ -19,6 +19,7 @@ pub mod oracle;
 pub mod query;
 pub mod ram_lfe;
 pub mod repo;
+pub mod rwa;
 pub mod settlement;
 /// SNS-backed ownership query handlers.
 pub mod sns;
@@ -105,6 +106,17 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::repo::RepoIsi>,
     dispatch_instruction::<iroha_data_model::isi::repo::ReverseRepoIsi>,
     dispatch_instruction::<iroha_data_model::isi::repo::RepoMarginCallIsi>,
+    dispatch_instruction::<iroha_data_model::isi::rwa::RwaInstructionBox>,
+    dispatch_instruction::<iroha_data_model::isi::rwa::RegisterRwa>,
+    dispatch_instruction::<iroha_data_model::isi::rwa::TransferRwa>,
+    dispatch_instruction::<iroha_data_model::isi::rwa::MergeRwas>,
+    dispatch_instruction::<iroha_data_model::isi::rwa::RedeemRwa>,
+    dispatch_instruction::<iroha_data_model::isi::rwa::FreezeRwa>,
+    dispatch_instruction::<iroha_data_model::isi::rwa::UnfreezeRwa>,
+    dispatch_instruction::<iroha_data_model::isi::rwa::HoldRwa>,
+    dispatch_instruction::<iroha_data_model::isi::rwa::ReleaseRwa>,
+    dispatch_instruction::<iroha_data_model::isi::rwa::ForceTransferRwa>,
+    dispatch_instruction::<iroha_data_model::isi::rwa::SetRwaControls>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::RegisterPinManifest>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::ApprovePinManifest>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::RetirePinManifest>,
@@ -406,6 +418,29 @@ impl Execute for RemoveKeyValueBox {
             Self::AssetDefinition(isi) => isi.execute(authority, state_transaction),
             Self::Nft(isi) => isi.execute(authority, state_transaction),
             Self::Trigger(isi) => isi.execute(authority, state_transaction),
+        }
+    }
+}
+
+impl Execute for iroha_data_model::isi::rwa::RwaInstructionBox {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        match self {
+            Self::Register(isi) => isi.execute(authority, state_transaction),
+            Self::Transfer(isi) => isi.execute(authority, state_transaction),
+            Self::Merge(isi) => isi.execute(authority, state_transaction),
+            Self::Redeem(isi) => isi.execute(authority, state_transaction),
+            Self::Freeze(isi) => isi.execute(authority, state_transaction),
+            Self::Unfreeze(isi) => isi.execute(authority, state_transaction),
+            Self::Hold(isi) => isi.execute(authority, state_transaction),
+            Self::Release(isi) => isi.execute(authority, state_transaction),
+            Self::ForceTransfer(isi) => isi.execute(authority, state_transaction),
+            Self::SetControls(isi) => isi.execute(authority, state_transaction),
+            Self::SetKeyValue(isi) => isi.execute(authority, state_transaction),
+            Self::RemoveKeyValue(isi) => isi.execute(authority, state_transaction),
         }
     }
 }

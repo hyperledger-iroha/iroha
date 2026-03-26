@@ -219,18 +219,34 @@ public struct ToriiOfflineRevocationBundle: Codable, Sendable, Equatable {
     public let issuedAtMs: UInt64
     public let expiresAtMs: UInt64
     public let verdictIds: [String]
+    public let blacklistedAccountIds: [String]
+    public let assetSendLimits: [ToriiOfflineAssetSendLimit]
     public let issuerSignatureBase64: String
 
     public init(
         issuedAtMs: UInt64,
         expiresAtMs: UInt64,
         verdictIds: [String],
+        blacklistedAccountIds: [String] = [],
+        assetSendLimits: [ToriiOfflineAssetSendLimit] = [],
         issuerSignatureBase64: String
     ) {
         self.issuedAtMs = issuedAtMs
         self.expiresAtMs = expiresAtMs
         self.verdictIds = verdictIds
+        self.blacklistedAccountIds = blacklistedAccountIds
+        self.assetSendLimits = assetSendLimits
         self.issuerSignatureBase64 = issuerSignatureBase64
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        issuedAtMs = try container.decode(UInt64.self, forKey: .issuedAtMs)
+        expiresAtMs = try container.decode(UInt64.self, forKey: .expiresAtMs)
+        verdictIds = try container.decode([String].self, forKey: .verdictIds)
+        blacklistedAccountIds = try container.decodeIfPresent([String].self, forKey: .blacklistedAccountIds) ?? []
+        assetSendLimits = try container.decodeIfPresent([ToriiOfflineAssetSendLimit].self, forKey: .assetSendLimits) ?? []
+        issuerSignatureBase64 = try container.decode(String.self, forKey: .issuerSignatureBase64)
     }
 
     public func isExpired(nowMs: UInt64 = ToriiOfflineCashCodec.currentTimestampMs()) -> Bool {
@@ -241,7 +257,31 @@ public struct ToriiOfflineRevocationBundle: Codable, Sendable, Equatable {
         case issuedAtMs = "issued_at_ms"
         case expiresAtMs = "expires_at_ms"
         case verdictIds = "verdict_ids"
+        case blacklistedAccountIds = "blacklisted_account_ids"
+        case assetSendLimits = "asset_send_limits"
         case issuerSignatureBase64 = "issuer_signature_base64"
+    }
+}
+
+public struct ToriiOfflineAssetSendLimit: Codable, Sendable, Equatable {
+    public let assetDefinitionId: String
+    public let dailySendLimit: String
+    public let monthlySendLimit: String
+
+    public init(
+        assetDefinitionId: String,
+        dailySendLimit: String,
+        monthlySendLimit: String
+    ) {
+        self.assetDefinitionId = assetDefinitionId
+        self.dailySendLimit = dailySendLimit
+        self.monthlySendLimit = monthlySendLimit
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case assetDefinitionId = "asset_definition_id"
+        case dailySendLimit = "daily_send_limit"
+        case monthlySendLimit = "monthly_send_limit"
     }
 }
 
@@ -723,7 +763,19 @@ public enum ToriiOfflineCashCodec {
             RevocationBundleUnsignedPayload(
                 issuedAtMs: bundle.issuedAtMs,
                 expiresAtMs: bundle.expiresAtMs,
-                verdictIds: bundle.verdictIds.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.sorted()
+                verdictIds: bundle.verdictIds.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.sorted(),
+                blacklistedAccountIds: bundle.blacklistedAccountIds
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .sorted(),
+                assetSendLimits: try bundle.assetSendLimits
+                    .sorted(by: { $0.assetDefinitionId < $1.assetDefinitionId })
+                    .map { limit in
+                        RevocationBundleAssetSendLimit(
+                            assetDefinitionId: limit.assetDefinitionId.trimmingCharacters(in: .whitespacesAndNewlines),
+                            dailySendLimit: try canonicalAmountString(limit.dailySendLimit),
+                            monthlySendLimit: try canonicalAmountString(limit.monthlySendLimit)
+                        )
+                    }
             )
         )
     }
@@ -818,11 +870,27 @@ private extension ToriiOfflineCashCodec {
         let issuedAtMs: UInt64
         let expiresAtMs: UInt64
         let verdictIds: [String]
+        let blacklistedAccountIds: [String]
+        let assetSendLimits: [RevocationBundleAssetSendLimit]
 
         enum CodingKeys: String, CodingKey {
             case issuedAtMs = "issued_at_ms"
             case expiresAtMs = "expires_at_ms"
             case verdictIds = "verdict_ids"
+            case blacklistedAccountIds = "blacklisted_account_ids"
+            case assetSendLimits = "asset_send_limits"
+        }
+    }
+
+    struct RevocationBundleAssetSendLimit: Encodable {
+        let assetDefinitionId: String
+        let dailySendLimit: String
+        let monthlySendLimit: String
+
+        enum CodingKeys: String, CodingKey {
+            case assetDefinitionId = "asset_definition_id"
+            case dailySendLimit = "daily_send_limit"
+            case monthlySendLimit = "monthly_send_limit"
         }
     }
 

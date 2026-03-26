@@ -10,7 +10,7 @@ Este documento descreve a pilha de endereçamento de contas de remessa implement
 `AccountAddress` (`crates/iroha_data_model/src/account/address.rs`) e o
 ferramentas complementares. Ele fornece:
 
-- Um endereço **Iroha Base58 (I105)** com soma de verificação e voltado para humanos, produzido por
+- Um endereço **I105** com soma de verificação e voltado para humanos, produzido por
   `AccountAddress::to_i105` que vincula um discriminante de cadeia à conta
   controlador e oferece formas textuais determinísticas e compatíveis com interoperabilidade.
 - Seletores de domínio para domínios padrão implícitos e resumos locais, com um
@@ -36,7 +36,7 @@ e um mapeamento determinístico do nome de domínio para a cadeia autoritativa.
 
 ## Metas
 
-- Descrever o envelope I105 Base58 implementado no modelo de dados e o
+- Descrever o envelope I105 implementado no modelo de dados e o
   regras canônicas de análise/alias que `AccountId` e `AccountAddress` seguem.
 - Codifique o discriminante de cadeia configurado diretamente em cada endereço e
   definir seu processo de governança/registro.
@@ -125,7 +125,7 @@ o formato de conta preferido para compartilhamento e produção canônica; o com
 O formulário `sora` é a segunda melhor opção, somente Sora, para UX, onde o alfabeto kana
 agrega valor. O hexadecimal canônico continua sendo um auxílio à depuração.
 
-- **I105 (Iroha Base58)** – um envelope Base58 que incorpora a corrente
+- **I105** – um envelope I105 que incorpora a corrente
   discriminante. Os decodificadores validam o prefixo antes de promover a carga útil para
   a forma canônica.
 - **Visualização compactada Sora** – um alfabeto somente Sora de **105 símbolos** construído por
@@ -388,7 +388,7 @@ os fluxos podem confiar neles literalmente. Anexe `<address>@<domain>` (rejected
   codificador, não o mapa CTAP2 usado para resumos de políticas multisig.
 - **Codificação:** `encode_i105()` concatena os bytes do prefixo com o canônico
   carga útil e anexa uma soma de verificação de 16 bits derivada de Blake2b-512 com o fixo
-  prefixo `I105PRE` (`b"I105PRE" || prefix || payload`). O resultado é codificado em Base58 via `bs58`.
+  Prefix: `I105PRE` (`b"I105PRE"` || prefix || payload). The result is encoded via `bs58` using the I105 alphabet.
   Os auxiliares CLI/SDK expõem o mesmo procedimento e `AccountAddress::parse_encoded`
   reverte via `decode_i105`.
 
@@ -634,7 +634,7 @@ seus bilhetes de mudança.
   adaptando esses requisitos à carteira ou ao explorer UX.
 - **Fluxos de compartilhamento seguros:** superfícies que copiam ou exibem endereços usam como padrão o formulário I105 e expõem uma ação de “compartilhamento” adjacente que apresenta a string completa e um código QR derivado da mesma carga para que os usuários possam verificar a soma de verificação visualmente ou por digitalização. Quando o truncamento for inevitável (por exemplo, telas pequenas), retenha o início e o fim da string, adicione reticências claras e mantenha o endereço completo acessível por meio de cópia para a área de transferência para evitar recortes acidentais.
 - **Proteções de IME:** As entradas de endereço DEVEM rejeitar artefatos de composição de teclados estilo IME/IME. Aplique entrada somente ASCII, apresente um aviso embutido quando caracteres de largura total ou Kana forem detectados e ofereça uma zona de colagem de texto simples que remove marcas de combinação antes da validação para que usuários japoneses e chineses possam desabilitar seu IME sem perder o progresso.
-- **Suporte para leitor de tela:** Forneça rótulos visualmente ocultos (`aria-label`/`aria-describedby`) que descrevem os dígitos iniciais do prefixo Base58 e dividem a carga útil do I105 em grupos de 4 ou 8 caracteres, para que a tecnologia assistiva leia caracteres agrupados em vez de uma string contínua. Anuncie o sucesso de cópia/compartilhamento por meio de regiões ao vivo educadas e garanta que as visualizações de QR incluam texto alternativo descritivo (“Endereço I105 para <alias> na cadeia 0x02F1”).
+- **Suporte para leitor de tela:** Forneça rótulos visualmente ocultos (`aria-label`/`aria-describedby`) que descrevem os dígitos iniciais do prefixo I105 e dividem a carga útil do I105 em grupos de 4 ou 8 caracteres, para que a tecnologia assistiva leia caracteres agrupados em vez de uma string contínua. Anuncie o sucesso de cópia/compartilhamento por meio de regiões ao vivo educadas e garanta que as visualizações de QR incluam texto alternativo descritivo (“Endereço I105 para <alias> na cadeia 0x02F1”).
 - **Uso compactado somente Sora:** Sempre rotule a visualização compactada `i105` como “somente Sora” e proteja-a por trás de uma confirmação explícita antes de copiar. SDKs e carteiras devem se recusar a exibir resultados compactados quando o discriminante da cadeia não for o valor Sora Nexus e devem direcionar os usuários de volta ao I105 para transferências entre redes para evitar o desvio de fundos.
 
 ## Lista de verificação de implementação
@@ -642,8 +642,7 @@ seus bilhetes de mudança.
 - **Envelope I105:** O prefixo codifica o `chain_discriminant` usando o compacto
   Esquema de 6/14 bits de `encode_i105_prefix()`, o corpo são os bytes canônicos
   (`AccountAddress::canonical_bytes()`), e a soma de verificação são os dois primeiros bytes
-  de Blake2b-512(`b"I105PRE"` || prefixo || corpo). A carga completa é Base58-
-  codificado via `bs58`.
+  de Blake2b-512(`b"I105PRE"` || prefixo || corpo). The full payload is encoded via `bs58` using the I105 alphabet.
 - **Contrato de registro:** Publicação JSON assinada (e raiz Merkle opcional)
   `{discriminant, i105_prefix, chain_alias, endpoints}` com TTL 24h e
   chaves de rotação.
@@ -672,7 +671,7 @@ seus bilhetes de mudança.
 - `GET /v1/accounts` aceita um parâmetro de consulta opcional `canonical I105 rendering` e
   `POST /v1/accounts/query` aceita o mesmo campo dentro do envelope JSON.
   Os valores suportados são:
-  - `i105` (padrão) — as respostas emitem cargas úteis I105 Base58 canônicas (por exemplo,
+  - `i105` (padrão) — as respostas emitem cargas úteis I105 canônicas (por exemplo,
     `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`).
   - `i105_default` — as respostas emitem a visualização compactada `i105` somente Sora enquanto
     mantendo filtros/parâmetros de caminho canônicos.
@@ -713,7 +712,7 @@ mensagens, além de orientações de correção recomendadas.
 | `ERR_INVALID_I105_ENCODING` | A string I105 contém caracteres fora do alfabeto. | Certifique-se de que o endereço use o alfabeto I105 publicado e não tenha sido truncado durante copiar/colar. |
 | `ERR_INVALID_LENGTH` | O comprimento da carga útil não corresponde ao tamanho canônico esperado para o seletor/controlador. | Forneça a carga canônica completa para o seletor de domínio selecionado e o layout do controlador. |
 | `ERR_CHECKSUM_MISMATCH` | Falha na validação da soma de verificação I105 (preferencial) ou compactada (`sora`, segundo melhor). | Gere novamente o endereço de uma fonte confiável; isso normalmente indica um erro de copiar/colar. |
-| `ERR_INVALID_I105_PREFIX_ENCODING` | Os bytes do prefixo I105 estão mal formados. | Codifique novamente o endereço com um codificador compatível; não altere os bytes Base58 iniciais manualmente. |
+| `ERR_INVALID_I105_PREFIX_ENCODING` | Os bytes do prefixo I105 estão mal formados. | Codifique novamente o endereço com um codificador compatível; não altere os bytes I105 iniciais manualmente. |
 | `ERR_INVALID_HEX_ADDRESS` | A forma hexadecimal canônica não foi decodificada. | Forneça uma string hexadecimal de comprimento par com prefixo `0x` produzida pelo codificador oficial. |
 | `ERR_MISSING_COMPRESSED_SENTINEL` | O formulário compactado não começa com `sora`. | Prefixe os endereços Sora compactados com o sentinela necessário antes de entregá-los aos decodificadores. |
 | `ERR_COMPRESSED_TOO_SHORT` | A string compactada não possui dígitos suficientes para carga útil e soma de verificação. | Use a string compactada completa emitida pelo codificador em vez de trechos truncados. |
@@ -746,7 +745,7 @@ mensagens, além de orientações de correção recomendadas.
 
 ## Alternativas consideradas
 
-- **Pure Base58Check (estilo Bitcoin).** Soma de verificação mais simples, mas detecção de erros mais fraca
+- **Pure checksum envelope (estilo Bitcoin).** Soma de verificação mais simples, mas detecção de erros mais fraca
   do que a soma de verificação I105 derivada de Blake2b (`encode_i105` trunca um hash de 512 bits)
   e carece de semântica de prefixo explícita para discriminantes de 16 bits.
 - **Incorporação do nome da cadeia na string de domínio (por exemplo, `finance@chain`).** Quebras

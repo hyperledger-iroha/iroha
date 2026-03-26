@@ -292,6 +292,10 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_nfts_list_tool());
     tools.push(iroha_nfts_get_tool());
     tools.push(iroha_nfts_query_tool());
+    tools.push(iroha_rwas_chain_list_tool());
+    tools.push(iroha_rwas_list_tool());
+    tools.push(iroha_rwas_get_tool());
+    tools.push(iroha_rwas_query_tool());
     tools.push(iroha_offline_transfers_list_tool());
     tools.push(iroha_offline_transfers_get_tool());
     tools.push(iroha_offline_transfers_query_tool());
@@ -1409,6 +1413,30 @@ async fn handle_tools_call(
         }
         "iroha.nfts.query" => {
             match dispatch_iroha_nfts_query(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.rwas.chain.list" => {
+            match dispatch_iroha_rwas_chain_list(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.rwas.list" => {
+            match dispatch_iroha_rwas_list(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.rwas.get" => {
+            match dispatch_iroha_rwas_get(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.rwas.query" => {
+            match dispatch_iroha_rwas_query(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -5373,6 +5401,99 @@ async fn dispatch_iroha_nfts_query(
     .await
 }
 
+async fn dispatch_iroha_rwas_list(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let query = collect_query_arguments(arguments, &["query", "headers", "accept"])?;
+    let route = append_query("/v1/explorer/rwas".to_owned(), query.as_ref())?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        route.as_str(),
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_rwas_chain_list(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        "/v1/rwas",
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_rwas_get(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let rwa_id = extract_rwa_id_argument(arguments)?;
+    let mut path_args = Map::new();
+    path_args.insert("rwa_id".into(), Value::String(rwa_id));
+    let path_value = Value::Object(path_args);
+    let route = fill_path_template("/v1/explorer/rwas/{rwa_id}", Some(&path_value))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::GET,
+        route.as_str(),
+        arguments.get("headers"),
+        Vec::new(),
+        None,
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_rwas_query(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_query_envelope_body(arguments)?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/rwas/query",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
 async fn dispatch_iroha_offline_transfers_list(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -6628,6 +6749,23 @@ fn extract_nft_id_argument(arguments: &Map) -> Result<String, String> {
         .ok_or_else(|| "`nft_id` is required (provide `nft_id`, `id`, or `path.nft_id`)".to_owned())
 }
 
+fn extract_rwa_id_argument(arguments: &Map) -> Result<String, String> {
+    if let Some(path) = arguments.get("path") {
+        let path = path
+            .as_object()
+            .ok_or_else(|| "`path` must be an object".to_owned())?;
+        if let Some(rwa_id) = path.get("rwa_id").and_then(Value::as_str) {
+            return Ok(rwa_id.to_owned());
+        }
+    }
+    arguments
+        .get("rwa_id")
+        .or_else(|| arguments.get("id"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| "`rwa_id` is required (provide `rwa_id`, `id`, or `path.rwa_id`)".to_owned())
+}
+
 fn extract_bundle_id_hex_argument(arguments: &Map) -> Result<String, String> {
     if let Some(path) = arguments.get("path") {
         let path = path
@@ -6973,10 +7111,6 @@ async fn dispatch_route(
         }
     }
 
-    request
-        .extensions_mut()
-        .insert(axum::extract::ConnectInfo(dispatched_connect_addr));
-
     let router = {
         let guard = app
             .mcp_dispatch_router
@@ -6987,8 +7121,13 @@ async fn dispatch_route(
             .ok_or_else(|| "mcp router unavailable".to_owned())?
     };
 
-    let response = router
-        .with_state(app.clone())
+    let service = router
+        .into_make_service_with_connect_info::<SocketAddr>()
+        .oneshot(dispatched_connect_addr)
+        .await
+        .map_err(|err| format!("dispatch connect-info failed: {err}"))?;
+
+    let response = service
         .oneshot(request)
         .await
         .map_err(|err| format!("dispatch failed: {err}"))?;
@@ -11022,6 +11161,125 @@ fn iroha_nfts_query_tool() -> ToolSpec {
     }
 }
 
+fn iroha_rwas_list_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.rwas.list".to_owned(),
+        description: "List explorer RWA lots with optional flat query filters.".to_owned(),
+        method: Method::GET,
+        path_template: "/v1/explorer/rwas".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+                "query": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "page": { "type": "integer" },
+                "per_page": { "type": "integer" },
+                "owned_by": { "type": "string" },
+                "domain": { "type": "string" },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_rwas_chain_list_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.rwas.chain.list".to_owned(),
+        description: "List RWA lots from chain state (`/v1/rwas`).".to_owned(),
+        method: Method::GET,
+        path_template: "/v1/rwas".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_rwas_get_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.rwas.get".to_owned(),
+        description: "Fetch explorer RWA detail (`rwa_id` shortcut supported).".to_owned(),
+        method: Method::GET,
+        path_template: "/v1/explorer/rwas/{rwa_id}".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "rwa_id": {
+                    "type": "string",
+                    "description": "Convenience shortcut for `path.rwa_id`."
+                },
+                "id": {
+                    "type": "string",
+                    "description": "Alias for `rwa_id`."
+                },
+                "path": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["rwa_id"],
+                    "properties": {
+                        "rwa_id": { "type": "string" }
+                    }
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
+fn iroha_rwas_query_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.rwas.query".to_owned(),
+        description:
+            "Query RWA lots with filter/select/sort/pagination envelope (flat shortcuts supported)."
+                .to_owned(),
+        method: Method::POST,
+        path_template: "/v1/rwas/query".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "body": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Raw QueryEnvelope payload. If provided, it takes precedence over shortcut fields."
+                },
+                "query": { "type": "string" },
+                "filter": { "type": "object", "additionalProperties": true },
+                "select": {},
+                "sort": { "type": "array", "items": {} },
+                "pagination": { "type": "object", "additionalProperties": true },
+                "limit": { "type": "integer" },
+                "offset": { "type": "integer" },
+                "fetch_size": { "type": "integer" },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" }
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
 fn iroha_offline_transfers_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.offline.transfers.list".to_owned(),
@@ -11990,7 +12248,7 @@ mod tests {
 
     fn install_remote_addr_probe_router(app: &mut SharedAppState) {
         let allow = vec![crate::limits::parse_cidr("127.0.0.0/8").expect("loopback cidr")];
-        let router: axum::Router<SharedAppState> = axum::Router::new().route(
+        let router: axum::Router = axum::Router::new().route(
             "/v1/remote-probe",
             axum::routing::get_service(tower::service_fn(move |req: Request<Body>| {
                 let allow = allow.clone();
@@ -12822,6 +13080,14 @@ mod tests {
         assert!(
             tools
                 .iter()
+                .any(|tool| tool.name == "iroha.rwas.chain.list")
+        );
+        assert!(tools.iter().any(|tool| tool.name == "iroha.rwas.list"));
+        assert!(tools.iter().any(|tool| tool.name == "iroha.rwas.get"));
+        assert!(tools.iter().any(|tool| tool.name == "iroha.rwas.query"));
+        assert!(
+            tools
+                .iter()
                 .any(|tool| tool.name == "iroha.offline.transfers.list")
         );
         assert!(
@@ -13366,6 +13632,15 @@ mod tests {
         });
         let nft_id = extract_nft_id_argument(args.as_object().expect("object")).expect("nft id");
         assert_eq!(nft_id, "nft-001");
+    }
+
+    #[test]
+    fn extract_rwa_id_argument_accepts_top_level_shortcut() {
+        let args = norito::json!({
+            "rwa_id": "rwa-001"
+        });
+        let rwa_id = extract_rwa_id_argument(args.as_object().expect("object")).expect("rwa id");
+        assert_eq!(rwa_id, "rwa-001");
     }
 
     #[test]

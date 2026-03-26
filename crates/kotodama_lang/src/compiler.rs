@@ -1974,13 +1974,14 @@ seiyaku Test {{
                         ConfigurationEventFilter, ConfigurationEventSet, DomainEventFilter,
                         DomainEventSet, ExecutorEventFilter, ExecutorEventSet, NftEventFilter,
                         NftEventSet, PeerEventFilter, PeerEventSet, RoleEventFilter, RoleEventSet,
-                        TriggerEventFilter, TriggerEventSet,
+                        RwaEventFilter, RwaEventSet, TriggerEventFilter, TriggerEventSet,
                     },
                 },
             },
             nft::NftId,
             peer::PeerId,
             role::RoleId,
+            rwa::RwaId,
             trigger::TriggerId,
         };
 
@@ -1998,6 +1999,12 @@ seiyaku Test {{
         let asset = AssetId::new(asset_definition.clone(), account.clone());
         let asset_literal = asset.canonical_literal();
         let nft: NftId = "n0$wonderland".parse().expect("nft");
+        let rwa: RwaId = format!(
+            "{}$wonderland",
+            iroha_crypto::Hash::prehashed([7; iroha_crypto::Hash::LENGTH])
+        )
+        .parse()
+        .expect("rwa");
         let trigger_id: TriggerId = "wake".parse().expect("trigger");
         let role_id: RoleId = "auditor".parse().expect("role");
 
@@ -2122,6 +2129,26 @@ seiyaku Test {{
                     NftEventFilter::new()
                         .for_events(NftEventSet::Created)
                         .for_nft(nft),
+                )),
+            ),
+            (
+                format!(
+                    r#"
+seiyaku Test {{
+  kotoage fn run() {{}}
+  register_trigger wake {{
+    call run;
+    on data rwa created {{
+      rwa "{rwa}";
+    }}
+  }}
+}}
+"#
+                ),
+                EventFilterBox::Data(DataEventFilter::Rwa(
+                    RwaEventFilter::new()
+                        .for_events(RwaEventSet::Created)
+                        .for_rwa(rwa),
                 )),
             ),
             (

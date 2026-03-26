@@ -10,7 +10,7 @@ Ce document décrit la pile d'adressage des comptes d'expédition implémentée 
 `AccountAddress` (`crates/iroha_data_model/src/account/address.rs`) et le
 outillage compagnon. Il fournit :
 
-- Une **adresse Iroha Base58 (I105)** avec somme de contrôle et face humaine produite par
+- Une **adresse I105** avec somme de contrôle et face humaine produite par
   `AccountAddress::to_i105` qui lie une chaîne discriminante au compte
   contrôleur et propose des formes textuelles déterministes et conviviales pour l’interopérabilité.
 - Sélecteurs de domaine pour les domaines par défaut implicites et les résumés locaux, avec un
@@ -36,7 +36,7 @@ et une cartographie déterministe du nom de domaine à la chaîne faisant autori
 
 ## Objectifs
 
-- Décrire l'enveloppe I105 Base58 implémentée dans le modèle de données et le
+- Décrire l'enveloppe I105 implémentée dans le modèle de données et le
   règles canoniques d'analyse/alias que `AccountId` et `AccountAddress` suivent.
 - Encodez le discriminant de chaîne configuré directement dans chaque adresse et
   définir son processus de gouvernance/registre.
@@ -125,7 +125,7 @@ le format de compte préféré pour le partage et la sortie canonique ; le comp
 Le formulaire `sora` est une option de deuxième choix, réservée à Sora, pour l'UX où l'alphabet kana
 ajoute de la valeur. L'hexagone canonique reste une aide au débogage.
 
-- **I105 (Iroha Base58)** – une enveloppe Base58 qui intègre la chaîne
+- **I105** – une enveloppe I105 qui intègre la chaîne
   discriminant. Les décodeurs valident le préfixe avant de promouvoir la charge utile vers
   la forme canonique.
 - **Vue compressée Sora** – un alphabet Sora uniquement de **105 symboles** construit par
@@ -388,7 +388,7 @@ les flux peuvent s’appuyer sur eux textuellement. Ajoutez `<address>@<domain>`
   encodeur, pas la carte CTAP2 utilisée pour les résumés de politique multisig.
 - **Encodage :** `encode_i105()` concatène les octets du préfixe avec le canonique
   charge utile et ajoute une somme de contrôle de 16 bits dérivée de Blake2b-512 avec le fixe
-  préfixe `I105PRE` (`b"I105PRE" || prefix || payload`). Le résultat est codé en Base58 via `bs58`.
+  Prefix: `I105PRE` (`b"I105PRE"` || prefix || payload). The result is encoded via `bs58` using the I105 alphabet.
   Les assistants CLI/SDK exposent la même procédure et `AccountAddress::parse_encoded`
   l'inverse via `decode_i105`.
 
@@ -634,7 +634,7 @@ leurs billets de change.
   adapter ces exigences au portefeuille ou à l'explorateur UX.
 - **Flux de partage sécurisé :** Les surfaces qui copient ou affichent des adresses utilisent par défaut le formulaire I105 et exposent une action « partager » adjacente qui présente à la fois la chaîne complète et un code QR dérivé de la même charge utile afin que les utilisateurs puissent vérifier la somme de contrôle visuellement ou par numérisation. Lorsque la troncature est inévitable (par exemple, petits écrans), conservez le début et la fin de la chaîne, ajoutez des points de suspension clairs et gardez l'adresse complète accessible via la copie dans le presse-papiers pour éviter tout écrêtage accidentel.
 - **Garanties IME :** Les entrées d'adresse DOIVENT rejeter les artefacts de composition des claviers de style IME/IME. Appliquez l'entrée ASCII uniquement, présentez un avertissement en ligne lorsque des caractères pleine chasse ou Kana sont détectés et proposez une zone de collage de texte brut qui supprime les marques combinées avant la validation afin que les utilisateurs japonais et chinois puissent désactiver leur IME sans perdre leur progression.
-- **Prise en charge des lecteurs d'écran :** fournissez des étiquettes visuellement masquées (`aria-label`/`aria-describedby`) qui décrivent les principaux chiffres du préfixe Base58 et divisent la charge utile I105 en groupes de 4 ou 8 caractères, afin que la technologie d'assistance lise les caractères groupés au lieu d'une chaîne d'exécution. Annoncez le succès de la copie/partage via des régions en direct polies et assurez-vous que les aperçus QR incluent un texte alternatif descriptif (« adresse I105 pour <alias> sur la chaîne 0x02F1 »).
+- **Prise en charge des lecteurs d'écran :** fournissez des étiquettes visuellement masquées (`aria-label`/`aria-describedby`) qui décrivent les principaux chiffres du préfixe I105 et divisent la charge utile I105 en groupes de 4 ou 8 caractères, afin que la technologie d'assistance lise les caractères groupés au lieu d'une chaîne d'exécution. Annoncez le succès de la copie/partage via des régions en direct polies et assurez-vous que les aperçus QR incluent un texte alternatif descriptif (« adresse I105 pour <alias> sur la chaîne 0x02F1 »).
 - **Utilisation compressée pour Sora uniquement :** Étiquetez toujours la vue compressée `i105` comme « Sora uniquement » et placez-la derrière une confirmation explicite avant de la copier. Les SDK et les portefeuilles doivent refuser d'afficher une sortie compressée lorsque le discriminant de chaîne n'est pas la valeur de Sora Nexus et doivent rediriger les utilisateurs vers I105 pour les transferts inter-réseaux afin d'éviter un acheminement erroné des fonds.
 
 ## Liste de contrôle de mise en œuvre
@@ -642,8 +642,7 @@ leurs billets de change.
 - **Enveloppe I105 :** Le préfixe encode le `chain_discriminant` en utilisant le compact
   Schéma 6/14 bits de `encode_i105_prefix()`, le corps est constitué des octets canoniques
   (`AccountAddress::canonical_bytes()`), et la somme de contrôle correspond aux deux premiers octets
-  de Blake2b-512 (`b"I105PRE"` || préfixe || corps). La charge utile complète est Base58-
-  encodé via `bs58`.
+  Blake2b-512(`b"I105PRE"` || prefix || body). The full payload is encoded via `bs58` using the I105 alphabet.
 - **Contrat de registre :** Publication JSON signée (et racine Merkle en option)
   `{discriminant, i105_prefix, chain_alias, endpoints}` avec 24h TTL et
   touches de rotation.
@@ -672,7 +671,7 @@ leurs billets de change.
 - `GET /v1/accounts` accepte un paramètre de requête `canonical I105 rendering` facultatif et
   `POST /v1/accounts/query` accepte le même champ à l'intérieur de l'enveloppe JSON.
   Les valeurs prises en charge sont :
-  - `i105` (par défaut) — les réponses émettent des charges utiles I105 Base58 canoniques (par exemple,
+  - `i105` (par défaut) — les réponses émettent des charges utiles I105 canoniques (par exemple,
     `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`).
   - `i105_default` — les réponses émettent la vue compressée `i105` Sora uniquement pendant
     garder les paramètres de filtres/chemin canoniques.
@@ -713,7 +712,7 @@ messages, ainsi que des conseils de résolution recommandés.
 | `ERR_INVALID_I105_ENCODING` | La chaîne I105 contient des caractères en dehors de l'alphabet. | Assurez-vous que l'adresse utilise l'alphabet I105 publié et n'a pas été tronquée lors du copier/coller. |
 | `ERR_INVALID_LENGTH` | La longueur de la charge utile ne correspond pas à la taille canonique attendue pour le sélecteur/contrôleur. | Fournissez la charge utile canonique complète pour le sélecteur de domaine et la disposition du contrôleur sélectionnés. |
 | `ERR_CHECKSUM_MISMATCH` | La validation de la somme de contrôle I105 (de préférence) ou compressée (`sora`, deuxième meilleur) a échoué. | Régénérez l'adresse à partir d'une source fiable ; cela indique généralement une erreur de copier/coller. |
-| `ERR_INVALID_I105_PREFIX_ENCODING` | Les octets du préfixe I105 sont mal formés. | Ré-encoder l'adresse avec un encodeur conforme ; ne modifiez pas manuellement les principaux octets Base58. |
+| `ERR_INVALID_I105_PREFIX_ENCODING` | Les octets du préfixe I105 sont mal formés. | Ré-encoder l'adresse avec un encodeur conforme ; ne modifiez pas manuellement les principaux octets I105. |
 | `ERR_INVALID_HEX_ADDRESS` | La forme hexadécimale canonique n'a pas pu être décodée. | Fournissez une chaîne hexadécimale de longueur paire avec préfixe `0x` et produite par l'encodeur officiel. |
 | `ERR_MISSING_COMPRESSED_SENTINEL` | Le formulaire compressé ne commence pas par `sora`. | Préfixez les adresses Sora compressées avec la sentinelle requise avant de les transmettre aux décodeurs. |
 | `ERR_COMPRESSED_TOO_SHORT` | La chaîne compressée ne contient pas suffisamment de chiffres pour la charge utile et la somme de contrôle. | Utilisez la chaîne compressée complète émise par l'encodeur au lieu d'extraits tronqués. |
@@ -746,7 +745,7 @@ messages, ainsi que des conseils de résolution recommandés.
 
 ## Alternatives envisagées
 
-- **Pure Base58Check (style Bitcoin).** Somme de contrôle plus simple mais détection d'erreurs plus faible
+- **Pure checksum envelope (style Bitcoin).** Somme de contrôle plus simple mais détection d'erreurs plus faible
   que la somme de contrôle I105 dérivée de Blake2b (`encode_i105` tronque un hachage de 512 bits)
   et manque de sémantique de préfixe explicite pour les discriminants 16 bits.
 - **Intégration du nom de la chaîne dans la chaîne du domaine (par exemple, `finance@chain`).** Ruptures

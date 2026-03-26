@@ -9,7 +9,14 @@ with Iroha nodes.
 This snapshot covers the offline key management façade, Norito encoding backed
 by the shared `norito-java` implementation, the Android Keystore/StrongBox
 backend (with cached attestations + deterministic software fallbacks), and
-scaffolding for network clients.
+scaffolding for network clients. The generated instruction helpers now include
+the first dedicated RWA lot builder slice alongside NFT helpers:
+`RegisterRwaInstruction`, `TransferRwaInstruction`,
+`MergeRwasInstruction`, `RedeemRwaInstruction`,
+`FreezeRwaInstruction`, `UnfreezeRwaInstruction`,
+`HoldRwaInstruction`, `ReleaseRwaInstruction`,
+`ForceTransferRwaInstruction`, `SetRwaControlsInstruction`,
+and RWA-aware metadata setters/removers.
 
 ## Gradle quickstart
 

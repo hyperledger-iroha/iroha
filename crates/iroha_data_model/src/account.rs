@@ -594,7 +594,7 @@ impl AccountId {
     /// Canonical I105 literals are accepted.
     /// Legacy forms such as `<identifier>@<domain>`, canonical hex, dotted/non-canonical
     /// I105 literals, aliases, UAID, opaque account literals, and historical
-    /// Base58 envelopes are rejected.
+    /// non-I105 envelopes are rejected.
     /// The returned canonical string always matches the canonical I105 representation.
     ///
     /// # Errors
@@ -1136,7 +1136,7 @@ mod account_id_parsing_tests {
     }
 
     #[test]
-    fn from_str_rejects_base58_like_alias() {
+    fn from_str_rejects_i105_alphabet_alias() {
         let alias_label = "primary";
         let err = AccountAddress::parse_encoded(alias_label, Some(address::chain_discriminant()))
             .expect_err("alias label should not parse as a valid address");

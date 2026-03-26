@@ -18955,6 +18955,10 @@ const ENDPOINT_NFTS_LIST: &str = "/v1/nfts";
 #[cfg(feature = "app_api")]
 const ENDPOINT_NFTS_QUERY: &str = "/v1/nfts/query";
 #[cfg(feature = "app_api")]
+const ENDPOINT_RWAS_LIST: &str = "/v1/rwas";
+#[cfg(feature = "app_api")]
+const ENDPOINT_RWAS_QUERY: &str = "/v1/rwas/query";
+#[cfg(feature = "app_api")]
 const ENDPOINT_SUBSCRIPTION_PLANS_LIST: &str = "/v1/subscriptions/plans";
 #[cfg(feature = "app_api")]
 const ENDPOINT_SUBSCRIPTIONS_LIST: &str = "/v1/subscriptions";
@@ -39293,6 +39297,24 @@ pub async fn handle_v1_explorer_nfts(
 }
 
 #[cfg(feature = "app_api")]
+pub async fn handle_v1_explorer_rwas(
+    state: Arc<CoreState>,
+    pagination: crate::explorer::ExplorerPaginationQuery,
+    owned_by: Option<AccountId>,
+    domain: Option<DomainId>,
+) -> Result<AxResponse, Error> {
+    let world = state.world_view();
+    let page = crate::explorer::rwas_page(
+        world.rwas_iter(),
+        owned_by.as_ref(),
+        domain.as_ref(),
+        pagination.page,
+        pagination.per_page,
+    );
+    Ok(JsonBody(page).into_response())
+}
+
+#[cfg(feature = "app_api")]
 pub async fn handle_v1_explorer_blocks(
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
@@ -41799,6 +41821,19 @@ pub async fn handle_v1_explorer_nft_detail(
     let dto = world
         .nft(&nft_id)
         .map(crate::explorer::ExplorerNftDto::from_entry)
+        .map_err(|_| explorer_not_found())?;
+    Ok(JsonBody(dto).into_response())
+}
+
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_explorer_rwa_detail(
+    state: Arc<CoreState>,
+    rwa_id: dm::rwa::RwaId,
+) -> Result<AxResponse, Error> {
+    let world = state.world_view();
+    let dto = world
+        .rwa(&rwa_id)
+        .map(crate::explorer::ExplorerRwaDto::from_entry)
         .map_err(|_| explorer_not_found())?;
     Ok(JsonBody(dto).into_response())
 }
@@ -48856,6 +48891,257 @@ fn validate_nfts_filter_adapter(expr: &FilterExpr) -> Result<()> {
     }
 }
 
+// ---------------------- RWAs listing ----------------------
+
+#[cfg(feature = "app_api")]
+#[derive(Clone)]
+struct RwaListItem {
+    id: String,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Clone)]
+struct RwaSortSelector {
+    ascending: bool,
+}
+
+#[cfg(feature = "app_api")]
+fn compile_rwa_sort_spec(spec: &[crate::filter::SortKey]) -> Vec<RwaSortSelector> {
+    let mut selectors = Vec::new();
+    for sk in spec {
+        if sk.key.0.as_str() == "id" {
+            selectors.push(RwaSortSelector {
+                ascending: matches!(sk.order, crate::filter::Order::Asc),
+            });
+        }
+    }
+    if selectors.is_empty() {
+        selectors.push(RwaSortSelector { ascending: true });
+    }
+    selectors
+}
+
+#[cfg(feature = "app_api")]
+fn rwa_sort_key(item: &RwaListItem, selectors: &[RwaSortSelector]) -> MultiSortKey {
+    let mut components = Vec::with_capacity(selectors.len());
+    for selector in selectors {
+        if selector.ascending {
+            components.push(SortKeyComponent::asc(item.id.clone()));
+        } else {
+            components.push(SortKeyComponent::desc(item.id.clone()));
+        }
+    }
+    MultiSortKey::new(components)
+}
+
+#[cfg(feature = "app_api")]
+fn rwa_filter_object(expr: &FilterExpr, item: &RwaListItem) -> bool {
+    use FilterExpr as F;
+    match expr {
+        F::And(list) => list.iter().all(|e| rwa_filter_object(e, item)),
+        F::Or(list) => list.iter().any(|e| rwa_filter_object(e, item)),
+        F::Not(inner) => !rwa_filter_object(inner, item),
+        F::Eq(f, v) => matches!(f.0.as_str(), "id") && v.as_str().is_some_and(|s| s == item.id),
+        F::Ne(f, v) => matches!(f.0.as_str(), "id") && v.as_str().is_some_and(|s| s != item.id),
+        F::In(f, list) => {
+            matches!(f.0.as_str(), "id")
+                && list.iter().filter_map(|v| v.as_str()).any(|s| s == item.id)
+        }
+        F::Nin(f, list) => {
+            matches!(f.0.as_str(), "id")
+                && list.iter().filter_map(|v| v.as_str()).all(|s| s != item.id)
+        }
+        F::Exists(f) => matches!(f.0.as_str(), "id"),
+        F::IsNull(_) | F::Lt(_, _) | F::Lte(_, _) | F::Gt(_, _) | F::Gte(_, _) => false,
+    }
+}
+
+#[cfg(feature = "app_api")]
+/// GET /v1/rwas — List RWA lots with basic pagination.
+#[iroha_futures::telemetry_future]
+pub async fn handle_v1_rwas(
+    state: Arc<CoreState>,
+    crate::NoritoQuery(p): crate::NoritoQuery<ListFilterParams>,
+) -> Result<impl IntoResponse> {
+    let items: Vec<RwaListItem> = state
+        .world_view()
+        .rwas_iter()
+        .map(|entry| RwaListItem {
+            id: entry.id().to_string(),
+        })
+        .collect();
+
+    let sort_spec = p.sort.as_deref().map(parse_sort_spec).unwrap_or_default();
+    let selectors = compile_rwa_sort_spec(&sort_spec);
+    let cap = app_query_page_cap(&state);
+    let pagination = enforce_app_pagination(p.limit, p.offset, cap, ENDPOINT_RWAS_LIST)?;
+
+    let filter_expr = p
+        .filter
+        .as_ref()
+        .and_then(|s| norito::json::from_str::<FilterExpr>(s).ok());
+    if let Some(ref expr) = filter_expr {
+        crate::filter::validate_filter(expr)
+            .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
+        validate_rwas_filter_adapter(expr)?;
+    }
+
+    let filter_ref = filter_expr.as_ref();
+    let mapped_iter = items.into_iter().filter_map({
+        let selectors = selectors;
+        move |item| {
+            if let Some(expr) = filter_ref
+                && !rwa_filter_object(expr, &item)
+            {
+                return None;
+            }
+            let key = rwa_sort_key(&item, &selectors);
+            Some((key, item))
+        }
+    });
+    let (items, total) =
+        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, None);
+
+    let mut arr = Vec::with_capacity(items.len());
+    for it in &items {
+        let mut m = norito::json::Map::new();
+        m.insert("id".into(), norito::json::Value::from(it.id.clone()));
+        arr.push(norito::json::Value::Object(m));
+    }
+    let mut top = norito::json::Map::new();
+    top.insert("items".into(), norito::json::Value::Array(arr));
+    top.insert("total".into(), norito::json::Value::from(total as u64));
+    let body = norito::json::to_json_pretty(&top).map_err(|e| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(
+            e.to_string(),
+        ))
+    })?;
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[cfg(feature = "app_api")]
+/// POST /v1/rwas/query — JSON envelope with optional pagination/sort.
+#[iroha_futures::telemetry_future]
+pub async fn handle_v1_rwas_query(
+    state: Arc<CoreState>,
+    NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
+) -> Result<impl IntoResponse> {
+    let items: Vec<RwaListItem> = state
+        .world_view()
+        .rwas_iter()
+        .map(|entry| RwaListItem {
+            id: entry.id().to_string(),
+        })
+        .collect();
+
+    let selectors = compile_rwa_sort_spec(&envelope.sort);
+    let cap = app_query_page_cap(&state);
+    let pagination = enforce_app_pagination(
+        envelope.pagination.limit,
+        envelope.pagination.offset,
+        cap,
+        ENDPOINT_RWAS_QUERY,
+    )?;
+    let limits = app_query_limits();
+    let fetch_size = limits
+        .clamp_fetch_size(envelope.fetch_size)
+        .map(|opt| opt.map(|val| val.min(pagination.cap)))?;
+
+    if let Some(ref expr) = envelope.filter {
+        fn depth(e: &crate::filter::FilterExpr) -> usize {
+            use crate::filter::FilterExpr as F;
+            match e {
+                F::And(list) | F::Or(list) => 1 + list.iter().map(depth).max().unwrap_or(0),
+                F::Not(inner) => 1 + depth(inner),
+                _ => 1,
+            }
+        }
+        if depth(expr) > 10 {
+            return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
+        }
+        crate::filter::validate_filter(expr)
+            .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
+        validate_rwas_filter_adapter(expr)?;
+    }
+
+    let filter_ref = envelope.filter.as_ref();
+    let mapped_iter = items.into_iter().filter_map({
+        let selectors = selectors;
+        move |item| {
+            if let Some(expr) = filter_ref
+                && !rwa_filter_object(expr, &item)
+            {
+                return None;
+            }
+            let key = rwa_sort_key(&item, &selectors);
+            Some((key, item))
+        }
+    });
+    let (items, total) =
+        collect_page_streaming(mapped_iter, pagination.offset, pagination.limit, fetch_size);
+
+    let mut arr = Vec::with_capacity(items.len());
+    for it in &items {
+        let mut m = norito::json::Map::new();
+        m.insert("id".into(), norito::json::Value::from(it.id.clone()));
+        arr.push(norito::json::Value::Object(m));
+    }
+    let mut top = norito::json::Map::new();
+    top.insert("items".into(), norito::json::Value::Array(arr));
+    top.insert("total".into(), norito::json::Value::from(total as u64));
+    let body = norito::json::to_json_pretty(&top).map_err(|e| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(
+            e.to_string(),
+        ))
+    })?;
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[cfg(feature = "app_api")]
+fn validate_rwas_filter_adapter(expr: &FilterExpr) -> Result<()> {
+    use FilterExpr as F;
+    match expr {
+        F::And(list) | F::Or(list) => {
+            for e in list {
+                validate_rwas_filter_adapter(e)?;
+            }
+            Ok(())
+        }
+        F::Not(inner) => validate_rwas_filter_adapter(inner),
+        F::Eq(f, v) | F::Ne(f, v) => {
+            if f.0.as_str() != "id" || !v.is_string() {
+                return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
+            }
+            Ok(())
+        }
+        F::In(f, list) | F::Nin(f, list) => {
+            if f.0.as_str() != "id" || !list.iter().all(norito::json::Value::is_string) {
+                return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
+            }
+            Ok(())
+        }
+        F::Exists(f) => {
+            if f.0.as_str() != "id" {
+                return Err(Error::Query(iroha_data_model::ValidationFail::TooComplex));
+            }
+            Ok(())
+        }
+        F::IsNull(_) | F::Lt(_, _) | F::Lte(_, _) | F::Gt(_, _) | F::Gte(_, _) => {
+            Err(Error::Query(iroha_data_model::ValidationFail::TooComplex))
+        }
+    }
+}
+
 // ---------------------- Subscription API ----------------------
 
 #[cfg(feature = "app_api")]
@@ -51028,6 +51314,21 @@ mod adapter_filter_tests {
         crate::filter::validate_filter(&expr2).unwrap();
         #[cfg(feature = "app_api")]
         assert!(validate_nfts_filter_adapter(&expr2).is_err());
+    }
+
+    #[test]
+    fn rwas_filter_adapter_accepts_exists_and_rejects_is_null() {
+        let ok = obj(vec![("op", val("exists")), ("args", val("id"))]);
+        let expr: FilterExpr = norito::json::value::from_value(ok).unwrap();
+        crate::filter::validate_filter(&expr).unwrap();
+        #[cfg(feature = "app_api")]
+        validate_rwas_filter_adapter(&expr).unwrap();
+
+        let bad = obj(vec![("op", val("is_null")), ("args", val("id"))]);
+        let expr2: FilterExpr = norito::json::value::from_value(bad).unwrap();
+        crate::filter::validate_filter(&expr2).unwrap();
+        #[cfg(feature = "app_api")]
+        assert!(validate_rwas_filter_adapter(&expr2).is_err());
     }
 
     #[cfg(feature = "app_api")]

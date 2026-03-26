@@ -22,7 +22,7 @@ Bu sənəddə həyata keçirilən göndərmə hesabı ünvanlama yığını təs
 `AccountAddress` (`crates/iroha_data_model/src/account/address.rs`) və
 yoldaş alətlər. O, təmin edir:
 
-- İstehsal edilmiş yoxlama cəmi, insana baxan **Iroha Base58 ünvanı (I105)**
+- İstehsal edilmiş yoxlama cəmi, insana baxan **I105 ünvanı (I105)**
   Zəncir diskriminantını hesaba bağlayan `AccountAddress::to_i105`
   nəzarətçi və deterministik qarşılıqlı əlaqəyə uyğun mətn formaları təklif edir.
 - Gizli defolt domenlər və yerli həzmlər üçün domen seçiciləri, a ilə
@@ -48,7 +48,7 @@ və domen adından nüfuzlu zəncirə qədər deterministik xəritəçəkmə.
 
 ## Məqsədlər
 
-- Məlumat modelində tətbiq olunan I105 Base58 zərfini və
+- Məlumat modelində tətbiq olunan I105 zərfini və
   `AccountId` və `AccountAddress`-in əməl etdiyi kanonik təhlil/ləqəb qaydaları.
 - Konfiqurasiya edilmiş zəncir diskriminantını birbaşa hər bir ünvana kodlayın və
   onun idarə edilməsi/reyestr prosesini müəyyən edir.
@@ -137,7 +137,7 @@ paylaşma və kanonik çıxış üçün üstünlük verilən hesab formatı; sı
 `sora` forması kana əlifbasının olduğu UX üçün ikinci ən yaxşı, yalnız Sora variantıdır.
 dəyər əlavə edir. Canonical hex sazlama yardımı olaraq qalır.
 
-- **I105 (Iroha Base58)** – zənciri daxil edən Base58 zərfi
+- **I105** – zənciri daxil edən I105 zərfi
   diskriminant. Dekoderlər faydalı yükü təşviq etməzdən əvvəl prefiksi təsdiqləyirlər
   kanonik forma.
 - **Sora ilə sıxılmış görünüş** – **105 simvoldan** ibarət yalnız Sora əlifbası
@@ -398,7 +398,7 @@ axınlar onlara sözlü etibar edə bilər. Yalnız açıq marşrut göstərişi
   kodlayıcı, multisig siyasət həzmləri üçün istifadə edilən CTAP2 xəritəsi deyil.
 - **Kodlaşdırma:** `encode_i105()` prefiks baytlarını kanonik baytlarla birləşdirir
   faydalı yüklənir və Blake2b-512-dən əldə edilmiş 16 bitlik yoxlama məbləğini sabitlə əlavə edir.
-  prefiks `I105PRE` (`b"I105PRE" || prefix || payload`). Nəticə `bs58` vasitəsilə Base58 ilə kodlanmışdır.
+  Prefix: `I105PRE` (`b"I105PRE"` || prefix || payload). The result is encoded via `bs58` using the I105 alphabet.
   CLI/SDK köməkçiləri eyni proseduru ifşa edir və `AccountAddress::parse_encoded`
   onu `decode_i105` vasitəsilə geri qaytarır.
 
@@ -640,7 +640,7 @@ onların dəyişmə biletləri.
   bu tələbləri cüzdan və ya explorer UX-ə uyğunlaşdırmaq.
 - **Təhlükəsiz paylaşma axınları:** Ünvanları defolt olaraq I105 formasına köçürən və ya göstərən səthlər və istifadəçilərin yoxlama məbləğini vizual və ya skan etməklə yoxlaya bilməsi üçün həm tam sətri, həm də eyni faydalı yükdən əldə edilən QR kodunu təqdim edən bitişik “paylaşma” əməliyyatını ifşa edən səthlər. Kəsilmə qaçınılmaz olduqda (məsələn, kiçik ekranlar), sətirin başlanğıcını və sonunu saxlayın, aydın ellipslər əlavə edin və təsadüfən kəsilmənin qarşısını almaq üçün tam ünvanı buferə köçürmə vasitəsilə əlçatan saxlayın.
 - **IME qoruyucuları:** Ünvan girişləri IME/IME tipli klaviaturaların kompozisiya artefaktlarını rədd etməlidir. Yalnız ASCII girişini tətbiq edin, tam enli və ya Kana simvolları aşkar edildikdə daxili xəbərdarlıq təqdim edin və Yapon və Çin istifadəçilərinin tərəqqini itirmədən öz IME-ni söndürə bilməsi üçün doğrulamadan əvvəl işarələri birləşdirən düz mətn yapışdırma zonası təklif edin.
-- **Ekran oxuyucu dəstəyi:** Aparıcı Base58 prefiks rəqəmlərini təsvir edən və I105 faydalı yükünü 4 və ya 8 simvoldan ibarət qruplara bölən vizual olaraq gizli etiketlər (`aria-label`/`aria-describedby`) təmin edin. Nəzakətli canlı bölgələr vasitəsilə kopyalama/paylaşım uğurunu elan edin və QR önizləmələrinə təsviri alt mətn (“0x02F1 zəncirində <ləqəb> üçün I105 ünvanı”) daxil olduğundan əmin olun.
+- **Ekran oxuyucu dəstəyi:** Aparıcı I105 prefiks rəqəmlərini təsvir edən və I105 faydalı yükünü 4 və ya 8 simvoldan ibarət qruplara bölən vizual olaraq gizli etiketlər (`aria-label`/`aria-describedby`) təmin edin. Nəzakətli canlı bölgələr vasitəsilə kopyalama/paylaşım uğurunu elan edin və QR önizləmələrinə təsviri alt mətn (“0x02F1 zəncirində <ləqəb> üçün I105 ünvanı”) daxil olduğundan əmin olun.
 - **Yalnız Sora üçün sıxılmış istifadə:** Həmişə `i105` sıxılmış görünüşünü "Yalnız Sora" kimi etiketləyin və kopyalamadan əvvəl onu açıq təsdiqin arxasına keçin. Zəncirvari diskriminant Sora Nexus dəyəri olmadıqda SDK və pul kisələri sıxılmış çıxışı göstərməkdən imtina etməli və vəsaitlərin yanlış yönləndirilməsinin qarşısını almaq üçün istifadəçiləri şəbəkələrarası köçürmələr üçün I105-ə yönləndirməlidir.
 
 ## İcra Yoxlama Siyahısı
@@ -648,7 +648,7 @@ onların dəyişmə biletləri.
 - **I105 zərfi:** Prefiks kompaktdan istifadə edərək `chain_discriminant`-i kodlayır
   `encode_i105_prefix()`-dən 6-/14-bit sxem, gövdə kanonik baytdır
   (`AccountAddress::canonical_bytes()`) və yoxlama məbləği ilk iki baytdır
-  Blake2b-512(`b"I105PRE"` || prefiks || gövdə). Tam faydalı yük Base58-dir
+  Blake2b-512(`b"I105PRE"` || prefiks || gövdə). Tam faydalı yük I105-dir
   `bs58` vasitəsilə kodlaşdırılmışdır.
 - **Reyestr müqaviləsi:** İmzalanmış JSON (və əlavə Merkle kökü) nəşri
   24 saat TTL ilə `{discriminant, i105_prefix, chain_alias, endpoints}` və
@@ -678,7 +678,7 @@ onların dəyişmə biletləri.
 - `GET /v1/accounts` isteğe bağlı `canonical I105 rendering` sorğu parametrini qəbul edir və
   `POST /v1/accounts/query` JSON zərfində eyni sahəni qəbul edir.
   Dəstəklənən dəyərlər bunlardır:
-  - `i105` (defolt) — cavablar kanonik I105 Base58 faydalı yükləri yayır (məsələn,
+  - `i105` (defolt) — cavablar kanonik I105 faydalı yükləri yayır (məsələn,
     `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`).
   - `i105_default` — cavablar yalnız Sora üçün `i105` sıxılmış görünüşünü yayır.
     filtrlərin/yol parametrlərinin kanonik saxlanması.
@@ -719,7 +719,7 @@ mesajlar, üstəlik tövsiyə olunan düzəliş təlimatı.
 | `ERR_INVALID_I105_ENCODING` | I105 sətirində əlifbadan kənar simvollar var. | Ünvanın dərc edilmiş I105 əlifbasından istifadə etdiyinə və kopyalama/yapışdırma zamanı kəsilmədiyinə əmin olun. |
 | `ERR_INVALID_LENGTH` | Faydalı yükün uzunluğu seçici/nəzarətçi üçün gözlənilən kanonik ölçüyə uyğun gəlmir. | Seçilmiş domen seçicisi və nəzarətçi tərtibatı üçün tam kanonik faydalı yükü təmin edin. |
 | `ERR_CHECKSUM_MISMATCH` | I105 (üstünlük verilir) və ya sıxılmış (`sora`, ikinci ən yaxşı) yoxlama məbləğinin doğrulanması uğursuz oldu. | Etibarlı mənbədən ünvanı bərpa edin; bu adətən kopyala/yapışdır xətasını göstərir. |
-| `ERR_INVALID_I105_PREFIX_ENCODING` | I105 prefiks baytları səhv formalaşdırılıb. | Ünvanı uyğun kodlayıcı ilə yenidən kodlayın; aparıcı Base58 baytını əl ilə dəyişdirməyin. |
+| `ERR_INVALID_I105_PREFIX_ENCODING` | I105 prefiks baytları səhv formalaşdırılıb. | Ünvanı uyğun kodlayıcı ilə yenidən kodlayın; aparıcı I105 baytını əl ilə dəyişdirməyin. |
 | `ERR_INVALID_HEX_ADDRESS` | Kanonik onaltılıq formanı deşifrə etmək alınmadı. | Rəsmi kodlayıcı tərəfindən istehsal olunan `0x`-prefiksli, bərabər uzunluqlu hex simli təmin edin. |
 | `ERR_MISSING_COMPRESSED_SENTINEL` | Sıxılmış forma `sora` ilə başlamır. | Sıxılmış Sora ünvanlarını dekoderlərə verməzdən əvvəl lazımi gözətçi ilə prefiks edin. |
 | `ERR_COMPRESSED_TOO_SHORT` | Sıxılmış sətirdə faydalı yük və yoxlama məbləği üçün kifayət qədər rəqəmlər yoxdur. | Kəsilmiş fraqmentlər əvəzinə kodlayıcı tərəfindən buraxılan tam sıxılmış sətirdən istifadə edin. |
@@ -750,7 +750,7 @@ mesajlar, üstəlik tövsiyə olunan düzəliş təlimatı.
 
 ## Alternativlər nəzərdən keçirilir
 
-- **Pure Base58Check (Bitcoin-stil).** Daha sadə yoxlama məbləği, lakin daha zəif səhv aşkarlanması
+- **Pure checksum envelope (Bitcoin-stil).** Daha sadə yoxlama məbləği, lakin daha zəif səhv aşkarlanması
   Blake2b-dən əldə edilən I105 yoxlama cəmindən (`encode_i105` 512 bitlik hashı kəsir)
   və 16 bitlik diskriminantlar üçün açıq prefiks semantikası yoxdur.
 - **Domen sətirində zəncir adının daxil edilməsi (məsələn, `finance@chain`).** Fasilələr

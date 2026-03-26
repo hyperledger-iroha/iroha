@@ -185,9 +185,14 @@ org.hyperledger.iroha.android.gpu.CudaAcceleratorsNativeSmokeTests`).
 
 Roadmap items tracked under `AND2`–`AND5` extend this snapshot with platform
 keystore bindings (StrongBox attestation), generated instruction builders,
-telemetry hooks, and distribution artifacts. See `roadmap.md` (Android section)
-and `status.md` for the latest progress notes. For the upcoming observability
-milestone (`AND7`), refer to the companion
+telemetry hooks, and distribution artifacts. The current generated builder set
+already includes NFT register/transfer helpers plus the first dedicated RWA
+lot helpers (`RegisterRwa`, `TransferRwa`, `MergeRwas`, `RedeemRwa`,
+`FreezeRwa`, `UnfreezeRwa`, `HoldRwa`, `ReleaseRwa`, `ForceTransferRwa`,
+RWA metadata setters, and `SetRwaControls`). See `roadmap.md` (Android
+section) and `status.md` for the latest progress notes. For the upcoming
+observability milestone (`AND7`), refer
+to the companion
 [`Android Telemetry Redaction Plan`](telemetry_redaction.md) for signal
 inventory, policy deltas, and readiness deliverables ahead of the SRE
 governance review. Enablement artefacts live under

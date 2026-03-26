@@ -3017,6 +3017,32 @@ fn nft_paths() -> Map {
     paths
 }
 
+fn rwa_paths() -> Map {
+    let mut paths = Map::new();
+    paths.insert(
+        "/v1/rwas".to_owned(),
+        Value::Object(json_get_operation(
+            "RWAs",
+            "List RWA lots.",
+            "List RWA lots visible to the caller.",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/rwas/query".to_owned(),
+        Value::Object(json_post_operation(
+            "RWAs",
+            "Query RWA lots.",
+            "Query RWA lots with JSON envelope.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths
+}
+
 fn subscription_paths() -> Map {
     let mut paths = Map::new();
     let plan_query_params = vec![
@@ -3274,6 +3300,16 @@ fn explorer_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/explorer/rwas".to_owned(),
+        Value::Object(json_get_operation(
+            "Explorer",
+            "List RWAs (explorer).",
+            "List RWA lots for explorer usage.",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
         "/v1/explorer/blocks".to_owned(),
         Value::Object(json_get_operation(
             "Explorer",
@@ -3448,6 +3484,16 @@ fn explorer_paths() -> Map {
             "Fetch NFT detail for explorer usage.",
             "#/components/schemas/JsonValue",
             vec![string_path_param("nft_id", "NFT identifier.")],
+        )),
+    );
+    paths.insert(
+        "/v1/explorer/rwas/{rwa_id}".to_owned(),
+        Value::Object(json_get_operation(
+            "Explorer",
+            "Fetch RWA detail (explorer).",
+            "Fetch RWA detail for explorer usage.",
+            "#/components/schemas/JsonValue",
+            vec![string_path_param("rwa_id", "RWA identifier.")],
         )),
     );
     paths.insert(
@@ -5796,6 +5842,7 @@ fn paths_section() -> Map {
     paths.extend(domain_paths());
     paths.extend(asset_paths());
     paths.extend(nft_paths());
+    paths.extend(rwa_paths());
     paths.extend(subscription_paths());
     paths.extend(parameter_paths());
     paths.extend(space_directory_paths());
@@ -10716,6 +10763,11 @@ mod tests {
                 label: "nfts",
                 builder: nft_paths,
                 expected: "/v1/nfts",
+            },
+            PathCase {
+                label: "rwas",
+                builder: rwa_paths,
+                expected: "/v1/rwas",
             },
             PathCase {
                 label: "parameters",

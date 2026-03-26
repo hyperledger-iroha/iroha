@@ -1,7 +1,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration coverage for Torii MCP endpoints.
 
-use std::{num::NonZeroU32, sync::Arc};
+use std::{net::SocketAddr, num::NonZeroU32, sync::Arc};
 
 use axum::{
     body::Body,
@@ -62,7 +62,22 @@ async fn read_json_body(response: axum::response::Response) -> Value {
         .await
         .expect("response body")
         .to_bytes();
-    norito::json::from_slice(&bytes).expect("valid json body")
+    norito::json::from_slice(&bytes).unwrap_or_else(|err| {
+        panic!(
+            "valid json body: {err}; raw_body={}",
+            String::from_utf8_lossy(&bytes)
+        )
+    })
+}
+
+async fn call_app(app: &axum::Router, request: Request<Body>) -> axum::response::Response {
+    let service = app
+        .clone()
+        .into_make_service_with_connect_info::<SocketAddr>()
+        .oneshot(SocketAddr::from(([127, 0, 0, 1], 0)))
+        .await
+        .expect("mcp make service");
+    service.oneshot(request).await.expect("mcp response")
 }
 
 async fn post_mcp(app: &axum::Router, payload: Value) -> (StatusCode, Value) {
@@ -75,7 +90,7 @@ async fn post_mcp(app: &axum::Router, payload: Value) -> (StatusCode, Value) {
         ))
         .expect("valid request");
 
-    let response = app.clone().oneshot(request).await.expect("mcp response");
+    let response = call_app(app, request).await;
     let status = response.status();
     let body = read_json_body(response).await;
     (status, body)
@@ -99,7 +114,7 @@ async fn post_mcp_with_headers(
         ))
         .expect("valid request");
 
-    let response = app.clone().oneshot(request).await.expect("mcp response");
+    let response = call_app(app, request).await;
     let status = response.status();
     let body = read_json_body(response).await;
     (status, body)
@@ -2493,6 +2508,22 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         "expected agent-friendly nft query MCP tool"
     );
     assert!(
+        names.iter().any(|name| name == "iroha.rwas.chain.list"),
+        "expected agent-friendly chain RWA list MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.rwas.list"),
+        "expected agent-friendly rwa list MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.rwas.get"),
+        "expected agent-friendly rwa detail MCP tool"
+    );
+    assert!(
+        names.iter().any(|name| name == "iroha.rwas.query"),
+        "expected agent-friendly rwa query MCP tool"
+    );
+    assert!(
         names
             .iter()
             .any(|name| name == "iroha.offline.transfers.list"),
@@ -3465,6 +3496,150 @@ async fn mcp_jsonrpc_tools_call_agent_alias_nfts_query_accepts_flat_envelope_fie
     assert!(
         !tool_is_error(&call),
         "nfts query alias with flat envelope fields should dispatch successfully"
+    );
+    let structured = structured_content(&call);
+    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_tools_call_agent_alias_rwas_chain_list_dispatches_route() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 106156,
+            "method": "tools/call",
+            "params": {
+                "name": "iroha.rwas.chain.list",
+                "arguments": {}
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let structured = structured_content(&call);
+    let http_status = structured.get("status").and_then(Value::as_u64);
+    assert!(
+        http_status.is_some(),
+        "rwas chain-list alias should return an HTTP status"
+    );
+    if tool_is_error(&call) {
+        assert!(
+            http_status.is_some_and(|status| status >= 400),
+            "error path for rwa chain-list alias should reflect HTTP error status"
+        );
+    } else {
+        assert_eq!(
+            http_status,
+            Some(200),
+            "successful rwa chain-list alias should return HTTP 200"
+        );
+    }
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_tools_call_agent_alias_rwas_list_accepts_flat_query_fields() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 106157,
+            "method": "tools/call",
+            "params": {
+                "name": "iroha.rwas.list",
+                "arguments": {
+                    "page": 1
+                }
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !tool_is_error(&call),
+        "rwas list alias with flat query fields should dispatch successfully"
+    );
+    let structured = structured_content(&call);
+    assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_tools_call_agent_alias_rwas_get_accepts_flat_rwa_id() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 106158,
+            "method": "tools/call",
+            "params": {
+                "name": "iroha.rwas.get",
+                "arguments": {
+                    "rwa_id": "not-a-rwa-id"
+                }
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        tool_is_error(&call),
+        "invalid rwa id should be marked as MCP tool error for rwa detail alias"
+    );
+    let structured = structured_content(&call);
+    assert!(
+        structured
+            .get("status")
+            .and_then(Value::as_u64)
+            .is_some_and(|status| status >= 400),
+        "expected invalid rwa id to be rejected by explorer rwa detail alias"
+    );
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_tools_call_agent_alias_rwas_query_accepts_flat_envelope_fields() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+
+    let app = build_router(cfg);
+    let (status, call) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 106159,
+            "method": "tools/call",
+            "params": {
+                "name": "iroha.rwas.query",
+                "arguments": {
+                    "limit": 2
+                }
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !tool_is_error(&call),
+        "rwas query alias with flat envelope fields should dispatch successfully"
     );
     let structured = structured_content(&call);
     assert_eq!(structured.get("status").and_then(Value::as_u64), Some(200));

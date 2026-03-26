@@ -22,7 +22,7 @@ translator: machine-google-reviewed
 `AccountAddress` (`crates/iroha_data_model/src/account/address.rs`) 和
 配套工具。它提供：
 
-- 一个校验和、面向人的 **Iroha Base58 地址 (I105)** 由
+- 一个校验和、面向人的 **I105 地址 (I105)** 由
   `AccountAddress::to_i105` 将链判别式绑定到帐户
   控制器并提供确定性的互操作友好的文本形式。
 - 隐式默认域和本地摘要的域选择器，带有
@@ -48,7 +48,7 @@ translator: machine-google-reviewed
 
 ## 目标
 
-- 描述数据模型中实现的 I105 Base58 信封以及
+- 描述数据模型中实现的 I105 信封以及
   `AccountId` 和 `AccountAddress` 遵循规范解析/别名规则。
 - 将配置的链判别式直接编码到每个地址中并
   定义其治理/注册流程。
@@ -137,7 +137,7 @@ Rust 数据模型公开了单个规范的有效负载表示
 `sora` 形式是第二好的、仅限 Sora 的 UX 选项，其中假名字母
 增加价值。规范十六进制仍然是一种调试辅助工具。
 
-- **I105 (Iroha Base58)** – 嵌入链条的 Base58 信封
+- **I105** – 嵌入链条的 I105 信封
   判别性的。解码器在将有效负载提升到之前验证前缀
   规范形式。
 - **Sora 压缩视图** – 由 **105 个符号**构建的仅限 Sora 的字母表
@@ -396,7 +396,7 @@ Sora Nexus 网络默认为 `chain_discriminant = 0x02F1`
   编码器，而不是用于多重签名策略摘要的 CTAP2 映射。
 - **编码：** `encode_i105()` 将前缀字节与规范连接起来
   有效负载并附加从 Blake2b-512 派生的 16 位校验和，其中固定
-  前缀 `I105PRE` (`b"I105PRE" || prefix || payload`)。结果通过 `bs58` 进行 Base58 编码。
+  Prefix: `I105PRE` (`b"I105PRE"` || prefix || payload). The result is encoded via `bs58` using the I105 alphabet.
   CLI/SDK 帮助程序公开相同的过程，并且 `AccountAddress::parse_encoded`
   通过 `decode_i105` 反转它。
 
@@ -638,7 +638,7 @@ HTTP 端点，以便审核员可以逐字重播验证步骤。
   使这些要求适应钱包或浏览器用户体验。
 - **安全共享流程：** 复制或显示地址的表面默认为 I105 形式，并公开相邻的“共享”操作，该操作显示完整的字符串和从同一负载派生的 QR 码，以便用户可以通过视觉或扫描来验证校验和。当截断不可避免时（例如，小屏幕），请保留字符串的开头和结尾，添加清晰的省略号，并保持可通过复制到剪贴板访问完整地址，以防止意外剪辑。
 - **IME 保护措施：** 地址输入必须拒绝来自 IME/IME 风格键盘的组合伪影。强制仅输入 ASCII，在检测到全角或假名字符时显示内联警告，并提供纯文本粘贴区域，在验证之前剥离组合标记，以便日语和中文用户可以禁用其 IME，而不会丢失进度。
-- **屏幕阅读器支持：** 提供可视化隐藏标签 (`aria-label`/`aria-describedby`)，用于描述前导 Base58 前缀数字并将 I105 有效负载分为 4 或 8 个字符组，因此辅助技术读取分组字符而不是连续字符串。通过礼貌的实时区域宣布复制/共享成功，并确保二维码预览包含描述性替代文本（“链 0x02F1 上 <alias> 的 I105 地址”）。
+- **屏幕阅读器支持：** 提供可视化隐藏标签 (`aria-label`/`aria-describedby`)，用于描述前导 I105 前缀数字并将 I105 有效负载分为 4 或 8 个字符组，因此辅助技术读取分组字符而不是连续字符串。通过礼貌的实时区域宣布复制/共享成功，并确保二维码预览包含描述性替代文本（“链 0x02F1 上 <alias> 的 I105 地址”）。
 - **仅 Sora 压缩使用：** 始终将 `i105` 压缩视图标记为“仅 Sora”，并在复制之前将其置于显式确认后面。当链判别式不是 Sora Nexus 值时，SDK 和钱包必须拒绝显示压缩输出，并应引导用户返回 I105 进行网络间转账，以避免资金错误路由。
 
 ## 实施清单
@@ -646,8 +646,7 @@ HTTP 端点，以便审核员可以逐字重播验证步骤。
 - **I105 信封：** 前缀使用紧凑型编码 `chain_discriminant`
   来自 `encode_i105_prefix()` 的 6 位/14 位方案，主体是规范字节
   (`AccountAddress::canonical_bytes()`)，校验和是前两个字节
-  Blake2b-512（`b"I105PRE"` || 前缀 || 主体）。完整的有效负载是Base58-
-  通过 `bs58` 编码。
+  Blake2b-512(`b"I105PRE"` || prefix || body). The full payload is encoded via `bs58` using the I105 alphabet.
 - **注册合约：** 签名 JSON（和可选的 Merkle 根）发布
   `{discriminant, i105_prefix, chain_alias, endpoints}` 带 24 小时 TTL 和
   旋转键。
@@ -676,7 +675,7 @@ HTTP 端点，以便审核员可以逐字重播验证步骤。
 - `GET /v1/accounts` 接受可选的 `canonical I105 rendering` 查询参数并且
   `POST /v1/accounts/query` 接受 JSON 信封内的相同字段。
   支持的值为：
-  - `i105`（默认）——响应发出规范的 I105 Base58 有效负载（例如，
+  - `i105`（默认）——响应发出规范的 I105 有效负载（例如，
     `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`）。
   - `i105_default` — 响应发出仅 Sora 的 `i105` 压缩视图，同时
     保持过滤器/路径参数规范。
@@ -717,7 +716,7 @@ SDK、钱包和 Torii 表面应与人类可读的表面一起显示
 | `ERR_INVALID_I105_ENCODING` | I105 字符串包含字母表之外的字符。 |确保地址使用已发布的 I105 字母表，并且在复制/粘贴过程中未被截断。 |
 | `ERR_INVALID_LENGTH` |有效负载长度与选择器/控制器的预期规范大小不匹配。 |为选定的域选择器和控制器布局提供完整的规范有效负载。 |
 | `ERR_CHECKSUM_MISMATCH` | I105（首选）或压缩（`sora`，第二好的）校验和验证失败。 |从可信来源重新生成地址；这通常表示复制/粘贴错误。 |
-| `ERR_INVALID_I105_PREFIX_ENCODING` | I105 前缀字节格式错误。 |使用兼容的编码器重新编码地址；不要手动更改前导 Base58 字节。 |
+| `ERR_INVALID_I105_PREFIX_ENCODING` | I105 前缀字节格式错误。 |使用兼容的编码器重新编码地址；不要手动更改前导 I105 字节。 |
 | `ERR_INVALID_HEX_ADDRESS` |规范的十六进制形式无法解码。 |提供由官方编码器生成的以 `0x` 为前缀、偶数长度的十六进制字符串。 |
 | `ERR_MISSING_COMPRESSED_SENTINEL` |压缩形式不以 `sora` 开头。 |在将压缩的 Sora 地址交给解码器之前，使用所需的哨兵作为前缀。 |
 | `ERR_COMPRESSED_TOO_SHORT` |压缩字符串缺少足够的有效负载和校验和数字。 |使用编码器发出的完整压缩字符串而不是截断的片段。 |
@@ -748,7 +747,7 @@ SDK、钱包和 Torii 表面应与人类可读的表面一起显示
 
 ## 考虑的替代方案
 
-- **纯 Base58Check（比特币风格）。** 校验和更简单，但错误检测更弱
+- **纯 checksum envelope（比特币风格）。** 校验和更简单，但错误检测更弱
   比 Blake2b 派生的 I105 校验和（`encode_i105` 截断 512 位哈希值）
   并且缺乏 16 位判别式的显式前缀语义。
 - **在域字符串中嵌入链名称（例如，`finance@chain`）。** 中断

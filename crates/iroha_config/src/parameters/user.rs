@@ -15239,29 +15239,15 @@ impl ToriiFaucet {
             |err| panic!("invalid torii.faucet.authority `{}`: {err}", self.authority),
             iroha_data_model::account::ParsedAccountId::into_account_id,
         );
-        let asset_definition_id = self.asset_definition_id.split_once('#').map_or_else(
-            || {
-                AssetDefinitionId::parse_address_literal(&self.asset_definition_id).unwrap_or_else(
-                    |err| {
-                        panic!(
-                            "invalid torii.faucet.asset_definition_id `{}`: {err}",
-                            self.asset_definition_id
-                        )
-                    },
-                )
-            },
-            |(name_literal, domain_literal)| {
-                let name = name_literal.trim().parse().unwrap_or_else(|err| {
-                    panic!("invalid torii.faucet.asset_definition_id name `{name_literal}`: {err}")
-                });
-                let domain = domain_literal.trim().parse().unwrap_or_else(|err| {
-                    panic!(
-                        "invalid torii.faucet.asset_definition_id domain `{domain_literal}`: {err}"
-                    )
-                });
-                AssetDefinitionId::new(domain, name)
-            },
-        );
+        let asset_definition_id = AssetDefinitionId::parse_address_literal(
+            &self.asset_definition_id,
+        )
+        .unwrap_or_else(|err| {
+            panic!(
+                "invalid torii.faucet.asset_definition_id `{}`: {err}",
+                self.asset_definition_id
+            )
+        });
         let amount = Numeric::from_str(self.amount.trim())
             .unwrap_or_else(|err| panic!("invalid torii.faucet.amount `{}`: {err}", self.amount));
         if amount <= Numeric::zero() {
@@ -15308,13 +15294,18 @@ mod torii_faucet_tests {
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
                 .expect("public key");
+        let asset_definition_id = AssetDefinitionId::new(
+            "sora".parse().expect("domain"),
+            "xor".parse().expect("name"),
+        )
+        .to_string();
         ToriiFaucet {
             enabled: true,
             authority: AccountId::new(public_key).to_string(),
             private_key: "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
                 .parse()
                 .expect("private key"),
-            asset_definition_id: "xor#sora".to_owned(),
+            asset_definition_id,
             amount: "25000".to_owned(),
             pow_difficulty_bits: 18,
             pow_scrypt_log_n: 13,
@@ -15364,6 +15355,14 @@ mod torii_faucet_tests {
         faucet.amount = "0".to_owned();
         let panic = std::panic::catch_unwind(|| faucet.parse());
         assert!(panic.is_err(), "expected zero amount to panic");
+    }
+
+    #[test]
+    fn torii_faucet_parse_rejects_legacy_asset_definition_literal() {
+        let mut faucet = sample_faucet();
+        faucet.asset_definition_id = "xor#sora".to_owned();
+        let panic = std::panic::catch_unwind(|| faucet.parse());
+        assert!(panic.is_err(), "expected legacy asset definition to panic");
     }
 
     #[test]
@@ -17442,9 +17441,17 @@ pub struct IsoCurrencyAsset {
 
 impl IsoCurrencyAsset {
     fn parse(self) -> actual::IsoCurrencyAsset {
+        let asset_definition = AssetDefinitionId::parse_address_literal(&self.asset_definition)
+            .unwrap_or_else(|err| {
+                panic!(
+                    "invalid iso_bridge.currency_assets.asset_definition `{}`: {err}",
+                    self.asset_definition
+                )
+            })
+            .to_string();
         actual::IsoCurrencyAsset {
             currency: self.currency,
-            asset_definition: self.asset_definition,
+            asset_definition,
         }
     }
 }
@@ -17639,6 +17646,9 @@ mod offline_cfg_tests {
 
     #[test]
     fn iso_bridge_json_deserializes() {
+        let asset_definition =
+            AssetDefinitionId::new("fin".parse().expect("domain"), "usd".parse().expect("name"))
+                .to_string();
         let json = r#"{
             "enabled": true,
             "dedupe_ttl_secs": 120,
@@ -17650,7 +17660,7 @@ mod offline_cfg_tests {
                 {"iban": "DE137017", "account_id": "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU"}
             ],
             "currency_assets": [
-                {"currency": "USD", "asset_definition": "usd#fin"}
+                {"currency": "USD", "asset_definition": "__ASSET_DEFINITION__"}
             ],
             "reference_data": {
                 "refresh_interval_secs": 3600,
@@ -17658,9 +17668,10 @@ mod offline_cfg_tests {
                 "bic_lei_path": null,
                 "mic_directory_path": null
             }
-        }"#;
+        }"#
+        .replace("__ASSET_DEFINITION__", &asset_definition);
 
-        let parsed: IsoBridge = norito::json::from_json(json).expect("valid iso bridge JSON");
+        let parsed: IsoBridge = norito::json::from_json(&json).expect("valid iso bridge JSON");
 
         assert!(parsed.enabled);
         assert_eq!(parsed.dedupe_ttl_secs, 120);
@@ -17671,8 +17682,27 @@ mod offline_cfg_tests {
         );
         assert_eq!(parsed.account_aliases[0].iban, "DE137017");
         assert_eq!(parsed.currency_assets[0].currency, "USD");
+        assert_eq!(parsed.currency_assets[0].asset_definition, asset_definition);
         assert_eq!(parsed.reference_data.refresh_interval_secs, 3600);
         assert!(parsed.reference_data.isin_crosswalk_path.is_none());
+    }
+
+    #[test]
+    fn iso_bridge_parse_rejects_legacy_asset_definition_literal() {
+        let cfg = IsoBridge {
+            enabled: true,
+            dedupe_ttl_secs: 120,
+            signer: None,
+            account_aliases: Vec::new(),
+            currency_assets: vec![IsoCurrencyAsset {
+                currency: "USD".to_owned(),
+                asset_definition: "usd#fin".to_owned(),
+            }],
+            reference_data: IsoReferenceData::default(),
+        };
+
+        let panic = std::panic::catch_unwind(|| cfg.parse());
+        assert!(panic.is_err(), "expected legacy asset definition to panic");
     }
 
     #[test]

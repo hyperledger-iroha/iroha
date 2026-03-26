@@ -1814,6 +1814,7 @@ impl TieredStateBackend {
             world.asset_metadata
         );
         collect_map!(TieredSegment::Nfts, Nft, world.nfts);
+        collect_map!(TieredSegment::Rwas, Rwa, world.rwas);
         collect_map!(TieredSegment::Roles, Role, world.roles);
         collect_map!(
             TieredSegment::AccountPermissions,
@@ -2488,8 +2489,9 @@ mod measured_bytes_impls {
             AggregateProofEnvelope, AndroidMarkerKeyProof, AndroidProvisionedProof,
             AppleAppAttestProof, OfflineAllowanceCommitment, OfflineAllowanceRecord,
             OfflineAppleAppAttestBinding, OfflineBalanceProof, OfflineCounterState,
-            OfflinePlatformProof, OfflinePlatformTokenSnapshot, OfflineReserveEnvelope,
-            OfflineReserveOperationResult, OfflineReserveRecord, OfflineReserveState,
+            OfflineMutationSettlement, OfflinePlatformProof, OfflinePlatformTokenSnapshot,
+            OfflineReserveEnvelope, OfflineReserveOperationResult, OfflineReserveRecord,
+            OfflineReserveState, OfflineTransparentZkProof,
             OfflineSpendAuthorization, OfflineSpendReceipt, OfflineToOnlineTransfer,
             OfflineTransferLifecycleEntry, OfflineTransferRecord, OfflineTransferStatus,
             OfflineVerdictRevocation, OfflineVerdictRevocationReason, OfflineVerdictSnapshot,
@@ -2506,6 +2508,7 @@ mod measured_bytes_impls {
             RuntimeUpgradeId, RuntimeUpgradeManifest, RuntimeUpgradeRecord,
             RuntimeUpgradeSbomDigest, RuntimeUpgradeStatus,
         },
+        rwa::{RwaControlPolicy, RwaData, RwaId, RwaParentRef},
         smart_contract::manifest::{
             AccessSetHints, ContractManifest, EntryPointKind, EntrypointDescriptor,
             KotobaTranslation, KotobaTranslationEntry, ManifestProvenance, TriggerCallback,
@@ -2998,6 +3001,50 @@ mod measured_bytes_impls {
             let mut total = size_of::<NftData>();
             total = total.saturating_add(self.content.measured_bytes_extra());
             total = total.saturating_add(self.owned_by.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for RwaParentRef {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<RwaParentRef>();
+            total = total.saturating_add(self.rwa.measured_bytes_extra());
+            total = total.saturating_add(self.quantity.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for RwaId {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<RwaId>();
+            total = total.saturating_add(self.domain.measured_bytes_extra());
+            total = total.saturating_add(self.hash.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for RwaControlPolicy {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<RwaControlPolicy>();
+            total = total.saturating_add(self.controller_accounts.measured_bytes_extra());
+            total = total.saturating_add(self.controller_roles.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for RwaData {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<RwaData>();
+            total = total.saturating_add(self.quantity.measured_bytes_extra());
+            total = total.saturating_add(self.spec.measured_bytes_extra());
+            total = total.saturating_add(self.primary_reference.measured_bytes_extra());
+            total = total.saturating_add(self.status.measured_bytes_extra());
+            total = total.saturating_add(self.metadata.measured_bytes_extra());
+            total = total.saturating_add(self.parents.measured_bytes_extra());
+            total = total.saturating_add(self.controls.measured_bytes_extra());
+            total = total.saturating_add(self.owned_by.measured_bytes_extra());
+            total = total.saturating_add(self.is_frozen.measured_bytes_extra());
+            total = total.saturating_add(self.held_quantity.measured_bytes_extra());
             total
         }
     }
@@ -3881,6 +3928,35 @@ mod measured_bytes_impls {
         fn measured_bytes(&self) -> usize {
             size_of::<OfflineReserveEnvelope>()
                 .saturating_add(self.reserve_state.measured_bytes_extra())
+                .saturating_add(self.settlement.measured_bytes_extra())
+        }
+    }
+
+    impl MeasuredBytes for OfflineTransparentZkProof {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<OfflineTransparentZkProof>();
+            total = total.saturating_add(self.backend.measured_bytes_extra());
+            total = total.saturating_add(self.circuit_id.measured_bytes_extra());
+            total = total.saturating_add(self.recursion_depth.measured_bytes_extra());
+            total = total.saturating_add(self.public_inputs_hex.measured_bytes_extra());
+            total = total.saturating_add(self.envelope_bytes.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for OfflineMutationSettlement {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<OfflineMutationSettlement>();
+            total = total.saturating_add(self.kind.measured_bytes_extra());
+            total = total.saturating_add(self.operation_id.measured_bytes_extra());
+            total = total.saturating_add(self.chain_tx_hash.measured_bytes_extra());
+            total = total.saturating_add(self.entry_hash.measured_bytes_extra());
+            total = total.saturating_add(self.block_height.measured_bytes_extra());
+            total = total.saturating_add(self.pre_state_hash.measured_bytes_extra());
+            total = total.saturating_add(self.post_state_hash.measured_bytes_extra());
+            total = total.saturating_add(self.settlement_commitment_hex.measured_bytes_extra());
+            total = total.saturating_add(self.proof.measured_bytes_extra());
+            total
         }
     }
 
@@ -3955,6 +4031,7 @@ enum TieredSegment {
     Assets,
     AssetMetadata,
     Nfts,
+    Rwas,
     Roles,
     AccountPermissions,
     AccountRoles,
@@ -3995,6 +4072,7 @@ impl TieredSegment {
             TieredSegment::Assets => "assets",
             TieredSegment::AssetMetadata => "asset_metadata",
             TieredSegment::Nfts => "nfts",
+            TieredSegment::Rwas => "rwas",
             TieredSegment::Roles => "roles",
             TieredSegment::AccountPermissions => "account_permissions",
             TieredSegment::AccountRoles => "account_roles",
@@ -4046,6 +4124,7 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "assets" => TieredSegment::Assets,
             "asset_metadata" => TieredSegment::AssetMetadata,
             "nfts" => TieredSegment::Nfts,
+            "rwas" => TieredSegment::Rwas,
             "roles" => TieredSegment::Roles,
             "account_permissions" => TieredSegment::AccountPermissions,
             "account_roles" => TieredSegment::AccountRoles,
@@ -4240,6 +4319,7 @@ pub(crate) enum TieredKeyHandle {
     Asset(iroha_data_model::asset::AssetId),
     AssetMetadata(iroha_data_model::asset::AssetId),
     Nft(iroha_data_model::nft::NftId),
+    Rwa(iroha_data_model::rwa::RwaId),
     Role(iroha_data_model::role::RoleId),
     AccountPermission(iroha_data_model::account::AccountId),
     AccountRole(crate::role::RoleIdWithOwner),
@@ -4280,6 +4360,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::Asset(_) => TieredSegment::Assets,
             TieredKeyHandle::AssetMetadata(_) => TieredSegment::AssetMetadata,
             TieredKeyHandle::Nft(_) => TieredSegment::Nfts,
+            TieredKeyHandle::Rwa(_) => TieredSegment::Rwas,
             TieredKeyHandle::Role(_) => TieredSegment::Roles,
             TieredKeyHandle::AccountPermission(_) => TieredSegment::AccountPermissions,
             TieredKeyHandle::AccountRole(_) => TieredSegment::AccountRoles,
@@ -4330,6 +4411,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::Asset(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AssetMetadata(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::Nft(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::Rwa(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::Role(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AccountPermission(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AccountRole(key) => Ok(norito::codec::Encode::encode(key)),
@@ -4395,6 +4477,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::Asset(id) => fetch!(world.assets, id),
             TieredKeyHandle::AssetMetadata(id) => fetch!(world.asset_metadata, id),
             TieredKeyHandle::Nft(id) => fetch!(world.nfts, id),
+            TieredKeyHandle::Rwa(id) => fetch!(world.rwas, id),
             TieredKeyHandle::Role(id) => fetch!(world.roles, id),
             TieredKeyHandle::AccountPermission(id) => fetch!(world.account_permissions, id),
             TieredKeyHandle::AccountRole(id) => fetch!(world.account_roles, id),
@@ -4454,6 +4537,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::Asset(id) => fetch!(world.assets, id),
             TieredKeyHandle::AssetMetadata(id) => fetch!(world.asset_metadata, id),
             TieredKeyHandle::Nft(id) => fetch!(world.nfts, id),
+            TieredKeyHandle::Rwa(id) => fetch!(world.rwas, id),
             TieredKeyHandle::Role(id) => fetch!(world.roles, id),
             TieredKeyHandle::AccountPermission(id) => fetch!(world.account_permissions, id),
             TieredKeyHandle::AccountRole(id) => fetch!(world.account_roles, id),
@@ -4502,6 +4586,7 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::Asset(id) => write!(f, "asset:{id}"),
             TieredKeyHandle::AssetMetadata(id) => write!(f, "asset_metadata:{id}"),
             TieredKeyHandle::Nft(id) => write!(f, "nft:{id}"),
+            TieredKeyHandle::Rwa(id) => write!(f, "rwa:{id}"),
             TieredKeyHandle::Role(id) => write!(f, "role:{id}"),
             TieredKeyHandle::AccountPermission(id) => write!(f, "account_permission:{id}"),
             TieredKeyHandle::AccountRole(id) => write!(f, "account_role:{id}"),

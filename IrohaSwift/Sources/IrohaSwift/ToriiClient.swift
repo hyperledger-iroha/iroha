@@ -1763,6 +1763,83 @@ public struct ToriiExplorerTransactionsPage: Decodable, Sendable, Equatable {
     public let items: [ToriiExplorerTransactionItem]
 }
 
+/// Explorer RWA lot projection returned by `/v1/explorer/rwas`.
+public struct ToriiExplorerRwaRecord: Decodable, Sendable, Equatable {
+    public let id: String
+    public let ownedBy: String
+    public let quantity: String
+    public let heldQuantity: String
+    public let primaryReference: String
+    public let status: String?
+    public let isFrozen: Bool
+    public let metadata: [String: ToriiJSONValue]
+    public let raw: [String: ToriiJSONValue]
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let raw = try container.decode([String: ToriiJSONValue].self)
+        guard case let .string(identifier)? = raw["id"], !identifier.isEmpty else {
+            throw ToriiClientError.invalidPayload("RWA explorer record missing string `id` field")
+        }
+        guard case let .string(owner)? = raw["owned_by"], !owner.isEmpty else {
+            throw ToriiClientError.invalidPayload("RWA explorer record missing string `owned_by` field")
+        }
+        guard case let .string(quantity)? = raw["quantity"], !quantity.isEmpty else {
+            throw ToriiClientError.invalidPayload("RWA explorer record missing string `quantity` field")
+        }
+        guard case let .string(heldQuantity)? = raw["held_quantity"], !heldQuantity.isEmpty else {
+            throw ToriiClientError.invalidPayload("RWA explorer record missing string `held_quantity` field")
+        }
+        guard case let .string(primaryReference)? = raw["primary_reference"], !primaryReference.isEmpty else {
+            throw ToriiClientError.invalidPayload("RWA explorer record missing string `primary_reference` field")
+        }
+        guard case let .bool(isFrozen)? = raw["is_frozen"] else {
+            throw ToriiClientError.invalidPayload("RWA explorer record missing bool `is_frozen` field")
+        }
+        let status: String?
+        if let statusValue = raw["status"] {
+            switch statusValue {
+            case .string(let value):
+                status = value
+            case .null:
+                status = nil
+            default:
+                throw ToriiClientError.invalidPayload("RWA explorer record `status` must be a string when present")
+            }
+        } else {
+            status = nil
+        }
+        let metadata: [String: ToriiJSONValue]
+        if let metadataValue = raw["metadata"] {
+            switch metadataValue {
+            case .object(let object):
+                metadata = object
+            case .null:
+                metadata = [:]
+            default:
+                throw ToriiClientError.invalidPayload("RWA explorer record `metadata` must be an object when present")
+            }
+        } else {
+            metadata = [:]
+        }
+        id = identifier
+        ownedBy = owner
+        self.quantity = quantity
+        self.heldQuantity = heldQuantity
+        self.primaryReference = primaryReference
+        self.status = status
+        self.isFrozen = isFrozen
+        self.metadata = metadata
+        self.raw = raw
+    }
+}
+
+/// Paginated explorer RWA lot list returned by `/v1/explorer/rwas`.
+public struct ToriiExplorerRwasPage: Decodable, Sendable, Equatable {
+    public let pagination: ToriiExplorerPaginationMeta
+    public let items: [ToriiExplorerRwaRecord]
+}
+
 /// Explorer duration wrapper (milliseconds).
 public struct ToriiExplorerDuration: Decodable, Sendable, Equatable {
     public let ms: UInt64
@@ -2330,6 +2407,49 @@ public struct ToriiExplorerTransactionsParams: Sendable, Equatable {
     }
 }
 
+/// Query parameters accepted by `/v1/explorer/rwas`.
+public struct ToriiExplorerRwasParams: Sendable, Equatable {
+    public var page: UInt64?
+    public var perPage: UInt64?
+    public var ownedBy: String?
+    public var domain: String?
+
+    public init(page: UInt64? = nil,
+                perPage: UInt64? = nil,
+                ownedBy: String? = nil,
+                domain: String? = nil) {
+        self.page = page
+        self.perPage = perPage
+        self.ownedBy = ownedBy
+        self.domain = domain
+    }
+
+    public func queryItems() throws -> [URLQueryItem]? {
+        var items: [URLQueryItem] = []
+        if let page {
+            guard page > 0 else {
+                throw ToriiClientError.invalidPayload("page must be at least 1.")
+            }
+            items.append(URLQueryItem(name: "page", value: String(page)))
+        }
+        if let perPage {
+            guard perPage > 0 else {
+                throw ToriiClientError.invalidPayload("perPage must be at least 1.")
+            }
+            items.append(URLQueryItem(name: "per_page", value: String(perPage)))
+        }
+        if let ownedBy = ownedBy?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !ownedBy.isEmpty {
+            let normalized = try normalizeToriiAccountIdQueryValue(ownedBy, field: "ownedBy")
+            items.append(URLQueryItem(name: "owned_by", value: normalized))
+        }
+        if let domain = try ToriiRequestValidation.normalizedOptionalNonEmpty(domain, field: "domain") {
+            items.append(URLQueryItem(name: "domain", value: domain))
+        }
+        return items.isEmpty ? nil : items
+    }
+}
+
 extension ToriiExplorerTransferDetails {
     fileprivate static func parse(from json: ToriiJSONValue) -> ToriiExplorerTransferDetails? {
         guard let payload = payloadObject(from: json) else {
@@ -2558,6 +2678,54 @@ public struct ToriiDomainListPage: Decodable, Sendable, ToriiListPageProtocol {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         items = try container.decodeIfPresent([ToriiDomainRecord].self, forKey: .items) ?? []
+        if let explicitTotal = try container.decodeIfPresent(Int.self, forKey: .total) {
+            total = explicitTotal
+        } else {
+            total = items.count
+        }
+    }
+}
+
+/// Chain-state RWA list item returned by `/v1/rwas` and `/v1/rwas/query`.
+public struct ToriiRwaListItem: Decodable, Sendable, Equatable {
+    public let id: String
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+    }
+
+    public init(id: String) {
+        self.id = id
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let identifier = try container.decode(String.self, forKey: .id)
+        guard !identifier.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ToriiClientError.invalidPayload("RWA list item `id` must be a non-empty string")
+        }
+        id = identifier
+    }
+}
+
+/// Paginated chain-state RWA lot list returned by `/v1/rwas` and `/v1/rwas/query`.
+public struct ToriiRwaListPage: Decodable, Sendable, ToriiListPageProtocol {
+    public let items: [ToriiRwaListItem]
+    public let total: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case items
+        case total
+    }
+
+    public init(items: [ToriiRwaListItem], total: Int) {
+        self.items = items
+        self.total = total
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        items = try container.decodeIfPresent([ToriiRwaListItem].self, forKey: .items) ?? []
         if let explicitTotal = try container.decodeIfPresent(Int.self, forKey: .total) {
             total = explicitTotal
         } else {
@@ -9750,6 +9918,20 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
 
     @available(iOS 15.0, macOS 12.0, *)
     @discardableResult
+    public func getExplorerRwas(params: ToriiExplorerRwasParams? = nil,
+                                completion: @escaping (Result<ToriiExplorerRwasPage, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.getExplorerRwas(params: params) }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    @discardableResult
+    public func getExplorerRwaDetail(rwaId: String,
+                                     completion: @escaping (Result<ToriiExplorerRwaRecord, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.getExplorerRwaDetail(rwaId: rwaId) }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    @discardableResult
     public func getExplorerTransactionDetail(hashHex: String,
                                               completion: @escaping (Result<ToriiExplorerTransactionDetail, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) {
@@ -9920,6 +10102,18 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func listDomains(options: ToriiListOptions = ToriiListOptions(),
                             completion: @escaping (Result<ToriiDomainListPage, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.listDomains(options: options) }
+    }
+
+    @discardableResult
+    public func listRwas(options: ToriiListOptions = ToriiListOptions(),
+                         completion: @escaping (Result<ToriiRwaListPage, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.listRwas(options: options) }
+    }
+
+    @discardableResult
+    public func queryRwas(_ envelope: ToriiQueryEnvelope,
+                          completion: @escaping (Result<ToriiRwaListPage, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.queryRwas(envelope) }
     }
 
     @discardableResult
@@ -10769,6 +10963,22 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         return try decodeJSON(ToriiExplorerTransactionsPage.self, from: data)
     }
 
+    public func getExplorerRwas(params: ToriiExplorerRwasParams? = nil) async throws -> ToriiExplorerRwasPage {
+        let request = try makeRequest(path: "/v1/explorer/rwas",
+                                      queryItems: try params?.queryItems())
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiExplorerRwasPage.self, from: data)
+    }
+
+    public func getExplorerRwaDetail(rwaId: String) async throws -> ToriiExplorerRwaRecord {
+        let normalizedRwaId = try ToriiRequestValidation.normalizedNonEmpty(rwaId, field: "rwaId")
+        let encodedRwaId = encodePathComponent(normalizedRwaId)
+        let request = try makeRequest(path: "/v1/explorer/rwas/\(encodedRwaId)",
+                                      queryItems: nil)
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiExplorerRwaRecord.self, from: data)
+    }
+
     public func getExplorerTransactionDetail(hashHex: String) async throws -> ToriiExplorerTransactionDetail {
         let normalizedHash = try ToriiRequestValidation.normalizedNonEmpty(hashHex, field: "hashHex")
         let encodedHash = encodePathComponent(normalizedHash)
@@ -11008,6 +11218,97 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                             page: page,
                                             perPage: perPage,
                                             assetDefinitionId: assetDefinitionId)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    public func iterateExplorerRwas(params: ToriiExplorerRwasParams = ToriiExplorerRwasParams(),
+                                    maxItems: UInt64? = nil) -> AsyncThrowingStream<ToriiExplorerRwaRecord, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    if let maxItems, maxItems == 0 {
+                        continuation.finish()
+                        return
+                    }
+                    var currentPage = params.page ?? 1
+                    var currentPerPage = params.perPage
+                    var remaining = maxItems
+                    while true {
+                        try Task.checkCancellation()
+                        let pageParams = ToriiExplorerRwasParams(page: currentPage,
+                                                                 perPage: currentPerPage,
+                                                                 ownedBy: params.ownedBy,
+                                                                 domain: params.domain)
+                        let response = try await getExplorerRwas(params: pageParams)
+                        if currentPerPage == nil {
+                            currentPerPage = response.pagination.perPage
+                        }
+                        for item in response.items {
+                            continuation.yield(item)
+                            if let remainingValue = remaining {
+                                if remainingValue <= 1 {
+                                    remaining = 0
+                                    break
+                                }
+                                remaining = remainingValue - 1
+                            }
+                        }
+                        if remaining == 0 {
+                            break
+                        }
+                        if response.items.isEmpty || response.pagination.totalPages == 0 {
+                            break
+                        }
+                        if currentPage >= response.pagination.totalPages {
+                            break
+                        }
+                        currentPage += 1
+                    }
+                    continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    public func listAccountRwas(accountId: String,
+                                params: ToriiExplorerRwasParams = ToriiExplorerRwasParams()) async throws -> ToriiExplorerRwasPage {
+        var effective = params
+        effective.ownedBy = try normalizeToriiAccountIdQueryValue(accountId, field: "accountId")
+        return try await getExplorerRwas(params: effective)
+    }
+
+    public func listRwas(options: ToriiListOptions = ToriiListOptions()) async throws -> ToriiRwaListPage {
+        let queryItems = try makeListQueryItems(options: options)
+        let request = try makeRequest(path: "/v1/rwas", queryItems: queryItems)
+        let data = try await data(for: request)
+        guard !data.isEmpty else {
+            return ToriiRwaListPage(items: [], total: 0)
+        }
+        return try decodeJSON(ToriiRwaListPage.self, from: data)
+    }
+
+    public func queryRwas(_ envelope: ToriiQueryEnvelope) async throws -> ToriiRwaListPage {
+        let body = try JSONEncoder().encode(envelope)
+        let request = try makeRequest(path: "/v1/rwas/query",
+                                      method: .post,
+                                      body: body,
+                                      headers: ["Content-Type": "application/json"])
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiRwaListPage.self, from: data)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    public func iterateRwas(options: ToriiListOptions = ToriiListOptions(),
+                            pageSize: Int? = nil,
+                            maxItems: Int? = nil) -> AsyncThrowingStream<ToriiRwaListItem, Swift.Error> {
+        iterateList(options: options, pageSize: pageSize, maxItems: maxItems) { opts in
+            try await self.listRwas(options: opts)
+        }
     }
 
     public func listDomains(options: ToriiListOptions = ToriiListOptions()) async throws -> ToriiDomainListPage {

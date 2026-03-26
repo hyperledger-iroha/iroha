@@ -295,7 +295,7 @@ public struct AccountAddress {
 
     static let multisigPersonalisation = Data("iroha-ms-policy".utf8)
     private static let i105WarningMessage =
-        "I105 addresses are the canonical Base58 account literal encoding. " +
+        "I105 addresses are the canonical account literal encoding. " +
         "Render and validate them with the intended chain discriminant."
 }
 

@@ -1263,6 +1263,16 @@ fn event_filter_boxes_from_expr(
                     })
                     .into_iter()
                     .collect(),
+                "rwa_id" => value
+                    .as_str()
+                    .and_then(|s| s.parse().ok())
+                    .map(|id| {
+                        EventFilterBox::Data(df::DataEventFilter::Rwa(
+                            df::RwaEventFilter::new().for_rwa(id),
+                        ))
+                    })
+                    .into_iter()
+                    .collect(),
                 "data_trigger_id" => value
                     .as_str()
                     .and_then(|s| s.parse().ok())
@@ -1360,6 +1370,8 @@ fn event_filter_boxes_from_expr(
                     asset_def_set: Option<df::AssetDefinitionEventSet>,
                     nft_id: Option<iroha_data_model::nft::NftId>,
                     nft_set: Option<df::NftEventSet>,
+                    rwa_id: Option<iroha_data_model::rwa::RwaId>,
+                    rwa_set: Option<df::RwaEventSet>,
                     role_id: Option<iroha_data_model::role::RoleId>,
                     role_set: Option<df::RoleEventSet>,
                     proof_id: Option<iroha_data_model::proof::ProofId>,
@@ -1422,6 +1434,7 @@ fn event_filter_boxes_from_expr(
                             c.asset_def_id = v.as_str().and_then(|s| s.parse().ok())
                         }
                         "nft_id" => c.nft_id = v.as_str().and_then(|s| s.parse().ok()),
+                        "rwa_id" => c.rwa_id = v.as_str().and_then(|s| s.parse().ok()),
                         "role_id" => c.role_id = v.as_str().and_then(|s| s.parse().ok()),
                         "proof_id" => {
                             c.proof_id = proof_id_from_json(v);
@@ -1500,6 +1513,24 @@ fn event_filter_boxes_from_expr(
                                 "Created" => Some(df::NftEventSet::Created),
                                 "Deleted" => Some(df::NftEventSet::Deleted),
                                 "OwnerChanged" => Some(df::NftEventSet::OwnerChanged),
+                                _ => None,
+                            });
+                        }
+                        "rwa_event" => {
+                            c.rwa_set = parse_event_list(v, &|s| match s {
+                                "Created" => Some(df::RwaEventSet::Created),
+                                "MetadataInserted" => Some(df::RwaEventSet::MetadataInserted),
+                                "MetadataRemoved" => Some(df::RwaEventSet::MetadataRemoved),
+                                "OwnerChanged" => Some(df::RwaEventSet::OwnerChanged),
+                                "Split" => Some(df::RwaEventSet::Split),
+                                "Merged" => Some(df::RwaEventSet::Merged),
+                                "Redeemed" => Some(df::RwaEventSet::Redeemed),
+                                "Frozen" => Some(df::RwaEventSet::Frozen),
+                                "Unfrozen" => Some(df::RwaEventSet::Unfrozen),
+                                "Held" => Some(df::RwaEventSet::Held),
+                                "Released" => Some(df::RwaEventSet::Released),
+                                "ForceTransferred" => Some(df::RwaEventSet::ForceTransferred),
+                                "ControlsChanged" => Some(df::RwaEventSet::ControlsChanged),
                                 _ => None,
                             });
                         }
@@ -1634,6 +1665,16 @@ fn event_filter_boxes_from_expr(
                         f = f.for_events(set);
                     }
                     out.push(EventFilterBox::Data(df::DataEventFilter::Nft(f)));
+                }
+                if c.rwa_id.is_some() || c.rwa_set.is_some() {
+                    let mut f = df::RwaEventFilter::new();
+                    if let Some(id) = c.rwa_id {
+                        f = f.for_rwa(id);
+                    }
+                    if let Some(set) = c.rwa_set {
+                        f = f.for_events(set);
+                    }
+                    out.push(EventFilterBox::Data(df::DataEventFilter::Rwa(f)));
                 }
                 if c.role_id.is_some() || c.role_set.is_some() {
                     let mut f = df::RoleEventFilter::new();

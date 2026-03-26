@@ -278,6 +278,8 @@ where
                 norito::codec::Encode::encode(q)
             } else if let Some(q) = any.downcast_ref::<crate::query::nft::prelude::FindNfts>() {
                 norito::codec::Encode::encode(q)
+            } else if let Some(q) = any.downcast_ref::<crate::query::rwa::prelude::FindRwas>() {
+                norito::codec::Encode::encode(q)
             } else if let Some(q) = any.downcast_ref::<crate::query::peer::prelude::FindPeers>() {
                 norito::codec::Encode::encode(q)
             } else if let Some(q) =
@@ -371,6 +373,8 @@ where
             {
                 norito::codec::Encode::encode(q)
             } else if let Some(q) = any.downcast_ref::<crate::query::nft::prelude::FindNfts>() {
+                norito::codec::Encode::encode(q)
+            } else if let Some(q) = any.downcast_ref::<crate::query::rwa::prelude::FindRwas>() {
                 norito::codec::Encode::encode(q)
             } else if let Some(q) = any.downcast_ref::<crate::query::peer::prelude::FindPeers>() {
                 norito::codec::Encode::encode(q)

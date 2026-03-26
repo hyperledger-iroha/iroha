@@ -261,6 +261,7 @@ use iroha_data_model::{
     nft::NftId,
     peer::Peer,
     permission::Permission,
+    rwa::RwaId,
     transaction::{
         SignedTransaction, TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload,
         signed::TransactionEntrypoint,
@@ -677,11 +678,12 @@ fn resolve_alias_on_chain(
         }
         if let Some(existing) = matched_account_id.as_ref() {
             if existing != account_id {
-                return Err(Error::Query(
-                    iroha_data_model::ValidationFail::InternalError(format!(
+                return Err(Error::AppConflict {
+                    code: "account_alias_conflict",
+                    message: format!(
                         "account alias `{canonical}` is bound to multiple accounts: {existing} and {account_id}"
-                    )),
-                ));
+                    ),
+                });
             }
         } else {
             matched_account_id = Some(account_id.clone());
@@ -1024,7 +1026,7 @@ struct AppState {
     mcp: iroha_config::parameters::actual::ToriiMcp,
     mcp_rate_limiter: limits::RateLimiter,
     mcp_tools: Arc<Vec<mcp::ToolSpec>>,
-    mcp_dispatch_router: std::sync::RwLock<Option<axum::Router<std::sync::Arc<AppState>>>>,
+    mcp_dispatch_router: std::sync::RwLock<Option<axum::Router>>,
     fee_policy: FeePolicy,
     norito_rpc: iroha_config::parameters::actual::NoritoRpcTransport,
     online_peers: OnlinePeersProvider,
@@ -1112,6 +1114,8 @@ struct AppState {
     offline_issuer: Option<OfflineIssuerSigner>,
     #[cfg(feature = "app_api")]
     account_faucet: Option<iroha_config::parameters::actual::ToriiFaucet>,
+    #[cfg(feature = "app_api")]
+    offline_policy_snapshot: Arc<std::sync::RwLock<crate::offline_reserve::OfflinePolicySnapshot>>,
     #[cfg(feature = "app_api")]
     uaid_onboarding: Option<AccountOnboardingSigner>,
     soracloud_runtime: Option<SharedSoracloudRuntime>,
@@ -4691,6 +4695,36 @@ async fn handler_offline_reserve_defund(
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
+async fn handler_offline_policy_update(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    crate::utils::extractors::NoritoJson(snapshot): crate::utils::extractors::NoritoJson<
+        crate::offline_reserve::OfflinePolicySnapshot,
+    >,
+) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        check_access_enforced(
+            &app,
+            &headers,
+            Some(remote_ip),
+            "v1/offline/policy",
+            enforce,
+        )
+        .await?;
+    }
+
+    json_ok(crate::offline_reserve::set_policy_snapshot(
+        app.as_ref(),
+        snapshot,
+    )?)
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
 async fn handler_offline_reserve_revocations(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -4939,6 +4973,17 @@ struct ExplorerNftsQuery {
 
 #[cfg(feature = "app_api")]
 #[derive(JsonDeserialize)]
+struct ExplorerRwasQuery {
+    #[norito(flatten)]
+    pagination: explorer::ExplorerPaginationQuery,
+    #[norito(default)]
+    owned_by: Option<String>,
+    #[norito(default)]
+    domain: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(JsonDeserialize)]
 struct ExplorerTransactionsQuery {
     #[norito(flatten)]
     pagination: explorer::ExplorerPaginationQuery,
@@ -4981,6 +5026,8 @@ const CONTEXT_EXPLORER_ASSET_DEFINITIONS_OWNED_BY: &str = "/v1/explorer/asset-de
 const CONTEXT_EXPLORER_ASSETS_OWNED_BY: &str = "/v1/explorer/assets?owned_by";
 #[cfg(feature = "app_api")]
 const CONTEXT_EXPLORER_NFTS_OWNED_BY: &str = "/v1/explorer/nfts?owned_by";
+#[cfg(feature = "app_api")]
+const CONTEXT_EXPLORER_RWAS_OWNED_BY: &str = "/v1/explorer/rwas?owned_by";
 #[cfg(feature = "app_api")]
 const CONTEXT_EXPLORER_TRANSACTIONS_AUTHORITY: &str = "/v1/explorer/transactions?authority";
 #[cfg(feature = "app_api")]
@@ -5375,6 +5422,12 @@ fn parse_nft_id(raw: &str) -> Result<NftId, Error> {
 }
 
 #[cfg(feature = "app_api")]
+fn parse_rwa_id(raw: &str) -> Result<RwaId, Error> {
+    raw.parse::<RwaId>()
+        .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))
+}
+
+#[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_explorer_accounts_list(
     State(app): State<SharedAppState>,
@@ -5547,6 +5600,39 @@ async fn handler_explorer_nfts_list(
         check_access(&app, &headers, Some(remote_ip), "v1/explorer/nfts").await?;
     }
     routing::handle_v1_explorer_nfts(app.state.clone(), pagination, owned_by, domain).await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_explorer_rwas_list(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxQuery(query): AxQuery<ExplorerRwasQuery>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    let ExplorerRwasQuery {
+        pagination,
+        owned_by,
+        domain,
+    } = query;
+    let owned_by = match owned_by {
+        Some(raw) => Some(parse_account_id_for_endpoint(
+            &app,
+            &raw,
+            CONTEXT_EXPLORER_RWAS_OWNED_BY,
+        )?),
+        None => None,
+    };
+    let domain = match domain {
+        Some(raw) => Some(parse_domain_id(&raw)?),
+        None => None,
+    };
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    if !allowed {
+        check_access(&app, &headers, Some(remote_ip), "v1/explorer/rwas").await?;
+    }
+    routing::handle_v1_explorer_rwas(app.state.clone(), pagination, owned_by, domain).await
 }
 
 #[cfg(feature = "app_api")]
@@ -6082,6 +6168,23 @@ async fn handler_explorer_nft_detail(
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
+async fn handler_explorer_rwa_detail(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath(rwa_raw): AxPath<String>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    if !allowed {
+        check_access(&app, &headers, Some(remote_ip), "v1/explorer/rwas/{id}").await?;
+    }
+    let rwa_id = parse_rwa_id(&rwa_raw)?;
+    routing::handle_v1_explorer_rwa_detail(app.state.clone(), rwa_id).await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
 async fn handler_explorer_block_detail(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -6437,6 +6540,49 @@ async fn handler_nfts_query(
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(&app, &headers, Some(remote_ip), "v1/nfts/query", enforce).await?;
         routing::handle_v1_nfts_query(app.state.clone(), payload).await?
+    };
+
+    Ok(response.into_response())
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_rwas_list(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxQuery(p): AxQuery<crate::routing::ListFilterParams>,
+) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+        return routing::handle_v1_rwas(app.state.clone(), AxQuery(p)).await;
+    }
+
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+    check_access_enforced(&app, &headers, Some(remote_ip), "v1/rwas", enforce).await?;
+
+    routing::handle_v1_rwas(app.state.clone(), AxQuery(p)).await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_rwas_query(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
+        crate::filter::QueryEnvelope,
+    >,
+) -> Result<axum::response::Response, Error> {
+    let remote_ip = remote.ip();
+    let payload = crate::utils::extractors::NoritoJson(env);
+    let response = if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+        routing::handle_v1_rwas_query(app.state.clone(), payload).await?
+    } else {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        check_access_enforced(&app, &headers, Some(remote_ip), "v1/rwas/query", enforce).await?;
+        routing::handle_v1_rwas_query(app.state.clone(), payload).await?
     };
 
     Ok(response.into_response())
@@ -16764,6 +16910,41 @@ fn tx_history_reject(
 }
 
 #[cfg(feature = "app_api")]
+fn tx_history_alias_resolution_error_message(err: &Error) -> String {
+    match err {
+        Error::AppConflict { message, .. } if !message.trim().is_empty() => message.clone(),
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+        ))
+        | Error::Query(iroha_data_model::ValidationFail::InternalError(message))
+            if !message.trim().is_empty() =>
+        {
+            message.clone()
+        }
+        _ => err.to_string(),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn tx_history_alias_resolution_reject(err: Error) -> AxResponse {
+    let (status, code) = match &err {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(_),
+        )) => (StatusCode::BAD_REQUEST, "tx_history_alias_invalid"),
+        Error::AppConflict { .. } => (StatusCode::CONFLICT, "tx_history_alias_conflict"),
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "tx_history_alias_resolution_failed",
+        ),
+    };
+    tx_history_reject(
+        status,
+        code,
+        tx_history_alias_resolution_error_message(&err),
+    )
+}
+
+#[cfg(feature = "app_api")]
 fn decode_tx_history_jwt_claims(
     auth_header: &str,
     jwt: &TxHistoryJwtConfig,
@@ -16940,11 +17121,7 @@ fn tx_history_viewer_from_headers(
             }
             Ok(None) => {}
             Err(err) => {
-                return Err(tx_history_reject(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "tx_history_alias_resolution_failed",
-                    err.to_string(),
-                ));
+                return Err(tx_history_alias_resolution_reject(err));
             }
         }
     }
@@ -17735,6 +17912,8 @@ pub struct Torii {
     offline_issuer: Option<OfflineIssuerSigner>,
     #[cfg(feature = "app_api")]
     account_faucet: Option<iroha_config::parameters::actual::ToriiFaucet>,
+    #[cfg(feature = "app_api")]
+    offline_policy_snapshot: Arc<std::sync::RwLock<crate::offline_reserve::OfflinePolicySnapshot>>,
     #[cfg(feature = "app_api")]
     uaid_onboarding: Option<AccountOnboardingSigner>,
     soracloud_runtime: Option<SharedSoracloudRuntime>,
@@ -18730,6 +18909,7 @@ impl Torii {
                     "/v1/offline/revocations/bundle",
                     get(handler_offline_reserve_revocations_bundle),
                 )
+                .route("/v1/offline/policy", post(handler_offline_policy_update))
                 .route("/v1/offline/cash/setup", post(handler_offline_cash_setup))
                 .route("/v1/offline/cash/load", post(handler_offline_cash_load))
                 .route(
@@ -19020,6 +19200,9 @@ impl Torii {
                 // NFTs listing
                 .route("/v1/nfts", get(handler_nfts_list))
                 .route("/v1/nfts/query", post(handler_nfts_query))
+                // RWA listing
+                .route("/v1/rwas", get(handler_rwas_list))
+                .route("/v1/rwas/query", post(handler_rwas_query))
                 // Subscriptions
                 .route(
                     "/v1/subscriptions/plans",
@@ -19067,6 +19250,7 @@ impl Torii {
                 )
                 .route("/v1/explorer/assets", get(handler_explorer_assets_list))
                 .route("/v1/explorer/nfts", get(handler_explorer_nfts_list))
+                .route("/v1/explorer/rwas", get(handler_explorer_rwas_list))
                 .route("/v1/explorer/blocks", get(handler_explorer_blocks_list))
                 .route("/v1/explorer/health", get(handler_explorer_health))
                 .route(
@@ -19157,6 +19341,10 @@ impl Torii {
                 .route(
                     "/v1/explorer/nfts/{nft_id}",
                     get(handler_explorer_nft_detail),
+                )
+                .route(
+                    "/v1/explorer/rwas/{rwa_id}",
+                    get(handler_explorer_rwa_detail),
                 )
                 .route(
                     "/v1/explorer/blocks/{identifier}",
@@ -19981,6 +20169,10 @@ impl Torii {
         #[cfg(feature = "app_api")]
         let account_faucet = config.faucet.clone();
         #[cfg(feature = "app_api")]
+        let offline_policy_snapshot = Arc::new(std::sync::RwLock::new(
+            crate::offline_reserve::OfflinePolicySnapshot::default(),
+        ));
+        #[cfg(feature = "app_api")]
         let identifier_resolver = config.ram_lfe.as_ref().and_then(|cfg| {
             if cfg.programs.is_empty() {
                 iroha_logger::warn!("torii.ram_lfe is enabled but no programs are configured");
@@ -20125,6 +20317,8 @@ impl Torii {
             offline_issuer,
             #[cfg(feature = "app_api")]
             account_faucet,
+            #[cfg(feature = "app_api")]
+            offline_policy_snapshot,
             #[cfg(feature = "app_api")]
             uaid_onboarding,
             soracloud_runtime,
@@ -20418,6 +20612,8 @@ impl Torii {
             #[cfg(feature = "app_api")]
             account_faucet: self.account_faucet.clone(),
             #[cfg(feature = "app_api")]
+            offline_policy_snapshot: self.offline_policy_snapshot.clone(),
+            #[cfg(feature = "app_api")]
             uaid_onboarding: self.uaid_onboarding.clone(),
             soracloud_runtime: self.soracloud_runtime.clone(),
             #[cfg(feature = "app_api")]
@@ -20587,6 +20783,8 @@ impl Torii {
             ))
             .layer(cors_layer);
 
+        let router = router.with_state(app_state.clone());
+
         {
             let mut guard = app_state
                 .mcp_dispatch_router
@@ -20595,7 +20793,7 @@ impl Torii {
             *guard = Some(router.clone());
         }
 
-        router.with_state(app_state)
+        router
     }
 
     /// Public helper to get the API router for integration tests without starting an HTTP server.
@@ -21782,6 +21980,13 @@ pub enum Error {
         /// Human-readable error message.
         message: String,
     },
+    /// Conflict error for app-facing operation `{code}`: {message}
+    AppConflict {
+        /// Stable machine-readable code.
+        code: &'static str,
+        /// Human-readable error message.
+        message: String,
+    },
     /// Proof endpoint `{endpoint}` throttled the request; retry after {retry_after_secs}s
     ProofRateLimited {
         /// Logical endpoint label.
@@ -21964,6 +22169,10 @@ impl IntoResponse for Error {
                     StatusCode::BAD_REQUEST
                 };
                 (status, utils::NoritoBody(payload)).into_response()
+            }
+            Self::AppConflict { code, message } => {
+                let payload = ErrorEnvelope::new(code, message);
+                (StatusCode::CONFLICT, utils::NoritoBody(payload)).into_response()
             }
             Self::ProofRateLimited {
                 endpoint,
@@ -22509,6 +22718,10 @@ pub(crate) mod tests_runtime_handlers {
             offline_issuer: None,
             #[cfg(feature = "app_api")]
             account_faucet: None,
+            #[cfg(feature = "app_api")]
+            offline_policy_snapshot: Arc::new(std::sync::RwLock::new(
+                crate::offline_reserve::OfflinePolicySnapshot::default(),
+            )),
             #[cfg(feature = "app_api")]
             uaid_onboarding: None,
             soracloud_runtime: None,
@@ -27501,6 +27714,7 @@ impl Error {
                 ErrorEnvelope::new("queue_error", "queue request rejected")
             }
             Self::AppQueryValidation { code, message } => ErrorEnvelope::new(code, message),
+            Self::AppConflict { code, message } => ErrorEnvelope::new(code, message),
             Self::ProofRateLimited {
                 endpoint,
                 retry_after_secs,
@@ -27562,6 +27776,7 @@ impl Error {
             ApiVersion(err) => err.status(),
             AcceptTransaction(_) => StatusCode::BAD_REQUEST,
             AppQueryValidation { .. } => StatusCode::BAD_REQUEST,
+            AppConflict { .. } => StatusCode::CONFLICT,
             LaneLifecycle { .. } => StatusCode::BAD_REQUEST,
             Config(_) | StatusSegmentNotFound(_) => StatusCode::NOT_FOUND,
             SerializationFailure { .. } => StatusCode::INTERNAL_SERVER_ERROR,
@@ -28234,9 +28449,42 @@ mod tests {
 
     #[cfg(feature = "app_api")]
     #[test]
+    fn tx_history_alias_resolution_reject_maps_duplicate_bindings_to_conflict() {
+        let response = tx_history_alias_resolution_reject(Error::AppConflict {
+            code: "account_alias_conflict",
+            message:
+                "account alias `operator1@hbl.sbp` is bound to multiple accounts: account-a and account-b"
+                    .to_string(),
+        });
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn tx_history_alias_resolution_reject_maps_invalid_alias_literals_to_bad_request() {
+        let response = tx_history_alias_resolution_reject(Error::Query(
+            iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                    "alias contains invalid scope".to_string(),
+                ),
+            ),
+        ));
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
     fn canonical_tx_history_alias_maps_fi_domains_into_sbp_dataspace() {
-        assert_eq!(canonical_tx_history_alias("operator1@hbl"), "operator1@hbl.sbp");
-        assert_eq!(canonical_tx_history_alias("operator2@ubl"), "operator2@ubl.sbp");
+        assert_eq!(
+            canonical_tx_history_alias("operator1@hbl"),
+            "operator1@hbl.sbp"
+        );
+        assert_eq!(
+            canonical_tx_history_alias("operator2@ubl"),
+            "operator2@ubl.sbp"
+        );
         assert_eq!(canonical_tx_history_alias("banking@sbp"), "banking@sbp");
         assert_eq!(
             canonical_tx_history_alias("operator1@hbl.sbp"),

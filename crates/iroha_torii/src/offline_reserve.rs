@@ -16,6 +16,10 @@ use iroha_core::{
         ReserveAppleAppAttestVerification, verify_reserve_apple_app_attest,
     },
     state::WorldReadOnly,
+    zk_stark::{
+        STARK_HASH_SHA256_V1, StarkFriParamsV1, StarkVerifyEnvelopeV1,
+        synthesize_stark_fri_envelope_bytes,
+    },
 };
 use iroha_crypto::{Hash, PrivateKey, Signature};
 use iroha_data_model::{
@@ -32,13 +36,15 @@ use iroha_data_model::{
     metadata::Metadata,
     name::Name,
     offline::{
-        OfflineCashDeviceBinding as SharedOfflineCashDeviceBinding,
         OfflineAppleAppAttestBinding as SharedOfflineAppleAppAttestBinding,
+        OfflineCashDeviceBinding as SharedOfflineCashDeviceBinding,
+        OfflineMutationSettlement as SharedOfflineMutationSettlement,
         OfflineReserveEnvelope as SharedOfflineReserveEnvelope,
         OfflineReserveOperationResult as SharedOfflineReserveOperationResult,
         OfflineReserveRecord as SharedOfflineReserveRecord,
         OfflineReserveState as SharedOfflineReserveState,
-        OfflineSpendAuthorization as SharedOfflineSpendAuthorization, OfflineVerdictRevocation,
+        OfflineSpendAuthorization as SharedOfflineSpendAuthorization,
+        OfflineTransparentZkProof as SharedOfflineTransparentZkProof, OfflineVerdictRevocation,
         OfflineVerdictRevocationReason,
     },
     prelude::{InstructionBox, Numeric, TransactionBuilder},
@@ -66,6 +72,12 @@ static GOOGLE_ATTESTATION_ROOT_ECDSA: &[u8] = include_bytes!(concat!(
 static ANDROID_ROOT_ANCHORS: LazyLock<Box<[&'static [u8]]>> =
     LazyLock::new(|| Box::new([GOOGLE_ATTESTATION_ROOT_RSA, GOOGLE_ATTESTATION_ROOT_ECDSA]));
 const OFFLINE_CASH_TX_COMMIT_TIMEOUT: Duration = Duration::from_secs(5);
+const OFFLINE_SETTLEMENT_PROOF_BACKEND: &str = "stark/fri/sha256-goldilocks";
+const OFFLINE_SETTLEMENT_CIRCUIT_ID: &str = "offline-bearer-settlement-v1";
+const OFFLINE_REDEEM_REQUEST_CIRCUIT_ID: &str = "offline-bearer-redeem-request-v1";
+const OFFLINE_STARK_DOMAIN_LOG2: u8 = 4;
+const OFFLINE_STARK_BLOWUP_LOG2: u8 = 3;
+const OFFLINE_STARK_QUERY_COUNT: u16 = 8;
 
 #[derive(Clone, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize)]
 struct StoredReserve {
@@ -199,6 +211,68 @@ pub struct OfflineReserveState {
 )]
 pub struct OfflineReserveEnvelope {
     pub reserve_state: OfflineReserveState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub settlement: Option<OfflineMutationSettlement>,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+pub struct OfflineTransparentZkProof {
+    pub backend: String,
+    pub circuit_id: String,
+    pub recursion_depth: u8,
+    pub public_inputs_hex: String,
+    pub envelope: StarkVerifyEnvelopeV1,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+pub struct OfflineMutationSettlement {
+    pub kind: String,
+    pub operation_id: String,
+    pub chain_tx_hash: String,
+    pub entry_hash: String,
+    pub block_height: u64,
+    pub pre_state_hash: String,
+    pub post_state_hash: String,
+    pub settlement_commitment_hex: String,
+    pub proof: OfflineTransparentZkProof,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+pub struct OfflineRedeemRequestProof {
+    pub backend: String,
+    pub circuit_id: String,
+    pub recursion_depth: u8,
+    pub public_inputs_hex: String,
+    pub envelope: StarkVerifyEnvelopeV1,
 }
 
 #[derive(
@@ -215,7 +289,49 @@ pub struct OfflineRevocationBundle {
     pub issued_at_ms: u64,
     pub expires_at_ms: u64,
     pub verdict_ids: Vec<String>,
+    #[serde(default)]
+    #[norito(default)]
+    pub blacklisted_account_ids: Vec<String>,
+    #[serde(default)]
+    #[norito(default)]
+    pub asset_send_limits: Vec<OfflineAssetSendLimit>,
     pub issuer_signature_base64: String,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Serialize,
+    Deserialize,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+pub struct OfflineAssetSendLimit {
+    pub asset_definition_id: String,
+    pub daily_send_limit: String,
+    pub monthly_send_limit: String,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    Serialize,
+    Deserialize,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+pub struct OfflinePolicySnapshot {
+    #[serde(default)]
+    #[norito(default)]
+    pub blacklisted_account_ids: Vec<String>,
+    #[serde(default)]
+    #[norito(default)]
+    pub asset_send_limits: Vec<OfflineAssetSendLimit>,
 }
 
 #[derive(
@@ -376,6 +492,7 @@ pub struct OfflineReserveDefundRequest {
     pub offline_public_key: String,
     pub amount: String,
     pub receipts: Vec<OfflineTransferReceipt>,
+    pub redeem_proof: OfflineRedeemRequestProof,
 }
 
 #[derive(
@@ -531,6 +648,38 @@ struct ReserveDefundRequestHashPayload<'a> {
     offline_public_key: &'a str,
     amount: &'a str,
     receipt_keys: Vec<String>,
+    redeem_public_inputs_hex: &'a str,
+}
+
+#[derive(crate::json_macros::JsonSerialize)]
+struct SettlementCommitmentPayload<'a> {
+    operation_id: &'a str,
+    kind: &'a str,
+    account_id: &'a str,
+    lineage_id: &'a str,
+    asset_definition_id: &'a str,
+    amount: &'a str,
+    offline_public_key: &'a str,
+    authorization_id: &'a str,
+    pre_state_hash: &'a str,
+    post_state_hash: &'a str,
+    chain_tx_hash: &'a str,
+    entry_hash: &'a str,
+    block_height: u64,
+}
+
+#[derive(crate::json_macros::JsonSerialize)]
+struct RedeemRequestCommitmentPayload<'a> {
+    operation_id: &'a str,
+    kind: &'a str,
+    account_id: &'a str,
+    lineage_id: &'a str,
+    asset_definition_id: &'a str,
+    amount: &'a str,
+    offline_public_key: &'a str,
+    authorization_id: &'a str,
+    pre_state_hash: &'a str,
+    receipt_keys: Vec<String>,
 }
 
 #[derive(crate::json_macros::JsonSerialize)]
@@ -583,6 +732,8 @@ struct RevocationBundleUnsignedPayload {
     issued_at_ms: u64,
     expires_at_ms: u64,
     verdict_ids: Vec<String>,
+    blacklisted_account_ids: Vec<String>,
+    asset_send_limits: Vec<OfflineAssetSendLimit>,
 }
 
 #[derive(crate::json_macros::JsonSerialize)]
@@ -888,8 +1039,70 @@ fn local_cash_device_binding_from_shared(
     }
 }
 
-fn shared_envelope_from_local(envelope: &OfflineReserveEnvelope) -> SharedOfflineReserveEnvelope {
-    SharedOfflineReserveEnvelope {
+fn shared_settlement_proof_from_local(
+    proof: &OfflineTransparentZkProof,
+) -> Result<SharedOfflineTransparentZkProof, Error> {
+    let envelope_bytes = norito::to_bytes(&proof.envelope)
+        .map_err(|err| conversion_error(format!("failed to encode settlement proof: {err}")))?;
+    Ok(SharedOfflineTransparentZkProof {
+        backend: proof.backend.clone(),
+        circuit_id: proof.circuit_id.clone(),
+        recursion_depth: proof.recursion_depth,
+        public_inputs_hex: proof.public_inputs_hex.clone(),
+        envelope_bytes,
+    })
+}
+
+fn local_settlement_proof_from_shared(
+    proof: &SharedOfflineTransparentZkProof,
+) -> Result<OfflineTransparentZkProof, Error> {
+    let envelope = norito::decode_from_bytes::<StarkVerifyEnvelopeV1>(&proof.envelope_bytes)
+        .map_err(|err| conversion_error(format!("failed to decode settlement proof: {err}")))?;
+    Ok(OfflineTransparentZkProof {
+        backend: proof.backend.clone(),
+        circuit_id: proof.circuit_id.clone(),
+        recursion_depth: proof.recursion_depth,
+        public_inputs_hex: proof.public_inputs_hex.clone(),
+        envelope,
+    })
+}
+
+fn shared_settlement_from_local(
+    settlement: &OfflineMutationSettlement,
+) -> Result<SharedOfflineMutationSettlement, Error> {
+    Ok(SharedOfflineMutationSettlement {
+        kind: settlement.kind.clone(),
+        operation_id: settlement.operation_id.clone(),
+        chain_tx_hash: settlement.chain_tx_hash.clone(),
+        entry_hash: settlement.entry_hash.clone(),
+        block_height: settlement.block_height,
+        pre_state_hash: settlement.pre_state_hash.clone(),
+        post_state_hash: settlement.post_state_hash.clone(),
+        settlement_commitment_hex: settlement.settlement_commitment_hex.clone(),
+        proof: shared_settlement_proof_from_local(&settlement.proof)?,
+    })
+}
+
+fn local_settlement_from_shared(
+    settlement: &SharedOfflineMutationSettlement,
+) -> Result<OfflineMutationSettlement, Error> {
+    Ok(OfflineMutationSettlement {
+        kind: settlement.kind.clone(),
+        operation_id: settlement.operation_id.clone(),
+        chain_tx_hash: settlement.chain_tx_hash.clone(),
+        entry_hash: settlement.entry_hash.clone(),
+        block_height: settlement.block_height,
+        pre_state_hash: settlement.pre_state_hash.clone(),
+        post_state_hash: settlement.post_state_hash.clone(),
+        settlement_commitment_hex: settlement.settlement_commitment_hex.clone(),
+        proof: local_settlement_proof_from_shared(&settlement.proof)?,
+    })
+}
+
+fn shared_envelope_from_local(
+    envelope: &OfflineReserveEnvelope,
+) -> Result<SharedOfflineReserveEnvelope, Error> {
+    Ok(SharedOfflineReserveEnvelope {
         reserve_state: SharedOfflineReserveState {
             reserve_id: envelope.reserve_state.reserve_id.clone(),
             account_id: envelope.reserve_state.account_id.clone(),
@@ -904,11 +1117,18 @@ fn shared_envelope_from_local(envelope: &OfflineReserveEnvelope) -> SharedOfflin
             authorization: shared_authorization_from_local(&envelope.reserve_state.authorization),
             issuer_signature_base64: envelope.reserve_state.issuer_signature_base64.clone(),
         },
-    }
+        settlement: envelope
+            .settlement
+            .as_ref()
+            .map(shared_settlement_from_local)
+            .transpose()?,
+    })
 }
 
-fn local_envelope_from_shared(envelope: &SharedOfflineReserveEnvelope) -> OfflineReserveEnvelope {
-    OfflineReserveEnvelope {
+fn local_envelope_from_shared(
+    envelope: &SharedOfflineReserveEnvelope,
+) -> Result<OfflineReserveEnvelope, Error> {
+    Ok(OfflineReserveEnvelope {
         reserve_state: OfflineReserveState {
             reserve_id: envelope.reserve_state.reserve_id.clone(),
             account_id: envelope.reserve_state.account_id.clone(),
@@ -923,7 +1143,12 @@ fn local_envelope_from_shared(envelope: &SharedOfflineReserveEnvelope) -> Offlin
             authorization: local_authorization_from_shared(&envelope.reserve_state.authorization),
             issuer_signature_base64: envelope.reserve_state.issuer_signature_base64.clone(),
         },
-    }
+        settlement: envelope
+            .settlement
+            .as_ref()
+            .map(local_settlement_from_shared)
+            .transpose()?,
+    })
 }
 
 fn shared_binding_from_local(
@@ -954,7 +1179,7 @@ fn shared_record_from_local(
 ) -> Result<SharedOfflineReserveRecord, Error> {
     let envelope = envelope_from_record(issuer, record)?;
     Ok(SharedOfflineReserveRecord {
-        reserve_state: shared_envelope_from_local(&envelope).reserve_state,
+        reserve_state: shared_envelope_from_local(&envelope)?.reserve_state,
         app_attest_key_id: record.app_attest_key_id.clone(),
         counter_book: record.counter_book.clone(),
         seen_transfer_ids: record.seen_transfer_ids.clone(),
@@ -1133,7 +1358,7 @@ pub(crate) async fn top_up_reserve(
                 "offline cash operation_id is already bound to a different request".to_owned(),
             ));
         }
-        return Ok(local_envelope_from_shared(&existing.envelope));
+        return local_envelope_from_shared(&existing.envelope);
     }
 
     let mut reserve = if let Some(reserve_id) = req.reserve_id.as_ref() {
@@ -1232,7 +1457,7 @@ pub(crate) async fn top_up_reserve(
                     kind: "topup".to_owned(),
                     request_hash_hex,
                     reserve_id: reserve.reserve_id.clone(),
-                    envelope: shared_envelope_from_local(&envelope),
+                    envelope: shared_envelope_from_local(&envelope)?,
                     completed_at_ms: now_ms(),
                 },
             }),
@@ -1256,7 +1481,7 @@ pub(crate) async fn renew_reserve(
                 "offline cash operation_id is already bound to a different request".to_owned(),
             ));
         }
-        return Ok(local_envelope_from_shared(&existing.envelope));
+        return local_envelope_from_shared(&existing.envelope);
     }
 
     let mut reserve = load_shared_reserve(app, &req.reserve_id)?
@@ -1329,7 +1554,7 @@ pub(crate) async fn renew_reserve(
                 kind: "renew".to_owned(),
                 request_hash_hex,
                 reserve_id: reserve.reserve_id.clone(),
-                envelope: shared_envelope_from_local(&envelope),
+                envelope: shared_envelope_from_local(&envelope)?,
                 completed_at_ms: now_ms(),
             },
         }),
@@ -1352,7 +1577,7 @@ pub(crate) async fn sync_reserve(
                 "offline cash operation_id is already bound to a different request".to_owned(),
             ));
         }
-        return Ok(local_envelope_from_shared(&existing.envelope));
+        return local_envelope_from_shared(&existing.envelope);
     }
 
     let mut reserve = load_shared_reserve(app, &req.reserve_id)?
@@ -1389,7 +1614,7 @@ pub(crate) async fn sync_reserve(
                 kind: "sync".to_owned(),
                 request_hash_hex,
                 reserve_id: reserve.reserve_id.clone(),
-                envelope: shared_envelope_from_local(&envelope),
+                envelope: shared_envelope_from_local(&envelope)?,
                 completed_at_ms: now_ms(),
             },
         }),
@@ -1413,7 +1638,7 @@ pub(crate) async fn defund_reserve(
                 "offline cash operation_id is already bound to a different request".to_owned(),
             ));
         }
-        return Ok(local_envelope_from_shared(&existing.envelope));
+        return local_envelope_from_shared(&existing.envelope);
     }
 
     let mut reserve = load_shared_reserve(app, &req.reserve_id)?
@@ -1473,7 +1698,7 @@ pub(crate) async fn defund_reserve(
                     kind: "defund".to_owned(),
                     request_hash_hex,
                     reserve_id: reserve.reserve_id.clone(),
-                    envelope: shared_envelope_from_local(&envelope),
+                    envelope: shared_envelope_from_local(&envelope)?,
                     completed_at_ms: now_ms(),
                 },
             }),
@@ -1562,9 +1787,7 @@ pub(crate) async fn setup_cash(
         &req.app_attest_key_id,
         Some(match &mode {
             OfflineCashAttestationMode::AppleAttest { binding, .. }
-            | OfflineCashAttestationMode::Android { binding, .. } => {
-                binding.clone()
-            }
+            | OfflineCashAttestationMode::Android { binding, .. } => binding.clone(),
         }),
     )?;
     record.apple_app_attest_binding = match &mode {
@@ -1631,7 +1854,7 @@ pub(crate) async fn load_cash(
                 "offline cash operation_id is already bound to a different request".to_owned(),
             ));
         }
-        return Ok(local_envelope_from_shared(&existing.envelope));
+        return local_envelope_from_shared(&existing.envelope);
     }
 
     let mut reserve = if let Some(reserve_id) = req.reserve_id.as_ref() {
@@ -1661,9 +1884,7 @@ pub(crate) async fn load_cash(
                     &req.app_attest_key_id,
                     Some(match &mode {
                         OfflineCashAttestationMode::AppleAttest { binding, .. }
-                        | OfflineCashAttestationMode::Android { binding, .. } => {
-                            binding.clone()
-                        }
+                        | OfflineCashAttestationMode::Android { binding, .. } => binding.clone(),
                     }),
                 )?
             }
@@ -1763,7 +1984,7 @@ pub(crate) async fn load_cash(
                     kind: "topup".to_owned(),
                     request_hash_hex,
                     reserve_id: reserve.reserve_id.clone(),
-                    envelope: shared_envelope_from_local(&envelope),
+                    envelope: shared_envelope_from_local(&envelope)?,
                     completed_at_ms: now_ms(),
                 },
             }),
@@ -1788,7 +2009,7 @@ pub(crate) async fn refresh_cash(
                 "offline cash operation_id is already bound to a different request".to_owned(),
             ));
         }
-        return Ok(local_envelope_from_shared(&existing.envelope));
+        return local_envelope_from_shared(&existing.envelope);
     }
 
     let mut reserve = load_shared_reserve(app, &req.reserve_id)?
@@ -1849,9 +2070,7 @@ pub(crate) async fn refresh_cash(
             verdict_id: reserve.authorization.verdict_id.clone(),
             device_binding: Some(match &mode {
                 OfflineCashAttestationMode::AppleAttest { binding, .. }
-                | OfflineCashAttestationMode::Android { binding, .. } => {
-                    binding.clone()
-                }
+                | OfflineCashAttestationMode::Android { binding, .. } => binding.clone(),
             }),
             app_attest_key_id: reserve.app_attest_key_id.clone(),
             issued_at_ms: now_ms(),
@@ -1889,7 +2108,7 @@ pub(crate) async fn refresh_cash(
                 kind: "renew".to_owned(),
                 request_hash_hex,
                 reserve_id: reserve.reserve_id.clone(),
-                envelope: shared_envelope_from_local(&envelope),
+                envelope: shared_envelope_from_local(&envelope)?,
                 completed_at_ms: now_ms(),
             },
         }),
@@ -2011,11 +2230,78 @@ pub(crate) async fn redeem_cash(
     defund_reserve(app, req).await
 }
 
+fn normalize_offline_policy_snapshot(
+    snapshot: OfflinePolicySnapshot,
+) -> Result<OfflinePolicySnapshot, Error> {
+    let mut blacklisted_account_ids = snapshot
+        .blacklisted_account_ids
+        .into_iter()
+        .map(|value| {
+            let authority = AccountId::parse_encoded(value.trim()).map_err(|err| {
+                conversion_error(format!("invalid blacklisted_account_id: {err}"))
+            })?;
+            Ok(authority.into_account_id().to_string())
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+    blacklisted_account_ids.sort();
+    blacklisted_account_ids.dedup();
+
+    let mut asset_send_limits = snapshot
+        .asset_send_limits
+        .into_iter()
+        .map(|item| {
+            let asset_definition_id = item
+                .asset_definition_id
+                .trim()
+                .parse::<AssetDefinitionId>()
+                .map_err(|err| conversion_error(format!("invalid asset_definition_id: {err}")))?
+                .to_string();
+            let daily_send_limit = canonical_amount_string(&parse_amount(&item.daily_send_limit)?);
+            let monthly_send_limit =
+                canonical_amount_string(&parse_amount(&item.monthly_send_limit)?);
+            Ok(OfflineAssetSendLimit {
+                asset_definition_id,
+                daily_send_limit,
+                monthly_send_limit,
+            })
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+    asset_send_limits
+        .sort_by(|left, right| left.asset_definition_id.cmp(&right.asset_definition_id));
+    asset_send_limits.dedup_by(|left, right| left.asset_definition_id == right.asset_definition_id);
+
+    Ok(OfflinePolicySnapshot {
+        blacklisted_account_ids,
+        asset_send_limits,
+    })
+}
+
+pub(crate) fn set_policy_snapshot(
+    app: &AppState,
+    snapshot: OfflinePolicySnapshot,
+) -> Result<OfflinePolicySnapshot, Error> {
+    let snapshot = normalize_offline_policy_snapshot(snapshot)?;
+    let mut guard = app
+        .offline_policy_snapshot
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *guard = snapshot.clone();
+    Ok(snapshot)
+}
+
+pub(crate) fn policy_snapshot(app: &AppState) -> OfflinePolicySnapshot {
+    app.offline_policy_snapshot
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
 pub(crate) fn revocation_bundle(app: &AppState) -> Result<OfflineRevocationBundle, Error> {
     let issuer = issuer(app)?;
     let mut verdict_ids = revoked_verdict_ids(app).into_iter().collect::<Vec<_>>();
     verdict_ids.sort();
     verdict_ids.dedup();
+    let snapshot = policy_snapshot(app);
 
     let issued_at_ms = now_ms();
     let expires_at_ms =
@@ -2024,12 +2310,16 @@ pub(crate) fn revocation_bundle(app: &AppState) -> Result<OfflineRevocationBundl
         issued_at_ms,
         expires_at_ms,
         verdict_ids,
+        blacklisted_account_ids: snapshot.blacklisted_account_ids,
+        asset_send_limits: snapshot.asset_send_limits,
         issuer_signature_base64: String::new(),
     };
     let signature_payload = canonical_json_bytes(&RevocationBundleUnsignedPayload {
         issued_at_ms: bundle.issued_at_ms,
         expires_at_ms: bundle.expires_at_ms,
         verdict_ids: bundle.verdict_ids.clone(),
+        blacklisted_account_ids: bundle.blacklisted_account_ids.clone(),
+        asset_send_limits: bundle.asset_send_limits.clone(),
     })?;
     bundle.issuer_signature_base64 = sign_base64(issuer, &signature_payload);
     Ok(bundle)
@@ -2625,12 +2915,12 @@ fn cash_transfer_receipt_unsigned_payload(
                 offline_public_key: receipt.offline_public_key.clone(),
                 pre_balance: canonical_amount_string(&parse_numeric(&receipt.pre_balance)?),
                 post_balance: canonical_amount_string(&parse_numeric(&receipt.post_balance)?),
-                pre_locked_balance: canonical_amount_string(
-                    &parse_numeric(&receipt.pre_parked_balance)?,
-                ),
-                post_locked_balance: canonical_amount_string(
-                    &parse_numeric(&receipt.post_parked_balance)?,
-                ),
+                pre_locked_balance: canonical_amount_string(&parse_numeric(
+                    &receipt.pre_parked_balance,
+                )?),
+                post_locked_balance: canonical_amount_string(&parse_numeric(
+                    &receipt.post_parked_balance,
+                )?),
                 pre_state_hash: receipt.pre_state_hash.clone(),
                 post_state_hash: receipt.post_state_hash.clone(),
                 local_revision: receipt.local_revision,
@@ -2835,7 +3125,10 @@ fn envelope_from_record(
     };
     reserve_state.issuer_signature_base64 =
         sign_base64(issuer, &reserve_state_unsigned_payload(&reserve_state)?);
-    Ok(OfflineReserveEnvelope { reserve_state })
+    Ok(OfflineReserveEnvelope {
+        reserve_state,
+        settlement: None,
+    })
 }
 
 struct AuthorizationDraft {
@@ -2945,13 +3238,213 @@ fn controller_asset_id(account_id: &str, asset_definition_id: &str) -> Result<As
     Ok(AssetId::new(definition, authority))
 }
 
+#[derive(Debug, Clone)]
+struct SubmittedTransactionReceipt {
+    chain_tx_hash: String,
+    entry_hash: String,
+    block_height: u64,
+}
+
+fn offline_recursive_stark_ready() -> bool {
+    cfg!(feature = "zk-stark")
+}
+
+fn ensure_offline_recursive_stark_ready() -> Result<(), Error> {
+    if offline_recursive_stark_ready() {
+        Ok(())
+    } else {
+        Err(conversion_error(
+            "offline recursive stark proofs are unavailable".to_owned(),
+        ))
+    }
+}
+
+fn offline_stark_params(domain_tag: String) -> StarkFriParamsV1 {
+    StarkFriParamsV1 {
+        version: 1,
+        n_log2: OFFLINE_STARK_DOMAIN_LOG2,
+        blowup_log2: OFFLINE_STARK_BLOWUP_LOG2,
+        fold_arity: 2,
+        queries: OFFLINE_STARK_QUERY_COUNT,
+        merkle_arity: 2,
+        hash_fn: STARK_HASH_SHA256_V1,
+        domain_tag,
+    }
+}
+
+fn synthesize_stark_envelope(
+    domain_tag: String,
+    transcript_label: &str,
+) -> Result<StarkVerifyEnvelopeV1, Error> {
+    let bytes = synthesize_stark_fri_envelope_bytes(
+        offline_stark_params(domain_tag),
+        transcript_label.to_owned(),
+    )
+    .map_err(|err| conversion_error(format!("failed to synthesize stark envelope: {err}")))?;
+    norito::decode_from_bytes::<StarkVerifyEnvelopeV1>(&bytes)
+        .map_err(|err| conversion_error(format!("failed to decode stark envelope: {err}")))
+}
+
+fn encode_stark_envelope_bytes(envelope: &StarkVerifyEnvelopeV1) -> Result<Vec<u8>, Error> {
+    norito::to_bytes(envelope)
+        .map_err(|err| conversion_error(format!("failed to encode stark envelope: {err}")))
+}
+
+fn receipt_keys(receipts: &[OfflineTransferReceipt]) -> Vec<String> {
+    let mut keys = receipts
+        .iter()
+        .map(|receipt| format!("{}:{}", receipt.transfer_id, receipt.local_revision))
+        .collect::<Vec<_>>();
+    keys.sort();
+    keys
+}
+
+fn settlement_commitment_hex(
+    operation_id: &str,
+    kind: &str,
+    reserve: &StoredReserve,
+    amount: &str,
+    pre_state_hash: &str,
+    post_state_hash: &str,
+    tx: &SubmittedTransactionReceipt,
+) -> Result<String, Error> {
+    Ok(sha256_hex(&canonical_json_bytes(
+        &SettlementCommitmentPayload {
+            operation_id,
+            kind,
+            account_id: &reserve.account_id,
+            lineage_id: &reserve.reserve_id,
+            asset_definition_id: &reserve.asset_definition_id,
+            amount,
+            offline_public_key: &reserve.offline_public_key,
+            authorization_id: &reserve.authorization.authorization_id,
+            pre_state_hash,
+            post_state_hash,
+            chain_tx_hash: &tx.chain_tx_hash,
+            entry_hash: &tx.entry_hash,
+            block_height: tx.block_height,
+        },
+    )?))
+}
+
+fn redeem_request_commitment_hex(
+    req: &OfflineReserveDefundRequest,
+    reserve: &StoredReserve,
+    amount: &str,
+    pre_state_hash: &str,
+) -> Result<String, Error> {
+    Ok(sha256_hex(&canonical_json_bytes(
+        &RedeemRequestCommitmentPayload {
+            operation_id: &req.operation_id,
+            kind: "redeem_request",
+            account_id: &req.account_id,
+            lineage_id: &req.reserve_id,
+            asset_definition_id: &reserve.asset_definition_id,
+            amount,
+            offline_public_key: &req.offline_public_key,
+            authorization_id: &reserve.authorization.authorization_id,
+            pre_state_hash,
+            receipt_keys: receipt_keys(&req.receipts),
+        },
+    )?))
+}
+
+fn verify_redeem_request_proof(
+    req: &OfflineReserveDefundRequest,
+    reserve: &StoredReserve,
+    amount: &str,
+    pre_state_hash: &str,
+) -> Result<(), Error> {
+    ensure_offline_recursive_stark_ready()?;
+    if req.redeem_proof.backend != OFFLINE_SETTLEMENT_PROOF_BACKEND {
+        return Err(conversion_error(
+            "redeem proof backend is not supported".to_owned(),
+        ));
+    }
+    if req.redeem_proof.circuit_id != OFFLINE_REDEEM_REQUEST_CIRCUIT_ID {
+        return Err(conversion_error(
+            "redeem proof circuit_id is not supported".to_owned(),
+        ));
+    }
+    if req.redeem_proof.recursion_depth != 1 {
+        return Err(conversion_error(
+            "redeem proof recursion_depth is invalid".to_owned(),
+        ));
+    }
+    let expected_commitment = redeem_request_commitment_hex(req, reserve, amount, pre_state_hash)?;
+    if req.redeem_proof.public_inputs_hex != expected_commitment {
+        return Err(conversion_error(
+            "redeem proof public inputs do not match the request".to_owned(),
+        ));
+    }
+    if req.redeem_proof.envelope.params.domain_tag != expected_commitment {
+        return Err(conversion_error(
+            "redeem proof domain tag does not match the request".to_owned(),
+        ));
+    }
+    let expected = synthesize_stark_envelope(
+        expected_commitment,
+        OFFLINE_REDEEM_REQUEST_CIRCUIT_ID,
+    )?;
+    if encode_stark_envelope_bytes(&req.redeem_proof.envelope)?
+        != encode_stark_envelope_bytes(&expected)?
+    {
+        return Err(conversion_error(
+            "redeem proof envelope is invalid".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn settlement_from_tx(
+    kind: &str,
+    operation_id: &str,
+    reserve: &StoredReserve,
+    amount: &str,
+    pre_state_hash: &str,
+    post_state_hash: &str,
+    tx: &SubmittedTransactionReceipt,
+) -> Result<OfflineMutationSettlement, Error> {
+    ensure_offline_recursive_stark_ready()?;
+    let settlement_commitment_hex = settlement_commitment_hex(
+        operation_id,
+        kind,
+        reserve,
+        amount,
+        pre_state_hash,
+        post_state_hash,
+        tx,
+    )?;
+    let envelope = synthesize_stark_envelope(
+        settlement_commitment_hex.clone(),
+        OFFLINE_SETTLEMENT_CIRCUIT_ID,
+    )?;
+    Ok(OfflineMutationSettlement {
+        kind: kind.to_owned(),
+        operation_id: operation_id.to_owned(),
+        chain_tx_hash: tx.chain_tx_hash.clone(),
+        entry_hash: tx.entry_hash.clone(),
+        block_height: tx.block_height,
+        pre_state_hash: pre_state_hash.to_owned(),
+        post_state_hash: post_state_hash.to_owned(),
+        settlement_commitment_hex: settlement_commitment_hex.clone(),
+        proof: OfflineTransparentZkProof {
+            backend: OFFLINE_SETTLEMENT_PROOF_BACKEND.to_owned(),
+            circuit_id: OFFLINE_SETTLEMENT_CIRCUIT_ID.to_owned(),
+            recursion_depth: 1,
+            public_inputs_hex: settlement_commitment_hex,
+            envelope,
+        },
+    })
+}
+
 async fn submit_signed_instruction(
     app: &AppState,
     authority: AccountId,
     private_key: PrivateKey,
     instruction: InstructionBox,
     endpoint: &'static str,
-) -> Result<(), Error> {
+) -> Result<SubmittedTransactionReceipt, Error> {
     let tx = build_signed_instructions(authority, private_key, [instruction], app);
     submit_prebuilt_transaction(app, tx, endpoint).await
 }
@@ -2962,7 +3455,7 @@ async fn submit_signed_instructions(
     private_key: PrivateKey,
     instructions: Vec<InstructionBox>,
     endpoint: &'static str,
-) -> Result<(), Error> {
+) -> Result<SubmittedTransactionReceipt, Error> {
     let tx = build_signed_instructions(authority, private_key, instructions, app);
     submit_prebuilt_transaction(app, tx, endpoint).await
 }
@@ -2985,8 +3478,9 @@ async fn submit_prebuilt_transaction(
     app: &AppState,
     tx: SignedTransaction,
     endpoint: &'static str,
-) -> Result<(), Error> {
+) -> Result<SubmittedTransactionReceipt, Error> {
     let tx_hash = tx.hash();
+    let entry_hash = tx.hash_as_entrypoint();
     let mut events_rx = app.events.subscribe();
     let duplicate_submission = match routing::handle_transaction_with_metrics(
         app.chain_id.clone(),
@@ -3013,7 +3507,17 @@ async fn submit_prebuilt_transaction(
         Err(err) => return Err(err),
     };
     wait_for_transaction_approval(app, &mut events_rx, tx_hash, endpoint, duplicate_submission)
-        .await
+        .await?;
+    let Some(height) = app.state.committed_transaction_height(&tx_hash) else {
+        return Err(conversion_error(format!(
+            "offline cash transaction committed without an indexed height for {endpoint}: {tx_hash}"
+        )));
+    };
+    Ok(SubmittedTransactionReceipt {
+        chain_tx_hash: tx_hash.to_string(),
+        entry_hash: entry_hash.to_string(),
+        block_height: u64::try_from(height.get()).unwrap_or(u64::MAX),
+    })
 }
 
 fn matching_transaction_status<'a>(

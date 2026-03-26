@@ -1687,6 +1687,8 @@ pub mod registry;
 pub mod repo;
 /// Runtime upgrade instructions and payloads.
 pub mod runtime_upgrade;
+/// Real-world asset lot instructions.
+pub mod rwa;
 /// DvP/PvP settlement instructions.
 pub mod settlement;
 /// Smart contract code management instructions.
@@ -2505,6 +2507,10 @@ pub mod prelude {
             ActivateRamLfeProgramPolicy, DeactivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy,
         },
         repo::{RepoInstructionBox, RepoIsi, ReverseRepoIsi},
+        rwa::{
+            ForceTransferRwa, FreezeRwa, HoldRwa, MergeRwas, RedeemRwa, RegisterRwa, ReleaseRwa,
+            RwaInstructionBox, SetRwaControls, TransferRwa, UnfreezeRwa,
+        },
         settlement::{
             DvpIsi, PvpIsi, SettlementAtomicity, SettlementExecutionOrder, SettlementFailureRecord,
             SettlementInstructionBox, SettlementKind, SettlementLedger, SettlementLedgerEntry,

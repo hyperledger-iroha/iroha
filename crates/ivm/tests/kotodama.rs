@@ -2134,7 +2134,7 @@ fn namespaced_host_calls_and_std_map_new_parse_and_type() {
             host::transfer_asset(
               account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
               account_id("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU"),
-              asset_definition("coin#wonder"),
+              asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
               1
             );
         }
@@ -2155,7 +2155,7 @@ fn indirect_sensitive_calls_require_permission() {
             transfer_asset(
               account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
               account_id("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU"),
-              asset_definition("coin#wonder"),
+              asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
               1
             );
         }

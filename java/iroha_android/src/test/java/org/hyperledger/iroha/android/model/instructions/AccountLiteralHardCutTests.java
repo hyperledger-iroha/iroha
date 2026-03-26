@@ -29,6 +29,9 @@ public final class AccountLiteralHardCutTests {
         () -> TransferAssetDefinitionInstruction.builder().setDestinationAccountId(legacy));
     expectIllegalArgument(() -> TransferNftInstruction.builder().setSourceAccountId(legacy));
     expectIllegalArgument(() -> TransferNftInstruction.builder().setDestinationAccountId(legacy));
+    expectIllegalArgument(() -> TransferRwaInstruction.builder().setSourceAccountId(legacy));
+    expectIllegalArgument(() -> TransferRwaInstruction.builder().setDestinationAccountId(legacy));
+    expectIllegalArgument(() -> ForceTransferRwaInstruction.builder().setDestinationAccountId(legacy));
     expectIllegalArgument(() -> TransferAssetInstruction.builder().setDestinationAccountId(legacy));
     expectIllegalArgument(() -> RegisterAccountInstruction.builder().setAccountId(legacy));
     expectIllegalArgument(() -> MultisigRegisterInstruction.builder().setAccountId(legacy));

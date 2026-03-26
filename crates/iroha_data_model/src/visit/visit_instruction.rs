@@ -92,6 +92,11 @@ fn visit_core_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionB
         visitor.visit_send_to_twitter(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<CancelTwitterEscrow>() {
         visitor.visit_cancel_twitter_escrow(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::rwa::RwaInstructionBox>()
+    {
+        visitor.visit_rwa_instruction_box(v);
     } else {
         return false;
     }
@@ -366,6 +371,13 @@ pub fn visit_remove_key_value<V: Visit + ?Sized>(visitor: &mut V, isi: &RemoveKe
         RemoveKeyValueBox::Nft(obj) => visitor.visit_remove_nft_key_value(obj),
         RemoveKeyValueBox::Trigger(obj) => visitor.visit_remove_trigger_key_value(obj),
     }
+}
+
+/// Dispatch grouped RWA instructions.
+pub fn visit_rwa_instruction_box<V: Visit + ?Sized>(
+    _visitor: &mut V,
+    _isi: &crate::isi::rwa::RwaInstructionBox,
+) {
 }
 
 /// Dispatch grant variants to the appropriate hook.

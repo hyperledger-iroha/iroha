@@ -3349,6 +3349,55 @@ mod model {
     pub struct OfflineReserveEnvelope {
         /// Current reserve anchor.
         pub reserve_state: OfflineReserveState,
+        /// On-ledger settlement proof for bearer load or redeem mutations.
+        #[norito(default)]
+        pub settlement: Option<OfflineMutationSettlement>,
+    }
+
+    /// Transparent proof payload binding an offline bearer mutation to a settlement commitment.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineTransparentZkProof {
+        /// Proof backend identifier.
+        pub backend: String,
+        /// Fixed circuit identifier expected by wallets and Torii.
+        pub circuit_id: String,
+        /// Declared recursion depth.
+        pub recursion_depth: u8,
+        /// Hex-encoded public inputs commitment.
+        pub public_inputs_hex: String,
+        /// Norito-encoded proof envelope bytes.
+        pub envelope_bytes: Vec<u8>,
+    }
+
+    /// Settlement artifact proving a load or redeem mutation finalized on-ledger.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineMutationSettlement {
+        /// Mutation kind (`load` or `redeem`).
+        pub kind: String,
+        /// Client operation identifier.
+        pub operation_id: String,
+        /// Committed transaction hash.
+        pub chain_tx_hash: String,
+        /// Entrypoint hash for the committed transaction.
+        pub entry_hash: String,
+        /// Block height containing the committed transaction.
+        pub block_height: u64,
+        /// Pre-mutation authoritative state hash.
+        pub pre_state_hash: String,
+        /// Post-mutation authoritative state hash.
+        pub post_state_hash: String,
+        /// Hex-encoded settlement commitment bound into the proof domain.
+        pub settlement_commitment_hex: String,
+        /// Transparent proof attesting to the settlement commitment.
+        pub proof: OfflineTransparentZkProof,
     }
 
     /// Signed revocation bundle distributed to wallets for offline deny-list enforcement.

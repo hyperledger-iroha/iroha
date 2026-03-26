@@ -22,7 +22,7 @@ Ushbu hujjatda amalga oshirilgan yuk tashish hisob-manzillash to'plami tasvirlan
 `AccountAddress` (`crates/iroha_data_model/src/account/address.rs`) va
 yordamchi asboblar. U quyidagilarni ta'minlaydi:
 
-- Tekshirish summasi, insonga qaragan **Iroha Base58 manzili (I105)** tomonidan ishlab chiqarilgan
+- Tekshirish summasi, insonga qaragan **I105 manzili (I105)** tomonidan ishlab chiqarilgan
   `AccountAddress::to_i105`, bu zanjir diskriminantini hisobga bog'laydi
   boshqaruvchi va deterministik o'zaro hamkorlik uchun qulay matn shakllarini taklif qiladi.
 - Yashirin standart domenlar va mahalliy dayjestlar uchun domen selektorlari, a bilan
@@ -48,7 +48,7 @@ va domen nomidan vakolatli zanjirga deterministik xaritalash.
 
 ## Maqsadlar
 
-- Ma'lumotlar modelida amalga oshirilgan I105 Base58 konvertini va
+- Ma'lumotlar modelida amalga oshirilgan I105 konvertini va
   `AccountId` va `AccountAddress` amal qiladigan kanonik tahlil/taxallus qoidalari.
 - Konfiguratsiya qilingan zanjir diskriminantini to'g'ridan-to'g'ri har bir manzilga kodlash va
   uning boshqaruvi/ro'yxatga olish jarayonini belgilang.
@@ -137,7 +137,7 @@ almashish va kanonik chiqish uchun afzal qilingan hisob formati; siqilgan
 `sora` shakli kana alifbosi bo'lgan UX uchun ikkinchi eng yaxshi, faqat Sora variantidir.
 qiymat qo‘shadi. Kanonik hex disk raskadrovka yordami bo'lib qolmoqda.
 
-- **I105 (Iroha Base58)** – zanjirni joylashtirgan Base58 konverti
+- **I105** – zanjirni joylashtirgan I105 konverti
   diskriminant. Dekoderlar foydali yukni ko'tarishdan oldin prefiksni tasdiqlaydi
   kanonik shakl.
 - **Sora-siqilgan koʻrinish** – faqat Sora alifbosi, **105 ta belgidan** tuzilgan
@@ -396,7 +396,7 @@ oqimlar ularga so'zma-so'z tayanishi mumkin. `<address>@<domain>` (rejected lega
   multisig siyosati dayjestlari uchun ishlatiladigan CTAP2 xaritasi emas, balki kodlovchi.
 - **Kodlash:** `encode_i105()` prefiks baytlarini kanonik bayt bilan birlashtiradi
   foydali yuk va Blake2b-512 dan olingan 16 bitli nazorat summasini o'zgarmas bilan qo'shadi
-  prefiksi `I105PRE` (`b"I105PRE" || prefix || payload`). Natijada `bs58` orqali Base58-kodlangan.
+  Prefix: `I105PRE` (`b"I105PRE"` || prefix || payload). The result is encoded via `bs58` using the I105 alphabet.
   CLI/SDK yordamchilari bir xil protsedurani ochib beradi va `AccountAddress::parse_encoded`
   uni `decode_i105` orqali o'zgartiradi.
 
@@ -638,7 +638,7 @@ ularning almashtirish chiptalari.
   ushbu talablarni hamyon yoki Explorer UX ga moslashtirish.
 - **Xavfsiz almashish oqimlari:** Manzillardan nusxa ko‘chiradigan yoki ko‘rsatadigan yuzalar standart I105 shakliga o‘rnatiladi va foydalanuvchilar nazorat summasini vizual yoki skanerlash orqali tekshirishlari uchun to‘liq qatorni va bir xil foydali yukdan olingan QR kodni taqdim etuvchi qo‘shni “ulashish” amalini ko‘rsatadi. Kesishning oldini olish mumkin bo'lmaganda (masalan, kichik ekranlar), satrning boshi va oxirini saqlang, aniq ellipslar qo'shing va tasodifiy qirqishning oldini olish uchun to'liq manzilni clipboardga nusxalash orqali kirish mumkin bo'lgan holda saqlang.
 - **IME himoyasi:** Manzilli kirishlar IME/IME uslubidagi klaviaturalardan kompozitsiya artefaktlarini rad etishi KERAK. Faqat ASCII yozuvini qo'llang, to'liq kenglik yoki Kana belgilari aniqlanganda qatorli ogohlantirishni taqdim eting va tekshirishdan oldin belgilarni birlashtirgan tekis matn joylashtirish zonasini taklif qiling, shuning uchun yapon va xitoy foydalanuvchilar o'z IME-ni progressni yo'qotmasdan o'chirib qo'yishlari mumkin.
-- **Ekranni o'qishni qo'llab-quvvatlash:** Asosiy Base58 prefiks raqamlarini tavsiflovchi va I105 foydali yukini 4 yoki 8 ta belgidan iborat guruhlarga bo'ladigan vizual tarzda yashirin yorliqlarni (`aria-label`/I18NI0000475X) taqdim eting, shuning uchun guruhli belgilar qatorini o'qish uchun yordamchi texnologiyalar o'qiydi. Muloyim jonli hududlar orqali nusxa ko‘chirish/ulashish muvaffaqiyatini e’lon qiling va QR oldindan ko‘rishda tavsiflovchi alternativ matnni (“0x02F1 zanjiridagi <taxallus” uchun I105 manzili”) o‘z ichiga oladi.
+- **Ekranni o'qishni qo'llab-quvvatlash:** Asosiy I105 prefiks raqamlarini tavsiflovchi va I105 foydali yukini 4 yoki 8 ta belgidan iborat guruhlarga bo'ladigan vizual tarzda yashirin yorliqlarni (`aria-label`/I18NI0000475X) taqdim eting, shuning uchun guruhli belgilar qatorini o'qish uchun yordamchi texnologiyalar o'qiydi. Muloyim jonli hududlar orqali nusxa ko‘chirish/ulashish muvaffaqiyatini e’lon qiling va QR oldindan ko‘rishda tavsiflovchi alternativ matnni (“0x02F1 zanjiridagi <taxallus” uchun I105 manzili”) o‘z ichiga oladi.
 - **Faqat Sora uchun siqilgan foydalanish:** Har doim `i105` siqilgan ko‘rinishini “Faqat Sora” deb belgilang va nusxa ko‘chirishdan oldin uni aniq tasdiqdan o‘tkazing. SDK va hamyonlar zanjir diskriminanti Sora Nexus qiymati bo'lmasa, siqilgan mahsulotni ko'rsatishdan bosh tortishi va mablag'larni noto'g'ri yo'naltirishning oldini olish uchun foydalanuvchilarni tarmoqlararo o'tkazmalar uchun I105 ga qaytarishi kerak.
 
 ## Amalga oshirishni tekshirish ro'yxati
@@ -646,8 +646,7 @@ ularning almashtirish chiptalari.
 - **I105 konvert:** Prefiks `chain_discriminant` ni kompakt yordamida kodlaydi
   `encode_i105_prefix()` dan 6-/14-bitli sxema, korpus kanonik baytlardir
   (`AccountAddress::canonical_bytes()`) va nazorat summasi birinchi ikki baytdir
-  Blake2b-512 (`b"I105PRE"` || prefiks || tanasi). To'liq foydali yuk Base58-
-  `bs58` orqali kodlangan.
+  Blake2b-512(`b"I105PRE"` || prefix || body). The full payload is encoded via `bs58` using the I105 alphabet.
 - **Ro‘yxatga olish shartnomasi:** Imzolangan JSON (va ixtiyoriy Merkle root) nashriyot
   `{discriminant, i105_prefix, chain_alias, endpoints}` 24 soatlik TTL va
   aylanish tugmachalari.
@@ -676,7 +675,7 @@ ularning almashtirish chiptalari.
 - `GET /v1/accounts` ixtiyoriy `canonical I105 rendering` so'rov parametrini qabul qiladi va
   `POST /v1/accounts/query` JSON konvertidagi bir xil maydonni qabul qiladi.
   Qo'llab-quvvatlanadigan qiymatlar:
-  - `i105` (standart) — javoblar kanonik I105 Base58 foydali yuklarini chiqaradi (masalan,
+  - `i105` (standart) — javoblar kanonik I105 foydali yuklarini chiqaradi (masalan,
     `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`).
   - `i105_default` - javoblar faqat Sora uchun `i105` siqilgan ko'rinishini chiqaradi.
     filtrlarni/yo'l parametrlarini kanonik saqlash.
@@ -717,7 +716,7 @@ xabarlar va tavsiya etilgan tuzatish bo'yicha ko'rsatmalar.
 | `ERR_INVALID_I105_ENCODING` | I105 satrida alifbodan tashqari belgilar mavjud. | Manzil nashr etilgan I105 alifbosidan foydalanishiga va nusxa ko‘chirish/joylashtirish vaqtida kesilmaganligiga ishonch hosil qiling. |
 | `ERR_INVALID_LENGTH` | Yuk yukining uzunligi selektor/kontroller uchun kutilgan kanonik o‘lchamga mos kelmaydi. | Tanlangan domen selektori va boshqaruvchi joylashuvi uchun to‘liq kanonik foydali yukni taqdim eting. |
 | `ERR_CHECKSUM_MISMATCH` | I105 (afzal) yoki siqilgan (`sora`, ikkinchi eng yaxshi) nazorat summasini tekshirish amalga oshmadi. | Ishonchli manbadan manzilni qayta tiklang; bu odatda nusxa ko'chirish/joylashtirish xatosini bildiradi. |
-| `ERR_INVALID_I105_PREFIX_ENCODING` | I105 prefiks baytlari noto'g'ri tuzilgan. | Muvofiq kodlovchi bilan manzilni qayta kodlash; etakchi Base58 baytlarini qo'lda o'zgartirmang. |
+| `ERR_INVALID_I105_PREFIX_ENCODING` | I105 prefiks baytlari noto'g'ri tuzilgan. | Muvofiq kodlovchi bilan manzilni qayta kodlash; etakchi I105 baytlarini qo'lda o'zgartirmang. |
 | `ERR_INVALID_HEX_ADDRESS` | Kanonik oʻn oltilik shaklni dekodlab boʻlmadi. | Rasmiy kodlovchi tomonidan ishlab chiqarilgan `0x` prefiksli, teng uzunlikdagi olti burchakli qatorni taqdim eting. |
 | `ERR_MISSING_COMPRESSED_SENTINEL` | Siqilgan shakl `sora` bilan boshlanmaydi. | Siqilgan Sora manzillarini dekoderlarga topshirishdan oldin kerakli qo'riqchi bilan prefiks qo'ying. |
 | `ERR_COMPRESSED_TOO_SHORT` | Siqilgan satrda foydali yuk va nazorat summasi uchun etarli raqamlar yo'q. | Kesilgan parchalar o'rniga kodlovchi tomonidan chiqarilgan to'liq siqilgan satrdan foydalaning. |
@@ -748,7 +747,7 @@ xabarlar va tavsiya etilgan tuzatish bo'yicha ko'rsatmalar.
 
 ## Muqobil variantlar ko'rib chiqildi
 
-- **Pure Base58Check (Bitcoin-uslubi).** Soddaroq nazorat summasi, ammo xatolarni aniqlash zaifroq
+- **Pure checksum envelope (Bitcoin-uslubi).** Soddaroq nazorat summasi, ammo xatolarni aniqlash zaifroq
   Blake2b tomonidan olingan I105 nazorat summasidan (`encode_i105` 512 bitli xeshni qisqartiradi)
   va 16 bitli diskriminantlar uchun aniq prefiks semantikasi yo'q.
 - **Domen qatoriga zanjir nomini kiritish (masalan, `finance@chain`).** Tanaffuslar

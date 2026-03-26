@@ -182,6 +182,7 @@ pub enum TriggerDataFamily {
     Asset,
     AssetDefinition,
     Nft,
+    Rwa,
     Trigger,
     Role,
     Configuration,

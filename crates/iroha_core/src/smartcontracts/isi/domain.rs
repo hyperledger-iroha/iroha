@@ -1745,6 +1745,20 @@ pub mod isi {
                 )
                 .into());
             }
+            if let Some((rwa_id, _)) = state_transaction
+                .world
+                .rwas
+                .iter()
+                .find(|(_, rwa)| rwa.owned_by == account_id)
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister account {account_id}: it owns RWA {rwa_id}; transfer or redeem the lot first"
+                    )
+                    .into(),
+                )
+                .into());
+            }
 
             remove_account_associated_permissions(state_transaction, &account_id);
 

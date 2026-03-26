@@ -6,7 +6,7 @@ import org.hyperledger.iroha.sdk.crypto.Blake2b
 
 private val I105_CHECKSUM_PREFIX = "I105PRE".toByteArray(StandardCharsets.UTF_8)
 private const val I105_WARNING =
-    "I105 addresses are the canonical Base58 account literal encoding. " +
+    "I105 addresses are the canonical account literal encoding. " +
         "Render and validate them with the intended chain discriminant."
 
 private val I105_ALPHABET = arrayOf(

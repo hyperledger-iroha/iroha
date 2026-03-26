@@ -182,7 +182,7 @@ public final class AccountAddressTests {
     } catch (final AccountAddress.AccountAddressException ex) {
       threw = ex.getCode() == AccountAddress.AccountAddressErrorCode.INVALID_I105_CHAR;
     }
-    assert threw : "I105 parsing should reject invalid base58 symbols";
+    assert threw : "I105 parsing should reject invalid non-I105 symbols";
   }
 
   private static void curveSupportDefaults() {

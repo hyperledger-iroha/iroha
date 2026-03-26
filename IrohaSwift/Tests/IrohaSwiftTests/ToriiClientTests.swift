@@ -3278,6 +3278,307 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testGetExplorerRwasEncodesQueryAndDecodesResponse() async throws {
+        let owner = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/explorer/rwas")
+            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            let query = Dictionary(uniqueKeysWithValues: (components?.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+            XCTAssertEqual(query["page"], "2")
+            XCTAssertEqual(query["per_page"], "25")
+            XCTAssertEqual(query["owned_by"], owner)
+            XCTAssertEqual(query["domain"], "commodities")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {
+                "pagination": {"page":2,"per_page":25,"total_pages":1,"total_items":1},
+                "items": [
+                    {
+                        "id":"lot-001$commodities",
+                        "owned_by":"\(owner)",
+                        "quantity":"100.5",
+                        "held_quantity":"5.0",
+                        "primary_reference":"vault://receipts/1",
+                        "status":"active",
+                        "is_frozen":false,
+                        "metadata":{"grade":"A"}
+                    }
+                ]
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let params = ToriiExplorerRwasParams(page: 2,
+                                             perPage: 25,
+                                             ownedBy: owner,
+                                             domain: "commodities")
+        let page = try await makeClient().getExplorerRwas(params: params)
+        XCTAssertEqual(page.pagination.page, 2)
+        XCTAssertEqual(page.pagination.perPage, 25)
+        XCTAssertEqual(page.pagination.totalItems, 1)
+        let item = try XCTUnwrap(page.items.first)
+        XCTAssertEqual(item.id, "lot-001$commodities")
+        XCTAssertEqual(item.ownedBy, owner)
+        XCTAssertEqual(item.quantity, "100.5")
+        XCTAssertEqual(item.heldQuantity, "5.0")
+        XCTAssertEqual(item.primaryReference, "vault://receipts/1")
+        XCTAssertEqual(item.status, "active")
+        XCTAssertFalse(item.isFrozen)
+        if case let .string(grade)? = item.metadata["grade"] {
+            XCTAssertEqual(grade, "A")
+        } else {
+            XCTFail("Expected RWA metadata grade")
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetExplorerRwasCompletion() {
+        let expectation = expectation(description: "explorer-rwas")
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/explorer/rwas")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {"pagination":{"page":1,"per_page":10,"total_pages":0,"total_items":0},"items":[]}
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        _ = makeClient().getExplorerRwas { result in
+            switch result {
+            case .success(let page):
+                XCTAssertEqual(page.items.count, 0)
+                XCTAssertEqual(page.pagination.totalItems, 0)
+            case .failure(let error):
+                XCTFail("Unexpected error: \(error)")
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 2.0)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetExplorerRwaDetailEncodesPathAndDecodesResponse() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertTrue(request.url!.absoluteString.contains("/v1/explorer/rwas/lot-001%24commodities"))
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {
+                "id":"lot-001$commodities",
+                "owned_by":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+                "quantity":"42",
+                "held_quantity":"2",
+                "primary_reference":"vault://receipts/2",
+                "status":null,
+                "is_frozen":true,
+                "metadata":null
+            }
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let detail = try await makeClient().getExplorerRwaDetail(rwaId: "lot-001$commodities")
+        XCTAssertEqual(detail.id, "lot-001$commodities")
+        XCTAssertEqual(detail.quantity, "42")
+        XCTAssertEqual(detail.heldQuantity, "2")
+        XCTAssertEqual(detail.primaryReference, "vault://receipts/2")
+        XCTAssertNil(detail.status)
+        XCTAssertTrue(detail.isFrozen)
+        XCTAssertTrue(detail.metadata.isEmpty)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testListAccountRwasUsesOwnedByFilter() async throws {
+        let owner = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/explorer/rwas")
+            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            let query = Dictionary(uniqueKeysWithValues: (components?.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+            XCTAssertEqual(query["owned_by"], owner)
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {"pagination":{"page":1,"per_page":10,"total_pages":1,"total_items":0},"items":[]}
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let page = try await makeClient().listAccountRwas(accountId: owner)
+        XCTAssertEqual(page.items.count, 0)
+        XCTAssertEqual(page.pagination.totalItems, 0)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testIterateExplorerRwasRespectsPagingAndMaxItems() async throws {
+        var observedPages: [String] = []
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/explorer/rwas")
+            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            let query = Dictionary(uniqueKeysWithValues: (components?.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+            observedPages.append(query["page"] ?? "1")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body: Data
+            switch query["page"] ?? "1" {
+            case "1":
+                body = """
+                {
+                    "pagination":{"page":1,"per_page":2,"total_pages":2,"total_items":3},
+                    "items":[
+                        {"id":"lot-001$commodities","owned_by":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","quantity":"10","held_quantity":"0","primary_reference":"vault://1","status":"active","is_frozen":false,"metadata":{}},
+                        {"id":"lot-002$commodities","owned_by":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","quantity":"20","held_quantity":"1","primary_reference":"vault://2","status":"active","is_frozen":false,"metadata":{}}
+                    ]
+                }
+                """.data(using: .utf8)!
+            case "2":
+                body = """
+                {
+                    "pagination":{"page":2,"per_page":2,"total_pages":2,"total_items":3},
+                    "items":[
+                        {"id":"lot-003$commodities","owned_by":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","quantity":"30","held_quantity":"0","primary_reference":"vault://3","status":"active","is_frozen":true,"metadata":{}}
+                    ]
+                }
+                """.data(using: .utf8)!
+            default:
+                body = #"{"pagination":{"page":3,"per_page":2,"total_pages":2,"total_items":3},"items":[]}"#.data(using: .utf8)!
+            }
+            return (response, body)
+        }
+
+        let stream = makeClient().iterateExplorerRwas(params: ToriiExplorerRwasParams(page: 1, perPage: 2),
+                                                      maxItems: 3)
+        var ids: [String] = []
+        for try await item in stream {
+            ids.append(item.id)
+        }
+        XCTAssertEqual(ids, ["lot-001$commodities", "lot-002$commodities", "lot-003$commodities"])
+        XCTAssertEqual(observedPages, ["1", "2"])
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testListRwasEncodesOptions() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/rwas")
+            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            let query = Dictionary(uniqueKeysWithValues: (components?.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+            XCTAssertEqual(query["limit"], "25")
+            XCTAssertEqual(query["offset"], "10")
+            XCTAssertEqual(query["sort"], "id")
+            let filterValue = try XCTUnwrap(query["filter"])
+            let filterData = try XCTUnwrap(filterValue.data(using: .utf8))
+            let decodedFilter = try JSONSerialization.jsonObject(with: filterData) as? [String: String]
+            XCTAssertEqual(decodedFilter?["id"], "lot-001$commodities")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body = """
+            {"items":[{"id":"lot-001$commodities"}],"total":1}
+            """.data(using: .utf8)!
+            return (response, body)
+        }
+
+        let options = ToriiListOptions(filter: .json(.object(["id": .string("lot-001$commodities")])),
+                                       sort: .fields(["id"]),
+                                       limit: 25,
+                                       offset: 10)
+        let page = try await makeClient().listRwas(options: options)
+        XCTAssertEqual(page.total, 1)
+        XCTAssertEqual(page.items.first?.id, "lot-001$commodities")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testQueryRwasPostsEnvelope() async throws {
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/v1/rwas/query")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+            let body = self.bodyJSON(from: request)
+            let pagination = body["pagination"] as? [String: Any]
+            XCTAssertEqual(pagination?["limit"] as? Int, 10)
+            XCTAssertEqual(pagination?["offset"] as? Int, 5)
+            let sort = body["sort"] as? [[String: Any]]
+            XCTAssertEqual(sort?.first?["key"] as? String, "id")
+            XCTAssertEqual(sort?.first?["order"] as? String, "asc")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let payload = """
+            {"items":[{"id":"lot-002$commodities"}],"total":1}
+            """.data(using: .utf8)!
+            return (response, payload)
+        }
+
+        let envelope = ToriiQueryEnvelope(
+            filter: .object(["id": .object(["eq": .string("lot-002$commodities")])]),
+            sort: [ToriiQuerySortKey(key: "id", order: .asc)],
+            pagination: ToriiQueryPagination(limit: 10, offset: 5),
+            fetchSize: 20
+        )
+        let page = try await makeClient().queryRwas(envelope)
+        XCTAssertEqual(page.total, 1)
+        XCTAssertEqual(page.items.first?.id, "lot-002$commodities")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testIterateRwasRespectsPagingAndMaxItems() async throws {
+        var observedLimits: [String] = []
+        var observedOffsets: [String] = []
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/rwas")
+            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
+            let query = Dictionary(uniqueKeysWithValues: (components?.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+            if let limit = query["limit"] {
+                observedLimits.append(limit)
+            }
+            if let offset = query["offset"] {
+                observedOffsets.append(offset)
+            }
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let body: Data
+            switch query["offset"] ?? "0" {
+            case "0":
+                body = """
+                {"items":[{"id":"lot-001$commodities"},{"id":"lot-002$commodities"}],"total":4}
+                """.data(using: .utf8)!
+            case "2":
+                body = """
+                {"items":[{"id":"lot-003$commodities"}],"total":4}
+                """.data(using: .utf8)!
+            default:
+                body = #"{"items":[],"total":4}"#.data(using: .utf8)!
+            }
+            return (response, body)
+        }
+
+        let stream = makeClient().iterateRwas(pageSize: 2, maxItems: 3)
+        var collected: [String] = []
+        for try await item in stream {
+            collected.append(item.id)
+        }
+        XCTAssertEqual(collected, ["lot-001$commodities", "lot-002$commodities", "lot-003$commodities"])
+        XCTAssertEqual(observedLimits, ["2", "1"])
+        XCTAssertEqual(observedOffsets, ["0", "2"])
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testGetExplorerTransactionTransfersAggregatesPages() async throws {
         let assetIdFilter = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"
         let pageOne = """

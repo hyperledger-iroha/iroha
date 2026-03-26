@@ -26,7 +26,7 @@ final class AccountIdTests: XCTestCase {
         XCTAssertFalse(accountId.contains("@"))
 
         // Should be parseable back
-        // I105 addresses are base58 encoded, typically 40-50 chars
+        // I105 addresses are compact encoded literals, typically 40-50 chars
         XCTAssertGreaterThan(accountId.count, 30)
     }
 

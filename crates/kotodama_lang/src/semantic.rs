@@ -8,8 +8,8 @@ use iroha_data_model::events::data::prelude::{
     AccountEventFilter, AccountEventSet, AssetDefinitionEventFilter, AssetDefinitionEventSet,
     AssetEventFilter, AssetEventSet, ConfigurationEventFilter, ConfigurationEventSet,
     DomainEventFilter, DomainEventSet, ExecutorEventFilter, ExecutorEventSet, NftEventFilter,
-    NftEventSet, PeerEventFilter, PeerEventSet, RoleEventFilter, RoleEventSet, TriggerEventFilter,
-    TriggerEventSet,
+    NftEventSet, PeerEventFilter, PeerEventSet, RoleEventFilter, RoleEventSet, RwaEventFilter,
+    RwaEventSet, TriggerEventFilter, TriggerEventSet,
 };
 use iroha_data_model::{
     account::AccountId,
@@ -30,6 +30,7 @@ use iroha_data_model::{
     peer::PeerId,
     prelude::Name,
     role::RoleId,
+    rwa::RwaId,
     trigger::{TriggerId, action::Repeats},
 };
 use iroha_primitives::json::Json;
@@ -360,6 +361,7 @@ fn trigger_data_family_name(family: TriggerDataFamily) -> &'static str {
         TriggerDataFamily::Asset => "asset",
         TriggerDataFamily::AssetDefinition => "asset_definition",
         TriggerDataFamily::Nft => "nft",
+        TriggerDataFamily::Rwa => "rwa",
         TriggerDataFamily::Trigger => "trigger",
         TriggerDataFamily::Role => "role",
         TriggerDataFamily::Configuration => "configuration",
@@ -485,6 +487,15 @@ fn parse_nft_matcher(
 ) -> Result<NftId, SemanticError> {
     raw.parse()
         .map_err(|err| invalid_data_matcher_literal(trigger_name, family, "nft", raw, err))
+}
+
+fn parse_rwa_matcher(
+    trigger_name: &str,
+    family: TriggerDataFamily,
+    raw: &str,
+) -> Result<RwaId, SemanticError> {
+    raw.parse()
+        .map_err(|err| invalid_data_matcher_literal(trigger_name, family, "rwa", raw, err))
 }
 
 fn parse_trigger_matcher(
@@ -825,6 +836,60 @@ fn lower_structured_data_filter(
                 }
             }
             Ok(DataEventFilter::Nft(nft))
+        }
+        TriggerDataFamily::Rwa => {
+            let mut rwa =
+                RwaEventFilter::new().for_events(match named_data_event_kind(&filter.event) {
+                    None => RwaEventSet::all(),
+                    Some("created") => RwaEventSet::Created,
+                    Some("metadata_inserted") => RwaEventSet::MetadataInserted,
+                    Some("metadata_removed") => RwaEventSet::MetadataRemoved,
+                    Some("owner_changed") => RwaEventSet::OwnerChanged,
+                    Some("split") => RwaEventSet::Split,
+                    Some("merged") => RwaEventSet::Merged,
+                    Some("redeemed") => RwaEventSet::Redeemed,
+                    Some("frozen") => RwaEventSet::Frozen,
+                    Some("unfrozen") => RwaEventSet::Unfrozen,
+                    Some("held") => RwaEventSet::Held,
+                    Some("released") => RwaEventSet::Released,
+                    Some("force_transferred") => RwaEventSet::ForceTransferred,
+                    Some("controls_changed") => RwaEventSet::ControlsChanged,
+                    Some(kind) => {
+                        return Err(unsupported_data_event_kind_error(
+                            trigger_name,
+                            filter.family,
+                            kind,
+                        ));
+                    }
+                });
+            let mut seen_rwa = false;
+            for matcher in &filter.matchers {
+                match matcher.key.as_str() {
+                    "rwa" => {
+                        if seen_rwa {
+                            return Err(duplicate_data_matcher_error(
+                                trigger_name,
+                                filter.family,
+                                "rwa",
+                            ));
+                        }
+                        rwa = rwa.for_rwa(parse_rwa_matcher(
+                            trigger_name,
+                            filter.family,
+                            &matcher.value,
+                        )?);
+                        seen_rwa = true;
+                    }
+                    key => {
+                        return Err(unsupported_data_matcher_error(
+                            trigger_name,
+                            filter.family,
+                            key,
+                        ));
+                    }
+                }
+            }
+            Ok(DataEventFilter::Rwa(rwa))
         }
         TriggerDataFamily::Trigger => {
             let mut trigger =
@@ -3389,9 +3454,11 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     })
                 }
                 "resolve_account_alias" => {
-                    if arg_typed.len() != 1 || arg_typed[0].ty != Type::String {
+                    if arg_typed.len() != 1
+                        || !(arg_typed[0].ty == Type::String || is_blob_like(&arg_typed[0].ty))
+                    {
                         return Err(SemanticError {
-                            message: "resolve_account_alias expects (String)".into(),
+                            message: "resolve_account_alias expects (String|Blob)".into(),
                         });
                     }
                     Ok(TypedExpr {
@@ -6237,6 +6304,15 @@ mod tests {
     }
 
     #[test]
+    fn resolve_account_alias_accepts_alias_bytes() {
+        let program = parse(
+            "fn f() { let alias = blob(\"banking@sbp\"); let _acct = resolve_account_alias(alias); }",
+        )
+        .expect("parse resolve_account_alias blob");
+        analyze(&program).expect("resolve_account_alias blob should type-check");
+    }
+
+    #[test]
     fn equality_between_event_account_and_resolved_alias_type_checks() {
         let program = parse(
             "fn f() { \
@@ -6433,6 +6509,7 @@ mod tests {
             nft::NftId,
             peer::PeerId,
             role::RoleId,
+            rwa::RwaId,
             trigger::TriggerId,
         };
 
@@ -6450,6 +6527,12 @@ mod tests {
         let asset = AssetId::new(asset_definition.clone(), account.clone());
         let asset_literal = asset.canonical_literal();
         let nft: NftId = "n0$wonderland".parse().expect("nft");
+        let rwa: RwaId = format!(
+            "{}$wonderland",
+            iroha_crypto::Hash::prehashed([7; iroha_crypto::Hash::LENGTH])
+        )
+        .parse()
+        .expect("rwa");
         let trigger_id: TriggerId = "wake".parse().expect("trigger");
         let role_id: RoleId = "auditor".parse().expect("role");
 
@@ -6574,6 +6657,26 @@ mod tests {
                     NftEventFilter::new()
                         .for_events(NftEventSet::Created)
                         .for_nft(nft),
+                )),
+            ),
+            (
+                format!(
+                    r#"
+                    seiyaku C {{
+                        kotoage fn run() {{}}
+                        register_trigger wake {{
+                            call run;
+                            on data rwa created {{
+                                rwa "{rwa}";
+                            }}
+                        }}
+                    }}
+                    "#
+                ),
+                EventFilterBox::Data(DataEventFilter::Rwa(
+                    RwaEventFilter::new()
+                        .for_events(RwaEventSet::Created)
+                        .for_rwa(rwa),
                 )),
             ),
             (

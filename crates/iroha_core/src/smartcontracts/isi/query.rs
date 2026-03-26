@@ -47,6 +47,7 @@ fn ensure_query_registry_initialized() {
         dm_query::ErasedIterQuery<dm::asset::definition::AssetDefinition>,
         dm_query::ErasedIterQuery<dm::repo::RepoAgreement>,
         dm_query::ErasedIterQuery<dm::nft::Nft>,
+        dm_query::ErasedIterQuery<dm::rwa::Rwa>,
         dm_query::ErasedIterQuery<dm::role::Role>,
         dm_query::ErasedIterQuery<dm::role::RoleId>,
         dm_query::ErasedIterQuery<dm::peer::PeerId>,
@@ -193,6 +194,22 @@ impl SortableQueryOutput for Nft {
 
     fn get_metadata_sorting_key(&self, key: &Name) -> Option<&Json> {
         self.content().get(key)
+    }
+
+    fn tiebreak_key(&self) -> Self::TiebreakKey {
+        self.id().clone()
+    }
+
+    fn tiebreak_cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.id().cmp(other.id())
+    }
+}
+
+impl SortableQueryOutput for Rwa {
+    type TiebreakKey = iroha_data_model::rwa::RwaId;
+
+    fn get_metadata_sorting_key(&self, key: &Name) -> Option<&Json> {
+        self.metadata().get(key)
     }
 
     fn tiebreak_key(&self) -> Self::TiebreakKey {
@@ -549,6 +566,7 @@ impl ExecuteQueryBox for QueryBox<QueryOutputBatchBox> {
                 dm::query::asset::prelude::FindAssetsDefinitions,
             dm::repo::RepoAgreement => dm::query::repo::prelude::FindRepoAgreements,
             dm::nft::Nft => dm::query::nft::prelude::FindNfts,
+            dm::rwa::Rwa => dm::query::rwa::prelude::FindRwas,
             dm::role::Role => dm::query::role::prelude::FindRoles,
             dm::role::RoleId => dm::query::role::prelude::FindRoleIds,
             dm::peer::PeerId => dm::query::peer::prelude::FindPeers,
@@ -1826,6 +1844,10 @@ impl ValidQueryRequest {
                                 iroha_data_model::nft::Nft,
                                 iroha_data_model::query::nft::prelude::FindNfts
                             ),
+                            QueryItemKind::Rwa => run_payload_or_default!(
+                                iroha_data_model::rwa::Rwa,
+                                iroha_data_model::query::rwa::prelude::FindRwas
+                            ),
                             QueryItemKind::Role => run_payload_or_default!(
                                 iroha_data_model::role::Role,
                                 iroha_data_model::query::role::prelude::FindRoles
@@ -1967,6 +1989,10 @@ impl ValidQueryRequest {
                             iroha_data_model::nft::Nft,
                             iroha_data_model::query::nft::prelude::FindNfts
                         ),
+                        QueryItemKind::Rwa => run_unit!(
+                            iroha_data_model::rwa::Rwa,
+                            iroha_data_model::query::rwa::prelude::FindRwas
+                        ),
                         QueryItemKind::Role => run_unit!(
                             iroha_data_model::role::Role,
                             iroha_data_model::query::role::prelude::FindRoles
@@ -2072,6 +2098,10 @@ impl ValidQueryRequest {
                         QueryItemKind::Nft => run_unit!(
                             iroha_data_model::nft::Nft,
                             iroha_data_model::query::nft::prelude::FindNfts
+                        ),
+                        QueryItemKind::Rwa => run_unit!(
+                            iroha_data_model::rwa::Rwa,
+                            iroha_data_model::query::rwa::prelude::FindRwas
                         ),
                         QueryItemKind::Role => run_unit!(
                             iroha_data_model::role::Role,
@@ -2184,6 +2214,10 @@ impl ValidQueryRequest {
                         QueryItemKind::Nft => run_unit!(
                             iroha_data_model::nft::Nft,
                             iroha_data_model::query::nft::prelude::FindNfts
+                        ),
+                        QueryItemKind::Rwa => run_unit!(
+                            iroha_data_model::rwa::Rwa,
+                            iroha_data_model::query::rwa::prelude::FindRwas
                         ),
                         QueryItemKind::Role => run_unit!(
                             iroha_data_model::role::Role,
@@ -3154,6 +3188,10 @@ impl ValidQueryRequest {
                             QueryItemKind::Nft => run_payload_or_default!(
                                 iroha_data_model::nft::Nft,
                                 iroha_data_model::query::nft::prelude::FindNfts
+                            ),
+                            QueryItemKind::Rwa => run_payload_or_default!(
+                                iroha_data_model::rwa::Rwa,
+                                iroha_data_model::query::rwa::prelude::FindRwas
                             ),
                             QueryItemKind::Role => run_payload_or_default!(
                                 iroha_data_model::role::Role,
