@@ -1359,14 +1359,16 @@ impl Actor {
                     .propose
                     .proposal_cache
                     .insert_hint(proposal_hint);
-                let block_created_msg = self
-                    .frontier_block_created_from_proposal(&signed_block, &proposal)
-                    .map(BlockMessage::BlockCreated)
-                    .unwrap_or_else(|| {
-                        BlockMessage::BlockCreated(super::message::BlockCreated::from(
-                            &signed_block,
-                        ))
-                    });
+                let block_created = self.frontier_block_created_for_wire(&signed_block);
+                if block_created.frontier.is_none() {
+                    warn!(
+                        height = proposal_height,
+                        view,
+                        block = %block_hash,
+                        "emitting BlockCreated without frontier metadata for active proposal"
+                    );
+                }
+                let block_created_msg = BlockMessage::BlockCreated(block_created);
                 let frame_len = super::consensus_block_wire_len(
                     self.common_config.peer.id(),
                     &block_created_msg,
@@ -1419,22 +1421,31 @@ impl Actor {
                 );
             };
 
-            let mut rbc_plan = self.prepare_rbc_plan(rbc::RbcPlanInputs {
-                signed_block: &signed_block,
-                transactions: &transactions_for_plan,
-                routing: &routing_batch,
-                payload: &payload_bytes,
-                payload_hash,
-                height: proposal_height,
-                view,
-                epoch: proposal_epoch,
-                local_validator_index,
-            })?;
+            // Loop back consensus messages locally so the leader participates immediately.
+            let frontier_block_created_ready = matches!(
+                &block_created_msg,
+                BlockMessage::BlockCreated(created) if created.frontier.is_some()
+            );
+            let mut rbc_plan = if frontier_block_created_ready {
+                None
+            } else {
+                self.prepare_rbc_plan(rbc::RbcPlanInputs {
+                    signed_block: &signed_block,
+                    transactions: &transactions_for_plan,
+                    routing: &routing_batch,
+                    payload: &payload_bytes,
+                    payload_hash,
+                    height: proposal_height,
+                    view,
+                    epoch: proposal_epoch,
+                    local_validator_index,
+                })?
+            };
             drop(payload_bytes);
 
             if let Some(plan) = rbc_plan.as_ref() {
-                // Install RBC sessions up front so local slot handling sees the transport state,
-                // but defer RBC network traffic until the frontier advertisement is enqueued.
+                // Non-frontier recovery still uses RBC transport, but exact frontier proposals
+                // are owned entirely by BlockCreated plus exact body fetch.
                 self.install_rbc_session_plan(&plan.primary)?;
                 if let Some(dup) = plan.duplicate.as_ref() {
                     self.install_rbc_session_plan(dup)?;
@@ -1442,11 +1453,6 @@ impl Actor {
                 self.publish_rbc_backlog_snapshot();
             }
 
-            // Loop back consensus messages locally so the leader participates immediately.
-            let frontier_block_created_ready = matches!(
-                &block_created_msg,
-                BlockMessage::BlockCreated(created) if created.frontier.is_some()
-            );
             let block_created_wire = Arc::new(block_created_msg.clone());
             let block_created_encoded = Arc::new(BlockMessageWire::encode_message(
                 block_created_wire.as_ref(),
@@ -1921,9 +1927,15 @@ impl Actor {
         }
 
         let local_peer_id = self.common_config.peer.id().clone();
-        let block_created = self
-            .frontier_block_created_from_proposal(&pending_block, &proposal)
-            .unwrap_or_else(|| super::message::BlockCreated::from(&pending_block));
+        let block_created = self.frontier_block_created_for_wire(&pending_block);
+        if block_created.frontier.is_none() {
+            warn!(
+                height,
+                view,
+                block = %block_hash,
+                "rebroadcasting BlockCreated without frontier metadata"
+            );
+        }
         let frontier_block_created_ready = block_created.frontier.is_some();
         let block_msg = Arc::new(BlockMessage::BlockCreated(block_created));
         let block_encoded = Arc::new(BlockMessageWire::encode_message(block_msg.as_ref()));

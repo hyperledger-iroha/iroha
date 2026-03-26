@@ -25156,11 +25156,13 @@ pub(crate) mod tests_runtime_handlers {
             authority: creds.account.clone(),
             private_key: clone_private_key(&creds.private_key),
             code_b64: code_b64.clone(),
+            dataspace: None,
         };
         let dto2 = DeployContractDto {
             authority: creds.account.clone(),
             private_key: clone_private_key(&creds.private_key),
             code_b64,
+            dataspace: None,
         };
 
         let first = super::handler_post_contract_deploy(
@@ -25914,6 +25916,7 @@ pub(crate) mod tests_runtime_handlers {
             authority: creds.account,
             private_key: clone_private_key(&creds.private_key),
             code_b64,
+            dataspace: None,
         };
         let resp = super::handler_post_contract_deploy(State(app), headers, NoritoJson(dto))
             .await
@@ -25928,6 +25931,20 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(
             v.get("ok").and_then(norito::json::Value::as_bool),
             Some(true)
+        );
+        assert_eq!(
+            v.get("dataspace").and_then(norito::json::Value::as_str),
+            Some("universal")
+        );
+        assert_eq!(
+            v.get("deploy_nonce").and_then(norito::json::Value::as_u64),
+            Some(0)
+        );
+        assert!(
+            v.get("contract_address")
+                .and_then(norito::json::Value::as_str)
+                .is_some_and(|value| !value.is_empty()),
+            "expected canonical contract address in deploy response"
         );
         assert_eq!(
             v.get("code_hash_hex")

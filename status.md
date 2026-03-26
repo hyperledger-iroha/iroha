@@ -1,6 +1,90 @@
 # Status
 
-Last updated: 2026-03-25
+Last updated: 2026-03-26
+
+## 2026-03-26 Follow-up: vote-backed contiguous frontier QC still escaped exact body repair on the first pilot, then was patched
+- Ran a fresh permissioned preserved-peer pilot on the pre-patch cut:
+  `/tmp/izanami_permissioned_frontier_fullfix_pilot_20260326T014914Z.log`
+  with preserved peers under
+  `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_3xlMXC`.
+- The pilot failed on the divergence safety gate, not the p95 gate:
+  strict min height stayed at `409` while the strict reference advanced to `519`,
+  and Izanami aborted with
+  `height divergence exceeded safety window (divergence 110, threshold 16, window 60s, quorum min 409, strict reference 519, strict min 409, lagging peers 1, target 1200, tolerated_failures 0)`.
+- The lagging peer was `prevailing_kit`
+  (`/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_3xlMXC/prevailing_kit/run-1-stdout.log`).
+  Its important consensus markers on the failing cut were:
+  - repeated `quorum of votes observed but block payload missing; deferring QC aggregation`;
+  - repeated `pruned far-ahead missing-block retry state and reanchored catch-up at the contiguous frontier`;
+  - zero-vote / low-vote reschedule churn at height `410`; and
+  - one `active pending block stalled past quorum timeout; routing contiguous frontier through unified recovery` warning.
+- Notably, this pilot did **not** immediately regress to the older RBC-era smoke signals from the prior full soaks:
+  there were no early hits for
+  `requested missing BlockCreated while awaiting RBC INIT`
+  or `sharing from fallback anchor`
+  in the preserved peer stdout during the period inspected.
+- Root cause on this cut:
+  the vote-backed contiguous frontier QC path in
+  `crates/iroha_core/src/sumeragi/main_loop/qc.rs`
+  suppressed generic fast payload recovery for `committed + 1`,
+  but it did not actually route that quorum-backed miss into the exact
+  frontier body-fetch lane there.
+- Fix landed in this follow-up:
+  the contiguous vote-backed QC-miss branch now calls
+  `handle_frontier_body_gap_with_topology(...)`
+  and immediately retries `retry_frontier_block_body_fetch(...)`
+  instead of only suppressing generic recovery.
+- Focused validation on the patched tree passed:
+  - `cargo fmt --all`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-frontierfix-target cargo test -p iroha_core qc_missing_block_defer_contiguous_frontier_stays_on_exact_body_owner --lib -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-frontierfix-target cargo test -p iroha_core defer_qc_if_block_missing_with_commit_quorum_hint_seeds_contiguous_frontier_owner_create_only --lib -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=/tmp/iroha-frontierfix-target cargo check -p iroha_core --lib --message-format short`
+- A patched permissioned pilot rerun was started with binary-path overrides to skip Izanami’s nested `iroha3d` rebuild:
+  `TEST_NETWORK_BIN_IROHAD=/Users/mtakemiya/dev/iroha/target/release/iroha3d`
+  and
+  `TEST_NETWORK_BIN_IROHA=/Users/mtakemiya/dev/iroha/target/release/iroha`,
+  but that rebuild/replay was still in progress at the end of this turn, so there is no post-patch pilot verdict yet.
+
+## 2026-03-25 Follow-up: full preserved-peer frontier-owner soaks still fail on legacy frontier recovery
+- Ran fresh full 4-peer stable preserved-peer soaks on the current
+  `BlockCreated` frontier-owner cut after rebuilding `iroha3d` and `izanami`.
+- Permissioned result:
+  - strict/quorum height `1403`;
+  - duration-deadline failure
+    `quorum p95 block interval 5001ms exceeded threshold 1000ms`;
+  - effective average `2565.9ms/block`; and
+  - modest workload noise only: `8` `plan submission failed` events, all
+    `Trigger with id repeat_trigger_* not found`.
+- Permissioned preserved-peer logs still show the old frontier owner:
+  - `FetchBlockBody=0`;
+  - `BlockBodyResponse=0`;
+  - `requested missing BlockCreated while awaiting RBC INIT=76`; and
+  - `sharing from fallback anchor=1145`.
+- NPoS result:
+  - strict/quorum height `1387`;
+  - the same duration-deadline failure
+    `quorum p95 block interval 5001ms exceeded threshold 1000ms`;
+  - effective average `2595.5ms/block`; and
+  - heavy workload contamination:
+    `2179` `plan submission failed` events, `2151` of them
+    `Failed to find asset`.
+- NPoS preserved-peer logs show the same structural frontier bug:
+  - `FetchBlockBody=0`;
+  - `BlockBodyResponse=0`;
+  - `requested missing BlockCreated while awaiting RBC INIT=45`; and
+  - `sharing from fallback anchor=1159`.
+- Critique:
+  - the exact-body frontier lane still is not the live soak path;
+  - both modes stayed on legacy missing-`BlockCreated` plus fallback-anchor
+    recovery for `committed + 1`; and
+  - NPoS looked better only in the opening window, then re-entered the same
+    `5s/10s` tail, including a `20046ms` interval mid-run, and still finished
+    slightly behind permissioned while also suffering unrelated workload-path
+    failures.
+- Validation:
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_BUILD_JOBS=4 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`
+  - full permissioned stable preserved-peer soak
+  - full NPoS stable preserved-peer soak
 
 ## 2026-03-25 Follow-up: `model-publish-private` now prepares encrypted upload plans from raw admitted model directories
 - Extended `crates/iroha_cli/src/soracloud.rs`,

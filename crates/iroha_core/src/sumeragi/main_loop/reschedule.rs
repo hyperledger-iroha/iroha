@@ -1176,6 +1176,12 @@ impl Actor {
         if topology_peers.is_empty() {
             topology_peers = self.effective_commit_topology();
         }
+        let stake_quorum_missing = vote_count > 0
+            && self
+                .commit_vote_quorum_status_for_block_detail(block_hash, height, view)
+                .stake_quorum_missing;
+        let direct_view_change_cause =
+            view_change_cause_for_quorum(reschedule_vote_count, stake_quorum_missing);
         let local_only_commit_topology =
             topology_peers.len() == 1 && topology_peers[0] == *self.common_config.peer.id();
         let no_commit_evidence = reschedule_vote_count == 0;
@@ -1219,90 +1225,31 @@ impl Actor {
             .unwrap_or(u64::MAX)
             .saturating_add(1);
         let contiguous_frontier = height == frontier_height;
+        let authoritative_payload_present = !drop_pending
+            && Self::payload_available_for_da(
+                &self.subsystems.da_rbc.rbc.sessions,
+                &self.subsystems.da_rbc.rbc.status_handle,
+                &pending,
+            );
+        let rotate_authoritative_frontier_immediately =
+            contiguous_frontier && has_reschedule_votes && authoritative_payload_present;
         let frontier_window = self
             .frontier_recovery_window()
             .max(Duration::from_millis(1));
-        let frontier_window_owned =
-            contiguous_frontier && self.frontier_recovery_owns_height_window(height, now);
-        let frontier_quorum_owner_active_without_action = contiguous_frontier
-            && self.frontier_recovery.is_some_and(|state| {
-                state.frontier_height == height
-                    && state.last_cause == "quorum_timeout"
-                    && state.last_action_at.is_none()
-                    && now.saturating_duration_since(state.last_progress_at) < frontier_window
-            });
-        let frontier_same_height_dependency_backlog_active = contiguous_frontier
-            && self.same_height_dependency_backlog_active_in_frontier_window(
-                height,
-                now,
-                queue_depths,
-            );
-        let frontier_same_slot_ingress_active = contiguous_frontier
-            && self.frontier_recovery_same_slot_ingress_active(height, view, queue_depths);
         let vote_backed_frontier_same_height_recovery_active = contiguous_frontier
             && has_reschedule_votes
             && !drop_pending
+            && !rotate_authoritative_frontier_immediately
             && self.frontier_recovery_same_slot_reassembly_active(height, view, now, queue_depths);
         let vote_backed_frontier_window_owned = contiguous_frontier
             && has_reschedule_votes
             && !drop_pending
+            && !rotate_authoritative_frontier_immediately
             && self.frontier_recovery_owns_height_window_with_window(
                 height,
                 now,
                 bundle_window_override.unwrap_or(frontier_window),
             );
-        if frontier_window_owned && drop_pending {
-            debug!(
-                block = %block_hash,
-                height,
-                view,
-                votes = vote_count,
-                min_votes = min_votes_for_commit,
-                pending_age_ms = pending_age.as_millis(),
-                quorum_stall_age_ms = quorum_stall_age.as_millis(),
-                "suppressing zero-vote quorum reschedule; frontier recovery already acted this window"
-            );
-            self.pending.pending_blocks.insert(block_hash, pending);
-            return false;
-        }
-        if frontier_quorum_owner_active_without_action && drop_pending {
-            debug!(
-                block = %block_hash,
-                height,
-                view,
-                votes = vote_count,
-                min_votes = min_votes_for_commit,
-                pending_age_ms = pending_age.as_millis(),
-                quorum_stall_age_ms = quorum_stall_age.as_millis(),
-                "suppressing zero-vote quorum reschedule; quorum-timeout frontier owner is still active this window"
-            );
-            self.pending.pending_blocks.insert(block_hash, pending);
-            return false;
-        }
-        if (frontier_same_height_dependency_backlog_active || frontier_same_slot_ingress_active)
-            && drop_pending
-        {
-            let created_frontier_owner =
-                self.seed_frontier_recovery_for_quorum_timeout(height, view, now);
-            debug!(
-                block = %block_hash,
-                height,
-                view,
-                votes = vote_count,
-                min_votes = min_votes_for_commit,
-                pending_age_ms = pending_age.as_millis(),
-                quorum_stall_age_ms = quorum_stall_age.as_millis(),
-                block_payload_rx_depth = queue_depths.block_payload_rx,
-                rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
-                block_rx_depth = queue_depths.block_rx,
-                same_height_dependency_backlog_active = frontier_same_height_dependency_backlog_active,
-                same_slot_ingress_active = frontier_same_slot_ingress_active,
-                created_frontier_owner,
-                "suppressing zero-vote quorum reschedule; same-slot frontier recovery ingress is still converging"
-            );
-            self.pending.pending_blocks.insert(block_hash, pending);
-            return false;
-        }
         if vote_backed_frontier_same_height_recovery_active {
             let recovery_cause = self
                 .frontier_dependency_recovery_cause(height, view, now)
@@ -1344,8 +1291,11 @@ impl Actor {
             self.pending.pending_blocks.insert(block_hash, pending);
             return false;
         }
-        let handoff_frontier_quorum_timeout_owner =
-            contiguous_frontier && (drop_pending || has_reschedule_votes);
+        let rotate_zero_vote_frontier_immediately = contiguous_frontier && drop_pending;
+        let handoff_frontier_quorum_timeout_owner = contiguous_frontier
+            && has_reschedule_votes
+            && !drop_pending
+            && !rotate_authoritative_frontier_immediately;
         let (requeued, failures, _duplicate_failures, _gossip_hashes) =
             if !has_reschedule_votes || drop_pending {
                 // Avoid conflicting proposals once votes exist (precommit or commit), unless we've
@@ -1394,6 +1344,21 @@ impl Actor {
                 "skipping no-op commit-quorum reschedule: no actionable retransmit targets remain"
             );
             self.pending.pending_blocks.insert(block_hash, pending);
+            if rotate_authoritative_frontier_immediately || rotate_zero_vote_frontier_immediately {
+                info!(
+                    block = %block_hash,
+                    height,
+                    view,
+                    votes = vote_count,
+                    min_votes = min_votes_for_commit,
+                    pending_age_ms = pending_age.as_millis(),
+                    quorum_stall_age_ms = quorum_stall_age.as_millis(),
+                    drop_pending,
+                    "no actionable quorum retransmit targets remain for contiguous frontier block; rotating view deterministically"
+                );
+                self.trigger_view_change_with_cause(height, view, direct_view_change_cause);
+                return true;
+            }
             return false;
         }
         let commit_quorum_bundle_window =
@@ -1414,6 +1379,21 @@ impl Actor {
                 "suppressing repeated commit-quorum reschedule in current deterministic recovery bundle window"
             );
             self.pending.pending_blocks.insert(block_hash, pending);
+            if rotate_authoritative_frontier_immediately || rotate_zero_vote_frontier_immediately {
+                info!(
+                    block = %block_hash,
+                    height,
+                    view,
+                    votes = vote_count,
+                    min_votes = min_votes_for_commit,
+                    pending_age_ms = pending_age.as_millis(),
+                    quorum_stall_age_ms = quorum_stall_age.as_millis(),
+                    drop_pending,
+                    "contiguous frontier quorum retransmit window was pacing-limited; rotating view deterministically"
+                );
+                self.trigger_view_change_with_cause(height, view, direct_view_change_cause);
+                return true;
+            }
             return false;
         }
         let rebroadcast = self.rebroadcast_pending_block_updates(
@@ -1459,6 +1439,20 @@ impl Actor {
                 "skipping no-op commit-quorum reschedule after pacing/cooldown suppressed all retransmit work"
             );
             self.pending.pending_blocks.insert(block_hash, pending);
+            if rotate_zero_vote_frontier_immediately {
+                info!(
+                    block = %block_hash,
+                    height,
+                    view,
+                    votes = vote_count,
+                    min_votes = min_votes_for_commit,
+                    pending_age_ms = pending_age.as_millis(),
+                    quorum_stall_age_ms = quorum_stall_age.as_millis(),
+                    "zero-vote contiguous frontier quorum timeout had no retransmit work; rotating view deterministically"
+                );
+                self.trigger_view_change_with_cause(height, view, direct_view_change_cause);
+                return true;
+            }
             return false;
         }
         if has_reschedule_votes {
@@ -1538,9 +1532,13 @@ impl Actor {
             commit_votes = commit_vote_count,
             reschedule_backoff_ms = reschedule_backoff.as_millis(),
             last_reschedule_ms = last_reschedule_ms,
-            rotate_immediately = false,
+            rotate_zero_vote_immediately = rotate_zero_vote_frontier_immediately,
+            rotate_immediately = rotate_authoritative_frontier_immediately,
             "commit quorum missing past timeout; rescheduling block for reassembly"
         );
+        if rotate_authoritative_frontier_immediately || rotate_zero_vote_frontier_immediately {
+            self.trigger_view_change_with_cause(height, view, direct_view_change_cause);
+        }
         true
     }
 

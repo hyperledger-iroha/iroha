@@ -2,6 +2,37 @@
 
 Last updated: 2026-03-25
 
+Latest sync (2026-03-25 frontier-owner full stable soaks still fail on legacy frontier recovery):
+the current `BlockCreated` frontier-owner cut still fails both full 4-peer
+stable preserved-peer soaks at the duration deadline:
+
+- permissioned finished at height `1403` and NPoS finished at height `1387`,
+  with both runs failing `quorum p95 block interval 5001ms exceeded threshold
+  1000ms`;
+- neither mode showed any live exact-body frontier traffic
+  (`FetchBlockBody=0`, `BlockBodyResponse=0`);
+- both modes still relied on legacy frontier rescue
+  (`requested missing BlockCreated while awaiting RBC INIT` and
+  `sharing from fallback anchor`);
+- permissioned remains the cleaner consensus signal, while the NPoS stable
+  workload is additionally broken by repeated asset-lookup submission failures
+  and should not be used as a clean performance comparator until that harness
+  issue is fixed.
+
+Validation:
+- `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_BUILD_JOBS=4 cargo build --release -p irohad --bin iroha3d -p izanami --bin izanami`
+- full permissioned stable preserved-peer soak
+- full NPoS stable preserved-peer soak
+
+Open work from this soak round:
+- delete the remaining frontier ownership split so `committed + 1` repair can
+  no longer fall back to missing-`BlockCreated` rescue or fallback-anchor
+  sharing, and the preserved-peer logs show nonzero exact-body fetches instead;
+- keep `BlockSyncUpdate`, anchor sharing, and generic missing-block recovery out
+  of the frontier lane entirely; and
+- debug the NPoS stable workload asset-lookup failures before treating its
+  full-hour soak numbers as meaningful consensus-only performance data.
+
 Latest sync (2026-03-25 Soracloud private-model publish drafts now prepare encrypted bundle plans locally):
 `crates/iroha_cli/src/soracloud.rs`,
 `crates/iroha_cli/Cargo.toml`,

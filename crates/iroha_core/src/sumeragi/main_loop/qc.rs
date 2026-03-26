@@ -1717,6 +1717,79 @@ impl Actor {
                 progress = true;
                 continue;
             }
+            let local_height = self.committed_height_snapshot();
+            let frontier_height = local_height.saturating_add(1);
+            let keep_through_height = frontier_height.saturating_add(1);
+            if stats_snapshot.height > keep_through_height {
+                let (
+                    pending_removed,
+                    missing_removed,
+                    deferred_updates_removed,
+                    deferred_qcs_removed,
+                    hints_removed,
+                    proposals_removed,
+                    seen_removed,
+                ) = self.prune_future_consensus_state_above_height(keep_through_height, now, true);
+                if missing_removed > 0 {
+                    super::status::inc_missing_request_pruned_stale_height(
+                        u64::try_from(missing_removed).unwrap_or(u64::MAX),
+                    );
+                    self.update_missing_block_gauges();
+                }
+                let evicted_total = pending_removed
+                    .saturating_add(deferred_updates_removed)
+                    .saturating_add(deferred_qcs_removed)
+                    .saturating_add(hints_removed)
+                    .saturating_add(proposals_removed)
+                    .saturating_add(seen_removed);
+                if evicted_total > 0 {
+                    super::status::inc_pending_queue_evictions_total(
+                        u64::try_from(evicted_total).unwrap_or(u64::MAX),
+                    );
+                }
+                let requested = self.request_range_pull_from_anchor(
+                    keep_through_height,
+                    "missing_block_far_ahead_retry",
+                    now,
+                );
+                if requested {
+                    self.note_missing_block_height_attempt(
+                        block_hash,
+                        stats_snapshot.height,
+                        stats_snapshot.view,
+                        super::MissingBlockRecoveryStage::RangePullFromAnchor,
+                        None,
+                        now,
+                    );
+                }
+                debug_assert!(
+                    self.pending
+                        .missing_block_requests
+                        .values()
+                        .all(|request| request.height <= keep_through_height),
+                    "retrying far-ahead missing blocks must prune per-hash state above the two-lane frontier window"
+                );
+                warn!(
+                    height = stats_snapshot.height,
+                    view = stats_snapshot.view,
+                    phase = ?stats_snapshot.phase,
+                    block = ?block_hash,
+                    local_height,
+                    keep_through_height,
+                    range_pull_height = keep_through_height,
+                    pending_removed,
+                    missing_removed,
+                    deferred_updates_removed,
+                    deferred_qcs_removed,
+                    hints_removed,
+                    proposals_removed,
+                    seen_removed,
+                    requested,
+                    "pruned far-ahead missing-block retry state and reanchored catch-up at the contiguous frontier"
+                );
+                progress = true;
+                continue;
+            }
             let expected_epoch = self.epoch_for_height(stats_snapshot.height);
             let mut signers = BTreeSet::new();
             let mut roster: Option<Vec<PeerId>> = None;
@@ -1802,7 +1875,58 @@ impl Actor {
                 .filter(|roster| !roster.is_empty())
                 .map(super::network_topology::Topology::new);
 
-            let local_height = self.committed_height_snapshot();
+            if stats_snapshot.height == frontier_height {
+                let routed = if let Some(topology) = topology.as_ref() {
+                    self.handle_frontier_body_gap_with_topology(
+                        block_hash,
+                        stats_snapshot.height,
+                        stats_snapshot.view,
+                        &signers,
+                        topology,
+                        /*exact_fetch_armed*/ true,
+                        now,
+                    )
+                } else {
+                    if self.update_frontier_slot(
+                        block_hash,
+                        stats_snapshot.height,
+                        stats_snapshot.view,
+                        None,
+                        BTreeSet::new(),
+                        /*block_created_seen*/ false,
+                        /*exact_fetch_armed*/ true,
+                        false,
+                        None,
+                        None,
+                        now,
+                    ) {
+                        self.clear_missing_block_request(
+                            &block_hash,
+                            MissingBlockClearReason::Obsolete,
+                        );
+                        self.clear_missing_block_view_change(&block_hash);
+                        true
+                    } else {
+                        false
+                    }
+                };
+                if routed {
+                    progress = true;
+                    continue;
+                }
+            }
+            if stats_snapshot.height == keep_through_height {
+                self.next_slot_prefetch = Some(super::FrontierPrefetchSlot {
+                    height: stats_snapshot.height,
+                    view: stats_snapshot.view,
+                    block_hash,
+                });
+                self.clear_missing_block_request(&block_hash, MissingBlockClearReason::Obsolete);
+                self.clear_missing_block_view_change(&block_hash);
+                progress = true;
+                continue;
+            }
+
             let far_ahead_retry = stats_snapshot.height > local_height.saturating_add(1);
             let far_ahead_retry_suppressed = far_ahead_retry
                 && !self.frontier_catchup_far_ahead_replay_allowed(stats_snapshot.height, now);
@@ -3146,10 +3270,32 @@ impl Actor {
             let contiguous_frontier = height == self.committed_height_snapshot().saturating_add(1)
                 && height == self.active_consensus_round_height();
             if contiguous_frontier {
-                let _ = self.seed_frontier_recovery_for_missing_payload(height, view, now);
+                let exact_owner_routed = self.handle_frontier_body_gap_with_topology(
+                    block_hash,
+                    height,
+                    view,
+                    signers,
+                    signature_topology,
+                    /*exact_fetch_armed*/ true,
+                    now,
+                );
+                let exact_retry_emitted = if exact_owner_routed {
+                    self.retry_frontier_block_body_fetch(now)
+                } else {
+                    false
+                };
+                debug!(
+                    height,
+                    view,
+                    phase = ?phase,
+                    block = %block_hash,
+                    exact_owner_routed,
+                    exact_retry_emitted,
+                    "routing vote-backed contiguous frontier payload miss through exact body repair"
+                );
             }
             let cooldown = self.rebroadcast_cooldown();
-            if self.block_sync_fetch_log.allow(block_hash, now, cooldown) {
+            if !contiguous_frontier && self.block_sync_fetch_log.allow(block_hash, now, cooldown) {
                 let local_peer = self.common_config.peer.id();
                 let targets = rebroadcast_targets_for_qc(local_peer, signers, signature_topology);
                 let fetch_freshness_cap =

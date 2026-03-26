@@ -3165,9 +3165,12 @@ struct FrontierSlot {
     height: u64,
     view: u64,
     block_hash: HashOf<BlockHeader>,
+    observed_at: Instant,
     last_updated_at: Instant,
     body_present: bool,
     block_created_seen: bool,
+    exact_fetch_armed: bool,
+    frontier_info: Option<super::message::BlockCreatedFrontierInfo>,
     leader: Option<PeerId>,
     voters: BTreeSet<PeerId>,
     fetch_stage: FrontierBodyFetchStage,
@@ -4171,7 +4174,41 @@ impl Actor {
             return;
         }
 
+        let now = Instant::now();
         let topology = super::network_topology::Topology::new(roster);
+        if gap == 1
+            && parent_height == frontier_height
+            && let Some(parent_view) =
+                self.frontier_view_from_consensus_evidence(target_parent_hash, parent_height)
+        {
+            let _ =
+                self.seed_frontier_recovery_for_missing_payload(parent_height, parent_view, now);
+            if self.handle_frontier_body_gap_with_topology(
+                target_parent_hash,
+                parent_height,
+                parent_view,
+                &BTreeSet::new(),
+                &topology,
+                true,
+                now,
+            ) {
+                info!(
+                    height = block_height,
+                    view = block_view,
+                    parent_height,
+                    parent_view,
+                    local_height,
+                    gap,
+                    block = %block_hash,
+                    missing_parent = %target_parent_hash,
+                    roster_source,
+                    trigger,
+                    "routed contiguous missing-parent recovery through exact frontier body owner"
+                );
+                return;
+            }
+        }
+
         let mut retry_window = self.quorum_timeout(self.runtime_da_enabled());
         if gap > 1 {
             let fast_retry = self.rebroadcast_cooldown();
@@ -4179,7 +4216,6 @@ impl Actor {
                 retry_window = fast_retry;
             }
         }
-        let now = Instant::now();
         let signers = BTreeSet::new();
         let view_change_window = if gap == 1 { Some(retry_window) } else { None };
         // Contiguous missing parents are consensus-critical; background priority suppresses
@@ -5709,6 +5745,47 @@ impl Actor {
             )
     }
 
+    fn should_preserve_live_contiguous_frontier_cleanup(
+        &self,
+        frontier_height: u64,
+        view: u64,
+        now: Instant,
+    ) -> bool {
+        if frontier_height != self.committed_height_snapshot().saturating_add(1) {
+            return false;
+        }
+        if self.phase_tracker.current_view(frontier_height) != Some(view) {
+            return false;
+        }
+
+        let exact_frontier_owner_active = self.frontier_slot.as_ref().is_some_and(|slot| {
+            slot.height == frontier_height
+                && slot.view == view
+                && slot.block_created_seen
+                && slot.exact_fetch_armed
+                && !slot.body_present
+        });
+        let authoritative_owner_active = self
+            .authoritative_slot_owner_hash(frontier_height, view)
+            .is_some();
+        if !exact_frontier_owner_active && !authoritative_owner_active {
+            return false;
+        }
+
+        exact_frontier_owner_active
+            || self.slot_has_vote_backed_consensus_evidence(frontier_height, view)
+            || self.frontier_recovery_same_slot_vote_backed_recovery_active(
+                frontier_height,
+                view,
+                now,
+            )
+            || self.frontier_recovery_same_slot_missing_payload_recovery_active(
+                frontier_height,
+                view,
+                now,
+            )
+    }
+
     fn suppress_quorum_view_change_while_frontier_repair_active(
         &mut self,
         height: u64,
@@ -5729,17 +5806,20 @@ impl Actor {
             return false;
         }
 
-        let repair_active = self.frontier_recovery_quorum_timeout_same_height_recovery_active(
-            height,
-            view,
-            now,
-            queue_depths,
-        ) || self.frontier_recovery_same_slot_reassembly_active(
-            height,
-            view,
-            now,
-            queue_depths,
-        );
+        if self.slot_has_authoritative_payload(height, view) {
+            return false;
+        }
+
+        let exact_body_repair_active = self.frontier_slot.as_ref().is_some_and(|slot| {
+            slot.height == height
+                && slot.view == view
+                && slot.block_created_seen
+                && slot.exact_fetch_armed
+                && !slot.body_present
+        });
+        let repair_active = exact_body_repair_active
+            || self.frontier_recovery_same_slot_missing_payload_recovery_active(height, view, now)
+            || self.frontier_recovery_same_slot_reassembly_active(height, view, now, queue_depths);
         if !repair_active {
             return false;
         }
@@ -6162,6 +6242,45 @@ impl Actor {
         let tip_height = self.state.committed_height();
         let tip_hash = self.state.latest_block_hash_fast();
         self.rbc_rebroadcast_active_with_tip(key, tip_height, tip_hash)
+    }
+
+    fn has_local_pending_candidate_for_rbc_key(&self, key: super::rbc_store::SessionKey) -> bool {
+        if self
+            .pending
+            .pending_blocks
+            .get(&key.0)
+            .is_some_and(|pending| {
+                !pending.aborted && pending.height == key.1 && pending.view == key.2
+            })
+        {
+            return true;
+        }
+        if self
+            .subsystems
+            .commit
+            .inflight
+            .as_ref()
+            .is_some_and(|inflight| {
+                inflight.block_hash == key.0
+                    && !inflight.pending.aborted
+                    && inflight.pending.height == key.1
+                    && inflight.pending.view == key.2
+            })
+        {
+            return true;
+        }
+        self.pending
+            .pending_processing
+            .get()
+            .is_some_and(|hash| hash == key.0)
+    }
+
+    fn suppress_rbc_hot_repair(&self, key: super::rbc_store::SessionKey) -> bool {
+        let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        if key.1 <= committed_height.saturating_add(2) {
+            return true;
+        }
+        !self.has_local_pending_candidate_for_rbc_key(key)
     }
 
     fn rbc_payload_backpressure_exempt_with_tip(
@@ -7934,6 +8053,7 @@ pub(super) struct Actor {
     network: IrohaNetwork,
     subsystems: ActorSubsystems,
     block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>>,
+    frontier_block_sync_hint: Arc<super::FrontierBlockSyncHint>,
     #[allow(dead_code)] // Retained until background broadcast wiring consumes the gossiper handle.
     peers_gossiper: PeersGossiperHandle,
     #[allow(dead_code)] // Retained until Genesis gossip orchestration consumes the handle.
@@ -9091,6 +9211,8 @@ struct ProposeState {
     // accepted `(height, view) -> block_hash` mapping across cleanup so the same view cannot
     // be reopened by local re-proposal or an alternate body.
     authoritative_block_slots: BTreeMap<(u64, u64), HashOf<BlockHeader>>,
+    authoritative_block_frontiers:
+        BTreeMap<(u64, u64, HashOf<BlockHeader>), super::message::BlockCreatedFrontierInfo>,
     proposals_seen: BTreeSet<(u64, u64)>,
     pacemaker_backpressure: PacemakerBackpressure,
     pacemaker_backpressure_tracker: pacing::PacemakerBackpressureTracker,
@@ -10196,6 +10318,7 @@ fn block_sync_update_with_roster(
     )
 }
 
+#[cfg(test)]
 fn block_sync_update_with_certified_roster(
     block: &SignedBlock,
     state: &State,
@@ -12588,6 +12711,45 @@ impl Actor {
         height == self.committed_height_snapshot().saturating_add(1)
     }
 
+    fn exact_frontier_block_created_owner_active(&self, key: super::rbc_store::SessionKey) -> bool {
+        self.frontier_slot_is_exact_height(key.1)
+            && self
+                .authoritative_slot_owner_hash(key.1, key.2)
+                .is_some_and(|owner| owner == key.0)
+            && self.block_payload_available_locally(key.0)
+    }
+
+    fn near_tip_rbc_runtime_unneeded(&self, key: super::rbc_store::SessionKey) -> bool {
+        let committed_height = self.committed_height_snapshot();
+        key.1 <= committed_height.saturating_add(2) && self.block_known_locally(key.0)
+    }
+
+    fn retire_exact_frontier_rbc_runtime(
+        &mut self,
+        key: super::rbc_store::SessionKey,
+        reason: &'static str,
+    ) -> bool {
+        if !self.exact_frontier_block_created_owner_active(key)
+            && !self.near_tip_rbc_runtime_unneeded(key)
+        {
+            return false;
+        }
+        debug!(
+            height = key.1,
+            view = key.2,
+            block = %key.0,
+            committed_height = self.committed_height_snapshot(),
+            reason,
+            "retiring near-tip RBC runtime after local BlockCreated ownership or local materialization"
+        );
+        self.purge_rbc_state(key, key.0, key.1, key.2);
+        true
+    }
+
+    fn frontier_block_materialized_locally(&self, hash: HashOf<BlockHeader>) -> bool {
+        self.local_signed_block_for_hash(hash).is_some()
+    }
+
     fn frontier_slot_retry_window(
         &self,
         block_hash: HashOf<BlockHeader>,
@@ -12612,12 +12774,22 @@ impl Actor {
             .filter(|peer| peer != self.common_config.peer.id());
         let canonical_signers =
             normalize_signer_indices_to_canonical(signers, &signature_topology, topology);
-        let voters = canonical_signers
+        let mut voters = canonical_signers
             .into_iter()
             .filter_map(|signer| usize::try_from(signer).ok())
             .filter_map(|idx| topology.as_ref().get(idx).cloned())
             .filter(|peer| peer != self.common_config.peer.id())
-            .collect();
+            .collect::<BTreeSet<_>>();
+        if voters.is_empty() {
+            voters.extend(
+                topology
+                    .as_ref()
+                    .iter()
+                    .filter(|peer| *peer != self.common_config.peer.id())
+                    .filter(|peer| leader.as_ref() != Some(*peer))
+                    .cloned(),
+            );
+        }
         (leader, voters)
     }
 
@@ -12625,7 +12797,7 @@ impl Actor {
         let committed_height = self.committed_height_snapshot();
         if self.frontier_slot.as_ref().is_some_and(|slot| {
             slot.height <= committed_height
-                || self.authoritative_block_payload_available(slot.block_hash)
+                || self.frontier_block_materialized_locally(slot.block_hash)
         }) {
             self.frontier_slot = None;
         }
@@ -12645,8 +12817,10 @@ impl Actor {
         view: u64,
         leader: Option<PeerId>,
         voters: BTreeSet<PeerId>,
-        authoritative_identity_known: bool,
+        block_created_seen: bool,
+        exact_fetch_armed: bool,
         body_present: bool,
+        frontier_info: Option<super::message::BlockCreatedFrontierInfo>,
         requester: Option<PeerId>,
         now: Instant,
     ) -> bool {
@@ -12664,7 +12838,7 @@ impl Actor {
             return false;
         }
 
-        let body_present = body_present || self.authoritative_block_payload_available(block_hash);
+        let body_present = body_present || self.frontier_block_materialized_locally(block_hash);
         let retry_window = self.frontier_slot_retry_window(block_hash, height, view);
         let mut slot = match self.frontier_slot.take() {
             Some(existing)
@@ -12677,8 +12851,11 @@ impl Actor {
             Some(existing)
                 if existing.height == height
                     && existing.view == view
-                    && (existing.body_present || existing.block_created_seen)
-                    && !authoritative_identity_known
+                    && (existing.body_present
+                        || existing.block_created_seen
+                        || existing.exact_fetch_armed)
+                    && !block_created_seen
+                    && !exact_fetch_armed
                     && !body_present =>
             {
                 self.frontier_slot = Some(existing);
@@ -12688,9 +12865,12 @@ impl Actor {
                 height,
                 view,
                 block_hash,
+                observed_at: now,
                 last_updated_at: now,
                 body_present,
-                block_created_seen: authoritative_identity_known,
+                block_created_seen,
+                exact_fetch_armed,
+                frontier_info: None,
                 leader: None,
                 voters: BTreeSet::new(),
                 fetch_stage: FrontierBodyFetchStage::Leader,
@@ -12702,7 +12882,11 @@ impl Actor {
 
         slot.last_updated_at = now;
         slot.body_present |= body_present;
-        slot.block_created_seen |= authoritative_identity_known;
+        slot.block_created_seen |= block_created_seen;
+        slot.exact_fetch_armed |= exact_fetch_armed;
+        if let Some(frontier_info) = frontier_info {
+            slot.frontier_info = Some(frontier_info);
+        }
         slot.retry_window = retry_window;
         if let Some(leader) = leader {
             slot.leader = Some(leader);
@@ -12715,6 +12899,12 @@ impl Actor {
         true
     }
 
+    fn frontier_body_fetch_grace_elapsed(&self, slot: &FrontierSlot, now: Instant) -> bool {
+        slot.block_created_seen
+            || now.saturating_duration_since(slot.observed_at)
+                >= self.authoritative_body_ingress_fetch_grace()
+    }
+
     fn handle_frontier_body_gap_with_topology(
         &mut self,
         block_hash: HashOf<BlockHeader>,
@@ -12722,11 +12912,11 @@ impl Actor {
         view: u64,
         signers: &BTreeSet<crate::sumeragi::consensus::ValidatorIndex>,
         topology: &super::network_topology::Topology,
-        authoritative_identity_known: bool,
+        exact_fetch_armed: bool,
         now: Instant,
     ) -> bool {
         if !self.frontier_slot_is_exact_height(height)
-            || self.authoritative_block_payload_available(block_hash)
+            || self.frontier_block_materialized_locally(block_hash)
         {
             return false;
         }
@@ -12738,8 +12928,10 @@ impl Actor {
             view,
             leader,
             voters,
-            authoritative_identity_known,
+            /*block_created_seen*/ false,
+            exact_fetch_armed,
             false,
+            None,
             None,
             now,
         ) {
@@ -12751,7 +12943,7 @@ impl Actor {
             slot.height == height
                 && slot.view == view
                 && slot.block_hash == block_hash
-                && slot.block_created_seen
+                && slot.exact_fetch_armed
                 && !slot.body_present
         });
         if frontier_slot_can_fetch {
@@ -12773,7 +12965,8 @@ impl Actor {
             voters.insert(voter);
         }
         self.update_frontier_slot(
-            block_hash, height, view, None, voters, false, false, None, now,
+            block_hash, height, view, None, voters, /*block_created_seen*/ false,
+            /*exact_fetch_armed*/ false, false, None, None, now,
         )
     }
 
@@ -12792,11 +12985,18 @@ impl Actor {
 
     fn frontier_body_next_due(&self, now: Instant) -> Option<Instant> {
         let slot = self.frontier_slot.as_ref()?;
-        if slot.body_present || !slot.block_created_seen {
+        if slot.body_present || !slot.exact_fetch_armed {
             return None;
         }
         if Self::frontier_body_fetch_targets(slot).is_empty() {
             return None;
+        }
+        let ingress_due = slot
+            .observed_at
+            .checked_add(self.authoritative_body_ingress_fetch_grace())
+            .unwrap_or(now);
+        if !self.frontier_body_fetch_grace_elapsed(slot, now) {
+            return Some(ingress_due.max(now));
         }
         let due = slot
             .last_fetch_at
@@ -12805,15 +13005,63 @@ impl Actor {
         Some(due.max(now))
     }
 
+    fn frontier_view_from_consensus_evidence(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+    ) -> Option<u64> {
+        let slot_view = self.frontier_slot.as_ref().and_then(|slot| {
+            (slot.height == height && slot.block_hash == block_hash).then_some(slot.view)
+        });
+        let request_view = self
+            .pending
+            .missing_block_requests
+            .get(&block_hash)
+            .and_then(|request| (request.height == height).then_some(request.view));
+        let deferred_qc_view = self
+            .deferred_missing_payload_qcs
+            .values()
+            .filter(|entry| entry.qc.subject_block_hash == block_hash && entry.qc.height == height)
+            .map(|entry| entry.qc.view)
+            .max();
+        let qc_cache_view = self
+            .qc_cache
+            .keys()
+            .filter(|(_, hash, qc_height, _, _)| *hash == block_hash && *qc_height == height)
+            .map(|(_, _, _, view, _)| *view)
+            .max();
+        let vote_view = self
+            .vote_log
+            .values()
+            .filter(|vote| vote.block_hash == block_hash && vote.height == height)
+            .map(|vote| vote.view)
+            .max();
+
+        [
+            slot_view,
+            request_view,
+            deferred_qc_view,
+            qc_cache_view,
+            vote_view,
+        ]
+        .into_iter()
+        .flatten()
+        .max()
+    }
+
     fn retry_frontier_block_body_fetch(&mut self, now: Instant) -> bool {
         self.prune_frontier_slot_state();
         let Some(mut slot) = self.frontier_slot.take() else {
             return false;
         };
-        if slot.body_present || self.authoritative_block_payload_available(slot.block_hash) {
+        if slot.body_present || self.frontier_block_materialized_locally(slot.block_hash) {
             return false;
         }
-        if !slot.block_created_seen {
+        if !slot.exact_fetch_armed {
+            self.frontier_slot = Some(slot);
+            return false;
+        }
+        if !self.frontier_body_fetch_grace_elapsed(&slot, now) {
             self.frontier_slot = Some(slot);
             return false;
         }
@@ -13297,6 +13545,57 @@ impl Actor {
 
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     pub(super) fn new(
+        config: SumeragiConfig,
+        common_config: CommonConfig,
+        consensus_frame_cap: usize,
+        consensus_payload_frame_cap: usize,
+        events_sender: EventsSender,
+        state: Arc<State>,
+        queue: Arc<Queue>,
+        kura: Arc<Kura>,
+        network: IrohaNetwork,
+        da_spool_dir: PathBuf,
+        peers_gossiper: PeersGossiperHandle,
+        genesis_network: GenesisWithPubKey,
+        block_count: BlockCount,
+        block_sync_gossip_limit: usize,
+        #[cfg(feature = "telemetry")] telemetry: Telemetry,
+        epoch_roster_provider: Option<Arc<WsvEpochRosterAdapter>>,
+        rbc_store: Option<RbcStoreConfig>,
+        background_post_tx: Option<mpsc::SyncSender<BackgroundPost>>,
+        wake_tx: Option<mpsc::SyncSender<()>>,
+        block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>>,
+        rbc_status_handle: rbc_status::Handle,
+    ) -> Result<Self> {
+        Self::new_with_block_sync_hint(
+            config,
+            common_config,
+            consensus_frame_cap,
+            consensus_payload_frame_cap,
+            events_sender,
+            state,
+            queue,
+            kura,
+            network,
+            da_spool_dir,
+            peers_gossiper,
+            genesis_network,
+            block_count,
+            block_sync_gossip_limit,
+            #[cfg(feature = "telemetry")]
+            telemetry,
+            epoch_roster_provider,
+            rbc_store,
+            background_post_tx,
+            wake_tx,
+            block_payload_dedup,
+            Arc::new(super::FrontierBlockSyncHint::default()),
+            rbc_status_handle,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn new_with_block_sync_hint(
         mut config: SumeragiConfig,
         common_config: CommonConfig,
         consensus_frame_cap: usize,
@@ -13317,6 +13616,7 @@ impl Actor {
         background_post_tx: Option<mpsc::SyncSender<BackgroundPost>>,
         wake_tx: Option<mpsc::SyncSender<()>>,
         block_payload_dedup: Arc<Mutex<BlockPayloadDedupCache>>,
+        frontier_block_sync_hint: Arc<super::FrontierBlockSyncHint>,
         rbc_status_handle: rbc_status::Handle,
     ) -> Result<Self> {
         let consensus_frame_cap = frame_plaintext_cap(consensus_frame_cap);
@@ -13790,6 +14090,7 @@ impl Actor {
             new_view_tracker: NewViewTracker::default(),
             highest_qc_missing_defer_markers: BTreeSet::new(),
             authoritative_block_slots: BTreeMap::new(),
+            authoritative_block_frontiers: BTreeMap::new(),
             proposals_seen: BTreeSet::new(),
             pacemaker_backpressure: PacemakerBackpressure::new(),
             pacemaker_backpressure_tracker: pacing::PacemakerBackpressureTracker::new(),
@@ -13850,6 +14151,7 @@ impl Actor {
             network,
             subsystems,
             block_payload_dedup,
+            frontier_block_sync_hint,
             peers_gossiper,
             genesis_network,
             block_count,
@@ -14020,6 +14322,7 @@ impl Actor {
         );
         let world = actor.state.world_view();
         actor.update_effective_timing_status_from_world(&world, actor.consensus_mode);
+        actor.sync_external_hints();
         iroha_logger::info!(
             height = actor.state.committed_height(),
             queue_len = actor.queue.active_len(),
@@ -14661,6 +14964,9 @@ impl Actor {
 
         for (key, session) in &rbc.sessions {
             if session.is_invalid() {
+                continue;
+            }
+            if self.exact_frontier_block_created_owner_active(*key) {
                 continue;
             }
             if session.delivered {
@@ -17050,6 +17356,9 @@ impl Actor {
 
     #[allow(clippy::too_many_lines)]
     fn maybe_emit_rbc_ready(&mut self, key: super::rbc_store::SessionKey) -> Result<()> {
+        if self.retire_exact_frontier_rbc_runtime(key, "ready_emit") {
+            return Ok(());
+        }
         let Some(mut session) = self.subsystems.da_rbc.rbc.sessions.remove(&key) else {
             return Ok(());
         };
@@ -17836,6 +18145,9 @@ impl Actor {
         if self.is_observer() || !self.runtime_da_enabled() {
             return false;
         }
+        if self.suppress_rbc_hot_repair(key) {
+            return false;
+        }
         if session.is_invalid() {
             return false;
         }
@@ -17986,6 +18298,9 @@ impl Actor {
         session: &RbcSession,
     ) {
         if self.is_observer() || !self.runtime_da_enabled() {
+            return;
+        }
+        if self.suppress_rbc_hot_repair(key) {
             return;
         }
         if !session.allows_payload_recovery() {
@@ -18388,16 +18703,20 @@ impl Actor {
             let ready_count = session.ready_signatures.len();
             let authoritative_known_payload =
                 self.rbc_session_has_authoritative_payload_for_progress(key, &session);
+            let hot_repair_allowed = !self.suppress_rbc_hot_repair(key);
             if session.progress_stage() == RbcProgressStage::Delivered {
-                if self.rescue_rbc_missing_ready_peers(
-                    key,
-                    &session,
-                    missing_ready_peers.as_slice(),
-                    ready_count,
-                ) {
+                if hot_repair_allowed
+                    && self.rescue_rbc_missing_ready_peers(
+                        key,
+                        &session,
+                        missing_ready_peers.as_slice(),
+                        ready_count,
+                    )
+                {
                     progress = true;
                 }
-                if self.rbc_deliver_rebroadcast_due(&key, now, ready_cooldown)
+                if hot_repair_allowed
+                    && self.rbc_deliver_rebroadcast_due(&key, now, ready_cooldown)
                     && let Some(deliver) = self.build_rbc_deliver(key, &session)
                 {
                     let ready_senders: Vec<_> = session
@@ -18438,8 +18757,9 @@ impl Actor {
             if authoritative_known_payload && !missing_chunks && ready_count == 0 {
                 continue;
             }
-            let should_rebroadcast_payload =
-                session.allows_payload_recovery() && !authoritative_known_payload;
+            let should_rebroadcast_payload = hot_repair_allowed
+                && session.allows_payload_recovery()
+                && !authoritative_known_payload;
             let payload_bundle = if should_rebroadcast_payload
                 && !relay_backpressure
                 && (!queue_backpressure
@@ -18451,12 +18771,14 @@ impl Actor {
             } else {
                 None
             };
-            let ready_bundle =
-                if ready_count != 0 && self.rbc_ready_rebroadcast_due(&key, now, ready_cooldown) {
-                    Self::rbc_ready_bundle(key, &session, roster_hash)
-                } else {
-                    None
-                };
+            let ready_bundle = if hot_repair_allowed
+                && ready_count != 0
+                && self.rbc_ready_rebroadcast_due(&key, now, ready_cooldown)
+            {
+                Self::rbc_ready_bundle(key, &session, roster_hash)
+            } else {
+                None
+            };
 
             if let Some((init, chunks)) = payload_bundle {
                 self.rebroadcast_rbc_payload_bundle(key, init, chunks, ready_count);
@@ -18466,12 +18788,14 @@ impl Actor {
                 self.rebroadcast_rbc_ready_bundle(key, readies);
                 progress = true;
             }
-            if self.rescue_rbc_missing_ready_peers(
-                key,
-                &session,
-                missing_ready_peers.as_slice(),
-                ready_count,
-            ) {
+            if hot_repair_allowed
+                && self.rescue_rbc_missing_ready_peers(
+                    key,
+                    &session,
+                    missing_ready_peers.as_slice(),
+                    ready_count,
+                )
+            {
                 progress = true;
             }
         }
@@ -18694,6 +19018,9 @@ impl Actor {
         key: super::rbc_store::SessionKey,
         now: Instant,
     ) -> Result<()> {
+        if self.retire_exact_frontier_rbc_runtime(key, "deliver_emit") {
+            return Ok(());
+        }
         let Some(mut session) = self.subsystems.da_rbc.rbc.sessions.remove(&key) else {
             return Ok(());
         };
@@ -19688,6 +20015,62 @@ impl Actor {
             })
             || self.sidecar_quarantined_for_height(local_height)
             || self.sidecar_quarantined_for_height(frontier_height)
+    }
+
+    fn contiguous_frontier_pressure_active(&self) -> bool {
+        self.has_contiguous_frontier_pressure(self.committed_height_snapshot())
+    }
+
+    fn frontier_lane_active_for_block_sync(&self) -> bool {
+        let local_height = self.committed_height_snapshot();
+        let frontier_height = local_height.saturating_add(1);
+        let tip_height = self.state.committed_height();
+        let tip_hash = self.state.latest_block_hash_fast();
+        let frontier_pending_exists = self.pending.pending_blocks.values().any(|pending| {
+            !pending.aborted
+                && pending.height == frontier_height
+                && pending_extends_tip(
+                    pending.height,
+                    pending.block.header().prev_block_hash(),
+                    tip_height,
+                    tip_hash,
+                )
+        });
+        let frontier_commit_inflight =
+            self.subsystems
+                .commit
+                .inflight
+                .as_ref()
+                .is_some_and(|inflight| {
+                    !inflight.pending.aborted
+                        && inflight.pending.height == frontier_height
+                        && pending_extends_tip(
+                            inflight.pending.height,
+                            inflight.pending.block.header().prev_block_hash(),
+                            tip_height,
+                            tip_hash,
+                        )
+                });
+        let frontier_slot_active = self
+            .frontier_slot
+            .as_ref()
+            .is_some_and(|slot| slot.height == frontier_height);
+        let next_slot_prefetch_active = self
+            .next_slot_prefetch
+            .as_ref()
+            .is_some_and(|slot| slot.height == frontier_height.saturating_add(1));
+
+        frontier_pending_exists
+            || frontier_commit_inflight
+            || frontier_slot_active
+            || next_slot_prefetch_active
+    }
+
+    pub(super) fn sync_external_hints(&self) {
+        self.frontier_block_sync_hint
+            .set_contiguous_frontier_pressure_active(self.contiguous_frontier_pressure_active());
+        self.frontier_block_sync_hint
+            .set_frontier_lane_active(self.frontier_lane_active_for_block_sync());
     }
 
     fn frontier_catchup_target_height(&self, local_height: u64) -> Option<u64> {
@@ -21553,6 +21936,18 @@ impl Actor {
         let (lock_lag_frontier, lock_lag_active, lock_lag_far_future, canonical_height) =
             self.lock_lag_range_pull_scope_for_height(height);
         let local_height = self.committed_height_snapshot();
+        if height == local_height.saturating_add(1) {
+            let exact_retry_emitted = self.retry_frontier_block_body_fetch(now);
+            debug!(
+                height,
+                local_height,
+                reason,
+                tier = tier.map(RangePullCandidateTier::label),
+                exact_retry_emitted,
+                "suppressing block-sync range pull for contiguous frontier exact-body owner"
+            );
+            return false;
+        }
         let canonical_frontier_reanchor_reason =
             Self::reason_is_canonical_frontier_reanchor(reason);
         let canonical_frontier_gate_heights =
@@ -23237,11 +23632,24 @@ impl Actor {
             .propose
             .authoritative_block_slots
             .retain(|(entry_height, _), _| *entry_height <= keep_through_height);
+        let stale_authoritative_frontier_heights: BTreeSet<_> = self
+            .subsystems
+            .propose
+            .authoritative_block_frontiers
+            .keys()
+            .filter(|(entry_height, _, _)| *entry_height > keep_through_height)
+            .map(|(entry_height, _, _)| *entry_height)
+            .collect();
+        self.subsystems
+            .propose
+            .authoritative_block_frontiers
+            .retain(|(entry_height, _, _), _| *entry_height <= keep_through_height);
 
         cleared_heights.extend(stale_hint_heights);
         cleared_heights.extend(stale_proposal_heights);
         cleared_heights.extend(stale_seen_heights);
         cleared_heights.extend(stale_authoritative_heights);
+        cleared_heights.extend(stale_authoritative_frontier_heights);
         let contiguous_frontier_height = keep_through_height.saturating_add(1);
         for height in cleared_heights {
             let _ = self.clear_lock_rejected_block_sinks_for_height(height);
@@ -25475,12 +25883,24 @@ impl Actor {
         now: Instant,
         all_peers: bool,
     ) -> bool {
+        let local_height = self.committed_height_snapshot();
+        if frontier_height == local_height.saturating_add(1) {
+            let exact_retry_emitted = self.retry_frontier_block_body_fetch(now);
+            debug!(
+                frontier_height,
+                local_height,
+                reason,
+                all_peers,
+                exact_retry_emitted,
+                "suppressing unified frontier range pull for contiguous frontier exact-body owner"
+            );
+            return exact_retry_emitted;
+        }
         let Some((anchor_prev_hash, anchor_latest_hash, anchor_mode)) =
             self.range_pull_anchor_hashes(reason, true)
         else {
             return false;
         };
-        let local_height = self.committed_height_snapshot();
         let view = self
             .phase_tracker
             .current_view(frontier_height)
@@ -25562,10 +25982,15 @@ impl Actor {
         now: Instant,
         source: &'static str,
     ) {
+        let preserve_live_frontier_state = source == "quorum_timeout"
+            && self.should_preserve_live_contiguous_frontier_cleanup(frontier_height, view, now);
         // Frontier cleanup must own all same-height recovery state, including RBC sessions
         // that no longer have a pending-block wrapper but still block contiguous progress.
-        let frontier_rbc_removed =
-            self.purge_rbc_sessions_at_or_above_height(frontier_height, false);
+        let frontier_rbc_removed = if preserve_live_frontier_state {
+            0
+        } else {
+            self.purge_rbc_sessions_at_or_above_height(frontier_height, false)
+        };
         let (
             pending_removed,
             missing_removed,
@@ -25574,7 +25999,11 @@ impl Actor {
             hints_removed,
             proposals_removed,
             seen_removed,
-        ) = self.prune_consensus_state_for_missing_block_height(frontier_height);
+        ) = if preserve_live_frontier_state {
+            (0, 0, 0, 0, 0, 0, 0)
+        } else {
+            self.prune_consensus_state_for_missing_block_height(frontier_height)
+        };
         let (
             future_pending_removed,
             future_missing_removed,
@@ -25608,27 +26037,50 @@ impl Actor {
                 u64::try_from(evicted_total).unwrap_or(u64::MAX),
             );
         }
-        self.clear_missing_block_recovery_for_height(frontier_height, now);
-        self.clear_sidecar_mismatch_for_height(frontier_height);
-        let frontier_state_cleared =
-            self.force_clear_frontier_reanchor_state_for_height(frontier_height, now);
-        let cooldowns_cleared =
-            self.clear_range_pull_escalation_cooldowns_for_height(frontier_height);
+        if !preserve_live_frontier_state {
+            self.clear_missing_block_recovery_for_height(frontier_height, now);
+            self.clear_sidecar_mismatch_for_height(frontier_height);
+        }
+        let frontier_state_cleared = if preserve_live_frontier_state {
+            false
+        } else {
+            self.force_clear_frontier_reanchor_state_for_height(frontier_height, now)
+        };
+        let cooldowns_cleared = if preserve_live_frontier_state {
+            0
+        } else {
+            self.clear_range_pull_escalation_cooldowns_for_height(frontier_height)
+        };
         let new_view_entries_before = self.subsystems.propose.new_view_tracker.entries.len();
         self.subsystems
             .propose
             .new_view_tracker
             .entries
-            .retain(|(entry_height, _), _| *entry_height < frontier_height);
+            .retain(|(entry_height, _), _| {
+                if preserve_live_frontier_state {
+                    *entry_height <= frontier_height
+                } else {
+                    *entry_height < frontier_height
+                }
+            });
         let new_view_entries_removed = new_view_entries_before
             .saturating_sub(self.subsystems.propose.new_view_tracker.entries.len());
-        let frontier_new_view_votes_removed =
-            self.clear_new_view_vote_history_at_or_above_height(frontier_height);
+        let frontier_new_view_votes_removed = if preserve_live_frontier_state {
+            self.clear_new_view_vote_history_at_or_above_height(frontier_height.saturating_add(1))
+        } else {
+            self.clear_new_view_vote_history_at_or_above_height(frontier_height)
+        };
         let forced_view_reset = self
             .subsystems
             .propose
             .forced_view_after_timeout
-            .is_some_and(|(height, _)| height >= frontier_height);
+            .is_some_and(|(height, _)| {
+                if preserve_live_frontier_state {
+                    height > frontier_height
+                } else {
+                    height >= frontier_height
+                }
+            });
         if forced_view_reset {
             self.subsystems.propose.forced_view_after_timeout = None;
         }
@@ -25636,7 +26088,13 @@ impl Actor {
             .subsystems
             .propose
             .last_missing_qc_timeout_trigger
-            .is_some_and(|trigger| trigger.height == frontier_height)
+            .is_some_and(|trigger| {
+                if preserve_live_frontier_state {
+                    trigger.height > frontier_height
+                } else {
+                    trigger.height == frontier_height
+                }
+            })
         {
             self.subsystems.propose.last_missing_qc_timeout_trigger = None;
         }
@@ -25644,18 +26102,32 @@ impl Actor {
             .subsystems
             .propose
             .last_missing_qc_reacquire_attempt
-            .is_some_and(|(attempt_height, _)| attempt_height == frontier_height)
+            .is_some_and(|(attempt_height, _)| {
+                if preserve_live_frontier_state {
+                    attempt_height > frontier_height
+                } else {
+                    attempt_height == frontier_height
+                }
+            })
         {
             self.subsystems.propose.last_missing_qc_reacquire_attempt = None;
         }
-        self.subsystems
-            .propose
-            .last_missing_qc_reacquire_without_dependency_at
-            .remove(&frontier_height);
+        if !preserve_live_frontier_state {
+            self.subsystems
+                .propose
+                .last_missing_qc_reacquire_without_dependency_at
+                .remove(&frontier_height);
+        } else {
+            self.subsystems
+                .propose
+                .last_missing_qc_reacquire_without_dependency_at
+                .retain(|height, _| *height <= frontier_height);
+        }
         super::status::inc_consensus_no_proposal_storm();
         warn!(
             height = frontier_height,
             view,
+            preserve_live_frontier_state,
             pending_removed,
             missing_removed,
             future_pending_removed,
@@ -26959,19 +27431,8 @@ impl Actor {
             "active pending block stalled past quorum timeout; routing contiguous frontier through unified recovery"
         );
         if height == frontier_height {
-            self.seed_frontier_recovery_for_quorum_timeout(height, view, now);
-            return matches!(
-                self.advance_frontier_recovery(
-                    "quorum_timeout",
-                    height,
-                    view,
-                    false,
-                    true,
-                    true,
-                    now,
-                ),
-                FrontierRecoveryAdvance::Rotate
-            );
+            self.trigger_view_change_with_cause(height, view, ViewChangeCause::QuorumTimeout);
+            return true;
         }
         self.trigger_view_change_with_cause(height, view, ViewChangeCause::QuorumTimeout);
         true
@@ -27426,7 +27887,8 @@ impl Actor {
             || self.has_actionable_deferred_missing_payload_qcs()
             || self.has_residual_round_backlog_for_height(height)
             || self.sidecar_quarantined_for_height(height);
-        if missing_qc_actionable_dependency_signals {
+        let contiguous_frontier_height = committed_height.saturating_add(1);
+        if missing_qc_actionable_dependency_signals && height != contiguous_frontier_height {
             if reset_stalled_frontier_state {
                 debug!(
                     height,
@@ -27476,6 +27938,7 @@ impl Actor {
             }
         }
         if !proposal_seen
+            && height != contiguous_frontier_height
             && self.maybe_force_missing_qc_leader_proposal(height, current_view, age, now)
         {
             return false;
@@ -27501,7 +27964,8 @@ impl Actor {
                     streak: missing_qc_timeout_streak,
                 });
         }
-        if pre_reset_frontier_reanchor_unresolved_in_window {
+        if pre_reset_frontier_reanchor_unresolved_in_window && height != contiguous_frontier_height
+        {
             debug!(
                 height,
                 view = current_view,
@@ -27523,17 +27987,68 @@ impl Actor {
                         tip_hash,
                     )
             });
-        let frontier_slot_vote_backed_evidence = height == committed_height.saturating_add(1)
+        let exact_frontier_body_repair_active = height == contiguous_frontier_height
+            && self.frontier_slot.as_ref().is_some_and(|slot| {
+                slot.height == height && slot.exact_fetch_armed && !slot.body_present
+            });
+        let authoritative_frontier_payload_present = height == contiguous_frontier_height
+            && self.slot_has_authoritative_payload(height, current_view);
+        let frontier_slot_vote_backed_evidence = height == contiguous_frontier_height
             && self.slot_has_vote_backed_consensus_evidence(height, current_view);
-        let frontier_non_missing_qc_recovery_cause = (height == committed_height.saturating_add(1))
+        let frontier_non_missing_qc_recovery_cause = (height == contiguous_frontier_height)
             .then(|| self.frontier_non_missing_qc_recovery_cause(height))
             .flatten();
-        let frontier_dependency_recovery_cause = (height == committed_height.saturating_add(1))
+        let frontier_dependency_recovery_cause = (height == contiguous_frontier_height)
             .then(|| self.frontier_dependency_recovery_cause(height, current_view, now))
             .flatten();
-        let frontier_vote_backed_recovery_active = height == committed_height.saturating_add(1)
+        let frontier_vote_backed_recovery_active = height == contiguous_frontier_height
             && self.frontier_vote_backed_recovery_active(height, now);
         if !missing_qc_actionable_dependency_signals {
+            if height == contiguous_frontier_height {
+                if exact_frontier_body_repair_active {
+                    let exact_retry_emitted = self.retry_frontier_block_body_fetch(now);
+                    debug!(
+                        height,
+                        view = current_view,
+                        committed_height,
+                        exact_retry_emitted,
+                        "deferring contiguous-frontier idle rotation while exact body repair remains active"
+                    );
+                    return false;
+                }
+                if frontier_matching_pending {
+                    debug!(
+                        height,
+                        view = current_view,
+                        committed_height,
+                        frontier_matching_pending,
+                        "suppressing contiguous-frontier idle rotation while local slot state is still active"
+                    );
+                    return false;
+                }
+                let direct_cause = if frontier_slot_vote_backed_evidence
+                    || authoritative_frontier_payload_present
+                {
+                    ViewChangeCause::QuorumTimeout
+                } else {
+                    ViewChangeCause::MissingQc
+                };
+                debug!(
+                    height,
+                    view = current_view,
+                    committed_height,
+                    cause = direct_cause.as_str(),
+                    proposal_seen,
+                    "routing contiguous frontier timeout through direct slot-based rotation"
+                );
+                if matches!(direct_cause, ViewChangeCause::MissingQc) && !proposal_seen {
+                    if let Some(telemetry) = self.telemetry_handle() {
+                        telemetry.inc_proposal_gap();
+                    }
+                }
+                self.trigger_view_change_with_cause(height, current_view, direct_cause);
+                return true;
+            }
             if let Some(reason) = frontier_non_missing_qc_recovery_cause {
                 debug!(
                     height,
@@ -27623,6 +28138,52 @@ impl Actor {
                 committed_height,
                 same_height_dependency_progress_at,
             );
+        }
+        if height == contiguous_frontier_height {
+            if exact_frontier_body_repair_active {
+                let exact_retry_emitted = self.retry_frontier_block_body_fetch(now);
+                debug!(
+                    height,
+                    view = current_view,
+                    committed_height,
+                    missing_qc_actionable_dependency_signals,
+                    exact_retry_emitted,
+                    "deferring contiguous-frontier idle rotation while exact body repair remains active"
+                );
+                return false;
+            }
+            if frontier_matching_pending {
+                debug!(
+                    height,
+                    view = current_view,
+                    committed_height,
+                    frontier_matching_pending,
+                    "suppressing contiguous-frontier idle rotation while local slot state is still active"
+                );
+                return false;
+            }
+            let direct_cause =
+                if frontier_slot_vote_backed_evidence || authoritative_frontier_payload_present {
+                    ViewChangeCause::QuorumTimeout
+                } else {
+                    ViewChangeCause::MissingQc
+                };
+            debug!(
+                height,
+                view = current_view,
+                committed_height,
+                cause = direct_cause.as_str(),
+                missing_qc_actionable_dependency_signals,
+                proposal_seen,
+                "routing contiguous frontier dependency timeout through direct slot-based rotation"
+            );
+            if matches!(direct_cause, ViewChangeCause::MissingQc) && !proposal_seen {
+                if let Some(telemetry) = self.telemetry_handle() {
+                    telemetry.inc_proposal_gap();
+                }
+            }
+            self.trigger_view_change_with_cause(height, current_view, direct_cause);
+            return true;
         }
         if pre_reset_frontier_reanchor_unresolved_in_window {
             debug!(

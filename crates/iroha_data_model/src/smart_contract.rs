@@ -1,5 +1,19 @@
 //! This module contains data and structures related only to smart contract execution
 
+use std::{str::FromStr, string::String, vec::Vec};
+
+use bech32::{Bech32m, Hrp};
+use iroha_data_model_derive::model;
+use iroha_primitives::conststr::ConstString;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+use thiserror::Error;
+
+use crate::{
+    account::{AccountAddressError, AccountId},
+    nexus::DataSpaceId,
+};
+
 pub mod payloads {
     //! Contexts with function arguments for different entrypoints
 
@@ -115,6 +129,290 @@ pub mod payloads {
     }
 }
 
+/// Metadata key tracking the next public contract deploy nonce for an account.
+pub const CONTRACT_DEPLOY_NONCE_METADATA_KEY: &str = "contract_deploy_nonce";
+
+/// Default mainnet contract HRP used for Bech32m-encoded contract addresses.
+pub const CONTRACT_ADDRESS_HRP_MAINNET: &str = "sorac";
+/// Default Taira/testnet contract HRP used for Bech32m-encoded contract addresses.
+pub const CONTRACT_ADDRESS_HRP_TAIRA: &str = "tairac";
+/// Mainnet chain discriminant used by Sora Nexus address encoding.
+pub const CHAIN_DISCRIMINANT_MAINNET: u16 = 753;
+/// Taira/testnet chain discriminant used by Sora Nexus address encoding.
+pub const CHAIN_DISCRIMINANT_TAIRA: u16 = 369;
+
+const CONTRACT_ADDRESS_VERSION_V1: u8 = 1;
+const CONTRACT_ADDRESS_TAG_V1: &[u8] = b"iroha:contract-address:v1";
+const CONTRACT_ADDRESS_HASH_LEN: usize = 20;
+const CONTRACT_ADDRESS_PAYLOAD_LEN_V1: usize = 1 + 8 + CONTRACT_ADDRESS_HASH_LEN;
+
+pub use self::model::*;
+
+#[model]
+mod model {
+    use derive_more::Display;
+
+    use super::*;
+
+    /// Canonical Bech32m-encoded public contract address.
+    #[derive(
+        Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema,
+    )]
+    #[repr(transparent)]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    pub struct ContractAddress(pub(super) ConstString);
+}
+
+/// Errors returned when deriving or parsing a [`ContractAddress`].
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum ContractAddressError {
+    /// The supplied literal was empty or malformed.
+    #[error("invalid contract address: {0}")]
+    InvalidLiteral(String),
+    /// Bech32m HRP parsing failed.
+    #[error("invalid contract address hrp: {0}")]
+    InvalidHrp(String),
+    /// The payload version is not recognized.
+    #[error("unsupported contract address version {0}")]
+    UnsupportedVersion(u8),
+    /// The payload length does not match the expected version layout.
+    #[error("invalid contract address payload length {found}; expected {expected}")]
+    InvalidPayloadLength {
+        /// Bytes actually decoded from the payload.
+        found: usize,
+        /// Bytes expected for the active address format version.
+        expected: usize,
+    },
+    /// Deployer account canonicalization failed during address derivation.
+    #[error("failed to derive contract address from deployer account: {0}")]
+    InvalidDeployer(String),
+}
+
+impl ContractAddress {
+    /// Derive a deterministic contract address from deployer identity, nonce, and dataspace.
+    ///
+    /// The address payload is versioned and encoded as:
+    /// `version || dataspace_id_be || blake3(preimage)[..20]`.
+    ///
+    /// The preimage is domain-separated and includes the chain discriminant so the resulting
+    /// address is network-specific.
+    pub fn derive(
+        chain_discriminant: u16,
+        deployer: &AccountId,
+        deploy_nonce: u64,
+        dataspace_id: DataSpaceId,
+    ) -> Result<Self, ContractAddressError> {
+        let hrp = contract_hrp_for_chain_discriminant(chain_discriminant);
+        let hrp =
+            Hrp::parse(&hrp).map_err(|err| ContractAddressError::InvalidHrp(err.to_string()))?;
+
+        let deployer_bytes = deployer
+            .to_account_address()
+            .and_then(|address| address.canonical_bytes())
+            .map_err(|err: AccountAddressError| {
+                ContractAddressError::InvalidDeployer(err.to_string())
+            })?;
+
+        let mut preimage =
+            Vec::with_capacity(CONTRACT_ADDRESS_TAG_V1.len() + 2 + 8 + 8 + deployer_bytes.len());
+        preimage.extend_from_slice(CONTRACT_ADDRESS_TAG_V1);
+        preimage.extend_from_slice(&chain_discriminant.to_be_bytes());
+        preimage.extend_from_slice(&dataspace_id.as_u64().to_be_bytes());
+        preimage.extend_from_slice(&deploy_nonce.to_be_bytes());
+        preimage.extend_from_slice(&deployer_bytes);
+
+        let digest = blake3::hash(&preimage);
+        let mut payload = Vec::with_capacity(CONTRACT_ADDRESS_PAYLOAD_LEN_V1);
+        payload.push(CONTRACT_ADDRESS_VERSION_V1);
+        payload.extend_from_slice(&dataspace_id.as_u64().to_be_bytes());
+        payload.extend_from_slice(&digest.as_bytes()[..CONTRACT_ADDRESS_HASH_LEN]);
+
+        let encoded = bech32::encode::<Bech32m>(hrp, &payload)
+            .map_err(|err| ContractAddressError::InvalidLiteral(err.to_string()))?;
+        encoded.parse()
+    }
+
+    /// Decode the dataspace identifier embedded in the address payload.
+    pub fn dataspace_id(&self) -> Result<DataSpaceId, ContractAddressError> {
+        let (_, payload) = decode_contract_address(self.as_ref())?;
+        let version = payload[0];
+        if version != CONTRACT_ADDRESS_VERSION_V1 {
+            return Err(ContractAddressError::UnsupportedVersion(version));
+        }
+        let mut bytes = [0_u8; 8];
+        bytes.copy_from_slice(&payload[1..9]);
+        Ok(DataSpaceId::new(u64::from_be_bytes(bytes)))
+    }
+
+    /// Borrow the canonical encoded literal.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        self.as_ref()
+    }
+}
+
+impl AsRef<str> for ContractAddress {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl FromStr for ContractAddress {
+    type Err = ContractAddressError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        decode_contract_address(value)?;
+        Ok(Self(ConstString::from(value)))
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::FastJsonWrite for ContractAddress {
+    fn write_json(&self, out: &mut String) {
+        norito::json::JsonSerialize::json_serialize(self.as_ref(), out);
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonDeserialize for ContractAddress {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let value = parser.parse_string()?;
+        value
+            .parse()
+            .map_err(|err: ContractAddressError| norito::json::Error::Message(err.to_string()))
+    }
+}
+
+/// Resolve the default contract-address HRP for the provided chain discriminant.
+#[must_use]
+pub fn contract_hrp_for_chain_discriminant(chain_discriminant: u16) -> String {
+    match chain_discriminant {
+        CHAIN_DISCRIMINANT_MAINNET => CONTRACT_ADDRESS_HRP_MAINNET.to_owned(),
+        CHAIN_DISCRIMINANT_TAIRA => CONTRACT_ADDRESS_HRP_TAIRA.to_owned(),
+        other => format!("c{other:x}"),
+    }
+}
+
+fn decode_contract_address(value: &str) -> Result<(Hrp, Vec<u8>), ContractAddressError> {
+    if value.trim().is_empty() {
+        return Err(ContractAddressError::InvalidLiteral(
+            "contract address must not be empty".to_owned(),
+        ));
+    }
+    if value.trim() != value {
+        return Err(ContractAddressError::InvalidLiteral(
+            "contract address must not contain leading or trailing whitespace".to_owned(),
+        ));
+    }
+
+    let (hrp, payload) = bech32::decode(value)
+        .map_err(|err| ContractAddressError::InvalidLiteral(err.to_string()))?;
+    if payload.is_empty() {
+        return Err(ContractAddressError::InvalidPayloadLength {
+            found: 0,
+            expected: CONTRACT_ADDRESS_PAYLOAD_LEN_V1,
+        });
+    }
+
+    match payload[0] {
+        CONTRACT_ADDRESS_VERSION_V1 => {
+            if payload.len() != CONTRACT_ADDRESS_PAYLOAD_LEN_V1 {
+                return Err(ContractAddressError::InvalidPayloadLength {
+                    found: payload.len(),
+                    expected: CONTRACT_ADDRESS_PAYLOAD_LEN_V1,
+                });
+            }
+        }
+        version => return Err(ContractAddressError::UnsupportedVersion(version)),
+    }
+
+    if hrp.as_str().is_empty() {
+        return Err(ContractAddressError::InvalidLiteral(
+            "contract address hrp must not be empty".to_owned(),
+        ));
+    }
+
+    Ok((hrp, payload))
+}
+
+/// Re-export commonly used smart-contract types.
+pub mod prelude {
+    pub use super::{CONTRACT_DEPLOY_NONCE_METADATA_KEY, ContractAddress};
+}
+
+#[cfg(test)]
+mod contract_address_tests {
+    use iroha_crypto::KeyPair;
+
+    use super::*;
+
+    #[test]
+    fn contract_address_derivation_is_deterministic() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let first = ContractAddress::derive(
+            CHAIN_DISCRIMINANT_MAINNET,
+            &authority,
+            7,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("derive contract address");
+        let second = ContractAddress::derive(
+            CHAIN_DISCRIMINANT_MAINNET,
+            &authority,
+            7,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("derive contract address");
+        assert_eq!(first, second);
+        assert_eq!(
+            first.dataspace_id().expect("dataspace"),
+            DataSpaceId::GLOBAL
+        );
+        assert!(first.as_str().starts_with(CONTRACT_ADDRESS_HRP_MAINNET));
+    }
+
+    #[test]
+    fn contract_address_derivation_changes_with_nonce_and_network() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let mainnet = ContractAddress::derive(
+            CHAIN_DISCRIMINANT_MAINNET,
+            &authority,
+            0,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("mainnet address");
+        let next_nonce = ContractAddress::derive(
+            CHAIN_DISCRIMINANT_MAINNET,
+            &authority,
+            1,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("nonce+1 address");
+        let taira =
+            ContractAddress::derive(CHAIN_DISCRIMINANT_TAIRA, &authority, 0, DataSpaceId::GLOBAL)
+                .expect("taira address");
+
+        assert_ne!(mainnet, next_nonce);
+        assert_ne!(mainnet, taira);
+        assert!(taira.as_str().starts_with(CONTRACT_ADDRESS_HRP_TAIRA));
+    }
+
+    #[test]
+    fn contract_address_parser_rejects_invalid_literals() {
+        let err = "not-an-address"
+            .parse::<ContractAddress>()
+            .expect_err("invalid address must fail");
+        assert!(
+            matches!(
+                err,
+                ContractAddressError::InvalidLiteral(_) | ContractAddressError::InvalidHrp(_)
+            ),
+            "unexpected error: {err:?}"
+        );
+    }
+}
 // Smart contract manifest types and helpers.
 pub mod manifest {
     //! Manifest metadata for IVM smart contracts.

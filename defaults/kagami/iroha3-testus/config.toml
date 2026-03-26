@@ -29,10 +29,15 @@ public_address = "127.0.0.1:1337"
 [torii]
 address = "0.0.0.0:8080"
 
+[torii.onboarding]
+authority = "testuﾛ1NrpｽﾓaMﾒﾌNhziﾙZfvWn9ﾙﾘvFqxｾmUﾓﾏ2ﾊｷﾍhqzｾ71P2D3"
+private_key = "8026207E82135F0CF3DA3F85DDF07E2FB797E0FBB62BCE789034DCE3A7D76C78106938"
+allowed_permissions = []
+
 [torii.faucet]
 authority = "testuﾛ1NrpｽﾓaMﾒﾌNhziﾙZfvWn9ﾙﾘvFqxｾmUﾓﾏ2ﾊｷﾍhqzｾ71P2D3"
 private_key = "8026207E82135F0CF3DA3F85DDF07E2FB797E0FBB62BCE789034DCE3A7D76C78106938"
-asset_definition_id = "xor#sora"
+asset_definition_id = "xor#universal"
 amount = "25000"
 pow_difficulty_bits = 8
 pow_scrypt_log_n = 13

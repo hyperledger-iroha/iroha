@@ -116,6 +116,9 @@ pub struct DeployArgs {
     /// Authority account identifier (canonical I105 account literal)
     #[arg(long)]
     pub authority: String,
+    /// Target dataspace alias for public address-first deploys (defaults to `universal`)
+    #[arg(long)]
+    pub dataspace: Option<String>,
     /// Hex-encoded private key for signing
     #[arg(long, value_name = "HEX")]
     pub private_key: String,
@@ -144,7 +147,12 @@ impl Run for DeployArgs {
         } else {
             return Err(eyre!("either --code-file or --code-b64 must be provided"));
         };
-        let v = client.post_contract_deploy_json(&authority, &private_key, &code_b64)?;
+        let v = client.post_contract_deploy_json(
+            &authority,
+            &private_key,
+            &code_b64,
+            self.dataspace.as_deref(),
+        )?;
         context.print_data(&v)?;
         Ok(())
     }

@@ -8514,7 +8514,8 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// POST `/v1/contracts/deploy` with JSON body `{ authority, private_key, code_b64 }`.
+    /// POST `/v1/contracts/deploy` with JSON body
+    /// `{ authority, private_key, code_b64, dataspace? }`.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn post_contract_deploy_json(
@@ -8522,6 +8523,7 @@ impl Client {
         authority: &iroha_data_model::account::AccountId,
         private_key: &iroha_crypto::PrivateKey,
         code_b64: &str,
+        dataspace: Option<&str>,
     ) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/contracts/deploy");
         let mut payload = norito::json::Map::new();
@@ -8533,6 +8535,9 @@ impl Client {
             ))?,
         );
         payload.insert("code_b64".into(), code_b64.into());
+        if let Some(dataspace) = dataspace {
+            payload.insert("dataspace".into(), dataspace.into());
+        }
         let body = norito::json::to_vec(&norito::json::Value::from(payload))?;
         let resp = self
             .default_request(HttpMethod::POST, url)

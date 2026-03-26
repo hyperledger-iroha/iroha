@@ -478,14 +478,26 @@ fn instruction_self_registers_authority(
     instruction: &InstructionBox,
     authority: &AccountId,
 ) -> bool {
-    let Some(register) = instruction
+    let maybe_registration = instruction
         .as_any()
         .downcast_ref::<iroha_data_model::isi::Register<Account>>()
-    else {
+        .map(|register| register.object())
+        .or_else(|| {
+            instruction
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::RegisterBox>()
+                .and_then(|register| match register {
+                    iroha_data_model::isi::RegisterBox::Account(register) => {
+                        Some(register.object())
+                    }
+                    _ => None,
+                })
+        });
+
+    let Some(registration) = maybe_registration else {
         return false;
     };
 
-    let registration = register.object();
     if registration.domain().is_some() {
         return false;
     }
@@ -493,7 +505,10 @@ fn instruction_self_registers_authority(
     registration.clone().build(authority).id == *authority
 }
 
-fn allows_unregistered_authority(executable: &Executable, authority: &AccountId) -> bool {
+pub(crate) fn allows_unregistered_authority(
+    executable: &Executable,
+    authority: &AccountId,
+) -> bool {
     match executable {
         Executable::Instructions(instructions) => {
             let Some((first, _rest)) = instructions.split_first() else {

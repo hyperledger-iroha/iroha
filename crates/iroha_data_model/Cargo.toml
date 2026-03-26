@@ -77,6 +77,7 @@ displaydoc = { workspace = true, features = ["std"] }
 getset = { workspace = true }
 derive-where = { workspace = true }
 base64 = { workspace = true, features = ["alloc"] }
+bech32 = { workspace = true }
 nonzero_ext = { workspace = true }
 rustc-hash = { workspace = true }
 icu_normalizer = { version = "2.1.1", default-features = false, features = ["compiled_data"] }

@@ -2056,39 +2056,10 @@ impl Actor {
                 #[cfg(feature = "telemetry")]
                 let block_sync_start = Instant::now();
                 let sync_block: SignedBlock = committed_block.as_ref().clone();
-                let mut sync_update = block_sync_update_with_certified_roster(
-                    &sync_block,
-                    &self.state,
-                    &self.kura,
-                    self.config.consensus_mode,
-                    &self.roster_validation_cache,
+                self.broadcast_block_created_for_block_sync(
+                    self.frontier_block_created_for_wire(&sync_block),
+                    &post_apply_snapshot.world_peers,
                 );
-                if sync_update.stake_snapshot.is_none() {
-                    sync_update.stake_snapshot = post_apply_snapshot.stake_snapshot.clone();
-                }
-                let expected_epoch = self.epoch_for_height(pending_height);
-                Self::apply_cached_qcs_to_block_sync_update(
-                    &mut sync_update,
-                    &self.qc_cache,
-                    &self.vote_log,
-                    block_hash,
-                    pending_height,
-                    pending_view,
-                    expected_epoch,
-                    self.state.as_ref(),
-                    self.config.consensus_mode,
-                );
-                if self.prepare_block_sync_update_for_broadcast(&mut sync_update, consensus_mode) {
-                    self.broadcast_block_sync_update(sync_update, &post_apply_snapshot.world_peers);
-                } else {
-                    debug!(
-                        height = pending_height,
-                        view = pending_view,
-                        block = %block_hash,
-                        targets = post_apply_snapshot.world_peers.len(),
-                        "skipping committed block payload fallback because a verifiable block sync update is unavailable"
-                    );
-                }
                 #[cfg(feature = "telemetry")]
                 {
                     let ms =
@@ -3331,6 +3302,7 @@ impl Actor {
         finish_timings(timings)
     }
 
+    #[cfg(test)]
     pub(super) fn local_precommit_vote_for(
         &self,
         height: u64,
@@ -4816,54 +4788,6 @@ impl Actor {
     }
 
     #[allow(clippy::needless_pass_by_value)]
-    pub(super) fn broadcast_block_sync_update(
-        &mut self,
-        update: super::message::BlockSyncUpdate,
-        peers: &[PeerId],
-    ) {
-        let height = update.block.header().height().get();
-        let view = update.block.header().view_change_index();
-        let fanout_peers =
-            self.transport_fanout_targets_for_round(peers, height, view, "block_sync_update");
-        let online_peers = self
-            .network
-            .online_peers(|set| set.iter().map(|peer| peer.id().clone()).collect::<Vec<_>>());
-        let world = self.state.world_view();
-        let registered_peers = world.peers().iter().cloned().collect::<Vec<_>>();
-        let trusted = self.common_config.trusted_peers.value();
-        let trusted_peers: Vec<PeerId> = std::iter::once(trusted.myself.id().clone())
-            .chain(trusted.others.iter().map(|peer| peer.id().clone()))
-            .collect();
-        let seed = update.block.hash();
-        let targets = Self::block_sync_update_targets_for_peers(
-            self.common_config.peer.id(),
-            self.block_sync_gossip_limit,
-            &fanout_peers,
-            &registered_peers,
-            &trusted_peers,
-            &online_peers,
-            seed.as_ref(),
-        );
-        if targets.is_empty() {
-            trace!(
-                height = update.block.header().height().get(),
-                view = update.block.header().view_change_index(),
-                block = ?update.block.hash(),
-                "skipping block sync update gossip: no targets"
-            );
-            return;
-        }
-        let msg = Arc::new(BlockMessage::BlockSyncUpdate(update));
-        let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
-        for peer in targets {
-            self.schedule_background(BackgroundRequest::Post {
-                peer,
-                msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
-            });
-        }
-    }
-
-    #[allow(clippy::needless_pass_by_value)]
     pub(super) fn broadcast_block_created_for_block_sync(
         &mut self,
         created: super::message::BlockCreated,
@@ -5036,26 +4960,6 @@ impl Actor {
             .and_then(|height| self.kura.get_block(height));
         if let Some(block) = block_from_kura {
             let block_height = block.header().height().get();
-            let mut update = block_sync_update_with_certified_roster(
-                block.as_ref(),
-                self.state.as_ref(),
-                self.kura.as_ref(),
-                self.config.consensus_mode,
-                &self.roster_validation_cache,
-            );
-            let expected_epoch = qc.epoch;
-            Self::apply_cached_qcs_to_block_sync_update(
-                &mut update,
-                &self.qc_cache,
-                &self.vote_log,
-                block_hash,
-                block_height,
-                qc.view,
-                expected_epoch,
-                self.state.as_ref(),
-                self.config.consensus_mode,
-            );
-            let (consensus_mode, _, _) = self.consensus_context_for_height(block_height);
             debug!(
                 height = block_height,
                 view = qc.view,
@@ -5063,14 +4967,10 @@ impl Actor {
                 targets = topology_peers.len(),
                 "rebroadcasting committed block for highest QC"
             );
-            if self.prepare_block_sync_update_for_broadcast(&mut update, consensus_mode) {
-                self.broadcast_block_sync_update(update, topology_peers);
-            } else {
-                self.broadcast_block_created_for_block_sync(
-                    super::message::BlockCreated::from(block.as_ref()),
-                    topology_peers,
-                );
-            }
+            self.broadcast_block_created_for_block_sync(
+                self.frontier_block_created_for_wire(block.as_ref()),
+                topology_peers,
+            );
             return;
         }
 
@@ -5085,7 +4985,7 @@ impl Actor {
                 return;
             }
             let block_height = pending.block.header().height().get();
-            let created = super::message::BlockCreated::from(&pending.block);
+            let created = self.frontier_block_created_for_wire(&pending.block);
             debug!(
                 height = block_height,
                 view = qc.view,
@@ -6235,6 +6135,10 @@ impl Actor {
             self.subsystems.propose.proposals_seen.clear();
         }
         self.subsystems.propose.authoritative_block_slots.clear();
+        self.subsystems
+            .propose
+            .authoritative_block_frontiers
+            .clear();
         self.subsystems.propose.proposal_cache =
             ProposalCache::new(self.recovery_pending_proposal_cap());
         self.reset_collector_state();
