@@ -2,6 +2,25 @@
 
 Last updated: 2026-03-26
 
+## 2026-03-26 Follow-up: `iroha_core` test-helper transaction lifetimes compile again
+- Updated
+  `crates/iroha_core/src/state.rs`
+  so the test/API `WorldTransaction` helper block now carries the explicit
+  `<'block, 'world>` impl lifetimes required by its `StorageTransaction`
+  return types.
+- The shipped behavior in this slice:
+  - the `smart_contract_state_mut_for_testing`,
+    `account_aliases_mut_for_testing`, and
+    `account_rekey_records_mut_for_testing` helpers no longer fail with
+    `error[E0261]` when `iroha_core` is compiled with the `iroha-core-tests`
+    feature; and
+  - the helper methods still expose the same mutable test scaffolding over the
+    underlying world transaction storage.
+- Validation:
+  - `cargo check -p iroha_core --message-format short` (pass)
+  - `cargo check -p iroha_core --features iroha-core-tests --message-format short` (pass)
+  - `cargo fmt --all` (pass)
+
 ## 2026-03-26 Follow-up: FASTPQ Stage 2 regression fixtures now match the current canonical prover output again
 - Refreshed
   `crates/fastpq_prover/tests/fixtures/stage2_balanced_1k.bin`
