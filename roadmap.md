@@ -2,6 +2,79 @@
 
 Last updated: 2026-03-26
 
+Latest sync (2026-03-26 MOCHI desktop UI + devex refresh):
+`mochi/mochi-ui-egui/src/main.rs`
+and
+`mochi/README.md`
+now carry a friendlier local-dev workflow for the desktop shell:
+
+- the desktop palette and hierarchy now push MOCHI toward a warmer,
+  Ganache-style "local chain cockpit" feel instead of a colder operator
+  console;
+- the overview/header, quickstart, and connect panels now expose copyable
+  launch recipes, app bootstrap env snippets, and `/status` curl probes so the
+  same setup is easy to reuse from a shell; and
+- the first-run path is clearer: preset choice, launch recipe, copyable local
+  identities, and live activity/debugging are now framed as one flow.
+
+Validation:
+- `cargo fmt --all`
+- `CARGO_TARGET_DIR=/tmp/iroha-mochi-verify cargo check -p mochi-core -p mochi-ui-egui -p mochi-integration --message-format short`
+- `CARGO_TARGET_DIR=/tmp/iroha-mochi-verify cargo test -p mochi-ui-egui compose_ -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-mochi-verify cargo test -p mochi-ui-egui shell_quote -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-mochi-verify cargo test -p mochi-ui-egui ensure_http_base -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-mochi-verify cargo test -p mochi-ui-egui render_overview_bar_smoke -- --nocapture`
+
+Open work for this slice now remains:
+- fix the existing `mochi-ui-egui` full-suite failures in the state-filter and
+  composer-template tests so the broader `cargo test -p mochi-ui-egui` run is
+  green again without the shared env-lock poison cascade;
+- decide whether the new desktop recipe/app-env snippets should also be exposed
+  from the bundle/docs pages outside `mochi/README.md`; and
+- no additional UI/devex blockers are known for this refresh after the targeted
+  helper/smoke reruns.
+
+Latest sync (2026-03-26 strict workspace clippy closure):
+`crates/iroha_data_model/src/rwa.rs`,
+`crates/iroha_executor_data_model/src/permission.rs`,
+`crates/iroha_genesis/src/bin/manifest_normalize.rs`,
+`crates/iroha_p2p/src/transport.rs`,
+`crates/iroha_core/src/pipeline/overlay.rs`,
+`crates/iroha_core/src/smartcontracts/isi/world.rs`,
+`crates/iroha_core/src/sumeragi/main_loop.rs`,
+`crates/iroha_core/src/sumeragi/main_loop/commit.rs`,
+`crates/iroha_core/src/sumeragi/status.rs`,
+`crates/iroha_core/tests/kotodama_pointer_abi_apply.rs`,
+`crates/iroha_kagami/src/localnet.rs`,
+`crates/iroha_torii/src/routing.rs`,
+`crates/iroha_torii/src/iso20022_bridge.rs`,
+`crates/iroha_torii/tests/zk_roots_handler_integration.rs`,
+`crates/iroha/src/client.rs`,
+`crates/iroha/src/config/user.rs`,
+`integration_tests/src/sync.rs`,
+`crates/izanami/src/chaos.rs`,
+`crates/iroha_js_host/src/lib.rs`,
+and
+`python/iroha_python/iroha_python_rs/src/lib.rs`
+now carry the broader workspace lint cleanup:
+
+- strict workspace `clippy` is green again after clearing the remaining
+  cross-crate warnings/errors in data-model helpers, transport docs, test-only
+  Sumeragi scaffolding, Torii alias/zk regressions, config literals, and SDK
+  bindings; and
+- no additional strict `cargo clippy --workspace --all-targets -- -D warnings`
+  blockers are known in the current checkout.
+
+Validation:
+- `CARGO_TARGET_DIR=/tmp/iroha-codex-clippy cargo clippy -p iroha_data_model --all-targets -- -D warnings`
+- `CARGO_TARGET_DIR=/tmp/iroha-codex-clippy cargo clippy --workspace --all-targets -- -D warnings`
+
+Open work for this slice now remains:
+- run the broader `cargo test --workspace` sweep when CI/runtime budget allows;
+- keep `cargo fmt --all` in mind for a future pass if unrelated formatting drift
+  resurfaces; and
+- no additional strict workspace `clippy` blockers are known after this sweep.
+
 Latest sync (2026-03-26 Torii account-alias selector consistency + OpenAPI refresh):
 `crates/iroha_core/src/state.rs`,
 `crates/iroha_torii/src/app_auth.rs`,
@@ -42,8 +115,8 @@ Validation:
 - `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_torii --lib handle_v1_subscription_plans_filters_provider_alias -- --nocapture`
 
 Open work for this slice now remains:
-- rerun the broader workspace-wide `cargo test --workspace` / `cargo clippy
-  --workspace --all-targets -- -D warnings` sweeps once time allows; and
+- rerun the broader workspace-wide `cargo test --workspace` sweep once time
+  allows; and
 - no additional Torii account-alias resolution drift is known after the focused
   alias regression suite and regenerated OpenAPI snapshots.
 

@@ -2,6 +2,73 @@
 
 Last updated: 2026-03-26
 
+## 2026-03-26 Follow-up: MOCHI now leans into a warmer Ganache-like desktop feel and faster local-app setup
+- Extended
+  `mochi/mochi-ui-egui/src/main.rs`
+  and
+  `mochi/README.md`
+  to rework the MOCHI desktop shell toward a friendlier local-chain cockpit and
+  to document the faster desktop loop.
+- The shipped behavior in this slice:
+  - the egui shell now uses a warmer, more playful palette and a stronger
+    top-level hierarchy instead of the colder operator-console presentation;
+  - the overview/header now surfaces copyable launch recipes, app bootstrap env
+    snippets, and `/status` curl probes so front-end/app work can move between
+    GUI and terminal without rebuilding the setup by hand;
+  - the quickstart panel now frames the two devnet presets more clearly,
+    exposes the exact terminal recipe for the current settings, and gives a
+    tighter first-run "happy path"; and
+  - the connect panel now highlights the most useful copy/paste snippets and
+    makes the disposable nature of the surfaced local keys explicit.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-mochi-verify cargo check -p mochi-core -p mochi-ui-egui -p mochi-integration --message-format short` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-mochi-verify cargo test -p mochi-ui-egui compose_ -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-mochi-verify cargo test -p mochi-ui-egui shell_quote -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-mochi-verify cargo test -p mochi-ui-egui ensure_http_base -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-mochi-verify cargo test -p mochi-ui-egui render_overview_bar_smoke -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-mochi-verify cargo test -p mochi-ui-egui --message-format short` (fails in existing unrelated tests before the new overview smoke can run in-suite: `filter_state_entries_collects_cached_matches`, `filter_state_entries_falls_back_to_current_page`, `composer_template_prefills_*`; later smoke tests then cascade on the shared env-lock poison)
+
+## 2026-03-26 Follow-up: strict workspace clippy is green again after the cross-crate cleanup sweep
+- Extended
+  `crates/iroha_data_model/src/rwa.rs`,
+  `crates/iroha_executor_data_model/src/permission.rs`,
+  `crates/iroha_genesis/src/bin/manifest_normalize.rs`,
+  `crates/iroha_p2p/src/transport.rs`,
+  `crates/iroha_core/src/pipeline/overlay.rs`,
+  `crates/iroha_core/src/smartcontracts/isi/world.rs`,
+  `crates/iroha_core/src/sumeragi/main_loop.rs`,
+  `crates/iroha_core/src/sumeragi/main_loop/commit.rs`,
+  `crates/iroha_core/src/sumeragi/status.rs`,
+  `crates/iroha_core/tests/kotodama_pointer_abi_apply.rs`,
+  `crates/iroha_kagami/src/localnet.rs`,
+  `crates/iroha_torii/src/routing.rs`,
+  `crates/iroha_torii/src/iso20022_bridge.rs`,
+  `crates/iroha_torii/tests/zk_roots_handler_integration.rs`,
+  `crates/iroha/src/client.rs`,
+  `crates/iroha/src/config/user.rs`,
+  `integration_tests/src/sync.rs`,
+  `crates/izanami/src/chaos.rs`,
+  `crates/iroha_js_host/src/lib.rs`,
+  and
+  `python/iroha_python/iroha_python_rs/src/lib.rs`
+  to clear the remaining strict workspace lint failures that surfaced during the
+  repo-wide `clippy` pass.
+- The shipped behavior in this slice:
+  - strict workspace lint blockers across the data model, config/test
+    scaffolding, transport docs, Sumeragi test-only helpers, Torii alias/zk
+    tests, and SDK bindings are resolved without changing the intended runtime
+    behavior;
+  - the Torii stateful alias parser regression test now matches the current
+    canonical `AccountId` return contract, and the zk roots integration test
+    seeds asset-definition aliases using the same executor path as the rest of
+    the alias coverage; and
+  - the current checkout now passes `cargo clippy --workspace --all-targets --
+    -D warnings`.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-clippy cargo clippy -p iroha_data_model --all-targets -- -D warnings` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-clippy cargo clippy --workspace --all-targets -- -D warnings` (pass)
+
 ## 2026-03-26 Follow-up: mochi multisig composer parsing is already fixed in-tree, and overlay tests no longer import stale `Account` symbols
 - Verified
   `mochi/mochi-ui-egui/src/main.rs`

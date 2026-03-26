@@ -2595,20 +2595,20 @@ struct UiPalette {
 impl UiPalette {
     fn new() -> Self {
         Self {
-            base: Color32::from_rgb(14, 18, 24),
-            panel: Color32::from_rgb(18, 24, 32),
-            panel_alt: Color32::from_rgb(24, 32, 42),
-            surface: Color32::from_rgb(32, 42, 54),
-            surface_hover: Color32::from_rgb(45, 58, 70),
-            surface_active: Color32::from_rgb(56, 86, 110),
-            border: Color32::from_rgb(46, 64, 84),
-            text: Color32::from_rgb(226, 232, 240),
-            text_muted: Color32::from_rgb(160, 172, 186),
-            accent: Color32::from_rgb(88, 200, 190),
-            accent_soft: Color32::from_rgb(34, 120, 128),
-            success: Color32::from_rgb(120, 200, 160),
-            warning: Color32::from_rgb(240, 192, 96),
-            danger: Color32::from_rgb(220, 96, 92),
+            base: Color32::from_rgb(24, 17, 16),
+            panel: Color32::from_rgb(35, 24, 22),
+            panel_alt: Color32::from_rgb(48, 33, 29),
+            surface: Color32::from_rgb(67, 46, 40),
+            surface_hover: Color32::from_rgb(84, 58, 49),
+            surface_active: Color32::from_rgb(116, 72, 52),
+            border: Color32::from_rgb(131, 94, 76),
+            text: Color32::from_rgb(247, 234, 224),
+            text_muted: Color32::from_rgb(200, 170, 151),
+            accent: Color32::from_rgb(255, 146, 92),
+            accent_soft: Color32::from_rgb(135, 76, 55),
+            success: Color32::from_rgb(116, 214, 167),
+            warning: Color32::from_rgb(255, 196, 98),
+            danger: Color32::from_rgb(240, 112, 92),
         }
     }
 }
@@ -2792,6 +2792,114 @@ impl MochiApp {
     fn set_quickstart_preset(&mut self, preset: ProfilePreset) {
         self.settings_profile_input.clear();
         self.settings_profile_input.push_str(preset.slug());
+    }
+
+    fn profile_recipe_value(profile: &NetworkProfile) -> String {
+        if let Some(preset) = profile.preset {
+            return preset.slug().to_owned();
+        }
+
+        let consensus_mode = match profile.consensus_mode {
+            SumeragiConsensusMode::Permissioned => "permissioned",
+            SumeragiConsensusMode::Npos => "npos",
+        };
+        format!(
+            "{{ peer_count = {}, consensus_mode = \"{}\" }}",
+            profile.topology.peer_count, consensus_mode
+        )
+    }
+
+    fn effective_profile_recipe(&self, supervisor: &Supervisor) -> String {
+        let trimmed = self.settings_profile_input.trim();
+        if !trimmed.is_empty() {
+            trimmed.to_owned()
+        } else {
+            Self::profile_recipe_value(supervisor.profile())
+        }
+    }
+
+    fn effective_workspace_recipe(&self, supervisor: &Supervisor) -> String {
+        let trimmed = self.settings_data_root_input.trim();
+        if !trimmed.is_empty() {
+            trimmed.to_owned()
+        } else {
+            Self::supervisor_base_data_root(supervisor)
+                .display()
+                .to_string()
+        }
+    }
+
+    fn effective_chain_id_recipe(&self, supervisor: &Supervisor) -> String {
+        let trimmed = self.settings_chain_id_input.trim();
+        if !trimmed.is_empty() {
+            trimmed.to_owned()
+        } else {
+            supervisor.chain_id().to_owned()
+        }
+    }
+
+    fn effective_torii_port_recipe(&self, supervisor: &Supervisor) -> Option<u16> {
+        self.settings_torii_port_input
+            .trim()
+            .parse::<u16>()
+            .ok()
+            .filter(|port| *port > 0)
+            .or_else(|| Self::infer_torii_base_port(supervisor))
+    }
+
+    fn effective_p2p_port_recipe(&self, supervisor: &Supervisor) -> Option<u16> {
+        self.settings_p2p_port_input
+            .trim()
+            .parse::<u16>()
+            .ok()
+            .filter(|port| *port > 0)
+            .or_else(|| Self::infer_p2p_base_port(supervisor))
+    }
+
+    fn launch_recipe(&self, supervisor: &Supervisor) -> String {
+        compose_launch_recipe(
+            &self.effective_profile_recipe(supervisor),
+            &self.effective_workspace_recipe(supervisor),
+            &self.effective_chain_id_recipe(supervisor),
+            self.effective_torii_port_recipe(supervisor),
+            self.effective_p2p_port_recipe(supervisor),
+            self.settings_build_binaries,
+            self.settings_readiness_smoke,
+        )
+    }
+
+    fn recipe_peer<'a>(peer_rows: &'a [PeerRow]) -> Option<&'a PeerRow> {
+        peer_rows
+            .iter()
+            .find(|row| row.api_base.is_some())
+            .or_else(|| peer_rows.first())
+    }
+
+    fn peer_api_base(row: &PeerRow) -> String {
+        row.api_base
+            .as_deref()
+            .map(ensure_http_base)
+            .unwrap_or_else(|| ensure_http_base(&row.torii))
+    }
+
+    fn status_probe_recipe(&self, peer_rows: &[PeerRow]) -> Option<String> {
+        let peer = Self::recipe_peer(peer_rows)?;
+        Some(compose_status_probe_recipe(&Self::peer_api_base(peer)))
+    }
+
+    fn app_env_recipe(&self, supervisor: &Supervisor, peer_rows: &[PeerRow]) -> Option<String> {
+        let peer = Self::recipe_peer(peer_rows)?;
+        let signer = supervisor.signers().first();
+        let account_id = signer.map(|entry| account_literal(entry.account_id()));
+        let private_key = signer
+            .map(|entry| ExposedPrivateKey(entry.key_pair().private_key().clone()).to_string());
+        Some(compose_app_env_recipe(
+            &Self::peer_api_base(peer),
+            &peer.torii,
+            &self.effective_chain_id_recipe(supervisor),
+            account_id.as_deref(),
+            private_key.as_deref(),
+        ))
     }
 
     fn start_block_stream_for(
@@ -5737,6 +5845,27 @@ impl MochiApp {
         metrics: &DashboardMetrics,
     ) {
         let palette = Self::palette();
+        let running_all = metrics.total_peers > 0 && metrics.running_peers == metrics.total_peers;
+        let hero_title = if metrics.running_peers == 0 {
+            "Spin up a friendly local chain."
+        } else if running_all {
+            "Your devnet is humming."
+        } else {
+            "Your devnet is still waking up."
+        };
+        let hero_subtitle = if metrics.running_peers == 0 {
+            "Pick a preset, start the devnet, and MOCHI will wire logs, events, and blocks for you."
+        } else if running_all {
+            "Copy an endpoint, grab a dev signer, and watch Activity as your app pushes real blocks."
+        } else {
+            "Some peers are still booting. You can already inspect readiness, logs, and endpoints while the rest settle."
+        };
+        let preset = Self::profile_name(supervisor);
+        let chain_id = self.effective_chain_id_recipe(supervisor);
+        let workspace = self.effective_workspace_recipe(supervisor);
+        let launch_recipe = self.launch_recipe(supervisor);
+        let app_env_recipe = self.app_env_recipe(supervisor, peer_rows);
+        let status_recipe = self.status_probe_recipe(peer_rows);
         let peers_value = metrics.peers_label();
         let latest_value = metrics.latest_height_text();
         let queue_value = metrics.queue_text();
@@ -5758,51 +5887,135 @@ impl MochiApp {
         Frame::new()
             .fill(palette.panel_alt)
             .stroke(Stroke::new(1.0, palette.border))
-            .corner_radius(CornerRadius::same(10))
-            .inner_margin(Margin::symmetric(14, 12))
+            .corner_radius(CornerRadius::same(14))
+            .inner_margin(Margin::symmetric(16, 16))
             .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(14.0, 12.0);
-                    self.render_stat_card(
-                        ui,
-                        "Peers Active",
-                        &peers_value,
-                        &stream_detail,
-                        Color32::from_rgb(120, 190, 255),
+                let render_glance = |ui: &mut egui::Ui, app: &mut Self| {
+                    ui.label(
+                        RichText::new("MOCHI")
+                            .size(12.0)
+                            .color(palette.warning)
+                            .strong(),
                     );
-                    self.render_stat_card(
-                        ui,
-                        "Latest Block",
-                        &latest_value,
-                        &block_detail,
-                        Color32::from_rgb(144, 220, 164),
-                    );
-                    self.render_stat_card(
-                        ui,
-                        "Queue Size",
-                        &queue_value,
-                        &queue_detail,
-                        Color32::from_rgb(250, 200, 128),
-                    );
-                    self.render_stat_card(
-                        ui,
-                        "Commit Latency",
-                        &latency_value,
-                        &latency_detail,
-                        Color32::from_rgb(210, 170, 255),
-                    );
-                    self.render_stat_card(
-                        ui,
-                        "Throughput",
-                        &throughput_value,
-                        &throughput_detail,
-                        Color32::from_rgb(255, 140, 200),
-                    );
-                });
-                ui.add_space(10.0);
+                    ui.label(RichText::new(hero_title).size(26.0).strong());
+                    ui.label(hero_subtitle);
+                    ui.add_space(10.0);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+                        app.render_overview_badge(ui, "Mode", &preset, palette.accent);
+                        app.render_overview_badge(ui, "Chain", &chain_id, palette.warning);
+                        app.render_overview_badge(
+                            ui,
+                            "Torii",
+                            &app.effective_torii_port_recipe(supervisor)
+                                .map(|port| format!(":{port}"))
+                                .unwrap_or_else(|| "auto".to_owned()),
+                            palette.success,
+                        );
+                        app.render_overview_badge(
+                            ui,
+                            "Workspace",
+                            &truncate(&workspace, 40),
+                            palette.text_muted,
+                        );
+                    });
+                    ui.add_space(10.0);
+                    Frame::new()
+                        .fill(palette.surface)
+                        .stroke(Stroke::new(1.0, palette.accent_soft))
+                        .corner_radius(CornerRadius::same(12))
+                        .inner_margin(Margin::symmetric(12, 10))
+                        .show(ui, |ui| {
+                            ui.label(
+                                RichText::new("Terminal recipe")
+                                    .small()
+                                    .color(palette.text_muted),
+                            );
+                            ui.label(
+                                RichText::new(&launch_recipe)
+                                    .monospace()
+                                    .color(palette.text),
+                            );
+                        });
+                    ui.add_space(8.0);
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.button("Copy launch recipe").clicked() {
+                            Self::copy_text(ui, launch_recipe.clone());
+                            app.last_info = Some("Copied the current launch recipe.".to_owned());
+                            app.last_error = None;
+                        }
+                        if let Some(env_recipe) = app_env_recipe.as_ref()
+                            && ui.button("Copy app env").clicked()
+                        {
+                            Self::copy_text(ui, env_recipe.clone());
+                            app.last_info =
+                                Some("Copied a local app bootstrap snippet.".to_owned());
+                            app.last_error = None;
+                        }
+                        if let Some(status_recipe) = status_recipe.as_ref()
+                            && ui.button("Copy /status curl").clicked()
+                        {
+                            Self::copy_text(ui, status_recipe.clone());
+                            app.last_info = Some("Copied a /status probe command.".to_owned());
+                            app.last_error = None;
+                        }
+                    });
+                };
+                let render_metrics = |ui: &mut egui::Ui, app: &Self| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing = egui::vec2(12.0, 12.0);
+                        app.render_stat_card(
+                            ui,
+                            "Peers Active",
+                            &peers_value,
+                            &stream_detail,
+                            Color32::from_rgb(255, 176, 112),
+                        );
+                        app.render_stat_card(
+                            ui,
+                            "Latest Block",
+                            &latest_value,
+                            &block_detail,
+                            Color32::from_rgb(144, 220, 164),
+                        );
+                        app.render_stat_card(
+                            ui,
+                            "Queue Size",
+                            &queue_value,
+                            &queue_detail,
+                            Color32::from_rgb(255, 208, 116),
+                        );
+                        app.render_stat_card(
+                            ui,
+                            "Commit Latency",
+                            &latency_value,
+                            &latency_detail,
+                            Color32::from_rgb(240, 180, 130),
+                        );
+                        app.render_stat_card(
+                            ui,
+                            "Throughput",
+                            &throughput_value,
+                            &throughput_detail,
+                            Color32::from_rgb(116, 214, 167),
+                        );
+                    });
+                };
+
+                if ui.available_width() < 980.0 {
+                    render_glance(ui, self);
+                    ui.add_space(12.0);
+                    render_metrics(ui, self);
+                } else {
+                    ui.columns(2, |columns| {
+                        render_glance(&mut columns[0], self);
+                        render_metrics(&mut columns[1], self);
+                    });
+                }
+
+                ui.add_space(12.0);
                 self.render_control_bar(ui, supervisor, peer_rows);
-                ui.add_space(6.0);
-                let preset = Self::profile_name(supervisor);
+                ui.add_space(8.0);
                 let footer = if let Some(report) = supervisor.compatibility() {
                     format!(
                         "{} • {} • Data root {}",
@@ -6545,16 +6758,29 @@ impl MochiApp {
     ) {
         let palette = Self::palette();
         Frame::new()
-            .fill(palette.panel)
+            .fill(palette.surface)
             .stroke(Stroke::new(1.0, accent))
-            .corner_radius(CornerRadius::same(10))
+            .corner_radius(CornerRadius::same(12))
             .inner_margin(Margin::symmetric(12, 10))
             .show(ui, |ui| {
                 ui.label(RichText::new(title).size(11.0).color(accent).strong());
-                ui.label(RichText::new(value).size(20.0).color(palette.text).strong());
+                ui.label(RichText::new(value).size(22.0).color(palette.text).strong());
                 if !detail.is_empty() {
                     ui.label(RichText::new(detail).size(12.0).color(palette.text_muted));
                 }
+            });
+    }
+
+    fn render_overview_badge(&self, ui: &mut egui::Ui, label: &str, value: &str, accent: Color32) {
+        let palette = Self::palette();
+        Frame::new()
+            .fill(palette.surface)
+            .stroke(Stroke::new(1.0, accent))
+            .corner_radius(CornerRadius::same(10))
+            .inner_margin(Margin::symmetric(10, 8))
+            .show(ui, |ui| {
+                ui.label(RichText::new(label).size(10.0).color(accent).strong());
+                ui.label(RichText::new(value).size(12.5).color(palette.text));
             });
     }
 
@@ -6664,11 +6890,8 @@ impl MochiApp {
         let palette = Self::palette();
         let selected_preset = self.selected_quickstart_preset(supervisor);
         let running = supervisor.is_any_running();
-        let workspace_label = if self.settings_data_root_input.trim().is_empty() {
-            "system temporary directory".to_owned()
-        } else {
-            self.settings_data_root_input.trim().to_owned()
-        };
+        let workspace_label = self.effective_workspace_recipe(supervisor);
+        let launch_recipe = self.launch_recipe(supervisor);
 
         Frame::new()
             .fill(palette.panel_alt)
@@ -6676,9 +6899,9 @@ impl MochiApp {
             .corner_radius(CornerRadius::same(12))
             .inner_margin(Margin::symmetric(16, 14))
             .show(ui, |ui| {
-                ui.label(RichText::new("Devnet quickstart").strong().size(18.0));
+                ui.label(RichText::new("Friendly quickstart").strong().size(18.0));
                 ui.label(
-                    "Run a disposable Iroha network for local app development, inspect live chain activity, and debug transactions in one workspace.",
+                    "Set up the local loop once, then restart it with one click whenever you need a fresh chain.",
                 );
                 ui.add_space(10.0);
                 ui.horizontal_wrapped(|ui| {
@@ -6708,10 +6931,10 @@ impl MochiApp {
                 ui.add_space(8.0);
                 ui.small(match selected_preset {
                     ProfilePreset::SinglePeer => {
-                        "Single Peer is the fastest local loop for app work, schema changes, and transaction debugging."
+                        "Single Peer is the solo sandbox: the fastest loop for UI work, schema changes, and transaction debugging."
                     }
                     ProfilePreset::FourPeerBft => {
-                        "Four Peer BFT is closer to a validator network and better for quorum, failover, and consensus-path debugging."
+                        "Four Peer BFT is the quorum playground: closer to validator reality for failover, committee, and consensus-path debugging."
                     }
                 });
                 ui.add_space(8.0);
@@ -6748,16 +6971,39 @@ impl MochiApp {
                         selected_preset.peer_count(),
                         metrics.running_peers,
                         metrics.latest_height_text(),
-                        workspace_label,
+                        truncate(&workspace_label, 52),
                     ))
                     .small()
                     .color(palette.text_muted),
                 );
+                ui.add_space(10.0);
+                Frame::new()
+                    .fill(palette.surface)
+                    .stroke(Stroke::new(1.0, palette.accent_soft))
+                    .corner_radius(CornerRadius::same(10))
+                    .inner_margin(Margin::symmetric(12, 10))
+                    .show(ui, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(RichText::new("Terminal recipe").strong());
+                            if ui.small_button("Copy recipe").clicked() {
+                                Self::copy_text(ui, launch_recipe.clone());
+                                self.last_info =
+                                    Some("Copied the current quickstart recipe.".to_owned());
+                                self.last_error = None;
+                            }
+                        });
+                        ui.label(RichText::new(&launch_recipe).monospace().color(palette.text));
+                        ui.small(
+                            "Useful when you want the same setup outside the GUI or need to hand the exact devnet recipe to a teammate.",
+                        );
+                    });
                 if !running {
                     ui.add_space(8.0);
                     ui.group(|ui| {
-                        ui.label(RichText::new("First run").strong());
-                        ui.small("1. Pick a preset. 2. Confirm the workspace and ports. 3. Start devnet. 4. Open Activity to watch logs, events, and blocks.");
+                        ui.label(RichText::new("Happy path").strong());
+                        ui.small(
+                            "1. Pick a mode. 2. Start the devnet. 3. Copy an endpoint and a signer from the next panel. 4. Open Activity to watch logs, events, and blocks.",
+                        );
                     });
                 }
                 ui.add_space(10.0);
@@ -6805,6 +7051,8 @@ impl MochiApp {
                         self.settings_dialog = true;
                     }
                 });
+                ui.add_space(6.0);
+                ui.small("Local only, disposable by default, and meant for fast iteration.");
             });
     }
 
@@ -6816,6 +7064,9 @@ impl MochiApp {
     ) {
         let palette = Self::palette();
         let signers = supervisor.signers();
+        let launch_recipe = self.launch_recipe(supervisor);
+        let app_env_recipe = self.app_env_recipe(supervisor, peer_rows);
+        let status_recipe = self.status_probe_recipe(peer_rows);
 
         Frame::new()
             .fill(palette.panel_alt)
@@ -6827,6 +7078,50 @@ impl MochiApp {
                 ui.label(
                     "Copy endpoints and development identities without digging through peer configs or the signing vault first.",
                 );
+                ui.add_space(10.0);
+                Frame::new()
+                    .fill(palette.surface)
+                    .stroke(Stroke::new(1.0, palette.accent_soft))
+                    .corner_radius(CornerRadius::same(10))
+                    .inner_margin(Margin::symmetric(12, 10))
+                    .show(ui, |ui| {
+                        ui.label(RichText::new("Handy snippets").strong());
+                        ui.small(
+                            "Copy/paste friendly recipes for your shell, your app bootstrap, or a quick sanity check against Torii.",
+                        );
+                        ui.add_space(8.0);
+                        ui.horizontal_wrapped(|ui| {
+                            if ui.button("Copy launch recipe").clicked() {
+                                Self::copy_text(ui, launch_recipe.clone());
+                                self.last_info = Some("Copied the current launch recipe.".to_owned());
+                                self.last_error = None;
+                            }
+                            if let Some(env_recipe) = app_env_recipe.as_ref()
+                                && ui.button("Copy app env").clicked()
+                            {
+                                Self::copy_text(ui, env_recipe.clone());
+                                self.last_info =
+                                    Some("Copied a local app bootstrap snippet.".to_owned());
+                                self.last_error = None;
+                            }
+                            if let Some(status_recipe) = status_recipe.as_ref()
+                                && ui.button("Copy /status curl").clicked()
+                            {
+                                Self::copy_text(ui, status_recipe.clone());
+                                self.last_info = Some("Copied a /status probe command.".to_owned());
+                                self.last_error = None;
+                            }
+                        });
+                        if let Some(env_recipe) = app_env_recipe.as_ref() {
+                            ui.add_space(6.0);
+                            ui.label(
+                                RichText::new(truncate(env_recipe, 140))
+                                    .monospace()
+                                    .color(palette.text),
+                            );
+                        }
+                    });
+
                 ui.add_space(10.0);
 
                 ui.label(RichText::new("Endpoints").strong());
@@ -6870,6 +7165,7 @@ impl MochiApp {
                         self.open_signer_vault_dialog(supervisor);
                     }
                 });
+                ui.small("These keys are for disposable local devnets only. Do not reuse them outside MOCHI.");
                 if signers.is_empty() {
                     ui.small("No signing authorities are currently available.");
                 } else {
@@ -6968,10 +7264,11 @@ impl MochiApp {
     }
 
     fn render_peer_card(&mut self, ui: &mut egui::Ui, supervisor: &mut Supervisor, row: &PeerRow) {
+        let palette = Self::palette();
         Frame::new()
-            .fill(Color32::from_rgb(20, 28, 38))
-            .stroke(Stroke::new(1.0, Color32::from_rgb(46, 64, 84)))
-            .corner_radius(CornerRadius::same(10))
+            .fill(palette.surface)
+            .stroke(Stroke::new(1.0, palette.border))
+            .corner_radius(CornerRadius::same(12))
             .inner_margin(Margin::symmetric(12, 10))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -7129,15 +7426,16 @@ impl MochiApp {
         metrics: &DashboardMetrics,
         lane_catalog: &LaneCatalogSnapshot,
     ) {
+        let palette = Self::palette();
         if self.status_history.is_empty() {
             ui.label("Waiting for telemetry updates…");
             return;
         }
 
         Frame::new()
-            .fill(Color32::from_rgb(22, 30, 40))
-            .stroke(Stroke::new(1.0, Color32::from_rgb(46, 64, 84)))
-            .corner_radius(CornerRadius::same(10))
+            .fill(palette.surface)
+            .stroke(Stroke::new(1.0, palette.border))
+            .corner_radius(CornerRadius::same(12))
             .inner_margin(Margin::symmetric(12, 10))
             .show(ui, |ui| {
                 ui.small(format!(
@@ -7450,10 +7748,11 @@ impl MochiApp {
     }
 
     fn render_activity_panel(&self, ui: &mut egui::Ui, metrics: &DashboardMetrics) {
+        let palette = Self::palette();
         Frame::new()
-            .fill(Color32::from_rgb(22, 30, 40))
-            .stroke(Stroke::new(1.0, Color32::from_rgb(46, 64, 84)))
-            .corner_radius(CornerRadius::same(10))
+            .fill(palette.surface)
+            .stroke(Stroke::new(1.0, palette.border))
+            .corner_radius(CornerRadius::same(12))
             .inner_margin(Margin::symmetric(12, 10))
             .show(ui, |ui| {
                 ui.label(RichText::new("Recent block activity").strong());
@@ -10626,7 +10925,7 @@ impl App for MochiApp {
         self.poll_maintenance_updates(&mut supervisor_opt);
         self.schedule_pending_maintenance(&mut supervisor_opt);
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("MOCHI — Local Iroha Devnet");
+            ui.add_space(4.0);
             if let Some(supervisor) = supervisor_opt.as_mut() {
                 self.render_ready(ui, supervisor);
             } else if matches!(self.maintenance_state, MaintenanceState::Running(_)) {
@@ -11241,6 +11540,111 @@ fn normalized_filter(input: &str) -> Option<String> {
     } else {
         Some(trimmed.to_ascii_lowercase())
     }
+}
+
+fn shell_quote(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return "''".to_owned();
+    }
+    if trimmed.chars().all(|ch| {
+        matches!(
+            ch,
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '/' | '.' | '_' | '-' | ':' | '@'
+        )
+    }) {
+        trimmed.to_owned()
+    } else {
+        format!("'{}'", trimmed.replace('\'', "'\"'\"'"))
+    }
+}
+
+fn ensure_http_base(value: &str) -> String {
+    let trimmed = value.trim().trim_end_matches('/');
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        trimmed.to_owned()
+    } else {
+        format!("http://{trimmed}")
+    }
+}
+
+fn compose_launch_recipe(
+    profile: &str,
+    data_root: &str,
+    chain_id: &str,
+    torii_port: Option<u16>,
+    p2p_port: Option<u16>,
+    build_binaries: bool,
+    readiness_smoke: bool,
+) -> String {
+    let mut parts = vec![
+        "cargo run -p mochi-ui-egui --".to_owned(),
+        format!("--profile {}", shell_quote(profile)),
+    ];
+    if !data_root.trim().is_empty() {
+        parts.push(format!("--data-root {}", shell_quote(data_root)));
+    }
+    if !chain_id.trim().is_empty() {
+        parts.push(format!("--chain-id {}", shell_quote(chain_id)));
+    }
+    if let Some(port) = torii_port {
+        parts.push(format!("--torii-start {port}"));
+    }
+    if let Some(port) = p2p_port {
+        parts.push(format!("--p2p-start {port}"));
+    }
+    parts.push(if build_binaries {
+        "--build-binaries".to_owned()
+    } else {
+        "--no-build-binaries".to_owned()
+    });
+    parts.push(if readiness_smoke {
+        "--enable-smoke".to_owned()
+    } else {
+        "--disable-smoke".to_owned()
+    });
+    parts.join(" ")
+}
+
+fn compose_app_env_recipe(
+    api_base: &str,
+    torii_url: &str,
+    chain_id: &str,
+    account_id: Option<&str>,
+    private_key: Option<&str>,
+) -> String {
+    let mut lines = vec![
+        "# local dev only; rename variables to match your app".to_owned(),
+        format!(
+            "export IROHA_API_BASE={}",
+            shell_quote(&ensure_http_base(api_base))
+        ),
+        format!(
+            "export IROHA_TORII_URL={}",
+            shell_quote(&ensure_http_base(torii_url))
+        ),
+        format!("export IROHA_CHAIN_ID={}", shell_quote(chain_id)),
+    ];
+    if let Some(account_id) = account_id {
+        lines.push(format!(
+            "export IROHA_ACCOUNT_ID={}",
+            shell_quote(account_id)
+        ));
+    }
+    if let Some(private_key) = private_key {
+        lines.push(format!(
+            "export IROHA_PRIVATE_KEY={}",
+            shell_quote(private_key)
+        ));
+    }
+    lines.join("\n")
+}
+
+fn compose_status_probe_recipe(api_base: &str) -> String {
+    format!(
+        "curl -sS {}/status",
+        shell_quote(&ensure_http_base(api_base))
+    )
 }
 
 fn render_filter_selector(ui: &mut egui::Ui, label: &str, value: &mut String, options: &[String]) {
@@ -12355,8 +12759,9 @@ mod tests {
     use super::{
         ActiveView, CliOverrides, InstructionPermission, MaintenanceCommand, MaintenanceState,
         MaintenanceTask, MochiApp, ProfilePreset, SignerEntryForm, SignerEntryState,
-        StatePageCache, StateQueryKind, SupervisorBuilder, filter_state_entries,
-        reset_cli_overrides_for_tests,
+        StatePageCache, StateQueryKind, SupervisorBuilder, compose_app_env_recipe,
+        compose_launch_recipe, ensure_http_base, filter_state_entries,
+        reset_cli_overrides_for_tests, shell_quote,
     };
 
     #[test]
@@ -12392,6 +12797,59 @@ mod tests {
             .expect("heading style");
         assert_eq!(heading.family, FontFamily::Proportional);
         assert!((heading.size - 20.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn shell_quote_handles_spaces_and_single_quotes() {
+        assert_eq!(shell_quote("mochi-local"), "mochi-local");
+        assert_eq!(shell_quote("/tmp/mochi data"), "'/tmp/mochi data'");
+        assert_eq!(shell_quote("alice's sandbox"), "'alice'\"'\"'s sandbox'");
+    }
+
+    #[test]
+    fn ensure_http_base_adds_scheme_once() {
+        assert_eq!(ensure_http_base("127.0.0.1:8080"), "http://127.0.0.1:8080");
+        assert_eq!(
+            ensure_http_base("http://127.0.0.1:8080/"),
+            "http://127.0.0.1:8080"
+        );
+    }
+
+    #[test]
+    fn compose_launch_recipe_includes_current_flags() {
+        let recipe = compose_launch_recipe(
+            "single-peer",
+            "/tmp/mochi data",
+            "mochi-local",
+            Some(8080),
+            Some(1337),
+            true,
+            false,
+        );
+        assert!(recipe.starts_with("cargo run -p mochi-ui-egui --"));
+        assert!(recipe.contains("--profile single-peer"));
+        assert!(recipe.contains("--data-root '/tmp/mochi data'"));
+        assert!(recipe.contains("--chain-id mochi-local"));
+        assert!(recipe.contains("--torii-start 8080"));
+        assert!(recipe.contains("--p2p-start 1337"));
+        assert!(recipe.contains("--build-binaries"));
+        assert!(recipe.contains("--disable-smoke"));
+    }
+
+    #[test]
+    fn compose_app_env_recipe_emits_local_bootstrap_exports() {
+        let recipe = compose_app_env_recipe(
+            "127.0.0.1:8080",
+            "127.0.0.1:8080",
+            "mochi-local",
+            Some("alice@wonderland"),
+            Some("deadbeef"),
+        );
+        assert!(recipe.contains("export IROHA_API_BASE=http://127.0.0.1:8080"));
+        assert!(recipe.contains("export IROHA_TORII_URL=http://127.0.0.1:8080"));
+        assert!(recipe.contains("export IROHA_CHAIN_ID=mochi-local"));
+        assert!(recipe.contains("export IROHA_ACCOUNT_ID=alice@wonderland"));
+        assert!(recipe.contains("export IROHA_PRIVATE_KEY=deadbeef"));
     }
 
     #[test]
