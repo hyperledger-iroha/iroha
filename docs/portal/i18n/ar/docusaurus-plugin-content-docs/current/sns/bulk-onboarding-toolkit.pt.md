@@ -34,7 +34,7 @@ Espelha `docs/source/sns/bulk_onboarding_toolkit.md` للمشغلين الخار
 |--------|------------|-----------|
 | `label` | سيم | تسمية الطلب (حالة مختلطة، وهي عبارة عن أداة طبيعية تتوافق مع المعيار v1 e UTS-46). |
 | `suffix_id` | سيم | المعرف الرقمي اللاحق (عشري أو `0x` سداسي عشري). |
-| `owner` | سيم | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` | سيم | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` | سيم | انتيرو `1..=255`. |
 | `payment_asset_id` | سيم | قضية التسوية (على سبيل المثال `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | سيم | إن Inteiros لا تمثل سوى وحدات وطنية ذات أهمية. |

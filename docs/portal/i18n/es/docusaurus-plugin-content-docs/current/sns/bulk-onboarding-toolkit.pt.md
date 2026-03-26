@@ -34,7 +34,7 @@ El analizador exige la siguiente línea de cabecalho (a orden y flexivel):| Colu
 |--------|-------------|-----------|
 | `label` | Sim | Etiqueta solicitada (aceita de caso mixto; a ferramenta normaliza conforme Norma v1 e UTS-46). |
 | `suffix_id` | Sim | Identificador numérico de sufijo (decimal o `0x` hexadecimal). |
-| `owner` | Sim | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` | Sim | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` | Sim | Inteiro `1..=255`. |
 | `payment_asset_id` | Sim | Activo de liquidación (por ejemplo `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Sim | Inteiros sinal representando unidades nativas do ativo. |

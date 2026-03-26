@@ -32,7 +32,7 @@ CLI لا يتوسع، لذا يقدم SN-3b builder حتمي من CSV إلى Nor
 |--------|-------|-------|
 | `label` | نعم | التسمية المطلوبة (يقبل حالة التباين؛ الاداءة تطبع حسب Norm v1 و UTS-46). |
 | `suffix_id` | نعم | معرف لاحق رئيسي (عشري او `0x` hex). |
-| `owner` | نعم | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` | نعم | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` | نعم | العدد صحيح `1..=255`. |
 | `payment_asset_id` | نعم | اصل التوريد (مثل `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | نعم | الرقم الصحيح غير الموقع يمثل الوحدات الاصلية. |

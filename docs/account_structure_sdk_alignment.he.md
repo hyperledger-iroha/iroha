@@ -14,7 +14,7 @@
 משימות:
 1. **פלט קנוני:** `AccountId::to_string()`/Display חייב להפיק I105 בלבד
    (ללא סיומת `@domain`). ה‑hex הקנוני מיועד לדיבוג (`0x...`).
-2. **Accepted inputs:** parsers MUST accept only canonical I105 account literals. Reject i105-default `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+2. **Accepted inputs:** parsers MUST accept only canonical i105 account literals. Reject i105-default `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
 3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
 4. **Checksum של I105:** השתמשו ב‑Blake2b‑512 על `I105PRE || prefix || payload`,
    וקחו את שני הבייטים הראשונים. בסיס האלפבית הדחוס הוא **105**.

@@ -36,11 +36,11 @@ final class TransactionInputValidatorTests: XCTestCase {
     func testValidateRejectsAuthorityWithReservedCharacters() {
         XCTAssertThrowsError(
             try TransactionInputValidator.validate(chainId: "0000",
-                                                   authorityId: "alice#bad@wonderland",
+                                                   authorityId: "alice#bad@hbl.sbp",
                                                    assetDefinitionId: sampleAid)
         ) { error in
             XCTAssertEqual(error as? TransactionInputError,
-                           .malformedAccountId(field: "authority", value: "alice#bad@wonderland"))
+                           .malformedAccountId(field: "authority", value: "alice#bad@hbl.sbp"))
         }
     }
 
@@ -91,9 +91,16 @@ final class TransactionInputValidatorTests: XCTestCase {
     }
 
     func testSanitizeMetadataTargetRejectsTextualAssetId() {
-        XCTAssertThrowsError(try TransactionInputValidator.sanitizeMetadataTarget(.asset("ro$se#wonderland#alice@wonderland"))) { error in
+        XCTAssertThrowsError(try TransactionInputValidator.sanitizeMetadataTarget(.asset("ro$se#wonderland#alice@hbl.sbp"))) { error in
             XCTAssertEqual(error as? TransactionInputError,
-                           .malformedAssetId("ro$se#wonderland#alice@wonderland"))
+                           .malformedAssetId("ro$se#wonderland#alice@hbl.sbp"))
+        }
+    }
+
+    func testSanitizeMetadataTargetRejectsMalformedRwaId() {
+        XCTAssertThrowsError(try TransactionInputValidator.sanitizeMetadataTarget(.rwa("lot-001"))) { error in
+            XCTAssertEqual(error as? TransactionInputError,
+                           .malformedRwaId(field: "target", value: "lot-001"))
         }
     }
 
@@ -110,6 +117,15 @@ final class TransactionInputValidatorTests: XCTestCase {
         let literal =
             "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
         let target = try TransactionInputValidator.sanitizeMetadataTarget(.asset(literal))
+        XCTAssertEqual(target.objectId, literal)
+    }
+
+    func testSanitizeRwaIdAcceptsCanonicalPublicLiteral() throws {
+        let literal =
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities"
+        let uppercaseHashLiteral =
+            "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF$commodities"
+        let target = try TransactionInputValidator.sanitizeMetadataTarget(.rwa(uppercaseHashLiteral))
         XCTAssertEqual(target.objectId, literal)
     }
 
@@ -133,7 +149,7 @@ final class TransactionInputValidatorTests: XCTestCase {
     func testValidateRejectsI105WithDomainSuffix() throws {
         let publicKey = Data(repeating: 0xAC, count: 32)
         let i105 = try AccountId.makeI105(publicKey: publicKey)
-        let literal = "\(i105)@wonderland"
+        let literal = "\(i105)@hbl.sbp"
         XCTAssertThrowsError(
             try TransactionInputValidator.validate(chainId: "0000",
                                                    authorityId: literal)

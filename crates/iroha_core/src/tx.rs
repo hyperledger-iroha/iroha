@@ -439,13 +439,13 @@ fn is_time_sensitive_instruction(instruction: &InstructionBox) -> bool {
         let trigger = &register.object;
         return is_time_sensitive_executable(trigger.action().executable());
     }
-    any.is::<iroha_data_model::isi::offline::RegisterOfflineReserve>()
-        || any.is::<iroha_data_model::isi::offline::CommitOfflineReserveOperation>()
+    any.is::<iroha_data_model::isi::offline::RegisterOfflineLineage>()
+        || any.is::<iroha_data_model::isi::offline::CommitOfflineLineageOperation>()
         || any.is::<iroha_data_model::isi::offline::RegisterOfflineAllowance>()
         || any.is::<iroha_data_model::isi::offline::SubmitOfflineToOnlineTransfer>()
         || any.is::<iroha_data_model::isi::offline::RegisterOfflineVerdictRevocation>()
-        || any.is::<iroha_data_model::isi::offline::ReserveOfflineEscrowBalance>()
-        || any.is::<iroha_data_model::isi::offline::RefundOfflineEscrowBalance>()
+        || any.is::<iroha_data_model::isi::offline::LoadOfflineEscrowBalance>()
+        || any.is::<iroha_data_model::isi::offline::RedeemOfflineEscrowBalance>()
         || any.is::<iroha_data_model::isi::oracle::RecordTwitterBinding>()
         || any.is::<iroha_data_model::isi::social::ClaimTwitterFollowReward>()
         || any.is::<iroha_data_model::isi::social::SendToTwitter>()

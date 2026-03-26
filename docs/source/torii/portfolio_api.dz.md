@@ -144,7 +144,7 @@ GET /v1/space-directory/uaids/{uaid}
 
 | Query | Description |
 |-------|-------------|
-| Address output | Canonical I105 only. |
+| Address output | Canonical i105 only. |
 
 Sample response:
 
@@ -193,7 +193,7 @@ GET /v1/space-directory/uaids/{uaid}/manifests?dataspace={id}
 | `status` (optional) | `active`, `inactive`, or `all` (default). Inactive captures pending, expired, and revoked manifests. |
 | `limit` (optional) | Maximum number of manifests to return (default unlimited). |
 | `offset` (optional) | Number of manifests to skip before collecting results (default `0`). |
-| Address output | Canonical I105 only. |
+| Address output | Canonical i105 only. |
 
 Sample response:
 
@@ -237,7 +237,7 @@ Sample response:
   present.
 - `accounts` reuse the `uaid_dataspaces` ledger map so operators can see which
   concrete account IDs are tied to the manifest’s dataspace. Set
-  canonical I105 output for
+  canonical i105 output for
   offline or QR workflows.
 - The `manifest` object is the exact `AssetPermissionManifest` structure
   published to the Space Directory, making it easy for SDKs to replay the

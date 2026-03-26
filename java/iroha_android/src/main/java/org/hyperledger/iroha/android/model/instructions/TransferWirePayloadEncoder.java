@@ -69,7 +69,7 @@ public final class TransferWirePayloadEncoder {
    * @param assetId The full asset ID as {@code <asset-definition-address>#<account-id>} with an
    *     optional {@code #dataspace:<id>} suffix
    * @param amount The amount to transfer as a string (e.g., "10" or "10.50")
-   * @param destinationAccountId The recipient's canonical I105 account ID
+   * @param destinationAccountId The recipient's canonical i105 account ID
    * @return InstructionBox with wire payload ready for Norito encoding
    */
   public static InstructionBox encodeAssetTransfer(
@@ -265,7 +265,7 @@ public final class TransferWirePayloadEncoder {
         address = AccountAddress.parseEncodedIgnoringCurveSupport(canonicalAccountId, null).address;
       } catch (AccountAddress.AccountAddressException e) {
         throw new IllegalArgumentException(
-            "Failed to parse canonical I105 account identifier: " + canonicalAccountId, e);
+            "Failed to parse canonical i105 account identifier: " + canonicalAccountId, e);
       }
 
       try {
@@ -285,7 +285,7 @@ public final class TransferWirePayloadEncoder {
         }
       } catch (AccountAddress.AccountAddressException e) {
         throw new IllegalArgumentException(
-            "Failed to extract controller from canonical I105 account id", e);
+            "Failed to extract controller from canonical i105 account id", e);
       }
 
       throw new IllegalArgumentException(

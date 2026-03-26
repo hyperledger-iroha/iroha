@@ -688,14 +688,14 @@ impl From<crate::isi::domain_link::UnlinkAccountDomain> for InstructionBox {
 }
 
 // Allow direct boxing of offline allowance instructions.
-impl From<crate::isi::offline::RegisterOfflineReserve> for InstructionBox {
-    fn from(i: crate::isi::offline::RegisterOfflineReserve) -> Self {
+impl From<crate::isi::offline::RegisterOfflineLineage> for InstructionBox {
+    fn from(i: crate::isi::offline::RegisterOfflineLineage) -> Self {
         InstructionBox(Box::new(i))
     }
 }
 
-impl From<crate::isi::offline::CommitOfflineReserveOperation> for InstructionBox {
-    fn from(i: crate::isi::offline::CommitOfflineReserveOperation) -> Self {
+impl From<crate::isi::offline::CommitOfflineLineageOperation> for InstructionBox {
+    fn from(i: crate::isi::offline::CommitOfflineLineageOperation) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -724,14 +724,14 @@ impl From<crate::isi::offline::ReclaimExpiredOfflineAllowance> for InstructionBo
     }
 }
 
-impl From<crate::isi::offline::ReserveOfflineEscrowBalance> for InstructionBox {
-    fn from(i: crate::isi::offline::ReserveOfflineEscrowBalance) -> Self {
+impl From<crate::isi::offline::LoadOfflineEscrowBalance> for InstructionBox {
+    fn from(i: crate::isi::offline::LoadOfflineEscrowBalance) -> Self {
         InstructionBox(Box::new(i))
     }
 }
 
-impl From<crate::isi::offline::RefundOfflineEscrowBalance> for InstructionBox {
-    fn from(i: crate::isi::offline::RefundOfflineEscrowBalance) -> Self {
+impl From<crate::isi::offline::RedeemOfflineEscrowBalance> for InstructionBox {
+    fn from(i: crate::isi::offline::RedeemOfflineEscrowBalance) -> Self {
         InstructionBox(Box::new(i))
     }
 }

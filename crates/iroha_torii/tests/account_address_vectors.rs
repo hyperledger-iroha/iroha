@@ -175,7 +175,7 @@ fn validate_positive_case(case: &PositiveCase, default_prefix: u16) {
     assert_eq!(
         canonical_bytes(&parsed_i105),
         canonical_payload,
-        "{}: parse_encoded I105 canonical mismatch",
+        "{}: parse_encoded i105 canonical mismatch",
         case.case_id
     );
 

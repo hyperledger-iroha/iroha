@@ -31,7 +31,7 @@ translation_last_reviewed: 2026-03-12
 - `AssetDefinitionId` - `unprefixed Base58 address with versioning and checksum` קנוני (UUID-v4 בתים). הגדרה: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. ספרות `alias` חייבות להיות `<name>#<domain>.<dataspace>` או `<name>#<dataspace>`, כאשר `<name>` שווה לשם הגדרת הנכס. קוד: `crates/iroha_data_model/src/asset/definition.rs`.
 
   - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`, where `status` is `permanent`, `leased_active`, `leased_grace`, or `expired_pending_cleanup`. Alias selectors resolve against the latest committed block creation time and stop resolving after grace even before sweep removes stale bindings.
-- `AssetId`: מילולית מקודדת קנונית `<asset-definition-id>#<account-id>` (טפסים טקסטואליים מדור קודם אינם נתמכים במהדורה הראשונה).- `NftId` — `nft$domain`. NFT: `{ id, content: Metadata, owned_by }`. קוד: `crates/iroha_data_model/src/nft.rs`.
+- `AssetId`: מילולית מקודדת קנונית `<asset-definition-id>#<i105-account-id>` (טפסים טקסטואליים מדור קודם אינם נתמכים במהדורה הראשונה).- `NftId` — `nft$domain`. NFT: `{ id, content: Metadata, owned_by }`. קוד: `crates/iroha_data_model/src/nft.rs`.
 - `RoleId` — `name`. תפקיד: `{ id, permissions: BTreeSet<Permission> }` עם Builder `NewRole { inner: Role, grant_to }`. קוד: `crates/iroha_data_model/src/role.rs`.
 - `Permission` — `{ name: Ident, payload: Json }`. קוד: `crates/iroha_data_model/src/permission.rs`.
 - `PeerId`/`Peer` - זהות עמיתים (מפתח ציבורי) וכתובת. קוד: `crates/iroha_data_model/src/peer.rs`.
@@ -207,7 +207,7 @@ translation_last_reviewed: 2026-03-12
 
 הערת הגירה:
 - מזהי `name#domain` הגדרת נכסים טקסטואליים אינם נתמכים בכוונה במהדורה הראשונה.
-- מזהי נכסים בגבולות הטבעה/שריפה/העברה נשארים קנוניים `<asset-definition-id>#<account-id>`; השתמש ב-`iroha tools encode asset-id` עם `--definition <base58-asset-definition-id>` או `--alias ...` בתוספת `--account`.
+- מזהי נכסים בגבולות הטבעה/שריפה/העברה נשארים קנוניים `<asset-definition-id>#<i105-account-id>`; השתמש ב-`iroha tools encode asset-id` עם `--definition <base58-asset-definition-id>` או `--alias ...` בתוספת `--account`.
 
 ---
 

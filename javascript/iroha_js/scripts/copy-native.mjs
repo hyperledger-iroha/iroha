@@ -10,6 +10,7 @@ import {
   readFileSync,
   writeFileSync,
 } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { join, dirname, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
@@ -45,6 +46,20 @@ const checksumManifestPath = join(destDir, "iroha_js_host.checksums.json");
 
 copyFileSync(source, dest);
 console.log(`Copied native module to ${dest}`);
+
+if (platform === "darwin") {
+  const sign = spawnSync("codesign", ["--force", "--sign", "-", dest], {
+    cwd: repoRoot,
+    stdio: "inherit",
+    env: process.env,
+  });
+  if (sign.status !== 0) {
+    throw new Error(
+      `Failed to ad-hoc sign ${dest}; macOS requires a valid signature for Node.js native addons.`,
+    );
+  }
+  console.log(`Ad-hoc signed native module at ${dest}`);
+}
 
 const sha256 = createHash("sha256")
   .update(readFileSync(dest))

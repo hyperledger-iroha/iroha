@@ -51,6 +51,8 @@ function parseCanonicalHexFixture(encoded) {
 const DEFAULT_PUBLIC_KEY = hexToBytes(
   "641297079357229F295938A4B5A333DE35069BF47B9D0704E45805713D13C201",
 );
+const DEFAULT_PUBLIC_KEY_SORA_I105 =
+  "sorauﾛ1P5ﾁXEｴﾕGjgﾕﾚﾎﾕｸﾁEtﾀ3ﾂｺ2gALｺﾒefﾍ8DLgｾoCVGUYHS5";
 const ALT_PUBLIC_KEY = hexToBytes(
   "3B77A042F1DE02F6D5F418F36A20FD68C8329FE3BBFBECD26A2D72878CD827F8",
 );
@@ -203,6 +205,19 @@ test("account address golden vectors round-trip", () => {
     Buffer.from(address.canonicalBytes()),
   );
 
+});
+
+test("decodeI105AccountAddress accepts live i105-default Sora literals", () => {
+  const address = AccountAddress.fromAccount({
+    domain: "default",
+    publicKey: DEFAULT_PUBLIC_KEY,
+  });
+  const decoded = decodeI105AccountAddress(DEFAULT_PUBLIC_KEY_SORA_I105, {
+    expectDiscriminant: 753,
+  });
+  assert.deepEqual(Buffer.from(decoded), Buffer.from(address.canonicalBytes()));
+  const parsed = AccountAddress.fromI105(DEFAULT_PUBLIC_KEY_SORA_I105, 753);
+  assert.equal(parsed.toI105(), "6cmzPVPX6eXMQPXrQzgef9LubBFmrK8yVoJ51F9DSpWfztubMTChZA6");
 });
 
 test("account address rejects extension flag", () => {
@@ -680,7 +695,7 @@ test("toI105 enforces prefix bounds and type", () => {
   );
 });
 
-test("I105 format rejects invalid base58 characters", () => {
+test("i105 format rejects characters outside the I105 alphabet", () => {
   assert.throws(
     () => AccountAddress.fromI105Default("invalid"),
     (error) =>

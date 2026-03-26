@@ -3,7 +3,7 @@ package org.hyperledger.iroha.android.testing;
 import java.util.Arrays;
 import org.hyperledger.iroha.android.address.AccountAddress;
 
-/** Deterministic canonical account identifiers for Android tests. */
+/** Deterministic canonical i105 account identifiers for Android tests. */
 public final class TestAccountIds {
 
   private TestAccountIds() {}

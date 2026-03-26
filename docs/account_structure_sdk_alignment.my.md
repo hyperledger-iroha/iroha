@@ -26,7 +26,7 @@ SDK နှင့် Codec ပိုင်ရှင်များအတွက်
 လုပ်ဆောင်ချက်များ-
 1. ** Canonical အထွက်-** `AccountId::to_string()`/Display သည် I105 ကိုသာ ထုတ်လွှတ်ရမည်
    (နံပါတ် `@domain` နောက်ဆက်တွဲ)။ Canonical hex သည် အမှားရှာပြင်ခြင်းအတွက် (`0x...`) ဖြစ်သည်။
-2. **Accepted inputs:** parsers MUST accept only canonical I105 account literals. Reject i105-default `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+2. **Accepted inputs:** parsers MUST accept only canonical i105 account literals. Reject i105-default `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
 3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
 4. **I105 checksum-** `I105PRE || prefix || payload` ကျော် Blake2b-512 ကိုသုံးပါ၊ ယူပါ။
    ပထမ 2 bytes ။ ချုံ့ထားသော အက္ခရာအခြေခံသည် **105** ဖြစ်သည်။

@@ -9,6 +9,16 @@ import {
   buildTransferAssetDefinitionInstruction,
   buildTransferDomainInstruction,
   buildTransferNftInstruction,
+  buildRegisterRwaInstruction,
+  buildTransferRwaInstruction,
+  buildMergeRwasInstruction,
+  buildRedeemRwaInstruction,
+  buildFreezeRwaInstruction,
+  buildUnfreezeRwaInstruction,
+  buildHoldRwaInstruction,
+  buildReleaseRwaInstruction,
+  buildForceTransferRwaInstruction,
+  buildSetRwaControlsInstruction,
   buildRegisterDomainInstruction,
   buildRegisterAccountInstruction,
   buildRegisterMultisigInstruction,
@@ -1097,6 +1107,291 @@ export function buildTransferNftTransaction({
     sourceAccountId,
     nftId,
     destinationAccountId,
+  });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing a `RegisterRwa` instruction.
+ */
+export function buildRegisterRwaTransaction({
+  chainId,
+  authority,
+  rwa,
+  rwaJson,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildRegisterRwaInstruction({ rwa, rwaJson });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing a `TransferRwa` instruction.
+ */
+export function buildTransferRwaTransaction({
+  chainId,
+  authority,
+  sourceAccountId,
+  rwaId,
+  quantity,
+  destinationAccountId,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildTransferRwaInstruction({
+    sourceAccountId,
+    rwaId,
+    quantity,
+    destinationAccountId,
+  });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing a `MergeRwas` instruction.
+ */
+export function buildMergeRwasTransaction({
+  chainId,
+  authority,
+  merge,
+  mergeJson,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildMergeRwasInstruction({ merge, mergeJson });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing a `RedeemRwa` instruction.
+ */
+export function buildRedeemRwaTransaction({
+  chainId,
+  authority,
+  rwaId,
+  quantity,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildRedeemRwaInstruction({ rwaId, quantity });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing a `FreezeRwa` instruction.
+ */
+export function buildFreezeRwaTransaction({
+  chainId,
+  authority,
+  rwaId,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildFreezeRwaInstruction({ rwaId });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing an `UnfreezeRwa` instruction.
+ */
+export function buildUnfreezeRwaTransaction({
+  chainId,
+  authority,
+  rwaId,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildUnfreezeRwaInstruction({ rwaId });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing a `HoldRwa` instruction.
+ */
+export function buildHoldRwaTransaction({
+  chainId,
+  authority,
+  rwaId,
+  quantity,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildHoldRwaInstruction({ rwaId, quantity });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing a `ReleaseRwa` instruction.
+ */
+export function buildReleaseRwaTransaction({
+  chainId,
+  authority,
+  rwaId,
+  quantity,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildReleaseRwaInstruction({ rwaId, quantity });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing a `ForceTransferRwa` instruction.
+ */
+export function buildForceTransferRwaTransaction({
+  chainId,
+  authority,
+  rwaId,
+  quantity,
+  destinationAccountId,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildForceTransferRwaInstruction({
+    rwaId,
+    quantity,
+    destinationAccountId,
+  });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing a `SetRwaControls` instruction.
+ */
+export function buildSetRwaControlsTransaction({
+  chainId,
+  authority,
+  rwaId,
+  controls,
+  controlsJson,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildSetRwaControlsInstruction({
+    rwaId,
+    controls,
+    controlsJson,
   });
   return buildTransaction({
     chainId,

@@ -171,7 +171,7 @@ pub enum SingularQueryJson {
     FindAssetById {
         /// Asset definition address identifying the asset type.
         asset: String,
-        /// Canonical I105 account identifier owning the asset.
+        /// Canonical i105 account identifier owning the asset.
         account_id: String,
         /// Optional balance scope selector.
         scope: Option<Value>,

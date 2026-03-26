@@ -34,7 +34,7 @@ CLI は SN-3b ビルダー、CSV は Norito 、 هياكل
 |----------|----------|----------|
 | `label` |とん | التسمية المطلوبة (يقبل حالة مختلطة; الاداة تطبع حسب Norm v1 و UTS-46)。 |
 | `suffix_id` |とん | معرف لاحقة رقمي (عشري او `0x` hex)。 |
-| `owner` |とん | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` |とん | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` |とん | عدد صحيح `1..=255`。 |
 | `payment_asset_id` |とん | صل التسوية (مثل `61CtjvNd9T3THAR65GsMVHr82Bjc`)。 |
 | `payment_gross` / `payment_net` |とん | عداد صحيحة غير موقعة تمثل وحدات الاصل. |

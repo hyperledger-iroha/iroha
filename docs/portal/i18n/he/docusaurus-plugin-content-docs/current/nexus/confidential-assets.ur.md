@@ -208,7 +208,7 @@ Local overrides کو operations runbook میں document کریں؛ retention win
 - היררכיית גזירת מפתח לכל חשבון:
   - `sk_spend` → `nk` (מפתח מבטל), `ivk` (מפתח צפייה נכנס), `ovk` (מפתח צפייה יוצא), `fvk`.
 - Encrypted note payloads AEAD استعمال کرتے ہیں جو ECDH-derived shared keys سے بنے ہوتے ہیں؛ optional auditor view keys asset policy کے مطابق outputs کے ساتھ attach کئے جا سکتے ہیں۔
-- CLI additions: `confidential create-keys`, `confidential send`, `confidential export-view-key`, memos decrypt کرنے کیلئے auditor tooling، اور `iroha app zk envelope` helper جو Norito memo envelopes offline produce/inspect کرتا ہے۔ Torii `POST /v1/confidential/derive-keyset` גירסת זרימת גזירה או זרימת גזירה גירסת hex/base64 או טפסים ותיקים تاکہ wallets programmatically key hierarchies fetch کر سکیں۔## בקרות גז, מגבלות ו-DoS
+- CLI additions: `confidential create-keys`, `confidential send`, `confidential export-view-key`, memos decrypt کرنے کیلئے auditor tooling، اور `iroha app zk envelope` helper جو Norito memo envelopes offline produce/inspect کرتا ہے۔
 - לוח זמנים דטרמיניסטי של גז:
   - Halo2 (Plonkish): גז בסיס `250_000` + גז `2_000` לכל קלט ציבורי.
   - `5` גז לכל בייט הוכחה, בתוספת חיובים לכל מבטל (`300`) או לכל התחייבות (`500`).

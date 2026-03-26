@@ -102,7 +102,7 @@ fn share_wallet_qr(client: &Client) -> eyre::Result<()> {
     let snapshot = client.get_explorer_account_qr(
         "i105...",
     )?;
-    println!("I105 literal: {}", snapshot.literal);
+    println!("i105 literal: {}", snapshot.literal);
     std::fs::write("alice_qr.svg", snapshot.svg)?;
     Ok(())
 }

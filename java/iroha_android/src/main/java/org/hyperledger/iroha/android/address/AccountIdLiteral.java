@@ -22,18 +22,18 @@ public final class AccountIdLiteral {
     }
     if (value.indexOf('@') >= 0) {
       throw new IllegalArgumentException(
-          field + " must use canonical I105 encoded account without @domain");
+          field + " must use canonical i105 encoded account without @domain");
     }
     final AccountAddress.ParseResult parsed;
     try {
       parsed = AccountAddress.parseEncoded(value, null);
     } catch (final AccountAddress.AccountAddressException ex) {
       throw new IllegalArgumentException(
-          field + " must use a canonical I105 encoded account literal", ex);
+          field + " must use a canonical i105 encoded account literal", ex);
     }
     if (parsed.format != AccountAddress.Format.I105) {
       throw new IllegalArgumentException(
-          field + " must use a canonical I105 encoded account literal");
+          field + " must use a canonical i105 encoded account literal");
     }
     return value;
   }

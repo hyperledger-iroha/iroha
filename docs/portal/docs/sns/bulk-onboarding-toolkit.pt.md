@@ -37,7 +37,7 @@ O parser exige a seguinte linha de cabecalho (a ordem e flexivel):
 |--------|-------------|-----------|
 | `label` | Sim | Label solicitada (mixed case aceita; a ferramenta normaliza conforme Norm v1 e UTS-46). |
 | `suffix_id` | Sim | Identificador numerico de sufixo (decimal ou `0x` hex). |
-| `owner` | Sim | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` | Sim | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` | Sim | Inteiro `1..=255`. |
 | `payment_asset_id` | Sim | Ativo de settlement (por exemplo `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Sim | Inteiros sem sinal representando unidades nativas do ativo. |

@@ -26,7 +26,7 @@ translator: machine-google-reviewed
 የእርምጃ እቃዎች፡-
 1. ** ቀኖናዊ ውፅዓት፡** I18NI0000005X/ማሳያ I105 ብቻ መልቀቅ አለበት
    (አይ18NI00000006X ቅጥያ የለም)። ቀኖናዊ ሄክስ ለማረም (`0x...`) ነው።
-2. **Accepted inputs:** parsers MUST accept only canonical I105 account literals. Reject i105-default `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+2. **Accepted inputs:** parsers MUST accept only canonical i105 account literals. Reject i105-default `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
 3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
 4. **I105 checksum:** Blake2b-512 ከ `I105PRE || prefix || payload` በላይ ይጠቀሙ፣ ይውሰዱ
    የመጀመሪያዎቹ 2 ባይት. የታመቀ ፊደል መሠረት **105** ነው።

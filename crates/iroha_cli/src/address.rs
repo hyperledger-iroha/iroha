@@ -1,4 +1,4 @@
-//! Account address tooling (canonical I105 and public-key input/output).
+//! Account address tooling (canonical i105 and public-key input/output).
 
 use super::*;
 use clap::ValueEnum;
@@ -39,13 +39,13 @@ impl Run for Command {
 
 #[derive(clap::Args, Debug)]
 pub struct Convert {
-    /// Address literal to parse (canonical I105 or public key).
+    /// Address literal to parse (canonical i105 or public key).
     #[arg(value_name = "ADDRESS")]
     input: String,
     /// Require I105 inputs to match the provided network prefix.
     #[arg(long = "expect-prefix", value_name = "PREFIX")]
     expect_prefix: Option<u16>,
-    /// Network prefix to use when emitting I105 output.
+    /// Network prefix to use when emitting i105 output.
     #[arg(
         long = "network-prefix",
         value_name = "PREFIX",
@@ -91,7 +91,7 @@ pub struct Audit {
     /// Require I105 inputs to match the provided network prefix.
     #[arg(long = "expect-prefix", value_name = "PREFIX")]
     expect_prefix: Option<u16>,
-    /// Network prefix to use when emitting I105 output.
+    /// Network prefix to use when emitting i105 output.
     #[arg(
         long = "network-prefix",
         value_name = "PREFIX",
@@ -208,7 +208,7 @@ pub struct Normalize {
     /// Require I105 inputs to match the provided network prefix.
     #[arg(long = "expect-prefix", value_name = "PREFIX")]
     expect_prefix: Option<u16>,
-    /// Network prefix to use when emitting I105 output.
+    /// Network prefix to use when emitting i105 output.
     #[arg(
         long = "network-prefix",
         value_name = "PREFIX",
@@ -389,7 +389,7 @@ fn parse_address_input(
         .get(..2)
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case("0x"))
     {
-        eyre::bail!("address literal must be canonical I105; canonical hex is not accepted");
+        eyre::bail!("address literal must be canonical i105; canonical hex is not accepted");
     }
     if let Ok(public_key) = trimmed.parse::<PublicKey>() {
         let account = AccountId::new(public_key);

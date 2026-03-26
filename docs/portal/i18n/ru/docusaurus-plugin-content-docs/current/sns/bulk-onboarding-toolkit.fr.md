@@ -36,7 +36,7 @@ Le parseur exige la ligne d'en-tete suivante (l'ordre est гибкий):
 |---------|--------|-------------|
 | `label` | Да | Libelle requiree (касса смешанного приема; l'outil нормализовать selon Norm v1 и UTS-46). |
 | `suffix_id` | Да | Идентификатор суффикса (десятичный или шестнадцатеричный `0x`). |
-| `owner` | Да | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` | Да | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` | Да | Энтьер `1..=255`. |
 | `payment_asset_id` | Да | Акт урегулирования (пример `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Да | Entiers не является представителем объединения местных жителей в действии. |

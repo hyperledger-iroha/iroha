@@ -71,7 +71,7 @@ public final class OfflineWalletSafetyDetectTests {
         """;
     return new OfflineAllowanceList.OfflineAllowanceItem(
         "deadbeef",
-        "alice@wonderland",
+        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
         "Alice",
         "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
         "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",

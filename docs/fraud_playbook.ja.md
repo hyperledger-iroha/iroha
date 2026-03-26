@@ -55,7 +55,7 @@ translator: manual
 
 - **リスク照会** – `POST /v1/fraud/query` は `RiskQuery` スキーマを受け付けます:
   - `query_id`（`[u8; 32]`、hex エンコード）
-  - `subject`（`AccountId`, `domainless encoded literal; canonical I105 only (i105-default `sora...` rejected)`）
+  - `subject`（`AccountId`, `domainless encoded literal; canonical i105 only (i105-default `sora...` rejected)`）
   - `operation`（`RiskOperation` に対応するタグ付き enum。JSONの `type` は enum バリアントに一致）
   - `related_asset`（`AssetId`, 任意）
   - `features`（`FeatureInput` に対応する `{ key: String, value_hash: hex32 }` の配列）

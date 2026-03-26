@@ -88,14 +88,14 @@ fn share_wallet_qr(client: &Client) -> eyre::Result<()> {
     let snapshot = client.get_explorer_account_qr(
         "i105...",
     )?;
-    println!("I105 literal: {}", snapshot.literal);
+    println!("i105 literal: {}", snapshot.literal);
     std::fs::write("alice_qr.svg", snapshot.svg)?;
     Ok(())
 }
 ```
 
-The returned `ExplorerAccountQrSnapshot` includes the canonical account id,
-canonical I105 literal, error-correction settings, and the inline SVG payload used by
+The returned `ExplorerAccountQrSnapshot` includes the canonical i105 account id,
+canonical i105 literal, error-correction settings, and the inline SVG payload used by
 wallet/explorer share flows.
 
 ## JavaScript / TypeScript (`@iroha/iroha-js`)

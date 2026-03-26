@@ -33,7 +33,7 @@ translator: machine-google-reviewed
 - `DomainId`: `name` (དཔེར་ན་ `wonderland`)།
 - `AccountId`: ཀེ་ནོ་ནིཀ་ཌོ་མེན་མེད་པའི་རྩིས་ཐོ་ངོས་འཛིན་འབད་མི་འདི་ `AccountAddress` བརྒྱུད་དེ་ I105 རྐྱངམ་ཅིག་སྦེ་ ཨིན་ཀོ་ཌི་འབད་ཡོདཔ་ཨིན། དབྱེ་དཔྱད་འབད་མི་ཨིན་པུཊི་ཚུ་ ཀེ་ནོ་ནིཀ་ I105; མངའ་ཁོངས་རྗེས་འཇུག་ཚུ་ (`@domain`) དང་ ཀེ་ནོ་ནིཀ་ I105 ཡིག་འབྲུ་ཚུ་ མིང་གཞན་ཚུ་ ཀེ་ནོ་ནིཀ་ཧེགསི་པར་སར་ཨིན་པུཊི་ རིག་གཞུང་ `norito:` པེ་ལོཌི་ཚུ་ དང་ `uaid:`/`uaid:`/`uaid:`/`opaque:` ཚུ་ཨིན།
 - `AssetDefinitionId`: ཀེ་ནོ་ནིཀ་`unprefixed Base58 address with versioning and checksum` (UUID-v4 བཱའིཊིསི)།
-- `AssetId`: ཀེ་ནོ་ནིཀ་ཨེན་ཀོ་ཌི་འབད་ཡོད་པའི་ཚིག་ཡིག་ `<asset-definition-id>#<account-id>` (རིག་གཞུང་ཚིག་ཡིག་འབྲི་ཤོག་ཚུ་ གསར་བཏོན་འགོ་དང་པ་ནང་ རྒྱབ་སྐྱོར་མེདཔ་ཨིན།)།
+- `AssetId`: ཀེ་ནོ་ནིཀ་ཨེན་ཀོ་ཌི་འབད་ཡོད་པའི་ཚིག་ཡིག་ `<asset-definition-id>#<i105-account-id>` (རིག་གཞུང་ཚིག་ཡིག་འབྲི་ཤོག་ཚུ་ གསར་བཏོན་འགོ་དང་པ་ནང་ རྒྱབ་སྐྱོར་མེདཔ་ཨིན།)།
 - `NftId`: `nft$domain` (དཔེར་ན་ `rose$garden`)།
 - `PeerId`: `public_key` (མཉམ་རོགས་འདྲ་མཉམ་འདི་ མི་མང་ལྡེ་མིག་གིས་ཨིན།)།
 
@@ -259,7 +259,7 @@ curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -d '{"alias":"pkr#ubl.sbp"}'
 ```གནས་སྤོ་དྲན་ཐོ།
 - རྙིངམ་ `name#domain` རྒྱུ་དངོས་-ངེས་ཚིག་ཨའི་ཌི་ཚུ་ v1 ནང་ངོས་ལེན་མི་འབད།
-- མིན་ཊི་/བརན་/སྤོ་བཤུད་ཀྱི་དོན་ལུ་ རྒྱུ་དངོས་ཨའི་ཌི་ཚུ་ ཀེ་ནོ་ནིཀ་ལུ་ལུས་ཡོདཔ་ཨིན། `<asset-definition-id>#<account-id>`; དེ་ཚུ་དང་གཅིག་ཁར་བཟོ་བསྐྲུན་འབད།
+- མིན་ཊི་/བརན་/སྤོ་བཤུད་ཀྱི་དོན་ལུ་ རྒྱུ་དངོས་ཨའི་ཌི་ཚུ་ ཀེ་ནོ་ནིཀ་ལུ་ལུས་ཡོདཔ་ཨིན། `<asset-definition-id>#<i105-account-id>`; དེ་ཚུ་དང་གཅིག་ཁར་བཟོ་བསྐྲུན་འབད།
   - `iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
   - ཡང་ན་ `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`.
 

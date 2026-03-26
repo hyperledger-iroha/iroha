@@ -1257,8 +1257,7 @@ impl ComposerTemplate {
             }
             ComposerTemplate::RegisterAssetDefinitionLily => {
                 app.composer_instruction_kind = ComposerInstructionKind::RegisterAssetDefinition;
-                let domain = "wonderland".to_owned();
-                app.composer_asset_definition_id = format!("lily#{domain}");
+                app.composer_asset_definition_id = "4jAY5UbAxnGPt31CkijmAsqXP4o4".to_owned();
                 app.composer_asset_definition_mintable = Mintable::Infinitely;
                 app.composer_mintability_tokens = 1;
                 app.last_info = Some("Loaded asset definition registration template.".to_owned());

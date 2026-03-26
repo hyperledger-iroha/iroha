@@ -34,7 +34,7 @@ translation_last_reviewed: 2026-03-12
 - `DomainId`: `name` (例: `wonderland`)。
 - `AccountId`: `AccountAddress` を介して I105 のみとしてエンコードされた正規のドメインレス アカウント識別子。パーサー入力は正規の I105 である必要があります。ドメイン サフィックス (`@domain`)、正規 I105 リテラル、エイリアス リテラル、正規 16 進パーサー入力、レガシー `norito:` ペイロード、および `uaid:`/`opaque:` アカウント パーサー フォームは拒否されます。
 - `AssetDefinitionId`: 正規の `unprefixed Base58 address with versioning and checksum` (UUID-v4 バイト)。
-- `AssetId`: 正規エンコードされたリテラル `<asset-definition-id>#<account-id>` (従来のテキスト形式は最初のリリースではサポートされていません)。
+- `AssetId`: 正規エンコードされたリテラル `<asset-definition-id>#<i105-account-id>` (従来のテキスト形式は最初のリリースではサポートされていません)。
 - `NftId`: `nft$domain` (例: `rose$garden`)。
 - `PeerId`: `public_key` (ピアの同等性は公開キーによって決まります)。
 
@@ -260,7 +260,7 @@ curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -d '{"alias":"pkr#ubl.sbp"}'
 ```移行メモ:
 - 古い `name#domain` 資産定義 ID は、v1 では受け入れられません。
-- ミント/バーン/転送のアセット ID は正規の `<asset-definition-id>#<account-id>` のままです。以下を使用してそれらを構築します。
+- ミント/バーン/転送のアセット ID は正規の `<asset-definition-id>#<i105-account-id>` のままです。以下を使用してそれらを構築します。
   - `iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
   - または `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`。
 

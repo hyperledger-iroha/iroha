@@ -138,7 +138,7 @@ pub struct RepairWorkerSignaturePayloadV1 {
     pub manifest_digest: [u8; 32],
     /// Provider identifier owning the ticket.
     pub provider_id: [u8; 32],
-    /// Worker account identifier (I105 form).
+    /// Worker account identifier (i105 form).
     pub worker_id: String,
     /// Idempotency key for the action.
     pub idempotency_key: String,
@@ -1252,7 +1252,7 @@ mod tests {
         let report = RepairReportV1 {
             version: REPAIR_REPORT_VERSION_V1,
             ticket_id: RepairTicketId("REP-351".into()),
-            auditor_account: "auditor#sora".into(),
+            auditor_account: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
             submitted_at_unix: 1_704_361_600,
             evidence: sample_evidence(),
             notes: Some("auto-generated from PoR pipeline".into()),
@@ -1271,7 +1271,7 @@ mod tests {
         let in_progress = RepairTaskStateV1::InProgress(InProgressRepairStateV1 {
             queued_at_unix: 1,
             started_at_unix: 2,
-            repair_agent: Some("repairer#sora".into()),
+            repair_agent: Some("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".into()),
         });
         assert!(in_progress.validate().is_ok());
 
@@ -1291,7 +1291,7 @@ mod tests {
             ticket_id: RepairTicketId("REP-351".into()),
             manifest_digest: manifest_digest(),
             provider_id: provider_id(),
-            auditor_account: "auditor#sora".into(),
+            auditor_account: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
             state: RepairTaskStateV1::Queued(QueuedRepairStateV1 {
                 queued_at_unix: 1,
                 sla_deadline_unix: Some(2),
@@ -1311,7 +1311,7 @@ mod tests {
             ticket_id: RepairTicketId("REP-351".into()),
             provider_id: provider_id(),
             manifest_digest: manifest_digest(),
-            auditor_account: "auditor#sora".into(),
+            auditor_account: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
             proposed_penalty_nano: 1_000_000_000,
             submitted_at_unix: 1_704_361_600,
             rationale: "Repeated PoR failures beyond SLA".into(),
@@ -1448,14 +1448,14 @@ mod tests {
         let report = RepairReportV1 {
             version: REPAIR_REPORT_VERSION_V1,
             ticket_id: RepairTicketId("REP-351".into()),
-            auditor_account: "auditor#sora".into(),
+            auditor_account: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
             submitted_at_unix: 1_704_361_600,
             evidence: sample_evidence(),
             notes: None,
         };
         let envelope = SignedAuditorRequestV1 {
             version: SIGNED_AUDITOR_REQUEST_VERSION_V1,
-            auditor_account: "auditor#sora".into(),
+            auditor_account: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
             nonce: 42,
             payload: SignedAuditorRequestPayloadV1::RepairReport(report),
             signature: sample_signature(),
@@ -1468,14 +1468,14 @@ mod tests {
         let report = RepairReportV1 {
             version: REPAIR_REPORT_VERSION_V1,
             ticket_id: RepairTicketId("REP-351".into()),
-            auditor_account: "auditor#sora".into(),
+            auditor_account: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
             submitted_at_unix: 1_704_361_600,
             evidence: sample_evidence(),
             notes: None,
         };
         let envelope = SignedAuditorRequestV1 {
             version: SIGNED_AUDITOR_REQUEST_VERSION_V1,
-            auditor_account: "other#sora".into(),
+            auditor_account: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".into(),
             nonce: 7,
             payload: SignedAuditorRequestPayloadV1::RepairReport(report),
             signature: sample_signature(),
@@ -1493,7 +1493,7 @@ mod tests {
             ticket_id: RepairTicketId("REP-500".into()),
             manifest_digest: manifest_digest(),
             provider_id: provider_id(),
-            worker_id: "ed25519:worker@sora".into(),
+            worker_id: "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw".into(),
             idempotency_key: "claim-500".into(),
             action: RepairWorkerActionV1::Claim {
                 claimed_at_unix: 1_704_361_700,
@@ -1509,7 +1509,7 @@ mod tests {
             ticket_id: RepairTicketId("REP-501".into()),
             manifest_digest: manifest_digest(),
             provider_id: provider_id(),
-            worker_id: "ed25519:worker@sora".into(),
+            worker_id: "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw".into(),
             idempotency_key: "fail-501".into(),
             action: RepairWorkerActionV1::Fail {
                 failed_at_unix: 1_704_361_800,
@@ -1529,7 +1529,7 @@ mod tests {
             ticket_id: RepairTicketId("REP-502".into()),
             manifest_digest: [0u8; 32],
             provider_id: provider_id(),
-            worker_id: "ed25519:worker@sora".into(),
+            worker_id: "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw".into(),
             idempotency_key: "claim-502".into(),
             action: RepairWorkerActionV1::Claim {
                 claimed_at_unix: 1_704_361_900,
@@ -1552,14 +1552,14 @@ mod tests {
             provider_id: provider_id(),
             status: RepairTaskStatusV1::Queued,
             occurred_at_unix: 1_704_400_000,
-            actor: Some("worker#sora".into()),
+            actor: Some("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw".into()),
             message: Some("queued".into()),
         };
         let digest = iroha_crypto::Hash::new(payload.encode());
         let header = SorafsAuditHeaderV1 {
             sequence: 7,
             occurred_at_unix: 1_704_400_000,
-            signer: "auditor#sora".into(),
+            signer: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
             payload_digest: *digest.as_ref(),
         };
         let event = RepairAuditEventV1 {

@@ -34,7 +34,7 @@ CLI для запуска SN-3b builder в формате CSV Norito для за
 |--------|-------|-------|
 | `label` | نعم | Приложение для проверки (в стандартном исполнении; стандартная версия Norm v1 и UTS-46). |
 | `suffix_id` | نعم | Введите код (код `0x` hex). |
-| `owner` | نعم | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` | نعم | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` | نعم | عدد صحيح `1..=255`. |
 | `payment_asset_id` | نعم | Это приложение (код `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | نعم | Это было сделано для того, чтобы покончить с собой. |

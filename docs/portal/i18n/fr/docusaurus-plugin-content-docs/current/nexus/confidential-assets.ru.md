@@ -200,7 +200,7 @@ Les grands livres confidentiels doivent conserver l'histoire officielle pour doc
 - Clé de dérivation de la hiérarchie sur le compte :
   - `sk_spend` → `nk` (clé d'annulation), `ivk` (clé de visualisation entrante), `ovk` (clé de visualisation sortante), `fvk`.
 - Les notes de charges utiles supplémentaires utilisent des clés partagées dérivées d'AEAD et d'ECDH ; Les touches de vue d'auditeur optionnelles peuvent être utilisées pour les sorties en fonction des activités politiques.
-- Ajout de la CLI : `confidential create-keys`, `confidential send`, `confidential export-view-key`, outils de vérification pour le mémo et l'aide `iroha app zk envelope`. создания/инспекции Norito enveloppes mémo en ligne. Torii permet la dérivation de flux à partir de `POST /v1/confidential/derive-keyset`, qui prend en charge les formulaires hexadécimaux et base64, que tous les programmes peuvent utiliser иерархии ключей.## Gaz, limites et contrôles DoS
+- Ajout de la CLI : `confidential create-keys`, `confidential send`, `confidential export-view-key`, outils de vérification pour le mémo et l'aide `iroha app zk envelope`. создания/инспекции Norito enveloppes mémo en ligne.
 - Calendrier des gaz de détermination :
   - Halo2 (Plonkish) : gaz `250_000` + gaz `2_000` pour l'entrée publique.
   - `5` gaz à l'épreuve du temps, plus par annulateur (`300`) et par engagement (`500`).

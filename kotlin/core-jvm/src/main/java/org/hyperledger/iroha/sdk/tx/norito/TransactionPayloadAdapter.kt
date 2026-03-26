@@ -131,7 +131,7 @@ internal class TransactionPayloadAdapter : TypeAdapter<TransactionPayload> {
                 val parsed = try {
                     AccountAddress.parseEncodedIgnoringCurveSupport(canonicalAuthority, null)
                 } catch (e: AccountAddressException) {
-                    throw IllegalArgumentException("authority must use canonical I105 encoding", e)
+                    throw IllegalArgumentException("authority must use canonical i105 encoding", e)
                 }
                 return parseAddressToController(parsed.address)
             }
@@ -149,7 +149,7 @@ internal class TransactionPayloadAdapter : TypeAdapter<TransactionPayload> {
                     }
                 } catch (e: AccountAddressException) {
                     throw IllegalArgumentException(
-                        "Failed to extract controller from canonical I105 account id",
+                        "Failed to extract controller from canonical i105 account id",
                         e,
                     )
                 }

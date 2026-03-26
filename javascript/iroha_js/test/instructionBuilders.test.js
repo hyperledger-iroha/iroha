@@ -14,6 +14,16 @@ import {
   buildTransferDomainInstruction,
   buildTransferAssetDefinitionInstruction,
   buildTransferNftInstruction,
+  buildRegisterRwaInstruction,
+  buildTransferRwaInstruction,
+  buildMergeRwasInstruction,
+  buildRedeemRwaInstruction,
+  buildFreezeRwaInstruction,
+  buildUnfreezeRwaInstruction,
+  buildHoldRwaInstruction,
+  buildReleaseRwaInstruction,
+  buildForceTransferRwaInstruction,
+  buildSetRwaControlsInstruction,
   buildCreateKaigiInstruction,
   buildJoinKaigiInstruction,
   buildLeaveKaigiInstruction,
@@ -166,6 +176,10 @@ const ASSET_ID_CANONICAL = hasNoritoBinding()
   ? canonicalizeAssetIdUsingNorito(ASSET_ID)
   : ASSET_ID;
 const NFT_ID = "dragon$wonderland";
+const RWA_ID =
+  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities";
+const RWA_ID_INPUT =
+  "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF$commodities";
 const SAMPLE_PUBLIC_KEY = hexToBytes(
   "641297079357229F295938A4B5A333DE35069BF47B9D0704E45805713D13C201",
 );
@@ -287,7 +301,7 @@ test("normalizeAssetId exported canonicalizes public asset identifiers", () => {
 test("normalizeAssetId rejects malformed asset literals", () => {
   assert.throws(
     () => exportedNormalizeAssetId("not:an-asset"),
-    /must use '<asset-definition-id>#<account-id>' with optional '#dataspace:<id>' suffix/,
+    /must use '<asset-definition-id>#<i105-account-id>' with optional '#dataspace:<id>' suffix/,
   );
 });
 
@@ -490,6 +504,134 @@ test("buildTransferNftInstruction covers nft transfer", () => {
         source: ACCOUNT_ID_CANONICAL,
         object: NFT_ID,
         destination: ACCOUNT_ID_CANONICAL,
+      },
+    },
+  });
+});
+
+test("buildRegisterRwaInstruction normalizes richer lot payloads", () => {
+  const instruction = buildRegisterRwaInstruction({
+    rwa: {
+      domain: "commodities",
+      quantity: "10.5",
+      spec: { scale: 1 },
+      primaryReference: "vault-cert-001",
+      metadata: { origin: "AE", lot: BigInt(3) },
+      parents: [{ rwa: RWA_ID, quantity: "1.25" }],
+      controls: {
+        controllerAccounts: [ACCOUNT_ID],
+        controllerRoles: ["auditor"],
+        freezeEnabled: true,
+        holdEnabled: true,
+      },
+    },
+  });
+  const decoded = encodeAndDecode(instruction);
+  assert.deepEqual(decoded, {
+    RegisterRwa: {
+      rwa: {
+        domain: "commodities",
+        quantity: "10.5",
+        spec: { scale: 1 },
+        primary_reference: "vault-cert-001",
+        status: null,
+        metadata: { origin: "AE", lot: "3" },
+        parents: [{ rwa: RWA_ID, quantity: "1.25" }],
+        controls: {
+          controller_accounts: [ACCOUNT_ID_CANONICAL],
+          controller_roles: ["auditor"],
+          freeze_enabled: true,
+          hold_enabled: true,
+          force_transfer_enabled: false,
+          redeem_enabled: false,
+        },
+      },
+    },
+  });
+});
+
+test("buildTransferRwaInstruction covers rwa transfer", () => {
+  const instruction = buildTransferRwaInstruction({
+    sourceAccountId: ACCOUNT_ID,
+    rwaId: RWA_ID_INPUT,
+    quantity: "3.25",
+    destinationAccountId: ACCOUNT_ID,
+  });
+  const decoded = encodeAndDecode(instruction);
+  assert.deepEqual(decoded, {
+    TransferRwa: {
+      source: ACCOUNT_ID_CANONICAL,
+      rwa: RWA_ID,
+      quantity: "3.25",
+      destination: ACCOUNT_ID_CANONICAL,
+    },
+  });
+});
+
+test("rwa scalar instruction builders cover lifecycle operations", () => {
+  const merge = buildMergeRwasInstruction({
+    merge: {
+      parents: [{ rwa: RWA_ID, quantity: "1.5" }],
+      primaryReference: "blend-cert-007",
+      status: "blended",
+      metadata: { grade: "A" },
+    },
+  });
+  const redeem = buildRedeemRwaInstruction({ rwaId: RWA_ID, quantity: "2" });
+  const freeze = buildFreezeRwaInstruction({ rwaId: RWA_ID });
+  const unfreeze = buildUnfreezeRwaInstruction({ rwaId: RWA_ID });
+  const hold = buildHoldRwaInstruction({ rwaId: RWA_ID, quantity: "3" });
+  const release = buildReleaseRwaInstruction({ rwaId: RWA_ID, quantity: "1" });
+  const forceTransfer = buildForceTransferRwaInstruction({
+    rwaId: RWA_ID,
+    quantity: "4",
+    destinationAccountId: ACCOUNT_ID,
+  });
+  const controls = buildSetRwaControlsInstruction({
+    rwaId: RWA_ID,
+    controls: { redeemEnabled: true },
+  });
+
+  assert.deepEqual(encodeAndDecode(merge), {
+    MergeRwas: {
+      parents: [{ rwa: RWA_ID, quantity: "1.5" }],
+      primary_reference: "blend-cert-007",
+      status: "blended",
+      metadata: { grade: "A" },
+    },
+  });
+  assert.deepEqual(encodeAndDecode(redeem), {
+    RedeemRwa: { rwa: RWA_ID, quantity: "2" },
+  });
+  assert.deepEqual(encodeAndDecode(freeze), {
+    FreezeRwa: { rwa: RWA_ID },
+  });
+  assert.deepEqual(encodeAndDecode(unfreeze), {
+    UnfreezeRwa: { rwa: RWA_ID },
+  });
+  assert.deepEqual(encodeAndDecode(hold), {
+    HoldRwa: { rwa: RWA_ID, quantity: "3" },
+  });
+  assert.deepEqual(encodeAndDecode(release), {
+    ReleaseRwa: { rwa: RWA_ID, quantity: "1" },
+  });
+  assert.deepEqual(encodeAndDecode(forceTransfer), {
+    ForceTransferRwa: {
+      rwa: RWA_ID,
+      quantity: "4",
+      destination: ACCOUNT_ID_CANONICAL,
+    },
+  });
+  assert.deepEqual(encodeAndDecode(controls), {
+    SetRwaControls: {
+      rwa: RWA_ID,
+      controls: {
+        controller_accounts: [],
+        controller_roles: [],
+        freeze_enabled: false,
+        hold_enabled: false,
+        force_transfer_enabled: false,
+        redeem_enabled: true,
       },
     },
   });

@@ -22,9 +22,9 @@ final class OfflineNoritoEncodingTests: XCTestCase {
     }
 
     func testEncodeAssetIdRejectsTextualForms() {
-        assertInvalidAssetId("62Fk4FPcMuLvW5QjDGNF2a4jAmjM#alice@wonderland")
-        assertInvalidAssetId("xor##alice@wonderland")
-        assertInvalidAssetId("rose##alice@wonderland")
+        assertInvalidAssetId("62Fk4FPcMuLvW5QjDGNF2a4jAmjM#alice@hbl.sbp")
+        assertInvalidAssetId("xor##alice@hbl.sbp")
+        assertInvalidAssetId("rose##alice@hbl.sbp")
     }
 
     func testEncodeAssetIdRejectsMalformedPublicLiterals() {
@@ -43,7 +43,7 @@ final class OfflineNoritoEncodingTests: XCTestCase {
     }
 
     func testEncodeAccountIdRejectsAliasLiteral() {
-        let literal = "alice@wonderland"
+        let literal = "alice@hbl.sbp"
         assertInvalidAccountId(literal, expected: literal)
     }
 

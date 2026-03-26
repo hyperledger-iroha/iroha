@@ -555,6 +555,7 @@ public struct ToriiOfflineCashRedeemRequest: Codable, Sendable, Equatable {
     public let deviceProof: ToriiOfflineDeviceProof
     public let amount: String
     public let receipts: [ToriiOfflineTransferReceipt]
+    public let redeemProof: ToriiOfflineRedeemRequestProof
 
     public init(
         operationId: String,
@@ -563,7 +564,8 @@ public struct ToriiOfflineCashRedeemRequest: Codable, Sendable, Equatable {
         deviceBinding: ToriiOfflineDeviceBinding,
         deviceProof: ToriiOfflineDeviceProof,
         amount: String,
-        receipts: [ToriiOfflineTransferReceipt]
+        receipts: [ToriiOfflineTransferReceipt],
+        redeemProof: ToriiOfflineRedeemRequestProof
     ) {
         self.operationId = operationId
         self.lineageId = lineageId
@@ -572,6 +574,7 @@ public struct ToriiOfflineCashRedeemRequest: Codable, Sendable, Equatable {
         self.deviceProof = deviceProof
         self.amount = amount
         self.receipts = receipts
+        self.redeemProof = redeemProof
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -582,18 +585,25 @@ public struct ToriiOfflineCashRedeemRequest: Codable, Sendable, Equatable {
         case deviceProof = "device_proof"
         case amount
         case receipts
+        case redeemProof = "redeem_proof"
     }
 }
 
 public struct ToriiOfflineCashEnvelope: Codable, Sendable, Equatable {
     public let lineageState: ToriiOfflineCashState
+    public let settlement: ToriiOfflineMutationSettlement?
 
-    public init(lineageState: ToriiOfflineCashState) {
+    public init(
+        lineageState: ToriiOfflineCashState,
+        settlement: ToriiOfflineMutationSettlement? = nil
+    ) {
         self.lineageState = lineageState
+        self.settlement = settlement
     }
 
     private enum CodingKeys: String, CodingKey {
         case lineageState = "lineage_state"
+        case settlement
     }
 }
 

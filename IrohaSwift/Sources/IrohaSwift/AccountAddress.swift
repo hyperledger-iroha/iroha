@@ -147,17 +147,30 @@ public struct AccountAddress {
         )
     }
 
-    public static func fromI105(_ encoded: String, expectedPrefix: UInt16? = nil) throws -> AccountAddress {
-        let trimmed = encoded.trimmingCharacters(in: .whitespacesAndNewlines)
+    static func parseEncodedSwiftOnly(_ input: String, expectedPrefix: UInt16? = nil) throws -> AccountAddress {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw AccountAddressError.invalidLength }
-        if let bridged = try? NoritoNativeBridge.shared.parseAccountAddress(
-            literal: trimmed,
-            expectedPrefix: expectedPrefix
-        ) {
-            return try AccountAddress.fromCanonicalBytes(bridged.canonicalBytes)
+        if trimmed.lowercased().hasPrefix("0x") {
+            throw AccountAddressError.unsupportedAddressFormat
         }
         let (_, canonical) = try decodeI105String(trimmed, expectedDiscriminant: expectedPrefix)
         return try AccountAddress.fromCanonicalBytes(canonical)
+    }
+
+    public static func fromI105(_ encoded: String, expectedPrefix: UInt16? = nil) throws -> AccountAddress {
+        let trimmed = encoded.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw AccountAddressError.invalidLength }
+        do {
+            return try parseEncodedSwiftOnly(trimmed, expectedPrefix: expectedPrefix)
+        } catch {
+            if let bridged = try? NoritoNativeBridge.shared.parseAccountAddress(
+                literal: trimmed,
+                expectedPrefix: expectedPrefix
+            ) {
+                return try AccountAddress.fromCanonicalBytes(bridged.canonicalBytes)
+            }
+            throw error
+        }
     }
 
     public static func fromI105Default(_ encoded: String) throws -> AccountAddress {
@@ -170,13 +183,17 @@ public struct AccountAddress {
         if trimmed.lowercased().hasPrefix("0x") {
             throw AccountAddressError.unsupportedAddressFormat
         }
-        if let bridged = try? NoritoNativeBridge.shared.parseAccountAddress(
-            literal: trimmed,
-            expectedPrefix: expectedPrefix
-        ) {
-            return try AccountAddress.fromCanonicalBytes(bridged.canonicalBytes)
+        do {
+            return try AccountAddress.fromI105(trimmed, expectedPrefix: expectedPrefix)
+        } catch {
+            if let bridged = try? NoritoNativeBridge.shared.parseAccountAddress(
+                literal: trimmed,
+                expectedPrefix: expectedPrefix
+            ) {
+                return try AccountAddress.fromCanonicalBytes(bridged.canonicalBytes)
+            }
+            throw error
         }
-        return try AccountAddress.fromI105(trimmed, expectedPrefix: expectedPrefix)
     }
 
     static func canonicalizeDomainLabel(_ raw: String) throws -> String {
@@ -214,13 +231,17 @@ public struct AccountAddress {
 
     public func toI105(networkPrefix: UInt16) throws -> String {
         let canonical = try canonicalBytes()
-        if let render = try? NoritoNativeBridge.shared.renderAccountAddress(
-            canonicalBytes: canonical,
-            networkPrefix: networkPrefix
-        ) {
-            return render.i105
+        do {
+            return try encodeI105String(discriminant: networkPrefix, canonical: canonical)
+        } catch {
+            if let render = try? NoritoNativeBridge.shared.renderAccountAddress(
+                canonicalBytes: canonical,
+                networkPrefix: networkPrefix
+            ) {
+                return render.i105
+            }
+            throw error
         }
-        return try encodeI105String(discriminant: networkPrefix, canonical: canonical)
     }
 
     public func toI105(chainDiscriminant: UInt16) throws -> String {
@@ -235,26 +256,30 @@ public struct AccountAddress {
     /// `docs/source/sns/address_display_guidelines.md`.
     public func displayFormats(networkPrefix: UInt16 = 753) throws -> AccountAddressDisplayFormats {
         let canonical = try canonicalBytes()
-        if let render = try? NoritoNativeBridge.shared.renderAccountAddress(
-            canonicalBytes: canonical,
-            networkPrefix: networkPrefix
-        ) {
+        do {
             return AccountAddressDisplayFormats(
-                i105: render.i105,
-                i105Default: render.i105Default,
+                i105: try encodeI105String(discriminant: networkPrefix, canonical: canonical),
+                i105Default: try encodeI105String(
+                    discriminant: AccountId.defaultNetworkPrefix,
+                    canonical: canonical
+                ),
                 networkPrefix: networkPrefix,
                 i105Warning: AccountAddress.i105WarningMessage
             )
+        } catch {
+            if let render = try? NoritoNativeBridge.shared.renderAccountAddress(
+                canonicalBytes: canonical,
+                networkPrefix: networkPrefix
+            ) {
+                return AccountAddressDisplayFormats(
+                    i105: render.i105,
+                    i105Default: render.i105Default,
+                    networkPrefix: networkPrefix,
+                    i105Warning: AccountAddress.i105WarningMessage
+                )
+            }
+            throw error
         }
-        return AccountAddressDisplayFormats(
-            i105: try encodeI105String(discriminant: networkPrefix, canonical: canonical),
-            i105Default: try encodeI105String(
-                discriminant: AccountId.defaultNetworkPrefix,
-                canonical: canonical
-            ),
-            networkPrefix: networkPrefix,
-            i105Warning: AccountAddress.i105WarningMessage
-        )
     }
 
     public func multisigPolicyInfo() throws -> MultisigPolicyInfo? {

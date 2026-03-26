@@ -9,10 +9,20 @@ const DEFAULT_I105_DISCRIMINANT = 0x02f1;
 const I105_DISCRIMINANT_MAX = 0x3fff;
 const HEADER_VERSION_V1 = 0;
 const HEADER_NORM_VERSION_V1 = 1;
+const I105_DEFAULT_SENTINEL_SORA = "sora";
+const I105_DEFAULT_SENTINEL_TEST = "test";
+const I105_DEFAULT_SENTINEL_DEV = "dev";
+const I105_DEFAULT_SENTINEL_NUMERIC_PREFIX = "n";
+const I105_DEFAULT_SENTINEL_SORA_FULLWIDTH = "ｓｏｒａ";
+const I105_DEFAULT_SENTINEL_TEST_FULLWIDTH = "ｔｅｓｔ";
+const I105_DEFAULT_SENTINEL_DEV_FULLWIDTH = "ｄｅｖ";
+const I105_DEFAULT_SENTINEL_NUMERIC_PREFIX_FULLWIDTH = "ｎ";
 const I105_LITERAL_CHECKSUM_LEN = 2;
 const I105_CHECKSUM_PREFIX = Buffer.from("I105PRE", "ascii");
+const I105_DEFAULT_CHECKSUM_LEN = 6;
+const I105_DEFAULT_BECH32M_CONST = 0x2bc830a3;
 const I105_WARNING =
-  "I105 addresses are the canonical Base58 account literal encoding. Render and validate them with the intended chain discriminant.";
+  "I105 addresses are the canonical account literal encoding. Render and validate them with the intended chain discriminant.";
 const I105_ASCII_ALPHABET = [
   "1",
   "2",
@@ -73,6 +83,104 @@ const I105_ASCII_ALPHABET = [
   "y",
   "z",
 ];
+const I105_DEFAULT_KANA_ALPHABET = [
+  "ｲ",
+  "ﾛ",
+  "ﾊ",
+  "ﾆ",
+  "ﾎ",
+  "ﾍ",
+  "ﾄ",
+  "ﾁ",
+  "ﾘ",
+  "ﾇ",
+  "ﾙ",
+  "ｦ",
+  "ﾜ",
+  "ｶ",
+  "ﾖ",
+  "ﾀ",
+  "ﾚ",
+  "ｿ",
+  "ﾂ",
+  "ﾈ",
+  "ﾅ",
+  "ﾗ",
+  "ﾑ",
+  "ｳ",
+  "ヰ",
+  "ﾉ",
+  "ｵ",
+  "ｸ",
+  "ﾔ",
+  "ﾏ",
+  "ｹ",
+  "ﾌ",
+  "ｺ",
+  "ｴ",
+  "ﾃ",
+  "ｱ",
+  "ｻ",
+  "ｷ",
+  "ﾕ",
+  "ﾒ",
+  "ﾐ",
+  "ｼ",
+  "ヱ",
+  "ﾋ",
+  "ﾓ",
+  "ｾ",
+  "ｽ",
+];
+const I105_DEFAULT_KANA_ALPHABET_FULLWIDTH = [
+  "イ",
+  "ロ",
+  "ハ",
+  "ニ",
+  "ホ",
+  "ヘ",
+  "ト",
+  "チ",
+  "リ",
+  "ヌ",
+  "ル",
+  "ヲ",
+  "ワ",
+  "カ",
+  "ヨ",
+  "タ",
+  "レ",
+  "ソ",
+  "ツ",
+  "ネ",
+  "ナ",
+  "ラ",
+  "ム",
+  "ウ",
+  "ヰ",
+  "ノ",
+  "オ",
+  "ク",
+  "ヤ",
+  "マ",
+  "ケ",
+  "フ",
+  "コ",
+  "エ",
+  "テ",
+  "ア",
+  "サ",
+  "キ",
+  "ユ",
+  "メ",
+  "ミ",
+  "シ",
+  "ヱ",
+  "ヒ",
+  "モ",
+  "セ",
+  "ス",
+];
 
 const MULTISIG_DIGEST_PERSONALIZATION = (() => {
   const bytes = new Uint8Array(16);
@@ -80,8 +188,8 @@ const MULTISIG_DIGEST_PERSONALIZATION = (() => {
   return bytes;
 })();
 
-const nativeBinding = getNativeBinding();
-const nativeAddressCodec = initNativeAddressCodec(nativeBinding);
+let cachedNativeAddressCodec;
+let nativeAddressCodecResolved = false;
 
 function domainSelectorDetails(selector) {
   if (!selector) {
@@ -120,6 +228,14 @@ function assertDomainMatches(address, expectedDomainName) {
 const I105_ALPHABET = I105_ASCII_ALPHABET;
 const I105_DIGIT_INDEX = new Map(I105_ALPHABET.map((symbol, idx) => [symbol, idx]));
 const I105_BASE = I105_ALPHABET.length;
+const I105_DEFAULT_ALPHABET = I105_ASCII_ALPHABET.concat(I105_DEFAULT_KANA_ALPHABET);
+const I105_DEFAULT_DIGIT_INDEX = new Map(
+  I105_DEFAULT_ALPHABET.map((symbol, idx) => [symbol, idx]),
+);
+for (const [idx, symbol] of I105_DEFAULT_KANA_ALPHABET_FULLWIDTH.entries()) {
+  I105_DEFAULT_DIGIT_INDEX.set(symbol, I105_ASCII_ALPHABET.length + idx);
+}
+const I105_DEFAULT_BASE = I105_DEFAULT_ALPHABET.length;
 
 export const AccountAddressErrorCode = Object.freeze({
   UNSUPPORTED_ALGORITHM: "ERR_UNSUPPORTED_ALGORITHM",
@@ -1121,7 +1237,10 @@ export class AccountAddress {
     if (nativeParsed) {
       return AccountAddress.fromCanonicalBytes(nativeParsed.canonicalBytes);
     }
-    const [, canonical] = decodeI105String(encoded, normalizedExpectedDiscriminant);
+    const [, canonical] = decodeSupportedI105String(
+      encoded,
+      normalizedExpectedDiscriminant,
+    );
     return AccountAddress.fromCanonicalBytes(canonical);
   }
 
@@ -1140,13 +1259,13 @@ export class AccountAddress {
     if (trimmed.includes("@")) {
       throw new AccountAddressError(
         AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
-        "account address literals must not include '@domain'; use canonical I105 form",
+        "account address literals must not include '@domain'; use canonical i105 form",
       );
     }
     if (isCanonicalHexLiteral(trimmed)) {
       throw new AccountAddressError(
         AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
-        "canonical hex account addresses are not accepted; use canonical I105 form",
+        "canonical hex account addresses are not accepted; use canonical i105 form",
       );
     }
     try {
@@ -1212,7 +1331,7 @@ export class AccountAddress {
   }
 
   /**
-   * Convenience helper that returns canonical I105 plus chain discriminant metadata.
+   * Convenience helper that returns canonical i105 plus chain discriminant metadata.
    *
    * @param {number|bigint|string} chainDiscriminant - Chain discriminant (defaults to Sora `753`);
    * accepts numeric strings that will be normalized.
@@ -1311,7 +1430,7 @@ function summarizeDomainSelector(selector) {
 
 function tryExtractI105Discriminant(literal) {
   try {
-    const [discriminant] = decodeI105String(literal);
+    const [discriminant] = decodeSupportedI105String(literal);
     return discriminant;
   } catch {
     return undefined;
@@ -1334,7 +1453,25 @@ function initNativeAddressCodec(binding) {
   };
 }
 
+function resolveNativeBinding() {
+  return globalThis.__IROHA_NATIVE_BINDING__ ?? getNativeBinding();
+}
+
+function getNativeAddressCodec() {
+  if (!nativeAddressCodecResolved) {
+    cachedNativeAddressCodec = initNativeAddressCodec(resolveNativeBinding());
+    nativeAddressCodecResolved = true;
+  }
+  return cachedNativeAddressCodec;
+}
+
+export function __resetAddressNativeStateForTests() {
+  cachedNativeAddressCodec = undefined;
+  nativeAddressCodecResolved = false;
+}
+
 function parseWithNativeCodec(input, expectedPrefix) {
+  const nativeAddressCodec = getNativeAddressCodec();
   if (!nativeAddressCodec) {
     return null;
   }
@@ -1381,6 +1518,7 @@ function parseWithNativeCodec(input, expectedPrefix) {
 }
 
 function renderWithNativeCodec(canonicalBytes, chainDiscriminant = DEFAULT_I105_DISCRIMINANT) {
+  const nativeAddressCodec = getNativeAddressCodec();
   if (!nativeAddressCodec) {
     return null;
   }
@@ -1455,7 +1593,10 @@ export function decodeI105AccountAddress(encoded, options = {}) {
     throw new TypeError("I105 address must be a string");
   }
   const normalizedOptions = normalizeI105DecodeOptions(options);
-  const [, canonical] = decodeI105String(encoded, normalizedOptions.expectDiscriminant);
+  const [, canonical] = decodeSupportedI105String(
+    encoded,
+    normalizedOptions.expectDiscriminant,
+  );
   return canonical;
 }
 
@@ -1484,9 +1625,9 @@ function classifyDetectedFormat(literal, inputKind, chainDiscriminant) {
 }
 
 /**
- * Inspect an account-id literal (canonical I105) and emit canonical encodings.
+ * Inspect an account-id literal (canonical i105) and emit canonical encodings.
  *
- * @param {string} literal - Account literal (canonical I105)
+ * @param {string} literal - Account literal (canonical i105)
  * @param {{ chainDiscriminant?: number, expectDiscriminant?: number }} [options]
  * @returns {{
  *   detectedFormat: { kind: string, chainDiscriminant?: number },
@@ -1722,6 +1863,21 @@ function encodeI105String(discriminant, canonical) {
   return digits.map((digit) => I105_ALPHABET[digit]).join("");
 }
 
+function decodeSupportedI105String(encoded, expectedDiscriminant) {
+  try {
+    return decodeI105String(encoded, expectedDiscriminant);
+  } catch (error) {
+    if (!(error instanceof AccountAddressError)) {
+      throw error;
+    }
+    const legacySentinel = parseI105DefaultSentinelAndPayload(encoded);
+    if (!legacySentinel) {
+      throw error;
+    }
+    return decodeI105DefaultString(encoded, expectedDiscriminant);
+  }
+}
+
 function decodeI105String(encoded, expectedDiscriminant) {
   if (typeof encoded !== "string") {
     throw new TypeError("I105 address must be a string");
@@ -1770,6 +1926,127 @@ function decodeI105String(encoded, expectedDiscriminant) {
     }
   }
   return [discriminant, body.subarray(prefixLength)];
+}
+
+function parseI105DefaultSentinelAndPayload(encoded) {
+  if (typeof encoded !== "string") {
+    return null;
+  }
+  if (
+    encoded.startsWith(I105_DEFAULT_SENTINEL_SORA) ||
+    encoded.startsWith(I105_DEFAULT_SENTINEL_SORA_FULLWIDTH)
+  ) {
+    return [DEFAULT_I105_DISCRIMINANT, encoded.slice(I105_DEFAULT_SENTINEL_SORA.length)];
+  }
+  if (
+    encoded.startsWith(I105_DEFAULT_SENTINEL_TEST) ||
+    encoded.startsWith(I105_DEFAULT_SENTINEL_TEST_FULLWIDTH)
+  ) {
+    return [0x0171, encoded.slice(I105_DEFAULT_SENTINEL_TEST.length)];
+  }
+  if (
+    encoded.startsWith(I105_DEFAULT_SENTINEL_DEV) ||
+    encoded.startsWith(I105_DEFAULT_SENTINEL_DEV_FULLWIDTH)
+  ) {
+    return [0x0000, encoded.slice(I105_DEFAULT_SENTINEL_DEV.length)];
+  }
+  if (
+    !encoded.startsWith(I105_DEFAULT_SENTINEL_NUMERIC_PREFIX) &&
+    !encoded.startsWith(I105_DEFAULT_SENTINEL_NUMERIC_PREFIX_FULLWIDTH)
+  ) {
+    return null;
+  }
+  const tail = encoded.slice(I105_DEFAULT_SENTINEL_NUMERIC_PREFIX.length);
+  const toAsciiDigit = (char) => {
+    if (char >= "0" && char <= "9") {
+      return char;
+    }
+    if (char >= "０" && char <= "９") {
+      return String.fromCharCode(char.codePointAt(0) - 0xfee0);
+    }
+    return null;
+  };
+  let index = 0;
+  let discriminantDigits = "";
+  while (index < tail.length) {
+    const asciiDigit = toAsciiDigit(tail[index]);
+    if (asciiDigit === null) {
+      break;
+    }
+    discriminantDigits += asciiDigit;
+    index += 1;
+  }
+  if (discriminantDigits.length === 0) {
+    return null;
+  }
+  const discriminant = Number(discriminantDigits);
+  if (
+    !Number.isInteger(discriminant) ||
+    discriminant < 0 ||
+    discriminant > I105_DISCRIMINANT_MAX
+  ) {
+    throw new AccountAddressError(
+      AccountAddressErrorCode.INVALID_I105_DISCRIMINANT,
+      `invalid I105 chain discriminant sentinel: ${encoded}`,
+    );
+  }
+  return [discriminant, tail.slice(index)];
+}
+
+function decodeI105DefaultString(encoded, expectedDiscriminant) {
+  if (typeof encoded !== "string") {
+    throw new TypeError("I105 address must be a string");
+  }
+  const parsed = parseI105DefaultSentinelAndPayload(encoded);
+  if (!parsed) {
+    throw new AccountAddressError(
+      AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+      "unsupported address format",
+    );
+  }
+  const [discriminant, payload] = parsed;
+  if (expectedDiscriminant !== undefined) {
+    const normalizedExpected = normalizeI105DiscriminantInput(
+      expectedDiscriminant,
+      "expected I105 chain discriminant",
+    );
+    if (discriminant !== normalizedExpected) {
+      throw new AccountAddressError(
+        AccountAddressErrorCode.UNEXPECTED_NETWORK_PREFIX,
+        `unexpected I105 chain discriminant: expected ${normalizedExpected}, found ${discriminant}`,
+        { details: { expected: normalizedExpected, found: discriminant } },
+      );
+    }
+  }
+  if (payload.length <= I105_DEFAULT_CHECKSUM_LEN) {
+    throw new AccountAddressError(
+      AccountAddressErrorCode.I105_TOO_SHORT,
+      "I105 address too short",
+    );
+  }
+  const digits = [];
+  for (const ch of payload) {
+    const value = I105_DEFAULT_DIGIT_INDEX.get(ch);
+    if (value === undefined) {
+      throw new AccountAddressError(
+        AccountAddressErrorCode.INVALID_I105_CHAR,
+        `invalid character in I105 address: ${ch}`,
+        { details: { char: ch } },
+      );
+    }
+    digits.push(value);
+  }
+  const dataDigits = digits.slice(0, -I105_DEFAULT_CHECKSUM_LEN);
+  const checksumDigits = digits.slice(-I105_DEFAULT_CHECKSUM_LEN);
+  const canonical = decodeBaseN(dataDigits, I105_DEFAULT_BASE);
+  const expected = i105DefaultChecksumDigits(canonical);
+  if (!Buffer.from(expected).equals(Buffer.from(checksumDigits))) {
+    throw new AccountAddressError(
+      AccountAddressErrorCode.CHECKSUM_MISMATCH,
+      "I105 checksum mismatch",
+    );
+  }
+  return [discriminant, canonical];
 }
 
 function encodeBaseN(bytes, base) {
@@ -1841,4 +2118,68 @@ function decodeBaseN(digits, base) {
   }
   out.reverse();
   return Uint8Array.from(out);
+}
+
+function convertToBase32(data) {
+  const bytes = Array.from(data);
+  let acc = 0;
+  let bits = 0;
+  const out = [];
+  for (const byte of bytes) {
+    acc = (acc << 8) | byte;
+    bits += 8;
+    while (bits >= 5) {
+      bits -= 5;
+      out.push((acc >> bits) & 0x1f);
+    }
+  }
+  if (bits > 0) {
+    out.push((acc << (5 - bits)) & 0x1f);
+  }
+  return out;
+}
+
+function bech32Polymod(values) {
+  const generators = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3];
+  let chk = 1;
+  for (const value of values) {
+    const top = chk >> 25;
+    chk = ((chk & 0x1ff_ffff) << 5) ^ value;
+    generators.forEach((generator, idx) => {
+      if ((top >> idx) & 1) {
+        chk ^= generator;
+      }
+    });
+  }
+  return chk;
+}
+
+function expandHrp(hrp) {
+  const out = [];
+  for (const ch of hrp) {
+    const code = ch.codePointAt(0);
+    out.push(code >> 5);
+  }
+  out.push(0);
+  for (const ch of hrp) {
+    out.push(ch.codePointAt(0) & 0x1f);
+  }
+  return out;
+}
+
+function bech32mChecksum(data) {
+  const values = expandHrp("snx");
+  values.push(...data);
+  values.push(...Array(I105_DEFAULT_CHECKSUM_LEN).fill(0));
+  const polymod = bech32Polymod(values) ^ I105_DEFAULT_BECH32M_CONST;
+  const result = [];
+  for (let i = 0; i < I105_DEFAULT_CHECKSUM_LEN; i += 1) {
+    result.push((polymod >> (5 * (I105_DEFAULT_CHECKSUM_LEN - 1 - i))) & 0x1f);
+  }
+  return result;
+}
+
+function i105DefaultChecksumDigits(canonical) {
+  const base32 = convertToBase32(canonical);
+  return bech32mChecksum(base32);
 }

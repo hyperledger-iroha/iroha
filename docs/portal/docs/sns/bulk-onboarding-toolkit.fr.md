@@ -37,7 +37,7 @@ Le parseur exige la ligne d'en-tete suivante (l'ordre est flexible):
 |---------|--------|-------------|
 | `label` | Oui | Libelle demande (casse mixte acceptee; l'outil normalise selon Norm v1 et UTS-46). |
 | `suffix_id` | Oui | Identifiant numerique de suffixe (decimal ou `0x` hex). |
-| `owner` | Oui | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` | Oui | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` | Oui | Entier `1..=255`. |
 | `payment_asset_id` | Oui | Actif de settlement (par exemple `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Oui | Entiers non signes representant des unites natives de l'actif. |

@@ -47,7 +47,7 @@ Parser aşağıdakı başlıq sırasını tələb edir (sifariş çevikdir):
 |--------|----------|-------------|
 | `label` | Bəli | Tələb olunan etiket (qarışıq halda qəbul edilir; alət Norm v1 və UTS-46-ya uyğun normallaşdırılır). |
 | `suffix_id` | Bəli | Rəqəm şəkilçisi identifikatoru (ondalıq və ya `0x` hex). |
-| `owner` | Bəli | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` | Bəli | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` | Bəli | Tam ədəd `1..=255`. |
 | `payment_asset_id` | Bəli | Hesablaşma aktivi (məsələn, `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Bəli | Aktiv-doğma vahidləri təmsil edən işarəsiz tam ədədlər. |

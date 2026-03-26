@@ -261,15 +261,15 @@ This ISI is idempotent per `(lane_id, epoch)` and underpins nightly accounting.
     - `GET /v1/nexus/public_lanes/{lane}/validators` – metadata, status
       (`PendingActivation`/`Active`/`Exiting`/`Exited`/`Slashed`), activation
       epoch/height, release timers, bonded stake, last reward epoch.
-      Optional `canonical I105 literal rendering` controls the literal rendering
-      (canonical I105 output only).
+      Optional `canonical i105 literal rendering` controls the literal rendering
+      (canonical i105 output only).
     - `GET /v1/nexus/public_lanes/{lane}/stake` – stake shares (`validator`,
       `staker`, bonded amount) plus pending unbond timers. Optional
       `?validator=i105...` filters the response for dashboards that focus
-      on a single validator; `canonical I105 rendering` applies to all literals.
+      on a single validator; `canonical i105 rendering` applies to all literals.
     - `GET /v1/nexus/public_lanes/{lane}/rewards/pending` – pending rewards per
       asset for the requested account. Requires `account=i105...` and accepts
-      optional `asset_id` and `upto_epoch` filters; `canonical I105 rendering` applies to
+      optional `asset_id` and `upto_epoch` filters; `canonical i105 rendering` applies to
       the account literal in the response.
   - Lifecycle ISIs use the standard transaction path (Torii
     `/v1/transactions` or the CLI instruction pipeline). Example Norito JSON

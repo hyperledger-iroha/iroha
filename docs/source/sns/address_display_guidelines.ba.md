@@ -53,7 +53,7 @@ tooltips, and warnings stay aligned across platforms:
 
 ## SDK helpers
 
-Each SDK now exposes a convenience helper that returns the I105 forms alongside
+Each SDK now exposes a convenience helper that returns the i105 forms alongside
 the warning string so UI layers can stay consistent:
 
 - JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)` (`javascript/iroha_js/src/address.js`)
@@ -115,7 +115,7 @@ telemetry exports offline.
 
 ## Torii API account literal contract
 
-Torii/Explorer endpoints emit I105 literals by default and accept the optional
+Torii/Explorer endpoints emit i105 literals by default and accept the optional
 canonical `i105` literals only (no format-override fields) on both query strings
 (`GET /v1/accounts`, `/v1/kaigi/relays`, `/v1/repo/agreements`, explorer routes,
 asset-holder endpoints, etc.) and JSON envelopes
@@ -129,10 +129,10 @@ return `HTTP 400` so misconfigured SDKs fail fast.
 
 Requests always accept I105 selectors. Canonical
 I105 strings remain the wire format for manifests, telemetry, and QR payloads,
-so only opt into `canonical I105 output` when rendering UX where the Sora
+so only opt into `canonical i105 output` when rendering UX where the Sora
 alphabet offers material ergonomic wins.
 
-Offline reserve endpoints use the same canonical account-literal rules. `/v1/offline/reserve/setup`, `/v1/offline/reserve/topup`, `/v1/offline/reserve/renew`, `/v1/offline/reserve/sync`, `/v1/offline/reserve/defund`, `/v1/offline/revocations`, and `/v1/offline/transfers{,/query}` accept canonical I105 `AccountId` selectors wherever account literals appear. Only canonical I105 literals are accepted; `i105-default`, `@<domain>` suffixes, and implicit default-domain reconstruction remain invalid.
+Offline reserve endpoints use the same canonical account-literal rules. `/v1/offline/reserve/setup`, `/v1/offline/reserve/topup`, `/v1/offline/reserve/renew`, `/v1/offline/reserve/sync`, `/v1/offline/reserve/defund`, `/v1/offline/revocations`, and `/v1/offline/transfers{,/query}` accept canonical i105 `AccountId` selectors wherever account literals appear. Only canonical i105 literals are accepted; `i105-default`, `@<domain>` suffixes, and implicit default-domain reconstruction remain invalid.
 If a workflow needs domain context, carry it in separate fields (for example domain filters,
 `ScopedAccountId`-bearing records, or resolver metadata), not by decorating strict `AccountId`
 input literals.
@@ -140,7 +140,7 @@ input literals.
 ## Accessibility + implicit domain metadata
 
 - **Copy mode controls.** When rendering the I105/I105/QR toggle, mark each button with
-  `aria-pressed` and an explicit `aria-label` (for example, “Copy canonical I105 account address”
+  `aria-pressed` and an explicit `aria-label` (for example, “Copy canonical i105 account address”
   vs “Copy i105-default Sora address—works only inside Sora-aware apps”). Include a visually-hidden
   `(safe to share)` or `(Sora-only)` suffix so screen readers convey the warnings present in the UI.
 - **Implicit domain hints.** Reuse the caption text from the main layout but also expose it via
@@ -150,7 +150,7 @@ input literals.
 - **QR metadata.** The `/v1/explorer/accounts/{id}/qr` endpoint returns both the literal and SVG
   payload. Wrap the SVG with `<figure role="img" aria-label="I105 QR for snx…">` so assistive tech
   can reference the literal field when announcing the image. If QR rendering fails, surface a
-  live-region alert that quotes the I105 literal instead of leaving a blank canvas.
+  live-region alert that quotes the i105 literal instead of leaving a blank canvas.
 - **Telemetry hooks.** Tag each copy button or context menu entry with `data-copy-mode="i105"`,
   `"i105-default"`, or `"qr"` and emit those values alongside the `torii_address_format_total` counter
   to the `address_ingest` dashboard. The roadmap’s ADDR-6b acceptance test reads that telemetry to
@@ -219,10 +219,10 @@ cross‑check Local vs global selectors without spelunking the RFC every time.
 
 ## Torii response knobs
 
-- Explorers consuming Torii via `/v1/accounts` and `/v1/accounts/query` always receive canonical I105 literals in `items[*].id`.
-- `GET /v1/accounts/{account_id}/transactions` and `POST .../transactions/query` also emit canonical I105 in `items[*].authority`.
-- `GET /v1/explorer/accounts/{account_id}/qr` returns canonical I105 payload metadata (`canonical_id`, `literal`, `modules`, `error_correction`, `qr_version`, `svg`) without any format override.
-- Asset-holder listings (`GET /v1/assets/{definition_id}/holders`) and `POST .../holders/query` return canonical I105 `items[*].account_id` values consistently.
+- Explorers consuming Torii via `/v1/accounts` and `/v1/accounts/query` always receive canonical i105 literals in `items[*].id`.
+- `GET /v1/accounts/{account_id}/transactions` and `POST .../transactions/query` also emit canonical i105 in `items[*].authority`.
+- `GET /v1/explorer/accounts/{account_id}/qr` returns canonical i105 payload metadata (`canonical_id`, `literal`, `modules`, `error_correction`, `qr_version`, `svg`) without any format override.
+- Asset-holder listings (`GET /v1/assets/{definition_id}/holders`) and `POST .../holders/query` return canonical i105 `items[*].account_id` values consistently.
 
 ## Local selector cutover toolkit (ADDR-5c)
 
@@ -260,7 +260,7 @@ through the migration:
    automation with `strict CI post-check` once operators are ready to block Local selectors in CI.
 6. When you need a newline-to-newline rewrite, use
    The helper skips non-Local rows by default, converts every remaining entry into the requested encoding
-   (canonical I105/hex/JSON), and preserves the original domain when `legacy  suffix` is set. Pair it with
+   (canonical i105/hex/JSON), and preserves the original domain when `legacy  suffix` is set. Pair it with
    `--allow-errors` to keep scanning even when a dump contains malformed literals.
 7. CI/lint automation can run `ci/check_address_normalize.sh`, which extracts the Local selectors from
    `fixtures/account/address_vectors.json`, converts them via `iroha tools address normalize`, and replays
@@ -288,7 +288,7 @@ Alertmanager pack (`dashboards/alerts/address_ingest_rules.yml`) surfaces three 
   responsible SDK team before declaring the incident resolved.
 
 `torii_address_format_total{endpoint,format}` complements the ingest metrics by counting every
-`canonical I105 literal rendering` request that Torii serves. Dashboard the metric alongside
+`canonical i105 literal rendering` request that Torii serves. Dashboard the metric alongside
 `torii_address_invalid_total` to prove that wallet/explorer traffic is gradually switching to the
 i105-default output before you disable Local selectors, and wire alert thresholds to catch any sudden
 fallback to the default I105 responses.

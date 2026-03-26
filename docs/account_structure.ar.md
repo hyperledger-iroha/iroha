@@ -60,18 +60,17 @@ AccountId {
     controller: AccountController // single PublicKey or multisig policy
 }
 
-Display: canonical I105 literal (no `@domain` suffix)
+Display: canonical i105 literal (no `@domain` suffix)
 Parse accepts:
-- Encoded account identifiers only: I105.
-- Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and alias literals such as `label@domain`.
+- Encoded account identifiers only: i105.
+- Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and account-alias literals such as label@dataspace or label@domain.dataspace.
 
 Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
 and `0x` prefixes are not accepted.
 
-This text form is now treated as an **account alias**: a routing convenience
-that points to the canonical [`AccountAddress`](#2-canonical-address-codecs).
-It remains useful for human readability and domain-scoped governance, but it is
-no longer considered the authoritative account identifier on-chain.
+Account aliases are separate on-chain bindings. They use
+label@dataspace or label@domain.dataspace and resolve to canonical
+i105 `AccountId` values. Strict `AccountId` parsers never accept alias literals directly.
 ```
 
 `ChainId` يعيش خارج `AccountId`. تتحقق العقد من `ChainId` الخاص بالمعاملة
@@ -311,7 +310,7 @@ tag-specific payload, then move on to the controller bytes.
 - تحويلات IME/NFKC: يمكن تسوية Sora kana بنصف العرض إلى أشكال العرض الكامل الخاصة بها دون كسر فك التشفير، ولكن يجب أن يظل ASCII `sora` وأرقام/حروف I105 ASCII. سطح حراس كامل العرض أو مطوي على الحالة `ERR_MISSING_COMPRESSED_SENTINEL`، وترفع حمولات ASCII كاملة العرض `ERR_INVALID_COMPRESSED_CHAR`، وتظهر حالات عدم تطابق المجموع الاختباري كـ `ERR_CHECKSUM_MISMATCH`. تغطي اختبارات الخصائص في `crates/iroha_data_model/src/account/address.rs` هذه المسارات حتى تتمكن مجموعات SDK والمحافظ من الاعتماد على حالات الفشل الحتمية.
 - يقوم تحليل Torii وSDK للأسماء المستعارة `address@domain` (rejected legacy form) بإصدار نفس الرموز `ERR_*` عندما تفشل مدخلات I105 (المفضل)/sora (ثاني أفضل) قبل إرجاع الاسم المستعار (على سبيل المثال، عدم تطابق المجموع الاختباري، عدم تطابق ملخص المجال)، بحيث يمكن للعملاء ترحيل الأسباب المنظمة دون التخمين من سلاسل النثر.
 - حمولات المحدد المحلي التي يقل حجمها عن 12 بايت `ERR_LOCAL8_DEPRECATED`، مع الحفاظ على التحويل الثابت من ملخصات Local‑8 القديمة.
-- Domainless canonical I105 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
+- Domainless canonical i105 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
 
 #### 2.5 المتجهات الثنائية المعيارية
 
@@ -357,7 +356,7 @@ tag-specific payload, then move on to the controller bytes.
 | مؤشر التسجيل العمومي (`registry_id = 0x0000_002A`، أي ما يعادل `treasury`) | `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF` | `sorakXｹ6NｻﾍﾀﾖSﾜﾖｱ3ﾚ5WﾘﾋQﾅｷｦxgﾛｸcﾁｵﾋkﾋvﾏ8SPﾓﾀｹdｴｴｲW9iCM6AEP` |
 
 تتطابق هذه السلاسل مع تلك الصادرة عن واجهة سطر الأوامر (`iroha tools address convert`)، Torii
-الاستجابات (`canonical I105 literal rendering`)، ومساعدي SDK، لذا قم بنسخ/لصق تجربة المستخدم
+الاستجابات (`canonical i105 literal rendering`)، ومساعدي SDK، لذا قم بنسخ/لصق تجربة المستخدم
 التدفقات يمكن الاعتماد عليها حرفيا. قم بإلحاق `<address>@<domain>` (rejected legacy form) فقط عندما تحتاج إلى تلميح توجيه صريح؛ اللاحقة ليست جزءًا من الإخراج الأساسي.
 
 #### 2.6 الأسماء المستعارة النصية لقابلية التشغيل البيني (مخطط لها)
@@ -388,7 +387,7 @@ tag-specific payload, then move on to the controller bytes.
   التشفير، وليس خريطة CTAP2 المستخدمة لملخصات سياسة multisig.
 - **التشفير:** `encode_i105()` يربط بايتات البادئة مع البايتات الأساسية
   الحمولة ويلحق مجموع اختباري 16 بت مشتق من Blake2b-512 مع الثابت
-  Prefix: `I105PRE` (`b"I105PRE"` || prefix || payload). The result is encoded via `bs58` using the I105 alphabet.
+  البادئة `I105PRE` (`b"I105PRE"` || prefix || payload). والنتيجة تُشفَّر عبر `bs58` باستخدام أبجدية I105.
   يعرض مساعدو CLI/SDK نفس الإجراء، و`AccountAddress::parse_encoded`
   يعكسه عبر `decode_i105`.
 
@@ -642,7 +641,7 @@ runbook. قم بتضمين إخراج الأمر في تذاكر التغيير 
 - **مغلف I105:** البادئة تقوم بتشفير `chain_discriminant` باستخدام المضغوط
   مخطط 6-/14 بت من `encode_i105_prefix()`، النص هو البايتات الأساسية
   (`AccountAddress::canonical_bytes()`)، والمجموع الاختباري هو أول بايتين
-  من Blake2b-512(`b"I105PRE"` || البادئة || الجسم). The full payload is encoded via `bs58` using the I105 alphabet.
+  من Blake2b-512(`b"I105PRE"` || البادئة || الجسم). الحمولة الكاملة تُشفَّر عبر `bs58` باستخدام أبجدية I105.
 - **عقد التسجيل:** نشر JSON (وجذر Merkle الاختياري).
   `{discriminant, i105_prefix, chain_alias, endpoints}` مع TTL لمدة 24 ساعة و
   مفاتيح التدوير.
@@ -664,11 +663,11 @@ runbook. قم بتضمين إخراج الأمر في تذاكر التغيير 
   المستخدمين أن النموذج `i105` المضغوط هو Sora فقط وهو عرضة لإعادة كتابة IME.
 - **تكامل Torii:** يظهر Cache Nexus احترام TTL، والإصدار
   `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` بشكل حتمي، و
-  keep strict account-literal parsing canonical-I105-only (reject compressed and any `@domain` suffix) with canonical I105 output.
+  keep strict account-literal parsing canonical-i105-only (reject compressed and any `@domain` suffix) with canonical i105 output.
 
 ### تنسيقات استجابة توري
 
-- `GET /v1/accounts` يقبل معلمة استعلام اختيارية `canonical I105 rendering` و
+- `GET /v1/accounts` يقبل معلمة استعلام اختيارية `canonical i105 rendering` و
   `POST /v1/accounts/query` يقبل نفس الحقل داخل مغلف JSON.
   القيم المدعومة هي:
   - `i105` (افتراضي) — تصدر الاستجابات حمولات I105 الأساسية (على سبيل المثال،
@@ -679,7 +678,7 @@ runbook. قم بتضمين إخراج الأمر في تذاكر التغيير 
   المحافظ والمستكشفون لطلب سلاسل مضغوطة لـ Sora-only UX بينما
   الاحتفاظ بـ I105 كإعداد افتراضي قابل للتشغيل البيني.
 - قوائم أصحاب الأصول (`GET /v1/assets/{definition_id}/holders`) وJSON الخاصة بهم
-  نظيره المغلف (`POST …/holders/query`) يكرم أيضًا `canonical I105 rendering`.
+  نظيره المغلف (`POST …/holders/query`) يكرم أيضًا `canonical i105 rendering`.
   يقوم الحقل `items[*].account_id` بإصدار قيم حرفية مضغوطة عندما يكون
   تم تعيين حقل المعلمة/المغلف على `i105_default`، مما يعكس الحسابات
   نقاط النهاية حتى يتمكن المستكشفون من تقديم مخرجات متسقة عبر الدلائل.

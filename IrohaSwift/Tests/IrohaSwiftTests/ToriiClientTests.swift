@@ -4167,55 +4167,21 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testCreateSubscriptionPlanPostsPayload() async throws {
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/subscriptions/plans")
-            XCTAssertEqual(request.httpMethod, "POST")
-            let body = self.bodyJSON(from: request)
-            XCTAssertEqual(body["authority"] as? String, "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
-            XCTAssertEqual(body["private_key"] as? String, "ed25519:priv")
-            XCTAssertEqual(body["plan_id"] as? String, "plan#subs")
-            let plan = body["plan"] as? [String: Any]
-            XCTAssertEqual(plan?["provider"] as? String, "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
-            let payload: [String: Any] = [
-                "ok": true,
-                "plan_id": "plan#subs",
-                "tx_hash_hex": "deadbeef"
-            ]
-            let response = HTTPURLResponse(url: request.url!,
-                                           statusCode: 200,
-                                           httpVersion: nil,
-                                           headerFields: ["Content-Type": "application/json"])!
-            let data = try JSONSerialization.data(withJSONObject: payload)
-            return (response, data)
-        }
-
+    func testCreateSubscriptionPlanRejectsRemovedServerSideSigningFlow() async {
         let plan: ToriiSubscriptionPlan = [
             "provider": .string("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
             "billing": .object(["kind": .string("monthly")]),
             "pricing": .object(["kind": .string("fixed"), "amount": .string("120")])
         ]
         let requestBody = ToriiSubscriptionPlanCreateRequest(authority: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
-                                                             privateKey: "ed25519:priv",
                                                              planId: "plan#subs",
                                                              plan: plan)
-        let response = try await makeClient().createSubscriptionPlan(requestBody)
-        XCTAssertTrue(response.ok)
-        XCTAssertEqual(response.planId, "plan#subs")
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testCreateSubscriptionPlanRejectsInsecureTransportForPrivateKeyBody() async {
-        let requestBody = ToriiSubscriptionPlanCreateRequest(authority: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
-                                                             privateKey: "ed25519:priv",
-                                                             planId: "plan#subs",
-                                                             plan: ["pricing": .object(["kind": .string("fixed")])])
-        await XCTAssertThrowsErrorAsync(try await makeClient(baseURL: URL(string: "http://example.test")!)
-            .createSubscriptionPlan(requestBody)) { error in
+        await XCTAssertThrowsErrorAsync(try await makeClient().createSubscriptionPlan(requestBody)) { error in
             guard case let ToriiClientError.invalidPayload(reason) = error else {
                 return XCTFail("Expected invalidPayload, got \(error)")
             }
-            XCTAssertTrue(reason.contains("refuses insecure transport"))
+            XCTAssertTrue(reason.contains("/v1/subscriptions/plans"))
+            XCTAssertTrue(reason.contains("locally signed transaction"))
         }
     }
 
@@ -4269,49 +4235,21 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testCreateSubscriptionPostsPayload() async throws {
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/subscriptions")
-            XCTAssertEqual(request.httpMethod, "POST")
-            let body = self.bodyJSON(from: request)
-            XCTAssertEqual(body["authority"] as? String, "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9")
-            XCTAssertEqual(body["private_key"] as? String, "ed25519:priv")
-            XCTAssertEqual(body["subscription_id"] as? String, "sub-1$subscriptions")
-            XCTAssertEqual(body["plan_id"] as? String, "plan#subs")
-            XCTAssertEqual(body["billing_trigger_id"] as? String, "sub-bill")
-            XCTAssertEqual(body["usage_trigger_id"] as? String, "sub-usage")
-            XCTAssertEqual(body["first_charge_ms"] as? Int, 1_704_067_200_000)
-            XCTAssertEqual(body["grant_usage_to_provider"] as? Bool, true)
-            let payload: [String: Any] = [
-                "ok": true,
-                "subscription_id": "sub-1$subscriptions",
-                "billing_trigger_id": "sub-bill",
-                "usage_trigger_id": "sub-usage",
-                "first_charge_ms": 1_704_067_200_000,
-                "tx_hash_hex": "deadbeef"
-            ]
-            let response = HTTPURLResponse(url: request.url!,
-                                           statusCode: 200,
-                                           httpVersion: nil,
-                                           headerFields: ["Content-Type": "application/json"])!
-            let data = try JSONSerialization.data(withJSONObject: payload)
-            return (response, data)
-        }
-
+    func testCreateSubscriptionRejectsRemovedServerSideSigningFlow() async {
         let requestBody = ToriiSubscriptionCreateRequest(authority: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
-                                                         privateKey: "ed25519:priv",
                                                          subscriptionId: "sub-1$subscriptions",
                                                          planId: "plan#subs",
                                                          billingTriggerId: "sub-bill",
                                                          usageTriggerId: "sub-usage",
                                                          firstChargeMs: 1_704_067_200_000,
                                                          grantUsageToProvider: true)
-        let response = try await makeClient().createSubscription(requestBody)
-        XCTAssertTrue(response.ok)
-        XCTAssertEqual(response.subscriptionId, "sub-1$subscriptions")
-        XCTAssertEqual(response.billingTriggerId, "sub-bill")
-        XCTAssertEqual(response.usageTriggerId, "sub-usage")
-        XCTAssertEqual(response.firstChargeMs, 1_704_067_200_000)
+        await XCTAssertThrowsErrorAsync(try await makeClient().createSubscription(requestBody)) { error in
+            guard case let ToriiClientError.invalidPayload(reason) = error else {
+                return XCTFail("Expected invalidPayload, got \(error)")
+            }
+            XCTAssertTrue(reason.contains("/v1/subscriptions"))
+            XCTAssertTrue(reason.contains("locally signed transaction"))
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -4353,60 +4291,36 @@ final class ToriiClientTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testSubscriptionActionsPostPayloads() async throws {
+    func testSubscriptionActionsRejectRemovedServerSideSigningFlow() async {
         let subscriptionId = "sub-1$subscriptions"
-        var captured: [String: [String: Any]] = [:]
-        StubURLProtocol.handler = { request in
-            let path = request.url?.path ?? ""
-            captured[path] = self.bodyJSON(from: request)
-            let payload: [String: Any] = [
-                "ok": true,
-                "subscription_id": subscriptionId,
-                "tx_hash_hex": "deadbeef"
-            ]
-            let response = HTTPURLResponse(url: request.url!,
-                                           statusCode: 200,
-                                           httpVersion: nil,
-                                           headerFields: ["Content-Type": "application/json"])!
-            let data = try JSONSerialization.data(withJSONObject: payload)
-            return (response, data)
-        }
-
         let client = makeClient()
-        let action = ToriiSubscriptionActionRequest(authority: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", privateKey: "ed25519:priv")
+        let action = ToriiSubscriptionActionRequest(authority: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9")
         let chargeAction = ToriiSubscriptionActionRequest(authority: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
-                                                          privateKey: "ed25519:priv",
                                                           chargeAtMs: 1_704_067_200_000)
         let cancelAction = ToriiSubscriptionActionRequest(authority: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
-                                                          privateKey: "ed25519:priv",
                                                           cancelMode: .periodEnd)
         let usage = ToriiSubscriptionUsageRequest(authority: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
-                                                  privateKey: "ed25519:priv",
                                                   unitKey: "compute_ms",
                                                   delta: "3600000",
                                                   usageTriggerId: "sub-usage")
-        _ = try await client.pauseSubscription(subscriptionId: subscriptionId, requestBody: action)
-        _ = try await client.resumeSubscription(subscriptionId: subscriptionId, requestBody: chargeAction)
-        _ = try await client.cancelSubscription(subscriptionId: subscriptionId, requestBody: cancelAction)
-        _ = try await client.keepSubscription(subscriptionId: subscriptionId, requestBody: action)
-        _ = try await client.chargeSubscriptionNow(subscriptionId: subscriptionId, requestBody: chargeAction)
-        _ = try await client.recordSubscriptionUsage(subscriptionId: subscriptionId, requestBody: usage)
+        let cases: [(String, @Sendable () async throws -> Void)] = [
+            ("/v1/subscriptions/{subscription_id}/pause", { _ = try await client.pauseSubscription(subscriptionId: subscriptionId, requestBody: action) }),
+            ("/v1/subscriptions/{subscription_id}/resume", { _ = try await client.resumeSubscription(subscriptionId: subscriptionId, requestBody: chargeAction) }),
+            ("/v1/subscriptions/{subscription_id}/cancel", { _ = try await client.cancelSubscription(subscriptionId: subscriptionId, requestBody: cancelAction) }),
+            ("/v1/subscriptions/{subscription_id}/keep", { _ = try await client.keepSubscription(subscriptionId: subscriptionId, requestBody: action) }),
+            ("/v1/subscriptions/{subscription_id}/charge-now", { _ = try await client.chargeSubscriptionNow(subscriptionId: subscriptionId, requestBody: chargeAction) }),
+            ("/v1/subscriptions/{subscription_id}/usage", { _ = try await client.recordSubscriptionUsage(subscriptionId: subscriptionId, requestBody: usage) })
+        ]
 
-        let pauseBody = captured["/v1/subscriptions/\(subscriptionId)/pause"] ?? [:]
-        XCTAssertEqual(pauseBody["authority"] as? String, "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9")
-        let resumeBody = captured["/v1/subscriptions/\(subscriptionId)/resume"] ?? [:]
-        XCTAssertEqual(resumeBody["charge_at_ms"] as? Int, 1_704_067_200_000)
-        let cancelBody = captured["/v1/subscriptions/\(subscriptionId)/cancel"] ?? [:]
-        XCTAssertEqual(cancelBody["private_key"] as? String, "ed25519:priv")
-        XCTAssertEqual(cancelBody["cancel_mode"] as? String, "period_end")
-        let keepBody = captured["/v1/subscriptions/\(subscriptionId)/keep"] ?? [:]
-        XCTAssertEqual(keepBody["authority"] as? String, "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9")
-        let chargeBody = captured["/v1/subscriptions/\(subscriptionId)/charge-now"] ?? [:]
-        XCTAssertEqual(chargeBody["charge_at_ms"] as? Int, 1_704_067_200_000)
-        let usageBody = captured["/v1/subscriptions/\(subscriptionId)/usage"] ?? [:]
-        XCTAssertEqual(usageBody["unit_key"] as? String, "compute_ms")
-        XCTAssertEqual(usageBody["delta"] as? String, "3600000")
-        XCTAssertEqual(usageBody["usage_trigger_id"] as? String, "sub-usage")
+        for (endpoint, operation) in cases {
+            await XCTAssertThrowsErrorAsync(try await operation()) { error in
+                guard case let ToriiClientError.invalidPayload(reason) = error else {
+                    return XCTFail("Expected invalidPayload, got \(error)")
+                }
+                XCTAssertTrue(reason.contains(endpoint))
+                XCTAssertTrue(reason.contains("locally signed transaction"))
+            }
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -5404,10 +5318,9 @@ final class ToriiClientHeaderTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testRegisterVerifyingKeyEncodesBody() async throws {
+    func testRegisterVerifyingKeyRejectsRemovedServerSideSigningFlow() async {
         let requestBody = ToriiVerifyingKeyRegisterRequest(
             authority: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
-            privateKey: "ed0120...",
             backend: "halo2/ipa",
             name: "vk_main",
             version: 1,
@@ -5416,35 +5329,18 @@ final class ToriiClientHeaderTests: XCTestCase {
             gasScheduleId: "halo2_default",
             verifyingKeyBytes: Data([0x01, 0x02, 0x03])
         )
-
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.httpMethod, "POST")
-            XCTAssertEqual(request.url?.path, "/v1/zk/vk/register")
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
-            let json = self.bodyJSON(from: request)
-            XCTAssertEqual(json["authority"] as? String, "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
-            XCTAssertEqual(json["backend"] as? String, "halo2/ipa")
-            XCTAssertEqual(json["public_inputs_schema_hash_hex"] as? String,
-                           "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
-            XCTAssertEqual(json["vk_bytes"] as? String, Data([0x01, 0x02, 0x03]).base64EncodedString())
-            XCTAssertEqual(json["vk_len"] as? Int, 3)
-            XCTAssertNil(json["vk_bytes_cid"])
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 202,
-                httpVersion: nil,
-                headerFields: ["Content-Type": "application/json"]
-            )!
-            return (response, Data())
+        await XCTAssertThrowsErrorAsync(try await makeClient().registerVerifyingKey(requestBody)) { error in
+            guard case let ToriiClientError.invalidPayload(reason) = error else {
+                return XCTFail("Expected invalidPayload, got \(error)")
+            }
+            XCTAssertTrue(reason.contains("/v1/zk/vk/register"))
+            XCTAssertTrue(reason.contains("locally signed transaction"))
         }
-
-        try await makeClient().registerVerifyingKey(requestBody)
     }
 
     func testRegisterVerifyingKeyRejectsInvalidSchemaHash() {
         let requestBody = ToriiVerifyingKeyRegisterRequest(
             authority: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
-            privateKey: "ed0120...",
             backend: "halo2/ipa",
             name: "vk_main",
             version: 1,
@@ -5462,7 +5358,6 @@ final class ToriiClientHeaderTests: XCTestCase {
     func testRegisterVerifyingKeyRejectsVkLengthMismatch() {
         var requestBody = ToriiVerifyingKeyRegisterRequest(
             authority: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
-            privateKey: "ed0120...",
             backend: "halo2/ipa",
             name: "vk_main",
             version: 1,
@@ -5480,10 +5375,9 @@ final class ToriiClientHeaderTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testUpdateVerifyingKeyEncodesBody() async throws {
+    func testUpdateVerifyingKeyRejectsRemovedServerSideSigningFlow() async {
         var requestBody = ToriiVerifyingKeyUpdateRequest(
             authority: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
-            privateKey: "ed0120...",
             backend: "halo2/ipa",
             name: "vk_main",
             version: 2,
@@ -5492,33 +5386,18 @@ final class ToriiClientHeaderTests: XCTestCase {
         )
         requestBody.verifyingKeyBytes = Data([0xAA])
         requestBody.commitmentHex = "20574662a58708e02e0000000000000000000000000000000000000000000000"
-
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.httpMethod, "POST")
-            XCTAssertEqual(request.url?.path, "/v1/zk/vk/update")
-            let json = self.bodyJSON(from: request)
-            XCTAssertEqual(json["public_inputs_schema_hash_hex"] as? String,
-                           "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
-            XCTAssertEqual(json["vk_bytes"] as? String, Data([0xAA]).base64EncodedString())
-            XCTAssertEqual(json["vk_len"] as? Int, 1)
-            XCTAssertEqual(json["commitment_hex"] as? String,
-                           "20574662a58708e02e0000000000000000000000000000000000000000000000")
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 202,
-                httpVersion: nil,
-                headerFields: ["Content-Type": "application/json"]
-            )!
-            return (response, Data())
+        await XCTAssertThrowsErrorAsync(try await makeClient().updateVerifyingKey(requestBody)) { error in
+            guard case let ToriiClientError.invalidPayload(reason) = error else {
+                return XCTFail("Expected invalidPayload, got \(error)")
+            }
+            XCTAssertTrue(reason.contains("/v1/zk/vk/update"))
+            XCTAssertTrue(reason.contains("locally signed transaction"))
         }
-
-        try await makeClient().updateVerifyingKey(requestBody)
     }
 
     func testUpdateVerifyingKeyRejectsInvalidCommitmentHex() {
         var requestBody = ToriiVerifyingKeyUpdateRequest(
             authority: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
-            privateKey: "ed0120...",
             backend: "halo2/ipa",
             name: "vk_main",
             version: 2,
@@ -7982,40 +7861,20 @@ id: 88
         waitForExpectations(timeout: 1)
     }
 
-    func testDeployContractParsesResponse() {
-        let expectation = expectation(description: "deploy contract")
-        let codeHash = String(repeating: "d", count: 64)
-        let abiHash = String(repeating: "e", count: 64)
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/contracts/deploy")
-            XCTAssertEqual(request.httpMethod, "POST")
-            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
-            let body = """
-            {"ok":true,"code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)"}
-            """.data(using: .utf8)!
-            return (response, body)
-        }
-
+    func testDeployContractRejectsRemovedServerSideSigningFlow() async {
         let req = ToriiDeployContractRequest(authority: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
-                                             privateKey: "ed25519:secret",
                                              codeB64: "AQ==")
-        makeClient().deployContract(req) { result in
-            switch result {
-            case .success(let response):
-                XCTAssertTrue(response.ok)
-                XCTAssertEqual(response.codeHashHex, codeHash)
-                XCTAssertEqual(response.abiHashHex, abiHash)
-            case .failure(let error):
-                XCTFail("unexpected error: \(error)")
+        await XCTAssertThrowsErrorAsync(try await makeClient().deployContract(req)) { error in
+            guard case let ToriiClientError.invalidPayload(reason) = error else {
+                return XCTFail("Expected invalidPayload, got \(error)")
             }
-            expectation.fulfill()
+            XCTAssertTrue(reason.contains("/v1/contracts/deploy"))
+            XCTAssertTrue(reason.contains("locally signed transaction"))
         }
-        waitForExpectations(timeout: 1)
     }
 
     func testDeployContractRejectsInvalidBase64() {
         let request = ToriiDeployContractRequest(authority: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
-                                                 privateKey: "ed25519:secret",
                                                  codeB64: "%%%")
         XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
             guard case ToriiClientError.invalidPayload = error else {
@@ -8026,7 +7885,6 @@ id: 88
 
     func testDeployContractRejectsUnsupportedFields() {
         let request = ToriiDeployContractRequest(authority: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
-                                                 privateKey: "ed25519:secret",
                                                  codeB64: "AQ==",
                                                  codeHash: String(repeating: "a", count: 64))
         XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
@@ -8036,95 +7894,35 @@ id: 88
         }
     }
 
-    func testDeployContractInstanceParsesResponse() {
-        let expectation = expectation(description: "deploy contract instance")
-        let codeHash = String(repeating: "f", count: 64)
-        let abiHash = String(repeating: "0", count: 64)
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/contracts/instance")
-            XCTAssertEqual(request.httpMethod, "POST")
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
-            guard let body = self.bodyData(from: request),
-                  let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
-                XCTFail("missing JSON body")
-                throw NSError(domain: "stub", code: -1)
-            }
-            XCTAssertEqual(json["authority"] as? String, "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
-            XCTAssertEqual(json["private_key"] as? String, "ed25519:secret")
-            XCTAssertEqual(json["namespace"] as? String, "apps")
-            XCTAssertEqual(json["contract_id"] as? String, "calc.v1")
-            XCTAssertEqual(json["code_b64"] as? String, "AQ==")
-            let manifest = json["manifest"] as? [String: Any]
-            XCTAssertEqual(manifest?["compiler_fingerprint"] as? String, "kotodama-0.8")
-            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
-            let bodyData = """
-            {"ok":true,"namespace":"apps","contract_id":"calc.v1","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)"}
-            """.data(using: .utf8)!
-            return (response, bodyData)
-        }
-
+    func testDeployContractInstanceRejectsRemovedServerSideSigningFlow() async {
         let manifest = ToriiContractManifest(compilerFingerprint: "kotodama-0.8")
         let req = ToriiDeployContractInstanceRequest(authority: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
-                                                     privateKey: "ed25519:secret",
                                                      namespace: "apps",
                                                      contractId: "calc.v1",
                                                      codeB64: "AQ==",
                                                      manifest: manifest)
-        makeClient().deployContractInstance(req) { result in
-            switch result {
-            case .success(let response):
-                XCTAssertTrue(response.ok)
-                XCTAssertEqual(response.namespace, "apps")
-                XCTAssertEqual(response.contractId, "calc.v1")
-                XCTAssertEqual(response.codeHashHex, codeHash)
-                XCTAssertEqual(response.abiHashHex, abiHash)
-            case .failure(let error):
-                XCTFail("unexpected error: \(error)")
+        await XCTAssertThrowsErrorAsync(try await makeClient().deployContractInstance(req)) { error in
+            guard case let ToriiClientError.invalidPayload(reason) = error else {
+                return XCTFail("Expected invalidPayload, got \(error)")
             }
-            expectation.fulfill()
+            XCTAssertTrue(reason.contains("/v1/contracts/instance"))
+            XCTAssertTrue(reason.contains("locally signed transaction"))
         }
-        waitForExpectations(timeout: 1)
     }
 
-    func testActivateContractInstanceParsesResponse() {
-        let expectation = expectation(description: "activate contract instance")
+    func testActivateContractInstanceRejectsRemovedServerSideSigningFlow() async {
         let codeHash = String(repeating: "1", count: 64)
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/contracts/instance/activate")
-            XCTAssertEqual(request.httpMethod, "POST")
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
-            guard let body = self.bodyData(from: request),
-                  let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
-                XCTFail("missing JSON body")
-                throw NSError(domain: "stub", code: -1)
-            }
-            XCTAssertEqual(json["authority"] as? String, "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
-            XCTAssertEqual(json["private_key"] as? String, "ed25519:secret")
-            XCTAssertEqual(json["namespace"] as? String, "apps")
-            XCTAssertEqual(json["contract_id"] as? String, "calc.v1")
-            XCTAssertEqual(json["code_hash"] as? String, codeHash)
-            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
-            let bodyData = """
-            {"ok":true}
-            """.data(using: .utf8)!
-            return (response, bodyData)
-        }
-
         let req = ToriiActivateContractInstanceRequest(authority: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
-                                                       privateKey: "ed25519:secret",
                                                        namespace: "apps",
                                                        contractId: "calc.v1",
                                                        codeHash: codeHash)
-        makeClient().activateContractInstance(req) { result in
-            switch result {
-            case .success(let response):
-                XCTAssertTrue(response.ok)
-            case .failure(let error):
-                XCTFail("unexpected error: \(error)")
+        await XCTAssertThrowsErrorAsync(try await makeClient().activateContractInstance(req)) { error in
+            guard case let ToriiClientError.invalidPayload(reason) = error else {
+                return XCTFail("Expected invalidPayload, got \(error)")
             }
-            expectation.fulfill()
+            XCTAssertTrue(reason.contains("/v1/contracts/instance/activate"))
+            XCTAssertTrue(reason.contains("locally signed transaction"))
         }
-        waitForExpectations(timeout: 1)
     }
 
     func testCallContractParsesResponse() {
@@ -8142,12 +7940,14 @@ id: 88
                 throw NSError(domain: "stub", code: -1)
             }
             XCTAssertEqual(json["authority"] as? String, "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
-            XCTAssertEqual(json["private_key"] as? String, "ed25519:secret")
+            XCTAssertNil(json["private_key"])
+            XCTAssertEqual(json["public_key_hex"] as? String, String(repeating: "1", count: 64))
+            XCTAssertEqual(json["signature_b64"] as? String, "AQ==")
             XCTAssertEqual(json["namespace"] as? String, "apps")
             XCTAssertEqual(json["contract_id"] as? String, "mint")
             XCTAssertEqual(json["entrypoint"] as? String, "create")
             XCTAssertEqual(json["gas_limit"] as? Int, 7)
-            XCTAssertEqual(json["gas_asset"] as? String, "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9")
+            XCTAssertEqual(json["gas_asset_id"] as? String, "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9")
             XCTAssertEqual(json["fee_sponsor"] as? String, "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
@@ -8161,7 +7961,8 @@ id: 88
 
         let request = ToriiContractCallRequest(
             authority: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
-            privateKey: "ed25519:secret",
+            publicKeyHex: String(repeating: "1", count: 64),
+            signatureB64: "AQ==",
             namespace: "apps",
             contractId: "mint",
             entrypoint: "create",
@@ -8196,7 +7997,6 @@ id: 88
     func testCallContractRejectsZeroGasLimit() {
         let request = ToriiContractCallRequest(
             authority: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
-            privateKey: "ed25519:secret",
             namespace: "apps",
             contractId: "mint",
             gasLimit: 0
@@ -8220,7 +8020,8 @@ id: 88
                 throw NSError(domain: "stub", code: -1)
             }
             XCTAssertEqual(json["multisig_account_alias"] as? String, "cbdc@hbl")
-            XCTAssertEqual(json["signer_accountId"] as? String, "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+            XCTAssertNil(json["private_key"])
+            XCTAssertEqual(json["signer_account_id"] as? String, "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
             XCTAssertEqual(json["namespace"] as? String, "apps")
             XCTAssertEqual(json["contract_id"] as? String, "mint")
             XCTAssertEqual(json["entrypoint"] as? String, "execute")
@@ -8230,7 +8031,7 @@ id: 88
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let bodyData = """
-            {"ok":true,"resolved_multisig_accountId":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","submitted":false,"proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","creation_time_ms":123,"signing_message_b64":"AQ=="}
+            {"ok":true,"resolved_multisig_account_id":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","submitted":false,"proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","creation_time_ms":123,"signing_message_b64":"AQ=="}
             """.data(using: .utf8)!
             return (response, bodyData)
         }
@@ -8275,8 +8076,9 @@ id: 88
                 XCTFail("missing JSON body")
                 throw NSError(domain: "stub", code: -1)
             }
-            XCTAssertEqual(json["multisig_accountId"] as? String, "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
-            XCTAssertEqual(json["signer_accountId"] as? String, "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9")
+            XCTAssertNil(json["private_key"])
+            XCTAssertEqual(json["multisig_account_id"] as? String, "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+            XCTAssertEqual(json["signer_account_id"] as? String, "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9")
             XCTAssertEqual(json["proposal_id"] as? String, proposalId)
             XCTAssertEqual(json["signature_b64"] as? String, "AQ==")
             let response = HTTPURLResponse(url: request.url!,
@@ -8284,7 +8086,7 @@ id: 88
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let bodyData = """
-            {"ok":true,"resolved_multisig_accountId":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","submitted":true,"proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","executed_tx_hash_hex":"\(txHash)"}
+            {"ok":true,"resolved_multisig_account_id":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","submitted":true,"proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","executed_tx_hash_hex":"\(txHash)"}
             """.data(using: .utf8)!
             return (response, bodyData)
         }
@@ -8324,7 +8126,7 @@ id: 88
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let bodyData = """
-            {"resolved_multisig_accountId":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","spec":{"quorum":2,"transaction_ttl_ms":60000}}
+            {"resolved_multisig_account_id":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","spec":{"quorum":2,"transaction_ttl_ms":60000}}
             """.data(using: .utf8)!
             return (response, bodyData)
         }
@@ -8345,9 +8147,61 @@ id: 88
         waitForExpectations(timeout: 1)
     }
 
+    func testGetMultisigSpecAcceptsDomainScopedAlias() {
+        let expectation = expectation(description: "multisig spec with domain-scoped alias")
+        StubURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/multisig/spec")
+            guard let body = self.bodyData(from: request),
+                  let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+                XCTFail("missing JSON body")
+                throw NSError(domain: "stub", code: -1)
+            }
+            XCTAssertEqual(json["multisig_account_alias"] as? String, "cbdc@hbl.universal")
+            let response = HTTPURLResponse(url: request.url!,
+                                           statusCode: 200,
+                                           httpVersion: nil,
+                                           headerFields: ["Content-Type": "application/json"])!
+            let bodyData = """
+            {"resolved_multisig_account_id":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","spec":{"quorum":2,"transaction_ttl_ms":60000}}
+            """.data(using: .utf8)!
+            return (response, bodyData)
+        }
+
+        let request = ToriiMultisigSpecRequest(
+            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@hbl.universal")
+        )
+        makeClient().getMultisigSpec(request) { result in
+            switch result {
+            case .success(let response):
+                XCTAssertEqual(response.resolvedMultisigAccountId, "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+            case .failure(let error):
+                XCTFail("unexpected error: \(error)")
+            }
+            expectation.fulfill()
+        }
+        waitForExpectations(timeout: 1)
+    }
+
+    func testGetMultisigSpecRejectsUnsupportedAliasShape() {
+        let request = ToriiMultisigSpecRequest(
+            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@hbl.universal.extra")
+        )
+
+        XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
+            guard case let ToriiClientError.invalidPayload(message) = error else {
+                return XCTFail("Expected invalidPayload, got \(error)")
+            }
+            XCTAssertTrue(
+                message.contains("label@dataspace or label@domain.dataspace"),
+                "Unexpected message: \(message)"
+            )
+        }
+    }
+
     func testListMultisigProposalsDecodesEntries() {
         let expectation = expectation(description: "multisig proposals list")
         let proposalId = String(repeating: "d", count: 64)
+        let approverId = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/multisig/proposals/list")
             let response = HTTPURLResponse(url: request.url!,
@@ -8355,7 +8209,7 @@ id: 88
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let bodyData = """
-            {"resolved_multisig_accountId":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","proposals":[{"proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","proposal":{"approvals":["operator1@hbl"]}}]}
+            {"resolved_multisig_account_id":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","proposals":[{"proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","proposal":{"approvals":["\(approverId)"]}}]}
             """.data(using: .utf8)!
             return (response, bodyData)
         }
@@ -8379,6 +8233,8 @@ id: 88
     func testGetMultisigProposalDecodesProposalLookup() {
         let expectation = expectation(description: "multisig proposal get")
         let proposalId = String(repeating: "e", count: 64)
+        let approverOne = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+        let approverTwo = "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/multisig/proposals/get")
             guard let body = self.bodyData(from: request),
@@ -8392,7 +8248,7 @@ id: 88
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let bodyData = """
-            {"resolved_multisig_accountId":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","proposal":{"approvals":["operator1@hbl","operator2@hbl"]}}
+            {"resolved_multisig_account_id":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","proposal_id":"\(proposalId)","instructions_hash":"\(proposalId)","proposal":{"approvals":["\(approverOne)","\(approverTwo)"]}}
             """.data(using: .utf8)!
             return (response, bodyData)
         }
@@ -8731,7 +8587,7 @@ id: 88
             guard case let ToriiClientError.invalidPayload(message) = error else {
                 return XCTFail("unexpected error: \(error)")
             }
-            XCTAssertTrue(message.contains("owner must be a canonical account id."))
+            XCTAssertTrue(message.contains("owner must be a canonical i105 account id."))
         }
     }
 

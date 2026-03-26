@@ -33,7 +33,7 @@ translation_last_reviewed: 2026-02-07
 |---------|------------|----------|
 | `label` | نعم | Запрозенная метка (يوفر حالة مختلطة ؛ تم ضبط الأداة على Norm v1 وUTS-46). |
 | `suffix_id` | نعم | لاحقة المعرف تشيسلوفي (ست عشرية أو `0x`). |
-| `owner` | نعم | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` | نعم | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` | نعم | سيلوي تشيسلو `1..=255`. |
 | `payment_asset_id` | نعم | التسوية النشطة (على سبيل المثال `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | نعم | مجموعة رائعة من الوحدات النشطة. |

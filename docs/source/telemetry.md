@@ -911,7 +911,7 @@ Norito-RPC transport telemetry requirements are captured in `docs/source/torii/n
 - `torii_http_request_duration_seconds_bucket{content_type,method}` — latency histogram for content-type parity dashboards.
 - `torii_http_response_bytes_total{content_type,method,status}` — optional payload-size counter for regression detection.
 - `torii_norito_decode_failures_total{payload_kind,reason}` — bucketed Norito RPC decode failures (invalid magic, checksum mismatch, unsupported feature, etc.).
-- `torii_address_invalid_total{surface,reason}` — rejects grouped by Torii surface (e.g., `routing.source`, `iso_bridge.source`) and the stable address error code so SDK drift or malformed I105 literals are visible.
+- `torii_address_invalid_total{surface,reason}` — rejects grouped by Torii surface (e.g., `routing.source`, `iso_bridge.source`) and the stable address error code so SDK drift or malformed i105 literals are visible.
 - Local‑8 specific counters are retired; rely on `torii_address_invalid_total{surface,reason}` and `torii_address_collision_total{surface,kind}` to monitor address ingestion and Local‑12 safety.
 - Existing gauges (`torii_active_connections_total{scheme}`, `torii_pre_auth_reject_total{reason}`) must include `scheme="norito_rpc"` to track transport gating.
 

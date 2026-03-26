@@ -60,18 +60,17 @@ AccountId {
     controller: AccountController // single PublicKey or multisig policy
 }
 
-Display: canonical I105 literal (no `@domain` suffix)
+Display: canonical i105 literal (no `@domain` suffix)
 Parse accepts:
-- Encoded account identifiers only: I105.
-- Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and alias literals such as `label@domain`.
+- Encoded account identifiers only: i105.
+- Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and account-alias literals such as label@dataspace or label@domain.dataspace.
 
 Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
 and `0x` prefixes are not accepted.
 
-This text form is now treated as an **account alias**: a routing convenience
-that points to the canonical [`AccountAddress`](#2-canonical-address-codecs).
-It remains useful for human readability and domain-scoped governance, but it is
-no longer considered the authoritative account identifier on-chain.
+Account aliases are separate on-chain bindings. They use
+label@dataspace or label@domain.dataspace and resolve to canonical
+i105 `AccountId` values. Strict `AccountId` parsers never accept alias literals directly.
 ```
 
 `ChainId` живет за пределами `AccountId`. Узлы проверяют `ChainId` транзакции.
@@ -311,7 +310,7 @@ tag-specific payload, then move on to the controller bytes.
 - Преобразования IME/NFKC: сора-кана половинной ширины можно нормализовать до их полноширинных форм без нарушения декодирования, но сигнальный индикатор ASCII `sora` и цифры/буквы I105 ДОЛЖНЫ оставаться ASCII. Полноэкранные индикаторы или свернутые в регистр символы отображают `ERR_MISSING_COMPRESSED_SENTINEL`, полезные данные ASCII во всю ширину поднимают `ERR_INVALID_COMPRESSED_CHAR`, а несовпадения контрольных сумм появляются как `ERR_CHECKSUM_MISMATCH`. Тесты свойств в `crates/iroha_data_model/src/account/address.rs` охватывают эти пути, поэтому SDK и кошельки могут полагаться на детерминированные сбои.
 - При анализе псевдонимов `address@domain` (rejected legacy form) Torii и SDK теперь выдаются одни и те же коды `ERR_*`, когда входные данные I105 (предпочтительный)/sora (второй лучший) терпят неудачу перед откатом псевдонима (например, несовпадение контрольной суммы, несоответствие дайджеста домена), поэтому клиенты могут передавать структурированные причины, не догадываясь из прозаических строк.
 - Полезные данные локального селектора длиной менее 12 байт отображаются `ERR_LOCAL8_DEPRECATED`, сохраняя жесткое переключение по сравнению с устаревшими дайджестами Local‑8.
-- Domainless canonical I105 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
+- Domainless canonical i105 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
 
 #### 2.5 Нормативные бинарные векторы
 
@@ -357,7 +356,7 @@ tag-specific payload, then move on to the controller bytes.
 | Указатель глобального реестра (`registry_id = 0x0000_002A`, эквивалент `treasury`) | `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF` | `sorakXｹ6NｻﾍﾀﾖSﾜﾖｱ3ﾚ5WﾘﾋQﾅｷｦxgﾛｸcﾁｵﾋkﾋvﾏ8SPﾓﾀｹdｴｴｲW9iCM6AEP` |
 
 Эти строки соответствуют строкам, выдаваемым CLI (`iroha tools address convert`), Torii
-ответы (`canonical I105 literal rendering`) и помощники SDK, поэтому копирование/вставка UX
+ответы (`canonical i105 literal rendering`) и помощники SDK, поэтому копирование/вставка UX
 потоки могут полагаться на них дословно. Добавляйте `<address>@<domain>` (rejected legacy form) только тогда, когда вам нужна явная подсказка маршрутизации; суффикс не является частью канонического вывода.
 
 #### 2.6 Текстовые псевдонимы для совместимости (планируется)
@@ -388,7 +387,7 @@ tag-specific payload, then move on to the controller bytes.
   кодировщик, а не карта CTAP2, используемая для дайджестов политики мультиподписи.
 - **Кодировка:** `encode_i105()` объединяет байты префикса с каноническими
   полезная нагрузка и добавляет 16-битную контрольную сумму, полученную из Blake2b-512, с фиксированной
-  Prefix: `I105PRE` (`b"I105PRE"` || prefix || payload). The result is encoded via `bs58` using the I105 alphabet.
+  префикс `I105PRE` (`b"I105PRE"` || prefix || payload). Результат кодируется через `bs58` с использованием алфавита I105.
   Помощники CLI/SDK предоставляют ту же процедуру и `AccountAddress::parse_encoded`
   отменяет его через `decode_i105`.
 
@@ -642,7 +641,7 @@ Nexus публикует **манифест, предназначенный то
 - **Конверт I105:** Префикс кодирует `chain_discriminant` с помощью компактного
   6-/14-битная схема от `encode_i105_prefix()`, тело — канонические байты
   (`AccountAddress::canonical_bytes()`), а контрольная сумма — это первые два байта.
-  из Blake2b-512(`b"I105PRE"` || префикс || тело). The full payload is encoded via `bs58` using the I105 alphabet.
+  из Blake2b-512(`b"I105PRE"` || префикс || тело). Полная полезная нагрузка кодируется через `bs58` с использованием алфавита I105.
 – **Контракт реестра:** Публикация подписанного JSON (и необязательного корня Merkle).
   `{discriminant, i105_prefix, chain_alias, endpoints}` с 24-часовым TTL и
   клавиши вращения.
@@ -664,11 +663,11 @@ Nexus публикует **манифест, предназначенный то
   Пользователи отмечают, что сжатая форма `i105` предназначена только для Sora и допускает перезапись IME.
 - **Интеграция Тори:** Кэшируйте манифесты Nexus с соблюдением TTL,
   `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` детерминированно, и
-  keep strict account-literal parsing canonical-I105-only (reject compressed and any `@domain` suffix) with canonical I105 output.
+  keep strict account-literal parsing canonical-i105-only (reject compressed and any `@domain` suffix) with canonical i105 output.
 
 ### Форматы ответов Тории
 
-- `GET /v1/accounts` принимает необязательный параметр запроса `canonical I105 rendering` и
+- `GET /v1/accounts` принимает необязательный параметр запроса `canonical i105 rendering` и
   `POST /v1/accounts/query` принимает то же поле внутри конверта JSON.
   Поддерживаемые значения:
   - `i105` (по умолчанию) — ответы выдают канонические полезные данные I105 (например,
@@ -679,7 +678,7 @@ Nexus публикует **манифест, предназначенный то
   кошельки и исследователи запрашивать сжатые строки для UX только для Sora, в то время как
   сохранение I105 в качестве совместимого значения по умолчанию.
 - Списки владельцев активов (`GET /v1/assets/{definition_id}/holders`) и их JSON.
-  аналог конверта (`POST …/holders/query`) также соблюдает `canonical I105 rendering`.
+  аналог конверта (`POST …/holders/query`) также соблюдает `canonical i105 rendering`.
   Поле `items[*].account_id` генерирует сжатые литералы всякий раз, когда
   Поле параметра/конверта имеет значение `i105_default`, что отражает учетные записи.
   конечные точки, чтобы исследователи могли предоставлять согласованные выходные данные во всех каталогах.

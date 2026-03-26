@@ -234,10 +234,10 @@ Runtime ロジックは NX-9 実装時に `PublicLaneRewardRecord` 注釈を emi
     - `GET /v1/nexus/public_lanes/{lane}/validators` – metadata, status
       (`PendingActivation`/`Active`/`Exiting`/`Exited`/`Slashed`), activation epoch/height,
       release timers, bonded stake, last reward epoch.
-      `canonical I105 literal rendering` で literal 表示を制御（I105 推奨、i105-default（`sora`）は Sora 専用の次善）。
+      `canonical i105 literal rendering` で literal 表示を制御（I105 推奨、i105-default（`sora`）は Sora 専用の次善）。
     - `GET /v1/nexus/public_lanes/{lane}/stake` – stake shares (`validator`,
       `staker`, bonded amount) と pending unbond timers。`?validator=i105...` は
-      特定バリデータ向けにフィルタし、`canonical I105 rendering` は全 literal に適用。
+      特定バリデータ向けにフィルタし、`canonical i105 rendering` は全 literal に適用。
   - Lifecycle ISIs は標準トランザクションパスを使用 (Torii `/v1/transactions`
     または CLI instruction pipeline)。Norito JSON payload 例:
 

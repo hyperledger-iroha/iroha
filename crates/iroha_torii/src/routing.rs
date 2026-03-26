@@ -4523,6 +4523,51 @@ mod zk_roots_selector_tests {
             ))
         ));
     }
+
+    #[test]
+    fn parse_tx_history_asset_selector_accepts_asset_alias_literal() {
+        let parsed = parse_tx_history_asset_selector("usd#main").expect("selector should parse");
+
+        match parsed {
+            TxHistoryAssetSelectorInput::DefinitionSelector(value) => {
+                assert_eq!(value, "usd#main")
+            }
+            other => panic!("unexpected selector variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_tx_history_asset_selector_accepts_asset_alias_literal() {
+        let (world, definition_id) = selector_world();
+        let view = world.view();
+        let resolved = resolve_tx_history_asset_selector(&view, 0, Some("usd#main"), None)
+            .expect("selector should resolve");
+
+        assert!(matches!(
+            resolved,
+            Some(TxHistoryAssetSelector::DefinitionId(ref id)) if id == &definition_id
+        ));
+    }
+
+    #[test]
+    fn resolve_tx_history_asset_selector_rejects_alias_outside_allowed_definition() {
+        let (world, definition_id) = selector_world();
+        let view = world.view();
+        let other_definition =
+            test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400ee");
+        let err =
+            resolve_tx_history_asset_selector(&view, 0, Some("usd#main"), Some(&other_definition))
+                .expect_err("mismatched selector should fail");
+
+        assert!(matches!(
+            err,
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(message)
+            )) if message
+                == "asset_id is outside the allowed transaction history asset definition"
+        ));
+        assert_ne!(definition_id, other_definition);
+    }
 }
 
 fn hash_to_hex<H>(hash: H) -> String
@@ -6748,32 +6793,8 @@ pub async fn handle_post_contract_call(
     let code_hash_hex = hex::encode(code_hash.as_ref());
     let abi_hash_hex = hex::encode(abi_hash.as_ref());
     let response =
-        if let Some(private_key) = private_key {
-            let tx = builder.sign(&private_key.0);
-            let tx_hash_hex = hex::encode(tx.hash().as_ref());
-            handle_transaction_with_metrics(
-                chain_id,
-                queue,
-                state,
-                tx,
-                telemetry,
-                "/v1/contracts/call",
-            )
-            .await?;
-            ContractCallResponseDto {
-                ok: true,
-                submitted: true,
-                namespace,
-                contract_id,
-                code_hash_hex,
-                abi_hash_hex,
-                creation_time_ms,
-                tx_hash_hex: Some(tx_hash_hex),
-                transaction_scaffold_b64: None,
-                signed_transaction_b64: None,
-                signing_message_b64: None,
-                entrypoint: response_entrypoint.clone(),
-            }
+        if private_key.is_some() {
+            return Err(reject_server_side_signing("/v1/contracts/call"));
         } else if public_key_hex.is_some() || signature_b64.is_some() {
             let public_key_hex = public_key_hex
                 .as_deref()
@@ -9682,29 +9703,10 @@ pub async fn handle_post_contract_call_multisig_propose(
     let builder = builder.with_instructions([dm::InstructionBox::from(propose_instruction)]);
 
     let response =
-        if let Some(private_key) = private_key {
-            let tx = builder.sign(&private_key.0);
-            let tx_hash_hex = hex::encode(tx.hash().as_ref());
-            handle_transaction_with_metrics(
-                chain_id,
-                queue,
-                state,
-                tx,
-                telemetry,
+        if private_key.is_some() {
+            return Err(reject_server_side_signing(
                 ENDPOINT_CONTRACTS_CALL_MULTISIG_PROPOSE,
-            )
-            .await?;
-            MultisigContractCallResponseDto {
-                ok: true,
-                resolved_multisig_account_id: multisig_account_id.clone(),
-                submitted: Some(true),
-                proposal_id: Some(proposal_id),
-                instructions_hash: Some(instructions_hash),
-                tx_hash_hex: Some(tx_hash_hex.clone()),
-                executed_tx_hash_hex: will_execute.then_some(tx_hash_hex),
-                creation_time_ms: Some(creation_time_ms),
-                signing_message_b64: None,
-            }
+            ));
         } else if public_key_hex.is_some() || signature_b64.is_some() {
             let public_key_hex = public_key_hex
                 .as_deref()
@@ -9848,29 +9850,10 @@ pub async fn handle_post_contract_call_multisig_approve(
     let builder = builder.with_instructions([dm::InstructionBox::from(approve_instruction)]);
 
     let response =
-        if let Some(private_key) = private_key {
-            let tx = builder.sign(&private_key.0);
-            let tx_hash_hex = hex::encode(tx.hash().as_ref());
-            handle_transaction_with_metrics(
-                chain_id,
-                queue,
-                state,
-                tx,
-                telemetry,
+        if private_key.is_some() {
+            return Err(reject_server_side_signing(
                 ENDPOINT_CONTRACTS_CALL_MULTISIG_APPROVE,
-            )
-            .await?;
-            MultisigContractCallResponseDto {
-                ok: true,
-                resolved_multisig_account_id: multisig_account_id.clone(),
-                submitted: Some(true),
-                proposal_id: proposal_id_literal,
-                instructions_hash: Some(hash_literal),
-                tx_hash_hex: Some(tx_hash_hex.clone()),
-                executed_tx_hash_hex: will_execute.then_some(tx_hash_hex),
-                creation_time_ms: Some(creation_time_ms),
-                signing_message_b64: None,
-            }
+            ));
         } else if public_key_hex.is_some() || signature_b64.is_some() {
             let public_key_hex = public_key_hex
                 .as_deref()
@@ -10050,31 +10033,8 @@ pub async fn handle_post_multisig_cancel(
     };
 
     let response =
-        if let Some(private_key) = private_key {
-            let tx = builder.sign(&private_key.0);
-            let tx_hash_hex = hex::encode(tx.hash().as_ref());
-            handle_transaction_with_metrics(
-                chain_id,
-                queue,
-                state,
-                tx,
-                telemetry,
-                ENDPOINT_MULTISIG_CANCEL,
-            )
-            .await?;
-            MultisigCancelResponseDto {
-                ok: true,
-                resolved_multisig_account_id: multisig_account_id.clone(),
-                submitted: Some(true),
-                action: action.clone(),
-                target_proposal_id: target_hash_literal.clone(),
-                target_instructions_hash: target_hash_literal.clone(),
-                cancel_proposal_id: cancel_hash_literal.clone(),
-                cancel_instructions_hash: cancel_hash_literal.clone(),
-                executed_tx_hash_hex: will_execute.then_some(tx_hash_hex),
-                creation_time_ms: Some(creation_time_ms),
-                signing_message_b64: None,
-            }
+        if private_key.is_some() {
+            return Err(reject_server_side_signing(ENDPOINT_MULTISIG_CANCEL));
         } else if public_key_hex.is_some() || signature_b64.is_some() {
             let public_key_hex = public_key_hex
                 .as_deref()
@@ -10211,29 +10171,8 @@ pub async fn handle_post_multisig_propose(
     let builder = builder.with_instructions([dm::InstructionBox::from(propose_instruction)]);
 
     let response =
-        if let Some(private_key) = private_key {
-            let tx = builder.sign(&private_key.0);
-            let tx_hash_hex = hex::encode(tx.hash().as_ref());
-            handle_transaction_with_metrics(
-                chain_id,
-                queue,
-                state,
-                tx,
-                telemetry,
-                ENDPOINT_MULTISIG_PROPOSE,
-            )
-            .await?;
-            MultisigContractCallResponseDto {
-                ok: true,
-                resolved_multisig_account_id: multisig_account_id.clone(),
-                submitted: Some(true),
-                proposal_id: Some(proposal_id),
-                instructions_hash: Some(instructions_hash),
-                tx_hash_hex: Some(tx_hash_hex.clone()),
-                executed_tx_hash_hex: will_execute.then_some(tx_hash_hex),
-                creation_time_ms: Some(creation_time_ms),
-                signing_message_b64: None,
-            }
+        if private_key.is_some() {
+            return Err(reject_server_side_signing(ENDPOINT_MULTISIG_PROPOSE));
         } else if public_key_hex.is_some() || signature_b64.is_some() {
             let public_key_hex = public_key_hex
                 .as_deref()
@@ -10373,29 +10312,8 @@ pub async fn handle_post_multisig_approve(
     let builder = builder.with_instructions([dm::InstructionBox::from(approve_instruction)]);
 
     let response =
-        if let Some(private_key) = private_key {
-            let tx = builder.sign(&private_key.0);
-            let tx_hash_hex = hex::encode(tx.hash().as_ref());
-            handle_transaction_with_metrics(
-                chain_id,
-                queue,
-                state,
-                tx,
-                telemetry,
-                ENDPOINT_MULTISIG_APPROVE,
-            )
-            .await?;
-            MultisigContractCallResponseDto {
-                ok: true,
-                resolved_multisig_account_id: multisig_account_id.clone(),
-                submitted: Some(true),
-                proposal_id: proposal_id_literal,
-                instructions_hash: Some(hash_literal),
-                tx_hash_hex: Some(tx_hash_hex.clone()),
-                executed_tx_hash_hex: will_execute.then_some(tx_hash_hex),
-                creation_time_ms: Some(creation_time_ms),
-                signing_message_b64: None,
-            }
+        if private_key.is_some() {
+            return Err(reject_server_side_signing(ENDPOINT_MULTISIG_APPROVE));
         } else if public_key_hex.is_some() || signature_b64.is_some() {
             let public_key_hex = public_key_hex
                 .as_deref()
@@ -14418,6 +14336,22 @@ pub async fn handle_post_sorafs_record_por_observation(
     Ok(resp)
 }
 
+#[cfg(feature = "app_api")]
+fn ensure_canonical_repair_account_id(value: &str, field: &str) -> Result<(), Error> {
+    let trimmed = value.trim();
+    if trimmed != value {
+        return Err(conversion_error(format!(
+            "invalid {field} `{value}`: expected canonical i105 account id without surrounding whitespace"
+        )));
+    }
+    AccountId::parse_encoded(trimmed).map_err(|err| {
+        conversion_error(format!(
+            "invalid {field} `{value}`: expected canonical i105 account id ({err})"
+        ))
+    })?;
+    Ok(())
+}
+
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_sorafs_repair_report(
@@ -14425,6 +14359,7 @@ pub async fn handle_post_sorafs_repair_report(
     sorafs_node: sorafs_node::NodeHandle,
     report: RepairReportV1,
 ) -> Result<impl IntoResponse, Error> {
+    ensure_canonical_repair_account_id(&report.auditor_account, "auditor_account")?;
     let record = sorafs_node
         .enqueue_repair_report(&report)
         .map_err(repair_scheduler_error)?;
@@ -14451,6 +14386,7 @@ pub async fn handle_post_sorafs_repair_slash(
     sorafs_node: sorafs_node::NodeHandle,
     proposal: RepairSlashProposalV1,
 ) -> Result<impl IntoResponse, Error> {
+    ensure_canonical_repair_account_id(&proposal.auditor_account, "auditor_account")?;
     let record = sorafs_node
         .submit_repair_slash_proposal(&proposal)
         .map_err(repair_scheduler_error)?;
@@ -14485,6 +14421,7 @@ pub async fn handle_post_sorafs_repair_claim(
         idempotency_key,
         signature: _,
     } = req;
+    ensure_canonical_repair_account_id(&worker_id, "worker_id")?;
     let record = sorafs_node
         .claim_repair_ticket(&ticket_id, &worker_id, claimed_at_unix, &idempotency_key)
         .map_err(repair_scheduler_error)?;
@@ -14512,6 +14449,7 @@ pub async fn handle_post_sorafs_repair_heartbeat(
         idempotency_key,
         signature: _,
     } = req;
+    ensure_canonical_repair_account_id(&worker_id, "worker_id")?;
     let record = sorafs_node
         .heartbeat_repair_ticket(&ticket_id, &worker_id, heartbeat_at_unix, &idempotency_key)
         .map_err(repair_scheduler_error)?;
@@ -14540,6 +14478,7 @@ pub async fn handle_post_sorafs_repair_complete(
         idempotency_key,
         signature: _,
     } = req;
+    ensure_canonical_repair_account_id(&worker_id, "worker_id")?;
     let record = sorafs_node
         .complete_repair_ticket(
             &ticket_id,
@@ -14574,6 +14513,7 @@ pub async fn handle_post_sorafs_repair_fail(
         idempotency_key,
         signature: _,
     } = req;
+    ensure_canonical_repair_account_id(&worker_id, "worker_id")?;
     let record = sorafs_node
         .fail_repair_ticket(
             &ticket_id,
@@ -14985,6 +14925,8 @@ mod repair_query_tests {
     use sorafs_node::config::StorageConfig;
     use tokio::runtime::Runtime;
 
+    const TEST_AUDITOR_I105: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+
     fn report(
         ticket: &str,
         manifest_digest: [u8; 32],
@@ -14994,7 +14936,7 @@ mod repair_query_tests {
         RepairReportV1 {
             version: REPAIR_REPORT_VERSION_V1,
             ticket_id: RepairTicketId(ticket.to_string()),
-            auditor_account: "auditor#sora".into(),
+            auditor_account: TEST_AUDITOR_I105.into(),
             submitted_at_unix,
             evidence: RepairEvidenceV1 {
                 version: REPAIR_EVIDENCE_VERSION_V1,
@@ -15126,6 +15068,10 @@ mod repair_worker_tests {
     use sorafs_node::config::StorageConfig;
     use tokio::runtime::Runtime;
 
+    const TEST_AUDITOR_I105: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+    const TEST_WORKER_A_I105: &str = "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9";
+    const TEST_WORKER_B_I105: &str = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
+
     fn report(
         ticket: &str,
         manifest_digest: [u8; 32],
@@ -15135,7 +15081,7 @@ mod repair_worker_tests {
         RepairReportV1 {
             version: REPAIR_REPORT_VERSION_V1,
             ticket_id: RepairTicketId(ticket.to_string()),
-            auditor_account: "auditor#sora".into(),
+            auditor_account: TEST_AUDITOR_I105.into(),
             submitted_at_unix,
             evidence: RepairEvidenceV1 {
                 version: REPAIR_EVIDENCE_VERSION_V1,
@@ -15194,7 +15140,7 @@ mod repair_worker_tests {
             let claim = RepairWorkerClaimDto {
                 ticket_id: report_a.ticket_id.clone(),
                 manifest_digest_hex: hex::encode(report_a.evidence.manifest_digest),
-                worker_id: "worker-a".into(),
+                worker_id: TEST_WORKER_A_I105.into(),
                 claimed_at_unix: report_a.submitted_at_unix + 10,
                 idempotency_key: "claim-a".into(),
                 signature: sign_worker_action(
@@ -15202,7 +15148,7 @@ mod repair_worker_tests {
                     &report_a.ticket_id,
                     report_a.evidence.manifest_digest,
                     report_a.evidence.provider_id,
-                    "worker-a",
+                    TEST_WORKER_A_I105,
                     "claim-a",
                     RepairWorkerActionV1::Claim {
                         claimed_at_unix: report_a.submitted_at_unix + 10,
@@ -15221,7 +15167,7 @@ mod repair_worker_tests {
             let heartbeat = RepairWorkerHeartbeatDto {
                 ticket_id: report_a.ticket_id.clone(),
                 manifest_digest_hex: hex::encode(report_a.evidence.manifest_digest),
-                worker_id: "worker-a".into(),
+                worker_id: TEST_WORKER_A_I105.into(),
                 heartbeat_at_unix: report_a.submitted_at_unix + 20,
                 idempotency_key: "heartbeat-a".into(),
                 signature: sign_worker_action(
@@ -15229,7 +15175,7 @@ mod repair_worker_tests {
                     &report_a.ticket_id,
                     report_a.evidence.manifest_digest,
                     report_a.evidence.provider_id,
-                    "worker-a",
+                    TEST_WORKER_A_I105,
                     "heartbeat-a",
                     RepairWorkerActionV1::Heartbeat {
                         heartbeat_at_unix: report_a.submitted_at_unix + 20,
@@ -15248,7 +15194,7 @@ mod repair_worker_tests {
             let complete = RepairWorkerCompleteDto {
                 ticket_id: report_a.ticket_id.clone(),
                 manifest_digest_hex: hex::encode(report_a.evidence.manifest_digest),
-                worker_id: "worker-a".into(),
+                worker_id: TEST_WORKER_A_I105.into(),
                 completed_at_unix: report_a.submitted_at_unix + 30,
                 resolution_notes: Some("done".into()),
                 idempotency_key: "complete-a".into(),
@@ -15257,7 +15203,7 @@ mod repair_worker_tests {
                     &report_a.ticket_id,
                     report_a.evidence.manifest_digest,
                     report_a.evidence.provider_id,
-                    "worker-a",
+                    TEST_WORKER_A_I105,
                     "complete-a",
                     RepairWorkerActionV1::Complete {
                         completed_at_unix: report_a.submitted_at_unix + 30,
@@ -15277,7 +15223,7 @@ mod repair_worker_tests {
             let claim_b = RepairWorkerClaimDto {
                 ticket_id: report_b.ticket_id.clone(),
                 manifest_digest_hex: hex::encode(report_b.evidence.manifest_digest),
-                worker_id: "worker-b".into(),
+                worker_id: TEST_WORKER_B_I105.into(),
                 claimed_at_unix: report_b.submitted_at_unix + 5,
                 idempotency_key: "claim-b".into(),
                 signature: sign_worker_action(
@@ -15285,7 +15231,7 @@ mod repair_worker_tests {
                     &report_b.ticket_id,
                     report_b.evidence.manifest_digest,
                     report_b.evidence.provider_id,
-                    "worker-b",
+                    TEST_WORKER_B_I105,
                     "claim-b",
                     RepairWorkerActionV1::Claim {
                         claimed_at_unix: report_b.submitted_at_unix + 5,
@@ -15304,7 +15250,7 @@ mod repair_worker_tests {
             let fail = RepairWorkerFailDto {
                 ticket_id: report_b.ticket_id.clone(),
                 manifest_digest_hex: hex::encode(report_b.evidence.manifest_digest),
-                worker_id: "worker-b".into(),
+                worker_id: TEST_WORKER_B_I105.into(),
                 failed_at_unix: report_b.submitted_at_unix + 15,
                 reason: "retry".into(),
                 idempotency_key: "fail-b".into(),
@@ -15313,7 +15259,7 @@ mod repair_worker_tests {
                     &report_b.ticket_id,
                     report_b.evidence.manifest_digest,
                     report_b.evidence.provider_id,
-                    "worker-b",
+                    TEST_WORKER_B_I105,
                     "fail-b",
                     RepairWorkerActionV1::Fail {
                         failed_at_unix: report_b.submitted_at_unix + 15,
@@ -15339,6 +15285,50 @@ mod repair_worker_tests {
             states.sort_by(|(left, _), (right, _)| left.cmp(right));
             assert!(matches!(states[0].1, RepairTaskStateV1::Completed(..)));
             assert!(matches!(states[1].1, RepairTaskStateV1::Failed(..)));
+        });
+    }
+
+    #[test]
+    fn repair_worker_handler_rejects_alias_account_id() {
+        Runtime::new().expect("runtime").block_on(async {
+            let temp_dir = tempfile::tempdir().expect("temp dir");
+            let config = StorageConfig::builder()
+                .enabled(true)
+                .data_dir(temp_dir.path().join("storage"))
+                .build();
+            let node = sorafs_node::NodeHandle::new(config);
+            let signer = KeyPair::random();
+            let report = report("REP-462", [0x12; 32], [0x23; 32], 1_700_500_200);
+
+            node.enqueue_repair_report(&report).expect("enqueue report");
+
+            let claim = RepairWorkerClaimDto {
+                ticket_id: report.ticket_id.clone(),
+                manifest_digest_hex: hex::encode(report.evidence.manifest_digest),
+                worker_id: "worker@hbl.sbp".into(),
+                claimed_at_unix: report.submitted_at_unix + 10,
+                idempotency_key: "claim-invalid".into(),
+                signature: sign_worker_action(
+                    &signer,
+                    &report.ticket_id,
+                    report.evidence.manifest_digest,
+                    report.evidence.provider_id,
+                    "worker@hbl.sbp",
+                    "claim-invalid",
+                    RepairWorkerActionV1::Claim {
+                        claimed_at_unix: report.submitted_at_unix + 10,
+                    },
+                ),
+            };
+
+            let err = handle_post_sorafs_repair_claim(
+                MaybeTelemetry::disabled(),
+                node,
+                NoritoJson(claim),
+            )
+            .await
+            .expect_err("alias worker id must be rejected");
+            assert!(err.to_string().contains("canonical i105 account id"));
         });
     }
 }
@@ -15398,6 +15388,12 @@ fn manifest_validation_error(err: ManifestValidationError) -> Error {
 pub(crate) fn conversion_error(message: String) -> Error {
     Error::Query(iroha_data_model::ValidationFail::QueryFailed(
         iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+    ))
+}
+
+fn reject_server_side_signing(endpoint: &'static str) -> Error {
+    conversion_error(format!(
+        "{endpoint} no longer accepts private_key payloads; submit a locally signed transaction instead"
     ))
 }
 
@@ -17742,6 +17738,13 @@ fn tx_references_domain_id(
 
 #[cfg(feature = "app_api")]
 #[derive(Debug, Clone)]
+pub(crate) enum TxHistoryAssetSelectorInput {
+    AssetId(iroha_data_model::asset::AssetId),
+    DefinitionSelector(String),
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone)]
 pub(crate) enum TxHistoryAssetSelector {
     AssetId(iroha_data_model::asset::AssetId),
     DefinitionId(iroha_data_model::asset::id::AssetDefinitionId),
@@ -17762,29 +17765,41 @@ pub(crate) struct MultisigApprovalsViewerScope {
 }
 
 #[cfg(feature = "app_api")]
-pub(crate) fn parse_tx_history_asset_selector(raw: &str) -> Result<TxHistoryAssetSelector> {
+pub(crate) fn parse_tx_history_asset_selector(raw: &str) -> Result<TxHistoryAssetSelectorInput> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(conversion_error("asset_id must not be empty".to_string()));
     }
     if let Ok(asset_id) = iroha_data_model::asset::AssetId::parse_literal(trimmed) {
-        return Ok(TxHistoryAssetSelector::AssetId(asset_id));
+        return Ok(TxHistoryAssetSelectorInput::AssetId(asset_id));
     }
-    trimmed
-        .parse::<iroha_data_model::asset::id::AssetDefinitionId>()
-        .map(TxHistoryAssetSelector::DefinitionId)
-        .map_err(|_| {
-            conversion_error("asset_id must be a valid asset id or asset definition id".to_string())
-        })
+    if iroha_data_model::asset::id::AssetDefinitionId::parse_address_literal(trimmed).is_ok()
+        || trimmed
+            .parse::<iroha_data_model::asset::AssetDefinitionAlias>()
+            .is_ok()
+    {
+        return Ok(TxHistoryAssetSelectorInput::DefinitionSelector(
+            trimmed.to_owned(),
+        ));
+    }
+    Err(conversion_error(
+        "asset_id must be a valid asset id, canonical Base58 asset definition id, or active asset alias"
+            .to_string(),
+    ))
 }
 
 #[cfg(feature = "app_api")]
 pub(crate) fn resolve_tx_history_asset_selector(
+    world: &impl WorldReadOnly,
+    now_ms: u64,
     raw: Option<&str>,
     allowed_definition: Option<&iroha_data_model::asset::id::AssetDefinitionId>,
 ) -> Result<Option<TxHistoryAssetSelector>> {
     let requested = raw.map(parse_tx_history_asset_selector).transpose()?;
     if let Some(allowed_definition) = allowed_definition {
+        let requested = requested
+            .map(|selector| selector.into_resolved(world, now_ms))
+            .transpose()?;
         let requested_definition = requested.as_ref().map(|selector| match selector {
             TxHistoryAssetSelector::AssetId(asset_id) => asset_id.definition(),
             TxHistoryAssetSelector::DefinitionId(definition_id) => definition_id,
@@ -17798,7 +17813,26 @@ pub(crate) fn resolve_tx_history_asset_selector(
             TxHistoryAssetSelector::DefinitionId(allowed_definition.clone())
         })));
     }
-    Ok(requested)
+    requested
+        .map(|selector| selector.into_resolved(world, now_ms))
+        .transpose()
+}
+
+#[cfg(feature = "app_api")]
+impl TxHistoryAssetSelectorInput {
+    fn into_resolved(
+        self,
+        world: &impl WorldReadOnly,
+        now_ms: u64,
+    ) -> Result<TxHistoryAssetSelector> {
+        match self {
+            Self::AssetId(asset_id) => Ok(TxHistoryAssetSelector::AssetId(asset_id)),
+            Self::DefinitionSelector(definition) => {
+                resolve_asset_definition_selector(world, &definition, now_ms)
+                    .map(TxHistoryAssetSelector::DefinitionId)
+            }
+        }
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -17937,7 +17971,7 @@ fn validate_tx_filter_adapter(expr: &FilterExpr, telemetry: &MaybeTelemetry) -> 
                     let s = v
                         .as_str()
                         .ok_or_else(|| Error::Query(dm::ValidationFail::TooComplex))?;
-                    parse_tx_history_asset_selector(s)
+                    iroha_data_model::asset::AssetId::parse_literal(s)
                         .map(|_| ())
                         .map_err(|_| Error::Query(dm::ValidationFail::TooComplex))
                 }
@@ -19584,7 +19618,7 @@ mod account_path_metric_tests {
                 .get()
         };
         assert!(
-            parse_account_path_segment("bad@wonderland", &telemetry, endpoint).is_err(),
+            parse_account_path_segment("bad@hbl.sbp", &telemetry, endpoint).is_err(),
             "literal should be rejected"
         );
         let after = {
@@ -20055,7 +20089,11 @@ pub async fn handle_v1_account_transactions_get_with_policy(
         &telemetry,
         ENDPOINT_ACCOUNTS_TRANSACTIONS,
     )?;
+    let world = state.world_view();
+    let now_ms = asset_alias_observation_time_ms(&state);
     let asset_filter = resolve_tx_history_asset_selector(
+        &world,
+        now_ms,
         params.asset_id.as_deref(),
         allowed_asset_definition_id.as_ref(),
     )?;
@@ -20160,7 +20198,11 @@ pub async fn handle_v1_transactions_history_get(
     let cap = app_query_page_cap(&state);
     let limits = app_query_limits();
     let committed_txs = committed_transactions_snapshot(state.as_ref());
+    let world = state.world_view();
+    let now_ms = asset_alias_observation_time_ms(&state);
     let asset_filter = resolve_tx_history_asset_selector(
+        &world,
+        now_ms,
         params.asset_id.as_deref(),
         allowed_asset_definition_id.as_ref(),
     )?;
@@ -25806,44 +25848,6 @@ mod app_api_integration_tests {
         assert!(json.get("sumeragi").is_some());
         assert!(json.get("block").is_some());
         assert!(json.get("transaction").is_some());
-    }
-
-    #[tokio::test]
-    async fn confidential_derive_keyset_endpoint_roundtrip() {
-        let _guard = app_query_limits_guard();
-        let state = mk_app_state_for_tests();
-        let request = ConfidentialKeyRequest {
-            seed_hex: Some(
-                "4242424242424242424242424242424242424242424242424242424242424242".to_owned(),
-            ),
-            seed_b64: None,
-        };
-
-        let response = handle_post_confidential_derive_keyset(
-            state.chain_id.clone(),
-            state.queue.clone(),
-            state.state.clone(),
-            state.telemetry.clone(),
-            NoritoJson(request),
-        )
-        .await
-        .expect("derive payload");
-
-        let resp = response.into_response();
-        assert_eq!(resp.status(), http::StatusCode::OK);
-        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-        let json: Value = norito::json::from_slice(&bytes).expect("json body");
-        let obj = json.as_object().expect("object response");
-        assert_eq!(
-            obj.get("nullifier_key_hex")
-                .and_then(Value::as_str)
-                .unwrap(),
-            "cb7149cc545b97fe5ab1ffe85550f9b0146f3dbff7cf9d2921b9432b641bf0dc"
-        );
-        assert_eq!(
-            obj.get("seed_b64").and_then(Value::as_str).unwrap(),
-            "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI="
-        );
     }
 
     #[tokio::test]
@@ -33526,7 +33530,7 @@ struct OfflineAllowanceListParams {
     pub offset: u64,
     /// Optional compact sort string.
     pub sort: Option<String>,
-    /// Filter allowances by controller account literal (canonical I105 only).
+    /// Filter allowances by controller account literal (canonical i105 only).
     pub controller_id: Option<String>,
     /// Filter allowances by asset identifier.
     pub asset_id: Option<String>,
@@ -33575,11 +33579,11 @@ pub struct OfflineTransferListParams {
     pub offset: u64,
     /// Optional compact sort string.
     pub sort: Option<String>,
-    /// Filter transfers by originating controller (canonical I105 only).
+    /// Filter transfers by originating controller (canonical i105 only).
     pub controller_id: Option<String>,
-    /// Filter transfers by receiver account literal (canonical I105 only).
+    /// Filter transfers by receiver account literal (canonical i105 only).
     pub receiver_id: Option<String>,
-    /// Filter transfers by deposit account literal (canonical I105 only).
+    /// Filter transfers by deposit account literal (canonical i105 only).
     pub deposit_account_id: Option<String>,
     /// Filter transfers by asset identifier.
     pub asset_id: Option<String>,
@@ -34107,7 +34111,7 @@ pub struct AssetHolderGetParams {
     /// Offset for pagination (default 0).
     #[norito(default)]
     pub offset: u64,
-    /// Filter holders by canonical I105 account identifier.
+    /// Filter holders by canonical i105 account identifier.
     pub account_id: Option<String>,
     /// Filter holders by balance scope (`global` or `dataspace:<id>`).
     pub scope: Option<String>,
@@ -36514,20 +36518,35 @@ fn faucet_executable_is_claim(
 }
 
 #[cfg(feature = "app_api")]
+fn resolve_faucet_asset_definition_id(
+    app: &crate::SharedAppState,
+    faucet: &iroha_config::parameters::actual::ToriiFaucet,
+) -> Result<AssetDefinitionId> {
+    let world = app.state.world_view();
+    resolve_asset_definition_selector(
+        &world,
+        &faucet.asset_definition_id,
+        asset_alias_observation_time_ms(app.state.as_ref()),
+    )
+}
+
+#[cfg(feature = "app_api")]
 fn faucet_pow_recent_claims(
     app: &crate::SharedAppState,
     faucet: &iroha_config::parameters::actual::ToriiFaucet,
     anchor_height: u64,
-) -> u64 {
+) -> Result<u64> {
     if faucet.pow_adaptive_lookback_blocks == 0
         || faucet.pow_adaptive_claims_per_extra_bit == 0
         || faucet.pow_adaptive_max_extra_bits == 0
     {
-        return 0;
+        return Ok(0);
     }
 
-    let source_asset_id =
-        AssetId::new(faucet.asset_definition_id.clone(), faucet.authority.clone());
+    let source_asset_id = AssetId::new(
+        resolve_faucet_asset_definition_id(app, faucet)?,
+        faucet.authority.clone(),
+    );
     let start_height = anchor_height
         .saturating_sub(faucet.pow_adaptive_lookback_blocks.saturating_sub(1))
         .max(1);
@@ -36568,7 +36587,7 @@ fn faucet_pow_recent_claims(
             .count()
     };
 
-    total.saturating_add(u64::try_from(queued_claims).unwrap_or(u64::MAX))
+    Ok(total.saturating_add(u64::try_from(queued_claims).unwrap_or(u64::MAX)))
 }
 
 #[cfg(feature = "app_api")]
@@ -36589,14 +36608,14 @@ fn faucet_pow_effective_difficulty_bits(
     app: &crate::SharedAppState,
     faucet: &iroha_config::parameters::actual::ToriiFaucet,
     anchor_height: u64,
-) -> u8 {
-    let recent_claims = faucet_pow_recent_claims(app, faucet, anchor_height);
+) -> Result<u8> {
+    let recent_claims = faucet_pow_recent_claims(app, faucet, anchor_height)?;
     let adaptive_bits = adaptive_faucet_pow_extra_bits(
         recent_claims,
         faucet.pow_adaptive_claims_per_extra_bit,
         faucet.pow_adaptive_max_extra_bits,
     );
-    faucet.pow_difficulty_bits.saturating_add(adaptive_bits)
+    Ok(faucet.pow_difficulty_bits.saturating_add(adaptive_bits))
 }
 
 #[cfg(feature = "app_api")]
@@ -36692,7 +36711,7 @@ fn verify_faucet_pow(
     }
 
     let effective_difficulty_bits =
-        faucet_pow_effective_difficulty_bits(app, faucet, anchor_height);
+        faucet_pow_effective_difficulty_bits(app, faucet, anchor_height)?;
     if effective_difficulty_bits == 0 {
         return Ok(());
     }
@@ -37000,7 +37019,7 @@ pub async fn handle_v1_accounts_faucet_puzzle(
         ));
     }
     let anchor_hash = faucet_pow_anchor_hash(&app, anchor_height)?;
-    let difficulty_bits = faucet_pow_effective_difficulty_bits(&app, faucet, anchor_height);
+    let difficulty_bits = faucet_pow_effective_difficulty_bits(&app, faucet, anchor_height)?;
     let challenge_salt_hex = if difficulty_bits > 0 {
         faucet_pow_challenge_salt(&app, faucet, anchor_height)?
             .as_ref()
@@ -37065,9 +37084,10 @@ pub async fn handle_v1_accounts_faucet(
         pow_nonce_hex.as_deref(),
     )?;
 
-    let destination_asset_id = AssetId::new(faucet.asset_definition_id.clone(), account_id.clone());
-    let source_asset_id =
-        AssetId::new(faucet.asset_definition_id.clone(), faucet.authority.clone());
+    let asset_definition_id = resolve_faucet_asset_definition_id(&app, faucet)?;
+
+    let destination_asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
+    let source_asset_id = AssetId::new(asset_definition_id.clone(), faucet.authority.clone());
     let (destination_balance, source_balance) = {
         let world = app.state.world_view();
         if world.account(&account_id).is_err() {
@@ -37115,7 +37135,7 @@ pub async fn handle_v1_accounts_faucet(
 
     let response = AccountFaucetResponseDto {
         account_id: account_id.to_string(),
-        asset_definition_id: faucet.asset_definition_id.to_string(),
+        asset_definition_id: asset_definition_id.to_string(),
         asset_id: destination_asset_id.to_string(),
         amount: faucet.amount.to_string(),
         tx_hash_hex,
@@ -38804,7 +38824,7 @@ mod accounts_query_tests {
         .await;
         assert!(
             i105_result.is_err(),
-            "non-canonical I105 literal `{non_canonical_i105_literal}` must be rejected"
+            "non-canonical i105 literal `{non_canonical_i105_literal}` must be rejected"
         );
     }
 }

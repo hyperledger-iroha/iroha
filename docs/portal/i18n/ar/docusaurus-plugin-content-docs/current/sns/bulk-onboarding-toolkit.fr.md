@@ -34,7 +34,7 @@ Le parseur exige la ligne d'en-tete suivante (الأمر مرن):| كولون | 
 |---------|-------|-------------|
 | `label` | أوي | Libelle requeste (casse mixte Acceptee؛ l'outil Normalize selon Norm v1 et UTS-46). |
 | `suffix_id` | أوي | معرف لاحقة رقمية (عشري أو `0x` سداسي عشري). |
-| `owner` | أوي | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` | أوي | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` | أوي | كامل `1..=255`. |
 | `payment_asset_id` | أوي | نشاط التسوية (على سبيل المثال `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | أوي | Entiers Non Signespresentant des Units Natives de l'actif. |

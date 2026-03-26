@@ -123,6 +123,16 @@ const HEADER_SORA_PROOF_STATUS: &str = "sora-proof-status";
 /// `Result` with [`QueryError`] as an error
 pub type QueryResult<T> = core::result::Result<T, QueryError>;
 
+fn ensure_canonical_i105_account_id(value: &str, field: &str) -> Result<()> {
+    let trimmed = value.trim();
+    if trimmed != value {
+        return Err(eyre!("{field} must not contain surrounding whitespace"));
+    }
+    AccountId::parse_encoded(trimmed)
+        .map_err(|err| eyre!("{field} must be a canonical i105 account id: {err}"))?;
+    Ok(())
+}
+
 /// Filters for `/v1/zk/prover/reports` listing/counting/deletion endpoints.
 #[derive(Debug, Default, Clone)]
 pub struct ZkProverReportsFilter<'a> {
@@ -3416,7 +3426,7 @@ mod evidence_http_tests {
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, "{}");
-        let literal = "alice@wonderland";
+        let literal = "alice@hbl.sbp";
 
         with_mock_http(respond_with(&snapshots, response), || {
             let resp = client
@@ -7595,6 +7605,7 @@ impl Client {
         &self,
         request: &SorafsRepairWorkerClaimRequest,
     ) -> Result<Response<Vec<u8>>> {
+        ensure_canonical_i105_account_id(&request.worker_id, "worker_id")?;
         let url = join_torii_url(&self.torii_url, "v1/sorafs/audit/repair/claim");
         let body = norito::json::to_vec(request)?;
         self.default_request(HttpMethod::POST, url)
@@ -7612,6 +7623,7 @@ impl Client {
         &self,
         request: &SorafsRepairWorkerCompleteRequest,
     ) -> Result<Response<Vec<u8>>> {
+        ensure_canonical_i105_account_id(&request.worker_id, "worker_id")?;
         let url = join_torii_url(&self.torii_url, "v1/sorafs/audit/repair/complete");
         let body = norito::json::to_vec(request)?;
         self.default_request(HttpMethod::POST, url)
@@ -7629,6 +7641,7 @@ impl Client {
         &self,
         request: &SorafsRepairWorkerFailRequest,
     ) -> Result<Response<Vec<u8>>> {
+        ensure_canonical_i105_account_id(&request.worker_id, "worker_id")?;
         let url = join_torii_url(&self.torii_url, "v1/sorafs/audit/repair/fail");
         let body = norito::json::to_vec(request)?;
         self.default_request(HttpMethod::POST, url)
@@ -7646,6 +7659,7 @@ impl Client {
         &self,
         proposal: &RepairSlashProposalV1,
     ) -> Result<Response<Vec<u8>>> {
+        ensure_canonical_i105_account_id(&proposal.auditor_account, "auditor_account")?;
         let url = join_torii_url(&self.torii_url, "v1/sorafs/audit/repair/slash");
         let body = norito::json::to_vec(proposal)?;
         self.default_request(HttpMethod::POST, url)
@@ -11570,6 +11584,8 @@ mod tests {
     const PASSWORD: &str = "ilovetea";
     // `mad_hatter:ilovetea` encoded with base64
     const ENCRYPTED_CREDENTIALS: &str = "bWFkX2hhdHRlcjppbG92ZXRlYQ==";
+    const TEST_WORKER_I105: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+    const TEST_AUDITOR_I105: &str = "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9";
 
     fn sample_commit_qc(block_header: &BlockHeader) -> Qc {
         let validator_set: Vec<PeerId> = Vec::new();
@@ -15808,7 +15824,7 @@ mod tests {
         let ticket_id = RepairTicketId("REP-401".to_string());
         let manifest_digest = [0x11; 32];
         let provider_id = [0x22; 32];
-        let worker_id = "worker@wonderland".to_string();
+        let worker_id = TEST_WORKER_I105.to_string();
         let idempotency_key = "claim-401".to_string();
         let claimed_at_unix = 1_700_000_001;
         let payload = RepairWorkerSignaturePayloadV1 {
@@ -15855,7 +15871,7 @@ mod tests {
         let ticket_id = RepairTicketId("REP-402".to_string());
         let manifest_digest = [0x33; 32];
         let provider_id = [0x44; 32];
-        let worker_id = "worker@wonderland".to_string();
+        let worker_id = TEST_WORKER_I105.to_string();
         let idempotency_key = "complete-402".to_string();
         let completed_at_unix = 1_700_000_002;
         let resolution_notes = Some("repaired".to_string());
@@ -15907,7 +15923,7 @@ mod tests {
         let ticket_id = RepairTicketId("REP-403".to_string());
         let manifest_digest = [0x55; 32];
         let provider_id = [0x66; 32];
-        let worker_id = "worker@wonderland".to_string();
+        let worker_id = TEST_WORKER_I105.to_string();
         let idempotency_key = "fail-403".to_string();
         let failed_at_unix = 1_700_000_003;
         let reason = "checksum_mismatch".to_string();
@@ -15960,7 +15976,7 @@ mod tests {
             ticket_id: RepairTicketId("REP-404".to_string()),
             provider_id: [0x77; 32],
             manifest_digest: [0x88; 32],
-            auditor_account: "auditor@wonderland".to_string(),
+            auditor_account: TEST_AUDITOR_I105.to_string(),
             proposed_penalty_nano: 500,
             submitted_at_unix: 1_700_000_004,
             rationale: "sla_missed".to_string(),
@@ -15988,6 +16004,62 @@ mod tests {
             norito::json::from_slice(&snapshot.body).expect("decode request body");
         let expected = norito::json::to_value(&proposal).expect("encode request");
         assert_eq!(body, expected);
+    }
+
+    #[test]
+    fn sorafs_repair_claim_rejects_alias_worker_id() {
+        let client = client_with_base_url(base_url());
+        let key_pair = KeyPair::random();
+        let ticket_id = RepairTicketId("REP-405".to_string());
+        let manifest_digest = [0x11; 32];
+        let provider_id = [0x22; 32];
+        let worker_id = "worker@hbl.sbp".to_string();
+        let idempotency_key = "claim-405".to_string();
+        let claimed_at_unix = 1_700_000_005;
+        let payload = RepairWorkerSignaturePayloadV1 {
+            version: REPAIR_WORKER_SIGNATURE_VERSION_V1,
+            ticket_id: ticket_id.clone(),
+            manifest_digest,
+            provider_id,
+            worker_id: worker_id.clone(),
+            idempotency_key: idempotency_key.clone(),
+            action: RepairWorkerActionV1::Claim { claimed_at_unix },
+        };
+        let signature = SignatureOf::new(key_pair.private_key(), &payload);
+        let request = SorafsRepairWorkerClaimRequest {
+            ticket_id,
+            manifest_digest_hex: hex::encode(manifest_digest),
+            worker_id,
+            claimed_at_unix,
+            idempotency_key,
+            signature,
+        };
+
+        let err = client
+            .post_sorafs_repair_claim(&request)
+            .expect_err("alias worker id must be rejected");
+        assert!(err.to_string().contains("canonical i105 account id"));
+    }
+
+    #[test]
+    fn sorafs_repair_slash_rejects_alias_auditor_account() {
+        let client = client_with_base_url(base_url());
+        let proposal = RepairSlashProposalV1 {
+            version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
+            ticket_id: RepairTicketId("REP-406".to_string()),
+            provider_id: [0x77; 32],
+            manifest_digest: [0x88; 32],
+            auditor_account: "auditor@hbl.sbp".to_string(),
+            proposed_penalty_nano: 500,
+            submitted_at_unix: 1_700_000_006,
+            rationale: "sla_missed".to_string(),
+            approval: None,
+        };
+
+        let err = client
+            .post_sorafs_repair_slash(&proposal)
+            .expect_err("alias auditor account must be rejected");
+        assert!(err.to_string().contains("canonical i105 account id"));
     }
 
     #[test]

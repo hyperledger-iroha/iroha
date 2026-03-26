@@ -238,7 +238,7 @@ kilid addımı.
 - Hər hesaba görə əsas törəmə iyerarxiyası:
   - `sk_spend` → `nk` (nülledici açar), `ivk` (daxil olan baxış açarı), `ovk` (gidən baxış açarı), `fvk`.
 - Şifrələnmiş qeyd yükləri ECDH-dən əldə edilən paylaşılan açarlarla AEAD-dan istifadə edir; isteğe bağlı auditor baxış açarları aktiv siyasətinə görə çıxışlara əlavə edilə bilər.
-- CLI əlavələri: `confidential create-keys`, `confidential send`, `confidential export-view-key`, qeydlərin şifrəsini açmaq üçün auditor aləti və Norito oflayn zərfləri hazırlamaq/yoxlamaq üçün `iroha app zk envelope` köməkçisi. Torii `POST /v1/confidential/derive-keyset` vasitəsilə eyni törəmə axınını ifşa edir, həm hex, həm də base64 formalarını qaytarır, beləliklə, pul kisələri proqramlı şəkildə əsas iyerarxiyaları əldə edə bilsin.
+- CLI əlavələri: `confidential create-keys`, `confidential send`, `confidential export-view-key`, qeydlərin şifrəsini açmaq üçün auditor aləti və Norito oflayn zərfləri hazırlamaq/yoxlamaq üçün `iroha app zk envelope` köməkçisi.
 
 ## Qaz, Limitlər və DoS Nəzarətləri
 - Deterministik qaz cədvəli:

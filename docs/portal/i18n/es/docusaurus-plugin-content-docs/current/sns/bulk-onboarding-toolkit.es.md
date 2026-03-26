@@ -33,7 +33,7 @@ El analizador requiere la siguiente fila de encabezado (el orden es flexible):| 
 |---------|-----------|-------------|
 | `label` | Sí | Etiqueta solicitada (se acepta mayus/minus; la herramienta normaliza según Norma v1 y UTS-46). |
 | `suffix_id` | Si | Identificador numérico de sufijo (decimal o `0x` hexadecimal). |
-| `owner` | Si | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` | Si | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` | Si | Entero `1..=255`. |
 | `payment_asset_id` | Si | Activo de liquidación (por ejemplo `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Si | Enteros sin signo que representan unidades nativas del activo. |

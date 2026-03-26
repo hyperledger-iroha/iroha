@@ -47,7 +47,7 @@ Torii 或 CLI。助手驗證前面的每一行，發出兩個
 |--------|----------|-------------|
 | `label` |是的 |請求的標籤（接受混合大小寫；工具根據 Norm v1 和 UTS-46 進行標準化）。 |
 | `suffix_id` |是的 |數字後綴標識符（十進製或 `0x` 十六進制）。 |
-| `owner` |是的 | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` |是的 | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` |是的 |整數 `1..=255`。 |
 | `payment_asset_id` |是的 |結算資產（例如 `61CtjvNd9T3THAR65GsMVHr82Bjc`）。 |
 | `payment_gross` / `payment_net` |是的 |表示資產本機單位的無符號整數。 |

@@ -89,6 +89,10 @@ function sampleAccountForms() {
 
 const SAMPLE_ACCOUNT_FORMS = sampleAccountForms();
 const SAMPLE_ACCOUNT_ID = SAMPLE_ACCOUNT_FORMS.canonical;
+const SAMPLE_RWA_ID =
+  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities";
+const SAMPLE_RWA_ID_UPPER =
+  "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF$commodities";
 
 function fixtureAccountAddress(label, domain = "fixture-domain") {
   let attempt = 0;
@@ -11449,6 +11453,201 @@ test("listExplorerNfts surfaces permission errors", async () => {
   );
 });
 
+test("listRwas hits rwa endpoint", async () => {
+  const fetchImpl = async (url) => {
+    const parsed = new URL(url);
+    assert.equal(parsed.pathname, "/v1/rwas");
+    assert.equal(parsed.searchParams.get("limit"), "25");
+    return createResponse({
+      status: 200,
+      jsonData: { items: [{ id: SAMPLE_RWA_ID }], total: 1 },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const payload = await client.listRwas({ limit: 25 });
+  assert.deepEqual(payload.items[0], { id: SAMPLE_RWA_ID });
+});
+
+test("listExplorerRwas encodes owner/domain filters and pagination", async () => {
+  const calls = [];
+  const fetchImpl = async (url) => {
+    const parsed = new URL(url);
+    calls.push(parsed);
+    return createResponse({
+      status: 200,
+      jsonData: {
+        pagination: { page: 2, per_page: 5, total_pages: 3, total_items: 12 },
+        items: [
+          {
+            id: SAMPLE_RWA_ID,
+            owned_by: SAMPLE_ACCOUNT_ID,
+            quantity: "10.5",
+            held_quantity: "1.0",
+            primary_reference: "vault-cert-001",
+            status: "active",
+            is_frozen: false,
+            metadata: { origin: "AE" },
+          },
+        ],
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const page = await client.listExplorerRwas({
+    ownedBy: SAMPLE_ACCOUNT_ID,
+    domainId: "commodities",
+    offset: 5,
+    limit: 5,
+  });
+  assert.equal(calls.length, 1);
+  const parsed = calls[0];
+  assert.equal(parsed.pathname, "/v1/explorer/rwas");
+  assert.equal(parsed.searchParams.get("owned_by"), SAMPLE_ACCOUNT_ID);
+  assert.equal(parsed.searchParams.get("domain"), "commodities");
+  assert.equal(parsed.searchParams.get("per_page"), "5");
+  assert.equal(parsed.searchParams.get("page"), "2");
+  assert.deepEqual(page.pagination, { page: 2, perPage: 5, totalPages: 3, totalItems: 12 });
+  assert.deepEqual(page.items[0], {
+    id: SAMPLE_RWA_ID,
+    ownedBy: SAMPLE_ACCOUNT_ID,
+    quantity: "10.5",
+    heldQuantity: "1.0",
+    primaryReference: "vault-cert-001",
+    status: "active",
+    isFrozen: false,
+    metadata: { origin: "AE" },
+    raw: {
+      id: SAMPLE_RWA_ID,
+      owned_by: SAMPLE_ACCOUNT_ID,
+      quantity: "10.5",
+      held_quantity: "1.0",
+      primary_reference: "vault-cert-001",
+      status: "active",
+      is_frozen: false,
+      metadata: { origin: "AE" },
+    },
+  });
+});
+
+test("getExplorerRwaDetail encodes path and decodes response", async () => {
+  const fetchImpl = async (url) => {
+    const parsed = new URL(url);
+    assert.equal(
+      parsed.pathname,
+      `/v1/explorer/rwas/${encodeURIComponent(SAMPLE_RWA_ID)}`,
+    );
+    return createResponse({
+      status: 200,
+      jsonData: {
+        id: SAMPLE_RWA_ID,
+        owned_by: SAMPLE_ACCOUNT_ID,
+        quantity: "2",
+        held_quantity: "0",
+        primary_reference: "vault-cert-002",
+        status: null,
+        is_frozen: true,
+        metadata: {},
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const detail = await client.getExplorerRwaDetail(SAMPLE_RWA_ID_UPPER);
+  assert.deepEqual(detail, {
+    id: SAMPLE_RWA_ID,
+    ownedBy: SAMPLE_ACCOUNT_ID,
+    quantity: "2",
+    heldQuantity: "0",
+    primaryReference: "vault-cert-002",
+    status: null,
+    isFrozen: true,
+    metadata: {},
+    raw: {
+      id: SAMPLE_RWA_ID,
+      owned_by: SAMPLE_ACCOUNT_ID,
+      quantity: "2",
+      held_quantity: "0",
+      primary_reference: "vault-cert-002",
+      status: null,
+      is_frozen: true,
+      metadata: {},
+    },
+  });
+});
+
+test("queryRwas posts structured envelope", async () => {
+  let capturedBody;
+  const fetchImpl = async (_url, init) => {
+    assert.equal(init.method, "POST");
+    capturedBody = JSON.parse(init.body);
+    return createResponse({
+      status: 200,
+      jsonData: { items: [{ id: SAMPLE_RWA_ID }], total: 1 },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const page = await client.queryRwas({
+    filter: { Eq: ["id", SAMPLE_RWA_ID] },
+    sort: [{ key: "id", order: "desc" }],
+    fetchSize: 10,
+  });
+  assert.deepEqual(capturedBody.filter, { Eq: ["id", SAMPLE_RWA_ID] });
+  assert.deepEqual(capturedBody.sort, [{ key: "id", order: "desc" }]);
+  assert.equal(capturedBody.fetch_size, 10);
+  assert.deepEqual(page.items[0], { id: SAMPLE_RWA_ID });
+});
+
+test("iterateAccountRwas walks explorer pagination and honours maxItems", async () => {
+  const fetchImpl = async (url) => {
+    const parsed = new URL(url);
+    const page = Number(parsed.searchParams.get("page") ?? 1);
+    const perPage = Number(parsed.searchParams.get("per_page") ?? 10);
+    const totalItems = 5;
+    const start = (page - 1) * perPage;
+    const remaining = Math.max(0, totalItems - start);
+    const items = Array.from({ length: Math.min(perPage, remaining) }, (_, index) => ({
+      id: `${SAMPLE_RWA_ID}:${start + index + 1}`,
+      owned_by: SAMPLE_ACCOUNT_ID,
+      quantity: "1",
+      held_quantity: "0",
+      primary_reference: `vault-cert-${start + index + 1}`,
+      status: null,
+      is_frozen: false,
+      metadata: { page, perPage },
+    }));
+    const totalPages = Math.ceil(totalItems / perPage);
+    return createResponse({
+      status: 200,
+      jsonData: {
+        pagination: {
+          page,
+          per_page: perPage,
+          total_pages: totalPages,
+          total_items: totalItems,
+        },
+        items,
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const seen = [];
+  for await (const rwa of client.iterateAccountRwas(SAMPLE_ACCOUNT_ID, {
+    pageSize: 2,
+    maxItems: 3,
+  })) {
+    seen.push(rwa.id);
+  }
+  assert.deepEqual(seen, [
+    `${SAMPLE_RWA_ID}:1`,
+    `${SAMPLE_RWA_ID}:2`,
+    `${SAMPLE_RWA_ID}:3`,
+  ]);
+});
+
 test("queryDomains posts structured envelope", async () => {
   let capturedBody;
   const fetchImpl = async (_url, init) => {
@@ -12027,7 +12226,7 @@ test("listAccountAssets rejects malformed asset filters", async () => {
 
   await assert.rejects(
     () => client.listAccountAssets(FIXTURE_ALICE_ID, { assetId: invalidAssetId }),
-    /must use '<asset-definition-id>#<account-id>' with optional '#dataspace:<id>' suffix/,
+    /must use '<asset-definition-id>#<i105-account-id>' with optional '#dataspace:<id>' suffix/,
   );
 });
 
@@ -15132,6 +15331,38 @@ test("getMultisigSpec rejects selectors that set both account id and alias", asy
         multisigAccountAlias: "cbdc@hbl",
       }),
     /requires exactly one of multisig_account_id or multisig_account_alias/,
+  );
+});
+
+test("getMultisigSpec accepts domain-scoped aliases and rejects unsupported alias shapes", async () => {
+  let captured;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (url, init) => {
+      captured = { url, init };
+      return createResponse({
+        status: 200,
+        jsonData: {
+          resolved_multisig_account_id: FIXTURE_ALICE_ID,
+          spec: { quorum: 2, transaction_ttl_ms: 60000 },
+        },
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+
+  await client.getMultisigSpec({
+    multisigAccountAlias: "cbdc@hbl.universal",
+  });
+  assert.deepEqual(JSON.parse(captured.init.body), {
+    multisig_account_alias: "cbdc@hbl.universal",
+  });
+
+  await assert.rejects(
+    () =>
+      client.getMultisigSpec({
+        multisigAccountAlias: "cbdc@hbl.universal.extra",
+      }),
+    /must use label@dataspace or label@domain.dataspace form/,
   );
 });
 

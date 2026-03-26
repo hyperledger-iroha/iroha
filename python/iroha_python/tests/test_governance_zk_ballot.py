@@ -105,7 +105,7 @@ def test_governance_submit_zk_ballot_v1_rejects_noncanonical_owner() -> None:
     session = RecordingSession(StubResponse(payload={"ok": True}))
     client = ToriiClient("http://node.test", session=session)
 
-    with pytest.raises(ValueError, match="canonical I105 account id"):
+    with pytest.raises(ValueError, match="canonical i105 account id"):
         client.governance_submit_zk_ballot_v1(
             {
                 "authority": CANONICAL_AUTHORITY,
@@ -139,7 +139,7 @@ def test_governance_submit_zk_ballot_proof_v1_rejects_noncanonical_owner() -> No
     session = RecordingSession(StubResponse(payload={"ok": True}))
     client = ToriiClient("http://node.test", session=session)
 
-    with pytest.raises(ValueError, match="canonical I105 account id"):
+    with pytest.raises(ValueError, match="canonical i105 account id"):
         client.governance_submit_zk_ballot_proof_v1(
             {
                 "authority": CANONICAL_AUTHORITY,
@@ -241,7 +241,7 @@ def test_governance_submit_zk_ballot_rejects_noncanonical_owner() -> None:
     session = RecordingSession(StubResponse(payload={"ok": True}))
     client = ToriiClient("http://node.test", session=session)
 
-    with pytest.raises(ValueError, match="canonical I105 account id"):
+    with pytest.raises(ValueError, match="canonical i105 account id"):
         client.governance_submit_zk_ballot(
             {
                 "authority": CANONICAL_AUTHORITY,

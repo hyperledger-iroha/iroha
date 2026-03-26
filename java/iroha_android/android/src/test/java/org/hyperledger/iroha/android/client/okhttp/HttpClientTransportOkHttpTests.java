@@ -49,7 +49,7 @@ public final class HttpClientTransportOkHttpTests {
       final TransactionPayload payload =
           TransactionPayload.builder()
               .setChainId("00000001")
-              .setAuthority("okhttp@wonderland")
+              .setAuthority("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
               .setCreationTimeMs(1_700_000_000_000L)
               .setInstructionBytes("payload".getBytes(StandardCharsets.UTF_8))
               .setTimeToLiveMs(5_000L)

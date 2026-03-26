@@ -168,7 +168,7 @@ impl norito::json::FastJsonWrite for AccountId {
     fn write_json(&self, out: &mut String) {
         let literal = self
             .canonical_i105()
-            .expect("AccountId JSON serialization requires canonical I105 encoding");
+            .expect("AccountId JSON serialization requires canonical i105 encoding");
         norito::json::JsonSerialize::json_serialize(&literal, out);
     }
 }
@@ -450,7 +450,7 @@ impl Default for AccountDetails {
 /// In other places use [`Account`] directly.
 pub type AccountValue = Owned<AccountDetails>;
 
-const ERR_ACCOUNT_LITERAL_FORMAT: &str = "AccountId must use a canonical I105 literal";
+const ERR_ACCOUNT_LITERAL_FORMAT: &str = "AccountId must use a canonical i105 literal";
 
 impl AccountId {
     /// Construct a single-signature account identifier.
@@ -542,7 +542,7 @@ impl AccountId {
         self.try_signatory().is_some_and(|pk| pk == public_key)
     }
 
-    /// Construct the address payload used for canonical I105 encoding.
+    /// Construct the address payload used for canonical i105 encoding.
     ///
     /// # Errors
     ///
@@ -568,7 +568,7 @@ impl AccountId {
             .to_i105_for_discriminant(network_prefix)
     }
 
-    /// Encode the account as canonical I105 using the configured chain discriminant.
+    /// Encode the account as canonical i105 using the configured chain discriminant.
     ///
     /// # Errors
     ///
@@ -591,11 +591,11 @@ impl AccountId {
 
     /// Parse an account identifier from text, returning the canonical representation and source.
     ///
-    /// Canonical I105 literals are accepted.
+    /// Canonical i105 literals are accepted.
     /// Legacy forms such as `<identifier>@<domain>`, canonical hex, dotted/non-canonical
-    /// I105 literals, aliases, UAID, opaque account literals, and historical
+    /// i105 literals, aliases, UAID, opaque account literals, and historical
     /// non-I105 envelopes are rejected.
-    /// The returned canonical string always matches the canonical I105 representation.
+    /// The returned canonical string always matches the canonical i105 representation.
     ///
     /// # Errors
     ///
@@ -612,7 +612,7 @@ impl AccountId {
         })
     }
 
-    /// Canonicalise a textual identifier into the I105 form.
+    /// Canonicalise a textual identifier into the i105 form.
     ///
     /// # Errors
     ///
@@ -1069,7 +1069,7 @@ mod account_id_parsing_tests {
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
                 .expect("parse public key literal");
-        let raw = format!("{public_key}@wonderland");
+        let raw = format!("{public_key}@hbl.sbp");
 
         let err = AccountId::parse_encoded(&raw)
             .map(crate::account::ParsedAccountId::into_account_id)
@@ -1125,7 +1125,7 @@ mod account_id_parsing_tests {
 
     #[test]
     fn from_str_rejects_alias_literals() {
-        let err = AccountId::parse_encoded("blue-alias@wonderland")
+        let err = AccountId::parse_encoded("blue-alias@hbl.sbp")
             .map(crate::account::ParsedAccountId::into_account_id)
             .expect_err("aliases must be rejected");
         assert!(
@@ -1142,7 +1142,7 @@ mod account_id_parsing_tests {
             .expect_err("alias label should not parse as a valid address");
         assert_eq!(err.code_str(), "ERR_CHECKSUM_MISMATCH");
 
-        let err = AccountId::parse_encoded("primary@wonderland")
+        let err = AccountId::parse_encoded("primary@hbl.sbp")
             .map(crate::account::ParsedAccountId::into_account_id)
             .expect_err("aliases must be rejected");
         assert!(
@@ -1182,7 +1182,7 @@ mod account_id_parsing_tests {
     fn parse_rejects_public_key_source() {
         let _guard = guard_chain_discriminant();
         let public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
-        let raw = format!("{public_key}@wonderland");
+        let raw = format!("{public_key}@hbl.sbp");
 
         let err = AccountId::parse_encoded(&raw).expect_err("public key source must be rejected");
         assert!(
@@ -1234,7 +1234,7 @@ mod account_id_parsing_tests {
         let previous_chain_discriminant = address::set_chain_discriminant(42);
         let _reset = Reset(previous_chain_discriminant);
         let err =
-            AccountId::parse_encoded("blue-alias@wonderland").expect_err("alias must be rejected");
+            AccountId::parse_encoded("blue-alias@hbl.sbp").expect_err("alias must be rejected");
 
         assert!(
             err.reason().contains("I105"),

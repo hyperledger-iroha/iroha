@@ -30,7 +30,7 @@ IDs میں `Display`/`FromStr` راؤنڈ ٹرپ کے ساتھ مستحکم سٹ
 - `AssetDefinitionId` — کیننیکل `unprefixed Base58 address with versioning and checksum` (UUID-v4 بائٹس)۔ تعریف: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`۔ `alias` لٹریلز `<name>#<domain>.<dataspace>` یا `<name>#<dataspace>`، `<name>` کے ساتھ اثاثہ کی تعریف کے نام کے برابر ہونا چاہیے۔ کوڈ: `crates/iroha_data_model/src/asset/definition.rs`۔
 
   - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`, where `status` is `permanent`, `leased_active`, `leased_grace`, or `expired_pending_cleanup`. Alias selectors resolve against the latest committed block creation time and stop resolving after grace even before sweep removes stale bindings.
-- `AssetId`: کیننیکل انکوڈ شدہ لٹریل `<asset-definition-id>#<account-id>` (میراثی متنی شکلیں پہلی ریلیز میں تعاون یافتہ نہیں ہیں)۔- `NftId` — `nft$domain`۔ NFT: `{ id, content: Metadata, owned_by }`۔ کوڈ: `crates/iroha_data_model/src/nft.rs`۔
+- `AssetId`: کیننیکل انکوڈ شدہ لٹریل `<asset-definition-id>#<i105-account-id>` (میراثی متنی شکلیں پہلی ریلیز میں تعاون یافتہ نہیں ہیں)۔- `NftId` — `nft$domain`۔ NFT: `{ id, content: Metadata, owned_by }`۔ کوڈ: `crates/iroha_data_model/src/nft.rs`۔
 - `RoleId` — `name`۔ کردار: بلڈر `NewRole { inner: Role, grant_to }` کے ساتھ `{ id, permissions: BTreeSet<Permission> }`۔ کوڈ: `crates/iroha_data_model/src/role.rs`۔
 - `Permission` — `{ name: Ident, payload: Json }`۔ کوڈ: `crates/iroha_data_model/src/permission.rs`۔
 - `PeerId`/`Peer` — ہم مرتبہ کی شناخت (عوامی کلید) اور پتہ۔ کوڈ: `crates/iroha_data_model/src/peer.rs`۔
@@ -206,7 +206,7 @@ IDs میں `Display`/`FromStr` راؤنڈ ٹرپ کے ساتھ مستحکم سٹ
 
 نقل مکانی نوٹ:
 - `name#domain` ٹیکسٹول اثاثہ کی تعریف IDs پہلی ریلیز میں جان بوجھ کر غیر تعاون یافتہ ہیں۔
-- ٹکسال/برن/ٹرانسفر باؤنڈری پر اثاثہ IDs کیننیکل `<asset-definition-id>#<account-id>` رہیں۔ `iroha tools encode asset-id` `--definition <base58-asset-definition-id>` یا `--alias ...` پلس `--account` کے ساتھ استعمال کریں۔
+- ٹکسال/برن/ٹرانسفر باؤنڈری پر اثاثہ IDs کیننیکل `<asset-definition-id>#<i105-account-id>` رہیں۔ `iroha tools encode asset-id` `--definition <base58-asset-definition-id>` یا `--alias ...` پلس `--account` کے ساتھ استعمال کریں۔
 
 ---
 

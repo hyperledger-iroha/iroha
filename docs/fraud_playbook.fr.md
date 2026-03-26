@@ -107,7 +107,7 @@ correspondance un‑à‑un avec les types Norito implémentés dans
 
 - **Entrée de risque** – `POST /v1/fraud/query` accepte le schéma `RiskQuery` :
   - `query_id` (`[u8; 32]`, encodé en hex)
-  - `subject` (`AccountId`, `domainless encoded literal; canonical I105 only (i105-default `sora...` rejected)`)
+  - `subject` (`AccountId`, `domainless encoded literal; canonical i105 only (i105-default `sora...` rejected)`)
   - `operation` (enum tagué correspondant à `RiskOperation` ; le discriminant
     JSON `type` reflète la variante de l’enum)
   - `related_asset` (`AssetId`, optionnel)

@@ -46,7 +46,7 @@ Parser کو درج ذیل header row درکار ہے (order flexible ہے):
 |--------|----------|-------------|
 | `label` | Yes | Requested label (mixed case accepted; tool Norm v1 اور UTS-46 کے مطابق normalize کرتا ہے). |
 | `suffix_id` | Yes | Numeric suffix identifier (decimal یا `0x` hex). |
-| `owner` | Yes | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` | Yes | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` | Yes | Integer `1..=255`. |
 | `payment_asset_id` | Yes | Settlement asset (مثال `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Yes | Unsigned integers جو asset-native units کو represent کریں۔ |

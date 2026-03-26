@@ -10,23 +10,17 @@ import org.hyperledger.iroha.android.client.JsonEncoder;
 public final class SubscriptionActionRequest {
 
   private final String authority;
-  private final String privateKey;
   private final Long chargeAtMs;
   private final CancelMode cancelMode;
 
   private SubscriptionActionRequest(final Builder builder) {
     this.authority = requireNonBlank(builder.authority, "authority");
-    this.privateKey = requireNonBlank(builder.privateKey, "private_key");
     this.chargeAtMs = builder.chargeAtMs;
     this.cancelMode = builder.cancelMode;
   }
 
   public String authority() {
     return authority;
-  }
-
-  public String privateKey() {
-    return privateKey;
   }
 
   public Long chargeAtMs() {
@@ -40,7 +34,6 @@ public final class SubscriptionActionRequest {
   public Map<String, Object> toJsonMap() {
     final Map<String, Object> json = new LinkedHashMap<>();
     json.put("authority", authority);
-    json.put("private_key", privateKey);
     if (chargeAtMs != null) {
       json.put("charge_at_ms", chargeAtMs);
     }
@@ -60,7 +53,6 @@ public final class SubscriptionActionRequest {
 
   public static final class Builder {
     private String authority;
-    private String privateKey;
     private Long chargeAtMs;
     private CancelMode cancelMode;
 
@@ -68,11 +60,6 @@ public final class SubscriptionActionRequest {
 
     public Builder authority(final String authority) {
       this.authority = authority;
-      return this;
-    }
-
-    public Builder privateKey(final String privateKey) {
-      this.privateKey = privateKey;
       return this;
     }
 

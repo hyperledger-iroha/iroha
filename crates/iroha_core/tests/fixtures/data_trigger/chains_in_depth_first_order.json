@@ -5,7 +5,7 @@
         "Account": {
           "Asset": {
             "Removed": {
-              "asset": "rose##alice@wonderland",
+              "asset": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
               "amount": "50"
             }
           }
@@ -19,7 +19,7 @@
         "Account": {
           "Asset": {
             "Added": {
-              "asset": "rose##bob@wonderland",
+              "asset": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
               "amount": "50"
             }
           }
@@ -33,7 +33,7 @@
         "Account": {
           "Asset": {
             "Removed": {
-              "asset": "rose##bob@wonderland",
+              "asset": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
               "amount": "50"
             }
           }
@@ -115,7 +115,7 @@
         "Account": {
           "Asset": {
             "Added": {
-              "asset": "rose##bob@wonderland",
+              "asset": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
               "amount": "50"
             }
           }
@@ -135,7 +135,7 @@
         "Account": {
           "Asset": {
             "Removed": {
-              "asset": "rose##bob@wonderland",
+              "asset": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
               "amount": "50"
             }
           }

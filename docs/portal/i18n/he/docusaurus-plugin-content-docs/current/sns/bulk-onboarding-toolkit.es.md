@@ -35,7 +35,7 @@ El parser requiere la suuiente fila de encabezado (el orden es גמיש):
 |--------|--------|-------------|
 | `label` | סי | כללי התנהגות (se acepta mayus/minus; la herramienta normaliza segun Norm v1 y UTS-46). |
 | `suffix_id` | סי | מזהה מספרי סופיו (עשרוני או `0x` hex). |
-| `owner` | סי | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` | סי | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` | סי | Entero `1..=255`. |
 | `payment_asset_id` | סי | Activo de Settlement (por ejemplo `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | סי | Enteros sin signno que representan unidades nativas del activo. |

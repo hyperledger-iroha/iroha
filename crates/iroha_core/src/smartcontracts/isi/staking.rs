@@ -105,6 +105,7 @@ impl Execute for RegisterPublicLaneValidator {
             &state_transaction.nexus.staking,
             &self.stake_account,
             None,
+            state_transaction.block_unix_timestamp_ms(),
         )?;
         assert_stake_amount_matches_spec(
             state_transaction,
@@ -389,6 +390,7 @@ impl Execute for BondPublicLaneStake {
             &state_transaction.nexus.staking,
             &self.staker,
             None,
+            state_transaction.block_unix_timestamp_ms(),
         )?;
         assert_stake_amount_matches_spec(
             state_transaction,
@@ -498,6 +500,7 @@ impl Execute for SchedulePublicLaneUnbond {
             &state_transaction.nexus.staking,
             &self.staker,
             None,
+            block_timestamp_ms,
         )?;
         assert_stake_amount_matches_spec(
             state_transaction,
@@ -593,6 +596,7 @@ impl Execute for FinalizePublicLaneUnbond {
             &state_transaction.nexus.staking,
             &self.staker,
             None,
+            block_timestamp_ms,
         )?;
         let share_key = stake_key(self.lane_id, &self.validator, &self.staker);
         let mut share = state_transaction
@@ -663,6 +667,7 @@ impl Execute for SlashPublicLaneValidator {
         )?;
         finalize_validator_lifecycle(state_transaction)?;
         ensure_positive_amount(&self.amount, "slash amount")?;
+        let recorded_at_ms = state_transaction.block_unix_timestamp_ms();
         apply_slash_to_validator(
             &mut state_transaction.world,
             &state_transaction.nexus.staking,
@@ -670,6 +675,7 @@ impl Execute for SlashPublicLaneValidator {
             &self.validator,
             self.slash_id,
             &self.amount,
+            recorded_at_ms,
             #[cfg(feature = "telemetry")]
             Some(state_transaction.telemetry),
             #[cfg(not(feature = "telemetry"))]
@@ -847,14 +853,7 @@ impl Execute for ClaimPublicLaneRewards {
                 "invalid nexus.fees.fee_sink_account_id; expected account identifier".into(),
             )
         })?;
-        let fee_asset =
-            AssetDefinitionId::parse_address_literal(&state_transaction.nexus.fees.fee_asset_id)
-                .map_err(|_| {
-                    Error::InvariantViolation(
-                        "invalid nexus.fees.fee_asset_id; expected an unprefixed Base58 asset definition id"
-                            .into(),
-                    )
-                })?;
+        let fee_asset = resolve_nexus_fee_asset_definition(state_transaction)?;
         let dust_threshold = state_transaction.nexus.staking.reward_dust_threshold;
         let dust_numeric = Numeric::new(u128::from(dust_threshold), 0);
 
@@ -1172,14 +1171,7 @@ fn validate_reward_sink(
             "invalid nexus.fees.fee_sink_account_id; expected account identifier".into(),
         )
     })?;
-    let fee_asset =
-        AssetDefinitionId::parse_address_literal(&state_transaction.nexus.fees.fee_asset_id)
-            .map_err(|_| {
-                Error::InvariantViolation(
-            "invalid nexus.fees.fee_asset_id; expected an unprefixed Base58 asset definition id"
-                .into(),
-        )
-            })?;
+    let fee_asset = resolve_nexus_fee_asset_definition(state_transaction)?;
     if reward_asset.account() != &sink_account {
         return Err(Error::InvariantViolation(
             "reward asset owner must match the configured fee sink account".into(),
@@ -1434,6 +1426,7 @@ pub(crate) fn apply_slash_to_validator(
     validator: &AccountId,
     slash_id: Hash,
     amount: &Numeric,
+    now_ms: u64,
     #[cfg(feature = "telemetry")] telemetry: Option<&crate::telemetry::StateTelemetry>,
     #[cfg(not(feature = "telemetry"))] _telemetry: Option<&crate::telemetry::StateTelemetry>,
 ) -> Result<(), Error> {
@@ -1443,7 +1436,7 @@ pub(crate) fn apply_slash_to_validator(
         .get(&validator_key)
         .map(|record| record.stake_account.clone())
         .ok_or_else(|| Error::InvariantViolation("validator not registered".into()))?;
-    let stake_ctx = stake_context(world, staking_cfg, &stake_account, None)?;
+    let stake_ctx = stake_context(world, staking_cfg, &stake_account, None, now_ms)?;
     let spec = world
         .asset_definitions
         .get(&stake_ctx.asset_definition)
@@ -1550,14 +1543,14 @@ fn stake_context(
     staking_cfg: &iroha_config::parameters::actual::NexusStaking,
     staker: &AccountId,
     slash_sink_override: Option<&AccountId>,
+    now_ms: u64,
 ) -> Result<StakeEscrowContext, Error> {
-    let asset_definition =
-        AssetDefinitionId::parse_address_literal(&staking_cfg.stake_asset_id).map_err(|_| {
-            Error::InvariantViolation(
-                "invalid nexus.staking.stake_asset_id; expected an unprefixed Base58 asset definition id"
-                    .into(),
-            )
-        })?;
+    let asset_definition = resolve_configured_asset_definition(
+        world,
+        &staking_cfg.stake_asset_id,
+        "nexus.staking.stake_asset_id",
+        now_ms,
+    )?;
     let escrow_account = parse_staking_account_literal(
         world,
         &staking_cfg.stake_escrow_account_id,
@@ -1628,6 +1621,35 @@ fn parse_staking_account_literal(
     Err(Error::InvariantViolation(
         format!("invalid nexus.staking.{field}; expected account identifier ({reason})").into(),
     ))
+}
+
+fn resolve_configured_asset_definition(
+    world: &impl WorldReadOnly,
+    literal: &str,
+    field: &'static str,
+    now_ms: u64,
+) -> Result<AssetDefinitionId, Error> {
+    crate::block::parse_asset_definition_literal_with_world(world, literal, now_ms).ok_or_else(
+        || {
+            Error::InvariantViolation(
+                format!(
+                    "invalid {field}; expected canonical Base58 asset definition id or active asset alias"
+                )
+                .into(),
+            )
+        },
+    )
+}
+
+fn resolve_nexus_fee_asset_definition(
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<AssetDefinitionId, Error> {
+    resolve_configured_asset_definition(
+        &state_transaction.world,
+        &state_transaction.nexus.fees.fee_asset_id,
+        "nexus.fees.fee_asset_id",
+        state_transaction.block_unix_timestamp_ms(),
+    )
 }
 
 fn assert_stake_amount_matches_spec(
@@ -1906,15 +1928,17 @@ mod tests {
         stx: &mut StateTransaction<'_, '_>,
     ) -> (AccountId, AccountId, AccountId, AssetDefinitionId) {
         let domain_id: DomainId = "nexus".parse().expect("domain id");
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&ALICE_ID, stx)
-            .unwrap();
+        stx.world.domains.insert(
+            domain_id.clone(),
+            Domain::new(domain_id.clone()).build(&ALICE_ID),
+        );
         // Ensure the authority account exists in the test ledger so subsequent instructions
         // can execute under Alice's identity.
         let alice_domain_id: DomainId = "wonderland".parse().expect("domain id");
-        Register::domain(Domain::new(alice_domain_id.clone()))
-            .execute(&ALICE_ID, stx)
-            .unwrap();
+        stx.world.domains.insert(
+            alice_domain_id.clone(),
+            Domain::new(alice_domain_id.clone()).build(&ALICE_ID),
+        );
         Register::account(Account::new(
             ALICE_ID.clone().to_account_id(alice_domain_id),
         ))
@@ -1985,8 +2009,14 @@ mod tests {
         stx.nexus.staking.stake_escrow_account_id = escrow.to_string();
         stx.nexus.staking.slash_sink_account_id = escrow.to_string();
 
-        let stake_ctx = stake_context(&stx.world, &stx.nexus.staking, &validator, None)
-            .expect("stake context should accept I105 literals");
+        let stake_ctx = stake_context(
+            &stx.world,
+            &stx.nexus.staking,
+            &validator,
+            None,
+            stx.block_unix_timestamp_ms(),
+        )
+        .expect("stake context should accept i105 literals");
 
         assert_eq!(
             stake_ctx.escrow_asset.account(),

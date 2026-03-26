@@ -105,7 +105,7 @@ translator: manual
 
 - **Risk intake** – ‎`POST /v1/fraud/query` מקבל סכמת `RiskQuery`:
   - `query_id` (`[u8; 32]` בהקס)
-  - `subject` (`AccountId`, ‎`domainless encoded literal; canonical I105 only (i105-default `sora...` rejected)`)
+  - `subject` (`AccountId`, ‎`domainless encoded literal; canonical i105 only (i105-default `sora...` rejected)`)
   - `operation` (enum מתויג תואם `RiskOperation`; שדה `type` ב-JSON משקף את הווריאנט)
   - `related_asset` (`AssetId`, אופציונלי)
   - `features` (מערך של `{ key: String, value_hash: hex32 }` מ-`FeatureInput`)

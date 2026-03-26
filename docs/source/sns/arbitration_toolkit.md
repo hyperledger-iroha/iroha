@@ -36,7 +36,7 @@ jq '.properties' docs/examples/sns/arbitration_case_schema.json
 | Field | Type | Description |
 |-------|------|-------------|
 | `case_id` | string (`SNS-YYYY-NNNNN` or UUID) | Immutable identifier referenced by governance votes and RCA logs. |
-| `selector` | object `{suffix_id,label,global_form}` | Targeted name. `global_form` must match the canonical I105 output documented in `address_display_guidelines.md`. |
+| `selector` | object `{suffix_id,label,global_form}` | Targeted name. `global_form` must match the canonical i105 output documented in `address_display_guidelines.md`. |
 | `dispute_type` | enum (`ownership`,`policy_violation`,`abuse`,`billing`,`other`) | Tracks the policy clause under review. |
 | `priority` | enum (`urgent`,`high`,`standard`,`info`) | Drives the SLA matrix below and alert routing. |
 | `reported_at` | RFC3339 timestamp | Time the complaint entered the queue (pre-notary). |

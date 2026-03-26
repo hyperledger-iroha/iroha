@@ -34,7 +34,7 @@ L'analyseur exige une ligne de cabecalho suivante (a ordem e flexivel) :| Colon
 |--------|-------------|---------------|
 | `label` | Sim | Étiquette sollicitée (cas mixte Aceita ; ferramenta normaliza conforme Norm v1 e UTS-46). |
 | `suffix_id` | Sim | Identificateur numérique de suffixe (décimal ou `0x` hex). |
-| `owner` | Sim | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` | Sim | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` | Sim | Inteiro `1..=255`. |
 | `payment_asset_id` | Sim | Ativo de règlement (par exemple `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Sim | Inteiros sem sinal representando unidades natives do ativo. |

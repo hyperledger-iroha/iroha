@@ -13,7 +13,7 @@ use ed25519_dalek::{Signature as DalekSignature, Verifier, VerifyingKey};
 use iroha_core::{
     queue,
     smartcontracts::isi::offline::{
-        ReserveAppleAppAttestVerification, verify_reserve_apple_app_attest,
+        LineageAppleAppAttestVerification, verify_lineage_apple_app_attest,
     },
     state::WorldReadOnly,
     zk_stark::{
@@ -30,19 +30,19 @@ use iroha_data_model::{
         pipeline::{PipelineEventBox, TransactionStatus},
     },
     isi::offline::{
-        CommitOfflineReserveOperation, RefundOfflineEscrowBalance, RegisterOfflineReserve,
-        RegisterOfflineVerdictRevocation, ReserveOfflineEscrowBalance,
+        CommitOfflineLineageOperation, LoadOfflineEscrowBalance, RedeemOfflineEscrowBalance,
+        RegisterOfflineLineage, RegisterOfflineVerdictRevocation,
     },
     metadata::Metadata,
     name::Name,
     offline::{
         OfflineAppleAppAttestBinding as SharedOfflineAppleAppAttestBinding,
         OfflineCashDeviceBinding as SharedOfflineCashDeviceBinding,
+        OfflineLineageEnvelope as SharedOfflineLineageEnvelope,
+        OfflineLineageOperationResult as SharedOfflineLineageOperationResult,
+        OfflineLineageRecord as SharedOfflineLineageRecord,
+        OfflineLineageState as SharedOfflineLineageState,
         OfflineMutationSettlement as SharedOfflineMutationSettlement,
-        OfflineReserveEnvelope as SharedOfflineReserveEnvelope,
-        OfflineReserveOperationResult as SharedOfflineReserveOperationResult,
-        OfflineReserveRecord as SharedOfflineReserveRecord,
-        OfflineReserveState as SharedOfflineReserveState,
         OfflineSpendAuthorization as SharedOfflineSpendAuthorization,
         OfflineTransparentZkProof as SharedOfflineTransparentZkProof, OfflineVerdictRevocation,
         OfflineVerdictRevocationReason,
@@ -80,14 +80,14 @@ const OFFLINE_STARK_BLOWUP_LOG2: u8 = 3;
 const OFFLINE_STARK_QUERY_COUNT: u16 = 8;
 
 #[derive(Clone, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize)]
-struct StoredReserve {
-    reserve_id: String,
+struct StoredLineage {
+    lineage_id: String,
     account_id: String,
     device_id: String,
     offline_public_key: String,
     asset_definition_id: String,
     balance: Numeric,
-    parked_balance: Numeric,
+    locked_balance: Numeric,
     server_revision: u64,
     server_state_hash: String,
     pending_local_revision: u64,
@@ -156,7 +156,7 @@ pub struct OfflineDeviceAttestation {
 )]
 pub struct OfflineSpendAuthorization {
     pub authorization_id: String,
-    pub reserve_id: String,
+    pub lineage_id: String,
     pub account_id: String,
     pub device_id: String,
     pub offline_public_key: String,
@@ -184,14 +184,14 @@ pub struct OfflineSpendAuthorization {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
-pub struct OfflineReserveState {
-    pub reserve_id: String,
+pub struct OfflineLineageState {
+    pub lineage_id: String,
     pub account_id: String,
     pub device_id: String,
     pub offline_public_key: String,
     pub asset_definition_id: String,
     pub balance: String,
-    pub parked_balance: String,
+    pub locked_balance: String,
     pub server_revision: u64,
     pub server_state_hash: String,
     pub pending_local_revision: u64,
@@ -209,8 +209,8 @@ pub struct OfflineReserveState {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
-pub struct OfflineReserveEnvelope {
-    pub reserve_state: OfflineReserveState,
+pub struct OfflineLineageEnvelope {
+    pub lineage_state: OfflineLineageState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -348,18 +348,18 @@ pub struct OfflineTransferReceipt {
     pub version: i32,
     pub transfer_id: String,
     pub direction: String,
-    pub reserve_id: String,
+    pub lineage_id: String,
     pub account_id: String,
     pub device_id: String,
     pub offline_public_key: String,
     pub pre_balance: String,
     pub post_balance: String,
-    pub pre_parked_balance: String,
-    pub post_parked_balance: String,
+    pub pre_locked_balance: String,
+    pub post_locked_balance: String,
     pub pre_state_hash: String,
     pub post_state_hash: String,
     pub local_revision: u64,
-    pub counterparty_reserve_id: String,
+    pub counterparty_lineage_id: String,
     pub counterparty_account_id: String,
     pub counterparty_device_id: String,
     pub counterparty_offline_public_key: String,
@@ -387,7 +387,7 @@ pub struct OfflineTransferReceipt {
 )]
 pub struct OfflineOutgoingTransferPayload {
     pub version: i32,
-    pub anchor: OfflineReserveState,
+    pub anchor: OfflineLineageState,
     pub ancestry_receipts: Vec<OfflineTransferReceipt>,
     pub receipt: OfflineTransferReceipt,
 }
@@ -402,7 +402,7 @@ pub struct OfflineOutgoingTransferPayload {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
-pub struct OfflineReserveSetupRequest {
+pub struct OfflineLineageSetupRequest {
     pub account_id: String,
     pub device_id: String,
     pub offline_public_key: String,
@@ -421,11 +421,11 @@ pub struct OfflineReserveSetupRequest {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
-pub struct OfflineReserveTopUpRequest {
+pub struct OfflineLineageLoadRequest {
     pub operation_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[norito(default)]
-    pub reserve_id: Option<String>,
+    pub lineage_id: Option<String>,
     pub account_id: String,
     pub device_id: String,
     pub offline_public_key: String,
@@ -445,9 +445,9 @@ pub struct OfflineReserveTopUpRequest {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
-pub struct OfflineReserveRenewRequest {
+pub struct OfflineLineageRefreshRequest {
     pub operation_id: String,
-    pub reserve_id: String,
+    pub lineage_id: String,
     pub account_id: String,
     pub device_id: String,
     pub offline_public_key: String,
@@ -465,9 +465,9 @@ pub struct OfflineReserveRenewRequest {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
-pub struct OfflineReserveSyncRequest {
+pub struct OfflineLineageSyncRequest {
     pub operation_id: String,
-    pub reserve_id: String,
+    pub lineage_id: String,
     pub account_id: String,
     pub device_id: String,
     pub offline_public_key: String,
@@ -484,9 +484,9 @@ pub struct OfflineReserveSyncRequest {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
-pub struct OfflineReserveDefundRequest {
+pub struct OfflineLineageRedeemRequest {
     pub operation_id: String,
-    pub reserve_id: String,
+    pub lineage_id: String,
     pub account_id: String,
     pub device_id: String,
     pub offline_public_key: String,
@@ -604,7 +604,7 @@ pub(crate) fn offline_cash_device_attestation(
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
-pub struct OfflineReserveRevocationRequest {
+pub struct OfflineLineageRevocationRequest {
     pub verdict_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[norito(default)]
@@ -629,9 +629,9 @@ pub struct OfflineRevocationList {
 }
 
 #[derive(crate::json_macros::JsonSerialize)]
-struct ReserveTopUpRequestHashPayload<'a> {
+struct LineageLoadRequestHashPayload<'a> {
     #[norito(default)]
-    reserve_id: Option<&'a str>,
+    lineage_id: Option<&'a str>,
     account_id: &'a str,
     device_id: &'a str,
     offline_public_key: &'a str,
@@ -641,8 +641,8 @@ struct ReserveTopUpRequestHashPayload<'a> {
 }
 
 #[derive(crate::json_macros::JsonSerialize)]
-struct ReserveDefundRequestHashPayload<'a> {
-    reserve_id: &'a str,
+struct LineageRedeemRequestHashPayload<'a> {
+    lineage_id: &'a str,
     account_id: &'a str,
     device_id: &'a str,
     offline_public_key: &'a str,
@@ -685,7 +685,7 @@ struct RedeemRequestCommitmentPayload<'a> {
 #[derive(crate::json_macros::JsonSerialize)]
 struct AuthorizationUnsignedPayload<'a> {
     authorization_id: &'a str,
-    reserve_id: &'a str,
+    lineage_id: &'a str,
     account_id: &'a str,
     device_id: &'a str,
     offline_public_key: &'a str,
@@ -713,14 +713,14 @@ struct CashAuthorizationUnsignedPayload<'a> {
 }
 
 #[derive(crate::json_macros::JsonSerialize)]
-struct ReserveStateUnsignedPayload<'a> {
-    reserve_id: &'a str,
+struct LineageStateUnsignedPayload<'a> {
+    lineage_id: &'a str,
     account_id: &'a str,
     device_id: &'a str,
     offline_public_key: &'a str,
     asset_definition_id: &'a str,
     balance: &'a str,
-    parked_balance: &'a str,
+    locked_balance: &'a str,
     server_revision: u64,
     server_state_hash: &'a str,
     pending_local_revision: u64,
@@ -741,18 +741,18 @@ struct TransferReceiptUnsignedPayload {
     version: i32,
     transfer_id: String,
     direction: String,
-    reserve_id: String,
+    lineage_id: String,
     account_id: String,
     device_id: String,
     offline_public_key: String,
     pre_balance: String,
     post_balance: String,
-    pre_parked_balance: String,
-    post_parked_balance: String,
+    pre_locked_balance: String,
+    post_locked_balance: String,
     pre_state_hash: String,
     post_state_hash: String,
     local_revision: u64,
-    counterparty_reserve_id: String,
+    counterparty_lineage_id: String,
     counterparty_account_id: String,
     counterparty_device_id: String,
     counterparty_offline_public_key: String,
@@ -857,15 +857,15 @@ struct LegacyCashTransferReceiptUnsignedPayload {
 
 #[derive(crate::json_macros::JsonSerialize)]
 struct LocalStateHashPayload<'a> {
-    reserve_id: &'a str,
+    lineage_id: &'a str,
     previous_state_hash: &'a str,
     transfer_id: &'a str,
     direction: &'a str,
-    counterparty_reserve_id: &'a str,
+    counterparty_lineage_id: &'a str,
     amount: &'a str,
     local_revision: u64,
     post_balance: &'a str,
-    post_parked_balance: &'a str,
+    post_locked_balance: &'a str,
 }
 
 #[derive(crate::json_macros::JsonSerialize)]
@@ -883,10 +883,10 @@ struct CashLocalStateHashPayload<'a> {
 
 #[derive(crate::json_macros::JsonSerialize)]
 struct AttestationSendPayload<'a> {
-    reserve_id: &'a str,
+    lineage_id: &'a str,
     transfer_id: &'a str,
     amount: &'a str,
-    receiver_reserve_id: &'a str,
+    receiver_lineage_id: &'a str,
 }
 
 #[derive(crate::json_macros::JsonSerialize)]
@@ -899,10 +899,10 @@ struct CashAttestationSendPayload<'a> {
 
 #[derive(crate::json_macros::JsonSerialize)]
 struct AttestationReceivePayload<'a> {
-    reserve_id: &'a str,
+    lineage_id: &'a str,
     transfer_id: &'a str,
     amount: &'a str,
-    sender_reserve_id: &'a str,
+    sender_lineage_id: &'a str,
 }
 
 #[derive(crate::json_macros::JsonSerialize)]
@@ -916,7 +916,7 @@ struct CashAttestationReceivePayload<'a> {
 #[derive(crate::json_macros::JsonSerialize)]
 struct AttestationChallengePayload<'a> {
     account_id: &'a str,
-    reserve_id: &'a str,
+    lineage_id: &'a str,
     operation: &'a str,
     payload_hash: &'a str,
 }
@@ -930,32 +930,32 @@ struct CashAttestationChallengePayload<'a> {
 }
 
 #[derive(crate::json_macros::JsonSerialize)]
-struct ReserveTopUpAttestationPayload<'a> {
-    reserve_id: &'a str,
+struct LineageLoadAttestationPayload<'a> {
+    lineage_id: &'a str,
     amount: &'a str,
 }
 
 #[derive(crate::json_macros::JsonSerialize)]
-struct ReserveRenewAttestationPayload<'a> {
-    reserve_id: &'a str,
+struct LineageRefreshAttestationPayload<'a> {
+    lineage_id: &'a str,
 }
 
 #[derive(crate::json_macros::JsonSerialize)]
-struct ReserveSetupAttestationPayload<'a> {
+struct LineageSetupAttestationPayload<'a> {
     account_id: &'a str,
     device_id: &'a str,
     offline_public_key: &'a str,
 }
 
 #[derive(crate::json_macros::JsonSerialize)]
-struct ReserveAnchorHashPayload<'a> {
-    reserve_id: &'a str,
+struct LineageAnchorHashPayload<'a> {
+    lineage_id: &'a str,
     account_id: &'a str,
     device_id: &'a str,
     offline_public_key: &'a str,
     asset_definition_id: &'a str,
     balance: &'a str,
-    parked_balance: &'a str,
+    locked_balance: &'a str,
     server_revision: u64,
     pending_local_revision: u64,
     authorization_id: &'a str,
@@ -966,7 +966,7 @@ fn shared_authorization_from_local(
 ) -> SharedOfflineSpendAuthorization {
     SharedOfflineSpendAuthorization {
         authorization_id: authorization.authorization_id.clone(),
-        reserve_id: authorization.reserve_id.clone(),
+        lineage_id: authorization.lineage_id.clone(),
         account_id: authorization.account_id.clone(),
         device_id: authorization.device_id.clone(),
         offline_public_key: authorization.offline_public_key.clone(),
@@ -990,7 +990,7 @@ fn local_authorization_from_shared(
 ) -> OfflineSpendAuthorization {
     OfflineSpendAuthorization {
         authorization_id: authorization.authorization_id.clone(),
-        reserve_id: authorization.reserve_id.clone(),
+        lineage_id: authorization.lineage_id.clone(),
         account_id: authorization.account_id.clone(),
         device_id: authorization.device_id.clone(),
         offline_public_key: authorization.offline_public_key.clone(),
@@ -1100,22 +1100,22 @@ fn local_settlement_from_shared(
 }
 
 fn shared_envelope_from_local(
-    envelope: &OfflineReserveEnvelope,
-) -> Result<SharedOfflineReserveEnvelope, Error> {
-    Ok(SharedOfflineReserveEnvelope {
-        reserve_state: SharedOfflineReserveState {
-            reserve_id: envelope.reserve_state.reserve_id.clone(),
-            account_id: envelope.reserve_state.account_id.clone(),
-            device_id: envelope.reserve_state.device_id.clone(),
-            offline_public_key: envelope.reserve_state.offline_public_key.clone(),
-            asset_definition_id: envelope.reserve_state.asset_definition_id.clone(),
-            balance: envelope.reserve_state.balance.clone(),
-            parked_balance: envelope.reserve_state.parked_balance.clone(),
-            server_revision: envelope.reserve_state.server_revision,
-            server_state_hash: envelope.reserve_state.server_state_hash.clone(),
-            pending_local_revision: envelope.reserve_state.pending_local_revision,
-            authorization: shared_authorization_from_local(&envelope.reserve_state.authorization),
-            issuer_signature_base64: envelope.reserve_state.issuer_signature_base64.clone(),
+    envelope: &OfflineLineageEnvelope,
+) -> Result<SharedOfflineLineageEnvelope, Error> {
+    Ok(SharedOfflineLineageEnvelope {
+        lineage_state: SharedOfflineLineageState {
+            lineage_id: envelope.lineage_state.lineage_id.clone(),
+            account_id: envelope.lineage_state.account_id.clone(),
+            device_id: envelope.lineage_state.device_id.clone(),
+            offline_public_key: envelope.lineage_state.offline_public_key.clone(),
+            asset_definition_id: envelope.lineage_state.asset_definition_id.clone(),
+            balance: envelope.lineage_state.balance.clone(),
+            locked_balance: envelope.lineage_state.locked_balance.clone(),
+            server_revision: envelope.lineage_state.server_revision,
+            server_state_hash: envelope.lineage_state.server_state_hash.clone(),
+            pending_local_revision: envelope.lineage_state.pending_local_revision,
+            authorization: shared_authorization_from_local(&envelope.lineage_state.authorization),
+            issuer_signature_base64: envelope.lineage_state.issuer_signature_base64.clone(),
         },
         settlement: envelope
             .settlement
@@ -1126,22 +1126,22 @@ fn shared_envelope_from_local(
 }
 
 fn local_envelope_from_shared(
-    envelope: &SharedOfflineReserveEnvelope,
-) -> Result<OfflineReserveEnvelope, Error> {
-    Ok(OfflineReserveEnvelope {
-        reserve_state: OfflineReserveState {
-            reserve_id: envelope.reserve_state.reserve_id.clone(),
-            account_id: envelope.reserve_state.account_id.clone(),
-            device_id: envelope.reserve_state.device_id.clone(),
-            offline_public_key: envelope.reserve_state.offline_public_key.clone(),
-            asset_definition_id: envelope.reserve_state.asset_definition_id.clone(),
-            balance: envelope.reserve_state.balance.clone(),
-            parked_balance: envelope.reserve_state.parked_balance.clone(),
-            server_revision: envelope.reserve_state.server_revision,
-            server_state_hash: envelope.reserve_state.server_state_hash.clone(),
-            pending_local_revision: envelope.reserve_state.pending_local_revision,
-            authorization: local_authorization_from_shared(&envelope.reserve_state.authorization),
-            issuer_signature_base64: envelope.reserve_state.issuer_signature_base64.clone(),
+    envelope: &SharedOfflineLineageEnvelope,
+) -> Result<OfflineLineageEnvelope, Error> {
+    Ok(OfflineLineageEnvelope {
+        lineage_state: OfflineLineageState {
+            lineage_id: envelope.lineage_state.lineage_id.clone(),
+            account_id: envelope.lineage_state.account_id.clone(),
+            device_id: envelope.lineage_state.device_id.clone(),
+            offline_public_key: envelope.lineage_state.offline_public_key.clone(),
+            asset_definition_id: envelope.lineage_state.asset_definition_id.clone(),
+            balance: envelope.lineage_state.balance.clone(),
+            locked_balance: envelope.lineage_state.locked_balance.clone(),
+            server_revision: envelope.lineage_state.server_revision,
+            server_state_hash: envelope.lineage_state.server_state_hash.clone(),
+            pending_local_revision: envelope.lineage_state.pending_local_revision,
+            authorization: local_authorization_from_shared(&envelope.lineage_state.authorization),
+            issuer_signature_base64: envelope.lineage_state.issuer_signature_base64.clone(),
         },
         settlement: envelope
             .settlement
@@ -1175,11 +1175,11 @@ fn local_binding_from_shared(
 
 fn shared_record_from_local(
     issuer: &OfflineIssuerSigner,
-    record: &StoredReserve,
-) -> Result<SharedOfflineReserveRecord, Error> {
+    record: &StoredLineage,
+) -> Result<SharedOfflineLineageRecord, Error> {
     let envelope = envelope_from_record(issuer, record)?;
-    Ok(SharedOfflineReserveRecord {
-        reserve_state: shared_envelope_from_local(&envelope)?.reserve_state,
+    Ok(SharedOfflineLineageRecord {
+        lineage_state: shared_envelope_from_local(&envelope)?.lineage_state,
         app_attest_key_id: record.app_attest_key_id.clone(),
         counter_book: record.counter_book.clone(),
         seen_transfer_ids: record.seen_transfer_ids.clone(),
@@ -1191,19 +1191,19 @@ fn shared_record_from_local(
     })
 }
 
-fn local_record_from_shared(record: &SharedOfflineReserveRecord) -> Result<StoredReserve, Error> {
-    Ok(StoredReserve {
-        reserve_id: record.reserve_state.reserve_id.clone(),
-        account_id: record.reserve_state.account_id.clone(),
-        device_id: record.reserve_state.device_id.clone(),
-        offline_public_key: record.reserve_state.offline_public_key.clone(),
-        asset_definition_id: record.reserve_state.asset_definition_id.clone(),
-        balance: parse_numeric(&record.reserve_state.balance)?,
-        parked_balance: parse_numeric(&record.reserve_state.parked_balance)?,
-        server_revision: record.reserve_state.server_revision,
-        server_state_hash: record.reserve_state.server_state_hash.clone(),
-        pending_local_revision: record.reserve_state.pending_local_revision,
-        authorization: local_authorization_from_shared(&record.reserve_state.authorization),
+fn local_record_from_shared(record: &SharedOfflineLineageRecord) -> Result<StoredLineage, Error> {
+    Ok(StoredLineage {
+        lineage_id: record.lineage_state.lineage_id.clone(),
+        account_id: record.lineage_state.account_id.clone(),
+        device_id: record.lineage_state.device_id.clone(),
+        offline_public_key: record.lineage_state.offline_public_key.clone(),
+        asset_definition_id: record.lineage_state.asset_definition_id.clone(),
+        balance: parse_numeric(&record.lineage_state.balance)?,
+        locked_balance: parse_numeric(&record.lineage_state.locked_balance)?,
+        server_revision: record.lineage_state.server_revision,
+        server_state_hash: record.lineage_state.server_state_hash.clone(),
+        pending_local_revision: record.lineage_state.pending_local_revision,
+        authorization: local_authorization_from_shared(&record.lineage_state.authorization),
         app_attest_key_id: record.app_attest_key_id.clone(),
         counter_book: record.counter_book.clone(),
         seen_transfer_ids: record.seen_transfer_ids.clone(),
@@ -1215,48 +1215,48 @@ fn local_record_from_shared(record: &SharedOfflineReserveRecord) -> Result<Store
     })
 }
 
-fn load_shared_reserve(app: &AppState, reserve_id: &str) -> Result<Option<StoredReserve>, Error> {
+fn load_shared_lineage(app: &AppState, lineage_id: &str) -> Result<Option<StoredLineage>, Error> {
     app.state
         .world_view()
-        .offline_reserves()
-        .get(&reserve_id.to_owned())
+        .offline_lineages()
+        .get(&lineage_id.to_owned())
         .map(local_record_from_shared)
         .transpose()
 }
 
-fn load_shared_reserve_by_lineage(
+fn load_shared_lineage_by_lineage(
     app: &AppState,
     account_id: &str,
     device_id: &str,
     offline_public_key: &str,
-) -> Result<Option<StoredReserve>, Error> {
-    load_shared_reserve(
+) -> Result<Option<StoredLineage>, Error> {
+    load_shared_lineage(
         app,
-        &deterministic_id("reserve", &[account_id, device_id, offline_public_key]),
+        &deterministic_id("lineage", &[account_id, device_id, offline_public_key]),
     )
 }
 
-fn reserve_has_active_lineage_state(reserve: &StoredReserve) -> bool {
-    !reserve.balance.is_zero()
-        || !reserve.parked_balance.is_zero()
-        || reserve.pending_local_revision != 0
+fn lineage_has_active_state(lineage: &StoredLineage) -> bool {
+    !lineage.balance.is_zero()
+        || !lineage.locked_balance.is_zero()
+        || lineage.pending_local_revision != 0
 }
 
-fn ensure_no_conflicting_active_reserve(
+fn ensure_no_conflicting_active_lineage(
     app: &AppState,
     account_id: &str,
     device_id: &str,
     offline_public_key: &str,
 ) -> Result<(), Error> {
-    for (_, shared) in app.state.world_view().offline_reserves().iter() {
-        let reserve = local_record_from_shared(shared)?;
-        if reserve.account_id != account_id {
+    for (_, shared) in app.state.world_view().offline_lineages().iter() {
+        let lineage = local_record_from_shared(shared)?;
+        if lineage.account_id != account_id {
             continue;
         }
-        if reserve.device_id == device_id && reserve.offline_public_key == offline_public_key {
+        if lineage.device_id == device_id && lineage.offline_public_key == offline_public_key {
             continue;
         }
-        if reserve_has_active_lineage_state(&reserve) {
+        if lineage_has_active_state(&lineage) {
             return Err(conversion_error(
                 "lineage_conflict: offline cash lineage is already bound to a different device"
                     .to_owned(),
@@ -1269,32 +1269,34 @@ fn ensure_no_conflicting_active_reserve(
 fn load_operation_result(
     app: &AppState,
     operation_key: &str,
-) -> Option<SharedOfflineReserveOperationResult> {
+) -> Option<SharedOfflineLineageOperationResult> {
     app.state
         .world_view()
-        .offline_reserve_operation_results()
+        .offline_lineage_operation_results()
         .get(&operation_key.to_owned())
         .cloned()
 }
 
-pub(crate) async fn setup_reserve(
+pub(crate) async fn setup_lineage(
     app: &AppState,
-    req: OfflineReserveSetupRequest,
-) -> Result<OfflineReserveEnvelope, Error> {
+    req: OfflineLineageSetupRequest,
+) -> Result<OfflineLineageEnvelope, Error> {
     ensure_non_empty(&req.account_id, "account_id")?;
+    ensure_canonical_account_id_literal(&req.account_id, "account_id")?;
     ensure_non_empty(&req.device_id, "device_id")?;
     ensure_non_empty(&req.offline_public_key, "offline_public_key")?;
     ensure_non_empty(&req.asset_definition_id, "asset_definition_id")?;
+    ensure_canonical_asset_definition_id_literal(&req.asset_definition_id, "asset_definition_id")?;
     ensure_non_empty(&req.app_attest_key_id, "app_attest_key_id")?;
 
     let issuer = issuer(app)?;
-    if let Some(existing) = load_shared_reserve_by_lineage(
+    if let Some(existing) = load_shared_lineage_by_lineage(
         app,
         &req.account_id,
         &req.device_id,
         &req.offline_public_key,
     )? {
-        validate_reserve_request(
+        validate_lineage_request(
             &existing,
             &req.account_id,
             &req.device_id,
@@ -1307,14 +1309,14 @@ pub(crate) async fn setup_reserve(
             validate_setup_attestation(app, &req, &mut counter_book, &existing.app_attest_key_id)?;
         return envelope_from_record(issuer, &existing);
     }
-    ensure_no_conflicting_active_reserve(
+    ensure_no_conflicting_active_lineage(
         app,
         &req.account_id,
         &req.device_id,
         &req.offline_public_key,
     )?;
 
-    let mut record = new_local_reserve(
+    let mut record = new_local_lineage(
         issuer,
         &req.account_id,
         &req.device_id,
@@ -1334,8 +1336,8 @@ pub(crate) async fn setup_reserve(
         app,
         operator_authority(issuer)?,
         issuer.operator_keypair.private_key().clone(),
-        InstructionBox::from(RegisterOfflineReserve {
-            reserve: shared_record_from_local(issuer, &record)?,
+        InstructionBox::from(RegisterOfflineLineage {
+            lineage: shared_record_from_local(issuer, &record)?,
         }),
         "/v1/offline/cash/setup",
     )
@@ -1343,30 +1345,42 @@ pub(crate) async fn setup_reserve(
     Ok(envelope)
 }
 
-pub(crate) async fn top_up_reserve(
+pub(crate) async fn load_lineage(
     app: &AppState,
-    req: OfflineReserveTopUpRequest,
-) -> Result<OfflineReserveEnvelope, Error> {
+    req: OfflineLineageLoadRequest,
+) -> Result<OfflineLineageEnvelope, Error> {
     ensure_offline_recursive_stark_ready()?;
+    ensure_non_empty(&req.account_id, "account_id")?;
+    ensure_canonical_account_id_literal(&req.account_id, "account_id")?;
+    ensure_non_empty(&req.device_id, "device_id")?;
+    ensure_non_empty(&req.offline_public_key, "offline_public_key")?;
+    ensure_non_empty(&req.asset_definition_id, "asset_definition_id")?;
+    ensure_canonical_asset_definition_id_literal(&req.asset_definition_id, "asset_definition_id")?;
+    ensure_non_empty(&req.app_attest_key_id, "app_attest_key_id")?;
     let issuer = issuer(app)?;
     let amount = parse_amount(&req.amount)?;
     let amount_string = canonical_amount_string(&amount);
-    let operation_key = operation_key("topup", &req.operation_id);
-    let request_hash_hex = topup_request_hash_hex(&req, &amount)?;
+    let operation_key = operation_key("load", &req.operation_id);
+    let request_hash_hex = load_request_hash_hex(&req, &amount)?;
     if let Some(existing) = load_operation_result(app, &operation_key) {
         if existing.request_hash_hex != request_hash_hex {
             return Err(conversion_error(
                 "offline cash operation_id is already bound to a different request".to_owned(),
             ));
         }
+        if existing.envelope.settlement.is_none() {
+            return Err(conversion_error(
+                "offline cash operation is finalizing its settlement proof; retry".to_owned(),
+            ));
+        }
         return local_envelope_from_shared(&existing.envelope);
     }
 
-    let mut reserve = if let Some(reserve_id) = req.reserve_id.as_ref() {
-        load_shared_reserve(app, reserve_id)?
+    let mut lineage = if let Some(lineage_id) = req.lineage_id.as_ref() {
+        load_shared_lineage(app, lineage_id)?
             .ok_or_else(|| conversion_error("offline cash lineage not found".to_owned()))?
     } else {
-        match load_shared_reserve_by_lineage(
+        match load_shared_lineage_by_lineage(
             app,
             &req.account_id,
             &req.device_id,
@@ -1374,13 +1388,13 @@ pub(crate) async fn top_up_reserve(
         )? {
             Some(existing) => existing,
             None => {
-                ensure_no_conflicting_active_reserve(
+                ensure_no_conflicting_active_lineage(
                     app,
                     &req.account_id,
                     &req.device_id,
                     &req.offline_public_key,
                 )?;
-                new_local_reserve(
+                new_local_lineage(
                     issuer,
                     &req.account_id,
                     &req.device_id,
@@ -1392,75 +1406,76 @@ pub(crate) async fn top_up_reserve(
             }
         }
     };
-    validate_reserve_request(
-        &reserve,
+    validate_lineage_request(
+        &lineage,
         &req.account_id,
         &req.device_id,
         &req.offline_public_key,
         Some(&req.asset_definition_id),
         Some(&req.app_attest_key_id),
     )?;
-    let expected_server_revision = reserve.server_revision;
-    let expected_state_hash = reserve.server_state_hash.clone();
-    validate_reserve_attestation(
+    let expected_server_revision = lineage.server_revision;
+    let expected_state_hash = lineage.server_state_hash.clone();
+    validate_lineage_attestation(
         app,
         &req.account_id,
-        &reserve.reserve_id,
-        "topup",
-        canonical_json_bytes(&ReserveTopUpAttestationPayload {
-            reserve_id: &reserve.reserve_id,
+        &lineage.lineage_id,
+        "load",
+        canonical_json_bytes(&LineageLoadAttestationPayload {
+            lineage_id: &lineage.lineage_id,
             amount: &amount_string,
         })?,
         &req.app_attest_key_id,
         &req.attestation,
-        &mut reserve.counter_book,
-        reserve.apple_app_attest_binding.as_ref(),
+        &mut lineage.counter_book,
+        lineage.apple_app_attest_binding.as_ref(),
     )?;
-    reserve.balance = reserve
+    lineage.balance = lineage
         .balance
         .clone()
         .checked_add(amount.clone())
         .ok_or_else(|| conversion_error("offline cash balance overflow".to_owned()))?;
-    reserve.parked_balance = parse_numeric(&minimum_required_parked_balance(
-        &canonical_amount_string(&reserve.balance),
-        Some(&reserve.authorization),
+    lineage.locked_balance = parse_numeric(&minimum_required_locked_balance(
+        &canonical_amount_string(&lineage.balance),
+        Some(&lineage.authorization),
         now_ms(),
     )?)?;
-    reserve.server_revision = committed_server_revision(expected_server_revision);
-    reserve.server_state_hash = reserve_anchor_hash(
-        &reserve.reserve_id,
-        &reserve.account_id,
-        &reserve.device_id,
-        &reserve.offline_public_key,
-        &reserve.asset_definition_id,
-        &canonical_amount_string(&reserve.balance),
-        &canonical_amount_string(&reserve.parked_balance),
-        reserve.server_revision,
-        reserve.pending_local_revision,
-        &reserve.authorization.authorization_id,
+    lineage.server_revision = committed_server_revision(expected_server_revision);
+    lineage.server_state_hash = lineage_anchor_hash(
+        &lineage.lineage_id,
+        &lineage.account_id,
+        &lineage.device_id,
+        &lineage.offline_public_key,
+        &lineage.asset_definition_id,
+        &canonical_amount_string(&lineage.balance),
+        &canonical_amount_string(&lineage.locked_balance),
+        lineage.server_revision,
+        lineage.pending_local_revision,
+        &lineage.authorization.authorization_id,
     )?;
-    let post_state_hash = reserve.server_state_hash.clone();
-    let mut envelope = envelope_from_record(issuer, &reserve)?;
+    let post_state_hash = lineage.server_state_hash.clone();
+    let mut envelope = envelope_from_record(issuer, &lineage)?;
+    let completed_at_ms = now_ms();
     let tx = submit_signed_instructions(
         app,
         operator_authority(issuer)?,
         issuer.operator_keypair.private_key().clone(),
         vec![
-            InstructionBox::from(ReserveOfflineEscrowBalance {
-                asset: controller_asset_id(&req.account_id, &reserve.asset_definition_id)?,
+            InstructionBox::from(LoadOfflineEscrowBalance {
+                asset: controller_asset_id(&req.account_id, &lineage.asset_definition_id)?,
                 amount,
             }),
-            InstructionBox::from(CommitOfflineReserveOperation {
+            InstructionBox::from(CommitOfflineLineageOperation {
                 expected_server_revision,
                 expected_state_hash: expected_state_hash.clone(),
-                reserve: shared_record_from_local(issuer, &reserve)?,
-                result: SharedOfflineReserveOperationResult {
+                lineage: shared_record_from_local(issuer, &lineage)?,
+                result: SharedOfflineLineageOperationResult {
                     operation_key: operation_key.clone(),
-                    kind: "topup".to_owned(),
-                    request_hash_hex,
-                    reserve_id: reserve.reserve_id.clone(),
+                    kind: "load".to_owned(),
+                    request_hash_hex: request_hash_hex.clone(),
+                    lineage_id: lineage.lineage_id.clone(),
                     envelope: shared_envelope_from_local(&envelope)?,
-                    completed_at_ms: now_ms(),
+                    completed_at_ms,
                 },
             }),
         ],
@@ -1470,102 +1485,124 @@ pub(crate) async fn top_up_reserve(
     envelope.settlement = Some(settlement_from_tx(
         "load",
         &req.operation_id,
-        &reserve,
+        &lineage,
         &amount_string,
         &expected_state_hash,
         &post_state_hash,
         &tx,
     )?);
+    finalize_operation_result_settlement(
+        app,
+        issuer,
+        &lineage,
+        operation_key,
+        "load",
+        request_hash_hex,
+        completed_at_ms,
+        &envelope,
+        "/v1/offline/cash/load",
+    )
+    .await?;
     Ok(envelope)
 }
 
-pub(crate) async fn renew_reserve(
+pub(crate) async fn refresh_lineage(
     app: &AppState,
-    req: OfflineReserveRenewRequest,
-) -> Result<OfflineReserveEnvelope, Error> {
+    req: OfflineLineageRefreshRequest,
+) -> Result<OfflineLineageEnvelope, Error> {
     ensure_offline_recursive_stark_ready()?;
+    ensure_non_empty(&req.account_id, "account_id")?;
+    ensure_canonical_account_id_literal(&req.account_id, "account_id")?;
+    ensure_non_empty(&req.device_id, "device_id")?;
+    ensure_non_empty(&req.offline_public_key, "offline_public_key")?;
+    ensure_non_empty(&req.app_attest_key_id, "app_attest_key_id")?;
     let issuer = issuer(app)?;
-    let operation_key = operation_key("renew", &req.operation_id);
-    let request_hash_hex = renew_request_hash_hex(&req)?;
+    let operation_key = operation_key("refresh", &req.operation_id);
+    let request_hash_hex = refresh_request_hash_hex(&req)?;
     if let Some(existing) = load_operation_result(app, &operation_key) {
         if existing.request_hash_hex != request_hash_hex {
             return Err(conversion_error(
                 "offline cash operation_id is already bound to a different request".to_owned(),
             ));
         }
+        if existing.envelope.settlement.is_none() {
+            return Err(conversion_error(
+                "offline cash operation is finalizing its settlement proof; retry".to_owned(),
+            ));
+        }
         return local_envelope_from_shared(&existing.envelope);
     }
 
-    let mut reserve = load_shared_reserve(app, &req.reserve_id)?
+    let mut lineage = load_shared_lineage(app, &req.lineage_id)?
         .ok_or_else(|| conversion_error("offline cash lineage not found".to_owned()))?;
-    validate_reserve_request(
-        &reserve,
+    validate_lineage_request(
+        &lineage,
         &req.account_id,
         &req.device_id,
         &req.offline_public_key,
         None,
         Some(&req.app_attest_key_id),
     )?;
-    let expected_server_revision = reserve.server_revision;
-    let expected_state_hash = reserve.server_state_hash.clone();
-    validate_reserve_attestation(
+    let expected_server_revision = lineage.server_revision;
+    let expected_state_hash = lineage.server_state_hash.clone();
+    validate_lineage_attestation(
         app,
         &req.account_id,
-        &reserve.reserve_id,
-        "renew",
-        canonical_json_bytes(&ReserveRenewAttestationPayload {
-            reserve_id: &reserve.reserve_id,
+        &lineage.lineage_id,
+        "refresh",
+        canonical_json_bytes(&LineageRefreshAttestationPayload {
+            lineage_id: &lineage.lineage_id,
         })?,
         &req.app_attest_key_id,
         &req.attestation,
-        &mut reserve.counter_book,
-        reserve.apple_app_attest_binding.as_ref(),
+        &mut lineage.counter_book,
+        lineage.apple_app_attest_binding.as_ref(),
     )?;
-    reserve.authorization = signed_authorization(
+    lineage.authorization = signed_authorization(
         issuer,
         AuthorizationDraft {
-            reserve_id: reserve.reserve_id.clone(),
-            account_id: reserve.account_id.clone(),
-            device_id: reserve.device_id.clone(),
-            offline_public_key: reserve.offline_public_key.clone(),
-            verdict_id: reserve.authorization.verdict_id.clone(),
+            lineage_id: lineage.lineage_id.clone(),
+            account_id: lineage.account_id.clone(),
+            device_id: lineage.device_id.clone(),
+            offline_public_key: lineage.offline_public_key.clone(),
+            verdict_id: lineage.authorization.verdict_id.clone(),
             device_binding: None,
-            app_attest_key_id: reserve.app_attest_key_id.clone(),
+            app_attest_key_id: lineage.app_attest_key_id.clone(),
             issued_at_ms: now_ms(),
         },
     )?;
-    reserve.parked_balance = parse_numeric(&minimum_required_parked_balance(
-        &canonical_amount_string(&reserve.balance),
-        Some(&reserve.authorization),
+    lineage.locked_balance = parse_numeric(&minimum_required_locked_balance(
+        &canonical_amount_string(&lineage.balance),
+        Some(&lineage.authorization),
         now_ms(),
     )?)?;
-    reserve.server_revision = committed_server_revision(expected_server_revision);
-    reserve.server_state_hash = reserve_anchor_hash(
-        &reserve.reserve_id,
-        &reserve.account_id,
-        &reserve.device_id,
-        &reserve.offline_public_key,
-        &reserve.asset_definition_id,
-        &canonical_amount_string(&reserve.balance),
-        &canonical_amount_string(&reserve.parked_balance),
-        reserve.server_revision,
-        reserve.pending_local_revision,
-        &reserve.authorization.authorization_id,
+    lineage.server_revision = committed_server_revision(expected_server_revision);
+    lineage.server_state_hash = lineage_anchor_hash(
+        &lineage.lineage_id,
+        &lineage.account_id,
+        &lineage.device_id,
+        &lineage.offline_public_key,
+        &lineage.asset_definition_id,
+        &canonical_amount_string(&lineage.balance),
+        &canonical_amount_string(&lineage.locked_balance),
+        lineage.server_revision,
+        lineage.pending_local_revision,
+        &lineage.authorization.authorization_id,
     )?;
-    let envelope = envelope_from_record(issuer, &reserve)?;
+    let envelope = envelope_from_record(issuer, &lineage)?;
     submit_signed_instruction(
         app,
         operator_authority(issuer)?,
         issuer.operator_keypair.private_key().clone(),
-        InstructionBox::from(CommitOfflineReserveOperation {
+        InstructionBox::from(CommitOfflineLineageOperation {
             expected_server_revision,
             expected_state_hash: expected_state_hash.clone(),
-            reserve: shared_record_from_local(issuer, &reserve)?,
-            result: SharedOfflineReserveOperationResult {
+            lineage: shared_record_from_local(issuer, &lineage)?,
+            result: SharedOfflineLineageOperationResult {
                 operation_key: operation_key.clone(),
-                kind: "renew".to_owned(),
+                kind: "refresh".to_owned(),
                 request_hash_hex,
-                reserve_id: reserve.reserve_id.clone(),
+                lineage_id: lineage.lineage_id.clone(),
                 envelope: shared_envelope_from_local(&envelope)?,
                 completed_at_ms: now_ms(),
             },
@@ -1576,10 +1613,17 @@ pub(crate) async fn renew_reserve(
     Ok(envelope)
 }
 
-pub(crate) async fn sync_reserve(
+pub(crate) async fn sync_lineage(
     app: &AppState,
-    req: OfflineReserveSyncRequest,
-) -> Result<OfflineReserveEnvelope, Error> {
+    req: OfflineLineageSyncRequest,
+) -> Result<OfflineLineageEnvelope, Error> {
+    ensure_non_empty(&req.account_id, "account_id")?;
+    ensure_canonical_account_id_literal(&req.account_id, "account_id")?;
+    ensure_non_empty(&req.device_id, "device_id")?;
+    ensure_non_empty(&req.offline_public_key, "offline_public_key")?;
+    for receipt in &req.receipts {
+        ensure_canonical_transfer_receipt_identifiers(receipt, "receipts")?;
+    }
     let issuer = issuer(app)?;
     let operation_key = operation_key("sync", &req.operation_id);
     let request_hash_hex = sync_request_hash_hex(&req)?;
@@ -1589,43 +1633,48 @@ pub(crate) async fn sync_reserve(
                 "offline cash operation_id is already bound to a different request".to_owned(),
             ));
         }
+        if existing.envelope.settlement.is_none() {
+            return Err(conversion_error(
+                "offline cash operation is finalizing its settlement proof; retry".to_owned(),
+            ));
+        }
         return local_envelope_from_shared(&existing.envelope);
     }
 
-    let mut reserve = load_shared_reserve(app, &req.reserve_id)?
+    let mut lineage = load_shared_lineage(app, &req.lineage_id)?
         .ok_or_else(|| conversion_error("offline cash lineage not found".to_owned()))?;
-    validate_reserve_request(
-        &reserve,
+    validate_lineage_request(
+        &lineage,
         &req.account_id,
         &req.device_id,
         &req.offline_public_key,
         None,
         None,
     )?;
-    let expected_server_revision = reserve.server_revision;
-    let expected_state_hash = reserve.server_state_hash.clone();
-    let prior_server_revision = reserve.server_revision;
-    let prior_pending_local_revision = reserve.pending_local_revision;
-    apply_receipts(app, issuer, &mut reserve, &req.receipts)?;
-    if reserve.server_revision == prior_server_revision
-        && reserve.pending_local_revision == prior_pending_local_revision
+    let expected_server_revision = lineage.server_revision;
+    let expected_state_hash = lineage.server_state_hash.clone();
+    let prior_server_revision = lineage.server_revision;
+    let prior_pending_local_revision = lineage.pending_local_revision;
+    apply_receipts(app, issuer, &mut lineage, &req.receipts)?;
+    if lineage.server_revision == prior_server_revision
+        && lineage.pending_local_revision == prior_pending_local_revision
     {
-        return envelope_from_record(issuer, &reserve);
+        return envelope_from_record(issuer, &lineage);
     }
-    let envelope = envelope_from_record(issuer, &reserve)?;
+    let envelope = envelope_from_record(issuer, &lineage)?;
     submit_signed_instruction(
         app,
         operator_authority(issuer)?,
         issuer.operator_keypair.private_key().clone(),
-        InstructionBox::from(CommitOfflineReserveOperation {
+        InstructionBox::from(CommitOfflineLineageOperation {
             expected_server_revision,
             expected_state_hash: expected_state_hash.clone(),
-            reserve: shared_record_from_local(issuer, &reserve)?,
-            result: SharedOfflineReserveOperationResult {
+            lineage: shared_record_from_local(issuer, &lineage)?,
+            result: SharedOfflineLineageOperationResult {
                 operation_key: operation_key.clone(),
                 kind: "sync".to_owned(),
                 request_hash_hex,
-                reserve_id: reserve.reserve_id.clone(),
+                lineage_id: lineage.lineage_id.clone(),
                 envelope: shared_envelope_from_local(&envelope)?,
                 completed_at_ms: now_ms(),
             },
@@ -1636,16 +1685,23 @@ pub(crate) async fn sync_reserve(
     Ok(envelope)
 }
 
-pub(crate) async fn defund_reserve(
+pub(crate) async fn redeem_lineage(
     app: &AppState,
-    req: OfflineReserveDefundRequest,
-) -> Result<OfflineReserveEnvelope, Error> {
+    req: OfflineLineageRedeemRequest,
+) -> Result<OfflineLineageEnvelope, Error> {
     ensure_offline_recursive_stark_ready()?;
+    ensure_non_empty(&req.account_id, "account_id")?;
+    ensure_canonical_account_id_literal(&req.account_id, "account_id")?;
+    ensure_non_empty(&req.device_id, "device_id")?;
+    ensure_non_empty(&req.offline_public_key, "offline_public_key")?;
+    for receipt in &req.receipts {
+        ensure_canonical_transfer_receipt_identifiers(receipt, "receipts")?;
+    }
     let issuer = issuer(app)?;
     let amount = parse_amount(&req.amount)?;
     let amount_string = canonical_amount_string(&amount);
-    let operation_key = operation_key("defund", &req.operation_id);
-    let request_hash_hex = defund_request_hash_hex(&req, &amount)?;
+    let operation_key = operation_key("redeem", &req.operation_id);
+    let request_hash_hex = redeem_request_hash_hex(&req, &amount)?;
     if let Some(existing) = load_operation_result(app, &operation_key) {
         if existing.request_hash_hex != request_hash_hex {
             return Err(conversion_error(
@@ -1655,68 +1711,69 @@ pub(crate) async fn defund_reserve(
         return local_envelope_from_shared(&existing.envelope);
     }
 
-    let mut reserve = load_shared_reserve(app, &req.reserve_id)?
+    let mut lineage = load_shared_lineage(app, &req.lineage_id)?
         .ok_or_else(|| conversion_error("offline cash lineage not found".to_owned()))?;
-    validate_reserve_request(
-        &reserve,
+    validate_lineage_request(
+        &lineage,
         &req.account_id,
         &req.device_id,
         &req.offline_public_key,
         None,
         None,
     )?;
-    let expected_server_revision = reserve.server_revision;
-    let expected_state_hash = reserve.server_state_hash.clone();
-    apply_receipts(app, issuer, &mut reserve, &req.receipts)?;
-    let pre_redeem_state_hash = reserve.server_state_hash.clone();
-    verify_redeem_request_proof(&req, &reserve, &amount_string, &pre_redeem_state_hash)?;
-    reserve.balance = reserve
+    let expected_server_revision = lineage.server_revision;
+    let expected_state_hash = lineage.server_state_hash.clone();
+    apply_receipts(app, issuer, &mut lineage, &req.receipts)?;
+    let pre_redeem_state_hash = lineage.server_state_hash.clone();
+    verify_redeem_request_proof(&req, &lineage, &amount_string, &pre_redeem_state_hash)?;
+    lineage.balance = lineage
         .balance
         .clone()
         .checked_sub(amount.clone())
         .ok_or_else(|| {
             conversion_error("insufficient offline cash balance for redeem".to_owned())
         })?;
-    reserve.parked_balance = parse_numeric(&minimum_required_parked_balance(
-        &canonical_amount_string(&reserve.balance),
-        Some(&reserve.authorization),
+    lineage.locked_balance = parse_numeric(&minimum_required_locked_balance(
+        &canonical_amount_string(&lineage.balance),
+        Some(&lineage.authorization),
         now_ms(),
     )?)?;
-    reserve.server_revision = committed_server_revision(expected_server_revision);
-    reserve.server_state_hash = reserve_anchor_hash(
-        &reserve.reserve_id,
-        &reserve.account_id,
-        &reserve.device_id,
-        &reserve.offline_public_key,
-        &reserve.asset_definition_id,
-        &canonical_amount_string(&reserve.balance),
-        &canonical_amount_string(&reserve.parked_balance),
-        reserve.server_revision,
-        reserve.pending_local_revision,
-        &reserve.authorization.authorization_id,
+    lineage.server_revision = committed_server_revision(expected_server_revision);
+    lineage.server_state_hash = lineage_anchor_hash(
+        &lineage.lineage_id,
+        &lineage.account_id,
+        &lineage.device_id,
+        &lineage.offline_public_key,
+        &lineage.asset_definition_id,
+        &canonical_amount_string(&lineage.balance),
+        &canonical_amount_string(&lineage.locked_balance),
+        lineage.server_revision,
+        lineage.pending_local_revision,
+        &lineage.authorization.authorization_id,
     )?;
-    let post_state_hash = reserve.server_state_hash.clone();
-    let mut envelope = envelope_from_record(issuer, &reserve)?;
+    let post_state_hash = lineage.server_state_hash.clone();
+    let mut envelope = envelope_from_record(issuer, &lineage)?;
+    let completed_at_ms = now_ms();
     let tx = submit_signed_instructions(
         app,
         operator_authority(issuer)?,
         issuer.operator_keypair.private_key().clone(),
         vec![
-            InstructionBox::from(RefundOfflineEscrowBalance {
-                asset: controller_asset_id(&req.account_id, &reserve.asset_definition_id)?,
+            InstructionBox::from(RedeemOfflineEscrowBalance {
+                asset: controller_asset_id(&req.account_id, &lineage.asset_definition_id)?,
                 amount,
             }),
-            InstructionBox::from(CommitOfflineReserveOperation {
+            InstructionBox::from(CommitOfflineLineageOperation {
                 expected_server_revision,
                 expected_state_hash: expected_state_hash.clone(),
-                reserve: shared_record_from_local(issuer, &reserve)?,
-                result: SharedOfflineReserveOperationResult {
+                lineage: shared_record_from_local(issuer, &lineage)?,
+                result: SharedOfflineLineageOperationResult {
                     operation_key: operation_key.clone(),
-                    kind: "defund".to_owned(),
-                    request_hash_hex,
-                    reserve_id: reserve.reserve_id.clone(),
+                    kind: "redeem".to_owned(),
+                    request_hash_hex: request_hash_hex.clone(),
+                    lineage_id: lineage.lineage_id.clone(),
                     envelope: shared_envelope_from_local(&envelope)?,
-                    completed_at_ms: now_ms(),
+                    completed_at_ms,
                 },
             }),
         ],
@@ -1726,34 +1783,48 @@ pub(crate) async fn defund_reserve(
     envelope.settlement = Some(settlement_from_tx(
         "redeem",
         &req.operation_id,
-        &reserve,
+        &lineage,
         &amount_string,
         &pre_redeem_state_hash,
         &post_state_hash,
         &tx,
     )?);
+    finalize_operation_result_settlement(
+        app,
+        issuer,
+        &lineage,
+        operation_key,
+        "redeem",
+        request_hash_hex,
+        completed_at_ms,
+        &envelope,
+        "/v1/offline/cash/redeem",
+    )
+    .await?;
     Ok(envelope)
 }
 
 pub(crate) async fn setup_cash(
     app: &AppState,
-    req: OfflineReserveSetupRequest,
+    req: OfflineLineageSetupRequest,
     mode: OfflineCashAttestationMode,
-) -> Result<OfflineReserveEnvelope, Error> {
+) -> Result<OfflineLineageEnvelope, Error> {
     ensure_non_empty(&req.account_id, "account_id")?;
+    ensure_canonical_account_id_literal(&req.account_id, "account_id")?;
     ensure_non_empty(&req.device_id, "device_id")?;
     ensure_non_empty(&req.offline_public_key, "offline_public_key")?;
     ensure_non_empty(&req.asset_definition_id, "asset_definition_id")?;
+    ensure_canonical_asset_definition_id_literal(&req.asset_definition_id, "asset_definition_id")?;
     ensure_non_empty(&req.app_attest_key_id, "app_attest_key_id")?;
 
     let issuer = issuer(app)?;
-    if let Some(existing) = load_shared_reserve_by_lineage(
+    if let Some(existing) = load_shared_lineage_by_lineage(
         app,
         &req.account_id,
         &req.device_id,
         &req.offline_public_key,
     )? {
-        validate_reserve_request(
+        validate_lineage_request(
             &existing,
             &req.account_id,
             &req.device_id,
@@ -1797,14 +1868,14 @@ pub(crate) async fn setup_cash(
         }
         return envelope_from_record(issuer, &existing);
     }
-    ensure_no_conflicting_active_reserve(
+    ensure_no_conflicting_active_lineage(
         app,
         &req.account_id,
         &req.device_id,
         &req.offline_public_key,
     )?;
 
-    let mut record = new_local_reserve(
+    let mut record = new_local_lineage(
         issuer,
         &req.account_id,
         &req.device_id,
@@ -1855,8 +1926,8 @@ pub(crate) async fn setup_cash(
         app,
         operator_authority(issuer)?,
         issuer.operator_keypair.private_key().clone(),
-        InstructionBox::from(RegisterOfflineReserve {
-            reserve: shared_record_from_local(issuer, &record)?,
+        InstructionBox::from(RegisterOfflineLineage {
+            lineage: shared_record_from_local(issuer, &record)?,
         }),
         "/v1/offline/cash/setup",
     )
@@ -1866,14 +1937,22 @@ pub(crate) async fn setup_cash(
 
 pub(crate) async fn load_cash(
     app: &AppState,
-    req: OfflineReserveTopUpRequest,
+    req: OfflineLineageLoadRequest,
     mode: OfflineCashAttestationMode,
-) -> Result<OfflineReserveEnvelope, Error> {
+) -> Result<OfflineLineageEnvelope, Error> {
+    ensure_offline_recursive_stark_ready()?;
+    ensure_non_empty(&req.account_id, "account_id")?;
+    ensure_canonical_account_id_literal(&req.account_id, "account_id")?;
+    ensure_non_empty(&req.device_id, "device_id")?;
+    ensure_non_empty(&req.offline_public_key, "offline_public_key")?;
+    ensure_non_empty(&req.asset_definition_id, "asset_definition_id")?;
+    ensure_canonical_asset_definition_id_literal(&req.asset_definition_id, "asset_definition_id")?;
+    ensure_non_empty(&req.app_attest_key_id, "app_attest_key_id")?;
     let issuer = issuer(app)?;
     let amount = parse_amount(&req.amount)?;
     let amount_string = canonical_amount_string(&amount);
-    let operation_key = operation_key("topup", &req.operation_id);
-    let request_hash_hex = topup_request_hash_hex(&req, &amount)?;
+    let operation_key = operation_key("load", &req.operation_id);
+    let request_hash_hex = load_request_hash_hex(&req, &amount)?;
     if let Some(existing) = load_operation_result(app, &operation_key) {
         if existing.request_hash_hex != request_hash_hex {
             return Err(conversion_error(
@@ -1883,11 +1962,11 @@ pub(crate) async fn load_cash(
         return local_envelope_from_shared(&existing.envelope);
     }
 
-    let mut reserve = if let Some(reserve_id) = req.reserve_id.as_ref() {
-        load_shared_reserve(app, reserve_id)?
+    let mut lineage = if let Some(lineage_id) = req.lineage_id.as_ref() {
+        load_shared_lineage(app, lineage_id)?
             .ok_or_else(|| conversion_error("offline cash lineage not found".to_owned()))?
     } else {
-        match load_shared_reserve_by_lineage(
+        match load_shared_lineage_by_lineage(
             app,
             &req.account_id,
             &req.device_id,
@@ -1895,13 +1974,13 @@ pub(crate) async fn load_cash(
         )? {
             Some(existing) => existing,
             None => {
-                ensure_no_conflicting_active_reserve(
+                ensure_no_conflicting_active_lineage(
                     app,
                     &req.account_id,
                     &req.device_id,
                     &req.offline_public_key,
                 )?;
-                new_local_reserve(
+                new_local_lineage(
                     issuer,
                     &req.account_id,
                     &req.device_id,
@@ -1916,18 +1995,18 @@ pub(crate) async fn load_cash(
             }
         }
     };
-    validate_reserve_request(
-        &reserve,
+    validate_lineage_request(
+        &lineage,
         &req.account_id,
         &req.device_id,
         &req.offline_public_key,
         Some(&req.asset_definition_id),
         Some(&req.app_attest_key_id),
     )?;
-    let expected_server_revision = reserve.server_revision;
-    let expected_state_hash = reserve.server_state_hash.clone();
+    let expected_server_revision = lineage.server_revision;
+    let expected_state_hash = lineage.server_state_hash.clone();
     let lineage_id = req
-        .reserve_id
+        .lineage_id
         .as_deref()
         .filter(|value| !value.is_empty())
         .unwrap_or("setup");
@@ -1946,8 +2025,8 @@ pub(crate) async fn load_cash(
                 payload,
                 &req.app_attest_key_id,
                 &attestation,
-                &mut reserve.counter_book,
-                reserve.apple_app_attest_binding.as_ref(),
+                &mut lineage.counter_book,
+                lineage.apple_app_attest_binding.as_ref(),
             )?;
         }
         OfflineCashAttestationMode::Android { binding, proof } => {
@@ -1968,51 +2047,52 @@ pub(crate) async fn load_cash(
             )?;
         }
     }
-    reserve.balance = reserve
+    lineage.balance = lineage
         .balance
         .clone()
         .checked_add(amount.clone())
         .ok_or_else(|| conversion_error("offline cash balance overflow".to_owned()))?;
-    reserve.parked_balance = parse_numeric(&minimum_required_parked_balance(
-        &canonical_amount_string(&reserve.balance),
-        Some(&reserve.authorization),
+    lineage.locked_balance = parse_numeric(&minimum_required_locked_balance(
+        &canonical_amount_string(&lineage.balance),
+        Some(&lineage.authorization),
         now_ms(),
     )?)?;
-    reserve.server_revision = committed_server_revision(expected_server_revision);
-    reserve.server_state_hash = reserve_anchor_hash(
-        &reserve.reserve_id,
-        &reserve.account_id,
-        &reserve.device_id,
-        &reserve.offline_public_key,
-        &reserve.asset_definition_id,
-        &canonical_amount_string(&reserve.balance),
-        &canonical_amount_string(&reserve.parked_balance),
-        reserve.server_revision,
-        reserve.pending_local_revision,
-        &reserve.authorization.authorization_id,
+    lineage.server_revision = committed_server_revision(expected_server_revision);
+    lineage.server_state_hash = lineage_anchor_hash(
+        &lineage.lineage_id,
+        &lineage.account_id,
+        &lineage.device_id,
+        &lineage.offline_public_key,
+        &lineage.asset_definition_id,
+        &canonical_amount_string(&lineage.balance),
+        &canonical_amount_string(&lineage.locked_balance),
+        lineage.server_revision,
+        lineage.pending_local_revision,
+        &lineage.authorization.authorization_id,
     )?;
-    let post_state_hash = reserve.server_state_hash.clone();
-    let mut envelope = envelope_from_record(issuer, &reserve)?;
+    let post_state_hash = lineage.server_state_hash.clone();
+    let mut envelope = envelope_from_record(issuer, &lineage)?;
+    let completed_at_ms = now_ms();
     let tx = submit_signed_instructions(
         app,
         operator_authority(issuer)?,
         issuer.operator_keypair.private_key().clone(),
         vec![
-            InstructionBox::from(ReserveOfflineEscrowBalance {
-                asset: controller_asset_id(&req.account_id, &reserve.asset_definition_id)?,
+            InstructionBox::from(LoadOfflineEscrowBalance {
+                asset: controller_asset_id(&req.account_id, &lineage.asset_definition_id)?,
                 amount,
             }),
-            InstructionBox::from(CommitOfflineReserveOperation {
+            InstructionBox::from(CommitOfflineLineageOperation {
                 expected_server_revision,
                 expected_state_hash: expected_state_hash.clone(),
-                reserve: shared_record_from_local(issuer, &reserve)?,
-                result: SharedOfflineReserveOperationResult {
+                lineage: shared_record_from_local(issuer, &lineage)?,
+                result: SharedOfflineLineageOperationResult {
                     operation_key: operation_key.clone(),
-                    kind: "topup".to_owned(),
-                    request_hash_hex,
-                    reserve_id: reserve.reserve_id.clone(),
+                    kind: "load".to_owned(),
+                    request_hash_hex: request_hash_hex.clone(),
+                    lineage_id: lineage.lineage_id.clone(),
                     envelope: shared_envelope_from_local(&envelope)?,
-                    completed_at_ms: now_ms(),
+                    completed_at_ms,
                 },
             }),
         ],
@@ -2022,23 +2102,40 @@ pub(crate) async fn load_cash(
     envelope.settlement = Some(settlement_from_tx(
         "load",
         &req.operation_id,
-        &reserve,
+        &lineage,
         &amount_string,
         &expected_state_hash,
         &post_state_hash,
         &tx,
     )?);
+    finalize_operation_result_settlement(
+        app,
+        issuer,
+        &lineage,
+        operation_key,
+        "load",
+        request_hash_hex,
+        completed_at_ms,
+        &envelope,
+        "/v1/offline/cash/load",
+    )
+    .await?;
     Ok(envelope)
 }
 
 pub(crate) async fn refresh_cash(
     app: &AppState,
-    req: OfflineReserveRenewRequest,
+    req: OfflineLineageRefreshRequest,
     mode: OfflineCashAttestationMode,
-) -> Result<OfflineReserveEnvelope, Error> {
+) -> Result<OfflineLineageEnvelope, Error> {
+    ensure_non_empty(&req.account_id, "account_id")?;
+    ensure_canonical_account_id_literal(&req.account_id, "account_id")?;
+    ensure_non_empty(&req.device_id, "device_id")?;
+    ensure_non_empty(&req.offline_public_key, "offline_public_key")?;
+    ensure_non_empty(&req.app_attest_key_id, "app_attest_key_id")?;
     let issuer = issuer(app)?;
-    let operation_key = operation_key("renew", &req.operation_id);
-    let request_hash_hex = renew_request_hash_hex(&req)?;
+    let operation_key = operation_key("refresh", &req.operation_id);
+    let request_hash_hex = refresh_request_hash_hex(&req)?;
     if let Some(existing) = load_operation_result(app, &operation_key) {
         if existing.request_hash_hex != request_hash_hex {
             return Err(conversion_error(
@@ -2048,20 +2145,20 @@ pub(crate) async fn refresh_cash(
         return local_envelope_from_shared(&existing.envelope);
     }
 
-    let mut reserve = load_shared_reserve(app, &req.reserve_id)?
+    let mut lineage = load_shared_lineage(app, &req.lineage_id)?
         .ok_or_else(|| conversion_error("offline cash lineage not found".to_owned()))?;
-    validate_reserve_request(
-        &reserve,
+    validate_lineage_request(
+        &lineage,
         &req.account_id,
         &req.device_id,
         &req.offline_public_key,
         None,
         Some(&req.app_attest_key_id),
     )?;
-    let expected_server_revision = reserve.server_revision;
-    let expected_state_hash = reserve.server_state_hash.clone();
+    let expected_server_revision = lineage.server_revision;
+    let expected_state_hash = lineage.server_state_hash.clone();
     let payload = canonical_json_bytes(&CashLineagePayload {
-        lineage_id: &req.reserve_id,
+        lineage_id: &req.lineage_id,
     })?;
     match &mode {
         OfflineCashAttestationMode::AppleAttest { binding, proof } => {
@@ -2069,13 +2166,13 @@ pub(crate) async fn refresh_cash(
             validate_cash_attestation(
                 app,
                 &req.account_id,
-                &req.reserve_id,
+                &req.lineage_id,
                 "refresh",
                 payload,
                 &req.app_attest_key_id,
                 &attestation,
-                &mut reserve.counter_book,
-                reserve.apple_app_attest_binding.as_ref(),
+                &mut lineage.counter_book,
+                lineage.apple_app_attest_binding.as_ref(),
             )?;
         }
         OfflineCashAttestationMode::Android { binding, proof } => {
@@ -2088,7 +2185,7 @@ pub(crate) async fn refresh_cash(
             )?;
             validate_android_cash_operation_proof(
                 &req.account_id,
-                &req.reserve_id,
+                &req.lineage_id,
                 "refresh",
                 payload,
                 binding,
@@ -2096,54 +2193,54 @@ pub(crate) async fn refresh_cash(
             )?;
         }
     }
-    reserve.authorization = signed_authorization(
+    lineage.authorization = signed_authorization(
         issuer,
         AuthorizationDraft {
-            reserve_id: reserve.reserve_id.clone(),
-            account_id: reserve.account_id.clone(),
-            device_id: reserve.device_id.clone(),
-            offline_public_key: reserve.offline_public_key.clone(),
-            verdict_id: reserve.authorization.verdict_id.clone(),
+            lineage_id: lineage.lineage_id.clone(),
+            account_id: lineage.account_id.clone(),
+            device_id: lineage.device_id.clone(),
+            offline_public_key: lineage.offline_public_key.clone(),
+            verdict_id: lineage.authorization.verdict_id.clone(),
             device_binding: Some(match &mode {
                 OfflineCashAttestationMode::AppleAttest { binding, .. }
                 | OfflineCashAttestationMode::Android { binding, .. } => binding.clone(),
             }),
-            app_attest_key_id: reserve.app_attest_key_id.clone(),
+            app_attest_key_id: lineage.app_attest_key_id.clone(),
             issued_at_ms: now_ms(),
         },
     )?;
-    reserve.parked_balance = parse_numeric(&minimum_required_parked_balance(
-        &canonical_amount_string(&reserve.balance),
-        Some(&reserve.authorization),
+    lineage.locked_balance = parse_numeric(&minimum_required_locked_balance(
+        &canonical_amount_string(&lineage.balance),
+        Some(&lineage.authorization),
         now_ms(),
     )?)?;
-    reserve.server_revision = committed_server_revision(expected_server_revision);
-    reserve.server_state_hash = reserve_anchor_hash(
-        &reserve.reserve_id,
-        &reserve.account_id,
-        &reserve.device_id,
-        &reserve.offline_public_key,
-        &reserve.asset_definition_id,
-        &canonical_amount_string(&reserve.balance),
-        &canonical_amount_string(&reserve.parked_balance),
-        reserve.server_revision,
-        reserve.pending_local_revision,
-        &reserve.authorization.authorization_id,
+    lineage.server_revision = committed_server_revision(expected_server_revision);
+    lineage.server_state_hash = lineage_anchor_hash(
+        &lineage.lineage_id,
+        &lineage.account_id,
+        &lineage.device_id,
+        &lineage.offline_public_key,
+        &lineage.asset_definition_id,
+        &canonical_amount_string(&lineage.balance),
+        &canonical_amount_string(&lineage.locked_balance),
+        lineage.server_revision,
+        lineage.pending_local_revision,
+        &lineage.authorization.authorization_id,
     )?;
-    let envelope = envelope_from_record(issuer, &reserve)?;
+    let envelope = envelope_from_record(issuer, &lineage)?;
     submit_signed_instruction(
         app,
         operator_authority(issuer)?,
         issuer.operator_keypair.private_key().clone(),
-        InstructionBox::from(CommitOfflineReserveOperation {
+        InstructionBox::from(CommitOfflineLineageOperation {
             expected_server_revision,
             expected_state_hash: expected_state_hash.clone(),
-            reserve: shared_record_from_local(issuer, &reserve)?,
-            result: SharedOfflineReserveOperationResult {
+            lineage: shared_record_from_local(issuer, &lineage)?,
+            result: SharedOfflineLineageOperationResult {
                 operation_key: operation_key.clone(),
-                kind: "renew".to_owned(),
+                kind: "refresh".to_owned(),
                 request_hash_hex,
-                reserve_id: reserve.reserve_id.clone(),
+                lineage_id: lineage.lineage_id.clone(),
                 envelope: shared_envelope_from_local(&envelope)?,
                 completed_at_ms: now_ms(),
             },
@@ -2156,15 +2253,22 @@ pub(crate) async fn refresh_cash(
 
 pub(crate) async fn sync_cash(
     app: &AppState,
-    req: OfflineReserveSyncRequest,
+    req: OfflineLineageSyncRequest,
     mode: OfflineCashAttestationMode,
-) -> Result<OfflineReserveEnvelope, Error> {
+) -> Result<OfflineLineageEnvelope, Error> {
+    ensure_non_empty(&req.account_id, "account_id")?;
+    ensure_canonical_account_id_literal(&req.account_id, "account_id")?;
+    ensure_non_empty(&req.device_id, "device_id")?;
+    ensure_non_empty(&req.offline_public_key, "offline_public_key")?;
+    for receipt in &req.receipts {
+        ensure_canonical_transfer_receipt_identifiers(receipt, "receipts")?;
+    }
     match &mode {
         OfflineCashAttestationMode::AppleAttest { binding, proof } => {
-            let mut reserve = load_shared_reserve(app, &req.reserve_id)?
+            let mut lineage = load_shared_lineage(app, &req.lineage_id)?
                 .ok_or_else(|| conversion_error("offline cash lineage not found".to_owned()))?;
-            validate_reserve_request(
-                &reserve,
+            validate_lineage_request(
+                &lineage,
                 &req.account_id,
                 &req.device_id,
                 &req.offline_public_key,
@@ -2175,15 +2279,15 @@ pub(crate) async fn sync_cash(
             validate_cash_attestation(
                 app,
                 &req.account_id,
-                &req.reserve_id,
+                &req.lineage_id,
                 "sync",
                 canonical_json_bytes(&CashLineagePayload {
-                    lineage_id: &req.reserve_id,
+                    lineage_id: &req.lineage_id,
                 })?,
-                &reserve.app_attest_key_id,
+                &lineage.app_attest_key_id,
                 &attestation,
-                &mut reserve.counter_book,
-                reserve.apple_app_attest_binding.as_ref(),
+                &mut lineage.counter_book,
+                lineage.apple_app_attest_binding.as_ref(),
             )?;
         }
         OfflineCashAttestationMode::Android { binding, proof } => {
@@ -2196,30 +2300,37 @@ pub(crate) async fn sync_cash(
             )?;
             validate_android_cash_operation_proof(
                 &req.account_id,
-                &req.reserve_id,
+                &req.lineage_id,
                 "sync",
                 canonical_json_bytes(&CashLineagePayload {
-                    lineage_id: &req.reserve_id,
+                    lineage_id: &req.lineage_id,
                 })?,
                 binding,
                 proof,
             )?;
         }
     }
-    sync_reserve(app, req).await
+    sync_lineage(app, req).await
 }
 
 pub(crate) async fn redeem_cash(
     app: &AppState,
-    req: OfflineReserveDefundRequest,
+    req: OfflineLineageRedeemRequest,
     mode: OfflineCashAttestationMode,
-) -> Result<OfflineReserveEnvelope, Error> {
+) -> Result<OfflineLineageEnvelope, Error> {
+    ensure_non_empty(&req.account_id, "account_id")?;
+    ensure_canonical_account_id_literal(&req.account_id, "account_id")?;
+    ensure_non_empty(&req.device_id, "device_id")?;
+    ensure_non_empty(&req.offline_public_key, "offline_public_key")?;
+    for receipt in &req.receipts {
+        ensure_canonical_transfer_receipt_identifiers(receipt, "receipts")?;
+    }
     match &mode {
         OfflineCashAttestationMode::AppleAttest { binding, proof } => {
-            let mut reserve = load_shared_reserve(app, &req.reserve_id)?
+            let mut lineage = load_shared_lineage(app, &req.lineage_id)?
                 .ok_or_else(|| conversion_error("offline cash lineage not found".to_owned()))?;
-            validate_reserve_request(
-                &reserve,
+            validate_lineage_request(
+                &lineage,
                 &req.account_id,
                 &req.device_id,
                 &req.offline_public_key,
@@ -2230,16 +2341,16 @@ pub(crate) async fn redeem_cash(
             validate_cash_attestation(
                 app,
                 &req.account_id,
-                &req.reserve_id,
+                &req.lineage_id,
                 "redeem",
                 canonical_json_bytes(&CashLineageAmountPayload {
-                    lineage_id: &req.reserve_id,
+                    lineage_id: &req.lineage_id,
                     amount: &req.amount,
                 })?,
-                &reserve.app_attest_key_id,
+                &lineage.app_attest_key_id,
                 &attestation,
-                &mut reserve.counter_book,
-                reserve.apple_app_attest_binding.as_ref(),
+                &mut lineage.counter_book,
+                lineage.apple_app_attest_binding.as_ref(),
             )?;
         }
         OfflineCashAttestationMode::Android { binding, proof } => {
@@ -2252,10 +2363,10 @@ pub(crate) async fn redeem_cash(
             )?;
             validate_android_cash_operation_proof(
                 &req.account_id,
-                &req.reserve_id,
+                &req.lineage_id,
                 "redeem",
                 canonical_json_bytes(&CashLineageAmountPayload {
-                    lineage_id: &req.reserve_id,
+                    lineage_id: &req.lineage_id,
                     amount: &req.amount,
                 })?,
                 binding,
@@ -2263,7 +2374,7 @@ pub(crate) async fn redeem_cash(
             )?;
         }
     }
-    defund_reserve(app, req).await
+    redeem_lineage(app, req).await
 }
 
 fn normalize_offline_policy_snapshot(
@@ -2341,7 +2452,7 @@ pub(crate) fn revocation_bundle(app: &AppState) -> Result<OfflineRevocationBundl
 
     let issued_at_ms = now_ms();
     let expires_at_ms =
-        issued_at_ms.saturating_add(issuer.reserve_policy.revocation_ttl.as_millis() as u64);
+        issued_at_ms.saturating_add(issuer.lineage_policy.revocation_ttl.as_millis() as u64);
     let mut bundle = OfflineRevocationBundle {
         issued_at_ms,
         expires_at_ms,
@@ -2370,7 +2481,7 @@ pub(crate) fn revocation_list(app: &AppState) -> Result<OfflineRevocationList, E
 
 pub(crate) async fn register_revocation(
     app: &AppState,
-    req: OfflineReserveRevocationRequest,
+    req: OfflineLineageRevocationRequest,
 ) -> Result<OfflineRevocationBundle, Error> {
     let issuer = issuer(app)?;
     let authority = operator_authority(issuer)?;
@@ -2402,7 +2513,7 @@ pub(crate) async fn register_revocation(
     revocation_bundle(app)
 }
 
-fn new_local_reserve(
+fn new_local_lineage(
     issuer: &OfflineIssuerSigner,
     account_id: &str,
     device_id: &str,
@@ -2410,12 +2521,12 @@ fn new_local_reserve(
     asset_definition_id: &str,
     app_attest_key_id: &str,
     device_binding: Option<OfflineCashAndroidDeviceBinding>,
-) -> Result<StoredReserve, Error> {
-    let reserve_id = deterministic_id("reserve", &[account_id, device_id, offline_public_key]);
+) -> Result<StoredLineage, Error> {
+    let lineage_id = deterministic_id("lineage", &[account_id, device_id, offline_public_key]);
     let authorization = signed_authorization(
         issuer,
         AuthorizationDraft {
-            reserve_id: reserve_id.clone(),
+            lineage_id: lineage_id.clone(),
             account_id: account_id.to_owned(),
             device_id: device_id.to_owned(),
             offline_public_key: offline_public_key.to_owned(),
@@ -2425,17 +2536,17 @@ fn new_local_reserve(
             issued_at_ms: now_ms(),
         },
     )?;
-    Ok(StoredReserve {
-        reserve_id: reserve_id.clone(),
+    Ok(StoredLineage {
+        lineage_id: lineage_id.clone(),
         account_id: account_id.to_owned(),
         device_id: device_id.to_owned(),
         offline_public_key: offline_public_key.to_owned(),
         asset_definition_id: asset_definition_id.to_owned(),
         balance: Numeric::zero(),
-        parked_balance: Numeric::zero(),
+        locked_balance: Numeric::zero(),
         server_revision: 0,
-        server_state_hash: reserve_anchor_hash(
-            &reserve_id,
+        server_state_hash: lineage_anchor_hash(
+            &lineage_id,
             account_id,
             device_id,
             offline_public_key,
@@ -2456,31 +2567,38 @@ fn new_local_reserve(
     })
 }
 
-fn validate_reserve_request(
-    reserve: &StoredReserve,
+fn validate_lineage_request(
+    lineage: &StoredLineage,
     account_id: &str,
     device_id: &str,
     offline_public_key: &str,
     asset_definition_id: Option<&str>,
     app_attest_key_id: Option<&str>,
 ) -> Result<(), Error> {
-    if reserve.account_id != account_id
-        || reserve.device_id != device_id
-        || reserve.offline_public_key != offline_public_key
+    ensure_canonical_account_id_literal(&lineage.account_id, "lineage.account_id")?;
+    ensure_canonical_asset_definition_id_literal(
+        &lineage.asset_definition_id,
+        "lineage.asset_definition_id",
+    )?;
+    ensure_canonical_account_id_literal(account_id, "account_id")?;
+    if lineage.account_id != account_id
+        || lineage.device_id != device_id
+        || lineage.offline_public_key != offline_public_key
     {
         return Err(conversion_error(
             "lineage_conflict: offline cash lineage does not match the request".to_owned(),
         ));
     }
     if let Some(definition_id) = asset_definition_id {
-        if reserve.asset_definition_id != definition_id {
+        ensure_canonical_asset_definition_id_literal(definition_id, "asset_definition_id")?;
+        if lineage.asset_definition_id != definition_id {
             return Err(conversion_error(
                 "asset_definition_id does not match the offline cash lineage".to_owned(),
             ));
         }
     }
     if let Some(key_id) = app_attest_key_id {
-        if reserve.app_attest_key_id != key_id {
+        if lineage.app_attest_key_id != key_id {
             return Err(conversion_error(
                 "lineage_conflict: app_attest_key_id does not match the offline cash lineage"
                     .to_owned(),
@@ -2493,17 +2611,17 @@ fn validate_reserve_request(
 fn apply_receipts(
     app: &AppState,
     issuer: &OfflineIssuerSigner,
-    reserve: &mut StoredReserve,
+    lineage: &mut StoredLineage,
     receipts: &[OfflineTransferReceipt],
 ) -> Result<(), Error> {
     if receipts.is_empty() {
         return Ok(());
     }
     let issuer_public_key = issuer_public_key_base64(issuer);
-    let mut current_balance = canonical_amount_string(&reserve.balance);
-    let mut current_parked = canonical_amount_string(&reserve.parked_balance);
-    let mut current_hash = reserve.server_state_hash.clone();
-    let mut current_revision = reserve.pending_local_revision;
+    let mut current_balance = canonical_amount_string(&lineage.balance);
+    let mut current_parked = canonical_amount_string(&lineage.locked_balance);
+    let mut current_hash = lineage.server_state_hash.clone();
+    let mut current_revision = lineage.pending_local_revision;
     let revoked_verdict_ids = revoked_verdict_ids(app);
 
     let mut ordered = receipts.to_vec();
@@ -2514,13 +2632,14 @@ fn apply_receipts(
         if receipt.local_revision <= current_revision {
             continue;
         }
+        ensure_canonical_transfer_receipt_identifiers(&receipt, "receipt")?;
         validate_receipt_signature(&receipt)?;
         validate_attestation_hash(&receipt)?;
-        validate_counter(&receipt.attestation, &mut reserve.counter_book)?;
+        validate_counter(&receipt.attestation, &mut lineage.counter_book)?;
         let expected_post_balance = validate_local_continuity(
             &receipt,
-            &reserve.reserve_id,
-            &reserve.offline_public_key,
+            &lineage.lineage_id,
+            &lineage.offline_public_key,
             &current_balance,
             &current_parked,
             &current_hash,
@@ -2528,7 +2647,7 @@ fn apply_receipts(
             &issuer_public_key,
             &revoked_verdict_ids,
         )?;
-        if !reserve
+        if !lineage
             .seen_transfer_ids
             .insert(receipt.transfer_id.clone())
         {
@@ -2536,8 +2655,8 @@ fn apply_receipts(
                 "duplicate transfer_id in offline cash sync".to_owned(),
             ));
         }
-        if !reserve.seen_sender_states.insert(sender_state_key(
-            &receipt.reserve_id,
+        if !lineage.seen_sender_states.insert(sender_state_key(
+            &receipt.lineage_id,
             receipt.local_revision,
         )) {
             return Err(conversion_error(
@@ -2545,18 +2664,18 @@ fn apply_receipts(
             ));
         }
         current_balance = expected_post_balance;
-        current_parked = receipt.post_parked_balance.clone();
+        current_parked = receipt.post_locked_balance.clone();
         current_hash = receipt.post_state_hash.clone();
         current_revision = receipt.local_revision;
         applied_any = true;
     }
 
     if applied_any {
-        reserve.balance = parse_numeric(&current_balance)?;
-        reserve.parked_balance = parse_numeric(&current_parked)?;
-        reserve.pending_local_revision = current_revision;
-        reserve.server_revision = reserve.server_revision.saturating_add(1);
-        reserve.server_state_hash = current_hash;
+        lineage.balance = parse_numeric(&current_balance)?;
+        lineage.locked_balance = parse_numeric(&current_parked)?;
+        lineage.pending_local_revision = current_revision;
+        lineage.server_revision = lineage.server_revision.saturating_add(1);
+        lineage.server_state_hash = current_hash;
     }
 
     Ok(())
@@ -2564,7 +2683,7 @@ fn apply_receipts(
 
 fn validate_local_continuity(
     receipt: &OfflineTransferReceipt,
-    expected_reserve_id: &str,
+    expected_lineage_id: &str,
     expected_offline_public_key: &str,
     current_balance: &str,
     current_parked: &str,
@@ -2573,11 +2692,11 @@ fn validate_local_continuity(
     issuer_public_key_base64: &str,
     revoked_verdict_ids: &BTreeSet<String>,
 ) -> Result<String, Error> {
-    if receipt.reserve_id != expected_reserve_id
+    if receipt.lineage_id != expected_lineage_id
         || receipt.offline_public_key != expected_offline_public_key
         || receipt.local_revision != current_revision.saturating_add(1)
         || receipt.pre_balance != current_balance
-        || receipt.pre_parked_balance != current_parked
+        || receipt.pre_locked_balance != current_parked
         || receipt.pre_state_hash != current_hash
     {
         return Err(conversion_error(
@@ -2613,7 +2732,7 @@ fn validate_local_continuity(
             })?;
             validate_source_payload(
                 source_payload,
-                &receipt.reserve_id,
+                &receipt.lineage_id,
                 &receipt.amount,
                 issuer_public_key_base64,
                 revoked_verdict_ids,
@@ -2629,26 +2748,26 @@ fn validate_local_continuity(
     validate_parked_continuity(receipt, &expected_post_balance)?;
 
     let expected_post_hash = next_local_state_hash(
-        &receipt.reserve_id,
+        &receipt.lineage_id,
         current_hash,
         &receipt.transfer_id,
         &receipt.direction,
-        &receipt.counterparty_reserve_id,
+        &receipt.counterparty_lineage_id,
         &receipt.amount,
         receipt.local_revision,
         &expected_post_balance,
-        &receipt.post_parked_balance,
+        &receipt.post_locked_balance,
     )?;
     let expected_cash_post_hash = cash_next_local_state_hash(
-        &receipt.reserve_id,
+        &receipt.lineage_id,
         current_hash,
         &receipt.transfer_id,
         &receipt.direction,
-        &receipt.counterparty_reserve_id,
+        &receipt.counterparty_lineage_id,
         &receipt.amount,
         receipt.local_revision,
         &expected_post_balance,
-        &receipt.post_parked_balance,
+        &receipt.post_locked_balance,
     )?;
     if receipt.post_balance != expected_post_balance
         || (receipt.post_state_hash != expected_post_hash
@@ -2663,25 +2782,26 @@ fn validate_local_continuity(
 
 fn validate_source_payload(
     raw_payload: &str,
-    recipient_reserve_id: &str,
+    recipient_lineage_id: &str,
     amount: &str,
     issuer_public_key_base64: &str,
     revoked_verdict_ids: &BTreeSet<String>,
 ) -> Result<(), Error> {
     let payload = decode_transfer_payload(raw_payload)?;
+    ensure_canonical_lineage_state_identifiers(&payload.anchor, "source_payload.anchor")?;
     validate_issuer_signature(
         authorization_unsigned_payload(&payload.anchor.authorization)?,
         &payload.anchor.authorization.issuer_signature_base64,
         issuer_public_key_base64,
     )?;
     validate_issuer_signature(
-        reserve_state_unsigned_payload(&payload.anchor)?,
+        lineage_state_unsigned_payload(&payload.anchor)?,
         &payload.anchor.issuer_signature_base64,
         issuer_public_key_base64,
     )?;
 
     let mut current_balance = payload.anchor.balance.clone();
-    let mut current_parked = minimum_required_parked_balance(
+    let mut current_parked = minimum_required_locked_balance(
         &current_balance,
         Some(&payload.anchor.authorization),
         payload
@@ -2697,9 +2817,13 @@ fn validate_source_payload(
 
     let mut ancestry = payload.ancestry_receipts.clone();
     ancestry.sort_by_key(|receipt| receipt.local_revision);
-    for receipt in ancestry {
+    for (index, receipt) in ancestry.into_iter().enumerate() {
+        ensure_canonical_transfer_receipt_identifiers(
+            &receipt,
+            &format!("source_payload.ancestry_receipts[{index}]"),
+        )?;
         if !seen_sender_states.insert(sender_state_key(
-            &receipt.reserve_id,
+            &receipt.lineage_id,
             receipt.local_revision,
         )) {
             return Err(conversion_error(
@@ -2711,7 +2835,7 @@ fn validate_source_payload(
         validate_counter(&receipt.attestation, &mut counter_book)?;
         current_balance = validate_local_continuity(
             &receipt,
-            &payload.anchor.reserve_id,
+            &payload.anchor.lineage_id,
             &payload.anchor.offline_public_key,
             &current_balance,
             &current_parked,
@@ -2720,25 +2844,26 @@ fn validate_source_payload(
             issuer_public_key_base64,
             revoked_verdict_ids,
         )?;
-        current_parked = receipt.post_parked_balance.clone();
+        current_parked = receipt.post_locked_balance.clone();
         current_hash = receipt.post_state_hash.clone();
         current_revision = receipt.local_revision;
     }
 
     if !seen_sender_states.insert(sender_state_key(
-        &payload.receipt.reserve_id,
+        &payload.receipt.lineage_id,
         payload.receipt.local_revision,
     )) {
         return Err(conversion_error(
             "duplicate sender state in outgoing payload".to_owned(),
         ));
     }
+    ensure_canonical_transfer_receipt_identifiers(&payload.receipt, "source_payload.receipt")?;
     validate_receipt_signature(&payload.receipt)?;
     validate_attestation_hash(&payload.receipt)?;
     validate_counter(&payload.receipt.attestation, &mut counter_book)?;
     let _ = validate_local_continuity(
         &payload.receipt,
-        &payload.anchor.reserve_id,
+        &payload.anchor.lineage_id,
         &payload.anchor.offline_public_key,
         &current_balance,
         &current_parked,
@@ -2748,7 +2873,7 @@ fn validate_source_payload(
         revoked_verdict_ids,
     )?;
     if payload.receipt.direction != "outgoing"
-        || payload.receipt.counterparty_reserve_id != recipient_reserve_id
+        || payload.receipt.counterparty_lineage_id != recipient_lineage_id
         || canonical_amount_string(&parse_amount(&payload.receipt.amount)?)
             != canonical_amount_string(&parse_amount(amount)?)
     {
@@ -2769,51 +2894,51 @@ fn validate_attestation_hash(receipt: &OfflineTransferReceipt) -> Result<(), Err
             ));
         }
     };
-    let reserve_transfer_payload = if receipt.direction == "incoming" {
+    let lineage_transfer_payload = if receipt.direction == "incoming" {
         canonical_json_bytes(&AttestationReceivePayload {
-            reserve_id: &receipt.reserve_id,
+            lineage_id: &receipt.lineage_id,
             transfer_id: &receipt.transfer_id,
             amount: &receipt.amount,
-            sender_reserve_id: &receipt.counterparty_reserve_id,
+            sender_lineage_id: &receipt.counterparty_lineage_id,
         })?
     } else {
         canonical_json_bytes(&AttestationSendPayload {
-            reserve_id: &receipt.reserve_id,
+            lineage_id: &receipt.lineage_id,
             transfer_id: &receipt.transfer_id,
             amount: &receipt.amount,
-            receiver_reserve_id: &receipt.counterparty_reserve_id,
+            receiver_lineage_id: &receipt.counterparty_lineage_id,
         })?
     };
-    let reserve_expected = sha256_hex(&canonical_json_bytes(&AttestationChallengePayload {
+    let lineage_expected = sha256_hex(&canonical_json_bytes(&AttestationChallengePayload {
         account_id: &receipt.account_id,
-        reserve_id: &receipt.reserve_id,
+        lineage_id: &receipt.lineage_id,
         operation,
-        payload_hash: &sha256_hex(&reserve_transfer_payload),
+        payload_hash: &sha256_hex(&lineage_transfer_payload),
     })?);
 
     let cash_transfer_payload = if receipt.direction == "incoming" {
         canonical_json_bytes(&CashAttestationReceivePayload {
-            lineage_id: &receipt.reserve_id,
+            lineage_id: &receipt.lineage_id,
             transfer_id: &receipt.transfer_id,
             amount: &receipt.amount,
-            sender_lineage_id: &receipt.counterparty_reserve_id,
+            sender_lineage_id: &receipt.counterparty_lineage_id,
         })?
     } else {
         canonical_json_bytes(&CashAttestationSendPayload {
-            lineage_id: &receipt.reserve_id,
+            lineage_id: &receipt.lineage_id,
             transfer_id: &receipt.transfer_id,
             amount: &receipt.amount,
-            receiver_lineage_id: &receipt.counterparty_reserve_id,
+            receiver_lineage_id: &receipt.counterparty_lineage_id,
         })?
     };
     let cash_expected = sha256_hex(&canonical_json_bytes(&CashAttestationChallengePayload {
         account_id: &receipt.account_id,
-        lineage_id: &receipt.reserve_id,
+        lineage_id: &receipt.lineage_id,
         operation,
         payload_hash: &sha256_hex(&cash_transfer_payload),
     })?);
 
-    if receipt.attestation.challenge_hash_hex != reserve_expected
+    if receipt.attestation.challenge_hash_hex != lineage_expected
         && receipt.attestation.challenge_hash_hex != cash_expected
     {
         return Err(conversion_error(
@@ -2838,10 +2963,10 @@ fn validate_counter(
 }
 
 fn validate_receipt_signature(receipt: &OfflineTransferReceipt) -> Result<(), Error> {
-    let reserve_payload = transfer_receipt_unsigned_payload(receipt)?;
+    let lineage_payload = transfer_receipt_unsigned_payload(receipt)?;
     if validate_signature(
         "offline receipt sender signature",
-        &reserve_payload,
+        &lineage_payload,
         &receipt.sender_signature_base64,
         &receipt.offline_public_key,
     )
@@ -2858,11 +2983,11 @@ fn validate_receipt_signature(receipt: &OfflineTransferReceipt) -> Result<(), Er
     ) {
         Ok(()) => Ok(()),
         Err(err) => Err(conversion_error(format!(
-            "invalid offline receipt sender signature: transfer_id={} direction={} local_revision={} reserve_payload_hash={} cash_payload_hash={} reason={err}",
+            "invalid offline receipt sender signature: transfer_id={} direction={} local_revision={} lineage_payload_hash={} cash_payload_hash={} reason={err}",
             receipt.transfer_id,
             receipt.direction,
             receipt.local_revision,
-            sha256_hex(&reserve_payload),
+            sha256_hex(&lineage_payload),
             sha256_hex(&cash_payload),
         ))),
     }
@@ -2913,18 +3038,18 @@ fn transfer_receipt_unsigned_payload(receipt: &OfflineTransferReceipt) -> Result
         version: receipt.version,
         transfer_id: receipt.transfer_id.clone(),
         direction: receipt.direction.clone(),
-        reserve_id: receipt.reserve_id.clone(),
+        lineage_id: receipt.lineage_id.clone(),
         account_id: receipt.account_id.clone(),
         device_id: receipt.device_id.clone(),
         offline_public_key: receipt.offline_public_key.clone(),
         pre_balance: canonical_amount_string(&parse_numeric(&receipt.pre_balance)?),
         post_balance: canonical_amount_string(&parse_numeric(&receipt.post_balance)?),
-        pre_parked_balance: canonical_amount_string(&parse_numeric(&receipt.pre_parked_balance)?),
-        post_parked_balance: canonical_amount_string(&parse_numeric(&receipt.post_parked_balance)?),
+        pre_locked_balance: canonical_amount_string(&parse_numeric(&receipt.pre_locked_balance)?),
+        post_locked_balance: canonical_amount_string(&parse_numeric(&receipt.post_locked_balance)?),
         pre_state_hash: receipt.pre_state_hash.clone(),
         post_state_hash: receipt.post_state_hash.clone(),
         local_revision: receipt.local_revision,
-        counterparty_reserve_id: receipt.counterparty_reserve_id.clone(),
+        counterparty_lineage_id: receipt.counterparty_lineage_id.clone(),
         counterparty_account_id: receipt.counterparty_account_id.clone(),
         counterparty_device_id: receipt.counterparty_device_id.clone(),
         counterparty_offline_public_key: receipt.counterparty_offline_public_key.clone(),
@@ -2945,29 +3070,29 @@ fn cash_transfer_receipt_unsigned_payload(
                 version: receipt.version,
                 transfer_id: receipt.transfer_id.clone(),
                 direction: receipt.direction.clone(),
-                lineage_id: receipt.reserve_id.clone(),
+                lineage_id: receipt.lineage_id.clone(),
                 account_id: receipt.account_id.clone(),
                 device_id: receipt.device_id.clone(),
                 offline_public_key: receipt.offline_public_key.clone(),
                 pre_balance: canonical_amount_string(&parse_numeric(&receipt.pre_balance)?),
                 post_balance: canonical_amount_string(&parse_numeric(&receipt.post_balance)?),
                 pre_locked_balance: canonical_amount_string(&parse_numeric(
-                    &receipt.pre_parked_balance,
+                    &receipt.pre_locked_balance,
                 )?),
                 post_locked_balance: canonical_amount_string(&parse_numeric(
-                    &receipt.post_parked_balance,
+                    &receipt.post_locked_balance,
                 )?),
                 pre_state_hash: receipt.pre_state_hash.clone(),
                 post_state_hash: receipt.post_state_hash.clone(),
                 local_revision: receipt.local_revision,
-                counterparty_lineage_id: receipt.counterparty_reserve_id.clone(),
+                counterparty_lineage_id: receipt.counterparty_lineage_id.clone(),
                 counterparty_account_id: receipt.counterparty_account_id.clone(),
                 counterparty_device_id: receipt.counterparty_device_id.clone(),
                 counterparty_offline_public_key: receipt.counterparty_offline_public_key.clone(),
                 amount: canonical_amount_string(&parse_amount(&receipt.amount)?),
                 authorization: Some(CashTransferReceiptAuthorizationPayload {
                     authorization_id: authorization.authorization_id.clone(),
-                    lineage_id: authorization.reserve_id.clone(),
+                    lineage_id: authorization.lineage_id.clone(),
                     account_id: authorization.account_id.clone(),
                     verdict_id: authorization.verdict_id.clone(),
                     max_balance: canonical_amount_string(&parse_amount(
@@ -2995,7 +3120,7 @@ fn cash_transfer_receipt_unsigned_payload(
             |authorization| -> Result<LegacyCashTransferReceiptAuthorizationPayload, Error> {
                 Ok(LegacyCashTransferReceiptAuthorizationPayload {
                     authorization_id: authorization.authorization_id.clone(),
-                    lineage_id: authorization.reserve_id.clone(),
+                    lineage_id: authorization.lineage_id.clone(),
                     account_id: authorization.account_id.clone(),
                     device_id: authorization.device_id.clone(),
                     offline_public_key: authorization.offline_public_key.clone(),
@@ -3019,18 +3144,18 @@ fn cash_transfer_receipt_unsigned_payload(
         version: receipt.version,
         transfer_id: receipt.transfer_id.clone(),
         direction: receipt.direction.clone(),
-        lineage_id: receipt.reserve_id.clone(),
+        lineage_id: receipt.lineage_id.clone(),
         account_id: receipt.account_id.clone(),
         device_id: receipt.device_id.clone(),
         offline_public_key: receipt.offline_public_key.clone(),
         pre_balance: canonical_amount_string(&parse_numeric(&receipt.pre_balance)?),
         post_balance: canonical_amount_string(&parse_numeric(&receipt.post_balance)?),
-        pre_locked_balance: canonical_amount_string(&parse_numeric(&receipt.pre_parked_balance)?),
-        post_locked_balance: canonical_amount_string(&parse_numeric(&receipt.post_parked_balance)?),
+        pre_locked_balance: canonical_amount_string(&parse_numeric(&receipt.pre_locked_balance)?),
+        post_locked_balance: canonical_amount_string(&parse_numeric(&receipt.post_locked_balance)?),
         pre_state_hash: receipt.pre_state_hash.clone(),
         post_state_hash: receipt.post_state_hash.clone(),
         local_revision: receipt.local_revision,
-        counterparty_lineage_id: receipt.counterparty_reserve_id.clone(),
+        counterparty_lineage_id: receipt.counterparty_lineage_id.clone(),
         counterparty_account_id: receipt.counterparty_account_id.clone(),
         counterparty_device_id: receipt.counterparty_device_id.clone(),
         counterparty_offline_public_key: receipt.counterparty_offline_public_key.clone(),
@@ -3048,7 +3173,7 @@ fn authorization_unsigned_payload(
     if let Some(device_binding) = authorization.device_binding.as_ref() {
         return canonical_json_bytes(&CashAuthorizationUnsignedPayload {
             authorization_id: &authorization.authorization_id,
-            lineage_id: &authorization.reserve_id,
+            lineage_id: &authorization.lineage_id,
             account_id: &authorization.account_id,
             verdict_id: &authorization.verdict_id,
             max_balance: &canonical_amount_string(&parse_amount(&authorization.max_balance)?),
@@ -3061,7 +3186,7 @@ fn authorization_unsigned_payload(
     }
     canonical_json_bytes(&AuthorizationUnsignedPayload {
         authorization_id: &authorization.authorization_id,
-        reserve_id: &authorization.reserve_id,
+        lineage_id: &authorization.lineage_id,
         account_id: &authorization.account_id,
         device_id: &authorization.device_id,
         offline_public_key: &authorization.offline_public_key,
@@ -3075,43 +3200,43 @@ fn authorization_unsigned_payload(
     })
 }
 
-fn reserve_state_unsigned_payload(reserve_state: &OfflineReserveState) -> Result<Vec<u8>, Error> {
-    canonical_json_bytes(&ReserveStateUnsignedPayload {
-        reserve_id: &reserve_state.reserve_id,
-        account_id: &reserve_state.account_id,
-        device_id: &reserve_state.device_id,
-        offline_public_key: &reserve_state.offline_public_key,
-        asset_definition_id: &reserve_state.asset_definition_id,
-        balance: &canonical_amount_string(&parse_numeric(&reserve_state.balance)?),
-        parked_balance: &canonical_amount_string(&parse_numeric(&reserve_state.parked_balance)?),
-        server_revision: reserve_state.server_revision,
-        server_state_hash: &reserve_state.server_state_hash,
-        pending_local_revision: reserve_state.pending_local_revision,
-        authorization_id: &reserve_state.authorization.authorization_id,
+fn lineage_state_unsigned_payload(lineage_state: &OfflineLineageState) -> Result<Vec<u8>, Error> {
+    canonical_json_bytes(&LineageStateUnsignedPayload {
+        lineage_id: &lineage_state.lineage_id,
+        account_id: &lineage_state.account_id,
+        device_id: &lineage_state.device_id,
+        offline_public_key: &lineage_state.offline_public_key,
+        asset_definition_id: &lineage_state.asset_definition_id,
+        balance: &canonical_amount_string(&parse_numeric(&lineage_state.balance)?),
+        locked_balance: &canonical_amount_string(&parse_numeric(&lineage_state.locked_balance)?),
+        server_revision: lineage_state.server_revision,
+        server_state_hash: &lineage_state.server_state_hash,
+        pending_local_revision: lineage_state.pending_local_revision,
+        authorization_id: &lineage_state.authorization.authorization_id,
     })
 }
 
 fn next_local_state_hash(
-    reserve_id: &str,
+    lineage_id: &str,
     previous_state_hash: &str,
     transfer_id: &str,
     direction: &str,
-    counterparty_reserve_id: &str,
+    counterparty_lineage_id: &str,
     amount: &str,
     local_revision: u64,
     post_balance: &str,
-    post_parked_balance: &str,
+    post_locked_balance: &str,
 ) -> Result<String, Error> {
     Ok(sha256_hex(&canonical_json_bytes(&LocalStateHashPayload {
-        reserve_id,
+        lineage_id,
         previous_state_hash,
         transfer_id,
         direction,
-        counterparty_reserve_id,
+        counterparty_lineage_id,
         amount: &canonical_amount_string(&parse_amount(amount)?),
         local_revision,
         post_balance: &canonical_amount_string(&parse_numeric(post_balance)?),
-        post_parked_balance: &canonical_amount_string(&parse_numeric(post_parked_balance)?),
+        post_locked_balance: &canonical_amount_string(&parse_numeric(post_locked_balance)?),
     })?))
 }
 
@@ -3143,32 +3268,32 @@ fn cash_next_local_state_hash(
 
 fn envelope_from_record(
     issuer: &OfflineIssuerSigner,
-    record: &StoredReserve,
-) -> Result<OfflineReserveEnvelope, Error> {
-    let mut reserve_state = OfflineReserveState {
-        reserve_id: record.reserve_id.clone(),
+    record: &StoredLineage,
+) -> Result<OfflineLineageEnvelope, Error> {
+    let mut lineage_state = OfflineLineageState {
+        lineage_id: record.lineage_id.clone(),
         account_id: record.account_id.clone(),
         device_id: record.device_id.clone(),
         offline_public_key: record.offline_public_key.clone(),
         asset_definition_id: record.asset_definition_id.clone(),
         balance: canonical_amount_string(&record.balance),
-        parked_balance: canonical_amount_string(&record.parked_balance),
+        locked_balance: canonical_amount_string(&record.locked_balance),
         server_revision: record.server_revision,
         server_state_hash: record.server_state_hash.clone(),
         pending_local_revision: record.pending_local_revision,
         authorization: record.authorization.clone(),
         issuer_signature_base64: String::new(),
     };
-    reserve_state.issuer_signature_base64 =
-        sign_base64(issuer, &reserve_state_unsigned_payload(&reserve_state)?);
-    Ok(OfflineReserveEnvelope {
-        reserve_state,
+    lineage_state.issuer_signature_base64 =
+        sign_base64(issuer, &lineage_state_unsigned_payload(&lineage_state)?);
+    Ok(OfflineLineageEnvelope {
+        lineage_state,
         settlement: None,
     })
 }
 
 struct AuthorizationDraft {
-    reserve_id: String,
+    lineage_id: String,
     account_id: String,
     device_id: String,
     offline_public_key: String,
@@ -3185,7 +3310,7 @@ fn signed_authorization(
     let authorization_id = deterministic_id(
         "authorization",
         &[
-            draft.reserve_id.as_str(),
+            draft.lineage_id.as_str(),
             draft.account_id.as_str(),
             draft.device_id.as_str(),
             draft.offline_public_key.as_str(),
@@ -3195,20 +3320,20 @@ fn signed_authorization(
     );
     let mut authorization = OfflineSpendAuthorization {
         authorization_id,
-        reserve_id: draft.reserve_id,
+        lineage_id: draft.lineage_id,
         account_id: draft.account_id,
         device_id: draft.device_id,
         offline_public_key: draft.offline_public_key,
         verdict_id: draft.verdict_id,
-        max_balance: canonical_amount_string(&parse_amount(&issuer.reserve_policy.max_balance)?),
-        max_tx_value: canonical_amount_string(&parse_amount(&issuer.reserve_policy.max_tx_value)?),
+        max_balance: canonical_amount_string(&parse_amount(&issuer.lineage_policy.max_balance)?),
+        max_tx_value: canonical_amount_string(&parse_amount(&issuer.lineage_policy.max_tx_value)?),
         issued_at_ms: draft.issued_at_ms,
         refresh_at_ms: draft
             .issued_at_ms
-            .saturating_add(issuer.reserve_policy.authorization_refresh.as_millis() as u64),
+            .saturating_add(issuer.lineage_policy.authorization_refresh.as_millis() as u64),
         expires_at_ms: draft
             .issued_at_ms
-            .saturating_add(issuer.reserve_policy.authorization_ttl.as_millis() as u64),
+            .saturating_add(issuer.lineage_policy.authorization_ttl.as_millis() as u64),
         device_binding: draft.device_binding,
         app_attest_key_id: draft.app_attest_key_id,
         issuer_signature_base64: String::new(),
@@ -3218,27 +3343,27 @@ fn signed_authorization(
     Ok(authorization)
 }
 
-fn reserve_anchor_hash(
-    reserve_id: &str,
+fn lineage_anchor_hash(
+    lineage_id: &str,
     account_id: &str,
     device_id: &str,
     offline_public_key: &str,
     asset_definition_id: &str,
     balance: &str,
-    parked_balance: &str,
+    locked_balance: &str,
     server_revision: u64,
     pending_local_revision: u64,
     authorization_id: &str,
 ) -> Result<String, Error> {
     Ok(sha256_hex(&canonical_json_bytes(
-        &ReserveAnchorHashPayload {
-            reserve_id,
+        &LineageAnchorHashPayload {
+            lineage_id,
             account_id,
             device_id,
             offline_public_key,
             asset_definition_id,
             balance,
-            parked_balance,
+            locked_balance,
             server_revision,
             pending_local_revision,
             authorization_id,
@@ -3338,7 +3463,7 @@ fn receipt_keys(receipts: &[OfflineTransferReceipt]) -> Vec<String> {
 fn settlement_commitment_hex(
     operation_id: &str,
     kind: &str,
-    reserve: &StoredReserve,
+    lineage: &StoredLineage,
     amount: &str,
     pre_state_hash: &str,
     post_state_hash: &str,
@@ -3348,12 +3473,12 @@ fn settlement_commitment_hex(
         &SettlementCommitmentPayload {
             operation_id,
             kind,
-            account_id: &reserve.account_id,
-            lineage_id: &reserve.reserve_id,
-            asset_definition_id: &reserve.asset_definition_id,
+            account_id: &lineage.account_id,
+            lineage_id: &lineage.lineage_id,
+            asset_definition_id: &lineage.asset_definition_id,
             amount,
-            offline_public_key: &reserve.offline_public_key,
-            authorization_id: &reserve.authorization.authorization_id,
+            offline_public_key: &lineage.offline_public_key,
+            authorization_id: &lineage.authorization.authorization_id,
             pre_state_hash,
             post_state_hash,
             chain_tx_hash: &tx.chain_tx_hash,
@@ -3364,8 +3489,8 @@ fn settlement_commitment_hex(
 }
 
 fn redeem_request_commitment_hex(
-    req: &OfflineReserveDefundRequest,
-    reserve: &StoredReserve,
+    req: &OfflineLineageRedeemRequest,
+    lineage: &StoredLineage,
     amount: &str,
     pre_state_hash: &str,
 ) -> Result<String, Error> {
@@ -3374,11 +3499,11 @@ fn redeem_request_commitment_hex(
             operation_id: &req.operation_id,
             kind: "redeem_request",
             account_id: &req.account_id,
-            lineage_id: &req.reserve_id,
-            asset_definition_id: &reserve.asset_definition_id,
+            lineage_id: &req.lineage_id,
+            asset_definition_id: &lineage.asset_definition_id,
             amount,
             offline_public_key: &req.offline_public_key,
-            authorization_id: &reserve.authorization.authorization_id,
+            authorization_id: &lineage.authorization.authorization_id,
             pre_state_hash,
             receipt_keys: receipt_keys(&req.receipts),
         },
@@ -3386,8 +3511,8 @@ fn redeem_request_commitment_hex(
 }
 
 fn verify_redeem_request_proof(
-    req: &OfflineReserveDefundRequest,
-    reserve: &StoredReserve,
+    req: &OfflineLineageRedeemRequest,
+    lineage: &StoredLineage,
     amount: &str,
     pre_state_hash: &str,
 ) -> Result<(), Error> {
@@ -3407,7 +3532,7 @@ fn verify_redeem_request_proof(
             "redeem proof recursion_depth is invalid".to_owned(),
         ));
     }
-    let expected_commitment = redeem_request_commitment_hex(req, reserve, amount, pre_state_hash)?;
+    let expected_commitment = redeem_request_commitment_hex(req, lineage, amount, pre_state_hash)?;
     if req.redeem_proof.public_inputs_hex != expected_commitment {
         return Err(conversion_error(
             "redeem proof public inputs do not match the request".to_owned(),
@@ -3418,10 +3543,8 @@ fn verify_redeem_request_proof(
             "redeem proof domain tag does not match the request".to_owned(),
         ));
     }
-    let expected = synthesize_stark_envelope(
-        expected_commitment,
-        OFFLINE_REDEEM_REQUEST_CIRCUIT_ID,
-    )?;
+    let expected =
+        synthesize_stark_envelope(expected_commitment, OFFLINE_REDEEM_REQUEST_CIRCUIT_ID)?;
     if encode_stark_envelope_bytes(&req.redeem_proof.envelope)?
         != encode_stark_envelope_bytes(&expected)?
     {
@@ -3435,7 +3558,7 @@ fn verify_redeem_request_proof(
 fn settlement_from_tx(
     kind: &str,
     operation_id: &str,
-    reserve: &StoredReserve,
+    lineage: &StoredLineage,
     amount: &str,
     pre_state_hash: &str,
     post_state_hash: &str,
@@ -3445,7 +3568,7 @@ fn settlement_from_tx(
     let settlement_commitment_hex = settlement_commitment_hex(
         operation_id,
         kind,
-        reserve,
+        lineage,
         amount,
         pre_state_hash,
         post_state_hash,
@@ -3472,6 +3595,40 @@ fn settlement_from_tx(
             envelope,
         },
     })
+}
+
+async fn finalize_operation_result_settlement(
+    app: &AppState,
+    issuer: &OfflineIssuerSigner,
+    lineage: &StoredLineage,
+    operation_key: String,
+    kind: &str,
+    request_hash_hex: String,
+    completed_at_ms: u64,
+    envelope: &OfflineLineageEnvelope,
+    endpoint: &'static str,
+) -> Result<(), Error> {
+    submit_signed_instruction(
+        app,
+        operator_authority(issuer)?,
+        issuer.operator_keypair.private_key().clone(),
+        InstructionBox::from(CommitOfflineLineageOperation {
+            expected_server_revision: lineage.server_revision,
+            expected_state_hash: lineage.server_state_hash.clone(),
+            lineage: shared_record_from_local(issuer, lineage)?,
+            result: SharedOfflineLineageOperationResult {
+                operation_key,
+                kind: kind.to_owned(),
+                request_hash_hex,
+                lineage_id: lineage.lineage_id.clone(),
+                envelope: shared_envelope_from_local(envelope)?,
+                completed_at_ms,
+            },
+        }),
+        endpoint,
+    )
+    .await?;
+    Ok(())
 }
 
 async fn submit_signed_instruction(
@@ -3688,7 +3845,7 @@ fn compare_amounts(lhs: &str, rhs: &str) -> Result<std::cmp::Ordering, Error> {
     Ok(left.cmp(&right))
 }
 
-fn minimum_required_parked_balance(
+fn minimum_required_locked_balance(
     total_balance: &str,
     authorization: Option<&OfflineSpendAuthorization>,
     now_ms: u64,
@@ -3713,20 +3870,20 @@ fn validate_parked_continuity(
     let authorization = receipt.authorization.as_ref().ok_or_else(|| {
         conversion_error("offline transfer receipt is missing an authorization snapshot".to_owned())
     })?;
-    let minimum_pre_parked = minimum_required_parked_balance(
+    let minimum_pre_parked = minimum_required_locked_balance(
         &receipt.pre_balance,
         Some(authorization),
         receipt.created_at_ms,
     )?;
-    let minimum_post_parked = minimum_required_parked_balance(
+    let minimum_post_parked = minimum_required_locked_balance(
         expected_post_balance,
         Some(authorization),
         receipt.created_at_ms,
     )?;
     match receipt.direction.as_str() {
         "outgoing" => {
-            if receipt.pre_parked_balance != minimum_pre_parked
-                || receipt.post_parked_balance != minimum_post_parked
+            if receipt.pre_locked_balance != minimum_pre_parked
+                || receipt.post_locked_balance != minimum_post_parked
             {
                 return Err(conversion_error(
                     "offline cash locked-balance continuity is invalid".to_owned(),
@@ -3734,10 +3891,10 @@ fn validate_parked_continuity(
             }
         }
         "incoming" => {
-            if compare_amounts(&receipt.pre_parked_balance, &minimum_pre_parked)?.is_lt()
-                || compare_amounts(&receipt.post_parked_balance, &minimum_post_parked)?.is_lt()
-                || compare_amounts(&receipt.pre_parked_balance, &receipt.pre_balance)?.is_gt()
-                || compare_amounts(&receipt.post_parked_balance, expected_post_balance)?.is_gt()
+            if compare_amounts(&receipt.pre_locked_balance, &minimum_pre_parked)?.is_lt()
+                || compare_amounts(&receipt.post_locked_balance, &minimum_post_parked)?.is_lt()
+                || compare_amounts(&receipt.pre_locked_balance, &receipt.pre_balance)?.is_gt()
+                || compare_amounts(&receipt.post_locked_balance, expected_post_balance)?.is_gt()
             {
                 return Err(conversion_error(
                     "offline cash locked-balance continuity is invalid".to_owned(),
@@ -3767,7 +3924,7 @@ fn validate_receipt_authorization(
         &authorization.issuer_signature_base64,
         issuer_public_key_base64,
     )?;
-    if authorization.reserve_id != receipt.reserve_id
+    if authorization.lineage_id != receipt.lineage_id
         || authorization.account_id != receipt.account_id
         || authorization.device_id != receipt.device_id
         || authorization.offline_public_key != receipt.offline_public_key
@@ -3800,8 +3957,8 @@ fn validate_receipt_authorization(
     Ok(())
 }
 
-fn setup_challenge_payload(req: &OfflineReserveSetupRequest) -> Result<Vec<u8>, Error> {
-    canonical_json_bytes(&ReserveSetupAttestationPayload {
+fn setup_challenge_payload(req: &OfflineLineageSetupRequest) -> Result<Vec<u8>, Error> {
+    canonical_json_bytes(&LineageSetupAttestationPayload {
         account_id: &req.account_id,
         device_id: &req.device_id,
         offline_public_key: &req.offline_public_key,
@@ -3923,11 +4080,11 @@ fn decode_challenge_hash_hex(challenge_hash_hex: &str) -> Result<[u8; 32], Error
 
 fn validate_setup_attestation(
     app: &AppState,
-    req: &OfflineReserveSetupRequest,
+    req: &OfflineLineageSetupRequest,
     counter_book: &mut BTreeMap<String, u64>,
     expected_app_attest_key_id: &str,
 ) -> Result<Option<StoredAppleAppAttestBinding>, Error> {
-    validate_reserve_attestation(
+    validate_lineage_attestation(
         app,
         &req.account_id,
         "setup",
@@ -4014,8 +4171,8 @@ fn validate_cash_attestation(
                 ))
             })?;
         let settlement_cfg = &app.state.settlement().offline;
-        verify_reserve_apple_app_attest(
-            &ReserveAppleAppAttestVerification {
+        verify_lineage_apple_app_attest(
+            &LineageAppleAppAttestVerification {
                 metadata,
                 attestation_report,
                 key_id: attestation.key_id.clone(),
@@ -4165,10 +4322,10 @@ fn validate_android_cash_operation_proof(
     .map_err(|_| conversion_error("offline cash device proof assertion is invalid".to_owned()))
 }
 
-fn validate_reserve_attestation(
+fn validate_lineage_attestation(
     app: &AppState,
     account_id: &str,
-    reserve_id: &str,
+    lineage_id: &str,
     operation: &str,
     payload: Vec<u8>,
     expected_app_attest_key_id: &str,
@@ -4183,7 +4340,7 @@ fn validate_reserve_attestation(
     }
     let challenge_seed = canonical_json_bytes(&AttestationChallengePayload {
         account_id,
-        reserve_id,
+        lineage_id,
         operation,
         payload_hash: &sha256_hex(&payload),
     })?;
@@ -4210,8 +4367,8 @@ fn validate_reserve_attestation(
                 ))
             })?;
         let settlement_cfg = &app.state.settlement().offline;
-        verify_reserve_apple_app_attest(
-            &ReserveAppleAppAttestVerification {
+        verify_lineage_apple_app_attest(
+            &LineageAppleAppAttestVerification {
                 metadata,
                 attestation_report,
                 key_id: attestation.key_id.clone(),
@@ -4616,17 +4773,17 @@ fn parse_android_key_description(
     })
 }
 
-fn sender_state_key(reserve_id: &str, local_revision: u64) -> String {
-    format!("{reserve_id}:{local_revision}")
+fn sender_state_key(lineage_id: &str, local_revision: u64) -> String {
+    format!("{lineage_id}:{local_revision}")
 }
 
-fn topup_request_hash_hex(
-    req: &OfflineReserveTopUpRequest,
+fn load_request_hash_hex(
+    req: &OfflineLineageLoadRequest,
     amount: &Numeric,
 ) -> Result<String, Error> {
     Ok(sha256_hex(&canonical_json_bytes(
-        &ReserveTopUpRequestHashPayload {
-            reserve_id: req.reserve_id.as_deref(),
+        &LineageLoadRequestHashPayload {
+            lineage_id: req.lineage_id.as_deref(),
             account_id: &req.account_id,
             device_id: &req.device_id,
             offline_public_key: &req.offline_public_key,
@@ -4637,18 +4794,18 @@ fn topup_request_hash_hex(
     )?))
 }
 
-fn renew_request_hash_hex(req: &OfflineReserveRenewRequest) -> Result<String, Error> {
+fn refresh_request_hash_hex(req: &OfflineLineageRefreshRequest) -> Result<String, Error> {
     Ok(sha256_hex(&canonical_json_bytes(
-        &ReserveRenewAttestationPayload {
-            reserve_id: &req.reserve_id,
+        &LineageRefreshAttestationPayload {
+            lineage_id: &req.lineage_id,
         },
     )?))
 }
 
-fn sync_request_hash_hex(req: &OfflineReserveSyncRequest) -> Result<String, Error> {
+fn sync_request_hash_hex(req: &OfflineLineageSyncRequest) -> Result<String, Error> {
     Ok(sha256_hex(&canonical_json_bytes(
-        &ReserveDefundRequestHashPayload {
-            reserve_id: &req.reserve_id,
+        &LineageRedeemRequestHashPayload {
+            lineage_id: &req.lineage_id,
             account_id: &req.account_id,
             device_id: &req.device_id,
             offline_public_key: &req.offline_public_key,
@@ -4659,13 +4816,13 @@ fn sync_request_hash_hex(req: &OfflineReserveSyncRequest) -> Result<String, Erro
     )?))
 }
 
-fn defund_request_hash_hex(
-    req: &OfflineReserveDefundRequest,
+fn redeem_request_hash_hex(
+    req: &OfflineLineageRedeemRequest,
     amount: &Numeric,
 ) -> Result<String, Error> {
     Ok(sha256_hex(&canonical_json_bytes(
-        &ReserveDefundRequestHashPayload {
-            reserve_id: &req.reserve_id,
+        &LineageRedeemRequestHashPayload {
+            lineage_id: &req.lineage_id,
             account_id: &req.account_id,
             device_id: &req.device_id,
             offline_public_key: &req.offline_public_key,
@@ -4707,25 +4864,29 @@ fn operation_key(kind: &str, operation_id: &str) -> String {
 mod tests {
     use super::*;
 
+    const TEST_ACCOUNT_I105: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+    const TEST_COUNTERPARTY_ACCOUNT_I105: &str =
+        "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9";
+
     #[test]
     fn sync_request_hash_is_stable_for_reordered_receipts() {
         let make_receipt = |transfer_id: &str, local_revision: u64| OfflineTransferReceipt {
             version: 1,
             transfer_id: transfer_id.to_owned(),
             direction: "incoming".to_owned(),
-            reserve_id: "reserve".to_owned(),
-            account_id: "alice@users".to_owned(),
+            lineage_id: "lineage".to_owned(),
+            account_id: TEST_ACCOUNT_I105.to_owned(),
             device_id: "device-1".to_owned(),
             offline_public_key: BASE64_STANDARD.encode([7u8; 32]),
             pre_balance: "0".to_owned(),
             post_balance: "1".to_owned(),
-            pre_parked_balance: "0".to_owned(),
-            post_parked_balance: "0".to_owned(),
+            pre_locked_balance: "0".to_owned(),
+            post_locked_balance: "0".to_owned(),
             pre_state_hash: "pre".to_owned(),
             post_state_hash: "post".to_owned(),
             local_revision,
-            counterparty_reserve_id: "peer".to_owned(),
-            counterparty_account_id: "bob@users".to_owned(),
+            counterparty_lineage_id: "peer".to_owned(),
+            counterparty_account_id: TEST_COUNTERPARTY_ACCOUNT_I105.to_owned(),
             counterparty_device_id: "device-2".to_owned(),
             counterparty_offline_public_key: BASE64_STANDARD.encode([8u8; 32]),
             amount: "1".to_owned(),
@@ -4745,15 +4906,15 @@ mod tests {
             created_at_ms: 1,
         };
 
-        let lhs = OfflineReserveSyncRequest {
+        let lhs = OfflineLineageSyncRequest {
             operation_id: "sync-1".to_owned(),
-            reserve_id: "reserve".to_owned(),
-            account_id: "alice@users".to_owned(),
+            lineage_id: "lineage".to_owned(),
+            account_id: TEST_ACCOUNT_I105.to_owned(),
             device_id: "device-1".to_owned(),
             offline_public_key: BASE64_STANDARD.encode([7u8; 32]),
             receipts: vec![make_receipt("b", 2), make_receipt("a", 1)],
         };
-        let rhs = OfflineReserveSyncRequest {
+        let rhs = OfflineLineageSyncRequest {
             receipts: lhs.receipts.iter().rev().cloned().collect(),
             ..lhs.clone()
         };
@@ -4769,19 +4930,19 @@ mod tests {
             version: 1,
             transfer_id: "transfer-1".to_owned(),
             direction: "outgoing".to_owned(),
-            reserve_id: "reserve-1".to_owned(),
-            account_id: "alice@users".to_owned(),
+            lineage_id: "lineage-1".to_owned(),
+            account_id: TEST_ACCOUNT_I105.to_owned(),
             device_id: "device-1".to_owned(),
             offline_public_key: BASE64_STANDARD.encode([7u8; 32]),
             pre_balance: "25".to_owned(),
             post_balance: "15".to_owned(),
-            pre_parked_balance: "0".to_owned(),
-            post_parked_balance: "0".to_owned(),
+            pre_locked_balance: "0".to_owned(),
+            post_locked_balance: "0".to_owned(),
             pre_state_hash: "pre".to_owned(),
             post_state_hash: "post".to_owned(),
             local_revision: 1,
-            counterparty_reserve_id: "reserve-2".to_owned(),
-            counterparty_account_id: "bob@users".to_owned(),
+            counterparty_lineage_id: "lineage-2".to_owned(),
+            counterparty_account_id: TEST_COUNTERPARTY_ACCOUNT_I105.to_owned(),
             counterparty_device_id: "device-2".to_owned(),
             counterparty_offline_public_key: BASE64_STANDARD.encode([8u8; 32]),
             amount: "10".to_owned(),
@@ -4854,7 +5015,7 @@ mod tests {
     }
 
     #[test]
-    fn defund_with_receipts_still_commits_single_server_revision_advance() {
+    fn redeem_with_receipts_still_commits_single_server_revision_advance() {
         let expected_server_revision = 5u64;
         let server_revision_after_receipts = 6u64;
 
@@ -4865,6 +5026,24 @@ mod tests {
             expected_server_revision.saturating_add(1)
         );
         assert_eq!(committed_revision, server_revision_after_receipts);
+    }
+
+    #[test]
+    fn canonical_account_helper_rejects_alias_literals() {
+        let err = ensure_canonical_account_id_literal("alice@wallets", "account_id")
+            .expect_err("aliases must be rejected");
+        assert!(err.to_string().contains("canonical i105 account id"));
+    }
+
+    #[test]
+    fn canonical_asset_definition_helper_rejects_alias_literals() {
+        let err =
+            ensure_canonical_asset_definition_id_literal("usd#wallets", "asset_definition_id")
+                .expect_err("aliases must be rejected");
+        assert!(
+            err.to_string()
+                .contains("canonical Base58 asset definition id")
+        );
     }
 }
 
@@ -4887,7 +5066,7 @@ fn decode_transfer_payload(raw_payload: &str) -> Result<OfflineOutgoingTransferP
             return Ok(payload);
         }
         if let Ok(mut value) = json::from_slice::<json::Value>(&decoded) {
-            translate_cash_outgoing_payload_value_to_reserve(&mut value)?;
+            normalize_cash_outgoing_payload_value(&mut value)?;
             return json::from_value::<OfflineOutgoingTransferPayload>(value).map_err(|err| {
                 conversion_error(format!(
                     "invalid offline cash transfer payload after translation: {err}"
@@ -4900,7 +5079,7 @@ fn decode_transfer_payload(raw_payload: &str) -> Result<OfflineOutgoingTransferP
     }
     let mut value = json::from_str::<json::Value>(encoded)
         .map_err(|err| conversion_error(format!("invalid offline transfer payload: {err}")))?;
-    translate_cash_outgoing_payload_value_to_reserve(&mut value)?;
+    normalize_cash_outgoing_payload_value(&mut value)?;
     json::from_value::<OfflineOutgoingTransferPayload>(value).map_err(|err| {
         conversion_error(format!(
             "invalid offline cash transfer payload after translation: {err}"
@@ -4912,68 +5091,56 @@ fn committed_server_revision(expected_server_revision: u64) -> u64 {
     expected_server_revision.saturating_add(1)
 }
 
-fn rename_transfer_payload_json_key(map: &mut json::Map, from: &str, to: &str) {
-    if let Some(value) = map.remove(from) {
-        map.insert(to.to_owned(), value);
-    }
-}
-
-fn translate_cash_authorization_value_to_reserve(value: &mut json::Value) -> Result<(), Error> {
+fn normalize_cash_authorization_value(value: &mut json::Value) -> Result<(), Error> {
     let Some(map) = value.as_object_mut() else {
         return Err(conversion_error(
             "offline cash authorization payload must be an object".to_owned(),
         ));
     };
-    rename_transfer_payload_json_key(map, "lineage_id", "reserve_id");
+    let _ = map;
     Ok(())
 }
 
-fn translate_cash_state_value_to_reserve(value: &mut json::Value) -> Result<(), Error> {
+fn normalize_cash_state_value(value: &mut json::Value) -> Result<(), Error> {
     let Some(map) = value.as_object_mut() else {
         return Err(conversion_error(
             "offline cash lineage anchor must be an object".to_owned(),
         ));
     };
-    rename_transfer_payload_json_key(map, "lineage_id", "reserve_id");
-    rename_transfer_payload_json_key(map, "locked_balance", "parked_balance");
     if let Some(authorization) = map.get_mut("authorization") {
-        translate_cash_authorization_value_to_reserve(authorization)?;
+        normalize_cash_authorization_value(authorization)?;
     }
     Ok(())
 }
 
-fn translate_cash_receipt_value_to_reserve(value: &mut json::Value) -> Result<(), Error> {
+fn normalize_cash_receipt_value(value: &mut json::Value) -> Result<(), Error> {
     let Some(map) = value.as_object_mut() else {
         return Err(conversion_error(
             "offline cash receipt payload must be an object".to_owned(),
         ));
     };
-    rename_transfer_payload_json_key(map, "lineage_id", "reserve_id");
-    rename_transfer_payload_json_key(map, "pre_locked_balance", "pre_parked_balance");
-    rename_transfer_payload_json_key(map, "post_locked_balance", "post_parked_balance");
-    rename_transfer_payload_json_key(map, "counterparty_lineage_id", "counterparty_reserve_id");
     if let Some(authorization) = map.get_mut("authorization") {
-        translate_cash_authorization_value_to_reserve(authorization)?;
+        normalize_cash_authorization_value(authorization)?;
     }
     Ok(())
 }
 
-fn translate_cash_outgoing_payload_value_to_reserve(value: &mut json::Value) -> Result<(), Error> {
+fn normalize_cash_outgoing_payload_value(value: &mut json::Value) -> Result<(), Error> {
     let Some(map) = value.as_object_mut() else {
         return Err(conversion_error(
             "offline transfer payload must be an object".to_owned(),
         ));
     };
     if let Some(anchor) = map.get_mut("anchor") {
-        translate_cash_state_value_to_reserve(anchor)?;
+        normalize_cash_state_value(anchor)?;
     }
     if let Some(json::Value::Array(items)) = map.get_mut("ancestry_receipts") {
         for item in items {
-            translate_cash_receipt_value_to_reserve(item)?;
+            normalize_cash_receipt_value(item)?;
         }
     }
     if let Some(receipt) = map.get_mut("receipt") {
-        translate_cash_receipt_value_to_reserve(receipt)?;
+        normalize_cash_receipt_value(receipt)?;
     }
     Ok(())
 }
@@ -5020,6 +5187,74 @@ fn sha256_hex(bytes: &[u8]) -> String {
 fn ensure_non_empty(value: &str, field_name: &str) -> Result<(), Error> {
     if value.trim().is_empty() {
         return Err(conversion_error(format!("{field_name} is required")));
+    }
+    Ok(())
+}
+
+fn ensure_canonical_account_id_literal(value: &str, field_name: &str) -> Result<(), Error> {
+    let trimmed = value.trim();
+    AccountId::parse_encoded(trimmed).map_err(|err| {
+        conversion_error(format!(
+            "{field_name} must be a canonical i105 account id: {err}"
+        ))
+    })?;
+    Ok(())
+}
+
+fn ensure_canonical_asset_definition_id_literal(
+    value: &str,
+    field_name: &str,
+) -> Result<(), Error> {
+    let trimmed = value.trim();
+    AssetDefinitionId::parse_address_literal(trimmed).map_err(|err| {
+        conversion_error(format!(
+            "{field_name} must be a canonical Base58 asset definition id: {err}"
+        ))
+    })?;
+    Ok(())
+}
+
+fn ensure_canonical_authorization_identifiers(
+    authorization: &OfflineSpendAuthorization,
+    field_name: &str,
+) -> Result<(), Error> {
+    ensure_canonical_account_id_literal(
+        &authorization.account_id,
+        &format!("{field_name}.account_id"),
+    )?;
+    Ok(())
+}
+
+fn ensure_canonical_lineage_state_identifiers(
+    state: &OfflineLineageState,
+    field_name: &str,
+) -> Result<(), Error> {
+    ensure_canonical_account_id_literal(&state.account_id, &format!("{field_name}.account_id"))?;
+    ensure_canonical_asset_definition_id_literal(
+        &state.asset_definition_id,
+        &format!("{field_name}.asset_definition_id"),
+    )?;
+    ensure_canonical_authorization_identifiers(
+        &state.authorization,
+        &format!("{field_name}.authorization"),
+    )?;
+    Ok(())
+}
+
+fn ensure_canonical_transfer_receipt_identifiers(
+    receipt: &OfflineTransferReceipt,
+    field_name: &str,
+) -> Result<(), Error> {
+    ensure_canonical_account_id_literal(&receipt.account_id, &format!("{field_name}.account_id"))?;
+    ensure_canonical_account_id_literal(
+        &receipt.counterparty_account_id,
+        &format!("{field_name}.counterparty_account_id"),
+    )?;
+    if let Some(authorization) = receipt.authorization.as_ref() {
+        ensure_canonical_authorization_identifiers(
+            authorization,
+            &format!("{field_name}.authorization"),
+        )?;
     }
     Ok(())
 }

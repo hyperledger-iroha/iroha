@@ -34,7 +34,7 @@ translation_last_reviewed: 2026-02-07
 |--------|----------|-------------|
 | `label` | نعم | التسمية المطلوبة (تم قبول الحالة المختلطة؛ الأداة Norm v1 وUTS-46 متوافقة مع التطبيع کرتا ہے). |
 | `suffix_id` | نعم | معرف اللاحقة الرقمية (عشري أو `0x` سداسي عشري). |
-| `owner` | نعم | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` | نعم | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` | نعم | عدد صحيح `1..=255`. |
 | `payment_asset_id` | نعم | أصل التسوية (مثال `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | نعم | الأعداد الصحيحة غير الموقعة هي وحدات الأصول الأصلية التي تمثل كريں. |

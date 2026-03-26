@@ -236,10 +236,10 @@ ISI זה idempotent לכל `(lane_id, epoch)` ומהווה בסיס לחשבונ
     - `GET /v1/nexus/public_lanes/{lane}/validators` – metadata, status
       (`PendingActivation`/`Active`/`Exiting`/`Exited`/`Slashed`), activation epoch/height,
       release timers, bonded stake, last reward epoch.
-      `canonical I105 literal rendering` שולט בהצגת literals (I105 מועדף; I105 הוא אפשרות שנייה ל-Sora בלבד).
+      `canonical i105 literal rendering` שולט בהצגת literals (I105 מועדף; I105 הוא אפשרות שנייה ל-Sora בלבד).
     - `GET /v1/nexus/public_lanes/{lane}/stake` – stake shares (`validator`,
       `staker`, bonded amount) בתוספת pending unbond timers. `?validator=i105...`
-      מסנן את התגובה ל‑dashboards שממוקדים במאמת יחיד; `canonical I105 rendering` חל על כל literals.
+      מסנן את התגובה ל‑dashboards שממוקדים במאמת יחיד; `canonical i105 rendering` חל על כל literals.
   - Lifecycle ISIs משתמשים בנתיב טרנזקציה סטנדרטי (Torii `/v1/transactions`
     או CLI instruction pipeline). דוגמאות payloads של Norito JSON:
 

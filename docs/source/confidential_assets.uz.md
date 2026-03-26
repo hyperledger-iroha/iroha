@@ -238,7 +238,7 @@ qulflangan qadam.
 - Hisob uchun kalitlarni hosil qilish ierarxiyasi:
   - `sk_spend` → `nk` (nullifier kaliti), `ivk` (kirish ko'rish kaliti), `ovk` (chiqish ko'rish kaliti), `fvk`.
 - Shifrlangan eslatma yuklamalari ECDH-dan olingan umumiy kalitlarga ega AEAD-dan foydalanadi; ixtiyoriy auditor ko'rinishi kalitlari har bir aktiv siyosati natijalariga biriktirilishi mumkin.
-- CLI qo'shimchalari: `confidential create-keys`, `confidential send`, `confidential export-view-key`, eslatmalar shifrini ochish uchun auditor asboblari va Grafana oflayn konvertlarni ishlab chiqarish/tekshirish uchun `iroha app zk envelope` yordamchisi. Torii `POST /v1/confidential/derive-keyset` orqali bir xil hosila oqimini ochib beradi, ham hex va base64 shakllarini qaytaradi, shuning uchun hamyonlar asosiy ierarxiyalarni dasturiy tarzda olishlari mumkin.
+- CLI qo'shimchalari: `confidential create-keys`, `confidential send`, `confidential export-view-key`, eslatmalar shifrini ochish uchun auditor asboblari va Grafana oflayn konvertlarni ishlab chiqarish/tekshirish uchun `iroha app zk envelope` yordamchisi.
 
 ## Gaz, limitlar va DoS boshqaruvlari
 - deterministik gaz jadvali:

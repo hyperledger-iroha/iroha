@@ -13,12 +13,12 @@ the Prometheus metrics emitted by `iroha_telemetry::metrics::Metrics`.
 
 | Route | Method | Feature Gate | Description | Response |
 |-------|--------|--------------|-------------|----------|
-| `/v1/kaigi/relays` | GET | `app_api` + `telemetry` | Lists registered relays with their domain, bandwidth class, HPKE fingerprint, and latest health sample. Emits canonical I105 relay identifiers. | `KaigiRelaySummaryListDto` |
-| `/v1/kaigi/relays/{relay_id}` | GET | `app_api` + `telemetry` | Returns metadata for a single relay, including base64 HPKE key material, latest health report metadata, and per-domain counters. `reported_by` always uses canonical I105 output, matching the Torii hard-cut account-literal contract. | `KaigiRelayDetailDto` |
+| `/v1/kaigi/relays` | GET | `app_api` + `telemetry` | Lists registered relays with their domain, bandwidth class, HPKE fingerprint, and latest health sample. Emits canonical i105 relay identifiers. | `KaigiRelaySummaryListDto` |
+| `/v1/kaigi/relays/{relay_id}` | GET | `app_api` + `telemetry` | Returns metadata for a single relay, including base64 HPKE key material, latest health report metadata, and per-domain counters. `reported_by` always uses canonical i105 output, matching the Torii hard-cut account-literal contract. | `KaigiRelayDetailDto` |
 | `/v1/kaigi/relays/health` | GET | `app_api` + `telemetry` | Aggregated relay health totals across all domains plus per-domain metrics. | `KaigiRelayHealthSnapshotDto` |
 | `/v1/kaigi/relays/events` | GET (SSE) | `app_api` + `telemetry` | Server-Sent Events stream emitting relay registration and health update notifications. | SSE events with JSON payloads (see below) |
 
-> **Account literals (`ADDR-5`):** The list and single-relay endpoints always return canonical I105 in `relay_id` and `reported_by`, matching the Torii hard-cut account-literal contract and the metrics counters backing Local-8 cutover dashboards.
+> **Account literals (`ADDR-5`):** The list and single-relay endpoints always return canonical i105 in `relay_id` and `reported_by`, matching the Torii hard-cut account-literal contract and the metrics counters backing Local-8 cutover dashboards.
 
 ### Response Schemas
 

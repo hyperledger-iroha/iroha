@@ -24,6 +24,7 @@ from iroha_torii_client import (  # noqa: E402  (import depends on sys.path muta
 
 CANONICAL_OWNER = "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL"
 CANONICAL_ASSET_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"
+CANONICAL_ASSET_DEFINITION_ID = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
 
 
 class StubResponse(requests.Response):
@@ -2031,7 +2032,7 @@ def test_list_offline_allowances_parses_payload() -> None:
                         "controller_id": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
                         "controller_display": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
                         "asset_id": CANONICAL_ASSET_ID,
-                        "asset_definition_id": "usd#wonderland",
+                        "asset_definition_id": CANONICAL_ASSET_DEFINITION_ID,
                         "asset_definition_name": "USD",
                         "asset_definition_alias": None,
                         "registered_at_ms": 10,
@@ -2059,7 +2060,7 @@ def test_list_offline_allowances_parses_payload() -> None:
     assert len(page.items) == 1
     item = page.items[0]
     assert item.certificate_id_hex == "cafebabe"
-    assert item.asset_definition_id == "usd#wonderland"
+    assert item.asset_definition_id == CANONICAL_ASSET_DEFINITION_ID
     assert item.asset_definition_name == "USD"
     assert item.asset_definition_alias is None
     assert item.deadline is not None
@@ -2615,7 +2616,7 @@ def test_submit_zk_ballot_rejects_noncanonical_owner() -> None:
     session.queue(StubResponse(payload={"ok": True}))
     client = ToriiClient("http://node.test", session=session)
 
-    with pytest.raises(RuntimeError, match="canonical account id"):
+    with pytest.raises(RuntimeError, match="canonical i105 account id"):
         client.submit_zk_ballot(
             authority="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
             chain_id="chain",
@@ -2650,7 +2651,7 @@ def test_submit_zk_ballot_v1_rejects_noncanonical_owner() -> None:
     session.queue(StubResponse(payload={"ok": True}))
     client = ToriiClient("http://node.test", session=session)
 
-    with pytest.raises(RuntimeError, match="canonical account id"):
+    with pytest.raises(RuntimeError, match="canonical i105 account id"):
         client.submit_zk_ballot_v1(
             authority="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
             chain_id="chain",

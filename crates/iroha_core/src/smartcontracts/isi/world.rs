@@ -2325,12 +2325,12 @@ pub mod isi {
                                 iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
                                     iroha_data_model::events::data::governance::GovernanceBallotRejected {
                                         referendum_id: self.election_id.clone(),
-                                        reason: "owner must be a canonical account id".into(),
+                                        reason: "owner must be a canonical i105 account id".into(),
                                 },
                             ),
                         ));
                         InstructionExecutionError::InvariantViolation(
-                            "owner must be a canonical account id".into(),
+                            "owner must be a canonical i105 account id".into(),
                         )
                     })?;
                         let owner_str = owner_str_raw.trim();
@@ -2339,12 +2339,12 @@ pub mod isi {
                                 iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
                                     iroha_data_model::events::data::governance::GovernanceBallotRejected {
                                         referendum_id: self.election_id.clone(),
-                                        reason: "owner must use canonical account id form".into(),
+                                        reason: "owner must use canonical i105 account id form".into(),
                                     },
                                 ),
                             ));
                             return Err(InstructionExecutionError::InvariantViolation(
-                                "owner must use canonical account id form".into(),
+                                "owner must use canonical i105 account id form".into(),
                             ));
                         }
 
@@ -2357,12 +2357,12 @@ pub mod isi {
                                 iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
                                     iroha_data_model::events::data::governance::GovernanceBallotRejected {
                                         referendum_id: self.election_id.clone(),
-                                        reason: "owner must be a canonical account id".into(),
+                                        reason: "owner must be a canonical i105 account id".into(),
                                     },
                                 ),
                             ));
                             InstructionExecutionError::InvariantViolation(
-                                "owner must be a canonical account id".into(),
+                                "owner must be a canonical i105 account id".into(),
                             )
                         })?;
                         if owner_parsed.to_string() != owner_str {
@@ -2370,12 +2370,12 @@ pub mod isi {
                                 iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
                                     iroha_data_model::events::data::governance::GovernanceBallotRejected {
                                         referendum_id: self.election_id.clone(),
-                                        reason: "owner must use canonical account id form".into(),
+                                        reason: "owner must use canonical i105 account id form".into(),
                                     },
                                 ),
                             ));
                             return Err(InstructionExecutionError::InvariantViolation(
-                                "owner must use canonical account id form".into(),
+                                "owner must use canonical i105 account id form".into(),
                             ));
                         }
                         if lock_owner.is_none() {
@@ -10166,8 +10166,12 @@ pub mod isi {
         }
     }
 
-    fn parse_config_asset_definition_id(raw: &str) -> Option<AssetDefinitionId> {
-        raw.parse().ok()
+    fn parse_config_asset_definition_id(
+        world: &impl crate::state::WorldReadOnly,
+        raw: &str,
+        now_ms: u64,
+    ) -> Option<AssetDefinitionId> {
+        crate::block::parse_asset_definition_literal_with_world(world, raw, now_ms)
     }
 
     fn is_permission_domain_associated(permission: &Permission, domain_id: &DomainId) -> bool {
@@ -10466,8 +10470,12 @@ pub mod isi {
                     )
                     .into());
                 }
-                if parse_config_asset_definition_id(&state_transaction.nexus.fees.fee_asset_id)
-                    .is_some_and(|configured| &configured == asset_definition_id)
+                if parse_config_asset_definition_id(
+                    &state_transaction.world,
+                    &state_transaction.nexus.fees.fee_asset_id,
+                    state_transaction.block_unix_timestamp_ms(),
+                )
+                .is_some_and(|configured| &configured == asset_definition_id)
                 {
                     return Err(InstructionExecutionError::InvariantViolation(
                         format!(
@@ -10477,8 +10485,12 @@ pub mod isi {
                     )
                     .into());
                 }
-                if parse_config_asset_definition_id(&state_transaction.nexus.staking.stake_asset_id)
-                    .is_some_and(|configured| &configured == asset_definition_id)
+                if parse_config_asset_definition_id(
+                    &state_transaction.world,
+                    &state_transaction.nexus.staking.stake_asset_id,
+                    state_transaction.block_unix_timestamp_ms(),
+                )
+                .is_some_and(|configured| &configured == asset_definition_id)
                 {
                     return Err(InstructionExecutionError::InvariantViolation(
                         format!(

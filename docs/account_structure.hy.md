@@ -22,7 +22,7 @@ translator: machine-google-reviewed
 `AccountAddress` (`crates/iroha_data_model/src/account/address.rs`) և
 ուղեկից գործիքավորում: Այն ապահովում է.
 
-- Ստուգիչ, մարդուն ուղղված **I105 հասցե (I105)** արտադրված է
+- Ստուգիչ, մարդուն ուղղված **I105 հասցե** արտադրված է
   `AccountAddress::to_i105`, որը շղթայական տարբերակիչ է կապում հաշվի հետ
   վերահսկիչ և առաջարկում է դետերմինիստական փոխգործակցության համար հարմար տեքստային ձևեր:
 - Դոմենի ընտրիչներ անուղղակի լռելյայն տիրույթների և տեղական ամփոփումների համար՝ a
@@ -72,18 +72,17 @@ AccountId {
     controller: AccountController // single PublicKey or multisig policy
 }
 
-Display: canonical I105 literal (no `@domain` suffix)
+Display: canonical i105 literal (no `@domain` suffix)
 Parse accepts:
-- Encoded account identifiers only: I105.
-- Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and alias literals such as `label@domain`.
+- Encoded account identifiers only: i105.
+- Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and account-alias literals such as label@dataspace or label@domain.dataspace.
 
 Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
 and `0x` prefixes are not accepted.
 
-This text form is now treated as an **account alias**: a routing convenience
-that points to the canonical [`AccountAddress`](#2-canonical-address-codecs).
-It remains useful for human readability and domain-scoped governance, but it is
-no longer considered the authoritative account identifier on-chain.
+Account aliases are separate on-chain bindings. They use
+label@dataspace or label@domain.dataspace and resolve to canonical
+i105 `AccountId` values. Strict `AccountId` parsers never accept alias literals directly.
 ```
 
 `ChainId`-ն ապրում է `AccountId`-ից դուրս: Հանգույցները ստուգում են գործարքի `ChainId`
@@ -321,7 +320,7 @@ Multisig-ի քաղաքականությունը նաև բացահայտում է 
 - IME/NFKC փոխարկումներ. կիսալայնությամբ Sora kana-ն կարող է նորմալացվել իրենց ամբողջ լայնության ձևերին՝ առանց վերծանման խախտելու, սակայն ASCII `sora` պահակային և I105 թվանշանները/տառերը ՊԵՏՔ Է մնան ASCII: Ամբողջ լայնությամբ կամ պատյանով ծալված պահապանների մակերեսը `ERR_MISSING_COMPRESSED_SENTINEL`, ամբողջ լայնությամբ ASCII օգտակար բեռները բարձրացնում են `ERR_INVALID_COMPRESSED_CHAR`, իսկ ստուգիչ գումարի անհամապատասխանությունները՝ որպես `ERR_CHECKSUM_MISMATCH`: `crates/iroha_data_model/src/account/address.rs`-ի սեփականության թեստերը ծածկում են այս ուղիները, որպեսզի SDK-ները և դրամապանակները կարողանան հիմնվել որոշիչ ձախողումների վրա:
 - Torii և `address@domain` (rejected legacy form) փոխանունների Torii և SDK վերլուծությունը այժմ թողարկում են նույն `ERR_*` կոդերը, երբ I105 (նախընտրելի)/sora (երկրորդ լավագույն) մուտքերը ձախողվում են, նախքան կեղծանունը կարող է կրկնել տիրույթի սխալները, ստուգել տիրույթի պատճառները (օր. առանց արձակ տողերից գուշակելու.
 - `ERR_LOCAL8_DEPRECATED` 12 բայթից ավելի կարճ տեղային ընտրիչով օգտակար բեռներ՝ պահպանելով հին Local‑8 մարսողությունների կոշտ անջատումը:
-- Domainless canonical I105 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
+- Domainless canonical i105 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
 
 #### 2.5 Նորմատիվ երկուական վեկտորներ
 
@@ -365,7 +364,7 @@ Sora Nexus ցանցերը կանխադրված են `chain_discriminant = 0x02F1
 | Համաշխարհային ռեգիստրի ցուցիչ (`registry_id = 0x0000_002A`, համարժեք `treasury`) | `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF` | `sorakXｹ6NｻﾍﾀﾖSﾜﾖｱ3ﾚ5WﾘﾋQﾅｷｦxgﾛｸcﾁｵﾋkﾋvﾏ8SPﾓﾀｹdｴｴｲW9iCM6AEP` |
 
 Այս տողերը համընկնում են CLI-ի (`iroha tools address convert`), Torii-ի թողարկված տողերի հետ
-պատասխաններ (`canonical I105 literal rendering`) և SDK օգնականներ, այնպես որ UX պատճենեք/տեղադրեք
+պատասխաններ (`canonical i105 literal rendering`) և SDK օգնականներ, այնպես որ UX պատճենեք/տեղադրեք
 հոսքերը կարող են բառացիորեն հենվել դրանց վրա: Կցել `<address>@<domain>` (rejected legacy form) միայն այն դեպքում, երբ ձեզ անհրաժեշտ է հստակ երթուղային հուշում. վերջածանցը կանոնական ելքի մաս չէ։
 
 #### 2.6 Փոխգործունակության տեքստային այլանուններ (պլանավորված)
@@ -396,7 +395,7 @@ Sora Nexus ցանցերը կանխադրված են `chain_discriminant = 0x02F1
   կոդավորիչը, այլ ոչ թե CTAP2 քարտեզը, որն օգտագործվում է բազմանշանակ քաղաքականության ամփոփումների համար:
 - **Կոդավորում.** `encode_i105()`-ը միացնում է նախածանցի բայթերը կանոնականի հետ
   օգտակար բեռ և ավելացնում է Blake2b-512-ից ստացված 16-բիթանոց ստուգիչ գումարը՝ ֆիքսված
-  Prefix: `I105PRE` (`b"I105PRE"` || prefix || payload). The result is encoded via `bs58` using the I105 alphabet.
+  նախածանց `I105PRE` (`b"I105PRE"` || prefix || payload)։ Արդյունքը կոդավորվում է `bs58`-ով՝ օգտագործելով I105 այբուբենը։
   CLI/SDK օգնականները բացահայտում են նույն ընթացակարգը, և `AccountAddress::parse_encoded`
   այն հակադարձում է `decode_i105`-ի միջոցով:
 
@@ -669,11 +668,11 @@ HTTP-ի վերջնակետերը, որպեսզի աուդիտորները կար
   օգտվողներ, որոնց սեղմված `i105` ձևը միայն Sora-ի համար է և ենթակա է IME-ի վերաշարադրումների:
 - **Torii ինտեգրում.** Cache Nexus դրսևորվում է TTL-ի նկատմամբ, արտանետում
   `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` դետերմինիստորեն, և
-  keep strict account-literal parsing canonical-I105-only (reject compressed and any `@domain` suffix) with canonical I105 output.
+  keep strict account-literal parsing canonical-i105-only (reject compressed and any `@domain` suffix) with canonical i105 output.
 
 ### Torii պատասխանի ձևաչափեր
 
-- `GET /v1/accounts` ընդունում է կամընտիր `canonical I105 rendering` հարցման պարամետրը և
+- `GET /v1/accounts` ընդունում է կամընտիր `canonical i105 rendering` հարցման պարամետրը և
   `POST /v1/accounts/query`-ն ընդունում է նույն դաշտը JSON ծրարի ներսում:
   Աջակցվող արժեքներն են.
   - `i105` (կանխադրված) — պատասխանները թողարկում են կանոնական I105 օգտակար բեռներ (օրինակ.
@@ -684,7 +683,7 @@ HTTP-ի վերջնակետերը, որպեսզի աուդիտորները կար
   դրամապանակներ և հետազոտողներ՝ սեղմված տողեր պահանջելու միայն Sora-ի UX-ի համար, մինչդեռ
   պահպանելով I105-ը որպես փոխգործունակ լռելյայն:
 - Ակտիվների սեփականատերերի ցուցակները (`GET /v1/assets/{definition_id}/holders`) և դրանց JSON-ը
-  ծրար գործընկերը (`POST …/holders/query`) նույնպես պատվում է `canonical I105 rendering`:
+  ծրար գործընկերը (`POST …/holders/query`) նույնպես պատվում է `canonical i105 rendering`:
   `items[*].account_id` դաշտն արտանետում է սեղմված տառեր, երբ
   պարամետր/ծրար դաշտը սահմանվել է `i105_default`՝ արտացոլելով հաշիվները
   վերջնակետեր, որպեսզի հետազոտողները կարողանան հետևողական արդյունք ներկայացնել դիրեկտորիաներում:

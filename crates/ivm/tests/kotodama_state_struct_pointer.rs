@@ -19,7 +19,7 @@ fn encode_pointer_tlv(ty: PointerType, payload: Vec<u8>) -> Vec<u8> {
 fn parse_account_id_literal(id: &str) -> AccountId {
     AccountId::parse_encoded(id)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .expect("account literal must be canonical I105")
+        .expect("account literal must be canonical i105")
 }
 
 fn encode_account_id_pointer(id: &str) -> Vec<u8> {

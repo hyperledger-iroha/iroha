@@ -30,7 +30,7 @@ final class TransactionEncoderValidationTests: XCTestCase {
         let value = try NoritoJSON(["profile": "demo"])
         let request = SetMetadataRequest(chainId: "chain",
                                          authority: "alice",
-                                         target: .account("bob@wonderland"),
+                                         target: .account("bob@hbl.sbp"),
                                          key: "profile",
                                          value: value,
                                          ttlMs: nil)
@@ -50,11 +50,11 @@ final class TransactionEncoderValidationTests: XCTestCase {
         let keypair = try Keypair(privateKeyBytes: Data(repeating: 9, count: 32))
         let address = try AccountAddress.fromAccount(publicKey: keypair.publicKey)
         let i105 = try address.toI105(networkPrefix: AccountId.defaultNetworkPrefix)
-        let authority = "\(i105)@wonderland"
+        let authority = "\(i105)@hbl.sbp"
         let value = try NoritoJSON(["profile": "demo"])
         let request = SetMetadataRequest(chainId: "chain",
                                          authority: authority,
-                                         target: .account("bob@wonderland"),
+                                         target: .account("bob@hbl.sbp"),
                                          key: "profile",
                                          value: value,
                                          ttlMs: nil)
@@ -107,6 +107,27 @@ final class TransactionEncoderValidationTests: XCTestCase {
         ) { error in
             XCTAssertEqual(error as? TransactionInputError,
                            .malformedAssetId("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"))
+        }
+    }
+
+    func testSetMetadataRejectsMalformedRwaTarget() throws {
+        let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 7, count: 32))
+        let authority = try canonicalAuthorityLiteral(from: signingKey)
+        let value = try NoritoJSON(["serial": "vault-1"])
+        let request = SetMetadataRequest(chainId: "chain",
+                                         authority: authority,
+                                         target: .rwa("lot-001"),
+                                         key: "serial",
+                                         value: value,
+                                         ttlMs: nil)
+
+        XCTAssertThrowsError(
+            try SwiftTransactionEncoder.encodeSetMetadata(request: request,
+                                                          signingKey: signingKey,
+                                                          creationTimeMs: 1)
+        ) { error in
+            XCTAssertEqual(error as? TransactionInputError,
+                           .malformedRwaId(field: "target", value: "lot-001"))
         }
     }
 
@@ -244,7 +265,7 @@ final class TransactionEncoderValidationTests: XCTestCase {
                                                            creationTimeMs: 1)
         ) { error in
             XCTAssertEqual(error as? TransactionInputError,
-                           .invalidZkBallotPublicInputs("owner must be a canonical account id"))
+                           .invalidZkBallotPublicInputs("owner must be a canonical i105 account id"))
         }
     }
 }

@@ -412,47 +412,63 @@ schema documented in `offline_allowance.md`.【IrohaSwift/Sources/IrohaSwift/And
 Use the `.notice` payload to surface disclosures/localised copy and fall back to the default handler
 when no custom UI is supplied. Additional risk guidance lives in `docs/source/offline_bearer_mode.md`.
 
-### Offline reserve setup and top-up
+### Offline cash setup, load, and refresh
 
-Use `ToriiClient.setupOfflineReserve` to create or fetch the device-bound reserve lineage before a
-wallet attempts offline receive. The response is the authoritative reserve envelope for the current
-`account_id` / `device_id` / `offline_public_key` tuple:
-
-```swift
-let envelope = try await torii.setupOfflineReserve(.init(
-    accountId: controllerId,
-    deviceId: deviceId,
-    offlinePublicKey: offlinePublicKey,
-    operationId: UUID().uuidString,
-    attestation: attestationPayload
-))
-
-print("reserve id", envelope.reserveState.reserveId)
-print("balance", envelope.reserveState.balance)
-```
-
-To move value offline, call `topUpOfflineReserve`. Torii debits the online balance, updates the
-reserve, and returns the new authoritative envelope. Renewals use `renewOfflineReserve` for the
-same reserve lineage and never mint value:
+Use the `ToriiOfflineCash*Request` and `ToriiOfflineCashEnvelope` models when calling the
+authenticated offline cash endpoints directly. The returned envelope is authoritative for the current
+`account_id` / device binding tuple:
 
 ```swift
-let topUp = try await torii.topUpOfflineReserve(.init(
-    reserveId: envelope.reserveState.reserveId,
-    amount: "100.00",
-    operationId: UUID().uuidString,
-    attestation: attestationPayload
-))
+let envelope = try await authenticatedTransport.post(
+    "/v1/offline/cash/setup",
+    body: ToriiOfflineCashSetupRequest(
+        accountId: controllerId,
+        assetDefinitionId: assetDefinitionId,
+        deviceBinding: deviceBinding,
+        deviceProof: deviceProof
+    ),
+    decode: ToriiOfflineCashEnvelope.self
+)
 
-let renewed = try await torii.renewOfflineReserve(.init(
-    reserveId: topUp.reserveState.reserveId,
-    operationId: UUID().uuidString,
-    attestation: attestationPayload
-))
+print("lineage id", envelope.lineageState.lineageId)
+print("balance", envelope.lineageState.balance)
 ```
 
-Use `syncOfflineReserve`, `defundOfflineReserve`, and `getOfflineRevocationBundle()` for the rest of
-the reserve lifecycle. The pre-release allowance/certificate/settlement helpers were removed from
-the public Torii client surface.
+To move value offline, call `/v1/offline/cash/load`. The issuer debits the online balance, updates the
+offline cash lineage, and returns the new authoritative envelope. Authorization refreshes use
+`/v1/offline/cash/refresh` for the same lineage and never mint value:
+
+```swift
+let loaded = try await authenticatedTransport.post(
+    "/v1/offline/cash/load",
+    body: ToriiOfflineCashLoadRequest(
+        operationId: UUID().uuidString,
+        lineageId: envelope.lineageState.lineageId,
+        accountId: controllerId,
+        assetDefinitionId: assetDefinitionId,
+        amount: "100.00",
+        deviceBinding: deviceBinding,
+        deviceProof: deviceProof
+    ),
+    decode: ToriiOfflineCashEnvelope.self
+)
+
+let refreshed = try await authenticatedTransport.post(
+    "/v1/offline/cash/refresh",
+    body: ToriiOfflineCashRefreshRequest(
+        operationId: UUID().uuidString,
+        lineageId: loaded.lineageState.lineageId,
+        accountId: controllerId,
+        deviceBinding: deviceBinding,
+        deviceProof: deviceProof
+    ),
+    decode: ToriiOfflineCashEnvelope.self
+)
+```
+
+Use `/v1/offline/cash/sync`, `/v1/offline/cash/redeem`, and `getOfflineRevocationBundle()` for the rest of
+the offline cash lifecycle. The pre-release allowance/certificate/settlement helpers were removed from
+the public SDK surface.
 
 ### Offline audit logging
 
@@ -484,8 +500,8 @@ and keeps the log deterministic so the OA5.1 audit toggle can be flipped per jur
 
 ### Revocation bundle journal
 
-Offline reserves now use the signed revocation bundle returned by `/v1/offline/revocations` plus the
-current `OfflineSpendAuthorization` carried in each reserve envelope. Persist the latest envelope and
+Offline cash now uses the signed revocation bundle returned by `/v1/offline/revocations` plus the
+current `OfflineSpendAuthorization` carried in each lineage envelope. Persist the latest envelope and
 revocation bundle together so wallets can fail closed for send when authorization or revocation
 freshness expires.
 
@@ -496,9 +512,9 @@ print("revocation bundle expires", bundle.expiresAtMs)
 
 ### Counter journal
 
-Reserve operations and offline transfer receipts continue to use monotonic App Attest / marker
-counters. Persist the counters alongside the reserve envelope and transfer journal; there is no
-separate counter-summary endpoint in the reserve cutover.
+Offline cash mutations and offline transfer receipts continue to use monotonic App Attest / marker
+counters. Persist the counters alongside the lineage envelope and transfer journal; there is no
+separate counter-summary endpoint in the offline cash cutover.
 
 ## SoraFS orchestrator client
 
@@ -847,7 +863,7 @@ For higher-level walkthroughs, see:
   helper wraps `/v1/explorer/accounts/{account_id}/qr` and returns the inline SVG, literal, and
   metadata defined in {doc}`sns/address_display_guidelines` so explorers can embed share-ready
   preferred I105 QR payloads without reimplementing the renderer
-  (omit the format to use I105 or use canonical I105 output).
+  (omit the format to use I105 or use canonical i105 output).
 - **Explorer:** `getExplorerInstructions` and `getExplorerTransactions` wrap
   `/v1/explorer/instructions` and `/v1/explorer/transactions` with
   `ToriiExplorerInstructionsParams`/`ToriiExplorerTransactionsParams` filters (including
@@ -901,9 +917,8 @@ For higher-level walkthroughs, see:
   `ToriiClientError.incompatibleDataModel` on mismatch), `getTransactionStatus`, and recovery
   snapshots via `getPipelineRecovery(height:)`.
 - **Network time:** `getTimeNow` for `/v1/time/now` snapshots.
-- **Zero-knowledge:** prover reports/attachments list/count/delete operations and verifying key registry helpers (`getVerifyingKey`, `listVerifyingKeys`, register/update/deprecate`).
-- **Confidential assets:** derive the wallet key hierarchy through `deriveConfidentialKeyset`
-  (`POST /v1/confidential/derive-keyset`), build memo envelopes with
+- **Zero-knowledge:** prover reports/attachments list/count/delete operations and verifying key registry read/event helpers (`getVerifyingKey`, `listVerifyingKeys`, `streamVerifyingKeyEvents`).
+- **Confidential assets:** derive the wallet key hierarchy locally through `deriveConfidentialKeyset`, build memo envelopes with
   `ConfidentialEncryptedPayload`, submit shielded debits via `ShieldRequest` +
   `submit(shield:keypair:)`, **unshield confidential balances via `ProofAttachment` +**
   `UnshieldRequest` **and** `submit(unshield:keypair:)`, and inspect rollout windows with
@@ -961,8 +976,7 @@ print("SVG payload", qr.svg)
 
 ## Verifying Key Registry
 
-`ToriiClient` wraps `/v1/zk/vk/*` so wallets can inspect registry state or submit verifier
-updates without hand-rolling JSON:
+`ToriiClient` wraps `/v1/zk/vk/*` so wallets can inspect registry state without hand-rolling JSON:
 
 ```swift
 if #available(iOS 15, macOS 12, *) {
@@ -974,40 +988,9 @@ if #available(iOS 15, macOS 12, *) {
 }
 ```
 
-Submitting lifecycle requests takes the typed DTOs defined in `ToriiClient.swift`. Inline
-verifier bytes are encoded as base64 and the helper infers `vk_len` when omitted:
+Mutation DTOs remain useful when you are assembling locally signed transactions, but the direct Torii register/update/deprecate helpers now fail closed instead of accepting embedded private keys. Build the verifier-management instructions locally, sign them with your wallet key, and submit the resulting transaction through the pipeline helpers.
 
-```swift
-guard
-    #available(iOS 15, macOS 12, *),
-    let vkBytes = Data(base64Encoded: "AQID")
-else { return }
-
-var register = ToriiVerifyingKeyRegisterRequest(
-    authority: "i105...",
-    privateKey: "ed0120...",
-    backend: "halo2/ipa",
-    name: "vk_main",
-    version: 1,
-    circuitId: "halo2/ipa::transfer_v1",
-    publicInputsSchemaHashHex: "fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3",
-    gasScheduleId: "halo2_default",
-    verifyingKeyBytes: vkBytes
-)
-register.maxProofBytes = 8_192
-try await torii.registerVerifyingKey(register)
-
-var deprecate = ToriiVerifyingKeyDeprecateRequest(
-    authority: register.authority,
-    privateKey: register.privateKey,
-    backend: register.backend,
-    name: register.name
-)
-try await torii.deprecateVerifyingKey(deprecate)
-```
-
-Completion-style overloads return `Task<Void, Never>` so UIKit/SwiftUI layers can cancel
-submission if the user dismisses a flow mid-flight.
+Completion-style overloads still mirror the async read and event-stream helpers so UIKit/SwiftUI layers can cancel work if the user dismisses a flow mid-flight.
 
 
 For proof verification outcomes, the proof event stream follows the same pattern:

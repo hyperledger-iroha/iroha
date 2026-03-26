@@ -26,7 +26,7 @@ translator: machine-google-reviewed
 བྱ་བའི་རྣམ་གྲངས།
 1. **ཀེ་ནོ་ནིག་ཨའུཊི་པུཊི་:** `AccountId::to_string()`/བཀྲམ་སྟོན་འབད་དགོཔ་ I105 རྐྱངམ་གཅིག
    (No I18NI0000006X རྗེས་འཇུག་)། ཀེ་ནོ་ནིག་ཧེགསི་འདི་ རྐྱེན་སེལ་འབད་ནིའི་དོན་ལུ་ཨིན། (I18NI000000007X)
-2. **Accepted inputs:** parsers MUST accept only canonical I105 account literals. Reject i105-default `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+2. **Accepted inputs:** parsers MUST accept only canonical i105 account literals. Reject i105-default `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
 3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
 4. **I105 ཅེག་སམ་:** `I105PRE || prefix || payload` ལས་ Blake2b-512 ལག་ལེན་འཐབ།
    the དང་པོ་ ༢ བཱའིཊི། བསྡམས་ཡོད་པའི་ཡི་གུ་གཞི་རྟེན་འདི་ **105** ཨིན།

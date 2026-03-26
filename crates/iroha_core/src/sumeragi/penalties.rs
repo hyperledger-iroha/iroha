@@ -314,6 +314,10 @@ impl<'a> PenaltyApplier<'a> {
                         &locator.validator,
                         slash_id,
                         &amount,
+                        self.state
+                            .latest_block_header_fast()
+                            .map(|header| header.creation_time_ms)
+                            .unwrap_or(0),
                         #[cfg(feature = "telemetry")]
                         self.telemetry,
                         #[cfg(not(feature = "telemetry"))]

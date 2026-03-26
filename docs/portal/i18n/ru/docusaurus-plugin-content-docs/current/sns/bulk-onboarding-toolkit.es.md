@@ -35,7 +35,7 @@ Torii или CLI. El helper valida cada fila de antemano, emite tanto un manific
 |---------|-----------|-------------|
 | `label` | Си | Etiqueta solicitada (se acepta mayus/minus; la Herramienta Normaliza Segun Norm v1 и UTS-46). |
 | `suffix_id` | Си | Цифровой идентификатор суфии (десятичный или шестнадцатеричный `0x`). |
-| `owner` | Си | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` | Си | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` | Си | Энтеро `1..=255`. |
 | `payment_asset_id` | Си | Активация урегулирования (например, `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Си | Enteros sin Signo que представляет собой unidades nativas del activo. |

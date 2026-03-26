@@ -43,13 +43,13 @@ class TransportSecurityClientTest {
     }
 
     @Test
-    fun offlineClientRejectsInsecurePrivateKeyBody() {
+    fun offlineClientRejectsRemovedServerSideSigningFlow() {
         val client = OfflineToriiClient.builder()
             .executor(StubExecutor())
             .baseUri(URI.create("http://example.com"))
             .build()
 
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<UnsupportedOperationException> {
             client.submitSettlement(
                 mapOf("bundle_id" to "deadbeef"),
                 sampleAuthority(0x41),
@@ -59,20 +59,50 @@ class TransportSecurityClientTest {
     }
 
     @Test
-    fun subscriptionClientRejectsInsecurePrivateKeyBody() {
+    fun subscriptionClientRejectsRemovedServerSideSigningFlow() {
         val client = SubscriptionToriiClient.builder()
             .executor(StubExecutor())
             .baseUri(URI.create("http://example.com"))
             .build()
 
-        assertFailsWith<IllegalArgumentException> {
+        assertFailsWith<UnsupportedOperationException> {
             client.createSubscriptionPlan(
                 SubscriptionPlanCreateRequest(
                     authority = sampleAuthority(0x42),
-                    privateKey = "deadbeef",
                     planId = "plan#subs",
                     plan = mapOf("kind" to "fixed"),
                 ),
+            )
+        }
+    }
+
+    @Test
+    fun transportSecurityRejectsInsecureCanonicalAuthHeaders() {
+        assertFailsWith<IllegalArgumentException> {
+            TransportSecurity.requireHttpRequestAllowed(
+                context = "HttpClientTransport",
+                baseUri = URI.create("http://example.com"),
+                targetUri = URI.create("http://example.com/query"),
+                headers = mapOf(
+                    "X-Iroha-Account" to sampleAuthority(0x43),
+                    "X-Iroha-Signature" to "deadbeef",
+                    "X-Iroha-Timestamp-Ms" to "123",
+                    "X-Iroha-Nonce" to "456",
+                ),
+                body = null,
+            )
+        }
+    }
+
+    @Test
+    fun transportSecurityRejectsInsecureSeedBody() {
+        assertFailsWith<IllegalArgumentException> {
+            TransportSecurity.requireHttpRequestAllowed(
+                context = "HttpClientTransport",
+                baseUri = URI.create("http://example.com"),
+                targetUri = URI.create("http://example.com/confidential"),
+                headers = emptyMap(),
+                body = """{"seed_hex":"deadbeef"}""".toByteArray(),
             )
         }
     }

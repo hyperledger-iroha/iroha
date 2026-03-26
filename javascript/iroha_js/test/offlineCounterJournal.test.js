@@ -9,6 +9,9 @@ import {
   OfflineCounterJournalError,
 } from "../src/offlineCounterJournal.js";
 
+const FIXTURE_ALICE_I105 =
+  "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+
 async function withTempDir(prefix, fn) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   try {
@@ -28,7 +31,7 @@ test("offline counter journal persists summary hashes", async () => {
       items: [
         {
           certificate_id_hex: "DEADBEEF",
-          controller_id: "alice@sora",
+          controller_id: FIXTURE_ALICE_I105,
           controller_display: "Alice",
           summary_hash_hex: summaryHash,
           apple_key_counters: apple,
@@ -53,7 +56,7 @@ test("offline counter journal rejects counter jumps", async () => {
   const journal = new OfflineCounterJournal({ storage: "memory" });
   await journal.updateCounter({
     certificateIdHex: "deadbeef",
-    controllerId: "alice@sora",
+    controllerId: FIXTURE_ALICE_I105,
     platform: "apple_key",
     scope: "key-1",
     counter: 1,
@@ -64,7 +67,7 @@ test("offline counter journal rejects counter jumps", async () => {
     () =>
       journal.updateCounter({
         certificateIdHex: "deadbeef",
-        controllerId: "alice@sora",
+        controllerId: FIXTURE_ALICE_I105,
         platform: "apple_key",
         scope: "key-1",
         counter: 3,
@@ -80,7 +83,7 @@ test("offline counter journal rejects fractional recordedAtMs", async () => {
     () =>
       journal.updateCounter({
         certificateIdHex: "deadbeef",
-        controllerId: "alice@sora",
+        controllerId: FIXTURE_ALICE_I105,
         platform: "apple_key",
         scope: "key-1",
         counter: 1,
@@ -97,7 +100,7 @@ test("offline counter journal validates summary hash parity", async () => {
     items: [
       {
         certificate_id_hex: "DEADBEEF",
-        controller_id: "alice@sora",
+        controller_id: FIXTURE_ALICE_I105,
         controller_display: "Alice",
         summary_hash_hex: "00".repeat(32),
         apple_key_counters: { "key-1": 1 },

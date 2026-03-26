@@ -9,7 +9,7 @@ public final class AccountIdLiteralTests {
   public void acceptsCanonicalI105Literal() throws Exception {
     final String address = sampleI105(0x11);
     final String normalized = AccountIdLiteral.requireCanonicalI105Address(address, "accountId");
-    assert address.equals(normalized) : "canonical I105 literal must pass through unchanged";
+    assert address.equals(normalized) : "canonical i105 literal must pass through unchanged";
   }
 
   @Test
@@ -24,7 +24,7 @@ public final class AccountIdLiteralTests {
   public void rejectsDomainSuffixedLiterals() throws Exception {
     final String address = sampleI105(0x33);
     try {
-      AccountIdLiteral.requireCanonicalI105Address(address + "@wonderland", "accountId");
+      AccountIdLiteral.requireCanonicalI105Address(address + "@hbl.sbp", "accountId");
       throw new AssertionError("expected IllegalArgumentException");
     } catch (final IllegalArgumentException expected) {
       assert expected.getMessage().contains("without @domain")
@@ -40,17 +40,17 @@ public final class AccountIdLiteralTests {
     try {
       AccountIdLiteral.requireCanonicalI105Address(
           "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9", "accountId");
-      throw new AssertionError("expected legacy non-I105 literal to be rejected");
+      throw new AssertionError("expected legacy non-i105 literal to be rejected");
     } catch (final IllegalArgumentException expected) {
-      assert expected.getMessage().contains("canonical I105")
-          : "legacy rejection must mention canonical I105";
+      assert expected.getMessage().contains("canonical i105")
+          : "legacy rejection must mention canonical i105";
     }
     try {
       AccountIdLiteral.requireCanonicalI105Address(address.canonicalHex(), "accountId");
       throw new AssertionError("expected canonical hex literal to be rejected");
     } catch (final IllegalArgumentException expected) {
-      assert expected.getMessage().contains("canonical I105")
-          : "hex rejection must mention canonical I105";
+      assert expected.getMessage().contains("canonical i105")
+          : "hex rejection must mention canonical i105";
     }
   }
 

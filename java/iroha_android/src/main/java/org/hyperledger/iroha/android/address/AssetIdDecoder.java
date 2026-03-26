@@ -66,7 +66,7 @@ public final class AssetIdDecoder {
   }
 
   /**
-   * Parses {@code <asset-definition-id>#<account-id>} with an optional
+   * Parses {@code <asset-definition-id>#<i105-account-id>} with an optional
    * {@code #dataspace:<id>} suffix.
    */
   public static AssetId decode(String assetId) {
@@ -79,7 +79,7 @@ public final class AssetIdDecoder {
     final String[] parts = trimmed.split("#", -1);
     if (parts.length != 2 && parts.length != 3) {
       throw new IllegalArgumentException(
-          "AssetId must use '<asset-definition-id>#<account-id>' with optional '#dataspace:<id>' suffix");
+          "AssetId must use '<asset-definition-id>#<i105-account-id>' with optional '#dataspace:<id>' suffix");
     }
 
     AssetDefinitionIdEncoder.parseAddressBytes(parts[0]);

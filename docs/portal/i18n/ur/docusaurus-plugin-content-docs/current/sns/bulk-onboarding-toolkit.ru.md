@@ -35,7 +35,7 @@ JSON پے لوڈز یا CLI ریرنس پیمائش نہیں کرتے ہیں ، 
 | --------- | ------------ | ---------- |
 | `label` | ہاں | مطلوبہ لیبل (مخلوط کیس کی اجازت ہے the ٹول نورم V1 اور UTS-46 کے مطابق معمول بناتا ہے)۔ |
 | `suffix_id` | ہاں | عددی لاحقہ شناخت کنندہ (اعشاریہ یا `0x` ہیکس)۔ |
-| `owner` | ہاں | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` | ہاں | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` | ہاں | انٹیجر `1..=255`۔ |
 | `payment_asset_id` | ہاں | تصفیہ اثاثہ (مثال کے طور پر `61CtjvNd9T3THAR65GsMVHr82Bjc`)۔ |
 | `payment_gross` / `payment_net` | ہاں | اثاثہ کے اکائیوں کی نمائندگی کرنے والے دستخط شدہ عدد۔ |

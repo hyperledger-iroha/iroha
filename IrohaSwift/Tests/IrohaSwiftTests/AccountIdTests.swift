@@ -21,7 +21,7 @@ final class AccountIdTests: XCTestCase {
         let publicKey = Data(repeating: 0xAB, count: 32)
         let accountId = try AccountId.makeI105(publicKey: publicKey)
 
-        // I105 format should NOT start with ed0120
+        // i105 format should NOT start with ed0120
         XCTAssertFalse(accountId.hasPrefix("ed0120"))
         XCTAssertFalse(accountId.contains("@"))
 
@@ -87,15 +87,15 @@ final class AccountIdTests: XCTestCase {
 
         XCTAssertEqual(AccountId.normalizeForComparison(i105), i105)
         XCTAssertEqual(AccountId.normalizeForComparison("\(i105)@default"), "\(i105)@default")
-        XCTAssertEqual(AccountId.normalizeForComparison("\(i105)@WONDERLAND"), "\(i105)@WONDERLAND")
+        XCTAssertEqual(AccountId.normalizeForComparison("\(i105)@HBL.SBP"), "\(i105)@HBL.SBP")
 
         XCTAssertFalse(AccountId.matchesForComparison(i105, "\(i105)@default"))
-        XCTAssertFalse(AccountId.matchesForComparison("\(i105)@default", "\(i105)@wonderland"))
+        XCTAssertFalse(AccountId.matchesForComparison("\(i105)@default", "\(i105)@hbl.sbp"))
     }
 
     func testNormalizeForComparisonDoesNotCanonicalizeLegacyLiterals() {
         let publicKey = Data(repeating: 0xAB, count: 32)
-        let rawUpper = "ed0120\(publicKey.map { String(format: "%02X", $0) }.joined())@WONDERLAND"
+        let rawUpper = "ed0120\(publicKey.map { String(format: "%02X", $0) }.joined())@HBL.SBP"
         XCTAssertEqual(AccountId.normalizeForComparison(rawUpper), rawUpper)
         XCTAssertFalse(AccountId.matchesForComparison(rawUpper, rawUpper.lowercased()))
     }

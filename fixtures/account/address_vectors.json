@@ -31,7 +31,7 @@
         },
         "format": "i105_default",
         "input": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwpvk0",
-        "note": "Introduces a non-Base58 glyph outside the canonical I105 alphabet."
+        "note": "Introduces a glyph outside the canonical I105 alphabet."
       },
       {
         "case_id": "i105_default-checksum-mismatch",

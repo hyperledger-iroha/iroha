@@ -696,7 +696,7 @@ impl ErrorHarness {
     }
 
     fn unsupported_alias_literal() -> ErrorVector {
-        let alias_literal = "alice@wonderland";
+        let alias_literal = "alice@hbl.sbp";
         let err = AccountAddress::parse_encoded(alias_literal, None)
             .expect_err("alias literal must fail");
 

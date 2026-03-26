@@ -147,8 +147,8 @@ public final class OfflineVerdictJournalTest {
     final String json =
         """
         {
-          "controller_id": "alice@wonderland",
-          "controller_display": "alice@wonderland",
+          "controller_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+          "controller_display": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
           "certificate_expires_at_ms": 1700000000000.5,
           "policy_expires_at_ms": 1700000000000,
           "recorded_at_ms": 1700000000000
@@ -167,8 +167,8 @@ public final class OfflineVerdictJournalTest {
     final String json =
         """
         {
-          "controller_id": "alice@wonderland",
-          "controller_display": "alice@wonderland",
+          "controller_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+          "controller_display": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
           "certificate_expires_at_ms": 1700000000000,
           "policy_expires_at_ms": 1700000000000,
           "recorded_at_ms": 1700000000000,
@@ -192,8 +192,8 @@ public final class OfflineVerdictJournalTest {
     final String json =
         """
         {
-          "controller_id": "alice@wonderland",
-          "controller_display": "alice@wonderland",
+          "controller_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+          "controller_display": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
           "certificate_expires_at_ms": 1700000000000,
           "policy_expires_at_ms": 1700000000000,
           "recorded_at_ms": 1700000000000,
@@ -216,8 +216,8 @@ public final class OfflineVerdictJournalTest {
     final String json =
         """
         {
-          "controller_id": "alice@wonderland",
-          "controller_display": "alice@wonderland",
+          "controller_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+          "controller_display": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
           "certificate_expires_at_ms": 1700000000000,
           "policy_expires_at_ms": 1700000000000,
           "recorded_at_ms": 1700000000000,
@@ -266,8 +266,8 @@ public final class OfflineVerdictJournalTest {
   private static OfflineAllowanceList.OfflineAllowanceItem sampleAllowance() {
     return new OfflineAllowanceList.OfflineAllowanceItem(
         "deadbeef",
-        "alice@wonderland",
-        "alice@wonderland",
+        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+        "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
         "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
         "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
         "USD",

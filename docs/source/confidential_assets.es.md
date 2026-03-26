@@ -238,7 +238,7 @@ paso a paso.
 - Jerarquía de derivación de claves por cuenta:
   - `sk_spend` → `nk` (clave anuladora), `ivk` (clave de visualización entrante), `ovk` (clave de visualización saliente), `fvk`.
 - Las cargas útiles de notas cifradas utilizan AEAD con claves compartidas derivadas de ECDH; Se pueden adjuntar claves opcionales de vista del auditor a los resultados según la política de activos.
-- Adiciones de CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, herramientas de auditor para descifrar notas y el asistente `iroha app zk envelope` para producir/inspeccionar sobres de notas Norito sin conexión. Torii expone el mismo flujo de derivación a través de `POST /v1/confidential/derive-keyset`, devolviendo formatos hexadecimal y base64 para que las billeteras puedan recuperar jerarquías clave mediante programación.
+- Adiciones de CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, herramientas de auditor para descifrar notas y el asistente `iroha app zk envelope` para producir/inspeccionar sobres de notas Norito sin conexión.
 
 ## Controles de gas, límites y DoS
 - Horario de gas determinista:

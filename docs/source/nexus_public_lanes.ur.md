@@ -239,10 +239,10 @@ NX-9 کے بعد runtime logic `PublicLaneRewardRecord` annotations emit کرے 
     - `GET /v1/nexus/public_lanes/{lane}/validators` – metadata, status
       (`PendingActivation`/`Active`/`Exiting`/`Exited`/`Slashed`), activation epoch/height,
       release timers, bonded stake, last reward epoch.
-      `canonical I105 literal rendering` literal rendering کو کنٹرول کرتا ہے۔
+      `canonical i105 literal rendering` literal rendering کو کنٹرول کرتا ہے۔
     - `GET /v1/nexus/public_lanes/{lane}/stake` – stake shares (`validator`,
       `staker`, bonded amount) کے ساتھ pending unbond timers۔ `?validator=i105...` response کو
-      ایک validator فوکس والے dashboards کے لئے filter کرتا ہے؛ `canonical I105 rendering` سب literals پر لاگو ہوتا ہے۔
+      ایک validator فوکس والے dashboards کے لئے filter کرتا ہے؛ `canonical i105 rendering` سب literals پر لاگو ہوتا ہے۔
   - Lifecycle ISIs standard transaction path استعمال کرتے ہیں (Torii `/v1/transactions`
     یا CLI instruction pipeline)۔ مثال Norito JSON payloads:
 

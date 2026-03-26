@@ -98,7 +98,7 @@ fn canonical_bytes(hex_value: &str) -> Vec<u8> {
 }
 
 fn selector_value() -> Value {
-    // Canonical I105 payloads are globally scoped and no longer embed domain selectors.
+    // Canonical i105 payloads are globally scoped and no longer embed domain selectors.
     json_obj!({ "kind": "default" })
 }
 
@@ -456,14 +456,14 @@ pub fn compliance_vectors_json() -> Value {
         json_obj!({
             "case_id": "i105_default-invalid-character",
             "format": "i105_default",
-            "note": "Introduces a non-Base58 glyph outside the canonical I105 alphabet.",
+            "note": "Introduces a glyph outside the canonical i105 alphabet.",
             "input": i105_default_bad_char,
             "expected_error": error_to_json(&err_bad_char),
         }),
         json_obj!({
             "case_id": "i105_default-checksum-mismatch",
             "format": "i105_default",
-            "note": "Checksum bytes replaced to trigger canonical I105 verification failure.",
+            "note": "Checksum bytes replaced to trigger canonical i105 verification failure.",
             "input": i105_default_bad_checksum,
             "expected_error": error_to_json(&err_bad_checksum),
         }),

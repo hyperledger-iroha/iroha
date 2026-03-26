@@ -237,7 +237,7 @@ A Documenta substitui localidades no runbook de operações; As políticas de go
 - Jerarquia de derivação por conta:
   - `sk_spend` -> `nk` (chave anuladora), `ivk` (chave de visualização de entrada), `ovk` (chave de visualização de saída), `fvk`.
 - Payloads de notas criptografadas usando AEAD com chaves compartilhadas derivadas de ECDH; você pode adicionar as chaves de auditoria opcionais às saídas de acordo com a política do ativo.
-- Adicionados ao CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, ferramentas de auditor para descifrar memorandos, e o auxiliar `iroha app zk envelope` para produzir/inspecionar envelopes Norito offline. Torii expõe o mesmo fluxo de derivação via `POST /v1/confidential/derive-keyset`, retornando formas hex e base64 para que carteiras obtenham jerarquias de chaves programaticamente.
+- Adicionados ao CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, ferramentas de auditor para descifrar memorandos, e o auxiliar `iroha app zk envelope` para produzir/inspecionar envelopes Norito offline.
 
 ## Gás, limites e controles DoS
 - Cronograma de gás determinista:

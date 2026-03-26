@@ -32,7 +32,7 @@ cargas útiles تلقائيا مع تسجيل ايصالات منظمة لاغر
 |--------|-------|-------|
 | `label` | نعم | التسمية المطلوبة (يقبل حالة مختلطة; الاداة تطبع حسب Norm v1 y UTS-46). |
 | `suffix_id` | نعم | معرف لاحقة رقمي (عشري او `0x` hexadecimal). |
-| `owner` | نعم | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` | نعم | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` | نعم | Aquí está `1..=255`. |
 | `payment_asset_id` | نعم | Este es el caso (modelo `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | نعم | اعداد صحيحة غير موقعة تمثل وحدات الاصل. |

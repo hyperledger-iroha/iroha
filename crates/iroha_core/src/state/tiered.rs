@@ -2489,13 +2489,13 @@ mod measured_bytes_impls {
             AggregateProofEnvelope, AndroidMarkerKeyProof, AndroidProvisionedProof,
             AppleAppAttestProof, OfflineAllowanceCommitment, OfflineAllowanceRecord,
             OfflineAppleAppAttestBinding, OfflineBalanceProof, OfflineCounterState,
-            OfflineMutationSettlement, OfflinePlatformProof, OfflinePlatformTokenSnapshot,
-            OfflineReserveEnvelope, OfflineReserveOperationResult, OfflineReserveRecord,
-            OfflineReserveState, OfflineTransparentZkProof,
-            OfflineSpendAuthorization, OfflineSpendReceipt, OfflineToOnlineTransfer,
-            OfflineTransferLifecycleEntry, OfflineTransferRecord, OfflineTransferStatus,
-            OfflineVerdictRevocation, OfflineVerdictRevocationReason, OfflineVerdictSnapshot,
-            OfflineWalletCertificate, OfflineWalletPolicy, PoseidonDigest,
+            OfflineLineageEnvelope, OfflineLineageOperationResult, OfflineLineageRecord,
+            OfflineLineageState, OfflineMutationSettlement, OfflinePlatformProof,
+            OfflinePlatformTokenSnapshot, OfflineSpendAuthorization, OfflineSpendReceipt,
+            OfflineToOnlineTransfer, OfflineTransferLifecycleEntry, OfflineTransferRecord,
+            OfflineTransferStatus, OfflineTransparentZkProof, OfflineVerdictRevocation,
+            OfflineVerdictRevocationReason, OfflineVerdictSnapshot, OfflineWalletCertificate,
+            OfflineWalletPolicy, PoseidonDigest,
         },
         peer::PeerId,
         permission::Permission,
@@ -3889,7 +3889,7 @@ mod measured_bytes_impls {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<OfflineSpendAuthorization>();
             total = total.saturating_add(self.authorization_id.measured_bytes_extra());
-            total = total.saturating_add(self.reserve_id.measured_bytes_extra());
+            total = total.saturating_add(self.lineage_id.measured_bytes_extra());
             total = total.saturating_add(self.account_id.measured_bytes_extra());
             total = total.saturating_add(self.device_id.measured_bytes_extra());
             total = total.saturating_add(self.offline_public_key.measured_bytes_extra());
@@ -3905,16 +3905,16 @@ mod measured_bytes_impls {
         }
     }
 
-    impl MeasuredBytes for OfflineReserveState {
+    impl MeasuredBytes for OfflineLineageState {
         fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<OfflineReserveState>();
-            total = total.saturating_add(self.reserve_id.measured_bytes_extra());
+            let mut total = size_of::<OfflineLineageState>();
+            total = total.saturating_add(self.lineage_id.measured_bytes_extra());
             total = total.saturating_add(self.account_id.measured_bytes_extra());
             total = total.saturating_add(self.device_id.measured_bytes_extra());
             total = total.saturating_add(self.offline_public_key.measured_bytes_extra());
             total = total.saturating_add(self.asset_definition_id.measured_bytes_extra());
             total = total.saturating_add(self.balance.measured_bytes_extra());
-            total = total.saturating_add(self.parked_balance.measured_bytes_extra());
+            total = total.saturating_add(self.locked_balance.measured_bytes_extra());
             total = total.saturating_add(self.server_revision.measured_bytes_extra());
             total = total.saturating_add(self.server_state_hash.measured_bytes_extra());
             total = total.saturating_add(self.pending_local_revision.measured_bytes_extra());
@@ -3924,10 +3924,10 @@ mod measured_bytes_impls {
         }
     }
 
-    impl MeasuredBytes for OfflineReserveEnvelope {
+    impl MeasuredBytes for OfflineLineageEnvelope {
         fn measured_bytes(&self) -> usize {
-            size_of::<OfflineReserveEnvelope>()
-                .saturating_add(self.reserve_state.measured_bytes_extra())
+            size_of::<OfflineLineageEnvelope>()
+                .saturating_add(self.lineage_state.measured_bytes_extra())
                 .saturating_add(self.settlement.measured_bytes_extra())
         }
     }
@@ -3971,10 +3971,10 @@ mod measured_bytes_impls {
         }
     }
 
-    impl MeasuredBytes for OfflineReserveRecord {
+    impl MeasuredBytes for OfflineLineageRecord {
         fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<OfflineReserveRecord>();
-            total = total.saturating_add(self.reserve_state.measured_bytes_extra());
+            let mut total = size_of::<OfflineLineageRecord>();
+            total = total.saturating_add(self.lineage_state.measured_bytes_extra());
             total = total.saturating_add(self.app_attest_key_id.measured_bytes_extra());
             total = total.saturating_add(self.counter_book.measured_bytes_extra());
             total = total.saturating_add(self.seen_transfer_ids.measured_bytes_extra());
@@ -3984,13 +3984,13 @@ mod measured_bytes_impls {
         }
     }
 
-    impl MeasuredBytes for OfflineReserveOperationResult {
+    impl MeasuredBytes for OfflineLineageOperationResult {
         fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<OfflineReserveOperationResult>();
+            let mut total = size_of::<OfflineLineageOperationResult>();
             total = total.saturating_add(self.operation_key.measured_bytes_extra());
             total = total.saturating_add(self.kind.measured_bytes_extra());
             total = total.saturating_add(self.request_hash_hex.measured_bytes_extra());
-            total = total.saturating_add(self.reserve_id.measured_bytes_extra());
+            total = total.saturating_add(self.lineage_id.measured_bytes_extra());
             total = total.saturating_add(self.envelope.measured_bytes_extra());
             total = total.saturating_add(self.completed_at_ms.measured_bytes_extra());
             total
@@ -4055,8 +4055,8 @@ enum TieredSegment {
     Council,
     ParliamentBodies,
     OfflineAllowances,
-    OfflineReserves,
-    OfflineReserveOperationResults,
+    OfflineLineages,
+    OfflineLineageOperationResults,
     OfflineVerdictRevocations,
     OfflineTransfers,
     OfflineConsumedBuildClaimIds,
@@ -4096,8 +4096,8 @@ impl TieredSegment {
             TieredSegment::Council => "council",
             TieredSegment::ParliamentBodies => "parliament_bodies",
             TieredSegment::OfflineAllowances => "offline_allowances",
-            TieredSegment::OfflineReserves => "offline_reserves",
-            TieredSegment::OfflineReserveOperationResults => "offline_reserve_operation_results",
+            TieredSegment::OfflineLineages => "offline_lineages",
+            TieredSegment::OfflineLineageOperationResults => "offline_lineage_operation_results",
             TieredSegment::OfflineVerdictRevocations => "offline_verdict_revocations",
             TieredSegment::OfflineTransfers => "offline_transfers",
             TieredSegment::OfflineConsumedBuildClaimIds => "offline_consumed_build_claim_ids",
@@ -4148,8 +4148,8 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "council" => TieredSegment::Council,
             "parliament_bodies" => TieredSegment::ParliamentBodies,
             "offline_allowances" => TieredSegment::OfflineAllowances,
-            "offline_reserves" => TieredSegment::OfflineReserves,
-            "offline_reserve_operation_results" => TieredSegment::OfflineReserveOperationResults,
+            "offline_lineages" => TieredSegment::OfflineLineages,
+            "offline_lineage_operation_results" => TieredSegment::OfflineLineageOperationResults,
             "offline_verdict_revocations" => TieredSegment::OfflineVerdictRevocations,
             "offline_transfers" => TieredSegment::OfflineTransfers,
             "offline_consumed_build_claim_ids" => TieredSegment::OfflineConsumedBuildClaimIds,
@@ -4343,8 +4343,8 @@ pub(crate) enum TieredKeyHandle {
     Council(u64),
     ParliamentBodies(u64),
     OfflineAllowance(iroha_crypto::Hash),
-    OfflineReserve(String),
-    OfflineReserveOperationResult(String),
+    OfflineLineage(String),
+    OfflineLineageOperationResult(String),
     OfflineVerdictRevocation(iroha_crypto::Hash),
     OfflineTransfer(iroha_crypto::Hash),
     OfflineConsumedBuildClaimId(iroha_crypto::Hash),
@@ -4384,9 +4384,9 @@ impl TieredKeyHandle {
             TieredKeyHandle::Council(_) => TieredSegment::Council,
             TieredKeyHandle::ParliamentBodies(_) => TieredSegment::ParliamentBodies,
             TieredKeyHandle::OfflineAllowance(_) => TieredSegment::OfflineAllowances,
-            TieredKeyHandle::OfflineReserve(_) => TieredSegment::OfflineReserves,
-            TieredKeyHandle::OfflineReserveOperationResult(_) => {
-                TieredSegment::OfflineReserveOperationResults
+            TieredKeyHandle::OfflineLineage(_) => TieredSegment::OfflineLineages,
+            TieredKeyHandle::OfflineLineageOperationResult(_) => {
+                TieredSegment::OfflineLineageOperationResults
             }
             TieredKeyHandle::OfflineVerdictRevocation(_) => {
                 TieredSegment::OfflineVerdictRevocations
@@ -4434,8 +4434,8 @@ impl TieredKeyHandle {
             TieredKeyHandle::Council(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::ParliamentBodies(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::OfflineAllowance(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::OfflineReserve(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::OfflineReserveOperationResult(key) => {
+            TieredKeyHandle::OfflineLineage(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::OfflineLineageOperationResult(key) => {
                 Ok(norito::codec::Encode::encode(key))
             }
             TieredKeyHandle::OfflineVerdictRevocation(key) => {
@@ -4501,9 +4501,9 @@ impl TieredKeyHandle {
             TieredKeyHandle::Council(id) => fetch!(world.council, id),
             TieredKeyHandle::ParliamentBodies(id) => fetch!(world.parliament_bodies, id),
             TieredKeyHandle::OfflineAllowance(id) => fetch!(world.offline_allowances, id),
-            TieredKeyHandle::OfflineReserve(id) => fetch!(world.offline_reserves, id),
-            TieredKeyHandle::OfflineReserveOperationResult(id) => {
-                fetch!(world.offline_reserve_operation_results, id)
+            TieredKeyHandle::OfflineLineage(id) => fetch!(world.offline_lineages, id),
+            TieredKeyHandle::OfflineLineageOperationResult(id) => {
+                fetch!(world.offline_lineage_operation_results, id)
             }
             TieredKeyHandle::OfflineVerdictRevocation(id) => {
                 fetch!(world.offline_verdict_revocations, id)
@@ -4561,9 +4561,9 @@ impl TieredKeyHandle {
             TieredKeyHandle::Council(id) => fetch!(world.council, id),
             TieredKeyHandle::ParliamentBodies(id) => fetch!(world.parliament_bodies, id),
             TieredKeyHandle::OfflineAllowance(id) => fetch!(world.offline_allowances, id),
-            TieredKeyHandle::OfflineReserve(id) => fetch!(world.offline_reserves, id),
-            TieredKeyHandle::OfflineReserveOperationResult(id) => {
-                fetch!(world.offline_reserve_operation_results, id)
+            TieredKeyHandle::OfflineLineage(id) => fetch!(world.offline_lineages, id),
+            TieredKeyHandle::OfflineLineageOperationResult(id) => {
+                fetch!(world.offline_lineage_operation_results, id)
             }
             TieredKeyHandle::OfflineVerdictRevocation(id) => {
                 fetch!(world.offline_verdict_revocations, id)
@@ -4610,9 +4610,9 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::Council(id) => write!(f, "council:{id}"),
             TieredKeyHandle::ParliamentBodies(id) => write!(f, "parliament_bodies:{id}"),
             TieredKeyHandle::OfflineAllowance(id) => write!(f, "offline_allowance:{id}"),
-            TieredKeyHandle::OfflineReserve(id) => write!(f, "offline_reserve:{id}"),
-            TieredKeyHandle::OfflineReserveOperationResult(id) => {
-                write!(f, "offline_reserve_operation_result:{id}")
+            TieredKeyHandle::OfflineLineage(id) => write!(f, "offline_lineage:{id}"),
+            TieredKeyHandle::OfflineLineageOperationResult(id) => {
+                write!(f, " offline_lineage_operation_result:{id}")
             }
             TieredKeyHandle::OfflineVerdictRevocation(id) => {
                 write!(f, "offline_verdict_revocation:{id}")

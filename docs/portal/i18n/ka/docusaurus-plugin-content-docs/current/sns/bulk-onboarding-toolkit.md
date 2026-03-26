@@ -45,7 +45,7 @@ Torii ან CLI. დამხმარე ამოწმებს ყველ
 |--------|----------|-------------|
 | `label` | დიახ | მოთხოვნილი ეტიკეტი (მიღებულია შერეული შემთხვევა; ინსტრუმენტი ნორმალიზდება ნორმის მიხედვით v1 და UTS-46). |
 | `suffix_id` | დიახ | რიცხვითი სუფიქსის იდენტიფიკატორი (ათწილადი ან `0x` თექვსმეტობითი). |
-| `owner` | დიახ | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` | დიახ | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` | დიახ | მთელი რიცხვი `1..=255`. |
 | `payment_asset_id` | დიახ | ანგარიშსწორების აქტივი (მაგალითად `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | დიახ | ხელმოუწერელი მთელი რიცხვები, რომლებიც წარმოადგენენ აქტივის მშობლიურ ერთეულებს. |

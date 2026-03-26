@@ -45,7 +45,7 @@ Torii йәки CLI. Ярҙам һәр рәтте алдан раҫлай, ике
 |-------|----------|-------------|
 | I18NI000000030X | Эйе | Һораулы ярлыҡ (ҡатнаш осраҡ ҡабул ителә; инструмент нормалашалар бер Норма v1 һәм UTS-46). |
 | `suffix_id` | Эйе | Һанлы суффикс идентификаторы (ун йәки I18NI000000032X гекс). |
-| `owner` | Эйе | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` | Эйе | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` | Эйе | Integer I18NI000000035X. |
 | `payment_asset_id` | Эйе | Ҡасаба активы (мәҫәлән, `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | I18NI000000038X / I18NI000000039X X | Эйе | Актив-тыуған берәмектәрҙе күрһәткән ҡултамғаһыҙ бөтөн һандар. |

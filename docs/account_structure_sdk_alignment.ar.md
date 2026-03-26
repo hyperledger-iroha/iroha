@@ -14,7 +14,7 @@
 بنود العمل:
 1. **الإخراج القياسي:** يجب أن يُخرج `AccountId::to_string()`/Display قيمة I105 فقط
    (بدون لاحقة `@domain`). الهيكس القياسي للتصحيح فقط (`0x...`).
-2. **Accepted inputs:** parsers MUST accept only canonical I105 account literals. Reject i105-default `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+2. **Accepted inputs:** parsers MUST accept only canonical i105 account literals. Reject i105-default `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
 3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
 4. **مجموع التحقق I105:** استخدم Blake2b-512 على `I105PRE || prefix || payload` وخذ أول
    بايتين. أساس الأبجدية المضغوطة هو **105**.

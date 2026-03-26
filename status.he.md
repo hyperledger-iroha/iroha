@@ -1862,7 +1862,7 @@ Last update: 2026-02-07
 - Tests: not run (localnet-only focus per request).
 - Merge: resolved status.md conflict markers between doc updates, CLI fixes, and FASTPQ test adjustments.
 - Docs: aligned governance API translations with I105 account_id responses and `--owner i105...`, updated JS SDK validation error guidance, and removed `@domain` from `inspectAccountId` examples.
-- Docs: switched Soranet incentive packet beneficiary example to canonical I105 account ids.
+- Docs: switched Soranet incentive packet beneficiary example to canonical i105 account ids.
 - Merge: resolved conflicts in Sumeragi pending-block gating + docs/portal CLI examples (app/tools/ledger updates).
 - Tests: not run (merge conflict resolution).
 - Docs: refreshed account ID/identity references to canonical I105 across Torii/SDK/finance/SoraFS/SNS docs, portal snippets, and OpenAPI relay account descriptions; updated Java recipe code to avoid `@domain` parsing.

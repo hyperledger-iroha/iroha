@@ -34,7 +34,7 @@ Analizador کو درج ذیل fila de encabezado درکار ہے (orden flexible
 |--------|----------|-------------|
 | `label` | Sí | Etiqueta solicitada (se aceptan mayúsculas y minúsculas mixtas; herramienta Norm v1 اور UTS-46 کے مطابق normalize کرتا ہے). |
 | `suffix_id` | Sí | Identificador de sufijo numérico (decimal یا `0x` hexadecimal). |
-| `owner` | Sí | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` | Sí | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` | Sí | Entero `1..=255`. |
 | `payment_asset_id` | Sí | Activo de liquidación (مثال `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Sí | Los enteros sin signo y las unidades nativas de activos representan کریں۔ |

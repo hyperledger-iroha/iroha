@@ -80,8 +80,8 @@ Notes:
 ### Type encodings (JSON)
 
 - `Hash` values (e.g., `code_hash`, `abi_hash`) are encoded as 64‑char lowercase hex strings (32 bytes).
-- `AccountId` strings use canonical I105 literals (domainless encoded literal).
-  Strict parser paths accept only canonical I105 literals (no `@<domain>` suffix).
+- `AccountId` strings use canonical i105 literals (domainless encoded literal).
+  Strict parser paths accept only canonical i105 literals (no `@<domain>` suffix).
 - `ExposedPrivateKey` accepts either a bare multihash hex string or its algorithm-prefixed variant (e.g., `ed25519:…`). Responses normalise to bare multihash hex. Multihash hex is canonical: varint bytes are lowercase, payload bytes are uppercase, and `0x` prefixes are rejected.
 
 ### GET response: ContractCodeRecordDto

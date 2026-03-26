@@ -4,6 +4,7 @@ use std::{sync::Arc, time::Duration};
 
 use dashmap::DashMap;
 use iroha_config::parameters::actual;
+use iroha_data_model::account::AccountId;
 use nonzero_ext::nonzero;
 /// Logical push notification target.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -144,9 +145,8 @@ impl PushBridge {
             return Err(PushError::Disabled);
         }
         let account_id = request.account_id.trim();
-        if account_id.is_empty() {
-            return Err(PushError::InvalidAccount(request.account_id));
-        }
+        AccountId::parse_encoded(account_id)
+            .map_err(|_| PushError::InvalidAccount(request.account_id.clone()))?;
         let platform = Platform::from_label(&request.platform)?;
         if !self.has_credentials(platform) {
             return Err(PushError::MissingCredentials { platform });
@@ -296,6 +296,24 @@ mod tests {
             })
             .expect("should store device");
         assert_eq!(bridge.device_count(), 1);
+    }
+
+    #[test]
+    fn alias_account_id_is_rejected() {
+        let bridge = PushBridge::new(actual::Push {
+            enabled: true,
+            fcm_api_key: Some("k".to_string()),
+            ..Default::default()
+        });
+        let err = bridge
+            .register_device(RegisterDeviceRequest {
+                account_id: "alice@wallets".to_string(),
+                platform: "FCM".to_string(),
+                token: "token-123".to_string(),
+                topics: None,
+            })
+            .expect_err("aliases must be rejected");
+        assert!(matches!(err, PushError::InvalidAccount(account) if account == "alice@wallets"));
     }
 
     #[test]

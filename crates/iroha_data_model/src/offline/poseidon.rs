@@ -694,7 +694,7 @@ mod tests {
     fn fixture_asset(value: &str) -> AssetId {
         AssetId::parse_literal(value).unwrap_or_else(|err| {
             panic!(
-                "fixture asset `{value}` must use `<asset-definition-id>#<account-id>` with optional `#dataspace:<id>` suffix: {err}"
+                "fixture asset `{value}` must use `<asset-definition-id>#<i105-account-id>` with optional `#dataspace:<id>` suffix: {err}"
             )
         })
     }

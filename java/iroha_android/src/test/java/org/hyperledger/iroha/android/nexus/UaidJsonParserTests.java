@@ -31,7 +31,7 @@ public final class UaidJsonParserTests {
               "dataspace_alias": "primary",
               "accounts": [
                 {
-                  "account_id": "alice@wonderland",
+                  "account_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
                   "label": "alice",
                   "assets": [
                     {
@@ -59,7 +59,7 @@ public final class UaidJsonParserTests {
     assert "primary".equals(dataspace.dataspaceAlias()) : "dataspace alias mismatch";
     assert dataspace.accounts().size() == 1 : "account list size mismatch";
     final UaidPortfolioResponse.UaidPortfolioAccount account = dataspace.accounts().get(0);
-    assert "alice@wonderland".equals(account.accountId()) : "account id mismatch";
+    assert "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".equals(account.accountId()) : "account id mismatch";
     assert "alice".equals(account.label()) : "account label mismatch";
     assert account.assets().size() == 1 : "asset list size mismatch";
     final UaidPortfolioResponse.UaidPortfolioAsset asset = account.assets().get(0);
@@ -81,7 +81,7 @@ public final class UaidJsonParserTests {
               "manifest_hash": "deadbeef",
               "status": "Active",
               "lifecycle": { "activated_epoch": 1.5 },
-              "accounts": ["alice@wonderland"],
+              "accounts": ["6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"],
               "manifest": {}
             }
           ]

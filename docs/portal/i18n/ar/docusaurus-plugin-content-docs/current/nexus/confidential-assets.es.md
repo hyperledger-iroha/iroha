@@ -245,7 +245,7 @@ enhebra `ConfidentialEncryptedPayload` وجهاز التشفير Norito، ويع
 - Jerarquia de rivacion por account:
   - `sk_spend` -> `nk` (مفتاح الإلغاء)، `ivk` (مفتاح العرض الوارد)، `ovk` (مفتاح العرض الصادر)، `fvk`.
 - حمولات الملاحظات المشفرة باستخدام EAAD مع المفاتيح المشتركة المشتقة من ECDH؛ إذا كان من الممكن إضافة مفاتيح عرض للمراجعين الاختياريين إلى المخرجات المرتبطة بسياسة الأصول.
-- إضافة سطر الأوامر: `confidential create-keys`، `confidential send`، `confidential export-view-key`، أدوات التدقيق لوصف المذكرات، والمساعد `iroha app zk envelope` لإنتاج/فحص المغلفات Norito دون الاتصال بالإنترنت. يعرض Torii تدفق الاشتقاق نفسه عبر `POST /v1/confidential/derive-keyset`، ويعيد الأشكال السداسية وbase64 حتى تتمكن المحافظ من الحصول على مفاتيح مفاتيح برمجية.
+- إضافة سطر الأوامر: `confidential create-keys`، `confidential send`، `confidential export-view-key`، أدوات التدقيق لوصف المذكرات، والمساعد `iroha app zk envelope` لإنتاج/فحص المغلفات Norito دون الاتصال بالإنترنت. يعرض
 
 ## الغاز، الحدود والضوابط DoS
 - جدول تحديد الغاز:

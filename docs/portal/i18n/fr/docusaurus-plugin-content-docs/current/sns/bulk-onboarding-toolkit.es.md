@@ -33,7 +33,7 @@ L'analyseur nécessite le fil d'encabezado suivant (l'ordre est flexible) :| Co
 |---------|-----------|-------------|
 | `label` | Si | Étiquette sollicitée (si vous acceptez peut-être/moins ; l'outil de normalisation à partir de la norme v1 et de l'UTS-46). |
 | `suffix_id` | Si | Identificateur numérique du suffixe (décimal ou `0x` hex). |
-| `owner` | Si | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` | Si | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` | Si | Entrez `1..=255`. |
 | `payment_asset_id` | Si | Actif de règlement (par exemple `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Si | Enteros sin signo que representan unidades natives del activo. |

@@ -243,10 +243,10 @@ Cet ISI est idempotent par `(lane_id, epoch)` et sous-tend la comptabilite noctu
     - `GET /v1/nexus/public_lanes/{lane}/validators` - metadata, statut
       (`PendingActivation`/`Active`/`Exiting`/`Exited`/`Slashed`), epoch/height d'activation,
       timers de release, stake bonded, dernier epoch de reward.
-      `canonical I105 literal rendering` controle le rendu des litteraux.
+      `canonical i105 literal rendering` controle le rendu des litteraux.
     - `GET /v1/nexus/public_lanes/{lane}/stake` - shares de stake (`validator`,
       `staker`, montant bonded) plus timers pending unbond. `?validator=i105...`
-      filtre la reponse pour les dashboards focalises sur un validateur ; `canonical I105 rendering`
+      filtre la reponse pour les dashboards focalises sur un validateur ; `canonical i105 rendering`
       s'applique a tous les litteraux.
   - Les ISIs de cycle de vie utilisent le chemin transaction standard (Torii
     `/v1/transactions` ou le pipeline d'instructions CLI). Exemples de payloads Norito JSON :

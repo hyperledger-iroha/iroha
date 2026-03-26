@@ -21,7 +21,7 @@ from iroha_python import (
 )
 
 pair = derive_ed25519_keypair_from_seed(b"demo-seed")
-authority = pair.default_account_id("wonderland")  # Canonical I105 account id
+authority = pair.default_account_id("wonderland")  # Canonical i105 account id
 instruction = Instruction.register_domain("wonderland")
 
 client = ToriiClient("http://127.0.0.1:8080", auth_token="dev-token")
@@ -65,8 +65,8 @@ from iroha_python import ToriiClient
 client = ToriiClient("http://127.0.0.1:8080", auth_token="dev-token")
 
 draft = {
-    "controller": "sora...",
-    "allowance": {"asset": "usd#wonderland", "amount": "10", "commitment": [1, 2]},
+    "controller": "<canonical_i105_account_id>",
+    "allowance": {"asset": "<canonical_base58_asset_definition_id>", "amount": "10", "commitment": [1, 2]},
     "spend_public_key": "ed0120deadbeef",
     "attestation_report": [3, 4],
     "issued_at_ms": 100,
@@ -77,7 +77,7 @@ draft = {
 
 top_up = client.top_up_offline_allowance(
     certificate=draft,
-    authority="sora...",
+    authority="<canonical_i105_account_id>",
     private_key="operator-private-key",
 )
 print("certificate id", top_up.registration.certificate_id_hex)
@@ -90,7 +90,7 @@ For renewals, call `top_up_offline_allowance_renewal` with the current
 renewed = client.top_up_offline_allowance_renewal(
     certificate_id_hex=top_up.registration.certificate_id_hex,
     certificate=draft,
-    authority="sora...",
+    authority="<canonical_i105_account_id>",
     private_key="operator-private-key",
 )
 print("renewed", renewed.registration.certificate_id_hex)
@@ -102,7 +102,7 @@ If you already have a signed certificate, call `register_offline_allowance` or
 ## Account addresses
 
 The `iroha_python.address` module mirrors the Rust codecs so applications can
-round-trip canonical bytes and canonical I105 account literals without bespoke conversions:
+round-trip canonical bytes and canonical i105 account literals without bespoke conversions:
 
 ```python
 from iroha_python.address import AccountAddress
@@ -117,7 +117,7 @@ print(formats["chain_discriminant"])
 print(formats["i105_warning"])
 ```
 
-> ℹ️ Use I105 literals consistently across SDK samples and operator tooling.
+> ℹ️ Use i105 literals consistently across SDK samples and operator tooling.
 > For Sora network discriminant `753`, literals should start with the `sora` sentinel.
 
 ## CUDA helpers
@@ -370,7 +370,7 @@ draft = TransactionDraft(config)
 draft.register_domain("wonderland") \
      .register_account("6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL", metadata={"role": "admin"}) \
      .register_asset_definition_numeric(
-        "rose#wonderland",
+        "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
         owner="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
         scale=2,
         mintable="Infinitely",
@@ -390,8 +390,13 @@ Apply metadata updates or transfer ownership without dropping to raw Norito:
 ```python
 draft.set_account_key_value("nickname", "Queen Alice")
 draft.transfer_domain("wonderland", destination="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r")
-draft.transfer_asset_definition("rose#wonderland", destination="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r")
+draft.transfer_asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", destination="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r")
 draft.transfer_nft("nft#wonderland", destination="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r")
+draft.transfer_rwa(
+    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities",
+    quantity="2.5",
+    destination="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
+)
 ```
 
 ### Repo settlement helpers
@@ -401,9 +406,9 @@ Create repo instructions without hand-crafting Norito payloads:
 ```python
 from iroha_python import RepoCashLeg, RepoCollateralLeg, RepoGovernance
 
-cash = RepoCashLeg(asset_definition_id="usd#wonderland", quantity="1000")
+cash = RepoCashLeg(asset_definition_id="<cash_asset_definition_base58>", quantity="1000")
 collateral = RepoCollateralLeg(
-    asset_definition_id="bond#wonderland",
+    asset_definition_id="<bond_asset_definition_base58>",
     quantity="1050",
     metadata={"isin": "ABC123"},
 )
@@ -459,14 +464,14 @@ from iroha_python import (
 )
 
 delivery_leg = SettlementLeg(
-    asset_definition_id="bond#wonderland",
+    asset_definition_id="<bond_asset_definition_base58>",
     quantity="10",
     from_account="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
     to_account="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
     metadata={"isin": "ABC123"},
 )
 payment_leg = SettlementLeg(
-    asset_definition_id="usd#wonderland",
+    asset_definition_id="<cash_asset_definition_base58>",
     quantity="1000",
     from_account="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
     to_account="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
@@ -485,7 +490,7 @@ draft.settlement_dvp(
 )
 
 counter_leg = SettlementLeg(
-    asset_definition_id="eur#wonderland",
+    asset_definition_id="<counter_asset_definition_base58>",
     quantity="900",
     from_account="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
     to_account="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",

@@ -157,7 +157,7 @@ Use the CLI workflow documented under ADDR-5:
 1. Run `iroha tools address convert <address-or-account_id> --format json`.
    The summary reports `detected_format`, `domain.kind`, and canonical
    encodings (`i105`, `i105_default`, `canonical_hex`). Inputs must be canonical
-   address literals (canonical I105 only on strict parser paths); i105-default `sora...`, canonical hex, and `@<domain>`
+   address literals (canonical i105 only on strict parser paths); i105-default `sora...`, canonical hex, and `@<domain>`
    suffixes are rejected on strict parser paths.
 2. SDKs can surface the same summary via JavaScript:
 
@@ -179,7 +179,7 @@ Use the CLI workflow documented under ADDR-5:
 5. For newline-to-newline rewrites, run
    `iroha tools address normalize --input addresses.txt --network-prefix 753 --format i105`.
    This rewrites each parsed row to the requested encoding
-   (canonical I105/hex/JSON). Pair with
+   (canonical i105/hex/JSON). Pair with
    `--allow-errors` for malformed dump triage.
 6. CI/lint automation can run `ci/check_address_normalize.sh`, which extracts
    Local-selector fixture rows, normalizes them, then audits to ensure zero parse

@@ -36,7 +36,7 @@ O parser exige a seguinte linha de cabecalho (a ordem e flexivel):
 |--------|-------------|--------|
 | `label` | סים | תווית solicitada (מקרה מעורב aceita; a ferramenta normaliza conforme Norm v1 e UTS-46). |
 | `suffix_id` | סים | מזהה מספרי סופיקסו (עשרוני או `0x` hex). |
-| `owner` | סים | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` | סים | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` | סים | Inteiro `1..=255`. |
 | `payment_asset_id` | סים | Ativo de settlement (por exemplo `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | סים | אינטירוס סם מייצג את הדמויות היחידות. |

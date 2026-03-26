@@ -715,8 +715,12 @@ pub mod isi {
         Ok(configured == *account_id)
     }
 
-    fn parse_config_asset_definition_id(raw: &str) -> Option<AssetDefinitionId> {
-        raw.parse().ok()
+    fn parse_config_asset_definition_id(
+        world: &impl crate::state::WorldReadOnly,
+        raw: &str,
+        now_ms: u64,
+    ) -> Option<AssetDefinitionId> {
+        crate::block::parse_asset_definition_literal_with_world(world, raw, now_ms)
     }
 
     impl Execute for Register<Account> {
@@ -2010,8 +2014,12 @@ pub mod isi {
                 )
                 .into());
             }
-            if parse_config_asset_definition_id(&state_transaction.nexus.fees.fee_asset_id)
-                .is_some_and(|configured| configured == asset_definition_id)
+            if parse_config_asset_definition_id(
+                &state_transaction.world,
+                &state_transaction.nexus.fees.fee_asset_id,
+                state_transaction.block_unix_timestamp_ms(),
+            )
+            .is_some_and(|configured| configured == asset_definition_id)
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
@@ -2021,8 +2029,12 @@ pub mod isi {
                 )
                 .into());
             }
-            if parse_config_asset_definition_id(&state_transaction.nexus.staking.stake_asset_id)
-                .is_some_and(|configured| configured == asset_definition_id)
+            if parse_config_asset_definition_id(
+                &state_transaction.world,
+                &state_transaction.nexus.staking.stake_asset_id,
+                state_transaction.block_unix_timestamp_ms(),
+            )
+            .is_some_and(|configured| configured == asset_definition_id)
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(

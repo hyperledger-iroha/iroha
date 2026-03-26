@@ -36,7 +36,7 @@ translation_last_reviewed: 2026-02-07
 |--------|----------|-------------|
 | `label` | Да | Запрошенная метка (принимается смешанный регистр; инструмент Norm v1 اور UTS-46 обеспечивает нормализацию). |
 | `suffix_id` | Да | Числовой идентификатор суффикса (десятеричный یا `0x`, шестнадцатеричный). |
-| `owner` | Да | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` | Да | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` | Да | Целое число `1..=255`. |
 | `payment_asset_id` | Да | Расчетный актив (مثال `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Да | Целые числа без знака и собственные единицы актива представляют собой کریں۔. |

@@ -2889,6 +2889,7 @@ fn slash_validator_for_model_host_violation(
         if amount.is_zero() {
             continue;
         }
+        let recorded_at_ms = state_transaction.block_unix_timestamp_ms();
         apply_slash_to_validator(
             &mut state_transaction.world,
             &state_transaction.nexus.staking,
@@ -2896,6 +2897,7 @@ fn slash_validator_for_model_host_violation(
             validator_account_id,
             slash_id,
             &amount,
+            recorded_at_ms,
             #[cfg(feature = "telemetry")]
             Some(state_transaction.telemetry),
             #[cfg(not(feature = "telemetry"))]
@@ -3792,16 +3794,17 @@ fn transfer_hf_shared_lease_amount(
 fn resolve_fee_asset_definition_id(
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<AssetDefinitionId, InstructionExecutionError> {
-    state_transaction
-        .nexus
-        .fees
-        .fee_asset_id
-        .parse()
-        .map_err(|_| {
-            InstructionExecutionError::InvariantViolation(
-                "invalid nexus.fees.fee_asset_id; expected asset definition identifier".into(),
-            )
-        })
+    crate::block::parse_asset_definition_literal_with_world(
+        &state_transaction.world,
+        &state_transaction.nexus.fees.fee_asset_id,
+        state_transaction.block_unix_timestamp_ms(),
+    )
+    .ok_or_else(|| {
+        InstructionExecutionError::InvariantViolation(
+            "invalid nexus.fees.fee_asset_id; expected canonical Base58 asset definition id or active asset alias"
+                .into(),
+        )
+    })
 }
 
 fn transfer_uploaded_model_amount(

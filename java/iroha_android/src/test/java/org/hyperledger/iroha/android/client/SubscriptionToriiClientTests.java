@@ -28,6 +28,19 @@ public final class SubscriptionToriiClientTests {
 
   private SubscriptionToriiClientTests() {}
 
+  private static void assertServerSideSigningRemoved(
+      final String endpoint, final Runnable action) {
+    try {
+      action.run();
+    } catch (final UnsupportedOperationException expected) {
+      assert expected.getMessage().contains(endpoint) : "missing endpoint in error message";
+      assert expected.getMessage().contains("locally signed transaction")
+          : "missing remediation in error message";
+      return;
+    }
+    throw new AssertionError("Expected " + endpoint + " to reject server-side signing");
+  }
+
   public static void main(final String[] args) {
     listPlansParsesResponse();
     createPlanBuildsBody();
@@ -76,7 +89,7 @@ public final class SubscriptionToriiClientTests {
         client
             .listSubscriptionPlans(
                 SubscriptionPlanListParams.builder()
-                    .provider("aws@commerce")
+                    .provider("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9")
                     .limit(10L)
                     .offset(5L)
                     .build())
@@ -100,72 +113,53 @@ public final class SubscriptionToriiClientTests {
   }
 
   private static void createPlanBuildsBody() {
-    final RecordingExecutor executor = new RecordingExecutor();
-    executor.enqueue(
-        200,
-        """
-        { "ok": true, "plan_id": "aws_compute#commerce", "tx_hash_hex": "deadbeef" }
-        """);
     final SubscriptionToriiClient client =
         SubscriptionToriiClient.builder()
-            .executor(executor)
+            .executor(new RecordingExecutor())
             .baseUri(URI.create("https://example.com"))
             .build();
     final Map<String, Object> plan = new LinkedHashMap<>();
     plan.put("kind", "fixed");
     plan.put("price", "120");
     plan.put("period", "month");
-    final SubscriptionPlanCreateResponse response =
-        client
-            .createSubscriptionPlan(
-                SubscriptionPlanCreateRequest.builder()
-                    .authority("aws@commerce")
-                    .privateKey("deadbeef")
-                    .planId("aws_compute#commerce")
-                    .plan(plan)
-                    .build())
-            .join();
-    assert response.ok() : "plan create should be ok";
-    assert "aws_compute#commerce".equals(response.planId()) : "plan id mismatch";
-    final Map<String, Object> body = parseBody(executor.lastBody);
-    assert "aws@commerce".equals(body.get("authority")) : "authority mismatch";
-    assert "deadbeef".equals(body.get("private_key")) : "private key mismatch";
-    assert "aws_compute#commerce".equals(body.get("plan_id")) : "plan id missing";
-    assert body.get("plan") instanceof Map : "plan missing";
+    assertServerSideSigningRemoved(
+        "/v1/subscriptions/plans",
+        () ->
+            client
+                .createSubscriptionPlan(
+                    SubscriptionPlanCreateRequest.builder()
+                        .authority("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9")
+                        .planId("aws_compute#commerce")
+                        .plan(plan)
+                        .build())
+                .join());
   }
 
   private static void createPlanRejectsInsecureTransportForPrivateKeyBody() {
-    final RecordingExecutor executor = new RecordingExecutor();
     final SubscriptionToriiClient client =
         SubscriptionToriiClient.builder()
-            .executor(executor)
+            .executor(new RecordingExecutor())
             .baseUri(URI.create("http://example.com"))
             .build();
     final Map<String, Object> plan = new LinkedHashMap<>();
     plan.put("kind", "fixed");
-    try {
-      client
-          .createSubscriptionPlan(
-              SubscriptionPlanCreateRequest.builder()
-                  .authority("aws@commerce")
-                  .privateKey("deadbeef")
-                  .planId("aws_compute#commerce")
-                  .plan(plan)
-                  .build())
-          .join();
-    } catch (final IllegalArgumentException expected) {
-      assert expected.getMessage().contains("refuses insecure transport")
-          : "expected insecure transport rejection";
-      return;
-    }
-    throw new AssertionError("Expected insecure subscription plan creation to be rejected");
+    assertServerSideSigningRemoved(
+        "/v1/subscriptions/plans",
+        () ->
+            client
+                .createSubscriptionPlan(
+                    SubscriptionPlanCreateRequest.builder()
+                        .authority("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9")
+                        .planId("aws_compute#commerce")
+                        .plan(plan)
+                        .build())
+                .join());
   }
 
   private static void planJsonBuilderParses() {
     final SubscriptionPlanCreateRequest request =
         SubscriptionPlanCreateRequest.builder()
-            .authority("aws@commerce")
-            .privateKey("deadbeef")
+            .authority("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9")
             .planId("aws_compute#commerce")
             .planJson("{\"kind\":\"fixed\",\"bill_for\":{\"value\":null}}")
             .build();
@@ -204,8 +198,8 @@ public final class SubscriptionToriiClientTests {
         client
             .listSubscriptions(
                 SubscriptionListParams.builder()
-                    .ownedBy("alice@wonderland")
-                    .provider("aws@commerce")
+                    .ownedBy("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+                    .provider("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9")
                     .status(SubscriptionStatus.ACTIVE)
                     .limit(10L)
                     .offset(0L)
@@ -234,54 +228,26 @@ public final class SubscriptionToriiClientTests {
   }
 
   private static void createSubscriptionBuildsBody() {
-    final RecordingExecutor executor = new RecordingExecutor();
-    executor.enqueue(
-        200,
-        """
-        {
-          "ok": true,
-          "subscription_id": "sub-1$subscriptions",
-          "billing_trigger_id": "sub-1$subscriptions#billing",
-          "usage_trigger_id": "sub-1$subscriptions#usage",
-          "first_charge_ms": 1700000000000,
-          "tx_hash_hex": "deadbeef"
-        }
-        """);
     final SubscriptionToriiClient client =
         SubscriptionToriiClient.builder()
-            .executor(executor)
+            .executor(new RecordingExecutor())
             .baseUri(URI.create("https://example.com"))
             .build();
-    final SubscriptionCreateResponse response =
-        client
-            .createSubscription(
-                SubscriptionCreateRequest.builder()
-                    .authority("alice@wonderland")
-                    .privateKey("deadbeef")
-                    .subscriptionId("sub-1$subscriptions")
-                    .planId("aws_compute#commerce")
-                    .billingTriggerId("sub-1$subscriptions#billing")
-                    .usageTriggerId("sub-1$subscriptions#usage")
-                    .firstChargeMs(1_700_000_000_000L)
-                    .grantUsageToProvider(true)
-                    .build())
-            .join();
-    assert response.ok() : "subscription create should be ok";
-    assert response.firstChargeMs() == 1_700_000_000_000L : "first_charge_ms mismatch";
-    final Map<String, Object> body = parseBody(executor.lastBody);
-    assert "alice@wonderland".equals(body.get("authority")) : "authority mismatch";
-    assert "deadbeef".equals(body.get("private_key")) : "private key mismatch";
-    assert "sub-1$subscriptions".equals(body.get("subscription_id"))
-        : "subscription id mismatch";
-    assert "aws_compute#commerce".equals(body.get("plan_id")) : "plan id mismatch";
-    assert body.get("billing_trigger_id").equals("sub-1$subscriptions#billing")
-        : "billing trigger missing";
-    assert body.get("usage_trigger_id").equals("sub-1$subscriptions#usage")
-        : "usage trigger missing";
-    assert ((Number) body.get("first_charge_ms")).longValue() == 1_700_000_000_000L
-        : "first_charge_ms body mismatch";
-    assert body.get("grant_usage_to_provider").equals(Boolean.TRUE)
-        : "grant_usage_to_provider missing";
+    assertServerSideSigningRemoved(
+        "/v1/subscriptions",
+        () ->
+            client
+                .createSubscription(
+                    SubscriptionCreateRequest.builder()
+                        .authority("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+                        .subscriptionId("sub-1$subscriptions")
+                        .planId("aws_compute#commerce")
+                        .billingTriggerId("sub-1$subscriptions#billing")
+                        .usageTriggerId("sub-1$subscriptions#usage")
+                        .firstChargeMs(1_700_000_000_000L)
+                        .grantUsageToProvider(true)
+                        .build())
+                .join());
   }
 
   private static void getSubscriptionHandlesNotFound() {
@@ -325,74 +291,49 @@ public final class SubscriptionToriiClientTests {
   }
 
   private static void subscriptionActionsAndUsagePostBodies() {
-    final RecordingExecutor executor = new RecordingExecutor();
-    final String actionResponse =
-        "{\"ok\":true,\"subscription_id\":\"sub-1$subscriptions\",\"tx_hash_hex\":\"deadbeef\"}";
-    executor.enqueue(200, actionResponse);
-    executor.enqueue(200, actionResponse);
-    executor.enqueue(200, actionResponse);
-    executor.enqueue(200, actionResponse);
-    executor.enqueue(200, actionResponse);
-    executor.enqueue(200, actionResponse);
     final SubscriptionToriiClient client =
         SubscriptionToriiClient.builder()
-            .executor(executor)
+            .executor(new RecordingExecutor())
             .baseUri(URI.create("https://example.com"))
             .build();
     final String subscriptionId = "sub-1$subscriptions";
     final SubscriptionActionRequest baseRequest =
         SubscriptionActionRequest.builder()
-            .authority("alice@wonderland")
-            .privateKey("deadbeef")
+            .authority("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
             .build();
     final SubscriptionActionRequest chargeRequest =
         SubscriptionActionRequest.builder()
-            .authority("alice@wonderland")
-            .privateKey("deadbeef")
+            .authority("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
             .chargeAtMs(1_700_000_000_000L)
             .build();
-    final SubscriptionActionResponse pauseResponse =
-        client.pauseSubscription(subscriptionId, baseRequest).join();
-    assert pauseResponse.ok() : "pause should be ok";
-    client.resumeSubscription(subscriptionId, chargeRequest).join();
-    client.cancelSubscription(subscriptionId, baseRequest).join();
-    client.keepSubscription(subscriptionId, baseRequest).join();
-    client.chargeSubscriptionNow(subscriptionId, chargeRequest).join();
-    client
-        .recordSubscriptionUsage(
-            subscriptionId,
-            SubscriptionUsageRequest.builder()
-                .authority("alice@wonderland")
-                .privateKey("deadbeef")
-                .unitKey("compute_ms")
-                .delta("3600000")
-                .usageTriggerId("sub-1$subscriptions#usage")
-                .build())
-        .join();
-    final String encodedId = urlEncode(subscriptionId);
-    final Map<String, Object> pauseBody =
-        parseBody(executor.bodyFor("/v1/subscriptions/" + encodedId + "/pause"));
-    assert pauseBody.get("authority").equals("alice@wonderland") : "pause authority missing";
-    assert pauseBody.get("private_key").equals("deadbeef") : "pause private key missing";
-    assert !pauseBody.containsKey("charge_at_ms") : "pause should not set charge_at_ms";
-    final Map<String, Object> resumeBody =
-        parseBody(executor.bodyFor("/v1/subscriptions/" + encodedId + "/resume"));
-    assert resumeBody.containsKey("charge_at_ms") : "resume charge_at_ms missing";
-    final Map<String, Object> cancelBody =
-        parseBody(executor.bodyFor("/v1/subscriptions/" + encodedId + "/cancel"));
-    assert cancelBody.get("authority").equals("alice@wonderland") : "cancel authority missing";
-    final Map<String, Object> keepBody =
-        parseBody(executor.bodyFor("/v1/subscriptions/" + encodedId + "/keep"));
-    assert keepBody.get("authority").equals("alice@wonderland") : "keep authority missing";
-    final Map<String, Object> chargeBody =
-        parseBody(executor.bodyFor("/v1/subscriptions/" + encodedId + "/charge-now"));
-    assert chargeBody.containsKey("charge_at_ms") : "charge-now charge_at_ms missing";
-    final Map<String, Object> usageBody =
-        parseBody(executor.bodyFor("/v1/subscriptions/" + encodedId + "/usage"));
-    assert usageBody.get("unit_key").equals("compute_ms") : "usage unit_key missing";
-    assert usageBody.get("delta").equals("3600000") : "usage delta missing";
-    assert usageBody.get("usage_trigger_id").equals("sub-1$subscriptions#usage")
-        : "usage trigger missing";
+    assertServerSideSigningRemoved(
+        "/v1/subscriptions/{subscription_id}/pause",
+        () -> client.pauseSubscription(subscriptionId, baseRequest).join());
+    assertServerSideSigningRemoved(
+        "/v1/subscriptions/{subscription_id}/resume",
+        () -> client.resumeSubscription(subscriptionId, chargeRequest).join());
+    assertServerSideSigningRemoved(
+        "/v1/subscriptions/{subscription_id}/cancel",
+        () -> client.cancelSubscription(subscriptionId, baseRequest).join());
+    assertServerSideSigningRemoved(
+        "/v1/subscriptions/{subscription_id}/keep",
+        () -> client.keepSubscription(subscriptionId, baseRequest).join());
+    assertServerSideSigningRemoved(
+        "/v1/subscriptions/{subscription_id}/charge-now",
+        () -> client.chargeSubscriptionNow(subscriptionId, chargeRequest).join());
+    assertServerSideSigningRemoved(
+        "/v1/subscriptions/{subscription_id}/usage",
+        () ->
+            client
+                .recordSubscriptionUsage(
+                    subscriptionId,
+                    SubscriptionUsageRequest.builder()
+                        .authority("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+                        .unitKey("compute_ms")
+                        .delta("3600000")
+                        .usageTriggerId("sub-1$subscriptions#usage")
+                        .build())
+                .join());
   }
 
   private static void listParamsRejectInvalidStatus() {
@@ -407,8 +348,7 @@ public final class SubscriptionToriiClientTests {
   private static void usageRequestRejectsInvalidDelta() {
     try {
       SubscriptionUsageRequest.builder()
-          .authority("alice@wonderland")
-          .privateKey("deadbeef")
+          .authority("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
           .unitKey("compute_ms")
           .delta("-1")
           .build();
@@ -418,8 +358,7 @@ public final class SubscriptionToriiClientTests {
     }
     try {
       SubscriptionUsageRequest.builder()
-          .authority("alice@wonderland")
-          .privateKey("deadbeef")
+          .authority("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
           .unitKey("compute_ms")
           .delta("invalid")
           .build();
@@ -429,8 +368,7 @@ public final class SubscriptionToriiClientTests {
     }
     final SubscriptionUsageRequest request =
         SubscriptionUsageRequest.builder()
-            .authority("alice@wonderland")
-            .privateKey("deadbeef")
+            .authority("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
             .unitKey("compute_ms")
             .delta("12.5")
             .build();

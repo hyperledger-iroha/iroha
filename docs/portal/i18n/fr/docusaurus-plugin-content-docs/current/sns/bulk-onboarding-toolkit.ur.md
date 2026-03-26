@@ -34,7 +34,7 @@ L'analyseur analyse la ligne d'en-tête ici (commande flexible ici) :| Colonne 
 |--------|----------|-------------|
 | `label` | Oui | Étiquette demandée (cas mixte accepté ; outil Norm v1 et UTS-46 pour normaliser les choses). |
 | `suffix_id` | Oui | Identificateur de suffixe numérique (décimal یا `0x` hex). |
-| `owner` | Oui | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` | Oui | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` | Oui | Entier `1..=255`. |
 | `payment_asset_id` | Oui | Actif de règlement (مثال `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Oui | Les entiers non signés et les unités natives de l'actif représentent کریں۔ |

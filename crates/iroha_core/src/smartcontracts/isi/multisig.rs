@@ -4930,7 +4930,7 @@ mod tests {
         let account = AccountId::new_multisig(policy);
         let canonical = account
             .canonical_i105()
-            .expect("large multisig policy should encode into canonical I105");
+            .expect("large multisig policy should encode into canonical i105");
 
         let role_id = multisig_role_for(Some(&domain_id), &account);
         let role_name = role_id.name().to_string();

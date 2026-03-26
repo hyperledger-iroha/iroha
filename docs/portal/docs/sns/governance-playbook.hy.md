@@ -75,7 +75,7 @@ sidebar_label. Կառավարման խաղագիրք
 | Կանոնադրություն + KPI հավելված | `docs/source/sns/governance_addenda/` | Տարբերակներով վերահսկվող ստորագրված կանոնադրությունները, KPI-ի դաշնագրերը և կառավարման որոշումները, որոնք վկայակոչվում են CLI-ի ձայներով: |
 | Ռեեստրի սխեման | [`registry-schema.md`](./registry-schema.md) | Կանոնական Norito կառուցվածքներ (`NameRecordV1`, `SuffixPolicyV1`, `RevenueAccrualEventV1`): |
 | Գրանցողի պայմանագիր | [`registrar-api.md`](./registrar-api.md) | REST/gRPC ծանրաբեռնվածություն, `sns_registrar_status_total` չափումներ և կառավարման ակնկալիքներ: |
-| Հասցե UX ուղեցույց | [`address-display-guidelines.md`](./address-display-guidelines.md) | Canonical I105 (նախընտրելի) + սեղմված (`sora`, երկրորդ լավագույն) արտապատկերումները, որոնք արտացոլված են դրամապանակների/հետախույզների կողմից: |
+| Հասցե UX ուղեցույց | [`address-display-guidelines.md`](./address-display-guidelines.md) | Canonical i105 (նախընտրելի) + սեղմված (`sora`, երկրորդ լավագույն) արտապատկերումները, որոնք արտացոլված են դրամապանակների/հետախույզների կողմից: |
 | SoraDNS / GAR փաստաթղթեր | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | Հոսթի դետերմինիստական ​​ածանցում, թափանցիկության մշակման գործընթաց և զգուշացման կանոններ: |
 | Կարգավորող հուշագրեր | `docs/source/sns/regulatory/` | Իրավասությունների ընդունման նշումներ (օրինակ՝ ԵՄ DSA), տնտեսավարի երախտագիտություն, ձևանմուշների հավելվածներ: |
 | Հորատման մատյան | `ops/drill-log.md` | Քաոսի և IR փորձերի ձայնագրությունը պահանջվում է փուլային ելքերից առաջ: |

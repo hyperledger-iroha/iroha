@@ -15,6 +15,10 @@ const SAMPLE_KEY = Buffer.from(
   "B935AAF1F4E44B3DB79E5E5A9BA4569E6F3E2310C219F3DDD56D3277828D5480",
   "hex",
 );
+const DEFAULT_DOMAIN_SORA_I105 =
+  "sorauﾛ1P5ﾁXEｴﾕGjgﾕﾚﾎﾕｸﾁEtﾀ3ﾂｺ2gALｺﾒefﾍ8DLgｾoCVGUYHS5";
+const DEFAULT_DOMAIN_CANONICAL_I105 =
+  "6cmzPVPX6eXMQPXrQzgef9LubBFmrK8yVoJ51F9DSpWfztubMTChZA6";
 
 function buildAccountForDomain(domain) {
   const address = AccountAddress.fromAccount({
@@ -66,13 +70,11 @@ test("inspectAccountId accepts literals without domain suffix", () => {
   assert.equal(summary.detectedFormat.kind, "i105");
 });
 
-test("inspectAccountId treats `sora` sentinel literals as canonical I105", () => {
-  const { address } = buildAccountForDomain(DEFAULT_DOMAIN_NAME);
-  const literal = address.toI105Default();
-
-  const summary = inspectAccountId(literal);
+test("inspectAccountId treats `sora` sentinel literals as canonical i105", () => {
+  const summary = inspectAccountId(DEFAULT_DOMAIN_SORA_I105);
   assert.equal(summary.detectedFormat.kind, "i105");
-  assert.equal(summary.i105.value, literal);
+  assert.equal(summary.detectedFormat.chainDiscriminant, 753);
+  assert.equal(summary.i105.value, DEFAULT_DOMAIN_CANONICAL_I105);
   assert.deepEqual(summary.warnings, []);
 });
 

@@ -520,7 +520,7 @@ impl Run for UnfreezeArgs {
 
 #[derive(Args, Debug)]
 pub struct GetRegistrationArgs {
-    /// Legacy domain selector literal (`label.suffix`) in canonical I105 form.
+    /// Legacy domain selector literal (`label.suffix`) in canonical i105 form.
     #[arg(long, value_name = "SELECTOR")]
     pub selector: String,
 }

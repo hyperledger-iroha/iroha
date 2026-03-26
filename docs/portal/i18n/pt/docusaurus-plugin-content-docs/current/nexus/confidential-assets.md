@@ -247,7 +247,7 @@ Documente overrides locais no runbook de operacoes; politicas de governance que 
 - Hierarquia de derivacao por account:
   - `sk_spend` -> `nk` (nullifier key), `ivk` (incoming viewing key), `ovk` (outgoing viewing key), `fvk`.
 - Payloads de notes encriptadas usam AEAD com shared keys derivadas por ECDH; view keys de auditor opcionais podem ser anexadas a outputs conforme a politica do asset.
-- Adicoes ao CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, tooling de auditor para descriptografar memos, e o helper `iroha app zk envelope` para produzir/inspecionar envelopes Norito offline. Torii expoe o mesmo fluxo de derivacao via `POST /v1/confidential/derive-keyset`, retornando formas hex e base64 para que wallets busquem hierarquias de chave programaticamente.
+- Adicoes ao CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, tooling de auditor para descriptografar memos, e o helper `iroha app zk envelope` para produzir/inspecionar envelopes Norito offline.
 
 ## Gas, limites e controles DoS
 - Schedule de gas determinista:

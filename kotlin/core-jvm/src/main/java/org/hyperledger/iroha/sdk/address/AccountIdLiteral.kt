@@ -12,18 +12,18 @@ fun requireCanonicalI105Address(accountId: String, field: String): String {
     val value = accountId.trim()
     require(value.isNotEmpty()) { "$field must not be blank" }
     require(value.indexOf('@') < 0) {
-        "$field must use canonical I105 encoded account without @domain"
+        "$field must use canonical i105 encoded account without @domain"
     }
     val parsed = try {
         AccountAddress.parseEncoded(value, null)
     } catch (ex: AccountAddressException) {
         throw IllegalArgumentException(
-            "$field must use a canonical I105 encoded account literal",
+            "$field must use a canonical i105 encoded account literal",
             ex,
         )
     }
     require(parsed.format == AccountAddressFormat.I105) {
-        "$field must use a canonical I105 encoded account literal"
+        "$field must use a canonical i105 encoded account literal"
     }
     return value
 }

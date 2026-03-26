@@ -9,6 +9,23 @@ import java.util.Map;
  * Shared transport-safety checks for SDK requests that carry credentials or raw private keys.
  */
 public final class TransportSecurity {
+  private static final java.util.Set<String> CREDENTIAL_HEADERS =
+      java.util.Set.of(
+          "authorization",
+          "x-api-token",
+          "x-iroha-account",
+          "x-iroha-signature",
+          "x-iroha-timestamp-ms",
+          "x-iroha-nonce");
+
+  private static final java.util.List<String> SENSITIVE_BODY_FIELDS =
+      java.util.List.of(
+          "\"private_key\"",
+          "\"seed_hex\"",
+          "\"seed_b64\"",
+          "\"seed_base64\"",
+          "\"key_seed_hex\"",
+          "\"key_seed_b64\"");
 
   private TransportSecurity() {}
 
@@ -22,7 +39,7 @@ public final class TransportSecurity {
         continue;
       }
       final String normalized = key.toLowerCase(Locale.ROOT);
-      if ("authorization".equals(normalized) || "x-api-token".equals(normalized)) {
+      if (CREDENTIAL_HEADERS.contains(normalized)) {
         return true;
       }
     }
@@ -98,15 +115,20 @@ public final class TransportSecurity {
   }
 
   private static boolean isSensitive(final Map<String, String> headers, final byte[] body) {
-    return headersContainCredentials(headers) || bodyContainsPrivateKey(body);
+    return headersContainCredentials(headers) || bodyContainsSensitiveMaterial(body);
   }
 
-  private static boolean bodyContainsPrivateKey(final byte[] body) {
+  private static boolean bodyContainsSensitiveMaterial(final byte[] body) {
     if (body == null || body.length == 0) {
       return false;
     }
     final String rendered = new String(body, StandardCharsets.UTF_8).toLowerCase(Locale.ROOT);
-    return rendered.contains("\"private_key\"");
+    for (final String field : SENSITIVE_BODY_FIELDS) {
+      if (rendered.contains(field)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static String expectedWebSocketScheme(final URI baseUri) {

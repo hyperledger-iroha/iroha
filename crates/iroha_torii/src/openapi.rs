@@ -641,61 +641,6 @@ fn offline_paths() -> Map {
         Value::Object(offline_revocations_bundle_operation()),
     );
     paths.insert(
-        "/v1/offline/cash/setup".to_owned(),
-        Value::Object(json_post_operation(
-            "Offline",
-            "Create or fetch an offline cash lineage.",
-            "Create the zero-balance offline cash lineage for a device or return the existing authoritative lineage envelope.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/offline/cash/load".to_owned(),
-        Value::Object(json_post_operation(
-            "Offline",
-            "Load offline cash.",
-            "Move online balance into the device-bound offline cash lineage and return the authoritative lineage envelope.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/offline/cash/refresh".to_owned(),
-        Value::Object(json_post_operation(
-            "Offline",
-            "Refresh offline cash authorization.",
-            "Refresh the spend authorization for an existing offline cash lineage without moving funds.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/offline/cash/sync".to_owned(),
-        Value::Object(json_post_operation(
-            "Offline",
-            "Sync offline cash receipts.",
-            "Submit pending offline cash receipts and return the updated authoritative lineage envelope.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/offline/cash/redeem".to_owned(),
-        Value::Object(json_post_operation(
-            "Offline",
-            "Redeem offline cash.",
-            "Sync pending receipts, move offline cash value back online, and return the updated lineage envelope.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
         "/v1/offline/transfers".to_owned(),
         Value::Object(offline_transfers_operation()),
     );
@@ -953,7 +898,7 @@ fn explorer_assets_query_parameters() -> Vec<Value> {
     let mut params = explorer_pagination_query_parameters();
     params.push(string_query_param(
         "owned_by",
-        "Filter assets by account owner (accepts canonical I105 account literals).",
+        "Filter assets by account owner (accepts canonical i105 account literals).",
     ));
     params.push(string_query_param(
         "definition",
@@ -970,7 +915,7 @@ fn explorer_transactions_query_parameters() -> Vec<Value> {
     let mut params = explorer_pagination_query_parameters();
     params.push(string_query_param(
         "authority",
-        "Filter transactions by authority account (accepts canonical I105 account literals).",
+        "Filter transactions by authority account (accepts canonical i105 account literals).",
     ));
     params.push(integer_query_param(
         "block",
@@ -992,11 +937,11 @@ fn explorer_instructions_query_parameters() -> Vec<Value> {
     let mut params = explorer_pagination_query_parameters();
     params.push(string_query_param(
         "authority",
-        "Filter instructions by authority account (accepts canonical I105 account literals).",
+        "Filter instructions by authority account (accepts canonical i105 account literals).",
     ));
     params.push(string_query_param(
         "account",
-        "Filter instructions by referenced account (transfer participants, asset-owner scoped mint/burn/asset-metadata updates, multisig accounts, and public-lane reward assets; accepts canonical I105 account literals).",
+        "Filter instructions by referenced account (transfer participants, asset-owner scoped mint/burn/asset-metadata updates, multisig accounts, and public-lane reward assets; accepts canonical i105 account literals).",
     ));
     params.push(string_query_param(
         "transaction_hash",
@@ -1048,7 +993,7 @@ fn asset_holders_list_query_parameters() -> Vec<Value> {
     let mut params = pagination_query_parameters();
     params.push(string_query_param(
         "account_id",
-        "Filter holders by canonical I105 account identifier.",
+        "Filter holders by canonical i105 account identifier.",
     ));
     params.push(string_query_param(
         "scope",
@@ -1061,7 +1006,7 @@ fn offline_allowance_query_parameters() -> Vec<Value> {
     vec![
         string_query_param(
             "controller_id",
-            "Filter allowances by controller account (accepts canonical I105 account literals).",
+            "Filter allowances by controller account (accepts canonical i105 account literals).",
         ),
         string_query_param("asset_id", "Filter allowances by asset identifier."),
         integer_query_param(
@@ -1121,15 +1066,15 @@ fn offline_transfer_query_parameters() -> Vec<Value> {
     vec![
         string_query_param(
             "controller_id",
-            "Filter bundles by originating controller account (accepts canonical I105 account literals).",
+            "Filter bundles by originating controller account (accepts canonical i105 account literals).",
         ),
         string_query_param(
             "receiver_id",
-            "Filter bundles by receiver account (accepts canonical I105 account literals).",
+            "Filter bundles by receiver account (accepts canonical i105 account literals).",
         ),
         string_query_param(
             "deposit_account_id",
-            "Filter bundles by deposit account (accepts canonical I105 account literals).",
+            "Filter bundles by deposit account (accepts canonical i105 account literals).",
         ),
         string_query_param("asset_id", "Filter bundles by asset identifier."),
         string_query_param(
@@ -1193,11 +1138,11 @@ fn offline_receipt_query_parameters() -> Vec<Value> {
     vec![
         string_query_param(
             "controller_id",
-            "Filter receipts by sender/controller account (accepts canonical I105 account literals).",
+            "Filter receipts by sender/controller account (accepts canonical i105 account literals).",
         ),
         string_query_param(
             "receiver_id",
-            "Filter receipts by receiver account (accepts canonical I105 account literals).",
+            "Filter receipts by receiver account (accepts canonical i105 account literals).",
         ),
         string_query_param(
             "bundle_id_hex",
@@ -1861,39 +1806,6 @@ fn contracts_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/contracts/deploy".to_owned(),
-        Value::Object(json_post_operation(
-            "Contracts",
-            "Deploy a contract.",
-            "Deploy contract code to a namespace.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/contracts/instance".to_owned(),
-        Value::Object(json_post_operation(
-            "Contracts",
-            "Create a contract instance.",
-            "Create a contract instance from registered code.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/contracts/instance/activate".to_owned(),
-        Value::Object(json_post_operation(
-            "Contracts",
-            "Activate a contract instance.",
-            "Activate a previously created contract instance.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
         "/v1/contracts/call".to_owned(),
         Value::Object(json_post_operation(
             "Contracts",
@@ -1936,17 +1848,6 @@ fn contracts_paths() -> Map {
             "Return active contract instances for a namespace.",
             "#/components/schemas/JsonValue",
             vec![string_path_param("ns", "Contract namespace identifier.")],
-        )),
-    );
-    paths.insert(
-        "/v1/confidential/derive-keyset".to_owned(),
-        Value::Object(json_post_operation(
-            "Contracts",
-            "Derive a confidential keyset.",
-            "Derive a confidential compute keyset for a lane.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
         )),
     );
     paths
@@ -2229,28 +2130,6 @@ fn zk_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/zk/vk/register".to_owned(),
-        Value::Object(json_post_operation(
-            "ZK",
-            "Register a verification key.",
-            "Register a verification key for a ZK backend.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/zk/vk/update".to_owned(),
-        Value::Object(json_post_operation(
-            "ZK",
-            "Update a verification key.",
-            "Update a verification key entry.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
         "/v1/zk/vk/{backend}/{name}".to_owned(),
         Value::Object(json_get_operation(
             "ZK",
@@ -2329,7 +2208,7 @@ fn governance_paths() -> Map {
         Value::Object(json_post_operation(
             "Governance",
             "Propose contract deployment.",
-            "Submit a governance proposal for contract deployment; optionally sign and submit when authority/private_key are provided.",
+            "Submit a governance proposal for contract deployment and receive draft instructions for local signing.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -2380,7 +2259,7 @@ fn governance_paths() -> Map {
         Value::Object(json_post_operation(
             "Governance",
             "Submit a ZK ballot.",
-            "Submit a zero-knowledge ballot; Torii submits when private_key is provided.",
+            "Submit a zero-knowledge ballot and receive draft instructions unless the request is invalid.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -2391,7 +2270,7 @@ fn governance_paths() -> Map {
         Value::Object(json_post_operation(
             "Governance",
             "Submit a ZK ballot (v1).",
-            "Submit a ZK ballot using the v1 envelope; Torii submits when private_key is provided.",
+            "Submit a ZK ballot using the v1 envelope and receive draft instructions unless the request is invalid.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -2402,7 +2281,7 @@ fn governance_paths() -> Map {
         Value::Object(json_post_operation(
             "Governance",
             "Submit a ballot proof.",
-            "Submit a ZK ballot proof bundle; Torii submits when private_key is provided.",
+            "Submit a ZK ballot proof bundle and receive draft instructions unless the request is invalid.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -2413,7 +2292,7 @@ fn governance_paths() -> Map {
         Value::Object(json_post_operation(
             "Governance",
             "Submit a plain ballot.",
-            "Submit a non-ZK ballot; Torii submits when private_key is provided.",
+            "Submit a non-ZK ballot and receive draft instructions unless the request is invalid.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -2424,7 +2303,7 @@ fn governance_paths() -> Map {
         Value::Object(json_post_operation(
             "Governance",
             "Finalize a referendum.",
-            "Finalize referendum tally and status; Torii submits when authority/private_key are provided.",
+            "Finalize referendum tally and status and receive draft instructions for local signing.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -2491,7 +2370,7 @@ fn governance_paths() -> Map {
         Value::Object(json_post_operation(
             "Governance",
             "Enact a referendum.",
-            "Enact an approved referendum; Torii submits when authority/private_key are provided.",
+            "Enact an approved referendum and receive draft instructions for local signing.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -3054,21 +2933,13 @@ fn subscription_paths() -> Map {
             Some("uint64"),
         ),
     ];
-    let mut plans = json_get_operation(
+    let plans = json_get_operation(
         "Subscriptions",
         "List subscription plans.",
         "List subscription plans by provider.",
         "#/components/schemas/JsonValue",
         plan_query_params,
     );
-    plans.extend(json_post_operation(
-        "Subscriptions",
-        "Create a subscription plan.",
-        "Register a subscription plan on an asset definition.",
-        "#/components/schemas/JsonValue",
-        "#/components/schemas/JsonValue",
-        Vec::new(),
-    ));
     paths.insert("/v1/subscriptions/plans".to_owned(), Value::Object(plans));
 
     let subscription_query_params = vec![
@@ -3085,21 +2956,13 @@ fn subscription_paths() -> Map {
             Some("uint64"),
         ),
     ];
-    let mut subs = json_get_operation(
+    let subs = json_get_operation(
         "Subscriptions",
         "List subscriptions.",
         "List subscriptions with optional filters.",
         "#/components/schemas/JsonValue",
         subscription_query_params,
     );
-    subs.extend(json_post_operation(
-        "Subscriptions",
-        "Create a subscription.",
-        "Create a subscription NFT and billing trigger.",
-        "#/components/schemas/JsonValue",
-        "#/components/schemas/JsonValue",
-        Vec::new(),
-    ));
     paths.insert("/v1/subscriptions".to_owned(), Value::Object(subs));
 
     let sub_param = string_path_param("subscription_id", "Subscription NFT identifier.");
@@ -3111,72 +2974,6 @@ fn subscription_paths() -> Map {
             "Fetch a subscription by NFT id.",
             "#/components/schemas/JsonValue",
             vec![sub_param.clone()],
-        )),
-    );
-    paths.insert(
-        "/v1/subscriptions/{subscription_id}/pause".to_owned(),
-        Value::Object(json_post_operation(
-            "Subscriptions",
-            "Pause a subscription.",
-            "Pause a subscription and unregister billing triggers.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            vec![sub_param.clone()],
-        )),
-    );
-    paths.insert(
-        "/v1/subscriptions/{subscription_id}/resume".to_owned(),
-        Value::Object(json_post_operation(
-            "Subscriptions",
-            "Resume a subscription.",
-            "Resume a subscription and re-schedule billing.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            vec![sub_param.clone()],
-        )),
-    );
-    paths.insert(
-        "/v1/subscriptions/{subscription_id}/cancel".to_owned(),
-        Value::Object(json_post_operation(
-            "Subscriptions",
-            "Cancel a subscription.",
-            "Cancel a subscription immediately or schedule cancellation at period end.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            vec![sub_param.clone()],
-        )),
-    );
-    paths.insert(
-        "/v1/subscriptions/{subscription_id}/keep".to_owned(),
-        Value::Object(json_post_operation(
-            "Subscriptions",
-            "Keep a subscription.",
-            "Undo a scheduled period-end cancellation and keep billing active.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            vec![sub_param.clone()],
-        )),
-    );
-    paths.insert(
-        "/v1/subscriptions/{subscription_id}/usage".to_owned(),
-        Value::Object(json_post_operation(
-            "Subscriptions",
-            "Record subscription usage.",
-            "Record usage for a subscription via a usage trigger.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            vec![sub_param.clone()],
-        )),
-    );
-    paths.insert(
-        "/v1/subscriptions/{subscription_id}/charge-now".to_owned(),
-        Value::Object(json_post_operation(
-            "Subscriptions",
-            "Charge a subscription now.",
-            "Trigger immediate billing for a subscription.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            vec![sub_param],
         )),
     );
     paths
@@ -3217,28 +3014,6 @@ fn space_directory_paths() -> Map {
             "Fetch manifests registered for a user account identifier.",
             "#/components/schemas/JsonValue",
             vec![string_path_param("uaid", "User account identifier.")],
-        )),
-    );
-    paths.insert(
-        "/v1/space-directory/manifests".to_owned(),
-        Value::Object(json_post_operation(
-            "SpaceDirectory",
-            "Publish a space directory manifest.",
-            "Publish a space directory manifest.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/space-directory/manifests/revoke".to_owned(),
-        Value::Object(json_post_operation(
-            "SpaceDirectory",
-            "Revoke a space directory manifest.",
-            "Revoke a space directory manifest.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
         )),
     );
     paths
@@ -3537,50 +3312,6 @@ fn explorer_paths() -> Map {
 
 fn sorafs_paths() -> Map {
     let mut paths = Map::new();
-    paths.insert(
-        "/v1/sorafs/pin/register".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
-            "Register a pin manifest.",
-            "Register a pin manifest for SoraFS.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/sorafs/capacity/declare".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
-            "Declare capacity.",
-            "Declare SoraFS capacity availability.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/sorafs/capacity/telemetry".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
-            "Submit capacity telemetry.",
-            "Submit SoraFS capacity telemetry.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/sorafs/capacity/dispute".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
-            "Submit a capacity dispute.",
-            "Submit a capacity dispute request.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
     paths.insert(
         "/v1/sorafs/capacity/schedule".to_owned(),
         Value::Object(json_post_operation(
@@ -5452,7 +5183,7 @@ fn nexus_public_lane_stake_operation() -> Map {
             Value::Object(lane_id_parameter()),
             string_query_param(
                 "validator",
-                "Optional validator account literal to filter stake entries (canonical I105 only).",
+                "Optional validator account literal to filter stake entries (canonical i105 only).",
             ),
         ]),
     );
@@ -5498,7 +5229,7 @@ fn nexus_public_lane_rewards_operation() -> Map {
         "description".into(),
         Value::String(
             "Returns the unclaimed reward amount per asset for the requested account in the \
-             given public lane. Requires an `account` query parameter (canonical I105) and \
+             given public lane. Requires an `account` query parameter (canonical i105) and \
              accepts optional `asset_id` and `upto_epoch` filters."
                 .to_owned(),
         ),
@@ -5525,7 +5256,7 @@ fn nexus_public_lane_rewards_operation() -> Map {
             Value::Object(lane_id_parameter()),
             string_query_param(
                 "account",
-                "Account literal to evaluate pending rewards for (canonical I105 only).",
+                "Account literal to evaluate pending rewards for (canonical i105 only).",
             ),
             string_query_param("asset_id", "Filter pending rewards by asset identifier."),
             Value::Object(upto_epoch_param),
@@ -5572,7 +5303,7 @@ fn nexus_dataspaces_account_summary_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Resolves the supplied canonical I105 account literal \
+            "Resolves the supplied canonical i105 account literal \
              and returns a joined view of UAID bindings, space-directory manifests, \
              portfolio counters, and per-dataspace consensus commitments."
                 .to_owned(),
@@ -5586,7 +5317,7 @@ fn nexus_dataspaces_account_summary_operation() -> Map {
         "parameters".into(),
         Value::Array(vec![string_path_param(
             "literal",
-            "Account literal to resolve (canonical I105 only).",
+            "Account literal to resolve (canonical i105 only).",
         )]),
     );
     operation.insert(
@@ -5658,7 +5389,7 @@ fn kaigi_relay_id_parameter() -> Map {
     param.insert(
         "description".into(),
         Value::String(
-            "Relay account identifier encoded as a canonical I105 account literal.".to_owned(),
+            "Relay account identifier encoded as a canonical i105 account literal.".to_owned(),
         ),
     );
     let mut schema = Map::new();
@@ -7890,7 +7621,7 @@ fn openapi_schemas() -> Map {
                 },
                 "controller_display": {
                     "type": "string",
-                    "description": "Controller rendered as canonical I105 account literal."
+                    "description": "Controller rendered as canonical i105 account literal."
                 },
                 "receiver_id": {
                     "type": "string",
@@ -7898,7 +7629,7 @@ fn openapi_schemas() -> Map {
                 },
                 "receiver_display": {
                     "type": "string",
-                    "description": "Receiver rendered as canonical I105 account literal."
+                    "description": "Receiver rendered as canonical i105 account literal."
                 },
                 "deposit_account_id": {
                     "type": "string",
@@ -7906,7 +7637,7 @@ fn openapi_schemas() -> Map {
                 },
                 "deposit_account_display": {
                     "type": "string",
-                    "description": "Deposit account rendered as canonical I105 account literal."
+                    "description": "Deposit account rendered as canonical i105 account literal."
                 },
                 "asset_id": {
                     "type": "string",
@@ -8704,7 +8435,7 @@ fn openapi_schemas() -> Map {
             "properties": {
                 "relay_id": {
                     "type": "string",
-                    "description": "Relay account identifier rendered as canonical I105 literal."
+                    "description": "Relay account identifier rendered as canonical i105 literal."
                 },
                 "domain": {
                     "type": "string",
@@ -9111,7 +8842,7 @@ fn openapi_schemas() -> Map {
                 },
                 "validator": {
                     "type": "string",
-                    "description": "Validator account literal rendered as canonical I105."
+                    "description": "Validator account literal rendered as canonical i105."
                 },
                 "stake_account": {
                     "type": "string",
@@ -9215,11 +8946,11 @@ fn openapi_schemas() -> Map {
                 },
                 "validator": {
                     "type": "string",
-                    "description": "Validator account literal rendered as canonical I105."
+                    "description": "Validator account literal rendered as canonical i105."
                 },
                 "staker": {
                     "type": "string",
-                    "description": "Staker account literal rendered as canonical I105."
+                    "description": "Staker account literal rendered as canonical i105."
                 },
                 "bonded": {
                     "type": "string",
@@ -9640,7 +9371,7 @@ fn openapi_schemas() -> Map {
                 },
                 "multisig_account_alias": {
                     "type": "string",
-                    "description": "Stable multisig alias in `label@domain` format."
+                    "description": "Stable multisig alias in label@dataspace or label@domain.dataspace format."
                 }
             },
             "oneOf": [
@@ -9718,7 +9449,6 @@ fn openapi_schemas() -> Map {
                     "additionalProperties": false,
                     "properties": {
                         "signer_account_id": { "type": "string" },
-                        "private_key": { "type": "object" },
                         "public_key_hex": { "type": "string" },
                         "signature_b64": { "type": "string" },
                         "creation_time_ms": { "type": "integer", "format": "uint64" },
@@ -9742,7 +9472,6 @@ fn openapi_schemas() -> Map {
                     "additionalProperties": false,
                     "properties": {
                         "signer_account_id": { "type": "string" },
-                        "private_key": { "type": "object" },
                         "public_key_hex": { "type": "string" },
                         "signature_b64": { "type": "string" },
                         "creation_time_ms": { "type": "integer", "format": "uint64" },
@@ -9783,7 +9512,6 @@ fn openapi_schemas() -> Map {
                     "additionalProperties": false,
                     "properties": {
                         "signer_account_id": { "type": "string" },
-                        "private_key": { "type": "object" },
                         "public_key_hex": { "type": "string" },
                         "signature_b64": { "type": "string" },
                         "creation_time_ms": { "type": "integer", "format": "uint64" },
@@ -9810,7 +9538,6 @@ fn openapi_schemas() -> Map {
                     "additionalProperties": false,
                     "properties": {
                         "signer_account_id": { "type": "string" },
-                        "private_key": { "type": "object" },
                         "public_key_hex": { "type": "string" },
                         "signature_b64": { "type": "string" },
                         "creation_time_ms": { "type": "integer", "format": "uint64" },
@@ -10078,7 +9805,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_spec_keeps_only_reserve_offline_paths() {
+    fn generated_spec_keeps_only_lineage_offline_paths() {
         let doc = generate_spec();
         let paths = doc
             .get("paths")
@@ -10682,7 +10409,7 @@ mod tests {
             PathCase {
                 label: "offline",
                 builder: offline_paths,
-                expected: "/v1/offline/cash/setup",
+                expected: "/v1/offline/revocations",
             },
             PathCase {
                 label: "system",
@@ -10727,7 +10454,7 @@ mod tests {
             PathCase {
                 label: "contracts",
                 builder: contracts_paths,
-                expected: "/v1/contracts/deploy",
+                expected: "/v1/contracts/call",
             },
             PathCase {
                 label: "zk",

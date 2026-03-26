@@ -5,7 +5,7 @@ seiyaku SmokeTransfer {
     transfer_asset(
       account!("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
       account!("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU"),
-      asset_definition!("xor#sora"),
+      asset_definition!("61CtjvNd9T3THAR65GsMVHr82Bjc"),
       1
     );
   }

@@ -137,7 +137,7 @@ authority (приватные ключи находятся только в па
 
 - `GET /v1/space-directory/uaids/{uaid}` — разрешить текущие привязки dataspace
   для UAID (нормализованные адреса, dataspace ids, program bindings). Добавьте
-  `canonical I105 output` для вывода Sora Name Service (I105 предпочтительно; I105 — второй по предпочтению, только для Sora).
+  `canonical i105 output` для вывода Sora Name Service (I105 предпочтительно; I105 — второй по предпочтению, только для Sora).
 - `GET /v1/accounts/{uaid}/portfolio` —
   агрегатор на Norito, зеркалящий `ToriiClient.getUaidPortfolio`, чтобы кошельки
   отображали универсальные holdings без сканирования состояния по dataspaces. Передайте

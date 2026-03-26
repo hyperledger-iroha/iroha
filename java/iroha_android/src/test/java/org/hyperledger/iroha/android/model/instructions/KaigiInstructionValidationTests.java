@@ -69,7 +69,7 @@ public final class KaigiInstructionValidationTests {
         () ->
             JoinKaigiInstruction.builder()
                 .setCallId("wonderland", "weekly-sync")
-                .setParticipant("alice@wonderland")
+                .setParticipant("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
                 .setProofBase64("not!base64")
                 .build(),
         "expected invalid join proof base64 to throw");
@@ -80,7 +80,7 @@ public final class KaigiInstructionValidationTests {
         () ->
             LeaveKaigiInstruction.builder()
                 .setCallId("wonderland", "weekly-sync")
-                .setParticipant("alice@wonderland")
+                .setParticipant("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
                 .setProofBase64("not!base64")
                 .build(),
         "expected invalid leave proof base64 to throw");

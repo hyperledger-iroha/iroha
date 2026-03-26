@@ -31,7 +31,7 @@ object AssetIdDecoder {
     }
 
     /**
-     * Parses `<asset-definition-id>#<account-id>` with an optional `#dataspace:<id>` suffix.
+     * Parses `<asset-definition-id>#<i105-account-id>` with an optional `#dataspace:<id>` suffix.
      */
     @JvmStatic
     fun decode(assetId: String): AssetId {
@@ -42,7 +42,7 @@ object AssetIdDecoder {
 
         val parts = trimmed.split('#')
         require(parts.size == 2 || parts.size == 3) {
-            "AssetId must use '<asset-definition-id>#<account-id>' with optional '#dataspace:<id>' suffix"
+            "AssetId must use '<asset-definition-id>#<i105-account-id>' with optional '#dataspace:<id>' suffix"
         }
 
         val definitionAddress = parts[0]
@@ -51,12 +51,12 @@ object AssetIdDecoder {
         val parsedAccount = try {
             AccountAddress.parseEncodedIgnoringCurveSupport(parts[1], null).address
         } catch (ex: AccountAddressException) {
-            throw IllegalArgumentException("AssetId.account must use canonical I105 form", ex)
+            throw IllegalArgumentException("AssetId.account must use canonical i105 form", ex)
         }
         val canonicalAccountId = try {
             parsedAccount.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
         } catch (ex: AccountAddressException) {
-            throw IllegalArgumentException("AssetId.account must use canonical I105 form", ex)
+            throw IllegalArgumentException("AssetId.account must use canonical i105 form", ex)
         }
 
         val dataspaceId = when (parts.size) {

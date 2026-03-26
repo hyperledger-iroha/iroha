@@ -206,7 +206,7 @@ Documente las anulaciones locales en el runbook de operaciones; Las políticas d
 - Jerarquía de derivación por cuenta:
   - `sk_spend` -> `nk` (clave anuladora), `ivk` (clave de visualización entrante), `ovk` (clave de visualización saliente), `fvk`.
 - Las cargas útiles de notas chiffre se utilizan AEAD con claves compartidas derivadas de ECDH; Las opciones de vista de claves del auditor pueden incluir agregados aux salidas según la política de la acción.
-- Incluye CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, herramienta de auditoría para descifrar notas y ayudante `iroha app zk envelope` para producir/inspeccionar sobres Norito sin conexión. Torii expone el flujo de derivación de memes a través de `POST /v1/confidential/derive-keyset`, que regresa de formas hexadecimales y base64 para que las billeteras puedan recuperar las jerarquías de claves programáticas.## Gas, límites y controles DoS
+- Incluye CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, herramienta de auditoría para descifrar notas y ayudante `iroha app zk envelope` para producir/inspeccionar sobres Norito sin conexión.
 - Horario de determinación de gas:
   - Halo2 (Plonkish): base `250_000` gas + `2_000` gas por entrada pública.
   - `5` byte de prueba de par de gas, más cargos por anulador (`300`) y compromiso de par (`500`).

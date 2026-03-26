@@ -443,7 +443,7 @@ export interface ProofAttachmentInput {
 /**
  * Canonicalise an account identifier to I105.
  *
- * Accepts only encoded I105 account IDs.
+ * Accepts only encoded i105 account ids.
  * Domain-suffixed literals (`<id>@domain`) and canonical-hex account literals are rejected.
  */
 export function normalizeAccountId(value: string, name?: string): string;
@@ -452,6 +452,11 @@ export function normalizeAccountId(value: string, name?: string): string;
  * Canonicalise an asset identifier, including embedded account components.
  */
 export function normalizeAssetId(value: string, name?: string): string;
+
+/**
+ * Canonicalise an RWA identifier in `<64-hex-hash>$<domain>` form.
+ */
+export function normalizeRwaId(value: string, name?: string): string;
 
 export interface ConfidentialGasSchedule {
   proofBase: number;
@@ -575,6 +580,21 @@ export interface ExplorerNftListOptions {
 }
 
 export interface ExplorerNftIteratorOptions extends ExplorerNftListOptions {
+  pageSize?: NumericLike;
+  maxItems?: NumericLike;
+}
+
+export interface ExplorerRwaListOptions {
+  page?: NumericLike;
+  perPage?: NumericLike;
+  limit?: NumericLike;
+  offset?: NumericLike;
+  ownedBy?: string;
+  domainId?: string;
+  signal?: AbortSignal;
+}
+
+export interface ExplorerRwaIteratorOptions extends ExplorerRwaListOptions {
   pageSize?: NumericLike;
   maxItems?: NumericLike;
 }
@@ -865,6 +885,9 @@ export interface ToriiAssetDefinitionListItem {
 export interface ToriiNftListItem {
   id: string;
 }
+export interface ToriiRwaListItem {
+  id: string;
+}
 export interface ToriiAccountAssetItem {
   asset_id: string;
   quantity: string;
@@ -1095,6 +1118,23 @@ export interface ToriiExplorerNft {
 export interface ToriiExplorerNftsPage {
   pagination: ToriiExplorerPaginationMeta;
   items: ReadonlyArray<ToriiExplorerNft>;
+}
+
+export interface ToriiExplorerRwa {
+  id: string;
+  ownedBy: string;
+  quantity: string;
+  heldQuantity: string;
+  primaryReference: string;
+  status: string | null;
+  isFrozen: boolean;
+  metadata: Record<string, JsonValue>;
+  raw: Record<string, JsonValue>;
+}
+
+export interface ToriiExplorerRwasPage {
+  pagination: ToriiExplorerPaginationMeta;
+  items: ReadonlyArray<ToriiExplorerRwa>;
 }
 
 export interface ToriiExplorerBlock {
@@ -4397,6 +4437,150 @@ export interface TransferNftInput {
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
 }
 
+export interface RwaParentRefInput {
+  rwa?: string;
+  rwaId?: string;
+  quantity: NumericLike;
+}
+
+export interface RwaControlPolicyInput {
+  controllerAccounts?: ReadonlyArray<string> | null;
+  controller_accounts?: ReadonlyArray<string> | null;
+  controllerRoles?: ReadonlyArray<string> | null;
+  controller_roles?: ReadonlyArray<string> | null;
+  freezeEnabled?: boolean | null;
+  freeze_enabled?: boolean | null;
+  holdEnabled?: boolean | null;
+  hold_enabled?: boolean | null;
+  forceTransferEnabled?: boolean | null;
+  force_transfer_enabled?: boolean | null;
+  redeemEnabled?: boolean | null;
+  redeem_enabled?: boolean | null;
+}
+
+export interface RegisterRwaPayloadInput {
+  domain: string;
+  quantity: NumericLike;
+  spec?: Record<string, unknown> | null;
+  primaryReference?: string;
+  primary_reference?: string;
+  status?: string | null;
+  metadata?: Record<string, JsonValue> | null;
+  parents?: ReadonlyArray<RwaParentRefInput> | null;
+  controls?: RwaControlPolicyInput | null;
+}
+
+export interface MergeRwasPayloadInput {
+  parents: ReadonlyArray<RwaParentRefInput>;
+  primaryReference?: string;
+  primary_reference?: string;
+  status?: string | null;
+  metadata?: Record<string, JsonValue> | null;
+}
+
+export interface RegisterRwaInput {
+  chainId: string;
+  authority: string;
+  rwa?: RegisterRwaPayloadInput | string;
+  rwaJson?: RegisterRwaPayloadInput | string;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  ttlMs?: number | null;
+  nonce?: number | null;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+}
+
+export interface TransferRwaInput {
+  chainId: string;
+  authority: string;
+  sourceAccountId: string;
+  rwaId: string;
+  quantity: NumericLike;
+  destinationAccountId: string;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  ttlMs?: number | null;
+  nonce?: number | null;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+}
+
+export interface MergeRwasInput {
+  chainId: string;
+  authority: string;
+  merge?: MergeRwasPayloadInput | string;
+  mergeJson?: MergeRwasPayloadInput | string;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  ttlMs?: number | null;
+  nonce?: number | null;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+}
+
+export interface RedeemRwaInput {
+  chainId: string;
+  authority: string;
+  rwaId: string;
+  quantity: NumericLike;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  ttlMs?: number | null;
+  nonce?: number | null;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+}
+
+export interface FreezeRwaInput {
+  chainId: string;
+  authority: string;
+  rwaId: string;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  ttlMs?: number | null;
+  nonce?: number | null;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+}
+
+export interface UnfreezeRwaInput extends FreezeRwaInput {}
+
+export interface HoldRwaInput {
+  chainId: string;
+  authority: string;
+  rwaId: string;
+  quantity: NumericLike;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  ttlMs?: number | null;
+  nonce?: number | null;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+}
+
+export interface ReleaseRwaInput extends HoldRwaInput {}
+
+export interface ForceTransferRwaInput {
+  chainId: string;
+  authority: string;
+  rwaId: string;
+  quantity: NumericLike;
+  destinationAccountId: string;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  ttlMs?: number | null;
+  nonce?: number | null;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+}
+
+export interface SetRwaControlsInput {
+  chainId: string;
+  authority: string;
+  rwaId: string;
+  controls?: RwaControlPolicyInput | string;
+  controlsJson?: RwaControlPolicyInput | string;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  ttlMs?: number | null;
+  nonce?: number | null;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+}
+
 /**
  * Parameters for {@link buildMintAndTransferTransaction}. Provide either
  * `transfer` or `transfers`; when `sourceAssetId` is omitted on a transfer the
@@ -6229,6 +6413,36 @@ export declare class ToriiClient {
   iterateNftsQuery<T = ToriiNftListItem>(
     options?: PaginationIteratorOptions,
   ): AsyncGenerator<T, void, unknown>;
+  listRwas<T = ToriiRwaListItem>(
+    options?: IterableListOptions,
+  ): Promise<ToriiIterableListResponse<T>>;
+  queryRwas<T = ToriiRwaListItem>(
+    options?: IterableQueryOptions,
+  ): Promise<ToriiIterableListResponse<T>>;
+  iterateRwas<T = ToriiRwaListItem>(
+    options?: PaginationIteratorOptions,
+  ): AsyncGenerator<T, void, unknown>;
+  iterateRwasQuery<T = ToriiRwaListItem>(
+    options?: PaginationIteratorOptions,
+  ): AsyncGenerator<T, void, unknown>;
+  listExplorerRwas<T = ToriiExplorerRwa>(
+    options?: ExplorerRwaListOptions,
+  ): Promise<ToriiExplorerRwasPage>;
+  getExplorerRwaDetail<T = ToriiExplorerRwa>(
+    rwaId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<T | null>;
+  iterateExplorerRwas<T = ToriiExplorerRwa>(
+    options?: ExplorerRwaIteratorOptions,
+  ): AsyncGenerator<T, void, unknown>;
+  listAccountRwas<T = ToriiExplorerRwa>(
+    accountId: string,
+    options?: ExplorerRwaListOptions,
+  ): Promise<ToriiExplorerRwasPage>;
+  iterateAccountRwas<T = ToriiExplorerRwa>(
+    accountId: string,
+    options?: ExplorerRwaIteratorOptions,
+  ): AsyncGenerator<T, void, unknown>;
   listExplorerNfts<T = ToriiExplorerNft>(
     options?: ExplorerNftListOptions,
   ): Promise<ToriiExplorerNftsPage>;
@@ -7738,6 +7952,36 @@ export function buildTransferDomainTransaction(
 export function buildTransferNftTransaction(
   input: TransferNftInput,
 ): SignedTransactionResult;
+export function buildRegisterRwaTransaction(
+  input: RegisterRwaInput,
+): SignedTransactionResult;
+export function buildTransferRwaTransaction(
+  input: TransferRwaInput,
+): SignedTransactionResult;
+export function buildMergeRwasTransaction(
+  input: MergeRwasInput,
+): SignedTransactionResult;
+export function buildRedeemRwaTransaction(
+  input: RedeemRwaInput,
+): SignedTransactionResult;
+export function buildFreezeRwaTransaction(
+  input: FreezeRwaInput,
+): SignedTransactionResult;
+export function buildUnfreezeRwaTransaction(
+  input: UnfreezeRwaInput,
+): SignedTransactionResult;
+export function buildHoldRwaTransaction(
+  input: HoldRwaInput,
+): SignedTransactionResult;
+export function buildReleaseRwaTransaction(
+  input: ReleaseRwaInput,
+): SignedTransactionResult;
+export function buildForceTransferRwaTransaction(
+  input: ForceTransferRwaInput,
+): SignedTransactionResult;
+export function buildSetRwaControlsTransaction(
+  input: SetRwaControlsInput,
+): SignedTransactionResult;
 /**
  * Compose a mint followed by one or more transfers. Provide either `transfer`
  * or `transfers`; transfers without an explicit `sourceAssetId` reuse the mint's
@@ -8024,6 +8268,72 @@ export function buildTransferNftInstruction({
   sourceAccountId: string;
   nftId: string;
   destinationAccountId: string;
+}): object;
+
+export function buildRegisterRwaInstruction(options: {
+  rwa?: RegisterRwaPayloadInput | string;
+  rwaJson?: RegisterRwaPayloadInput | string;
+} | RegisterRwaPayloadInput): object;
+
+export function buildTransferRwaInstruction({
+  sourceAccountId,
+  rwaId,
+  quantity,
+  destinationAccountId,
+}: {
+  sourceAccountId: string;
+  rwaId: string;
+  quantity: NumericLike;
+  destinationAccountId: string;
+}): object;
+
+export function buildMergeRwasInstruction(options: {
+  merge?: MergeRwasPayloadInput | string;
+  mergeJson?: MergeRwasPayloadInput | string;
+} | MergeRwasPayloadInput): object;
+
+export function buildRedeemRwaInstruction({
+  rwaId,
+  quantity,
+}: {
+  rwaId: string;
+  quantity: NumericLike;
+}): object;
+
+export function buildFreezeRwaInstruction({ rwaId }: { rwaId: string }): object;
+
+export function buildUnfreezeRwaInstruction({ rwaId }: { rwaId: string }): object;
+
+export function buildHoldRwaInstruction({
+  rwaId,
+  quantity,
+}: {
+  rwaId: string;
+  quantity: NumericLike;
+}): object;
+
+export function buildReleaseRwaInstruction({
+  rwaId,
+  quantity,
+}: {
+  rwaId: string;
+  quantity: NumericLike;
+}): object;
+
+export function buildForceTransferRwaInstruction({
+  rwaId,
+  quantity,
+  destinationAccountId,
+}: {
+  rwaId: string;
+  quantity: NumericLike;
+  destinationAccountId: string;
+}): object;
+
+export function buildSetRwaControlsInstruction(options: {
+  rwaId: string;
+  controls?: RwaControlPolicyInput | string;
+  controlsJson?: RwaControlPolicyInput | string;
 }): object;
 
 export function buildCreateKaigiInstruction(call: CreateKaigiInput): object;

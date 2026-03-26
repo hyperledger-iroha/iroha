@@ -9426,11 +9426,11 @@ mod advert_tests {
         );
         fetch_headers.insert(
             header::HeaderName::from_static(HEADER_SORA_NAME),
-            HeaderValue::from_static("alice@wonderland"),
+            HeaderValue::from_static("alice@hbl.sbp"),
         );
         fetch_headers.insert(
             header::HeaderName::from_static(HEADER_SORA_PROOF),
-            alias_proof_header("alice@wonderland"),
+            alias_proof_header("alice@hbl.sbp"),
         );
 
         let fetch_request = StorageFetchRequestDto {
@@ -10011,11 +10011,11 @@ mod advert_tests {
         );
         fetch_headers.insert(
             header::HeaderName::from_static(HEADER_SORA_NAME),
-            HeaderValue::from_static("alice@wonderland"),
+            HeaderValue::from_static("alice@hbl.sbp"),
         );
         fetch_headers.insert(
             header::HeaderName::from_static(HEADER_SORA_PROOF),
-            alias_proof_header("alice@wonderland"),
+            alias_proof_header("alice@hbl.sbp"),
         );
 
         let fetch_request = StorageFetchRequestDto {

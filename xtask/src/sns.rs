@@ -650,7 +650,7 @@ fn ensure_asset_literal(literal: &str, field: &str, prefix: &str, errors: &mut V
     }
     if let Err(err) = iroha_data_model::asset::AssetId::parse_literal(trimmed) {
         errors.push(format!(
-            "{prefix}: {field} `{literal}` must be an asset id in `<asset-definition-id>#<account-id>` form: {err}"
+            "{prefix}: {field} `{literal}` must be an asset id in `<asset-definition-id>#<i105-account-id>` form: {err}"
         ));
     }
 }

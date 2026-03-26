@@ -200,7 +200,7 @@ if (!ballot.accepted) {
   console.warn("ballot rejected", ballot.reason);
 }
 
-const zkOwner = "i105..."; // canonical I105 account id for ZK public inputs
+const zkOwner = "i105..."; // canonical i105 account id for ZK public inputs
 await torii.governanceSubmitZkBallot({
   authority,
   chainId: "00000000-0000-0000-0000-000000000000",

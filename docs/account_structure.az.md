@@ -22,7 +22,7 @@ Bu sənəddə həyata keçirilən göndərmə hesabı ünvanlama yığını təs
 `AccountAddress` (`crates/iroha_data_model/src/account/address.rs`) və
 yoldaş alətlər. O, təmin edir:
 
-- İstehsal edilmiş yoxlama cəmi, insana baxan **I105 ünvanı (I105)**
+- İstehsal edilmiş yoxlama cəmi, insana baxan **I105 ünvanı**
   Zəncir diskriminantını hesaba bağlayan `AccountAddress::to_i105`
   nəzarətçi və deterministik qarşılıqlı əlaqəyə uyğun mətn formaları təklif edir.
 - Gizli defolt domenlər və yerli həzmlər üçün domen seçiciləri, a ilə
@@ -72,18 +72,17 @@ AccountId {
     controller: AccountController // single PublicKey or multisig policy
 }
 
-Display: canonical I105 literal (no `@domain` suffix)
+Display: canonical i105 literal (no `@domain` suffix)
 Parse accepts:
-- Encoded account identifiers only: I105.
-- Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and alias literals such as `label@domain`.
+- Encoded account identifiers only: i105.
+- Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and account-alias literals such as label@dataspace or label@domain.dataspace.
 
 Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
 and `0x` prefixes are not accepted.
 
-This text form is now treated as an **account alias**: a routing convenience
-that points to the canonical [`AccountAddress`](#2-canonical-address-codecs).
-It remains useful for human readability and domain-scoped governance, but it is
-no longer considered the authoritative account identifier on-chain.
+Account aliases are separate on-chain bindings. They use
+label@dataspace or label@domain.dataspace and resolve to canonical
+i105 `AccountId` values. Strict `AccountId` parsers never accept alias literals directly.
 ```
 
 `ChainId` `AccountId` xaricində yaşayır. Düyünlər əməliyyatın `ChainId` nömrəsini yoxlayır
@@ -323,7 +322,7 @@ SDK-lar və operator iş axınları arasında ardıcıl.
 - IME/NFKC çevrilmələri: yarım eni Sora kana kodlaşdırmanı pozmadan tam enli formalarına normallaşdırıla bilər, lakin ASCII `sora` sentinel və I105 rəqəmləri/hərfləri ASCII olaraq qalmalıdır. Tam enli və ya qutu qatlanmış gözətçilər səthi `ERR_MISSING_COMPRESSED_SENTINEL`, tam enli ASCII faydalı yükləri `ERR_INVALID_COMPRESSED_CHAR` artırır və yoxlama məbləği uyğunsuzluqları `ERR_CHECKSUM_MISMATCH` kimi qabarır. `crates/iroha_data_model/src/account/address.rs`-də mülkiyyət testləri bu yolları əhatə edir ki, SDK-lar və pul kisələri deterministik uğursuzluqlara arxalana bilsin.
 - Torii və `address@domain` (rejected legacy form) ləqəblərinin SDK təhlili indi I105 (üstünlük verilir)/sora (ikinci-ən yaxşı) daxiletmələr ləqəbdən əvvəl uğursuz olduqda (məsələn, domen strukturunda səhv səhvlər ola bilməyəndə) eyni `ERR_*` kodlarını buraxır. nəsr sətirlərindən təxmin etmək.
 - `ERR_LOCAL8_DEPRECATED` səthi 12 baytdan qısa olan yerli selektorun faydalı yükləri köhnə Local‑8 həzmlərindən sərt kəsimi qoruyur.
-- Domainless canonical I105 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
+- Domainless canonical i105 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
 
 #### 2.5 Normativ ikili vektorlar
 
@@ -367,7 +366,7 @@ hər kanonik yük üçün ardıcıl mətn formaları. Seçilmiş qurğular
 | Qlobal reyestr göstəricisi (`registry_id = 0x0000_002A`, `treasury` ekvivalenti) | `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF` | `sorakXｹ6NｻﾍﾀﾖSﾜﾖｱ3ﾚ5WﾘﾋQﾅｷｦxgﾛｸcﾁｵﾋkﾋvﾏ8SPﾓﾀｹdｴｴｲW9iCM6AEP` |
 
 Bu sətirlər CLI (`iroha tools address convert`), Torii tərəfindən buraxılanlara uyğundur
-cavablar (`canonical I105 literal rendering`) və SDK köməkçiləri, buna görə də UX kopyalayın/yapışdırın
+cavablar (`canonical i105 literal rendering`) və SDK köməkçiləri, buna görə də UX kopyalayın/yapışdırın
 axınlar onlara sözlü etibar edə bilər. Yalnız açıq marşrut göstərişinə ehtiyacınız olduqda `<address>@<domain>` (rejected legacy form) əlavə edin; şəkilçi kanonik çıxışın bir hissəsi deyil.
 
 #### 2.6 Qarşılıqlı fəaliyyət üçün mətn ləqəbləri (planlaşdırılmış)
@@ -398,7 +397,7 @@ axınlar onlara sözlü etibar edə bilər. Yalnız açıq marşrut göstərişi
   kodlayıcı, multisig siyasət həzmləri üçün istifadə edilən CTAP2 xəritəsi deyil.
 - **Kodlaşdırma:** `encode_i105()` prefiks baytlarını kanonik baytlarla birləşdirir
   faydalı yüklənir və Blake2b-512-dən əldə edilmiş 16 bitlik yoxlama məbləğini sabitlə əlavə edir.
-  Prefix: `I105PRE` (`b"I105PRE"` || prefix || payload). The result is encoded via `bs58` using the I105 alphabet.
+  prefiks `I105PRE` (`b"I105PRE"` || prefix || payload). Nəticə `bs58` vasitəsilə I105 əlifbası ilə kodlanır.
   CLI/SDK köməkçiləri eyni proseduru ifşa edir və `AccountAddress::parse_encoded`
   onu `decode_i105` vasitəsilə geri qaytarır.
 
@@ -416,7 +415,7 @@ hər kanonik faydalı yük üçün hərflər. Əsas məqamlar:
   `sorakX…CM6AEP`. Qeyd dəftəri seçicilərinin hələ də deşifrə etdiyini nümayiş etdirir
   müvafiq yerli həzm kimi eyni kanonik faydalı yük.
 - **Uğursuzluq halı (`i105-prefix-mismatch`).**  
-  Bir qovşaqda `NETWORK_PREFIX + 1` prefiksi ilə kodlanmış I105 literalının təhlili
+  Bir qovşaqda `NETWORK_PREFIX + 1` prefiksi ilə kodlanmış i105 literalının təhlili
   standart prefiksin məhsuldarlığını gözləyir
   `AccountAddressError::UnexpectedNetworkPrefix { expected: 753, found: 754 }`
   domen yönləndirmə cəhdindən əvvəl. `i105-checksum-mismatch` qurğusu
@@ -638,7 +637,7 @@ onların dəyişmə biletləri.
 #### Əlçatanlıq və Təhlükəsiz Paylaşım Rəhbərliyi- Məhsul səthləri üçün icra təlimatı canlı olaraq izlənilir
   `docs/portal/docs/reference/address-safety.md`; zaman həmin yoxlama siyahısına istinad edin
   bu tələbləri cüzdan və ya explorer UX-ə uyğunlaşdırmaq.
-- **Təhlükəsiz paylaşma axınları:** Ünvanları defolt olaraq I105 formasına köçürən və ya göstərən səthlər və istifadəçilərin yoxlama məbləğini vizual və ya skan etməklə yoxlaya bilməsi üçün həm tam sətri, həm də eyni faydalı yükdən əldə edilən QR kodunu təqdim edən bitişik “paylaşma” əməliyyatını ifşa edən səthlər. Kəsilmə qaçınılmaz olduqda (məsələn, kiçik ekranlar), sətirin başlanğıcını və sonunu saxlayın, aydın ellipslər əlavə edin və təsadüfən kəsilmənin qarşısını almaq üçün tam ünvanı buferə köçürmə vasitəsilə əlçatan saxlayın.
+- **Təhlükəsiz paylaşma axınları:** Ünvanları defolt olaraq i105 formasına köçürən və ya göstərən səthlər və istifadəçilərin yoxlama məbləğini vizual və ya skan etməklə yoxlaya bilməsi üçün həm tam sətri, həm də eyni faydalı yükdən əldə edilən QR kodunu təqdim edən bitişik “paylaşma” əməliyyatını ifşa edən səthlər. Kəsilmə qaçınılmaz olduqda (məsələn, kiçik ekranlar), sətirin başlanğıcını və sonunu saxlayın, aydın ellipslər əlavə edin və təsadüfən kəsilmənin qarşısını almaq üçün tam ünvanı buferə köçürmə vasitəsilə əlçatan saxlayın.
 - **IME qoruyucuları:** Ünvan girişləri IME/IME tipli klaviaturaların kompozisiya artefaktlarını rədd etməlidir. Yalnız ASCII girişini tətbiq edin, tam enli və ya Kana simvolları aşkar edildikdə daxili xəbərdarlıq təqdim edin və Yapon və Çin istifadəçilərinin tərəqqini itirmədən öz IME-ni söndürə bilməsi üçün doğrulamadan əvvəl işarələri birləşdirən düz mətn yapışdırma zonası təklif edin.
 - **Ekran oxuyucu dəstəyi:** Aparıcı I105 prefiks rəqəmlərini təsvir edən və I105 faydalı yükünü 4 və ya 8 simvoldan ibarət qruplara bölən vizual olaraq gizli etiketlər (`aria-label`/`aria-describedby`) təmin edin. Nəzakətli canlı bölgələr vasitəsilə kopyalama/paylaşım uğurunu elan edin və QR önizləmələrinə təsviri alt mətn (“0x02F1 zəncirində <ləqəb> üçün I105 ünvanı”) daxil olduğundan əmin olun.
 - **Yalnız Sora üçün sıxılmış istifadə:** Həmişə `i105` sıxılmış görünüşünü "Yalnız Sora" kimi etiketləyin və kopyalamadan əvvəl onu açıq təsdiqin arxasına keçin. Zəncirvari diskriminant Sora Nexus dəyəri olmadıqda SDK və pul kisələri sıxılmış çıxışı göstərməkdən imtina etməli və vəsaitlərin yanlış yönləndirilməsinin qarşısını almaq üçün istifadəçiləri şəbəkələrarası köçürmələr üçün I105-ə yönləndirməlidir.
@@ -668,14 +667,14 @@ onların dəyişmə biletləri.
   çevrilmiş kodlaşdırmanı `<address>@<domain>` (rejected legacy form) kimi təkrarlayır, beləliklə, aşkar fərqlər erqonomik olaraq qalır.
 - **Wallet/explorer UX:** [ünvan göstərmə qaydalarına] əməl edin (source/sns/address_display_guidelines.md)
   ADDR-6 ilə göndərilir - ikili nüsxə düymələri təklif edin, I105-i QR yükü kimi saxlayın və xəbərdarlıq edin
-  istifadəçilər sıxılmış I105 formasının yalnız Sora-dır və IME-nin yenidən yazılmasına həssasdır.
+  istifadəçilər sıxılmış i105 formasının yalnız Sora-dır və IME-nin yenidən yazılmasına həssasdır.
 - **Torii inteqrasiyası:** Keş Nexus TTL-ə uyğun olaraq təzahür edir, yayır
   `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` deterministik və
-  keep strict account-literal parsing canonical-I105-only (reject compressed and any `@domain` suffix) with canonical I105 output.
+  keep strict account-literal parsing canonical-i105-only (reject compressed and any `@domain` suffix) with canonical i105 output.
 
 ### Torii cavab formatları
 
-- `GET /v1/accounts` isteğe bağlı `canonical I105 rendering` sorğu parametrini qəbul edir və
+- `GET /v1/accounts` isteğe bağlı `canonical i105 rendering` sorğu parametrini qəbul edir və
   `POST /v1/accounts/query` JSON zərfində eyni sahəni qəbul edir.
   Dəstəklənən dəyərlər bunlardır:
   - `i105` (defolt) — cavablar kanonik I105 faydalı yükləri yayır (məsələn,
@@ -686,7 +685,7 @@ onların dəyişmə biletləri.
   cüzdanlar və tədqiqatçılar yalnız Sora-da UX üçün sıxılmış sətirlər tələb etsinlər
   I105-i qarşılıqlı işləyə bilən standart olaraq saxlayır.
 - Aktiv sahibi siyahıları (`GET /v1/assets/{definition_id}/holders`) və onların JSON
-  zərf həmkarı (`POST …/holders/query`) də `canonical I105 rendering`-i şərəfləndirir.
+  zərf həmkarı (`POST …/holders/query`) də `canonical i105 rendering`-i şərəfləndirir.
   `items[*].account_id` sahəsi hər dəfə sıxılmış hərflər buraxır
   parametr/zərf sahəsi hesabları əks etdirərək `i105_default` olaraq təyin edilib
   tədqiqatçıların qovluqlar arasında ardıcıl çıxış təqdim edə bilməsi üçün son nöqtələr.

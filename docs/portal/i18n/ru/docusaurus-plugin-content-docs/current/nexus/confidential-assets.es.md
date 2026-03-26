@@ -227,7 +227,7 @@ Documenta переопределяет локали в рабочем списк
 - Получение происхождения для учетной записи:
   - `sk_spend` -> `nk` (ключ обнулителя), `ivk` (входящий ключ просмотра), `ovk` (исходящий ключ просмотра), `fvk`.
 - Payloads de notes encriptadas usan AEAD con shared keys derivadas por ECDH; se pueden adjuntar view keys de auditores opcionales a outputs segun la politica del asset.
-- Дополнительные возможности CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, инструменты аудита для расшифровки заметок и помощник `iroha app zk envelope` для создания/проверки конвертов Norito в автономном режиме. Torii экспонирует ошибочное происхождение через `POST /v1/confidential/derive-keyset`, возвращает шестнадцатеричные форматы и base64, чтобы кошельки программно получали иерархии клав.## Газ, ограничения и контроль DoS
+- Дополнительные возможности CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, инструменты аудита для расшифровки заметок и помощник `iroha app zk envelope` для создания/проверки конвертов Norito в автономном режиме.
 - График определения газа:
   - Halo2 (Plonkish): базовый газ `250_000` + газ `2_000` для общедоступного входа.
   - `5` байт проверки газа, основной груз для обнуления (`300`) и обязательства (`500`).

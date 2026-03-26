@@ -36,7 +36,7 @@ SN-3b 決定論的 CSV-to-Norito ビルダー Torii CLI
 |----------|----------|---------------|
 | `label` |はい |要求されたラベル (大文字と小文字の混合が受け入れられます。ツール Norm v1 اور UTS-46 کے مطابق 正規化 کرتا ہے)。 |
 | `suffix_id` |はい |数値サフィックス識別子 (10 進数、`0x` 16 進数)。 |
-| `owner` |はい | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` |はい | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` |はい |整数 `1..=255`。 |
 | `payment_asset_id` |はい |決済資産 (`61CtjvNd9T3THAR65GsMVHr82Bjc`)。 |
 | `payment_gross` / `payment_net` |はい |符号なし整数は資産固有の単位を表します。 |

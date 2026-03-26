@@ -60,18 +60,17 @@ AccountId {
     controller: AccountController // single PublicKey or multisig policy
 }
 
-Display: canonical I105 literal (no `@domain` suffix)
+Display: canonical i105 literal (no `@domain` suffix)
 Parse accepts:
-- Encoded account identifiers only: I105.
-- Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and alias literals such as `label@domain`.
+- Encoded account identifiers only: i105.
+- Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and account-alias literals such as label@dataspace or label@domain.dataspace.
 
 Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
 and `0x` prefixes are not accepted.
 
-This text form is now treated as an **account alias**: a routing convenience
-that points to the canonical [`AccountAddress`](#2-canonical-address-codecs).
-It remains useful for human readability and domain-scoped governance, but it is
-no longer considered the authoritative account identifier on-chain.
+Account aliases are separate on-chain bindings. They use
+label@dataspace or label@domain.dataspace and resolve to canonical
+i105 `AccountId` values. Strict `AccountId` parsers never accept alias literals directly.
 ```
 
 `ChainId` vit à l'extérieur de `AccountId`. Les nœuds vérifient le `ChainId` de la transaction
@@ -311,7 +310,7 @@ Détails clés de la mise en œuvre :
 - Conversions IME/NFKC : les Sora kana demi-largeur peuvent être normalisés dans leur forme pleine largeur sans interrompre le décodage, mais la sentinelle ASCII `sora` et les chiffres/lettres I105 DOIVENT rester ASCII. Les sentinelles pleine largeur ou pliées font surface `ERR_MISSING_COMPRESSED_SENTINEL`, les charges utiles ASCII pleine largeur augmentent `ERR_INVALID_COMPRESSED_CHAR` et les discordances de somme de contrôle apparaissent sous la forme `ERR_CHECKSUM_MISMATCH`. Les tests de propriété dans `crates/iroha_data_model/src/account/address.rs` couvrent ces chemins afin que les SDK et les portefeuilles puissent s'appuyer sur des échecs déterministes.
 - L'analyse Torii et SDK des alias `address@domain` (rejected legacy form) émettent désormais les mêmes codes `ERR_*` lorsque les entrées I105 (préféré)/sora (deuxième meilleur) échouent avant le repli de l'alias (par exemple, non-concordance de somme de contrôle, non-concordance de résumé de domaine), afin que les clients puissent relayer des raisons structurées sans deviner à partir de chaînes de prose.
 - Les charges utiles du sélecteur local de moins de 12 octets apparaissent `ERR_LOCAL8_DEPRECATED`, préservant un basculement définitif à partir des anciens résumés Local‑8.
-- Domainless canonical I105 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
+- Domainless canonical i105 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
 
 #### 2.5 Vecteurs binaires normatifs
 
@@ -357,7 +356,7 @@ des formes textuelles cohérentes pour chaque charge utile canonique. Luminaires
 | Pointeur de registre global (`registry_id = 0x0000_002A`, équivalent à `treasury`) | `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF` | `sorakXｹ6NｻﾍﾀﾖSﾜﾖｱ3ﾚ5WﾘﾋQﾅｷｦxgﾛｸcﾁｵﾋkﾋvﾏ8SPﾓﾀｹdｴｴｲW9iCM6AEP` |
 
 Ces chaînes correspondent à celles émises par la CLI (`iroha tools address convert`), Torii
-réponses (`canonical I105 literal rendering`) et assistants SDK, donc copier/coller UX
+réponses (`canonical i105 literal rendering`) et assistants SDK, donc copier/coller UX
 les flux peuvent s’appuyer sur eux textuellement. Ajoutez `<address>@<domain>` (rejected legacy form) uniquement lorsque vous avez besoin d'un indice de routage explicite ; le suffixe ne fait pas partie de la sortie canonique.
 
 #### 2.6 Alias textuels pour l'interopérabilité (prévu)
@@ -388,7 +387,7 @@ les flux peuvent s’appuyer sur eux textuellement. Ajoutez `<address>@<domain>`
   encodeur, pas la carte CTAP2 utilisée pour les résumés de politique multisig.
 - **Encodage :** `encode_i105()` concatène les octets du préfixe avec le canonique
   charge utile et ajoute une somme de contrôle de 16 bits dérivée de Blake2b-512 avec le fixe
-  Prefix: `I105PRE` (`b"I105PRE"` || prefix || payload). The result is encoded via `bs58` using the I105 alphabet.
+  préfixe `I105PRE` (`b"I105PRE"` || prefix || payload). Le résultat est encodé via `bs58` avec l'alphabet I105.
   Les assistants CLI/SDK exposent la même procédure et `AccountAddress::parse_encoded`
   l'inverse via `decode_i105`.
 
@@ -642,7 +641,7 @@ leurs billets de change.
 - **Enveloppe I105 :** Le préfixe encode le `chain_discriminant` en utilisant le compact
   Schéma 6/14 bits de `encode_i105_prefix()`, le corps est constitué des octets canoniques
   (`AccountAddress::canonical_bytes()`), et la somme de contrôle correspond aux deux premiers octets
-  Blake2b-512(`b"I105PRE"` || prefix || body). The full payload is encoded via `bs58` using the I105 alphabet.
+  de Blake2b-512(`b"I105PRE"` || préfixe || corps). La charge utile complète est encodée via `bs58` avec l'alphabet I105.
 - **Contrat de registre :** Publication JSON signée (et racine Merkle en option)
   `{discriminant, i105_prefix, chain_alias, endpoints}` avec 24h TTL et
   touches de rotation.
@@ -664,11 +663,11 @@ leurs billets de change.
   aux utilisateurs que le formulaire compressé `i105` est uniquement Sora et sensible aux réécritures IME.
 - **Intégration Torii :** Cache Nexus se manifeste en respectant le TTL, émet
   `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` de manière déterministe, et
-  keep strict account-literal parsing canonical-I105-only (reject compressed and any `@domain` suffix) with canonical I105 output.
+  keep strict account-literal parsing canonical-i105-only (reject compressed and any `@domain` suffix) with canonical i105 output.
 
 ### Formats de réponse Torii
 
-- `GET /v1/accounts` accepte un paramètre de requête `canonical I105 rendering` facultatif et
+- `GET /v1/accounts` accepte un paramètre de requête `canonical i105 rendering` facultatif et
   `POST /v1/accounts/query` accepte le même champ à l'intérieur de l'enveloppe JSON.
   Les valeurs prises en charge sont :
   - `i105` (par défaut) — les réponses émettent des charges utiles I105 canoniques (par exemple,
@@ -679,7 +678,7 @@ leurs billets de change.
   les portefeuilles et les explorateurs pour demander des chaînes compressées pour l'UX Sora uniquement tout en
   en gardant I105 comme valeur par défaut interopérable.
 - Listes des détenteurs d'actifs (`GET /v1/assets/{definition_id}/holders`) et leur JSON
-  la contrepartie de l'enveloppe (`POST …/holders/query`) honore également `canonical I105 rendering`.
+  la contrepartie de l'enveloppe (`POST …/holders/query`) honore également `canonical i105 rendering`.
   Le champ `items[*].account_id` émet des littéraux compressés chaque fois que le
   Le champ paramètre/enveloppe est défini sur `i105_default`, reflétant les comptes
   points de terminaison afin que les explorateurs puissent présenter une sortie cohérente dans tous les répertoires.

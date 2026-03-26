@@ -67,6 +67,7 @@ use iroha_data_model::{
         compute_receipts_root,
     },
     proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId},
+    rwa::RwaId,
     smart_contract::manifest::ContractManifest,
     transaction::{
         Executable, SignedTransaction, TransactionSubmissionReceipt, signed::TransactionBuilder,
@@ -572,6 +573,7 @@ fn parse_account_list(bytes: &[u8]) -> BridgeResult<Vec<AccountId>> {
 enum MetadataTarget {
     Domain(DomainId),
     Account(AccountId),
+    Rwa(RwaId),
     AssetDefinition(AssetDefinitionId),
     Asset(AssetId),
 }
@@ -583,6 +585,10 @@ fn parse_metadata_target(kind: u8, object: String) -> BridgeResult<MetadataTarge
             .map(MetadataTarget::Domain)
             .map_err(|_| BridgeError::MetadataTarget),
         1 => parse_account_id(object).map(MetadataTarget::Account),
+        4 => object
+            .parse::<RwaId>()
+            .map(MetadataTarget::Rwa)
+            .map_err(|_| BridgeError::MetadataTarget),
         2 => parse_asset_definition(object).map(MetadataTarget::AssetDefinition),
         3 => AssetId::parse_literal(&object)
             .map(MetadataTarget::Asset)
@@ -599,6 +605,7 @@ fn build_set_metadata_instruction(
     match target {
         MetadataTarget::Domain(id) => InstructionBox::from(SetKeyValue::domain(id, key, value)),
         MetadataTarget::Account(id) => InstructionBox::from(SetKeyValue::account(id, key, value)),
+        MetadataTarget::Rwa(id) => InstructionBox::from(SetKeyValue::rwa(id, key, value)),
         MetadataTarget::AssetDefinition(id) => {
             InstructionBox::from(SetKeyValue::asset_definition(id, key, value))
         }
@@ -610,6 +617,7 @@ fn build_remove_metadata_instruction(target: MetadataTarget, key: Name) -> Instr
     match target {
         MetadataTarget::Domain(id) => InstructionBox::from(RemoveKeyValue::domain(id, key)),
         MetadataTarget::Account(id) => InstructionBox::from(RemoveKeyValue::account(id, key)),
+        MetadataTarget::Rwa(id) => InstructionBox::from(RemoveKeyValue::rwa(id, key)),
         MetadataTarget::AssetDefinition(id) => {
             InstructionBox::from(RemoveKeyValue::asset_definition(id, key))
         }
@@ -9400,9 +9408,9 @@ pub unsafe extern "C" fn connect_norito_decode_signed_transaction_json(
 /// Decode a canonical public `AssetId` literal into canonical readable JSON fields.
 ///
 /// Response JSON object fields:
-/// - `asset_id`: canonical public asset id (`<asset-definition-id>#<account-id>`)
+/// - `asset_id`: canonical public asset id (`<asset-definition-id>#<i105-account-id>`)
 /// - `asset_definition_id`: canonical asset definition id (unprefixed Base58 address)
-/// - `account_id`: canonical account id (I105 literal)
+/// - `account_id`: canonical i105 account id (i105 literal)
 ///
 /// # Safety
 /// All pointer arguments must be valid and non-null.
@@ -11784,6 +11792,7 @@ mod tests {
     use std::{ffi::CString, mem::MaybeUninit};
 
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::isi::rwa::RwaInstructionBox;
 
     use super::*;
 
@@ -11882,6 +11891,10 @@ mod tests {
 
     fn sample_identifier_signature_hex() -> String {
         "ab".repeat(64)
+    }
+
+    fn sample_rwa_id_literal() -> String {
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities".to_owned()
     }
 
     const LIVE_EMAIL_CLAIM_SIGNATURE_HEX: &str = "9262CA8C755D47207ED0CD2E19892DFAA4612701A36DCAF87173D42CC754DFB6A66158856FDFD25974C2A11E9FC32940CA0DF18CAC25A38CB5DEDC4625E67900";
@@ -12048,6 +12061,56 @@ mod tests {
         .expect("parse swift-normalized claim receipt");
 
         assert_eq!(receipt.payload, payload);
+    }
+
+    #[test]
+    fn rwa_metadata_target_parses_kind_four() {
+        let literal = sample_rwa_id_literal();
+        let target = parse_metadata_target(4, literal.clone()).expect("parse rwa target");
+        match target {
+            MetadataTarget::Rwa(id) => assert_eq!(id.to_string(), literal),
+            _ => panic!("expected rwa metadata target"),
+        }
+    }
+
+    #[test]
+    fn rwa_metadata_target_builds_set_key_value_in_rwa_instruction_box() {
+        let literal = sample_rwa_id_literal();
+        let target = parse_metadata_target(4, literal.clone()).expect("parse rwa target");
+        let key: Name = "serial".parse().expect("valid name");
+        let instruction =
+            build_set_metadata_instruction(target, key.clone(), Json::from("vault-01"));
+        let rwa = instruction
+            .as_any()
+            .downcast_ref::<RwaInstructionBox>()
+            .expect("rwa instruction box");
+        match rwa {
+            RwaInstructionBox::SetKeyValue(inner) => {
+                assert_eq!(inner.object.to_string(), literal);
+                assert_eq!(inner.key, key);
+                assert_eq!(inner.value, Json::from("vault-01"));
+            }
+            other => panic!("expected SetKeyValue variant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rwa_metadata_target_builds_remove_key_value_in_rwa_instruction_box() {
+        let literal = sample_rwa_id_literal();
+        let target = parse_metadata_target(4, literal.clone()).expect("parse rwa target");
+        let key: Name = "serial".parse().expect("valid name");
+        let instruction = build_remove_metadata_instruction(target, key.clone());
+        let rwa = instruction
+            .as_any()
+            .downcast_ref::<RwaInstructionBox>()
+            .expect("rwa instruction box");
+        match rwa {
+            RwaInstructionBox::RemoveKeyValue(inner) => {
+                assert_eq!(inner.object.to_string(), literal);
+                assert_eq!(inner.key, key);
+            }
+            other => panic!("expected RemoveKeyValue variant, got {other:?}"),
+        }
     }
 
     #[test]

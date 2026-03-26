@@ -134,7 +134,7 @@ Lane manifests live under the directory configured via `nexus.registry.manifest_
 
 Key requirements:
 
-- Validators **must** be canonical I105 account IDs (no `@domain` suffix; keep domain routing in dedicated fields) that exist in the catalog. Set `quorum` to the multisig threshold (≥2).
+- Validators **must** be canonical i105 account IDs (no `@domain` suffix; keep domain routing in dedicated fields) that exist in the catalog. Set `quorum` to the multisig threshold (≥2).
 - Protected namespaces are enforced by `Queue::push` (see `crates/iroha_core/src/queue.rs`), so all CBDC contracts must specify `gov_namespace` + `gov_contract_id`.
 - `composability_group` fields follow the schema described in `docs/source/nexus.md` §8.6; the owner (CBDC lane) supplies the whitelist and quotas. Whitelisted DS manifests only specify the `group_id_hex` + `activation_epoch`.
 - After copying the manifest, run `cargo test -p integration_tests nexus::lane_registry -- --nocapture` to confirm `LaneManifestRegistry::from_config` loads it.

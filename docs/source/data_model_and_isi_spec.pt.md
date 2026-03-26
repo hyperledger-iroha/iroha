@@ -30,7 +30,7 @@ Os IDs têm formatos de string estáveis com `Display`/`FromStr` ida e volta. As
 - `AssetDefinitionId` — `unprefixed Base58 address with versioning and checksum` canônico (bytes UUID-v4). Definição: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. Os literais `alias` devem ser `<name>#<domain>.<dataspace>` ou `<name>#<dataspace>`, com `<name>` igual ao nome da definição de ativo. Código: `crates/iroha_data_model/src/asset/definition.rs`.
 
   - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`, where `status` is `permanent`, `leased_active`, `leased_grace`, or `expired_pending_cleanup`. Alias selectors resolve against the latest committed block creation time and stop resolving after grace even before sweep removes stale bindings.
-- `AssetId`: literal codificado canônico `<asset-definition-id>#<account-id>` (formulários textuais legados não são suportados na primeira versão).- `NftId` — `nft$domain`. NFT: `{ id, content: Metadata, owned_by }`. Código: `crates/iroha_data_model/src/nft.rs`.
+- `AssetId`: literal codificado canônico `<asset-definition-id>#<i105-account-id>` (formulários textuais legados não são suportados na primeira versão).- `NftId` — `nft$domain`. NFT: `{ id, content: Metadata, owned_by }`. Código: `crates/iroha_data_model/src/nft.rs`.
 - `RoleId` — `name`. Função: `{ id, permissions: BTreeSet<Permission> }` com construtor `NewRole { inner: Role, grant_to }`. Código: `crates/iroha_data_model/src/role.rs`.
 - `Permission` — `{ name: Ident, payload: Json }`. Código: `crates/iroha_data_model/src/permission.rs`.
 - `PeerId`/`Peer` — identidade do par (chave pública) e endereço. Código: `crates/iroha_data_model/src/peer.rs`.
@@ -206,7 +206,7 @@ Envelope comum: `InstructionExecutionError` com variantes para erros de avaliaç
 
 Nota de migração:
 - Os IDs de definição de ativos textuais `name#domain` não são intencionalmente suportados na primeira versão.
-- Os IDs de ativos nos limites de criação/gravação/transferência permanecem canônicos `<asset-definition-id>#<account-id>`; use `iroha tools encode asset-id` com `--definition <base58-asset-definition-id>` ou `--alias ...` mais `--account`.
+- Os IDs de ativos nos limites de criação/gravação/transferência permanecem canônicos `<asset-definition-id>#<i105-account-id>`; use `iroha tools encode asset-id` com `--definition <base58-asset-definition-id>` ou `--alias ...` mais `--account`.
 
 ---
 

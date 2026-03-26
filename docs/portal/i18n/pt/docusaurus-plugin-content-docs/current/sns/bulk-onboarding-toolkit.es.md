@@ -35,7 +35,7 @@ O analisador requer o seguinte fio encabezado (a ordem é flexível):
 |--------|-----------|-------------|
 | `label` | Si | Etiqueta solicitada (aceita mayus/minus; a herramienta normaliza conforme Norm v1 e UTS-46). |
 | `suffix_id` | Sim | Identificador numérico de sufixo (decimal ou `0x` hex). |
-| `owner` | Si | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` | Si | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` | Si | Entero `1..=255`. |
 | `payment_asset_id` | Si | Ativo de liquidação (por exemplo `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Si | Enteros sem sinal que representa unidades nativas do ativo. |

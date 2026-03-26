@@ -10387,7 +10387,7 @@ impl GatewayDenylistRecord {
                 if trimmed.is_empty() {
                     return Err(eyre!("`account_id` must not be empty"));
                 }
-                // Validate as a strict canonical I105 account literal.
+                // Validate as a strict canonical i105 account literal.
                 resolve(trimmed).wrap_err("failed to resolve `account_id`")?;
                 if let Some(alias) = self.account_alias.as_deref()
                     && alias.trim().is_empty()
@@ -12293,7 +12293,7 @@ mod tests {
         let record = denylist_record_for_account(&non_canonical_i105);
         assert!(
             record.validate(&resolve_account_literal).is_err(),
-            "non-canonical I105 literal should be rejected"
+            "non-canonical i105 literal should be rejected"
         );
     }
 

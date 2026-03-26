@@ -7,8 +7,8 @@ package org.hyperledger.iroha.sdk.address
  * Composes canonical public asset identifiers.
  *
  * Public asset literals use:
- * - `<asset-definition-id>#<account-id>`
- * - `<asset-definition-id>#<account-id>#dataspace:<id>`
+ * - `<asset-definition-id>#<i105-account-id>`
+ * - `<asset-definition-id>#<i105-account-id>#dataspace:<id>`
  */
 object AssetIdEncoder {
 
@@ -55,17 +55,17 @@ object AssetIdEncoder {
     private fun canonicalAccountId(accountId: String): String {
         val trimmed = accountId.trim()
         require(trimmed == accountId && trimmed.isNotEmpty()) {
-            "accountId must use canonical I105 form"
+            "accountId must use canonical i105 form"
         }
         val parsed = try {
             AccountAddress.parseEncodedIgnoringCurveSupport(trimmed, null).address
         } catch (ex: AccountAddressException) {
-            throw IllegalArgumentException("accountId must use canonical I105 form", ex)
+            throw IllegalArgumentException("accountId must use canonical i105 form", ex)
         }
         return try {
             parsed.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
         } catch (ex: AccountAddressException) {
-            throw IllegalArgumentException("accountId must use canonical I105 form", ex)
+            throw IllegalArgumentException("accountId must use canonical i105 form", ex)
         }
     }
 }

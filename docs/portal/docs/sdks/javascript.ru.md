@@ -247,7 +247,7 @@ Explorer telemetry provides typed helpers for the `/v1/explorer/metrics` and
 `/v1/explorer/accounts/{account_id}/qr` endpoints so dashboards can replay the
 same snapshots that power the portal. `getExplorerMetrics()` normalises the
 payload and returns `null` when the route is disabled. Pair it with
-`getExplorerAccountQr()` whenever you need I105 literals plus inline
+`getExplorerAccountQr()` whenever you need i105 literals plus inline
 SVG for share buttons.
 
 ```ts
@@ -270,8 +270,8 @@ console.log(
 );
 ```
 
-Explorer QR helpers now return canonical I105 output by default.
-selectors; omit the override for the preferred I105 output or request `i105_qr`
+Explorer QR helpers now return canonical i105 output by default.
+selectors; omit the override for the preferred i105 output or request `i105_qr`
 when you need the QR-safe variant. The i105-default literal is the Sora-only option for UX. The helper always returns the canonical identifier,
 the selected literal, and metadata (network prefix, QR version/modules, error
 correction tier, and inline SVG), so CI/CD can publish the same payloads that

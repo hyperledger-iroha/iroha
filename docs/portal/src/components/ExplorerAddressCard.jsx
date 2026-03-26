@@ -3,7 +3,7 @@ import React, {useState} from 'react';
 const SAMPLE_ADDRESS = {
   i105: '6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw',
   i105Default: 'sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE',
-  i105Warning: 'i105-default literals are Sora-only compatibility output; prefer canonical I105.',
+  i105Warning: 'i105-default literals are Sora-only compatibility output; prefer canonical i105.',
 };
 
 export default function ExplorerAddressCard() {
@@ -35,12 +35,12 @@ export default function ExplorerAddressCard() {
       <div className="card__header">
         <h3>Explorer copy instrumentation</h3>
         <p id={domainHelperId}>
-          I105 literals are global and selector-free. Domain/dataspace access is granted on-chain.
+          i105 literals are global and selector-free. Domain/dataspace access is granted on-chain.
         </p>
       </div>
       <div className="card__body" aria-describedby={domainHelperId}>
         <dl>
-          <dt>I105 literal (preferred)</dt>
+          <dt>i105 literal (preferred)</dt>
           <dd>
             <code>{SAMPLE_ADDRESS.i105}</code>
           </dd>

@@ -80,7 +80,7 @@ public final class AccountAddress {
   }
 
   /**
-   * Convenience helper that surfaces canonical I105 alongside the shared warning string.
+   * Convenience helper that surfaces canonical i105 alongside the shared warning string.
    * Follow {@code docs/source/sns/address_display_guidelines.md} when presenting these values.
    */
   public DisplayFormats displayFormats() throws AccountAddressException {
@@ -88,7 +88,7 @@ public final class AccountAddress {
   }
 
   /**
-   * Convenience helper that surfaces canonical I105 alongside the shared warning string.
+   * Convenience helper that surfaces canonical i105 alongside the shared warning string.
    * Follow {@code docs/source/sns/address_display_guidelines.md} when presenting these values.
    */
   public DisplayFormats displayFormats(final int discriminant) throws AccountAddressException {
@@ -282,12 +282,12 @@ public final class AccountAddress {
     if (trimmed.contains("@")) {
       throw new AccountAddressException(
           AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
-          "account address literals must not include @domain; use canonical I105 form");
+          "account address literals must not include @domain; use canonical i105 form");
     }
     if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
       throw new AccountAddressException(
           AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
-          "canonical hex account addresses are not accepted; use canonical I105 form");
+          "canonical hex account addresses are not accepted; use canonical i105 form");
     }
     return new ParseResult(fromI105(trimmed, expectedPrefix), Format.I105);
   }
@@ -305,12 +305,12 @@ public final class AccountAddress {
     if (trimmed.contains("@")) {
       throw new AccountAddressException(
           AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
-          "account address literals must not include @domain; use canonical I105 form");
+          "account address literals must not include @domain; use canonical i105 form");
     }
     if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
       throw new AccountAddressException(
           AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
-          "canonical hex account addresses are not accepted; use canonical I105 form");
+          "canonical hex account addresses are not accepted; use canonical i105 form");
     }
     return new ParseResult(fromI105(trimmed, expectedPrefix), Format.I105);
   }
@@ -329,12 +329,12 @@ public final class AccountAddress {
     if (trimmed.contains("@")) {
       throw new AccountAddressException(
           AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
-          "account address literals must not include @domain; use canonical I105 form");
+          "account address literals must not include @domain; use canonical i105 form");
     }
     if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
       throw new AccountAddressException(
           AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
-          "canonical hex account addresses are not accepted; use canonical I105 form");
+          "canonical hex account addresses are not accepted; use canonical i105 form");
     }
     final byte[] canonical = decodeI105(trimmed, expectedPrefix);
     parseCanonical(canonical, true);

@@ -143,7 +143,7 @@ public final class AccountAddressTests {
 
     final AccountAddress.ParseResult i105Parsed =
         AccountAddress.parseEncoded(i105, AccountAddress.DEFAULT_I105_DISCRIMINANT);
-    assert i105Parsed.format == AccountAddress.Format.I105 : "expected I105 format";
+    assert i105Parsed.format == AccountAddress.Format.I105 : "expected i105 format";
     assert Arrays.equals(address.canonicalBytes(), i105Parsed.address.canonicalBytes())
         : "I105 round-trip mismatch";
   }

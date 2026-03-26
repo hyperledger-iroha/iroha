@@ -12,5 +12,5 @@
   <text x="90" y="264" font-size="15" font-family="Inter,Helvetica,Arial,sans-serif" fill="#3f51b5">Copy I105 (preferred)</text>
   <rect x="380" y="235" width="300" height="46" rx="8" ry="8" fill="#fafafa" stroke="#3f51b5" stroke-width="1.5" />
   <text x="410" y="264" font-size="15" font-family="Inter,Helvetica,Arial,sans-serif" fill="#3f51b5">Copy i105-default (`sora`, Sora-only)</text>
-  <text x="40" y="305" font-size="13" font-family="Inter,Helvetica,Arial,sans-serif" fill="#666">Tooltips: “Copy the preferred I105 form” · “i105-default (`sora`) addresses are Sora-only (second-best)”.</text>
+  <text x="40" y="305" font-size="13" font-family="Inter,Helvetica,Arial,sans-serif" fill="#666">Tooltips: “Copy the preferred i105 form” · “i105-default (`sora`) addresses are Sora-only (second-best)”.</text>
 </svg>

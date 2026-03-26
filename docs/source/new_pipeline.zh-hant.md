@@ -1070,7 +1070,7 @@ struct BridgeReceipt {
   proof_hash: [u8; 32]
   amount: u128
   asset_id: bytes      // canonical Iroha asset id
-  recipient: bytes     // account id / address
+  recipient: bytes     // i105 account id / address
 }
 
 struct BridgeMessage {

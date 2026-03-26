@@ -227,7 +227,7 @@ SPDX-License-Identifier: Apache-2.0
 - Сообщение от автора:
   - `sk_spend` → `nk` (ключ обнулителя), `ivk` (входящий ключ просмотра), `ovk` (исходящий ключ просмотра), `fvk`.
 - Примечания о полезной нагрузке в AEAD и ECDH; Если вы используете ключи просмотра аудитора, выводятся выходные данные.
-- Интерфейс командной строки: `confidential create-keys`, `confidential send`, `confidential export-view-key`, загрузка заметок и заметок. `iroha app zk envelope` Конверты для конвертов/бумаги Norito دون اتصال. Torii используется для ввода данных `POST /v1/confidential/derive-keyset` для шестнадцатеричного формата в формате Base64. Он был убит Биллом Хейлзом Бёрнером.
+- Интерфейс командной строки: `confidential create-keys`, `confidential send`, `confidential export-view-key`, загрузка заметок и заметок. `iroha app zk envelope` Конверты для конвертов/бумаги Norito دون اتصال.
 
 ## Защита от DoS
 - Газовый режим:

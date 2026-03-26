@@ -12,6 +12,7 @@ import {
   normalizeAssetId,
   normalizeIdentifierInput,
   normalizeOpaqueLiteral,
+  normalizeRwaId,
 } from "./normalizers.js";
 import { AccountAddressError } from "./address.js";
 import {
@@ -424,6 +425,25 @@ const EXPLORER_NFT_LIST_OPTION_KEYS = new Set([
 ]);
 const EXPLORER_NFT_ITERATOR_OPTION_KEYS = new Set([
   ...EXPLORER_NFT_LIST_OPTION_KEYS,
+  "pageSize",
+  "maxItems",
+]);
+const EXPLORER_RWA_LIST_OPTION_KEYS = new Set([
+  "page",
+  "perPage",
+  "limit",
+  "offset",
+  "ownedBy",
+  "owned_by",
+  "domainId",
+  "domain_id",
+  "domain",
+  "pageSize",
+  "maxItems",
+  "signal",
+]);
+const EXPLORER_RWA_ITERATOR_OPTION_KEYS = new Set([
+  ...EXPLORER_RWA_LIST_OPTION_KEYS,
   "pageSize",
   "maxItems",
 ]);
@@ -1364,6 +1384,188 @@ export class ToriiClient {
   iterateAccountNfts(accountId, options = {}) {
     const normalizedId = ToriiClient._normalizeAccountId(accountId, "accountId");
     return this.iterateExplorerNfts({ ...options, ownedBy: normalizedId });
+  }
+
+  /**
+   * List RWAs (`GET /v1/rwas`).
+   * @param {IterableListOptions} [options]
+   * @returns {Promise<{items: Array<{id: string}>, total: number}>}
+   */
+  async listRwas(options = {}) {
+    const { requirePermissions, options: rest } = ToriiClient._splitPermissionedIterableOptions(
+      options,
+      "listRwas",
+    );
+    this._assertPermissionRequirement(requirePermissions, "listRwas");
+    return this._listIterable("/v1/rwas", rest, normalizeRwaListResponse);
+  }
+
+  /**
+   * Query RWAs (`POST /v1/rwas/query`).
+   * @param {IterableQueryOptions} [options]
+   * @returns {Promise<{items: Array<{id: string}>, total: number}>}
+   */
+  async queryRwas(options = {}) {
+    const { requirePermissions, options: rest } = ToriiClient._splitPermissionedIterableOptions(
+      options,
+      "queryRwas",
+    );
+    this._assertPermissionRequirement(requirePermissions, "queryRwas");
+    return this._queryIterable("/v1/rwas/query", rest, normalizeRwaListResponse);
+  }
+
+  /**
+   * Iterate over RWAs using automatic pagination.
+   * @param {PaginationIteratorOptions} [options]
+   * @returns {AsyncGenerator<{id: string}, void, unknown>}
+   */
+  iterateRwas(options = {}) {
+    const { requirePermissions, options: rest } = ToriiClient._splitPermissionedIterableOptions(
+      options,
+      "iterateRwas",
+    );
+    this._assertPermissionRequirement(requirePermissions, "iterateRwas");
+    return this._iterateIterable(this.listRwas, rest);
+  }
+
+  /**
+   * Iterate RWAs via the structured query endpoint.
+   * @param {PaginationIteratorOptions} [options]
+   * @returns {AsyncGenerator<{id: string}, void, unknown>}
+   */
+  iterateRwasQuery(options = {}) {
+    const { requirePermissions, options: rest } = ToriiClient._splitPermissionedIterableOptions(
+      options,
+      "iterateRwasQuery",
+    );
+    this._assertPermissionRequirement(requirePermissions, "iterateRwasQuery");
+    return this._iterateIterable(this.queryRwas, rest);
+  }
+
+  /**
+   * List explorer RWAs with optional owner/domain filters (`GET /v1/explorer/rwas`).
+   * @param {ExplorerRwaListOptions} [options]
+   * @returns {Promise<{pagination: ToriiExplorerPaginationMeta, items: Array<object>}>}
+   */
+  async listExplorerRwas(options = {}) {
+    const normalized = ToriiClient._normalizeExplorerRwaListOptions(
+      options,
+      "listExplorerRwas options",
+    );
+    const params = {
+      page: normalized.page,
+      per_page: normalized.perPage,
+    };
+    if (normalized.ownedBy !== undefined) {
+      params.owned_by = normalized.ownedBy;
+    }
+    if (normalized.domain !== undefined) {
+      params.domain = normalized.domain;
+    }
+    const response = await this._request("GET", "/v1/explorer/rwas", {
+      params,
+      headers: { Accept: "application/json" },
+      signal: normalized.signal,
+    });
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    if (!payload) {
+      throw new Error("explorer rwas endpoint returned no payload");
+    }
+    return normalizeExplorerRwaPage(payload);
+  }
+
+  /**
+   * Get explorer detail for a single RWA (`GET /v1/explorer/rwas/{rwaId}`).
+   * @param {string} rwaId
+   * @param {{ signal?: AbortSignalLike }} [options]
+   * @returns {Promise<object>}
+   */
+  async getExplorerRwaDetail(rwaId, options = {}) {
+    const normalizedId = normalizeRwaId(rwaId, "rwaId");
+    const { signal } = ToriiClient._normalizeOptionsWithSignal(options, "getExplorerRwaDetail");
+    const response = await this._request(
+      "GET",
+      `/v1/explorer/rwas/${encodeURIComponent(normalizedId)}`,
+      {
+        headers: { Accept: "application/json" },
+        signal,
+      },
+    );
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    if (!payload) {
+      throw new Error("explorer rwa detail endpoint returned no payload");
+    }
+    return normalizeExplorerRwaRecord(payload, "explorer rwa detail response");
+  }
+
+  /**
+   * Iterate explorer RWAs with optional owner/domain filters.
+   * @param {ExplorerRwaIteratorOptions} [options]
+   * @returns {AsyncGenerator<object, void, unknown>}
+   */
+  iterateExplorerRwas(options = {}) {
+    const normalized = ToriiClient._normalizeExplorerRwaIteratorOptions(
+      options,
+      "iterateExplorerRwas options",
+    );
+    const { maxItems, ...listOptions } = normalized;
+    const self = this;
+    return (async function* iterator() {
+      let page = normalized.page;
+      let remaining = maxItems;
+      while (true) {
+        const pageResult = await self.listExplorerRwas({
+          ...listOptions,
+          page,
+          perPage: normalized.perPage,
+        });
+        const items = Array.isArray(pageResult?.items) ? pageResult.items : [];
+        if (items.length === 0) {
+          return;
+        }
+        for (const item of items) {
+          yield item;
+          if (remaining !== null) {
+            remaining -= 1;
+            if (remaining <= 0) {
+              return;
+            }
+          }
+        }
+        const { pagination } = pageResult;
+        if (
+          (pagination && pagination.totalPages && page >= pagination.totalPages) ||
+          items.length < normalized.perPage
+        ) {
+          return;
+        }
+        page += 1;
+      }
+    })();
+  }
+
+  /**
+   * List explorer RWAs owned by an account (`GET /v1/explorer/rwas?owned_by=...`).
+   * @param {string} accountId
+   * @param {ExplorerRwaListOptions} [options]
+   * @returns {Promise<{pagination: ToriiExplorerPaginationMeta, items: Array<object>}>}
+   */
+  async listAccountRwas(accountId, options = {}) {
+    const normalizedId = ToriiClient._normalizeAccountId(accountId, "accountId");
+    return this.listExplorerRwas({ ...options, ownedBy: normalizedId });
+  }
+
+  /**
+   * Iterate explorer RWAs owned by an account.
+   * @param {string} accountId
+   * @param {ExplorerRwaIteratorOptions} [options]
+   * @returns {AsyncGenerator<object, void, unknown>}
+   */
+  iterateAccountRwas(accountId, options = {}) {
+    const normalizedId = ToriiClient._normalizeAccountId(accountId, "accountId");
+    return this.iterateExplorerRwas({ ...options, ownedBy: normalizedId });
   }
 
   /**
@@ -7920,22 +8122,28 @@ export class ToriiClient {
       url.host === this._baseHost && protocol === this._baseProtocol;
     const initHeaders = this._createHeaders(options.headers);
     const hasCredentials = headersContainCredentials(initHeaders);
+    const canonicalAuth = options.canonicalAuth
+      ? ToriiClient._normalizeCanonicalAuth(options.canonicalAuth)
+      : null;
+    const hasCanonicalAuth = canonicalAuth !== null;
+    const hasSensitiveBody = bodyContainsSensitiveKeyMaterial(options.body, initHeaders);
+    const hasSensitiveTransport = hasCredentials || hasCanonicalAuth || hasSensitiveBody;
     const allowAbsoluteUrl = options.allowAbsoluteUrl === true;
     const methodUpper = String(method).toUpperCase();
-    if (hasCredentials) {
+    if (hasSensitiveTransport) {
       if (protocol !== this._baseProtocol) {
         throw new Error(
-          `ToriiClient: refusing to send credentials over mismatched scheme ${url.protocol}; use ${this._baseProtocol.replace(":", "")} URLs derived from the client base URL.`,
+          `ToriiClient: refusing to send sensitive request material over mismatched scheme ${url.protocol}; use ${this._baseProtocol.replace(":", "")} URLs derived from the client base URL.`,
         );
       }
       if (pathIsAbsolute && url.host !== this._baseHost) {
         throw new Error(
-          `ToriiClient: refusing to send credentials to mismatched host ${url.host} (expected ${this._baseHost}); use relative paths on the configured base URL.`,
+          `ToriiClient: refusing to send sensitive request material to mismatched host ${url.host} (expected ${this._baseHost}); use relative paths on the configured base URL.`,
         );
       }
       if (!this._allowInsecure && !isSecureProtocol(protocol)) {
         throw new Error(
-          `ToriiClient: refusing to send credentials over insecure protocol ${url.protocol}; use https or allowInsecure: true.`,
+          `ToriiClient: refusing to send sensitive request material over insecure protocol ${url.protocol}; use https or allowInsecure: true.`,
         );
       }
     } else if (pathIsAbsolute && !originMatches && !allowAbsoluteUrl) {
@@ -7943,11 +8151,13 @@ export class ToriiClient {
         "ToriiClient: absolute URLs are blocked when no credentials are attached; pass allowAbsoluteUrl: true to override.",
       );
     }
-    if (hasCredentials && this._allowInsecure && !isSecureProtocol(protocol)) {
+    if (hasSensitiveTransport && this._allowInsecure && !isSecureProtocol(protocol)) {
       this._emitInsecureTransportTelemetry({
         client: "torii",
         method: methodUpper,
-        hasCredentials: true,
+        hasCredentials,
+        hasSensitiveBody,
+        hasCanonicalAuth,
         allowInsecure: true,
         url: url.toString(),
         baseUrl: this._baseUrl,
@@ -7975,26 +8185,23 @@ export class ToriiClient {
       headers: initHeaders,
       body: options.body,
     };
-    if (options.canonicalAuth) {
-      const canonicalAuth = ToriiClient._normalizeCanonicalAuth(options.canonicalAuth);
-      if (canonicalAuth) {
-        const bodyForSigning =
-          init.body === undefined || init.body === null
-            ? Buffer.alloc(0)
-            : Buffer.isBuffer(init.body)
-              ? init.body
-              : Buffer.from(init.body);
-        const canonicalHeaders = buildCanonicalRequestHeaders({
-          accountId: canonicalAuth.accountId,
-          method: methodUpper,
-          path: url.pathname,
-          query: url.search.startsWith("?") ? url.search.slice(1) : url.search,
-          body: bodyForSigning,
-          privateKey: canonicalAuth.privateKey,
-        });
-        for (const [key, value] of Object.entries(canonicalHeaders)) {
-          setHeader(initHeaders, key, value);
-        }
+    if (canonicalAuth) {
+      const bodyForSigning =
+        init.body === undefined || init.body === null
+          ? Buffer.alloc(0)
+          : Buffer.isBuffer(init.body)
+            ? init.body
+            : Buffer.from(init.body);
+      const canonicalHeaders = buildCanonicalRequestHeaders({
+        accountId: canonicalAuth.accountId,
+        method: methodUpper,
+        path: url.pathname,
+        query: url.search.startsWith("?") ? url.search.slice(1) : url.search,
+        body: bodyForSigning,
+        privateKey: canonicalAuth.privateKey,
+      });
+      for (const [key, value] of Object.entries(canonicalHeaders)) {
+        setHeader(initHeaders, key, value);
       }
     }
     const retryProfileName =
@@ -9509,6 +9716,78 @@ export class ToriiClient {
     );
     const { pageSize, maxItems, ...listOptions } = normalized;
     const base = ToriiClient._normalizeExplorerNftListOptions(listOptions, context);
+    const iterator = { ...base };
+    if (pageSize !== undefined && pageSize !== null) {
+      iterator.perPage = ToriiClient._normalizeUnsignedInteger(
+        pageSize,
+        `${context}.pageSize`,
+        { allowZero: false },
+      );
+    }
+    if (maxItems !== undefined && maxItems !== null) {
+      iterator.maxItems = ToriiClient._normalizeUnsignedInteger(
+        maxItems,
+        `${context}.maxItems`,
+        { allowZero: false },
+      );
+    } else {
+      iterator.maxItems = null;
+    }
+    return iterator;
+  }
+
+  static _normalizeExplorerRwaListOptions(options = {}, context = "explorer rwa options") {
+    const normalized = ToriiClient._normalizeIterableOptions(
+      options,
+      context,
+      EXPLORER_RWA_LIST_OPTION_KEYS,
+    );
+    const { signal } = normalizeSignalOption(normalized, context);
+    const perPageSource =
+      normalized.perPage ?? normalized.limit ?? normalized.per_page ?? normalized.limit;
+    const perPage = ToriiClient._normalizeUnsignedInteger(
+      perPageSource ?? DEFAULT_PAGE_SIZE,
+      `${context}.perPage`,
+      { allowZero: false },
+    );
+    let pageValue = normalized.page ?? normalized.page_number ?? null;
+    if (pageValue !== null && pageValue !== undefined) {
+      pageValue = ToriiClient._normalizeUnsignedInteger(
+        pageValue,
+        `${context}.page`,
+        { allowZero: false },
+      );
+    } else {
+      const offset = ToriiClient._normalizeOffset(normalized.offset);
+      pageValue = Math.floor(offset / perPage) + 1;
+    }
+    const ownedByRaw = normalized.ownedBy ?? normalized.owned_by;
+    const domainRaw = normalized.domainId ?? normalized.domain_id ?? normalized.domain;
+    const base = {
+      page: pageValue,
+      perPage,
+      signal,
+    };
+    if (ownedByRaw !== undefined && ownedByRaw !== null) {
+      base.ownedBy = ToriiClient._normalizeAccountId(ownedByRaw, `${context}.ownedBy`);
+    }
+    if (domainRaw !== undefined && domainRaw !== null) {
+      base.domain = ToriiClient._requireDomainId(domainRaw, `${context}.domainId`);
+    }
+    return base;
+  }
+
+  static _normalizeExplorerRwaIteratorOptions(
+    options = {},
+    context = "explorer rwa iterator options",
+  ) {
+    const normalized = ToriiClient._normalizeIterableOptions(
+      options,
+      context,
+      EXPLORER_RWA_ITERATOR_OPTION_KEYS,
+    );
+    const { pageSize, maxItems, ...listOptions } = normalized;
+    const base = ToriiClient._normalizeExplorerRwaListOptions(listOptions, context);
     const iterator = { ...base };
     if (pageSize !== undefined && pageSize !== null) {
       iterator.perPage = ToriiClient._normalizeUnsignedInteger(
@@ -14249,6 +14528,60 @@ function normalizeExplorerNftPage(payload) {
   };
 }
 
+function normalizeExplorerRwaRecord(payload, context) {
+  const record = ensureRecord(payload ?? {}, context);
+  const id = requireNonEmptyString(record.id ?? "", `${context}.id`);
+  const ownedBy = requireNonEmptyString(record.owned_by ?? "", `${context}.owned_by`);
+  const quantity = requireNonEmptyString(record.quantity ?? "", `${context}.quantity`);
+  const heldQuantity = requireNonEmptyString(
+    record.held_quantity ?? "",
+    `${context}.held_quantity`,
+  );
+  const primaryReference = requireNonEmptyString(
+    record.primary_reference ?? "",
+    `${context}.primary_reference`,
+  );
+  if (typeof record.is_frozen !== "boolean") {
+    throw new TypeError(`${context}.is_frozen must be a boolean`);
+  }
+  let status = null;
+  if (record.status !== undefined && record.status !== null) {
+    status = requireNonEmptyString(record.status, `${context}.status`);
+  }
+  const metadata =
+    record.metadata === undefined || record.metadata === null
+      ? {}
+      : cloneJsonValue(record.metadata, `${context}.metadata`);
+  return {
+    id,
+    ownedBy,
+    quantity,
+    heldQuantity,
+    primaryReference,
+    status,
+    isFrozen: record.is_frozen,
+    metadata,
+    raw: cloneJsonValue(record, `${context}.raw`),
+  };
+}
+
+function normalizeExplorerRwaPage(payload) {
+  const record = ensureRecord(payload ?? {}, "explorer rwas response");
+  const items = record.items;
+  if (!Array.isArray(items)) {
+    throw new TypeError("explorer rwas response.items must be an array");
+  }
+  return {
+    pagination: normalizeExplorerPaginationMeta(
+      record.pagination ?? {},
+      "explorer rwas response.pagination",
+    ),
+    items: items.map((item, index) =>
+      normalizeExplorerRwaRecord(item, `explorer rwas response.items[${index}]`),
+    ),
+  };
+}
+
 function normalizeExplorerBlocksPage(payload) {
   const record = ensureRecord(payload ?? {}, "explorer blocks response");
   const items = record.items;
@@ -15328,6 +15661,39 @@ function headersContainCredentials(headers) {
   return (
     hasHeader(headers, "authorization") ||
     hasHeader(headers, "x-api-token")
+  );
+}
+
+function bodyContainsSensitiveKeyMaterial(body, headers) {
+  if (body == null) {
+    return false;
+  }
+  const contentTypeKey = findHeaderKey(headers, "content-type");
+  const contentType =
+    contentTypeKey && headers[contentTypeKey] != null
+      ? String(headers[contentTypeKey]).toLowerCase()
+      : null;
+  const shouldInspectAsText =
+    typeof body === "string" || Boolean(contentType && contentType.includes("json"));
+  if (!shouldInspectAsText) {
+    return false;
+  }
+  let text;
+  if (typeof body === "string") {
+    text = body;
+  } else if (Buffer.isBuffer(body)) {
+    text = body.toString("utf8");
+  } else if (body instanceof Uint8Array) {
+    text = Buffer.from(body).toString("utf8");
+  } else if (ArrayBuffer.isView(body)) {
+    text = Buffer.from(body.buffer, body.byteOffset, body.byteLength).toString("utf8");
+  } else if (body instanceof ArrayBuffer) {
+    text = Buffer.from(body).toString("utf8");
+  } else {
+    return false;
+  }
+  return /"(?:private_key|privateKey|private_key_hex|privateKeyHex|private_key_bytes|privateKeyBytes|private_key_multihash|privateKeyMultihash)"\s*:/u.test(
+    text,
   );
 }
 
@@ -17136,10 +17502,18 @@ function normalizeMultisigAccountSelector(input, context) {
 function normalizeMultisigAccountAliasLiteral(value, context) {
   const alias = requireNonEmptyString(value, context).trim();
   const parts = alias.split("@");
-  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+  const scopeParts = parts[1]?.split(".") ?? [];
+  if (
+    parts.length !== 2 ||
+    !parts[0] ||
+    !parts[1] ||
+    scopeParts.length < 1 ||
+    scopeParts.length > 2 ||
+    scopeParts.some((part) => !part)
+  ) {
     throw createValidationError(
       ValidationErrorCode.INVALID_STRING,
-      `${context} must use label@domain form`,
+      `${context} must use label@dataspace or label@domain.dataspace form`,
       normalizeErrorPath(context),
     );
   }
@@ -20913,6 +21287,10 @@ function normalizeAssetDefinitionListResponse(payload) {
 
 function normalizeNftListResponse(payload) {
   return normalizeIdListResponse(payload, "nft list response");
+}
+
+function normalizeRwaListResponse(payload) {
+  return normalizeIdListResponse(payload, "rwa list response");
 }
 
 function normalizeSignalOption(options, context) {

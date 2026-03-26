@@ -3,8 +3,8 @@
 //!
 //! This module hosts minimal DTOs and handlers for governance endpoints
 //! described in `gov.md` and `docs/source/contract_deployment.md`.
-//! Handlers validate inputs, build instruction skeletons, and optionally submit
-//! signed transactions when `authority`/`private_key` are provided.
+//! Handlers validate inputs, build instruction skeletons, and reject legacy
+//! `private_key` payloads so callers must submit locally signed transactions.
 //!
 //! Notes
 //! - JSON parsing uses Norito's serde wrappers via the `NoritoJson` extractor.
@@ -166,7 +166,7 @@ pub struct ProposeDeployContractDto {
     /// Optional authority (AccountId string) to submit the proposal directly.
     #[norito(default)]
     pub authority: Option<String>,
-    /// Optional private key (multihash string) to sign and submit the proposal.
+    /// Legacy private key field; rejected when provided.
     #[norito(default)]
     pub private_key: Option<String>,
 }
@@ -340,9 +340,9 @@ fn reject_zk_public_input_aliases(map: &json::Map) -> Result<(), String> {
 
 fn ensure_owner_canonical(owner: &str) -> Result<(), String> {
     let canonical = iroha_data_model::account::AccountId::canonicalize(owner)
-        .map_err(|_| "owner must be a canonical account id".to_string())?;
+        .map_err(|_| "owner must be a canonical i105 account id".to_string())?;
     if canonical != owner {
-        return Err("owner must use canonical account id form".to_string());
+        return Err("owner must use canonical i105 account id form".to_string());
     }
     Ok(())
 }
@@ -356,7 +356,7 @@ fn reject_zk_public_input_owner(map: &json::Map) -> Result<(), String> {
     }
     let owner = value
         .as_str()
-        .ok_or_else(|| "owner must be a canonical account id".to_string())?;
+        .ok_or_else(|| "owner must be a canonical i105 account id".to_string())?;
     ensure_owner_canonical(owner)
 }
 
@@ -492,7 +492,7 @@ pub struct ZkBallotV1BallotProofDto {
 #[cfg(feature = "zk-ballot")]
 /// POST /v1/gov/ballots/zk-v1 — accept BallotProof-like DTO and build an instruction skeleton.
 ///
-/// If `private_key` is provided, Torii signs and submits the ballot transaction.
+/// Legacy `private_key` payloads are rejected; callers must submit locally signed transactions.
 ///
 /// # Errors
 /// Returns `crate::Error::Query` for invalid chain id or authority. Invalid payloads are
@@ -611,7 +611,7 @@ pub async fn handle_gov_ballot_zk_v1(
 #[cfg(feature = "zk-ballot")]
 /// POST /v1/gov/ballots/zk-v1/ballot-proof — accept BallotProof JSON and build instruction skeleton.
 ///
-/// If `private_key` is provided, Torii signs and submits the ballot transaction.
+/// Legacy `private_key` payloads are rejected; callers must submit locally signed transactions.
 ///
 /// # Errors
 /// Returns `crate::Error::Query` for invalid chain id or authority. Malformed payloads are
@@ -1374,7 +1374,7 @@ pub struct FinalizeDto {
     /// Optional authority (AccountId string) to submit the finalize transaction.
     #[norito(default)]
     pub authority: Option<String>,
-    /// Optional private key (multihash string) to sign and submit.
+    /// Legacy private key field; rejected when provided.
     #[norito(default)]
     pub private_key: Option<String>,
 }
@@ -1390,7 +1390,7 @@ pub struct FinalizeResponse {
 
 /// Handler for finalizing a referendum (draft transaction).
 ///
-/// If `authority` and `private_key` are provided, Torii submits the transaction.
+/// Legacy `private_key` payloads are rejected; callers must submit locally signed transactions.
 ///
 /// # Errors
 /// Returns `crate::Error::Query` when `proposal_id` is not 32-byte hex.
@@ -1458,7 +1458,7 @@ pub struct EnactDto {
     /// Optional authority (AccountId string) to submit the enact transaction.
     #[norito(default)]
     pub authority: Option<String>,
-    /// Optional private key (multihash string) to sign and submit.
+    /// Legacy private key field; rejected when provided.
     #[norito(default)]
     pub private_key: Option<String>,
 }
@@ -1472,7 +1472,7 @@ pub struct EnactResponse {
 
 /// Handler for building an enactment transaction (draft only).
 ///
-/// If `authority` and `private_key` are provided, Torii submits the transaction.
+/// Legacy `private_key` payloads are rejected; callers must submit locally signed transactions.
 ///
 /// # Errors
 /// Returns `crate::Error::Query` when the proposal or preimage hashes are not 32-byte hex strings.
@@ -1788,8 +1788,8 @@ pub struct InstancesQuery {
 
 /// POST /v1/gov/propose-deploy — build a proposal id and instruction skeleton.
 ///
-/// If `authority` and `private_key` are provided, Torii signs and submits the
-/// transaction before returning the draft instructions.
+/// Legacy `private_key` payloads are rejected; callers must submit locally
+/// signed transactions after building the draft instructions.
 ///
 /// # Errors
 /// Returns `crate::Error::Query` when the namespace, contract id, hashes, ABI version, or request
@@ -1940,7 +1940,7 @@ pub async fn handle_gov_propose_deploy(
 
 /// POST /v1/gov/ballot/zk — accept a ZK ballot and build an instruction skeleton.
 ///
-/// If `private_key` is provided, Torii signs and submits the ballot transaction.
+/// Legacy `private_key` payloads are rejected; callers must submit locally signed transactions.
 ///
 /// # Errors
 /// Returns `crate::Error::Query` for invalid chain id or authority. Invalid proofs result in an
@@ -2039,7 +2039,7 @@ pub async fn handle_gov_ballot_zk(
 
 /// POST /v1/gov/ballot/plain — accept a plain quadratic ballot and build an instruction skeleton.
 ///
-/// If `private_key` is provided, Torii signs and submits the ballot transaction.
+/// Legacy `private_key` payloads are rejected; callers must submit locally signed transactions.
 ///
 /// # Errors
 /// Returns `crate::Error::Query` when the ballot fields fail validation (direction, authority,
@@ -2439,7 +2439,7 @@ pub async fn handle_gov_council_persist(
             return Err(crate::Error::Query(
                 iroha_data_model::ValidationFail::QueryFailed(
                     iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                        "authority/private_key required for on-chain persistence".into(),
+                        "direct persistence unavailable; submit a locally signed transaction instead".into(),
                     ),
                 ),
             ));
@@ -2552,7 +2552,7 @@ pub async fn handle_gov_council_replace(
             return Err(crate::Error::Query(
                 iroha_data_model::ValidationFail::QueryFailed(
                     iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                        "authority/private_key required for on-chain persistence".into(),
+                        "direct persistence unavailable; submit a locally signed transaction instead".into(),
                     ),
                 ),
             ));
@@ -2762,7 +2762,7 @@ mod tests {
         account_id
             .to_account_address()
             .and_then(|address| address.to_i105())
-            .expect("non-canonical I105 literal")
+            .expect("non-canonical i105 literal")
     }
 
     fn mk_basic_context() -> (Arc<State>, Arc<Queue>, Arc<ChainId>) {
@@ -3319,7 +3319,7 @@ mod tests {
         assert!(!body.accepted);
         assert_eq!(
             body.reason.as_deref(),
-            Some("owner must use canonical account id form")
+            Some("owner must use canonical i105 account id form")
         );
     }
 
@@ -3998,7 +3998,7 @@ mod tests {
         assert!(!body.accepted);
         assert_eq!(
             body.reason.as_deref(),
-            Some("owner must use canonical account id form")
+            Some("owner must use canonical i105 account id form")
         );
     }
 
@@ -4191,7 +4191,7 @@ mod tests {
         assert!(!body.accepted);
         assert_eq!(
             body.reason.as_deref(),
-            Some("owner must use canonical account id form")
+            Some("owner must use canonical i105 account id form")
         );
     }
 

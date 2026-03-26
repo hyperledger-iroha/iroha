@@ -990,17 +990,21 @@ impl Executor {
             warn!(target: "economics", "nexus fee rejected: {reason}");
             ValidationFail::NotPermitted(reason)
         })?;
-        let asset_def =
-            AssetDefinitionId::parse_address_literal(&cfg.fee_asset_id).map_err(|_| {
-                let reason =
-                    "invalid nexus fee asset id; expected an unprefixed Base58 asset definition id"
-                        .to_owned();
-                sumeragi_status::record_nexus_fee_event(NexusFeeEvent::ConfigInvalid {
-                    reason: reason.clone(),
-                });
-                warn!(target: "economics", "nexus fee rejected: {reason}");
-                ValidationFail::NotPermitted(reason)
-            })?;
+        let asset_def = crate::block::parse_asset_definition_literal_with_world(
+            &state_transaction.world,
+            &cfg.fee_asset_id,
+            state_transaction.block_unix_timestamp_ms(),
+        )
+        .ok_or_else(|| {
+            let reason =
+                "invalid nexus fee asset id; expected canonical Base58 asset definition id or active asset alias"
+                    .to_owned();
+            sumeragi_status::record_nexus_fee_event(NexusFeeEvent::ConfigInvalid {
+                reason: reason.clone(),
+            });
+            warn!(target: "economics", "nexus fee rejected: {reason}");
+            ValidationFail::NotPermitted(reason)
+        })?;
 
         let payer_asset = AssetId::new(asset_def, payer.clone());
         let payer_kind_label = match payer_kind {

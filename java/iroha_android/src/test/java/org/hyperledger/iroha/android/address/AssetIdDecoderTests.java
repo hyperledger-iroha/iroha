@@ -64,7 +64,7 @@ public final class AssetIdDecoderTests {
     } catch (final IllegalArgumentException ex) {
       threw =
           ex.getMessage() != null
-              && ex.getMessage().contains("<asset-definition-id>#<account-id>");
+              && ex.getMessage().contains("<asset-definition-id>#<i105-account-id>");
     }
 
     assert threw : "decode must reject malformed asset literals";

@@ -14,7 +14,7 @@ SDK の挙動とテストを標準仕様に合わせてください。
 対応事項:
 1. **カノニカル出力:** `AccountId::to_string()`/Display は I105 のみを出力すること
    （`@domain` サフィックス無し）。カノニカル hex はデバッグ用途（`0x...`）。
-2. **Accepted inputs:** parsers MUST accept only canonical I105 account literals. Reject i105-default `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+2. **Accepted inputs:** parsers MUST accept only canonical i105 account literals. Reject i105-default `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
 3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
 4. **I105 チェックサム:** `I105PRE || prefix || payload` に対して Blake2b‑512 を計算し、
    先頭 2 バイトを使用。圧縮アルファベットの基数は **105**。

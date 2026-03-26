@@ -17,7 +17,7 @@ seiyaku PredictionMarket {
   }
   kotoage fn main() permission(MarketUser) {
     let caller = authority();
-    let asset = asset_definition("xor#sora");
+    let asset = asset_definition("61CtjvNd9T3THAR65GsMVHr82Bjc");
     let pool = account_id("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw");
     let alice = account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn");
     let bob = account_id("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU");

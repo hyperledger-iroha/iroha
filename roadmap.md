@@ -2,6 +2,99 @@
 
 Last updated: 2026-03-26
 
+Latest sync (2026-03-26 JS/Python RWA client parity and JS address lazy native fallback):
+`javascript/iroha_js/src/{address,normalizers,instructionBuilders,transaction,toriiClient,index}.js`,
+`javascript/iroha_js/index.d.ts`,
+`javascript/iroha_js/test/{addressNativeInterop,rwaBuilders.pure,toriiClient,toriiIterators.parity,transactionBuilder,instructionBuilders}.test.js`,
+`javascript/iroha_js/README.md`,
+`python/iroha_python/iroha_python_rs/src/lib.rs`,
+`python/iroha_python/src/iroha_python/tx.py`,
+and
+`python/iroha_python/README.md`
+now push the JS and Python client stacks past NFT-only handling for the
+dedicated RWA family:
+
+- JS now exposes first-class RWA id normalization, dedicated RWA instruction
+  builders, transaction wrappers, Torii list/query/iterate helpers, explorer
+  and account pagination helpers, and matching TypeScript declarations; and
+- Python now exposes `Instruction.transfer_rwa(...)` in the Rust extension plus
+  `TransactionDraft.transfer_rwa(...)` in the pure-Python transaction helper;
+  and
+- the JS account-address codec now resolves the native parse/render bridge
+  lazily and honours the injected `__IROHA_NATIVE_BINDING__` override, so
+  pure-JS consumers no longer hard-crash just by importing `src/address.js`
+  before deciding whether the native addon is available.
+
+Validation:
+- `cd javascript/iroha_js && npm run build:dist`
+- `cd javascript/iroha_js && npm run build:native`
+- `cd javascript/iroha_js && node -e 'import("./src/address.js").then((m)=>{ console.log("loaded", typeof m.AccountAddress); }).catch((err)=>{ console.error(err); process.exit(1); })'`
+- `cd javascript/iroha_js && node --test test/addressNativeInterop.test.js`
+- `cd javascript/iroha_js && IROHA_JS_DISABLE_NATIVE=1 node --test test/rwaBuilders.pure.test.js`
+- `cd javascript/iroha_js && IROHA_JS_DISABLE_NATIVE=1 node --test --test-name-pattern "listRwas hits rwa endpoint|listExplorerRwas encodes owner/domain filters and pagination|getExplorerRwaDetail encodes path and decodes response|queryRwas posts structured envelope|iterateAccountRwas walks explorer pagination and honours maxItems|listRwas forwards pagination/sort/filter and validates filter payloads" test/toriiClient.test.js test/toriiIterators.parity.test.js`
+- `cd javascript/iroha_js && IROHA_JS_DISABLE_NATIVE=1 node --test --test-name-pattern "buildTransferRwaTransaction returns canonical hash|buildRegisterRwaTransaction forwards canonical instruction payload" test/transactionBuilder.test.js`
+- `cd javascript/iroha_js && IROHA_JS_DISABLE_NATIVE=1 node --test --test-name-pattern "buildRegisterRwaInstruction normalizes richer lot payloads|buildTransferRwaInstruction covers rwa transfer|rwa scalar instruction builders cover lifecycle operations" test/instructionBuilders.test.js`
+- `source /tmp/iroha-py-tools/bin/activate && python -m pytest python/iroha_python/tests/test_tx_rwa.py -q`
+
+Open work for this slice now remains:
+- debug the JS native host crash that still occurs when the actual
+  `iroha_js_host.node` addon is loaded in this environment, so the older
+  native-dependent JS suites can move from "skip cleanly / pure-JS coverage
+  only" back to reliable native execution; and
+- rerun the targeted Rust test for
+  `python/iroha_python/iroha_python_rs::Instruction::transfer_rwa(...)` once
+  unrelated cargo lock contention clears, so the extension-side serializer path
+  is also validated locally.
+
+Latest sync (2026-03-26 Swift RWA builders and metadata target parity):
+`IrohaSwift/Sources/IrohaSwift/RwaInstructionBuilders.swift`,
+`IrohaSwift/Sources/IrohaSwift/AccountAddress.swift`,
+`IrohaSwift/Sources/IrohaSwift/OfflineNoritoEncoding.swift`,
+`IrohaSwift/Sources/IrohaSwift/TransactionEncoder.swift`,
+`IrohaSwift/Sources/IrohaSwift/TxBuilder.swift`,
+`crates/connect_norito_bridge/src/lib.rs`,
+and
+`IrohaSwift/README.md`
+now move the Apple SDK past Torii-only support for the dedicated RWA family:
+
+- Swift now exposes a dedicated RWA payload-builder family for
+  `RegisterRwa`, `TransferRwa`, `MergeRwas`, `RedeemRwa`, `FreezeRwa`,
+  `UnfreezeRwa`, `HoldRwa`, `ReleaseRwa`, `ForceTransferRwa`, and
+  `SetRwaControls`, with matching `IrohaSDK` convenience methods;
+- Swift-side validation now understands public RWA ids in
+  `<64-hex-hash>$<domain>` form and canonicalizes the hash portion before the
+  payload is emitted; and
+- Swift-side account validation/rendering now uses the local i105 codec first,
+  which removes the bridge-init crash from malformed-account and focused RWA
+  payload-builder tests while still preserving the native bridge as a fallback
+  for bridge-backed encode paths; and
+- the existing metadata signing path now accepts `.rwa(...)`, with the native
+  bridge wiring target kind `4` to the dedicated `RwaInstructionBox`
+  metadata-edit variants.
+
+Validation:
+- `cargo fmt --all`
+- `cd IrohaSwift && swift test --filter TransactionInputValidatorTests/testSanitizeRwaIdAcceptsCanonicalPublicLiteral`
+- `cd IrohaSwift && swift test --skip-build --filter TransactionInputValidatorTests/testSanitizeMetadataTargetRejectsMalformedRwaId`
+- `cd IrohaSwift && swift test --skip-build --filter RwaInstructionBuildersTests/testRegisterRwaWrapsRawNewRwaObject`
+- `cd IrohaSwift && swift test --skip-build --filter RwaInstructionBuildersTests/testMergeRwasWrapsRawMergeObject`
+- `cd IrohaSwift && swift test --skip-build --filter RwaInstructionBuildersTests/testRejectsInvalidRwaIdAndQuantity`
+- `cd IrohaSwift && swift test --filter TransactionEncoderValidationTests/testSetMetadataRejectsMalformedAuthority`
+- `cd IrohaSwift && swift test --filter RwaInstructionBuildersTests`
+- `cd IrohaSwift && swift test --skip-build --filter TransactionInputValidatorTests/testValidateAcceptsI105Authority`
+- `cd IrohaSwift && swift test --skip-build --filter TransactionInputValidatorTests/testValidateAcceptsI105DefaultAuthorityAndCanonicalizesToI105`
+- `cd IrohaSwift && swift test --skip-build --filter TransactionInputValidatorTests/testSanitizeMetadataTargetTrimsAccountAndDomainIds`
+- `cd IrohaSwift && swift test --skip-build --filter TransactionEncoderValidationTests/testSetMetadataRejectsMalformedRwaTarget`
+- `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 cargo test -p connect_norito_bridge rwa_metadata_ -- --nocapture`
+
+Open work for this slice now remains:
+- decide whether Swift should grow typed `NewRwa` / `MergeRwas` /
+  `RwaControlPolicy` value objects instead of the current JSON-carrying
+  wrappers for the richer payloads; and
+- decide whether Swift should add native signed-envelope builders for the full
+  non-metadata RWA instruction family instead of stopping at payload builders
+  plus `.rwa(...)` metadata signing.
+
 Latest sync (2026-03-26 Swift Torii RWA surface):
 `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift`,
 `IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift`,
@@ -26,39 +119,46 @@ Validation:
 - `cd IrohaSwift && swift test --skip-build --filter ToriiClientTests/testIterateRwasRespectsPagingAndMaxItems`
 
 Open work for this slice now remains:
-- add dedicated Swift RWA instruction builders if we want full mobile parity
-  with Kotlin/Java instead of Torii-only coverage; and
 - decide whether the mobile SDKs should grow typed `NewRwa` / `MergeRwas` /
   `RwaControlPolicy` value objects instead of the current JSON-carrying
-  wrappers for richer RWA payloads.
+  wrappers for richer RWA payloads; and
+- decide whether Swift should add native signed-envelope builders for the full
+  non-metadata RWA instruction family instead of stopping at payload builders
+  plus `.rwa(...)` metadata signing.
 
-Latest sync (2026-03-26 Base58-only asset-definition literal hardening):
-`crates/iroha_config/src/parameters/user.rs`,
-`crates/iroha_torii/src/iso20022_bridge.rs`,
-`crates/ivm/tests/kotodama.rs`,
-`crates/ivm/tests/data/mfc.ko`,
-and
-`crates/kotodama_lang/src/samples/asset_ops.ko`
-now remove the remaining positive legacy asset-definition literal acceptance in
-the current tree:
+Latest sync (2026-03-26 alias-aware asset-definition selector runtime):
+`crates/iroha_config/src/parameters/{actual,user}.rs`,
+`crates/iroha_core/src/{block.rs,executor.rs}`,
+`crates/iroha_core/src/smartcontracts/isi/{domain.rs,soracloud.rs,staking.rs,world.rs}`,
+`crates/iroha_core/src/sumeragi/penalties.rs`,
+`crates/iroha_torii/src/{iso20022_bridge.rs,lib.rs,routing.rs}`,
+`crates/iroha_torii/tests/accounts_faucet.rs`,
+the checked-in Mochi/Kotodama examples, and the Python fixtures now close the
+remaining alias-hostile asset-definition selector paths:
 
-- Torii config parsing now requires canonical Base58 asset-definition literals
-  for faucet and ISO 20022 currency bindings instead of accepting
-  `name#domain` compatibility inputs;
-- the ISO 20022 bridge fixtures now use canonical Base58 literals, while
-  alias-aware query/app paths stay unchanged; and
-- the remaining in-tree Kotodama/IVM positive samples/tests that passed typed
-  `asset_definition(...)` constructors now use canonical Base58 literals
-  instead of `aid:` or `name#domain` forms.
+- Torii faucet, Torii transaction-history allow-lists, ISO 20022 currency
+  bindings, Nexus staking, and Nexus fees now accept either canonical Base58
+  asset-definition ids or active on-chain asset aliases at config parse time;
+- the corresponding runtime paths now resolve those selectors against world
+  state at the current observation timestamp, so leased aliases such as
+  `xor#universal` work for faucet transfers, faucet PoW accounting, ISO bridge
+  transaction construction, transaction-history definition filters, Nexus fee
+  charging, staking/slash escrow flows, and the domain/asset-definition
+  unregister guards; and
+- the remaining positive examples/tests that still passed alias-shaped literals
+  into typed `AssetDefinitionId` constructors in non-alias-aware contexts now
+  use canonical Base58 literals, while offline-allowance client fixtures assert
+  the canonical `asset_definition_id` field and keep alias display separate.
 
 Validation:
 - `cargo fmt --all`
-- `CARGO_TARGET_DIR=/tmp/iroha-asset-config cargo test -p iroha_config asset_definition_literal -- --nocapture`
-- `/tmp/iroha-asset-torii/debug/deps/iroha_torii-8898d567bed74bfc extracts_transfer --nocapture`
-- `/tmp/iroha-asset-ivm/debug/deps/kotodama-3bb1a49477da1132 parse_mfc_example --nocapture`
-- `/tmp/iroha-asset-ivm/debug/deps/kotodama-3bb1a49477da1132 compile_kotodama_samples_supported --nocapture`
-- `/tmp/iroha-asset-ivm/debug/deps/kotodama-3bb1a49477da1132 namespaced_host_calls_and_std_map_new_parse_and_type --nocapture`
-- `/tmp/iroha-asset-ivm/debug/deps/kotodama-3bb1a49477da1132 indirect_sensitive_calls_require_permission --nocapture`
+- `cargo test -p iroha_config torii_faucet -- --nocapture`
+- `cargo test -p iroha_config nexus_asset_selector -- --nocapture`
+- `cargo test -p iroha_config iso_bridge_parse -- --nocapture`
+- `cargo test -p iroha_torii --features app_api --test accounts_faucet -- --nocapture`
+- `cargo test -p iroha_torii --lib iso20022_bridge::tests::runtime_accepts_asset_alias_currency_binding -- --nocapture`
+- `cargo test -p iroha_torii --lib iso20022_bridge::tests::build_transaction_accepts_asset_alias_hint -- --nocapture`
+- `cargo test -p iroha_core --lib stake_context_accepts_i105_account_literals -- --nocapture`
 
 Open work for this slice now remains:
 - rerun broader workspace verification (`cargo build --workspace`,
@@ -68,16 +168,43 @@ Open work for this slice now remains:
   API surfaces stop resolving on-chain aliases, in which case they should be
   migrated to canonical Base58 literals too.
 
-Latest sync (2026-03-26 security audit report added):
-`security_audit_report.md`
-now tracks the current prioritized security backlog from a targeted audit pass.
+Latest sync (2026-03-26 security audit remediations landed):
+`crates/iroha_torii/src/{lib,gov,routing,openapi,zk_attachments}.rs`,
+`crates/iroha_p2p/src/{peer,network,transport}.rs`,
+`IrohaSwift/Sources/IrohaSwift/{Confidential,TransportSecurity,ToriiClient,TxBuilder}.swift`,
+`kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/{TransportSecurity,SubscriptionToriiClient,OfflineToriiClient}.kt`,
+and
+`java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/{TransportSecurity,SubscriptionToriiClient,OfflineToriiClient}.java`
+now close the concrete findings from `security_audit_report.md`:
+
+- Torii no longer traces raw request headers and no longer exposes the audited
+  remote server-side-signing / confidential-derive shortcuts;
+- Swift/Kotlin/Java transport sensitivity now covers canonical auth headers
+  plus seed-bearing bodies, and the audited SDK helpers fail closed instead of
+  forwarding caller `private_key` material to Torii;
+- the attachment sanitizer now requires a real OS sandbox on supported Unix
+  hosts and fails closed otherwise; and
+- TLS/QUIC P2P connections now authenticate the live transport session by
+  signing/verifying the presented certificate fingerprint inside the existing
+  handshake.
+
+Validation:
+- `cargo fmt --all`
+- `cd IrohaSwift && swift test --filter TransportSecurityTests`
+- `cd IrohaSwift && swift test --filter RemovedServerSideSigningFlow`
+- `cd IrohaSwift && swift test --filter OfflineCashEndpointsRejectRemovedServerSideSigningFlows`
+- `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.TransportSecurityClientTest --console=plain`
+- `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test` (security slice compiled; suite still fails in unrelated existing OkHttp tests)
+- `CARGO_TARGET_DIR=/tmp/iroha_security_verify cargo check -p iroha_torii --lib --message-format short`
+- `CARGO_TARGET_DIR=/tmp/iroha_security_verify cargo test -p iroha_p2p handshake_accepts_matching_transport_binding --lib -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha_security_verify cargo test -p iroha_p2p handshake_rejects_mismatched_transport_binding --lib -- --nocapture`
+- `rg -n '/v1/confidential/derive-keyset|ConfidentialKeyRequest|ConfidentialKeyResponse' docs/source docs/portal IrohaSwift/README.md docs/portal/static/openapi/torii.json docs/portal/static/openapi/versions/current/torii.json`
+- `rg -n '"private_key"' docs/portal/static/openapi/torii.json docs/portal/static/openapi/versions/current/torii.json`
 
 Open work from this audit now is:
-- remove or redact Torii request-header logging so auth material does not reach traces/logs;
-- deprecate public request DTOs that carry raw `private_key` values and move signing fully client-side;
-- remove or narrow remote confidential seed derivation, stop echoing seeds in responses, and classify seed-bearing requests as sensitive in all SDK transport guards;
-- replace the attachment sanitizer's current subprocess-plus-`setrlimit` isolation with a real sandbox or rename/re-scope it to match its actual guarantees; and
-- decide whether optional P2P TLS/QUIC must provide authenticated transport or remain explicitly documented as unauthenticated encrypted tunneling.
+- rerun broader Rust/SDK verification once there is budget for the full
+  workspace build/test surface and recheck the Java Android suite after the
+  unrelated OkHttp failures are addressed.
 
 Latest sync (2026-03-26 Kotlin/Java mobile SDKs now ship the dedicated RWA builder family):
 `kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/`,
@@ -101,11 +228,12 @@ Validation:
 - `./gradlew :core:test --tests org.hyperledger.iroha.android.model.instructions.RwaInstructionBuilderTests --tests org.hyperledger.iroha.android.model.instructions.AccountLiteralHardCutTests --console=plain`
 
 Open work for this slice now remains:
-- decide whether Swift should gain matching RWA instruction builders instead
-  of staying Torii-only for this asset family; and
 - decide whether the mobile SDKs should grow typed `NewRwa` / `MergeRwas` /
   `RwaControlPolicy` value objects instead of the current JSON-carrying
-  wrappers for the richer RWA payloads.
+  wrappers for the richer RWA payloads; and
+- decide whether Swift should add native signed-envelope builders for the full
+  non-metadata RWA instruction family instead of stopping at payload builders
+  plus `.rwa(...)` metadata signing.
 
 Latest sync (2026-03-25 deterministic RWA generated IDs and Torii/MCP parity coverage):
 `crates/iroha_core/src/state.rs`,
@@ -8864,10 +8992,10 @@ This appendix tracks open TODO markers discovered in the repository. Items are g
 
 ## Asset ID Follow-up
 1. Completed: `AssetDefinitionId::from_str` and the public Rust selectors are Base58-only, the last checked-in capability fixtures were migrated from `aid:<hex>` to canonical Base58 addresses, and the remaining `aid:` literals in-tree are deliberate negative tests.
-2. Completed: the remaining public `norito:<hex>` `AssetId` helpers/examples in Swift offline encoding/decoding, Torii client parsing, bridge/docs wording, and Android/JVM transfer helpers were removed so the first release exposes a single canonical asset-id form: `<asset-definition-id>#<account-id>` with optional `#dataspace:<id>` for scoped balances.
+2. Completed: the remaining public `norito:<hex>` `AssetId` helpers/examples in Swift offline encoding/decoding, Torii client parsing, bridge/docs wording, and Android/JVM transfer helpers were removed so the first release exposes a single canonical asset-id form: `<asset-definition-id>#<i105-account-id>` with optional `#dataspace:<id>` for scoped balances.
 3. Completed: translated data-model docs, Swift SDK docs/examples, Swift client references, and JS Torii typings/JSDoc no longer describe legacy `aid:` literals or the old `name#domain@dataspace` alias grammar.
 4. Completed: the dead `xtask` `rewrite-legacy-asset-literals` bin target and the old alias-shaped `asset_def:name#domain` access-hint compatibility path were removed, so workspace tooling and access hints no longer rely on any first-release asset-id compatibility shim.
-5. Completed: `cargo fmt --all`, the focused `iroha_data_model` asset-id parse test, and the focused `iroha_core` access-hint regression test are green; no open first-release asset-id hard-cut work remains in this branch.
+5. Completed: alias-hostile config/runtime selectors are now closed too; Torii faucet, ISO 20022 currency bindings, Nexus fee charging, and Nexus staking/slash flows resolve canonical Base58 ids or active on-chain asset aliases against world state, while non-alias-aware typed examples/tests now use canonical Base58 literals.
 
 ## Asset Alias Lease Follow-up
 1. Completed: translated docs and SDK-facing API references now describe the current `alias_binding` response payload, the persisted lease statuses (`permanent`, `leased_active`, `leased_grace`, `expired_pending_cleanup`), the chain-time-based alias cutoff, and the post-grace `expired_pending_cleanup` readback semantics.

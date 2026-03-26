@@ -34,7 +34,7 @@ El parseur exige la línea de ente siguiente (el orden es flexible):| columna | 
 |---------|--------|-------------|
 | `label` | Sí | Libelle demande (caso mixto aceptado; la herramienta se normaliza según la norma v1 y UTS-46). |
 | `suffix_id` | Sí | Número de sufijo identificador (decimal o `0x` hexadecimal). |
-| `owner` | Sí | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` | Sí | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` | Sí | Entier `1..=255`. |
 | `payment_asset_id` | Sí | Actif de liquidación (por ejemplo `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Sí | Entiers non signes representant des unites nativos de l'actif. |

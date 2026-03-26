@@ -500,7 +500,7 @@ iroha app sorafs gateway merkle proof \
   - `entries[]` — `{index, kind, descriptor, hash_hex, policy_tier}` for every
     entry so auditors can map registry indexes back to the source file.
 - `account_id` entries are validated locally as encoded account literals
-  (canonical I105 only). Alias, UAID, opaque, and
+  (canonical i105 only). Alias, UAID, opaque, and
   `@domain` literals are rejected by the validator.
 - `merkle proof` recomputes the tree for the given denylist and produces a
   membership proof for the zero-based `--index` requested. The JSON artefact

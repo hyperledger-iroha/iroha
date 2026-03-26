@@ -62,7 +62,7 @@ təhlükəsizlik və ya əlçatanlığa xələl gətirmədən formatlar.
 - Gating: `i105` sıxılmış simli açıq təsdiqin arxasında gizlədin.
   Təsdiq formanın yalnız Sora Nexus zəncirlərində işlədiyini təkrar etməlidir.
 - Etiketləmə: hər bir hadisəyə görünən “Yalnız Sora” nişanı və a
-  digər şəbəkələrin niyə I105 formasını tələb etdiyini izah edən alət ipucu.
+  digər şəbəkələrin niyə i105 formasını tələb etdiyini izah edən alət ipucu.
 - Qoruyucular: aktiv zəncir diskriminantı Nexus bölgüsü deyilsə,
   sıxılmış ünvanı tamamilə yaratmaqdan imtina edin və istifadəçini geri yönləndirin
   I105.

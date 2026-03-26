@@ -378,7 +378,7 @@ class AccountAddress:
             raise AccountAddressError("account id must not include '@domain'")
         if token.startswith(("0x", "0X")):
             raise AccountAddressError(
-                "canonical hex account literals are not accepted; use canonical I105 forms"
+                "canonical hex account literals are not accepted; use canonical i105 forms"
             )
         return cls.from_i105(token, expected_discriminant=expected_discriminant)
 

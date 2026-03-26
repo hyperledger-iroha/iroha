@@ -214,20 +214,20 @@ in `docs/source/sdk/android/readiness/` for AND5/AND7 readiness gates.
 The first retail reserve release removed the pre-release allowance/certificate/settlement inspection
 flow from the supported Android SDK documentation. Wallets should use the reserve routes directly:
 
-- `POST /v1/offline/reserve/setup`
-- `POST /v1/offline/reserve/topup`
-- `POST /v1/offline/reserve/renew`
-- `POST /v1/offline/reserve/sync`
-- `POST /v1/offline/reserve/defund`
+- `POST /v1/offline/cash/setup`
+- `POST /v1/offline/cash/load`
+- `POST /v1/offline/cash/refresh`
+- `POST /v1/offline/cash/sync`
+- `POST /v1/offline/cash/redeem`
 - `GET /v1/offline/revocations`
 - `GET /v1/offline/transfers` and `POST /v1/offline/transfers/query` only when transfer history is required
 
-Reserve envelopes are authoritative for balance, parked balance, authorization policy, and
+Offline cash lineage envelopes are authoritative for balance, locked balance, authorization policy, and
 revocation freshness. The old allowance/summaries/state/spend-receipts/settlements APIs are not part
-of the shipped reserve wallet path.
+of the shipped offline cash wallet path.
 
-When journaling is required, persist the reserve anchor, parked/spendable split, pending receipts,
-pending reserve operations, seen transfer ids, sender-state replay guards, revocation bundle, and
+When journaling is required, persist the lineage anchor, locked/spendable split, pending receipts,
+pending offline cash mutations, seen transfer ids, sender-state replay guards, revocation bundle, and
 App Attest key id together so incomplete state freezes the wallet instead of recreating value.
 
 ## QR stream handoff

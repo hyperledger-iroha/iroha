@@ -59,6 +59,7 @@ use iroha_data_model::{
     prelude::{AccountId, ChainId},
     proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox},
     repo::prelude::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
+    rwa::RwaId,
     transaction::{
         Executable, IvmBytecode, SignedTransaction, TransactionBuilder as ModelTransactionBuilder,
         TransactionSubmissionReceipt,
@@ -3734,6 +3735,55 @@ mod tests {
     }
 
     #[test]
+    fn transfer_rwa_instruction_classmethod_serializes_canonical_numeric_payload() {
+        ensure_python();
+        Python::attach(|py| {
+            let instruction_type = py.get_type::<Instruction>();
+            let quantity = pyo3::types::PyString::new(py, "1.2500");
+            let instruction = Instruction::transfer_rwa(
+                &instruction_type,
+                "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities",
+                quantity.as_any(),
+                "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
+            )
+            .expect("transfer rwa builds");
+            let decoded = json::from_str::<InstructionBox>(&instruction.to_json().expect("json"))
+                .expect("instruction json decodes");
+
+            let InstructionBox::Rwa(iroha_data_model::isi::rwa::RwaInstructionBox::Transfer(
+                transfer,
+            )) = decoded
+            else {
+                panic!("expected TransferRwa instruction");
+            };
+
+            assert_eq!(
+                transfer.source,
+                parse_account_id("6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL")
+                    .expect("source parses")
+            );
+            assert_eq!(
+                transfer.destination,
+                parse_account_id(
+                    "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r"
+                )
+                .expect("destination parses")
+            );
+            assert_eq!(
+                transfer.rwa,
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities"
+                    .parse()
+                    .expect("rwa id parses")
+            );
+            assert_eq!(
+                transfer.quantity,
+                Numeric::from_str("1.25").expect("numeric parses")
+            );
+        });
+    }
+
+    #[test]
     fn sorafs_gateway_fetch_py_streams_payload() {
         ensure_python();
         let payload: Vec<u8> = (0..4096).map(|idx| (idx as u8).wrapping_mul(11)).collect();
@@ -4099,16 +4149,19 @@ mod tests {
         ensure_python();
         Python::attach(|py| {
             let dict = PyDict::new(py);
-            dict.set_item("asset_definition_id", "usd#wonderland")
+            dict.set_item("asset_definition_id", "7EAD8EFYUx1aVKZPUU1fyKvr8dF1")
                 .unwrap();
             dict.set_item("quantity", "10").unwrap();
             let leg = parse_repo_cash_leg(py, dict.as_any()).expect("repo cash leg should parse");
-            assert_eq!(leg.asset_definition_id.to_string(), "usd#wonderland");
+            assert_eq!(
+                leg.asset_definition_id.to_string(),
+                "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
+            );
             assert_eq!(leg.quantity.to_string(), "10");
 
             let missing = PyDict::new(py);
             missing
-                .set_item("asset_definition_id", "usd#wonderland")
+                .set_item("asset_definition_id", "7EAD8EFYUx1aVKZPUU1fyKvr8dF1")
                 .unwrap();
             let err =
                 parse_repo_cash_leg(py, missing.as_any()).expect_err("missing quantity rejected");
@@ -5717,6 +5770,27 @@ impl Instruction {
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid NFT id `{nft_id}`: {err}")))?;
         let instruction = Transfer::nft(source, nft_id, destination);
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    fn transfer_rwa(
+        _cls: &Bound<'_, PyType>,
+        source: &str,
+        rwa_id: &str,
+        quantity: &Bound<'_, PyAny>,
+        destination: &str,
+    ) -> PyResult<Self> {
+        let source = parse_account_id(source)?;
+        ensure_ed25519_account(&source)?;
+        let destination = parse_account_id(destination)?;
+        ensure_ed25519_account(&destination)?;
+        let rwa_id: RwaId = rwa_id
+            .parse()
+            .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
+        let quantity = parse_numeric_any(quantity)?;
+        let instruction =
+            iroha_data_model::isi::rwa::TransferRwa::new(source, rwa_id, quantity, destination);
         Ok(Instruction::new(instruction.into()))
     }
 

@@ -36,7 +36,7 @@ O analisador exige a seguinte linha de cabecalho (a ordem e flexivel):
 |--------|-------------|-----------|
 | `label` | Sim | Etiqueta solicitada (aceita maiúsculas e minúsculas; a ferramenta normaliza conforme Norma v1 e UTS-46). |
 | `suffix_id` | Sim | Identificador numérico de sufixo (decimal ou `0x` hex). |
-| `owner` | Sim | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` | Sim | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` | Sim | Inteiro `1..=255`. |
 | `payment_asset_id` | Sim | Ativo de liquidação (por exemplo `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Sim | Inteiros sem sinal representando unidades nativas do ativo. |

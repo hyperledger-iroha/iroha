@@ -141,7 +141,7 @@ const torii = new ToriiClient("http://127.0.0.1:8080", {
 });
 
 const usagePlan = {
-  provider: "aws@commerce",
+  provider: "<provider_account_i105>",
   billing: {
     cadence: {
       kind: "monthly_calendar",
@@ -252,13 +252,16 @@ import {
   buildRegisterDomainAndMintTransaction,
   buildRegisterAccountAndTransferTransaction,
   buildRegisterAssetDefinitionAndMintTransaction,
+  buildRegisterRwaTransaction,
   buildRegisterDomainInstruction,
   buildRegisterAccountInstruction,
   buildTransferAssetInstruction,
   buildTransferAssetTransaction,
+  buildTransferRwaInstruction,
   submitSignedTransaction,
   normalizeAccountId,
   normalizeAssetId,
+  normalizeRwaId,
 } from "@iroha/iroha-js";
 
 const { publicKey, privateKey } = generateKeyPair();
@@ -270,6 +273,9 @@ const authority = normalizeAccountId(authorityInput);
 const newAccountId = normalizeAccountId(newAccountIdInput);
 const roseAssetId = normalizeAssetId("<base58-asset-definition-id>#<i105-account-id>");
 const lilyAssetId = normalizeAssetId("<base58-asset-definition-id>#<i105-account-id>");
+const vaultLotId = normalizeRwaId(
+  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities",
+);
 // Normalise human-supplied identifiers once and reuse the canonical forms below.
 const message = Buffer.from("test");
 const signature = signEd25519(message, privateKey);
@@ -375,11 +381,11 @@ if (recovery) {
   );
 }
 
-### Iterating NFTs and account assets
+### Iterating NFTs, RWAs, and account assets
 
 The iterable helpers accept `requirePermissions` to fail fast when credentials are missing. NFT
-filters only admit `id` equality/exists checks, while account-asset queries allow quantity
-comparisons.
+and RWA explorer filters accept owner/domain pagination, while account-asset queries allow
+quantity comparisons.
 
 ```js
 const torii = new ToriiClient("https://torii.example", {
@@ -392,6 +398,19 @@ const nftPage = await torii.listNfts({
   sort: [{ key: "id", order: "asc" }],
 });
 console.log("first nft page:", nftPage.items.map((it) => it.id));
+
+const rwaPage = await torii.listExplorerRwas({
+  ownedBy: authority,
+  perPage: 2,
+});
+console.log("first RWA page:", rwaPage.items.map((it) => it.id));
+
+for await (const lot of torii.iterateAccountRwas(authority, {
+  pageSize: 2,
+  domainId: "commodities",
+})) {
+  console.log(`${lot.id} => ${lot.quantity}`);
+}
 
 for await (const holding of torii.iterateAccountAssetsQuery("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", {
   requirePermissions: true,
@@ -609,6 +628,27 @@ const transferTx = buildTransferAssetTransaction({
   destinationAccountId: authority,
   privateKey,
 });
+
+const registerRwaTx = buildRegisterRwaTransaction({
+  chainId: "test-chain",
+  authority,
+  rwa: {
+    domain: "commodities",
+    quantity: "10.5",
+    spec: { scale: 1 },
+    primaryReference: "vault-cert-001",
+    metadata: { origin: "AE" },
+  },
+  privateKey,
+});
+
+const transferRwa = buildTransferRwaInstruction({
+  sourceAccountId: authority,
+  rwaId: vaultLotId,
+  quantity: "2.5",
+  destinationAccountId: newAccountId,
+});
+console.log(noritoDecodeInstruction(transferRwa));
 
 const mintAndTransferTx = buildMintAndTransferTransaction({
   chainId: "test-chain",
@@ -888,7 +928,7 @@ pinned to the configured base.
   bigint` but require plain decimal literals (no exponent), with up to 28
   fractional digits and a 512-bit mantissa.
 - Keep asset IDs in canonical public form
-  (`<asset-definition-id>#<account-id>` with optional `#dataspace:<id>`) when
+  (`<asset-definition-id>#<i105-account-id>` with optional `#dataspace:<id>`) when
   chaining mint and transfer steps. The helpers do not guess missing account or
   scope suffixes, ensuring all peers derive the same destination.
 - Reuse the exported `normalizeAccountId()` / `normalizeAssetId()` helpers when you
@@ -2062,7 +2102,7 @@ const proposalTx = buildProposeDeployContractTransaction({
   privateKey,
 });
 
-const zkOwner = "6cmzPVPX4ZZ37ssFtJnQzouYHC9YVUEsVZUWF966ToXNoKUsfX1qgpC"; // canonical I105 account id for ZK public inputs
+const zkOwner = "6cmzPVPX4ZZ37ssFtJnQzouYHC9YVUEsVZUWF966ToXNoKUsfX1qgpC"; // canonical i105 account id for ZK public inputs
 
 const zkBallotTx = buildCastZkBallotTransaction({
   chainId: "test-chain",
@@ -3246,7 +3286,7 @@ for await (const trigger of torii.iterateTriggersQuery({
 //     NFT_DEFINITION_ID=5Pz9SwdN9eXPbiXPX9HRCpzCcE3o
 ```
 
-> **Hard-cut account parser:** Account-scoped helpers (`listAccountAssets`, `listAccountPermissions`, `listAccountTransactions`, and query/iterator variants) accept only canonical I105 account IDs. Domain-suffixed and legacy compatibility literals are rejected.
+> **Hard-cut account parser:** Account-scoped helpers (`listAccountAssets`, `listAccountPermissions`, `listAccountTransactions`, and query/iterator variants) accept only canonical i105 account ids. Account aliases (`label@dataspace` / `label@domain.dataspace`) and legacy compatibility literals are rejected.
 
 Use the SNS helpers to manage Sora Name Service records without hand-crafting JSON:
 
@@ -3436,7 +3476,7 @@ if (!ballot.accepted) {
   console.warn("ballot rejected:", ballot.reason);
 }
 
-const zkOwner = "6cmzPVPX4ZZ37ssFtJnQzouYHC9YVUEsVZUWF966ToXNoKUsfX1qgpC"; // canonical I105 account id for ZK public inputs
+const zkOwner = "6cmzPVPX4ZZ37ssFtJnQzouYHC9YVUEsVZUWF966ToXNoKUsfX1qgpC"; // canonical i105 account id for ZK public inputs
 await torii.governanceSubmitZkBallot({
   authority,
   chainId: "00000000-0000-0000-0000-000000000000",

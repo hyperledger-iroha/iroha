@@ -36,7 +36,7 @@ O parser exige a seguinte linha de cabecalho (a ordem e flexivel):
 |----------|---------------|----------|
 | `label` |シム | solicitada にラベルを付けます (大文字と小文字が混在した aceita、Norm v1 e UTS-46 に準拠した標準規格)。 |
 | `suffix_id` |シム |接尾辞の識別子 (10 進数または `0x` 16 進数)。 |
-| `owner` |シム | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` |シム | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` |シム |インテイロ `1..=255`。 |
 | `payment_asset_id` |シム |決済処理 (`61CtjvNd9T3THAR65GsMVHr82Bjc` の例)。 |
 | `payment_gross` / `payment_net` |シム | Interos sem sinal representando unidades nativas do ativo. |

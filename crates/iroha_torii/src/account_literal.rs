@@ -57,7 +57,7 @@ mod tests {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         let literal = ALICE_ID.to_string();
-        let parsed = AccountId::parse_encoded(&literal).expect("I105 literal should parse");
+        let parsed = AccountId::parse_encoded(&literal).expect("i105 literal should parse");
         assert_eq!(parsed.canonical(), literal);
         assert_eq!(parsed.account_id().controller(), ALICE_ID.controller());
 

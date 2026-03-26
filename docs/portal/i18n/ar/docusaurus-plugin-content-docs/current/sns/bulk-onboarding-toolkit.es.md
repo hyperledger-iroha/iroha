@@ -33,7 +33,7 @@ Torii أو CLI. المساعد صالح لكل عائلة قديمة، يصدر 
 |---------|----------|-------------|
 | `label` | سي | العلامات المطلوبة (إذا كانت مقبولة/ناقصة؛ الأداة طبيعية باستخدام Norm v1 وUTS-46). |
 | `suffix_id` | سي | المعرف الرقمي للصوفيجو (عشري أو `0x` سداسي عشري). |
-| `owner` | سي | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` | سي | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` | سي | انتيرو `1..=255`. |
 | `payment_asset_id` | سي | نشاط التسوية (على سبيل المثال `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | سي | إن الأمعاء ليست علامة على أنها تمثل وحدات من السكان الأصليين النشطين. |

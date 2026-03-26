@@ -30,7 +30,7 @@ Identifikatorlar `Display`/`FromStr` boʻylab sayohatga ega barqaror string shak
 - `AssetDefinitionId` — kanonik `unprefixed Base58 address with versioning and checksum` (UUID-v4 bayt). Ta'rif: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. `alias` harflari `<name>#<domain>.<dataspace>` yoki `<name>#<dataspace>`, `<name>` obyekt taʼrifi nomiga teng boʻlishi kerak. Kod: `crates/iroha_data_model/src/asset/definition.rs`.
 
   - Torii asset-definition responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`, where `status` is `permanent`, `leased_active`, `leased_grace`, or `expired_pending_cleanup`. Alias selectors resolve against the latest committed block creation time and stop resolving after grace even before sweep removes stale bindings.
-- `AssetId`: kanonik kodlangan literal `<asset-definition-id>#<account-id>` (eski matn shakllari birinchi versiyada qo'llab-quvvatlanmaydi).- `NftId` — `nft$domain`. NFT: `{ id, content: Metadata, owned_by }`. Kod: `crates/iroha_data_model/src/nft.rs`.
+- `AssetId`: kanonik kodlangan literal `<asset-definition-id>#<i105-account-id>` (eski matn shakllari birinchi versiyada qo'llab-quvvatlanmaydi).- `NftId` — `nft$domain`. NFT: `{ id, content: Metadata, owned_by }`. Kod: `crates/iroha_data_model/src/nft.rs`.
 - `RoleId` — `name`. Rol: `{ id, permissions: BTreeSet<Permission> }` quruvchi `NewRole { inner: Role, grant_to }` bilan. Kod: `crates/iroha_data_model/src/role.rs`.
 - `Permission` — `{ name: Ident, payload: Json }`. Kod: `crates/iroha_data_model/src/permission.rs`.
 - `PeerId`/`Peer` — tengdosh identifikatori (ochiq kalit) va manzil. Kod: `crates/iroha_data_model/src/peer.rs`.
@@ -206,7 +206,7 @@ Umumiy konvert: `InstructionExecutionError` baholash xatolari, soʻrovlar xatosi
 
 Migratsiya eslatmasi:
 - `name#domain` matnli obyekt taʼrifi identifikatorlari birinchi versiyada ataylab qoʻllab-quvvatlanmaydi.
-- Yalpish/yonish/o'tkazish chegaralaridagi aktiv identifikatorlari `<asset-definition-id>#<account-id>` kanonik bo'lib qoladi; `iroha tools encode asset-id` bilan `--definition <base58-asset-definition-id>` yoki `--alias ...` plus `--account` dan foydalaning.
+- Yalpish/yonish/o'tkazish chegaralaridagi aktiv identifikatorlari `<asset-definition-id>#<i105-account-id>` kanonik bo'lib qoladi; `iroha tools encode asset-id` bilan `--definition <base58-asset-definition-id>` yoki `--alias ...` plus `--account` dan foydalaning.
 
 ---
 

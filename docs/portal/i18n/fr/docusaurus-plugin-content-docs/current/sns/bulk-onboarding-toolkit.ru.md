@@ -33,7 +33,7 @@ charges utiles автоматически, записывая структури
 |---------|-------------|--------------|
 | `label` | Oui | Méthode applicable (cas mixte; instrument normalisé selon la norme v1 et UTS-46). |
 | `suffix_id` | Oui | Le suffixe d'identification de l'identifiant (désposé ou `0x` hex). |
-| `owner` | Oui | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` | Oui | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` | Oui | Le chien `1..=255`. |
 | `payment_asset_id` | Oui | Règlement actif (par exemple `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Oui | Sans cela, les éditions précédentes sont actives. |

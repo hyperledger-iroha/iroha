@@ -34,7 +34,7 @@ L'analyseur exige la ligne d'en-tête suivante (l'ordre est flexible) :| Colonn
 |---------|--------|-------------|
 | `label` | Oui | Libelle demande (casse mixte acceptée; l'outil normalise selon Norm v1 et UTS-46). |
 | `suffix_id` | Oui | Identifiant numérique de suffixe (décimal ou `0x` hex). |
-| `owner` | Oui | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` | Oui | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` | Oui | Entier `1..=255`. |
 | `payment_asset_id` | Oui | Actif de règlement (par exemple `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Oui | Entiers non signes représentant des unités natives de l'actif. |

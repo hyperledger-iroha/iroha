@@ -4944,7 +4944,7 @@ pub struct Torii {
     pub api_fee_asset_id: Option<String>,
     /// Optional fee policy: fixed amount per request.
     pub api_fee_amount: Option<u64>,
-    /// Optional fee policy: receiver account id (canonical I105 literal).
+    /// Optional fee policy: receiver account id (canonical i105 literal).
     pub api_fee_receiver: Option<String>,
     /// SoraNet privacy ingestion guard rails (auth/rate/namespace).
     pub soranet_privacy_ingest: SoranetPrivacyIngest,
@@ -5093,7 +5093,10 @@ pub struct ToriiTxHistory {
     /// Optional dataspace-keyed mandatory-alias policy file.
     pub mandatory_aliases_path: Option<PathBuf>,
     /// Optional asset-definition restriction applied to visible-history endpoints.
-    pub allowed_asset_definition_id: Option<AssetDefinitionId>,
+    ///
+    /// This may be either a canonical Base58 asset definition identifier or an
+    /// on-chain asset alias that must be resolved against world state.
+    pub allowed_asset_definition_id: Option<String>,
     /// Optional JWT bearer verification configuration for wallet history reads.
     pub jwt: Option<ToriiTxHistoryJwt>,
 }
@@ -5619,8 +5622,11 @@ pub struct ToriiFaucet {
     pub authority: AccountId,
     /// Private key corresponding to the faucet authority.
     pub private_key: ExposedPrivateKey,
-    /// Asset definition distributed by the faucet.
-    pub asset_definition_id: AssetDefinitionId,
+    /// Asset definition selector distributed by the faucet.
+    ///
+    /// This may be either a canonical Base58 asset definition identifier or an
+    /// on-chain asset alias that must be resolved against world state.
+    pub asset_definition_id: String,
     /// Fixed quantity transferred to each eligible account.
     pub amount: Numeric,
     /// Difficulty in leading zero bits for faucet proof-of-work (0 disables PoW).
@@ -5646,7 +5652,7 @@ pub struct ToriiFaucet {
 /// Offline certificate issuer configuration exposed to Torii.
 #[derive(Debug, Clone)]
 pub struct ToriiOfflineIssuer {
-    /// Optional on-chain operator account authorized to manage reserve escrow on behalf of users.
+    /// Optional on-chain operator account authorized to manage offline escrow on behalf of users.
     pub operator_authority: Option<AccountId>,
     /// Private key used to sign offline wallet certificates.
     pub operator_private_key: ExposedPrivateKey,
@@ -5654,14 +5660,14 @@ pub struct ToriiOfflineIssuer {
     pub legacy_operator_private_keys: Vec<ExposedPrivateKey>,
     /// Allowed controller allow-list (empty => allow all).
     pub allowed_controllers: Vec<AccountId>,
-    /// Reserve-policy values used for device-bound offline reserve authorization.
-    pub reserve_policy: ToriiOfflineReservePolicy,
+    /// Lineage-policy values used for device-bound offline bearer authorization.
+    pub lineage_policy: ToriiOfflineLineagePolicy,
 }
 
-/// Device-bound offline reserve policy exposed to Torii.
+/// Device-bound offline lineage policy exposed to Torii.
 #[derive(Debug, Clone)]
-pub struct ToriiOfflineReservePolicy {
-    /// Maximum total spendable offline balance per reserve.
+pub struct ToriiOfflineLineagePolicy {
+    /// Maximum total spendable offline balance per bearer lineage.
     pub max_balance: String,
     /// Maximum single offline transfer value.
     pub max_tx_value: String,
@@ -6736,7 +6742,7 @@ pub struct IsoBridgeSigner {
 pub struct IsoAccountAlias {
     /// External IBAN representation.
     pub iban: String,
-    /// Account identifier (canonical I105 literal).
+    /// Account identifier (canonical i105 literal).
     pub account_id: String,
 }
 
@@ -6745,7 +6751,7 @@ pub struct IsoAccountAlias {
 pub struct IsoCurrencyAsset {
     /// ISO 4217 currency code (e.g., `USD`).
     pub currency: String,
-    /// Asset definition identifier (e.g., `usd#payments`).
+    /// Asset definition selector (canonical Base58 or leased alias).
     pub asset_definition: String,
 }
 

@@ -60,7 +60,7 @@ mod api_version;
 #[cfg(feature = "app_api")]
 mod identifier_resolution;
 #[cfg(feature = "app_api")]
-mod offline_reserve;
+mod offline_lineage;
 mod operator_auth;
 mod operator_signatures;
 #[cfg(feature = "push")]
@@ -805,7 +805,7 @@ struct TxHistoryJwtConfig {
 struct TxHistoryAccessPolicy {
     jwt: Option<TxHistoryJwtConfig>,
     mandatory_aliases: HashMap<String, HashSet<String>>,
-    allowed_asset_definition_id: Option<AssetDefinitionId>,
+    allowed_asset_definition_id: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -1115,7 +1115,7 @@ struct AppState {
     #[cfg(feature = "app_api")]
     account_faucet: Option<iroha_config::parameters::actual::ToriiFaucet>,
     #[cfg(feature = "app_api")]
-    offline_policy_snapshot: Arc<std::sync::RwLock<crate::offline_reserve::OfflinePolicySnapshot>>,
+    offline_policy_snapshot: Arc<std::sync::RwLock<crate::offline_lineage::OfflinePolicySnapshot>>,
     #[cfg(feature = "app_api")]
     uaid_onboarding: Option<AccountOnboardingSigner>,
     soracloud_runtime: Option<SharedSoracloudRuntime>,
@@ -2950,15 +2950,14 @@ async fn handler_account_transactions_query(
     env.pagination.limit = Some(page_limit);
     env.fetch_size = limits.clamp_fetch_size(env.fetch_size)?;
     let payload = crate::utils::extractors::NoritoJson(env);
+    let allowed_asset_definition_id = resolve_tx_history_allowed_asset_definition_id(&app)?;
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_account_transactions_with_policy(
             app.state.clone(),
             AxPath(account_id),
             payload,
             tel.clone(),
-            app.tx_history_access_policy
-                .allowed_asset_definition_id
-                .clone(),
+            allowed_asset_definition_id.clone(),
         )
         .await
         .map(IntoResponse::into_response);
@@ -2975,9 +2974,7 @@ async fn handler_account_transactions_query(
         AxPath(key_hint),
         payload,
         tel,
-        app.tx_history_access_policy
-            .allowed_asset_definition_id
-            .clone(),
+        allowed_asset_definition_id,
     )
     .await
     .map(IntoResponse::into_response)
@@ -3116,15 +3113,14 @@ async fn handler_account_transactions_get(
     let mut params = params;
     let page_limit = limits.clamp_page_limit(params.limit)?;
     params.limit = Some(page_limit);
+    let allowed_asset_definition_id = resolve_tx_history_allowed_asset_definition_id(&app)?;
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_account_transactions_get_with_policy(
             app.state.clone(),
             AxPath(account_id),
             AxQuery(params),
             tel.clone(),
-            app.tx_history_access_policy
-                .allowed_asset_definition_id
-                .clone(),
+            allowed_asset_definition_id.clone(),
         )
         .await
         .map(IntoResponse::into_response);
@@ -3141,9 +3137,7 @@ async fn handler_account_transactions_get(
         AxPath(key_hint),
         AxQuery(params),
         tel,
-        app.tx_history_access_policy
-            .allowed_asset_definition_id
-            .clone(),
+        allowed_asset_definition_id,
     )
     .await
     .map(IntoResponse::into_response)
@@ -3163,6 +3157,10 @@ async fn handler_transactions_history_get(
     let viewer = match tx_history_viewer_from_headers(&app, &headers) {
         Ok(viewer) => viewer,
         Err(response) => return Ok(response),
+    };
+    let allowed_asset_definition_id = match resolve_tx_history_allowed_asset_definition_id(&app) {
+        Ok(value) => value,
+        Err(err) => return Ok(tx_history_alias_resolution_reject(err)),
     };
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
@@ -3185,9 +3183,7 @@ async fn handler_transactions_history_get(
         crate::NoritoQuery(params),
         tel,
         visibility,
-        app.tx_history_access_policy
-            .allowed_asset_definition_id
-            .clone(),
+        allowed_asset_definition_id,
     )
     .await
     .map(IntoResponse::into_response)
@@ -4009,13 +4005,13 @@ fn rename_offline_json_key(map: &mut norito::json::Map, from: &str, to: &str) {
 }
 
 #[cfg(feature = "app_api")]
-fn translate_cash_authorization_to_reserve_json(value: &mut Value) -> Result<(), Error> {
+fn translate_cash_authorization_to_lineage_json(value: &mut Value) -> Result<(), Error> {
     let Some(map) = value.as_object_mut() else {
         return Err(offline_cash_invalid_payload(
             "offline cash authorization must be an object",
         ));
     };
-    rename_offline_json_key(map, "lineage_id", "reserve_id");
+    rename_offline_json_key(map, "lineage_id", "lineage_id");
     if let Some(device_binding_value) = map.get("device_binding").cloned() {
         let binding = decode_offline_cash_device_binding(
             device_binding_value,
@@ -4033,7 +4029,7 @@ fn translate_cash_authorization_to_reserve_json(value: &mut Value) -> Result<(),
 
 #[cfg(feature = "app_api")]
 fn encode_offline_cash_device_binding_value(
-    binding: &crate::offline_reserve::OfflineCashAndroidDeviceBinding,
+    binding: &crate::offline_lineage::OfflineCashAndroidDeviceBinding,
 ) -> Result<Value, Error> {
     norito::json::to_value(binding).map_err(|err| {
         offline_cash_invalid_payload(format!(
@@ -4043,16 +4039,16 @@ fn encode_offline_cash_device_binding_value(
 }
 
 #[cfg(feature = "app_api")]
-fn translate_reserve_authorization_to_cash_json(
+fn translate_lineage_authorization_to_cash_json(
     value: &mut Value,
-    fallback_binding: Option<&crate::offline_reserve::OfflineCashAndroidDeviceBinding>,
+    fallback_binding: Option<&crate::offline_lineage::OfflineCashAndroidDeviceBinding>,
 ) -> Result<(), Error> {
     let Some(map) = value.as_object_mut() else {
         return Err(offline_cash_invalid_payload(
             "offline cash authorization must be an object",
         ));
     };
-    rename_offline_json_key(map, "reserve_id", "lineage_id");
+    rename_offline_json_key(map, "lineage_id", "lineage_id");
     if !map.contains_key("device_binding") {
         if let Some(binding) = fallback_binding {
             map.insert(
@@ -4068,34 +4064,34 @@ fn translate_reserve_authorization_to_cash_json(
 }
 
 #[cfg(feature = "app_api")]
-fn translate_cash_state_to_reserve_json(value: &mut Value) -> Result<(), Error> {
+fn translate_cash_state_to_lineage_json(value: &mut Value) -> Result<(), Error> {
     let Some(map) = value.as_object_mut() else {
         return Err(offline_cash_invalid_payload(
             "offline cash state must be an object",
         ));
     };
-    rename_offline_json_key(map, "lineage_id", "reserve_id");
-    rename_offline_json_key(map, "locked_balance", "parked_balance");
+    rename_offline_json_key(map, "lineage_id", "lineage_id");
+    rename_offline_json_key(map, "locked_balance", "locked_balance");
     if let Some(authorization) = map.get_mut("authorization") {
-        translate_cash_authorization_to_reserve_json(authorization)?;
+        translate_cash_authorization_to_lineage_json(authorization)?;
     }
     Ok(())
 }
 
 #[cfg(feature = "app_api")]
-fn translate_reserve_state_to_cash_json(
+fn translate_lineage_state_to_cash_json(
     value: &mut Value,
-    fallback_binding: Option<&crate::offline_reserve::OfflineCashAndroidDeviceBinding>,
+    fallback_binding: Option<&crate::offline_lineage::OfflineCashAndroidDeviceBinding>,
 ) -> Result<(), Error> {
     let Some(map) = value.as_object_mut() else {
         return Err(offline_cash_invalid_payload(
             "offline cash state must be an object",
         ));
     };
-    rename_offline_json_key(map, "reserve_id", "lineage_id");
-    rename_offline_json_key(map, "parked_balance", "locked_balance");
+    rename_offline_json_key(map, "lineage_id", "lineage_id");
+    rename_offline_json_key(map, "locked_balance", "locked_balance");
     if let Some(authorization) = map.get_mut("authorization") {
-        translate_reserve_authorization_to_cash_json(authorization, fallback_binding)?;
+        translate_lineage_authorization_to_cash_json(authorization, fallback_binding)?;
     }
     Ok(())
 }
@@ -4134,8 +4130,8 @@ fn decode_offline_transfer_payload_value(raw_payload: &str) -> Result<Value, Err
 fn decode_offline_cash_device_binding(
     value: Value,
     context: &'static str,
-) -> Result<crate::offline_reserve::OfflineCashAndroidDeviceBinding, Error> {
-    norito::json::from_value::<crate::offline_reserve::OfflineCashAndroidDeviceBinding>(value)
+) -> Result<crate::offline_lineage::OfflineCashAndroidDeviceBinding, Error> {
+    norito::json::from_value::<crate::offline_lineage::OfflineCashAndroidDeviceBinding>(value)
         .map_err(|err| {
             offline_cash_invalid_payload(format!("failed to decode offline cash {context}: {err}"))
         })
@@ -4145,28 +4141,28 @@ fn decode_offline_cash_device_binding(
 fn decode_offline_cash_device_proof(
     value: Value,
     context: &'static str,
-) -> Result<crate::offline_reserve::OfflineCashAndroidDeviceProof, Error> {
-    norito::json::from_value::<crate::offline_reserve::OfflineCashAndroidDeviceProof>(value)
+) -> Result<crate::offline_lineage::OfflineCashAndroidDeviceProof, Error> {
+    norito::json::from_value::<crate::offline_lineage::OfflineCashAndroidDeviceProof>(value)
         .map_err(|err| {
             offline_cash_invalid_payload(format!("failed to decode offline cash {context}: {err}"))
         })
 }
 
 #[cfg(feature = "app_api")]
-fn translate_cash_receipt_to_reserve_json(value: &mut Value) -> Result<(), Error> {
+fn translate_cash_receipt_to_lineage_json(value: &mut Value) -> Result<(), Error> {
     let Some(map) = value.as_object_mut() else {
         return Err(offline_cash_invalid_payload(
             "offline cash receipt must be an object",
         ));
     };
-    rename_offline_json_key(map, "lineage_id", "reserve_id");
-    rename_offline_json_key(map, "pre_locked_balance", "pre_parked_balance");
-    rename_offline_json_key(map, "post_locked_balance", "post_parked_balance");
-    rename_offline_json_key(map, "counterparty_lineage_id", "counterparty_reserve_id");
+    rename_offline_json_key(map, "lineage_id", "lineage_id");
+    rename_offline_json_key(map, "pre_locked_balance", "pre_locked_balance");
+    rename_offline_json_key(map, "post_locked_balance", "post_locked_balance");
+    rename_offline_json_key(map, "counterparty_lineage_id", "counterparty_lineage_id");
     if let Some(device_proof_value) = map.remove("device_proof") {
         let proof = decode_offline_cash_device_proof(device_proof_value, "receipt device_proof")?;
         let attestation =
-            norito::json::to_value(&crate::offline_reserve::OfflineDeviceAttestation {
+            norito::json::to_value(&crate::offline_lineage::OfflineDeviceAttestation {
                 key_id: proof.attestation_key_id,
                 counter: proof.counter.unwrap_or(0),
                 assertion_base64: proof.assertion_base64,
@@ -4184,28 +4180,28 @@ fn translate_cash_receipt_to_reserve_json(value: &mut Value) -> Result<(), Error
         map.entry("attestation".to_owned()).or_insert(attestation);
     }
     if let Some(authorization) = map.get_mut("authorization") {
-        translate_cash_authorization_to_reserve_json(authorization)?;
+        translate_cash_authorization_to_lineage_json(authorization)?;
     }
     Ok(())
 }
 
 #[cfg(feature = "app_api")]
-fn translate_cash_outgoing_payload_to_reserve_json(value: &mut Value) -> Result<(), Error> {
+fn translate_cash_outgoing_payload_to_lineage_json(value: &mut Value) -> Result<(), Error> {
     let Some(map) = value.as_object_mut() else {
         return Err(offline_cash_invalid_payload(
             "offline transfer payload must be an object",
         ));
     };
     if let Some(anchor) = map.get_mut("anchor") {
-        translate_cash_state_to_reserve_json(anchor)?;
+        translate_cash_state_to_lineage_json(anchor)?;
     }
     if let Some(Value::Array(items)) = map.get_mut("ancestry_receipts") {
         for item in items {
-            translate_cash_receipt_to_reserve_json(item)?;
+            translate_cash_receipt_to_lineage_json(item)?;
         }
     }
     if let Some(receipt) = map.get_mut("receipt") {
-        translate_cash_receipt_to_reserve_json(receipt)?;
+        translate_cash_receipt_to_lineage_json(receipt)?;
     }
     Ok(())
 }
@@ -4213,7 +4209,7 @@ fn translate_cash_outgoing_payload_to_reserve_json(value: &mut Value) -> Result<
 #[cfg(feature = "app_api")]
 fn extract_offline_cash_mode(
     value: &Value,
-) -> Result<crate::offline_reserve::OfflineCashAttestationMode, Error> {
+) -> Result<crate::offline_lineage::OfflineCashAttestationMode, Error> {
     let Some(map) = value.as_object() else {
         return Err(offline_cash_invalid_payload(
             "offline cash request must be an object",
@@ -4238,12 +4234,12 @@ fn extract_offline_cash_mode(
             }
             if binding.platform.eq_ignore_ascii_case("android") {
                 return Ok(
-                    crate::offline_reserve::OfflineCashAttestationMode::Android { binding, proof },
+                    crate::offline_lineage::OfflineCashAttestationMode::Android { binding, proof },
                 );
             }
             if binding.platform.eq_ignore_ascii_case("ios") {
                 return Ok(
-                    crate::offline_reserve::OfflineCashAttestationMode::AppleAttest {
+                    crate::offline_lineage::OfflineCashAttestationMode::AppleAttest {
                         binding,
                         proof,
                     },
@@ -4258,21 +4254,21 @@ fn extract_offline_cash_mode(
 
 #[cfg(feature = "app_api")]
 fn clone_offline_cash_mode_binding(
-    mode: &crate::offline_reserve::OfflineCashAttestationMode,
-) -> crate::offline_reserve::OfflineCashAndroidDeviceBinding {
+    mode: &crate::offline_lineage::OfflineCashAttestationMode,
+) -> crate::offline_lineage::OfflineCashAndroidDeviceBinding {
     match mode {
-        crate::offline_reserve::OfflineCashAttestationMode::AppleAttest { binding, .. }
-        | crate::offline_reserve::OfflineCashAttestationMode::Android { binding, .. } => {
+        crate::offline_lineage::OfflineCashAttestationMode::AppleAttest { binding, .. }
+        | crate::offline_lineage::OfflineCashAttestationMode::Android { binding, .. } => {
             binding.clone()
         }
     }
 }
 
 fn offline_cash_attestation_value(
-    binding: &crate::offline_reserve::OfflineCashAndroidDeviceBinding,
-    proof: &crate::offline_reserve::OfflineCashAndroidDeviceProof,
+    binding: &crate::offline_lineage::OfflineCashAndroidDeviceBinding,
+    proof: &crate::offline_lineage::OfflineCashAndroidDeviceProof,
 ) -> Result<Value, Error> {
-    let attestation = crate::offline_reserve::offline_cash_device_attestation(binding, proof)?;
+    let attestation = crate::offline_lineage::offline_cash_device_attestation(binding, proof)?;
     norito::json::to_value(&attestation).map_err(|err| {
         offline_cash_invalid_payload(format!(
             "failed to encode translated offline cash attestation: {err}"
@@ -4280,7 +4276,7 @@ fn offline_cash_attestation_value(
     })
 }
 
-fn translate_cash_request_to_reserve_json(
+fn translate_cash_request_to_lineage_json(
     value: &mut Value,
     include_device_attestation: bool,
 ) -> Result<(), Error> {
@@ -4289,7 +4285,7 @@ fn translate_cash_request_to_reserve_json(
             "offline cash request must be an object",
         ));
     };
-    rename_offline_json_key(map, "lineage_id", "reserve_id");
+    rename_offline_json_key(map, "lineage_id", "lineage_id");
     let binding_value = map.remove("device_binding").ok_or_else(|| {
         offline_cash_invalid_payload(
             "offline cash requests require both device_binding and device_proof",
@@ -4319,33 +4315,33 @@ fn translate_cash_request_to_reserve_json(
     }
     if let Some(Value::Array(receipts)) = map.get_mut("receipts") {
         for receipt in receipts {
-            translate_cash_receipt_to_reserve_json(receipt)?;
+            translate_cash_receipt_to_lineage_json(receipt)?;
         }
     }
     Ok(())
 }
 
 #[cfg(feature = "app_api")]
-fn translate_reserve_envelope_to_cash_json(
+fn translate_lineage_envelope_to_cash_json(
     mut value: Value,
-    fallback_binding: Option<&crate::offline_reserve::OfflineCashAndroidDeviceBinding>,
+    fallback_binding: Option<&crate::offline_lineage::OfflineCashAndroidDeviceBinding>,
 ) -> Result<Value, Error> {
     let Some(map) = value.as_object_mut() else {
         return Err(offline_cash_invalid_payload(
             "offline cash envelope must be an object",
         ));
     };
-    if let Some(mut reserve_state) = map.remove("reserve_state") {
-        translate_reserve_state_to_cash_json(&mut reserve_state, fallback_binding)?;
-        map.insert("lineage_state".to_owned(), reserve_state);
+    if let Some(mut lineage_state) = map.remove("lineage_state") {
+        translate_lineage_state_to_cash_json(&mut lineage_state, fallback_binding)?;
+        map.insert("lineage_state".to_owned(), lineage_state);
         return Ok(value);
     }
     if let Some(lineage_state) = map.get_mut("lineage_state") {
-        translate_reserve_state_to_cash_json(lineage_state, fallback_binding)?;
+        translate_lineage_state_to_cash_json(lineage_state, fallback_binding)?;
         return Ok(value);
     }
     Err(offline_cash_invalid_payload(
-        "offline cash envelope missing reserve_state",
+        "offline cash envelope missing lineage_state",
     ))
 }
 
@@ -4358,7 +4354,7 @@ fn decode_offline_cash_request<T>(
 where
     T: JsonDeserialize,
 {
-    translate_cash_request_to_reserve_json(&mut request_body, include_device_attestation)?;
+    translate_cash_request_to_lineage_json(&mut request_body, include_device_attestation)?;
     norito::json::from_value(request_body).map_err(|err| {
         offline_cash_invalid_payload(format!("failed to decode {context} request: {err}"))
     })
@@ -4374,17 +4370,17 @@ fn decode_offline_cash_request_body(body: &Bytes, context: &'static str) -> Resu
 #[cfg(feature = "app_api")]
 fn offline_cash_response<T>(
     envelope: &T,
-    fallback_binding: Option<&crate::offline_reserve::OfflineCashAndroidDeviceBinding>,
+    fallback_binding: Option<&crate::offline_lineage::OfflineCashAndroidDeviceBinding>,
 ) -> Result<AxResponse, Error>
 where
     T: JsonSerialize,
 {
-    let reserve_value =
+    let lineage_value =
         norito::json::to_value(envelope).map_err(|source| Error::SerializationFailure {
             context: "offline cash response",
             source,
         })?;
-    let cash_value = translate_reserve_envelope_to_cash_json(reserve_value, fallback_binding)?;
+    let cash_value = translate_lineage_envelope_to_cash_json(lineage_value, fallback_binding)?;
     json_ok(cash_value)
 }
 
@@ -4413,12 +4409,12 @@ async fn handler_offline_cash_setup(
     let request_body = decode_offline_cash_request_body(&body, "offline cash setup")?;
     let mode = extract_offline_cash_mode(&request_body)?;
     let response_binding = clone_offline_cash_mode_binding(&mode);
-    let req = decode_offline_cash_request::<crate::offline_reserve::OfflineReserveSetupRequest>(
+    let req = decode_offline_cash_request::<crate::offline_lineage::OfflineLineageSetupRequest>(
         request_body,
         "offline cash setup",
         true,
     )?;
-    let envelope = crate::offline_reserve::setup_cash(app.as_ref(), req, mode).await?;
+    let envelope = crate::offline_lineage::setup_cash(app.as_ref(), req, mode).await?;
     offline_cash_response(&envelope, Some(&response_binding))
 }
 
@@ -4447,12 +4443,12 @@ async fn handler_offline_cash_load(
     let request_body = decode_offline_cash_request_body(&body, "offline cash load")?;
     let mode = extract_offline_cash_mode(&request_body)?;
     let response_binding = clone_offline_cash_mode_binding(&mode);
-    let req = decode_offline_cash_request::<crate::offline_reserve::OfflineReserveTopUpRequest>(
+    let req = decode_offline_cash_request::<crate::offline_lineage::OfflineLineageLoadRequest>(
         request_body,
         "offline cash load",
         true,
     )?;
-    let envelope = crate::offline_reserve::load_cash(app.as_ref(), req, mode).await?;
+    let envelope = crate::offline_lineage::load_cash(app.as_ref(), req, mode).await?;
     offline_cash_response(&envelope, Some(&response_binding))
 }
 
@@ -4481,12 +4477,12 @@ async fn handler_offline_cash_refresh(
     let request_body = decode_offline_cash_request_body(&body, "offline cash refresh")?;
     let mode = extract_offline_cash_mode(&request_body)?;
     let response_binding = clone_offline_cash_mode_binding(&mode);
-    let req = decode_offline_cash_request::<crate::offline_reserve::OfflineReserveRenewRequest>(
+    let req = decode_offline_cash_request::<crate::offline_lineage::OfflineLineageRefreshRequest>(
         request_body,
         "offline cash refresh",
         true,
     )?;
-    let envelope = crate::offline_reserve::refresh_cash(app.as_ref(), req, mode).await?;
+    let envelope = crate::offline_lineage::refresh_cash(app.as_ref(), req, mode).await?;
     offline_cash_response(&envelope, Some(&response_binding))
 }
 
@@ -4515,12 +4511,12 @@ async fn handler_offline_cash_sync(
     let request_body = decode_offline_cash_request_body(&body, "offline cash sync")?;
     let mode = extract_offline_cash_mode(&request_body)?;
     let response_binding = clone_offline_cash_mode_binding(&mode);
-    let req = decode_offline_cash_request::<crate::offline_reserve::OfflineReserveSyncRequest>(
+    let req = decode_offline_cash_request::<crate::offline_lineage::OfflineLineageSyncRequest>(
         request_body,
         "offline cash sync",
         false,
     )?;
-    let envelope = crate::offline_reserve::sync_cash(app.as_ref(), req, mode).await?;
+    let envelope = crate::offline_lineage::sync_cash(app.as_ref(), req, mode).await?;
     offline_cash_response(&envelope, Some(&response_binding))
 }
 
@@ -4549,12 +4545,12 @@ async fn handler_offline_cash_redeem(
     let request_body = decode_offline_cash_request_body(&body, "offline cash redeem")?;
     let mode = extract_offline_cash_mode(&request_body)?;
     let response_binding = clone_offline_cash_mode_binding(&mode);
-    let req = decode_offline_cash_request::<crate::offline_reserve::OfflineReserveDefundRequest>(
+    let req = decode_offline_cash_request::<crate::offline_lineage::OfflineLineageRedeemRequest>(
         request_body,
         "offline cash redeem",
         false,
     )?;
-    let envelope = crate::offline_reserve::redeem_cash(app.as_ref(), req, mode).await?;
+    let envelope = crate::offline_lineage::redeem_cash(app.as_ref(), req, mode).await?;
     offline_cash_response(&envelope, Some(&response_binding))
 }
 
@@ -4563,18 +4559,18 @@ async fn handler_offline_cash_redeem(
 async fn handler_offline_cash_readiness() -> Result<impl IntoResponse, Error> {
     json_ok(json_object([json_entry(
         "offline_recursive_stark",
-        crate::offline_reserve::offline_recursive_stark_ready(),
+        crate::offline_lineage::offline_recursive_stark_ready(),
     )]))
 }
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_reserve_setup(
+async fn handler_offline_lineage_setup(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::offline_reserve::OfflineReserveSetupRequest,
+        crate::offline_lineage::OfflineLineageSetupRequest,
     >,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
@@ -4585,23 +4581,23 @@ async fn handler_offline_reserve_setup(
             &app,
             &headers,
             Some(remote_ip),
-            "v1/offline/reserve/setup",
+            "v1/offline/lineage/setup",
             enforce,
         )
         .await?;
     }
 
-    json_ok(crate::offline_reserve::setup_reserve(app.as_ref(), req).await?)
+    json_ok(crate::offline_lineage::setup_lineage(app.as_ref(), req).await?)
 }
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_reserve_topup(
+async fn handler_offline_lineage_load(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::offline_reserve::OfflineReserveTopUpRequest,
+        crate::offline_lineage::OfflineLineageLoadRequest,
     >,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
@@ -4612,23 +4608,23 @@ async fn handler_offline_reserve_topup(
             &app,
             &headers,
             Some(remote_ip),
-            "v1/offline/reserve/topup",
+            "v1/offline/lineage/load",
             enforce,
         )
         .await?;
     }
 
-    json_ok(crate::offline_reserve::top_up_reserve(app.as_ref(), req).await?)
+    json_ok(crate::offline_lineage::load_lineage(app.as_ref(), req).await?)
 }
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_reserve_renew(
+async fn handler_offline_lineage_refresh(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::offline_reserve::OfflineReserveRenewRequest,
+        crate::offline_lineage::OfflineLineageRefreshRequest,
     >,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
@@ -4639,23 +4635,23 @@ async fn handler_offline_reserve_renew(
             &app,
             &headers,
             Some(remote_ip),
-            "v1/offline/reserve/renew",
+            "v1/offline/lineage/refresh",
             enforce,
         )
         .await?;
     }
 
-    json_ok(crate::offline_reserve::renew_reserve(app.as_ref(), req).await?)
+    json_ok(crate::offline_lineage::refresh_lineage(app.as_ref(), req).await?)
 }
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_reserve_sync(
+async fn handler_offline_lineage_sync(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::offline_reserve::OfflineReserveSyncRequest,
+        crate::offline_lineage::OfflineLineageSyncRequest,
     >,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
@@ -4666,23 +4662,23 @@ async fn handler_offline_reserve_sync(
             &app,
             &headers,
             Some(remote_ip),
-            "v1/offline/reserve/sync",
+            "v1/offline/lineage/sync",
             enforce,
         )
         .await?;
     }
 
-    json_ok(crate::offline_reserve::sync_reserve(app.as_ref(), req).await?)
+    json_ok(crate::offline_lineage::sync_lineage(app.as_ref(), req).await?)
 }
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_reserve_defund(
+async fn handler_offline_lineage_redeem(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::offline_reserve::OfflineReserveDefundRequest,
+        crate::offline_lineage::OfflineLineageRedeemRequest,
     >,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
@@ -4693,13 +4689,13 @@ async fn handler_offline_reserve_defund(
             &app,
             &headers,
             Some(remote_ip),
-            "v1/offline/reserve/defund",
+            "v1/offline/lineage/redeem",
             enforce,
         )
         .await?;
     }
 
-    json_ok(crate::offline_reserve::defund_reserve(app.as_ref(), req).await?)
+    json_ok(crate::offline_lineage::redeem_lineage(app.as_ref(), req).await?)
 }
 
 #[cfg(feature = "app_api")]
@@ -4709,7 +4705,7 @@ async fn handler_offline_policy_update(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(snapshot): crate::utils::extractors::NoritoJson<
-        crate::offline_reserve::OfflinePolicySnapshot,
+        crate::offline_lineage::OfflinePolicySnapshot,
     >,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
@@ -4726,7 +4722,7 @@ async fn handler_offline_policy_update(
         .await?;
     }
 
-    json_ok(crate::offline_reserve::set_policy_snapshot(
+    json_ok(crate::offline_lineage::set_policy_snapshot(
         app.as_ref(),
         snapshot,
     )?)
@@ -4734,7 +4730,7 @@ async fn handler_offline_policy_update(
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_reserve_revocations(
+async fn handler_offline_lineage_revocations(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
@@ -4753,12 +4749,12 @@ async fn handler_offline_reserve_revocations(
         .await?;
     }
 
-    json_ok(crate::offline_reserve::revocation_list(app.as_ref())?)
+    json_ok(crate::offline_lineage::revocation_list(app.as_ref())?)
 }
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_reserve_revocations_bundle(
+async fn handler_offline_lineage_revocations_bundle(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
@@ -4777,17 +4773,17 @@ async fn handler_offline_reserve_revocations_bundle(
         .await?;
     }
 
-    json_ok(crate::offline_reserve::revocation_bundle(app.as_ref())?)
+    json_ok(crate::offline_lineage::revocation_bundle(app.as_ref())?)
 }
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_reserve_revoke(
+async fn handler_offline_lineage_revoke(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::offline_reserve::OfflineReserveRevocationRequest,
+        crate::offline_lineage::OfflineLineageRevocationRequest,
     >,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
@@ -4804,7 +4800,7 @@ async fn handler_offline_reserve_revoke(
         .await?;
     }
 
-    json_ok(crate::offline_reserve::register_revocation(app.as_ref(), req).await?)
+    json_ok(crate::offline_lineage::register_revocation(app.as_ref(), req).await?)
 }
 
 #[cfg(feature = "app_api")]
@@ -5409,6 +5405,17 @@ fn parse_asset_definition_id(app: &AppState, raw: &str) -> Result<AssetDefinitio
                 iroha_data_model::query::error::QueryExecutionFail::NotFound,
             ))
         })
+}
+
+#[cfg(feature = "app_api")]
+fn resolve_tx_history_allowed_asset_definition_id(
+    app: &AppState,
+) -> Result<Option<AssetDefinitionId>, Error> {
+    app.tx_history_access_policy
+        .allowed_asset_definition_id
+        .as_deref()
+        .map(|selector| parse_asset_definition_id(app, selector))
+        .transpose()
 }
 
 #[cfg(feature = "app_api")]
@@ -14744,15 +14751,21 @@ async fn handler_iso_pacs008(
         ));
     }
 
-    let (transaction, context) = match runtime.build_pacs008_transaction(
-        &parsed,
-        Arc::as_ref(&app.chain_id),
-        &app.telemetry,
-    ) {
-        Ok(result) => result,
-        Err(err) => {
-            runtime.mark_rejected(&msg_id, Some(err.to_string()), None);
-            return Err(Error::Query(map_iso_error(err)));
+    let now_ms = routing::asset_alias_observation_time_ms(app.state.as_ref());
+    let (transaction, context) = {
+        let world = app.state.world_view();
+        match runtime.build_pacs008_transaction(
+            &parsed,
+            &world,
+            now_ms,
+            Arc::as_ref(&app.chain_id),
+            &app.telemetry,
+        ) {
+            Ok(result) => result,
+            Err(err) => {
+                runtime.mark_rejected(&msg_id, Some(err.to_string()), None);
+                return Err(Error::Query(map_iso_error(err)));
+            }
         }
     };
 
@@ -14898,15 +14911,21 @@ async fn handler_iso_pacs009(
         ));
     }
 
-    let (transaction, context) = match runtime.build_pacs009_transaction(
-        &parsed,
-        Arc::as_ref(&app.chain_id),
-        &app.telemetry,
-    ) {
-        Ok(result) => result,
-        Err(err) => {
-            runtime.mark_rejected(&msg_id, Some(err.to_string()), None);
-            return Err(Error::Query(map_iso_error(err)));
+    let now_ms = routing::asset_alias_observation_time_ms(app.state.as_ref());
+    let (transaction, context) = {
+        let world = app.state.world_view();
+        match runtime.build_pacs009_transaction(
+            &parsed,
+            &world,
+            now_ms,
+            Arc::as_ref(&app.chain_id),
+            &app.telemetry,
+        ) {
+            Ok(result) => result,
+            Err(err) => {
+                runtime.mark_rejected(&msg_id, Some(err.to_string()), None);
+                return Err(Error::Query(map_iso_error(err)));
+            }
         }
     };
 
@@ -17781,7 +17800,7 @@ struct OfflineIssuerSigner {
     operator_keypair: KeyPair,
     legacy_operator_keypairs: Vec<KeyPair>,
     allowed_controllers: Vec<AccountId>,
-    reserve_policy: iroha_config::parameters::actual::ToriiOfflineReservePolicy,
+    lineage_policy: iroha_config::parameters::actual::ToriiOfflineLineagePolicy,
 }
 
 #[cfg(feature = "app_api")]
@@ -17922,7 +17941,7 @@ pub struct Torii {
     #[cfg(feature = "app_api")]
     account_faucet: Option<iroha_config::parameters::actual::ToriiFaucet>,
     #[cfg(feature = "app_api")]
-    offline_policy_snapshot: Arc<std::sync::RwLock<crate::offline_reserve::OfflinePolicySnapshot>>,
+    offline_policy_snapshot: Arc<std::sync::RwLock<crate::offline_lineage::OfflinePolicySnapshot>>,
     #[cfg(feature = "app_api")]
     uaid_onboarding: Option<AccountOnboardingSigner>,
     soracloud_runtime: Option<SharedSoracloudRuntime>,
@@ -18497,20 +18516,10 @@ impl Torii {
     fn add_contracts_and_vk_routes(&self, builder: &mut RouterBuilder) {
         builder.apply(|router| {
             // Group contracts + VK endpoints into a small sub-router for clarity and merge it.
-            let group = Router::new()
-                .route(
-                    "/v1/contracts/code-bytes/{code_hash}",
-                    get(handler_get_contract_code_bytes),
-                )
-                .route("/v1/contracts/deploy", post(handler_post_contract_deploy))
-                .route(
-                    "/v1/contracts/instance",
-                    post(handler_post_contract_instance),
-                )
-                .route(
-                    "/v1/contracts/instance/activate",
-                    post(handler_post_contract_instance_activate),
-                );
+            let group = Router::new().route(
+                "/v1/contracts/code-bytes/{code_hash}",
+                get(handler_get_contract_code_bytes),
+            );
 
             #[cfg(feature = "app_api")]
             let group = group
@@ -18553,22 +18562,6 @@ impl Torii {
             let group = group;
 
             let group = group
-                .route(
-                    "/v1/sorafs/pin/register",
-                    post(handler_post_sorafs_register_manifest),
-                )
-                .route(
-                    "/v1/sorafs/capacity/declare",
-                    post(handler_post_sorafs_capacity_declare),
-                )
-                .route(
-                    "/v1/sorafs/capacity/telemetry",
-                    post(handler_post_sorafs_capacity_telemetry),
-                )
-                .route(
-                    "/v1/sorafs/capacity/dispute",
-                    post(handler_post_sorafs_capacity_dispute),
-                )
                 .route(
                     "/v1/sorafs/capacity/schedule",
                     post(handler_post_sorafs_capacity_schedule),
@@ -18649,9 +18642,6 @@ impl Torii {
             let group = group;
 
             let group = group
-                // VK registry lifecycle (app API convenience): register, update
-                .route("/v1/zk/vk/register", post(handler_post_vk_register))
-                .route("/v1/zk/vk/update", post(handler_post_vk_update))
                 .route(
                     "/v1/zk/vk/{backend}/{name}",
                     get(handler_get_vk_by_backend_name),
@@ -18871,14 +18861,6 @@ impl Torii {
                     get(handler_space_directory_manifests),
                 )
                 .route(
-                    "/v1/space-directory/manifests",
-                    post(handler_space_directory_manifest_publish),
-                )
-                .route(
-                    "/v1/space-directory/manifests/revoke",
-                    post(handler_space_directory_manifest_revoke),
-                )
-                .route(
                     "/v1/ram-lfe/program-policies",
                     get(handler_ram_lfe_program_policies),
                 )
@@ -18908,25 +18890,17 @@ impl Torii {
                 )
                 .route(
                     "/v1/offline/revocations",
-                    get(handler_offline_reserve_revocations).post(handler_offline_reserve_revoke),
+                    get(handler_offline_lineage_revocations).post(handler_offline_lineage_revoke),
                 )
                 .route(
                     "/v1/offline/revocations/bundle",
-                    get(handler_offline_reserve_revocations_bundle),
+                    get(handler_offline_lineage_revocations_bundle),
                 )
                 .route("/v1/offline/policy", post(handler_offline_policy_update))
-                .route("/v1/offline/cash/setup", post(handler_offline_cash_setup))
-                .route("/v1/offline/cash/load", post(handler_offline_cash_load))
                 .route(
                     "/v1/offline/cash/readiness",
                     get(handler_offline_cash_readiness),
                 )
-                .route(
-                    "/v1/offline/cash/refresh",
-                    post(handler_offline_cash_refresh),
-                )
-                .route("/v1/offline/cash/sync", post(handler_offline_cash_sync))
-                .route("/v1/offline/cash/redeem", post(handler_offline_cash_redeem))
                 .route("/v1/offline/transfers", get(handler_offline_transfers_list))
                 .route(
                     "/v1/offline/transfers/{bundle_id_hex}",
@@ -19215,39 +19189,12 @@ impl Torii {
                 // Subscriptions
                 .route(
                     "/v1/subscriptions/plans",
-                    get(handler_subscription_plans_list).post(handler_subscription_plans_create),
+                    get(handler_subscription_plans_list),
                 )
-                .route(
-                    "/v1/subscriptions",
-                    get(handler_subscriptions_list).post(handler_subscriptions_create),
-                )
+                .route("/v1/subscriptions", get(handler_subscriptions_list))
                 .route(
                     "/v1/subscriptions/{subscription_id}",
                     get(handler_subscription_get),
-                )
-                .route(
-                    "/v1/subscriptions/{subscription_id}/pause",
-                    post(handler_subscription_pause),
-                )
-                .route(
-                    "/v1/subscriptions/{subscription_id}/resume",
-                    post(handler_subscription_resume),
-                )
-                .route(
-                    "/v1/subscriptions/{subscription_id}/cancel",
-                    post(handler_subscription_cancel),
-                )
-                .route(
-                    "/v1/subscriptions/{subscription_id}/keep",
-                    post(handler_subscription_keep),
-                )
-                .route(
-                    "/v1/subscriptions/{subscription_id}/usage",
-                    post(handler_subscription_usage),
-                )
-                .route(
-                    "/v1/subscriptions/{subscription_id}/charge-now",
-                    post(handler_subscription_charge_now),
                 )
                 .route("/v1/parameters", get(handler_parameters))
                 // Explorer endpoints
@@ -20172,14 +20119,14 @@ impl Torii {
                 operator_keypair,
                 legacy_operator_keypairs,
                 allowed_controllers: cfg.allowed_controllers.clone(),
-                reserve_policy: cfg.reserve_policy.clone(),
+                lineage_policy: cfg.lineage_policy.clone(),
             }
         });
         #[cfg(feature = "app_api")]
         let account_faucet = config.faucet.clone();
         #[cfg(feature = "app_api")]
         let offline_policy_snapshot = Arc::new(std::sync::RwLock::new(
-            crate::offline_reserve::OfflinePolicySnapshot::default(),
+            crate::offline_lineage::OfflinePolicySnapshot::default(),
         ));
         #[cfg(feature = "app_api")]
         let identifier_resolver = config.ram_lfe.as_ref().and_then(|cfg| {
@@ -21721,7 +21668,7 @@ mod gateway_denylist_loader_tests {
     fn account_id_entries_reject_encoded_literals_with_domain_suffix() {
         let (_, i105, _) = sample_account_literals();
         let mut entry = base_account_entry();
-        entry.account_id = Some(format!("{i105}@wonderland"));
+        entry.account_id = Some(format!("{i105}@hbl.sbp"));
         entry.issued_at = Some("2025-01-01T00:00:00Z".to_string());
 
         let policy = sample_policy();
@@ -21791,7 +21738,7 @@ mod gateway_denylist_loader_tests {
 
         let policy = sample_policy();
         let err = build_account_id_denylist_entry(&entry, &policy)
-            .expect_err("non-canonical I105 account_id must be rejected");
+            .expect_err("non-canonical i105 account_id must be rejected");
         assert!(err.contains("invalid account_id"));
     }
 }
@@ -22713,7 +22660,7 @@ pub(crate) mod tests_runtime_handlers {
             account_faucet: None,
             #[cfg(feature = "app_api")]
             offline_policy_snapshot: Arc::new(std::sync::RwLock::new(
-                crate::offline_reserve::OfflinePolicySnapshot::default(),
+                crate::offline_lineage::OfflinePolicySnapshot::default(),
             )),
             #[cfg(feature = "app_api")]
             uaid_onboarding: None,
@@ -28505,8 +28452,9 @@ mod tests {
     #[cfg(feature = "app_api")]
     #[test]
     fn offline_cash_mode_extraction_accepts_ios_binding_and_proof() {
+        let (_, account_i105, _) = sample_account_literals();
         let request = norito::json!({
-            "account_id": "alice@users",
+            "account_id": account_i105,
             "device_binding": {
                 "platform": "ios",
                 "attestation_key_id": "att-key",
@@ -28528,7 +28476,7 @@ mod tests {
 
         let mode = extract_offline_cash_mode(&request).expect("ios offline cash mode");
         match mode {
-            crate::offline_reserve::OfflineCashAttestationMode::AppleAttest { binding, proof } => {
+            crate::offline_lineage::OfflineCashAttestationMode::AppleAttest { binding, proof } => {
                 assert_eq!(binding.platform, "ios");
                 assert_eq!(binding.device_id, "device-1");
                 assert_eq!(proof.platform, "ios");
@@ -28540,9 +28488,10 @@ mod tests {
 
     #[cfg(feature = "app_api")]
     #[test]
-    fn translate_cash_request_to_reserve_json_injects_canonical_attestation_fields() {
+    fn translate_cash_request_to_lineage_json_injects_canonical_attestation_fields() {
+        let (_, account_i105, _) = sample_account_literals();
         let mut request = norito::json!({
-            "account_id": "alice@users",
+            "account_id": account_i105,
             "lineage_id": "lineage-1",
             "amount": "25",
             "device_binding": {
@@ -28564,11 +28513,11 @@ mod tests {
             }
         });
 
-        translate_cash_request_to_reserve_json(&mut request, true)
+        translate_cash_request_to_lineage_json(&mut request, true)
             .expect("translate offline cash request");
 
         assert_eq!(
-            request.get("reserve_id").and_then(Value::as_str),
+            request.get("lineage_id").and_then(Value::as_str),
             Some("lineage-1")
         );
         assert_eq!(request.get("lineage_id"), None);
@@ -28681,7 +28630,7 @@ mod tests {
         RepairReportV1 {
             version: REPAIR_REPORT_VERSION_V1,
             ticket_id: RepairTicketId(ticket.to_string()),
-            auditor_account: "auditor#sora".into(),
+            auditor_account: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
             submitted_at_unix,
             evidence: RepairEvidenceV1 {
                 version: REPAIR_EVIDENCE_VERSION_V1,

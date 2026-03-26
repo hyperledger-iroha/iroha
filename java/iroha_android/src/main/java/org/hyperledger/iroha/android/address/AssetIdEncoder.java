@@ -11,8 +11,8 @@ import java.util.Objects;
  * <p>Public asset literals use:
  *
  * <ul>
- *   <li>{@code <asset-definition-id>#<account-id>}
- *   <li>{@code <asset-definition-id>#<account-id>#dataspace:<id>}
+ *   <li>{@code <asset-definition-id>#<i105-account-id>}
+ *   <li>{@code <asset-definition-id>#<i105-account-id>#dataspace:<id>}
  * </ul>
  */
 public final class AssetIdEncoder {

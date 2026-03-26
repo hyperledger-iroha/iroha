@@ -139,7 +139,7 @@ authority (private keys travel only in-memory inside Torii’s secure handler):
 
 - `GET /v1/space-directory/uaids/{uaid}` — resolve the current dataspace bindings
   for a UAID (normalized addresses, dataspace ids, program bindings). Add
-  `canonical I105 output` for Sora Name Service output (canonical I105 output only).
+  `canonical i105 output` for Sora Name Service output (canonical i105 output only).
 - `GET /v1/accounts/{uaid}/portfolio` —
   Norito-backed aggregator that mirrors `ToriiClient.getUaidPortfolio` so wallets
   can render universal holdings without scraping per-dataspace state. Pass

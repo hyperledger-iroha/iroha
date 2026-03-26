@@ -26,7 +26,7 @@ SDK және кодек иелеріне арналған # I105 шығару ж
 Әрекет элементтері:
 1. **Канондық шығыс:** `AccountId::to_string()`/Дисплей тек I105 шығаруы КЕРЕК
    (`@domain` жұрнағы жоқ). Канондық он алтылық қатені түзетуге арналған (`0x...`).
-2. **Accepted inputs:** parsers MUST accept only canonical I105 account literals. Reject i105-default `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+2. **Accepted inputs:** parsers MUST accept only canonical i105 account literals. Reject i105-default `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
 3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
 4. **I105 бақылау сомасы:** `I105PRE || prefix || payload` орнына Blake2b-512 пайдаланыңыз, алыңыз
    алғашқы 2 байт. Сығылған алфавит базасы **105**.

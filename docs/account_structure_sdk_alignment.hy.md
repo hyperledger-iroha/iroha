@@ -26,7 +26,7 @@ translator: machine-google-reviewed
 Գործողությունների տարրեր.
 1. **Կանոնիկ ելք.** `AccountId::to_string()`/Էկրան պետք է թողարկի միայն I105
    (ոչ `@domain` վերջածանց): Canonical hex-ը նախատեսված է վրիպազերծման համար (`0x...`):
-2. **Accepted inputs:** parsers MUST accept only canonical I105 account literals. Reject i105-default `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+2. **Accepted inputs:** parsers MUST accept only canonical i105 account literals. Reject i105-default `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
 3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
 4. **I105 checksum:** օգտագործեք Blake2b-512 `I105PRE || prefix || payload`-ի վրա, վերցրեք
    առաջին 2 բայթ. Սեղմված այբուբենի հիմքը **105** է:

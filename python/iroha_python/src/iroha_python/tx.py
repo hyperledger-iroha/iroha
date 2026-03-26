@@ -421,6 +421,23 @@ class TransactionDraft:
         self.add_instruction(Instruction.transfer_nft(origin, nft_id, destination))
         return self
 
+    def transfer_rwa(
+        self,
+        rwa_id: str,
+        *,
+        quantity: NumericLike,
+        destination: str,
+        source: Optional[str] = None,
+    ) -> TransactionDraft:
+        """Append a `TransferRwa` instruction."""
+
+        origin = source or self._config.authority
+        normalized_quantity = _normalize_quantity(quantity)
+        self.add_instruction(
+            Instruction.transfer_rwa(origin, rwa_id, normalized_quantity, destination)
+        )
+        return self
+
     def settlement_dvp(
         self,
         settlement_id: str,

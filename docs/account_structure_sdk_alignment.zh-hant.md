@@ -26,7 +26,7 @@ translator: machine-google-reviewed
 行動項目：
 1. **規範輸出：** `AccountId::to_string()`/顯示器必須僅發出 I105
    （無 `@domain` 後綴）。規範十六進制用於調試 (`0x...`)。
-2. **Accepted inputs:** parsers MUST accept only canonical I105 account literals. Reject i105-default `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+2. **Accepted inputs:** parsers MUST accept only canonical i105 account literals. Reject i105-default `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
 3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
 4. **I105校驗和：**使用Blake2b-512 over `I105PRE || prefix || payload`，取
    前 2 個字節。壓縮字母基數為 **105**。

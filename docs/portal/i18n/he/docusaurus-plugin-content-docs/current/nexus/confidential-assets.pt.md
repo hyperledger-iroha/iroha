@@ -227,7 +227,7 @@ Documente עוקף את locais no runbook de operacoes; politicas de governance 
 - Hierarquia de derivacao por account:
   - `sk_spend` -> `nk` (מפתח מבטל), `ivk` (מפתח צפייה נכנס), `ovk` (מפתח צפייה יוצא), `fvk`.
 - מטענים משותפים באמצעות AEAD com מפתחות משותפים נגזרות של ECDH; הצג מפתחות של אודיטור אופציונאי פודם סר אנקסאדות פלטים תואמים נכס פוליטי.
-- Adicoes ao CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, tooling de auditor para descriptografar מזכרים, e o helper `iroha app zk envelope` para produzir/inspecionar envelopes I008NT030X offline. Torii expoe o mesmo fluxo de derivacao via `POST /v1/confidential/derive-keyset`, retornando formas hex e base64 para que wallets busquem hierarquias de chave programaticamente.## גז, מגביל את ה-DoS
+- Adicoes ao CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, tooling de auditor para descriptografar מזכרים, e o helper `iroha app zk envelope` para produzir/inspecionar envelopes I008NT030X offline.
 - לוח זמנים לקביעת גז:
   - Halo2 (Plonkish): בסיס `250_000` גז + `2_000` גז עבור קלט ציבורי.
   - `5` בתים חסין גז, מטען מבטל (`300`) ומחויבות (`500`).

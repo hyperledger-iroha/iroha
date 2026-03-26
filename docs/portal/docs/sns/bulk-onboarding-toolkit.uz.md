@@ -47,7 +47,7 @@ Tahlil qiluvchi quyidagi sarlavha qatorini talab qiladi (tartib moslashuvchan):
 |--------|----------|-------------|
 | `label` | Ha | Talab qilingan yorliq (aralash holatda qabul qilinadi; asbob v1 va UTS-46 normalariga muvofiq normallashadi). |
 | `suffix_id` | Ha | Raqamli qo'shimcha identifikator (o'nlik yoki `0x` hex). |
-| `owner` | Ha | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` | Ha | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` | Ha | Butun son `1..=255`. |
 | `payment_asset_id` | Ha | Hisob-kitob aktivi (masalan, `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Ha | Obyektning asl birliklarini ifodalovchi belgisiz butun sonlar. |

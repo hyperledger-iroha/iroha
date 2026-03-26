@@ -31,9 +31,9 @@ Ushbu hujjat `iroha_data_model` kassasida tatbiq etilgan va ish maydoni bo'ylab 
 - `IdBox`: Har qanday qoʻllab-quvvatlanadigan identifikator uchun yigʻma turdagi konvert (`DomainId`, `AccountId`, `AssetDefinitionId`, `AssetId`, `AssetId`, Kotodama, Kotodama `TriggerId`, `RoleId`, `Permission`, `CustomParameterId`). Umumiy oqimlar va yagona turdagi Norito kodlash uchun foydalidir.
 - `ChainId`: tranzaktsiyalarda takroriy himoya qilish uchun foydalaniladigan noaniq zanjir identifikatori.Identifikatorlarning string shakllari (`Display`/`FromStr` bilan ikki tomonlama):
 - `DomainId`: `name` (masalan, `wonderland`).
-- `AccountId`: kanonik domensiz hisob identifikatori `AccountAddress` orqali faqat I105 sifatida kodlangan. Tahlil qiluvchi kirishlar kanonik I105 bo'lishi kerak; domen qo'shimchalari (`@domain`), kanonik I105 literallari, taxallus literallari, kanonik olti burchakli tahliliy kiritish, eski `norito:` foydali yuklari va `uaid:`/`opaque:` hisobi tahlil qilinadi.
+- `AccountId`: kanonik domensiz hisob identifikatori `AccountAddress` orqali faqat I105 sifatida kodlangan. Tahlil qiluvchi kirishlar kanonik I105 bo'lishi kerak; domen qo'shimchalari (`@domain`), kanonik i105 literallari, taxallus literallari, kanonik olti burchakli tahliliy kiritish, eski `norito:` foydali yuklari va `uaid:`/`opaque:` hisobi tahlil qilinadi.
 - `AssetDefinitionId`: kanonik `unprefixed Base58 address with versioning and checksum` (UUID-v4 bayt).
-- `AssetId`: kanonik kodlangan literal `<asset-definition-id>#<account-id>` (eski matn shakllari birinchi versiyada qo'llab-quvvatlanmaydi).
+- `AssetId`: kanonik kodlangan literal `<asset-definition-id>#<i105-account-id>` (eski matn shakllari birinchi versiyada qo'llab-quvvatlanmaydi).
 - `NftId`: `nft$domain` (masalan, `rose$garden`).
 - `PeerId`: `public_key` (teng tengligi ochiq kalit orqali amalga oshiriladi).
 
@@ -259,7 +259,7 @@ curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -d '{"alias":"pkr#ubl.sbp"}'
 ```Migratsiya eslatmasi:
 - Eski `name#domain` aktivlarni aniqlash identifikatorlari v1 da qabul qilinmaydi.
-- Yalpiz/yoqish/o'tkazish uchun aktiv identifikatorlari `<asset-definition-id>#<account-id>` kanonik bo'lib qoladi; ularni yarating:
+- Yalpiz/yoqish/o'tkazish uchun aktiv identifikatorlari `<asset-definition-id>#<i105-account-id>` kanonik bo'lib qoladi; ularni yarating:
   - `iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
   - yoki `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`.
 

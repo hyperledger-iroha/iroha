@@ -5,7 +5,7 @@ public struct TransferRequest {
     public let authority: String
     public let assetDefinitionId: String // e.g., "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
     public let quantity: String         // decimal string
-    public let destination: String      // account id
+    public let destination: String      // i105 account id
     public let description: String?
     public let ttlMs: UInt64?
     public let nonce: UInt32?
@@ -84,6 +84,7 @@ public struct BurnRequest {
 public enum MetadataTarget: Sendable {
     case domain(String)
     case account(String)
+    case rwa(String)
     case assetDefinition(String)
     case asset(String)
 
@@ -93,6 +94,8 @@ public enum MetadataTarget: Sendable {
             return 0
         case .account:
             return 1
+        case .rwa:
+            return 4
         case .assetDefinition:
             return 2
         case .asset:
@@ -106,6 +109,8 @@ public enum MetadataTarget: Sendable {
             return domainId
         case .account(let accountId):
             return accountId
+        case .rwa(let rwaId):
+            return rwaId
         case .assetDefinition(let definitionId):
             return definitionId
         case .asset(let assetId):
@@ -1559,45 +1564,22 @@ public final class IrohaSDK: @unchecked Sendable {
     public func deriveConfidentialKeyset(seedHex: String? = nil,
                                          seedBase64: String? = nil,
                                          completion: @escaping (Result<ConfidentialKeyset, Error>) -> Void) {
-        guard let toriiRestClient else {
-            completion(.failure(Self.restUnavailableError()))
-            return
-        }
         let trimmedHex = seedHex?.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedBase64 = seedBase64?.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !(trimmedHex?.isEmpty ?? true) || !(trimmedBase64?.isEmpty ?? true) else {
-            completion(.failure(ToriiClientError.invalidPayload("Provide either seedHex or seedBase64.")))
-            return
-        }
-        toriiRestClient.deriveConfidentialKeyset(seedHex: trimmedHex, seedBase64: trimmedBase64) { result in
-            switch result {
-            case .success(let response):
-                do {
-                    let keyset = try response.asKeyset()
-                    completion(.success(keyset))
-                } catch {
-                    completion(.failure(error))
-                }
-            case .failure(let error):
-                completion(.failure(error))
-            }
+        do {
+            let keyset = try ConfidentialKeyset.derive(seedHex: trimmedHex, seedBase64: trimmedBase64)
+            completion(.success(keyset))
+        } catch {
+            completion(.failure(error))
         }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
     public func deriveConfidentialKeyset(seedHex: String? = nil,
                                          seedBase64: String? = nil) async throws -> ConfidentialKeyset {
-        guard let toriiRestClient else {
-            throw Self.restUnavailableError()
-        }
         let trimmedHex = seedHex?.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedBase64 = seedBase64?.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !(trimmedHex?.isEmpty ?? true) || !(trimmedBase64?.isEmpty ?? true) else {
-            throw ToriiClientError.invalidPayload("Provide either seedHex or seedBase64.")
-        }
-        let response = try await toriiRestClient.deriveConfidentialKeyset(seedHex: trimmedHex,
-                                                                          seedBase64: trimmedBase64)
-        return try response.asKeyset()
+        return try ConfidentialKeyset.derive(seedHex: trimmedHex, seedBase64: trimmedBase64)
     }
 
     public func submitGovernanceDeployContractProposal(_ request: ToriiGovernanceDeployContractProposalRequest,

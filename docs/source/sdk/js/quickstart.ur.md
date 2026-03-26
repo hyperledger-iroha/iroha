@@ -378,7 +378,7 @@ for await (const holding of torii.iterateAccountAssetsQuery("i105...", {
 
 `iterateNfts` and `iterateAccountAssets` wrap the same Norito filter/sort
 envelopes as the POST query endpoints while handling pagination for you. Pass
-`pageSize`/`maxItems` to bound the iteration. Responses use canonical I105 account identifiers. Torii returns permission errors as
+`pageSize`/`maxItems` to bound the iteration. Responses use canonical i105 account identifiers. Torii returns permission errors as
 `ToriiHttpError` (status/`code`/`message`); catch them to surface deny reasons
 in UI flows.
 
@@ -495,7 +495,7 @@ Explorer telemetry surfaces two helper endpoints so SDKs can capture the same re
 snapshots and QR payloads exposed in the portal. `getExplorerMetrics()` fetches
 `/v1/explorer/metrics`, normalises the payload, and returns `null` when the route is
 disabled or gated. Pair it with `getExplorerAccountQr()` when you need a share-ready
-preferred I105 literal (or the I105 literal) plus inline SVG for QR buttons.
+preferred i105 literal (or the i105 literal) plus inline SVG for QR buttons.
 
 ```js
 import { promises as fs } from "node:fs";
@@ -517,8 +517,8 @@ console.log(
 );
 ```
 
-`getExplorerAccountQr()` returns canonical I105 output. The helper trims invalid
-combinations locally and always returns the canonical account identifier,
+`getExplorerAccountQr()` returns canonical i105 output. The helper trims invalid
+combinations locally and always returns the canonical i105 account identifier,
 selected literal, and QR metadata (version, error correction level, module count,
 network prefix, and inline SVG) so automation can cache or embed the same payloads the
 Explorer renders.

@@ -24,7 +24,7 @@ public final class AssetIdEncoderTests {
     final String expected = AssetDefinitionIdEncoder.encode("rose", "wonderland") + "#" + ACCOUNT_ID;
 
     assert expected.equals(encoded)
-        : "encodeAssetId must emit '<asset-definition-id>#<account-id>'";
+        : "encodeAssetId must emit '<asset-definition-id>#<i105-account-id>'";
   }
 
   private static void encodeAssetIdFromDefinitionBuildsCanonicalLiteral() {
@@ -47,11 +47,11 @@ public final class AssetIdEncoderTests {
   private static void encodeAssetIdRejectsNonCanonicalAccountId() {
     boolean threw = false;
     try {
-      AssetIdEncoder.encodeAssetId("rose", "wonderland", "ed0120ABCD@wonderland");
+      AssetIdEncoder.encodeAssetId("rose", "wonderland", "ed0120ABCD@hbl.sbp");
     } catch (final IllegalArgumentException ex) {
       threw =
           ex.getMessage() != null
-              && ex.getMessage().contains("canonical I105");
+              && ex.getMessage().contains("canonical i105");
     }
 
     assert threw : "encodeAssetId must reject non-canonical account literals";

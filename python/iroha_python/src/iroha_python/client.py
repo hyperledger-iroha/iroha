@@ -716,21 +716,21 @@ def _ensure_governance_owner_canonical(owner: Any, *, context: str) -> None:
     if owner is None:
         return
     if not isinstance(owner, str):
-        raise ValueError(f"{context}.owner must be a canonical I105 account id")
+        raise ValueError(f"{context}.owner must be a canonical i105 account id")
     trimmed = owner.strip()
     if not trimmed or trimmed != owner:
-        raise ValueError(f"{context}.owner must be a canonical I105 account id")
+        raise ValueError(f"{context}.owner must be a canonical i105 account id")
     if any(ch.isspace() for ch in trimmed):
-        raise ValueError(f"{context}.owner must be a canonical I105 account id")
+        raise ValueError(f"{context}.owner must be a canonical i105 account id")
     if "@" in trimmed:
-        raise ValueError(f"{context}.owner must be a canonical I105 account id")
+        raise ValueError(f"{context}.owner must be a canonical i105 account id")
     try:
         address = AccountAddress.parse_encoded(trimmed, expected_discriminant=DEFAULT_I105_DISCRIMINANT)
     except AccountAddressError as exc:
-        raise ValueError(f"{context}.owner must be a canonical I105 account id") from exc
+        raise ValueError(f"{context}.owner must be a canonical i105 account id") from exc
     canonical = address.to_i105(DEFAULT_I105_DISCRIMINANT)
     if canonical != owner:
-        raise ValueError(f"{context}.owner must be a canonical I105 account id")
+        raise ValueError(f"{context}.owner must be a canonical i105 account id")
 
 
 def _normalize_governance_zk_public_inputs(value: Any, *, context: str) -> Dict[str, Any]:

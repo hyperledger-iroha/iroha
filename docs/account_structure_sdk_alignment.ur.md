@@ -14,7 +14,7 @@
 کارروائیاں:
 1. **کینونیکل آؤٹ پٹ:** `AccountId::to_string()`/Display لازماً صرف I105 دے
    (`@domain` لاحقہ کے بغیر)۔ کینونیکل hex صرف ڈی بگنگ کے لیے ہے (`0x...`).
-2. **Accepted inputs:** parsers MUST accept only canonical I105 account literals. Reject i105-default `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
+2. **Accepted inputs:** parsers MUST accept only canonical i105 account literals. Reject i105-default `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
 3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
 4. **I105 checksum:** `I105PRE || prefix || payload` پر Blake2b‑512 استعمال کریں اور
    پہلے 2 بائٹس لیں۔ compressed alphabet base **105** ہے۔

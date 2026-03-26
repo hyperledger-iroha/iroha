@@ -95,7 +95,7 @@ System.out.println("expires at: " + preview.expiresAtMs());
 `enforceProposalTtl` rejects TTL overrides above the policy cap (`transaction_ttl_ms`) before
 submission so apps can surface the same error Torii would return. Use
 `previewProposalExpiry` when you only need a preview (cap + expiry) without throwing.
-When registering a multisig controller, supply an explicit canonical I105 account id for a random
+When registering a multisig controller, supply an explicit canonical i105 account id for a random
 controller key (the controller must never be used for direct signing). Nodes now quarantine
 deterministically derived controller ids and will reject registration and subsequent
 propose/approve attempts that use them.
@@ -136,7 +136,7 @@ plan.put("period", "month");
 SubscriptionPlanCreateResponse planResponse =
     client.createSubscriptionPlan(
             SubscriptionPlanCreateRequest.builder()
-                .authority("aws@commerce")
+                .authority("<provider_account_i105>")
                 .privateKey("<hex>")
                 .planId("aws_compute#commerce")
                 .plan(plan)
@@ -146,7 +146,7 @@ SubscriptionPlanCreateResponse planResponse =
 SubscriptionCreateResponse subscriptionResponse =
     client.createSubscription(
             SubscriptionCreateRequest.builder()
-                .authority("alice@wonderland")
+                .authority("<subscriber_account_i105>")
                 .privateKey("<hex>")
                 .subscriptionId("sub-001$subscriptions")
                 .planId("aws_compute#commerce")
@@ -156,7 +156,7 @@ SubscriptionCreateResponse subscriptionResponse =
 client.recordSubscriptionUsage(
         "sub-001$subscriptions",
         SubscriptionUsageRequest.builder()
-            .authority("aws@commerce")
+            .authority("<provider_account_i105>")
             .privateKey("<hex>")
             .unitKey("compute_ms")
             .delta("3600000")
@@ -727,9 +727,9 @@ HTTP requests:
 import java.net.URI;
 import org.hyperledger.iroha.android.client.CanonicalRequestSigner;
 
-URI uri = URI.create("https://torii.example/v1/accounts/alice@wonderland/assets?limit=10");
+URI uri = URI.create("https://torii.example/v1/accounts/<account_i105>/assets?limit=10");
 Map<String, String> headers =
-    CanonicalRequestSigner.buildHeaders("get", uri, new byte[0], "alice@wonderland", keyPair.getPrivate());
+    CanonicalRequestSigner.buildHeaders("get", uri, new byte[0], "<account_i105>", keyPair.getPrivate());
 ```
 
 Signatures cover the canonical method/path/query/body layout plus freshness
@@ -1023,7 +1023,7 @@ from any `HttpClientTransport`:
 ```java
 OfflineListParams params = OfflineListParams.builder()
     .limit(10L)
-    .filter("{\"op\":\"eq\",\"args\":[\"controller_id\",\"merchant@wonderland\"]}")
+    .filter("{\"op\":\"eq\",\"args\":[\"controller_id\",\"<merchant_account_i105>\"]}")
     .build();
 
 transport.offlineToriiClient().listAllowances(params)
@@ -1034,7 +1034,7 @@ transport.offlineToriiClient().listAllowances(params)
     });
 
 OfflineQueryEnvelope query = OfflineQueryEnvelope.builder()
-    .filterJson("{\"op\":\"eq\",\"args\":[\"receiver_id\",\"merchant@wonderland\"]}")
+    .filterJson("{\"op\":\"eq\",\"args\":[\"receiver_id\",\"<merchant_account_i105>\"]}")
     .setLimit(25L)
     .build();
 

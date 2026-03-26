@@ -183,7 +183,7 @@ pub(crate) fn default_domain_guard(label: Option<&str>) -> DefaultDomainGuard {
     DefaultDomainGuard::enter(label)
 }
 
-/// Obtain the currently configured chain discriminant for I105 literal encoding,
+/// Obtain the currently configured chain discriminant for i105 literal encoding,
 /// honoring any thread-local override.
 #[must_use]
 pub fn chain_discriminant() -> u16 {
@@ -348,7 +348,7 @@ impl AccountAddress {
         })
     }
 
-    /// Encode the payload as a canonical I105 Base58 literal using the active
+    /// Encode the payload as a canonical i105 literal using the active
     /// chain discriminant.
     ///
     /// # Errors
@@ -359,7 +359,7 @@ impl AccountAddress {
         self.to_i105_for_discriminant(chain_discriminant())
     }
 
-    /// Encode the payload as a canonical I105 Base58 literal with a specific
+    /// Encode the payload as a canonical i105 literal with a specific
     /// chain discriminant.
     ///
     /// # Errors
@@ -430,13 +430,13 @@ impl AccountAddress {
         })
     }
 
-    /// Decode the canonical I105 Base58 representation.
+    /// Decode the canonical i105 representation.
     ///
     /// # Errors
     ///
-    /// Returns [`AccountAddressError`] if the string contains invalid Base58
-    /// symbols, carries a mismatching chain discriminant, or fails checksum
-    /// validation.
+    /// Returns [`AccountAddressError`] if the string contains symbols outside
+    /// the canonical i105 alphabet, carries a mismatching chain discriminant,
+    /// or fails checksum validation.
     pub fn from_i105(encoded: &str) -> Result<Self, AccountAddressError> {
         Self::from_i105_for_discriminant(encoded, None)
     }
@@ -447,7 +447,8 @@ impl AccountAddress {
     /// # Errors
     ///
     /// Returns [`AccountAddressError`] if the string carries a mismatching
-    /// discriminant, has invalid Base58 symbols, or fails checksum validation.
+    /// discriminant, has symbols outside the canonical i105 alphabet, or fails
+    /// checksum validation.
     pub fn from_i105_for_discriminant(
         encoded: &str,
         expected_discriminant: Option<u16>,
@@ -460,12 +461,12 @@ impl AccountAddress {
         Self::from_canonical_bytes(&canonical)
     }
 
-    /// Parse an address string in strict encoded I105 form.
+    /// Parse an address string in strict encoded i105 form.
     ///
     /// # Errors
     ///
     /// Returns [`AccountAddressError::UnsupportedAddressFormat`] for unsupported
-    /// non-I105 literals (including canonical-hex parser input) and malformed
+    /// non-i105 literals (including canonical-hex parser input) and malformed
     /// I105 lexical forms.
     ///
     /// Preserves semantic decode failures such as checksum and discriminant
@@ -995,7 +996,7 @@ pub enum AccountAddressErrorCode {
     UnknownCurve,
     /// Canonical payload contained trailing bytes.
     UnexpectedTrailingBytes,
-    /// I105 form shorter than minimal payload.
+    /// i105 form shorter than minimal payload.
     I105TooShort,
     /// Invalid character in I105 alphabet.
     InvalidI105Char,
@@ -1092,7 +1093,7 @@ pub enum AccountAddressError {
     /// Address contains trailing bytes beyond the expected payload.
     #[error("unexpected trailing bytes in canonical payload")]
     UnexpectedTrailingBytes,
-    /// I105 form is too short to contain payload and checksum.
+    /// i105 form is too short to contain payload and checksum.
     #[error("I105 address too short")]
     I105TooShort,
     /// Encountered a character outside of the I105 alphabet.
@@ -1165,7 +1166,7 @@ impl fmt::Display for AccountAddress {
     }
 }
 
-/// Encode a chain discriminant into the canonical I105 prefix bytes.
+/// Encode a chain discriminant into the canonical i105 prefix bytes.
 ///
 /// # Errors
 ///
@@ -1338,7 +1339,7 @@ mod tests {
         let parse_err = AccountId::parse_encoded(&literal).expect_err("account parsing fails");
         assert_eq!(
             parse_err.reason(),
-            "AccountId must use a canonical I105 literal"
+            "AccountId must use a canonical i105 literal"
         );
         assert_eq!(
             err.code_str(),
@@ -1359,7 +1360,7 @@ mod tests {
         let parse_err = AccountId::parse_encoded(&literal).expect_err("account parsing fails");
         assert_eq!(
             parse_err.reason(),
-            "AccountId must use a canonical I105 literal"
+            "AccountId must use a canonical i105 literal"
         );
         assert_eq!(
             err.code_str(),
@@ -1738,7 +1739,7 @@ mod tests {
 
     #[test]
     fn parse_encoded_rejects_unknown_format() {
-        let err = AccountAddress::parse_encoded("alice@wonderland", None)
+        let err = AccountAddress::parse_encoded("alice@hbl.sbp", None)
             .expect_err("alias literal rejected");
         assert!(matches!(err, AccountAddressError::UnsupportedAddressFormat));
     }

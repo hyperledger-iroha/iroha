@@ -35,7 +35,7 @@ El parser requiere la siguiente fila de encabezado (柔軟な順序で):
 |----------|-----------|---------------|
 | `label` |シ | Etiqueta solicitada (安全性を保証する/マイナス; ラ・ヘルラミエンタ・ノーマルリザ・セグン・ノルムv1 y UTS-46)。 |
 | `suffix_id` |シ |識別番号 (10 進数または `0x` 16 進数)。 |
-| `owner` |シ | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
+| `owner` |シ | AccountId string (domainless encoded literal; canonical i105 only; no `@<domain>` suffix). |
 | `term_years` |シ |エンテロ `1..=255`。 |
 | `payment_asset_id` |シ |決済活動 (por ejemplo `61CtjvNd9T3THAR65GsMVHr82Bjc`)。 |
 | `payment_gross` / `payment_net` |シ | Enteros sin signo que は、unidades nativas del activo を表します。 |

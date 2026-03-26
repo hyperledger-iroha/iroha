@@ -46,7 +46,7 @@ impl ParsedAccountAddress {
         self.address.to_i105_for_discriminant(network_prefix)
     }
 
-    /// Encode the address as canonical I105 using the configured discriminant.
+    /// Encode the address as canonical i105 using the configured discriminant.
     ///
     /// # Errors
     ///
@@ -74,7 +74,7 @@ pub fn encode_account_id_to_i105_for_discriminant(
     AccountAddress::from_account_id(account)?.to_i105_for_discriminant(network_prefix)
 }
 
-/// Encode an [`AccountId`] as canonical I105 using the configured discriminant.
+/// Encode an [`AccountId`] as canonical i105 using the configured discriminant.
 ///
 /// # Errors
 ///
@@ -94,7 +94,7 @@ pub fn encode_account_id_to_canonical_hex(
     AccountAddress::from_account_id(account)?.canonical_hex()
 }
 
-/// Parse an address string in strict encoded I105 form.
+/// Parse an address string in strict encoded i105 form.
 ///
 /// # Errors
 ///
