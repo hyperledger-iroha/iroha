@@ -18655,10 +18655,6 @@ impl Torii {
                     get(handler_get_proof_by_backend_hash),
                 )
                 .route(
-                    "/v1/confidential/derive-keyset",
-                    post(handler_confidential_derive_keyset_route),
-                )
-                .route(
                     "/v1/contracts/code/{code_hash}",
                     get(handler_get_contract_code),
                 );
@@ -20749,8 +20745,7 @@ impl Torii {
         let router = builder
             .finish()
             .layer((
-                TraceLayer::new_for_http()
-                    .make_span_with(DefaultMakeSpan::default().include_headers(true)),
+                TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::default()),
                 TimeoutLayer::with_status_code(
                     StatusCode::REQUEST_TIMEOUT,
                     SERVER_SHUTDOWN_TIMEOUT,
@@ -21951,21 +21946,6 @@ fn build_gc_runtime(
     );
 
     Some(runtime)
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_confidential_derive_keyset_route(
-    State(app): State<SharedAppState>,
-    payload: crate::NoritoJson<routing::ConfidentialKeyRequest>,
-) -> Result<impl IntoResponse> {
-    routing::handle_post_confidential_derive_keyset(
-        app.chain_id.clone(),
-        app.queue.clone(),
-        app.state.clone(),
-        app.telemetry.clone(),
-        payload,
-    )
-    .await
 }
 
 /// Torii errors.

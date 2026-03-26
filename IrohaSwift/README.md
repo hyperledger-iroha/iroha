@@ -3,7 +3,7 @@
 Swift SDK targeting Hyperledger Iroha v2 and Sora Nexus (Iroha v3) nodes on Apple platforms.
 
 Features:
-- Torii HTTP client (balances, transactions, explorer instructions/transactions, subscriptions, pipeline recovery, time service, ZK attachments, prover reports, contracts)
+- Torii HTTP client (balances, transactions, explorer instructions/transactions/RWAs, subscriptions, pipeline recovery, time service, ZK attachments, prover reports, contracts)
 - Device-bound offline cash helpers (`ToriiClient.setupOfflineCash`, `loadOfflineCash`, `refreshOfflineCash`, `syncOfflineCash`, `redeemOfflineCash`) plus transfer-history inspection and signed revocation bundle fetch via `/v1/offline/revocations`
 - Health & metrics helpers (fetch `/v1/health` text probe and `/v1/metrics` Prometheus/JSON payloads)
 - Norito envelope encoder (header + CRC64-XZ)
@@ -316,6 +316,28 @@ If you need transfer details for a specific transaction, call
 `getExplorerTransactionTransferSummaries(hashHex:matchingAccount:)`.
 Use `streamTransactionTransferSummaries` or `transactionTransferSummariesPublisher` to keep
 receiving live transfer updates for that transaction.
+
+For RWA lots, use the dedicated explorer and chain-state helpers:
+
+```swift
+if #available(iOS 15.0, macOS 12.0, *) {
+    let lots = try await torii.getExplorerRwas(
+        params: ToriiExplorerRwasParams(
+            page: 1,
+            perPage: 25,
+            ownedBy: "<account_i105>",
+            domain: "commodities"
+        )
+    )
+    if let first = lots.items.first {
+        let detail = try await torii.getExplorerRwaDetail(rwaId: first.id)
+        print(detail.quantity, detail.heldQuantity, detail.primaryReference)
+    }
+
+    let rwaIds = try await torii.listRwas(options: ToriiListOptions(limit: 10))
+    print(rwaIds.items.map(\.id))
+}
+```
 
 To react to new blocks as they commit, subscribe to the explorer SSE streams:
 

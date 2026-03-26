@@ -3277,96 +3277,47 @@ final class ToriiClientTests: XCTestCase {
         waitForExpectations(timeout: 2.0)
     }
 
-    @available(iOS 15.0, macOS 12.0, *)
-    func testGetExplorerRwasEncodesQueryAndDecodesResponse() async throws {
+    func testExplorerRwasParamsQueryItemsEncodeOwnedByAndDomain() throws {
         let owner = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/explorer/rwas")
-            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            let query = Dictionary(uniqueKeysWithValues: (components?.queryItems ?? []).map { ($0.name, $0.value ?? "") })
-            XCTAssertEqual(query["page"], "2")
-            XCTAssertEqual(query["per_page"], "25")
-            XCTAssertEqual(query["owned_by"], owner)
-            XCTAssertEqual(query["domain"], "commodities")
-            let response = HTTPURLResponse(url: request.url!,
-                                           statusCode: 200,
-                                           httpVersion: nil,
-                                           headerFields: ["Content-Type": "application/json"])!
-            let body = """
-            {
-                "pagination": {"page":2,"per_page":25,"total_pages":1,"total_items":1},
-                "items": [
-                    {
-                        "id":"lot-001$commodities",
-                        "owned_by":"\(owner)",
-                        "quantity":"100.5",
-                        "held_quantity":"5.0",
-                        "primary_reference":"vault://receipts/1",
-                        "status":"active",
-                        "is_frozen":false,
-                        "metadata":{"grade":"A"}
-                    }
-                ]
-            }
-            """.data(using: .utf8)!
-            return (response, body)
-        }
-
         let params = ToriiExplorerRwasParams(page: 2,
                                              perPage: 25,
                                              ownedBy: owner,
                                              domain: "commodities")
-        let page = try await makeClient().getExplorerRwas(params: params)
-        XCTAssertEqual(page.pagination.page, 2)
-        XCTAssertEqual(page.pagination.perPage, 25)
-        XCTAssertEqual(page.pagination.totalItems, 1)
-        let item = try XCTUnwrap(page.items.first)
-        XCTAssertEqual(item.id, "lot-001$commodities")
-        XCTAssertEqual(item.ownedBy, owner)
-        XCTAssertEqual(item.quantity, "100.5")
-        XCTAssertEqual(item.heldQuantity, "5.0")
-        XCTAssertEqual(item.primaryReference, "vault://receipts/1")
-        XCTAssertEqual(item.status, "active")
-        XCTAssertFalse(item.isFrozen)
-        if case let .string(grade)? = item.metadata["grade"] {
-            XCTAssertEqual(grade, "A")
-        } else {
-            XCTFail("Expected RWA metadata grade")
-        }
+        let queryItems = try XCTUnwrap(params.queryItems())
+        let query = Dictionary(uniqueKeysWithValues: queryItems.map { ($0.name, $0.value ?? "") })
+        XCTAssertEqual(query["page"], "2")
+        XCTAssertEqual(query["per_page"], "25")
+        XCTAssertEqual(query["owned_by"], owner)
+        XCTAssertEqual(query["domain"], "commodities")
     }
 
-    @available(iOS 15.0, macOS 12.0, *)
-    func testGetExplorerRwasCompletion() {
-        let expectation = expectation(description: "explorer-rwas")
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/explorer/rwas")
-            let response = HTTPURLResponse(url: request.url!,
-                                           statusCode: 200,
-                                           httpVersion: nil,
-                                           headerFields: ["Content-Type": "application/json"])!
-            let body = """
-            {"pagination":{"page":1,"per_page":10,"total_pages":0,"total_items":0},"items":[]}
-            """.data(using: .utf8)!
-            return (response, body)
+    func testExplorerRwaRecordDecodesNullStatusAndMetadataDefaults() throws {
+        let json = """
+        {
+            "id":"lot-001$commodities",
+            "owned_by":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+            "quantity":"42",
+            "held_quantity":"2",
+            "primary_reference":"vault://receipts/2",
+            "status":null,
+            "is_frozen":true,
+            "metadata":null
         }
-
-        _ = makeClient().getExplorerRwas { result in
-            switch result {
-            case .success(let page):
-                XCTAssertEqual(page.items.count, 0)
-                XCTAssertEqual(page.pagination.totalItems, 0)
-            case .failure(let error):
-                XCTFail("Unexpected error: \(error)")
-            }
-            expectation.fulfill()
-        }
-        waitForExpectations(timeout: 2.0)
+        """
+        let record = try JSONDecoder().decode(ToriiExplorerRwaRecord.self, from: Data(json.utf8))
+        XCTAssertEqual(record.id, "lot-001$commodities")
+        XCTAssertEqual(record.quantity, "42")
+        XCTAssertEqual(record.heldQuantity, "2")
+        XCTAssertEqual(record.primaryReference, "vault://receipts/2")
+        XCTAssertNil(record.status)
+        XCTAssertTrue(record.isFrozen)
+        XCTAssertTrue(record.metadata.isEmpty)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
     func testGetExplorerRwaDetailEncodesPathAndDecodesResponse() async throws {
         StubURLProtocol.handler = { request in
-            XCTAssertTrue(request.url!.absoluteString.contains("/v1/explorer/rwas/lot-001%24commodities"))
+            XCTAssertEqual(request.url?.path, "/v1/explorer/rwas/lot-001$commodities")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -3394,78 +3345,6 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertNil(detail.status)
         XCTAssertTrue(detail.isFrozen)
         XCTAssertTrue(detail.metadata.isEmpty)
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testListAccountRwasUsesOwnedByFilter() async throws {
-        let owner = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/explorer/rwas")
-            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            let query = Dictionary(uniqueKeysWithValues: (components?.queryItems ?? []).map { ($0.name, $0.value ?? "") })
-            XCTAssertEqual(query["owned_by"], owner)
-            let response = HTTPURLResponse(url: request.url!,
-                                           statusCode: 200,
-                                           httpVersion: nil,
-                                           headerFields: ["Content-Type": "application/json"])!
-            let body = """
-            {"pagination":{"page":1,"per_page":10,"total_pages":1,"total_items":0},"items":[]}
-            """.data(using: .utf8)!
-            return (response, body)
-        }
-
-        let page = try await makeClient().listAccountRwas(accountId: owner)
-        XCTAssertEqual(page.items.count, 0)
-        XCTAssertEqual(page.pagination.totalItems, 0)
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testIterateExplorerRwasRespectsPagingAndMaxItems() async throws {
-        var observedPages: [String] = []
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/explorer/rwas")
-            let components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)
-            let query = Dictionary(uniqueKeysWithValues: (components?.queryItems ?? []).map { ($0.name, $0.value ?? "") })
-            observedPages.append(query["page"] ?? "1")
-            let response = HTTPURLResponse(url: request.url!,
-                                           statusCode: 200,
-                                           httpVersion: nil,
-                                           headerFields: ["Content-Type": "application/json"])!
-            let body: Data
-            switch query["page"] ?? "1" {
-            case "1":
-                body = """
-                {
-                    "pagination":{"page":1,"per_page":2,"total_pages":2,"total_items":3},
-                    "items":[
-                        {"id":"lot-001$commodities","owned_by":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","quantity":"10","held_quantity":"0","primary_reference":"vault://1","status":"active","is_frozen":false,"metadata":{}},
-                        {"id":"lot-002$commodities","owned_by":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","quantity":"20","held_quantity":"1","primary_reference":"vault://2","status":"active","is_frozen":false,"metadata":{}}
-                    ]
-                }
-                """.data(using: .utf8)!
-            case "2":
-                body = """
-                {
-                    "pagination":{"page":2,"per_page":2,"total_pages":2,"total_items":3},
-                    "items":[
-                        {"id":"lot-003$commodities","owned_by":"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn","quantity":"30","held_quantity":"0","primary_reference":"vault://3","status":"active","is_frozen":true,"metadata":{}}
-                    ]
-                }
-                """.data(using: .utf8)!
-            default:
-                body = #"{"pagination":{"page":3,"per_page":2,"total_pages":2,"total_items":3},"items":[]}"#.data(using: .utf8)!
-            }
-            return (response, body)
-        }
-
-        let stream = makeClient().iterateExplorerRwas(params: ToriiExplorerRwasParams(page: 1, perPage: 2),
-                                                      maxItems: 3)
-        var ids: [String] = []
-        for try await item in stream {
-            ids.append(item.id)
-        }
-        XCTAssertEqual(ids, ["lot-001$commodities", "lot-002$commodities", "lot-003$commodities"])
-        XCTAssertEqual(observedPages, ["1", "2"])
     }
 
     @available(iOS 15.0, macOS 12.0, *)

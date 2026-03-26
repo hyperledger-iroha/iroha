@@ -1347,6 +1347,7 @@ pub(crate) async fn top_up_reserve(
     app: &AppState,
     req: OfflineReserveTopUpRequest,
 ) -> Result<OfflineReserveEnvelope, Error> {
+    ensure_offline_recursive_stark_ready()?;
     let issuer = issuer(app)?;
     let amount = parse_amount(&req.amount)?;
     let amount_string = canonical_amount_string(&amount);
@@ -1438,8 +1439,9 @@ pub(crate) async fn top_up_reserve(
         reserve.pending_local_revision,
         &reserve.authorization.authorization_id,
     )?;
-    let envelope = envelope_from_record(issuer, &reserve)?;
-    submit_signed_instructions(
+    let post_state_hash = reserve.server_state_hash.clone();
+    let mut envelope = envelope_from_record(issuer, &reserve)?;
+    let tx = submit_signed_instructions(
         app,
         operator_authority(issuer)?,
         issuer.operator_keypair.private_key().clone(),
@@ -1465,6 +1467,15 @@ pub(crate) async fn top_up_reserve(
         "/v1/offline/cash/load",
     )
     .await?;
+    envelope.settlement = Some(settlement_from_tx(
+        "load",
+        &req.operation_id,
+        &reserve,
+        &amount_string,
+        &expected_state_hash,
+        &post_state_hash,
+        &tx,
+    )?);
     Ok(envelope)
 }
 
@@ -1472,6 +1483,7 @@ pub(crate) async fn renew_reserve(
     app: &AppState,
     req: OfflineReserveRenewRequest,
 ) -> Result<OfflineReserveEnvelope, Error> {
+    ensure_offline_recursive_stark_ready()?;
     let issuer = issuer(app)?;
     let operation_key = operation_key("renew", &req.operation_id);
     let request_hash_hex = renew_request_hash_hex(&req)?;
@@ -1628,8 +1640,10 @@ pub(crate) async fn defund_reserve(
     app: &AppState,
     req: OfflineReserveDefundRequest,
 ) -> Result<OfflineReserveEnvelope, Error> {
+    ensure_offline_recursive_stark_ready()?;
     let issuer = issuer(app)?;
     let amount = parse_amount(&req.amount)?;
+    let amount_string = canonical_amount_string(&amount);
     let operation_key = operation_key("defund", &req.operation_id);
     let request_hash_hex = defund_request_hash_hex(&req, &amount)?;
     if let Some(existing) = load_operation_result(app, &operation_key) {
@@ -1654,6 +1668,8 @@ pub(crate) async fn defund_reserve(
     let expected_server_revision = reserve.server_revision;
     let expected_state_hash = reserve.server_state_hash.clone();
     apply_receipts(app, issuer, &mut reserve, &req.receipts)?;
+    let pre_redeem_state_hash = reserve.server_state_hash.clone();
+    verify_redeem_request_proof(&req, &reserve, &amount_string, &pre_redeem_state_hash)?;
     reserve.balance = reserve
         .balance
         .clone()
@@ -1679,8 +1695,9 @@ pub(crate) async fn defund_reserve(
         reserve.pending_local_revision,
         &reserve.authorization.authorization_id,
     )?;
-    let envelope = envelope_from_record(issuer, &reserve)?;
-    submit_signed_instructions(
+    let post_state_hash = reserve.server_state_hash.clone();
+    let mut envelope = envelope_from_record(issuer, &reserve)?;
+    let tx = submit_signed_instructions(
         app,
         operator_authority(issuer)?,
         issuer.operator_keypair.private_key().clone(),
@@ -1706,6 +1723,15 @@ pub(crate) async fn defund_reserve(
         "/v1/offline/cash/redeem",
     )
     .await?;
+    envelope.settlement = Some(settlement_from_tx(
+        "redeem",
+        &req.operation_id,
+        &reserve,
+        &amount_string,
+        &pre_redeem_state_hash,
+        &post_state_hash,
+        &tx,
+    )?);
     Ok(envelope)
 }
 
@@ -1965,8 +1991,9 @@ pub(crate) async fn load_cash(
         reserve.pending_local_revision,
         &reserve.authorization.authorization_id,
     )?;
-    let envelope = envelope_from_record(issuer, &reserve)?;
-    submit_signed_instructions(
+    let post_state_hash = reserve.server_state_hash.clone();
+    let mut envelope = envelope_from_record(issuer, &reserve)?;
+    let tx = submit_signed_instructions(
         app,
         operator_authority(issuer)?,
         issuer.operator_keypair.private_key().clone(),
@@ -1992,6 +2019,15 @@ pub(crate) async fn load_cash(
         "/v1/offline/cash/load",
     )
     .await?;
+    envelope.settlement = Some(settlement_from_tx(
+        "load",
+        &req.operation_id,
+        &reserve,
+        &amount_string,
+        &expected_state_hash,
+        &post_state_hash,
+        &tx,
+    )?);
     Ok(envelope)
 }
 
@@ -4610,12 +4646,6 @@ fn renew_request_hash_hex(req: &OfflineReserveRenewRequest) -> Result<String, Er
 }
 
 fn sync_request_hash_hex(req: &OfflineReserveSyncRequest) -> Result<String, Error> {
-    let mut receipt_keys = req
-        .receipts
-        .iter()
-        .map(|receipt| format!("{}:{}", receipt.transfer_id, receipt.local_revision))
-        .collect::<Vec<_>>();
-    receipt_keys.sort();
     Ok(sha256_hex(&canonical_json_bytes(
         &ReserveDefundRequestHashPayload {
             reserve_id: &req.reserve_id,
@@ -4623,7 +4653,8 @@ fn sync_request_hash_hex(req: &OfflineReserveSyncRequest) -> Result<String, Erro
             device_id: &req.device_id,
             offline_public_key: &req.offline_public_key,
             amount: "",
-            receipt_keys,
+            receipt_keys: receipt_keys(&req.receipts),
+            redeem_public_inputs_hex: "",
         },
     )?))
 }
@@ -4632,12 +4663,6 @@ fn defund_request_hash_hex(
     req: &OfflineReserveDefundRequest,
     amount: &Numeric,
 ) -> Result<String, Error> {
-    let mut receipt_keys = req
-        .receipts
-        .iter()
-        .map(|receipt| format!("{}:{}", receipt.transfer_id, receipt.local_revision))
-        .collect::<Vec<_>>();
-    receipt_keys.sort();
     Ok(sha256_hex(&canonical_json_bytes(
         &ReserveDefundRequestHashPayload {
             reserve_id: &req.reserve_id,
@@ -4645,7 +4670,8 @@ fn defund_request_hash_hex(
             device_id: &req.device_id,
             offline_public_key: &req.offline_public_key,
             amount: &canonical_amount_string(amount),
-            receipt_keys,
+            receipt_keys: receipt_keys(&req.receipts),
+            redeem_public_inputs_hex: &req.redeem_proof.public_inputs_hex,
         },
     )?))
 }

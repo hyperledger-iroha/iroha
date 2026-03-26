@@ -11275,13 +11275,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         }
     }
 
-    public func listAccountRwas(accountId: String,
-                                params: ToriiExplorerRwasParams = ToriiExplorerRwasParams()) async throws -> ToriiExplorerRwasPage {
-        var effective = params
-        effective.ownedBy = try normalizeToriiAccountIdQueryValue(accountId, field: "accountId")
-        return try await getExplorerRwas(params: effective)
-    }
-
     public func listRwas(options: ToriiListOptions = ToriiListOptions()) async throws -> ToriiRwaListPage {
         let queryItems = try makeListQueryItems(options: options)
         let request = try makeRequest(path: "/v1/rwas", queryItems: queryItems)
