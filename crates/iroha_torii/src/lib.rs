@@ -28235,8 +28235,14 @@ mod tests {
     #[cfg(feature = "app_api")]
     #[test]
     fn canonical_tx_history_alias_maps_fi_domains_into_sbp_dataspace() {
-        assert_eq!(canonical_tx_history_alias("operator1@hbl"), "operator1@hbl.sbp");
-        assert_eq!(canonical_tx_history_alias("operator2@ubl"), "operator2@ubl.sbp");
+        assert_eq!(
+            canonical_tx_history_alias("operator1@hbl"),
+            "operator1@hbl.sbp"
+        );
+        assert_eq!(
+            canonical_tx_history_alias("operator2@ubl"),
+            "operator2@ubl.sbp"
+        );
         assert_eq!(canonical_tx_history_alias("banking@sbp"), "banking@sbp");
         assert_eq!(
             canonical_tx_history_alias("operator1@hbl.sbp"),

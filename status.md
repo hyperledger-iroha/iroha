@@ -1,6 +1,17 @@
 # Status
 
-Last updated: 2026-03-25
+Last updated: 2026-03-26
+
+## 2026-03-26 Follow-up: address canonicalisation integration assertions now validate canonical account literals instead of a stale `sora` prefix
+- Tightened `integration_tests/tests/address_canonicalisation.rs` so the
+  account-listing, asset-holder, and account-transaction response assertions
+  validate canonical encoded account literals by parsing them, instead of
+  requiring a stale `sora...` textual prefix that no longer matches the Torii
+  account-literal formatter or the current `AccountId`/`AccountAddress`
+  canonical rendering.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo test -p integration_tests --test address_canonicalisation -- --nocapture --test-threads=1` (pass; 24 passed, 0 failed, finished in 620.03s)
 
 ## 2026-03-25 Follow-up: FASTPQ transfer golden fixtures refreshed for canonical asset/account identifiers
 - Refreshed the checked-in transfer regression fixture and its derived golden

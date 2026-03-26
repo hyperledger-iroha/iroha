@@ -32,8 +32,8 @@ use iroha_data_model::{
     metadata::Metadata,
     name::Name,
     offline::{
-        OfflineCashDeviceBinding as SharedOfflineCashDeviceBinding,
         OfflineAppleAppAttestBinding as SharedOfflineAppleAppAttestBinding,
+        OfflineCashDeviceBinding as SharedOfflineCashDeviceBinding,
         OfflineReserveEnvelope as SharedOfflineReserveEnvelope,
         OfflineReserveOperationResult as SharedOfflineReserveOperationResult,
         OfflineReserveRecord as SharedOfflineReserveRecord,
@@ -1562,9 +1562,7 @@ pub(crate) async fn setup_cash(
         &req.app_attest_key_id,
         Some(match &mode {
             OfflineCashAttestationMode::AppleAttest { binding, .. }
-            | OfflineCashAttestationMode::Android { binding, .. } => {
-                binding.clone()
-            }
+            | OfflineCashAttestationMode::Android { binding, .. } => binding.clone(),
         }),
     )?;
     record.apple_app_attest_binding = match &mode {
@@ -1661,9 +1659,7 @@ pub(crate) async fn load_cash(
                     &req.app_attest_key_id,
                     Some(match &mode {
                         OfflineCashAttestationMode::AppleAttest { binding, .. }
-                        | OfflineCashAttestationMode::Android { binding, .. } => {
-                            binding.clone()
-                        }
+                        | OfflineCashAttestationMode::Android { binding, .. } => binding.clone(),
                     }),
                 )?
             }
@@ -1849,9 +1845,7 @@ pub(crate) async fn refresh_cash(
             verdict_id: reserve.authorization.verdict_id.clone(),
             device_binding: Some(match &mode {
                 OfflineCashAttestationMode::AppleAttest { binding, .. }
-                | OfflineCashAttestationMode::Android { binding, .. } => {
-                    binding.clone()
-                }
+                | OfflineCashAttestationMode::Android { binding, .. } => binding.clone(),
             }),
             app_attest_key_id: reserve.app_attest_key_id.clone(),
             issued_at_ms: now_ms(),
@@ -2625,12 +2619,12 @@ fn cash_transfer_receipt_unsigned_payload(
                 offline_public_key: receipt.offline_public_key.clone(),
                 pre_balance: canonical_amount_string(&parse_numeric(&receipt.pre_balance)?),
                 post_balance: canonical_amount_string(&parse_numeric(&receipt.post_balance)?),
-                pre_locked_balance: canonical_amount_string(
-                    &parse_numeric(&receipt.pre_parked_balance)?,
-                ),
-                post_locked_balance: canonical_amount_string(
-                    &parse_numeric(&receipt.post_parked_balance)?,
-                ),
+                pre_locked_balance: canonical_amount_string(&parse_numeric(
+                    &receipt.pre_parked_balance,
+                )?),
+                post_locked_balance: canonical_amount_string(&parse_numeric(
+                    &receipt.post_parked_balance,
+                )?),
                 pre_state_hash: receipt.pre_state_hash.clone(),
                 post_state_hash: receipt.post_state_hash.clone(),
                 local_revision: receipt.local_revision,
