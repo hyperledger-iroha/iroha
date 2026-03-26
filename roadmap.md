@@ -2,6 +2,23 @@
 
 Last updated: 2026-03-26
 
+Latest sync (2026-03-26 zk confidential localnet `Config` literal compatibility):
+`integration_tests/tests/zk_confidential_localnet.rs`
+now carries the remaining test-side compatibility fix for the current client
+config shape:
+
+- the pressure-submitter client template now sets
+  `soracloud_http_witness_file: None`, so the `zk_confidential_localnet` test
+  target compiles against the current `iroha::config::Config`.
+
+Validation:
+- `rustfmt --edition 2024 integration_tests/tests/zk_confidential_localnet.rs`
+- `cargo test -p integration_tests --test zk_confidential_localnet pressure_submitter_clients_applies_short_timeouts -- --exact --nocapture`
+
+Open work for this slice now remains:
+- clear the unrelated syntax error at `mochi/mochi-ui-egui/src/main.rs:9920`
+  so `cargo fmt --all` works workspace-wide again.
+
 Latest sync (2026-03-26 Swift account-address bridge fallback without `NoritoBridge.xcframework`):
 `IrohaSwift/Sources/IrohaSwift/NativeBridge.swift`
 now carries the remaining Swift-side account-address bridge cleanup:

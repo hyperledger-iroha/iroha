@@ -2,6 +2,22 @@
 
 Last updated: 2026-03-26
 
+## 2026-03-26 Follow-up: zk confidential localnet test config matches the current client `Config`
+- Extended
+  `integration_tests/tests/zk_confidential_localnet.rs`
+  so the pressure-submitter client template now initializes the optional
+  `soracloud_http_witness_file` field added to `iroha::config::Config`.
+- The shipped behavior in this slice:
+  - the `zk_confidential_localnet` test target compiles again against the
+    current client configuration shape; and
+  - the test helper keeps Soracloud HTTP witness-file support explicitly
+    disabled by setting the field to `None`, matching the other existing test
+    and CLI config builders.
+- Validation:
+  - `rustfmt --edition 2024 integration_tests/tests/zk_confidential_localnet.rs` (pass)
+  - `cargo test -p integration_tests --test zk_confidential_localnet pressure_submitter_clients_applies_short_timeouts -- --exact --nocapture` (pass)
+  - `cargo fmt --all` (blocked by an unrelated existing parse error in `mochi/mochi-ui-egui/src/main.rs:9920`)
+
 ## 2026-03-26 Follow-up: Swift account-address bridge-style APIs no longer depend on `NoritoBridge.xcframework` for parse/render coverage
 - Extended
   `IrohaSwift/Sources/IrohaSwift/NativeBridge.swift`
