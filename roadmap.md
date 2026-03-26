@@ -2,6 +2,30 @@
 
 Last updated: 2026-03-26
 
+Latest sync (2026-03-26 FASTPQ Stage 2 fixture refresh):
+`crates/fastpq_prover/tests/fixtures/stage2_balanced_1k.bin`
+and
+`crates/fastpq_prover/tests/fixtures/stage2_balanced_5k.bin`
+now match the current canonical CPU prover output again:
+
+- the Stage 2 backend regression fixtures were regenerated from the current
+  prover output, which clears the focused fixture parity failures in
+  `backend_regression` and `proof_fixture`; and
+- the focused `realistic_flows` suite still verifies regenerated proofs, so no
+  new proof-verification regression is known in this slice.
+
+Validation:
+- `cargo test -p fastpq_prover --test realistic_flows -- --nocapture`
+- `FASTPQ_UPDATE_FIXTURES=1 cargo test -p fastpq_prover --test backend_regression stage2_artifact_balanced_ -- --nocapture`
+- `cargo test -p fastpq_prover --test backend_regression stage2_artifact_balanced_ -- --nocapture`
+- `cargo test -p fastpq_prover --test proof_fixture golden_stage2_proof_matches_fixture -- --nocapture`
+
+Open work for this slice now remains:
+- rerun a broader `cargo test -p fastpq_prover` sweep when runtime budget
+  allows; and
+- rerun the optional `fastpq-gpu` parity coverage once the required GPU/Metal
+  toolchain is available in the environment.
+
 Latest sync (2026-03-26 MOCHI desktop UI + devex refresh):
 `mochi/mochi-ui-egui/src/main.rs`
 and

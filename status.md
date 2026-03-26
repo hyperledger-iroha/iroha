@@ -2,6 +2,28 @@
 
 Last updated: 2026-03-26
 
+## 2026-03-26 Follow-up: FASTPQ Stage 2 regression fixtures now match the current canonical prover output again
+- Refreshed
+  `crates/fastpq_prover/tests/fixtures/stage2_balanced_1k.bin`
+  and
+  `crates/fastpq_prover/tests/fixtures/stage2_balanced_5k.bin`
+  so the Stage 2 backend regression fixtures match the current canonical CPU
+  prover output again.
+- The shipped behavior in this slice:
+  - `stage2_artifact_balanced_1k_matches_fixture` and
+    `stage2_artifact_balanced_5k_matches_fixture` are green again against the
+    refreshed fixtures;
+  - `golden_stage2_proof_matches_fixture` now reads the same refreshed 1k
+    artifact and passes again; and
+  - the focused `realistic_flows` coverage still verifies regenerated proofs,
+    confirming this was fixture drift rather than a focused proof-verification
+    regression.
+- Validation:
+  - `cargo test -p fastpq_prover --test realistic_flows -- --nocapture` (pass)
+  - `FASTPQ_UPDATE_FIXTURES=1 cargo test -p fastpq_prover --test backend_regression stage2_artifact_balanced_ -- --nocapture` (pass)
+  - `cargo test -p fastpq_prover --test backend_regression stage2_artifact_balanced_ -- --nocapture` (pass)
+  - `cargo test -p fastpq_prover --test proof_fixture golden_stage2_proof_matches_fixture -- --nocapture` (pass)
+
 ## 2026-03-26 Follow-up: MOCHI now leans into a warmer Ganache-like desktop feel and faster local-app setup
 - Extended
   `mochi/mochi-ui-egui/src/main.rs`
