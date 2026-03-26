@@ -79,6 +79,8 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<Revoke<RoleId, Account>>,
     InstructionRegistry::register::<Revoke<Permission, Role>>,
     InstructionRegistry::register::<RevokeBox>,
+    InstructionRegistry::register::<offline::RegisterOfflineReserve>,
+    InstructionRegistry::register::<offline::CommitOfflineReserveOperation>,
     InstructionRegistry::register::<offline::RegisterOfflineAllowance>,
     InstructionRegistry::register::<offline::SubmitOfflineToOnlineTransfer>,
     InstructionRegistry::register::<offline::RegisterOfflineVerdictRevocation>,

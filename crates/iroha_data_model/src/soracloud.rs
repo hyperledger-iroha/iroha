@@ -15,7 +15,7 @@ use std::{
     num::{NonZeroU16, NonZeroU32, NonZeroU64},
 };
 
-use iroha_crypto::{Hash, PublicKey};
+use iroha_crypto::{Hash, PublicKey, Signature};
 use iroha_primitives::json::Json;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -117,6 +117,8 @@ pub const SORA_SERVICE_RUNTIME_STATE_VERSION_V1: u16 = 1;
 pub const SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraRuntimeReceiptV1`].
 pub const SORA_RUNTIME_RECEIPT_VERSION_V1: u16 = 1;
+/// Schema version for [`CanonicalRequestWitnessV1`].
+pub const CANONICAL_REQUEST_WITNESS_VERSION_V1: u16 = 1;
 /// Schema version for [`SoracloudHostRequestEnvelopeV1`].
 pub const SORACLOUD_HOST_REQUEST_VERSION_V1: u16 = 1;
 /// Schema version for [`SoracloudHostResponseEnvelopeV1`].
@@ -276,6 +278,85 @@ pub struct SoraLifecycleHooksV1 {
     pub healthcheck_path: Option<String>,
 }
 
+/// Explicit config export injected into the runtime environment or mounted tree.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoraConfigExportV1 {
+    /// Required config entry being exported.
+    pub config_name: String,
+    /// Concrete export target.
+    pub target: SoraConfigExportTargetV1,
+}
+
+impl SoraConfigExportV1 {
+    /// Return the required config name referenced by this export.
+    #[must_use]
+    pub fn config_name(&self) -> &str {
+        &self.config_name
+    }
+
+    /// Return the unique target identifier used for duplicate detection.
+    #[must_use]
+    pub fn target_identifier(&self) -> &str {
+        match &self.target {
+            SoraConfigExportTargetV1::Env(var_name) => var_name,
+            SoraConfigExportTargetV1::File(relative_path) => relative_path,
+        }
+    }
+}
+
+/// Target kind for one explicit config export.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "target", content = "value"))]
+pub enum SoraConfigExportTargetV1 {
+    /// Export the canonical JSON payload into an environment variable.
+    Env(String),
+    /// Export the canonical JSON payload into a mounted relative file path.
+    File(String),
+}
+
+/// One verified signature entry in a multisig canonical request witness.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct CanonicalRequestSignatureWitnessV1 {
+    /// Public key that produced this signature.
+    pub signer: PublicKey,
+    /// Signature over the canonical request witness payload.
+    pub signature: Signature,
+}
+
+/// Multisignature witness for app-auth canonical HTTP requests.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct CanonicalRequestWitnessV1 {
+    /// Schema version; must equal [`CANONICAL_REQUEST_WITNESS_VERSION_V1`].
+    pub schema_version: u16,
+    /// Multisig account authorising the canonical request.
+    pub subject_account: AccountId,
+    /// Unix timestamp in milliseconds used for freshness checks.
+    pub timestamp_ms: u64,
+    /// Replay nonce bound to the witness payload.
+    pub nonce: String,
+    /// Hash of the canonical request bytes reconstructed by the verifier.
+    pub canonical_request_hash: Hash,
+    /// Verified signature witnesses supplied by multisig participants.
+    #[norito(default)]
+    pub signatures: Vec<CanonicalRequestSignatureWitnessV1>,
+}
+
 /// Canonical executable bundle manifest for `SoraCloud` workloads.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -305,6 +386,9 @@ pub struct SoraContainerManifestV1 {
     /// Service-scoped secret entries that must exist before this revision may start.
     #[norito(default)]
     pub required_secret_names: Vec<String>,
+    /// Explicit config exports projected into the runtime environment or mounted tree.
+    #[norito(default)]
+    pub config_exports: Vec<SoraConfigExportV1>,
     /// Capability policy enforced by SCR.
     pub capabilities: SoraCapabilityPolicyV1,
     /// Resource limits used at admission/runtime.
@@ -382,6 +466,50 @@ impl SoraContainerManifestV1 {
                     field: "required_secret_names",
                     reason: format!("duplicate required secret `{secret_name}`"),
                 });
+            }
+        }
+
+        let mut config_export_env_targets = BTreeSet::new();
+        let mut config_export_file_targets = BTreeSet::new();
+        for export in &self.config_exports {
+            validate_service_material_name(
+                "sora container manifest",
+                "config_exports.config_name",
+                export.config_name(),
+            )?;
+            if !required_configs.contains(export.config_name()) {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "sora container manifest",
+                    field: "config_exports",
+                    reason: format!(
+                        "config export `{}` must reference a declared required config",
+                        export.config_name()
+                    ),
+                });
+            }
+            match &export.target {
+                SoraConfigExportTargetV1::Env(var_name) => {
+                    validate_config_export_env_var_name(var_name)?;
+                    if !config_export_env_targets.insert(var_name.clone()) {
+                        return Err(SoraCloudManifestError::InvalidField {
+                            manifest: "sora container manifest",
+                            field: "config_exports",
+                            reason: format!("duplicate config export env target `{var_name}`"),
+                        });
+                    }
+                }
+                SoraConfigExportTargetV1::File(relative_path) => {
+                    validate_config_export_relative_path(relative_path)?;
+                    if !config_export_file_targets.insert(relative_path.clone()) {
+                        return Err(SoraCloudManifestError::InvalidField {
+                            manifest: "sora container manifest",
+                            field: "config_exports",
+                            reason: format!(
+                                "duplicate config export file target `{relative_path}`"
+                            ),
+                        });
+                    }
+                }
             }
         }
 
@@ -3436,6 +3564,102 @@ fn validate_service_material_name(
     Ok(())
 }
 
+fn validate_config_export_env_var_name(value: &str) -> Result<(), SoraCloudManifestError> {
+    let manifest = "sora container manifest";
+    let field = "config_exports";
+    if value.trim().is_empty() {
+        return Err(SoraCloudManifestError::EmptyField { manifest, field });
+    }
+    if value.trim() != value {
+        return Err(SoraCloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: "config export env var must not include surrounding whitespace".to_string(),
+        });
+    }
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return Err(SoraCloudManifestError::EmptyField { manifest, field });
+    };
+    if !(first == '_' || first.is_ascii_alphabetic()) {
+        return Err(SoraCloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: format!(
+                "config export env var `{value}` must start with an ASCII letter or '_'"
+            ),
+        });
+    }
+    if !chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric()) {
+        return Err(SoraCloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: format!(
+                "config export env var `{value}` must use only ASCII letters, digits, and '_'"
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn validate_config_export_relative_path(value: &str) -> Result<(), SoraCloudManifestError> {
+    let manifest = "sora container manifest";
+    let field = "config_exports";
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(SoraCloudManifestError::EmptyField { manifest, field });
+    }
+    if trimmed != value {
+        return Err(SoraCloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: "config export file path must not include surrounding whitespace".to_string(),
+        });
+    }
+    if value.starts_with('/') || value.ends_with('/') {
+        return Err(SoraCloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: format!(
+                "config export file path `{value}` must stay relative and must not end with '/'"
+            ),
+        });
+    }
+    if value.contains('\\') {
+        return Err(SoraCloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: format!("config export file path `{value}` must use '/' separators only"),
+        });
+    }
+    if value.len() > 512 {
+        return Err(SoraCloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: "config export file path must not exceed 512 bytes".to_string(),
+        });
+    }
+    if value.chars().any(char::is_control) {
+        return Err(SoraCloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: "config export file path must not contain control characters".to_string(),
+        });
+    }
+    for segment in value.split('/') {
+        if segment.is_empty() || segment == "." || segment == ".." {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest,
+                field,
+                reason: format!(
+                    "config export file path `{value}` must not contain empty, '.' or '..' segments"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Authoritative config entry tracked for one Soracloud service deployment.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -4206,6 +4430,44 @@ pub enum SoraUploadedModelRuntimeFormatV1 {
     SoracloudPrivateIr,
     /// Hugging Face style safetensors layout before private compile admission.
     HuggingFaceSafetensors,
+}
+
+/// Source material used to normalize a private uploaded-model publish draft.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct PrivateModelLocalDirSourceV1 {
+    /// Relative or absolute filesystem path to the source directory.
+    pub path: String,
+}
+
+/// Hugging Face snapshot source used to normalize a private uploaded-model publish draft.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct PrivateModelHuggingFaceSnapshotSourceV1 {
+    /// Hub repository identifier such as `org/model`.
+    pub repo: String,
+    /// Immutable pinned revision string, expected to be a commit SHA.
+    pub revision: String,
+}
+
+/// Source material used to normalize a private uploaded-model publish draft.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+pub enum PrivateModelSourceV1 {
+    /// Normalize an admitted local directory into the deterministic publish tree.
+    LocalDir(PrivateModelLocalDirSourceV1),
+    /// Fetch a pinned Hugging Face snapshot before deterministic packaging.
+    HuggingFaceSnapshot(PrivateModelHuggingFaceSnapshotSourceV1),
 }
 
 /// Policy pricing for uploaded-model storage and private execution.
@@ -9007,9 +9269,10 @@ pub fn encode_ciphertext_query_provenance_payload(
 pub mod prelude {
     pub use super::{
         AGENT_APARTMENT_MANIFEST_VERSION_V1, AgentApartmentManifestV1, AgentSpendLimitV1,
-        AgentToolCapabilityV1, AgentUpgradePolicyV1, CIPHERTEXT_QUERY_PROOF_VERSION_V1,
-        CIPHERTEXT_QUERY_RESPONSE_VERSION_V1, CIPHERTEXT_QUERY_SPEC_VERSION_V1,
-        CIPHERTEXT_STATE_RECORD_VERSION_V1, CiphertextInclusionProofV1,
+        AgentToolCapabilityV1, AgentUpgradePolicyV1, CANONICAL_REQUEST_WITNESS_VERSION_V1,
+        CIPHERTEXT_QUERY_PROOF_VERSION_V1, CIPHERTEXT_QUERY_RESPONSE_VERSION_V1,
+        CIPHERTEXT_QUERY_SPEC_VERSION_V1, CIPHERTEXT_STATE_RECORD_VERSION_V1,
+        CanonicalRequestSignatureWitnessV1, CanonicalRequestWitnessV1, CiphertextInclusionProofV1,
         CiphertextQueryMetadataLevelV1, CiphertextQueryResponseV1, CiphertextQueryResultItemV1,
         CiphertextQuerySpecV1, CiphertextStateMetadataV1, CiphertextStateRecordV1,
         DECRYPTION_AUTHORITY_POLICY_VERSION_V1, DECRYPTION_REQUEST_VERSION_V1,
@@ -9017,7 +9280,8 @@ pub mod prelude {
         FHE_EXECUTION_POLICY_VERSION_V1, FHE_GOVERNANCE_BUNDLE_VERSION_V1, FHE_JOB_SPEC_VERSION_V1,
         FHE_PARAM_SET_VERSION_V1, FheDeterministicRoundingModeV1, FheExecutionPolicyV1,
         FheGovernanceBundleV1, FheJobInputRefV1, FheJobOperationV1, FheJobSpecV1,
-        FheParamLifecycleV1, FheParamSetV1, FheSchemeV1, SECRET_ENVELOPE_VERSION_V1,
+        FheParamLifecycleV1, FheParamSetV1, FheSchemeV1, PrivateModelHuggingFaceSnapshotSourceV1,
+        PrivateModelLocalDirSourceV1, PrivateModelSourceV1, SECRET_ENVELOPE_VERSION_V1,
         SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1, SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
         SORA_CONTAINER_MANIFEST_VERSION_V1, SORA_DECRYPTION_REQUEST_RECORD_VERSION_V1,
         SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SORA_HF_PLACEMENT_RECORD_VERSION_V1,
@@ -9037,24 +9301,24 @@ pub mod prelude {
         SoraAgentPersistentStateV1, SoraAgentRuntimeStatusV1, SoraAgentWalletDailySpendEntryV1,
         SoraAgentWalletSpendRequestV1, SoraArtifactKindV1, SoraArtifactRefV1,
         SoraCapabilityPolicyV1, SoraCertifiedResponsePolicyV1, SoraCloudManifestError,
-        SoraContainerManifestRefV1, SoraContainerManifestV1, SoraContainerRuntimeV1,
-        SoraDecryptionRequestRecordV1, SoraDeploymentBundleV1, SoraHfBackendFamilyV1,
-        SoraHfModelFormatV1, SoraHfModelSizeBucketV1, SoraHfPlacementHostAssignmentV1,
-        SoraHfPlacementHostRoleV1, SoraHfPlacementHostStatusV1, SoraHfPlacementRecordV1,
-        SoraHfPlacementStatusV1, SoraHfResourceProfileV1, SoraHfSharedLeaseActionV1,
-        SoraHfSharedLeaseAuditEventV1, SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseMemberV1,
-        SoraHfSharedLeasePoolV1, SoraHfSharedLeaseStatusV1, SoraHfSourceRecordV1,
-        SoraHfSourceStatusV1, SoraLifecycleHooksV1, SoraMailboxContractV1,
-        SoraModelArtifactActionV1, SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1,
-        SoraModelHostCapabilityRecordV1, SoraModelProvenanceKindV1, SoraModelProvenanceRefV1,
-        SoraModelRegistryV1, SoraModelWeightActionV1, SoraModelWeightAuditEventV1,
-        SoraModelWeightVersionRecordV1, SoraNetworkPolicyV1, SoraResourceLimitsV1,
-        SoraRolloutPolicyV1, SoraRolloutStageV1, SoraRouteTargetV1, SoraRouteVisibilityV1,
-        SoraRuntimeReceiptV1, SoraServiceAuditEventV1, SoraServiceDeploymentStateV1,
-        SoraServiceHandlerClassV1, SoraServiceHandlerV1, SoraServiceHealthStatusV1,
-        SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1, SoraServiceManifestV1,
-        SoraServiceRolloutStateV1, SoraServiceRuntimeStateV1, SoraServiceStateEntryV1,
-        SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1,
+        SoraConfigExportTargetV1, SoraConfigExportV1, SoraContainerManifestRefV1,
+        SoraContainerManifestV1, SoraContainerRuntimeV1, SoraDecryptionRequestRecordV1,
+        SoraDeploymentBundleV1, SoraHfBackendFamilyV1, SoraHfModelFormatV1,
+        SoraHfModelSizeBucketV1, SoraHfPlacementHostAssignmentV1, SoraHfPlacementHostRoleV1,
+        SoraHfPlacementHostStatusV1, SoraHfPlacementRecordV1, SoraHfPlacementStatusV1,
+        SoraHfResourceProfileV1, SoraHfSharedLeaseActionV1, SoraHfSharedLeaseAuditEventV1,
+        SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1,
+        SoraHfSharedLeaseStatusV1, SoraHfSourceRecordV1, SoraHfSourceStatusV1,
+        SoraLifecycleHooksV1, SoraMailboxContractV1, SoraModelArtifactActionV1,
+        SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1, SoraModelHostCapabilityRecordV1,
+        SoraModelProvenanceKindV1, SoraModelProvenanceRefV1, SoraModelRegistryV1,
+        SoraModelWeightActionV1, SoraModelWeightAuditEventV1, SoraModelWeightVersionRecordV1,
+        SoraNetworkPolicyV1, SoraResourceLimitsV1, SoraRolloutPolicyV1, SoraRolloutStageV1,
+        SoraRouteTargetV1, SoraRouteVisibilityV1, SoraRuntimeReceiptV1, SoraServiceAuditEventV1,
+        SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
+        SoraServiceHealthStatusV1, SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1,
+        SoraServiceManifestV1, SoraServiceRolloutStateV1, SoraServiceRuntimeStateV1,
+        SoraServiceStateEntryV1, SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1,
         SoraStateMutationOperationV1, SoraStateScopeV1, SoraTlsModeV1, SoraTrainingJobActionV1,
         SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1, SoraTrainingJobStatusV1,
         encode_agent_artifact_allow_provenance_payload,
@@ -10127,6 +10391,7 @@ mod tests {
             env: BTreeMap::from([("APP_ENV".to_string(), "prod".to_string())]),
             required_config_names: Vec::new(),
             required_secret_names: Vec::new(),
+            config_exports: Vec::new(),
             capabilities: SoraCapabilityPolicyV1 {
                 network: SoraNetworkPolicyV1::Allowlist(vec![
                     "api.sora.internal".to_string(),
@@ -10655,6 +10920,41 @@ mod tests {
     }
 
     #[test]
+    fn canonical_request_witness_roundtrips_through_norito() {
+        let signer = KeyPair::random();
+        let witness = CanonicalRequestWitnessV1 {
+            schema_version: CANONICAL_REQUEST_WITNESS_VERSION_V1,
+            subject_account: sample_account_id(9),
+            timestamp_ms: 1_717_171_717,
+            nonce: "witness-roundtrip".to_owned(),
+            canonical_request_hash: sample_hash(61),
+            signatures: vec![CanonicalRequestSignatureWitnessV1 {
+                signer: signer.public_key().clone(),
+                signature: Signature::new(signer.private_key(), b"canonical-request-witness"),
+            }],
+        };
+
+        let encoded = norito::to_bytes(&witness).expect("encode witness");
+        let decoded: CanonicalRequestWitnessV1 =
+            norito::decode_from_bytes(&encoded).expect("decode witness");
+        assert_eq!(decoded, witness);
+    }
+
+    #[test]
+    fn private_model_source_roundtrips_through_norito() {
+        let source =
+            PrivateModelSourceV1::HuggingFaceSnapshot(PrivateModelHuggingFaceSnapshotSourceV1 {
+                repo: "openai-community/gpt2".to_owned(),
+                revision: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+            });
+
+        let encoded = norito::to_bytes(&source).expect("encode source");
+        let decoded: PrivateModelSourceV1 =
+            norito::decode_from_bytes(&encoded).expect("decode source");
+        assert_eq!(decoded, source);
+    }
+
+    #[test]
     fn container_validate_rejects_invalid_healthcheck_path() {
         let mut container = sample_container();
         container.lifecycle.healthcheck_path = Some("healthz".to_string());
@@ -10684,6 +10984,74 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn container_validate_rejects_config_export_for_nonrequired_config() {
+        let mut container = sample_container();
+        container.config_exports = vec![SoraConfigExportV1 {
+            config_name: "runtime/feature_flag".to_string(),
+            target: SoraConfigExportTargetV1::Env("FEATURE_FLAG_JSON".to_string()),
+        }];
+        let error = container
+            .validate()
+            .expect_err("config export must reference a required config");
+        assert!(matches!(
+            error,
+            SoraCloudManifestError::InvalidField {
+                field: "config_exports",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn container_validate_rejects_duplicate_config_export_env_targets() {
+        let mut container = sample_container();
+        container.required_config_names = vec![
+            "runtime/theme".to_string(),
+            "runtime/feature_flag".to_string(),
+        ];
+        container.config_exports = vec![
+            SoraConfigExportV1 {
+                config_name: "runtime/theme".to_string(),
+                target: SoraConfigExportTargetV1::Env("APP_CONFIG_JSON".to_string()),
+            },
+            SoraConfigExportV1 {
+                config_name: "runtime/feature_flag".to_string(),
+                target: SoraConfigExportTargetV1::Env("APP_CONFIG_JSON".to_string()),
+            },
+        ];
+        let error = container
+            .validate()
+            .expect_err("duplicate config export env targets must fail");
+        assert!(matches!(
+            error,
+            SoraCloudManifestError::InvalidField {
+                field: "config_exports",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn container_validate_accepts_required_config_exports() {
+        let mut container = sample_container();
+        container.required_config_names = vec!["runtime/theme".to_string()];
+        container.config_exports = vec![
+            SoraConfigExportV1 {
+                config_name: "runtime/theme".to_string(),
+                target: SoraConfigExportTargetV1::Env("THEME_JSON".to_string()),
+            },
+            SoraConfigExportV1 {
+                config_name: "runtime/theme".to_string(),
+                target: SoraConfigExportTargetV1::File("runtime/theme.json".to_string()),
+            },
+        ];
+        assert!(
+            container.validate().is_ok(),
+            "required config exports should validate"
+        );
     }
 
     #[test]

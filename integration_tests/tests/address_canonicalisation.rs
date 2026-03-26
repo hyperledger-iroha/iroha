@@ -1009,10 +1009,10 @@ async fn accounts_listing_supports_i105_response() -> Result<()> {
         ids.iter().any(|id| id == &expected),
         "I105 literal {expected} missing from response {ids:?}"
     );
-    assert!(
-        ids.iter().all(|id| id.starts_with("sora")),
-        "all ids should be I105 in the response: {ids:?}"
-    );
+    for id in &ids {
+        AccountId::parse_encoded(id)
+            .wrap_err_with(|| format!("account id {id} should parse as canonical I105"))?;
+    }
 
     Ok(())
 }
@@ -1264,10 +1264,10 @@ async fn asset_holders_get_supports_i105_response() -> Result<()> {
         !ids.is_empty(),
         "expected at least one holder in response for definition {definition_literal}"
     );
-    assert!(
-        ids.iter().all(|id| id.starts_with("sora")),
-        "all holders should render I105 literals: {ids:?}"
-    );
+    for id in &ids {
+        AccountId::parse_encoded(id)
+            .wrap_err_with(|| format!("holder id {id} should parse as canonical I105"))?;
+    }
 
     Ok(())
 }
@@ -1461,12 +1461,7 @@ async fn account_transactions_get_returns_i105_literals() -> Result<()> {
         authorities.iter().any(|literal| literal == &i105_literal),
         "I105 response should include {i105_literal}, got {authorities:?}"
     );
-    assert!(
-        authorities
-            .iter()
-            .all(|literal| literal.starts_with("sora")),
-        "I105 response should emit only I105 literals; got {authorities:?}"
-    );
+    assert_authorities_are_i105(&authorities)?;
 
     Ok(())
 }
@@ -1588,12 +1583,7 @@ async fn account_transactions_query_returns_i105_literals() -> Result<()> {
         authorities.iter().any(|literal| literal == &i105_literal),
         "I105 query response should include {i105_literal}, got {authorities:?}"
     );
-    assert!(
-        authorities
-            .iter()
-            .all(|literal| literal.starts_with("sora")),
-        "I105 query response should emit only I105 literals; got {authorities:?}"
-    );
+    assert_authorities_are_i105(&authorities)?;
 
     Ok(())
 }

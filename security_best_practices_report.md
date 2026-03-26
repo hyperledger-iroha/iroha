@@ -49,10 +49,17 @@ stay enabled. Later dependency scanning added seven live third-party findings
 to the backlog, but the current tree has since removed both active `tar`
 advisories by dropping the `xtask` Rust `tar` dependency and replacing the
 `iroha_crypto` `libsodium-sys-stable` interop tests with OpenSSL-backed
-equivalents. The remaining dependency triage now consists of one
-runtime-reachable but precondition-gated TLS advisory (`rustls-webpki`), two
-direct PQ replacement advisories (`pqcrypto-dilithium`, `pqcrypto-kyber`), and
-two transitive unmaintained macro crates (`derivative`, `paste`). The
+equivalents. The current tree has also replaced the direct PQ dependencies
+flagged in that sweep, migrating `soranet_pq`, `iroha_crypto`, and `ivm` from
+`pqcrypto-dilithium` / `pqcrypto-kyber` to
+`pqcrypto-mldsa` / `pqcrypto-mlkem` while preserving the existing ML-DSA /
+ML-KEM API surface. A later same-day dependency pass then pinned the workspace
+`reqwest` / `rustls` versions to patched patch releases, which keeps
+`rustls-webpki` on the fixed `0.103.10` line in the current resolve. The only
+remaining dependency policy exceptions are the two transitive unmaintained
+macro crates (`derivative`, `paste`), which are now explicitly accepted in
+`deny.toml` because there is no safe upgrade and removing them would require
+replacing or vendoring multiple upstream stacks. The
 remaining accelerator work is
 runtime validation of the mirrored CUDA fix and the expanded CUDA truth set on
 a host with live CUDA driver support, not a confirmed correctness or fail-open
@@ -829,35 +836,16 @@ Remediation status:
 ## Dependency Findings
 
 - `cargo deny check advisories bans sources --hide-inclusion-graph` now runs
-  directly against the tracked `deny.toml` and reports five live dependency
-  findings from the current workspace lockfile.
+  directly against the tracked `deny.toml` and now reports three live
+  dependency findings from a generated workspace lockfile.
 - The `tar` advisories are no longer present in the active dependency graph:
   `xtask/src/mochi.rs` now uses `Command::new("tar")` with a fixed argument
   vector, and `iroha_crypto` no longer pulls `libsodium-sys-stable` for
   Ed25519 interop tests after swapping those checks to OpenSSL.
 - Current findings:
-  - `RUSTSEC-2026-0049`: `rustls-webpki` has a CRL Distribution Point matching
-    bug.
   - `RUSTSEC-2024-0388`: `derivative` is unmaintained.
   - `RUSTSEC-2024-0436`: `paste` is unmaintained.
-  - `RUSTSEC-2024-0380`: `pqcrypto-dilithium` has been replaced by
-    `pqcrypto-mldsa`.
-  - `RUSTSEC-2024-0381`: `pqcrypto-kyber` has been replaced by
-    `pqcrypto-mlkem`.
 - Impact triage:
-  - `rustls-webpki` is runtime-reachable through the `reqwest` /
-    `hyper-rustls` client stack in production crates such as
-    `crates/iroha_torii`, `crates/iroha_cli`, `crates/iroha_telemetry`, and
-    `crates/sorafs_car`. However, the specific advisory requires CRL-based
-    revocation checking. I found no repository code that loads CRLs or builds
-    a revocation-aware verifier; the sampled call sites use the default
-    `reqwest::Client::builder()` path in
-    `crates/iroha_torii/src/soracloud.rs:2952-2959` and
-    `reqwest::Client::builder()` in
-    `crates/iroha_torii/src/webhook.rs:1941-1957`. This means the dependency is
-    present on runtime paths, but the advisory appears latent in the current
-    tree unless CRL handling is added or enabled. This is an inference from
-    the advisory preconditions plus the repo search results.
   - The previously reported `tar` advisories are closed for the active
     dependency graph. `cargo tree -p xtask -e normal -i tar`,
     `cargo tree -p iroha_crypto -e all -i tar`, and
@@ -865,13 +853,21 @@ Remediation status:
     with “package ID specification ... did not match any packages,” and
     `cargo deny` no longer reports `RUSTSEC-2026-0067` or
     `RUSTSEC-2026-0068`.
-  - `pqcrypto-dilithium` and `pqcrypto-kyber` remain direct dependencies in
-    `crates/iroha_crypto/Cargo.toml`, so their replacement advisories are real
-    product-maintenance work rather than tooling-only noise.
+  - The previously reported direct PQ replacement advisories are now closed in
+    the current tree. `crates/soranet_pq/Cargo.toml`,
+    `crates/iroha_crypto/Cargo.toml`, and `crates/ivm/Cargo.toml` now depend
+    on `pqcrypto-mldsa` / `pqcrypto-mlkem`, and the touched ML-DSA / ML-KEM
+    runtime tests still pass after the migration.
+  - The previously reported `rustls-webpki` advisory is no longer active in
+    the current resolve. The workspace now pins `reqwest` / `rustls` to the
+    patched patch releases that keep `rustls-webpki` on `0.103.10`, which is
+    outside the advisory range.
   - `derivative` and `paste` are not used directly in the workspace source.
     They enter transitively through the BLS / arkworks stack under
-    `w3f-bls`, so removing them requires upstream or dependency-stack changes
-    rather than a local macro cleanup.
+    `w3f-bls` and several other upstream crates, so removing them requires
+    upstream or dependency-stack changes rather than a local macro cleanup.
+    The current tree now accepts those two advisories explicitly in
+    `deny.toml` with recorded reasons.
 
 ## Coverage Notes
 
@@ -1038,17 +1034,10 @@ Remediation status:
 
 ### Next Tranche
 
-- Triage and remediate the five remaining dependency findings from cargo-deny,
-  prioritizing a lockfile update for `rustls-webpki` once lockfile edits are
-  allowed, then deciding whether to replace or explicitly accept the four
-  unmaintained/replaced crates.
-- Decide whether the direct PQ dependencies in `iroha_crypto`
-  (`pqcrypto-dilithium`, `pqcrypto-kyber`) should move to their FIPS-aligned
-  successors or remain as a documented compatibility choice for the first
-  release.
-- Track the transitive `derivative` / `paste` debt to the BLS / arkworks stack
-  and remove it when the upstream dependency chain can be updated without
-  destabilizing the cryptography surface.
+- Monitor upstream replacements for the explicitly accepted transitive
+  `derivative` / `paste` macro debt and remove the `deny.toml` exceptions when
+  safe upgrades become available without destabilizing the BLS / Halo2 / PQ /
+  UI dependency stacks.
 - Rerun the full nightly IVM fuzz-smoke script on a warm cache so
   `tlv_validate` / `kotodama_lower` have stable recorded results next to the
   now-green Norito targets. A direct `tlv_validate` binary run now completes,

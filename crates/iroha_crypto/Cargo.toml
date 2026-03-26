@@ -119,8 +119,8 @@ k256 = { version = "0.13.4", default-features = false, features = ["alloc", "ecd
 
 argon2 = { version = "0.5.3", default-features = false, features = ["std"] }
 
-# PQC (Dilithium available by default, Kyber always available for streaming HPKE)
-pqcrypto-dilithium = { version = "0.5" }
+# PQC (ML-DSA available by default, ML-KEM available through `soranet_pq`)
+pqcrypto-mldsa = { version = "0.1.2" }
 pqcrypto-traits = { version = "0.3.5" }
 time = { workspace = true, features = ["formatting", "parsing"] }
 

@@ -54,7 +54,7 @@ Evaluación de legitimidad y de crates “principales” (resumen):
   libsecp) para reducir superficie.
 - BLS12‑381/ZK: `blstrs`, familia `halo2_*` — ampliamente usados en ecosistemas
   ZK en producción; legítimos.
-- PQ: `pqcrypto-dilithium`, `pqcrypto-traits` — crates de referencia
+- PQ: `pqcrypto-mldsa`, `pqcrypto-mlkem`, `pqcrypto-traits` — crates de referencia
   legítimos.
 - TLS: `rustls`, `tokio-rustls`, `hyper-rustls` — pila TLS moderna canónica
   en Rust.

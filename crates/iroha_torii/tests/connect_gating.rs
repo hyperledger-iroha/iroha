@@ -217,7 +217,6 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             mcp: A::ToriiMcp::default(),
             ram_lfe: None,
             tx_history: None,
-            faucet: None,
             // minimal defaults
             query_rate_per_authority_per_sec: None,
             query_burst_per_authority: None,
@@ -373,6 +372,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             sorafs_gateway: iroha_config::parameters::actual::SorafsGateway::default(),
             sorafs_por: iroha_config::parameters::actual::SorafsPor::default(),
             onboarding: None,
+            faucet: None,
             offline_issuer: None,
         },
         soracloud_runtime: A::SoracloudRuntime::default(),

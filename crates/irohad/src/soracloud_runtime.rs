@@ -52,7 +52,8 @@ use iroha_data_model::{
         SORA_RUNTIME_RECEIPT_VERSION_V1, SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
         SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1, SORACLOUD_HOST_RESPONSE_VERSION_V1,
         SoraAgentApartmentRecordV1, SoraAgentRuntimeStatusV1, SoraArtifactKindV1,
-        SoraCapabilityPolicyV1, SoraCertifiedResponsePolicyV1, SoraDeploymentBundleV1,
+        SoraCapabilityPolicyV1, SoraCertifiedResponsePolicyV1, SoraConfigExportTargetV1,
+        SoraDeploymentBundleV1,
         SoraHfPlacementHostAssignmentV1, SoraHfPlacementHostRoleV1, SoraHfPlacementHostStatusV1,
         SoraHfPlacementRecordV1, SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseStatusV1,
         SoraHfSourceStatusV1, SoraModelHostViolationKindV1, SoraModelPrivacyModeV1,
@@ -2437,6 +2438,9 @@ impl SoracloudRuntimeManager {
                 write_service_config_materializations(
                     &version_dir,
                     &PathBuf::from(&plan.config_materialization_dir),
+                    &PathBuf::from(&plan.config_exports_materialization_dir),
+                    &PathBuf::from(&plan.effective_env_materialization_path),
+                    plan,
                     deployment,
                 )?;
                 write_service_secret_materializations(
@@ -6832,6 +6836,8 @@ fn build_runtime_snapshot(
                 .join(sanitize_path_component(&service_name))
                 .join(sanitize_path_component(&service_version));
             let config_dir = service_dir.join("configs");
+            let config_exports_dir = service_dir.join("config_exports");
+            let effective_env_path = service_dir.join("effective_env.json");
             let secret_envelopes_dir = service_dir.join("secret_envelopes");
             let secret_payload_dir = state_dir
                 .join("secrets")
@@ -6851,6 +6857,7 @@ fn build_runtime_snapshot(
             let hydration_complete = artifact_plans
                 .iter()
                 .all(|artifact| artifact.available_locally);
+            let effective_env = build_effective_service_environment(bundle, deployment)?;
             let plan = SoracloudRuntimeServicePlan {
                 service_name: service_name.clone(),
                 service_version: service_version.clone(),
@@ -6887,11 +6894,15 @@ fn build_runtime_snapshot(
                     .unwrap_or(u32::MAX),
                 secret_entry_count: u32::try_from(deployment.service_secrets.len())
                     .unwrap_or(u32::MAX),
+                config_exports: bundle.container.config_exports.clone(),
                 supports_host_read_config: true,
                 supports_host_read_secret_envelope: true,
                 supports_private_secret_payload_reads,
                 materialization_dir: service_dir.display().to_string(),
                 config_materialization_dir: config_dir.display().to_string(),
+                effective_env,
+                effective_env_materialization_path: effective_env_path.display().to_string(),
+                config_exports_materialization_dir: config_exports_dir.display().to_string(),
                 secret_envelopes_materialization_dir: secret_envelopes_dir.display().to_string(),
                 secret_payload_materialization_dir: secret_payload_dir.display().to_string(),
                 mailboxes: bundle
@@ -8253,6 +8264,48 @@ fn sanitize_path_component(raw: &str) -> String {
         .collect()
 }
 
+fn build_effective_service_environment(
+    bundle: &SoraDeploymentBundleV1,
+    deployment: &SoraServiceDeploymentStateV1,
+) -> eyre::Result<BTreeMap<String, String>> {
+    let mut effective_env = bundle.container.env.clone();
+    for export in &bundle.container.config_exports {
+        let entry = deployment
+            .service_configs
+            .get(export.config_name())
+            .ok_or_else(|| {
+                eyre::eyre!(
+                    "service `{}` revision `{}` config export references missing authoritative config `{}`",
+                    bundle.service.service_name,
+                    bundle.service.service_version,
+                    export.config_name()
+                )
+            })?;
+        if let SoraConfigExportTargetV1::Env(var_name) = &export.target {
+            effective_env.insert(var_name.clone(), entry.value_json.get().clone());
+        }
+    }
+    Ok(effective_env)
+}
+
+fn sanitized_relative_export_path(relative_path: &str) -> Result<PathBuf, ()> {
+    if relative_path.is_empty()
+        || relative_path.starts_with('/')
+        || relative_path.ends_with('/')
+        || relative_path.contains('\\')
+    {
+        return Err(());
+    }
+    let mut path = PathBuf::new();
+    for component in relative_path.split('/') {
+        if component.is_empty() || component == "." || component == ".." {
+            return Err(());
+        }
+        path.push(sanitize_path_component(component));
+    }
+    Ok(path)
+}
+
 fn prune_nested_directory_tree(
     root: &Path,
     desired: &BTreeMap<String, BTreeSet<String>>,
@@ -8354,9 +8407,14 @@ fn reset_directory(root: &Path) -> io::Result<()> {
 fn write_service_config_materializations(
     version_dir: &Path,
     config_root: &Path,
+    config_exports_root: &Path,
+    effective_env_path: &Path,
+    plan: &SoracloudRuntimeServicePlan,
     deployment: &SoraServiceDeploymentStateV1,
 ) -> eyre::Result<()> {
     reset_directory(config_root).wrap_err_with(|| format!("reset {}", config_root.display()))?;
+    reset_directory(config_exports_root)
+        .wrap_err_with(|| format!("reset {}", config_exports_root.display()))?;
     write_json_atomic(
         &version_dir.join("service_configs.json"),
         &deployment.service_configs,
@@ -8367,6 +8425,8 @@ fn write_service_config_materializations(
             version_dir.join("service_configs.json").display()
         )
     })?;
+    write_json_atomic(effective_env_path, &plan.effective_env)
+        .wrap_err_with(|| format!("write {}", effective_env_path.display()))?;
 
     for (config_name, entry) in &deployment.service_configs {
         let relative_path = sanitized_relative_material_path(config_name).map_err(|_| {
@@ -8380,6 +8440,38 @@ fn write_service_config_materializations(
             format!(
                 "write materialized config `{config_name}` under {}",
                 config_root.display()
+            )
+        })?;
+    }
+    for export in &plan.config_exports {
+        let SoraConfigExportTargetV1::File(relative_path) = &export.target else {
+            continue;
+        };
+        let entry = deployment
+            .service_configs
+            .get(export.config_name())
+            .ok_or_else(|| {
+                eyre::eyre!(
+                    "service config export `{}` references missing authoritative config `{}`",
+                    export.target_identifier(),
+                    export.config_name()
+                )
+            })?;
+        let relative_path = sanitized_relative_export_path(relative_path).map_err(|_| {
+            eyre::eyre!(
+                "invalid service config export file path `{relative_path}` for config `{}`",
+                export.config_name()
+            )
+        })?;
+        write_bytes_atomic(
+            &config_exports_root.join(relative_path),
+            entry.value_json.get().as_bytes(),
+        )
+        .wrap_err_with(|| {
+            format!(
+                "write exported config `{}` under {}",
+                export.config_name(),
+                config_exports_root.display()
             )
         })?;
     }
@@ -10037,6 +10129,18 @@ mod tests {
     fn reconcile_once_persists_active_service_and_apartment_materializations() -> Result<()> {
         let mut state = test_state()?;
         let mut bundle = load_deployment_bundle_fixture()?;
+        bundle.container.required_config_names = vec!["ui/settings".to_string()];
+        bundle.container.config_exports = vec![
+            iroha_data_model::soracloud::SoraConfigExportV1 {
+                config_name: "ui/settings".to_string(),
+                target: SoraConfigExportTargetV1::Env("UI_SETTINGS_JSON".to_string()),
+            },
+            iroha_data_model::soracloud::SoraConfigExportV1 {
+                config_name: "ui/settings".to_string(),
+                target: SoraConfigExportTargetV1::File("runtime/ui_settings.json".to_string()),
+            },
+        ];
+        bundle.service.container.manifest_hash = bundle.container_manifest_hash();
         let bundle_bytes = simple_soracloud_contract_artifact(&["update", "private_update"]);
         let artifact_payloads =
             assign_fixture_artifact_hashes(&mut bundle, &bundle_bytes, "persist-materialization");
@@ -10128,6 +10232,13 @@ mod tests {
         assert_eq!(plan.secret_generation, 3);
         assert_eq!(plan.config_entry_count, 1);
         assert_eq!(plan.secret_entry_count, 1);
+        assert_eq!(plan.config_exports.len(), 2);
+        assert_eq!(
+            plan.effective_env
+                .get("UI_SETTINGS_JSON")
+                .expect("exported env var"),
+            config_value.get()
+        );
         assert_eq!(
             snapshot
                 .apartments
@@ -10154,6 +10265,26 @@ mod tests {
                 temp_dir
                     .path()
                     .join("services/web_portal/2026.02.0/configs/ui/settings"),
+            )?,
+            config_value.get().clone(),
+        );
+        let effective_env: BTreeMap<String, String> = read_json_optional(
+            &temp_dir
+                .path()
+                .join("services/web_portal/2026.02.0/effective_env.json"),
+        )?
+        .expect("effective env should exist");
+        assert_eq!(
+            effective_env
+                .get("UI_SETTINGS_JSON")
+                .expect("exported env var"),
+            config_value.get()
+        );
+        assert_eq!(
+            fs::read_to_string(
+                temp_dir
+                    .path()
+                    .join("services/web_portal/2026.02.0/config_exports/runtime/ui_settings.json"),
             )?,
             config_value.get().clone(),
         );
@@ -13533,6 +13664,7 @@ mod tests {
                         secret_generation: 0,
                         config_entry_count: 0,
                         secret_entry_count: 0,
+                        config_exports: Vec::new(),
                         supports_host_read_config: true,
                         supports_host_read_secret_envelope: true,
                         supports_private_secret_payload_reads: false,
@@ -13544,6 +13676,17 @@ mod tests {
                         config_materialization_dir: temp_dir
                             .path()
                             .join("services/restored_service/2026.03.0/configs")
+                            .display()
+                            .to_string(),
+                        effective_env: BTreeMap::new(),
+                        effective_env_materialization_path: temp_dir
+                            .path()
+                            .join("services/restored_service/2026.03.0/effective_env.json")
+                            .display()
+                            .to_string(),
+                        config_exports_materialization_dir: temp_dir
+                            .path()
+                            .join("services/restored_service/2026.03.0/config_exports")
                             .display()
                             .to_string(),
                         secret_envelopes_materialization_dir: temp_dir

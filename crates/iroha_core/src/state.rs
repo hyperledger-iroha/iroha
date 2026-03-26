@@ -23632,15 +23632,20 @@ mod replay_validation_tests {
 
 #[cfg(test)]
 mod permission_cache_tests {
+    use std::collections::BTreeSet;
+
     use iroha_data_model::{
         account::AccountId,
         domain::DomainId,
         isi::{Grant, Revoke},
+        nexus::DataSpaceId,
+        permission::Permission,
         prelude::{Account, Domain},
         role::{Role, RoleId},
         trigger::TriggerId,
     };
     use iroha_executor_data_model::permission::{
+        account::{AccountAliasPermissionScope, CanManageAccountAlias},
         nexus::CanUseFeeSponsor,
         trigger::{CanExecuteTrigger, CanRegisterTrigger},
     };
@@ -23712,8 +23717,6 @@ mod permission_cache_tests {
 
     #[test]
     fn trigger_permission_payload_with_whitespace_decodes() {
-        use std::collections::BTreeSet;
-
         let (registrar, _) = gen_account_in("wonderland");
 
         let domain: Domain = Domain::new(wonderland_domain_id()).build(&registrar);
@@ -23743,6 +23746,33 @@ mod permission_cache_tests {
             "Norito decoder should handle non-canonical JSON payloads"
         );
         assert!(stx.can_execute_trigger_for(&registrar, &trigger_id));
+    }
+
+    #[test]
+    fn permission_deserialized_from_json_matches_canonical_permission() {
+        let stored: Permission = norito::json::from_str(
+            r#"{
+                "name": "CanManageAccountAlias",
+                "payload": { "scope": { "scope": "dataspace", "value": 0 } }
+            }"#,
+        )
+        .expect("deserialize permission");
+        let target = Permission::from(CanManageAccountAlias {
+            scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::GLOBAL),
+        });
+
+        let permissions = BTreeSet::from([stored]);
+
+        assert!(
+            permissions.contains(&target),
+            "deserialized permissions should use canonical JSON payloads: stored={}, target={}",
+            permissions
+                .first()
+                .expect("stored permission")
+                .payload()
+                .get(),
+            target.payload().get(),
+        );
     }
 
     #[test]
@@ -42129,6 +42159,7 @@ mod tests {
                 env: std::collections::BTreeMap::new(),
                 required_config_names: Vec::new(),
                 required_secret_names: Vec::new(),
+                config_exports: Vec::new(),
                 capabilities: iroha_data_model::soracloud::SoraCapabilityPolicyV1 {
                     network: iroha_data_model::soracloud::SoraNetworkPolicyV1::Isolated,
                     allow_wallet_signing: false,

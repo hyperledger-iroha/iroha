@@ -10420,6 +10420,7 @@ mod tests {
             env: std::collections::BTreeMap::new(),
             required_config_names: Vec::new(),
             required_secret_names: Vec::new(),
+            config_exports: Vec::new(),
             capabilities: SoraCapabilityPolicyV1 {
                 network: SoraNetworkPolicyV1::Allowlist(vec!["api.example.test".to_string()]),
                 allow_wallet_signing: false,

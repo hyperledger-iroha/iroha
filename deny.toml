@@ -7,7 +7,10 @@ no-default-features = false
 feature-depth = 1
 
 [advisories]
-ignore = []
+ignore = [
+    { id = "RUSTSEC-2024-0388", reason = "Transitive arkworks/w3f-bls proc-macro debt; no safe upgrade is currently available and the workspace does not use derivative directly." },
+    { id = "RUSTSEC-2024-0436", reason = "Transitive proc-macro debt from pqcrypto-mldsa, halo2curves, parquet, and ratatui; no safe upgrade is currently available without vendoring or replacing multiple upstream stacks." },
+]
 unmaintained = "all"
 yanked = "warn"
 

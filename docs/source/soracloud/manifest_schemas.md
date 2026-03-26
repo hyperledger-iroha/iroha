@@ -33,7 +33,9 @@ These manifests are designed for the `IVM` + custom Sora Container Runtime
 (SCR) direction (no WASM, no Docker dependency in runtime admission).
 
 - `SoraContainerManifestV1` captures executable bundle identity, runtime type,
-  capability policy, resources, and lifecycle probe settings.
+  capability policy, resources, lifecycle probe settings, and explicit
+  required-config exports into the runtime environment or mounted revision
+  tree.
 - `SoraServiceManifestV1` captures deployment intent: service identity,
   referenced container manifest hash/version, routing, rollout policy, and
   state bindings.
@@ -109,6 +111,14 @@ Validation rejects unsupported versions with
 - Container manifest:
   - `bundle_path` and `entrypoint` must be non-empty.
   - `healthcheck_path` (if set) must start with `/`.
+  - `config_exports` may reference only configs declared in
+    `required_config_names`.
+  - config-export env targets must use canonical environment-variable names
+    (`[A-Za-z_][A-Za-z0-9_]*`).
+  - config-export file targets must stay relative, use `/` separators, and
+    must not contain empty, `.` or `..` segments.
+  - config exports must not target the same env var or relative file path more
+    than once.
 - Service manifest:
   - `service_version` must be non-empty.
   - `container.expected_schema_version` must match container schema v1.

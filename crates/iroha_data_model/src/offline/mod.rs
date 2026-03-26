@@ -3241,6 +3241,34 @@ mod model {
         pub ios_environment: Option<String>,
     }
 
+    /// Canonical device binding carried in offline-cash authorizations.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineCashDeviceBinding {
+        /// Platform label (`android` or `ios`).
+        pub platform: String,
+        /// Device-bound App Attest / Keystore key identifier.
+        pub attestation_key_id: String,
+        /// Device identifier bound to the lineage.
+        pub device_id: String,
+        /// Offline public key bound to the lineage.
+        pub offline_public_key: String,
+        /// Base64-encoded attestation report captured during binding.
+        pub attestation_report_base64: String,
+        /// Optional iOS team identifier bound into the attestation.
+        #[norito(default)]
+        pub ios_team_id: Option<String>,
+        /// Optional iOS bundle identifier bound into the attestation.
+        #[norito(default)]
+        pub ios_bundle_id: Option<String>,
+        /// Optional iOS environment label bound into the attestation.
+        #[norito(default)]
+        pub ios_environment: Option<String>,
+    }
+
     /// Issuer-signed policy lease that gates offline spending for one reserve lineage.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -3270,6 +3298,9 @@ mod model {
         pub refresh_at_ms: u64,
         /// Expiry timestamp (unix ms).
         pub expires_at_ms: u64,
+        /// Canonical public device binding, when available.
+        #[norito(default)]
+        pub device_binding: Option<OfflineCashDeviceBinding>,
         /// Bound device attestation key identifier.
         pub app_attest_key_id: String,
         /// Issuer signature over the unsigned authorization payload.

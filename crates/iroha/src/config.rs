@@ -182,6 +182,8 @@ pub struct Config {
     pub transaction_add_nonce: bool,
     /// Root directory containing Connect queue state for diagnostics and offline replay helpers.
     pub connect_queue_root: PathBuf,
+    /// Optional JSON witness file used for multisig-signed Soracloud HTTP requests.
+    pub soracloud_http_witness_file: Option<PathBuf>,
     /// Alias cache policy applied when validating `SoraFS` proofs.
     pub sorafs_alias_cache: sorafs_manifest::alias_cache::AliasCachePolicy,
     /// Default `SoraNet` anonymity policy stage for gateway fetches.

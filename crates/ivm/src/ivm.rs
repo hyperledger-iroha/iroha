@@ -1761,7 +1761,9 @@ impl IVM {
                 msg_len,
                 result_reg,
             } => {
-                use pqcrypto_dilithium::{dilithium2, dilithium3, dilithium5};
+                use pqcrypto_mldsa::{
+                    mldsa44 as dilithium2, mldsa65 as dilithium3, mldsa87 as dilithium5,
+                };
                 use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _};
                 let msg = self.memory.load_region(msg_addr, msg_len)?;
                 let valid = match level {
@@ -5500,7 +5502,9 @@ fn compute_instruction(
             msg_len,
             result_reg,
         } => {
-            use pqcrypto_dilithium::{dilithium2, dilithium3, dilithium5};
+            use pqcrypto_mldsa::{
+                mldsa44 as dilithium2, mldsa65 as dilithium3, mldsa87 as dilithium5,
+            };
             use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _};
             let msg = mem.load_region(msg_addr, msg_len)?;
             let valid = match level {

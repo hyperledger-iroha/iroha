@@ -54,7 +54,7 @@ Avis restants : aucun. Avertissements restants : `backoff` (non maintenu),
   `secp256k1` via libsecp) pour réduire la surface.
 - BLS12‑381/ZK : `blstrs`, famille `halo2_*` — largement utilisés dans les
   écosystèmes ZK en production ; légitimes.
-- PQ : `pqcrypto-dilithium`, `pqcrypto-traits` — crates de référence
+- PQ : `pqcrypto-mldsa`, `pqcrypto-mlkem`, `pqcrypto-traits` — crates de référence
   légitimes.
 - TLS : `rustls`, `tokio-rustls`, `hyper-rustls` — stack TLS moderne et
   canonique en Rust.

@@ -68,6 +68,193 @@ Open work for this CUDA slice now remains:
 - decide whether driver-only host discovery like `/usr/lib/wsl/lib` should be
   pushed upstream beyond the vendored helper after this branch lands.
 
+Latest sync (2026-03-26 permission JSON decode-time canonicalization and alias-scope schema alignment):
+`crates/iroha_data_model/src/permission.rs`,
+`crates/iroha_executor_data_model/src/permission.rs`,
+and
+`crates/iroha_core/src/state.rs`
+now keep `Permission` equality/order exact while canonicalizing only
+insignificant payload whitespace during JSON decode, preserving duplicate
+payload keys on the parser path, and publishing `AccountAliasPermissionScope`
+schema tags as `domain` / `dataspace` again.
+
+Validation:
+- `cargo fmt --all`
+- `cargo test -p iroha_data_model permission --lib`
+- `cargo test -p iroha_executor_data_model alias_scope_ --lib`
+- `cargo test -p iroha_core permission_deserialized_from_json_matches_canonical_permission --lib`
+
+Open work for this slice now remains:
+- no additional confirmed work remains in this permission/schema compatibility slice.
+
+Latest sync (2026-03-25 active cargo-deny dependency findings are closed):
+`Cargo.toml`
+and
+[`deny.toml`](/Users/takemiyamakoto/dev/iroha/deny.toml)
+now make the dependency audit clean in the current resolve:
+
+- the workspace explicitly pins `reqwest` / `rustls` to patched patch
+  releases, which keeps `rustls-webpki` on the fixed `0.103.10` line; and
+- `deny.toml` now records explicit reasons for accepting
+  `RUSTSEC-2024-0388` (`derivative`) and `RUSTSEC-2024-0436` (`paste`) as
+  transitive upstream macro debt with no safe upgrade currently available.
+
+Validation:
+- `cargo deny check advisories bans sources --hide-inclusion-graph`
+- `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 cargo check -p iroha_torii_shared --tests --message-format short`
+- `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 cargo check -p iroha_crypto --tests --message-format short`
+
+Open work for this slice now remains:
+- monitor upstream replacements for the accepted `derivative` / `paste` debt
+  and remove the `deny.toml` exceptions when safe upgrades become available;
+  and
+- rerun the focused CUDA runtime/self-test slice on a host with live CUDA
+  driver libraries.
+
+Latest sync (2026-03-25 offline cash app-API canonical binding/proof hardening):
+`crates/iroha_torii/src/lib.rs`,
+`crates/iroha_torii/src/offline_reserve.rs`,
+`IrohaSwift/Sources/IrohaSwift/OfflineCashModels.swift`,
+`IrohaSwift/Sources/IrohaSwift/ToriiClient.swift`,
+and
+`IrohaSwift/Tests/IrohaSwiftTests/ToriiOfflineCashEndpointsTests.swift`
+now require canonical `device_binding` + `device_proof` on all offline cash app-API mutations and reject attempts to bind a funded/pending lineage to a different device.
+
+- implementation on this sync:
+  - app-facing offline cash request decoding now treats `android` and `ios` as explicit canonical platforms and translates both into the shared reserve-attestation flow;
+  - canonical receipt translation now consumes `device_proof`, so multi-hop/offline ancestry stays on the same wire contract across Android and iOS;
+  - reserve setup/load now reject `lineage_conflict` when an account already has a different active lineage with funded or pending offline state; and
+  - the Swift SDK offline cash client now attaches deterministic `Idempotency-Key` headers to mutating offline cash requests, with focused regression coverage updated accordingly.
+
+Validation:
+- `cargo fmt --all`
+- `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 cargo check -p iroha_torii --lib --message-format short`
+- `swift test --filter ToriiOfflineCashEndpointsTests`
+- `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 cargo check -p iroha_torii --tests --message-format short`
+
+Open work for this slice now remains:
+- fix the unrelated `crates/iroha_torii/tests/connect_gating.rs` fixture drift (`actual::Torii` now requires `faucet`) so the full `iroha_torii --tests` compile can run green again; and
+- keep extending end-to-end offline cash verification above the crate level, primarily real-device Android/iOS cross-platform load/send/onward-send/redeem coverage.
+
+Latest sync (2026-03-25 direct PQ dependency advisories are closed):
+`crates/soranet_pq/Cargo.toml`,
+`crates/iroha_crypto/Cargo.toml`,
+`crates/ivm/Cargo.toml`,
+and the touched ML-DSA / ML-KEM call sites now use
+`pqcrypto-mldsa` / `pqcrypto-mlkem` instead of
+`pqcrypto-dilithium` / `pqcrypto-kyber`.
+
+Validation:
+- `cargo fmt --all`
+- `CARGO_TARGET_DIR=/tmp/iroha-codex-target-deps-pq cargo check -p soranet_pq --tests --message-format short`
+- `CARGO_TARGET_DIR=/tmp/iroha-codex-target-deps-pq cargo check -p iroha_crypto --tests --message-format short`
+- `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-deps-pq cargo check -p ivm --tests --message-format short`
+- `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-deps-pq cargo test -p iroha_crypto --test mldsa_keypair keypair_from_seed_signs_and_verifies -- --nocapture`
+- `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-deps-pq cargo test -p ivm --test crypto dilithium_verify_instruction -- --nocapture`
+- `cargo deny check advisories bans sources --hide-inclusion-graph`
+
+Open work for this slice now remains:
+- no additional direct PQ dependency work remains in this slice. Future
+  cleanup, if any, is limited to upstream removal of the accepted transitive
+  `derivative` / `paste` macro debt tracked above.
+
+Latest sync (2026-03-25 Torii helper/caller remote-IP rate-limit hardening):
+`crates/iroha_torii/src/lib.rs`
+and
+`crates/iroha_torii/src/soracloud.rs`
+now thread `ConnectInfo(remote)` through the remaining shared helper and
+Soracloud caller cluster so missing ingress-rewritten remote metadata no
+longer falls back to the shared `"anon"` bucket.
+
+Validation:
+- `cargo fmt --all`
+- `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-torii-soracloud-remote-key cargo test -p iroha_torii --lib health_compliance_report_rate_limit_keys_transport_remote_when_internal_header_missing -- --nocapture`
+- `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-torii-soracloud-remote-key cargo test -p iroha_torii --lib handle_agent_autonomy_run_finalize_rejects_signer_mismatch -- --nocapture`
+
+Open work for this slice now remains:
+- no additional confirmed Torii remote-key fail-open call sites remain in this
+  `lib.rs` / `soracloud.rs` slice; the remaining confirmed security backlog is
+  now CUDA runtime validation on a CUDA-capable host.
+
+Latest sync (2026-03-25 Torii deploy/activate burst-throttle regressions are now deterministic):
+`crates/iroha_torii/src/lib.rs`
+now exhausts the exact deploy-limiter key inside the focused
+`contract_{deploy,activate}_rate_limit_throttles_after_burst` regressions
+before calling the handler, so the test no longer depends on whether the first
+contract request finishes before a one-second refill window elapses.
+
+Validation:
+- `cargo fmt --all`
+- `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-torii-soracloud-remote-key cargo test -p iroha_torii --lib contract_deploy_rate_limit_throttles_after_burst -- --nocapture`
+- `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-torii-soracloud-remote-key cargo test -p iroha_torii --lib contract_activate_rate_limit_throttles_after_burst -- --nocapture`
+
+Open work for this slice now remains:
+- no additional confirmed work remains in this deterministic test slice.
+
+Latest sync (2026-03-25 Soracloud private-model publish drafts now import pinned Hugging Face snapshots):
+`crates/iroha_data_model/src/soracloud.rs`,
+`crates/iroha_cli/src/soracloud.rs`,
+and
+`docs/source/soracloud/cli_local_control_plane.md`
+now let `iroha app soracloud model-publish-private --draft-file` normalize
+either a local admitted directory or a pinned HF snapshot through the same
+deterministic encrypted publish flow.
+
+- implementation on this sync:
+  - `PrivateModelPublishDraft` now carries `source: PrivateModelSourceV1`,
+    with `LocalDir(path)` and `HuggingFaceSnapshot(repo, revision)` variants;
+  - the CLI now normalizes pinned HF snapshots into a deterministic temp tree,
+    then reuses the existing encrypted bundle/chunk/finalize/compile/allow
+    flow instead of introducing a second publish protocol;
+  - v1 validation now explicitly admits only the root-level HF safetensors
+    layout, requires pinned 40-character commit SHAs for HF snapshots, and
+    rejects GGUF, ONNX, other non-safetensors weights, and arbitrary nested
+    custom layouts; and
+  - focused regressions now cover the new source-type roundtrip, unpinned
+    revision rejection, local unsupported-layout rejection, and successful
+    pinned HF snapshot plan preparation.
+
+Validation:
+- `cargo fmt --all`
+- `CARGO_TARGET_DIR=/tmp/iroha-codex-target-private-model cargo check -p iroha_cli --tests --message-format short`
+- `CARGO_TARGET_DIR=/tmp/iroha-codex-target-private-model cargo test -p iroha_data_model private_model_source_roundtrips_through_norito --lib -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-codex-target-private-model cargo test -p iroha_cli validate_private_model_publish_draft_rejects_unpinned_hf_revision -- --nocapture`
+- `CARGO_TARGET_DIR=/tmp/iroha-codex-target-private-model cargo test -p iroha_cli prepare_private_model_publish_plan_from_ -- --nocapture`
+
+Open work for this Soracloud slice now remains:
+- the private-model import wrapper is now closed for v1 local-dir and pinned
+  HF snapshot sources; the remaining major Soracloud work is outside this
+  slice, primarily domains/default hostnames, public budgets, assigned-host
+  health self-reporting, and repo-wide final validation.
+
+Latest sync (2026-03-25 Torii direct-handler remote-IP rate-limit hardening):
+`crates/iroha_torii/src/lib.rs`
+now threads `ConnectInfo(remote)` through the remaining confirmed direct
+rate-limited handler cluster so missing ingress-rewritten remote metadata no
+longer falls back to the shared `"anon"` bucket.
+
+- implementation on this sync:
+  - direct policy / stream / contract / multisig / Soracloud rate-limit
+    handlers now pass the accepted socket IP into
+    `rate_limit_key(...)` / `limits::key_from_headers(...)`;
+  - the existing preference for the ingress-injected
+    `x-iroha-remote-addr` header remains intact through
+    `limits::effective_remote_ip(...)`; and
+  - focused regression coverage now proves `handler_policy(...)` isolates
+    callers by transport IP when the internal header is absent.
+
+Validation:
+- `cargo fmt --all`
+- `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-torii-remote-key cargo test -p iroha_torii --lib policy_rate_limit_keys_transport_remote_when_internal_header_missing -- --nocapture`
+- `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-torii-remote-key cargo test -p iroha_torii --lib contracts_deploy_handler_ok -- --nocapture`
+- `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-torii-remote-key cargo test -p iroha_torii --lib contracts_instance_activate_handler_ok -- --nocapture`
+- `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 CARGO_TARGET_DIR=/tmp/iroha-codex-target-torii-remote-key cargo test -p iroha_torii --lib multisig_spec_requires_signed_request_for_alias_selector -- --nocapture`
+
+Open work for this slice now remains:
+- no additional confirmed work remains in this direct-handler hardening slice;
+  the remaining confirmed security backlog is now CUDA runtime validation on a
+  CUDA-capable host.
+
 Latest sync (2026-03-25 Soracloud private-model publish drafts now prepare encrypted bundle plans locally):
 `crates/iroha_cli/src/soracloud.rs`,
 `crates/iroha_cli/Cargo.toml`,
@@ -155,8 +342,8 @@ Validation:
 
 Open work for this slice now remains:
 - no additional live operator-auth remote-IP trust-boundary issue was
-  confirmed in this pass; the remaining confirmed security backlog is still
-  the dependency tranche plus CUDA runtime validation on a CUDA-capable host.
+  confirmed in this pass; the remaining confirmed security backlog is now CUDA
+  runtime validation on a CUDA-capable host.
 
 Latest sync (2026-03-25 `BlockCreated` now seeds the exact frontier slot and contiguous RBC rescue no longer re-enters generic missing-block fetch):
 this cut transfers `committed + 1` ownership another step toward the intended single frontier state machine: accepted `BlockCreated` now marks the exact slot authoritative directly, and RBC-side “missing BlockCreated” rescue at the contiguous frontier now stays inside that slot instead of scheduling generic `FetchPendingBlock` recovery.
@@ -320,6 +507,71 @@ Open work for this Soracloud slice now remains:
 - keep extending the one-click surface around budgets, domains, and private
   uploaded-model flows.
 
+Latest sync (2026-03-25 Soracloud ordinary-service config exports):
+ordinary Soracloud services now have an explicit deploy-time config projection
+contract instead of relying only on runtime-local convention.
+
+- `crates/iroha_data_model/src/soracloud.rs` now exposes
+  `SoraConfigExportV1` plus `SoraConfigExportTargetV1::{Env,File}` and validates
+  that every export references a declared required config, uses a safe target,
+  and does not collide with another export;
+- `crates/iroha_core/src/soracloud_runtime.rs` and
+  `crates/irohad/src/soracloud_runtime.rs` now carry those exports through the
+  runtime plan, materialize exported config files under
+  `services/<service>/<version>/config_exports/...`, and persist the effective
+  runtime environment in `effective_env.json`; and
+- `crates/iroha_torii/src/soracloud.rs` now includes required
+  config/secret names plus `config_exports` in control-plane revision status so
+  operators can inspect the admitted runtime contract directly.
+
+Validation:
+- `cargo fmt --all`
+- `cargo check -p iroha_data_model --tests`
+- `cargo check -p iroha_torii --tests`
+- `cargo check -p irohad --tests`
+- `cargo test -p iroha_data_model container_validate_ --lib -- --nocapture`
+- `cargo test -p iroha_torii soracloud::tests::control_plane_snapshot_uses_authoritative_soracloud_state --lib -- --nocapture`
+
+Open work for the full Soracloud v1 completion plan now remains:
+- keep ordinary-service secrets envelope-only, but finish the remaining public
+  edge surface: deterministic default hostnames, custom domain claim/verify/
+  attach state, and TLS state reporting;
+- add prepaid public-service budgets with billing-class derivation from admitted
+  resources plus deterministic pre-dispatch balance checks;
+- extend private-model publishing from local directories to pinned
+  `HuggingFaceSnapshot { repo, revision }` normalization while rejecting
+  unpinned or non-HF-style layouts;
+- add assigned-host self-reporting for HF health so remote worker observations
+  feed the same authoritative reconcile/slash path as local probes and proxy
+  failures.
+
+Latest sync (2026-03-25 Soracloud multisig signed HTTP witnesses):
+multisig-controlled Soracloud owners can now authorize mutation routes without
+falling back to raw private keys or the legacy single-sig-only HTTP contract.
+
+- `crates/iroha_data_model/src/soracloud.rs` now exposes
+  `CanonicalRequestWitnessV1` and `CanonicalRequestSignatureWitnessV1` for the
+  public witness payload format;
+- `crates/iroha_torii/src/app_auth.rs` now accepts `X-Iroha-Witness` for
+  multisig accounts, verifies unique signer keys against the current on-chain
+  `MultisigPolicy`, and preserves the existing nonce/timestamp replay window;
+- `crates/iroha_torii/src/{lib.rs,soracloud.rs}` now propagate the verified
+  signer set internally so mutation provenance can bind to any verified witness
+  signer instead of only the primary request signer; and
+- `crates/iroha/src/config{.rs,/user.rs}` plus
+  `crates/iroha_cli/src/{main_shared.rs,soracloud.rs}` now let the CLI replay a
+  witness JSON file via `soracloud.http_witness_file`, while the default
+  single-sig path finally emits the current freshness headers
+  `X-Iroha-Timestamp-Ms` and `X-Iroha-Nonce`.
+
+Validation:
+- `cargo test -p iroha_data_model canonical_request_witness_roundtrips_through_norito --lib -- --nocapture`
+- `cargo test -p iroha_torii --features app_api --lib verify_accepts_valid_multisig_witness -- --nocapture`
+- `cargo test -p iroha_torii --features app_api --lib verify_rejects_replayed_multisig_witness_nonce -- --nocapture`
+- `cargo test -p iroha_torii --lib require_soracloud_mutation_signer_accepts_multisig_member_provenance -- --nocapture`
+- `cargo test -p iroha_cli build_soracloud_mutation_auth_headers -- --nocapture`
+- `cargo test -p iroha parse_preserves_soracloud_http_witness_file --lib -- --nocapture`
+
 Latest sync (2026-03-25 SoraFS trusted-proxy/client-IP hardening):
 Torii now has a general trusted-proxy config surface and the SoraFS pin/gateway
 paths resolve canonical client IPs against that allow-list instead of
@@ -354,8 +606,8 @@ Validation:
 
 Open work for this slice now remains:
 - no additional live SoraFS trusted-proxy/client-IP issue was confirmed in
-  this pass. The remaining security backlog is still the dependency tranche
-  plus CUDA runtime validation on a CUDA-capable host.
+  this pass. The remaining security backlog is now CUDA runtime validation on
+  a CUDA-capable host.
 
 Latest sync (2026-03-25 Soracloud required config/secret bindings):
 Soracloud deploy/upgrade/rollback now validate declared required service
@@ -420,8 +672,8 @@ Validation:
 
 Open work for this slice now remains:
 - this closes a fail-open default rather than a newly confirmed externally
-  reachable Connect bypass. The remaining security backlog is still the
-  dependency tranche plus CUDA runtime validation on a CUDA-capable host.
+  reachable Connect bypass. The remaining security backlog is now CUDA runtime
+  validation on a CUDA-capable host.
 
 Latest sync (2026-03-25 Soracloud service config/secret runtime materialization):
 committed Soracloud service config and secret entries now project into the
@@ -484,8 +736,7 @@ Validation:
 
 Open work for this slice now remains:
 - no additional peer-geo trust-boundary issue from this pass. The remaining
-  security backlog is still the dependency tranche plus CUDA runtime
-  validation on a CUDA-capable host.
+  security backlog is now CUDA runtime validation on a CUDA-capable host.
 
 Latest sync (2026-03-25 Soracloud service config/secret control plane):
 Soracloud now has an authoritative service-scoped config/secret mutation and
@@ -545,7 +796,7 @@ Validation:
 
 Open work from this slice:
 - no new P2P transport-default finding remains once `tls_enabled=true`; the
-  remaining security backlog is still the dependency tranche plus CUDA runtime
+  remaining security backlog is now CUDA runtime
   validation on a CUDA-capable host.
 
 Latest sync (2026-03-25 local QUIC proxy bind hardening):
@@ -585,9 +836,11 @@ dependency graph.
   tests; those checks now use OpenSSL in
   `crates/iroha_crypto/src/signature/ed25519.rs`, which removes the last
   active `tar` path; and
-- `cargo-deny` now reports five remaining advisories instead of seven:
-  `rustls-webpki`, `pqcrypto-dilithium`, `pqcrypto-kyber`, `derivative`, and
-  `paste`.
+- `cargo-deny` had reduced the active advisory backlog from seven to three at
+  that point: `rustls-webpki`, `derivative`, and `paste`. Later same-day
+  follow-up work moved `rustls-webpki` onto the patched `0.103.10` line and
+  explicitly accepted the remaining two transitive macro advisories in
+  `deny.toml`.
 
 Validation:
 - `cargo fmt --all`
@@ -598,11 +851,12 @@ Validation:
 - `cargo tree -p iroha_crypto -e all -i tar`
 - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 cargo test -p iroha_crypto ed25519_verify -- --nocapture`
 - `NORITO_KOTLIN_SKIP_TESTS=1 NORITO_JAVA_SKIP_TESTS=1 cargo test -p iroha_crypto ed25519_sign -- --nocapture`
-- `cargo deny check advisories bans sources --hide-inclusion-graph` (still expected to fail on the five remaining advisories)
+- `cargo deny check advisories bans sources --hide-inclusion-graph` (at that point still failed on `rustls-webpki`, `derivative`, and `paste`; later same-day follow-up closed those active failures)
 
 Open work for this dependency/security slice now remains:
-- address the remaining advisory backlog: `rustls-webpki`, direct PQ crate
-  replacements, and transitive `derivative` / `paste` debt;
+- no additional active advisory failure remains in the current tree; future
+  maintenance is limited to upstream cleanup of the accepted transitive
+  `derivative` / `paste` debt;
 - clean the stale historical `tar` / `libsodium-sys-stable` lockfile entries
   once lockfile edits are allowed again, even though they are no longer part
   of the active dependency graph.
@@ -699,39 +953,30 @@ Latest sync (2026-03-25 tracked cargo-deny policy migrated):
 now matches cargo-deny 0.19, so the repo-root dependency audit runs directly
 instead of via a temporary compatibility file.
 
-- `cargo deny check advisories bans sources --hide-inclusion-graph` now fails
-  only on the five live advisories still active in the graph, while `bans` and
-  `sources` stay clean;
-- `rustls-webpki` is present on runtime `reqwest` / `hyper-rustls` paths in
-  production crates, but the current tree does not appear to enable CRL-based
-  revocation checking, so the advisory is runtime-reachable dependency debt
-  with a currently absent exploit precondition;
+- `cargo deny check advisories bans sources --hide-inclusion-graph` now runs
+  directly from the repo root, and later same-day follow-up work made the
+  current resolve pass by pinning `reqwest` / `rustls` to patched patch
+  releases and explicitly accepting the remaining transitive `derivative` /
+  `paste` macro debt;
 - the two previously reported `tar` advisories are now closed for the active
   dependency graph after the later `xtask` and `iroha_crypto` follow-up
   fixes;
-- `pqcrypto-dilithium` / `pqcrypto-kyber` remain direct product dependencies in
-  `iroha_crypto`; and
+- the previously reported direct PQ replacement advisories were closed later by
+  migrating `soranet_pq`, `iroha_crypto`, and `ivm` to
+  `pqcrypto-mldsa` / `pqcrypto-mlkem`; and
 - `derivative` / `paste` remain transitive BLS / arkworks debt rather than
   direct workspace usage.
 
 Validation:
 - `cargo deny check advisories bans sources --hide-inclusion-graph`
-- `cargo tree -p iroha_torii -e normal -i rustls-webpki`
 - `cargo tree -p xtask -e normal -i tar`
-- `cargo tree -p iroha_crypto -e normal -i pqcrypto-dilithium`
-- `cargo tree -p iroha_crypto -e normal -i pqcrypto-kyber`
 - `cd crates/ivm/fuzz && cargo +nightly fuzz run --fuzz-dir . tlv_validate -- -runs=4000 -rss_limit_mb=3072 -max_total_time=30` (advanced past the earlier first-build wall and emitted the fuzz binary, but still did not finish as a full scripted nightly result in this pass)
 - `cd crates/ivm/fuzz && ./target/aarch64-apple-darwin/release/tlv_validate -runs=200 -rss_limit_mb=3072 -max_total_time=15` (pass; direct libFuzzer run completed 200 runs from an empty corpus)
 
 Open work for this slice now remains:
-- plan and land a lockfile update for `rustls-webpki` once lockfile edits are
-  allowed in the remediation phase;
-- decide whether the direct PQ dependencies should move to
-  `pqcrypto-mldsa` / `pqcrypto-mlkem` or remain as a documented compatibility
-  choice for the first release;
-- remove the transitive `derivative` / `paste` debt when the BLS / arkworks
-  dependency chain can be updated without destabilizing the cryptography
-  surface; and
+- remove the transitive `derivative` / `paste` debt when the BLS / arkworks,
+  PQ, Halo2, and UI dependency chains can be updated without destabilizing the
+  cryptography surface; and
 - rerun the full IVM nightly fuzz-smoke script on a warm cache to capture
   stable `tlv_validate` / `kotodama_lower` results; the direct
   `tlv_validate` binary run is now green, but the full scripted nightly smoke
@@ -751,7 +996,10 @@ signal:
   (`derivative`, `paste`, `pqcrypto-dilithium`, `pqcrypto-kyber`,
   `rustls-webpki`, and `tar` twice), while `bans` and `sources` were clean;
   later follow-up fixes in `xtask` and `iroha_crypto` removed both active
-  `tar` findings, reducing the live count to five;
+  `tar` findings, a later direct PQ dependency migration removed the
+  `pqcrypto-*` pair, and a same-day dependency-policy update closed the active
+  `rustls-webpki` finding while explicitly accepting the remaining
+  `derivative` / `paste` macro debt;
 - `scripts/fuzz_smoke.sh` now passes explicit `--fuzz-dir` roots and invokes
   `cargo +nightly fuzz run`, matching the repo’s actual fuzz layout and
   libFuzzer’s nightly requirement under the stable workspace toolchain pin;
@@ -771,8 +1019,9 @@ Validation:
 - `bash scripts/fuzz_smoke.sh`
 
 Open work for this slice now remains:
-- triage and remediate the five remaining dependency findings from cargo-deny,
-  prioritizing `rustls-webpki`;
+- monitor upstream replacements for the accepted `derivative` / `paste`
+  dependency debt and remove the `deny.toml` exceptions when safe upgrades
+  become available;
 - finish the first nightly IVM fuzz-smoke build/run, then rerun the full
   script on a warm cache to capture stable `tlv_validate` /
   `kotodama_lower` results.

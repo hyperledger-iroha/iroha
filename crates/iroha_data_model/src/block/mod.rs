@@ -1521,6 +1521,74 @@ mod tests {
     }
 
     #[test]
+    fn versioned_block_roundtrip_preserves_instruction_order() {
+        use crate::{
+            ChainId,
+            account::AccountId,
+            parameter::{Parameter, system::SumeragiParameter},
+            transaction::{Executable, signed::TransactionBuilder},
+        };
+
+        let key_pair = iroha_crypto::KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let chain: ChainId = "test-chain".parse().expect("chain id");
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+
+        let ordered = vec![
+            crate::isi::InstructionBox::from(crate::isi::SetParameter::new(Parameter::Sumeragi(
+                SumeragiParameter::CommitTimeMs(667),
+            ))),
+            crate::isi::InstructionBox::from(crate::isi::SetParameter::new(Parameter::Sumeragi(
+                SumeragiParameter::MinFinalityMs(100),
+            ))),
+            crate::isi::InstructionBox::from(crate::isi::SetParameter::new(Parameter::Sumeragi(
+                SumeragiParameter::BlockTimeMs(333),
+            ))),
+            crate::isi::InstructionBox::from(crate::isi::SetParameter::new(Parameter::Block(
+                crate::parameter::BlockParameter::MaxTransactions(NonZeroU64::new(10_000).unwrap()),
+            ))),
+        ];
+
+        let tx = TransactionBuilder::new(chain, authority)
+            .with_instructions(ordered.clone())
+            .sign(key_pair.private_key());
+        let block = SignedBlock {
+            signatures: BTreeSet::new(),
+            payload: BlockPayload {
+                header,
+                transactions: vec![tx],
+                da_commitments: None,
+                da_proof_policies: None,
+                da_pin_intents: None,
+                previous_roster_evidence: None,
+            },
+            result: None,
+        };
+
+        let versioned = block.encode_versioned();
+        let decoded_versioned =
+            SignedBlock::decode_all_versioned(&versioned).expect("decode versioned block");
+        let framed = frame_versioned_signed_block_bytes(&versioned).expect("frame versioned block");
+        let decoded_framed = decode_framed_signed_block(&framed).expect("decode framed block");
+
+        for decoded in [&decoded_versioned, &decoded_framed] {
+            let tx = decoded
+                .transactions_vec()
+                .first()
+                .expect("block must contain one transaction");
+            let Executable::Instructions(actual) = tx.instructions() else {
+                panic!("expected instruction executable after block roundtrip");
+            };
+            let actual = actual.iter().cloned().collect::<Vec<_>>();
+
+            assert_eq!(
+                actual, ordered,
+                "instruction order must survive signed block roundtrip"
+            );
+        }
+    }
+
+    #[test]
     fn deframe_rejects_payload_exceeding_max_len() {
         use nonzero_ext::nonzero;
         const LENGTH_OFFSET: usize = 1 + 4 + 1 + 1 + 16 + 1;

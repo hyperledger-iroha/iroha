@@ -16259,6 +16259,38 @@ pub mod isi {
         }
 
         #[test]
+        fn set_parameter_allows_sequential_sumeragi_timing_updates() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            SetParameter(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(100)))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("min_finality should accept 100");
+            SetParameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(100)))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("block_time should accept 100 after min_finality update");
+            SetParameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(100)))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("commit_time should accept 100 after block_time update");
+            SetParameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(667)))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("commit_time should accept 667 before block_time increase");
+            SetParameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(333)))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("block_time should accept 333 after commit_time increase");
+
+            let params = stx.world.parameters.get().sumeragi().clone();
+            assert_eq!(params.min_finality_ms(), 100);
+            assert_eq!(params.block_time_ms(), 333);
+            assert_eq!(params.commit_time_ms(), 667);
+        }
+
+        #[test]
         fn set_parameter_rejects_zero_npos_reconfig_fields() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
