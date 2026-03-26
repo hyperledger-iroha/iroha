@@ -161,24 +161,24 @@ fn map_recent_block(block: ExplorerBlockRecord) -> DashboardRecentBlock {
 #[cfg(test)]
 mod tests {
     use httpmock::prelude::*;
-    use iroha_test_samples::ALICE_KEYPAIR;
+    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+    use norito::json;
 
-    use super::{DashboardSnapshot, fetch_dashboard_snapshot};
+    use super::fetch_dashboard_snapshot;
     use crate::{SigningAuthority, torii::ToriiClient};
 
     fn signer() -> SigningAuthority {
-        SigningAuthority::new(
-            "Alice",
-            "alice@wonderland".parse().expect("account id"),
-            ALICE_KEYPAIR.clone(),
-        )
+        SigningAuthority::new("Alice", ALICE_ID.clone(), ALICE_KEYPAIR.clone())
     }
 
     #[tokio::test]
     async fn fetch_dashboard_snapshot_aggregates_signers_assets_and_blocks() {
         let server = MockServer::start();
+        let alice_id = ALICE_ID.to_string();
         server.mock(|when, then| {
-            when.method(GET).path("/blocks");
+            when.method(GET)
+                .path("/v1/blocks")
+                .query_param("limit", "6");
             then.status(200)
                 .header("content-type", "application/json")
                 .body(
@@ -189,31 +189,62 @@ mod tests {
                 );
         });
         server.mock(|when, then| {
-            when.method(GET).path("/v1/explorer/accounts");
+            when.method(GET)
+                .path("/v1/explorer/accounts")
+                .query_param("page", "1")
+                .query_param("per_page", "200");
             then.status(200)
                 .header("content-type", "application/json")
                 .body(
-                    r#"{
-  "pagination":{"page":1,"per_page":200,"total_pages":1,"total_items":1},
-  "items":[{"id":"alice@wonderland","i105_address":"i105:alice","network_prefix":0,"owned_domains":1,"owned_assets":2,"owned_nfts":0,"metadata":{}}]
-}"#,
+                    json::to_string(&json!({
+                        "pagination": {
+                            "page": 1,
+                            "per_page": 200,
+                            "total_pages": 1,
+                            "total_items": 1
+                        },
+                        "items": [{
+                            "id": alice_id,
+                            "i105_address": "i105:alice",
+                            "network_prefix": 0,
+                            "owned_domains": 1,
+                            "owned_assets": 2,
+                            "owned_nfts": 0,
+                            "metadata": {}
+                        }]
+                    }))
+                    .expect("serialize accounts body"),
                 );
         });
-        server.mock(|when, then| {
+        let owned_by = alice_id.clone();
+        server.mock(move |when, then| {
             when.method(GET)
                 .path("/v1/explorer/assets")
-                .query_param("owned_by", "alice@wonderland");
+                .query_param("page", "1")
+                .query_param("per_page", "64")
+                .query_param("owned_by", &owned_by);
             then.status(200)
                 .header("content-type", "application/json")
                 .body(
-                    r#"{
-  "pagination":{"page":1,"per_page":64,"total_pages":1,"total_items":1},
-  "items":[{"id":"rose##1","definition_id":"rose#wonderland","account_id":"alice@wonderland","value":"25"}]
-}"#,
+                    json::to_string(&json!({
+                        "pagination": {
+                            "page": 1,
+                            "per_page": 64,
+                            "total_pages": 1,
+                            "total_items": 1
+                        },
+                        "items": [{
+                            "id": "rose##1",
+                            "definition_id": "rose#wonderland",
+                            "account_id": alice_id,
+                            "value": "25"
+                        }]
+                    }))
+                    .expect("serialize assets body"),
                 );
         });
 
-        let client = ToriiClient::new(server.base_url()).expect("client");
+        let client = ToriiClient::new(server.url("/")).expect("client");
         let snapshot = fetch_dashboard_snapshot("peer0", &client, &[signer()])
             .await
             .expect("snapshot");

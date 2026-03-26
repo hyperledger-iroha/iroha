@@ -2,6 +2,90 @@
 
 Last updated: 2026-03-26
 
+## 2026-03-26 Follow-up: Iroha core and Izanami pre-existing warning noise is gone
+- Updated
+  `crates/iroha_core/src/state.rs`
+  and
+  `crates/izanami/src/main.rs`
+  to remove the remaining pre-existing warnings seen in targeted `iroha_core`
+  and `izanami` validation runs.
+- The shipped behavior in this slice:
+  - the test-only `WorldTransaction` helper impl in `iroha_core` now uses
+    anonymous lifetimes instead of single-use named lifetimes, removing the
+    `single_use_lifetimes` warning from `state.rs`; and
+  - the `izanami` bin target now re-exports the library `faults` module
+    instead of recompiling a private copy, so the dead-code warnings for
+    `FaultScenarioKind` variants and `apply_fault_scenario` no longer appear in
+    bin/test builds.
+- Validation:
+  - `cargo check -p iroha_core -p izanami --message-format short` (pass)
+  - `cargo test -p izanami --message-format short` (pass; expected debug logs remain in some tests, but the old warnings are gone)
+
+## 2026-03-26 Follow-up: Mochi core and Izanami fixture regressions are green again
+- Updated
+  `mochi/mochi-core/src/compose.rs`,
+  `mochi/fixtures/composer/{draft_multisig_propose,multisig_instructions}.json`,
+  `mochi/mochi-core/tests/fixtures/composer_drafts/{implicit_receive_transfer,multisig_propose}.json`,
+  `mochi/mochi-core/tests/fixtures/{canonical_block_wire,canonical_pipeline_event_message}.bin`,
+  and
+  `crates/izanami/src/smart_contracts.rs`
+  so the remaining red fixture tests match the current canonical asset/account
+  literal rules, Torii wire encoding, and bundled IVM artifact versions.
+- The shipped behavior in this slice:
+  - composer roundtrip tests and shared JSON fixtures now use canonical
+    balance-bucket asset ids (`<definition>#<account>`) and scoped-account
+    registration input where required by the current parser;
+  - Torii canonical block/pipeline fixture binaries were regenerated from the
+    in-tree ignored fixture writers so the stream/canonical tests match the
+    live wire format again; and
+  - Izanami now loads the checked-in `v1_1` IVM artifacts instead of expecting
+    missing historical fixture names.
+- Validation:
+  - `cargo test -p mochi-core drafts_json_roundtrip_covers_all_variants -- --nocapture` (pass)
+  - `cargo test -p mochi-core draft_fixtures_parse_to_expected_variants -- --nocapture` (pass)
+  - `cargo test -p mochi-core composer_draft_fixtures_roundtrip -- --nocapture` (pass)
+  - `cargo test -p mochi-core regenerate_ -- --ignored --nocapture` (pass)
+  - `cargo test -p mochi-core --message-format short` (pass)
+  - `cargo test -p izanami deploy_ivm_trigger_is_not_repeatable -- --nocapture` (pass)
+  - `cargo test -p izanami --message-format short` (pass)
+
+## 2026-03-26 Follow-up: MOCHI now opens on an account-first dashboard with first-run setup, bootstrap file generation, and a Chaos Lab
+- Extended
+  `mochi/mochi-core/src/{bootstrap.rs,dashboard.rs,chaos.rs,lib.rs,supervisor.rs}`,
+  `mochi/mochi-ui-egui/src/{main.rs,dashboard_view.rs,composer_scenarios.rs,wizard.rs,chaos_view.rs}`,
+  `crates/izanami/src/{lib.rs,faults.rs}`,
+  and
+  `mochi/README.md`
+  so the Mochi desktop shell feels closer to a friendly Ganache-style local
+  sandbox instead of a node-first operator console.
+- The shipped behavior in this slice:
+  - Mochi now defaults to a `Dashboard` home view with prefunded signer cards,
+    explorer-backed balances, recent blocks, and one-click actions for common
+    local-dev loops like minting, transfer, multisig, block viewing, env copy,
+    bootstrap file generation, and chain reset;
+  - clean startup now opens a blocking first-run wizard that chooses topology,
+    workspace, and Nexus defaults before launching the sandbox and landing on
+    the dashboard;
+  - Mochi can now write local bootstrap artifacts directly into the selected
+    workspace: `.env.local`,
+    `.mochi/generated/typescript/connect.ts`,
+    `.mochi/generated/rust/connect.rs`, and
+    `.mochi/generated/kotlin/MochiConnect.kt`;
+  - the composer now exposes a scenario-first lane (`Fund account`,
+    `Create teammate`, `Test multisig`, `Test implicit receive`,
+    `Publish manifest`) without removing the existing advanced/raw builder; and
+  - the new `Chaos Lab` tab reuses extracted Izanami fault helpers to run peer
+    bounce, latency, partition, resource-pressure, bad-actor, and wipe/rejoin
+    drills against the current supervised Mochi network.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo check -p mochi-core -p mochi-ui-egui -p izanami --message-format short` (pass; unrelated pre-existing warnings remain in `iroha_core`, and `izanami`'s binary target still warns that some fault variants/helpers are not exercised from the CLI)
+  - `cargo test -p mochi-ui-egui --message-format short` (pass)
+  - `cargo test -p mochi-core bootstrap::tests:: -- --nocapture` (pass)
+  - `cargo test -p mochi-core dashboard::tests::fetch_dashboard_snapshot_aggregates_signers_assets_and_blocks -- --nocapture` (pass)
+  - `cargo test -p izanami --message-format short` (still fails in pre-existing binary-side tests that expect missing IVM fixture artifacts: `instructions::tests::deploy_ivm_trigger_is_not_repeatable`, `smart_contracts::tests::ivm_artifact_loads`, `smart_contracts::tests::ivm_trigger_program_metadata_parses`)
+  - `cargo test -p mochi-core --message-format short` (still fails in pre-existing compose/Torii fixture tests unrelated to this slice: `compose::tests::draft_fixtures_parse_to_expected_variants`, `compose::tests::drafts_json_roundtrip_covers_all_variants`, `torii::tests::block_canonical_wire_matches_fixture`, `torii::tests::block_stream_decodes_block_events`, `torii::tests::block_stream_end_to_end_decodes_canonical_block`, `torii::tests::event_stream_decodes_pipeline_events`)
+
 ## 2026-03-26 Follow-up: Kagami now has a task-first CLI surface, scriptable wizard flags, and generated next-step guidance
 - Extended
   `crates/iroha_kagami/src/main.rs`,

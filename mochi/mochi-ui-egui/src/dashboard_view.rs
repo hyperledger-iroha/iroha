@@ -48,7 +48,7 @@ impl MochiApp {
                     Some(detail) => format!("{} ({detail})", err.message),
                     None => err.message,
                 });
-            let _ = tx.send(DashboardUpdate { peer, result });
+            let _ = tx.send(DashboardUpdate { result });
         });
     }
 

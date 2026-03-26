@@ -28,7 +28,6 @@ impl MochiApp {
                         let subtitle = match preset {
                             ProfilePreset::SinglePeer => "Fastest loop for app work and demos.",
                             ProfilePreset::FourPeerBft => "Better for consensus debugging and failure drills.",
-                            _ => "Use this preset.",
                         };
                         Frame::new()
                             .fill(if selected {

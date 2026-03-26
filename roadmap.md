@@ -2,6 +2,79 @@
 
 Last updated: 2026-03-26
 
+Latest sync (2026-03-26 targeted warning cleanup):
+`crates/iroha_core/src/state.rs`
+and
+`crates/izanami/src/main.rs`
+now carry the warning pass:
+
+- the test-only `WorldTransaction` helpers in `iroha_core` no longer trigger
+  `single_use_lifetimes`; and
+- the `izanami` bin target now reuses the library `faults` module, removing
+  the duplicate dead-code warnings from bin/test builds.
+
+Validation:
+- `cargo check -p iroha_core -p izanami --message-format short`
+- `cargo test -p izanami --message-format short`
+
+Latest sync (2026-03-26 Mochi core + Izanami fixture drift repair):
+`mochi/mochi-core/src/compose.rs`,
+`mochi/fixtures/composer/{draft_multisig_propose,multisig_instructions}.json`,
+`mochi/mochi-core/tests/fixtures/composer_drafts/{implicit_receive_transfer,multisig_propose}.json`,
+`mochi/mochi-core/tests/fixtures/{canonical_block_wire,canonical_pipeline_event_message}.bin`,
+and
+`crates/izanami/src/smart_contracts.rs`
+now carry the remaining green-up work:
+
+- composer draft fixtures and roundtrip tests now use canonical asset/account
+  literals that match the current parser contracts;
+- Torii canonical fixture binaries were regenerated from the built-in ignored
+  helpers, so the block/event stream regression tests match the live wire
+  encoding again; and
+- Izanami now points at the checked-in `v1_1` IVM artifacts, which clears the
+  previously red binary-side smart-contract tests.
+
+Validation:
+- `cargo test -p mochi-core regenerate_ -- --ignored --nocapture`
+- `cargo test -p mochi-core --message-format short`
+- `cargo test -p izanami --message-format short`
+
+Latest sync (2026-03-26 MOCHI dashboard + wizard + bootstrap + chaos refresh):
+`mochi/mochi-core/src/{bootstrap,dashboard,chaos,lib,supervisor}.rs`,
+`mochi/mochi-ui-egui/src/{main,dashboard_view,composer_scenarios,wizard,chaos_view}.rs`,
+`crates/izanami/src/{lib,faults}.rs`,
+and
+`mochi/README.md`
+now carry the larger Mochi local-dev UX pass:
+
+- Mochi opens on a new account-first `Dashboard` with explorer balances,
+  recent blocks, one-click local actions, and direct bootstrap-file/env output
+  instead of dropping straight into the node/ops view;
+- first-run setup is now a wizard that selects topology, workspace, and Nexus
+  defaults before launching the sandbox;
+- the composer now has scenario cards for the most common local-dev flows while
+  preserving the advanced/raw transaction path; and
+- a new `Chaos Lab` tab reuses extracted Izanami fault helpers to exercise peer
+  bounce, latency, partition, pressure, and wipe/rejoin drills against the
+  current supervised sandbox.
+
+Validation:
+- `cargo fmt --all`
+- `cargo check -p mochi-core -p mochi-ui-egui -p izanami --message-format short`
+- `cargo test -p mochi-ui-egui --message-format short`
+- `cargo test -p mochi-core bootstrap::tests:: -- --nocapture`
+- `cargo test -p mochi-core dashboard::tests::fetch_dashboard_snapshot_aggregates_signers_assets_and_blocks -- --nocapture`
+
+Open work for this slice now remains:
+- continue splitting the remaining `mochi-ui-egui/src/main.rs` monolith so the
+  old network/activity/state panels and shared theme helpers live in dedicated
+  modules instead of the shell file;
+- decide whether the dashboard should grow a richer recent-activity rail
+  (transactions/rejections) instead of the current account+block snapshot only;
+- decide whether the refreshed fixture assets should also be surfaced from
+  developer docs or fixture-generation automation instead of relying on the
+  ignored regeneration tests alone.
+
 Latest sync (2026-03-26 Kagami task-first CLI + docs/help refresh):
 `crates/iroha_kagami/src/{main,localnet,localnet_tui,swarm,wizard,codec}.rs`,
 `crates/iroha_kagami/{README.md,CommandLineHelp.md}`,

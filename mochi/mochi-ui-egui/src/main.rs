@@ -71,7 +71,7 @@ use iroha_data_model::{
 use iroha_executor_data_model::isi::multisig::MultisigSpec;
 use mochi_core::{
     BlockDecodeStage, BlockStreamDecodeError, BlockStreamEvent, BlockSummary, BootstrapBundle,
-    BootstrapInputs, BootstrapWriteError, ChaosEvent, ChaosPreset, ChaosReport, ChaosRunRequest,
+    BootstrapInputs, BootstrapWriteError, ChaosPreset, ChaosReport, ChaosRunRequest,
     DashboardSnapshot, EventCategory, EventDecodeStage, EventStreamDecodeError, EventStreamEvent,
     EventSummary, ExposedPrivateKey, GenesisProfile, InstructionDraft, InstructionPermission,
     KeyPair, LifecycleEvent, LogStreamKind, ManagedBlockStream, ManagedEventStream,
@@ -1818,7 +1818,6 @@ struct StateUpdate {
 
 #[derive(Debug)]
 struct DashboardUpdate {
-    peer: String,
     result: Result<DashboardSnapshot, String>,
 }
 
@@ -3035,16 +3034,16 @@ impl MochiApp {
     fn app_env_recipe(&self, supervisor: &Supervisor, peer_rows: &[PeerRow]) -> Option<String> {
         let peer = Self::recipe_peer(peer_rows)?;
         let signer = supervisor.signers().first();
-        let inputs = BootstrapInputs {
-            api_base: Self::peer_api_base(peer),
-            torii_url: peer.torii.clone(),
-            chain_id: self.effective_chain_id_recipe(supervisor),
-            account_id: signer.map(|entry| account_literal(entry.account_id())),
-            private_key: signer.map(|entry| {
-                ExposedPrivateKey(entry.key_pair().private_key().clone()).to_string()
-            }),
-        };
-        Some(inputs.render_shell_exports())
+        let account_id = signer.map(|entry| account_literal(entry.account_id()));
+        let private_key = signer
+            .map(|entry| ExposedPrivateKey(entry.key_pair().private_key().clone()).to_string());
+        Some(compose_app_env_recipe(
+            &Self::peer_api_base(peer),
+            &peer.torii,
+            &self.effective_chain_id_recipe(supervisor),
+            account_id.as_deref(),
+            private_key.as_deref(),
+        ))
     }
 
     fn start_block_stream_for(
@@ -6978,7 +6977,7 @@ impl MochiApp {
                 ui.add_space(12.0);
                 self.render_devnet_access_panel(ui, supervisor, peer_rows);
                 ui.add_space(12.0);
-                self.render_dashboard_view(ui, supervisor, peer_rows, peer_aliases, metrics);
+                self.render_peer_overview_panel(ui, supervisor, peer_rows, peer_aliases, metrics);
             });
     }
 
@@ -7390,7 +7389,7 @@ impl MochiApp {
             });
     }
 
-    fn render_dashboard_view(
+    fn render_peer_overview_panel(
         &mut self,
         ui: &mut egui::Ui,
         supervisor: &mut Supervisor,
@@ -11815,31 +11814,14 @@ fn compose_app_env_recipe(
     account_id: Option<&str>,
     private_key: Option<&str>,
 ) -> String {
-    let mut lines = vec![
-        "# local dev only; rename variables to match your app".to_owned(),
-        format!(
-            "export IROHA_API_BASE={}",
-            shell_quote(&ensure_http_base(api_base))
-        ),
-        format!(
-            "export IROHA_TORII_URL={}",
-            shell_quote(&ensure_http_base(torii_url))
-        ),
-        format!("export IROHA_CHAIN_ID={}", shell_quote(chain_id)),
-    ];
-    if let Some(account_id) = account_id {
-        lines.push(format!(
-            "export IROHA_ACCOUNT_ID={}",
-            shell_quote(account_id)
-        ));
+    BootstrapInputs {
+        api_base: api_base.to_owned(),
+        torii_url: torii_url.to_owned(),
+        chain_id: chain_id.to_owned(),
+        account_id: account_id.map(ToOwned::to_owned),
+        private_key: private_key.map(ToOwned::to_owned),
     }
-    if let Some(private_key) = private_key {
-        lines.push(format!(
-            "export IROHA_PRIVATE_KEY={}",
-            shell_quote(private_key)
-        ));
-    }
-    lines.join("\n")
+    .render_shell_exports()
 }
 
 fn compose_status_probe_recipe(api_base: &str) -> String {
@@ -14395,7 +14377,7 @@ mod tests {
             &pages,
             &current_entries,
             StateQueryKind::Accounts,
-            Some("bob"),
+            Some("rrjxvb"),
             None,
             None,
             None,
@@ -14428,7 +14410,7 @@ mod tests {
             &pages,
             &current_entries,
             StateQueryKind::Accounts,
-            Some("alice"),
+            Some("ggm2d"),
             None,
             None,
             None,
@@ -15108,7 +15090,8 @@ mod tests {
             ComposerInstructionKind::MintAsset
         );
         assert!(
-            app.composer_asset_id.contains("rose"),
+            app.composer_asset_id
+                .contains("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
             "expected rose asset id, got {}",
             app.composer_asset_id
         );
@@ -15160,7 +15143,8 @@ mod tests {
             ComposerInstructionKind::BurnAsset
         );
         assert!(
-            app.composer_asset_id.contains("rose"),
+            app.composer_asset_id
+                .contains("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
             "expected rose asset id, got {}",
             app.composer_asset_id
         );
@@ -15212,7 +15196,8 @@ mod tests {
             ComposerInstructionKind::TransferAsset
         );
         assert!(
-            app.composer_asset_id.contains("rose"),
+            app.composer_asset_id
+                .contains("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
             "expected rose asset id, got {}",
             app.composer_asset_id
         );
