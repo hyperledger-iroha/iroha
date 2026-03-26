@@ -744,6 +744,8 @@ fn batch_label(batch: &QueryOutputBatchBox) -> &'static str {
         QueryOutputBatchBox::RepoAgreement(_) => "RepoAgreement",
         QueryOutputBatchBox::NftId(_) => "NftId",
         QueryOutputBatchBox::Nft(_) => "Nft",
+        QueryOutputBatchBox::RwaId(_) => "RwaId",
+        QueryOutputBatchBox::Rwa(_) => "Rwa",
         QueryOutputBatchBox::Role(_) => "Role",
         QueryOutputBatchBox::Parameter(_) => "Parameter",
         QueryOutputBatchBox::Permission(_) => "Permission",
@@ -1011,7 +1013,12 @@ mod tests {
     }
 
     #[test]
-    fn batch_label_handles_offline_variants() {
+    fn batch_label_handles_rwa_and_offline_variants() {
+        assert_eq!(
+            batch_label(&QueryOutputBatchBox::RwaId(Vec::new())),
+            "RwaId"
+        );
+        assert_eq!(batch_label(&QueryOutputBatchBox::Rwa(Vec::new())), "Rwa");
         assert_eq!(
             batch_label(&QueryOutputBatchBox::OfflineCounterSummary(Vec::new())),
             "OfflineCounterSummary"
