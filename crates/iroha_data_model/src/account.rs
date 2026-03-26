@@ -207,7 +207,7 @@ impl ParsedAccountId {
         &self.account_id
     }
 
-    /// Borrow the canonical textual representation (I105).
+    /// Borrow the canonical textual representation (i105).
     #[must_use]
     pub fn canonical(&self) -> &str {
         &self.canonical
@@ -553,11 +553,11 @@ impl AccountId {
         AccountAddress::from_account_id(self)
     }
 
-    /// Encode the account as an I105 string for the provided network prefix.
+    /// Encode the account as an i105 string for the provided network prefix.
     ///
     /// # Errors
     ///
-    /// Returns [`AccountAddressError`] if the account cannot be encoded or if I105
+    /// Returns [`AccountAddressError`] if the account cannot be encoded or if i105
     /// conversion fails for the provided network prefix.
     #[inline]
     pub fn to_i105_for_discriminant(
@@ -593,8 +593,8 @@ impl AccountId {
     ///
     /// Canonical I105 literals are accepted.
     /// Legacy forms such as `<identifier>@<domain>`, canonical hex, dotted/non-canonical
-    /// I105 literals, aliases, UAID, opaque account literals, and historical
-    /// Base58 envelopes are rejected.
+    /// i105 literals, aliases, UAID, opaque account literals, and historical
+    /// non-i105 envelopes are rejected.
     /// The returned canonical string always matches the canonical I105 representation.
     ///
     /// # Errors
@@ -612,7 +612,7 @@ impl AccountId {
         })
     }
 
-    /// Canonicalise a textual identifier into the I105 form.
+    /// Canonicalise a textual identifier into the i105 form.
     ///
     /// # Errors
     ///
@@ -637,14 +637,23 @@ impl AccountId {
         let expected_prefix = address::chain_discriminant();
         match AccountAddress::from_i105_for_discriminant(input, Some(expected_prefix)) {
             Ok(address) => {
+                let canonical = address
+                    .to_i105_for_discriminant(expected_prefix)
+                    .map_err(|err| ParseError::new(err.code_str()))?;
+                if canonical != input {
+                    return Err(ParseError::new(ERR_ACCOUNT_LITERAL_FORMAT));
+                }
                 let controller = address
                     .to_account_controller()
                     .map_err(|err| ParseError::new(err.code_str()))?;
                 Ok((Self { controller }, AccountAddressSource::Encoded))
             }
             Err(
-                AccountAddressError::I105TooShort
+                AccountAddressError::MissingI105Sentinel
+                | AccountAddressError::I105TooShort
                 | AccountAddressError::InvalidI105Char(_)
+                | AccountAddressError::InvalidI105Base
+                | AccountAddressError::InvalidI105Digit(_)
                 | AccountAddressError::UnsupportedAddressFormat
                 | AccountAddressError::InvalidLength
                 | AccountAddressError::ChecksumMismatch,
@@ -1069,13 +1078,13 @@ mod account_id_parsing_tests {
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
                 .expect("parse public key literal");
-        let raw = format!("{public_key}@wonderland");
+        let raw = format!("{public_key}@hbl.dataspace");
 
         let err = AccountId::parse_encoded(&raw)
             .map(crate::account::ParsedAccountId::into_account_id)
             .expect_err("public_key@domain literals must be rejected");
         assert!(
-            err.reason().contains("I105"),
+            err.reason().contains("i105"),
             "unexpected error: {}",
             err.reason()
         );
@@ -1090,7 +1099,7 @@ mod account_id_parsing_tests {
             .map(crate::account::ParsedAccountId::into_account_id)
             .expect_err("canonical hex account literals must be rejected");
         assert!(
-            err.reason().contains("I105"),
+            err.reason().contains("i105"),
             "unexpected error: {}",
             err.reason()
         );
@@ -1105,7 +1114,7 @@ mod account_id_parsing_tests {
         let address = AccountAddress::from_account_id(&account).expect("address encodes");
         let i105 = address
             .to_i105_for_discriminant(address::chain_discriminant())
-            .expect("I105 encode");
+            .expect("i105 encode");
         let canonical_hex = address.canonical_hex().expect("canonical hex encode");
         let domain_suffix = domain.to_string();
 
@@ -1116,7 +1125,7 @@ mod account_id_parsing_tests {
             let err = AccountId::parse_encoded(&literal)
                 .expect_err("encoded literals with @domain suffix must be rejected");
             assert!(
-                err.reason().contains("I105"),
+                err.reason().contains("i105"),
                 "unexpected error: {}",
                 err.reason()
             );
@@ -1125,28 +1134,28 @@ mod account_id_parsing_tests {
 
     #[test]
     fn from_str_rejects_alias_literals() {
-        let err = AccountId::parse_encoded("blue-alias@wonderland")
+        let err = AccountId::parse_encoded("blue-alias@hbl.dataspace")
             .map(crate::account::ParsedAccountId::into_account_id)
             .expect_err("aliases must be rejected");
         assert!(
-            err.reason().contains("I105"),
+            err.reason().contains("i105"),
             "unexpected error: {}",
             err.reason()
         );
     }
 
     #[test]
-    fn from_str_rejects_base58_like_alias() {
+    fn from_str_rejects_i105_alphabet_alias() {
         let alias_label = "primary";
         let err = AccountAddress::parse_encoded(alias_label, Some(address::chain_discriminant()))
             .expect_err("alias label should not parse as a valid address");
-        assert_eq!(err.code_str(), "ERR_CHECKSUM_MISMATCH");
+        assert_eq!(err.code_str(), "ERR_MISSING_I105_SENTINEL");
 
-        let err = AccountId::parse_encoded("primary@wonderland")
+        let err = AccountId::parse_encoded("primary@hbl.dataspace")
             .map(crate::account::ParsedAccountId::into_account_id)
             .expect_err("aliases must be rejected");
         assert!(
-            err.reason().contains("I105"),
+            err.reason().contains("canonical I105"),
             "unexpected error: {}",
             err.reason()
         );
@@ -1158,7 +1167,7 @@ mod account_id_parsing_tests {
             .map(crate::account::ParsedAccountId::into_account_id)
             .expect_err("mismatched alias domain must fail");
         assert!(
-            err.reason().contains("I105"),
+            err.reason().contains("i105"),
             "unexpected error message: {}",
             err.reason()
         );
@@ -1179,14 +1188,27 @@ mod account_id_parsing_tests {
     }
 
     #[test]
+    fn parse_rejects_fullwidth_sentinel_i105_literal() {
+        let _guard = guard_chain_discriminant();
+        let key_pair = KeyPair::from_seed(vec![0xA5; 32], Algorithm::Ed25519);
+        let account = AccountId::new(key_pair.public_key().clone());
+        let canonical = account.to_string();
+        let noncanonical = canonical.replacen("sora", "ｓｏｒａ", 1);
+
+        let err = AccountId::parse_encoded(&noncanonical)
+            .expect_err("fullwidth sentinel literal must be rejected");
+        assert_eq!(err.reason(), ERR_ACCOUNT_LITERAL_FORMAT);
+    }
+
+    #[test]
     fn parse_rejects_public_key_source() {
         let _guard = guard_chain_discriminant();
         let public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
-        let raw = format!("{public_key}@wonderland");
+        let raw = format!("{public_key}@hbl.dataspace");
 
         let err = AccountId::parse_encoded(&raw).expect_err("public key source must be rejected");
         assert!(
-            err.reason().contains("I105"),
+            err.reason().contains("i105"),
             "unexpected error: {}",
             err.reason()
         );
@@ -1200,7 +1222,7 @@ mod account_id_parsing_tests {
         let address = AccountAddress::from_account_id(&account).expect("account encodes");
         let i105 = address
             .to_i105_for_discriminant(address::chain_discriminant())
-            .expect("I105 encode");
+            .expect("i105 encode");
 
         let literal = i105;
         let parsed = AccountId::parse_encoded(&literal).expect("encoded literal should parse");
@@ -1233,11 +1255,11 @@ mod account_id_parsing_tests {
 
         let previous_chain_discriminant = address::set_chain_discriminant(42);
         let _reset = Reset(previous_chain_discriminant);
-        let err =
-            AccountId::parse_encoded("blue-alias@wonderland").expect_err("alias must be rejected");
+        let err = AccountId::parse_encoded("blue-alias@hbl.dataspace")
+            .expect_err("alias must be rejected");
 
         assert!(
-            err.reason().contains("I105"),
+            err.reason().contains("i105"),
             "unexpected error: {}",
             err.reason()
         );
@@ -1254,7 +1276,7 @@ mod account_id_parsing_tests {
         let err =
             AccountId::canonicalize(&literal).expect_err("canonical hex input must be rejected");
         assert!(
-            err.reason().contains("I105"),
+            err.reason().contains("i105"),
             "unexpected error: {}",
             err.reason()
         );
@@ -1325,7 +1347,7 @@ mod account_id_parsing_tests {
             .map(crate::account::ParsedAccountId::into_account_id)
             .expect_err("encoded address with domain should be rejected");
         assert!(
-            err.reason().contains("I105"),
+            err.reason().contains("i105"),
             "unexpected error: {}",
             err.reason()
         );
@@ -1339,7 +1361,7 @@ mod account_id_parsing_tests {
         let account = AccountId::new(key_pair.public_key().clone());
         let rendered = account.to_string();
         let parsed =
-            AccountAddress::parse_encoded(&rendered, None).expect("display should parse as I105");
+            AccountAddress::parse_encoded(&rendered, None).expect("display should parse as i105");
         assert_eq!(
             parsed.to_account_id().expect("decode account id"),
             account,
@@ -1415,7 +1437,7 @@ mod tests {
         let rendered = account_id.to_string();
         let parsed = AccountId::parse_encoded(&rendered)
             .map(ParsedAccountId::into_account_id)
-            .expect("rendered I105 must parse");
+            .expect("rendered i105 must parse");
         assert_eq!(parsed.signatory(), account_id.signatory());
     }
 
@@ -1534,8 +1556,8 @@ mod tests {
     #[test]
     fn i105_checksum_failure_reports_error_code() {
         // Negative vector from fixtures/account/address_vectors.json (`i105-checksum-mismatch`).
-        let literal = "RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiz";
-        let err = AccountId::parse_encoded(literal).expect_err("invalid I105 payload must fail");
+        let literal = "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSア";
+        let err = AccountId::parse_encoded(literal).expect_err("invalid i105 payload must fail");
         assert_eq!(
             err.reason(),
             AccountAddressErrorCode::ChecksumMismatch.as_str()
@@ -1660,7 +1682,7 @@ mod json_tests {
         let err = norito::json::from_json::<AccountId>(&legacy)
             .expect_err("legacy norito account literal must fail");
         let msg = err.to_string();
-        assert!(msg.contains("I105"), "unexpected error: {msg}");
+        assert!(msg.contains("i105"), "unexpected error: {msg}");
     }
 
     #[test]

@@ -685,19 +685,15 @@ pub mod isi {
 
     fn resolve_config_account_literal(
         world: &impl crate::state::WorldReadOnly,
+        dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
         raw: &str,
         field_path: &'static str,
     ) -> Result<AccountId, Error> {
-        crate::block::parse_account_literal_with_world(world, raw)
-            .or_else(|| {
-                AccountId::parse_encoded(raw)
-                    .ok()
-                    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-            })
+        crate::block::parse_account_literal_with_world(world, dataspace_catalog, raw)
             .ok_or_else(|| {
                 InstructionExecutionError::InvariantViolation(
                     format!(
-                        "invalid {field_path} account literal `{raw}`: expected account identifier"
+                        "invalid {field_path} account literal `{raw}`: expected canonical I105 account id or on-chain alias"
                     )
                     .into(),
                 )
@@ -707,16 +703,21 @@ pub mod isi {
 
     fn config_account_matches(
         world: &impl crate::state::WorldReadOnly,
+        dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
         raw: &str,
         account_id: &AccountId,
         field_path: &'static str,
     ) -> Result<bool, Error> {
-        let configured = resolve_config_account_literal(world, raw, field_path)?;
+        let configured = resolve_config_account_literal(world, dataspace_catalog, raw, field_path)?;
         Ok(configured == *account_id)
     }
 
-    fn parse_config_asset_definition_id(raw: &str) -> Option<AssetDefinitionId> {
-        raw.parse().ok()
+    fn parse_config_asset_definition_id(
+        world: &impl crate::state::WorldReadOnly,
+        raw: &str,
+        now_ms: u64,
+    ) -> Option<AssetDefinitionId> {
+        crate::block::parse_asset_definition_literal_with_world(world, raw, now_ms)
     }
 
     impl Execute for Register<Account> {
@@ -1043,18 +1044,21 @@ pub mod isi {
             }
             let nexus_fee_sink_matches = config_account_matches(
                 &state_transaction.world,
+                &state_transaction.nexus.dataspace_catalog,
                 &state_transaction.nexus.fees.fee_sink_account_id,
                 &account_id,
                 "nexus.fees.fee_sink_account_id",
             )?;
             let nexus_stake_escrow_matches = config_account_matches(
                 &state_transaction.world,
+                &state_transaction.nexus.dataspace_catalog,
                 &state_transaction.nexus.staking.stake_escrow_account_id,
                 &account_id,
                 "nexus.staking.stake_escrow_account_id",
             )?;
             let nexus_slash_sink_matches = config_account_matches(
                 &state_transaction.world,
+                &state_transaction.nexus.dataspace_catalog,
                 &state_transaction.nexus.staking.slash_sink_account_id,
                 &account_id,
                 "nexus.staking.slash_sink_account_id",
@@ -1745,6 +1749,20 @@ pub mod isi {
                 )
                 .into());
             }
+            if let Some((rwa_id, _)) = state_transaction
+                .world
+                .rwas
+                .iter()
+                .find(|(_, rwa)| rwa.owned_by == account_id)
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister account {account_id}: it owns RWA {rwa_id}; transfer or redeem the lot first"
+                    )
+                    .into(),
+                )
+                .into());
+            }
 
             remove_account_associated_permissions(state_transaction, &account_id);
 
@@ -1996,8 +2014,12 @@ pub mod isi {
                 )
                 .into());
             }
-            if parse_config_asset_definition_id(&state_transaction.nexus.fees.fee_asset_id)
-                .is_some_and(|configured| configured == asset_definition_id)
+            if parse_config_asset_definition_id(
+                &state_transaction.world,
+                &state_transaction.nexus.fees.fee_asset_id,
+                state_transaction.block_unix_timestamp_ms(),
+            )
+            .is_some_and(|configured| configured == asset_definition_id)
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
@@ -2007,8 +2029,12 @@ pub mod isi {
                 )
                 .into());
             }
-            if parse_config_asset_definition_id(&state_transaction.nexus.staking.stake_asset_id)
-                .is_some_and(|configured| configured == asset_definition_id)
+            if parse_config_asset_definition_id(
+                &state_transaction.world,
+                &state_transaction.nexus.staking.stake_asset_id,
+                state_transaction.block_unix_timestamp_ms(),
+            )
+            .is_some_and(|configured| configured == asset_definition_id)
             {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(

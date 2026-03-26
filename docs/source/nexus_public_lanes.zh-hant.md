@@ -1,12 +1,4 @@
 ---
-lang: zh-hant
-direction: ltr
-source: docs/source/nexus_public_lanes.md
-status: complete
-generator: scripts/sync_docs_i18n.py
-source_hash: 65540923620ca8a96dd0c0b07b3000b6c77e22deef4bd390725abbb3a6ed1193
-source_last_modified: "2026-01-31T19:25:45.077354+00:00"
-translation_last_reviewed: 2026-02-07
 title: Nexus Public Lane Staking
 description: NX-9 specification for permissionless validator admission, stake accounting, and reward records.
 ---
@@ -115,8 +107,8 @@ Reward distributions use `PublicLaneRewardRecord` and `PublicLaneRewardShare`:
   "asset": "4cuvDVPuLBKJyN6dPbRQhmLh68sU",
   "total_reward": "250.0000",
   "shares": [
-    { "account": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw", "role": "Validator", "amount": "150" },
-    { "account": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r", "role": "Nominator", "amount": "100" }
+    { "account": "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE", "role": "Validator", "amount": "150" },
+    { "account": "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE", "role": "Nominator", "amount": "100" }
   ],
   "metadata": {
     "telemetry_epoch_root": "0x4afe…",
@@ -149,8 +141,8 @@ Registers a validator and bonds an initial stake:
 ```norito
 {
   "lane_id": 1,
-  "validator": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
-  "stake_account": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
+  "validator": "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
+  "stake_account": "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
   "initial_stake": "150000",
   "metadata": {
     "commission_bps": 750,
@@ -255,7 +247,7 @@ This ISI is idempotent per `(lane_id, epoch)` and underpins nightly accounting.
   - `iroha_cli app nexus public-lane validators --lane <id> [--summary]`
     surfaces lifecycle/activation markers (pending target epoch, `activation_epoch` /
     `activation_height`, exit release, slash id) alongside bonded/self stake.
-    `iroha_cli app nexus public-lane stake --lane <id> [--validator i105...] [--summary]`
+    `iroha_cli app nexus public-lane stake --lane <id> [--validator <i105-account-id>] [--summary]`
     mirrors the `/stake` endpoint with pending-unbond hints per `(validator, staker)` pair.
   - Torii snapshots for dashboards and SDKs:
     - `GET /v1/nexus/public_lanes/{lane}/validators` – metadata, status
@@ -265,10 +257,10 @@ This ISI is idempotent per `(lane_id, epoch)` and underpins nightly accounting.
       (canonical I105 output only).
     - `GET /v1/nexus/public_lanes/{lane}/stake` – stake shares (`validator`,
       `staker`, bonded amount) plus pending unbond timers. Optional
-      `?validator=i105...` filters the response for dashboards that focus
+      `?validator=<i105-account-id>` filters the response for dashboards that focus
       on a single validator; `canonical I105 rendering` applies to all literals.
     - `GET /v1/nexus/public_lanes/{lane}/rewards/pending` – pending rewards per
-      asset for the requested account. Requires `account=i105...` and accepts
+      asset for the requested account. Requires `account=<i105-account-id>` and accepts
       optional `asset_id` and `upto_epoch` filters; `canonical I105 rendering` applies to
       the account literal in the response.
   - Lifecycle ISIs use the standard transaction path (Torii
@@ -277,11 +269,11 @@ This ISI is idempotent per `(lane_id, epoch)` and underpins nightly accounting.
 
     ```jsonc
     [
-      { "ActivatePublicLaneValidator": { "lane_id": 1, "validator": "i105..." } },
+      { "ActivatePublicLaneValidator": { "lane_id": 1, "validator": "<i105-account-id>" } },
       {
         "ExitPublicLaneValidator": {
           "lane_id": 1,
-          "validator": "i105...",
+          "validator": "<i105-account-id>",
           "release_at_ms": 1730000000000
         }
       }

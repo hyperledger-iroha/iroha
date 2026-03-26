@@ -97,6 +97,7 @@ public final class RemoveKeyValueInstruction implements InstructionTemplate {
     ACCOUNT("RemoveAccountKeyValue", "account"),
     ASSET_DEFINITION("RemoveAssetDefinitionKeyValue", "definition"),
     NFT("RemoveNftKeyValue", "nft"),
+    RWA("RemoveRwaKeyValue", "rwa"),
     TRIGGER("RemoveTriggerKeyValue", "trigger");
 
     private final String action;
@@ -149,6 +150,10 @@ public final class RemoveKeyValueInstruction implements InstructionTemplate {
 
     public Builder setNftId(final String nftId) {
       return setTarget(Target.NFT, nftId);
+    }
+
+    public Builder setRwaId(final String rwaId) {
+      return setTarget(Target.RWA, rwaId);
     }
 
     public Builder setTriggerId(final String triggerId) {

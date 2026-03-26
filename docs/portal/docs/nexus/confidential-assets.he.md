@@ -234,7 +234,7 @@ Ledgers חסויים חייבים לשמור מספיק היסטוריה כדי 
 - היררכיית derivation לכל חשבון:
   - `sk_spend` → `nk` (nullifier key), `ivk` (incoming viewing key), `ovk` (outgoing viewing key), `fvk`.
 - payloads מוצפנים של notes משתמשים ב-AEAD עם מפתחות שיתוף נגזרים ב-ECDH; אפשר לצרף auditor view keys לאופציות outputs בהתאם למדיניות הנכס.
-- תוספות CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, tooling לאודיטורים לפענוח memos, ו-helper `iroha app zk envelope` ליצירה/בדיקה של מעטפות Norito offline. Torii חושף את אותו זרם derivation דרך `POST /v1/confidential/derive-keyset`, ומחזיר hex ו-base64 כדי שה-wallets יוכלו למשוך היררכיות מפתחות בצורה פרוגרמטית.
+- תוספות CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, tooling לאודיטורים לפענוח memos, ו-helper `iroha app zk envelope` ליצירה/בדיקה של מעטפות Norito offline.
 
 ## Gas, מגבלות ובקרות DoS
 - לוח גז דטרמיניסטי:

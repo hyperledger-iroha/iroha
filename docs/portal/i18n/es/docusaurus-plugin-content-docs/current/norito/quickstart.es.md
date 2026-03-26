@@ -86,7 +86,7 @@ El corredor imprime el registro `info("Hello from Kotodama")` y ejecuta el sysca
 
 ## 4. Envía el bytecode vía ToriiCon el nodo aún corriendo, envió el bytecode compilado a Torii usando el CLI. La identidad de desarrollo por defecto se deriva de la clave pública en `defaults/client.toml`, por lo que el ID de cuenta es
 ```
-i105...
+<i105-account-id>
 ```
 
 Utilice el archivo de configuración para proporcionar la URL de Torii, el ID de cadena y la clave de firma:
@@ -106,7 +106,7 @@ Usa el mismo perfil del CLI para obtener el detalle de cuenta que escribe el con
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id i105... \
+  --id <i105-account-id> \
   --key example | jq .
 ```
 

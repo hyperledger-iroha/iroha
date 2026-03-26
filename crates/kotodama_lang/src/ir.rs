@@ -70,6 +70,7 @@ pub struct Function {
     pub params: Vec<String>,
     pub blocks: Vec<BasicBlock>,
     pub entry: Label,
+    pub location: super::ast::SourceLocation,
 }
 
 /// A single basic block in a function.
@@ -948,6 +949,7 @@ fn lower_function_named(
         params: func.params.clone(),
         blocks: ctx.blocks,
         entry,
+        location: func.location,
     };
     if let Some(err) = ctx.error {
         Err(err)
@@ -1028,6 +1030,7 @@ fn lower_entrypoint_wrapper(
         params: Vec::new(),
         blocks: ctx.blocks,
         entry,
+        location: func.location,
     };
     if let Some(err) = ctx.error {
         Err(err)
@@ -4463,7 +4466,7 @@ mod tests {
             seiyaku C {
                 struct TransferArgs { domain: DomainId; to: AccountId; }
                 fn main() {
-                    let args = TransferArgs(domain("wonderland"), account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"));
+                    let args = TransferArgs(domain("wonderland"), account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"));
                     transfer_domain(authority(), args.domain, args.to);
                 }
             }

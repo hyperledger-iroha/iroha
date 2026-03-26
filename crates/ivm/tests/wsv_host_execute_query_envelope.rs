@@ -85,8 +85,8 @@ fn query_get_balance_returns_json_tlv() {
     );
     let caller_value = norito::json::to_value(&caller).expect("serialize caller");
     let caller_literal = caller_value.as_str().expect("caller id string");
-    let alice =
-        ScopedAccountId::parse_encoded(caller_literal).expect("canonical account id must parse");
+    let alice = ScopedAccountId::parse_encoded(caller_literal)
+        .expect("canonical I105 account id must parse");
     let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
         "wonderland".parse().unwrap(),
         "rose".parse().unwrap(),

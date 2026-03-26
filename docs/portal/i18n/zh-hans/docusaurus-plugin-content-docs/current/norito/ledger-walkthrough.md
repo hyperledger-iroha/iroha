@@ -32,8 +32,8 @@ SDK 快速入门，以便您可以确认 CLI 和 SDK 行为之间的一致性。
 从演示密钥派生：
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 通过列出前几个帐户来确认值：

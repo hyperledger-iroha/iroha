@@ -20,7 +20,7 @@ Owners: Torii Platform Team / SRE / Wallet & Explorer Support
 Roadmap link: **ADDR-6/ADDR-7 — UX & Security acceptance criteria**
 
 This runbook documents the operational response when Torii, SDKs, or wallet
-surfaces report I105 checksum failures (`ERR_CHECKSUM_MISMATCH` /
+surfaces report i105 checksum failures (`ERR_CHECKSUM_MISMATCH` /
 `ChecksumMismatch`). It complements the security analysis in
 [`address_security_review.md`](./address_security_review.md), the UX guidance in
 [`address_display_guidelines.md`](./address_display_guidelines.md), and the

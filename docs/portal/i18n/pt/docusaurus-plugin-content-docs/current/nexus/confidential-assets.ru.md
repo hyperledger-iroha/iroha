@@ -223,7 +223,7 @@ Documente a implementação local no runbook de operações; governança-politic
 - Иерархия derivação ключей на аккаунт:
   - `sk_spend` → `nk` (chave anuladora), `ivk` (chave de visualização de entrada), `ovk` (chave de visualização de saída), `fvk`.
 - Зашифрованные notas de cargas úteis usam AEAD com chaves compartilhadas derivadas de ECDH; As chaves de visualização do auditor opcionais podem ser configuradas para saídas em condições de política ativa.
-- CLI de expansão: `confidential create-keys`, `confidential send`, `confidential export-view-key`, аудит-инструменты para расшифровки memo e auxiliar `iroha app zk envelope` para создания/инспекции Norito envelopes de memorando офлайн. Torii é usado para derivação de fluxo como `POST /v1/confidential/derive-keyset`, formato hexadecimal e base64, formato de caixa grande программно получать иерархии ключей.## Limites, limites e controles DoS
+- CLI de expansão: `confidential create-keys`, `confidential send`, `confidential export-view-key`, аудит-инструменты para расшифровки memo e auxiliar `iroha app zk envelope` para создания/инспекции Norito envelopes de memorando офлайн.
 - Cronograma de gás Детерминированный:
   - Halo2 (Plonkish): базовый `250_000` gás + `2_000` gás на каждый entrada pública.
   - `5` gás à prova de água, mais por anulador (`300`) e por compromisso (`500`) начисления.

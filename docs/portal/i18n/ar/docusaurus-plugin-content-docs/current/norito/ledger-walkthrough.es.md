@@ -30,8 +30,8 @@ translation_last_reviewed: 2026-02-07
 Derivadas de las claves العرض التوضيحي:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 تأكيد القيم المدرجة في الحسابات الأولى:

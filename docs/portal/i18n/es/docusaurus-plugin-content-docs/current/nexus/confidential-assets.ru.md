@@ -200,7 +200,7 @@ Libros de contabilidad confidenciales que contienen historias actualizadas sobre
 - Иерархия derivación ключей на аккаунт:
   - `sk_spend` → `nk` (clave anuladora), `ivk` (clave de visualización entrante), `ovk` (clave de visualización saliente), `fvk`.
 - Las notas de carga útil de Зашифрованные incluyen claves compartidas derivadas de AEAD con ECDH; Las teclas de vista de auditor opcionales pueden activar las salidas en la actividad política.
-- CLI de configuración: `confidential create-keys`, `confidential send`, `confidential export-view-key`, instrumentos de auditoría para notas de registro y ayudante `iroha app zk envelope` para создания/инспекции Norito sobres para notas офлайн. Torii proporciona una derivación de flujo a partir de `POST /v1/confidential/derive-keyset`, formas hexadecimal y base64, programas de gran tamaño получать иерархии ключей.## Gases, limitaciones y controles DoS
+- CLI de configuración: `confidential create-keys`, `confidential send`, `confidential export-view-key`, instrumentos de auditoría para notas de registro y ayudante `iroha app zk envelope` para создания/инспекции Norito sobres para notas офлайн.
 - Horario de gas determinado:
   - Halo2 (Plonkish): базовый `250_000` gas + `2_000` gas на каждый entrada pública.
   - `5` gas a prueba de байт, más por anulador (`300`) y por compromiso (`500`) начисления.

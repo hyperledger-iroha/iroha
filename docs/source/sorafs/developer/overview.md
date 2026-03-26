@@ -67,7 +67,7 @@ sorafs_cli manifest submit \
   --manifest artifacts/site.manifest.to \
   --chunk-plan artifacts/site.chunk_plan.json \
   --torii-url https://gateway.local:8080 \
-  --authority i105... \
+  --authority <i105-account-id> \
   --private-key ed25519:0123...cafe \
   --summary-out artifacts/site.submit.summary.json
 ```

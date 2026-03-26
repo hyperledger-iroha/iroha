@@ -88,9 +88,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -99,7 +99,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -258,7 +258,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
   གཞི་བསྟུན་ཚུ་ སི་ཨེསི་ཝི་གནས་ཁོངས་ལུ་འབྲེལ་བའི་སེལ་འཐུ་འབད་ཡོདཔ་ཨིན། དངོས་པོའི་མེ་ཊ་ཌེ་ཊ་
   བདེན་དཔྱད་ཀྱི་འཛོལ་བ་ཅིག་བཏོནམ་ཨིན།
 - **ཚད་འཛིན་:** ནང་ཐིག་སྟོངམ་གུའི་གུས་ཞབས་ `--default-controllers`. གསལ་སྟོན་
-  ཚད་འཛིན་ཐོ་ཡིག་ཚུ་ (དཔེར་ན་ `i105...;i105...`) ཇོ་བདག་མེན་མི་ལུ་སྤྲོད་པའི་སྐབས་ཨིན།
+  ཚད་འཛིན་ཐོ་ཡིག་ཚུ་ (དཔེར་ན་ `<i105-account-id>;<i105-account-id>`) ཇོ་བདག་མེན་མི་ལུ་སྤྲོད་པའི་སྐབས་ཨིན།
   འཁྲབ་རྩེདཔ་ཚུ།
 
 འཐུས་ཤོར་ཚུ་ སྐབས་དོན་གྲལ་ཐིག་ཨང་གྲངས་ཚུ་དང་གཅིག་ཁར་སྙན་ཞུ་འབདཝ་ཨིན།(དཔེར་ན་ (དཔེར་ན་ )

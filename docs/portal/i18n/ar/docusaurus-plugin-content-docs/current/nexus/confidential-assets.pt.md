@@ -245,7 +245,7 @@ Redes novas que iniciam with confidencialidade habilita characteration a politic
 - Hierarquia de derivacao por account:
   - `sk_spend` -> `nk` (مفتاح الإلغاء)، `ivk` (مفتاح العرض الوارد)، `ovk` (مفتاح العرض الصادر)، `fvk`.
 - حمولات الملاحظات المشفرة باستخدام AEAD com المفاتيح المشتركة المشتقة من ECDH؛ عرض مفاتيح خيارات المدقق التي يمكن أن تضيف مخرجات تتوافق مع الأصول السياسية.
-- دعم لـ CLI: `confidential create-keys`، `confidential send`، `confidential export-view-key`، أدوات التدقيق لوصف المذكرات، والمساعد `iroha app zk envelope` للمنتج/فحص المغلفات Norito دون الاتصال بالإنترنت. يعرض Torii نفس تدفق الاشتقاق عبر `POST /v1/confidential/derive-keyset`، ويعيد الأشكال السداسية وbase64 لتتمكن المحافظ من البحث عن التسلسل الهرمي للمفتاح برمجيًا.
+- دعم لـ CLI: `confidential create-keys`، `confidential send`، `confidential export-view-key`، أدوات التدقيق لوصف المذكرات، والمساعد `iroha app zk envelope` للمنتج/فحص المغلفات Norito دون الاتصال بالإنترنت. يعرض
 
 ## الغاز والحدود والضوابط DoS
 - جدول تحديد الغاز:

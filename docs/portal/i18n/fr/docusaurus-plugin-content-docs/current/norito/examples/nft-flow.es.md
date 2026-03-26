@@ -19,7 +19,7 @@ Enregistrez le cycle de vie d'un NFT de l'extrême à l'extrême : connaissance
 
 ## Recorrido del libro mayor
 
-- Assurez-vous que la définition du NFT existe (par exemple `n0#wonderland`) avec les données du propriétaire/récepteur utilisées dans le fragment (`i105...`, `i105...`).
+- Assurez-vous que la définition du NFT existe (par exemple `n0#wonderland`) avec les données du propriétaire/récepteur utilisées dans le fragment (`<i105-account-id>`, `<i105-account-id>`).
 - Appelez le point d'entrée `nft_issue_and_transfer` pour connaître le NFT, transférer Alice à Bob et ajouter une bandera de métadonnées qui décrit l'émission.
 - Inspectez l'état du livre principal de NFT avec `iroha_cli ledger nfts list --account <id>` ou les équivalents du SDK pour vérifier le transfert, puis confirmez que l'actif est éliminé une fois que l'instruction est exécutée.
 
@@ -35,11 +35,11 @@ Enregistrez le cycle de vie d'un NFT de l'extrême à l'extrême : connaissance
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
 seiyaku NftFlow {
   kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
-    let owner = account!("i105...");
+    let owner = account!("<i105-account-id>");
     let nft = nft_id!("n0$wonderland");
     nft_mint_asset(nft, owner);
 
-    let to = account!("i105...");
+    let to = account!("<i105-account-id>");
     nft_transfer_asset(owner, nft, to);
     nft_set_metadata(nft, json!{ issued: "demo" });
     nft_burn_asset(nft);

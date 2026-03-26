@@ -58,7 +58,7 @@ public final class KaigiInstructionValidationTests {
         () ->
             CreateKaigiInstruction.builder()
                 .setCallId("wonderland", "weekly-sync")
-                .setHost("host@wonderland")
+                .setHost("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB")
                 .addRelayManifestHop("relay-alpha@wonderland", "not!base64", 7)
                 .build(),
         "expected invalid create relay manifest hpke key to throw");
@@ -69,7 +69,7 @@ public final class KaigiInstructionValidationTests {
         () ->
             JoinKaigiInstruction.builder()
                 .setCallId("wonderland", "weekly-sync")
-                .setParticipant("alice@wonderland")
+                .setParticipant("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB")
                 .setProofBase64("not!base64")
                 .build(),
         "expected invalid join proof base64 to throw");
@@ -80,7 +80,7 @@ public final class KaigiInstructionValidationTests {
         () ->
             LeaveKaigiInstruction.builder()
                 .setCallId("wonderland", "weekly-sync")
-                .setParticipant("alice@wonderland")
+                .setParticipant("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB")
                 .setProofBase64("not!base64")
                 .build(),
         "expected invalid leave proof base64 to throw");

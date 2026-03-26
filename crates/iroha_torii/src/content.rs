@@ -849,10 +849,11 @@ mod tests {
             length: 4,
             file_hash: [5; 32],
         };
-        let creator =
-            AccountId::parse_encoded("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw")
-                .map(|parsed| parsed.into_account_id())
-                .expect("valid account id");
+        let creator = AccountId::parse_encoded(
+            "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
+        )
+        .map(|parsed| parsed.into_account_id())
+        .expect("valid account id");
         let bundle = ContentBundleRecord {
             bundle_id: Hash::new(b"bundle"),
             manifest,

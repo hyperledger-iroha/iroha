@@ -81,15 +81,15 @@ const mint = buildMintAssetInstruction({
 
 const transfer = buildTransferAssetInstruction({
   sourceAssetId: "norito:4e52543000000001",
-  destinationAccountId: "i105...",
+  destinationAccountId: "<i105-account-id>",
   quantity: "5",
 });
 
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
-  authority: "i105...",
+  authority: "<i105-account-id>",
   mint: { assetId: "norito:4e52543000000001", quantity: "10" },
-  transfers: [{ destinationAccountId: "i105...", quantity: "5" }],
+  transfers: [{ destinationAccountId: "<i105-account-id>", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
 ```
@@ -177,11 +177,11 @@ const defs = await torii.queryAssetDefinitions({
 console.log("filtered definitions", defs.items);
 
 const assetId = "norito:4e52543000000001";
-const balances = await torii.listAccountAssets("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const balances = await torii.listAccountAssets("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D", {
   limit: 10,
   assetId,
 });
-const txs = await torii.listAccountTransactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const txs = await torii.listAccountTransactions("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D", {
   limit: 5,
   assetId,
 });
@@ -202,7 +202,7 @@ const setup = await fetch(`${baseUrl}/v1/offline/reserve/setup`, {
   method: "POST",
   headers: { "content-type": "application/json" },
   body: JSON.stringify({
-    account_id: "i105:...",
+    account_id: "<i105-account-id>",
     device_id: "device-123",
     offline_public_key: "ed25519:...",
     operation_id: crypto.randomUUID(),
@@ -258,7 +258,7 @@ Explorer telemetry provides typed helpers for the `/v1/explorer/metrics` and
 `/v1/explorer/accounts/{account_id}/qr` endpoints so dashboards can replay the
 same snapshots that power the portal. `getExplorerMetrics()` normalises the
 payload and returns `null` when the route is disabled. Pair it with
-`getExplorerAccountQr()` whenever you need I105 literals plus inline
+`getExplorerAccountQr()` whenever you need i105 literals plus inline
 SVG for share buttons.
 
 ```ts
@@ -273,7 +273,7 @@ if (!snapshot) {
   console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
 }
 
-const qr = await torii.getExplorerAccountQr("i105...");
+const qr = await torii.getExplorerAccountQr("<i105-account-id>");
 console.log("explorer literal", qr.literal);
 await fs.writeFile("alice.svg", qr.svg, "utf8");
 console.log(
@@ -282,8 +282,8 @@ console.log(
 ```
 
 Explorer QR helpers now return canonical I105 output by default.
-selectors; omit the override for the preferred I105 output or request `i105_qr`
-when you need the QR-safe variant. The i105-default literal is the Sora-only option for UX. The helper always returns the canonical identifier,
+selectors; omit the override for the preferred i105 output or request `i105_qr`
+when you need the QR-safe variant. The helper always returns the canonical identifier,
 the selected literal, and metadata (network prefix, QR version/modules, error
 correction tier, and inline SVG), so CI/CD can publish the same payloads that
 the Explorer surfaces without calling bespoke converters.
@@ -500,7 +500,7 @@ canonicalise them before submitting requests:
   grouping asset holdings by canonical account IDs; pass `assetId` to filter the
   portfolio down to a single asset instance.
 - `getUaidBindings(uaid)` enumerates every dataspace ↔ account
-  binding (`I105` returns the `i105` literals).
+  binding (`i105` returns the `i105` literals).
 - `getUaidManifests(uaid, { dataspaceId })` returns each capability manifest,
   lifecycle status, and bound accounts for auditing.
 
@@ -545,7 +545,7 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     manifest,
     privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
     reason: "Attester v2 rollout",
@@ -555,7 +555,7 @@ await torii.publishSpaceDirectoryManifest(
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
     uaid,
     dataspaceId: 11,

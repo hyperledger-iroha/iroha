@@ -84,6 +84,25 @@ def _normalize_metadata(metadata: MetadataLike) -> Optional[Mapping[str, Any]]:
     return json.loads(serialized)
 
 
+def _normalize_json_value(value: Any, context: str) -> Any:
+    """Convert nested payloads to JSON-compatible values, stringifying Decimals when needed."""
+
+    try:
+        serialized = json.dumps(value, default=str)
+    except TypeError as exc:  # pragma: no cover - exercised by callers
+        raise TypeError(f"{context} must be JSON serializable") from exc
+    return json.loads(serialized)
+
+
+def _normalize_mapping_payload(payload: Mapping[str, Any], context: str) -> Dict[str, Any]:
+    if not isinstance(payload, Mapping):
+        raise TypeError(f"{context} must be a mapping")
+    normalized = _normalize_json_value(payload, context)
+    if not isinstance(normalized, dict):  # pragma: no cover - json.loads object contract
+        raise TypeError(f"{context} must serialize to a JSON object")
+    return normalized
+
+
 class TransactionDraft:
     """Collect instructions and sign transactions with ergonomic helpers."""
 
@@ -189,6 +208,16 @@ class TransactionDraft:
 
         metadata_payload = _normalize_metadata(metadata)
         self.add_instruction(Instruction.register_account(account_id, metadata_payload))
+        return self
+
+    def register_rwa(
+        self,
+        rwa: Mapping[str, Any],
+    ) -> TransactionDraft:
+        """Append a `RegisterRwa` instruction."""
+
+        rwa_payload = _normalize_mapping_payload(rwa, "rwa")
+        self.add_instruction(Instruction.register_rwa(rwa_payload))
         return self
 
     def register_asset_definition_numeric(
@@ -419,6 +448,129 @@ class TransactionDraft:
 
         origin = source or self._config.authority
         self.add_instruction(Instruction.transfer_nft(origin, nft_id, destination))
+        return self
+
+    def transfer_rwa(
+        self,
+        rwa_id: str,
+        *,
+        quantity: NumericLike,
+        destination: str,
+        source: Optional[str] = None,
+    ) -> TransactionDraft:
+        """Append a `TransferRwa` instruction."""
+
+        origin = source or self._config.authority
+        normalized_quantity = _normalize_quantity(quantity)
+        self.add_instruction(
+            Instruction.transfer_rwa(origin, rwa_id, normalized_quantity, destination)
+        )
+        return self
+
+    def merge_rwas(
+        self,
+        merge: Mapping[str, Any],
+    ) -> TransactionDraft:
+        """Append a `MergeRwas` instruction."""
+
+        merge_payload = _normalize_mapping_payload(merge, "merge")
+        self.add_instruction(Instruction.merge_rwas(merge_payload))
+        return self
+
+    def redeem_rwa(
+        self,
+        rwa_id: str,
+        *,
+        quantity: NumericLike,
+    ) -> TransactionDraft:
+        """Append a `RedeemRwa` instruction."""
+
+        normalized_quantity = _normalize_quantity(quantity)
+        self.add_instruction(Instruction.redeem_rwa(rwa_id, normalized_quantity))
+        return self
+
+    def freeze_rwa(self, rwa_id: str) -> TransactionDraft:
+        """Append a `FreezeRwa` instruction."""
+
+        self.add_instruction(Instruction.freeze_rwa(rwa_id))
+        return self
+
+    def unfreeze_rwa(self, rwa_id: str) -> TransactionDraft:
+        """Append an `UnfreezeRwa` instruction."""
+
+        self.add_instruction(Instruction.unfreeze_rwa(rwa_id))
+        return self
+
+    def hold_rwa(
+        self,
+        rwa_id: str,
+        *,
+        quantity: NumericLike,
+    ) -> TransactionDraft:
+        """Append a `HoldRwa` instruction."""
+
+        normalized_quantity = _normalize_quantity(quantity)
+        self.add_instruction(Instruction.hold_rwa(rwa_id, normalized_quantity))
+        return self
+
+    def release_rwa(
+        self,
+        rwa_id: str,
+        *,
+        quantity: NumericLike,
+    ) -> TransactionDraft:
+        """Append a `ReleaseRwa` instruction."""
+
+        normalized_quantity = _normalize_quantity(quantity)
+        self.add_instruction(Instruction.release_rwa(rwa_id, normalized_quantity))
+        return self
+
+    def force_transfer_rwa(
+        self,
+        rwa_id: str,
+        *,
+        quantity: NumericLike,
+        destination: str,
+    ) -> TransactionDraft:
+        """Append a `ForceTransferRwa` instruction."""
+
+        normalized_quantity = _normalize_quantity(quantity)
+        self.add_instruction(
+            Instruction.force_transfer_rwa(rwa_id, normalized_quantity, destination)
+        )
+        return self
+
+    def set_rwa_controls(
+        self,
+        rwa_id: str,
+        controls: Mapping[str, Any],
+    ) -> TransactionDraft:
+        """Append a `SetRwaControls` instruction."""
+
+        controls_payload = _normalize_mapping_payload(controls, "controls")
+        self.add_instruction(Instruction.set_rwa_controls(rwa_id, controls_payload))
+        return self
+
+    def set_rwa_key_value(
+        self,
+        rwa_id: str,
+        key: str,
+        value: Any,
+    ) -> TransactionDraft:
+        """Append a `SetRwaKeyValue` instruction."""
+
+        normalized_value = _normalize_json_value(value, "value")
+        self.add_instruction(Instruction.set_rwa_key_value(rwa_id, key, normalized_value))
+        return self
+
+    def remove_rwa_key_value(
+        self,
+        rwa_id: str,
+        key: str,
+    ) -> TransactionDraft:
+        """Append a `RemoveRwaKeyValue` instruction."""
+
+        self.add_instruction(Instruction.remove_rwa_key_value(rwa_id, key))
         return self
 
     def settlement_dvp(

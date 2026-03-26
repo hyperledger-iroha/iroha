@@ -247,7 +247,7 @@ mod tests {
 
     #[test]
     fn account_id_json_key_codec_rejects_domain_suffix_literal() {
-        let err = crate::account::AccountId::decode_json_key("alice@wonderland")
+        let err = crate::account::AccountId::decode_json_key("alice@hbl.dataspace")
             .expect_err("domain suffix literal must be rejected");
         assert!(
             err.to_string().contains("canonical I105"),

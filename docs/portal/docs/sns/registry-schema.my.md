@@ -247,7 +247,7 @@ Enum RegistryEventKind {
 Gateways သည် `RegistryEventV1` သို့ စာရင်းသွင်းပြီး DNS/SoraFS ဖြင့်-
 
 1. ဖြစ်ရပ်အစီအစဥ်အလိုက် ကိုးကားထားသော နောက်ဆုံးပေါ် `NameRecordV1` ကို ရယူခြင်း။
-2. ဖြေရှင်းသူ နမူနာပုံစံများကို ပြန်လည်ထုတ်ပေးခြင်း (နှစ်သက်သော I105 + ဒုတိယအကောင်းဆုံး ချုံ့ထားသော (`sora`) လိပ်စာများ၊ စာသားမှတ်တမ်းများ)။
+2. ဖြေရှင်းသူ နမူနာပုံစံများကို ပြန်လည်ထုတ်ပေးခြင်း (နှစ်သက်သော i105 + ဒုတိယအကောင်းဆုံး ချုံ့ထားသော (`sora`) လိပ်စာများ၊ စာသားမှတ်တမ်းများ)။
 3. [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md) တွင် ဖော်ပြထားသော SoraDNS အလုပ်အသွားအလာမှတဆင့် မွမ်းမံထားသော ဇုန်ဒေတာကို ပင်ထိုးခြင်း။
 
 ပွဲပေးပို့မှု အာမခံချက်များ-
@@ -267,7 +267,7 @@ NameRecordV1 {
     name_hash: 0x5f57...9c2a,
     normalized_label: "makoto",
     display_label: "Makoto",
-    owner: "i105...",
+    owner: "<i105-account-id>",
     controllers: [
         NameControllerV1 {
             controller_type: Account,
@@ -294,7 +294,7 @@ NameRecordV1 {
 SuffixPolicyV1 {
     suffix_id: 0x0001,
     suffix: "sora",
-    steward: "i105...",
+    steward: "<i105-account-id>",
     status: Active,
     payment_asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc",
     pricing: [
@@ -307,10 +307,10 @@ SuffixPolicyV1 {
     max_term_years: 5,
     referral_cap_bps: 500,
     reserved_labels: [
-        ReservedNameV1 { normalized_label:"treasury", assigned_to:Some("i105..."), release_at:None, note:"Protocol reserved" }
+        ReservedNameV1 { normalized_label:"treasury", assigned_to:Some("<i105-account-id>"), release_at:None, note:"Protocol reserved" }
     ],
     fee_split: SuffixFeeSplitV1 { treasury_bps:7000, steward_bps:3000, referral_max_bps:1000, escrow_bps:500 },
-    fund_splitter_account: "i105...",
+    fund_splitter_account: "<i105-account-id>",
     policy_version: 3,
     metadata: { "kpi_covenant":"bafybeigd..." },
 }

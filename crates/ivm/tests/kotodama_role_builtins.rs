@@ -12,13 +12,13 @@ fn kotodama_create_and_grant_role_enables_mint() {
         fn main() {
           // Bootstrap domain/account/asset
           register_domain(domain("default"));
-          register_account(account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"));
+          register_account(account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"));
           register_asset("rose", "ROSE", 0, 1);
           // Create role with mint permission and grant to authority
           create_role(name("minter"), json("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
-          grant_role(account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"), name("minter"));
+          grant_role(account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"), name("minter"));
           // Mint using role permission
-          mint_asset(account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"), asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), 1);
+          mint_asset(account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"), asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), 1);
         }
     "#;
     let compiler = KotodamaCompiler::new();
@@ -53,7 +53,7 @@ fn kotodama_grant_role_accepts_runtime_account_argument() {
 
         fn main() {
           create_role(name("minter"), json("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
-          let who = account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn");
+          let who = account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB");
           grant_it(who);
         }
     "#;
@@ -87,7 +87,7 @@ fn kotodama_grant_permission_accepts_runtime_account_argument() {
         }
 
         fn main() {
-          let who = account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn");
+          let who = account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB");
           grant_it(who);
         }
     "#;
@@ -120,7 +120,7 @@ fn kotodama_runtime_account_argument_survives_syscall_before_grant_permission() 
         }
 
         fn main() {
-          let who = account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn");
+          let who = account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB");
           grant_it(who);
         }
     "#;
@@ -149,7 +149,7 @@ fn kotodama_runtime_account_argument_survives_syscall_before_grant_permission() 
 fn kotodama_authority_matches_domainless_account_literal() {
     let src = r#"
         fn main() {
-          let who = account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn");
+          let who = account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB");
           assert(authority() == who, "authority should normalize to domainless subject");
         }
     "#;

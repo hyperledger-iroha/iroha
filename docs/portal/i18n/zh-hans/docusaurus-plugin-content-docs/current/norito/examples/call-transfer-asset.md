@@ -21,9 +21,9 @@ slug：/norito/examples/call-transfer-asset
 
 ## 账本演练
 
-- 用其将转移的资产为合同机构（例如 `i105...`）提供资金，并授予该机构 `CanTransfer` 角色或同等权限。
-- 调用 `call_transfer_asset` 入口点，将 5 个单位从合约账户转移到 `i105...`，镜像链上自动化包装主机调用的方式。
-- 通过 `FindAccountAssets` 或 `iroha_cli ledger asset list --account i105...` 验证余额并检查事件以确认元数据防护记录了传输上下文。
+- 用其将转移的资产为合同机构（例如 `<i105-account-id>`）提供资金，并授予该机构 `CanTransfer` 角色或同等权限。
+- 调用 `call_transfer_asset` 入口点，将 5 个单位从合约账户转移到 `<i105-account-id>`，镜像链上自动化包装主机调用的方式。
+- 通过 `FindAccountAssets` 或 `iroha_cli ledger asset list --account <i105-account-id>` 验证余额并检查事件以确认元数据防护记录了传输上下文。
 
 ## 相关SDK指南
 
@@ -38,8 +38,8 @@ slug：/norito/examples/call-transfer-asset
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("i105..."),
-      account!("i105..."),
+      account!("<i105-account-id>"),
+      account!("<i105-account-id>"),
       asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );

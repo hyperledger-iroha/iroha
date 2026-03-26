@@ -188,7 +188,7 @@ Grands livres confidentiels et fraîcheur des notes et audits axés sur la gouve
 - Hiérarchie de dérivation des clés par compte :
   - `sk_spend` → `nk` (clé d'annulation), `ivk` (clé de visualisation entrante), `ovk` (clé de visualisation sortante), `fvk`.
 - Charges utiles de notes chiffrées AEAD pour les clés partagées dérivées de l'ECDH et les clés partagées dérivées de l'ECDH. facultatif, l'auditeur voit les clés de la politique d'actifs et les sorties sont incluses dans la pièce jointe.
-- Ajouts CLI : `confidential create-keys`, `confidential send`, `confidential export-view-key`, les mémos décryptent les outils d'auditeur, ainsi que l'assistant `iroha app zk envelope` et les enveloppes mémo Norito hors ligne. produire/inspecter کرتا ہے۔ Torii `POST /v1/confidential/derive-keyset` flux de dérivation et flux de dérivation pour les formulaires hex/base64 et les portefeuilles les hiérarchies de clés par programme récupèrent کر سکیں۔## Contrôles de gaz, limites et DoS
+- Ajouts CLI : `confidential create-keys`, `confidential send`, `confidential export-view-key`, les mémos décryptent les outils d'auditeur, ainsi que l'assistant `iroha app zk envelope` et les enveloppes mémo Norito hors ligne. produire/inspecter کرتا ہے۔
 - Programme de gaz déterministe :
   - Halo2 (Plonkish) : base gaz `250_000` + gaz `2_000` par entrée publique.
   - Gaz `5` par octet de preuve, plus frais par annulateur (`300`) et par engagement (`500`)

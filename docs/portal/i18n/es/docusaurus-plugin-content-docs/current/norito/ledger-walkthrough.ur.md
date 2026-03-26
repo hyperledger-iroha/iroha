@@ -26,8 +26,8 @@ babosa: /norito/ledger-walkthrough
 اس گائیڈ میں `$ADMIN_ACCOUNT` اور `$RECEIVER_ACCOUNT` کو ان ID de cuenta سے بدلیں جو آپ استعمال کرنا چاہتے ہیں۔ paquete predeterminado پہلے ہی claves de demostración سے اخذ کیے گئے دو cuentas شامل کرتا ہے:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 پہلے چند cuentas لسٹ کر کے ویلیوز کی تصدیق کریں:

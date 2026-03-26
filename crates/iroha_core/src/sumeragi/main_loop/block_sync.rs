@@ -494,8 +494,13 @@ impl Actor {
         if slot.block_hash != block_hash || slot.height != height || slot.view != view {
             return;
         }
+        slot.candidate.body_state = super::FrontierBodyState::Available;
         slot.body_present = true;
-        let requesters = std::mem::take(&mut slot.pending_requesters);
+        slot.phase = super::FrontierSlotPhase::ValidateBody;
+        slot.timers.last_progress_at = Instant::now();
+        let requesters = std::mem::take(&mut slot.repair_state.pending_requesters);
+        slot.pending_requesters.clear();
+        slot.sync_compat_fields();
         for peer in requesters {
             self.send_block_body_response(peer, block);
         }
@@ -3503,7 +3508,8 @@ impl Actor {
             && slot.height == request.height
             && slot.view == request.view
         {
-            slot.pending_requesters.insert(peer);
+            slot.repair_state.pending_requesters.insert(peer);
+            slot.sync_compat_fields();
         }
         self.record_consensus_message_handling(
             super::status::ConsensusMessageKind::FetchBlockBody,
@@ -3559,16 +3565,14 @@ impl Actor {
         let result = self.handle_block_created(block_created, sender);
         let body_materialized = self.frontier_block_materialized_locally(response.block_hash);
         if body_materialized {
-            if let Some(slot) = self.frontier_slot.as_mut()
-                && slot.block_hash == response.block_hash
-                && slot.height == response.height
-                && slot.view == response.view
-            {
-                if let Some(sender) = sender_for_slot {
-                    slot.voters.insert(sender);
-                }
-                slot.body_present = true;
-            }
+            let _ = self.handle_frontier_slot_event(
+                Instant::now(),
+                super::FrontierSlotEvent::OnBodyAvailable {
+                    block_hash: response.block_hash,
+                    view: response.view,
+                    sender: sender_for_slot,
+                },
+            );
         } else {
             self.release_block_payload_dedup(&dedup_key);
         }

@@ -12,7 +12,7 @@ use crate::{
     nexus::{DataSpaceCatalog, DataSpaceId},
 };
 
-/// Stable account label that survives signatory rotation.
+/// Stable on-chain account alias that survives signatory rotation.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -20,7 +20,7 @@ use crate::{
 )]
 #[cfg_attr(feature = "json", norito(no_fast_from_json))]
 pub struct AccountLabel {
-    /// Human-readable label unique within the alias namespace.
+    /// Human-readable alias label unique within the alias namespace.
     pub label: Name,
     /// Optional concrete domain scope for the alias.
     #[norito(default)]
@@ -54,7 +54,7 @@ impl AccountLabel {
 
     /// Parse a canonical account alias literal.
     ///
-    /// Supported forms are `label@domain.dataspace` and `label@dataspace`.
+    /// Supported forms are `name@domain.dataspace` and `name@dataspace`.
     ///
     /// # Errors
     /// Returns [`ParseError`] when the literal is malformed or the dataspace alias is unknown.
@@ -129,9 +129,7 @@ struct AliasSegments<'a> {
 
 fn split_alias_segments(input: &str) -> Result<AliasSegments<'_>, ParseError> {
     let (label, right) = input.split_once('@').ok_or_else(|| {
-        ParseError::new(
-            "account alias must use `label@domain.dataspace` or `label@dataspace` format",
-        )
+        ParseError::new("account alias must use `name@domain.dataspace` or `name@dataspace` format")
     })?;
     if right.contains('@') {
         return Err(ParseError::new(

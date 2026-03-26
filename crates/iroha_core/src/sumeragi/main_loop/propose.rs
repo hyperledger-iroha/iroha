@@ -2682,6 +2682,15 @@ impl Actor {
             return false;
         }
 
+        if height == self.committed_height_snapshot().saturating_add(1) {
+            let _ = self.seed_frontier_slot_from_same_height_evidence(
+                height,
+                view_idx,
+                now,
+                "missing_qc",
+            );
+        }
+
         if let Some(block_hash) = self.authoritative_slot_owner_hash(height, view_idx) {
             if pending_queue_len > 0 {
                 debug!(

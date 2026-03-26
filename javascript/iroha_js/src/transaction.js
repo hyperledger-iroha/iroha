@@ -9,6 +9,18 @@ import {
   buildTransferAssetDefinitionInstruction,
   buildTransferDomainInstruction,
   buildTransferNftInstruction,
+  buildRegisterRwaInstruction,
+  buildTransferRwaInstruction,
+  buildMergeRwasInstruction,
+  buildRedeemRwaInstruction,
+  buildFreezeRwaInstruction,
+  buildUnfreezeRwaInstruction,
+  buildHoldRwaInstruction,
+  buildReleaseRwaInstruction,
+  buildForceTransferRwaInstruction,
+  buildSetRwaControlsInstruction,
+  buildSetRwaKeyValueInstruction,
+  buildRemoveRwaKeyValueInstruction,
   buildRegisterDomainInstruction,
   buildRegisterAccountInstruction,
   buildRegisterMultisigInstruction,
@@ -55,7 +67,7 @@ function resolveNativeBinding() {
   return globalThis.__IROHA_NATIVE_BINDING__ ?? getNativeBinding();
 }
 
-function composeAssetIdFromDefinitionAndAccount(assetDefinitionId, accountId, context) {
+function composeAssetHoldingIdFromDefinitionAndAccount(assetDefinitionId, accountId, context) {
   const definition = String(assetDefinitionId ?? "").trim();
   if (!definition) {
     throw new TypeError(`${context}.assetDefinitionId must be a non-empty string`);
@@ -387,6 +399,7 @@ export function buildPrecommitTriggerAction(options) {
 export function buildMintAssetTransaction({
   chainId,
   authority,
+  assetHoldingId,
   assetId,
   quantity,
   metadata = null,
@@ -395,7 +408,7 @@ export function buildMintAssetTransaction({
   nonce = null,
   privateKey,
 }) {
-  const instruction = buildMintAssetInstruction({ assetId, quantity });
+  const instruction = buildMintAssetInstruction({ assetHoldingId: assetHoldingId ?? assetId, quantity });
   return buildTransaction({
     chainId,
     authority,
@@ -415,6 +428,7 @@ export function buildMintAssetTransaction({
 export function buildBurnAssetTransaction({
   chainId,
   authority,
+  assetHoldingId,
   assetId,
   quantity,
   metadata = null,
@@ -423,7 +437,7 @@ export function buildBurnAssetTransaction({
   nonce = null,
   privateKey,
 }) {
-  const instruction = buildBurnAssetInstruction({ assetId, quantity });
+  const instruction = buildBurnAssetInstruction({ assetHoldingId: assetHoldingId ?? assetId, quantity });
   return buildTransaction({
     chainId,
     authority,
@@ -502,6 +516,7 @@ export function buildMintTriggerTransaction({
 export function buildTransferAssetTransaction({
   chainId,
   authority,
+  sourceAssetHoldingId,
   sourceAssetId,
   quantity,
   destinationAccountId,
@@ -512,7 +527,7 @@ export function buildTransferAssetTransaction({
   privateKey,
 }) {
   const instruction = buildTransferAssetInstruction({
-    sourceAssetId,
+    sourceAssetHoldingId: sourceAssetHoldingId ?? sourceAssetId,
     quantity,
     destinationAccountId,
   });
@@ -543,7 +558,7 @@ function buildRegisterDomainInstructions({ domain, mints = [] }) {
   mints.forEach((mint) => {
     instructions.push(
       buildMintAssetInstruction({
-        assetId: mint.assetId,
+        assetHoldingId: mint.assetHoldingId ?? mint.assetId,
         quantity: mint.quantity,
       }),
     );
@@ -564,12 +579,13 @@ function buildRegisterAccountInstructions({ account, transfers = [] }) {
     }),
   );
   transfers.forEach((transfer) => {
-    if (!transfer.sourceAssetId) {
-      throw new TypeError("transfer.sourceAssetId is required");
+    const sourceAssetHoldingId = transfer.sourceAssetHoldingId ?? transfer.sourceAssetId;
+    if (!sourceAssetHoldingId) {
+      throw new TypeError("transfer.sourceAssetHoldingId is required");
     }
     instructions.push(
       buildTransferAssetInstruction({
-        sourceAssetId: transfer.sourceAssetId,
+        sourceAssetHoldingId,
         quantity: transfer.quantity,
         destinationAccountId: transfer.destinationAccountId,
       }),
@@ -636,7 +652,7 @@ function buildRegisterAssetDefinitionInstructions({ assetDefinition, mints = [] 
   mints.forEach((mint) => {
     instructions.push(
       buildMintAssetInstruction({
-        assetId: mint.assetId,
+        assetHoldingId: mint.assetHoldingId ?? mint.assetId,
         quantity: mint.quantity,
       }),
     );
@@ -644,26 +660,32 @@ function buildRegisterAssetDefinitionInstructions({ assetDefinition, mints = [] 
   return instructions;
 }
 
-function resolveAssetIdForMint(assetDefinitionId, mint, context = "mint") {
-  if (mint.assetId) {
-    const normalizedAssetId = ToriiClient._normalizeAssetId(mint.assetId, `${context}.assetId`);
+function resolveAssetHoldingIdForMint(assetDefinitionId, mint, context = "mint") {
+  const providedAssetHoldingId = mint.assetHoldingId ?? mint.assetId;
+  if (providedAssetHoldingId) {
+    const normalizedAssetHoldingId = ToriiClient._normalizeAssetHoldingId(
+      providedAssetHoldingId,
+      mint.assetHoldingId !== undefined ? `${context}.assetHoldingId` : `${context}.assetId`,
+    );
     if (!mint.accountId) {
-      return normalizedAssetId;
+      return normalizedAssetHoldingId;
     }
-    const derivedAssetId = composeAssetIdFromDefinitionAndAccount(
+    const derivedAssetHoldingId = composeAssetHoldingIdFromDefinitionAndAccount(
       assetDefinitionId,
       mint.accountId,
       context,
     );
-    if (normalizedAssetId !== derivedAssetId) {
-      throw new TypeError(`${context}.assetId must match ${context}.assetDefinitionId + ${context}.accountId`);
+    if (normalizedAssetHoldingId !== derivedAssetHoldingId) {
+      throw new TypeError(
+        `${context}.assetHoldingId must match ${context}.assetDefinitionId + ${context}.accountId`,
+      );
     }
-    return normalizedAssetId;
+    return normalizedAssetHoldingId;
   }
   if (!mint.accountId) {
-    throw new TypeError(`${context}.assetId or ${context}.accountId must be provided`);
+    throw new TypeError(`${context}.assetHoldingId or ${context}.accountId must be provided`);
   }
-  return composeAssetIdFromDefinitionAndAccount(assetDefinitionId, mint.accountId, context);
+  return composeAssetHoldingIdFromDefinitionAndAccount(assetDefinitionId, mint.accountId, context);
 }
 
 function normalizeDomainMintSpec(value, context) {
@@ -691,9 +713,9 @@ function normalizeAssetDefinitionMintSpec(assetDefinitionId, value, context) {
   if (!value || typeof value !== "object") {
     throw new TypeError(`${context} must be an object`);
   }
-  const assetId = resolveAssetIdForMint(assetDefinitionId, value, context);
+  const assetHoldingId = resolveAssetHoldingIdForMint(assetDefinitionId, value, context);
   return {
-    assetId,
+    assetHoldingId,
     accountId:
       value.accountId === undefined || value.accountId === null
         ? null
@@ -720,12 +742,12 @@ function normalizeTransferSpec(value, context, options = {}) {
     throw new TypeError(`${context} must be an object`);
   }
   const spec = {
-    sourceAssetId: value.sourceAssetId,
+    sourceAssetHoldingId: value.sourceAssetHoldingId ?? value.sourceAssetId,
     quantity: value.quantity,
     destinationAccountId: value.destinationAccountId,
   };
-  if (requireSource && !spec.sourceAssetId) {
-    throw new TypeError(`${context}.sourceAssetId is required`);
+  if (requireSource && !spec.sourceAssetHoldingId) {
+    throw new TypeError(`${context}.sourceAssetHoldingId is required`);
   }
   return spec;
 }
@@ -771,18 +793,18 @@ export function buildMintAndTransferTransaction({
     throw new TypeError("transfer or transfers options are required");
   }
   const mintInstruction = buildMintAssetInstruction(mint);
-  const defaultSource = mint.assetId;
-  if (!defaultSource && transferSpecs.some((spec) => spec.sourceAssetId === undefined)) {
+  const defaultSource = mint.assetHoldingId ?? mint.assetId;
+  if (!defaultSource && transferSpecs.some((spec) => spec.sourceAssetHoldingId === undefined)) {
     throw new TypeError(
-      "mint.assetId is required when transfer sourceAssetId is omitted",
+      "mint.assetHoldingId is required when transfer sourceAssetHoldingId is omitted",
     );
   }
   const instructions = [mintInstruction];
   for (const spec of transferSpecs) {
-    const sourceAssetId = spec.sourceAssetId ?? defaultSource;
+    const sourceAssetHoldingId = spec.sourceAssetHoldingId ?? defaultSource;
     instructions.push(
       buildTransferAssetInstruction({
-        sourceAssetId,
+        sourceAssetHoldingId,
         quantity: spec.quantity,
         destinationAccountId: spec.destinationAccountId,
       }),
@@ -1022,11 +1044,12 @@ export function buildRegisterAssetDefinitionMintAndTransferTransaction({
         : [];
 
   if (transferSpecs.length > 0) {
-    const defaultSourceAssetId = mintSpecs[0].assetId;
+    const defaultSourceAssetHoldingId = mintSpecs[0].assetHoldingId;
     for (const spec of transferSpecs) {
       instructions.push(
         buildTransferAssetInstruction({
-          sourceAssetId: spec.sourceAssetId ?? defaultSourceAssetId,
+          sourceAssetHoldingId:
+            spec.sourceAssetHoldingId ?? defaultSourceAssetHoldingId,
           quantity: spec.quantity,
           destinationAccountId: spec.destinationAccountId,
         }),
@@ -1098,6 +1121,346 @@ export function buildTransferNftTransaction({
     nftId,
     destinationAccountId,
   });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing a `RegisterRwa` instruction.
+ */
+export function buildRegisterRwaTransaction({
+  chainId,
+  authority,
+  rwa,
+  rwaJson,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildRegisterRwaInstruction({ rwa, rwaJson });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing a `TransferRwa` instruction.
+ */
+export function buildTransferRwaTransaction({
+  chainId,
+  authority,
+  sourceAccountId,
+  rwaId,
+  quantity,
+  destinationAccountId,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildTransferRwaInstruction({
+    sourceAccountId,
+    rwaId,
+    quantity,
+    destinationAccountId,
+  });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing a `MergeRwas` instruction.
+ */
+export function buildMergeRwasTransaction({
+  chainId,
+  authority,
+  merge,
+  mergeJson,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildMergeRwasInstruction({ merge, mergeJson });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing a `RedeemRwa` instruction.
+ */
+export function buildRedeemRwaTransaction({
+  chainId,
+  authority,
+  rwaId,
+  quantity,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildRedeemRwaInstruction({ rwaId, quantity });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing a `FreezeRwa` instruction.
+ */
+export function buildFreezeRwaTransaction({
+  chainId,
+  authority,
+  rwaId,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildFreezeRwaInstruction({ rwaId });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing an `UnfreezeRwa` instruction.
+ */
+export function buildUnfreezeRwaTransaction({
+  chainId,
+  authority,
+  rwaId,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildUnfreezeRwaInstruction({ rwaId });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing a `HoldRwa` instruction.
+ */
+export function buildHoldRwaTransaction({
+  chainId,
+  authority,
+  rwaId,
+  quantity,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildHoldRwaInstruction({ rwaId, quantity });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing a `ReleaseRwa` instruction.
+ */
+export function buildReleaseRwaTransaction({
+  chainId,
+  authority,
+  rwaId,
+  quantity,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildReleaseRwaInstruction({ rwaId, quantity });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing a `ForceTransferRwa` instruction.
+ */
+export function buildForceTransferRwaTransaction({
+  chainId,
+  authority,
+  rwaId,
+  quantity,
+  destinationAccountId,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildForceTransferRwaInstruction({
+    rwaId,
+    quantity,
+    destinationAccountId,
+  });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing a `SetRwaControls` instruction.
+ */
+export function buildSetRwaControlsTransaction({
+  chainId,
+  authority,
+  rwaId,
+  controls,
+  controlsJson,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildSetRwaControlsInstruction({
+    rwaId,
+    controls,
+    controlsJson,
+  });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing a `SetRwaKeyValue` instruction.
+ */
+export function buildSetRwaKeyValueTransaction({
+  chainId,
+  authority,
+  rwaId,
+  key,
+  value,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildSetRwaKeyValueInstruction({ rwaId, key, value });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing a `RemoveRwaKeyValue` instruction.
+ */
+export function buildRemoveRwaKeyValueTransaction({
+  chainId,
+  authority,
+  rwaId,
+  key,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildRemoveRwaKeyValueInstruction({ rwaId, key });
   return buildTransaction({
     chainId,
     authority,

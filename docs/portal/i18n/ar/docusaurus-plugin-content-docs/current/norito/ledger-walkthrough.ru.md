@@ -29,8 +29,8 @@ translation_last_reviewed: 2026-02-07
 حسابات الهوية. يوجد في الحزمة الافتراضية حسابان مستفيدان من المفاتيح التجريبية:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 قم بالإجابة على الأسئلة السابقة بالحسابات الأولى:

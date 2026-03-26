@@ -359,7 +359,7 @@ fn por_trigger_posts_manual_challenge() {
     let token = TestChallengeAuthTokenV1 {
         version: 1,
         token_id: "token-1".to_string(),
-        operator_account: "council@sora".to_string(),
+        operator_account: "council@governance.dataspace".to_string(),
         expires_at,
         scopes: vec![TestChallengeAuthScopeV1 {
             manifest_digest,

@@ -5,7 +5,9 @@ import { ToriiClient, ToriiHttpError } from "../src/toriiClient.js";
 import { ValidationError, ValidationErrorCode } from "../src/index.js";
 
 const BASE_URL = "http://localhost:8080";
-const FIXTURE_ACCOUNT_ID = "6cmzPVPX8e5qQsHdB57DhqFT9wp2MiMoXsvt9LYUtypj1nx96bF5s8W";
+const FIXTURE_ACCOUNT_ID = "sorauロ1PワKNラ7シコa2WクシメミQホbコトocニチヰJaアbg6sセgイヨPfX7WAWRY";
+const FIXTURE_RWA_ID =
+  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities";
 
 function createResponse({ status, jsonData = {}, headers, textBody }) {
   const headerMap = new Map();
@@ -62,6 +64,43 @@ test("listNfts forwards pagination/sort/filter and validates filter payloads", a
   const badClient = new ToriiClient(BASE_URL, { fetchImpl });
   await assert.rejects(
     () => badClient.listNfts({ filter: "   " }),
+    (error) =>
+      error instanceof ValidationError &&
+      error.code === ValidationErrorCode.INVALID_STRING &&
+      error.path === "filter",
+  );
+  assert.equal(requests.length, 1, "invalid filter must not issue fetch calls");
+});
+
+test("listRwas forwards pagination/sort/filter and validates filter payloads", async () => {
+  const requests = [];
+  const fetchImpl = async (url) => {
+    requests.push(url);
+    return createResponse({
+      status: 200,
+      jsonData: { items: [{ id: FIXTURE_RWA_ID }], total: 1 },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const payload = await client.listRwas({
+    limit: 2,
+    sort: [{ key: "id", order: "asc" }],
+    filter: { Eq: ["id", FIXTURE_RWA_ID] },
+  });
+  assert.equal(payload.items[0].id, FIXTURE_RWA_ID);
+  assert.equal(requests.length, 1);
+  const parsed = new URL(requests[0]);
+  assert.equal(parsed.pathname, "/v1/rwas");
+  assert.equal(parsed.searchParams.get("limit"), "2");
+  assert.equal(parsed.searchParams.get("sort"), "id:asc");
+  const parsedFilter = parsed.searchParams.get("filter");
+  assert.ok(parsedFilter);
+  assert.deepEqual(JSON.parse(parsedFilter), { Eq: ["id", FIXTURE_RWA_ID] });
+
+  const badClient = new ToriiClient(BASE_URL, { fetchImpl });
+  await assert.rejects(
+    () => badClient.listRwas({ filter: "   " }),
     (error) =>
       error instanceof ValidationError &&
       error.code === ValidationErrorCode.INVALID_STRING &&

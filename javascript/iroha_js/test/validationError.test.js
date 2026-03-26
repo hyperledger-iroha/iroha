@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 
 import {
   AccountAddress,
-  DEFAULT_DOMAIN_NAME,
   ValidationError,
   ValidationErrorCode,
   normalizeAccountId,
@@ -39,7 +38,6 @@ test("normalizeAccountId rejects '@domain' literals (no UTS-46 canonicalization 
 
 test("normalizeAccountId accepts default-domain literal without suffix", () => {
   const address = AccountAddress.fromAccount({
-    domain: DEFAULT_DOMAIN_NAME,
     publicKey: SAMPLE_KEY,
   });
   const literalWithoutDomain = address.toI105();
@@ -48,7 +46,7 @@ test("normalizeAccountId accepts default-domain literal without suffix", () => {
   assert.throws(
     () =>
       normalizeAccountId(
-        `${literalWithoutDomain}@${DEFAULT_DOMAIN_NAME}`,
+        `${literalWithoutDomain}@dataspace`,
         "accountId",
       ),
     (error) =>
@@ -60,7 +58,6 @@ test("normalizeAccountId accepts default-domain literal without suffix", () => {
 
 test("normalizeAccountId rejects canonical hex account literals", () => {
   const address = AccountAddress.fromAccount({
-    domain: DEFAULT_DOMAIN_NAME,
     publicKey: SAMPLE_KEY,
   });
   const canonicalHex = address.canonicalHex();
@@ -69,45 +66,40 @@ test("normalizeAccountId rejects canonical hex account literals", () => {
     (error) =>
       error instanceof ValidationError &&
       error.code === ValidationErrorCode.INVALID_ACCOUNT_ID &&
-      /must be an I105 account id/i.test(error.message),
+      /must be a canonical I105 account id/i.test(error.message),
   );
 });
 
-const maybeTestI105Default = process.env.IROHA_JS_DISABLE_NATIVE === "1" ? test.skip : test;
-
-maybeTestI105Default("normalizeAccountId accepts i105Default default-domain literal without suffix", () => {
+test("normalizeAccountId accepts i105 default-domain literal without suffix", () => {
   const address = AccountAddress.fromAccount({
-    domain: DEFAULT_DOMAIN_NAME,
     publicKey: SAMPLE_KEY,
   });
-  const i105Default = address.toI105Default();
-  const normalized = normalizeAccountId(i105Default, "accountId");
+  const canonicalI105 = address.toI105();
+  const normalized = normalizeAccountId(canonicalI105, "accountId");
 
-  const parsed = AccountAddress.parseEncoded(normalized, undefined, DEFAULT_DOMAIN_NAME).address;
+  const parsed = AccountAddress.parseEncoded(normalized).address;
   assert.deepEqual(
     Buffer.from(parsed.canonicalBytes()),
     Buffer.from(address.canonicalBytes()),
   );
 });
 
-test("normalizeAccountId canonicalizes i105Default literal without suffix for non-default domain", () => {
+test("normalizeAccountId canonicalizes i105 literal without suffix", () => {
   const address = AccountAddress.fromAccount({
-    domain: "wonderland",
     publicKey: SAMPLE_KEY,
   });
-  const i105Default = address.toI105Default();
+  const i105 = address.toI105();
 
-  const normalized = normalizeAccountId(i105Default, "accountId");
-  const parsed = AccountAddress.parseEncoded(normalized, undefined, "wonderland").address;
+  const normalized = normalizeAccountId(i105, "accountId");
+  const parsed = AccountAddress.parseEncoded(normalized).address;
   assert.deepEqual(
     Buffer.from(parsed.canonicalBytes()),
     Buffer.from(address.canonicalBytes()),
   );
 });
 
-test("normalizeAccountId canonicalizes non-default I105 literal without suffix", () => {
+test("normalizeAccountId preserves canonical i105 literals", () => {
   const address = AccountAddress.fromAccount({
-    domain: "wonderland",
     publicKey: SAMPLE_KEY,
   });
   const literalWithoutDomain = address.toI105();
@@ -157,10 +149,9 @@ test("ValidationError preserves metadata", () => {
 
 test("normalizeAccountId rejects encoded addresses with domain suffixes", () => {
   const address = AccountAddress.fromAccount({
-    domain: "wonderland",
     publicKey: SAMPLE_KEY,
   });
-  const mismatchedId = `${address.toI105()}@${DEFAULT_DOMAIN_NAME}`;
+  const mismatchedId = `${address.toI105()}@dataspace`;
   assert.throws(
     () => normalizeAccountId(mismatchedId, "accountId"),
     (error) =>

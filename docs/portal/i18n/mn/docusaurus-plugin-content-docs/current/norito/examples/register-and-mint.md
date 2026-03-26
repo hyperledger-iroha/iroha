@@ -21,9 +21,9 @@ slug: /norito/examples/register-and-mint
 
 ## Бүртгэлийн дэвтэр
 
-- SDK-ийн хурдан эхлүүлэх бүрт тохируулах үе шатыг тусгаж, очих хаяг (жишээ нь, `i105...`) байгаа эсэхийг шалгаарай.
+- SDK-ийн хурдан эхлүүлэх бүрт тохируулах үе шатыг тусгаж, очих хаяг (жишээ нь, `<i105-account-id>`) байгаа эсэхийг шалгаарай.
 - ROSE хөрөнгийн тодорхойлолтыг үүсгэхийн тулд `register_and_mint` нэвтрэх цэгийг дуудаж, нэг гүйлгээнд 250 нэгжийг Алис руу илгээнэ үү.
-- Үлдэгдлийг `client.request(FindAccountAssets)` эсвэл `iroha_cli ledger asset list --account i105...`-ээр шалгана уу.
+- Үлдэгдлийг `client.request(FindAccountAssets)` эсвэл `iroha_cli ledger asset list --account <i105-account-id>`-ээр шалгана уу.
 
 ## Холбогдох SDK гарын авлага
 
@@ -45,7 +45,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("i105...");
+    let to = account!("<i105-account-id>");
     let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     mint_asset(to, asset, 250);
   }

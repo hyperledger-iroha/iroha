@@ -47,6 +47,7 @@ const JSON_MIME_TYPE: &str = "application/json";
 const TEXT_JSON_MIME_TYPE: &str = "text/json";
 const ATTACHMENT_SANITIZER_ENV: &str = "IROHA_ATTACHMENT_SANITIZER";
 const ATTACHMENT_SANITIZER_MAX_INPUT_ENV: &str = "IROHA_ATTACHMENT_SANITIZER_MAX_INPUT_BYTES";
+const ATTACHMENT_SANITIZER_SANDBOXED_ENV: &str = "IROHA_ATTACHMENT_SANITIZER_OS_SANDBOXED";
 const SANITIZER_POLL_INTERVAL_MS: u64 = 5;
 const ATTACHMENT_META_SCAN_MAX_FILES: usize = 20_000;
 const TAG_FILTER_LEGACY_SCAN_CAP: usize = 128;
@@ -745,7 +746,7 @@ async fn sanitize_attachment_subprocess(
         max_archive_depth: cfg.max_archive_depth,
         timeout_ms: cfg.timeout.as_millis().max(1) as u64,
     };
-    let mut outcome = task::spawn_blocking(move || run_sanitizer_subprocess(request, cfg.timeout))
+    let outcome = task::spawn_blocking(move || run_sanitizer_subprocess(request, cfg.timeout))
         .await
         .map_err(|err| {
             SanitizeError::new(
@@ -753,7 +754,6 @@ async fn sanitize_attachment_subprocess(
                 format!("attachment sanitize task failed: {err}"),
             )
         })??;
-    outcome.summary.sandboxed = true;
     Ok(outcome)
 }
 
@@ -773,10 +773,8 @@ fn run_sanitizer_subprocess(
         .saturating_add(1024)
         .max(1024)
         .to_string();
-    let mut cmd = Command::new(exe);
-    cmd.env(ATTACHMENT_SANITIZER_ENV, "1")
-        .env(ATTACHMENT_SANITIZER_MAX_INPUT_ENV, max_input_bytes)
-        .stdin(Stdio::piped())
+    let mut cmd = sandboxed_sanitizer_command(&exe, &max_input_bytes)?;
+    cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
     let mut child = cmd.spawn().map_err(|err| {
@@ -922,6 +920,103 @@ fn sanitizer_executable_with_override(
             format!("attachment sanitizer executable unavailable: {err}"),
         )
     })
+}
+
+fn sandboxed_sanitizer_command(
+    exe: &Path,
+    max_input_bytes: &str,
+) -> Result<Command, SanitizeError> {
+    #[cfg(target_os = "linux")]
+    {
+        let bubblewrap = find_executable_in_path("bwrap").ok_or_else(|| {
+            SanitizeError::new(
+                SanitizeRejectReason::Sandbox,
+                "attachment sanitizer subprocess requires bubblewrap (`bwrap`) on Linux",
+            )
+        })?;
+        let mut cmd = Command::new(bubblewrap);
+        cmd.args([
+            "--die-with-parent",
+            "--new-session",
+            "--unshare-user",
+            "--unshare-pid",
+            "--unshare-net",
+            "--unshare-uts",
+            "--unshare-ipc",
+            "--ro-bind",
+            "/",
+            "/",
+            "--dev",
+            "/dev",
+            "--proc",
+            "/proc",
+            "--tmpfs",
+            "/tmp",
+            "--setenv",
+            ATTACHMENT_SANITIZER_ENV,
+            "1",
+            "--setenv",
+            ATTACHMENT_SANITIZER_MAX_INPUT_ENV,
+            max_input_bytes,
+            "--setenv",
+            ATTACHMENT_SANITIZER_SANDBOXED_ENV,
+            "1",
+        ]);
+        cmd.arg(exe);
+        return Ok(cmd);
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let sandbox_exec = find_executable_in_path("sandbox-exec").ok_or_else(|| {
+            SanitizeError::new(
+                SanitizeRejectReason::Sandbox,
+                "attachment sanitizer subprocess requires `sandbox-exec` on macOS",
+            )
+        })?;
+        let profile = r#"(version 1)
+(deny default)
+(allow process*)
+(allow file-read*)
+(deny network*)"#;
+        let mut cmd = Command::new(sandbox_exec);
+        cmd.arg("-p")
+            .arg(profile)
+            .arg(exe)
+            .env(ATTACHMENT_SANITIZER_ENV, "1")
+            .env(ATTACHMENT_SANITIZER_MAX_INPUT_ENV, max_input_bytes)
+            .env(ATTACHMENT_SANITIZER_SANDBOXED_ENV, "1");
+        return Ok(cmd);
+    }
+
+    #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+    {
+        let _ = (exe, max_input_bytes);
+        return Err(SanitizeError::new(
+            SanitizeRejectReason::Sandbox,
+            "attachment sanitizer subprocess is unsupported on this Unix target",
+        ));
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = (exe, max_input_bytes);
+        Err(SanitizeError::new(
+            SanitizeRejectReason::Sandbox,
+            "attachment sanitizer subprocess requires a supported OS sandbox",
+        ))
+    }
+}
+
+fn find_executable_in_path(name: &str) -> Option<PathBuf> {
+    let path = env::var_os("PATH")?;
+    for dir in env::split_paths(&path) {
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 fn enforce_per_tenant_quota(tenant: &AttachmentTenant, incoming_size: u64) -> bool {
@@ -1767,6 +1862,7 @@ pub fn sanitizer_process_exit_code_from_env() -> Option<i32> {
 }
 
 fn run_sanitizer_process() -> Result<(), SanitizeError> {
+    let sandboxed = env::var_os(ATTACHMENT_SANITIZER_SANDBOXED_ENV).is_some();
     let max_input = env::var(ATTACHMENT_SANITIZER_MAX_INPUT_ENV)
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
@@ -1811,7 +1907,7 @@ fn run_sanitizer_process() -> Result<(), SanitizeError> {
     let response =
         match sanitize_attachment_sync(request.declared_type.as_deref(), &request.body, &cfg) {
             Ok(mut outcome) => {
-                outcome.summary.sandboxed = true;
+                outcome.summary.sandboxed = sandboxed;
                 SanitizerResponse {
                     ok: true,
                     summary: Some(outcome.summary),

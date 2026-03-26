@@ -3,9 +3,7 @@
 
 package org.hyperledger.iroha.sdk.address
 
-/**
- * Parses canonical public asset identifiers.
- */
+/** Parses canonical public asset identifiers. */
 object AssetIdDecoder {
 
     class AssetId(
@@ -15,7 +13,7 @@ object AssetIdDecoder {
     )
 
     /**
-     * Checks whether the given value is a canonical public asset literal.
+     * Checks whether the given value is a canonical Base58 asset-definition id.
      */
     @JvmStatic
     fun isCanonical(value: String?): Boolean {
@@ -31,40 +29,17 @@ object AssetIdDecoder {
     }
 
     /**
-     * Parses `<asset-definition-id>#<account-id>` with an optional `#dataspace:<id>` suffix.
+     * Parses a canonical Base58 asset-definition id.
      */
     @JvmStatic
     fun decode(assetId: String): AssetId {
         val trimmed = assetId.trim()
         require(trimmed == assetId && trimmed.isNotEmpty()) {
-            "AssetId must use canonical public form"
+            "AssetId must use canonical unprefixed Base58 asset-definition form"
         }
 
-        val parts = trimmed.split('#')
-        require(parts.size == 2 || parts.size == 3) {
-            "AssetId must use '<asset-definition-id>#<account-id>' with optional '#dataspace:<id>' suffix"
-        }
-
-        val definitionAddress = parts[0]
-        AssetDefinitionIdEncoder.parseAddressBytes(definitionAddress)
-
-        val parsedAccount = try {
-            AccountAddress.parseEncodedIgnoringCurveSupport(parts[1], null).address
-        } catch (ex: AccountAddressException) {
-            throw IllegalArgumentException("AssetId.account must use canonical I105 form", ex)
-        }
-        val canonicalAccountId = try {
-            parsedAccount.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
-        } catch (ex: AccountAddressException) {
-            throw IllegalArgumentException("AssetId.account must use canonical I105 form", ex)
-        }
-
-        val dataspaceId = when (parts.size) {
-            2 -> null
-            else -> parseDataspace(parts[2])
-        }
-
-        return AssetId(AssetDefinition(definitionAddress), canonicalAccountId, dataspaceId)
+        AssetDefinitionIdEncoder.parseAddressBytes(trimmed)
+        return AssetId(AssetDefinition(trimmed), "", null)
     }
 
     /**
@@ -78,13 +53,5 @@ object AssetIdDecoder {
         }
         AssetDefinitionIdEncoder.parseAddressBytes(trimmed)
         return AssetDefinition(trimmed)
-    }
-
-    private fun parseDataspace(scopeLiteral: String): Long {
-        val match = Regex("^dataspace:(\\d+)$").matchEntire(scopeLiteral)
-            ?: throw IllegalArgumentException(
-                "AssetId.scope must use 'dataspace:<id>' when present"
-            )
-        return match.groupValues[1].toLong()
     }
 }

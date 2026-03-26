@@ -32,7 +32,7 @@ pub use self::model::QueryWithFilter;
 pub use self::model::*;
 use self::{
     account::*, asset::*, block::*, domain::*, dsl::*, executor::*, nft::*, peer::*, permission::*,
-    role::*, transaction::*, trigger::*,
+    role::*, rwa::*, transaction::*, trigger::*,
 };
 #[cfg(feature = "fault_injection")]
 use crate::transaction::ExecutionStep;
@@ -53,6 +53,7 @@ use crate::{
     permission::Permission,
     repo::RepoAgreement,
     role::{Role, RoleId},
+    rwa::{Rwa, RwaId},
     seal,
     trigger::{Trigger, TriggerId},
 };
@@ -781,6 +782,10 @@ mod model {
         NftId(Vec<NftId>),
         /// Batch of NFTs.
         Nft(Vec<Nft>),
+        /// Batch of RWA identifiers.
+        RwaId(Vec<RwaId>),
+        /// Batch of RWAs.
+        Rwa(Vec<Rwa>),
         /// Batch of roles.
         Role(Vec<Role>),
         /// Batch of parameters.
@@ -1019,6 +1024,7 @@ mod model {
                 try_build!(crate::asset::value::Asset, Asset);
                 try_build!(crate::asset::definition::AssetDefinition, AssetDefinition);
                 try_build!(crate::nft::Nft, Nft);
+                try_build!(crate::rwa::Rwa, Rwa);
                 try_build!(crate::role::Role, Role);
                 try_build!(crate::role::RoleId, RoleId);
                 try_build!(crate::peer::PeerId, PeerId);
@@ -1104,6 +1110,8 @@ mod model {
         RepoAgreement,
         /// NFT items.
         Nft,
+        /// RWA lot items.
+        Rwa,
         /// Role items.
         Role,
         /// Role identifier items.
@@ -1183,6 +1191,12 @@ mod model {
     impl ItemKindTag for Nft {
         fn kind() -> QueryItemKind {
             QueryItemKind::Nft
+        }
+    }
+    #[cfg(feature = "fast_dsl")]
+    impl ItemKindTag for Rwa {
+        fn kind() -> QueryItemKind {
+            QueryItemKind::Rwa
         }
     }
     #[cfg(feature = "fast_dsl")]
@@ -1836,6 +1850,8 @@ impl QueryOutputBatchBox {
             (Self::AssetDefinition(v1), Self::AssetDefinition(v2)) => v1.extend(v2),
             (Self::NftId(v1), Self::NftId(v2)) => v1.extend(v2),
             (Self::Nft(v1), Self::Nft(v2)) => v1.extend(v2),
+            (Self::RwaId(v1), Self::RwaId(v2)) => v1.extend(v2),
+            (Self::Rwa(v1), Self::Rwa(v2)) => v1.extend(v2),
             (Self::Role(v1), Self::Role(v2)) => v1.extend(v2),
             (Self::Parameter(v1), Self::Parameter(v2)) => v1.extend(v2),
             (Self::Permission(v1), Self::Permission(v2)) => v1.extend(v2),
@@ -1885,6 +1901,8 @@ impl QueryOutputBatchBox {
             Self::AssetDefinition(v) => v.len(),
             Self::NftId(v) => v.len(),
             Self::Nft(v) => v.len(),
+            Self::RwaId(v) => v.len(),
+            Self::Rwa(v) => v.len(),
             Self::Role(v) => v.len(),
             Self::Parameter(v) => v.len(),
             Self::Permission(v) => v.len(),
@@ -2398,6 +2416,7 @@ impl_iter_queries! {
     FindAssetsDefinitions => crate::asset::definition::AssetDefinition,
     repo::FindRepoAgreements => crate::repo::RepoAgreement,
     FindNfts => crate::nft::Nft,
+    FindRwas => crate::rwa::Rwa,
     FindDomains => crate::domain::Domain,
     FindPeers => crate::peer::PeerId,
     FindActiveTriggerIds => crate::trigger::TriggerId,
@@ -2523,6 +2542,9 @@ mod trait_object_tests {
 
         assert_predicate::<nft::FindNfts>();
         assert_selector::<nft::FindNfts>();
+
+        assert_predicate::<rwa::FindRwas>();
+        assert_selector::<rwa::FindRwas>();
 
         assert_predicate::<role::FindRoles>();
         assert_selector::<role::FindRoles>();
@@ -3036,6 +3058,29 @@ pub mod nft {
     pub mod prelude {
         //! The prelude re-exports most commonly used traits, structs and macros from this crate.
         pub use super::FindNfts;
+    }
+}
+
+pub mod rwa {
+    //! RWA-related query definitions.
+    //!
+    //! Queries related to [`crate::rwa`].
+
+    use std::{format, string::String, vec::Vec};
+
+    use derive_more::Display;
+
+    queries! {
+        /// [`FindRwas`] finds all registered RWA lots.
+        #[derive(Copy, Display)]
+        #[display("Find all RWAs")]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        pub struct FindRwas;
+    }
+
+    pub mod prelude {
+        //! Prelude re-exports for RWA queries.
+        pub use super::FindRwas;
     }
 }
 
@@ -3565,6 +3610,8 @@ pub mod error {
             AssetDefinition(AssetDefinitionId),
             /// Failed to find NFT: `{0}`
             Nft(NftId),
+            /// Failed to find RWA: `{0}`
+            Rwa(RwaId),
             /// Failed to find account: `{0}`
             Account(AccountId),
             /// Failed to find domain: `{0}`
@@ -3599,7 +3646,8 @@ pub mod prelude {
         asset::prelude::*, block::prelude::*, builder::prelude::*, da::prelude::*,
         domain::prelude::*, dsl::prelude::*, endorsement::prelude::*, executor::prelude::*,
         nft::prelude::*, oracle::prelude::*, parameters::prelude::*, peer::prelude::*,
-        permission::prelude::*, role::prelude::*, transaction::prelude::*, trigger::prelude::*,
+        permission::prelude::*, role::prelude::*, rwa::prelude::*, transaction::prelude::*,
+        trigger::prelude::*,
     };
 }
 
@@ -3627,7 +3675,7 @@ mod fault_injection_tests {
             id: TriggerId::from_str("fault_trigger").expect("valid trigger id"),
             instructions: ExecutionStep(Vec::<InstructionBox>::new().into()),
             authority: AccountId::parse_encoded(
-                "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
+                "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
             )
             .map(crate::account::ParsedAccountId::into_account_id)
             .expect("valid authority"),

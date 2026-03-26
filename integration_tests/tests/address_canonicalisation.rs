@@ -700,19 +700,19 @@ fn i105_bob_literal() -> String {
     account_address.to_i105().expect("I105 address encoding")
 }
 
-fn legacy_dotted_i105_literal(i105_literal: &str) -> String {
+fn dotted_i105_literal(i105_literal: &str) -> String {
     let mut chars = i105_literal.chars();
     let sentinel: String = chars.by_ref().take(4).collect();
     let remainder: String = chars.collect();
     format!("{sentinel}.{remainder}")
 }
 
-fn legacy_dotted_i105_alice_literal() -> String {
-    legacy_dotted_i105_literal(&i105_alice_literal())
+fn dotted_i105_alice_literal() -> String {
+    dotted_i105_literal(&i105_alice_literal())
 }
 
-fn legacy_dotted_i105_bob_literal() -> String {
-    legacy_dotted_i105_literal(&i105_bob_literal())
+fn dotted_i105_bob_literal() -> String {
+    dotted_i105_literal(&i105_bob_literal())
 }
 
 fn local8_literal() -> String {
@@ -743,7 +743,7 @@ fn local8_literal() -> String {
 
 fn public_key_literal() -> String {
     let public_key = ALICE_KEYPAIR.public_key().to_string();
-    format!("{public_key}@wonderland")
+    format!("{public_key}@hbl.sbp")
 }
 
 struct KaigiRelaySeed {
@@ -879,10 +879,10 @@ async fn accounts_query_accepts_i105_filter_literals() -> Result<()> {
 }
 
 #[tokio::test]
-async fn accounts_listing_filter_rejects_legacy_dotted_i105_literals() -> Result<()> {
+async fn accounts_listing_filter_rejects_dotted_i105_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
         NetworkBuilder::new(),
-        stringify!(accounts_listing_filter_rejects_legacy_dotted_i105_literals),
+        stringify!(accounts_listing_filter_rejects_dotted_i105_literals),
     )
     .await?
     else {
@@ -890,9 +890,9 @@ async fn accounts_listing_filter_rejects_legacy_dotted_i105_literals() -> Result
     };
     network.ensure_blocks(1).await?;
 
-    let literal = legacy_dotted_i105_alice_literal();
+    let literal = dotted_i105_alice_literal();
     let reason = AccountId::parse_encoded(&literal)
-        .expect_err("legacy dotted I105 literal must fail strict parsing")
+        .expect_err("dotted I105 literal must fail strict parsing")
         .reason()
         .to_string();
     let filter = format!(r#"{{"op":"eq","args":["id","{literal}"]}}"#);
@@ -915,7 +915,7 @@ async fn accounts_listing_filter_rejects_legacy_dotted_i105_literals() -> Result
     assert_eq!(
         resp.status(),
         reqwest::StatusCode::BAD_REQUEST,
-        "legacy dotted I105 filter literal should be rejected"
+        "dotted I105 filter literal should be rejected"
     );
     let body = resp.text().await?;
     assert!(
@@ -927,10 +927,10 @@ async fn accounts_listing_filter_rejects_legacy_dotted_i105_literals() -> Result
 }
 
 #[tokio::test]
-async fn accounts_query_rejects_legacy_dotted_i105_filter_literals() -> Result<()> {
+async fn accounts_query_rejects_dotted_i105_filter_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
         NetworkBuilder::new(),
-        stringify!(accounts_query_rejects_legacy_dotted_i105_filter_literals),
+        stringify!(accounts_query_rejects_dotted_i105_filter_literals),
     )
     .await?
     else {
@@ -938,9 +938,9 @@ async fn accounts_query_rejects_legacy_dotted_i105_filter_literals() -> Result<(
     };
     network.ensure_blocks(1).await?;
 
-    let literal = legacy_dotted_i105_alice_literal();
+    let literal = dotted_i105_alice_literal();
     let reason = AccountId::parse_encoded(&literal)
-        .expect_err("legacy dotted I105 literal must fail strict parsing")
+        .expect_err("dotted I105 literal must fail strict parsing")
         .reason()
         .to_string();
     let body = format!(
@@ -963,7 +963,7 @@ async fn accounts_query_rejects_legacy_dotted_i105_filter_literals() -> Result<(
     assert_eq!(
         resp.status(),
         reqwest::StatusCode::BAD_REQUEST,
-        "legacy dotted I105 filter literal should be rejected"
+        "dotted I105 filter literal should be rejected"
     );
     let body = resp.text().await?;
     assert!(
@@ -1071,9 +1071,9 @@ async fn account_path_endpoints_reject_i105_literals() -> Result<()> {
     };
     network.ensure_blocks(1).await?;
 
-    let literal = legacy_dotted_i105_alice_literal();
+    let literal = dotted_i105_alice_literal();
     let reason = AccountId::parse_encoded(&literal)
-        .expect_err("legacy dotted I105 literal must fail strict parsing")
+        .expect_err("dotted I105 literal must fail strict parsing")
         .reason()
         .to_string();
     let http = http_client();
@@ -1100,7 +1100,7 @@ async fn account_path_endpoints_reject_i105_literals() -> Result<()> {
         assert_eq!(
             resp.status(),
             reqwest::StatusCode::BAD_REQUEST,
-            "legacy dotted I105 literal should be rejected for {url}"
+            "dotted I105 literal should be rejected for {url}"
         );
         let body = resp.text().await.unwrap_or_default();
         assert!(
@@ -1273,10 +1273,10 @@ async fn asset_holders_get_supports_i105_response() -> Result<()> {
 }
 
 #[tokio::test]
-async fn asset_holders_query_rejects_legacy_dotted_i105_filter_literals() -> Result<()> {
+async fn asset_holders_query_rejects_dotted_i105_filter_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
         NetworkBuilder::new(),
-        stringify!(asset_holders_query_rejects_legacy_dotted_i105_filter_literals),
+        stringify!(asset_holders_query_rejects_dotted_i105_filter_literals),
     )
     .await?
     else {
@@ -1284,9 +1284,9 @@ async fn asset_holders_query_rejects_legacy_dotted_i105_filter_literals() -> Res
     };
     network.ensure_blocks(1).await?;
 
-    let literal = legacy_dotted_i105_alice_literal();
+    let literal = dotted_i105_alice_literal();
     let reason = AccountId::parse_encoded(&literal)
-        .expect_err("legacy dotted I105 literal must fail strict parsing")
+        .expect_err("dotted I105 literal must fail strict parsing")
         .reason()
         .to_string();
     let body = format!(
@@ -1322,7 +1322,7 @@ async fn asset_holders_query_rejects_legacy_dotted_i105_filter_literals() -> Res
     assert_eq!(
         resp.status(),
         reqwest::StatusCode::BAD_REQUEST,
-        "legacy dotted I105 filter literal should be rejected"
+        "dotted I105 filter literal should be rejected"
     );
     let body = resp.text().await?;
     assert!(
@@ -1452,7 +1452,7 @@ async fn account_transactions_get_returns_i105_literals() -> Result<()> {
         .await?;
     assert!(
         resp.status().is_success(),
-        "expected success fetching account transactions with canonical i105, got {}",
+        "expected success fetching account transactions with canonical I105, got {}",
         resp.status()
     );
     let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
@@ -1574,7 +1574,7 @@ async fn account_transactions_query_returns_i105_literals() -> Result<()> {
         .await?;
     assert!(
         resp.status().is_success(),
-        "expected success from account transactions query with canonical i105, got {}",
+        "expected success from account transactions query with canonical I105, got {}",
         resp.status()
     );
     let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
@@ -1672,38 +1672,38 @@ async fn explorer_transactions_emit_i105_literals() -> Result<()> {
     );
     assert!(
         authorities.iter().all(|literal| literal == &i105_literal),
-        "explorer transactions should honour canonical i105; got {authorities:?}"
+        "explorer transactions should honour canonical I105; got {authorities:?}"
     );
 
-    let legacy_dotted_i105_filter = legacy_dotted_i105_literal(&i105_literal);
-    let legacy_dotted_i105_filter_url = {
+    let dotted_i105_filter = dotted_i105_literal(&i105_literal);
+    let dotted_i105_filter_url = {
         let mut url = base;
         {
             let mut qp = url.query_pairs_mut();
-            qp.append_pair("authority", &legacy_dotted_i105_filter);
+            qp.append_pair("authority", &dotted_i105_filter);
             qp.append_pair("page", "1");
             qp.append_pair("per_page", "8");
         }
         url
     };
-    let legacy_dotted_i105_reason = AccountId::parse_encoded(&legacy_dotted_i105_filter)
-        .expect_err("legacy dotted I105 authority filter must fail strict parsing")
+    let dotted_i105_reason = AccountId::parse_encoded(&dotted_i105_filter)
+        .expect_err("dotted I105 authority filter must fail strict parsing")
         .reason()
         .to_string();
     let resp = http
-        .get(legacy_dotted_i105_filter_url)
+        .get(dotted_i105_filter_url)
         .header("Accept", "application/json")
         .send()
         .await?;
     assert_eq!(
         resp.status(),
         reqwest::StatusCode::BAD_REQUEST,
-        "explorer transactions should reject legacy dotted I105 authority filters"
+        "explorer transactions should reject dotted I105 authority filters"
     );
     let body = resp.text().await?;
     assert!(
-        body.contains(&legacy_dotted_i105_reason),
-        "response body should mention {legacy_dotted_i105_reason}, got {body}"
+        body.contains(&dotted_i105_reason),
+        "response body should mention {dotted_i105_reason}, got {body}"
     );
 
     Ok(())
@@ -1793,38 +1793,38 @@ async fn explorer_instructions_emit_i105_literals() -> Result<()> {
     );
     assert!(
         authorities.iter().all(|literal| literal == &i105_literal),
-        "explorer instructions should honour canonical i105; got {authorities:?}"
+        "explorer instructions should honour canonical I105; got {authorities:?}"
     );
 
-    let legacy_dotted_i105_filter = legacy_dotted_i105_literal(&i105_literal);
-    let legacy_dotted_i105_filter_url = {
+    let dotted_i105_filter = dotted_i105_literal(&i105_literal);
+    let dotted_i105_filter_url = {
         let mut url = base;
         {
             let mut qp = url.query_pairs_mut();
-            qp.append_pair("authority", &legacy_dotted_i105_filter);
+            qp.append_pair("authority", &dotted_i105_filter);
             qp.append_pair("page", "1");
             qp.append_pair("per_page", "8");
         }
         url
     };
-    let legacy_dotted_i105_reason = AccountId::parse_encoded(&legacy_dotted_i105_filter)
-        .expect_err("legacy dotted I105 authority filter must fail strict parsing")
+    let dotted_i105_reason = AccountId::parse_encoded(&dotted_i105_filter)
+        .expect_err("dotted I105 authority filter must fail strict parsing")
         .reason()
         .to_string();
     let resp = http
-        .get(legacy_dotted_i105_filter_url)
+        .get(dotted_i105_filter_url)
         .header("Accept", "application/json")
         .send()
         .await?;
     assert_eq!(
         resp.status(),
         reqwest::StatusCode::BAD_REQUEST,
-        "explorer instructions should reject legacy dotted I105 authority filters"
+        "explorer instructions should reject dotted I105 authority filters"
     );
     let body = resp.text().await?;
     assert!(
-        body.contains(&legacy_dotted_i105_reason),
-        "response body should mention {legacy_dotted_i105_reason}, got {body}"
+        body.contains(&dotted_i105_reason),
+        "response body should mention {dotted_i105_reason}, got {body}"
     );
 
     Ok(())
@@ -1921,7 +1921,7 @@ async fn explorer_account_qr_accepts_i105_hint() -> Result<()> {
         .await?;
     assert!(
         resp.status().is_success(),
-        "expected explorer account QR to respect canonical i105, got {}",
+        "expected explorer account QR to respect canonical I105, got {}",
         resp.status()
     );
     let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
@@ -2036,7 +2036,7 @@ async fn accounts_query_rejects_public_key_filter_literals() -> Result<()> {
 }
 
 #[tokio::test]
-async fn accounts_query_rejects_alias_and_legacy_dotted_i105_filter_literals() -> Result<()> {
+async fn accounts_query_rejects_alias_and_dotted_i105_filter_literals() -> Result<()> {
     let domain_id: DomainId = "aliases".parse()?;
     let label = AccountLabel::new(domain_id.clone(), "primary".parse()?);
     let keypair = KeyPair::random();
@@ -2049,7 +2049,7 @@ async fn accounts_query_rejects_alias_and_legacy_dotted_i105_filter_literals() -
         .with_genesis_instruction(Register::account(account));
     let Some(network) = start_network_async_or_skip(
         builder,
-        stringify!(accounts_query_rejects_alias_and_legacy_dotted_i105_filter_literals),
+        stringify!(accounts_query_rejects_alias_and_dotted_i105_filter_literals),
     )
     .await?
     else {
@@ -2067,7 +2067,7 @@ async fn accounts_query_rejects_alias_and_legacy_dotted_i105_filter_literals() -
     wait_for_account_in_query(&http, url.clone(), &expected).await?;
 
     let alias_literal = format!("{}@{}", label.label, domain_id);
-    let i105_literal = legacy_dotted_i105_literal(&account_id.to_string());
+    let i105_literal = dotted_i105_literal(&account_id.to_string());
 
     let alias_body = format!(
         r#"{{"filter":{{"op":"eq","args":["id","{alias_literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
@@ -2098,13 +2098,13 @@ async fn accounts_query_rejects_alias_and_legacy_dotted_i105_filter_literals() -
     let status = resp.status();
     let body = resp.text().await?;
     let reason = AccountId::parse_encoded(&i105_literal)
-        .expect_err("legacy dotted I105 literal must fail strict parsing")
+        .expect_err("dotted I105 literal must fail strict parsing")
         .reason()
         .to_string();
     assert_eq!(
         status,
         reqwest::StatusCode::BAD_REQUEST,
-        "legacy dotted I105 literal should be rejected, got {status} body={body}"
+        "dotted I105 literal should be rejected, got {status} body={body}"
     );
     assert!(
         body.contains(&reason),
@@ -2256,7 +2256,7 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
         .expect("I105 initiator literal must be present");
     assert_eq!(
         initiator, i105_alice,
-        "repo agreements should honour canonical i105 for initiators"
+        "repo agreements should honour canonical I105 for initiators"
     );
     let counterparty = entry
         .get("counterparty")
@@ -2264,7 +2264,7 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
         .expect("I105 counterparty literal must be present");
     assert_eq!(
         counterparty, i105_bob,
-        "repo agreements should honour canonical i105 for counterparties"
+        "repo agreements should honour canonical I105 for counterparties"
     );
 
     let query_url = base.join("/v1/repo/agreements/query")?;
@@ -2292,7 +2292,7 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
         .expect("I105 query initiator literal must be present");
     assert_eq!(
         initiator, i105_alice,
-        "repo agreements query should honour canonical i105"
+        "repo agreements query should honour canonical I105"
     );
     let counterparty = entry
         .get("counterparty")
@@ -2300,7 +2300,7 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
         .expect("I105 query counterparty literal must be present");
     assert_eq!(
         counterparty, i105_bob,
-        "repo agreements query should honour canonical i105"
+        "repo agreements query should honour canonical I105"
     );
 
     Ok(())
@@ -2423,7 +2423,7 @@ async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
         seed.relay_i105
     );
 
-    let legacy_relay_literal = legacy_dotted_i105_bob_literal();
+    let legacy_relay_literal = dotted_i105_bob_literal();
     let detail_url = base.join(&format!("/v1/kaigi/relays/{legacy_relay_literal}"))?;
     let detail_resp = http
         .get(detail_url)
@@ -2433,12 +2433,12 @@ async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
     assert_eq!(
         detail_resp.status(),
         reqwest::StatusCode::BAD_REQUEST,
-        "kaigi relay detail should reject legacy dotted I105 literal, got {}",
+        "kaigi relay detail should reject dotted I105 literal, got {}",
         detail_resp.status()
     );
     let body = detail_resp.text().await?;
     let reason = AccountId::parse_encoded(&legacy_relay_literal)
-        .expect_err("legacy dotted I105 relay literal must fail strict parsing")
+        .expect_err("dotted I105 relay literal must fail strict parsing")
         .reason()
         .to_string();
     assert!(
@@ -2454,7 +2454,7 @@ async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
         .await?;
     assert!(
         formatted_resp.status().is_success(),
-        "kaigi relay detail with canonical i105 should succeed, got {}",
+        "kaigi relay detail with canonical I105 should succeed, got {}",
         formatted_resp.status()
     );
     let formatted_detail: norito::json::Value =
@@ -2467,7 +2467,7 @@ async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
         .ok_or_else(|| eyre!("formatted detail missing relay literal"))?;
     assert_eq!(
         relay_literal, seed.relay_i105,
-        "relay literal should honour canonical i105"
+        "relay literal should honour canonical I105"
     );
     let reported_by_literal = formatted_detail
         .get("reported_by")
@@ -2475,7 +2475,7 @@ async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
         .ok_or_else(|| eyre!("formatted detail missing reported_by literal"))?;
     assert_eq!(
         reported_by_literal, seed.reporter_i105,
-        "reported_by should honour canonical i105"
+        "reported_by should honour canonical I105"
     );
 
     Ok(())
@@ -2638,7 +2638,7 @@ async fn offline_allowances_query_emit_i105_literals() -> Result<()> {
         .await?;
     assert!(
         resp.status().is_success(),
-        "offline allowance query with canonical i105 should succeed, got {}",
+        "offline allowance query with canonical I105 should succeed, got {}",
         resp.status()
     );
     let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
@@ -2650,7 +2650,7 @@ async fn offline_allowances_query_emit_i105_literals() -> Result<()> {
         .ok_or_else(|| eyre!("offline allowance missing controller_display field"))?;
     assert_eq!(
         i105_display, seed.controller_i105,
-        "canonical i105 should rewrite controller_display"
+        "canonical I105 should rewrite controller_display"
     );
 
     Ok(())

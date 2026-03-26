@@ -80,7 +80,7 @@ use iroha_data_model::{
     },
     nft::{NftEntry, NftValue},
     offline::{
-        OfflineAllowanceRecord, OfflineReserveOperationResult, OfflineReserveRecord,
+        OfflineAllowanceRecord, OfflineLineageOperationResult, OfflineLineageRecord,
         OfflineTransferRecord, OfflineTransferStatus, OfflineVerdictRevocation,
     },
     oracle::{
@@ -95,6 +95,7 @@ use iroha_data_model::{
     ram_lfe::{RamLfeProgramId, RamLfeProgramPolicy},
     repo::{RepoAgreement, RepoAgreementId},
     role::RoleId,
+    rwa::{RwaEntry, RwaId, RwaValue},
     social::{ViralCampaignBudget, ViralDailyCounter, ViralEscrowRecord, ViralRewardBudget},
     soracloud::{
         SoraAgentApartmentAuditEventV1, SoraAgentApartmentRecordV1, SoraDecryptionRequestRecordV1,
@@ -370,6 +371,7 @@ macro_rules! build_world_block {
             assets: $state.assets.$method(),
             asset_metadata: $state.asset_metadata.$method(),
             nfts: $state.nfts.$method(),
+            rwas: $state.rwas.$method(),
             roles: $state.roles.$method(),
             account_permissions: $state.account_permissions.$method(),
             account_roles: $state.account_roles.$method(),
@@ -484,8 +486,8 @@ macro_rules! build_world_block {
             repo_agreements: $state.repo_agreements.$method(),
             settlement_ledgers: $state.settlement_ledgers.$method(),
             offline_allowances: $state.offline_allowances.$method(),
-            offline_reserves: $state.offline_reserves.$method(),
-            offline_reserve_operation_results: $state.offline_reserve_operation_results.$method(),
+            offline_lineages: $state.offline_lineages.$method(),
+            offline_lineage_operation_results: $state.offline_lineage_operation_results.$method(),
             offline_verdict_revocations: $state.offline_verdict_revocations.$method(),
             offline_consumed_build_claim_ids: $state.offline_consumed_build_claim_ids.$method(),
             offline_to_online_transfers: $state.offline_to_online_transfers.$method(),
@@ -550,6 +552,7 @@ macro_rules! build_world_transaction {
             assets: $state.assets.transaction(),
             asset_metadata: $state.asset_metadata.transaction(),
             nfts: $state.nfts.transaction(),
+            rwas: $state.rwas.transaction(),
             roles: $state.roles.transaction(),
             account_permissions: $state.account_permissions.transaction(),
             account_roles: $state.account_roles.transaction(),
@@ -670,9 +673,9 @@ macro_rules! build_world_transaction {
             repo_agreements: $state.repo_agreements.transaction(),
             settlement_ledgers: $state.settlement_ledgers.transaction(),
             offline_allowances: $state.offline_allowances.transaction(),
-            offline_reserves: $state.offline_reserves.transaction(),
-            offline_reserve_operation_results: $state
-                .offline_reserve_operation_results
+            offline_lineages: $state.offline_lineages.transaction(),
+            offline_lineage_operation_results: $state
+                .offline_lineage_operation_results
                 .transaction(),
             offline_verdict_revocations: $state.offline_verdict_revocations.transaction(),
             offline_consumed_build_claim_ids: $state.offline_consumed_build_claim_ids.transaction(),
@@ -912,6 +915,7 @@ struct AccountPermissionSummary {
 
 fn parse_permission_account_field(
     world: &impl WorldReadOnly,
+    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
     payload: &iroha_primitives::json::Json,
     field: &str,
 ) -> Option<iroha_data_model::account::AccountId> {
@@ -925,7 +929,8 @@ fn parse_permission_account_field(
         norito::json::Value::String(value) => value.as_str(),
         _ => return None,
     };
-    crate::block::parse_account_literal_with_world(world, literal).map(Into::into)
+    crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal)
+        .map(Into::into)
 }
 
 impl AccountPermissionSummary {
@@ -936,12 +941,20 @@ impl AccountPermissionSummary {
         self.fee_sponsors.clear();
     }
 
-    fn apply_grant(&mut self, world: &impl WorldReadOnly, permission: &Permission) {
+    fn apply_grant(
+        &mut self,
+        world: &impl WorldReadOnly,
+        dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+        permission: &Permission,
+    ) {
         match permission.name() {
             "CanRegisterTrigger" => {
-                if let Some(authority) =
-                    parse_permission_account_field(world, permission.payload(), "authority")
-                {
+                if let Some(authority) = parse_permission_account_field(
+                    world,
+                    dataspace_catalog,
+                    permission.payload(),
+                    "authority",
+                ) {
                     self.reg_trigger_authorities.insert(authority);
                 }
             }
@@ -954,9 +967,12 @@ impl AccountPermissionSummary {
                 }
             }
             "CanUseFeeSponsor" => {
-                if let Some(sponsor) =
-                    parse_permission_account_field(world, permission.payload(), "sponsor")
-                {
+                if let Some(sponsor) = parse_permission_account_field(
+                    world,
+                    dataspace_catalog,
+                    permission.payload(),
+                    "sponsor",
+                ) {
                     self.fee_sponsors.insert(sponsor);
                 }
             }
@@ -1396,7 +1412,7 @@ pub struct World {
     /// Index from UAID to bound account (1:1).
     #[norito(skip)]
     pub(crate) uaid_accounts: Storage<UniversalAccountId, AccountId>,
-    /// Index from account alias to canonical account id.
+    /// Index from account alias to canonical I105 account id.
     #[norito(skip)]
     pub(crate) account_aliases: Storage<AccountLabel, AccountId>,
     /// Index from opaque identifiers to UAIDs.
@@ -1433,6 +1449,8 @@ pub struct World {
     pub(crate) asset_metadata: Storage<AssetId, Metadata>,
     /// Non fungible assets.
     pub(crate) nfts: Storage<NftId, NftValue>,
+    /// Registered real-world asset lots.
+    pub(crate) rwas: Storage<RwaId, RwaValue>,
     /// Roles. [`Role`] pairs.
     pub(crate) roles: Storage<RoleId, Role>,
     /// Permission tokens of an account.
@@ -1706,10 +1724,10 @@ pub struct World {
     pub(crate) settlement_ledgers: Storage<SettlementId, SettlementLedger>,
     /// Registered offline allowances keyed by certificate id.
     pub(crate) offline_allowances: Storage<Hash, OfflineAllowanceRecord>,
-    /// Shared offline reserve records keyed by stable reserve id.
-    pub(crate) offline_reserves: Storage<String, OfflineReserveRecord>,
-    /// Replayable reserve operation results keyed by `kind:operation_id`.
-    pub(crate) offline_reserve_operation_results: Storage<String, OfflineReserveOperationResult>,
+    /// Shared offline lineage records keyed by stable lineage id.
+    pub(crate) offline_lineages: Storage<String, OfflineLineageRecord>,
+    /// Replayable offline cash mutation results keyed by `kind:operation_id`.
+    pub(crate) offline_lineage_operation_results: Storage<String, OfflineLineageOperationResult>,
     /// Recorded verdict revocations keyed by attestation verdict id.
     pub(crate) offline_verdict_revocations: Storage<Hash, OfflineVerdictRevocation>,
     /// Consumed build-claim identifiers used for replay protection across pruning.
@@ -1803,7 +1821,7 @@ pub struct WorldBlock<'world> {
     pub(crate) domain_account_subjects: StorageBlock<'world, DomainId, BTreeSet<AccountId>>,
     /// Index from UAID to bound account (1:1).
     pub(crate) uaid_accounts: StorageBlock<'world, UniversalAccountId, AccountId>,
-    /// Index from account alias to canonical account id.
+    /// Index from account alias to canonical I105 account id.
     pub(crate) account_aliases: StorageBlock<'world, AccountLabel, AccountId>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids: StorageBlock<'world, OpaqueAccountId, UniversalAccountId>,
@@ -1837,6 +1855,8 @@ pub struct WorldBlock<'world> {
     pub(crate) asset_metadata: StorageBlock<'world, AssetId, Metadata>,
     /// Registered NFTs.
     pub(crate) nfts: StorageBlock<'world, NftId, NftValue>,
+    /// Registered RWA lots.
+    pub(crate) rwas: StorageBlock<'world, RwaId, RwaValue>,
     /// Roles. [`Role`] pairs.
     pub(crate) roles: StorageBlock<'world, RoleId, Role>,
     /// Permission tokens of an account.
@@ -2095,11 +2115,11 @@ pub struct WorldBlock<'world> {
     pub(crate) settlement_ledgers: StorageBlock<'world, SettlementId, SettlementLedger>,
     /// Registered offline allowances keyed by certificate id.
     pub(crate) offline_allowances: StorageBlock<'world, Hash, OfflineAllowanceRecord>,
-    /// Shared offline reserve records keyed by stable reserve id.
-    pub(crate) offline_reserves: StorageBlock<'world, String, OfflineReserveRecord>,
-    /// Replayable reserve operation results keyed by `kind:operation_id`.
-    pub(crate) offline_reserve_operation_results:
-        StorageBlock<'world, String, OfflineReserveOperationResult>,
+    /// Shared offline lineage records keyed by stable lineage id.
+    pub(crate) offline_lineages: StorageBlock<'world, String, OfflineLineageRecord>,
+    /// Replayable offline cash mutation results keyed by `kind:operation_id`.
+    pub(crate) offline_lineage_operation_results:
+        StorageBlock<'world, String, OfflineLineageOperationResult>,
     /// Recorded verdict revocations keyed by attestation verdict id.
     pub(crate) offline_verdict_revocations: StorageBlock<'world, Hash, OfflineVerdictRevocation>,
     /// Consumed build-claim identifiers used for replay protection across pruning.
@@ -2208,6 +2228,7 @@ impl<'world> WorldBlock<'world> {
         collect_reverts!(self.assets, Asset);
         collect_reverts!(self.asset_metadata, AssetMetadata);
         collect_reverts!(self.nfts, Nft);
+        collect_reverts!(self.rwas, Rwa);
         collect_reverts!(self.roles, Role);
         collect_reverts!(self.account_permissions, AccountPermission);
         collect_reverts!(self.account_roles, AccountRole);
@@ -2231,10 +2252,10 @@ impl<'world> WorldBlock<'world> {
         collect_reverts!(self.council, Council);
         collect_reverts!(self.parliament_bodies, ParliamentBodies);
         collect_reverts!(self.offline_allowances, OfflineAllowance);
-        collect_reverts!(self.offline_reserves, OfflineReserve);
+        collect_reverts!(self.offline_lineages, OfflineLineage);
         collect_reverts!(
-            self.offline_reserve_operation_results,
-            OfflineReserveOperationResult
+            self.offline_lineage_operation_results,
+            OfflineLineageOperationResult
         );
         collect_reverts!(self.offline_verdict_revocations, OfflineVerdictRevocation);
         collect_reverts!(
@@ -2265,6 +2286,7 @@ impl<'world> WorldBlock<'world> {
         collect_payload!(self.assets, Asset);
         collect_payload!(self.asset_metadata, AssetMetadata);
         collect_payload!(self.nfts, Nft);
+        collect_payload!(self.rwas, Rwa);
         collect_payload!(self.roles, Role);
         collect_payload!(self.account_permissions, AccountPermission);
         collect_payload!(self.account_roles, AccountRole);
@@ -2288,10 +2310,10 @@ impl<'world> WorldBlock<'world> {
         collect_payload!(self.council, Council);
         collect_payload!(self.parliament_bodies, ParliamentBodies);
         collect_payload!(self.offline_allowances, OfflineAllowance);
-        collect_payload!(self.offline_reserves, OfflineReserve);
+        collect_payload!(self.offline_lineages, OfflineLineage);
         collect_payload!(
-            self.offline_reserve_operation_results,
-            OfflineReserveOperationResult
+            self.offline_lineage_operation_results,
+            OfflineLineageOperationResult
         );
         collect_payload!(self.offline_verdict_revocations, OfflineVerdictRevocation);
         collect_payload!(
@@ -2342,7 +2364,7 @@ pub struct WorldTransaction<'block, 'world> {
         StorageTransaction<'block, 'world, DomainId, BTreeSet<AccountId>>,
     /// Index from UAID to bound account (1:1).
     pub(crate) uaid_accounts: StorageTransaction<'block, 'world, UniversalAccountId, AccountId>,
-    /// Index from account alias to canonical account id.
+    /// Index from account alias to canonical I105 account id.
     pub(crate) account_aliases: StorageTransaction<'block, 'world, AccountLabel, AccountId>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids:
@@ -2383,6 +2405,8 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) asset_metadata: StorageTransaction<'block, 'world, AssetId, Metadata>,
     /// Registered NFTs.
     pub(crate) nfts: StorageTransaction<'block, 'world, NftId, NftValue>,
+    /// Registered RWA lots.
+    pub(crate) rwas: StorageTransaction<'block, 'world, RwaId, RwaValue>,
     /// Roles. [`Role`] pairs.
     pub(crate) roles: StorageTransaction<'block, 'world, RoleId, Role>,
     /// Permission tokens of an account.
@@ -2685,11 +2709,11 @@ pub struct WorldTransaction<'block, 'world> {
         StorageTransaction<'block, 'world, SettlementId, SettlementLedger>,
     /// Registered offline allowances keyed by certificate id.
     pub(crate) offline_allowances: StorageTransaction<'block, 'world, Hash, OfflineAllowanceRecord>,
-    /// Shared offline reserve records keyed by stable reserve id.
-    pub(crate) offline_reserves: StorageTransaction<'block, 'world, String, OfflineReserveRecord>,
-    /// Replayable reserve operation results keyed by `kind:operation_id`.
-    pub(crate) offline_reserve_operation_results:
-        StorageTransaction<'block, 'world, String, OfflineReserveOperationResult>,
+    /// Shared offline lineage records keyed by stable lineage id.
+    pub(crate) offline_lineages: StorageTransaction<'block, 'world, String, OfflineLineageRecord>,
+    /// Replayable offline cash mutation results keyed by `kind:operation_id`.
+    pub(crate) offline_lineage_operation_results:
+        StorageTransaction<'block, 'world, String, OfflineLineageOperationResult>,
     /// Recorded verdict revocations keyed by attestation verdict id.
     pub(crate) offline_verdict_revocations:
         StorageTransaction<'block, 'world, Hash, OfflineVerdictRevocation>,
@@ -2774,6 +2798,32 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self,
     ) -> &mut StorageTransaction<'block, 'world, Name, Vec<u8>> {
         &mut self.smart_contract_state
+    }
+
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Provides mutable access to account-alias bindings for tests and API scaffolding.
+    pub fn account_aliases_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<
+        'block,
+        'world,
+        iroha_data_model::account::rekey::AccountLabel,
+        iroha_data_model::account::AccountId,
+    > {
+        &mut self.account_aliases
+    }
+
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Provides mutable access to account rekey records for tests and API scaffolding.
+    pub fn account_rekey_records_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<
+        'block,
+        'world,
+        iroha_data_model::account::rekey::AccountLabel,
+        iroha_data_model::account::rekey::AccountRekeyRecord,
+    > {
+        &mut self.account_rekey_records
     }
 
     /// Record that the given asset definition belongs to its domain.
@@ -2996,7 +3046,7 @@ pub struct WorldView<'world> {
     pub(crate) domain_account_subjects: StorageView<'world, DomainId, BTreeSet<AccountId>>,
     /// Index from UAID to bound account (1:1).
     pub(crate) uaid_accounts: StorageView<'world, UniversalAccountId, AccountId>,
-    /// Index from account alias to canonical account id.
+    /// Index from account alias to canonical I105 account id.
     pub(crate) account_aliases: StorageView<'world, AccountLabel, AccountId>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids: StorageView<'world, OpaqueAccountId, UniversalAccountId>,
@@ -3029,6 +3079,8 @@ pub struct WorldView<'world> {
     pub(crate) asset_metadata: StorageView<'world, AssetId, Metadata>,
     /// Registered NFTs.
     pub(crate) nfts: StorageView<'world, NftId, NftValue>,
+    /// Registered RWA lots.
+    pub(crate) rwas: StorageView<'world, RwaId, RwaValue>,
     /// Roles. [`Role`] pairs.
     pub(crate) roles: StorageView<'world, RoleId, Role>,
     /// Permission tokens of an account.
@@ -3311,11 +3363,11 @@ pub struct WorldView<'world> {
     pub(crate) settlement_ledgers: StorageView<'world, SettlementId, SettlementLedger>,
     /// Registered offline allowances keyed by certificate id.
     pub(crate) offline_allowances: StorageView<'world, Hash, OfflineAllowanceRecord>,
-    /// Shared offline reserve records keyed by stable reserve id.
-    pub(crate) offline_reserves: StorageView<'world, String, OfflineReserveRecord>,
-    /// Replayable reserve operation results keyed by `kind:operation_id`.
-    pub(crate) offline_reserve_operation_results:
-        StorageView<'world, String, OfflineReserveOperationResult>,
+    /// Shared offline lineage records keyed by stable lineage id.
+    pub(crate) offline_lineages: StorageView<'world, String, OfflineLineageRecord>,
+    /// Replayable offline cash mutation results keyed by `kind:operation_id`.
+    pub(crate) offline_lineage_operation_results:
+        StorageView<'world, String, OfflineLineageOperationResult>,
     /// Recorded verdict revocations keyed by attestation verdict id.
     pub(crate) offline_verdict_revocations: StorageView<'world, Hash, OfflineVerdictRevocation>,
     /// Consumed build-claim identifiers used for replay protection across pruning.
@@ -6153,6 +6205,8 @@ pub struct StateTransaction<'block, 'state> {
     /// Hash of the current transaction entrypoint (`call_hash`), when executing a transaction.
     /// Not set for ad-hoc instruction execution in tests.
     pub tx_call_hash: Option<iroha_crypto::Hash>,
+    /// Deterministic per-transaction ordinal used when generating canonical RWA lot ids.
+    pub(crate) rwa_generated_id_ordinal: u64,
     /// Remaining executor fuel budget for runtime executor validation in this transaction.
     pub(crate) executor_fuel_remaining: Option<u64>,
     /// Optional view of block-level preverified proofs (`proof_hash` -> ok)
@@ -10384,6 +10438,7 @@ impl World {
             assets,
             asset_metadata: Storage::default(),
             nfts,
+            rwas: Storage::default(),
             proofs: Storage::default(),
             contract_manifests: Storage::default(),
             contract_code: Storage::default(),
@@ -10405,8 +10460,8 @@ impl World {
             repo_agreements: Storage::default(),
             settlement_ledgers: Storage::default(),
             offline_to_online_transfers: Storage::default(),
-            offline_reserves: Storage::default(),
-            offline_reserve_operation_results: Storage::default(),
+            offline_lineages: Storage::default(),
+            offline_lineage_operation_results: Storage::default(),
             governance_proposals: Storage::default(),
             governance_referenda: Storage::default(),
             governance_stage_approvals: Storage::default(),
@@ -10755,39 +10810,16 @@ impl World {
         }
 
         for (definition_id, definition) in definitions.iter() {
-            if by_definition.contains_key(definition_id) {
-                continue;
-            }
-
-            let Some(alias) = definition.alias().as_ref().cloned() else {
-                continue;
-            };
-            if let Some(existing) = by_alias.get(&alias)
-                && existing != definition_id
-            {
+            if let Some(alias) = definition.alias().as_ref() {
                 return Err(format!(
-                    "Asset alias `{alias}` already bound to asset definition {existing}"
+                    "Asset definition {definition_id} stores inline alias `{alias}`; persist aliases only in asset_definition_alias_bindings"
                 ));
             }
-            by_alias.insert(alias.clone(), definition_id.clone());
-            by_definition.insert(
-                definition_id.clone(),
-                AssetDefinitionAliasBindingRecord {
-                    alias: alias.clone(),
-                    lease_expiry_ms: None,
-                    grace_until_ms: None,
-                    bound_at_ms: 0,
-                },
-            );
         }
         self.asset_definition_aliases = by_alias.into_iter().collect();
         let normalized_definitions: BTreeMap<AssetDefinitionId, AssetDefinition> = definitions
             .iter()
-            .map(|(definition_id, definition)| {
-                let mut definition = definition.clone();
-                definition.alias = None;
-                (definition_id.clone(), definition)
-            })
+            .map(|(definition_id, definition)| (definition_id.clone(), definition.clone()))
             .collect();
         if normalized_definitions.len() != definitions.iter().count() {
             return Err("asset definition rebuild lost entries".to_owned());
@@ -11021,6 +11053,7 @@ impl World {
             assets: self.assets.view(),
             asset_metadata: self.asset_metadata.view(),
             nfts: self.nfts.view(),
+            rwas: self.rwas.view(),
             roles: self.roles.view(),
             account_permissions: self.account_permissions.view(),
             account_roles: self.account_roles.view(),
@@ -11127,8 +11160,8 @@ impl World {
             repo_agreements: self.repo_agreements.view(),
             settlement_ledgers: self.settlement_ledgers.view(),
             offline_allowances: self.offline_allowances.view(),
-            offline_reserves: self.offline_reserves.view(),
-            offline_reserve_operation_results: self.offline_reserve_operation_results.view(),
+            offline_lineages: self.offline_lineages.view(),
+            offline_lineage_operation_results: self.offline_lineage_operation_results.view(),
             offline_verdict_revocations: self.offline_verdict_revocations.view(),
             offline_consumed_build_claim_ids: self.offline_consumed_build_claim_ids.view(),
             offline_to_online_transfers: self.offline_to_online_transfers.view(),
@@ -11276,6 +11309,8 @@ pub trait WorldReadOnly {
     fn asset_metadata(&self) -> &impl StorageReadOnly<AssetId, Metadata>;
     /// NFT storage (read-only).
     fn nfts(&self) -> &impl StorageReadOnly<NftId, NftValue>;
+    /// RWA storage (read-only).
+    fn rwas(&self) -> &impl StorageReadOnly<RwaId, RwaValue>;
     /// Role storage (read-only).
     fn roles(&self) -> &impl StorageReadOnly<RoleId, Role>;
     /// Account permissions mapping (read-only).
@@ -11533,12 +11568,12 @@ pub trait WorldReadOnly {
     fn settlement_ledgers(&self) -> &impl StorageReadOnly<SettlementId, SettlementLedger>;
     /// Registered offline allowances (read-only).
     fn offline_allowances(&self) -> &impl StorageReadOnly<Hash, OfflineAllowanceRecord>;
-    /// Shared offline reserve records keyed by reserve id (read-only).
-    fn offline_reserves(&self) -> &impl StorageReadOnly<String, OfflineReserveRecord>;
-    /// Completed reserve operation results keyed by `kind:operation_id` (read-only).
-    fn offline_reserve_operation_results(
+    /// Shared offline lineage records keyed by lineage id (read-only).
+    fn offline_lineages(&self) -> &impl StorageReadOnly<String, OfflineLineageRecord>;
+    /// Completed offline cash mutation results keyed by `kind:operation_id` (read-only).
+    fn offline_lineage_operation_results(
         &self,
-    ) -> &impl StorageReadOnly<String, OfflineReserveOperationResult>;
+    ) -> &impl StorageReadOnly<String, OfflineLineageOperationResult>;
     /// Recorded verdict revocations (read-only).
     fn offline_verdict_revocations(&self) -> &impl StorageReadOnly<Hash, OfflineVerdictRevocation>;
     /// Consumed build-claim identifiers (read-only).
@@ -12057,6 +12092,31 @@ pub trait WorldReadOnly {
             .map(|(id, value)| NftEntry::new(id, value))
     }
 
+    /// Get `Rwa` immutable view.
+    ///
+    /// # Errors
+    /// - RWA entry not found
+    fn rwa<'a>(&'a self, rwa_id: &'a RwaId) -> Result<RwaEntry<'a>, FindError> {
+        self.rwas()
+            .get(rwa_id)
+            .map(|value| RwaEntry::new(rwa_id, value))
+            .ok_or_else(|| FindError::Rwa(rwa_id.clone()))
+    }
+
+    /// Returns reference for RWAs map.
+    #[inline]
+    fn rwas_iter(&self) -> impl Iterator<Item = RwaEntry<'_>> {
+        self.rwas()
+            .iter()
+            .map(|(id, value)| RwaEntry::new(id, value))
+    }
+
+    /// Iterate RWAs in domain.
+    fn rwas_in_domain_iter<'a>(&'a self, id: &'a DomainId) -> impl Iterator<Item = RwaEntry<'a>> {
+        self.rwas_iter()
+            .filter(move |entry| entry.id().domain() == id)
+    }
+
     // Role-related methods
 
     /// Get `Role` and return reference to it.
@@ -12183,6 +12243,9 @@ macro_rules! impl_world_ro {
             }
             fn nfts(&self) -> &impl StorageReadOnly<NftId, NftValue> {
                 &self.nfts
+            }
+            fn rwas(&self) -> &impl StorageReadOnly<RwaId, RwaValue> {
+                &self.rwas
             }
             fn roles(&self) -> &impl StorageReadOnly<RoleId, Role> {
                 &self.roles
@@ -12514,13 +12577,13 @@ macro_rules! impl_world_ro {
             fn offline_allowances(&self) -> &impl StorageReadOnly<Hash, OfflineAllowanceRecord> {
                 &self.offline_allowances
             }
-            fn offline_reserves(&self) -> &impl StorageReadOnly<String, OfflineReserveRecord> {
-                &self.offline_reserves
+            fn offline_lineages(&self) -> &impl StorageReadOnly<String, OfflineLineageRecord> {
+                &self.offline_lineages
             }
-            fn offline_reserve_operation_results(
+            fn offline_lineage_operation_results(
                 &self,
-            ) -> &impl StorageReadOnly<String, OfflineReserveOperationResult> {
-                &self.offline_reserve_operation_results
+            ) -> &impl StorageReadOnly<String, OfflineLineageOperationResult> {
+                &self.offline_lineage_operation_results
             }
             fn offline_verdict_revocations(
                 &self,
@@ -12973,8 +13036,8 @@ impl<'world> WorldBlock<'world> {
             repo_agreements,
             settlement_ledgers,
             offline_allowances,
-            offline_reserves,
-            offline_reserve_operation_results,
+            offline_lineages,
+            offline_lineage_operation_results,
             offline_verdict_revocations,
             offline_consumed_build_claim_ids,
             offline_to_online_transfers,
@@ -13081,8 +13144,8 @@ impl<'world> WorldBlock<'world> {
         repo_agreements.commit();
         settlement_ledgers.commit();
         offline_allowances.commit();
-        offline_reserves.commit();
-        offline_reserve_operation_results.commit();
+        offline_lineages.commit();
+        offline_lineage_operation_results.commit();
         offline_verdict_revocations.commit();
         offline_consumed_build_claim_ids.commit();
         offline_to_online_transfers.commit();
@@ -14004,8 +14067,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             replication_orders,
             settlement_ledgers,
             offline_allowances,
-            offline_reserves,
-            offline_reserve_operation_results,
+            offline_lineages,
+            offline_lineage_operation_results,
             offline_verdict_revocations,
             offline_consumed_build_claim_ids,
             offline_to_online_transfers,
@@ -14110,8 +14173,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         self.soradns_history_len.apply();
         settlement_ledgers.apply();
         offline_allowances.apply();
-        offline_reserves.apply();
-        offline_reserve_operation_results.apply();
+        offline_lineages.apply();
+        offline_lineage_operation_results.apply();
         offline_verdict_revocations.apply();
         offline_consumed_build_claim_ids.apply();
         offline_to_online_transfers.apply();
@@ -14647,6 +14710,16 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         self.nfts
             .get_mut(id)
             .ok_or_else(|| FindError::Nft(id.clone()))
+    }
+
+    /// Get mutable reference to [`Rwa`].
+    ///
+    /// # Errors
+    /// If RWA not found
+    pub fn rwa_mut(&mut self, id: &RwaId) -> Result<&mut RwaValue, FindError> {
+        self.rwas
+            .get_mut(id)
+            .ok_or_else(|| FindError::Rwa(id.clone()))
     }
 
     /// Set executor data model.
@@ -20696,6 +20769,7 @@ impl<'state> StateBlock<'state> {
             confidential_gas_used_in_tx: 0,
             confidential_gas_used_in_block_so_far: self.confidential_gas_used_in_block,
             tx_call_hash: None,
+            rwa_generated_id_ordinal: 0,
             executor_fuel_remaining: None,
             preverified_batch: self.preverified_batch.clone(),
             fastpq_transcripts: &mut self.fastpq_transcripts,
@@ -23632,15 +23706,20 @@ mod replay_validation_tests {
 
 #[cfg(test)]
 mod permission_cache_tests {
+    use std::collections::BTreeSet;
+
     use iroha_data_model::{
         account::AccountId,
         domain::DomainId,
         isi::{Grant, Revoke},
+        nexus::DataSpaceId,
+        permission::Permission,
         prelude::{Account, Domain},
         role::{Role, RoleId},
         trigger::TriggerId,
     };
     use iroha_executor_data_model::permission::{
+        account::{AccountAliasPermissionScope, CanManageAccountAlias},
         nexus::CanUseFeeSponsor,
         trigger::{CanExecuteTrigger, CanRegisterTrigger},
     };
@@ -23712,8 +23791,6 @@ mod permission_cache_tests {
 
     #[test]
     fn trigger_permission_payload_with_whitespace_decodes() {
-        use std::collections::BTreeSet;
-
         let (registrar, _) = gen_account_in("wonderland");
 
         let domain: Domain = Domain::new(wonderland_domain_id()).build(&registrar);
@@ -23743,6 +23820,33 @@ mod permission_cache_tests {
             "Norito decoder should handle non-canonical JSON payloads"
         );
         assert!(stx.can_execute_trigger_for(&registrar, &trigger_id));
+    }
+
+    #[test]
+    fn permission_deserialized_from_json_matches_canonical_permission() {
+        let stored: Permission = norito::json::from_str(
+            r#"{
+                "name": "CanManageAccountAlias",
+                "payload": { "scope": { "scope": "dataspace", "value": 0 } }
+            }"#,
+        )
+        .expect("deserialize permission");
+        let target = Permission::from(CanManageAccountAlias {
+            scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::GLOBAL),
+        });
+
+        let permissions = BTreeSet::from([stored]);
+
+        assert!(
+            permissions.contains(&target),
+            "deserialized permissions should use canonical JSON payloads: stored={}, target={}",
+            permissions
+                .first()
+                .expect("stored permission")
+                .payload()
+                .get(),
+            target.payload().get(),
+        );
     }
 
     #[test]
@@ -24292,8 +24396,16 @@ mod permission_cache_tests {
             let mut block = state.block(next_header);
             let mut stx = block.transaction();
             let mut summary = AccountPermissionSummary::default();
-            summary.apply_grant(&stx.world, &Permission::from(permission_register.clone()));
-            summary.apply_grant(&stx.world, &Permission::from(permission_execute.clone()));
+            summary.apply_grant(
+                &stx.world,
+                &stx.nexus.dataspace_catalog,
+                &Permission::from(permission_register.clone()),
+            );
+            summary.apply_grant(
+                &stx.world,
+                &stx.nexus.dataspace_catalog,
+                &Permission::from(permission_execute.clone()),
+            );
             stx.perm_cache.insert_summary(registrar.clone(), summary);
             assert!(
                 stx.can_register_trigger_for(&registrar, &owner),
@@ -24940,6 +25052,29 @@ impl StateTransaction<'_, '_> {
         };
         crate::sumeragi::witness::record_fastpq_transcript(&transcript);
         self.pending_transfer_transcripts.push(transcript);
+    }
+
+    /// Generate the next canonical RWA identifier for this transaction scope.
+    ///
+    /// The id is derived from the current transaction entrypoint hash when available and
+    /// falls back to a deterministic synthetic batch hash for ad-hoc execution contexts.
+    #[must_use]
+    pub fn next_generated_rwa_id(&mut self, domain: &DomainId, purpose: &str) -> RwaId {
+        let batch_hash = self
+            .tx_call_hash
+            .unwrap_or_else(|| self.ensure_synthetic_batch_hash_with(|_| {}));
+        let ordinal = self.rwa_generated_id_ordinal;
+        self.rwa_generated_id_ordinal = self.rwa_generated_id_ordinal.saturating_add(1);
+
+        let mut bytes = Vec::with_capacity(
+            b"iroha:rwa:id:v2|".len() + purpose.len() + batch_hash.as_ref().len() + 8,
+        );
+        bytes.extend_from_slice(b"iroha:rwa:id:v2|");
+        bytes.extend_from_slice(purpose.as_bytes());
+        bytes.push(0xff);
+        bytes.extend_from_slice(batch_hash.as_ref());
+        bytes.extend_from_slice(&ordinal.to_le_bytes());
+        RwaId::generated(domain.clone(), Hash::new(bytes))
     }
 
     /// Record a completed AXT envelope for persistence within the current block.
@@ -25670,7 +25805,11 @@ impl StateTransaction<'_, '_> {
                     }
                     if let Err(e) = run_result {
                         return Err(
-                            crate::smartcontracts::ivm::map_vm_error_to_validation(&e).into()
+                            crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
+                                &cached_runtime.vm,
+                                &e,
+                            )
+                            .into(),
                         );
                     }
                     // Collect queued ISIs from the host, execute them via the executor,
@@ -25796,9 +25935,10 @@ impl StateTransaction<'_, '_> {
 
     fn build_permission_summary(&mut self, account: &AccountId) -> AccountPermissionSummary {
         let world = &self.world;
+        let dataspace_catalog = &self.nexus.dataspace_catalog;
         let mut summary = AccountPermissionSummary::default();
         let mut merge_permission = |permission: &Permission| {
-            summary.apply_grant(world, permission);
+            summary.apply_grant(world, dataspace_catalog, permission);
         };
         if let Some(perms) = world.account_permissions.get(account) {
             for permission in perms {
@@ -26324,6 +26464,7 @@ pub(crate) mod deserialize {
         let account_rekey_records = take_optional_default(&mut map, "account_rekey_records")?;
         let asset_metadata = take_optional_default(&mut map, "asset_metadata")?;
         let nfts: Storage<NftId, NftValue> = take_required(&mut map, "nfts")?;
+        let rwas: Storage<RwaId, RwaValue> = take_optional_default(&mut map, "rwas")?;
         let roles: Storage<RoleId, Role> = take_required(&mut map, "roles")?;
         let account_permissions: Storage<AccountId, Permissions> =
             take_required(&mut map, "account_permissions")?;
@@ -26436,9 +26577,9 @@ pub(crate) mod deserialize {
         let repo_agreements = take_optional_default(&mut map, "repo_agreements")?;
         let settlement_ledgers = take_optional_default(&mut map, "settlement_ledgers")?;
         let offline_allowances = take_optional_default(&mut map, "offline_allowances")?;
-        let offline_reserves = take_optional_default(&mut map, "offline_reserves")?;
-        let offline_reserve_operation_results =
-            take_optional_default(&mut map, "offline_reserve_operation_results")?;
+        let offline_lineages = take_optional_default(&mut map, "offline_lineages")?;
+        let offline_lineage_operation_results =
+            take_optional_default(&mut map, "offline_lineage_operation_results")?;
         let offline_verdict_revocations =
             take_optional_default(&mut map, "offline_verdict_revocations")?;
         let offline_consumed_build_claim_ids =
@@ -26481,6 +26622,7 @@ pub(crate) mod deserialize {
             assets,
             asset_metadata,
             nfts,
+            rwas,
             roles,
             account_permissions,
             account_roles,
@@ -26578,8 +26720,8 @@ pub(crate) mod deserialize {
             repo_agreements,
             settlement_ledgers,
             offline_allowances,
-            offline_reserves,
-            offline_reserve_operation_results,
+            offline_lineages,
+            offline_lineage_operation_results,
             offline_verdict_revocations,
             offline_consumed_build_claim_ids,
             offline_to_online_transfers,
@@ -27331,25 +27473,20 @@ mod tests {
     #[cfg(feature = "telemetry")]
     use crate::telemetry::StateTelemetry;
 
-    fn asset_alias_test_world(
-        alias: Option<AssetDefinitionAlias>,
-    ) -> (World, AssetDefinitionId, AssetDefinitionAlias) {
+    fn asset_alias_test_world() -> (World, AssetDefinitionId) {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
         let domain_id: DomainId = "issuer".parse().expect("domain");
         let definition_id =
             AssetDefinitionId::new(domain_id.clone(), "usd".parse().expect("asset name"));
-        let mut definition = AssetDefinition::numeric(definition_id.clone())
+        let definition = AssetDefinition::numeric(definition_id.clone())
             .with_name("usd".to_owned())
             .build(&authority);
-        let legacy_alias = alias.unwrap_or_else(|| "usd#legacy".parse().expect("legacy alias"));
-        definition.alias = Some(legacy_alias.clone());
 
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = Account::new(authority.clone().to_account_id(domain_id)).build(&authority);
         (
             World::with([domain], [account], [definition]),
             definition_id,
-            legacy_alias,
         )
     }
 
@@ -27421,7 +27558,7 @@ mod tests {
 
     #[test]
     fn rebuild_asset_definition_alias_indexes_prefers_persisted_bindings() {
-        let (mut world, definition_id, legacy_alias) = asset_alias_test_world(None);
+        let (mut world, definition_id) = asset_alias_test_world();
         let persisted_alias: AssetDefinitionAlias = "usd#canonical".parse().expect("alias");
         let binding = AssetDefinitionAliasBindingRecord {
             alias: persisted_alias.clone(),
@@ -27433,16 +27570,6 @@ mod tests {
         world.asset_definition_aliases = Storage::default();
         world.asset_definition_alias_bindings =
             std::iter::once((definition_id.clone(), binding.clone())).collect();
-        let mut stored_definition = world
-            .asset_definitions
-            .view()
-            .get(&definition_id)
-            .expect("stored definition")
-            .clone();
-        stored_definition.alias = Some(legacy_alias.clone());
-        world
-            .asset_definitions
-            .insert(definition_id.clone(), stored_definition);
         world
             .rebuild_asset_definition_alias_indexes()
             .expect("rebuild should succeed");
@@ -27451,10 +27578,6 @@ mod tests {
         assert_eq!(
             view.asset_definition_aliases().get(&persisted_alias),
             Some(&definition_id)
-        );
-        assert!(
-            view.asset_definition_aliases().get(&legacy_alias).is_none(),
-            "stale inline alias must not override the persisted binding"
         );
         assert_eq!(
             view.asset_definition_alias_bindings()
@@ -27477,13 +27600,14 @@ mod tests {
                 .expect("stored definition")
                 .alias()
                 .is_none(),
-            "stored asset definition alias must be derived from bindings"
+            "stored asset definition alias must stay empty; bindings drive alias reads"
         );
     }
 
     #[test]
-    fn rebuild_asset_definition_alias_indexes_synthesizes_legacy_bindings() {
-        let (mut world, definition_id, legacy_alias) = asset_alias_test_world(None);
+    fn rebuild_asset_definition_alias_indexes_rejects_inline_alias_without_binding() {
+        let (mut world, definition_id) = asset_alias_test_world();
+        let legacy_alias: AssetDefinitionAlias = "usd#legacy".parse().expect("legacy alias");
         world.asset_definition_aliases = Storage::default();
         world.asset_definition_alias_bindings = Storage::default();
         let mut stored_definition = world
@@ -27497,45 +27621,57 @@ mod tests {
             .asset_definitions
             .insert(definition_id.clone(), stored_definition);
 
-        world
+        let err = world
             .rebuild_asset_definition_alias_indexes()
-            .expect("rebuild should synthesize a permanent binding");
-        let view = world.view();
+            .expect_err("rebuild must reject inline asset-definition aliases");
+        assert_eq!(
+            err,
+            format!(
+                "Asset definition {definition_id} stores inline alias `{legacy_alias}`; persist aliases only in asset_definition_alias_bindings"
+            )
+        );
+    }
 
-        let binding = view
-            .asset_definition_alias_bindings()
+    #[test]
+    fn rebuild_asset_definition_alias_indexes_rejects_inline_alias_even_with_binding() {
+        let (mut world, definition_id) = asset_alias_test_world();
+        let inline_alias: AssetDefinitionAlias = "usd#legacy".parse().expect("inline alias");
+        world.asset_definition_aliases = Storage::default();
+        world.asset_definition_alias_bindings = std::iter::once((
+            definition_id.clone(),
+            AssetDefinitionAliasBindingRecord {
+                alias: "usd#canonical".parse().expect("persisted alias"),
+                lease_expiry_ms: None,
+                grace_until_ms: None,
+                bound_at_ms: 100,
+            },
+        ))
+        .collect();
+        let mut stored_definition = world
+            .asset_definitions
+            .view()
             .get(&definition_id)
-            .expect("binding");
-        assert_eq!(binding.alias, legacy_alias);
-        assert_eq!(binding.lease_expiry_ms, None);
-        assert_eq!(binding.grace_until_ms, None);
-        assert_eq!(binding.bound_at_ms, 0);
+            .expect("stored definition")
+            .clone();
+        stored_definition.alias = Some(inline_alias.clone());
+        world
+            .asset_definitions
+            .insert(definition_id.clone(), stored_definition);
+
+        let err = world
+            .rebuild_asset_definition_alias_indexes()
+            .expect_err("rebuild must reject inline asset-definition aliases");
         assert_eq!(
-            view.asset_definition_aliases().get(&legacy_alias),
-            Some(&definition_id)
-        );
-        assert_eq!(
-            view.asset_definition(&definition_id)
-                .expect("definition")
-                .alias()
-                .as_ref(),
-            Some(&legacy_alias)
-        );
-        assert!(
-            world
-                .asset_definitions
-                .view()
-                .get(&definition_id)
-                .expect("stored definition")
-                .alias()
-                .is_none(),
-            "stored asset definition alias must be normalized away"
+            err,
+            format!(
+                "Asset definition {definition_id} stores inline alias `{inline_alias}`; persist aliases only in asset_definition_alias_bindings"
+            )
         );
     }
 
     #[test]
     fn asset_definition_alias_lookup_stops_after_grace_even_before_sweep() {
-        let (mut world, definition_id, _) = asset_alias_test_world(None);
+        let (mut world, definition_id) = asset_alias_test_world();
         let alias: AssetDefinitionAlias = "usd#lease".parse().expect("alias");
         world.asset_definition_aliases = Storage::default();
         world.asset_definition_alias_bindings = std::iter::once((
@@ -27575,7 +27711,7 @@ mod tests {
 
     #[test]
     fn asset_definition_alias_bindings_roundtrip_through_state_json() {
-        let (mut world, definition_id, _) = asset_alias_test_world(None);
+        let (mut world, definition_id) = asset_alias_test_world();
         let alias: AssetDefinitionAlias = "usd#durable".parse().expect("alias");
         let binding = AssetDefinitionAliasBindingRecord {
             alias: alias.clone(),
@@ -28071,12 +28207,14 @@ mod tests {
         let mut summary = AccountPermissionSummary::default();
         summary.apply_grant(
             &world_view,
+            &iroha_data_model::nexus::DataSpaceCatalog::default(),
             &Permission::from(CanRegisterTrigger {
                 authority: account_id.clone(),
             }),
         );
         summary.apply_grant(
             &world_view,
+            &iroha_data_model::nexus::DataSpaceCatalog::default(),
             &Permission::from(CanUseFeeSponsor {
                 sponsor: account_id.clone(),
             }),

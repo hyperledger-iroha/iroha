@@ -5,20 +5,17 @@ import org.hyperledger.iroha.sdk.client.JsonEncoder
 /** Request payload for subscription usage recording. */
 class SubscriptionUsageRequest(
     authority: String,
-    privateKey: String,
     unitKey: String,
     delta: String,
     usageTriggerId: String? = null,
 ) {
     val authority: String = requireNonBlank(authority, "authority")
-    val privateKey: String = requireNonBlank(privateKey, "private_key")
     val unitKey: String = requireNonBlank(unitKey, "unit_key")
     val delta: String = requireNumericLiteral(delta, "delta")
     val usageTriggerId: String? = normalizeOptional(usageTriggerId)
 
     fun toJsonMap(): Map<String, Any> = buildMap {
         put("authority", authority)
-        put("private_key", privateKey)
         put("unit_key", unitKey)
         put("delta", delta)
         this@SubscriptionUsageRequest.usageTriggerId?.let { put("usage_trigger_id", it) }

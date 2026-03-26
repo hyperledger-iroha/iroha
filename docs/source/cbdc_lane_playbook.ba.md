@@ -104,10 +104,10 @@ Lane манифестар каталог аҫтында тура эфирҙа к
   "version": 1,
   "governance": "central_bank_multisig",
   "validators": [
-    "i105...",
-    "i105...",
-    "i105...",
-    "i105..."
+    "<i105-account-id>",
+    "<i105-account-id>",
+    "<i105-account-id>",
+    "<i105-account-id>"
   ],
   "quorum": 3,
   "protected_namespaces": [
@@ -141,7 +141,7 @@ Lane манифестар каталог аҫтында тура эфирҙа к
 }
 ```
 
-Төп талаптар:- Валидаторҙар **** канонлы I105 иҫәбе идентификаторҙары булырға тейеш (юҡ `@domain`; `@domain` ҡушымтаһы каталогта бар, улар бар. `quorum` комплекты күп сиг сигенә (≥2).
+Төп талаптар:- Валидаторҙар **** канонлы i105 иҫәбе идентификаторҙары булырға тейеш (юҡ `@domain`; `@domain` ҡушымтаһы каталогта бар, улар бар. `quorum` комплекты күп сиг сигенә (≥2).
 - Һаҡланған исемдәр киңлеге `Queue::push` тарафынан үтәлә (ҡара: `crates/iroha_core/src/queue.rs`), шуға күрә бөтә CBDC контракттары ла `gov_namespace`X + `gov_contract_id`X X.
 - `composability_group` яландары `docs/source/nexus.md` §8.6-ла һүрәтләнгән схема буйынса; хужаһы (CBDC һыҙаты) аҡ исемлек һәм квоталар менән тәьмин итә. Whitest исемлектәге DS маскировкалары ғына `group_id_hex` + `activation_epoch` X.
 - Манифест күсергәндән һуң, `cargo test -p integration_tests nexus::lane_registry -- --nocapture` `LaneManifestRegistry::from_config` раҫлау өсөн эшләй.
@@ -246,7 +246,7 @@ iroha app space-directory manifest audit-bundle \
   curl -X POST https://torii.soranexus/v1/space-directory/manifests \
        -H 'Content-Type: application/json' \
        -d '{
-            "authority": "i105...",
+            "authority": "<i105-account-id>",
             "private_key": "ed25519:CiC7…",
             "manifest": '"'"'$(cat fixtures/space_directory/capability/cbdc_wholesale.manifest.json)'"'"',
             "reason": "CBDC onboarding wave 4"
@@ -262,7 +262,7 @@ iroha app space-directory manifest audit-bundle \
   curl -X POST https://torii.soranexus/v1/space-directory/manifests/revoke \
        -H 'Content-Type: application/json' \
        -d '{
-            "authority": "i105...",
+            "authority": "<i105-account-id>",
             "private_key": "ed25519:CiC7…",
             "uaid": "uaid:0f4d…ab11",
             "dataspace": 11,

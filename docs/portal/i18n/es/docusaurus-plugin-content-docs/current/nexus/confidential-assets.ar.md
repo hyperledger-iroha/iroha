@@ -210,7 +210,7 @@ Descripción detallada del runbook de operaciones سياسات الحوكمة ا
 - تسلسل اشتقاق المفاتيح لكل حساب:
   - `sk_spend` → `nk` (clave anuladora), `ivk` (clave de visualización entrante), `ovk` (clave de visualización saliente), `fvk`.
 - Notas de cargas útiles de تستخدم المشفرة AEAD مع مفاتيح مشتركة مشتقة من ECDH؛ يمكن ارفاق claves de vista de auditor اختيارية الى salidas حسب سياسة الاصل.
-- CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, memorandos y notas `iroha app zk envelope` لانتاج/فحص sobres Norito دون اتصال. Utilice Torii para conectar `POST /v1/confidential/derive-keyset` y hexadecimal y base64 para conectar archivos. المفاتيح برمجيا.## الغاز، الحدود، وضوابط DoS
+- CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, memorandos y notas `iroha app zk envelope` لانتاج/فحص sobres Norito دون اتصال. Utilice
 - جدول gas حتمي:
   - Halo2 (Plonkish): اساس `250_000` gas + `2_000` gas لكل entrada pública.
   - `5` gas لكل بايت prueba, مع رسوم لكل anulador (`300`) y compromiso (`500`).

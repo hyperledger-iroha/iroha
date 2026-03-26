@@ -7,10 +7,9 @@
 use crate::cli_output::print_with_optional_text;
 use crate::{Run, RunContext};
 use eyre::{Result, eyre};
-use iroha::data_model::{alias::AliasIndex, name::Name};
+use iroha::data_model::alias::AliasIndex;
 use iroha::{client::Client, http::Response, http::StatusCode};
 use std::fmt::Write as _;
-use std::str::FromStr;
 
 #[cfg(test)]
 use iroha_i18n::{Bundle, Language, Localizer};
@@ -120,7 +119,7 @@ where
     C: RunContext,
     F: FnOnce(&Client, &str) -> Result<Response<Vec<u8>>>,
 {
-    let _ = Name::from_str(alias).map_err(|err| eyre!("invalid alias: {err}"))?;
+    validate_account_alias_literal(alias)?;
     if dry_run {
         let output = norito::json!({
             "alias": alias,
@@ -152,6 +151,51 @@ where
         status => Err(eyre!(
             "alias resolve failed with status {status}: {}",
             format_alias_error("server response", &body)
+        )),
+    }
+}
+
+fn validate_account_alias_literal(alias: &str) -> Result<()> {
+    let trimmed = alias.trim();
+    if trimmed.is_empty() {
+        return Err(eyre!(
+            "invalid alias: account alias must use `name@domain.dataspace` or `name@dataspace` format"
+        ));
+    }
+    if trimmed != alias {
+        return Err(eyre!(
+            "invalid alias: account alias must not contain leading or trailing whitespace"
+        ));
+    }
+
+    let (name, right) = trimmed.split_once('@').ok_or_else(|| {
+        eyre!("invalid alias: account alias must use `name@domain.dataspace` or `name@dataspace` format")
+    })?;
+    if right.contains('@') {
+        return Err(eyre!(
+            "invalid alias: account alias must contain exactly one `@` separator"
+        ));
+    }
+    if name.is_empty() || right.is_empty() {
+        return Err(eyre!(
+            "invalid alias: account alias segments must not be empty"
+        ));
+    }
+
+    let dot_count = right.bytes().filter(|byte| *byte == b'.').count();
+    match dot_count {
+        0 => Ok(()),
+        1 => {
+            let (domain, dataspace) = right.split_once('.').expect("counted dot");
+            if domain.is_empty() || dataspace.is_empty() {
+                return Err(eyre!(
+                    "invalid alias: account alias domain and dataspace segments must not be empty"
+                ));
+            }
+            Ok(())
+        }
+        _ => Err(eyre!(
+            "invalid alias: account alias must use `name@domain.dataspace` or `name@dataspace` format"
         )),
     }
 }
@@ -287,7 +331,7 @@ mod tests {
         command: Command,
     }
 
-    const SAMPLE_ACCOUNT_ID: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+    const SAMPLE_ACCOUNT_ID: &str = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
 
     #[test]
     fn parse_voprf_args() {

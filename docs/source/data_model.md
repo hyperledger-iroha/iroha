@@ -25,9 +25,9 @@ This document explains the structures, identifiers, traits, and protocols that f
 
 String forms of IDs (round-trippable with `Display`/`FromStr`):
 - `DomainId`: `name` (e.g., `wonderland`).
-- `AccountId`: canonical domainless account identifier encoded via `AccountAddress` as I105 only. Parser inputs must be canonical I105; domain suffixes (`@domain`), canonical I105 literals, alias literals, canonical hex parser input, legacy `norito:` payloads, and `uaid:`/`opaque:` account parser forms are rejected.
-- `AssetDefinitionId`: canonical unprefixed Base58 address over the canonical asset-definition bytes.
-- `AssetId`: canonical public literal `<asset-definition-id>#<account-id>` with an optional `#dataspace:<id>` suffix for scoped balances. CLI/Torii selectors may also expose split `asset + account + scope` fields where that is more ergonomic.
+- `AccountId`: canonical domainless account identifier encoded via `AccountAddress` as I105 only. Strict parser inputs must be canonical I105; domain suffixes (`@domain`), account-alias literals, canonical hex parser input, legacy `norito:` payloads, and `uaid:`/`opaque:` account parser forms are rejected. On-chain account aliases use `name@domain.dataspace` or `name@dataspace` and resolve to canonical `AccountId` values.
+- `AssetDefinitionId`: canonical unprefixed Base58 address over the canonical asset-definition bytes. This is the public asset ID. On-chain asset aliases use `name#domain.dataspace` or `name#dataspace` and resolve only to this canonical Base58 asset ID.
+- `AssetId`: public asset identifier in canonical bare Base58 form. Asset aliases like `name#dataspace` or `name#domain.dataspace` resolve to `AssetId`. Internal ledger holdings may additionally expose split `asset + account + optional dataspace` fields where needed, but that composite shape is not the public `AssetId`.
 - `NftId`: `nft$domain` (e.g., `rose$garden`).
 - `PeerId`: `public_key` (peer equality is by public key).
 
@@ -270,7 +270,7 @@ iroha ledger asset definition register \
 # Mint using alias + account components
 iroha ledger asset mint \
   --definition-alias pkr#ubl.sbp \
-  --account sorauﾛ1P... \
+  --account sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB \
   --quantity 500
 
 # Resolve alias to the canonical Base58 id via Torii

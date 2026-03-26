@@ -7,7 +7,6 @@ import {
   AccountAddress,
   AccountAddressError,
   AccountAddressErrorCode,
-  DEFAULT_DOMAIN_NAME,
 } from "../src/address.js";
 
 const VALID_KEY = Buffer.from(
@@ -28,7 +27,7 @@ test("fromAccount enforces curve-specific public key length", () => {
   assert.equal(shortKey.length, 31);
 
   assert.throws(
-    () => AccountAddress.fromAccount({ domain: DEFAULT_DOMAIN_NAME, publicKey: shortKey }),
+    () => AccountAddress.fromAccount({ publicKey: shortKey }),
     (error) =>
       error instanceof AccountAddressError &&
       error.code === AccountAddressErrorCode.INVALID_PUBLIC_KEY,
@@ -37,7 +36,6 @@ test("fromAccount enforces curve-specific public key length", () => {
 
 test("fromCanonicalBytes rejects controller payloads with mismatched key lengths", () => {
   const address = AccountAddress.fromAccount({
-    domain: DEFAULT_DOMAIN_NAME,
     publicKey: VALID_KEY,
   });
   const canonical = Buffer.from(address.canonicalBytes());
@@ -54,7 +52,7 @@ test("fromCanonicalBytes rejects controller payloads with mismatched key lengths
 
 test("fromAccount rejects small-order ed25519 public keys", () => {
   assert.throws(
-    () => AccountAddress.fromAccount({ domain: DEFAULT_DOMAIN_NAME, publicKey: SMALL_ORDER_KEY }),
+    () => AccountAddress.fromAccount({ publicKey: SMALL_ORDER_KEY }),
     (error) =>
       error instanceof AccountAddressError &&
       error.code === AccountAddressErrorCode.INVALID_PUBLIC_KEY &&
@@ -64,7 +62,6 @@ test("fromAccount rejects small-order ed25519 public keys", () => {
 
 test("fromCanonicalBytes rejects non-canonical ed25519 encodings", () => {
   const address = AccountAddress.fromAccount({
-    domain: DEFAULT_DOMAIN_NAME,
     publicKey: VALID_KEY,
   });
   const canonical = Buffer.from(address.canonicalBytes());

@@ -64,6 +64,7 @@ pub const HEADER_TIMESTAMP_MS: &str = "X-Iroha-Timestamp-Ms";
 pub const HEADER_NONCE: &str = "X-Iroha-Nonce";
 /// Header carrying the base64 Norito-encoded multisig witness.
 pub const HEADER_WITNESS: &str = "X-Iroha-Witness";
+const ACCOUNT_HEADER_CONTEXT: &str = "X-Iroha-Account";
 /// HTTP request types used for canonical signing.
 pub use axum::http::{Method, Uri};
 
@@ -345,14 +346,22 @@ fn parse_required_header_text(
     }
 }
 
-fn parse_account_header_value(account_literal: &str) -> Result<AccountId, crate::Error> {
-    AccountId::parse_encoded(account_literal.trim())
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .map_err(|_| {
-            crate::Error::Query(ValidationFail::NotPermitted(
-                "invalid X-Iroha-Account value".to_owned(),
-            ))
-        })
+fn parse_account_header_value(
+    state: &Arc<CoreState>,
+    account_literal: &str,
+) -> Result<AccountId, crate::Error> {
+    crate::routing::parse_account_literal_with_state(
+        state.as_ref(),
+        account_literal.trim(),
+        &crate::routing::MaybeTelemetry::disabled(),
+        ACCOUNT_HEADER_CONTEXT,
+    )
+    .map(|(account_id, _)| account_id)
+    .map_err(|_| {
+        crate::Error::Query(ValidationFail::NotPermitted(
+            "invalid X-Iroha-Account value".to_owned(),
+        ))
+    })
 }
 
 fn validate_freshness(
@@ -476,7 +485,7 @@ pub fn verify_canonical_request(
                         "invalid X-Iroha-Account value".to_owned(),
                     ))
                 })?;
-            let account = parse_account_header_value(account_literal)?;
+            let account = parse_account_header_value(state, account_literal)?;
             if account != witness.subject_account {
                 return Err(crate::Error::Query(ValidationFail::NotPermitted(
                     "X-Iroha-Account does not match X-Iroha-Witness subject_account".to_owned(),
@@ -596,7 +605,7 @@ pub fn verify_canonical_request(
     };
 
     let account_literal = parse_required_header_text(headers, HEADER_ACCOUNT)?;
-    let account = parse_account_header_value(&account_literal)?;
+    let account = parse_account_header_value(state, &account_literal)?;
 
     if let Some(expected) = expected_account
         && expected != &account
@@ -686,7 +695,8 @@ mod tests {
 
     use super::*;
 
-    const TEST_ACCOUNT_I105: &str = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
+    const TEST_ACCOUNT_I105: &str =
+        "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE";
 
     fn minimal_state_with_account(account: &AccountId) -> Arc<State> {
         let domain_id: DomainId = "wonderland".parse().unwrap();
@@ -697,6 +707,28 @@ mod tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         ))
+    }
+
+    fn bind_account_alias_for_test(state: &Arc<State>, account_id: &AccountId, alias: &str) {
+        let label = iroha_data_model::account::rekey::AccountLabel::from_literal(
+            alias,
+            &state.nexus_snapshot().dataspace_catalog,
+        )
+        .expect("valid account alias");
+        let header =
+            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        let world = tx.world_mut_for_testing();
+        world
+            .account_aliases_mut_for_testing()
+            .insert(label.clone(), account_id.clone());
+        world.account_rekey_records_mut_for_testing().insert(
+            label.clone(),
+            iroha_data_model::account::rekey::AccountRekeyRecord::new(label, account_id.clone()),
+        );
+        tx.apply();
+        block.commit().expect("commit account alias for test");
     }
 
     #[cfg(test)]
@@ -755,6 +787,49 @@ mod tests {
         headers.insert(
             HEADER_ACCOUNT,
             axum::http::HeaderValue::from_str(&account_literal).unwrap(),
+        );
+        headers.insert(
+            HEADER_SIGNATURE,
+            axum::http::HeaderValue::from_str(&BASE64_STANDARD.encode(signature.payload()))
+                .unwrap(),
+        );
+        headers.insert(
+            HEADER_TIMESTAMP_MS,
+            axum::http::HeaderValue::from_str(&timestamp_ms.to_string()).unwrap(),
+        );
+        headers.insert(HEADER_NONCE, axum::http::HeaderValue::from_static(nonce));
+
+        let verified =
+            verify_canonical_request(&state, &headers, &method, &uri, &[], Some(&account))
+                .expect("verify");
+        assert_eq!(
+            verified,
+            Some(VerifiedCanonicalRequest {
+                account,
+                signer: ALICE_KEYPAIR.public_key().clone(),
+                verified_signers: vec![ALICE_KEYPAIR.public_key().clone()],
+            })
+        );
+    }
+
+    #[test]
+    fn verify_accepts_alias_account_header_and_returns_canonical_i105_account() {
+        let _guard = test_guard(CanonicalRequestAuthConfig::default());
+        let account = ALICE_ID.clone();
+        let state = minimal_state_with_account(&account);
+        bind_account_alias_for_test(&state, &account, "wallet@universal");
+        let method = Method::GET;
+        let uri: Uri = format!("/v1/accounts/{TEST_ACCOUNT_I105}/assets?limit=10")
+            .parse()
+            .expect("uri");
+        let timestamp_ms = now_unix_ms();
+        let nonce = "accept-alias-account-header";
+        let message = canonical_request_signature_message(&method, &uri, &[], timestamp_ms, nonce);
+        let signature = Signature::new(ALICE_KEYPAIR.private_key(), &message);
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HEADER_ACCOUNT,
+            axum::http::HeaderValue::from_static("wallet@universal"),
         );
         headers.insert(
             HEADER_SIGNATURE,

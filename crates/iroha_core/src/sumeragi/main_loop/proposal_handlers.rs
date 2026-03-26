@@ -1041,12 +1041,7 @@ impl Actor {
                     self.authoritative_slot_frontier_info(height, view, block_hash)
                 })
                 .is_some()
-            || self.frontier_slot.as_ref().is_some_and(|slot| {
-                slot.height == height
-                    && slot.view == view
-                    && slot.block_created_seen
-                    && slot.frontier_info.is_some()
-            })
+            || self.frontier_slot_has_active_owner_state(height)
     }
 
     fn locally_authoritative_frontier_info_for_block(

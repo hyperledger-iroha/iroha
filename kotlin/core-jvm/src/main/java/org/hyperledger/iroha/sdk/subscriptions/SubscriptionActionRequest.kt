@@ -5,19 +5,16 @@ import org.hyperledger.iroha.sdk.client.JsonEncoder
 /** Request payload for subscription action endpoints (pause/resume/cancel/charge-now). */
 class SubscriptionActionRequest(
     authority: String,
-    privateKey: String,
     chargeAtMs: Long? = null,
     val cancelMode: CancelMode? = null,
 ) {
     val authority: String = requireNonBlank(authority, "authority")
-    val privateKey: String = requireNonBlank(privateKey, "private_key")
     val chargeAtMs: Long? = chargeAtMs?.also {
         require(it >= 0) { "chargeAtMs must be non-negative" }
     }
 
     fun toJsonMap(): Map<String, Any> = buildMap {
         put("authority", authority)
-        put("private_key", privateKey)
         chargeAtMs?.let { put("charge_at_ms", it) }
         cancelMode?.let { put("cancel_mode", it.value) }
     }

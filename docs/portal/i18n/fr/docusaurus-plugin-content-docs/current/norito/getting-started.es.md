@@ -69,7 +69,7 @@ Lorsque vous êtes satisfait du contrat, envoyez-le à un nœud en utilisant la 
 
 ```sh
 iroha_cli app contracts deploy \
-  --authority i105... \
+  --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
 ```

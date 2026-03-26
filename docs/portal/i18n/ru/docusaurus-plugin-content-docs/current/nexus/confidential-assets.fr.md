@@ -227,7 +227,7 @@ Documentez les переопределяет локальные операции 
 - Иерархия деривации номинального счета:
   - `sk_spend` -> `nk` (ключ обнулителя), `ivk` (входящий ключ просмотра), `ovk` (исходящий ключ просмотра), `fvk`.
 - Les payloads de notes chiffre es utilisent AEAD avec des shared keys derivees par ECDH; des view keys d auditeur optionnelles peuvent etre attachees aux outputs selon la politique de l actif.
-- Интерфейс командной строки: `confidential create-keys`, `confidential send`, `confidential export-view-key`, инструменты аудита для дешифрования заметок и помощник `iroha app zk envelope` для создания/проверки конвертов Norito в автономном режиме. Torii раскрывает поток вывода мемов через `POST /v1/confidential/derive-keyset`, возвращает шестнадцатеричные формы и base64, чтобы кошельки могли эффективно восстановить программные иерархии блоков.## Газ, ограничения и контроль DoS
+- Интерфейс командной строки: `confidential create-keys`, `confidential send`, `confidential export-view-key`, инструменты аудита для дешифрования заметок и помощник `iroha app zk envelope` для создания/проверки конвертов Norito в автономном режиме.
 - График определения газа:
   - Halo2 (Plonkish): базовый газ `250_000` + газ `2_000`, номинальный общедоступный вход.
   - `5` Байт подтверждения номинала газа, плюс обнулитель номинала расходов (`300`) и обязательство по номиналу (`500`).

@@ -80,6 +80,17 @@ impl SetKeyValue<Nft> {
     }
 }
 
+impl SetKeyValue<Rwa> {
+    /// Constructs a new [`SetKeyValue`] for an [`Rwa`] with the given `key` and `value`.
+    pub fn rwa(rwa_id: RwaId, key: Name, value: impl Into<Json>) -> Self {
+        Self {
+            object: rwa_id,
+            key,
+            value: value.into(),
+        }
+    }
+}
+
 impl SetKeyValue<Trigger> {
     /// Constructs a new [`SetKeyValue`] for a [`Trigger`] with the given `key` and `value`.
     pub fn trigger(trigger_id: TriggerId, key: Name, value: impl Into<Json>) -> Self {
@@ -182,6 +193,16 @@ impl RemoveKeyValue<Nft> {
     pub fn nft(nft_id: NftId, key: Name) -> Self {
         Self {
             object: nft_id,
+            key,
+        }
+    }
+}
+
+impl RemoveKeyValue<Rwa> {
+    /// Constructs a new [`RemoveKeyValue`] for an [`Rwa`] with the given `key`.
+    pub fn rwa(rwa_id: RwaId, key: Name) -> Self {
+        Self {
+            object: rwa_id,
             key,
         }
     }

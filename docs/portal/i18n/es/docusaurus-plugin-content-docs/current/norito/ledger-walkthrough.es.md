@@ -30,8 +30,8 @@ ID de cuenta que planeas usar. El paquete por defecto ya incluye dos cuentas
 Demostración de Derivadas de las claves:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 Confirma los valores listando las primeras cuentas:

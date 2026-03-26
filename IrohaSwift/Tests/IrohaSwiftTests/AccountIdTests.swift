@@ -21,12 +21,12 @@ final class AccountIdTests: XCTestCase {
         let publicKey = Data(repeating: 0xAB, count: 32)
         let accountId = try AccountId.makeI105(publicKey: publicKey)
 
-        // I105 format should NOT start with ed0120
+        // i105 format should NOT start with ed0120
         XCTAssertFalse(accountId.hasPrefix("ed0120"))
         XCTAssertFalse(accountId.contains("@"))
 
         // Should be parseable back
-        // I105 addresses are base58 encoded, typically 40-50 chars
+        // I105 addresses are compact encoded literals, typically 40-50 chars
         XCTAssertGreaterThan(accountId.count, 30)
     }
 
@@ -81,21 +81,23 @@ final class AccountIdTests: XCTestCase {
         XCTAssertFalse(accountId.contains("@"))
     }
 
-    func testNormalizeForComparisonLeavesDomainSuffixedLiteralsUntouched() throws {
+    func testNormalizeForComparisonLeavesAccountAliasesUntouched() throws {
         let publicKey = Data(repeating: 0x11, count: 32)
         let i105 = try AccountId.makeI105(publicKey: publicKey)
+        let alias = "alice@dataspace"
+        let scopedAlias = "alice@hbl.dataspace"
 
         XCTAssertEqual(AccountId.normalizeForComparison(i105), i105)
-        XCTAssertEqual(AccountId.normalizeForComparison("\(i105)@default"), "\(i105)@default")
-        XCTAssertEqual(AccountId.normalizeForComparison("\(i105)@WONDERLAND"), "\(i105)@WONDERLAND")
+        XCTAssertEqual(AccountId.normalizeForComparison(alias), alias)
+        XCTAssertEqual(AccountId.normalizeForComparison(scopedAlias), scopedAlias)
 
-        XCTAssertFalse(AccountId.matchesForComparison(i105, "\(i105)@default"))
-        XCTAssertFalse(AccountId.matchesForComparison("\(i105)@default", "\(i105)@wonderland"))
+        XCTAssertFalse(AccountId.matchesForComparison(i105, alias))
+        XCTAssertFalse(AccountId.matchesForComparison(alias, scopedAlias))
     }
 
     func testNormalizeForComparisonDoesNotCanonicalizeLegacyLiterals() {
         let publicKey = Data(repeating: 0xAB, count: 32)
-        let rawUpper = "ed0120\(publicKey.map { String(format: "%02X", $0) }.joined())@WONDERLAND"
+        let rawUpper = "ed0120\(publicKey.map { String(format: "%02X", $0) }.joined())@HBL.SBP"
         XCTAssertEqual(AccountId.normalizeForComparison(rawUpper), rawUpper)
         XCTAssertFalse(AccountId.matchesForComparison(rawUpper, rawUpper.lowercased()))
     }

@@ -1,11 +1,11 @@
 {
   "allowances": [
     {
-      "allowance_asset": "61CtjvNd9T3THAR65GsMVHr82Bjc#6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+      "allowance_asset": "61CtjvNd9T3THAR65GsMVHr82Bjc",
       "amount": "250.00",
       "attestation_report_hex": "aa55aa55",
       "blinding_hex": "1111111111111111111111111111111111111111111111111111111111111111",
-      "controller": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+      "controller": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
       "expires_at_ms": 1745900000000,
       "issued_at_ms": 1730314876000,
       "label": "ios-demo",
@@ -22,11 +22,11 @@
       "spend_public_key": "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
     },
     {
-      "allowance_asset": "5ywNgSPQ5KyuQh7SwaZmwMW4GTXu#6cmzPVPX8DcdUnE1nGLZBU1opw24wjxczQNqhCCYvMzKfJR2rGs9tan",
+      "allowance_asset": "5ywNgSPQ5KyuQh7SwaZmwMW4GTXu",
       "amount": "150.00",
       "attestation_report_hex": "bb66bb66",
       "blinding_hex": "2222222222222222222222222222222222222222222222222222222222222222",
-      "controller": "6cmzPVPX8DcdUnE1nGLZBU1opw24wjxczQNqhCCYvMzKfJR2rGs9tan",
+      "controller": "sorauロ1PyXノspjg6gnvエ1メムLネオBトEwtテD8Rクヌgヲホセレカ7エvWUJA5A",
       "expires_at_ms": 1745900000000,
       "issued_at_ms": 1730314876000,
       "label": "android-demo",
@@ -49,12 +49,12 @@
       "spend_public_key": "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D"
     },
     {
-      "allowance_asset": "6qZbrYPmQHMjXG6tx4BV8cfz2pEm#6cmzPVPX6y3sc78Afv2PhjjTDK2EjkvWtQCyc4kKLYNSyWFSLbozEeZ",
+      "allowance_asset": "6qZbrYPmQHMjXG6tx4BV8cfz2pEm",
       "amount": "90",
       "attestation_nonce_hex": "3333333333333333333333333333333333333333333333333333333333333333",
       "attestation_report_hex": "cc77cc77",
       "blinding_hex": "4444444444444444444444444444444444444444444444444444444444444444",
-      "controller": "6cmzPVPX6y3sc78Afv2PhjjTDK2EjkvWtQCyc4kKLYNSyWFSLbozEeZ",
+      "controller": "sorauロ1PGEネHvNyスヰX6uZケbヰskiwbtモトヱNuソuk9sルメフテヰキ8YTGTS",
       "expires_at_ms": 1745900000000,
       "issued_at_ms": 1730314876000,
       "label": "android-hms-demo",
@@ -82,11 +82,11 @@
       "spend_public_key": "ed01207233BFC89DCBD68C19FDE6CE6158225298EC1131B6A130D1AEB454C1AB5183C0"
     },
     {
-      "allowance_asset": "61CtjvNd9T3THAR65GsMVHr82Bjc#6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU",
+      "allowance_asset": "61CtjvNd9T3THAR65GsMVHr82Bjc",
       "amount": "175.00",
       "attestation_report_hex": "dd88dd88",
       "blinding_hex": "5555555555555555555555555555555555555555555555555555555555555555",
-      "controller": "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU",
+      "controller": "sorauロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76",
       "expires_at_ms": 1745900000000,
       "issued_at_ms": 1730314876000,
       "label": "android-play-demo",
@@ -118,10 +118,10 @@
       "spend_public_key": "ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016"
     },
     {
-      "allowance_asset": "61CtjvNd9T3THAR65GsMVHr82Bjc#6cmzPVPX9g5LPdtBLCo3EgGtBJ7X9P1Y4pTocgsnjrziQFDxrWi3AGU",
+      "allowance_asset": "61CtjvNd9T3THAR65GsMVHr82Bjc",
       "amount": "200.00",
       "blinding_hex": "6666666666666666666666666666666666666666666666666666666666666666",
-      "controller": "6cmzPVPX9g5LPdtBLCo3EgGtBJ7X9P1Y4pTocgsnjrziQFDxrWi3AGU",
+      "controller": "sorauロ1PスNgソリ9マユ2ユ9トZタテフWwヒセヰトツT3WコTxカオホKモロmキNSD7UG",
       "expires_at_ms": 1745900000000,
       "issued_at_ms": 1730314876000,
       "label": "android-provisioned-demo",
@@ -142,7 +142,7 @@
     }
   ],
   "operator": {
-    "account": "6cmzPVPX8j6hZ4dceSGxHX65vr3iK4RG3em7w24HeJ9BbQXmKFVrykC",
+    "account": "sorauロ1Pタ2サレエキクBヨコzBVSフユメRBqwdフsヘフツハネ1Yヤzy6ケ5xYWX98C",
     "private_key": "ed25519:8f8c7d6c5b4a392817161514131211100f0e0d0c0b0a09080706050403020100"
   }
 }

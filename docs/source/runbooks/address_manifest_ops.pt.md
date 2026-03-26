@@ -183,7 +183,7 @@ Campos de cabeçalho de `manifest.json`:
     fazem hash para o mesmo digest. Pause promoções de manifesto, execute
     `scripts/address_local_toolkit.sh` para confirmar o mapeamento do digest e
     coordene com a governança Nexus antes de reemitir a entrada afetada.
-  - `AddressInvalidRatioSlo` — alerta quando envios I105/comprimidos inválidos
+  - `AddressInvalidRatioSlo` — alerta quando envios i105/comprimidos inválidos
     (excluindo rejeições Local‑8/strict‑mode) excedem o SLO global de 0,1 % por
     dez minutos. Investigue `torii_address_invalid_total` por contexto/razão e
     coordene com o time SDK proprietário antes de reativar o modo estrito.

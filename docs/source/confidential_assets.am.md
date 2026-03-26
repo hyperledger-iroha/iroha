@@ -238,7 +238,7 @@ SPDX-License-Identifier: Apache-2.0
 - በየመለያ ቁልፍ የማውጫ ተዋረድ፡
   - `sk_spend` → `nk` (የማስሻሻ ቁልፍ)፣ `ivk` (መጪ መመልከቻ ቁልፍ)፣ `ovk` (የወጪ መመልከቻ ቁልፍ)፣ `fvk`።
 - የተመሰጠረ የማስታወሻ ጭነት AEAD ከ ECDH-የተገኙ የጋራ ቁልፎች ጋር ይጠቀማሉ; አማራጭ የኦዲተር እይታ ቁልፎች በንብረት ፖሊሲ ከውጤቶች ጋር ሊጣበቁ ይችላሉ።
-- CLI ተጨማሪዎች፡- `confidential create-keys`፣ `confidential send`፣ `confidential export-view-key`፣የኦዲተር ማስታዎሻዎችን ለመፍታት እና የ`iroha app zk envelope` ረዳት `iroha app zk envelope` ረዳት ከመስመር ውጭ ኢንቬሎፕን ለመስራት። Torii በ `POST /v1/confidential/derive-keyset` በኩል ተመሳሳይ የመነሻ ፍሰት ያጋልጣል፣ ሁለቱንም ሄክስ እና ቤዝ64 ቅጾችን በመመለስ የኪስ ቦርሳ ቁልፍ ተዋረዶችን በፕሮግራማዊ መንገድ ማምጣት ይችላል።
+- CLI ተጨማሪዎች፡- `confidential create-keys`፣ `confidential send`፣ `confidential export-view-key`፣የኦዲተር ማስታዎሻዎችን ለመፍታት እና የ`iroha app zk envelope` ረዳት `iroha app zk envelope` ረዳት ከመስመር ውጭ ኢንቬሎፕን ለመስራት።
 
 ## ጋዝ፣ ገደቦች እና የዶኤስ መቆጣጠሪያዎች
 - የሚወስን የጋዝ መርሃ ግብር;
@@ -423,7 +423,7 @@ import {
 
 const unsigned = buildRegisterZkAssetTransaction({
   registration: {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: {
       commit_params: "vk_shield",

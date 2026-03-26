@@ -69,15 +69,15 @@ const mint = buildMintAssetInstruction({
 
 const transfer = buildTransferAssetInstruction({
   sourceAssetId: "norito:4e52543000000001",
-  destinationAccountId: "i105...",
+  destinationAccountId: "<i105-account-id>",
   quantity: "5",
 });
 
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
-  authority: "i105...",
+  authority: "<i105-account-id>",
   mint: { assetId: "norito:4e52543000000001", quantity: "10" },
-  transfers: [{ destinationAccountId: "i105...", quantity: "5" }],
+  transfers: [{ destinationAccountId: "<i105-account-id>", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
 ```
@@ -165,11 +165,11 @@ const defs = await torii.queryAssetDefinitions({
 console.log("filtered definitions", defs.items);
 
 const assetId = "norito:4e52543000000001";
-const balances = await torii.listAccountAssets("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const balances = await torii.listAccountAssets("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D", {
   limit: 10,
   assetId,
 });
-const txs = await torii.listAccountTransactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const txs = await torii.listAccountTransactions("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D", {
   limit: 5,
   assetId,
 });
@@ -275,7 +275,7 @@ abort.abort(); // closes the underlying WebSocket cleanly
 `/v1/explorer/accounts/{account_id}/qr` اختتامی نکات تاکہ ڈیش بورڈز دوبارہ چلاسکیں
 وہی سنیپ شاٹس جو پورٹل کو طاقت دیتے ہیں۔ `getExplorerMetrics()` کو معمول بناتا ہے
 جب راستہ غیر فعال ہوتا ہے تو پے لوڈ اور واپسی `null`۔ اس کے ساتھ جوڑ
-`getExplorerAccountQr()` جب بھی آپ کو I105 (ترجیحی)/سورہ (دوسرا بہترین) لٹریلس پلس ان لائن کی ضرورت ہو
+`getExplorerAccountQr()` جب بھی آپ کو i105 (ترجیحی)/سورہ (دوسرا بہترین) لٹریلس پلس ان لائن کی ضرورت ہو
 شیئر بٹنوں کے لئے ایس وی جی۔
 
 ```ts
@@ -290,7 +290,7 @@ if (!snapshot) {
   console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
 }
 
-const qr = await torii.getExplorerAccountQr("i105...");
+const qr = await torii.getExplorerAccountQr("<i105-account-id>");
 console.log("explorer literal", qr.literal);
 await fs.writeFile("alice.svg", qr.svg, "utf8");
 console.log(
@@ -298,8 +298,8 @@ console.log(
 );
 ```
 
-پاسنگ `I105` ایکسپلورر کے پہلے سے طے شدہ کمپریسڈ آئینہ
-سلیکٹرز ؛ ترجیحی I105 آؤٹ پٹ کے لئے اوور رائڈ کو چھوڑ دیں یا `i105_qr` کی درخواست کریں
+پاسنگ `i105` ایکسپلورر کے پہلے سے طے شدہ کمپریسڈ آئینہ
+سلیکٹرز ؛ ترجیحی i105 آؤٹ پٹ کے لئے اوور رائڈ کو چھوڑ دیں یا `i105_qr` کی درخواست کریں
 جب آپ کو QR-SAFE مختلف قسم کی ضرورت ہو۔ کمپریسڈ لفظی دوسرا بہترین ہے
 UX کے لئے صرف SORA- آپشن۔ مددگار ہمیشہ کیننیکل شناخت کنندہ کو لوٹاتا ہے ،
 منتخب لفظی ، اور میٹا ڈیٹا (نیٹ ورک کا سابقہ ​​، QR ورژن/ماڈیول ، خرابی
@@ -514,7 +514,7 @@ for await (const event of torii.streamEvents({
   کیننیکل اکاؤنٹ IDs کے ذریعہ اثاثوں کے حصول کو گروپ کرنا ؛ فلٹر کرنے کے لئے `assetId` پاس کریں
   ایک ہی اثاثہ مثال کے طور پر پورٹ فولیو۔
 - `getUaidBindings(uaid)` ہر ڈیٹا اسپیس ↔ اکاؤنٹ کی گنتی کرتا ہے
-  بائنڈنگ (`I105` `i105` لفظی لوٹاتا ہے)۔
+  بائنڈنگ (`i105` `i105` لفظی لوٹاتا ہے)۔
 - `getUaidManifests(uaid, { dataspaceId })` ہر صلاحیت کو ظاہر کرتا ہے ،
   لائف سائیکل کی حیثیت ، اور آڈٹ کے لئے پابند اکاؤنٹس۔
 
@@ -559,7 +559,7 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     manifest,
     privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
     reason: "Attester v2 rollout",
@@ -569,7 +569,7 @@ await torii.publishSpaceDirectoryManifest(
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
     uaid,
     dataspaceId: 11,

@@ -3161,9 +3161,168 @@ enum FrontierBodyFetchStage {
     Voters,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FrontierSlotMode {
+    Normal,
+    DeepCatchup,
+    Finalized,
+    Superseded,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FrontierSlotPhase {
+    AwaitBlockCreated,
+    AwaitBody,
+    ValidateBody,
+    AwaitVotes,
+    AwaitCommitQc,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FrontierBodyState {
+    Missing,
+    Available,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FrontierValidationState {
+    Unknown,
+    Pending,
+    Valid,
+    Invalid,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FrontierVoteState {
+    None,
+    VotesObserved,
+    CommitQcObserved,
+}
+
+#[derive(Debug, Clone)]
+struct FrontierCandidate {
+    view: u64,
+    block_hash: HashOf<BlockHeader>,
+    frontier_info: Option<super::message::BlockCreatedFrontierInfo>,
+    leader: Option<PeerId>,
+    voters: BTreeSet<PeerId>,
+    body_state: FrontierBodyState,
+    validation_state: FrontierValidationState,
+    vote_state: FrontierVoteState,
+    block_created_seen: bool,
+    exact_fetch_armed: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct FrontierQuorumProgress {
+    votes_observed: bool,
+    commit_qc_observed: bool,
+    last_vote_at: Option<Instant>,
+    last_commit_qc_at: Option<Instant>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FrontierTimers {
+    observed_at: Instant,
+    last_updated_at: Instant,
+    last_progress_at: Instant,
+    last_fetch_at: Option<Instant>,
+    lag_window_started_at: Option<Instant>,
+    last_view_advance_at: Option<Instant>,
+    deep_catchup_entered_at: Option<Instant>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct FrontierLocalVoteState {
+    local_vote_emitted: bool,
+}
+
+#[derive(Debug, Clone)]
+struct FrontierRepairState {
+    fetch_stage: FrontierBodyFetchStage,
+    retry_window: Duration,
+    pending_requesters: BTreeSet<PeerId>,
+    last_reason: Option<&'static str>,
+    quorum_timeout_rebroadcasted: bool,
+    deep_catchup_reason: Option<&'static str>,
+}
+
+#[derive(Debug, Clone)]
+enum FrontierSlotEvent {
+    OnBlockCreated {
+        block_hash: HashOf<BlockHeader>,
+        view: u64,
+        frontier_info: Option<super::message::BlockCreatedFrontierInfo>,
+        leader: Option<PeerId>,
+        voters: BTreeSet<PeerId>,
+        body_present: bool,
+        requester: Option<PeerId>,
+    },
+    OnBodyAvailable {
+        block_hash: HashOf<BlockHeader>,
+        view: u64,
+        sender: Option<PeerId>,
+    },
+    OnBodyValidated {
+        block_hash: HashOf<BlockHeader>,
+        view: u64,
+        valid: bool,
+    },
+    OnVoteObserved {
+        block_hash: HashOf<BlockHeader>,
+        view: u64,
+        voter: Option<PeerId>,
+    },
+    OnCommitQcObserved {
+        block_hash: HashOf<BlockHeader>,
+        view: u64,
+    },
+    OnFutureGapObserved {
+        block_hash: HashOf<BlockHeader>,
+        view: u64,
+        leader: Option<PeerId>,
+        voters: BTreeSet<PeerId>,
+        exact_fetch_armed: bool,
+        requester: Option<PeerId>,
+    },
+    OnFetchRetryDue,
+    OnQuorumTimeout {
+        cause: ViewChangeCause,
+        requested_view: u64,
+    },
+    OnLagWindowExpired {
+        reason: &'static str,
+    },
+    OnViewAdvanceRequested {
+        cause: ViewChangeCause,
+        requested_view: u64,
+    },
+    OnCommittedHeightAdvanced {
+        committed_height: u64,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct FrontierSlotActions {
+    fetch_block_body: bool,
+    enter_deep_catchup: Option<&'static str>,
+    request_view_change: Option<(u64, u64, ViewChangeCause)>,
+    retire_slot: bool,
+}
+
 #[derive(Debug)]
 struct FrontierSlot {
     height: u64,
+    active_view: u64,
+    mode: FrontierSlotMode,
+    phase: FrontierSlotPhase,
+    candidate: FrontierCandidate,
+    quorum_progress: FrontierQuorumProgress,
+    timers: FrontierTimers,
+    local_vote_state: FrontierLocalVoteState,
+    repair_state: FrontierRepairState,
+    // TODO: remove these compatibility mirrors once the remaining slot helpers read the nested
+    // FSM fields directly instead of the legacy flat fields.
     view: u64,
     block_hash: HashOf<BlockHeader>,
     observed_at: Instant,
@@ -3178,6 +3337,473 @@ struct FrontierSlot {
     last_fetch_at: Option<Instant>,
     retry_window: Duration,
     pending_requesters: BTreeSet<PeerId>,
+}
+
+impl FrontierSlot {
+    fn new(
+        height: u64,
+        view: u64,
+        block_hash: HashOf<BlockHeader>,
+        now: Instant,
+        retry_window: Duration,
+        leader: Option<PeerId>,
+        voters: BTreeSet<PeerId>,
+        block_created_seen: bool,
+        exact_fetch_armed: bool,
+        body_present: bool,
+        frontier_info: Option<super::message::BlockCreatedFrontierInfo>,
+        requester: Option<PeerId>,
+    ) -> Self {
+        let mut pending_requesters = BTreeSet::new();
+        if let Some(requester) = requester {
+            pending_requesters.insert(requester);
+        }
+        let candidate = FrontierCandidate {
+            view,
+            block_hash,
+            frontier_info: frontier_info.clone(),
+            leader: leader.clone(),
+            voters: voters.clone(),
+            body_state: if body_present {
+                FrontierBodyState::Available
+            } else {
+                FrontierBodyState::Missing
+            },
+            validation_state: if body_present {
+                FrontierValidationState::Pending
+            } else {
+                FrontierValidationState::Unknown
+            },
+            vote_state: FrontierVoteState::None,
+            block_created_seen,
+            exact_fetch_armed,
+        };
+        let timers = FrontierTimers {
+            observed_at: now,
+            last_updated_at: now,
+            last_progress_at: now,
+            last_fetch_at: None,
+            lag_window_started_at: (!body_present).then_some(now),
+            last_view_advance_at: None,
+            deep_catchup_entered_at: None,
+        };
+        let repair_state = FrontierRepairState {
+            fetch_stage: FrontierBodyFetchStage::Leader,
+            retry_window,
+            pending_requesters,
+            last_reason: None,
+            quorum_timeout_rebroadcasted: false,
+            deep_catchup_reason: None,
+        };
+        let phase = if body_present {
+            FrontierSlotPhase::ValidateBody
+        } else if block_created_seen || exact_fetch_armed {
+            FrontierSlotPhase::AwaitBody
+        } else {
+            FrontierSlotPhase::AwaitBlockCreated
+        };
+        let mut slot = Self {
+            height,
+            active_view: view,
+            mode: FrontierSlotMode::Normal,
+            phase,
+            candidate,
+            quorum_progress: FrontierQuorumProgress::default(),
+            timers,
+            local_vote_state: FrontierLocalVoteState::default(),
+            repair_state,
+            view,
+            block_hash,
+            observed_at: now,
+            last_updated_at: now,
+            body_present,
+            block_created_seen,
+            exact_fetch_armed,
+            frontier_info,
+            leader,
+            voters,
+            fetch_stage: FrontierBodyFetchStage::Leader,
+            last_fetch_at: None,
+            retry_window,
+            pending_requesters: BTreeSet::new(),
+        };
+        slot.sync_compat_fields();
+        slot
+    }
+
+    fn lag_started_at(&self) -> Instant {
+        self.timers
+            .lag_window_started_at
+            .unwrap_or(self.timers.observed_at)
+    }
+
+    fn body_missing(&self) -> bool {
+        matches!(self.candidate.body_state, FrontierBodyState::Missing)
+    }
+
+    fn matches_candidate(&self, block_hash: HashOf<BlockHeader>, view: u64) -> bool {
+        self.candidate.block_hash == block_hash && self.candidate.view == view
+    }
+
+    fn current_view_for_timeout(&self, requested_view: u64) -> u64 {
+        self.active_view
+            .max(requested_view)
+            .max(self.candidate.view)
+    }
+
+    fn record_progress(&mut self, now: Instant) {
+        self.timers.last_progress_at = now;
+        self.timers.last_updated_at = now;
+        self.timers.lag_window_started_at = None;
+        self.repair_state.quorum_timeout_rebroadcasted = false;
+    }
+
+    fn note_lag_if_needed(&mut self, now: Instant) {
+        if self.timers.lag_window_started_at.is_none() {
+            self.timers.lag_window_started_at = Some(now);
+        }
+    }
+
+    fn mark_deep_catchup(&mut self, now: Instant, reason: &'static str) {
+        self.mode = FrontierSlotMode::DeepCatchup;
+        self.repair_state.deep_catchup_reason = Some(reason);
+        self.repair_state.last_reason = Some(reason);
+        self.repair_state.quorum_timeout_rebroadcasted = false;
+        self.timers.deep_catchup_entered_at = Some(now);
+        self.timers.last_updated_at = now;
+    }
+
+    fn sync_compat_fields(&mut self) {
+        self.view = self.candidate.view;
+        self.block_hash = self.candidate.block_hash;
+        self.observed_at = self.timers.observed_at;
+        self.last_updated_at = self.timers.last_updated_at;
+        self.body_present = matches!(self.candidate.body_state, FrontierBodyState::Available);
+        self.block_created_seen = self.candidate.block_created_seen;
+        self.exact_fetch_armed = self.candidate.exact_fetch_armed;
+        self.frontier_info = self.candidate.frontier_info.clone();
+        self.leader = self.candidate.leader.clone();
+        self.voters = self.candidate.voters.clone();
+        self.fetch_stage = self.repair_state.fetch_stage;
+        self.last_fetch_at = self.timers.last_fetch_at;
+        self.retry_window = self.repair_state.retry_window;
+        self.pending_requesters = self.repair_state.pending_requesters.clone();
+    }
+
+    fn step(
+        &mut self,
+        now: Instant,
+        event: FrontierSlotEvent,
+        lag_window: Duration,
+    ) -> FrontierSlotActions {
+        let mut actions = FrontierSlotActions::default();
+        match event {
+            FrontierSlotEvent::OnBlockCreated {
+                block_hash,
+                view,
+                frontier_info,
+                leader,
+                voters,
+                body_present,
+                requester,
+            } => {
+                let higher_view = view > self.candidate.view;
+                let same_candidate = self.matches_candidate(block_hash, view);
+                if higher_view {
+                    self.candidate = FrontierCandidate {
+                        view,
+                        block_hash,
+                        frontier_info: frontier_info.clone(),
+                        leader: leader.clone(),
+                        voters: voters.clone(),
+                        body_state: if body_present {
+                            FrontierBodyState::Available
+                        } else {
+                            FrontierBodyState::Missing
+                        },
+                        validation_state: if body_present {
+                            FrontierValidationState::Pending
+                        } else {
+                            FrontierValidationState::Unknown
+                        },
+                        vote_state: FrontierVoteState::None,
+                        block_created_seen: true,
+                        exact_fetch_armed: true,
+                    };
+                    self.active_view = self.active_view.max(view);
+                    self.phase = if body_present {
+                        FrontierSlotPhase::ValidateBody
+                    } else {
+                        FrontierSlotPhase::AwaitBody
+                    };
+                    self.quorum_progress = FrontierQuorumProgress::default();
+                    self.repair_state.fetch_stage = FrontierBodyFetchStage::Leader;
+                    self.repair_state.quorum_timeout_rebroadcasted = false;
+                    self.timers.observed_at = now;
+                    self.record_progress(now);
+                } else if same_candidate {
+                    self.candidate.block_created_seen = true;
+                    self.candidate.exact_fetch_armed = true;
+                    if let Some(frontier_info) = frontier_info {
+                        self.candidate.frontier_info = Some(frontier_info);
+                    }
+                    if let Some(leader) = leader {
+                        self.candidate.leader = Some(leader);
+                    }
+                    self.candidate.voters.extend(voters);
+                    if body_present {
+                        self.candidate.body_state = FrontierBodyState::Available;
+                        self.candidate.validation_state = FrontierValidationState::Pending;
+                        self.phase = FrontierSlotPhase::ValidateBody;
+                        self.record_progress(now);
+                    } else {
+                        self.phase = FrontierSlotPhase::AwaitBody;
+                        self.note_lag_if_needed(now);
+                    }
+                } else {
+                    self.sync_compat_fields();
+                    return actions;
+                }
+                if let Some(requester) = requester {
+                    self.repair_state.pending_requesters.insert(requester);
+                }
+                self.mode = match self.mode {
+                    FrontierSlotMode::Finalized | FrontierSlotMode::Superseded => {
+                        FrontierSlotMode::Normal
+                    }
+                    mode => mode,
+                };
+            }
+            FrontierSlotEvent::OnBodyAvailable {
+                block_hash,
+                view,
+                sender,
+            } => {
+                if !self.matches_candidate(block_hash, view) {
+                    self.sync_compat_fields();
+                    return actions;
+                }
+                if let Some(sender) = sender {
+                    self.candidate.voters.insert(sender);
+                }
+                self.candidate.body_state = FrontierBodyState::Available;
+                if matches!(
+                    self.candidate.validation_state,
+                    FrontierValidationState::Unknown
+                ) {
+                    self.candidate.validation_state = FrontierValidationState::Pending;
+                }
+                self.phase = FrontierSlotPhase::ValidateBody;
+                self.record_progress(now);
+            }
+            FrontierSlotEvent::OnBodyValidated {
+                block_hash,
+                view,
+                valid,
+            } => {
+                if !self.matches_candidate(block_hash, view) {
+                    self.sync_compat_fields();
+                    return actions;
+                }
+                if valid {
+                    self.candidate.validation_state = FrontierValidationState::Valid;
+                    self.phase = if self.quorum_progress.commit_qc_observed {
+                        FrontierSlotPhase::AwaitCommitQc
+                    } else {
+                        FrontierSlotPhase::AwaitVotes
+                    };
+                    self.record_progress(now);
+                } else {
+                    self.candidate.validation_state = FrontierValidationState::Invalid;
+                    self.phase = FrontierSlotPhase::AwaitBlockCreated;
+                    self.note_lag_if_needed(now);
+                }
+            }
+            FrontierSlotEvent::OnVoteObserved {
+                block_hash,
+                view,
+                voter,
+            } => {
+                if self.matches_candidate(block_hash, view) {
+                    if let Some(voter) = voter {
+                        self.candidate.voters.insert(voter);
+                    }
+                    self.candidate.vote_state = FrontierVoteState::VotesObserved;
+                    self.quorum_progress.votes_observed = true;
+                    self.quorum_progress.last_vote_at = Some(now);
+                    self.phase = FrontierSlotPhase::AwaitCommitQc;
+                    self.record_progress(now);
+                } else if view >= self.candidate.view {
+                    self.candidate.view = view;
+                    self.candidate.block_hash = block_hash;
+                    self.candidate.vote_state = FrontierVoteState::VotesObserved;
+                    self.candidate.body_state = FrontierBodyState::Missing;
+                    self.candidate.validation_state = FrontierValidationState::Unknown;
+                    self.candidate.block_created_seen = false;
+                    self.candidate.exact_fetch_armed = true;
+                    if let Some(voter) = voter {
+                        self.candidate.voters.insert(voter);
+                    }
+                    self.active_view = self.active_view.max(view);
+                    self.phase = FrontierSlotPhase::AwaitBody;
+                    self.note_lag_if_needed(now);
+                }
+            }
+            FrontierSlotEvent::OnCommitQcObserved { block_hash, view } => {
+                if !self.matches_candidate(block_hash, view) {
+                    self.sync_compat_fields();
+                    return actions;
+                }
+                self.candidate.vote_state = FrontierVoteState::CommitQcObserved;
+                self.quorum_progress.commit_qc_observed = true;
+                self.quorum_progress.last_commit_qc_at = Some(now);
+                self.phase = FrontierSlotPhase::AwaitCommitQc;
+                self.record_progress(now);
+            }
+            FrontierSlotEvent::OnFutureGapObserved {
+                block_hash,
+                view,
+                leader,
+                voters,
+                exact_fetch_armed,
+                requester,
+            } => {
+                let higher_view = view > self.candidate.view;
+                let same_candidate = self.matches_candidate(block_hash, view);
+                if higher_view {
+                    self.candidate = FrontierCandidate {
+                        view,
+                        block_hash,
+                        frontier_info: None,
+                        leader: leader.clone(),
+                        voters: voters.clone(),
+                        body_state: FrontierBodyState::Missing,
+                        validation_state: FrontierValidationState::Unknown,
+                        vote_state: FrontierVoteState::None,
+                        block_created_seen: false,
+                        exact_fetch_armed,
+                    };
+                    self.active_view = self.active_view.max(view);
+                    self.phase = FrontierSlotPhase::AwaitBody;
+                    self.quorum_progress = FrontierQuorumProgress::default();
+                    self.repair_state.fetch_stage = FrontierBodyFetchStage::Leader;
+                    self.repair_state.quorum_timeout_rebroadcasted = false;
+                    self.timers.observed_at = now;
+                    self.note_lag_if_needed(now);
+                } else if same_candidate {
+                    if let Some(leader) = leader {
+                        self.candidate.leader = Some(leader);
+                    }
+                    self.candidate.voters.extend(voters);
+                    self.candidate.exact_fetch_armed |= exact_fetch_armed;
+                    self.phase = if self.body_missing() {
+                        FrontierSlotPhase::AwaitBody
+                    } else {
+                        self.phase
+                    };
+                    self.note_lag_if_needed(now);
+                } else {
+                    self.sync_compat_fields();
+                    return actions;
+                }
+                if let Some(requester) = requester {
+                    self.repair_state.pending_requesters.insert(requester);
+                }
+                if !matches!(self.mode, FrontierSlotMode::DeepCatchup) {
+                    actions.fetch_block_body = self.candidate.exact_fetch_armed;
+                }
+            }
+            FrontierSlotEvent::OnFetchRetryDue => {
+                if matches!(self.mode, FrontierSlotMode::Normal)
+                    && matches!(self.phase, FrontierSlotPhase::AwaitBody)
+                    && self.candidate.exact_fetch_armed
+                    && self.body_missing()
+                {
+                    actions.fetch_block_body = true;
+                }
+            }
+            FrontierSlotEvent::OnQuorumTimeout {
+                cause,
+                requested_view,
+            } => {
+                let frontier_waiting_for_body = matches!(self.phase, FrontierSlotPhase::AwaitBody)
+                    && self.candidate.exact_fetch_armed
+                    && self.body_missing();
+                let lag_expired = lag_window != Duration::ZERO
+                    && now.saturating_duration_since(self.lag_started_at()) >= lag_window;
+                if frontier_waiting_for_body && !matches!(self.mode, FrontierSlotMode::DeepCatchup)
+                {
+                    if lag_expired {
+                        self.mark_deep_catchup(now, "frontier_stall_reset");
+                        actions.enter_deep_catchup = Some("frontier_stall_reset");
+                    } else {
+                        actions.fetch_block_body = true;
+                    }
+                } else if matches!(self.mode, FrontierSlotMode::DeepCatchup) {
+                    actions.enter_deep_catchup = self.repair_state.deep_catchup_reason;
+                } else {
+                    if lag_expired && matches!(self.phase, FrontierSlotPhase::AwaitCommitQc) {
+                        self.mark_deep_catchup(now, "frontier_stall_reset");
+                        actions.enter_deep_catchup = Some("frontier_stall_reset");
+                    } else if self.repair_state.quorum_timeout_rebroadcasted {
+                        self.active_view = self
+                            .current_view_for_timeout(requested_view)
+                            .saturating_add(1);
+                        self.timers.last_view_advance_at = Some(now);
+                        self.timers.last_updated_at = now;
+                        self.repair_state.quorum_timeout_rebroadcasted = false;
+                        actions.request_view_change = Some((
+                            self.height,
+                            self.current_view_for_timeout(requested_view),
+                            cause,
+                        ));
+                    } else {
+                        self.repair_state.quorum_timeout_rebroadcasted = true;
+                        if frontier_waiting_for_body {
+                            actions.fetch_block_body = true;
+                        }
+                    }
+                }
+            }
+            FrontierSlotEvent::OnLagWindowExpired { reason } => {
+                if matches!(self.mode, FrontierSlotMode::Normal)
+                    && matches!(
+                        self.phase,
+                        FrontierSlotPhase::AwaitBody
+                            | FrontierSlotPhase::AwaitVotes
+                            | FrontierSlotPhase::AwaitCommitQc
+                    )
+                {
+                    self.mark_deep_catchup(now, reason);
+                    actions.enter_deep_catchup = Some(reason);
+                } else if matches!(self.mode, FrontierSlotMode::DeepCatchup) {
+                    actions.enter_deep_catchup = self.repair_state.deep_catchup_reason;
+                }
+            }
+            FrontierSlotEvent::OnViewAdvanceRequested {
+                cause,
+                requested_view,
+            } => {
+                let current_view = self.current_view_for_timeout(requested_view);
+                self.active_view = self
+                    .current_view_for_timeout(requested_view)
+                    .saturating_add(1);
+                self.timers.last_view_advance_at = Some(now);
+                self.timers.last_updated_at = now;
+                self.repair_state.quorum_timeout_rebroadcasted = false;
+                actions.request_view_change = Some((self.height, current_view, cause));
+            }
+            FrontierSlotEvent::OnCommittedHeightAdvanced { committed_height } => {
+                if committed_height >= self.height {
+                    self.mode = FrontierSlotMode::Finalized;
+                    actions.retire_slot = true;
+                }
+            }
+        }
+
+        self.sync_compat_fields();
+        actions
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3424,6 +4050,7 @@ fn send_missing_block_request(
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 #[cfg(any(test, feature = "iroha-core-tests"))]
+#[allow(dead_code)] // Exercised by unit-test-only recovery harnesses.
 fn defer_qc_for_missing_block<F>(
     block_known: bool,
     retry_window: Duration,
@@ -5246,6 +5873,17 @@ impl Actor {
     }
 
     fn frontier_non_missing_qc_recovery_cause(&self, frontier_height: u64) -> Option<&'static str> {
+        if self.frontier_slot_is_exact_height(frontier_height)
+            && let Some(slot) = self.frontier_slot.as_ref()
+            && slot.height == frontier_height
+            && !matches!(
+                slot.mode,
+                FrontierSlotMode::Finalized | FrontierSlotMode::Superseded
+            )
+            && slot.repair_state.last_reason != Some("missing_qc")
+        {
+            return slot.repair_state.last_reason;
+        }
         self.frontier_recovery.as_ref().and_then(|state| {
             (state.frontier_height == frontier_height && state.last_cause != "missing_qc")
                 .then_some(state.last_cause)
@@ -5267,6 +5905,27 @@ impl Actor {
         now: Instant,
         window: Duration,
     ) -> bool {
+        if self.frontier_slot_is_exact_height(frontier_height)
+            && let Some(slot) = self.frontier_slot.as_ref()
+            && slot.height == frontier_height
+            && !matches!(
+                slot.mode,
+                FrontierSlotMode::Finalized | FrontierSlotMode::Superseded
+            )
+        {
+            let window = window.max(Duration::from_millis(1));
+            let slot_last_action_at = [
+                slot.timers.last_fetch_at,
+                slot.timers.last_view_advance_at,
+                slot.timers.deep_catchup_entered_at,
+            ]
+            .into_iter()
+            .flatten()
+            .max();
+            if let Some(last_action_at) = slot_last_action_at {
+                return now.saturating_duration_since(last_action_at) < window;
+            }
+        }
         let Some(state) = self
             .frontier_recovery
             .filter(|state| state.frontier_height == frontier_height)
@@ -5329,6 +5988,20 @@ impl Actor {
         now: Instant,
         queue_depths: super::status::WorkerQueueDepthSnapshot,
     ) -> bool {
+        if self.frontier_slot_is_exact_height(frontier_height) {
+            return self.frontier_slot.as_ref().is_some_and(|slot| {
+                slot.height == frontier_height
+                    && !matches!(
+                        slot.mode,
+                        FrontierSlotMode::Finalized | FrontierSlotMode::Superseded
+                    )
+                    && self.same_height_dependency_backlog_active_in_frontier_window(
+                        frontier_height,
+                        now,
+                        queue_depths,
+                    )
+            });
+        }
         self.frontier_recovery_exists_at_height(frontier_height)
             && self.same_height_dependency_backlog_active_in_frontier_window(
                 frontier_height,
@@ -5347,7 +6020,26 @@ impl Actor {
             return false;
         }
 
-        self.slot_has_authoritative_payload(frontier_height, frontier_view)
+        let frontier_slot_ingress_active = self.frontier_slot_is_exact_height(frontier_height)
+            && self.frontier_slot.as_ref().is_some_and(|slot| {
+                slot.height == frontier_height
+                    && slot.view <= frontier_view
+                    && !matches!(
+                        slot.mode,
+                        FrontierSlotMode::Finalized | FrontierSlotMode::Superseded
+                    )
+                    && (slot.block_created_seen
+                        || slot.body_present
+                        || matches!(
+                            slot.phase,
+                            FrontierSlotPhase::ValidateBody
+                                | FrontierSlotPhase::AwaitVotes
+                                | FrontierSlotPhase::AwaitCommitQc
+                        ))
+            });
+
+        frontier_slot_ingress_active
+            || self.slot_has_authoritative_payload(frontier_height, frontier_view)
             || self.pending.pending_blocks.values().any(|pending| {
                 !pending.aborted
                     && pending.height == frontier_height
@@ -5397,6 +6089,9 @@ impl Actor {
         frontier_height: u64,
         now: Instant,
     ) -> bool {
+        if self.frontier_slot_is_exact_height(frontier_height) {
+            return false;
+        }
         let window = self
             .frontier_recovery_window()
             .max(Duration::from_millis(1));
@@ -5472,6 +6167,24 @@ impl Actor {
         frontier_view: u64,
         now: Instant,
     ) -> bool {
+        let frontier_slot_vote_backed = self.frontier_slot_is_exact_height(frontier_height)
+            && self.frontier_slot.as_ref().is_some_and(|slot| {
+                slot.height == frontier_height
+                    && slot.view <= frontier_view
+                    && !matches!(
+                        slot.mode,
+                        FrontierSlotMode::Finalized | FrontierSlotMode::Superseded
+                    )
+                    && (slot.quorum_progress.votes_observed
+                        || slot.quorum_progress.commit_qc_observed
+                        || matches!(
+                            slot.phase,
+                            FrontierSlotPhase::AwaitVotes | FrontierSlotPhase::AwaitCommitQc
+                        ))
+            });
+        if frontier_slot_vote_backed {
+            return true;
+        }
         let window = self
             .frontier_recovery_window()
             .max(Duration::from_millis(1));
@@ -5578,6 +6291,18 @@ impl Actor {
         frontier_view: u64,
         now: Instant,
     ) -> bool {
+        let frontier_slot_missing_payload = self.frontier_slot_is_exact_height(frontier_height)
+            && self.frontier_slot.as_ref().is_some_and(|slot| {
+                slot.height == frontier_height
+                    && slot.view <= frontier_view
+                    && matches!(slot.mode, FrontierSlotMode::Normal)
+                    && slot.exact_fetch_armed
+                    && !slot.body_present
+                    && matches!(slot.phase, FrontierSlotPhase::AwaitBody)
+            });
+        if frontier_slot_missing_payload {
+            return true;
+        }
         let window = self
             .frontier_recovery_window()
             .max(Duration::from_millis(1));
@@ -5671,8 +6396,24 @@ impl Actor {
                     .seed_inflight
                     .keys()
                     .any(|key| key.1 == frontier_height && key.2 == frontier_view));
+        let frontier_slot_reassembly_active = self.frontier_slot_is_exact_height(frontier_height)
+            && self.frontier_slot.as_ref().is_some_and(|slot| {
+                slot.height == frontier_height
+                    && slot.view <= frontier_view
+                    && matches!(slot.mode, FrontierSlotMode::Normal)
+                    && (slot.block_created_seen
+                        || slot.body_present
+                        || slot.exact_fetch_armed
+                        || matches!(
+                            slot.phase,
+                            FrontierSlotPhase::ValidateBody
+                                | FrontierSlotPhase::AwaitVotes
+                                | FrontierSlotPhase::AwaitCommitQc
+                        ))
+            });
 
-        same_height_payload_dependency_backlog_active
+        frontier_slot_reassembly_active
+            || same_height_payload_dependency_backlog_active
             || same_slot_payload_ingress_active
             || self.frontier_recovery_same_height_rbc_sender_activity_active(frontier_height, now)
             || self.frontier_recovery_same_slot_missing_payload_recovery_active(
@@ -5826,6 +6567,23 @@ impl Actor {
     }
 
     fn frontier_vote_backed_recovery_active(&self, frontier_height: u64, now: Instant) -> bool {
+        if self.frontier_slot_is_exact_height(frontier_height)
+            && self.frontier_slot.as_ref().is_some_and(|slot| {
+                slot.height == frontier_height
+                    && !matches!(
+                        slot.mode,
+                        FrontierSlotMode::Finalized | FrontierSlotMode::Superseded
+                    )
+                    && (slot.quorum_progress.votes_observed
+                        || slot.quorum_progress.commit_qc_observed
+                        || matches!(
+                            slot.phase,
+                            FrontierSlotPhase::AwaitVotes | FrontierSlotPhase::AwaitCommitQc
+                        ))
+            })
+        {
+            return true;
+        }
         let tip_height = self.state.committed_height();
         let tip_hash = self.state.latest_block_hash_fast();
         let window = self.frontier_recovery_window();
@@ -5867,12 +6625,245 @@ impl Actor {
             || self.frontier_recovery_owned_by_quorum_timeout(frontier_height)
     }
 
+    fn frontier_slot_has_active_owner_state(&self, height: u64) -> bool {
+        self.frontier_slot.as_ref().is_some_and(|slot| {
+            slot.height == height
+                && !matches!(
+                    slot.mode,
+                    FrontierSlotMode::Finalized | FrontierSlotMode::Superseded
+                )
+                && (matches!(slot.mode, FrontierSlotMode::DeepCatchup)
+                    || matches!(
+                        slot.phase,
+                        FrontierSlotPhase::AwaitBody
+                            | FrontierSlotPhase::ValidateBody
+                            | FrontierSlotPhase::AwaitVotes
+                            | FrontierSlotPhase::AwaitCommitQc
+                    )
+                    || slot.block_created_seen
+                    || slot.body_present
+                    || slot.frontier_info.is_some()
+                    || slot.candidate.exact_fetch_armed
+                    || slot.quorum_progress.votes_observed
+                    || slot.quorum_progress.commit_qc_observed)
+        })
+    }
+
+    fn seed_frontier_slot_from_same_height_evidence(
+        &mut self,
+        frontier_height: u64,
+        requested_view: u64,
+        now: Instant,
+        reason: &'static str,
+    ) -> bool {
+        if frontier_height != self.committed_height_snapshot().saturating_add(1) {
+            return false;
+        }
+
+        if let Some(slot) = self.frontier_slot.as_mut()
+            && slot.height == frontier_height
+            && !matches!(
+                slot.mode,
+                FrontierSlotMode::Finalized | FrontierSlotMode::Superseded
+            )
+        {
+            slot.active_view = slot.active_view.max(requested_view);
+            slot.repair_state.last_reason = Some(reason);
+            slot.note_lag_if_needed(now);
+            slot.sync_compat_fields();
+            if self
+                .frontier_recovery
+                .as_ref()
+                .is_some_and(|state| state.frontier_height == frontier_height)
+            {
+                self.frontier_recovery = None;
+            }
+            return true;
+        }
+
+        let local_pending_seed = self
+            .pending
+            .pending_blocks
+            .values()
+            .filter(|pending| {
+                !pending.aborted
+                    && pending.validation_status != ValidationStatus::Invalid
+                    && pending.height == frontier_height
+            })
+            .max_by_key(|pending| pending.view)
+            .map(|pending| (pending.view, pending.block.hash()));
+        let local_inflight_seed = self
+            .subsystems
+            .commit
+            .inflight
+            .as_ref()
+            .filter(|inflight| {
+                !inflight.pending.aborted
+                    && inflight.pending.validation_status != ValidationStatus::Invalid
+                    && inflight.pending.height == frontier_height
+            })
+            .map(|inflight| (inflight.pending.view, inflight.block_hash));
+        let local_block_seed = match (local_pending_seed, local_inflight_seed) {
+            (Some(lhs), Some(rhs)) => Some(if rhs.0 > lhs.0 { rhs } else { lhs }),
+            (Some(seed), None) | (None, Some(seed)) => Some(seed),
+            (None, None) => None,
+        };
+        if let Some((view, block_hash)) = local_block_seed {
+            let frontier_info =
+                self.authoritative_slot_frontier_info(frontier_height, view, block_hash);
+            let _ = self.handle_frontier_slot_event(
+                now,
+                FrontierSlotEvent::OnBlockCreated {
+                    block_hash,
+                    view,
+                    frontier_info,
+                    leader: None,
+                    voters: BTreeSet::new(),
+                    body_present: true,
+                    requester: None,
+                },
+            );
+        } else if let Some((view, block_hash)) = self
+            .subsystems
+            .propose
+            .authoritative_block_slots
+            .iter()
+            .filter(|((height, _), _)| *height == frontier_height)
+            .max_by_key(|((_, view), _)| *view)
+            .map(|((_, view), block_hash)| (*view, *block_hash))
+        {
+            let frontier_info =
+                self.authoritative_slot_frontier_info(frontier_height, view, block_hash);
+            let body_present = self.frontier_block_materialized_locally(block_hash);
+            let _ = self.handle_frontier_slot_event(
+                now,
+                FrontierSlotEvent::OnBlockCreated {
+                    block_hash,
+                    view,
+                    frontier_info,
+                    leader: None,
+                    voters: BTreeSet::new(),
+                    body_present,
+                    requester: None,
+                },
+            );
+        } else {
+            let expected_epoch = self.epoch_for_height(frontier_height);
+            let qc_seed = self
+                .qc_cache
+                .values()
+                .filter(|qc| {
+                    frontier_height == qc.height
+                        && qc.epoch == expected_epoch
+                        && matches!(
+                            qc.phase,
+                            crate::sumeragi::consensus::Phase::Prepare
+                                | crate::sumeragi::consensus::Phase::Commit
+                        )
+                })
+                .max_by_key(|qc| {
+                    (
+                        qc.view,
+                        u8::from(matches!(
+                            qc.phase,
+                            crate::sumeragi::consensus::Phase::Commit
+                        )),
+                    )
+                })
+                .map(|qc| (qc.phase, qc.view, qc.subject_block_hash));
+            if let Some((phase, view, block_hash)) = qc_seed {
+                let event = if matches!(phase, crate::sumeragi::consensus::Phase::Commit) {
+                    FrontierSlotEvent::OnCommitQcObserved { block_hash, view }
+                } else {
+                    FrontierSlotEvent::OnVoteObserved {
+                        block_hash,
+                        view,
+                        voter: None,
+                    }
+                };
+                let _ = self.handle_frontier_slot_event(now, event);
+            } else if let Some((view, block_hash)) = self
+                .vote_log
+                .values()
+                .filter(|vote| {
+                    frontier_height == vote.height
+                        && vote.epoch == expected_epoch
+                        && matches!(
+                            vote.phase,
+                            crate::sumeragi::consensus::Phase::Prepare
+                                | crate::sumeragi::consensus::Phase::Commit
+                        )
+                })
+                .max_by_key(|vote| {
+                    (
+                        vote.view,
+                        u8::from(matches!(
+                            vote.phase,
+                            crate::sumeragi::consensus::Phase::Commit
+                        )),
+                    )
+                })
+                .map(|vote| (vote.view, vote.block_hash))
+            {
+                let _ = self.handle_frontier_slot_event(
+                    now,
+                    FrontierSlotEvent::OnVoteObserved {
+                        block_hash,
+                        view,
+                        voter: None,
+                    },
+                );
+            }
+        }
+
+        let Some(slot) = self.frontier_slot.as_mut() else {
+            return false;
+        };
+        if slot.height != frontier_height {
+            return false;
+        }
+        slot.active_view = slot.active_view.max(requested_view);
+        slot.repair_state.last_reason = Some(reason);
+        slot.note_lag_if_needed(now);
+        slot.sync_compat_fields();
+        if self
+            .frontier_recovery
+            .as_ref()
+            .is_some_and(|state| state.frontier_height == frontier_height)
+        {
+            self.frontier_recovery = None;
+        }
+        true
+    }
+
     fn seed_frontier_recovery_for_quorum_timeout(
         &mut self,
         frontier_height: u64,
         view: u64,
         now: Instant,
     ) -> bool {
+        if self
+            .frontier_slot
+            .as_ref()
+            .is_some_and(|slot| slot.height == frontier_height)
+        {
+            let Some(slot) = self.frontier_slot.as_mut() else {
+                return false;
+            };
+            slot.active_view = slot.active_view.max(view);
+            slot.repair_state.last_reason = Some("quorum_timeout");
+            slot.note_lag_if_needed(now);
+            slot.sync_compat_fields();
+            return true;
+        }
+        if self.seed_frontier_slot_from_same_height_evidence(
+            frontier_height,
+            view,
+            now,
+            "quorum_timeout",
+        ) {
+            return true;
+        }
         if self.frontier_recovery_exists_at_height(frontier_height) {
             return false;
         }
@@ -5904,6 +6895,28 @@ impl Actor {
         view: u64,
         now: Instant,
     ) -> bool {
+        if self
+            .frontier_slot
+            .as_ref()
+            .is_some_and(|slot| slot.height == frontier_height)
+        {
+            let Some(slot) = self.frontier_slot.as_mut() else {
+                return false;
+            };
+            slot.active_view = slot.active_view.max(view);
+            slot.repair_state.last_reason = Some("missing_payload");
+            slot.note_lag_if_needed(now);
+            slot.sync_compat_fields();
+            return true;
+        }
+        if self.seed_frontier_slot_from_same_height_evidence(
+            frontier_height,
+            view,
+            now,
+            "missing_payload",
+        ) {
+            return true;
+        }
         if self.frontier_recovery_exists_at_height(frontier_height) {
             return false;
         }
@@ -7401,6 +8414,7 @@ struct FrontierRecoveryState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RoundRecoveryBundleSource {
     CommitQuorumReschedule,
+    #[allow(dead_code)] // Reserved for unit-test coverage of fallback gating semantics.
     RosterProofFallback,
     RangePullExpiry,
     PayloadMismatchRecovery,
@@ -12681,6 +13695,338 @@ impl Actor {
         height == self.committed_height_snapshot().saturating_add(1)
     }
 
+    fn frontier_slot_lag_window(&self) -> Duration {
+        self.frontier_catchup_stall_window()
+            .max(self.missing_qc_height_stall_window())
+            .max(Duration::from_millis(1))
+    }
+
+    fn frontier_slot_deep_catchup_active_at_height(&self, height: u64) -> bool {
+        self.frontier_slot.as_ref().is_some_and(|slot| {
+            slot.height == height && matches!(slot.mode, FrontierSlotMode::DeepCatchup)
+        })
+    }
+
+    fn frontier_slot_allows_deep_catchup(&self, height: u64, _reason: &'static str) -> bool {
+        height == self.committed_height_snapshot().saturating_add(1)
+            && self.frontier_slot_deep_catchup_active_at_height(height)
+    }
+
+    fn apply_frontier_slot_event(
+        &mut self,
+        now: Instant,
+        event: FrontierSlotEvent,
+    ) -> FrontierSlotActions {
+        let lag_window = self.frontier_slot_lag_window();
+        let frontier_height = self.committed_height_snapshot().saturating_add(1);
+        match event {
+            FrontierSlotEvent::OnCommittedHeightAdvanced { committed_height } => {
+                let Some(mut slot) = self.frontier_slot.take() else {
+                    return FrontierSlotActions::default();
+                };
+                let actions = slot.step(
+                    now,
+                    FrontierSlotEvent::OnCommittedHeightAdvanced { committed_height },
+                    lag_window,
+                );
+                if !actions.retire_slot {
+                    self.frontier_slot = Some(slot);
+                }
+                actions
+            }
+            FrontierSlotEvent::OnFetchRetryDue => {
+                let Some(mut slot) = self.frontier_slot.take() else {
+                    return FrontierSlotActions::default();
+                };
+                let actions = slot.step(now, FrontierSlotEvent::OnFetchRetryDue, lag_window);
+                self.frontier_slot = Some(slot);
+                actions
+            }
+            FrontierSlotEvent::OnViewAdvanceRequested {
+                cause,
+                requested_view,
+            } => {
+                let Some(mut slot) = self.frontier_slot.take() else {
+                    return FrontierSlotActions {
+                        request_view_change: Some((frontier_height, requested_view, cause)),
+                        ..FrontierSlotActions::default()
+                    };
+                };
+                let actions = slot.step(
+                    now,
+                    FrontierSlotEvent::OnViewAdvanceRequested {
+                        cause,
+                        requested_view,
+                    },
+                    lag_window,
+                );
+                self.frontier_slot = Some(slot);
+                actions
+            }
+            FrontierSlotEvent::OnLagWindowExpired { reason } => {
+                let Some(mut slot) = self.frontier_slot.take() else {
+                    return FrontierSlotActions::default();
+                };
+                let actions = slot.step(
+                    now,
+                    FrontierSlotEvent::OnLagWindowExpired { reason },
+                    lag_window,
+                );
+                self.frontier_slot = Some(slot);
+                actions
+            }
+            FrontierSlotEvent::OnQuorumTimeout {
+                cause,
+                requested_view,
+            } => {
+                let Some(mut slot) = self.frontier_slot.take() else {
+                    return FrontierSlotActions {
+                        request_view_change: Some((frontier_height, requested_view, cause)),
+                        ..FrontierSlotActions::default()
+                    };
+                };
+                let actions = slot.step(
+                    now,
+                    FrontierSlotEvent::OnQuorumTimeout {
+                        cause,
+                        requested_view,
+                    },
+                    lag_window,
+                );
+                self.frontier_slot = Some(slot);
+                actions
+            }
+            FrontierSlotEvent::OnBlockCreated {
+                block_hash,
+                view,
+                frontier_info,
+                leader,
+                voters,
+                body_present,
+                requester,
+            } => {
+                let retry_window =
+                    self.frontier_slot_retry_window(block_hash, frontier_height, view);
+                let mut slot = match self.frontier_slot.take() {
+                    Some(slot) if slot.height == frontier_height => slot,
+                    _ => FrontierSlot::new(
+                        frontier_height,
+                        view,
+                        block_hash,
+                        now,
+                        retry_window,
+                        leader.clone(),
+                        voters.clone(),
+                        true,
+                        true,
+                        body_present,
+                        frontier_info.clone(),
+                        requester.clone(),
+                    ),
+                };
+                slot.repair_state.retry_window = retry_window;
+                let actions = slot.step(
+                    now,
+                    FrontierSlotEvent::OnBlockCreated {
+                        block_hash,
+                        view,
+                        frontier_info,
+                        leader,
+                        voters,
+                        body_present,
+                        requester,
+                    },
+                    lag_window,
+                );
+                self.frontier_slot = Some(slot);
+                actions
+            }
+            FrontierSlotEvent::OnBodyAvailable {
+                block_hash,
+                view,
+                sender,
+            } => {
+                let Some(mut slot) = self.frontier_slot.take() else {
+                    return FrontierSlotActions::default();
+                };
+                let actions = slot.step(
+                    now,
+                    FrontierSlotEvent::OnBodyAvailable {
+                        block_hash,
+                        view,
+                        sender,
+                    },
+                    lag_window,
+                );
+                self.frontier_slot = Some(slot);
+                actions
+            }
+            FrontierSlotEvent::OnBodyValidated {
+                block_hash,
+                view,
+                valid,
+            } => {
+                let Some(mut slot) = self.frontier_slot.take() else {
+                    return FrontierSlotActions::default();
+                };
+                let actions = slot.step(
+                    now,
+                    FrontierSlotEvent::OnBodyValidated {
+                        block_hash,
+                        view,
+                        valid,
+                    },
+                    lag_window,
+                );
+                self.frontier_slot = Some(slot);
+                actions
+            }
+            FrontierSlotEvent::OnVoteObserved {
+                block_hash,
+                view,
+                voter,
+            } => {
+                let retry_window =
+                    self.frontier_slot_retry_window(block_hash, frontier_height, view);
+                let mut slot = match self.frontier_slot.take() {
+                    Some(slot) if slot.height == frontier_height => slot,
+                    _ => FrontierSlot::new(
+                        frontier_height,
+                        view,
+                        block_hash,
+                        now,
+                        retry_window,
+                        None,
+                        voter.clone().into_iter().collect(),
+                        false,
+                        true,
+                        false,
+                        None,
+                        None,
+                    ),
+                };
+                slot.repair_state.retry_window = retry_window;
+                let actions = slot.step(
+                    now,
+                    FrontierSlotEvent::OnVoteObserved {
+                        block_hash,
+                        view,
+                        voter,
+                    },
+                    lag_window,
+                );
+                self.frontier_slot = Some(slot);
+                actions
+            }
+            FrontierSlotEvent::OnCommitQcObserved { block_hash, view } => {
+                let retry_window =
+                    self.frontier_slot_retry_window(block_hash, frontier_height, view);
+                let mut slot = match self.frontier_slot.take() {
+                    Some(slot) if slot.height == frontier_height => slot,
+                    _ => FrontierSlot::new(
+                        frontier_height,
+                        view,
+                        block_hash,
+                        now,
+                        retry_window,
+                        None,
+                        BTreeSet::new(),
+                        false,
+                        true,
+                        false,
+                        None,
+                        None,
+                    ),
+                };
+                slot.repair_state.retry_window = retry_window;
+                let actions = slot.step(
+                    now,
+                    FrontierSlotEvent::OnCommitQcObserved { block_hash, view },
+                    lag_window,
+                );
+                self.frontier_slot = Some(slot);
+                actions
+            }
+            FrontierSlotEvent::OnFutureGapObserved {
+                block_hash,
+                view,
+                leader,
+                voters,
+                exact_fetch_armed,
+                requester,
+            } => {
+                let retry_window =
+                    self.frontier_slot_retry_window(block_hash, frontier_height, view);
+                let mut slot = match self.frontier_slot.take() {
+                    Some(slot) if slot.height == frontier_height => slot,
+                    _ => FrontierSlot::new(
+                        frontier_height,
+                        view,
+                        block_hash,
+                        now,
+                        retry_window,
+                        leader.clone(),
+                        voters.clone(),
+                        false,
+                        exact_fetch_armed,
+                        false,
+                        None,
+                        requester.clone(),
+                    ),
+                };
+                slot.repair_state.retry_window = retry_window;
+                let actions = slot.step(
+                    now,
+                    FrontierSlotEvent::OnFutureGapObserved {
+                        block_hash,
+                        view,
+                        leader,
+                        voters,
+                        exact_fetch_armed,
+                        requester,
+                    },
+                    lag_window,
+                );
+                self.frontier_slot = Some(slot);
+                actions
+            }
+        }
+    }
+
+    fn execute_frontier_slot_actions(
+        &mut self,
+        now: Instant,
+        actions: FrontierSlotActions,
+    ) -> FrontierRecoveryAdvance {
+        let mut advance = FrontierRecoveryAdvance::None;
+        if actions.fetch_block_body && self.emit_frontier_block_body_fetch(now) {
+            advance = FrontierRecoveryAdvance::CatchUp;
+        }
+        if let Some(reason) = actions.enter_deep_catchup
+            && self.request_range_pull_from_anchor(
+                self.committed_height_snapshot().saturating_add(1),
+                reason,
+                now,
+            )
+        {
+            advance = FrontierRecoveryAdvance::CatchUp;
+        }
+        if let Some((height, view, cause)) = actions.request_view_change {
+            self.apply_view_change_with_cause_for_height(height, view, cause);
+            advance = FrontierRecoveryAdvance::Rotate;
+        }
+        advance
+    }
+
+    fn handle_frontier_slot_event(
+        &mut self,
+        now: Instant,
+        event: FrontierSlotEvent,
+    ) -> FrontierRecoveryAdvance {
+        let actions = self.apply_frontier_slot_event(now, event);
+        self.execute_frontier_slot_actions(now, actions)
+    }
+
     fn exact_frontier_block_created_owner_active(&self, key: super::rbc_store::SessionKey) -> bool {
         self.frontier_slot_is_exact_height(key.1)
             && self
@@ -12792,34 +14138,18 @@ impl Actor {
                 .is_some()
     }
 
-    fn should_allow_contiguous_frontier_deep_catchup(
-        &self,
-        height: u64,
-        reason: &'static str,
-    ) -> bool {
-        let local_height = self.committed_height_snapshot();
-        if height != local_height.saturating_add(1) {
-            return false;
-        }
-
-        // The contiguous frontier is owned by the exact slot machine while the peer is still in
-        // healthy near-tip recovery. Re-open deterministic deep catch-up only after the shared
-        // lagging windows activate for the current frontier. This preserves exact body repair for
-        // healthy peers, but prevents a marooned `committed + 1` node from spinning forever once
-        // it has been deterministically classified as lagging.
-        let missing_qc_stall_active = self
-            .missing_qc_height_stall
-            .as_ref()
-            .is_some_and(|stall| stall.height == height && stall.mode_active);
-        if missing_qc_stall_active && Self::reason_is_missing_qc_stall_reanchor(reason) {
-            return true;
-        }
-
-        self.frontier_catchup_stall.as_ref().is_some_and(|stall| {
-            stall.frontier_height == height
-                && stall.local_height_at_entry == local_height
-                && stall.mode_active
-                && Self::reason_is_canonical_frontier_reanchor(reason)
+    fn frontier_slot_lag_window_expired(&self, height: u64, now: Instant) -> bool {
+        self.frontier_slot.as_ref().is_some_and(|slot| {
+            slot.height == height
+                && matches!(slot.mode, FrontierSlotMode::Normal)
+                && matches!(
+                    slot.phase,
+                    FrontierSlotPhase::AwaitBody
+                        | FrontierSlotPhase::AwaitVotes
+                        | FrontierSlotPhase::AwaitCommitQc
+                )
+                && now.saturating_duration_since(slot.lag_started_at())
+                    >= self.frontier_slot_lag_window()
         })
     }
 
@@ -12847,13 +14177,10 @@ impl Actor {
 
     fn prune_frontier_slot_state(&mut self) {
         let committed_height = self.committed_height_snapshot();
-        if self
-            .frontier_slot
-            .as_ref()
-            .is_some_and(|slot| slot.height <= committed_height)
-        {
-            self.frontier_slot = None;
-        }
+        let _ = self.handle_frontier_slot_event(
+            Instant::now(),
+            FrontierSlotEvent::OnCommittedHeightAdvanced { committed_height },
+        );
         if self
             .next_slot_prefetch
             .as_ref()
@@ -12890,65 +14217,28 @@ impl Actor {
         if height != frontier_height {
             return false;
         }
-
         let body_present = body_present || self.frontier_block_materialized_locally(block_hash);
-        let retry_window = self.frontier_slot_retry_window(block_hash, height, view);
-        let mut slot = match self.frontier_slot.take() {
-            Some(existing)
-                if existing.height == height
-                    && existing.view == view
-                    && existing.block_hash == block_hash =>
-            {
-                existing
-            }
-            Some(existing)
-                if existing.height == height
-                    && existing.view == view
-                    && (existing.body_present
-                        || existing.block_created_seen
-                        || existing.exact_fetch_armed)
-                    && !block_created_seen
-                    && !exact_fetch_armed
-                    && !body_present =>
-            {
-                self.frontier_slot = Some(existing);
-                return true;
-            }
-            _ => FrontierSlot {
-                height,
-                view,
+        let event = if block_created_seen || body_present {
+            FrontierSlotEvent::OnBlockCreated {
                 block_hash,
-                observed_at: now,
-                last_updated_at: now,
+                view,
+                frontier_info,
+                leader,
+                voters,
                 body_present,
-                block_created_seen,
+                requester,
+            }
+        } else {
+            FrontierSlotEvent::OnFutureGapObserved {
+                block_hash,
+                view,
+                leader,
+                voters,
                 exact_fetch_armed,
-                frontier_info: None,
-                leader: None,
-                voters: BTreeSet::new(),
-                fetch_stage: FrontierBodyFetchStage::Leader,
-                last_fetch_at: None,
-                retry_window,
-                pending_requesters: BTreeSet::new(),
-            },
+                requester,
+            }
         };
-
-        slot.last_updated_at = now;
-        slot.body_present |= body_present;
-        slot.block_created_seen |= block_created_seen;
-        slot.exact_fetch_armed |= exact_fetch_armed;
-        if let Some(frontier_info) = frontier_info {
-            slot.frontier_info = Some(frontier_info);
-        }
-        slot.retry_window = retry_window;
-        if let Some(leader) = leader {
-            slot.leader = Some(leader);
-        }
-        slot.voters.extend(voters);
-        if let Some(requester) = requester {
-            slot.pending_requesters.insert(requester);
-        }
-        self.frontier_slot = Some(slot);
+        let _ = self.handle_frontier_slot_event(now, event);
         true
     }
 
@@ -13013,14 +14303,18 @@ impl Actor {
         voter: Option<PeerId>,
         now: Instant,
     ) -> bool {
-        let mut voters = BTreeSet::new();
-        if let Some(voter) = voter.filter(|peer| peer != self.common_config.peer.id()) {
-            voters.insert(voter);
+        if !self.frontier_slot_is_exact_height(height) {
+            return false;
         }
-        self.update_frontier_slot(
-            block_hash, height, view, None, voters, /*block_created_seen*/ false,
-            /*exact_fetch_armed*/ false, false, None, None, now,
-        )
+        let advance = self.handle_frontier_slot_event(
+            now,
+            FrontierSlotEvent::OnVoteObserved {
+                block_hash,
+                view,
+                voter: voter.filter(|peer| peer != self.common_config.peer.id()),
+            },
+        );
+        !matches!(advance, FrontierRecoveryAdvance::None)
     }
 
     fn frontier_body_fetch_targets(slot: &FrontierSlot) -> Vec<PeerId> {
@@ -13038,7 +14332,10 @@ impl Actor {
 
     fn frontier_body_next_due(&self, now: Instant) -> Option<Instant> {
         let slot = self.frontier_slot.as_ref()?;
-        if slot.body_present || !slot.exact_fetch_armed {
+        if slot.body_present
+            || !slot.exact_fetch_armed
+            || !matches!(slot.mode, FrontierSlotMode::Normal)
+        {
             return None;
         }
         if Self::frontier_body_fetch_targets(slot).is_empty() {
@@ -13102,17 +14399,18 @@ impl Actor {
         .max()
     }
 
-    fn retry_frontier_block_body_fetch(&mut self, now: Instant) -> bool {
+    fn emit_frontier_block_body_fetch(&mut self, now: Instant) -> bool {
         self.prune_frontier_slot_state();
         let Some(mut slot) = self.frontier_slot.take() else {
             return false;
         };
         if slot.body_present || self.frontier_block_materialized_locally(slot.block_hash) {
             slot.body_present = true;
+            slot.candidate.body_state = FrontierBodyState::Available;
             self.frontier_slot = Some(slot);
             return false;
         }
-        if !slot.exact_fetch_armed {
+        if !slot.exact_fetch_armed || !matches!(slot.mode, FrontierSlotMode::Normal) {
             self.frontier_slot = Some(slot);
             return false;
         }
@@ -13162,11 +14460,22 @@ impl Actor {
             });
         }
         slot.last_fetch_at = Some(now);
+        slot.timers.last_fetch_at = Some(now);
         if matches!(slot.fetch_stage, FrontierBodyFetchStage::Leader) {
             slot.fetch_stage = FrontierBodyFetchStage::Voters;
+            slot.repair_state.fetch_stage = FrontierBodyFetchStage::Voters;
         }
+        slot.timers.last_updated_at = now;
+        slot.sync_compat_fields();
         self.frontier_slot = Some(slot);
         true
+    }
+
+    fn retry_frontier_block_body_fetch(&mut self, now: Instant) -> bool {
+        matches!(
+            self.handle_frontier_slot_event(now, FrontierSlotEvent::OnFetchRetryDue),
+            FrontierRecoveryAdvance::CatchUp
+        )
     }
 
     fn local_block_height_view(&self, hash: HashOf<BlockHeader>) -> Option<(u64, u64)> {
@@ -21996,18 +23305,28 @@ impl Actor {
             self.lock_lag_range_pull_scope_for_height(height);
         let local_height = self.committed_height_snapshot();
         if height == local_height.saturating_add(1)
-            && !self.should_allow_contiguous_frontier_deep_catchup(height, reason)
+            && !self.frontier_slot_allows_deep_catchup(height, reason)
         {
-            let exact_retry_emitted = self.retry_frontier_block_body_fetch(now);
-            debug!(
-                height,
-                local_height,
-                reason,
-                tier = tier.map(RangePullCandidateTier::label),
-                exact_retry_emitted,
-                "suppressing block-sync range pull for contiguous frontier exact-body owner"
-            );
-            return false;
+            if self.frontier_slot_lag_window_expired(height, now) {
+                let _ = self.handle_frontier_slot_event(
+                    now,
+                    FrontierSlotEvent::OnLagWindowExpired {
+                        reason: "frontier_stall_reset",
+                    },
+                );
+            }
+            if !self.frontier_slot_allows_deep_catchup(height, reason) {
+                let exact_retry_emitted = self.retry_frontier_block_body_fetch(now);
+                debug!(
+                    height,
+                    local_height,
+                    reason,
+                    tier = tier.map(RangePullCandidateTier::label),
+                    exact_retry_emitted,
+                    "suppressing block-sync range pull for contiguous frontier exact-body owner"
+                );
+                return false;
+            }
         }
         let canonical_frontier_reanchor_reason =
             Self::reason_is_canonical_frontier_reanchor(reason);
@@ -25942,18 +27261,28 @@ impl Actor {
     ) -> bool {
         let local_height = self.committed_height_snapshot();
         if frontier_height == local_height.saturating_add(1)
-            && !self.should_allow_contiguous_frontier_deep_catchup(frontier_height, reason)
+            && !self.frontier_slot_allows_deep_catchup(frontier_height, reason)
         {
-            let exact_retry_emitted = self.retry_frontier_block_body_fetch(now);
-            debug!(
-                frontier_height,
-                local_height,
-                reason,
-                all_peers,
-                exact_retry_emitted,
-                "suppressing unified frontier range pull for contiguous frontier exact-body owner"
-            );
-            return exact_retry_emitted;
+            if self.frontier_slot_lag_window_expired(frontier_height, now) {
+                let _ = self.handle_frontier_slot_event(
+                    now,
+                    FrontierSlotEvent::OnLagWindowExpired {
+                        reason: "frontier_stall_reset",
+                    },
+                );
+            }
+            if !self.frontier_slot_allows_deep_catchup(frontier_height, reason) {
+                let exact_retry_emitted = self.retry_frontier_block_body_fetch(now);
+                debug!(
+                    frontier_height,
+                    local_height,
+                    reason,
+                    all_peers,
+                    exact_retry_emitted,
+                    "suppressing unified frontier range pull for contiguous frontier exact-body owner"
+                );
+                return exact_retry_emitted;
+            }
         }
         let Some((anchor_prev_hash, anchor_latest_hash, anchor_mode)) =
             self.range_pull_anchor_hashes(reason, true)
@@ -26519,6 +27848,47 @@ impl Actor {
                 reason,
                 "suppressing timeout-driven recovery for non-contiguous frontier height"
             );
+            return FrontierRecoveryAdvance::None;
+        }
+        if !self.frontier_slot_is_exact_height(height) {
+            let _ = self.seed_frontier_slot_from_same_height_evidence(height, view, now, reason);
+        }
+        if self.frontier_slot_is_exact_height(height) {
+            if self.frontier_slot_lag_window_expired(height, now)
+                || self.frontier_slot_deep_catchup_active_at_height(height)
+            {
+                return self.handle_frontier_slot_event(
+                    now,
+                    FrontierSlotEvent::OnLagWindowExpired {
+                        reason: "frontier_stall_reset",
+                    },
+                );
+            }
+            if reason == "quorum_timeout" {
+                return self.handle_frontier_slot_event(
+                    now,
+                    FrontierSlotEvent::OnQuorumTimeout {
+                        cause: Self::frontier_recovery_view_change_cause(reason),
+                        requested_view: view,
+                    },
+                );
+            }
+            if self.frontier_slot.is_some() {
+                let recovery =
+                    self.handle_frontier_slot_event(now, FrontierSlotEvent::OnFetchRetryDue);
+                if !matches!(recovery, FrontierRecoveryAdvance::None) {
+                    return recovery;
+                }
+            }
+            if allow_rotation {
+                return self.handle_frontier_slot_event(
+                    now,
+                    FrontierSlotEvent::OnViewAdvanceRequested {
+                        cause: Self::frontier_recovery_view_change_cause(reason),
+                        requested_view: view,
+                    },
+                );
+            }
             return FrontierRecoveryAdvance::None;
         }
 
@@ -28486,8 +29856,65 @@ impl Actor {
         self.trigger_view_change_with_cause(height, view, ViewChangeCause::CommitFailure);
     }
 
-    #[allow(clippy::too_many_lines)]
     fn trigger_view_change_with_cause(&mut self, height: u64, view: u64, cause: ViewChangeCause) {
+        if height == self.committed_height_snapshot().saturating_add(1)
+            && matches!(
+                cause,
+                ViewChangeCause::QuorumTimeout
+                    | ViewChangeCause::StakeQuorumTimeout
+                    | ViewChangeCause::MissingQc
+                    | ViewChangeCause::MissingPayload
+            )
+            && !self.frontier_slot_is_exact_height(height)
+        {
+            let now = Instant::now();
+            let reason = match cause {
+                ViewChangeCause::QuorumTimeout | ViewChangeCause::StakeQuorumTimeout => {
+                    "quorum_timeout"
+                }
+                ViewChangeCause::MissingPayload => "missing_payload",
+                ViewChangeCause::MissingQc => "missing_qc",
+                _ => unreachable!("cause already filtered to frontier slot-owned causes"),
+            };
+            let _ = self.seed_frontier_slot_from_same_height_evidence(height, view, now, reason);
+        }
+        if self.frontier_slot_is_exact_height(height)
+            && matches!(
+                cause,
+                ViewChangeCause::QuorumTimeout
+                    | ViewChangeCause::StakeQuorumTimeout
+                    | ViewChangeCause::MissingQc
+                    | ViewChangeCause::MissingPayload
+            )
+        {
+            let now = Instant::now();
+            let event = if matches!(
+                cause,
+                ViewChangeCause::QuorumTimeout | ViewChangeCause::StakeQuorumTimeout
+            ) {
+                FrontierSlotEvent::OnQuorumTimeout {
+                    cause,
+                    requested_view: view,
+                }
+            } else {
+                FrontierSlotEvent::OnViewAdvanceRequested {
+                    cause,
+                    requested_view: view,
+                }
+            };
+            let _ = self.handle_frontier_slot_event(now, event);
+            return;
+        }
+        self.apply_view_change_with_cause_for_height(height, view, cause);
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn apply_view_change_with_cause_for_height(
+        &mut self,
+        height: u64,
+        view: u64,
+        cause: ViewChangeCause,
+    ) {
         if let Some(current_height) = self.phase_tracker.round_height {
             if height < current_height {
                 debug!(

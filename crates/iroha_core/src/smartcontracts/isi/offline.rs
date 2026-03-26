@@ -34,9 +34,9 @@ use iroha_data_model::{
     isi::{
         error::{InstructionExecutionError, MathError},
         offline::{
-            CommitOfflineReserveOperation, ReclaimExpiredOfflineAllowance,
-            RefundOfflineEscrowBalance, RegisterOfflineAllowance, RegisterOfflineReserve,
-            RegisterOfflineVerdictRevocation, ReserveOfflineEscrowBalance,
+            CommitOfflineLineageOperation, LoadOfflineEscrowBalance,
+            ReclaimExpiredOfflineAllowance, RedeemOfflineEscrowBalance, RegisterOfflineAllowance,
+            RegisterOfflineLineage, RegisterOfflineVerdictRevocation,
             SubmitOfflineToOnlineTransfer,
         },
     },
@@ -54,8 +54,8 @@ use iroha_data_model::{
         OFFLINE_LINEAGE_EPOCH_KEY, OFFLINE_LINEAGE_PREV_CERTIFICATE_ID_HEX_KEY,
         OFFLINE_LINEAGE_SCOPE_KEY, OFFLINE_REJECTION_REASON_PREFIX, OfflineAllowanceRecord,
         OfflineBalanceProof, OfflineBuildClaim, OfflineBuildClaimPlatform, OfflineCounterState,
-        OfflineCounterSummary, OfflinePlatformProof, OfflinePlatformTokenSnapshot,
-        OfflineProofRequestError, OfflineReserveRecord, OfflineSpendReceipt,
+        OfflineCounterSummary, OfflineLineageRecord, OfflinePlatformProof,
+        OfflinePlatformTokenSnapshot, OfflineProofRequestError, OfflineSpendReceipt,
         OfflineToOnlineTransfer, OfflineTransferRecord, OfflineTransferRejectionPlatform,
         OfflineTransferRejectionReason, OfflineTransferStatus, OfflineVerdictRevocation,
         OfflineVerdictSnapshot, OfflineWalletCertificate, PROVISIONED_COUNTER_PREFIX,
@@ -1186,23 +1186,23 @@ pub mod isi {
         Some(rejection_code(reason).to_owned())
     }
 
-    impl Execute for RegisterOfflineReserve {
+    impl Execute for RegisterOfflineLineage {
         fn execute(
             self,
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            register_reserve(self, authority, state_transaction)
+            register_lineage(self, authority, state_transaction)
         }
     }
 
-    impl Execute for CommitOfflineReserveOperation {
+    impl Execute for CommitOfflineLineageOperation {
         fn execute(
             self,
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            commit_reserve_operation(self, authority, state_transaction)
+            commit_lineage_operation(self, authority, state_transaction)
         }
     }
 
@@ -1302,23 +1302,23 @@ pub mod isi {
         }
     }
 
-    impl Execute for ReserveOfflineEscrowBalance {
+    impl Execute for LoadOfflineEscrowBalance {
         fn execute(
             self,
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            reserve_offline_escrow_balance(self, authority, state_transaction)
+            load_offline_escrow_balance(self, authority, state_transaction)
         }
     }
 
-    impl Execute for RefundOfflineEscrowBalance {
+    impl Execute for RedeemOfflineEscrowBalance {
         fn execute(
             self,
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            refund_offline_escrow_balance(self, authority, state_transaction)
+            redeem_offline_escrow_balance(self, authority, state_transaction)
         }
     }
 
@@ -1340,188 +1340,221 @@ pub mod isi {
         } else {
             Err(labeled_invariant(
                 "unauthorized_controller",
-                "only an offline escrow manager may mutate shared offline reserves",
+                "only an offline escrow manager may mutate shared offline lineages",
             ))
         }
     }
 
-    fn validate_reserve_numeric(raw: &str, field: &'static str) -> Result<Numeric, Error> {
+    fn validate_lineage_numeric(raw: &str, field: &'static str) -> Result<Numeric, Error> {
         raw.parse::<Numeric>().map_err(|_| {
             InstructionExecutionError::InvariantViolation(
-                format!("offline reserve {field} must be a valid numeric string").into(),
+                format!("offline lineage {field} must be a valid numeric string").into(),
             )
         })
     }
 
-    fn validate_reserve_record(record: &OfflineReserveRecord) -> Result<(), Error> {
-        if record.reserve_state.reserve_id.trim().is_empty()
-            || record.reserve_state.account_id.trim().is_empty()
-            || record.reserve_state.device_id.trim().is_empty()
-            || record.reserve_state.offline_public_key.trim().is_empty()
-            || record.reserve_state.asset_definition_id.trim().is_empty()
+    fn validate_lineage_record(record: &OfflineLineageRecord) -> Result<(), Error> {
+        if record.lineage_state.lineage_id.trim().is_empty()
+            || record.lineage_state.account_id.trim().is_empty()
+            || record.lineage_state.device_id.trim().is_empty()
+            || record.lineage_state.offline_public_key.trim().is_empty()
+            || record.lineage_state.asset_definition_id.trim().is_empty()
             || record.app_attest_key_id.trim().is_empty()
         {
             return Err(labeled_invariant(
-                "invalid_reserve",
-                "offline reserve lineage fields must be non-empty",
+                "invalid_lineage",
+                "offline lineage fields must be non-empty",
             ));
         }
-        if record.reserve_state.authorization.reserve_id != record.reserve_state.reserve_id
-            || record.reserve_state.authorization.account_id != record.reserve_state.account_id
-            || record.reserve_state.authorization.device_id != record.reserve_state.device_id
-            || record.reserve_state.authorization.offline_public_key
-                != record.reserve_state.offline_public_key
-            || record.reserve_state.authorization.app_attest_key_id != record.app_attest_key_id
+        if record.lineage_state.authorization.lineage_id != record.lineage_state.lineage_id
+            || record.lineage_state.authorization.account_id != record.lineage_state.account_id
+            || record.lineage_state.authorization.device_id != record.lineage_state.device_id
+            || record.lineage_state.authorization.offline_public_key
+                != record.lineage_state.offline_public_key
+            || record.lineage_state.authorization.app_attest_key_id != record.app_attest_key_id
         {
             return Err(labeled_invariant(
-                "invalid_reserve",
-                "offline reserve authorization does not match the reserve lineage",
+                "invalid_lineage",
+                "offline lineage authorization does not match the lineage identity",
             ));
         }
-        let balance = validate_reserve_numeric(&record.reserve_state.balance, "balance")?;
+        let balance = validate_lineage_numeric(&record.lineage_state.balance, "balance")?;
         let parked =
-            validate_reserve_numeric(&record.reserve_state.parked_balance, "parked_balance")?;
+            validate_lineage_numeric(&record.lineage_state.locked_balance, "locked_balance")?;
         if parked > balance {
             return Err(labeled_invariant(
-                "invalid_reserve",
-                "offline reserve parked_balance cannot exceed balance",
+                "invalid_lineage",
+                "offline lineage locked_balance cannot exceed balance",
             ));
         }
-        let _ = validate_reserve_numeric(
-            &record.reserve_state.authorization.max_balance,
+        let _ = validate_lineage_numeric(
+            &record.lineage_state.authorization.max_balance,
             "authorization.max_balance",
         )?;
-        let _ = validate_reserve_numeric(
-            &record.reserve_state.authorization.max_tx_value,
+        let _ = validate_lineage_numeric(
+            &record.lineage_state.authorization.max_tx_value,
             "authorization.max_tx_value",
         )?;
         Ok(())
     }
 
-    fn register_reserve(
-        isi: RegisterOfflineReserve,
+    fn register_lineage(
+        isi: RegisterOfflineLineage,
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         ensure_can_manage_offline_escrow(authority, state_transaction)?;
-        let record = isi.reserve;
-        validate_reserve_record(&record)?;
-        let reserve_id = record.reserve_state.reserve_id.clone();
+        let record = isi.lineage;
+        validate_lineage_record(&record)?;
+        let lineage_id = record.lineage_state.lineage_id.clone();
         if state_transaction
             .world
-            .offline_reserves
-            .get(&reserve_id)
+            .offline_lineages
+            .get(&lineage_id)
             .is_some()
         {
             return Err(labeled_invariant(
-                "reserve_duplicate",
-                "offline reserve already exists",
+                "lineage_duplicate",
+                "offline lineage already exists",
             ));
         }
         state_transaction
             .world
-            .offline_reserves
-            .insert(reserve_id, record);
+            .offline_lineages
+            .insert(lineage_id, record);
         Ok(())
     }
 
-    fn commit_reserve_operation(
-        isi: CommitOfflineReserveOperation,
+    fn commit_lineage_operation(
+        isi: CommitOfflineLineageOperation,
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         ensure_can_manage_offline_escrow(authority, state_transaction)?;
-        let record = isi.reserve;
+        let record = isi.lineage;
         let result = isi.result;
-        validate_reserve_record(&record)?;
-        let reserve_id = record.reserve_state.reserve_id.clone();
+        validate_lineage_record(&record)?;
+        let lineage_id = record.lineage_state.lineage_id.clone();
         if result.operation_key.trim().is_empty()
             || result.kind.trim().is_empty()
             || result.request_hash_hex.trim().is_empty()
         {
             return Err(labeled_invariant(
                 "invalid_operation",
-                "offline reserve operation metadata must be non-empty",
+                "offline lineage operation metadata must be non-empty",
             ));
         }
-        if result.reserve_id != reserve_id || result.envelope.reserve_state != record.reserve_state
+        if result.lineage_id != lineage_id || result.envelope.lineage_state != record.lineage_state
         {
             return Err(labeled_invariant(
                 "invalid_operation",
-                "offline reserve operation result does not match the updated reserve state",
-            ));
-        }
-        if state_transaction
-            .world
-            .offline_reserve_operation_results
-            .get(&result.operation_key)
-            .is_some()
-        {
-            return Err(labeled_invariant(
-                "operation_duplicate",
-                "offline reserve operation_id already exists",
+                "offline lineage operation result does not match the updated lineage state",
             ));
         }
         let current = state_transaction
             .world
-            .offline_reserves
-            .get(&reserve_id)
+            .offline_lineages
+            .get(&lineage_id)
+            .cloned();
+        let existing_operation_result = state_transaction
+            .world
+            .offline_lineage_operation_results
+            .get(&result.operation_key)
             .cloned();
         if let Some(current) = current {
-            if current.reserve_state.server_revision != isi.expected_server_revision
-                || current.reserve_state.server_state_hash != isi.expected_state_hash
+            if current.lineage_state == record.lineage_state
+                && isi.expected_server_revision == current.lineage_state.server_revision
+                && isi.expected_state_hash == current.lineage_state.server_state_hash
+            {
+                if let Some(existing) = existing_operation_result {
+                    if existing.kind != result.kind
+                        || existing.request_hash_hex != result.request_hash_hex
+                        || existing.lineage_id != result.lineage_id
+                        || existing.envelope.lineage_state != result.envelope.lineage_state
+                    {
+                        return Err(labeled_invariant(
+                            "operation_duplicate",
+                            "offline lineage operation_id is already bound to a different result",
+                        ));
+                    }
+                    let existing_settlement = existing.envelope.settlement.clone();
+                    let incoming_settlement = result.envelope.settlement.clone();
+                    if existing_settlement == incoming_settlement {
+                        return Ok(());
+                    }
+                    if existing_settlement.is_none() && incoming_settlement.is_some() {
+                        state_transaction
+                            .world
+                            .offline_lineage_operation_results
+                            .insert(result.operation_key.clone(), result);
+                        return Ok(());
+                    }
+                    return Err(labeled_invariant(
+                        "operation_duplicate",
+                        "offline lineage operation_id already exists",
+                    ));
+                }
+            }
+            if current.lineage_state.server_revision != isi.expected_server_revision
+                || current.lineage_state.server_state_hash != isi.expected_state_hash
             {
                 return Err(labeled_invariant(
-                    "stale_reserve",
-                    "offline reserve mutation is based on a stale anchor",
+                    "stale_lineage",
+                    "offline lineage mutation is based on a stale anchor",
                 ));
             }
-            if current.reserve_state.account_id != record.reserve_state.account_id
-                || current.reserve_state.device_id != record.reserve_state.device_id
-                || current.reserve_state.offline_public_key
-                    != record.reserve_state.offline_public_key
-                || current.reserve_state.asset_definition_id
-                    != record.reserve_state.asset_definition_id
+            if current.lineage_state.account_id != record.lineage_state.account_id
+                || current.lineage_state.device_id != record.lineage_state.device_id
+                || current.lineage_state.offline_public_key
+                    != record.lineage_state.offline_public_key
+                || current.lineage_state.asset_definition_id
+                    != record.lineage_state.asset_definition_id
                 || current.app_attest_key_id != record.app_attest_key_id
             {
                 return Err(labeled_invariant(
-                    "invalid_reserve",
-                    "offline reserve mutation cannot change reserve lineage",
+                    "invalid_lineage",
+                    "offline lineage mutation cannot change lineage identity",
                 ));
             }
-            if record.reserve_state.pending_local_revision
-                < current.reserve_state.pending_local_revision
+            if record.lineage_state.pending_local_revision
+                < current.lineage_state.pending_local_revision
             {
                 return Err(labeled_invariant(
-                    "invalid_reserve",
-                    "offline reserve mutation cannot rewind pending_local_revision",
+                    "invalid_lineage",
+                    "offline lineage mutation cannot rewind pending_local_revision",
                 ));
             }
         } else if isi.expected_server_revision != 0 || !isi.expected_state_hash.is_empty() {
             return Err(labeled_invariant(
-                "reserve_not_found",
-                "offline reserve not found",
+                "lineage_not_found",
+                "offline lineage not found",
             ));
         }
-        if record.reserve_state.server_revision != isi.expected_server_revision.saturating_add(1) {
+        if existing_operation_result.is_some() {
             return Err(labeled_invariant(
-                "invalid_reserve",
-                "offline reserve mutation must advance server_revision by exactly one",
+                "operation_duplicate",
+                "offline lineage operation_id already exists",
+            ));
+        }
+        if record.lineage_state.server_revision != isi.expected_server_revision.saturating_add(1) {
+            return Err(labeled_invariant(
+                "invalid_lineage",
+                "offline lineage mutation must advance server_revision by exactly one",
             ));
         }
         state_transaction
             .world
-            .offline_reserves
-            .insert(reserve_id, record);
+            .offline_lineages
+            .insert(lineage_id, record);
         state_transaction
             .world
-            .offline_reserve_operation_results
+            .offline_lineage_operation_results
             .insert(result.operation_key.clone(), result);
         Ok(())
     }
 
-    fn reserve_offline_escrow_balance(
-        isi: ReserveOfflineEscrowBalance,
+    fn load_offline_escrow_balance(
+        isi: LoadOfflineEscrowBalance,
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
@@ -1539,7 +1572,7 @@ pub mod isi {
         if asset.account() != authority && !can_manage_offline_escrow {
             return Err(labeled_invariant(
                 "unauthorized_controller",
-                "only the controller or an offline escrow manager may reserve online balance into offline escrow",
+                "only the controller or an offline escrow manager may load online balance into offline escrow",
             ));
         }
         let spec = state_transaction.numeric_spec_for(asset.definition())?;
@@ -1547,14 +1580,14 @@ pub mod isi {
         if amount <= Numeric::zero() {
             return Err(labeled_invariant(
                 "invalid_amount",
-                "offline reserve amount must be positive",
+                "offline load amount must be positive",
             ));
         }
         reserve_offline_allowance(state_transaction, &asset, &amount)
     }
 
-    fn refund_offline_escrow_balance(
-        isi: RefundOfflineEscrowBalance,
+    fn redeem_offline_escrow_balance(
+        isi: RedeemOfflineEscrowBalance,
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
@@ -1572,7 +1605,7 @@ pub mod isi {
         if asset.account() != authority && !can_manage_offline_escrow {
             return Err(labeled_invariant(
                 "unauthorized_controller",
-                "only the controller or an offline escrow manager may refund offline escrow back online",
+                "only the controller or an offline escrow manager may redeem offline escrow back online",
             ));
         }
         let spec = state_transaction.numeric_spec_for(asset.definition())?;
@@ -1580,7 +1613,7 @@ pub mod isi {
         if amount <= Numeric::zero() {
             return Err(labeled_invariant(
                 "invalid_amount",
-                "offline reserve amount must be positive",
+                "offline redeem amount must be positive",
             ));
         }
         refund_allowance_from_escrow(state_transaction, &asset, authority, &amount)
@@ -7502,7 +7535,7 @@ mod attestation {
     /// Inputs required to validate an App Attest assertion outside the legacy
     /// receipt/certificate flow while reusing the same verifier pipeline.
     #[derive(Debug, Clone)]
-    pub struct ReserveAppleAppAttestVerification {
+    pub struct LineageAppleAppAttestVerification {
         /// Metadata containing `ios.app_attest.*` keys.
         pub metadata: Metadata,
         /// Raw App Attest attestation object bytes.
@@ -7523,8 +7556,8 @@ mod attestation {
     ///
     /// The caller is responsible for deriving `challenge_hash` from the
     /// reserve operation payload in the exact same way as the client.
-    pub fn verify_reserve_apple_app_attest(
-        verification: &ReserveAppleAppAttestVerification,
+    pub fn verify_lineage_apple_app_attest(
+        verification: &LineageAppleAppAttestVerification,
         block_timestamp_ms: u64,
         settlement_cfg: &actual::Offline,
     ) -> Result<(), InstructionExecutionError> {
@@ -12158,7 +12191,7 @@ mod attestation {
     }
 }
 
-pub use self::attestation::{ReserveAppleAppAttestVerification, verify_reserve_apple_app_attest};
+pub use self::attestation::{LineageAppleAppAttestVerification, verify_lineage_apple_app_attest};
 
 #[cfg(test)]
 mod aggregate_proof_tests {

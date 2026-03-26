@@ -67,7 +67,7 @@ def test_summary_includes_artifact_metadata(tmp_path: Path) -> None:
 
     creation_time_ms = 1_735_000_000_123
     chain = "00000002"
-    authority = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
+    authority = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"
     time_to_live_ms = 5000
     nonce = 42
     payloads_path = _write_payloads(
@@ -138,7 +138,7 @@ def test_errors_propagate_into_summary(tmp_path: Path) -> None:
 
     creation_time_ms = 1_735_000_000_222
     chain = "00000003"
-    authority = "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU"
+    authority = "sorauロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76"
     time_to_live_ms = None
     nonce = None
     payloads_path = _write_payloads(
@@ -202,7 +202,7 @@ def test_creation_time_mismatch_triggers_error(tmp_path: Path) -> None:
     (resources / "charlie.norito").write_bytes(payload_bytes)
 
     chain = "00000004"
-    authority = "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7THvV"
+    authority = "sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53"
     payloads_path = _write_payloads(
         tmp_path / "transaction_payloads.json",
         [
@@ -264,7 +264,7 @@ def test_chain_mismatch_triggers_error(tmp_path: Path) -> None:
                 "encoded": base64.b64encode(payload_bytes).decode(),
                 "creation_time_ms": 1_735_000_000_444,
                 "chain": "00000004",
-                "authority": "6cmzPVPX8DcdUnE1nGLZBU1opw24wjxczQNqhCCYvMzKfJR2rGs9tan",
+                "authority": "sorauロ1PyXノspjg6gnvエ1メムLネオBトEwtテD8Rクヌgヲホセレカ7エvWUJA5A",
                 "time_to_live_ms": None,
                 "nonce": None,
             }
@@ -280,7 +280,7 @@ def test_chain_mismatch_triggers_error(tmp_path: Path) -> None:
                 signed_bytes,
                 creation_time_ms=1_735_000_000_444,
                 chain="00000005",
-                authority="6cmzPVPX8DcdUnE1nGLZBU1opw24wjxczQNqhCCYvMzKfJR2rGs9tan",
+                authority="sorauロ1PyXノspjg6gnvエ1メムLネオBトEwtテD8Rクヌgヲホセレカ7エvWUJA5A",
                 time_to_live_ms=None,
                 nonce=None,
             )
@@ -317,7 +317,7 @@ def test_authority_mismatch_triggers_error(tmp_path: Path) -> None:
                 "encoded": base64.b64encode(payload_bytes).decode(),
                 "creation_time_ms": 1_735_000_000_777,
                 "chain": "00000008",
-                "authority": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+                "authority": "sorauロ1NcMBm2dフBokヱDムナekAbカヘワヌミMFスヱヒZリ2u4WGUMMS63EY6",
                 "time_to_live_ms": None,
                 "nonce": None,
             }
@@ -333,7 +333,7 @@ def test_authority_mismatch_triggers_error(tmp_path: Path) -> None:
                 signed_bytes,
                 creation_time_ms=1_735_000_000_777,
                 chain="00000008",
-                authority="6cmzPVPX4QdPT36dHgSFoznxS3MV99eV8CzeuZFTeqqsBgXDUYfft81",
+                authority="sorauロ1NcミuロタKモhネgスXヲDTマエtヤミ8PJPfSユPuテ884ウヌヰ4ヌJKTL36",
                 time_to_live_ms=None,
                 nonce=None,
             )
@@ -370,7 +370,7 @@ def test_time_to_live_mismatch_triggers_error(tmp_path: Path) -> None:
                 "encoded": base64.b64encode(payload_bytes).decode(),
                 "creation_time_ms": 1_735_000_000_888,
                 "chain": "00000009",
-                "authority": "6cmzPVPX4QdPT36dHgSFoznxS3MV99eV8CzeuZFTeqqsBgXDUYfft81",
+                "authority": "sorauロ1NcミuロタKモhネgスXヲDTマエtヤミ8PJPfSユPuテ884ウヌヰ4ヌJKTL36",
                 "time_to_live_ms": 5000,
                 "nonce": 7,
             }
@@ -386,7 +386,7 @@ def test_time_to_live_mismatch_triggers_error(tmp_path: Path) -> None:
                 signed_bytes,
                 creation_time_ms=1_735_000_000_888,
                 chain="00000009",
-                authority="6cmzPVPX4QdPT36dHgSFoznxS3MV99eV8CzeuZFTeqqsBgXDUYfft81",
+                authority="sorauロ1NcミuロタKモhネgスXヲDTマエtヤミ8PJPfSユPuテ884ウヌヰ4ヌJKTL36",
                 time_to_live_ms=6000,
                 nonce=7,
             )
@@ -423,7 +423,7 @@ def test_nonce_mismatch_triggers_error(tmp_path: Path) -> None:
                 "encoded": base64.b64encode(payload_bytes).decode(),
                 "creation_time_ms": 1_735_000_000_999,
                 "chain": "00000010",
-                "authority": "6cmzPVPX4Vnjpp7MFrUdgoZ9scoVXwFPcp4U6r6yELFetMDx2taw8et",
+                "authority": "sorauロ1NfコキリcルヲEムgsKti4Zリ6HKウZCナクシ16fvSイymカサリホ29JNWE",
                 "time_to_live_ms": None,
                 "nonce": 9,
             }
@@ -439,7 +439,7 @@ def test_nonce_mismatch_triggers_error(tmp_path: Path) -> None:
                 signed_bytes,
                 creation_time_ms=1_735_000_000_999,
                 chain="00000010",
-                authority="6cmzPVPX4Vnjpp7MFrUdgoZ9scoVXwFPcp4U6r6yELFetMDx2taw8et",
+                authority="sorauロ1NfコキリcルヲEムgsKti4Zリ6HKウZCナクシ16fvSイymカサリホ29JNWE",
                 time_to_live_ms=None,
                 nonce=11,
             )
@@ -476,7 +476,7 @@ def test_missing_nonce_field_fails(tmp_path: Path) -> None:
                 "encoded": base64.b64encode(payload_bytes).decode(),
                 "creation_time_ms": 1_735_000_000_555,
                 "chain": "00000006",
-                "authority": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+                "authority": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
                 "time_to_live_ms": None,
             }
         ],
@@ -491,7 +491,7 @@ def test_missing_nonce_field_fails(tmp_path: Path) -> None:
                 signed_bytes,
                 creation_time_ms=1_735_000_000_555,
                 chain="00000006",
-                authority="6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+                authority="sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
                 time_to_live_ms=None,
                 nonce=None,
             )
@@ -528,7 +528,7 @@ def test_missing_time_to_live_field_fails(tmp_path: Path) -> None:
                 "encoded": base64.b64encode(payload_bytes).decode(),
                 "creation_time_ms": 1_735_000_000_666,
                 "chain": "00000007",
-                "authority": "6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ",
+                "authority": "sorauロ1PクCカrムhyワエトhウヤSqP2GFGラヱミケヌマzヘオミMヌヨトksJヱRRJXVB",
                 "nonce": None,
             }
         ],
@@ -543,7 +543,7 @@ def test_missing_time_to_live_field_fails(tmp_path: Path) -> None:
                 signed_bytes,
                 creation_time_ms=1_735_000_000_666,
                 chain="00000007",
-                authority="6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ",
+                authority="sorauロ1PクCカrムhyワエトhウヤSqP2GFGラヱミケヌマzヘオミMヌヨトksJヱRRJXVB",
                 time_to_live_ms=None,
                 nonce=None,
             )

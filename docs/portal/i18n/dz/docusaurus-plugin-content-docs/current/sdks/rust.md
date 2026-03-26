@@ -146,7 +146,7 @@ use iroha::client::{
 fn download_qr() -> eyre::Result<()> {
  let client = Client::new(ClientConfiguration::test())?;
  let snapshot = client.get_explorer_account_qr(
- "i105...",
+ "<i105-account-id>",
  )?;
  println!("Canonical literal: {}", snapshot.literal);
  println!("SVG payload: {}", snapshot.svg);
@@ -156,7 +156,7 @@ fn download_qr() -> eyre::Result<()> {
 
 `ExplorerAccountQrSnapshot` གིས་ `/v1/explorer/accounts/{id}/qr` JSON
 ཁ་ཐོག་: དེ་ནང་ལུ་ ཀེ་ནོ་ནིག་རྩིས་ཐོ་ id དང་ ཡིག་ཆའི་བརྡ་སྟོན་འབད་མི་ཚུ་ཨིན།
-ཚད་ལྡན I105 literal་, ཡོངས་འབྲེལ་སྔོན་སྒྲིག་/ནོར་འཁྲུལ་-ནོར་བཅོས་མེ་ཊ་ཌེ་ཊ་, ཀིའུ་ཨར་རྒྱ་ཚད་, དང་།
+ཚད་ལྡན i105 literal་, ཡོངས་འབྲེལ་སྔོན་སྒྲིག་/ནོར་འཁྲུལ་-ནོར་བཅོས་མེ་ཊ་ཌེ་ཊ་, ཀིའུ་ཨར་རྒྱ་ཚད་, དང་།
 དངུལ་ཁུག་/འཚོལ་ཞིབ་འབད་མི་ ནང་ཐིག་ཨེསི་ཝི་ཇི་ པེ་ལོཌ་འདི་ ཐད་ཀར་དུ་ བཙུགས་ཚུགས། 
 
 ## 7. བྱུང་རིམ་ཚུ་ མཁོ་སྒྲུབ་འབད་ནི།

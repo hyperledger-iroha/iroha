@@ -50,8 +50,9 @@ use super::{
 use crate::{
     encoding, instruction,
     metadata::{
-        self, CONTRACT_FEATURE_BIT_VECTOR, CONTRACT_FEATURE_BIT_ZK, EmbeddedContractInterfaceV1,
-        EmbeddedEntrypointDescriptor, LITERAL_SECTION_MAGIC, ProgramMetadata,
+        self, CONTRACT_FEATURE_BIT_VECTOR, CONTRACT_FEATURE_BIT_ZK, EmbeddedContractDebugInfoV1,
+        EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, EmbeddedFunctionBudgetReportV1,
+        EmbeddedSourceLocation, EmbeddedSourceMapEntryV1, LITERAL_SECTION_MAGIC, ProgramMetadata,
     },
     pointer_abi::PointerType,
     syscalls,
@@ -101,7 +102,22 @@ impl StatePathHint {
 
 struct CompilationArtifacts {
     bytes: Vec<u8>,
-    access_hint_diagnostics: AccessHintDiagnostics,
+    compile_report: CompileReport,
+}
+
+#[derive(Clone)]
+struct FunctionDebugSeed {
+    name: String,
+    location: super::ast::SourceLocation,
+    pc_start: u64,
+    frame_bytes: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompileReport {
+    pub source_map: Vec<EmbeddedSourceMapEntryV1>,
+    pub budget_report: Vec<EmbeddedFunctionBudgetReportV1>,
+    pub access_hint_diagnostics: AccessHintDiagnostics,
 }
 
 /// Diagnostics emitted when access hints cannot be fully derived.
@@ -571,6 +587,8 @@ pub struct CompilerOptions {
     pub dynamic_iter_cap: u8,
     /// Enforce the deterministic on-chain safety profile during compilation.
     pub enforce_on_chain_profile: bool,
+    /// Emit additive compiler debug metadata into the artifact.
+    pub emit_debug: bool,
 }
 
 impl Default for CompilerOptions {
@@ -583,6 +601,7 @@ impl Default for CompilerOptions {
             max_cycles: DEFAULT_MAX_CYCLES,
             dynamic_iter_cap: 2,
             enforce_on_chain_profile: true,
+            emit_debug: true,
         }
     }
 }
@@ -1287,8 +1306,8 @@ seiyaku Test {
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_def.clone(), account.clone());
-        let canonical_asset = AssetId::parse_literal(&asset_id.canonical_literal())
-            .expect("parse canonical asset");
+        let canonical_asset =
+            AssetId::parse_literal(&asset_id.canonical_literal()).expect("parse canonical asset");
         let isi = InstructionBox::from(Mint::asset_numeric(1u32, asset_id.clone()));
         let bytes = norito::to_bytes(&isi).expect("encode InstructionBox");
         let hex_payload = format!("0x{}", hex::encode(bytes));
@@ -1301,24 +1320,36 @@ seiyaku Test {
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        assert!(hints.read_keys.contains(&format!(
-            "account:{}",
-            canonical_asset.account()
-        )));
-        assert!(hints.read_keys.contains(&format!(
-            "domain:{}",
-            canonical_asset.definition().domain()
-        )));
-        assert!(hints.read_keys.contains(&format!(
-            "asset_def:{}",
-            canonical_asset.definition()
-        )));
-        assert!(hints.read_keys.contains(&format!("asset:{canonical_asset}")));
-        assert!(hints.write_keys.contains(&format!(
-            "asset_def:{}",
-            canonical_asset.definition()
-        )));
-        assert!(hints.write_keys.contains(&format!("asset:{canonical_asset}")));
+        assert!(
+            hints
+                .read_keys
+                .contains(&format!("account:{}", canonical_asset.account()))
+        );
+        assert!(
+            hints
+                .read_keys
+                .contains(&format!("domain:{}", canonical_asset.definition().domain()))
+        );
+        assert!(
+            hints
+                .read_keys
+                .contains(&format!("asset_def:{}", canonical_asset.definition()))
+        );
+        assert!(
+            hints
+                .read_keys
+                .contains(&format!("asset:{canonical_asset}"))
+        );
+        assert!(
+            hints
+                .write_keys
+                .contains(&format!("asset_def:{}", canonical_asset.definition()))
+        );
+        assert!(
+            hints
+                .write_keys
+                .contains(&format!("asset:{canonical_asset}"))
+        );
 
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
         let main = entrypoints
@@ -1441,8 +1472,8 @@ seiyaku Test {
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_def.clone(), account.clone());
-        let canonical_asset = AssetId::parse_literal(&asset_id.canonical_literal())
-            .expect("parse canonical asset");
+        let canonical_asset =
+            AssetId::parse_literal(&asset_id.canonical_literal()).expect("parse canonical asset");
         let request = QueryRequest::Singular(SingularQueryBox::FindAssetById(FindAssetById::new(
             asset_id.clone(),
         )));
@@ -1457,19 +1488,26 @@ seiyaku Test {
         let hints = manifest
             .access_set_hints
             .expect("expected access_set_hints");
-        assert!(hints.read_keys.contains(&format!(
-            "account:{}",
-            canonical_asset.account()
-        )));
-        assert!(hints.read_keys.contains(&format!(
-            "domain:{}",
-            canonical_asset.definition().domain()
-        )));
-        assert!(hints.read_keys.contains(&format!(
-            "asset_def:{}",
-            canonical_asset.definition()
-        )));
-        assert!(hints.read_keys.contains(&format!("asset:{canonical_asset}")));
+        assert!(
+            hints
+                .read_keys
+                .contains(&format!("account:{}", canonical_asset.account()))
+        );
+        assert!(
+            hints
+                .read_keys
+                .contains(&format!("domain:{}", canonical_asset.definition().domain()))
+        );
+        assert!(
+            hints
+                .read_keys
+                .contains(&format!("asset_def:{}", canonical_asset.definition()))
+        );
+        assert!(
+            hints
+                .read_keys
+                .contains(&format!("asset:{canonical_asset}"))
+        );
         assert!(hints.write_keys.is_empty());
 
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
@@ -2013,13 +2051,14 @@ seiyaku Test {{
                         ConfigurationEventFilter, ConfigurationEventSet, DomainEventFilter,
                         DomainEventSet, ExecutorEventFilter, ExecutorEventSet, NftEventFilter,
                         NftEventSet, PeerEventFilter, PeerEventSet, RoleEventFilter, RoleEventSet,
-                        TriggerEventFilter, TriggerEventSet,
+                        RwaEventFilter, RwaEventSet, TriggerEventFilter, TriggerEventSet,
                     },
                 },
             },
             nft::NftId,
             peer::PeerId,
             role::RoleId,
+            rwa::RwaId,
             trigger::TriggerId,
         };
 
@@ -2037,6 +2076,12 @@ seiyaku Test {{
         let asset = AssetId::new(asset_definition.clone(), account.clone());
         let asset_literal = asset.canonical_literal();
         let nft: NftId = "n0$wonderland".parse().expect("nft");
+        let rwa: RwaId = format!(
+            "{}$wonderland",
+            iroha_crypto::Hash::prehashed([7; iroha_crypto::Hash::LENGTH])
+        )
+        .parse()
+        .expect("rwa");
         let trigger_id: TriggerId = "wake".parse().expect("trigger");
         let role_id: RoleId = "auditor".parse().expect("role");
 
@@ -2161,6 +2206,26 @@ seiyaku Test {{
                     NftEventFilter::new()
                         .for_events(NftEventSet::Created)
                         .for_nft(nft),
+                )),
+            ),
+            (
+                format!(
+                    r#"
+seiyaku Test {{
+  kotoage fn run() {{}}
+  register_trigger wake {{
+    call run;
+    on data rwa created {{
+      rwa "{rwa}";
+    }}
+  }}
+}}
+"#
+                ),
+                EventFilterBox::Data(DataEventFilter::Rwa(
+                    RwaEventFilter::new()
+                        .for_events(RwaEventSet::Created)
+                        .for_rwa(rwa),
                 )),
             ),
             (
@@ -3112,6 +3177,7 @@ impl Compiler {
         let mut uses_vector_global = false;
         let mut call_fixups: Vec<(usize, String, String)> = Vec::new();
         let mut func_start_offsets: HashMap<String, usize> = HashMap::new();
+        let mut function_debug_seeds: Vec<FunctionDebugSeed> = Vec::new();
         struct JumpFixup {
             at: usize,
             target_label: usize,
@@ -3149,6 +3215,12 @@ impl Compiler {
             let param_home_count = usize::min(func.params.len(), regalloc::ARG_REGS.len());
             let param_home_size = param_home_count * 8;
             let local_frame = alloc.frame_size + 8 + saved_size + param_home_size;
+            function_debug_seeds.push(FunctionDebugSeed {
+                name: func.name.clone(),
+                location: func.location,
+                pc_start: func_base as u64,
+                frame_bytes: u32::try_from(local_frame).unwrap_or(u32::MAX),
+            });
             let save_base = 8 + alloc.frame_size;
             let param_home_base = save_base + saved_size;
             // Determine if this function is the entry (no caller)
@@ -7359,15 +7431,26 @@ impl Compiler {
             kotoba: kotoba_entries.clone(),
             entrypoints: entrypoint_descriptors.clone(),
         };
+        let compile_report =
+            build_compile_report(&function_debug_seeds, code.len(), hint_diagnostics.clone());
+        let debug_section = if self.opts.emit_debug {
+            EmbeddedContractDebugInfoV1 {
+                source_map: compile_report.source_map.clone(),
+                budget_report: compile_report.budget_report.clone(),
+            }
+            .encode_section()
+        } else {
+            Vec::new()
+        };
 
         // Compute literal table and patch LOADs. Contract artifacts are laid out as:
-        //   [ header | CNTR | LTLB? | code ]
+        //   [ header | CNTR | DBG1 | LTLB? | code ]
         let meta_bytes = meta.encode();
         let contract_section = contract_interface.encode_section();
         let header_len = meta_bytes.len() as u64;
         let need_literals = !key_order.is_empty();
-        // Literal table base when present, immediately after the required CNTR section.
-        let lit_base = header_len + contract_section.len() as u64;
+        // Literal table base when present, immediately after the required CNTR/DBG1 sections.
+        let lit_base = header_len + contract_section.len() as u64 + debug_section.len() as u64;
         // Literal table length and offsets
         let lit_count = key_order.len() as u64;
         let lit_size = lit_count * 8;
@@ -7384,7 +7467,7 @@ impl Compiler {
             lit_bytes.extend_from_slice(&ptr.to_le_bytes());
         }
         // Patch literal pointer stubs with absolute data addresses
-        let literal_start = contract_section.len() as u64;
+        let literal_start = contract_section.len() as u64 + debug_section.len() as u64;
         for (at, rd, key) in &fixups {
             let data_off = *data_offsets
                 .get(key)
@@ -7396,9 +7479,11 @@ impl Compiler {
         // Final layout assembly
         let mut out = meta_bytes;
         out.extend_from_slice(&contract_section);
+        out.extend_from_slice(&debug_section);
         let mut post_pad: usize = 0;
         if need_literals {
             let total_prefix = contract_section.len()
+                + debug_section.len()
                 + lit_header_size as usize
                 + lit_size as usize
                 + data_bytes.len();
@@ -7450,7 +7535,7 @@ impl Compiler {
 
         Ok(CompilationArtifacts {
             bytes: out,
-            access_hint_diagnostics: hint_diagnostics,
+            compile_report,
         })
     }
 
@@ -7469,19 +7554,19 @@ impl Compiler {
         ),
         String,
     > {
-        let (bytes, manifest, _diag) = self.compile_source_with_manifest_and_diagnostics(src)?;
+        let (bytes, manifest, _report) = self.compile_source_with_manifest_and_report(src)?;
         Ok((bytes, manifest))
     }
 
-    /// Compile source and produce a manifest plus access-hint diagnostics.
-    pub fn compile_source_with_manifest_and_diagnostics(
+    /// Compile source and produce a manifest plus compiler report data.
+    pub fn compile_source_with_manifest_and_report(
         &self,
         src: &str,
     ) -> Result<
         (
             Vec<u8>,
             iroha_data_model::smart_contract::manifest::ContractManifest,
-            AccessHintDiagnostics,
+            CompileReport,
         ),
         String,
     > {
@@ -7518,7 +7603,70 @@ impl Compiler {
             kotoba: (!contract_interface.kotoba.is_empty()).then_some(contract_interface.kotoba),
             provenance: None,
         };
-        Ok((bytes, manifest, artifacts.access_hint_diagnostics))
+        Ok((bytes, manifest, artifacts.compile_report))
+    }
+
+    /// Compile source and produce a manifest plus access-hint diagnostics.
+    pub fn compile_source_with_manifest_and_diagnostics(
+        &self,
+        src: &str,
+    ) -> Result<
+        (
+            Vec<u8>,
+            iroha_data_model::smart_contract::manifest::ContractManifest,
+            AccessHintDiagnostics,
+        ),
+        String,
+    > {
+        let (bytes, manifest, report) = self.compile_source_with_manifest_and_report(src)?;
+        Ok((bytes, manifest, report.access_hint_diagnostics))
+    }
+}
+
+fn build_compile_report(
+    function_debug_seeds: &[FunctionDebugSeed],
+    code_len: usize,
+    access_hint_diagnostics: AccessHintDiagnostics,
+) -> CompileReport {
+    let mut entries = function_debug_seeds.to_vec();
+    entries.sort_by_key(|seed| seed.pc_start);
+
+    let mut source_map = Vec::with_capacity(entries.len());
+    let mut budget_report = Vec::with_capacity(entries.len());
+    for (idx, seed) in entries.iter().enumerate() {
+        let pc_end = entries
+            .get(idx + 1)
+            .map(|next| next.pc_start)
+            .unwrap_or(code_len as u64);
+        let source = EmbeddedSourceLocation {
+            line: seed.location.line as u32,
+            column: seed.location.column as u32,
+        };
+        let bytecode_bytes = pc_end.saturating_sub(seed.pc_start) as u32;
+        let bytecode_words = bytecode_bytes / 4;
+        source_map.push(EmbeddedSourceMapEntryV1 {
+            function_name: seed.name.clone(),
+            pc_start: seed.pc_start,
+            pc_end,
+            source: source.clone(),
+        });
+        budget_report.push(EmbeddedFunctionBudgetReportV1 {
+            function_name: seed.name.clone(),
+            pc_start: seed.pc_start,
+            pc_end,
+            bytecode_bytes,
+            bytecode_words,
+            frame_bytes: seed.frame_bytes,
+            jump_span_words: bytecode_words,
+            jump_range_risk: bytecode_words > i16::MAX as u32,
+            source: Some(source),
+        });
+    }
+
+    CompileReport {
+        source_map,
+        budget_report,
+        access_hint_diagnostics,
     }
 }
 
@@ -8605,6 +8753,7 @@ pub mod test_helpers {
             params: vec!["a".to_string()],
             blocks: vec![bb],
             entry: ir::Label(0),
+            location: crate::ast::SourceLocation { line: 1, column: 1 },
         };
 
         // Allocate registers once to mimic real emission environment

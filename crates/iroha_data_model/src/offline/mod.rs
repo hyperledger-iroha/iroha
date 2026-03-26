@@ -3212,7 +3212,7 @@ mod model {
         pub refresh_at_ms: Option<u64>,
     }
 
-    /// Device assertion proof attached to reserve operations and transfer receipts.
+    /// Device assertion proof attached to lineage operations and transfer receipts.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -3225,9 +3225,9 @@ mod model {
         pub counter: u64,
         /// Base64-encoded platform assertion blob.
         pub assertion_base64: String,
-        /// Lowercase hex challenge hash derived from the canonical reserve payload.
+        /// Lowercase hex challenge hash derived from the canonical lineage payload.
         pub challenge_hash_hex: String,
-        /// Optional full attestation report for setup / top-up / renew binding.
+        /// Optional full attestation report for setup / load / refresh binding.
         #[norito(default)]
         pub attestation_report_base64: Option<String>,
         /// Optional iOS team identifier bound into the attestation.
@@ -3269,7 +3269,7 @@ mod model {
         pub ios_environment: Option<String>,
     }
 
-    /// Issuer-signed policy lease that gates offline spending for one reserve lineage.
+    /// Issuer-signed policy lease that gates offline spending for one bearer lineage.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -3278,8 +3278,8 @@ mod model {
     pub struct OfflineSpendAuthorization {
         /// Deterministic authorization identifier.
         pub authorization_id: String,
-        /// Stable reserve lineage identifier.
-        pub reserve_id: String,
+        /// Stable bearer lineage identifier.
+        pub lineage_id: String,
         /// Controller account bound to this authorization.
         pub account_id: String,
         /// Device identifier bound to this authorization.
@@ -3288,7 +3288,7 @@ mod model {
         pub offline_public_key: String,
         /// Verdict identifier used for revocation snapshots.
         pub verdict_id: String,
-        /// Maximum spendable reserve balance allowed while this authorization is active.
+        /// Maximum spendable bearer balance allowed while this authorization is active.
         pub max_balance: String,
         /// Maximum permitted single offline transfer amount.
         pub max_tx_value: String,
@@ -3307,48 +3307,97 @@ mod model {
         pub issuer_signature_base64: String,
     }
 
-    /// Issuer-signed authoritative reserve anchor returned by Torii.
+    /// Issuer-signed authoritative lineage anchor returned by Torii.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
-    pub struct OfflineReserveState {
-        /// Stable reserve lineage identifier.
-        pub reserve_id: String,
-        /// Controller account bound to this reserve.
+    pub struct OfflineLineageState {
+        /// Stable bearer lineage identifier.
+        pub lineage_id: String,
+        /// Controller account bound to this lineage.
         pub account_id: String,
-        /// Device identifier bound to this reserve.
+        /// Device identifier bound to this lineage.
         pub device_id: String,
-        /// Offline public key bound to this reserve.
+        /// Offline public key bound to this lineage.
         pub offline_public_key: String,
-        /// Asset definition tracked by this reserve.
+        /// Asset definition tracked by this lineage.
         pub asset_definition_id: String,
-        /// Total local reserve balance.
+        /// Total local bearer balance.
         pub balance: String,
         /// Portion of the balance that is parked under policy/expiry constraints.
-        pub parked_balance: String,
-        /// Authoritative server revision for this reserve lineage.
+        pub locked_balance: String,
+        /// Authoritative server revision for this bearer lineage.
         pub server_revision: u64,
-        /// Canonical state hash anchoring the reserve lineage.
+        /// Canonical state hash anchoring the bearer lineage.
         pub server_state_hash: String,
         /// Latest local receipt revision folded into the anchor.
         pub pending_local_revision: u64,
         /// Active spend authorization snapshot.
         pub authorization: OfflineSpendAuthorization,
-        /// Issuer signature over the unsigned reserve-state payload.
+        /// Issuer signature over the unsigned lineage-state payload.
         pub issuer_signature_base64: String,
     }
 
-    /// Signed reserve envelope returned to clients.
+    /// Signed lineage envelope returned to clients.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
-    pub struct OfflineReserveEnvelope {
-        /// Current reserve anchor.
-        pub reserve_state: OfflineReserveState,
+    pub struct OfflineLineageEnvelope {
+        /// Current lineage anchor.
+        pub lineage_state: OfflineLineageState,
+        /// On-ledger settlement proof for bearer load or redeem mutations.
+        #[norito(default)]
+        pub settlement: Option<OfflineMutationSettlement>,
+    }
+
+    /// Transparent proof payload binding an offline bearer mutation to a settlement commitment.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineTransparentZkProof {
+        /// Proof backend identifier.
+        pub backend: String,
+        /// Fixed circuit identifier expected by wallets and Torii.
+        pub circuit_id: String,
+        /// Declared recursion depth.
+        pub recursion_depth: u8,
+        /// Hex-encoded public inputs commitment.
+        pub public_inputs_hex: String,
+        /// Norito-encoded proof envelope bytes.
+        pub envelope_bytes: Vec<u8>,
+    }
+
+    /// Settlement artifact proving a load or redeem mutation finalized on-ledger.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct OfflineMutationSettlement {
+        /// Mutation kind (`load` or `redeem`).
+        pub kind: String,
+        /// Client operation identifier.
+        pub operation_id: String,
+        /// Committed transaction hash.
+        pub chain_tx_hash: String,
+        /// Entrypoint hash for the committed transaction.
+        pub entry_hash: String,
+        /// Block height containing the committed transaction.
+        pub block_height: u64,
+        /// Pre-mutation authoritative state hash.
+        pub pre_state_hash: String,
+        /// Post-mutation authoritative state hash.
+        pub post_state_hash: String,
+        /// Hex-encoded settlement commitment bound into the proof domain.
+        pub settlement_commitment_hex: String,
+        /// Transparent proof attesting to the settlement commitment.
+        pub proof: OfflineTransparentZkProof,
     }
 
     /// Signed revocation bundle distributed to wallets for offline deny-list enforcement.
@@ -3368,7 +3417,7 @@ mod model {
         pub issuer_signature_base64: String,
     }
 
-    /// Signed reserve receipt exchanged directly between offline peers.
+    /// Signed lineage receipt exchanged directly between offline peers.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -3379,32 +3428,32 @@ mod model {
         pub version: i32,
         /// Deterministic transfer identifier.
         pub transfer_id: String,
-        /// Transfer direction relative to the holder of `reserve_id`.
+        /// Transfer direction relative to the holder of `lineage_id`.
         pub direction: String,
-        /// Sender or receiver reserve lineage identifier.
-        pub reserve_id: String,
-        /// Controller account of the reserve holder.
+        /// Sender or receiver bearer lineage identifier.
+        pub lineage_id: String,
+        /// Controller account of the lineage holder.
         pub account_id: String,
-        /// Device identifier of the reserve holder.
+        /// Device identifier of the lineage holder.
         pub device_id: String,
-        /// Offline public key of the reserve holder.
+        /// Offline public key of the lineage holder.
         pub offline_public_key: String,
         /// Total balance before applying the receipt.
         pub pre_balance: String,
         /// Total balance after applying the receipt.
         pub post_balance: String,
         /// Parked balance before applying the receipt.
-        pub pre_parked_balance: String,
+        pub pre_locked_balance: String,
         /// Parked balance after applying the receipt.
-        pub post_parked_balance: String,
+        pub post_locked_balance: String,
         /// Local state hash before applying the receipt.
         pub pre_state_hash: String,
         /// Local state hash after applying the receipt.
         pub post_state_hash: String,
         /// Monotonic local revision after applying the receipt.
         pub local_revision: u64,
-        /// Counterparty reserve lineage identifier.
-        pub counterparty_reserve_id: String,
+        /// Counterparty bearer lineage identifier.
+        pub counterparty_lineage_id: String,
         /// Counterparty controller account identifier.
         pub counterparty_account_id: String,
         /// Counterparty device identifier.
@@ -3436,8 +3485,8 @@ mod model {
     pub struct OfflineOutgoingTransferPayload {
         /// Wire-format version.
         pub version: i32,
-        /// Latest authoritative reserve anchor known to the sender.
-        pub anchor: OfflineReserveState,
+        /// Latest authoritative lineage anchor known to the sender.
+        pub anchor: OfflineLineageState,
         /// Optional ancestry receipts bridging from the anchor to the current sender state.
         #[norito(default)]
         pub ancestry_receipts: Vec<OfflineTransferReceipt>,
@@ -3445,7 +3494,7 @@ mod model {
         pub receipt: OfflineTransferReceipt,
     }
 
-    /// Persisted App Attest binding captured during reserve setup.
+    /// Persisted App Attest binding captured during lineage setup.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
@@ -3462,24 +3511,24 @@ mod model {
         pub ios_environment: String,
     }
 
-    /// Shared reserve record stored in the Iroha world state.
+    /// Shared lineage record stored in the Iroha world state.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
-    pub struct OfflineReserveRecord {
-        /// Current authoritative reserve anchor.
-        pub reserve_state: OfflineReserveState,
-        /// Device attestation key bound to this reserve lineage.
+    pub struct OfflineLineageRecord {
+        /// Current authoritative lineage anchor.
+        pub lineage_state: OfflineLineageState,
+        /// Device attestation key bound to this bearer lineage.
         pub app_attest_key_id: String,
         /// Highest attestation counter observed per device key identifier.
         #[norito(default)]
         pub counter_book: BTreeMap<String, u64>,
-        /// Transfer ids already folded into the reserve anchor.
+        /// Transfer ids already folded into the lineage anchor.
         #[norito(default)]
         pub seen_transfer_ids: BTreeSet<String>,
-        /// Sender-state revisions already folded into the reserve anchor.
+        /// Sender-state revisions already folded into the lineage anchor.
         #[norito(default)]
         pub seen_sender_states: BTreeSet<String>,
         /// Persisted iOS App Attest binding, when applicable.
@@ -3487,23 +3536,23 @@ mod model {
         pub apple_app_attest_binding: Option<OfflineAppleAppAttestBinding>,
     }
 
-    /// Completed reserve operation result keyed by `kind:operation_id`.
+    /// Completed lineage operation result keyed by `kind:operation_id`.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
-    pub struct OfflineReserveOperationResult {
+    pub struct OfflineLineageOperationResult {
         /// Stable operation key (`kind:operation_id`).
         pub operation_key: String,
-        /// Operation kind (`topup`, `renew`, `sync`, `defund`).
+        /// Operation kind (`load`, `refresh`, `sync`, `redeem`).
         pub kind: String,
         /// Request hash bound to the original client request.
         pub request_hash_hex: String,
-        /// Reserve lineage identifier mutated by this operation.
-        pub reserve_id: String,
+        /// Bearer lineage identifier mutated by this operation.
+        pub lineage_id: String,
         /// Reserve envelope returned after the successful mutation.
-        pub envelope: OfflineReserveEnvelope,
+        pub envelope: OfflineLineageEnvelope,
         /// Completion timestamp (unix ms).
         pub completed_at_ms: u64,
     }

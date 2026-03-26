@@ -106,9 +106,10 @@ pub use crate::contract_artifact::{
     ContractArtifactError, VerifiedContractArtifact, verify_contract_artifact,
 };
 pub use crate::metadata::{
-    CONTRACT_FEATURE_BIT_VECTOR, CONTRACT_FEATURE_BIT_ZK, CONTRACT_FEATURE_KNOWN_BITS,
-    EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, MAGIC as METADATA_MAGIC,
-    ProgramMetadata, VECTOR_LENGTH_MAX,
+    CONTRACT_DEBUG_SECTION_MAGIC, CONTRACT_FEATURE_BIT_VECTOR, CONTRACT_FEATURE_BIT_ZK,
+    CONTRACT_FEATURE_KNOWN_BITS, EmbeddedContractDebugInfoV1, EmbeddedContractInterfaceV1,
+    EmbeddedEntrypointDescriptor, EmbeddedFunctionBudgetReportV1, EmbeddedSourceLocation,
+    EmbeddedSourceMapEntryV1, MAGIC as METADATA_MAGIC, ProgramMetadata, VECTOR_LENGTH_MAX,
 };
 pub use crate::{
     aes::{
@@ -127,7 +128,10 @@ pub use crate::{
     ec::{
         ec_add, ec_add_truncated, ec_mul, ec_mul_truncated, pairing_check, pairing_check_truncated,
     },
-    error::{Perm, VMError},
+    error::{
+        Perm, VMError, VmBudgetSnapshot, VmExecutionContext, VmExecutionDiagnostic,
+        VmSourceLocation, VmTrapKind,
+    },
     field_dispatch::{Avx2Field, Avx512Field, FieldArithmetic, NeonField, ScalarField, Sse2Field},
     host::IVMHost,
     iso20022::*,
@@ -155,11 +159,6 @@ pub use iroha_crypto::{MerkleProof, MerkleTree};
 pub use ivm_abi::SyscallPolicy;
 
 pub use crate::signature::{Ed25519BatchItem, verify_ed25519_batch_items};
-#[cfg(target_os = "macos")]
-pub use crate::vector::{
-    bit_pipe_compile_count, metal_available, metal_disabled, release_metal_state,
-    reset_metal_backend_for_tests,
-};
 pub use crate::{
     mock_wsv::{
         AccountId, AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken,
@@ -172,10 +171,12 @@ pub use crate::{
     state_overlay::{DurableStateOverlay, DurableStateSnapshot},
     tx_parallel::{PostRunPhase, Transaction, execute_transactions_parallel},
     vector::{
-        SimdChoice, clear_forced_simd, clear_thread_forced_simd, forced_simd_test_lock,
-        set_forced_simd, set_thread_forced_simd, sha256_compress, simd_backend, simd_bits,
-        simd_choice, simd_lanes, vadd32, vadd32_auto, vadd64, vadd64_auto, vand, vand_auto,
-        vector_supported, vor, vor_auto, vrot32, vrot32_auto, vxor, vxor_auto, zero_vector,
+        SimdChoice, bit_pipe_compile_count, clear_forced_simd, clear_thread_forced_simd,
+        forced_simd_test_lock, metal_available, metal_disabled, release_metal_state,
+        reset_metal_backend_for_tests, set_forced_simd, set_thread_forced_simd, sha256_compress,
+        simd_backend, simd_bits, simd_choice, simd_lanes, vadd32, vadd32_auto, vadd64, vadd64_auto,
+        vand, vand_auto, vector_supported, vor, vor_auto, vrot32, vrot32_auto, vxor, vxor_auto,
+        zero_vector,
     },
     zk::{MemEvent, RegEvent, RegisterState},
 };
@@ -589,7 +590,21 @@ mod tests {
             assert_eq!(errors.simd.as_deref(), Some("simd unsupported on hardware"));
         }
         assert!(errors.metal.is_none());
-        assert!(errors.cuda.is_none());
+        #[cfg(feature = "cuda")]
+        {
+            if status.cuda.available {
+                assert!(errors.cuda.is_none());
+            } else {
+                assert!(
+                    errors.cuda.is_some(),
+                    "expected a CUDA disable/unavailable reason when the CUDA feature is enabled"
+                );
+            }
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            assert!(errors.cuda.is_none());
+        }
     }
 
     #[test]
@@ -686,5 +701,17 @@ mod tests {
         assert!(guest_stack_limit() >= 64 * 1024);
         assert!(crate::memory::Memory::stack_budget_limit() <= 1024 * 1024 * 1024);
         assert!(crate::memory::Memory::stack_budget_limit() >= 64 * 1024);
+    }
+
+    #[test]
+    fn metal_api_exports_are_available_on_all_targets() {
+        release_metal_state();
+        reset_metal_backend_for_tests();
+        assert_eq!(metal_available(), crate::vector::metal_available());
+        assert_eq!(metal_disabled(), crate::vector::metal_disabled());
+        assert_eq!(
+            bit_pipe_compile_count(),
+            crate::vector::bit_pipe_compile_count()
+        );
     }
 }

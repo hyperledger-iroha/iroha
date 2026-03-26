@@ -96,7 +96,7 @@ This section documents the TLV shapes and minimal JSON payloads accepted by the 
     - JSON accepts either key `"perms"` or `"permissions"`, each a string array of permission names.
     - Examples:
       - `{ "perms": [ "mint_asset:rose#wonder" ] }`
-      - `{ "permissions": [ "read_assets:i105...", "transfer_asset:rose#wonder" ] }`
+      - `{ "permissions": [ "read_assets:<i105-account-id>", "transfer_asset:rose#wonder" ] }`
     - Supported permission name prefixes in the mock:
       - `register_domain`, `register_account`, `register_asset_definition`
       - `read_assets:<account_id>`

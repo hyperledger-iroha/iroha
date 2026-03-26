@@ -31,6 +31,10 @@ pub enum Command {
     Code(CodeCommand),
     /// Deploy compiled `.to` code via Torii (POST /v1/contracts/deploy)
     Deploy(DeployArgs),
+    /// Submit a contract call through Torii (POST /v1/contracts/call)
+    Call(CallArgs),
+    /// Execute a read-only contract view through Torii (POST /v1/contracts/view)
+    View(ViewArgs),
     /// Deploy bytecode, register manifest, and activate a namespace binding in one transaction
     DeployActivate(DeployActivateArgs),
     /// Contract manifest helpers
@@ -47,6 +51,8 @@ impl Run for Command {
         match self {
             Command::Code(cmd) => cmd.run(context),
             Command::Deploy(args) => args.run(context),
+            Command::Call(args) => args.run(context),
+            Command::View(args) => args.run(context),
             Command::DeployActivate(args) => args.run(context),
             Command::Manifest(cmd) => cmd.run(context),
             Command::Simulate(args) => args.run(context),
@@ -154,6 +160,137 @@ impl Run for DeployArgs {
             self.dataspace.as_deref(),
         )?;
         context.print_data(&v)?;
+        Ok(())
+    }
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct ContractTargetArgs {
+    /// Canonical contract address. When provided it takes precedence over namespace/id.
+    #[arg(long, conflicts_with_all = ["namespace", "contract_id"])]
+    pub contract_address: Option<String>,
+    /// Namespace hosting the contract when using the legacy binding path.
+    #[arg(long, requires = "contract_id", conflicts_with = "contract_address")]
+    pub namespace: Option<String>,
+    /// Contract id within the namespace when using the legacy binding path.
+    #[arg(long, requires = "namespace", conflicts_with = "contract_address")]
+    pub contract_id: Option<String>,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct ContractPayloadArgs {
+    /// Inline Norito JSON payload object or value.
+    #[arg(long, value_name = "JSON", conflicts_with = "payload_file")]
+    pub payload_json: Option<String>,
+    /// File containing a Norito JSON payload object or value.
+    #[arg(long, value_name = "PATH", conflicts_with = "payload_json")]
+    pub payload_file: Option<PathBuf>,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct CallArgs {
+    /// Authority account identifier. Defaults to the configured client authority.
+    #[arg(long)]
+    pub authority: Option<String>,
+    /// Hex-encoded private key override used to sign and submit the call directly.
+    #[arg(long, value_name = "HEX", conflicts_with = "scaffold_only")]
+    pub private_key: Option<String>,
+    /// Request an unsigned transaction scaffold instead of direct submission.
+    #[arg(long)]
+    pub scaffold_only: bool,
+    /// Optional contract entrypoint selector (defaults to `main`).
+    #[arg(long)]
+    pub entrypoint: Option<String>,
+    /// Optional gas asset id forwarded to transaction metadata.
+    #[arg(long)]
+    pub gas_asset_id: Option<String>,
+    /// Optional fee sponsor account charged for gas/fees when supported.
+    #[arg(long)]
+    pub fee_sponsor: Option<String>,
+    /// Gas limit metadata forwarded to the contract call.
+    #[arg(long, default_value_t = 100_000)]
+    pub gas_limit: u64,
+    #[command(flatten)]
+    pub target: ContractTargetArgs,
+    #[command(flatten)]
+    pub payload: ContractPayloadArgs,
+}
+
+impl Run for CallArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let client: Client = context.client_from_config();
+        let authority = resolve_contract_authority(context, self.authority.as_deref())?;
+        let private_key = resolve_contract_call_private_key(
+            context,
+            &authority,
+            self.private_key.as_deref(),
+            self.scaffold_only,
+        )?;
+        let fee_sponsor = self
+            .fee_sponsor
+            .as_deref()
+            .map(|value| crate::resolve_account_id(context, value))
+            .transpose()
+            .wrap_err("failed to resolve --fee-sponsor")?;
+        let target = resolve_contract_target(self.target)?;
+        let payload = load_contract_payload_value(
+            self.payload.payload_json.as_deref(),
+            self.payload.payload_file.as_deref(),
+        )?;
+        let value = client.post_contract_call_json(
+            &authority,
+            private_key.as_ref(),
+            target.contract_address.as_ref(),
+            target.namespace.as_deref(),
+            target.contract_id.as_deref(),
+            self.entrypoint.as_deref(),
+            payload.as_ref(),
+            None,
+            self.gas_asset_id.as_deref(),
+            fee_sponsor.as_ref(),
+            self.gas_limit,
+        )?;
+        context.print_data(&value)?;
+        Ok(())
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct ViewArgs {
+    /// Authority account identifier used as the read context. Defaults to the configured client authority.
+    #[arg(long)]
+    pub authority: Option<String>,
+    /// Optional contract entrypoint selector (defaults to `main`).
+    #[arg(long)]
+    pub entrypoint: Option<String>,
+    /// Gas limit applied to the local view execution.
+    #[arg(long, default_value_t = 100_000)]
+    pub gas_limit: u64,
+    #[command(flatten)]
+    pub target: ContractTargetArgs,
+    #[command(flatten)]
+    pub payload: ContractPayloadArgs,
+}
+
+impl Run for ViewArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let client: Client = context.client_from_config();
+        let authority = resolve_contract_authority(context, self.authority.as_deref())?;
+        let target = resolve_contract_target(self.target)?;
+        let payload = load_contract_payload_value(
+            self.payload.payload_json.as_deref(),
+            self.payload.payload_file.as_deref(),
+        )?;
+        let value = client.post_contract_view_json(
+            &authority,
+            target.contract_address.as_ref(),
+            target.namespace.as_deref(),
+            target.contract_id.as_deref(),
+            self.entrypoint.as_deref(),
+            payload.as_ref(),
+            self.gas_limit,
+        )?;
+        context.print_data(&value)?;
         Ok(())
     }
 }
@@ -318,6 +455,99 @@ fn load_code_bytes(code_file: Option<PathBuf>, code_b64: Option<String>) -> Resu
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedContractTarget {
+    contract_address: Option<iroha::data_model::smart_contract::ContractAddress>,
+    namespace: Option<String>,
+    contract_id: Option<String>,
+}
+
+fn resolve_contract_target(args: ContractTargetArgs) -> Result<ResolvedContractTarget> {
+    match (
+        args.contract_address.as_deref(),
+        args.namespace.as_deref(),
+        args.contract_id.as_deref(),
+    ) {
+        (Some(address), None, None) => Ok(ResolvedContractTarget {
+            contract_address: Some(
+                address
+                    .parse()
+                    .wrap_err("invalid --contract-address canonical literal")?,
+            ),
+            namespace: None,
+            contract_id: None,
+        }),
+        (None, Some(namespace), Some(contract_id)) => Ok(ResolvedContractTarget {
+            contract_address: None,
+            namespace: Some(namespace.to_owned()),
+            contract_id: Some(contract_id.to_owned()),
+        }),
+        (None, None, None) => Err(eyre!(
+            "provide either --contract-address or both --namespace and --contract-id"
+        )),
+        _ => Err(eyre!(
+            "provide either --contract-address or both --namespace and --contract-id"
+        )),
+    }
+}
+
+fn load_contract_payload_value(
+    payload_json: Option<&str>,
+    payload_file: Option<&std::path::Path>,
+) -> Result<Option<norito::json::Value>> {
+    match (payload_json, payload_file) {
+        (Some(raw), None) => norito::json::from_str(raw)
+            .map(Some)
+            .wrap_err("invalid --payload-json"),
+        (None, Some(path)) => {
+            let contents = std::fs::read_to_string(path)
+                .wrap_err_with(|| format!("read {}", path.display()))?;
+            norito::json::from_str(&contents)
+                .map(Some)
+                .wrap_err_with(|| format!("invalid JSON in {}", path.display()))
+        }
+        (None, None) => Ok(None),
+        (Some(_), Some(_)) => Err(eyre!(
+            "--payload-json and --payload-file are mutually exclusive"
+        )),
+    }
+}
+
+fn resolve_contract_authority<C: RunContext>(
+    context: &mut C,
+    authority: Option<&str>,
+) -> Result<AccountId> {
+    match authority {
+        Some(authority) => {
+            crate::resolve_account_id(context, authority).wrap_err("failed to resolve --authority")
+        }
+        None => Ok(context.config().account.clone()),
+    }
+}
+
+fn resolve_contract_call_private_key<C: RunContext>(
+    context: &C,
+    authority: &AccountId,
+    private_key_hex: Option<&str>,
+    scaffold_only: bool,
+) -> Result<Option<PrivateKey>> {
+    if scaffold_only {
+        return Ok(None);
+    }
+    if let Some(private_key_hex) = private_key_hex {
+        return private_key_hex
+            .parse()
+            .map(Some)
+            .wrap_err("invalid --private-key");
+    }
+    if authority == &context.config().account {
+        return Ok(Some(context.config().key_pair.private_key().clone()));
+    }
+    Err(eyre!(
+        "--private-key is required when --authority does not match client.toml authority"
+    ))
+}
+
 fn self_register_authority_instruction(authority: &AccountId) -> InstructionBox {
     Register::account(Account::new_domainless(authority.clone())).into()
 }
@@ -464,6 +694,95 @@ mod tests {
             instructions[0],
             self_register_authority_instruction(&authority),
             "first instruction must self-register the domainless authority"
+        );
+    }
+
+    #[test]
+    fn load_contract_payload_value_accepts_inline_json() {
+        let payload = load_contract_payload_value(Some(r#"{"amount":7}"#), None).expect("payload");
+        let object = payload
+            .as_ref()
+            .and_then(norito::json::Value::as_object)
+            .expect("payload object");
+        assert_eq!(
+            object.get("amount").and_then(norito::json::Value::as_i64),
+            Some(7)
+        );
+    }
+
+    #[test]
+    fn load_contract_payload_value_accepts_json_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("payload.json");
+        std::fs::write(&path, r#"{"entrypoint":"mirror_state"}"#).expect("write payload");
+        let payload = load_contract_payload_value(None, Some(&path)).expect("payload from file");
+        let object = payload
+            .as_ref()
+            .and_then(norito::json::Value::as_object)
+            .expect("payload object");
+        assert_eq!(
+            object
+                .get("entrypoint")
+                .and_then(norito::json::Value::as_str),
+            Some("mirror_state")
+        );
+    }
+
+    #[test]
+    fn resolve_contract_target_accepts_contract_address() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
+            0,
+            &authority,
+            1,
+            iroha::data_model::nexus::DataSpaceId::new(0),
+        )
+        .expect("contract address");
+        let resolved = resolve_contract_target(ContractTargetArgs {
+            contract_address: Some(contract_address.to_string()),
+            namespace: None,
+            contract_id: None,
+        })
+        .expect("resolved target");
+        assert_eq!(resolved.contract_address, Some(contract_address));
+        assert!(resolved.namespace.is_none());
+        assert!(resolved.contract_id.is_none());
+    }
+
+    #[test]
+    fn resolve_contract_target_accepts_namespace_pair() {
+        let resolved = resolve_contract_target(ContractTargetArgs {
+            contract_address: None,
+            namespace: Some("apps".to_owned()),
+            contract_id: Some("router".to_owned()),
+        })
+        .expect("resolved target");
+        assert_eq!(resolved.namespace.as_deref(), Some("apps"));
+        assert_eq!(resolved.contract_id.as_deref(), Some("router"));
+        assert!(resolved.contract_address.is_none());
+    }
+
+    #[test]
+    fn resolve_contract_call_private_key_uses_context_key_for_default_authority() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let ctx = TestContext::new(authority.clone());
+        let private_key =
+            resolve_contract_call_private_key(&ctx, &authority, None, false).expect("key");
+        assert_eq!(
+            private_key,
+            Some(ctx.config().key_pair.private_key().clone())
+        );
+    }
+
+    #[test]
+    fn resolve_contract_call_private_key_rejects_mismatched_authority_without_override() {
+        let ctx = TestContext::new(AccountId::new(KeyPair::random().public_key().clone()));
+        let other_authority = AccountId::new(KeyPair::random().public_key().clone());
+        let err = resolve_contract_call_private_key(&ctx, &other_authority, None, false)
+            .expect_err("missing override should fail");
+        assert!(
+            err.to_string()
+                .contains("--private-key is required when --authority does not match")
         );
     }
 

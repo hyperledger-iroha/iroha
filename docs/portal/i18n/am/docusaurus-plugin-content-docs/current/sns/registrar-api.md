@@ -118,7 +118,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/policies/{suffix_id}` | አግኝ | - | የአሁኑን `SuffixPolicyV1` (መሸጎጫ) ያውጡ። |
 | `/v1/sns/names/{namespace}/{literal}` | አግኝ | - | የአሁኑን I18NI0000067X + ውጤታማ ሁኔታ ይመልሳል (ገባሪ፣ ጸጋ፣ ወዘተ)። |
 
-** የመራጭ ኢንኮዲንግ፡** የ`{selector}` ዱካ ክፍል I105 (ተመራጭ)፣ የተጨመቀ (`sora`፣ ሁለተኛ-ምርጥ)፣ ወይም ቀኖናዊ ሄክስ በ ADDR-5 ይቀበላል። Torii በ I18NI0000070X በኩል መደበኛ ያደርገዋል።
+** የመራጭ ኢንኮዲንግ፡** የ`{selector}` ዱካ ክፍል i105 (ተመራጭ)፣ የተጨመቀ (`sora`፣ ሁለተኛ-ምርጥ)፣ ወይም ቀኖናዊ ሄክስ በ ADDR-5 ይቀበላል። Torii በ I18NI0000070X በኩል መደበኛ ያደርገዋል።
 
 ** የስህተት ሞዴል፡** ሁሉም የመጨረሻ ነጥቦች Norito JSON በ `code`፣ `message`፣ `details` ይመለሳሉ። ኮዶች `sns_err_reserved`፣ `sns_err_payment_mismatch`፣ `sns_err_policy_violation`፣ I18NI0000077X ያካትታሉ።
 
@@ -164,7 +164,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner <i105-account-id> \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -226,7 +226,7 @@ Torii ማረጋገጫዎችን በማረጋገጥ ያረጋግጣል፡-
 
 1. የደንበኛ ጥያቄዎች I18NI0000098X ዋጋ አሰጣጥን፣ ጸጋን እና የሚገኙ ደረጃዎችን ለማምጣት።
 2. ደንበኛ `RegisterNameRequestV1` ይገነባል፡
-   - `selector` ከተመረጡት I105 ወይም ሁለተኛ-ምርጥ የታመቀ (`sora`) መለያ የተገኘ።
+   - `selector` ከተመረጡት i105 ወይም ሁለተኛ-ምርጥ የታመቀ (`sora`) መለያ የተገኘ።
    - `term_years` በፖሊሲ ገደቦች ውስጥ።
    - `payment` የግምጃ ቤት / መጋቢ ክፍፍል ማስተላለፍን በመጥቀስ።
 3. Torii ያረጋግጣል፡-

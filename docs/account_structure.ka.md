@@ -1,111 +1,99 @@
----
-lang: ka
-direction: ltr
-source: docs/account_structure.md
-status: complete
-generator: scripts/sync_docs_i18n.py
-source_hash: 01561366c9698c10d29ff3f49ad4c14b22b1796b5c7701cf98d200a140af1caf
-source_last_modified: "2026-01-28T17:11:30.635172+00:00"
-translation_last_reviewed: 2026-02-07
-translator: machine-google-reviewed
----
+# Account Structure RFC
 
-# ანგარიშის სტრუქტურა RFC
+**Status:** Accepted (ADDR-1)  
+**Audience:** Data model, Torii, Nexus, Wallet, Governance teams  
+**Related issues:** TBD
 
-** სტატუსი: ** მიღებულია (ADDR-1)  
-** აუდიტორია:** მონაცემთა მოდელი, Torii, Nexus, Wallet, მმართველობის გუნდები  
-** დაკავშირებული საკითხები: ** TBD
+## Summary
 
-## რეზიუმე
+This document describes the shipping account-addressing stack implemented in
+`AccountAddress` (`crates/iroha_data_model/src/account/address.rs`) and the
+companion tooling. It provides:
 
-ეს დოკუმენტი აღწერს მიწოდების ანგარიშის მისამართების დასტას, რომელიც განხორციელდა
-`AccountAddress` (`crates/iroha_data_model/src/account/address.rs`) და
-კომპანიონი ხელსაწყოები. ის უზრუნველყოფს:
+- A checksummed, human-facing **Katakana I105 account address** produced by
+  `AccountAddress::to_i105` that binds a chain discriminant to the account
+  controller and offers deterministic interop-friendly textual forms.
+- A domainless canonical account payload keyed only by the controller.
+  Explicit domain context now lives outside the payload via
+  `ScopedAccountId { account, domain }` and domain-link state.
 
-- შეჯამებული, ადამიანისკენ მიმართული **Iroha Base58 მისამართი (I105)** მიერ წარმოებული
-  `AccountAddress::to_i105`, რომელიც აკავშირებს ჯაჭვის დისკრიმინანტს ანგარიშთან
-  კონტროლერი და გთავაზობთ დეტერმინისტულ ინტეროპ მეგობრულ ტექსტურ ფორმებს.
-- დომენის სელექტორები იმპლიციტური ნაგულისხმევი დომენებისთვის და ლოკალური დაიჯესტებისთვის, a
-  დაცულია გლობალური რეესტრის ამორჩევის ტეგი მომავალი Nexus მხარდაჭერილი მარშრუტირებისთვის (
-  რეესტრის ძებნა ** ჯერ არ არის გაგზავნილი **).
+## Motivation
 
-## მოტივაცია
+Wallets and off-chain tooling rely on raw `name@dataspace` or `name@domain.dataspace` on-chain account aliases today. This
+has two major drawbacks:
 
-საფულეები და ჯაჭვის გარეშე ხელსაწყოები ეყრდნობა დღეს `alias@domain` (rejected legacy form) მარშრუტიზაციის ნედლეულ მეტსახელებს. ეს
-აქვს ორი ძირითადი ნაკლი:
+1. **No network binding.** The string has no checksum or chain prefix, so users
+   can paste an address from the wrong network without immediate feedback. The
+   transaction will eventually be rejected (chain mismatch) or, worse, succeed
+   against an unintended account if the destination exists locally.
+2. **Domain collision.** Domains are namespace-only and can be reused on each
+   chain. Federation of services (custodians, bridges, cross-chain workflows)
+   becomes brittle because `finance` on chain A is unrelated to `finance` on
+   chain B.
 
-1. ** ქსელის სავალდებულო არ არის. ** სტრიქონს არ აქვს გამშვები ჯამი ან ჯაჭვის პრეფიქსი, ამიტომ მომხმარებლებს
-   შეუძლია მისამართის ჩასმა არასწორი ქსელიდან დაუყოვნებლივი გამოხმაურების გარეშე. The
-   ტრანზაქცია საბოლოოდ უარყოფილი იქნება (ჯაჭვის შეუსაბამობა) ან, უარესი, წარმატებული იქნება
-   არასასურველი ანგარიშის წინააღმდეგ, თუ დანიშნულება ადგილობრივად არსებობს.
-2. **დომენის შეჯახება.** დომენები არის მხოლოდ სახელთა სივრცე და მათი ხელახლა გამოყენება შესაძლებელია თითოეულზე
-   ჯაჭვი. სერვისების ფედერაცია (მზრუნველები, ხიდები, ჯვარედინი სამუშაო ნაკადები)
-   ხდება მყიფე, რადგან `finance` ჯაჭვზე A არ არის დაკავშირებული `finance`-თან
-   ჯაჭვი B.
+We need a human-friendly address format that guards against copy/paste errors
+and a deterministic mapping from an on-chain alias to the authoritative chain/account binding.
 
-ჩვენ გვჭირდება ადამიანური მიმართვის ფორმატი, რომელიც იცავს კოპირების/პასტის შეცდომებს
-და დეტერმინისტული რუქა დომენის სახელიდან ავტორიტეტულ ჯაჭვამდე.
+## Goals
 
-## გოლები
+- Describe the I105 envelope implemented in the data model and the
+  canonical parsing/alias rules that `AccountId` and `AccountAddress` follow.
+- Encode the configured chain discriminant directly into each address and
+  define its governance/registry process.
+- Describe how to introduce a global domain registry without breaking current
+  deployments and specify normalization/anti-spoofing rules.
 
-- აღწერეთ I105 Base58 კონვერტი დანერგილი მონაცემთა მოდელში და
-  კანონიკური პარსინგის წესები, რომლებსაც `AccountId` და `AccountAddress` იცავენ.
-- დაშიფვრეთ კონფიგურირებული ჯაჭვის დისკრიმინანტი პირდაპირ თითოეულ მისამართზე და
-  განსაზღვროს მისი მართვის/რეგისტრაციის პროცესი.
-- აღწერეთ, როგორ შემოვიტანოთ დომენის გლობალური რეესტრი დენის დარღვევის გარეშე
-  განლაგება და ნორმალიზების/გაყალბების საწინააღმდეგო წესების მითითება.
+## Non-goals
 
-## არაგოლები
+- Implementing cross-chain asset transfers. The routing layer only returns the
+  target chain.
+- Finalising governance for global domain issuance. This RFC focuses on the data
+  model and transport primitives.
 
-- აქტივების ჯაჭვური ტრანსფერების განხორციელება. მარშრუტიზაციის ფენა აბრუნებს მხოლოდ
-  სამიზნე ჯაჭვი.
-- გლობალური დომენის გაცემის მმართველობის დასრულება. ეს RFC ფოკუსირებულია მონაცემებზე
-  მოდელი და სატრანსპორტო პრიმიტივები.
+## Background
 
-## ფონი
-
-### მიმდინარე მარშრუტიზაციის მეტსახელი
+### Current on-chain account alias
 
 ```
 AccountId {
-    domain: DomainId,   // wrapper over Name (ASCII-ish string)
     controller: AccountController // single PublicKey or multisig policy
 }
+ScopedAccountId {
+    account: AccountId,
+    domain: DomainId,
+}
 
-Display: canonical I105 literal (no `@domain` suffix)
+Display / JSON text: canonical I105 literal only
 Parse accepts:
-- Encoded account identifiers only: I105.
-- Runtime parsers reject canonical hex (`0x...`), any `@<domain>` suffix, and alias literals such as `label@domain`.
+- Canonical I105 account literals only.
+- Runtime parsers reject non-canonical/dotted i105 literals, legacy `norito:<hex>`,
+  canonical hex (`0x...`), any `@<domain>` suffix, and account-alias literals such as
+  `name@dataspace` or `name@domain.dataspace`.
 
-Multihash hex is canonical: varint bytes are lowercase hex, payload bytes are uppercase hex,
-and `0x` prefixes are not accepted.
-
-This text form is now treated as an **account alias**: a routing convenience
-that points to the canonical [`AccountAddress`](#2-canonical-address-codecs).
-It remains useful for human readability and domain-scoped governance, but it is
-no longer considered the authoritative account identifier on-chain.
+Domain context is explicit and out-of-band. There is no public
+`AccountSubjectId`; subject identity is `AccountId`.
 ```
 
-`ChainId` ცხოვრობს `AccountId`-ის გარეთ. კვანძები ამოწმებენ გარიგების `ChainId`
-კონფიგურაციის საწინააღმდეგოდ მიღებისას (`AcceptTransactionFail::ChainIdMismatch`)
-და უარყოს უცხოური ტრანზაქცია, მაგრამ ანგარიშის სტრიქონი თავისთავად შეიცავს No
-ქსელის მინიშნება.
+`ChainId` lives outside of `AccountId`. Nodes check the transaction’s `ChainId`
+against configuration during admission (`AcceptTransactionFail::ChainIdMismatch`)
+and reject foreign transactions, but the account string itself carries no
+network hint.
 
-### დომენის იდენტიფიკატორები
+### Domain identifiers
 
-`DomainId` ახვევს `Name`-ს (ნორმალიზებული სტრიქონი) და ვრცელდება ლოკალურ ჯაჭვზე.
-ყველა ჯაჭვს შეუძლია დამოუკიდებლად დაარეგისტრიროს `wonderland`, `finance` და ა.შ.
+`DomainId` wraps a `Name` (normalized string) and is scoped to the local chain.
+Every chain can register `wonderland`, `finance`, etc. independently.
 
-### Nexus კონტექსტი
+### Nexus context
 
-Nexus პასუხისმგებელია კომპონენტთაშორის კოორდინაციაზე (ზოლები/მონაცემთა სივრცეები). ის
-ამჟამად არ აქვს ჯვარედინი ჯაჭვის დომენის მარშრუტიზაციის კონცეფცია.
+Nexus is responsible for cross-component coordination (lanes/data-spaces). It
+currently has no concept of cross-chain domain routing.
 
-## შემოთავაზებული დიზაინი
+## Proposed Design
 
-### 1. დეტერმინისტული ჯაჭვის დისკრიმინანტი
+### 1. Deterministic chain discriminant
 
-`iroha_config::parameters::actual::Common` ახლა ამჟღავნებს:
+`iroha_config::parameters::actual::Common` now exposes:
 
 ```rust
 pub struct Common {
@@ -115,54 +103,46 @@ pub struct Common {
 }
 ```
 
-- ** შეზღუდვები:**
-  - უნიკალური თითო აქტიურ ქსელში; იმართება ხელმოწერილი საჯარო რეესტრის მეშვეობით
-    აშკარა დაჯავშნილი დიაპაზონები (მაგ., `0x0000–0x0FFF` ტესტი/დევი, `0x1000–0x7FFF`
-    საზოგადოების გამოყოფა, `0x8000–0xFFEF` მმართველობით დამტკიცებული, `0xFFF0–0xFFFF`
-    დაცულია).
-  - უცვლელი გაშვებული ჯაჭვისთვის. მის შეცვლას მყარი ჩანგალი და ა
-    რეესტრის განახლება.
-- **მმართველობა და რეესტრი (დაგეგმილი): ** მრავალხელმოწერიანი მმართველობის ნაკრები
-  ხელმოწერილი JSON რეესტრის შენარჩუნება, რომელიც ასახავს დისკრიმინატორებს ადამიანის ალიასებზე და
-  CAIP-2 იდენტიფიკატორები. ეს რეესტრი ჯერ არ არის გაგზავნილი მუშაობის დროის ნაწილი.
-- **გამოყენება:** გადადის სახელმწიფო დაშვების, Torii, SDK-ებისა და საფულის API-ების მეშვეობით
-  ყველა კომპონენტს შეუძლია მისი ჩასმა ან გადამოწმება. CAIP-2 ექსპოზიცია მომავალში რჩება
-  ინტეროპის ამოცანა.
+- **Constraints:**
+  - Unique per active network; managed through a signed public registry with
+    explicit reserved ranges (e.g., `0x0000–0x0FFF` test/dev, `0x1000–0x7FFF`
+    community allocations, `0x8000–0xFFEF` governance-approved, `0xFFF0–0xFFFF`
+    reserved).
+  - Immutable for a running chain. Changing it requires a hard fork and a
+    registry update.
+- **Governance & registry (planned):** A multi-signature governance set will
+  maintain a signed JSON registry mapping discriminants to human aliases and
+  CAIP-2 identifiers. This registry is not yet part of the shipped runtime.
+- **Usage:** Threaded through state admission, Torii, SDKs, and wallet APIs so
+  every component can embed or validate it. CAIP-2 exposure remains a future
+  interop task.
 
-### 2. მისამართების კანონიკური კოდეკები
+### 2. Canonical address codecs
 
-Rust მონაცემთა მოდელი ავლენს ერთი კანონიკური დატვირთვის წარმოდგენას
-(`AccountAddress`), რომელიც შეიძლება გამოიცეს რამდენიმე ადამიანის წინაშე მდგარ ფორმატში. I105 არის
-ანგარიშის სასურველი ფორმატი გაზიარებისა და კანონიკური გამოსავლისთვის; შეკუმშული
-`sora` ფორმა არის მეორე საუკეთესო, მხოლოდ Sora-ის ვარიანტი UX-ისთვის, სადაც კანა ანბანია
-მატებს ღირებულებას. Canonical hex რჩება გამართვის დამხმარე საშუალებად.
+The Rust data model now distinguishes the public `AccountId` surface from the
+lower-level `AccountAddress` helper.
 
-- **I105 (Iroha Base58)** – Base58 კონვერტი, რომელიც ათავსებს ჯაჭვს
-  დისკრიმინანტი. დეკოდერები ამოწმებენ პრეფიქსის დატვირთვის დაწინაურებამდე
-  კანონიკური ფორმა.
-- **Sora-შეკუმშული ხედი** – მხოლოდ Sora ანბანი **105 სიმბოლოსგან** აშენებული
-  ნახევრად სიგანის イロハ ლექსის (ヰ და ヱ ჩათვლით) დამატება 58-სიმბოლოზე
-  I105 კომპლექტი. სტრიქონები იწყება სენტინელით `sora`, ჩაშენებულია Bech32m-დან მიღებული
-  გამშვები ჯამი და გამოტოვეთ ქსელის პრეფიქსი (Sora Nexus იგულისხმება სენტინელის მიერ).
+- `AccountId` text/JSON parsing is hard-cut to canonical I105 only.
+- `AccountAddress` remains the canonical binary envelope and can still be
+  rendered as I105. Canonical hex remains an internal envelope/debug view and
+  is not a public account identifier.
 
-  ```
-  I105  : 123456789ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz
-  Iroha : ｲﾛﾊﾆﾎﾍﾄﾁﾘﾇﾙｦﾜｶﾖﾀﾚｿﾂﾈﾅﾗﾑｳヰﾉｵｸﾔﾏｹﾌｺｴﾃｱｻｷﾕﾒﾐｼヱﾋﾓｾｽ
-  ```
-- **Canonical hex** – კანონიკური ბაიტის `0x…` კოდირება გამართვისთვის
-  კონვერტი.
+- **I105** – the canonical account-address envelope that embeds the chain
+  discriminant. Decoders validate the prefix before promoting the payload to
+  the canonical form.
+- **Canonical hex** – an internal `0x…` view of the canonical byte envelope for
+  debugging, fixtures, and low-level tooling only.
 
-`AccountAddress::parse_encoded` ავტომატურად ამოიცნობს I105 (სასურველია), შეკუმშული (`sora`, მეორე საუკეთესო) ან კანონიკურ ექვსკუთხედს
-(მხოლოდ `0x...`; შიშველი ექვსკუთხედი უარყოფილია) შეაქვს და აბრუნებს როგორც დეკოდირებულ დატვირთვას, ასევე აღმოჩენილს
-`AccountAddress`. Torii ახლა უწოდებს `parse_encoded`-ს ISO 20022-ის დამატებით
-მიმართავს და ინახავს კანონიკურ თექვსმეტობით ფორმას, ასე რომ მეტამონაცემები დეტერმინისტული რჩება
-ორიგინალური წარმოდგენის მიუხედავად.
+`AccountAddress::parse_encoded` accepts i105 forms for
+the raw address envelope. `AccountId::parse_encoded`, `FromStr`, and JSON
+deserialization accept only canonical I105 and reject non-canonical/legacy
+i105 forms, canonical hex, `norito:`, alias, and `@domain` forms.
 
-#### 2.1 ჰედერის ბაიტის განლაგება (ADDR-1a)
+#### 2.1 Header byte layout (ADDR-1a)
 
-ყოველი კანონიკური დატვირთვა განლაგებულია როგორც `header · controller`. The
-`header` არის ერთი ბაიტი, რომელიც აცნობებს, რომელი პარსერის წესები ვრცელდება იმ ბაიტებზე, რომლებიც
-მიჰყევით:
+Every canonical payload is laid out as `header · controller`. The
+`header` is a single byte that communicates which parser rules apply to the bytes that
+follow:
 
 ```
 bit index:   7        5 4      3 2      1 0
@@ -171,18 +151,18 @@ payload bit: │version  │ class  │  norm  │ext │
              └─────────┴────────┴────────┴────┘
 ```
 
-ამრიგად, პირველი ბაიტი აერთიანებს სქემის მეტამონაცემებს ქვედა დინების დეკოდერებისთვის:
+The first byte therefore packs the schema metadata for downstream decoders:
 
-| ბიტები | ველი | დაშვებული მნიშვნელობები | შეცდომა დარღვევაზე |
-|------|-------|---------------|-------------------|
-| 7-5 | `addr_version` | `0` (v1). მნიშვნელობები `1-7` დაცულია მომავალი გადასინჯვისთვის. | მნიშვნელობები `0-7` ტრიგერის გარეთ `AccountAddressError::InvalidHeaderVersion`; განხორციელებები უნდა განიხილებოდეს არა-ნულოვანი ვერსიები, როგორც მხარდაუჭერელი დღეს. |
-| 4-3 | `addr_class` | `0` = ერთი კლავიში, `1` = მრავალმნიშვნელოვანი. | სხვა მნიშვნელობები ზრდის `AccountAddressError::UnknownAddressClass`. |
-| 2-1 | `norm_version` | `1` (ნორმა v1). მნიშვნელობები `0`, `2`, `3` დაცულია. | მნიშვნელობები `0-3`-ს გარეთ ზრდის `AccountAddressError::InvalidNormVersion`. |
-| 0 | `ext_flag` | უნდა იყოს `0`. | კომპლექტი ბიტი ზრდის `AccountAddressError::UnexpectedExtensionFlag`. |
+| Bits | Field | Allowed values | Error on violation |
+|------|-------|----------------|--------------------|
+| 7-5  | `addr_version` | `0` (v1). Values `1-7` are reserved for future revisions. | Values outside `0-7` trigger `AccountAddressError::InvalidHeaderVersion`; implementations MUST treat non-zero versions as unsupported today. |
+| 4-3  | `addr_class` | `0` = single key, `1` = multisig. | Other values raise `AccountAddressError::UnknownAddressClass`. |
+| 2-1  | `norm_version` | `1` (Norm v1). Values `0`, `2`, `3` are reserved. | Values outside `0-3` raise `AccountAddressError::InvalidNormVersion`. |
+| 0    | `ext_flag` | MUST be `0`. | Set bit raises `AccountAddressError::UnexpectedExtensionFlag`. |
 
-Rust შიფრატორი წერს `0x02` ერთი გასაღების კონტროლერებისთვის (ვერსია 0, კლასი 0,
-ნორმა v1, გაფართოების დროშა გასუფთავებულია) და `0x0A` მულტისიგ კონტროლერებისთვის (ვერსია 0,
-კლასი 1, ნორმა v1, გაფართოების დროშა გასუფთავებულია).
+The Rust encoder writes `0x02` for single-key controllers (version 0, class 0,
+norm v1, extension flag cleared) and `0x0A` for multisig controllers (version 0,
+class 1, norm v1, extension flag cleared).
 
 #### 2.2 Domainless payload semantics
 
@@ -191,242 +171,202 @@ with no selector segment, no implicit default-domain reconstruction, and no
 public decode fallback for legacy scoped-account literals.
 
 Explicit domain context is modeled separately as `ScopedAccountId { account,
-domain }` or separate API fields; it is not encoded into `AccountId` payload
-bytes.
+domain }` and via account-domain link state. Converting an `AccountAddress`
+into a scoped account therefore requires the caller to supply the domain
+explicitly. The public subject-identity surface is just `AccountId`;
+`AccountSubjectId` is not part of the public API.
 
-| Tag | Meaning | Payload | Notes |
-|-----|---------|---------|-------|
-| `0x00` | Domainless canonical scope | none | Canonical account payloads are domainless; explicit domain context lives outside the address payload. |
-| `0x01` | Local domain digest | 12 bytes | Digest = `blake2s_mac(key = "SORA-LOCAL-K:v1", canonical_label)[0..12]`. |
-| `0x02` | Global registry entry | 4 bytes | Big-endian `registry_id`; reserved until the global registry ships. |
+#### 2.3 Controller payload encodings (ADDR-1a)
 
-Domain labels are canonicalised (UTS-46 + STD3 + NFC) before hashing. Unknown tags raise `AccountAddressError::UnknownDomainTag`. When validating an address against a domain, mismatched selectors raise `AccountAddressError::DomainMismatch`.
+The controller payload is a tagged union appended immediately after the header in
+canonical payloads:
 
-```
-legacy selector segment
-┌──────────┬──────────────────────────────────────────────┐
-│ tag (u8) │ payload (depends on selector kind, see table)│
-└──────────┴──────────────────────────────────────────────┘
-```
-
-When present, the selector is immediately adjacent to the controller payload, so
-a decoder can walk the wire format in order: read the tag byte, read the
-tag-specific payload, then move on to the controller bytes.
-
-**Legacy selector examples**
-
-- *Implicit default* (`tag = 0x00`). No payload. Example canonical hex for the default
-  domain using the deterministic test key:
-  `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.
-- *Local digest* (`tag = 0x01`). Payload is the 12-byte digest. Example (`treasury` seed
-  `0x01`): `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`.
-- *Global registry* (`tag = 0x02`). Payload is a big-endian `registry_id:u32`. The bytes
-  that follow the payload are identical to the implicit-default case; the selector simply
-  replaces the normalised domain string with a registry pointer. Example using
-  `registry_id = 0x0000_002A` (decimal 42) and the deterministic default controller:
-  `0x02020000002a000120641297079357229f295938a4b5a333de35069bf47b9d0704e45805713d13c201`.
-
-#### 2.3 კონტროლერის დატვირთვის კოდირება (ADDR-1a)
-
-კონტროლერის payload არის კიდევ ერთი ტეგირებული კავშირი, რომელიც დართულია დომენის ამორჩევის შემდეგ:| ტეგი | კონტროლერი | განლაგება | შენიშვნები |
+| Tag | Controller | Layout | Notes |
 |-----|------------|--------|-------|
-| `0x00` | ერთი გასაღები | `curve_id:u8` · `key_len:u8` · `key_bytes` | `curve_id=0x01` რუკები Ed25519-ზე დღეს. `key_len` შემოიფარგლება `u8`-ით; უფრო დიდი მნიშვნელობები ამაღლებს `AccountAddressError::KeyPayloadTooLong`-ს (ასე რომ, ერთი გასაღების ML-DSA საჯარო გასაღებები, რომლებიც >255 ბაიტია, არ შეიძლება იყოს კოდირებული და უნდა გამოიყენონ მრავალსიგანი). |
-| `0x01` | Multisig | `version:u8` · `threshold:u16` · `member_count:u8` · (`curve_id:u8` · `weight:u16` · `key_len:u16` · `curve_id:u8` · `weight:u16` · `key_len:u16` · I18NI0000016 | მხარს უჭერს 255 წევრამდე (`CONTROLLER_MULTISIG_MEMBER_MAX`). უცნობი მრუდები ამაღლებს `AccountAddressError::UnknownCurve`; არასწორი პოლიტიკის ბუშტი ჩნდება, როგორც `AccountAddressError::InvalidMultisigPolicy`. |
+| `0x00` | Single key | `curve_id:u8` · `key_len:u8` · `key_bytes` | `curve_id=0x01` maps to Ed25519 today. `key_len` is bounded to `u8`; larger values raise `AccountAddressError::KeyPayloadTooLong` (so single-key ML‑DSA public keys, which are >255 bytes, cannot be encoded and must use multisig). |
+| `0x01` | Multisig | `version:u8` · `threshold:u16` · `member_count:u16` · (`curve_id:u8` · `weight:u16` · `key_len:u16` · `key_bytes`)\* | The encoded member count is 16-bit; the old 255-member hard cap is gone. Unknown curves raise `AccountAddressError::UnknownCurve`; malformed policies bubble up as `AccountAddressError::InvalidMultisigPolicy`. |
 
-Multisig პოლიტიკა ასევე ასახავს CTAP2-ის სტილის CBOR რუკას და კანონიკურ დაიჯესტს
-ჰოსტებსა და SDK-ებს შეუძლიათ კონტროლერის განმსაზღვრელი შემოწმება. იხ
-`docs/source/references/multisig_policy_schema.md` (ADDR-1c) სქემისთვის,
-ვალიდაციის წესები, ჰეშირების პროცედურა და ოქროს მოწყობილობები.
+Multisig policies also expose a CTAP2-style CBOR map and canonical digest so
+hosts and SDKs can verify the controller deterministically. See
+`docs/source/references/multisig_policy_schema.md` (ADDR-1c) for the schema,
+validation rules, hashing procedure, and golden fixtures.
 
-ყველა გასაღების ბაიტი დაშიფრულია ზუსტად ისე, როგორც დაბრუნდა `PublicKey::to_bytes`; დეკოდერები აღადგენენ `PublicKey` ინსტანციებს და ზრდიან `AccountAddressError::InvalidPublicKey`-ს, თუ ბაიტები არ ემთხვევა დეკლარირებულ მრუდს.
+All key bytes are encoded exactly as returned by `PublicKey::to_bytes`; decoders reconstruct `PublicKey` instances and raise `AccountAddressError::InvalidPublicKey` if the bytes do not match the declared curve.
 
-> **Ed25519 კანონიკური აღსრულება (ADDR-3a):** მრუდის `0x01` გასაღებები უნდა გაშიფრულიყო ხელმომწერის მიერ გამოშვებულ ზუსტად ბაიტის სტრიქონამდე და არ უნდა იყოს მცირე რიგის ქვეჯგუფში. კვანძები ახლა უარყოფენ არაკანონიკურ დაშიფვრებს (მაგ., `2^255-19` მოდულის შემცირებული მნიშვნელობები) და სუსტ წერტილებს, როგორიცაა პირადობის ელემენტი, ამიტომ SDK-ებმა უნდა გამოავლინონ შესატყვისი ვალიდაციის შეცდომები მისამართების გაგზავნამდე.
+> **Ed25519 canonical enforcement (ADDR-3a):** curve `0x01` keys must decode to the exact byte string emitted by the signer and must not lie in the small-order subgroup. Nodes now reject non-canonical encodings (e.g., values reduced modulo `2^255-19`) and weak points such as the identity element, so SDKs should surface matching validation errors before submitting addresses.
 
-##### 2.3.1 მრუდის იდენტიფიკატორის რეესტრი (ADDR-1d)
+##### 2.3.1 Curve identifier registry (ADDR-1d)
 
-| ID (`curve_id`) | ალგორითმი | მხატვრული კარიბჭე | შენიშვნები |
-|-----------------|----------|-------------|------|
-| `0x00` | დაცულია | — | არ უნდა იყოს ემიტირებული; დეკოდერების ზედაპირი `ERR_UNKNOWN_CURVE`. |
-| `0x01` | Ed25519 | — | კანონიკური v1 ალგორითმი (`Algorithm::Ed25519`); ჩართულია ნაგულისხმევ კონფიგურაციაში. |
-| `0x02` | ML-DSA (დილითიუმი3) | — | იყენებს Dilithium3 საჯარო გასაღების ბაიტებს (1952 ბაიტი). ერთი გასაღების მისამართებს არ შეუძლია ML-DSA კოდირება, რადგან `key_len` არის `u8`; multisig იყენებს `u16` სიგრძეს. |
-| `0x03` | BLS12‑381 (ნორმალური) | `bls` | საჯარო გასაღებები G1-ში (48 ბაიტი), ხელმოწერები G2-ში (96 ბაიტი). |
-| `0x04` | secp256k1 | — | დეტერმინისტული ECDSA SHA-256-ზე; საჯარო გასაღებები იყენებენ 33-ბაიტიან SEC1 შეკუმშულ ფორმას, ხოლო ხელმოწერები იყენებენ კანონიკურ 64-ბაიტიან `r∥s` განლაგებას. |
-| `0x05` | BLS12‑381 (პატარა) | `bls` | საჯარო გასაღებები G2-ში (96 ბაიტი), ხელმოწერები G1-ში (48 ბაიტი). |
-| `0x0A` | GOST R 34.10-2012 (256, კომპლექტი A) | `gost` | ხელმისაწვდომია მხოლოდ მაშინ, როდესაც ჩართულია `gost` ფუნქცია. |
-| `0x0B` | GOST R 34.10-2012 (256, კომპლექტი B) | `gost` | ხელმისაწვდომია მხოლოდ მაშინ, როდესაც ჩართულია `gost` ფუნქცია. |
-| `0x0C` | GOST R 34.10-2012 (256, კომპლექტი C) | `gost` | ხელმისაწვდომია მხოლოდ მაშინ, როდესაც ჩართულია `gost` ფუნქცია. |
-| `0x0D` | GOST R 34.10-2012 (512, კომპლექტი A) | `gost` | ხელმისაწვდომია მხოლოდ მაშინ, როდესაც ჩართულია `gost` ფუნქცია. |
-| `0x0E` | GOST R 34.10-2012 (512, კომპლექტი B) | `gost` | ხელმისაწვდომია მხოლოდ მაშინ, როდესაც ჩართულია `gost` ფუნქცია. |
-| `0x0F` | SM2 | `sm` | DistID სიგრძე (u16 BE) + DistID ბაიტი + 65-ბაიტი SEC1 შეუკუმშული SM2 კლავიში; ხელმისაწვდომია მხოლოდ მაშინ, როდესაც ჩართულია `sm`. |
+| ID (`curve_id`) | Algorithm | Feature gate | Notes |
+|-----------------|-----------|--------------|-------|
+| `0x00` | Reserved | — | MUST NOT be emitted; decoders surface `ERR_UNKNOWN_CURVE`. |
+| `0x01` | Ed25519 | — | Canonical v1 algorithm (`Algorithm::Ed25519`); enabled in the default config. |
+| `0x02` | ML‑DSA (Dilithium3) | — | Uses the Dilithium3 public key bytes (1952 bytes). Single‑key addresses cannot encode ML‑DSA because `key_len` is `u8`; multisig uses `u16` lengths. |
+| `0x03` | BLS12‑381 (normal) | `bls` | Public keys in G1 (48 bytes), signatures in G2 (96 bytes). |
+| `0x04` | secp256k1 | — | Deterministic ECDSA over SHA‑256; public keys use the 33‑byte SEC1 compressed form and signatures use the canonical 64‑byte `r∥s` layout. |
+| `0x05` | BLS12‑381 (small) | `bls` | Public keys in G2 (96 bytes), signatures in G1 (48 bytes). |
+| `0x0A` | GOST R 34.10‑2012 (256, set A) | `gost` | Available only when the `gost` feature is enabled. |
+| `0x0B` | GOST R 34.10‑2012 (256, set B) | `gost` | Available only when the `gost` feature is enabled. |
+| `0x0C` | GOST R 34.10‑2012 (256, set C) | `gost` | Available only when the `gost` feature is enabled. |
+| `0x0D` | GOST R 34.10‑2012 (512, set A) | `gost` | Available only when the `gost` feature is enabled. |
+| `0x0E` | GOST R 34.10‑2012 (512, set B) | `gost` | Available only when the `gost` feature is enabled. |
+| `0x0F` | SM2 | `sm` | DistID length (u16 BE) + DistID bytes + 65‑byte SEC1 uncompressed SM2 key; available only when `sm` is enabled. |
 
-სლოტები `0x06–0x09` რჩება გამოუყენებელი დამატებითი მოსახვევებისთვის; ახლის დანერგვა
-ალგორითმი მოითხოვს საგზაო რუქის განახლებას და შესაბამისი SDK/მასპინძლის დაფარვას. შიფრები
-უნდა უარყოს ნებისმიერი მხარდაჭერილი ალგორითმი `ERR_UNSUPPORTED_ALGORITHM`-ით და
-დეკოდერები სწრაფად უნდა ჩავარდეს უცნობ ID-ებზე `ERR_UNKNOWN_CURVE` შესანარჩუნებლად
-მარცხით დახურული ქცევა.
+Slots `0x06–0x09` remain unassigned for additional curves; introducing a new
+algorithm requires a roadmap update and matching SDK/host coverage. Encoders
+MUST reject any unsupported algorithm with `ERR_UNSUPPORTED_ALGORITHM`, and
+decoders MUST fail fast on unknown ids with `ERR_UNKNOWN_CURVE` to preserve
+fail-closed behaviour.
 
-კანონიკური რეესტრი (მათ შორის მანქანით წაკითხვადი JSON ექსპორტი) მუშაობს
+The canonical registry (including a machine-readable JSON export) lives under
 [`docs/source/references/address_curve_registry.md`](source/references/address_curve_registry.md).
-Tooling-მა უნდა მოიხმაროს ეს მონაცემთა ბაზა პირდაპირ, რათა მრუდის იდენტიფიკატორები დარჩეს
-თანმიმდევრულია SDK-ებსა და ოპერატორების სამუშაო პროცესებში.
+Tooling SHOULD consume that dataset directly so curve identifiers remain
+consistent across SDKs and operator workflows.
 
-- **SDK კარიბჭე:** SDK-ების ნაგულისხმევად არის მხოლოდ Ed25519 ვალიდაცია/კოდირება. სვიფტი ამხელს
-  კომპილაციის დროის დროშები (`IROHASWIFT_ENABLE_MLDSA`, `IROHASWIFT_ENABLE_GOST`,
-  `IROHASWIFT_ENABLE_SM`); Java/Android SDK მოითხოვს
-  `AccountAddress.configureCurveSupport(...)`; JavaScript SDK იყენებს
+- **SDK gating:** SDKs default to Ed25519-only validation/encoding. Swift exposes
+  compile-time flags (`IROHASWIFT_ENABLE_MLDSA`, `IROHASWIFT_ENABLE_GOST`,
+  `IROHASWIFT_ENABLE_SM`); the Java/Android SDK requires
+  `AccountAddress.configureCurveSupport(...)`; the JavaScript SDK uses
   `configureCurveSupport({ allowMlDsa: true, allowGost: true, allowSm2: true })`.
-  secp256k1 მხარდაჭერა ხელმისაწვდომია, მაგრამ არ არის ჩართული ნაგულისხმევად JS/Android-ში
-  SDK-ები; აბონენტებმა მკაფიოდ უნდა მიიღონ მონაწილეობა არა-Ed25519 კონტროლერების გამოშვებისას.
-- **ჰოსტის კარიბჭე:** `Register<Account>` უარყოფს კონტროლერებს, რომელთა ხელმომწერები იყენებენ ალგორითმებს
-  აკლია კვანძის `crypto.allowed_signing` სიიდან ** ან ** მრუდის იდენტიფიკატორები არ არის
-  `crypto.curves.allowed_curve_ids`, ამიტომ კლასტერებმა უნდა განაცხადონ მხარდაჭერა (კონფიგურაცია +
-  genesis) ML-DSA/GOST/SM კონტროლერების რეგისტრაციამდე. BLS კონტროლერი
-  ალგორითმები ყოველთვის დაშვებულია შედგენისას (კონსენსუსის კლავიშები მათზეა დამოკიდებული),
-  და ნაგულისხმევი კონფიგურაცია ჩართავს Ed25519 + secp256k1.【crates/iroha_core/src/smartcontracts/isi/domain.rs:32】
+  secp256k1 support is available but not enabled by default in the JS/Android
+  SDKs; callers must opt in explicitly when emitting non‑Ed25519 controllers.
+- **Host gating:** `Register<Account>` rejects controllers whose signatories use algorithms
+  missing from the node’s `crypto.allowed_signing` list **or** curve identifiers absent from
+  `crypto.curves.allowed_curve_ids`, so clusters must advertise support (configuration +
+  genesis) before ML‑DSA/GOST/SM controllers can be registered. BLS controller
+  algorithms are always allowed when compiled (consensus keys rely on them),
+  and the default configuration enables Ed25519 + secp256k1.【crates/iroha_core/src/smartcontracts/isi/domain.rs:32】
 
-##### 2.3.2 Multisig კონტროლერის ხელმძღვანელობა
+##### 2.3.2 Multisig controller guidance
 
-`AccountController::Multisig` სერიებს ახორციელებს პოლიტიკას მეშვეობით
-`crates/iroha_data_model/src/account/controller.rs` და ახორციელებს სქემას
-დოკუმენტირებულია [`docs/source/references/multisig_policy_schema.md`] (source/references/multisig_policy_schema.md).
-განხორციელების ძირითადი დეტალები:
+`AccountController::Multisig` serialises policies via
+`crates/iroha_data_model/src/account/controller.rs` and enforces the schema
+documented in [`docs/source/references/multisig_policy_schema.md`](source/references/multisig_policy_schema.md).
+Key implementation details:
 
-- პოლიტიკა ნორმალიზებულია და დამოწმებულია `MultisigPolicy::validate()`-ით ადრე
-  ჩადგმული. ზღურბლები უნდა იყოს ≥1 და ≤Σ წონა; დუბლიკატი წევრები არიან
-  ამოღებულია დეტერმინისტულად `(algorithm || 0x00 || key_bytes)`-ით დახარისხების შემდეგ.
-- ორობითი კონტროლერის დატვირთვა (`ControllerPayload::Multisig`) კოდირებს
-  `version:u8`, `threshold:u16`, `member_count:u8`, შემდეგ თითოეული წევრის
-  `(curve_id, weight:u16, key_len:u16, key_bytes)`. ეს არის ზუსტად ის
-  `AccountAddress::canonical_bytes()` წერს I105 (სასურველია)/sora (მეორე საუკეთესო) იტვირთება.
-- ჰეშინგი (`MultisigPolicy::digest_blake2b256()`) იყენებს Blake2b-256-ს
-  `iroha-ms-policy` პერსონალიზაციის სტრიქონი, რათა მმართველობის მანიფესტებმა შეაერთონ ა
-  დეტერმინისტული პოლიტიკის ID, რომელიც ემთხვევა I105-ში ჩაშენებულ კონტროლერის ბაიტებს.
-- მოწყობილობების დაფარვა ცხოვრობს `fixtures/account/address_vectors.json`-ში (ქეისები
-  `addr-multisig-*`). საფულეები და SDK-ები უნდა ამტკიცებდნენ კანონიკურ I105 სტრიქონებს
-  ქვემოთ, რათა დაადასტურონ, რომ მათი შიფრები ემთხვევა Rust-ის განხორციელებას.
+- Policies are normalised and validated by `MultisigPolicy::validate()` before
+  being embedded. Thresholds must be ≥ 1 and ≤ Σ weight; duplicate members are
+  removed deterministically after sorting by `(algorithm || 0x00 || key_bytes)`.
+- The binary controller payload (`ControllerPayload::Multisig`) encodes
+  `version:u8`, `threshold:u16`, `member_count:u16`, then each member’s
+  `(curve_id, weight:u16, key_len:u16, key_bytes)`. This is exactly what
+  `AccountAddress::canonical_bytes()` writes to I105 payloads.
+- Multisig address encoding is no longer limited by an 8-bit member counter.
+  The binary field is `u16`, so the old 255-member hard cap no longer applies.
+- Hashing (`MultisigPolicy::digest_blake2b256()`) uses Blake2b-256 with the
+  `iroha-ms-policy` personalization string so governance manifests can bind to a
+  deterministic policy ID that matches the controller bytes embedded in I105.
+- Fixture coverage lives in `fixtures/account/address_vectors.json` (cases
+  `addr-multisig-*`). Wallets and SDKs should assert the generated fixture
+  bundle directly rather than copying inline literals into code or docs. The
+  canonical renderer now emits mixed Base58 + Iroha-poem I105 payload symbols after the
+  chain sentinel.
 
-| საქმის ID | ბარიერი / წევრები | I105 ლიტერალი (პრეფიქსი `0x02F1`) | სორა შეკუმშული (`sora`) ლიტერალური | შენიშვნები |
-|---------|--------------------------------------------------|-----------------------|
-| `addr-multisig-council-threshold3` | `≥3` წონა, წევრები `(2,1,1)` | `SRfSHsrH3tEmYaaAYyD248F3vfT1oQ3WEGS22MaD8W9bLefF7rsoKLYGcpbcM9EcSus5ZhCAZU7ztn2BCsyeCAdfRncAVmVsipd4ibk6CBLF3Nrzcw8P7VKJg6mtFgEhWVTjfDkUMoc63oeEmaWyV6cyiphwk8ZgKAJUe4TyVtmKm1WWcg7qZ6i` | `sora3vﾑ2zkaoUwﾋﾅGﾘﾚyﾂe3ﾖfﾙヰｶﾘﾉwｷnoWﾛYicaUr3ﾔｲﾖ2Ado3TﾘYQﾉJqﾜﾇｳﾑﾐd8dDjRGｦ3Vﾃ9HcﾀMヰR8ﾎﾖgEqGｵEｾDyc5ﾁ1ﾔﾉ31sUﾑﾀﾖaｸxﾘ3ｲｷMEuFｺｿﾉBQSVQnxﾈeJzrXLヰhｿｹ5SEEﾅPﾂﾗｸdヰﾋ1bUGHｲVXBWNNJ6K` | საბჭოს დომენის მმართველობის კვორუმი. |
-| `addr-multisig-wonderland-threshold2` | `≥2`, წევრები `(1,2)` | `3xsmkps1KPBn9dtpE5qHRhHEZCpiAe8d9j6H9A42TV6kc1TpaqdwnSksKgQrsSEHznqvWKBMc1os69BELzkLjsR7EV2gjV14d9JMzo97KEmYoKtxCrFeKFAcy7ffQdboV1uRt` | `sora2ﾖZﾘeｴAdx3ﾂﾉﾔXhnｹﾀ2ﾉｱﾋxﾅﾄﾌヱwﾐmﾊvEﾐCﾏﾎｦ1ﾑHﾋso2GKﾔﾕﾁwﾂﾃP6ﾁｼﾙﾖｺ9ｻｦbﾈ4wFdﾑFヰ3HaﾘｼMｷﾌHWtｷﾋLﾙﾖQ4D3XﾊﾜXmpktﾚｻ5ﾅﾅﾇ1gkﾏsCFQGH9` | ორმაგი ხელმოწერის საოცრებათა ქვეყნის მაგალითი (წონა 1 + 2). |
-| `addr-multisig-default-quorum3` | `≥3`, წევრები `(1,1,1,1)` | `nA2bDNhMqXz7ERkHNoEWbvJGyR1aDRsw32LaUWLgbK3vcpzohmdFCLvdotxUWWDY3aZeX4ptLk4Z6TjF5ossnJm8VrNo6daxmGTkqUyP4MxJxiNyPFxsEE5DLnsoLWUcxaWNpZ76tmkbiGS31Gv8tejKpuiHUMaQ1s5ohWyZvDnpycNkBK8AEfGJqn5yc9zAzfWbVhpDwkPj8ScnzvH1Echr5` | `soraﾐ38ﾅｴｸﾜ8ﾃzwBrqﾘｺ4yﾄv6kqJp1ｳｱﾛｿrzﾄﾃﾘﾒRﾗtV9ｼﾔPｽcヱEﾌVVVｼﾘｲZAｦﾓﾅｦeﾒN76vﾈcuｶuﾛL54rzﾙﾏX2zMﾌRLﾃﾋpﾚpｲcHﾑﾅﾃﾔzｵｲVfAﾃﾚﾎﾚCヰﾔｲｽｦw9ﾔﾕ8bGGkﾁ6sNｼaｻRﾖﾜYﾕﾚU18ﾅHヰﾌuMeﾊtﾂrｿj95Ft8ﾜ3fﾄkNiｴuﾈrCﾐQt8ヱｸｸmﾙﾒgUbﾑEKTTCM` | იმპლიციტური ნაგულისხმევი დომენის კვორუმი, რომელიც გამოიყენება ბაზის მართვისთვის.
+#### 2.4 Failure rules (ADDR-1a)
 
-#### 2.4 წარუმატებლობის წესები (ADDR-1a)
+- Payloads shorter than the required canonical header+controller size emit
+  `AccountAddressError::InvalidLength` or
+  `AccountAddressError::UnexpectedTrailingBytes`.
+- Headers that set the reserved `ext_flag` or advertise unsupported versions/classes MUST be rejected using `UnexpectedExtensionFlag`, `InvalidHeaderVersion`, or `UnknownAddressClass`.
+- Unknown controller tags raise `UnknownControllerTag`.
+- Oversized or malformed key material raises `KeyPayloadTooLong` or `InvalidPublicKey`.
+- Multisig controllers that exceed the encodable `u16` member count raise
+  `MultisigMemberOverflow`; there is no 255-member limit.
+- Canonical rendering uses mixed Base58 + Iroha-poem I105 payload symbols after the chain
+  sentinel. Decoders may still read historical mixed payloads for compatibility,
+  but public renderers, JSON, and docs must emit the katakana canonical form.
+- `AccountId` text/JSON parsing does not attempt alias or domain fallback:
+  non-canonical/legacy i105 literals, `norito:<hex>`, canonical hex, `@domain`, and alias
+  forms are rejected up front in favor of canonical I105 only.
 
-- საჭირო სათაურზე მოკლე დატვირთვა + სელექტორი ან დარჩენილი ბაიტით გამოსცემს `AccountAddressError::InvalidLength` ან `AccountAddressError::UnexpectedTrailingBytes`.
-- სათაურები, რომლებიც აყენებენ დაჯავშნილ `ext_flag`-ს ან აქვეყნებენ რეკლამას მხარდაუჭერელ ვერსიებს/კლასებს, უნდა უარყოთ `UnexpectedExtensionFlag`, `InvalidHeaderVersion`, ან `UnknownAddressClass` გამოყენებით.
-- ამორჩევის/კონტროლერის უცნობი ტეგები ამაღლებს `UnknownDomainTag` ან `UnknownControllerTag`.
-- დიდი ზომის ან არასწორი ფორმის საკვანძო მასალა ამაღლებს `KeyPayloadTooLong` ან `InvalidPublicKey`.
-- Multisig კონტროლერები, რომლებიც აღემატება 255 წევრს, ზრდის `MultisigMemberOverflow`.
-- IME/NFKC კონვერტაციები: ნახევრად სიგანის Sora kana შეიძლება ნორმალიზდეს მათი სრული სიგანის ფორმებამდე დეკოდირების დარღვევის გარეშე, მაგრამ ASCII `sora` სენტინელი და I105 ციფრები/ასოები უნდა დარჩეს ASCII. სრულ სიგანეზე ან დაკეცილი სენტინელების ზედაპირზე `ERR_MISSING_COMPRESSED_SENTINEL`, სრული სიგანის ASCII ტვირთამწეობა ამაღლებს `ERR_INVALID_COMPRESSED_CHAR` და საკონტროლო ჯამის შეუსაბამობები ბუშტუკდება, როგორც `ERR_CHECKSUM_MISMATCH`. საკუთრების ტესტები `crates/iroha_data_model/src/account/address.rs`-ში მოიცავს ამ ბილიკებს, ასე რომ SDK-ები და საფულეები შეიძლება დაეყრდნონ განმსაზღვრელ წარუმატებლობებს.
-- Torii და `address@domain` (rejected legacy form) მეტსახელების Torii და SDK ანალიზები ახლა ასხივებენ იგივე `ERR_*` კოდებს, როდესაც I105 (სასურველია)/სორა (მეორე საუკეთესო) შეყვანები ვერ მოხერხდება, სანამ მეტსახელის შეიძლება ხელახლა გამოაცხადოს დომენის შეცდომის მიზეზები (მაგ. პროზაული სიმებიდან გამოცნობის გარეშე.
-- ლოკალური სელექტორი 12 ბაიტზე მოკლეა `ERR_LOCAL8_DEPRECATED` ზედაპირის დატვირთვით, რაც ინარჩუნებს მყარ ნაწილს ძველი Local‑8 დაჯესტებიდან.
-- Domainless canonical I105 literals decode directly to a domainless `AccountId`. Use `ScopedAccountId` only when an interface requires explicit domain context.
+#### 2.5 Normative binary vectors
 
-#### 2.5 ნორმატიული ორობითი ვექტორები
+- **Selector-free canonical single-key payload (`seed byte 0x00`)**  
+  Canonical hex: `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.  
+  Breakdown: `0x02` header, `0x00` controller tag, `0x01` curve id (Ed25519),
+  `0x20` key length, followed by the 32-byte key payload.
+- **Canonical multisig payload layout**  
+  `0x0A | 0x01 | version:u8 | threshold:u16 | member_count:u16 | ...members`
+  where each member is encoded as `(curve_id:u8, weight:u16, key_len:u16,
+  key_bytes)`.
 
-- ** ნაგულისხმევი ნაგულისხმევი დომენი (`default`, დაწყებული ბაიტი `0x00`)**  
-  კანონიკური ექვსკუთხედი: `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29`.  
-  დაშლა: `0x02` სათაური, `0x00` ამომრჩევი (იგულისხმება ნაგულისხმევი), `0x00` კონტროლერის ტეგი, `0x01` მრუდის ID (Ed25519), I18NI00000002 კლავიშის სიგრძე, რომელსაც მოჰყვება კლავიშის სიგრძე-32.
-- **ლოკალური დომენის დაიჯესტი (`treasury`, დაწყებული ბაიტი `0x01`)**  
-  კანონიკური ექვსკუთხედი: `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c`.  
-  დაყოფა: `0x02` სათაური, ამომრჩევი ტეგი `0x01` პლუს დაიჯესტი `b1 8f e9 c1 ab ba c4 5b 3e 38 fc 5d`, რასაც მოჰყვება ერთი გასაღების დატვირთვა (`0x00` ტეგი, I18NI000002861, სიგრძე I2080X 32-ბაიტი Ed25519 გასაღები).ერთეულის ტესტები (`account::address::tests::parse_encoded_accepts_all_formats`) ამტკიცებს V1 ვექტორებს ქვემოთ `AccountAddress::parse_encoded`-ის მეშვეობით, რაც გარანტიას იძლევა, რომ ინსტრუმენტები შეიძლება დაეყრდნოს კანონიკურ დატვირთვას ექვსკუთხა, I105 (სასურველი) და შეკუმშული (`sora`, მეორე საუკეთესო) ფორმებით. განაახლეთ გაფართოებული მოწყობილობების ნაკრები `cargo run -p iroha_data_model --example address_vectors`-ით.
+The fixture bundle in `fixtures/account/address_vectors.json` still publishes
+i105 outputs plus non-canonical legacy-vector fixtures for the same canonical payloads.
+Public `AccountId` parser tests separately assert that only canonical I105 is
+accepted.
 
-| დომენი | სათესლე ბაიტი | კანონიკური hex | შეკუმშული (`sora`) |
-|-------------|-------------------------------------------- --------------------------------------------|------------|
-| ნაგულისხმევი | `0x00` | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE` |
-| ხაზინა | `0x01` | `0x0201b18fe9c1abbac45b3e38fc5d0001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
-| საოცრებათა ქვეყანა | `0x02` | `0x0201b8ae571b79c5a80f5834da2b0001208139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394` | `sora5ｻwﾓyRｿqﾏnMﾀﾙヰKoﾒﾇﾓQｺﾛyｼ3ｸFHB2F5LyPﾐTMZkｹｼw67ﾋVﾕｻr8ﾉGﾇeEnｻVRNKCS` |
-| იროჰა | `0x03` | `0x0201de8b36819700c807083608e2000120ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1` | `sora5ｻﾜxﾀ7Vｱ7QFeｷMﾂLﾉﾃﾏﾓﾀTﾚgSav3Wnｱｵ4ｱCKｷﾛMﾘzヰHiﾐｱ6ﾃﾉﾁﾐZmﾇ2fiﾎX21P4L` |
-| ალფა | `0x04` | `0x020146be2154ae86826a3fef0ec0000120ca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c` | `sora5ｻ9JヱﾈｿuwU6ｴpﾔﾂﾈRqRTds1HﾃﾐｶLVﾍｳ9ﾔhｾNｵVｷyucEﾒGﾈﾏﾍ9sKeﾉDzrｷﾆ742WG1` |
-| ომეგა | `0x05` | `0x0201390d946885bc8416b3d30c9d0001206e7a1cdd29b0b78fd13af4c5598feff4ef2a97166e3ca6f2e4fbfccd80505bf1` | `sora5ｻ3zrﾌuﾚﾄJﾑXQhｸTyN8pzwRkWxmjVﾗbﾚﾕヰﾈoｽｦｶtEEﾊﾐ6GPｿﾓﾊｾEhvPｾｻ3XAJ73F` |
-| მმართველობა | `0x06` | `0x0201989eb45a80940d187e2c908f0001208a875fff1eb38451577acd5afee405456568dd7c89e090863a0557bc7af49f17` | `sora5ｻiｵﾁyVﾕｽbFpDHHuﾇﾉdﾗｲﾓﾄRﾋAW3frUCｾ5ｷﾘTwdﾚnｽtQiLﾏｼｶﾅXgｾZmﾒヱH58H4KP` |
-| ვალიდიატორები | `0x07` | `0x0201e4ffa58704c69afaeb7cc2d7000120ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c` | `sora5ｻﾀLDH6VYﾑNAｾgﾉVﾜtxﾊRXLｹﾍﾔﾌLd93GﾔGeｴﾄYrs1ﾂHｸkYxｹwｿyZﾗxyﾎZoXT1S4N` |
-| მკვლევარი | `0x08` | `0x02013b35422c65c2a83c99c523ad0001201398f62c6d1a457c51ba6a4b5f3dbd2f69fca93216218dc8997e416bd17d93ca` | `sora5ｻ4nmｻaﾚﾚPvNLgｿｱv6MHDeEyﾀovﾉJcpvrﾖ6ﾈCQcCNﾇﾜhﾚﾖyFdTwｸｶHEｱ9rWU8FMB` |
-| სორანეტი | `0x09` | `0x0201047d9ea7f5d5dbec3f7bfc58000120fd1724385aa0c75b64fb78cd602fa1d991fdebf76b13c58ed702eac835e9f618` | `sora5ｱｸヱVQﾂcﾁヱRﾓcApｲﾁﾅﾒvﾌﾏfｾNnﾛRJsｿDhﾙuHaﾚｺｦﾌﾍﾈeﾆﾎｺN1UUDｶ6ﾎﾄﾛoRH8JUL` |
-| kitsune | `0x0A` | `0x0201e91933de397fd7723dc9a76c00012043a72e714401762df66b68c26dfbdf2682aaec9f2474eca4613e424a0fbafd3c` | `sora5ｻﾚｺヱkfFJfSﾁｼJwﾉLvbpSｷﾔMWFMrbｳｸｲｲyヰKGJﾉｻ4ｹﾕrｽhｺｽzSDヰXAN62AD7RGNS` |
-| da | `0x0B` | `0x02016838cf5bb0ce0f3d4f380e1c00012066be7e332c7a453332bd9d0a7f7db055f5c5ef1a06ada66d98b39fb6810c473a` | `sora5ｻNﾒ5SﾐRﾉﾐﾃ62ｿ1ｶｷWFKyF1BcAﾔvｼﾐHqﾙﾐPﾏｴヰ5tｲﾕvnﾙT6ﾀW7mﾔ7ﾇﾗﾂｳ25CXS93` |
+Reviewed-by: Data Model WG, Cryptography WG — scope approved for ADDR-1a.
 
-განხილული მიერ: მონაცემთა მოდელი WG, კრიპტოგრაფიის WG — ფარგლები დამტკიცებულია ADDR-1a-სთვის.
+##### Sora Nexus reference aliases
 
-##### Sora Nexus მითითების მეტსახელები
-
-Sora Nexus ქსელები ნაგულისხმევად არის `chain_discriminant = 0x02F1`
+Sora Nexus networks default to `chain_discriminant = 0x02F1`
 (`iroha_config::parameters::defaults::common::CHAIN_DISCRIMINANT`). The
-ამიტომ `AccountAddress::to_i105` და `to_i105` დამხმარეები ასხივებენ
-თანმიმდევრული ტექსტური ფორმები ყოველი კანონიკური დატვირთვისთვის. არჩეული მოწყობილობებიდან
-`fixtures/account/address_vectors.json` (გენერირებული მეშვეობით
-`cargo xtask address-vectors`) ნაჩვენებია ქვემოთ სწრაფი მითითებისთვის:
+`AccountAddress::to_i105` helpers therefore emit
+consistent textual forms for every canonical payload. The authoritative sample
+literals now live only in `fixtures/account/address_vectors.json` so the CLI,
+Torii responses, and SDK helpers all consume one canonical I105 source
+of truth instead of duplicating stale inline strings.
 
-| ანგარიში / სელექტორი | I105 ლიტერალი (პრეფიქსი `0x02F1`) | სორა შეკუმშული (`sora`) ლიტერალური |
-|------------------ |
-| `default` დომენი (იმპლიციტური სელექტორი, თესლი `0x00`) | `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw` | `sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE` (არასავალდებულო `@default` სუფიქსი მარშრუტიზაციის მკაფიო მინიშნებების მიწოდებისას) |
-| `treasury` (ადგილობრივი დაიჯესტის სელექტორი, თესლი `0x01`) | `34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r` | `sora5ｻu6rﾀCヰTGwﾏ1ﾅヱﾌQｲﾖﾇqCｦヰﾓZQCZRDSSﾅMｱﾙヱｹﾁｸ8ｾeﾄﾛ6C8bZuwﾗｹCZｦRSLQFU` |
-| გლობალური რეესტრის მაჩვენებელი (`registry_id = 0x0000_002A`, `treasury`-ის ექვივალენტი) | `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF` | `sorakXｹ6NｻﾍﾀﾖSﾜﾖｱ3ﾚ5WﾘﾋQﾅｷｦxgﾛｸcﾁｵﾋkﾋvﾏ8SPﾓﾀｹdｴｴｲW9iCM6AEP` |
+#### 2.6 Public textual forms
 
-ეს სტრიქონები ემთხვევა CLI-ს (`iroha tools address convert`), Torii-ის მიერ გამოშვებულ სტრიქონებს
-პასუხები (`canonical I105 literal rendering`) და SDK დამხმარეები, ამიტომ UX დააკოპირეთ/ჩასვით
-ნაკადებს შეუძლიათ სიტყვასიტყვით დაეყრდნონ მათ. დაუმატეთ `<address>@<domain>` (rejected legacy form) მხოლოდ მაშინ, როდესაც გჭირდებათ მკაფიო მარშრუტიზაციის მინიშნება; სუფიქსი არ არის კანონიკური გამომავალი ნაწილი.
+- **Canonical account id:** a I105 literal only.
+- **On-chain account aliases:** `name@dataspace` or `name@domain.dataspace`.
+  These aliases resolve on-chain to canonical I105 account ids and are not a
+  second account-id codec.
+- **Out-of-band wrappers:** transport wrappers such as CAIP-style URIs or other
+  integration envelopes may exist in downstream systems, but they are not
+  canonical account ids. Any such wrapper must resolve to a canonical I105 account id or an
+  on-chain alias before it reaches strict parser paths.
+- **Machine helpers:** Rust, TypeScript/JavaScript, Python, Swift, Kotlin, and
+  Java SDKs expose canonical I105 codecs
+  (`AccountAddress::to_i105`, `AccountAddress::parse_encoded`, and equivalents).
 
-#### 2.6 ტექსტური მეტსახელები თავსებადობისთვის (დაგეგმილი)
+#### 2.7 Deterministic i105 encoding
 
-- **ჯაჭვის ალიასის სტილი:** `ih:<chain-alias>:<alias@domain>` მორებისა და ადამიანებისთვის
-  შესვლა. საფულეებმა უნდა გააანალიზონ პრეფიქსი, დაადასტურონ ჩაშენებული ჯაჭვი და დაბლოკონ
-  შეუსაბამობები.
-- **CAIP-10 ფორმა:** `iroha:<caip-2-id>:<i105-addr>` ჯაჭვის აგნოსტიკისთვის
-  ინტეგრაციები. ეს რუკა **ჯერ არ არის დანერგილი** გაგზავნილში
-  ხელსაწყოების ჯაჭვები.
-- **მანქანის დამხმარეები:** გამოაქვეყნეთ კოდეკები Rust, TypeScript/JavaScript, Python,
-  და კოტლინი, რომელიც მოიცავს I105 და შეკუმშულ ფორმატებს (`AccountAddress::to_i105`,
-  `AccountAddress::parse_encoded` და მათი SDK ეკვივალენტები). CAIP-10 დამხმარეები არიან
-  მომავალი სამუშაო.
-
-#### 2.7 დეტერმინისტული I105 მეტსახელი
-
-- **პრეფიქსის რუქა:** ხელახლა გამოიყენეთ `chain_discriminant`, როგორც I105 ქსელის პრეფიქსი.
-  `encode_i105_prefix()` (იხ. `crates/iroha_data_model/src/account/address.rs`)
-  გამოსცემს 6-ბიტიან პრეფიქსს (ერთი ბაიტი) `<64` მნიშვნელობებისთვის და 14-ბიტიანი, ორ ბაიტისთვის
-  ფორმა უფრო დიდი ქსელებისთვის. ავტორიტეტული დავალებები ცხოვრობს
+- **Prefix mapping:** Reuse the `chain_discriminant` inside the same canonical
+  i105 codec. Well-known discriminants use sentinels such as `sora`, `test`,
+  or `dev` as part of the canonical i105 literal; there is no separate ASCII
+  account-id codec. The authoritative assignments live in
   [`address_prefix_registry.md`](source/references/address_prefix_registry.md);
-  SDK-ებმა უნდა შეინახონ შესაბამისი JSON რეესტრი სინქრონიზებული, რათა თავიდან აიცილონ შეჯახება.
-- **ანგარიშის მასალა:** I105 შიფრავს კანონიკურ დატვირთვას, რომელიც აშენებულია
-  `AccountAddress::canonical_bytes()` — სათაურის ბაიტი, დომენის ამომრჩევი და
-  კონტროლერის დატვირთვა. არ არსებობს დამატებითი ჰეშირების ნაბიჯი; I105 ათავსებს
-  ორობითი კონტროლერის ტვირთამწეობა (ერთი ღილაკი ან მულტისიგ), როგორც წარმოებულია Rust-ის მიერ
-  ენკოდერი და არა CTAP2 რუკა, რომელიც გამოიყენება მრავალრიცხოვანი პოლიტიკის შეჯამებისთვის.
-- ** დაშიფვრა:** `encode_i105()` აერთიანებს პრეფიქსის ბაიტებს კანონიკურს
-  payload და აერთებს 16-ბიტიან საკონტროლო ჯამს, რომელიც მიღებულია Blake2b-512-დან ფიქსირებული
-  პრეფიქსი `I105PRE` (`b"I105PRE" || prefix || payload`). შედეგი არის Base58-ში კოდირებული `bs58`-ის მეშვეობით.
-  CLI/SDK დამხმარეები ავლენენ იმავე პროცედურას და `AccountAddress::parse_encoded`
-  აბრუნებს მას `decode_i105`-ის საშუალებით.
+  SDKs MUST keep the matching JSON registry in sync to avoid collisions.
+- **Account material:** I105 encodes the canonical payload built by
+  `AccountAddress::canonical_bytes()`—header byte and controller payload.
+  Domain-selector bytes are not emitted in canonical payloads. There is no additional hashing step; I105 embeds the
+  binary controller payload (single key or multisig) as produced by the Rust
+  encoder, not the CTAP2 map used for multisig policy digests.
+- **Encoding:** `encode_i105()` renders the canonical payload with the
+  105-symbol katakana alphabet and appends a six-symbol Bech32m-style checksum
+  over the canonical bytes. CLI/SDK helpers expose the same procedure, and
+  `AccountAddress::parse_encoded` reverses it via `decode_i105`.
 
-#### 2.8 ნორმატიული ტექსტური ტესტის ვექტორები
+#### 2.8 Normative textual test vectors
 
-`fixtures/account/address_vectors.json` შეიცავს სრულ I105 (სასურველია) და შეკუმშული (`sora`, მეორე საუკეთესო)
-ლიტერალები ყოველი კანონიკური დატვირთვისთვის. მაჩვენებლები:
+`fixtures/account/address_vectors.json` contains canonical i105 literals plus
+negative fixtures that exercise non-canonical and malformed inputs.
+Highlights:
 
-- **`addr-single-default-ed25519` (Sora Nexus, პრეფიქსი `0x02F1`).**  
-  I105 `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`, შეკუმშული (`sora`)
-  `sora2QG…U4N5E5`. Torii ასხივებს ზუსტად ამ სტრიქონებს `AccountId`-დან
-  `Display` განხორციელება (კანონიკური I105) და `AccountAddress::to_i105`.
-- **`addr-global-registry-002a` (რეესტრის სელექტორი → ხაზინა).**  
-  I105 `3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF`, შეკუმშული (`sora`)
-  `sorakX…CM6AEP`. აჩვენებს, რომ რეესტრის სელექტორები კვლავ დეკოდირდება
-  იგივე კანონიკური დატვირთვა, როგორც შესაბამისი ადგილობრივი დაიჯესტი.
-- **შეცდომის შემთხვევა (`i105-prefix-mismatch`).**  
-  I105 ლიტერალის ანალიზი, რომელიც კოდირებულია პრეფიქსით `NETWORK_PREFIX + 1` კვანძზე
-  ველოდები ნაგულისხმევი პრეფიქსის გამომუშავებას
+- **`addr-single-default-ed25519` (Sora Nexus, prefix `0x02F1`).**  
+  Torii emits the generated I105 literal from `AccountId`’s `Display`
+  implementation (canonical I105).
+- **Multisig controller payloads.**  
+  Canonical controller bytes now encode `member_count:u16`, so address encoding
+  no longer has the old 255-member hard cap.
+- **Failure case (`i105-prefix-mismatch`).**  
+  Parsing an i105 literal encoded with prefix `NETWORK_PREFIX + 1` on a node
+  expecting the default prefix yields
   `AccountAddressError::UnexpectedNetworkPrefix { expected: 753, found: 754 }`
-  დომენის მარშრუტიზაციის მცდელობამდე. `i105-checksum-mismatch` მოწყობილობა
-  ახორციელებს ჩარევის გამოვლენას Blake2b საკონტროლო ჯამზე.
+  before domain routing is attempted. Negative-path `AccountId` tests also cover
+  rejected `norito:...`, `0x...`, alias, and `@domain` inputs. The
+  `i105-checksum-mismatch` fixture exercises tampering detection over the
+  I105 checksum.
 
-#### 2.9 შესაბამისობის მოწყობილობები
+#### 2.9 Compliance fixtures
 
-ADDR‑2 აგზავნის ხელახლა სათამაშო მოწყობილობების პაკეტს, რომელიც მოიცავს დადებით და უარყოფითს
-სცენარები კანონიკურ ექვსკუთხედში, I105 (სასურველია), შეკუმშული (`sora`, ნახევარი/სრული სიგანე), იმპლიციტური
-ნაგულისხმევი სელექტორები, გლობალური რეესტრის მეტსახელები და მრავალხელმოწერის კონტროლერები. The
-კანონიკური JSON ცხოვრობს `fixtures/account/address_vectors.json`-ში და შეიძლება იყოს
-რეგენერირებულია:
+ADDR‑2 ships a replayable fixture bundle covering positive and negative
+scenarios across canonical I105, non-canonical legacy-vector output, canonical
+`AccountAddress` hex renderings, selector-free payloads, multisignature
+controllers, and rejected legacy `AccountId` literal forms. The canonical JSON
+lives in `fixtures/account/address_vectors.json` and can be regenerated with:
 
 ```
 cargo xtask address-vectors --out fixtures/account/address_vectors.json
@@ -434,26 +374,26 @@ cargo xtask address-vectors --out fixtures/account/address_vectors.json
 cargo xtask address-vectors --verify
 ```
 
-ad-hoc ექსპერიმენტებისთვის (სხვადასხვა გზა/ფორმატი) მაგალითი ბინარულია
-ხელმისაწვდომია:
+For ad-hoc experiments (different paths/formats) the example binary is still
+available:
 
 ```
 cargo run -p iroha_data_model --example account_address_vectors > fixtures/account/address_vectors.json
 ```
 
-ჟანგის ერთეულის ტესტები `crates/iroha_data_model/tests/account_address_vectors.rs`-ში
-და `crates/iroha_torii/tests/account_address_vectors.rs`, JS-თან ერთად,
-Swift და Android აღკაზმულობა (`javascript/iroha_js/test/address.test.js`,
+Rust unit tests in `crates/iroha_data_model/tests/account_address_vectors.rs`
+and `crates/iroha_torii/tests/account_address_vectors.rs`, together with the JS,
+Swift, and Android harnesses (`javascript/iroha_js/test/address.test.js`,
 `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift`,
 `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java`),
-მოიხმარეთ იგივე მოწყობილობა, რათა უზრუნველყოთ კოდეკის პარიტეტი SDK-ებში და Torii დაშვება.
+consume the same fixture to guarantee codec parity across SDKs and Torii admission.
 
-### 3. გლობალურად უნიკალური დომენები და ნორმალიზაცია
+### 3. Globally unique domains & normalization
 
-აგრეთვე იხილეთ: [`docs/source/references/address_norm_v1.md`](source/references/address_norm_v1.md)
-კანონიკური Norm v1 მილსადენისთვის, რომელიც გამოიყენება Torii-ში, მონაცემთა მოდელსა და SDK-ებზე.
+See also: [`docs/source/references/address_norm_v1.md`](source/references/address_norm_v1.md)
+for the canonical Norm v1 pipeline used across Torii, the data model, and SDKs.
 
-ხელახლა განსაზღვრეთ `DomainId`, როგორც ტეგირებული ტოპი:
+Redefine `DomainId` as a tagged tuple:
 
 ```
 DomainId {
@@ -467,328 +407,321 @@ enum GlobalDomainAuthority {
 }
 ```
 
-`LocalChain` ახვევს არსებულ სახელს დომენებისთვის, რომელსაც მართავს მიმდინარე ჯაჭვი.
-როდესაც დომენი რეგისტრირებულია გლობალური რეესტრის მეშვეობით, ჩვენ ვაგრძელებთ საკუთრებას
-ჯაჭვის დისკრიმინანტი. ჩვენება/პარსინგი ამჟამად უცვლელი რჩება, მაგრამ
-გაფართოებული სტრუქტურა იძლევა გადაწყვეტილებების მარშრუტიზაციის საშუალებას.
+`LocalChain` wraps the existing Name for domains managed by the current chain.
+When a domain is registered through the global registry, we persist the owning
+chain’s discriminant. Display / parsing stays unchanged for now, but the
+expanded structure allows routing decisions.
 
-#### 3.1 ნორმალიზება და გაყალბების დაცვა
+#### 3.1 Normalization & spoofing defenses
 
-ნორმა v1 განსაზღვრავს კანონიკურ მილსადენს, რომელიც ყველა კომპონენტმა უნდა გამოიყენოს დომენამდე
-სახელი შენარჩუნებულია ან ჩართულია `AccountAddress`-ში. სრული გავლა
-ცხოვრობს [`docs/source/references/address_norm_v1.md`]-ში (source/references/address_norm_v1.md);
-ქვემოთ მოცემული შეჯამება აღწერს საფულეების, Torii, SDK-ების და მართვის საფეხურებს
-ინსტრუმენტები უნდა განხორციელდეს.
+Norm v1 defines the canonical pipeline every component must use before a domain
+name is persisted or embedded into an `AccountAddress`. The full walkthrough
+lives in [`docs/source/references/address_norm_v1.md`](source/references/address_norm_v1.md);
+the summary below captures the steps that wallets, Torii, SDKs, and governance
+tools must implement.
 
-1. **შეყვანის ვალიდაცია.** უარყოთ ცარიელი სტრიქონები, უფსკრული და რეზერვირებული
-   დელიმიტერები `@`, `#`, `$`. ეს ემთხვევა იმ ინვარიანტებს, რომლებიც აღსრულდა
+1. **Input validation.** Reject empty strings, whitespace, and the reserved
+   delimiters `@`, `#`, `$`. This matches the invariants enforced by
    `Name::validate_str`.
-2. ** Unicode NFC შემადგენლობა. ** გამოიყენეთ ICU მხარდაჭერილი NFC ნორმალიზება ასე კანონიკურად
-   ეკვივალენტური თანმიმდევრობები დეტერმინისტულად იშლება (მაგ., `e\u{0301}` → `é`).
-3. **UTS-46 ნორმალიზაცია.** გაუშვით NFC გამომავალი UTS‑46-ით
-   `use_std3_ascii_rules = true`, `transitional_processing = false` და
-   DNS სიგრძის აღსრულება ჩართულია. შედეგი არის მცირე ასოების A-ლეიბლის თანმიმდევრობა;
-   შეყვანები, რომლებიც არღვევს STD3 წესებს, აქ ვერ ხერხდება.
-4. **სიგრძის ლიმიტები.** დაიცავით DNS სტილის საზღვრები: თითოეული ლეიბლი უნდა იყოს 1–63
-   ბაიტი და სრული დომენი არ უნდა აღემატებოდეს 255 ბაიტს 3 ნაბიჯის შემდეგ.
-5. **სურვილისამებრ დამაბნეველი პოლიტიკა.** UTS‑39 სკრიპტის შემოწმება ხდება
-   ნორმა v2; ოპერატორებს შეუძლიათ მათი ადრეული ჩართვა, მაგრამ შემოწმების წარუმატებლობის შემთხვევაში უნდა შეწყდეს
-   დამუშავება.
+2. **Unicode NFC composition.** Apply ICU-backed NFC normalisation so canonically
+   equivalent sequences collapse deterministically (e.g., `e\u{0301}` → `é`).
+3. **UTS-46 normalisation.** Run the NFC output through UTS‑46 with
+   `use_std3_ascii_rules = true`, `transitional_processing = false`, and
+   DNS-length enforcement enabled. The result is a lower-case A-label sequence;
+   inputs that violate STD3 rules fail here.
+4. **Length limits.** Enforce the DNS-style bounds: each label MUST be 1–63
+   bytes and the full domain MUST NOT exceed 255 bytes after step 3.
+5. **Optional confusable policy.** UTS‑39 script checks are tracked for
+   Norm v2; operators can enable them early, but failing the check must abort
+   processing.
 
-თუ ყველა ეტაპი წარმატებულია, მცირე ასოების A-ლეიბლის სტრიქონი ინახება და გამოიყენება
-მისამართის კოდირება, კონფიგურაცია, მანიფესტები და რეესტრის ძიება. ადგილობრივი დაიჯესტი
-სელექტორები იღებენ თავიანთ 12-ბაიტიან მნიშვნელობას, როგორც `blake2s_mac(key = "SORA-LOCAL-K:v1",
-კანონიკური_ლეიბლი)[0..12]` ნაბიჯის 3 გამოსავლის გამოყენებით. ყველა სხვა მცდელობა (შერეული
-case, upper-case, unicode input) უარყოფილია სტრუქტურირებულით
-`ParseError`s საზღვარზე, სადაც სახელი იყო მოწოდებული.
+If every stage succeeds, the lower-case A-label string is cached and used for
+address encoding, configuration, manifests, and registry lookups. Local digest
+selectors derive their 12-byte value as `blake2s_mac(key = "SORA-LOCAL-K:v1",
+canonical_label)[0..12]` using the step 3 output. All other attempts (mixed
+case, upper-case, raw Unicode input) are rejected with structured
+`ParseError`s at the boundary where the name was supplied.
 
-კანონიკური მოწყობილობები, რომლებიც აჩვენებენ ამ წესებს - მათ შორის, ორმხრივი მოგზაურობის კოდის ჩათვლით
-და STD3 არასწორი თანმიმდევრობები - ჩამოთვლილია
-`docs/source/references/address_norm_v1.md` და ასახულია SDK CI-ში
-ვექტორული კომპლექტები თვალყურის დევნება ADDR-2-ით.
+Canonical fixtures demonstrating these rules — including punycode round-trips
+and invalid STD3 sequences — are listed in
+`docs/source/references/address_norm_v1.md` and are mirrored in the SDK CI
+vector suites tracked under ADDR‑2.
 
-### 4. Nexus დომენის რეესტრი და მარშრუტიზაცია- ** რეესტრის სქემა: ** Nexus ინახავს ხელმოწერილ რუკას `DomainName -> ChainRecord`
-  სადაც `ChainRecord` მოიცავს ჯაჭვის დისკრიმინანტს, არჩევით მეტამონაცემებს (RPC
-  საბოლოო წერტილები) და უფლებამოსილების დამადასტურებელი საბუთი (მაგ. მმართველობის მრავალხელმოწერა).
-- **სინქრონიზაციის მექანიზმი:**
-  - ჯაჭვები წარადგენენ ხელმოწერილი დომენის პრეტენზიებს Nexus-ზე (დაბადების დროს ან მეშვეობით
-    მართვის ინსტრუქცია).
-  - Nexus აქვეყნებს პერიოდულ მანიფესტებს (ხელმოწერილი JSON პლუს არჩევითი Merkle root)
-    HTTPS-ზე და კონტენტ-მისამართიან მეხსიერებაზე (მაგ., IPFS). კლიენტები ამაგრებენ
-    უახლესი მანიფესტი და ხელმოწერების გადამოწმება.
-- ** საძიებო ნაკადი:**
-  - Torii იღებს ტრანზაქციას `DomainId`-ზე მითითებით.
-  - თუ დომენი ლოკალურად უცნობია, Torii ითხოვს ქეშირებულ Nexus მანიფესტს.
-  - თუ მანიფესტი მიუთითებს უცხოურ ჯაჭვზე, ტრანზაქცია უარყოფილია
-    განმსაზღვრელი `ForeignDomain` შეცდომა და დისტანციური ჯაჭვის ინფორმაცია.
-  - თუ დომენი აკლია Nexus-ს, Torii აბრუნებს `UnknownDomain`-ს.
-- ** ნდობის წამყვანები და როტაცია: ** მმართველობის კლავიშების ნიშანი; როტაცია ან
-  გაუქმება გამოქვეყნებულია ახალი მანიფესტის ჩანაწერის სახით. კლიენტები ახორციელებენ მანიფესტს
-  TTL-ები (მაგ., 24 სთ) და უარი თქვან ძველ მონაცემებზე კონსულტაციაზე ამ ფანჯრის მიღმა.
-- ** წარუმატებლობის რეჟიმები:** თუ მანიფესტის მოძიება ვერ მოხერხდა, Torii ბრუნდება ქეშზე
-  მონაცემები TTL-ის ფარგლებში; წარსულში TTL ის ასხივებს `RegistryUnavailable` და უარს ამბობს
-  ჯვარედინი დომენური მარშრუტიზაცია არათანმიმდევრული მდგომარეობის თავიდან ასაცილებლად.
+### 4. Nexus domain registry & routing
 
-### 4.1 რეესტრის უცვლელობა, მეტსახელები და საფლავის ქვები (ADDR-7c)
+- **Registry schema:** Nexus maintains a signed map `DomainName -> ChainRecord`
+  where `ChainRecord` includes the chain discriminant, optional metadata (RPC
+  endpoints), and a proof of authority (e.g., governance multi-signature).
+- **Sync mechanism:**
+  - Chains submit signed domain claims to Nexus (either during genesis or via
+    governance instruction).
+  - Nexus publishes periodic manifests (signed JSON plus optional Merkle root)
+    over HTTPS and content-addressed storage (e.g., IPFS). Clients pin the
+    latest manifest and verify signatures.
+- **Lookup flow:**
+  - Torii receives a transaction referencing `DomainId`.
+  - If the domain is unknown locally, Torii queries the cached Nexus manifest.
+  - If the manifest indicates a foreign chain, the transaction is rejected with
+    a deterministic `ForeignDomain` error and the remote chain info.
+  - If the domain is missing from Nexus, Torii returns `UnknownDomain`.
+- **Trust anchors & rotation:** Governance keys sign manifests; rotation or
+  revocation is published as a new manifest entry. Clients enforce manifest
+  TTLs (e.g., 24h) and refuse to consult stale data beyond that window.
+- **Failure modes:** If manifest retrieval fails, Torii falls back to cached
+  data within TTL; past TTL it emits `RegistryUnavailable` and refuses
+  cross-domain routing to avoid inconsistent state.
 
-Nexus აქვეყნებს **მხოლოდ დანართის მანიფესტს**, ასე რომ, ყველა დომენის ან მეტსახელის მინიჭება
-შესაძლებელია აუდიტის და ხელახლა დაკვრა. ოპერატორებმა უნდა დაამუშავონ პაკეტში აღწერილი
-[address manifest runbook](source/runbooks/address_manifest_ops.md) როგორც
-სიმართლის ერთადერთი წყარო: თუ მანიფესტი აკლია ან ვერ დამოწმებულია, Torii უნდა
-უარი თქვას დაზარალებული დომენის გადაჭრაზე.
+### 4.1 Registry immutability, aliases, and tombstones (ADDR-7c)
 
-ავტომატიზაციის მხარდაჭერა: `cargo xtask address-manifest verify --bundle <current_dir> --previous <previous_dir>`
-იმეორებს საკონტროლო ჯამს, სქემას და წინა დაჯესტის შემოწმებებს, რომლებიც გაწერილია ში
-runbook. ჩართეთ ბრძანების გამომავალი ცვლილების ბილეთებში, რათა ნახოთ `sequence`
-და `previous_digest` კავშირი დამოწმებული იყო ნაკრების გამოქვეყნებამდე.
+Nexus publishes an **append-only manifest** so every domain or alias assignment
+can be audited and replayed. Operators must treat the bundle described in the
+[address manifest runbook](source/runbooks/address_manifest_ops.md) as the
+sole source of truth: if a manifest is missing or fails validation, Torii must
+refuse to resolve the affected domain.
 
-#### მანიფესტის სათაურის და ხელმოწერის კონტრაქტი
+Automation support: `cargo xtask address-manifest verify --bundle <current_dir> --previous <previous_dir>`
+replays the checksum, schema, and previous-digest checks spelled out in the
+runbook. Include the command output in change tickets to show the `sequence`
+and `previous_digest` linkage was validated before publishing the bundle.
 
-| ველი | მოთხოვნა |
+#### Manifest header & signature contract
+
+| Field | Requirement |
 |-------|-------------|
-| `version` | ამჟამად `1`. Bump მხოლოდ შესაბამისი სპეციფიკაციის განახლებით. |
-| `sequence` | ზრდა **ზუსტად** ერთით თითო პუბლიკაციაზე. Torii ქეში უარს ამბობს შესწორებაზე ხარვეზებით ან რეგრესიებით. |
-| `generated_ms` + `ttl_hours` | დააყენეთ ქეშის სიახლე (ნაგულისხმევი 24 სთ). თუ TTL იწურება მომდევნო გამოქვეყნებამდე, Torii გადადის `RegistryUnavailable`-ზე. |
-| `previous_digest` | BLAKE3 დაიჯესტი (ექვსკუთხა) წინა მანიფესტი სხეულის. ვერიფიკატორები ხელახლა გამოთვლიან მას `b3sum`-ით უცვლელობის დასამტკიცებლად. |
-| `signatures` | მანიფესტები ხელმოწერილია Sigstore (`cosign sign-blob`) მეშვეობით. Ops-მა უნდა გაუშვას `cosign verify-blob --bundle manifest.sigstore manifest.json` და განახორციელოს მმართველობითი იდენტობის/გამომცემის შეზღუდვები გაშვებამდე. |
+| `version` | Currently `1`. Bump only with a matching spec update. |
+| `sequence` | Increment by **exactly** one per publication. Torii caches refuse revisions with gaps or regressions. |
+| `generated_ms` + `ttl_hours` | Establish cache freshness (default 24 h). If the TTL expires before the next publication, Torii flips to `RegistryUnavailable`. |
+| `previous_digest` | BLAKE3 digest (hex) of the prior manifest body. Verifiers recompute it with `b3sum` to prove immutability. |
+| `signatures` | Manifests are signed via Sigstore (`cosign sign-blob`). Ops must run `cosign verify-blob --bundle manifest.sigstore manifest.json` and enforce the governance identity/issuer constraints before rollout. |
 
-გამოშვების ავტომატიზაცია ასხივებს `manifest.sigstore` და `checksums.sha256`
-JSON სხეულის გვერდით. შეინახეთ ფაილები ერთად SoraFS-ზე ან
-HTTP ბოლო წერტილები, რათა აუდიტორებმა შეძლონ გადამოწმების ნაბიჯების სიტყვასიტყვით გამეორება.
+The release automation emits `manifest.sigstore` and `checksums.sha256`
+alongside the JSON body. Keep the files together when mirroring to SoraFS or
+HTTP endpoints so auditors can replay the verification steps verbatim.
 
-#### შესვლის ტიპები
+#### Entry types
 
-| ტიპი | დანიშნულება | აუცილებელი ველები |
+| Type | Purpose | Required fields |
 |------|---------|-----------------|
-| `global_domain` | აცხადებს, რომ დომენი რეგისტრირებულია გლობალურად და უნდა განისაზღვროს ჯაჭვის დისკრიმინატორთან და I105 პრეფიქსით. | `{ "domain": "<label>", "chain": "sora:nexus:global", "i105_prefix": 753, "selector": "global" }` |
-| `tombstone` | სამუდამოდ აცილებს ალიასს/სელექტორს. საჭიროა Local‑8 დაიჯესტების წაშლის ან დომენის წაშლისას. | `{ "selector": {…}, "reason_code": "LOCAL8_RETIREMENT" \| …, "ticket": "<governance id>", "replaces_sequence": <number> }` |
+| `global_domain` | Declares that a domain is registered globally and should map to a chain discriminant and I105 prefix. | `{ "domain": "<label>", "chain": "sora:nexus:global", "i105_prefix": 753, "selector": "global" }` |
+| `tombstone` | Retires an alias/selector permanently. Required when erasing Local‑8 digests or removing a domain. | `{ "selector": {…}, "reason_code": "LOCAL8_RETIREMENT" \| …, "ticket": "<governance id>", "replaces_sequence": <number> }` |
 
-`global_domain` ჩანაწერები შეიძლება შეიცავდეს არჩევითად `manifest_url` ან `sorafs_cid`
-მიუთითოთ საფულეები ხელმოწერილი ჯაჭვის მეტამონაცემებზე, მაგრამ კანონიკური ტოპი რჩება
-`{domain, chain, discriminant/i105_prefix}`. `tombstone` ჩანაწერები **აუცილებელი ** ციტირება
-სელექციონერი პენსიაზე გასული და ბილეთის/მმართველობის არტეფაქტი, რომელიც უფლებამოსილია
-ცვლილება ისე, რომ აუდიტის ბილიკი რეკონსტრუქციული იყოს ოფლაინში.
+`global_domain` entries may optionally include a `manifest_url` or `sorafs_cid`
+to point wallets at signed chain metadata, but the canonical tuple remains
+`{domain, chain, discriminant/i105_prefix}`. `tombstone` records **must** cite
+the selector being retired and the ticket/governance artefact that authorised
+the change so the audit trail is reconstructable offline.
 
-#### მეტსახელი/საფლავის ქვის სამუშაო პროცესი და ტელემეტრია
+#### Alias/tombstone workflow & telemetry
 
-1. ** დრიფტის ამოცნობა.** გამოიყენეთ `torii_address_local8_total{endpoint}`,
+1. **Detect drift.** Use `torii_address_local8_total{endpoint}`,
    `torii_address_local8_domain_total{endpoint,domain}`,
    `torii_address_collision_total{endpoint,kind="local12_digest"}`,
    `torii_address_collision_domain_total{endpoint,domain}`,
-   `torii_address_domain_total{endpoint,domain_kind}` და
-   `torii_address_invalid_total{endpoint,reason}` (გაყვანილია ქ
-   `dashboards/grafana/address_ingest.json`) ადგილობრივი წარდგენის დასადასტურებლად და
-   ლოკალური-12 შეჯახება რჩება ნულზე საფლავის ქვის შეთავაზებამდე. The
-   თითო დომენის მრიცხველები მფლობელებს საშუალებას აძლევს დაამტკიცონ, რომ მხოლოდ dev/ტესტი დომენები ასხივებენ Local‑8
-   ტრაფიკი (და Local‑12 შეჯახების რუკა ცნობილ დადგმულ დომენებზე) ხოლო
-   მოიცავს **Domain Kind Mix (5m)** პანელს, რათა SRE-ებმა შეძლონ გრაფიკის დახატვა რამდენი
-   `domain_kind="local12"` ტრაფიკი რჩება და `AddressLocal12Traffic`
-   გაფრთხილება ხანძრის დროს, როდესაც წარმოება მაინც ხედავს Local-12 სელექტორებს, მიუხედავად იმისა
-   საპენსიო კარიბჭე.
-2. **გამოიყვანეთ კანონიკური დიჯესტები.** გაუშვით
+   `torii_address_domain_total{endpoint,domain_kind}`, and
+   `torii_address_invalid_total{endpoint,reason}` (rendered in
+   `dashboards/grafana/address_ingest.json`) to confirm Local submissions and
+   Local-12 collisions stay at zero before proposing a tombstone. The
+   per-domain counters let owners prove that only dev/test domains emit Local‑8
+   traffic (and that Local‑12 collisions map to known staging domains) while
+   includes the **Domain Kind Mix (5m)** panel so SREs can graph how much
+   `domain_kind="local12"` traffic remains, and the `AddressLocal12Traffic`
+   alert fires whenever production still sees Local-12 selectors despite the
+   retirement gate.
+2. **Derive canonical digests.** Run
    `iroha tools address convert <address> --format json --expect-prefix 753`
-   (ან მოიხმარეთ `fixtures/account/address_vectors.json` მეშვეობით
-   `scripts/account_fixture_helper.py`) ზუსტი `digest_hex`-ის გადასაღებად.
-   CLI იღებს I105, `i105` და კანონიკურ `0x…` ლიტერალებს; დაურთოს
-   `@<domain>` მხოლოდ მაშინ, როცა საჭიროა მანიფესტებისთვის ეტიკეტის შენარჩუნება.
-   JSON რეზიუმე ასახავს ამ დომენს `input_domain` ველის მეშვეობით და
-   `legacy  suffix` იმეორებს კონვერტირებულ დაშიფვრას, როგორც `<address>@<domain>` (rejected legacy form)
-   manifest diffs (ეს სუფიქსი არის მეტამონაცემები და არა ანგარიშის კანონიკური ID).
-   ახალ ხაზზე ორიენტირებული ექსპორტისთვის გამოიყენეთ
-   `iroha tools address normalize --input <file> legacy-selector input mode` ლოკალური მასობრივი კონვერტაციისთვის
-   ამომრჩეველები კანონიკურ I105 (სასურველი), შეკუმშული (`sora`, მეორე საუკეთესო), თექვსმეტობითი ან JSON ფორმებად გამოტოვებისას
-   არალოკალური რიგები. როდესაც აუდიტორებს სჭირდებათ ელცხრილისთვის შესაფერისი მტკიცებულება, გაუშვით
-   `iroha tools address audit --input <file> --format csv` CSV შეჯამების გამოსაცემად
-   (`input,status,format,domain_kind,…`), რომელიც ხაზს უსვამს ადგილობრივ სელექტორებს,
-   კანონიკური დაშიფვრები და იმავე ფაილში წარუმატებლობის გაანალიზება.
-3. **დაამატეთ მანიფესტის ჩანაწერები.** შეადგინეთ `tombstone` ჩანაწერი (და შემდგომი
-   `global_domain` ჩანაწერი გლობალურ რეესტრში მიგრაციისას) და დამოწმება
-   მანიფესტი `cargo xtask address-vectors`-ით ხელმოწერების მოთხოვნამდე.
-4. **გადაამოწმეთ და გამოაქვეყნეთ.** მიჰყევით runbook-ის საკონტროლო სიას (ჰეშები, Sigstore,
-   თანმიმდევრობის ერთფეროვნება) პაკეტის SoraFS-ზე გადატანამდე. Torii ახლა
-   ახდენს I105 (სასურველი)/სორას (მეორე-საუკეთესო) ლიტერალების კანონიკიზაციას შეკვრის დაშვებისთანავე.
-5. **მონიტორი და უკან დაბრუნება.** შეინახეთ Local‑8 და Local‑12 შეჯახების პანელები
-   ნულოვანი 30 დღის განმავლობაში; თუ რეგრესია გამოჩნდება, ხელახლა გამოაქვეყნეთ წინა მანიფესტი
-   მხოლოდ ზემოქმედების ქვეშ მყოფ არასაწარმოო გარემოში ტელემეტრიის სტაბილიზაციამდე.
+   (or consume `fixtures/account/address_vectors.json` via
+   `scripts/account_fixture_helper.py`) to capture the exact `digest_hex`.
+  The CLI address tool accepts canonical I105 and the internal
+  canonical `0x…` envelope view; runtime `AccountId` parsers continue to accept
+  canonical I105 only.
+  The JSON summary reports the parsed format/domain kind plus canonical
+  encodings (I105 and canonical hex) for each input.
+  For newline-oriented exports use
+  `iroha tools address normalize --input <file>` to rewrite newline-separated
+  address lists into canonical I105, canonical hex, or JSON forms.
+  When auditors need spreadsheet-friendly evidence, run
+  `iroha tools address audit --input <file> --format csv` to emit a CSV summary
+  (`input,status,format,domain_kind,…`) that highlights domain kind,
+  canonical encodings, and parse failures in the same file.
+3. **Append manifest entries.** Draft the `tombstone` record (and the follow-up
+   `global_domain` record when migrating to the global registry) and validate
+   the manifest with `cargo xtask address-vectors` before requesting signatures.
+4. **Verify & publish.** Follow the runbook checklist (hashes, Sigstore,
+   sequence monotonicity) before mirroring the bundle to SoraFS. Torii now
+   canonicalizes account filters and path literals from canonical I105 input only.
+5. **Monitor & rollback.** Keep the Local‑8 and Local‑12 collision panels at
+   zero for 30 days; if regressions appear, republish the previous manifest
+   only in the affected non-production environment until telemetry stabilises.
 
-ყველა ზემოთ ჩამოთვლილი ნაბიჯი არის ADDR-7c სავალდებულო მტკიცებულება: ვლინდება გარეშე
-`cosign` ხელმოწერის ნაკრები ან შესაბამისი `previous_digest` მნიშვნელობების გარეშე უნდა
-უარყოფილი იქნება ავტომატურად და ოპერატორებმა უნდა დაურთოს დამადასტურებელი ჟურნალი
-მათი შეცვლის ბილეთები.
+All of the steps above are mandatory evidence for ADDR‑7c: manifests without
+the `cosign` signature bundle or without matching `previous_digest` values must
+be rejected automatically, and operators must attach the verification logs to
+their change tickets.
 
-### 5. საფულე და API ერგონომიკა
+### 5. Wallet & API ergonomics
 
-- ** ნაგულისხმევი ჩვენება: ** საფულეები აჩვენებს I105 მისამართს (მოკლე, შეჯამებული)
-  პლუს გადაჭრილი დომენი, როგორც რეესტრიდან მოტანილი ლეიბლი. დომენები არის
-  ნათლად აღინიშნება, როგორც აღწერილობითი მეტამონაცემები, რომლებიც შეიძლება შეიცვალოს, ხოლო I105 არის
-  სტაბილური მისამართი.
-- **შეყვანის კანონიკიზაცია:** Torii და SDK-ები მიიღებენ I105 (სასურველია)/sora (მეორე საუკეთესო)/0x
-  მისამართები პლუს `alias@domain` (rejected legacy form), `uaid:…` და
-  `opaque:…` ფორმირდება, შემდეგ ხდება კანონიკიზაცია I105-ზე გამოსასვლელად. არ არსებობს
-  მკაცრი რეჟიმის გადართვა; ნედლეული ტელეფონის/ელფოსტის იდენტიფიკატორები უნდა ინახებოდეს ჩანაწერში
-  UAID/გაუმჭვირვალე რუკების საშუალებით.
-- **შეცდომის პრევენცია:** საფულეები აანალიზებენ I105 პრეფიქსებს და აიძულებენ ჯაჭვის დისკრიმინაციას
-  მოლოდინები. ჯაჭვის შეუსაბამობა იწვევს რთულ წარუმატებლობებს ქმედითი დიაგნოსტიკით.
-- **კოდეკების ბიბლიოთეკები:** ოფიციალური Rust, TypeScript/JavaScript, Python და Kotlin
-  ბიბლიოთეკები უზრუნველყოფენ I105 კოდირების/გაშიფვრის პლუს შეკუმშული (`sora`) მხარდაჭერას
-  თავიდან აიცილოთ ფრაგმენტული განხორციელება. CAIP-10 კონვერტაციები ჯერ არ არის გაგზავნილი.
+- **Display defaults:** Wallets show the I105 address (short, checksummed)
+  plus the resolved domain as a label fetched from the registry. Domains are
+  clearly marked as descriptive metadata that may change, while I105 is the
+  stable address.
+- **Input canonicalization:** Torii and SDKs accept canonical I105 account IDs only and reject `@domain` suffixes, alias forms, non-canonical/legacy i105 literals, and canonical-hex account literals in runtime parser paths. There is no
+  strict-mode toggle; raw phone/email identifiers must be kept off-ledger
+  via UAID/opaque mappings.
+- **Error prevention:** Wallets parse I105 prefixes and enforce chain-discriminant
+  expectations. Chain mismatches trigger hard failures with actionable diagnostics.
+- **Codec libraries:** Official Rust, TypeScript/JavaScript, Python, and Kotlin
+  libraries provide I105 encoding/decoding plus I105 support to
+  avoid fragmented implementations. CAIP-10 conversions are not shipped yet.
 
-#### ხელმისაწვდომობისა და უსაფრთხო გაზიარების სახელმძღვანელო- პროდუქტის ზედაპირების დანერგვის ინსტრუქცია თვალყურს ადევნებს პირდაპირ ეთერში
-  `docs/portal/docs/reference/address-safety.md`; მიმართეთ იმ საკონტროლო სიას, როდესაც
-  ამ მოთხოვნების ადაპტირება საფულესთან ან Explorer UX-თან.
-- **უსაფრთხო გაზიარების ნაკადები:** ზედაპირები, რომლებიც აკოპირებენ ან აჩვენებენ, მიმართავენ ნაგულისხმევს I105 ფორმას და ამჟღავნებენ მიმდებარე „გაზიარების“ მოქმედებას, რომელიც წარმოადგენს როგორც სრულ სტრიქონს, ასევე QR კოდს, რომელიც მიღებულია ერთი და იგივე დატვირთვიდან, რათა მომხმარებლებს შეეძლოთ შეამოწმონ საკონტროლო ჯამი ვიზუალურად ან სკანირებით. როდესაც შეკვეცა გარდაუვალია (მაგ., პატარა ეკრანები), შეინარჩუნეთ სტრიქონის დასაწყისი და დასასრული, დაამატეთ მკაფიო ელიფსები და შეინახეთ სრული მისამართი ხელმისაწვდომი ასლი ბუფერში, რათა თავიდან აიცილოთ შემთხვევითი ამოჭრა.
-- **IME გარანტიები:** მისამართის შეყვანები უნდა უარყოს კომპოზიციის არტეფაქტები IME/IME სტილის კლავიატურებიდან. განახორციელეთ მხოლოდ ASCII ჩანაწერი, წარმოადგინეთ შიდა გაფრთხილება სრული სიგანის ან Kana სიმბოლოების აღმოჩენისას და შესთავაზეთ უბრალო ტექსტის ჩასმის ზონა, რომელიც ამოიღებს შერწყმულ ნიშნებს დადასტურებამდე, რათა იაპონელ და ჩინელ მომხმარებლებს შეეძლოთ გამორთონ IME პროგრესის დაკარგვის გარეშე.
-- **ეკრანის წამკითხველის მხარდაჭერა:** უზრუნველყოს ვიზუალურად დამალული ლეიბლები (`aria-label`/`aria-describedby`), რომლებიც აღწერს Base58 პრეფიქსის მთავარ ციფრებს და ანაწილებს I105 დატვირთვას 4 ან 8-სიმბოლოიან ჯგუფებად, ასე რომ, ჯგუფური დამხმარე ტექნოლოგია იკითხება. გამოაცხადეთ ასლის/გაზიარების წარმატება თავაზიანი ცოცხალი რეგიონების მეშვეობით და დარწმუნდით, რომ QR წინასწარი გადახედვები შეიცავს აღწერით ალტერნატიულ ტექსტს („I105 მისამართი <alias> ჯაჭვზე 0x02F1“).
-- **მხოლოდ Sora-ზე შეკუმშული გამოყენება:** ყოველთვის მონიშნეთ `i105` შეკუმშული ხედი, როგორც „მხოლოდ Sora“ და დააკოპირეთ ის აშკარა დადასტურების უკან. SDK-ებმა და საფულეებმა უარი უნდა თქვან შეკუმშული გამოსავლის ჩვენებაზე, როდესაც ჯაჭვის დისკრიმინანტი არ არის Sora Nexus მნიშვნელობა და უნდა მიმართონ მომხმარებლებს უკან I105-ზე ქსელში გადარიცხვისთვის, რათა თავიდან იქნას აცილებული თანხების არასწორი მარშრუტი.
+#### Accessibility & Safe Sharing Guidance
 
-## განხორციელების ჩამონათვალი
+- Implementation guidance for product surfaces is tracked live in
+  `docs/portal/docs/reference/address-safety.md`; reference that checklist when
+  adapting these requirements to wallet or explorer UX.
+- **Safe sharing flows:** Surfaces that copy or display addresses default to the i105 form and expose an adjacent “share” action that presents both the full string and a QR code derived from the same payload so users can verify the checksum visually or by scanning. When truncation is unavoidable (e.g., small screens), retain the start and end of the string, add clear ellipses, and keep the full address accessible via copy-to-clipboard to prevent accidental clipping.
+- **IME safeguards:** Address inputs MUST reject composition artefacts from IME/IME-style keyboards. Enforce ASCII-only entry, present an inline warning when full-width or Kana characters are detected, and offer a plain-text paste zone that strips combining marks before validation so Japanese and Chinese users can disable their IME without losing progress.
+- **Screen-reader support:** Provide visually hidden labels (`aria-label`/`aria-describedby`) that describe the leading i105 digits and chunk the i105 payload into 4- or 8-character groups, so assistive technology reads grouped characters instead of a run-on string. Announce copy/share success via polite live regions and ensure QR previews include descriptive alt text (“i105 address for <alias> on chain 0x02F1”).
+- **Single-format usage:** Keep address sharing on canonical I105 only and avoid secondary account-literal formats in wallet/explorer copy flows.
 
-- **I105 კონვერტი:** პრეფიქსი კოდირებს `chain_discriminant`-ს კომპაქტურის გამოყენებით
-  6-/14-ბიტიანი სქემა `encode_i105_prefix()`-დან, სხეული არის კანონიკური ბაიტი
-  (`AccountAddress::canonical_bytes()`) და საკონტროლო ჯამი არის პირველი ორი ბაიტი
-  Blake2b-512-ის (`b"I105PRE"` || პრეფიქსი || სხეული). სრული დატვირთვა არის Base58-
-  კოდირებულია `bs58`-ით.
-- ** რეესტრის კონტრაქტი: ** ხელმოწერილი JSON (და სურვილისამებრ Merkle root) გამოცემა
-  `{discriminant, i105_prefix, chain_alias, endpoints}` 24 სთ TTL და
-  ბრუნვის გასაღებები.
-- **დომენის პოლიტიკა:** ASCII `Name` დღეს; თუ ჩართულია i18n, გამოიყენეთ UTS-46 ამისთვის
-  ნორმალიზება და UTS-39 დამაბნეველი შემოწმებისთვის. მაქსიმალური ეტიკეტის აღსრულება (63) და
-  მთლიანი (255) სიგრძე.
-- **ტექსტური დამხმარეები:** გემი I105 ↔ შეკუმშული (`i105`) კოდეკები Rust-ში,
-  TypeScript/JavaScript, Python და Kotlin საერთო ტესტის ვექტორებით (CAIP-10
-  რუკები რჩება სამომავლო სამუშაოდ).
-- **CLI tooling:** უზრუნველყოს დეტერმინისტული ოპერატორის სამუშაო ნაკადი `iroha tools address convert`-ის საშუალებით
-  (იხ. `crates/iroha_cli/src/address.rs`), რომელიც იღებს I105/`0x…` ლიტერალებს და
-  არასავალდებულო `<address>@<domain>` (rejected legacy form) ეტიკეტები, ნაგულისხმევი I105 გამომავალი Sora Nexus პრეფიქსის გამოყენებით (`753`),
-  და ასხივებს მხოლოდ Sora-ზე შეკუმშულ ანბანს, როდესაც ოპერატორები პირდაპირ ითხოვენ მას
-  `--format i105` ან JSON შემაჯამებელი რეჟიმი. ბრძანება ახორციელებს პრეფიქსის მოლოდინებს
-  გაანალიზება, ჩაწერს მოწოდებულ დომენს (`input_domain` JSON-ში) და `legacy  suffix` დროშას
-  იმეორებს კონვერტირებულ დაშიფვრას, როგორც `<address>@<domain>` (rejected legacy form), რათა მანიფესტაციური განსხვავებები დარჩეს ერგონომიული.
-- **Wallet/explorer UX:** მიჰყევით [მისამართების ჩვენების მითითებებს] (source/sns/address_display_guidelines.md)
-  გაიგზავნება ADDR-6-ით — გთავაზობთ ორმაგი ასლის ღილაკებს, შეინახეთ I105 QR დატვირთვად და გააფრთხილეთ
-  მომხმარებლები, რომ შეკუმშული `i105` ფორმა არის მხოლოდ Sora და მგრძნობიარეა IME გადაწერებისთვის.
-- **Torii ინტეგრაცია:** ქეში Nexus გამოხატავს TTL-ს, ემისიას
-  `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` დეტერმინისტულად და
-  keep strict account-literal parsing canonical-I105-only (reject compressed and any `@domain` suffix) with canonical I105 output.
+## Implementation Checklist
 
-### Torii პასუხის ფორმატები
+- **I105 envelope:** Prefix encodes the `chain_discriminant` using the compact
+  6-/14-bit scheme from `encode_i105_prefix()`, the body is the canonical bytes
+  (`AccountAddress::canonical_bytes()`), and the checksum is the first two bytes
+  of Blake2b-512(`b"I105PRE"` || prefix || body). The full payload is encoded
+  with the I105 alphabet via `bs58`.
+- **Registry contract:** Signed JSON (and optional Merkle root) publishing
+  `{discriminant, i105_prefix, chain_alias, endpoints}` with 24h TTL and
+  rotation keys.
+- **Domain policy:** ASCII `Name` today; if enabling i18n, apply UTS-46 for
+  normalization and UTS-39 for confusable checks. Enforce max label (63) and
+  total (255) lengths.
+- **Textual helpers:** Ship I105 ↔ canonical I105 codecs in Rust,
+  TypeScript/JavaScript, Python, and Kotlin with shared test vectors (CAIP-10
+  mappings remain future work).
+- **CLI tooling:** Provide a deterministic operator workflow via `iroha tools address convert`
+  (see `crates/iroha_cli/src/address.rs`), which accepts canonical I105 literals,
+  defaults to i105 output using the Sora Nexus prefix (`753`), enforces prefix
+  expectations on parse, and rejects `@domain` suffixes so operator pipelines
+  stay on canonical address literals only.
+- **Wallet/explorer UX:** Follow the [address display guidelines](source/sns/address_display_guidelines.md)
+  shipped with ADDR-6—keep canonical I105 as the single copy/QR payload and
+  apply IME-safe input/output handling.
+- **Torii integration:** Cache Nexus manifests respecting TTL, emit
+  `ForeignDomain`/`UnknownDomain`/`RegistryUnavailable` deterministically, and
+  keep strict account-literal parsing canonical-i105-only (reject non-canonical
+  forms and any `@domain` suffix) with canonical I105 output.
 
-- `GET /v1/accounts` იღებს არასავალდებულო `canonical I105 rendering` მოთხოვნის პარამეტრს და
-  `POST /v1/accounts/query` იღებს იმავე ველს JSON კონვერტში.
-  მხარდაჭერილი მნიშვნელობებია:
-  - `i105` (ნაგულისხმევი) — პასუხები ასხივებენ კანონიკურ I105 Base58 დატვირთვას (მაგ.
-    `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw`).
-  - `i105_default` — პასუხები გამოსცემს მხოლოდ Sora-ს `i105` შეკუმშულ ხედს, სანამ
-    ფილტრების / ბილიკის პარამეტრების კანონიკური შენარჩუნება.
-- არასწორი მნიშვნელობები ბრუნდება `400` (`QueryExecutionFail::Conversion`). ეს საშუალებას იძლევა
-  საფულეები და მკვლევარები მოითხოვონ შეკუმშული სტრიქონები მხოლოდ Sora-ის UX-ისთვის, ხოლო
-  I105-ის შენახვა თავსებადი ნაგულისხმევად.
-- აქტივების მფლობელთა ჩამონათვალი (`GET /v1/assets/{definition_id}/holders`) და მათი JSON
-  კონვერტის კოლეგა (`POST …/holders/query`) ასევე პატივს სცემს `canonical I105 rendering`.
-  `items[*].account_id` ველი ასხივებს შეკუმშულ ლიტერალებს, როდესაც
-  პარამეტრი/კონვერტის ველი დაყენებულია `i105_default`, რომელიც ასახავს ანგარიშებს
-  ბოლო წერტილები, რათა მკვლევარებმა წარმოადგინონ თანმიმდევრული გამომავალი დირექტორიაში.
-- ** ტესტირება: ** დაამატეთ ერთეული ტესტები შიფრატორის/დეკოდერის ორმხრივი მოგზაურობისთვის, არასწორი ჯაჭვისთვის
-  წარუმატებლობები და მანიფესტი ძიება; დაამატეთ ინტეგრაციის გაშუქება Torii-სა და SDK-ებში
-  რადგან I105 მიედინება ბოლომდე.
+### Torii response formats
 
-## შეცდომის კოდის რეესტრი
+- `GET /v1/accounts` and `POST /v1/accounts/query` emit canonical I105 account
+  literals in responses.
+- Asset holder listings (`GET /v1/assets/{definition_id}/holders`) and their JSON
+  envelope counterpart (`POST …/holders/query`) also emit canonical I105 account
+  identifiers in `items[*].account_id`.
+- **Testing:** Add unit tests for encoder/decoder round-trips, wrong-chain
+  failures, and manifest lookups; add integration coverage in Torii and SDKs
+  for I105 flows end to end.
 
-მისამართის შიფრატორები და დეკოდერები ავლენენ წარუმატებლობებს
-`AccountAddressError::code_str()`. შემდეგ ცხრილებში მოცემულია სტაბილური კოდები
-რომ SDK-ები, საფულეები და Torii ზედაპირები უნდა აღმოჩნდეს ადამიანის მიერ წაკითხვადი ზედაპირის გვერდით
-შეტყობინებები, პლუს რეკომენდირებული ინსტრუქცია.
+## Error Code Registry
 
-### კანონიკური კონსტრუქცია
+Address encoders and decoders expose failures through
+`AccountAddressError::code_str()`. The following tables provide the stable codes
+that SDKs, wallets, and Torii surfaces should surface alongside human-readable
+messages, plus recommended remediation guidance.
 
-| კოდი | წარუმატებლობა | რეკომენდირებული გამოსწორება |
-|------|---------|------------------------|
-| `ERR_UNSUPPORTED_ALGORITHM` | ენკოდერმა მიიღო ხელმოწერის ალგორითმი, რომელიც არ არის მხარდაჭერილი რეესტრის ან build ფუნქციების მიერ. | შეზღუდეთ ანგარიშის მშენებლობა რეესტრში და კონფიგურაციაში ჩართული მრუდებით. |
-| `ERR_KEY_PAYLOAD_TOO_LONG` | ხელმოწერის გასაღების დატვირთვის სიგრძე აჭარბებს მხარდაჭერილ ლიმიტს. | ერთი გასაღებიანი კონტროლერები შემოიფარგლება `u8` სიგრძით; გამოიყენეთ multisig დიდი საჯარო გასაღებებისთვის (მაგ., ML-DSA). |
-| `ERR_INVALID_HEADER_VERSION` | მისამართის სათაურის ვერსია მხარდაჭერილი დიაპაზონის მიღმაა. | გამოუშვით სათაური ვერსია `0` V1 მისამართებისთვის; განაახლეთ ენკოდერები ახალი ვერსიების მიღებამდე. |
-| `ERR_INVALID_NORM_VERSION` | ნორმალიზების ვერსიის დროშა არ არის აღიარებული. | გამოიყენეთ ნორმალიზების ვერსია `1` და მოერიდეთ რეზერვირებული ბიტების გადართვას. |
-| `ERR_INVALID_I105_PREFIX` | მოთხოვნილი I105 ქსელის პრეფიქსის კოდირება შეუძლებელია. | აირჩიეთ პრეფიქსი ჯაჭვის რეესტრში გამოქვეყნებულ `0..=16383` დიაპაზონში. |
-| `ERR_CANONICAL_HASH_FAILURE` | ნორმალური დატვირთვის ჰეშირება ვერ მოხერხდა. | ხელახლა სცადეთ ოპერაცია; თუ შეცდომა შენარჩუნებულია, განიხილეთ იგი, როგორც შიდა ხარვეზი ჰეშირების სტეკში. |
+### Canonical Construction
 
-### ფორმატის გაშიფვრა და ავტომატური აღმოჩენა
+| Code | Failure | Recommended Remediation |
+|------|---------|-------------------------|
+| `ERR_UNSUPPORTED_ALGORITHM` | Encoder received a signing algorithm not supported by the registry or build features. | Restrict account construction to curves enabled in the registry and configuration. |
+| `ERR_KEY_PAYLOAD_TOO_LONG` | Signing key payload length exceeds the supported limit. | Single-key controllers are limited to `u8` lengths; use multisig for large public keys (e.g., ML‑DSA). |
+| `ERR_INVALID_HEADER_VERSION` | Address header version is outside the supported range. | Emit header version `0` for V1 addresses; upgrade encoders before adopting new versions. |
+| `ERR_INVALID_NORM_VERSION` | Normalisation version flag is not recognised. | Use normalisation version `1` and avoid toggling reserved bits. |
+| `ERR_INVALID_I105_PREFIX` | Requested I105 network prefix cannot be encoded. | Pick a prefix within the inclusive `0..=16383` range published in the chain registry. |
+| `ERR_CANONICAL_HASH_FAILURE` | Canonical payload hashing failed. | Retry the operation; if the error persists, treat it as an internal bug in the hashing stack. |
 
-| კოდი | წარუმატებლობა | რეკომენდირებული გამოსწორება |
-|------|---------|------------------------|
-| `ERR_INVALID_I105_ENCODING` | I105 სტრიქონი შეიცავს სიმბოლოებს ანბანის მიღმა. | დარწმუნდით, რომ მისამართი იყენებს გამოქვეყნებულ I105 ანბანს და არ არის შეკვეცილი კოპირების/პასტის დროს. |
-| `ERR_INVALID_LENGTH` | დატვირთვის სიგრძე არ ემთხვევა სელექტორის/კონტროლერის მოსალოდნელ კანონიკურ ზომას. | მიაწოდეთ სრული კანონიკური დატვირთვა არჩეული დომენის ამორჩევისა და კონტროლერის განლაგებისთვის. |
-| `ERR_CHECKSUM_MISMATCH` | I105 (სასურველი) ან შეკუმშული (`sora`, მეორე საუკეთესო) საკონტროლო ჯამის ვალიდაცია ვერ მოხერხდა. | მისამართის რეგენერაცია სანდო წყაროდან; ეს ჩვეულებრივ მიუთითებს ასლის/პასტის შეცდომაზე. |
-| `ERR_INVALID_I105_PREFIX_ENCODING` | I105 პრეფიქსი ბაიტები არასწორია. | მისამართის ხელახლა დაშიფვრა შესაბამისი ენკოდერით; არ შეცვალოთ წამყვანი Base58 ბაიტი ხელით. |
-| `ERR_INVALID_HEX_ADDRESS` | კანონიკური თექვსმეტობითი ფორმა ვერ გაშიფრა. | მიაწოდეთ `0x` პრეფიქსით, თანაბარი სიგრძის თექვსმეტობითი სტრიქონი, რომელიც დამზადებულია ოფიციალური კოდირებით. |
-| `ERR_MISSING_COMPRESSED_SENTINEL` | შეკუმშული ფორმა არ იწყება `sora`-ით. | პრეფიქსი შეკუმშული Sora მისამართები საჭირო სენტინელით, სანამ ისინი დეკოდერებს გადასცემენ. |
-| `ERR_COMPRESSED_TOO_SHORT` | შეკუმშულ სტრიქონს არ გააჩნია საკმარისი ციფრები დატვირთვისა და გამშვები ჯამისთვის. | გამოიყენეთ სრული შეკუმშული სტრიქონი, რომელიც გამოსხივებულია შიფრირებული სნიპეტების ნაცვლად. |
-| `ERR_INVALID_COMPRESSED_CHAR` | შეკუმშული ანბანის გარეთ მყოფი სიმბოლო. | შეცვალეთ სიმბოლო მოქმედი Base-105 გლიფით გამოქვეყნებული ნახევარსიგანის/სრული სიგანის ცხრილებიდან. |
-| `ERR_INVALID_COMPRESSED_BASE` | ენკოდერმა სცადა მხარდაჭერილი რადიქსის გამოყენება. | შეიტანეთ შეცდომა ენკოდერის წინააღმდეგ; შეკუმშული ანბანი ფიქსირდება 105-იან რადიქსზე V1-ში. |
-| `ERR_INVALID_COMPRESSED_DIGIT` | ციფრული მნიშვნელობა აღემატება შეკუმშული ანბანის ზომას. | დარწმუნდით, რომ თითოეული ციფრი არის `0..105)` ფარგლებში, საჭიროების შემთხვევაში განაახლეთ მისამართი. |
-| `ERR_UNSUPPORTED_ADDRESS_FORMAT` | ავტომატური ამოცნობა ვერ ცნობს შეყვანის ფორმატს. | პარსერების გამოძახებისას მიუთითეთ I105 (სასურველი), შეკუმშული (`sora`) ან კანონიკური `0x` თექვსმეტობითი სტრიქონები. |
+### Format Decoding and Auto Detection
 
-### დომენის და ქსელის დადასტურება| კოდი | წარუმატებლობა | რეკომენდირებული გამოსწორება |
-|------|---------|------------------------|
-| `ERR_DOMAIN_MISMATCH` | დომენის სელექტორი არ ემთხვევა მოსალოდნელ დომენს. | გამოიყენეთ დანიშნულ დომენზე გაცემული მისამართი ან განაახლეთ მოლოდინი. |
-| `ERR_INVALID_DOMAIN_LABEL` | დომენის ლეიბლის ნორმალიზაციის შემოწმება ვერ მოხერხდა. | დაშიფვრამდე დომენის კანონიკირება UTS-46 არატრანზიციული დამუშავების გამოყენებით. |
-| `ERR_UNEXPECTED_NETWORK_PREFIX` | დეკოდირებული I105 ქსელის პრეფიქსი განსხვავდება კონფიგურირებული მნიშვნელობისაგან. | გადაერთეთ მისამართზე სამიზნე ჯაჭვიდან ან შეცვალეთ მოსალოდნელი დისკრიმინანტი/პრეფიქსი. |
-| `ERR_UNKNOWN_ADDRESS_CLASS` | მისამართების კლასის ბიტები არ არის აღიარებული. | განაახლეთ დეკოდერი გამოშვებამდე, რომელიც გაიგებს ახალ კლასს, ან მოერიდეთ სათაურის ბიტებში ჩარევას. |
-| `ERR_UNKNOWN_DOMAIN_TAG` | დომენის ამომრჩეველი ტეგი უცნობია. | განაახლეთ ვერსიაზე, რომელიც მხარს უჭერს ამომრჩევის ახალ ტიპს, ან მოერიდეთ ექსპერიმენტული დატვირთვების გამოყენებას V1 კვანძებზე. |
-| `ERR_UNEXPECTED_EXTENSION_FLAG` | დაჯავშნილი გაფართოების ბიტი დაყენდა. | რეზერვირებული ბიტების გასუფთავება; ისინი დარჩებიან კარიბჭეში, სანამ მომავალი ABI არ წარადგენს მათ. |
-| `ERR_UNKNOWN_CONTROLLER_TAG` | კონტროლერის დატვირთვის ტეგი არ არის აღიარებული. | განაახლეთ დეკოდერი, რათა ამოიცნოთ ახალი კონტროლერის ტიპები მათ გარჩევამდე. |
-| `ERR_UNEXPECTED_TRAILING_BYTES` | კანონიკური დატვირთვა შეიცავდა უკანა ბაიტებს დეკოდირების შემდეგ. | აღადგინეთ კანონიკური დატვირთვა; მხოლოდ დოკუმენტირებული სიგრძე უნდა იყოს წარმოდგენილი. |
+| Code | Failure | Recommended Remediation |
+|------|---------|-------------------------|
+| `ERR_INVALID_I105_ENCODING` | I105 string contains characters outside the alphabet. | Ensure the address uses the published I105 alphabet and has not been truncated during copy/paste. |
+| `ERR_INVALID_LENGTH` | Payload length does not match the expected canonical size for header/controller (or legacy decode-compat selector variants). | Supply the full canonical payload emitted by the official encoder, or a complete legacy payload when decoding historical data. |
+| `ERR_CHECKSUM_MISMATCH` | Canonical I105 checksum validation failed. | Regenerate the canonical I105 address from a trusted source; this typically indicates a copy/paste error. |
+| `ERR_INVALID_I105_PREFIX_ENCODING` | I105 prefix bytes are malformed. | Re-encode the address with a compliant encoder; do not alter the leading I105 bytes manually. |
+| `ERR_INVALID_HEX_ADDRESS` | Canonical hexadecimal form failed to decode. | Provide a `0x`-prefixed, even-length hex string produced by the official encoder. |
+| `ERR_MISSING_COMPRESSED_SENTINEL` | Legacy/non-canonical I105 form does not start with the expected sentinel. | Use canonical I105 output and avoid manual sentinel rewriting. |
+| `ERR_COMPRESSED_TOO_SHORT` | Legacy/non-canonical I105 string is truncated before payload+checksum complete. | Use the full canonical I105 string emitted by the encoder. |
+| `ERR_INVALID_COMPRESSED_CHAR` | Legacy/non-canonical I105 payload includes an invalid glyph. | Replace with canonical I105 output generated by official codecs. |
+| `ERR_INVALID_COMPRESSED_BASE` | Encoder attempted to use an unsupported legacy radix. | File a bug against the encoder; production flows must stay canonical I105. |
+| `ERR_INVALID_COMPRESSED_DIGIT` | Legacy/non-canonical digit value exceeds the supported legacy alphabet size. | Regenerate canonical I105 and avoid manual digit manipulation. |
+| `ERR_UNSUPPORTED_ADDRESS_FORMAT` | Auto-detection could not recognise the input format. | Provide canonical I105 on strict account-id parser paths; use canonical `0x` hex only in low-level/debug tooling that explicitly accepts it. |
 
-### კონტროლერის Payload Validation
+### Domain and Network Validation
 
-| კოდი | წარუმატებლობა | რეკომენდირებული გამოსწორება |
-|------|---------|------------------------|
-| `ERR_INVALID_PUBLIC_KEY` | საკვანძო ბაიტები არ ემთხვევა დეკლარირებულ მრუდს. | დარწმუნდით, რომ გასაღები ბაიტები დაშიფრულია ზუსტად ისე, როგორც საჭიროა არჩეული მრუდისთვის (მაგ., 32-ბაიტი Ed25519). |
-| `ERR_UNKNOWN_CURVE` | მრუდის იდენტიფიკატორი არ არის რეგისტრირებული. | გამოიყენეთ მრუდის ID `1` (Ed25519), სანამ დამატებითი მრუდები არ დამტკიცდება და გამოქვეყნდება რეესტრში. |
-| `ERR_MULTISIG_MEMBER_OVERFLOW` | Multisig კონტროლერი აცხადებს უფრო მეტ წევრს, ვიდრე მხარდაჭერილია. | დაშიფვრამდე შეამცირეთ მრავალრიცხოვანი წევრობა დოკუმენტურ ლიმიტამდე. |
-| `ERR_INVALID_MULTISIG_POLICY` | Multisig პოლიტიკის მომგებიანი ვალიდაცია ვერ მოხერხდა (ბარიერი/წონა/სქემა). | ხელახლა შექმენით პოლიტიკა ისე, რომ დააკმაყოფილოს CTAP2 სქემა, წონის საზღვრები და ზღვრული შეზღუდვები. |
+| Code | Failure | Recommended Remediation |
+|------|---------|-------------------------|
+| `ERR_DOMAIN_MISMATCH` | Domain selector does not match the expected domain. | Use an address issued for the intended domain or update the expectation. |
+| `ERR_INVALID_DOMAIN_LABEL` | Domain label failed normalisation checks. | Canonicalise the domain using UTS-46 non-transitional processing before encoding. |
+| `ERR_UNEXPECTED_NETWORK_PREFIX` | Decoded I105 network prefix differs from the configured value. | Switch to an address from the target chain or adjust the expected discriminant/prefix. |
+| `ERR_UNKNOWN_ADDRESS_CLASS` | Address class bits are not recognised. | Upgrade the decoder to a release that understands the new class, or avoid tampering with the header bits. |
+| `ERR_UNKNOWN_DOMAIN_TAG` | Domain selector tag is unknown. | Update to a release that supports the new selector type, or avoid using experimental payloads on V1 nodes. |
+| `ERR_UNEXPECTED_EXTENSION_FLAG` | Reserved extension bit was set. | Clear reserved bits; they remain gated until a future ABI introduces them. |
+| `ERR_UNKNOWN_CONTROLLER_TAG` | Controller payload tag not recognised. | Upgrade the decoder to recognise new controller types before parsing them. |
+| `ERR_UNEXPECTED_TRAILING_BYTES` | Canonical payload contained trailing bytes after decoding. | Regenerate the canonical payload; only the documented length should be present. |
 
-განიხილება ## ალტერნატივები
+### Controller Payload Validation
 
-- **Pure Base58Check (ბიტკოინის სტილი).** უფრო მარტივი საკონტროლო ჯამი, მაგრამ უფრო სუსტი შეცდომის გამოვლენა
-  ვიდრე Blake2b-დან მიღებული I105 საკონტროლო ჯამი (`encode_i105` წყვეტს 512-ბიტიან ჰეშს)
-  და მოკლებულია აშკარა პრეფიქსის სემანტიკას 16-ბიტიანი დისკრიმინანტებისთვის.
-- **ჯაჭვის სახელის ჩაშენება დომენის სტრიქონში (მაგ., `finance@chain`).** იშლება
-- ** დაეყრდნოთ მხოლოდ Nexus მარშრუტიზაციას მისამართების შეცვლის გარეშე.** მომხმარებლები მაინც იქნებიან
-  ორაზროვანი სტრიქონების კოპირება/ჩასმა; ჩვენ გვსურს, რომ მისამართი თავად ატარებდეს კონტექსტს.
-- **Bech32m კონვერტი.** QR-მეგობრული და გთავაზობთ ადამიანისათვის წასაკითხ პრეფიქსს, მაგრამ
-  განსხვავდებოდა გადაზიდვის I105 განხორციელებისგან (`AccountAddress::to_i105`)
-  და მოითხოვს ყველა მოწყობილობის/SDK-ის ხელახლა შექმნას. მიმდინარე საგზაო რუკა ინახავს I105 +
-  შეკუმშული (`sora`) მხარდაჭერა მომავალში კვლევის გაგრძელებისას
-  Bech32m/QR ფენები (CAIP-10 რუკების გადადება).
+| Code | Failure | Recommended Remediation |
+|------|---------|-------------------------|
+| `ERR_INVALID_PUBLIC_KEY` | Key bytes do not match the declared curve. | Ensure the key bytes are encoded exactly as required for the selected curve (e.g., 32-byte Ed25519). |
+| `ERR_UNKNOWN_CURVE` | Curve identifier is not registered. | Use curve ID `1` (Ed25519) until additional curves are approved and published in the registry. |
+| `ERR_MULTISIG_MEMBER_OVERFLOW` | Multisig controller declares more members than supported. | Reduce the multisig membership to the documented limit before encoding. |
+| `ERR_INVALID_MULTISIG_POLICY` | Multisig policy payload failed validation (threshold/weights/schema). | Rebuild the policy so that it satisfies the CTAP2 schema, weight bounds, and threshold constraints. |
 
-## ღია კითხვები
+## Alternatives Considered
 
-- დაადასტურეთ, რომ `u16` დისკრიმინანტები პლუს რეზერვირებული დიაპაზონები ფარავს გრძელვადიან მოთხოვნას;
-  წინააღმდეგ შემთხვევაში შეაფასეთ `u32` varint კოდირებით.
-- დაასრულეთ მრავალხელმოწერის მართვის პროცესი რეესტრის განახლებისთვის და როგორ
-  განიხილება გაუქმება/ვადაგასული ასიგნებები.
-- განსაზღვრეთ მანიფესტის ხელმოწერის ზუსტი სქემა (მაგ., Ed25519 multi-sig) და
-  სატრანსპორტო უსაფრთხოება (HTTPS დამაგრება, IPFS ჰეშის ფორმატი) Nexus განაწილებისთვის.
-- დაადგინეთ, მხარდაჭერილი იქნება თუ არა დომენის ფსევდონიმები/გადამისამართებები მიგრაციებისთვის და როგორ
-  დეტერმინიზმის დარღვევის გარეშე გამოაქვეყნოს ისინი.
-- მიუთითეთ, როგორ აფორმებს Kotodama/IVM კონტრაქტებს წვდომა I105 დამხმარეებზე (`to_address()`,
-  `parse_address()`) და უნდა გამოამჟღავნოს თუ არა CAIP-10-ის ჯაჭვზე შენახვა
-  რუკები (დღეს I105 კანონიკურია).
-- გამოიკვლიეთ Iroha ჯაჭვების რეგისტრაცია გარე რეესტრებში (მაგ., I105 რეესტრი,
-  CAIP სახელთა სივრცის დირექტორია) ეკოსისტემის უფრო ფართო გასწორებისთვის.
+- **Pure checksum envelope (Bitcoin-style).** Simpler checksum but weaker error detection
+  than the Blake2b-derived I105 checksum (`encode_i105` truncates a 512-bit hash)
+  and lacks explicit prefix semantics for 16-bit discriminants.
+- **Embedding chain name in the domain string (e.g., `finance@chain`).** Breaks
+- **Rely solely on Nexus routing without changing addresses.** Users would still
+  copy/paste ambiguous strings; we want the address itself to carry context.
+- **Bech32m envelope.** QR-friendly and offers a human-readable prefix, but
+  would diverge from the shipping I105 implementation (`AccountAddress::to_i105`)
+  and require recreating all fixtures/SDKs. The current roadmap keeps I105 +
+  I105 support while continuing research into future
+  Bech32m/QR layers (CAIP-10 mapping is deferred).
 
-## შემდეგი ნაბიჯები
+## Open Questions
 
-1. I105 კოდირება დაეშვა `iroha_data_model`-ში (`AccountAddress::to_i105`,
-   `parse_encoded`); განაგრძეთ მოწყობილობების/ტესტების პორტირება ყველა SDK-ზე და გაასუფთავეთ ნებისმიერი
+- Confirm that `u16` discriminants plus reserved ranges cover long-term demand;
+  otherwise evaluate `u32` with varint encoding.
+- Finalize the multi-signature governance process for registry updates and how
+  revocations/expired allocations are handled.
+- Define the exact manifest signature scheme (e.g., Ed25519 multi-sig) and
+  transport security (HTTPS pinning, IPFS hash format) for Nexus distribution.
+- Determine whether to support domain aliases/redirects for migrations and how
+  to surface them without breaking determinism.
+- Specify how Kotodama/IVM contracts access I105 helpers (`to_address()`,
+  `parse_address()`) and whether on-chain storage should ever expose CAIP-10
+  mappings (today I105 is canonical).
+- Explore registering Iroha chains in external registries (e.g., I105 registry,
+  CAIP namespace directory) for broader ecosystem alignment.
+
+## Next Steps
+
+1. I105 encoding landed in `iroha_data_model` (`AccountAddress::to_i105`,
+   `parse_encoded`); continue porting fixtures/tests to every SDK and purge any
    Bech32m placeholders.
-2. გააფართოვეთ კონფიგურაციის სქემა `chain_discriminant`-ით და მიიღეთ გონივრული
-  ნაგულისხმევი სატესტო/დეველოპერული კონფიგურაციებისთვის. **(შესრულებულია: `common.chain_discriminant`
-  ახლა იგზავნება `iroha_config`-ში, ნაგულისხმევად არის `0x02F1` თითო ქსელში
-  აჭარბებს.)**
-3. შეადგინეთ Nexus რეესტრის სქემა და კონცეფციის დამადასტურებელი მანიფესტის გამომცემელი.
-4. შეაგროვეთ გამოხმაურება საფულის პროვაიდერებისა და მეურვეებისგან ადამიანური ფაქტორის ასპექტებზე
-   (HRP დასახელება, ჩვენების ფორმატირება).
-5. განაახლეთ დოკუმენტაცია (`docs/source/data_model.md`, Torii API დოკუმენტები) ერთხელ
-   განხორციელების გზა ჩადებულია.
-6. გაგზავნეთ ოფიციალური კოდეკების ბიბლიოთეკები (Rust/TS/Python/Kotlin) ნორმატიული ტესტით
-   ვექტორები, რომლებიც მოიცავს წარმატებისა და წარუმატებლობის შემთხვევებს.
+2. Extend configuration schema with `chain_discriminant` and derive sensible
+  defaults for existing test/dev setups. **(Done: `common.chain_discriminant`
+  now ships in `iroha_config`, defaulting to `0x02F1` with per-network
+  overrides.)**
+3. Draft the Nexus registry schema and proof-of-concept manifest publisher.
+4. Collect feedback from wallet providers and custodians on human-factor aspects
+   (HRP naming, display formatting).
+5. Update documentation (`docs/source/data_model.md`, Torii API docs) once the
+   implementation path is committed.
+6. Ship official codec libraries (Rust/TS/Python/Kotlin) with normative test
+   vectors covering success and failure cases.

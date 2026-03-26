@@ -63,7 +63,7 @@ Il couvre les Phases de beta fermee (N0)、lancement public (N1) および拡張
 |チャート + 付録 KPI | `docs/source/sns/governance_addenda/` |チャートの署名者は、バージョン管理、規約 KPI および統治上の決定を参照して、投票 CLI を参照します。 |
 |レジストリのスキーマ | [`registry-schema.md`](./registry-schema.md) |構造体 Norito canonique (`NameRecordV1`、`SuffixPolicyV1`、`RevenueAccrualEventV1`)。 |
 |レジストラとの契約 | [`registrar-api.md`](./registrar-api.md) |ペイロード REST/gRPC、メトリック `sns_registrar_status_total` および管理上のフック。 |
-|ガイド UX d'addresses | [`address-display-guidelines.md`](./address-display-guidelines.md) | Rendus canoniques I105 (優先) および圧縮 (2 番目の選択) は、ウォレット/エクスプローラーの再生産品です。 |
+|ガイド UX d'addresses | [`address-display-guidelines.md`](./address-display-guidelines.md) | Rendus canoniques i105 (優先) および圧縮 (2 番目の選択) は、ウォレット/エクスプローラーの再生産品です。 |
 |ドキュメント SoraDNS / GAR | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md)、[`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) |ホストの決定、透明性と規則に関するワークフローの導出。 |
 |メモレグルメンテア | `docs/source/sns/regulatory/` |管轄権に関するメモ (例: EU DSA)、管理責任者への謝辞、モデルの附属書。 |
 |ジャーナル・ド・ドリル | `ops/drill-log.md` |ジャーナル・デ・リハーサルの混乱とIRには、段階的な出撃が必要です。 |
@@ -106,7 +106,7 @@ Il couvre les Phases de beta fermee (N0)、lancement public (N1) および拡張
    ETAT GAR/zone の最も重要なプロパティ (voir 4.5)。
 6. **漏洩クライアント:** Mettre a jour le ledger oriente クライアント (ウォレット/エクスプローラー)
    フィクスチャ パルタージュ経由 [`address-display-guidelines.md`](./address-display-guidelines.md)、
-   en s'assurant que les rendus I105 は、対応する補助ガイドのコピー/QR を圧縮します。
+   en s'assurant que les rendus i105 は、対応する補助ガイドのコピー/QR を圧縮します。
 
 ### 4.3 再建、分割および和解のトレゾレリー
 
@@ -138,11 +138,11 @@ Il couvre les Phases de beta fermee (N0)、lancement public (N1) および拡張
 ### 4.4 ゲル、訴訟および訴訟|フェーズ |所有権 |アクションとプリューブ | SLA |
 |------|--------------|------||-----|
 |デマンド ドゥ ジェル ソフト |スチュワード / サポート |寄託者はチケット `SNS-DF-<id>` の支払い、保証金の参照、および影響の選択を行っています。 |メインディッシュの4時間前まで。 |
-|チケットガーディアン |コンセイユの守護者 | `sns governance freeze --selector <I105> --reason <text> --until <ts>` 製品 `GuardianFreezeTicketV1`。 Stocker le JSON du ticket sous `artifacts/sns/guardian/<id>.json`。 | <=30 分の ACK、<=2 時間の実行。 |
+|チケットガーディアン |コンセイユの守護者 | `sns governance freeze --selector <i105> --reason <text> --until <ts>` 製品 `GuardianFreezeTicketV1`。 Stocker le JSON du ticket sous `artifacts/sns/guardian/<id>.json`。 | <=30 分の ACK、<=2 時間の実行。 |
 |コンセイユの批准 |行政管理 |承認者はジェルを拒否し、文書を作成して決定を下し、チケットの保護者と保証金のダイジェストを記録します。 |プロチェーンセッションは非同期で投票します。 |
 |パネル裁定取引 |適合 + スチュワード | 7 人の陪審員パネルの会議 (セロン ロードマップ) は、`sns governance dispute ballot` 経由で速報ハッシュを取得します。投票参加者は事件の報告を匿名化します。 |評決 <= 保釈金留置後 7 時間。 |
 |アピール |ガーディアン+コンセイユ |二重の法廷での絆と反復的な陪審員の手続き。登録者ファイル マニフェスト Norito `DisputeAppealV1` および参照者ファイル チケット プライマリ。 | <=10 時間。 |
-|デゲルと修復 |レジストラ + ops リゾルバー |実行者 `sns governance unfreeze --selector <I105> --ticket <id>`、レジストラの最新情報、および GAR/リゾルバーの差分の管理。 |判決後即時。 |
+|デゲルと修復 |レジストラ + ops リゾルバー |実行者 `sns governance unfreeze --selector <i105> --ticket <id>`、レジストラの最新情報、および GAR/リゾルバーの差分の管理。 |判決後即時。 |
 
 Les canons d'urgence (ガーディアンのゲルのデクレンシュ <= 72 時間) ミームの流れに沿ったもの
 あなたのレビューは遡及的であり、透明性のあるものである必要があります

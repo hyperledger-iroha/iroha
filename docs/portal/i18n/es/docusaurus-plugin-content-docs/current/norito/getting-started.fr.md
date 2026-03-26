@@ -69,7 +69,7 @@ Cuando esté satisfecho con el contrato, implementelo en un lugar a través de l
 
 ```sh
 iroha_cli app contracts deploy \
-  --authority i105... \
+  --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
 ```

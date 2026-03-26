@@ -5,7 +5,9 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
 pub use self::model::*;
-use crate::{account, asset, domain, nexus, nft, parameter, peer, permission, repo, role, trigger};
+use crate::{
+    account, asset, domain, nexus, nft, parameter, peer, permission, repo, role, rwa, trigger,
+};
 
 #[model]
 mod model {
@@ -90,6 +92,9 @@ mod model {
         /// [`NftId`](`nft::NftId`) variant.
         #[display("{_0}")]
         NftId(nft::NftId),
+        /// [`RwaId`](`rwa::RwaId`) variant.
+        #[display("{_0}")]
+        RwaId(rwa::RwaId),
         /// [`PeerId`](`peer::PeerId`) variant.
         PeerId(peer::PeerId),
         /// [`LaneId`](`nexus::LaneId`) variant.
@@ -117,6 +122,7 @@ mod id_box_codec {
         AssetDefinitionId(asset::id::AssetDefinitionId),
         AssetId(asset::id::AssetId),
         NftId(nft::NftId),
+        RwaId(rwa::RwaId),
         PeerId(peer::PeerId),
         LaneId(nexus::LaneId),
         TriggerId(trigger::TriggerId),
@@ -134,6 +140,7 @@ mod id_box_codec {
                 IdBox::AssetDefinitionId(v) => Self::AssetDefinitionId(v),
                 IdBox::AssetId(v) => Self::AssetId(v),
                 IdBox::NftId(v) => Self::NftId(v),
+                IdBox::RwaId(v) => Self::RwaId(v),
                 IdBox::PeerId(v) => Self::PeerId(v),
                 IdBox::LaneId(v) => Self::LaneId(v),
                 IdBox::TriggerId(v) => Self::TriggerId(v),
@@ -153,6 +160,7 @@ mod id_box_codec {
                 IdBoxCandidate::AssetDefinitionId(v) => Self::AssetDefinitionId(v),
                 IdBoxCandidate::AssetId(v) => Self::AssetId(v),
                 IdBoxCandidate::NftId(v) => Self::NftId(v),
+                IdBoxCandidate::RwaId(v) => Self::RwaId(v),
                 IdBoxCandidate::PeerId(v) => Self::PeerId(v),
                 IdBoxCandidate::LaneId(v) => Self::LaneId(v),
                 IdBoxCandidate::TriggerId(v) => Self::TriggerId(v),
@@ -197,6 +205,7 @@ impl_encode_as_id_box! {
     account::AccountId,
     asset::id::AssetDefinitionId,
     asset::id::AssetId,
+    rwa::RwaId,
     trigger::TriggerId,
     permission::Permission,
     role::RoleId,

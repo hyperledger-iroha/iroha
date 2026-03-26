@@ -77,9 +77,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -88,7 +88,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -251,7 +251,7 @@ Auditeurs puissent se concentrer sur une seule execution CSV。
   CSV の配置に関連する解決策の決定を参照します。
   オブジェクトではないメタデータが検証に失敗する可能性があります。
 - **コントローラー:** セルセルは、関連する `--default-controllers` を参照します。フルニセズ
-  明示的なリスト (`i105...;i105...` など) は、完全に削除されたものです。
+  明示的なリスト (`<i105-account-id>;<i105-account-id>` など) は、完全に削除されたものです。
   俳優は所有者ではありません。
 
 Les echecs Sont signales avec des numeros de ligne contextuels (par example)

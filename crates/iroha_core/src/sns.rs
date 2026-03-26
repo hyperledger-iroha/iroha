@@ -69,7 +69,7 @@ pub enum SnsError {
 /// SNS namespaces used by the authoritative name-record storage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SnsNamespace {
-    /// Full account-alias key (`label@domain.dataspace` or `label@dataspace`).
+    /// Full account-alias key (`name@domain.dataspace` or `name@dataspace`).
     AccountAlias,
     /// Canonical domain literal.
     Domain,

@@ -26,8 +26,8 @@ slug : /norito/ledger-walkthrough
 طوال الدليل، استبدل `$ADMIN_ACCOUNT` et `$RECEIVER_ACCOUNT` بمعرفات الحساب التي تخطط لاستخدامها. يتضمن الـ bundle الافتراضي بالفعل حسابين مشتقين من مفاتيح العرض:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 اكد القيم عبر سرد اولى الحسابات:

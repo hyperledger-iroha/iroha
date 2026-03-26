@@ -100,7 +100,7 @@ async fn accounts_portfolio_snapshot_matches_fixture() {
 }
 
 #[tokio::test]
-async fn accounts_portfolio_filters_by_asset_and_scope() {
+async fn accounts_portfolio_filters_by_asset_id() {
     let (app, uaid) = setup_portfolio_app(|state| {
         let (uaid, _accounts) = seed_portfolio_accounts(state);
         uaid
@@ -119,22 +119,17 @@ async fn accounts_portfolio_filters_by_asset_and_scope() {
     assert_eq!(baseline.status(), StatusCode::OK);
     let baseline_body = baseline.into_body().collect().await.unwrap().to_bytes();
     let baseline_value: Value = json::from_slice(&baseline_body).expect("valid portfolio payload");
-    let asset = baseline_value["dataspaces"][0]["accounts"][0]["assets"][0]["asset"]
+    let asset_id = baseline_value["dataspaces"][0]["accounts"][0]["assets"][0]["asset_id"]
         .as_str()
-        .expect("baseline asset selector")
-        .to_owned();
-    let scope = baseline_value["dataspaces"][0]["accounts"][0]["assets"][0]["scope"]
-        .as_str()
-        .expect("baseline scope")
+        .expect("baseline asset id")
         .to_owned();
 
     let resp = app
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/v1/accounts/uaid:{uaid_hex}/portfolio?asset={}&scope={}",
-                    urlencoding::encode(&asset),
-                    urlencoding::encode(&scope)
+                    "/v1/accounts/uaid:{uaid_hex}/portfolio?asset_id={}",
+                    urlencoding::encode(&asset_id)
                 ))
                 .body(axum::body::Body::empty())
                 .unwrap(),
@@ -150,8 +145,7 @@ async fn accounts_portfolio_filters_by_asset_and_scope() {
         .as_array()
         .expect("assets array");
     assert_eq!(assets.len(), 1);
-    assert_eq!(assets[0]["asset"], Value::from(asset));
-    assert_eq!(assets[0]["scope"], Value::from(scope));
+    assert_eq!(assets[0]["asset_id"], Value::from(asset_id));
 }
 
 fn setup_portfolio_app<SeedFn>(seed_fn: SeedFn) -> (Router, UniversalAccountId)

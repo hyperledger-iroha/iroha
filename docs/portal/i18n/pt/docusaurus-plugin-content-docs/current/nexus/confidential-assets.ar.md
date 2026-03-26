@@ -233,7 +233,7 @@ Certifique-se de que o produto esteja funcionando corretamente. O tempo de execu
 - تسلسل اشتقاق المفاتيح لكل حساب:
   - `sk_spend` → `nk` (chave anuladora), `ivk` (chave de visualização de entrada), `ovk` (chave de visualização de saída), `fvk`.
 - تستخدم notas de cargas úteis المشفرة AEAD مع مفاتيح مشتركة مشتقة من ECDH; يمكن ارفاق chaves de visualização do auditor اختيارية الى saídas حسب سياسة الاصل.
-- CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, ادوات للمدققين لفك memos, والمساعد `iroha app zk envelope` Envelopes de papel/corte Norito sem problemas. O Torii é um arquivo de código aberto que `POST /v1/confidential/derive-keyset` é usado para hex e base64 para ser usado جلب هياكل المفاتيح برمجيا.
+- CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, ادوات للمدققين لفك memos, والمساعد `iroha app zk envelope` Envelopes de papel/corte Norito sem problemas. O
 
 ## الغاز, الحدود, وضوابط DoS
 - gás natural:

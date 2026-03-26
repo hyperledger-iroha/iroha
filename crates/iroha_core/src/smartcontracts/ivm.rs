@@ -37,6 +37,45 @@ pub fn map_vm_error_to_validation(err: &ivm::VMError) -> ValidationFail {
     ValidationFail::NotPermitted(err.to_string())
 }
 
+fn format_vm_diagnostic(diag: &ivm::VmExecutionDiagnostic) -> String {
+    let mut message = diag.message.clone();
+    use std::fmt::Write as _;
+    let _ = write!(&mut message, " at pc=0x{:x}", diag.pc);
+    if let Some(function) = diag
+        .source
+        .as_ref()
+        .and_then(|source| source.function.as_deref())
+        .or(diag.context.current_function.as_deref())
+    {
+        let _ = write!(&mut message, " fn={function}");
+    }
+    if let Some(source) = diag.source.as_ref()
+        && let (Some(line), Some(column)) = (source.line, source.column)
+    {
+        let _ = write!(&mut message, " src={line}:{column}");
+    }
+    if let Some(opcode) = diag.context.opcode {
+        let _ = write!(&mut message, " opcode=0x{opcode:02x}");
+    }
+    if let Some(syscall) = diag.context.syscall {
+        let _ = write!(&mut message, " syscall=0x{syscall:02x}");
+    }
+    message
+}
+
+/// Map a VM execution error into a validation failure enriched with VM context.
+#[must_use]
+pub fn map_vm_error_with_context_to_validation(
+    vm: &ivm::IVM,
+    err: &ivm::VMError,
+) -> ValidationFail {
+    if let Some(diag) = vm.last_diagnostic() {
+        ValidationFail::NotPermitted(format_vm_diagnostic(diag))
+    } else {
+        map_vm_error_to_validation(err)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

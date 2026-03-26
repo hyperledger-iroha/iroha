@@ -12,11 +12,13 @@ use iroha_config::parameters::actual;
 use iroha_core::iso_bridge::reference_data::{
     ReferenceDataError, ReferenceDataSnapshots, ValidationOutcome,
 };
+use iroha_core::state::WorldReadOnly;
 use iroha_crypto::PrivateKey;
 use iroha_data_model::{
     ValidationFail,
     account::address::{AccountAddress, AccountAddressError, AddressDomainKind},
     alias::AliasIndex,
+    asset::AssetDefinitionAlias,
     prelude::{
         AccountId, AssetDefinitionId, AssetId, ChainId, DomainId, InstructionBox, Metadata, Name,
         TransactionBuilder, Transfer,
@@ -37,7 +39,7 @@ pub struct Iso20022BridgeRuntime {
     account_aliases: Arc<HashMap<String, AccountId>>,
     alias_indices: Arc<HashMap<String, AliasIndex>>,
     index_aliases: Arc<BTreeMap<AliasIndex, (String, AccountId)>>,
-    currency_assets: Arc<HashMap<String, AssetDefinitionId>>,
+    currency_assets: Arc<HashMap<String, String>>,
     reference_data: Arc<ReferenceDataSnapshots>,
     dedupe_ttl: Duration,
     records: DashMap<String, IsoMessageRecord>,
@@ -473,9 +475,9 @@ impl Iso20022BridgeRuntime {
                     binding.currency
                 );
             }
-            let asset_def = AssetDefinitionId::parse_address_literal(&binding.asset_definition)
+            let asset_selector = validate_asset_definition_selector(&binding.asset_definition)
                 .wrap_err_with(|| format!("invalid asset definition for currency {currency}"))?;
-            currencies.insert(currency, asset_def);
+            currencies.insert(currency, asset_selector);
         }
 
         let reference_data = Arc::new(ReferenceDataSnapshots::from_config(&config.reference_data));
@@ -514,9 +516,15 @@ impl Iso20022BridgeRuntime {
     }
 
     /// Resolve an ISO 4217 currency code into an asset definition identifier.
-    pub fn resolve_asset(&self, currency: &str) -> Option<AssetDefinitionId> {
+    pub fn resolve_asset(
+        &self,
+        world: &impl WorldReadOnly,
+        now_ms: u64,
+        currency: &str,
+    ) -> Option<AssetDefinitionId> {
         let currency = normalise_currency(currency);
-        self.currency_assets.get(&currency).cloned()
+        let selector = self.currency_assets.get(&currency)?;
+        resolve_asset_definition_selector(world, selector, now_ms)
     }
 
     /// Access the cached ISO reference datasets.
@@ -845,6 +853,8 @@ impl Iso20022BridgeRuntime {
     pub fn build_pacs008_transaction(
         &self,
         parsed: &ParsedMessage,
+        world: &impl WorldReadOnly,
+        now_ms: u64,
         chain_id: &ChainId,
         telemetry: &MaybeTelemetry,
     ) -> Result<
@@ -953,17 +963,17 @@ impl Iso20022BridgeRuntime {
 
         let asset_definition =
             if let Some(hint) = parsed.field_text("SplmtryData/AssetDefinitionId") {
-                let definition = AssetDefinitionId::parse_address_literal(hint)
-                    .map_err(|_| MsgError::ValidationFailed)?;
+                let definition = resolve_asset_definition_selector(world, hint, now_ms)
+                    .ok_or(MsgError::ValidationFailed)?;
                 context.asset_definition_id = Some(definition.to_string());
                 definition
             } else {
-                let definition =
-                    self.resolve_asset(&currency)
-                        .ok_or_else(|| MsgError::InvalidIdentifier {
-                            field: "IntrBkSttlmCcy".to_owned(),
-                            kind: IdentifierKind::Currency,
-                        })?;
+                let definition = self
+                    .resolve_asset(world, now_ms, &currency)
+                    .ok_or_else(|| MsgError::InvalidIdentifier {
+                        field: "IntrBkSttlmCcy".to_owned(),
+                        kind: IdentifierKind::Currency,
+                    })?;
                 context.asset_definition_id = Some(definition.to_string());
                 definition
             };
@@ -1017,6 +1027,8 @@ impl Iso20022BridgeRuntime {
     pub fn build_pacs009_transaction(
         &self,
         parsed: &ParsedMessage,
+        world: &impl WorldReadOnly,
+        now_ms: u64,
         chain_id: &ChainId,
         telemetry: &MaybeTelemetry,
     ) -> Result<
@@ -1134,17 +1146,17 @@ impl Iso20022BridgeRuntime {
 
         let asset_definition =
             if let Some(hint) = parsed.field_text("SplmtryData/AssetDefinitionId") {
-                let definition = AssetDefinitionId::parse_address_literal(hint)
-                    .map_err(|_| MsgError::ValidationFailed)?;
+                let definition = resolve_asset_definition_selector(world, hint, now_ms)
+                    .ok_or(MsgError::ValidationFailed)?;
                 context.asset_definition_id = Some(definition.to_string());
                 definition
             } else {
-                let definition =
-                    self.resolve_asset(&currency)
-                        .ok_or_else(|| MsgError::InvalidIdentifier {
-                            field: "IntrBkSttlmCcy".to_owned(),
-                            kind: IdentifierKind::Currency,
-                        })?;
+                let definition = self
+                    .resolve_asset(world, now_ms, &currency)
+                    .ok_or_else(|| MsgError::InvalidIdentifier {
+                        field: "IntrBkSttlmCcy".to_owned(),
+                        kind: IdentifierKind::Currency,
+                    })?;
                 context.asset_definition_id = Some(definition.to_string());
                 definition
             };
@@ -1271,6 +1283,40 @@ fn normalise_currency(input: &str) -> String {
     input.trim().to_ascii_uppercase()
 }
 
+fn validate_asset_definition_selector(input: &str) -> eyre::Result<String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        eyre::bail!("asset definition selector must not be empty");
+    }
+    if AssetDefinitionId::parse_address_literal(trimmed).is_ok()
+        || AssetDefinitionAlias::from_str(trimmed).is_ok()
+    {
+        return Ok(trimmed.to_owned());
+    }
+    eyre::bail!(
+        "invalid asset definition selector `{trimmed}`; expected canonical Base58 asset definition id or on-chain asset alias literal"
+    );
+}
+
+fn resolve_asset_definition_selector(
+    world: &impl WorldReadOnly,
+    selector: &str,
+    now_ms: u64,
+) -> Option<AssetDefinitionId> {
+    let literal = selector.trim();
+    if literal.is_empty() {
+        return None;
+    }
+
+    AssetDefinitionId::parse_address_literal(literal)
+        .ok()
+        .or_else(|| {
+            AssetDefinitionAlias::from_str(literal)
+                .ok()
+                .and_then(|alias| world.asset_definition_id_by_alias_at(&alias, now_ms))
+        })
+}
+
 fn insert_metadata_value(metadata: &mut Metadata, key: &str, value: &str) -> Result<(), MsgError> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -1293,9 +1339,13 @@ mod tests {
     use std::{io::Write as _, str::FromStr, time::SystemTime};
 
     use iroha_core::iso_bridge::reference_data::SnapshotState;
+    use iroha_core::state::World;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        ValidationFail,
+        Registrable, ValidationFail,
+        account::Account,
+        asset::{AssetDefinition, AssetDefinitionAlias},
+        domain::Domain,
         nexus::{AxtRejectContext, AxtRejectReason, DataSpaceId, LaneId},
         transaction::error::{TransactionLimitError, TransactionRejectionReason},
     };
@@ -1314,8 +1364,17 @@ mod tests {
         (account, literal, private_key)
     }
 
+    fn sample_asset_definition_literal() -> String {
+        AssetDefinitionId::new(
+            "test".parse().expect("domain"),
+            "usd".parse().expect("name"),
+        )
+        .to_string()
+    }
+
     fn sample_config() -> actual::IsoBridge {
         let (_account_id, account_literal, private_key) = sample_account_bundle();
+        let asset_definition = sample_asset_definition_literal();
         actual::IsoBridge {
             enabled: true,
             dedupe_ttl_secs: 60,
@@ -1329,10 +1388,36 @@ mod tests {
             }],
             currency_assets: vec![actual::IsoCurrencyAsset {
                 currency: "USD".to_string(),
-                asset_definition: "usd#test".to_string(),
+                asset_definition,
             }],
             reference_data: actual::IsoReferenceData::default(),
         }
+    }
+
+    fn sample_world(asset_alias: Option<&str>) -> World {
+        let (authority, _, _) = sample_account_bundle();
+        let domain_id: DomainId = "test".parse().expect("domain");
+        let asset_definition_id =
+            AssetDefinitionId::new(domain_id.clone(), "usd".parse().expect("name"));
+        let domain = Domain::new(domain_id.clone()).build(&authority);
+        let account = Account::new(authority.clone().to_account_id(domain_id)).build(&authority);
+        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
+            .with_name("USD".to_owned())
+            .build(&authority);
+        let world = World::with([domain], [account], [asset_definition]);
+        if let Some(alias_literal) = asset_alias {
+            let alias: AssetDefinitionAlias = alias_literal.parse().expect("asset alias");
+            let mut block = world.block();
+            let mut tx = block.transaction_without_telemetry(
+                iroha_config::parameters::actual::LaneConfig::default(),
+                0,
+            );
+            tx.bind_asset_definition_alias(&asset_definition_id, alias, None, None, 10_000)
+                .expect("bind alias");
+            tx.apply();
+            block.commit();
+        }
+        world
     }
 
     fn write_snapshot(contents: &str) -> NamedTempFile {
@@ -1354,7 +1439,9 @@ mod tests {
             iroha_crypto::KeyPair::from_seed(vec![0xAB; 32], iroha_crypto::Algorithm::Ed25519);
         let account = AccountId::new(key_pair.public_key().clone());
         let address = AccountAddress::from_account_id(&account).expect("address");
-        let i105 = address.to_i105_for_discriminant(42).expect("i105 encoding");
+        let i105 = address
+            .to_i105_for_discriminant(iroha_data_model::account::address::chain_discriminant())
+            .expect("i105 encoding");
         let (value, observation) = super::parse_account_address_literal(&i105);
         assert!(value.is_some());
         assert_eq!(observation.error_code(), None);
@@ -1444,6 +1531,23 @@ mod tests {
     }
 
     #[test]
+    fn runtime_accepts_asset_alias_currency_binding() {
+        let mut config = sample_config();
+        config.currency_assets[0].asset_definition = "usd#test".to_string();
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        let world = sample_world(Some("usd#test"));
+        let world_view = world.view();
+
+        let resolved = runtime
+            .resolve_asset(&world_view, 10_000, "USD")
+            .expect("currency binding should resolve");
+
+        assert_eq!(resolved.to_string(), sample_asset_definition_literal());
+    }
+
+    #[test]
     fn runtime_rejects_legacy_signer_account_literal() {
         let mut config = sample_config();
         if let Some(ref mut signer) = config.signer {
@@ -1484,10 +1588,12 @@ mod tests {
             b"MsgId=m1\nIntrBkSttlmAmt=10\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-01\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nDbtrAgt=DEUTDEFF\nCdtrAgt=DEUTDEFF\nSplmtryData/SourceAccountAddress=0xdebtor\nSplmtryData/TargetAccountAddress=0xcreditor",
         )
         .expect("parsed");
+        let world = sample_world(None);
+        let world_view = world.view();
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let (tx, context) = runtime
-            .build_pacs008_transaction(&msg, &chain_id, &telemetry)
+            .build_pacs008_transaction(&msg, &world_view, 10_000, &chain_id, &telemetry)
             .expect("build");
         assert_eq!(context.ledger_id.as_deref(), Some(chain_id.as_str()));
         let (_expected_account, canonical_account, _) = sample_account_bundle();
@@ -1499,7 +1605,11 @@ mod tests {
             context.target_account_id.as_deref(),
             Some(canonical_account.as_str())
         );
-        assert_eq!(context.asset_definition_id.as_deref(), Some("usd#test"));
+        let asset_definition = sample_asset_definition_literal();
+        assert_eq!(
+            context.asset_definition_id.as_deref(),
+            Some(asset_definition.as_str())
+        );
         assert_eq!(context.source_account_address.as_deref(), Some("0xdebtor"));
         assert_eq!(
             context.target_account_address.as_deref(),
@@ -1529,7 +1639,7 @@ mod tests {
             .get(&asset_key)
             .and_then(|json| json.try_into_any_norito::<String>().ok())
             .expect("asset metadata");
-        assert_eq!(stored_asset, "usd#test");
+        assert_eq!(stored_asset, asset_definition);
 
         let asset_id_key = Name::from_str("iso20022_asset_id").unwrap();
         let stored_asset_id = metadata
@@ -1537,6 +1647,31 @@ mod tests {
             .and_then(|json| json.try_into_any_norito::<String>().ok())
             .expect("asset id metadata");
         assert_eq!(context.asset_id.as_deref(), Some(stored_asset_id.as_str()));
+    }
+
+    #[test]
+    fn build_transaction_accepts_asset_alias_hint() {
+        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
+            .expect("cfg")
+            .expect("enabled");
+        let msg = parse_message(
+            "pacs.008",
+            b"MsgId=m1\nIntrBkSttlmAmt=10\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-01\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nDbtrAgt=DEUTDEFF\nCdtrAgt=DEUTDEFF\nSplmtryData/AssetDefinitionId=usd#test",
+        )
+        .expect("parsed");
+        let world = sample_world(Some("usd#test"));
+        let world_view = world.view();
+        let chain_id: ChainId = "test-chain".parse().unwrap();
+        let telemetry = MaybeTelemetry::for_tests();
+        let (_tx, context) = runtime
+            .build_pacs008_transaction(&msg, &world_view, 10_000, &chain_id, &telemetry)
+            .expect("build");
+        let expected_asset_definition = sample_asset_definition_literal();
+
+        assert_eq!(
+            context.asset_definition_id.as_deref(),
+            Some(expected_asset_definition.as_str())
+        );
     }
 
     #[test]
@@ -1562,10 +1697,12 @@ mod tests {
             b"MsgId=m1\nIntrBkSttlmAmt=10\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-01\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nDbtrAgt=TESTUS33\nCdtrAgt=TESTUS33",
         )
         .expect("parsed");
+        let world = sample_world(None);
+        let world_view = world.view();
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let err = runtime
-            .build_pacs008_transaction(&msg, &chain_id, &telemetry)
+            .build_pacs008_transaction(&msg, &world_view, 10_000, &chain_id, &telemetry)
             .expect_err("unknown BIC must fail");
         match err {
             MsgError::InvalidIdentifier { ref field, kind } => {
@@ -1586,10 +1723,12 @@ mod tests {
             b"MsgId=m1\nIntrBkSttlmAmt=10\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-01\nDbtrAcct=GB29NWBK60161331926819\nCdtrAcct=GB29NWBK60161331926819\nDbtrAgt=DEUTDEFF\nCdtrAgt=DEUTDEFF",
         )
         .expect("parsed");
+        let world = sample_world(None);
+        let world_view = world.view();
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let err = runtime
-            .build_pacs008_transaction(&msg, &chain_id, &telemetry)
+            .build_pacs008_transaction(&msg, &world_view, 10_000, &chain_id, &telemetry)
             .expect_err("unmapped IBAN must fail");
         match err {
             MsgError::InvalidIdentifier { ref field, kind } => {
@@ -1610,10 +1749,12 @@ mod tests {
             b"MsgId=m1\nIntrBkSttlmAmt=10\nIntrBkSttlmCcy=EUR\nIntrBkSttlmDt=2024-01-01\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nDbtrAgt=DEUTDEFF\nCdtrAgt=DEUTDEFF",
         )
         .expect("parsed");
+        let world = sample_world(None);
+        let world_view = world.view();
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let err = runtime
-            .build_pacs008_transaction(&msg, &chain_id, &telemetry)
+            .build_pacs008_transaction(&msg, &world_view, 10_000, &chain_id, &telemetry)
             .expect_err("unbound currency must fail");
         match err {
             MsgError::InvalidIdentifier { ref field, kind } => {
@@ -1634,10 +1775,12 @@ mod tests {
             b"BizMsgIdr=b1\nMsgDefIdr=pacs.009.001.10\nCreDtTm=2024-01-01T12:00:00Z\nIntrBkSttlmAmt=2500\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-03\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nInstgAgt=DEUTDEFF\nInstdAgt=DEUTDEFF\nPurp=SECU\nSplmtryData/SourceAccountAddress=0xdebtor\nSplmtryData/TargetAccountAddress=0xcreditor",
         )
         .expect("parsed");
+        let world = sample_world(None);
+        let world_view = world.view();
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let (tx, context) = runtime
-            .build_pacs009_transaction(&msg, &chain_id, &telemetry)
+            .build_pacs009_transaction(&msg, &world_view, 10_000, &chain_id, &telemetry)
             .expect("build");
         assert_eq!(context.ledger_id.as_deref(), Some(chain_id.as_str()));
         let (_expected_account, canonical_account, _) = sample_account_bundle();
@@ -1649,7 +1792,11 @@ mod tests {
             context.target_account_id.as_deref(),
             Some(canonical_account.as_str())
         );
-        assert_eq!(context.asset_definition_id.as_deref(), Some("usd#test"));
+        let asset_definition = sample_asset_definition_literal();
+        assert_eq!(
+            context.asset_definition_id.as_deref(),
+            Some(asset_definition.as_str())
+        );
 
         let metadata = tx.metadata();
         let purpose_key = Name::from_str("iso20022_category_purpose").unwrap();
@@ -1670,10 +1817,12 @@ mod tests {
             b"BizMsgIdr=b1\nMsgDefIdr=pacs.009.001.10\nCreDtTm=2024-01-01T12:00:00Z\nIntrBkSttlmAmt=2500\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-03\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nInstgAgt=DEUTDEFF\nInstdAgt=DEUTDEFF\nPurp=OTHR",
         )
         .expect("parsed");
+        let world = sample_world(None);
+        let world_view = world.view();
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let err = runtime
-            .build_pacs009_transaction(&msg, &chain_id, &telemetry)
+            .build_pacs009_transaction(&msg, &world_view, 10_000, &chain_id, &telemetry)
             .expect_err("non-SECU purpose must fail");
         match err {
             MsgError::InvalidValue { field, kind } => {
@@ -1694,10 +1843,12 @@ mod tests {
             b"BizMsgIdr=b1\nMsgDefIdr=pacs.009.001.10\nCreDtTm=2024-01-01T12:00:00Z\nIntrBkSttlmAmt=2500\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-03\nDbtrAcct=GB29NWBK60161331926819\nCdtrAcct=GB29NWBK60161331926819\nInstgAgt=DEUTDEFF\nInstdAgt=DEUTDEFF\nPurp=SECU",
         )
         .expect("parsed");
+        let world = sample_world(None);
+        let world_view = world.view();
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let err = runtime
-            .build_pacs009_transaction(&msg, &chain_id, &telemetry)
+            .build_pacs009_transaction(&msg, &world_view, 10_000, &chain_id, &telemetry)
             .expect_err("unmapped IBAN must fail");
         match err {
             MsgError::InvalidIdentifier { ref field, kind } => {
@@ -1718,10 +1869,12 @@ mod tests {
             b"BizMsgIdr=b1\nMsgDefIdr=pacs.009.001.10\nCreDtTm=2024-01-01T12:00:00Z\nIntrBkSttlmAmt=2500\nIntrBkSttlmCcy=EUR\nIntrBkSttlmDt=2024-01-03\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nInstgAgt=DEUTDEFF\nInstdAgt=DEUTDEFF\nPurp=SECU",
         )
         .expect("parsed");
+        let world = sample_world(None);
+        let world_view = world.view();
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let err = runtime
-            .build_pacs009_transaction(&msg, &chain_id, &telemetry)
+            .build_pacs009_transaction(&msg, &world_view, 10_000, &chain_id, &telemetry)
             .expect_err("unbound currency must fail");
         match err {
             MsgError::InvalidIdentifier { ref field, kind } => {
@@ -1755,10 +1908,12 @@ mod tests {
             b"BizMsgIdr=b1\nMsgDefIdr=pacs.009.001.10\nCreDtTm=2024-01-01T12:00:00Z\nIntrBkSttlmAmt=2500\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-03\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nInstgAgt=TESTUS33\nInstdAgt=TESTUS33\nPurp=SECU",
         )
         .expect("parsed");
+        let world = sample_world(None);
+        let world_view = world.view();
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let err = runtime
-            .build_pacs009_transaction(&msg, &chain_id, &telemetry)
+            .build_pacs009_transaction(&msg, &world_view, 10_000, &chain_id, &telemetry)
             .expect_err("unknown BIC must fail");
         match err {
             MsgError::InvalidIdentifier { ref field, kind } => {
@@ -1823,7 +1978,8 @@ mod tests {
         let context = IsoMessageContext {
             ledger_id: Some("ledger-A".to_string()),
             source_account_id: Some(
-                "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU".to_string(),
+                "sorauロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76"
+                    .to_string(),
             ),
             ..IsoMessageContext::default()
         };
@@ -1834,7 +1990,7 @@ mod tests {
         assert_eq!(status.ledger_id(), Some("ledger-A"));
         assert_eq!(
             status.source_account_id(),
-            Some("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU")
+            Some("sorauロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76")
         );
         assert_eq!(status.transaction_hash(), Some("hash-ctx"));
     }

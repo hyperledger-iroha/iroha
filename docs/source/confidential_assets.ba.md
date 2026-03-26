@@ -238,7 +238,7 @@ lockstep.
 - Пер-иҫәп асҡыс сығарылыш иерархияһы:
   - `sk_spend` → `nk` (нулификатор асҡысы), `ivk` (уҡлау асҡысы), `ovk` (башҡа ҡарау асҡысы), `fvk`.
 - шифрланған иҫкәрмә файҙалы йөкләмәләр ҡулланыу AEAD менән ECDH-алынған уртаҡ асҡыстар; опциональ аудитор ҡарау асҡыстары активтар сәйәсәте өсөн сығыштарға беркетелгән булыуы мөмкин.
-- CLI өҫтәмәләре: `confidential create-keys`, `confidential send`, `confidential export-view-key`, аудитор өсөн расшифровкалау өсөн шифрлау иҫтәлек, һәм `iroha app zk envelope` ярҙамсы етештереү/тикшерергә Norito иҫтәлек офлайн конверт. Torii `POST /v1/confidential/derive-keyset` аша шул уҡ сығарылыш ағымын фашлай, гекс һәм base64 формаларын ҡайтара, шуға күрә янсыҡтар программалы рәүештә асҡыс иерархияларын ала ала.
+- CLI өҫтәмәләре: `confidential create-keys`, `confidential send`, `confidential export-view-key`, аудитор өсөн расшифровкалау өсөн шифрлау иҫтәлек, һәм `iroha app zk envelope` ярҙамсы етештереү/тикшерергә Norito иҫтәлек офлайн конверт.
 
 ## Газ, сикләүҙәр & DoS контроль
 - Детерминистик газ графигы:
@@ -279,7 +279,7 @@ import {
 
 const unsigned = buildRegisterZkAssetTransaction({
   registration: {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: {
       commit_params: "vk_shield",
@@ -444,7 +444,7 @@ import {
 
 const unsigned = buildRegisterZkAssetTransaction({
   registration: {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: {
       commit_params: "vk_shield",

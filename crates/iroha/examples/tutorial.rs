@@ -226,8 +226,9 @@ fn asset_minting_test(config: Config) -> Result<(), Error> {
 
     // #region mint_asset_mint_alt
     // Mint the Asset instance (alternate syntax).
-    // AssetId textual representation uses the public
-    // `<asset-definition-id>#<account-id>` form with optional `#dataspace:<id>` suffix.
+    // AssetId textual representation uses the canonical internal balance-bucket
+    // `<base58-asset-definition-id>#<i105-account-id>` form with optional `#dataspace:<id>` suffix.
+    // Public asset ids remain bare Base58 asset-definition ids.
     let alice_roses_literal = AssetId::new(roses, alice).canonical_literal();
     let alice_roses: AssetId = alice_roses_literal.parse()?;
     let mint_roses_alt = Mint::asset_numeric(10u32, alice_roses);
@@ -280,8 +281,9 @@ fn asset_burning_test(config: Config) -> Result<(), Error> {
 
     // #region burn_asset_burn_alt
     // Burn the Asset instance (alternate syntax).
-    // AssetId textual representation uses the public
-    // `<asset-definition-id>#<account-id>` form with optional `#dataspace:<id>` suffix.
+    // AssetId textual representation uses the canonical internal balance-bucket
+    // `<base58-asset-definition-id>#<i105-account-id>` form with optional `#dataspace:<id>` suffix.
+    // Public asset ids remain bare Base58 asset-definition ids.
     let alice_roses_literal = AssetId::new(roses, alice).canonical_literal();
     let alice_roses: AssetId = alice_roses_literal.parse()?;
     let burn_roses_alt = Burn::asset_numeric(10u32, alice_roses);

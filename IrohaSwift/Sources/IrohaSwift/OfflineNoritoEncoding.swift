@@ -336,7 +336,10 @@ public enum OfflineNorito {
         }
         let address: AccountAddress
         do {
-            address = try AccountAddress.parseEncoded(trimmed, expectedPrefix: defaultNetworkPrefix)
+            address = try AccountAddress.parseEncodedSwiftOnly(
+                trimmed,
+                expectedPrefix: defaultNetworkPrefix
+            )
         } catch {
             throw OfflineNoritoError.invalidAccountId(trimmed)
         }

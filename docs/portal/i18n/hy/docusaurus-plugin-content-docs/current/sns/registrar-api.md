@@ -118,7 +118,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/policies/{suffix_id}` | ՍՏԱՆԱԼ | — | Ներբեռնեք ընթացիկ `SuffixPolicyV1` (cacheable): |
 | `/v1/sns/names/{namespace}/{literal}` | ՍՏԱՆԱԼ | — | Վերադարձնում է ընթացիկ `NameRecordV1` + արդյունավետ վիճակ (Ակտիվ, շնորհ և այլն): |
 
-**Ընտրողի կոդավորում.** `{selector}` ուղու հատվածը ընդունում է I105 (նախընտրելի), սեղմված (`sora`, երկրորդ լավագույն) կամ կանոնական վեցանկյուն ADDR-5-ի համար; Torii-ը նորմալացնում է այն `NameSelectorV1`-ի միջոցով:
+**Ընտրողի կոդավորում.** `{selector}` ուղու հատվածը ընդունում է i105 (նախընտրելի), սեղմված (`sora`, երկրորդ լավագույն) կամ կանոնական վեցանկյուն ADDR-5-ի համար; Torii-ը նորմալացնում է այն `NameSelectorV1`-ի միջոցով:
 
 **Սխալի մոդել.** բոլոր վերջնակետերը վերադարձնում են Norito JSON `code`, `message`, `details`-ով: Կոդերը ներառում են `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`:
 
@@ -164,7 +164,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner <i105-account-id> \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -226,7 +226,7 @@ Torii-ը ստուգում է ապացույցները՝ ստուգելով.
 
 1. Հաճախորդը հարցումներ է կատարում `/v1/sns/policies/{suffix_id}`-ին՝ գները, շնորհը և մատչելի մակարդակները ստանալու համար:
 2. Հաճախորդը կառուցում է `RegisterNameRequestV1`:
-   - `selector` ստացված նախընտրելի I105 կամ երկրորդ լավագույն սեղմված (`sora`) պիտակից:
+   - `selector` ստացված նախընտրելի i105 կամ երկրորդ լավագույն սեղմված (`sora`) պիտակից:
    - `term_years` քաղաքականության սահմաններում:
    - `payment` հղում կատարելով գանձապետարանի/տնտեսավարի բաժանարար փոխանցմանը:
 3. Torii վավերացնում է.

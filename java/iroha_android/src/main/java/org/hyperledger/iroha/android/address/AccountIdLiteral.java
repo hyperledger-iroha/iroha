@@ -35,6 +35,22 @@ public final class AccountIdLiteral {
       throw new IllegalArgumentException(
           field + " must use a canonical I105 encoded account literal");
     }
-    return value;
+    final Integer discriminant = AccountAddress.detectI105Discriminant(value);
+    if (discriminant == null) {
+      throw new IllegalArgumentException(
+          field + " must use a canonical I105 encoded account literal");
+    }
+    final String canonical;
+    try {
+      canonical = parsed.address.toI105(discriminant.intValue());
+    } catch (final AccountAddress.AccountAddressException ex) {
+      throw new IllegalArgumentException(
+          field + " must use a canonical I105 encoded account literal", ex);
+    }
+    if (!value.equals(canonical)) {
+      throw new IllegalArgumentException(
+          field + " must use a canonical I105 encoded account literal");
+    }
+    return canonical;
   }
 }

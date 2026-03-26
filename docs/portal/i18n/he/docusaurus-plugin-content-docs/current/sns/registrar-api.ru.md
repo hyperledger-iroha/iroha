@@ -115,7 +115,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/names/{namespace}/{literal}/freeze` | מחק | `GovernanceHookV1` | Unfreeze после устранения; убеждается, что המועצה לעקוף את зафиксирован. |
 | `/v1/sns/reserved/{selector}` | פוסט | `ReservedAssignmentRequestV1` | Назначение שמור имен דייל/מועצה. |
 | `/v1/sns/policies/{suffix_id}` | קבל | -- | Получает текущую `SuffixPolicyV1` (кэшируемо). |
-| `/v1/sns/names/{namespace}/{literal}` | קבל | -- | Возвращает текущий `NameRecordV1` + эффективное состояние (Active, Grace, и т. д.). |**בורר כונן:** סמן `{selector}` принимает I105, דחוס (`sora`) או קנונית משומשת ל-ADDR-5; Torii נורמאלי של `NameSelectorV1`.
+| `/v1/sns/names/{namespace}/{literal}` | קבל | -- | Возвращает текущий `NameRecordV1` + эффективное состояние (Active, Grace, и т. д.). |**בורר כונן:** סמן `{selector}` принимает i105, דחוס (`sora`) או קנונית משומשת ל-ADDR-5; Torii נורמאלי של `NameSelectorV1`.
 
 **Модель ошибок:** все эндпоинты возвращают Norito JSON с `code`, `message`, I100NI730. Коды включают `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
 
@@ -161,7 +161,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner <i105-account-id> \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -221,7 +221,7 @@ Torii проверяет доказательства, проверяя:
 
 ### 6.1 Стандартная регистрация1. Client запрашивает `/v1/sns/policies/{suffix_id}` чтобы получить цены, grace и доступные tiers.
 2. Клиент строит `RegisterNameRequestV1`:
-   - תווית `selector` מתוצרת I105 או תווית דחוסה (`sora`).
+   - תווית `selector` מתוצרת i105 או תווית דחוסה (`sora`).
    - `term_years` в пределах политики.
    - `payment` ссылается на перевод מפצל אוצר/דייל.
 3. Torii הצג:

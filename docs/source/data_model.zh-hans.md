@@ -31,9 +31,9 @@ translator: machine-google-reviewed
 - `IdBox`：任何支持的 ID 的求和型信封（`DomainId`、`AccountId`、`AssetDefinitionId`、`AssetId`、`NftId`、`PeerId`、 `TriggerId`、`RoleId`、`Permission`、`CustomParameterId`）。对于通用流和 Norito 编码作为单一类型很有用。
 - `ChainId`：用于交易中重放保护的不透明链标识符。ID 的字符串形式（可与 `Display`/`FromStr` 进行往返）：
 - `DomainId`：`name`（例如，`wonderland`）。
-- `AccountId`：仅通过 `AccountAddress` 编码为 I105 的规范无域帐户标识符。解析器输入必须是规范的 I105；域后缀 (`@domain`)、规范 I105 文字、别名文字、规范十六进制解析器输入、旧版 `norito:` 有效负载和 `uaid:`/`opaque:` 帐户解析器形式将被拒绝。
+- `AccountId`：仅通过 `AccountAddress` 编码为 i105 的规范无域帐户标识符。解析器输入必须是规范的 i105；域后缀 (`@domain`)、规范 i105 文字、别名文字、规范十六进制解析器输入、旧版 `norito:` 有效负载和 `uaid:`/`opaque:` 帐户解析器形式将被拒绝。
 - `AssetDefinitionId`：规范 `unprefixed Base58 address with versioning and checksum`（UUID-v4 字节）。
-- `AssetId`：规范编码文字 `<asset-definition-id>#<account-id>`（第一个版本不支持旧文本形式）。
+- `AssetId`：规范编码文字 `<canonical-base58-asset-definition-id>`（第一个版本不支持旧文本形式）。
 - `NftId`：`nft$domain`（例如，`rose$garden`）。
 - `PeerId`：`public_key`（对等平等由公钥决定）。
 
@@ -43,7 +43,7 @@ translator: machine-google-reviewed
 - `DomainId { name: Name }` – 唯一名称。
 - `Domain { id, logo: Option<SorafsUri>, metadata: Metadata, owned_by: AccountId }`。
 - 生成器：`NewDomain` 与 `with_logo`、`with_metadata`，然后 `Registrable::build(authority)` 设置 `owned_by`。### 账户
-- `AccountId` 是由控制器键入并编码为规范 I105 的规范无域帐户身份。
+- `AccountId` 是由控制器键入并编码为规范 i105 的规范无域帐户身份。
 - `ScopedAccountId { account: AccountId, domain: DomainId }` 仅在需要范围视图时才携带显式域上下文。
 - `Account { id, metadata, label?, uaid? }` — `label` 是密钥更新记录使用的可选稳定别名，`uaid` 携带可选的 Nexus 范围 [通用帐户 ID](./universal_accounts_guide.md)。
 - 生成器：`NewAccount` 通过 `Account::new(id)`；注册需要明确的 `ScopedAccountId` 域，并且不会从默认值中推断出域。
@@ -250,7 +250,7 @@ iroha ledger asset definition register \
 # Mint using alias + account components (no manual norito hex copy/paste)
 iroha ledger asset mint \
   --definition-alias pkr#ubl.sbp \
-  --account sorauﾛ1P... \
+  --account sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB \
   --quantity 500
 
 # Resolve alias to canonical Base58 id via Torii
@@ -259,7 +259,7 @@ curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -d '{"alias":"pkr#ubl.sbp"}'
 ```迁移注意事项：
 - v1 中不接受旧的 `name#domain` 资产定义 ID。
-- 用于铸币/销毁/转移的资产 ID 仍然是规范的 `<asset-definition-id>#<account-id>`；构建它们：
+- 用于铸币/销毁/转移的资产 ID 仍然是规范的 `<canonical-base58-asset-definition-id>`；构建它们：
   - `iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
   - 或 `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`。
 

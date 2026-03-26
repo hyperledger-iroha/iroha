@@ -22,6 +22,7 @@ use crate::{
     query::{CommittedTransaction, QueryOutputBatchBox, QueryOutputBatchBoxTuple},
     repo::RepoAgreement,
     role::{Role, RoleId},
+    rwa::{Rwa, RwaId},
     transaction::{TransactionEntrypoint, TransactionResult as TxResultType},
     trigger::{Trigger, TriggerId, action::Action},
 };
@@ -84,6 +85,8 @@ mod single_item {
         RepoAgreement,
         NftId,
         Nft,
+        RwaId,
+        Rwa,
         Role,
         Parameter,
         Permission,

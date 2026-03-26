@@ -86,9 +86,9 @@ Muvaffaqiyatli skript yig'ilgan manifestni yozadi:
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -97,7 +97,7 @@ Muvaffaqiyatli skript yig'ilgan manifestni yozadi:
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -256,7 +256,7 @@ Kengash `release` tomonidan filtrlanadi, shuning uchun auditorlar bitta CSV ishg
   murojaatlar CSV manziliga nisbatan hal qilinadi. Ob'ekt bo'lmagan metama'lumotlar
   tekshirish xatosini keltirib chiqaradi.
 - **Kontrollerlar:** bo'sh hujayralar `--default-controllers` ni hurmat qiladi. Aniq taqdim eting
-  boshqaruvchi ro'yxatlari (masalan, `i105...;i105...`) egasi bo'lmaganlarga topshirilganda
+  boshqaruvchi ro'yxatlari (masalan, `<i105-account-id>;<i105-account-id>`) egasi bo'lmaganlarga topshirilganda
   aktyorlar.
 
 Xatolar kontekstli qator raqamlari bilan xabar qilinadi (masalan

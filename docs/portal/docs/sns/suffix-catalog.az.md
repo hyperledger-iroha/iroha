@@ -47,9 +47,9 @@ alətlər status sənədlərini silmədən eyni parametrləri yükləyə bilər.
 
 | şəkilçi | ID (`hex`) | Stüard | Fond bölücü | Status | Ödəniş aktivi | İstinad həddi (bps) | Müddət (min – max illər) | Grace / Redemption (günlər) | Qiymətləndirmə səviyyələri (regex → əsas qiymət / auksion) | Qorunan etiketlər | Ödəniş bölgüsü (T/S/R/E bps) | Siyasət versiyası |
 |--------|------------|---------|---------------|--------|---------------|--------------------|--------------------------|--------------------------|--------------------------|-----------------|
-| `.sora` | `0x0001` | `i105...` | `i105...` | Aktiv | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 500 | 1 – 5 | 30 / 60 | `T0: ^[a-z0-9]{3,}$ → 120 XOR (Vickrey)` | `treasury → i105...` | `7000 / 3000 / 1000 / 0` | 1 |
-| `.nexus` | `0x0002` | `i105...` | `i105...` | Dayandırıldı | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 300 | 1 – 3 | 15 / 30 | `T0: ^[a-z0-9]{4,}$ → 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ → 4000 XOR (Dutch floor 500)` | `treasury → i105...`, `guardian → i105...` | `6500 / 2500 / 800 / 200` | 2 |
-| `.dao` | `0x0003` | `i105...` | `i105...` | Ləğv edildi | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 0 | 1 – 2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ → 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
+| `.sora` | `0x0001` | `<i105-account-id>` | `<i105-account-id>` | Aktiv | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 500 | 1 – 5 | 30 / 60 | `T0: ^[a-z0-9]{3,}$ → 120 XOR (Vickrey)` | `treasury → <i105-account-id>` | `7000 / 3000 / 1000 / 0` | 1 |
+| `.nexus` | `0x0002` | `<i105-account-id>` | `<i105-account-id>` | Dayandırıldı | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 300 | 1 – 3 | 15 / 30 | `T0: ^[a-z0-9]{4,}$ → 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ → 4000 XOR (Dutch floor 500)` | `treasury → <i105-account-id>`, `guardian → <i105-account-id>` | `6500 / 2500 / 800 / 200` | 2 |
+| `.dao` | `0x0003` | `<i105-account-id>` | `<i105-account-id>` | Ləğv edildi | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 0 | 1 – 2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ → 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
 
 ## JSON çıxarışı
 
@@ -62,7 +62,7 @@ alətlər status sənədlərini silmədən eyni parametrləri yükləyə bilər.
       "suffix": ".sora",
       "suffix_id": 1,
       "status": "active",
-      "fund_splitter_account": "i105...",
+      "fund_splitter_account": "<i105-account-id>",
       "payment_asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
       "referral_cap_bps": 500,
       "pricing": [

@@ -41,6 +41,60 @@ fn minimal_contract_artifact() -> Vec<u8> {
     bytes
 }
 
+fn minimal_contract_artifact_with_debug() -> Vec<u8> {
+    let meta = ProgramMetadata {
+        version_major: 1,
+        version_minor: 1,
+        mode: 0,
+        vector_length: 0,
+        max_cycles: 0,
+        abi_version: 1,
+    };
+    let interface = ivm::EmbeddedContractInterfaceV1 {
+        compiler_fingerprint: "metadata-tests".to_owned(),
+        features_bitmap: 0,
+        access_set_hints: None,
+        kotoba: Vec::new(),
+        entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
+            name: "main".to_owned(),
+            kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
+            params: Vec::new(),
+            return_type: None,
+            permission: None,
+            read_keys: Vec::new(),
+            write_keys: Vec::new(),
+            access_hints_complete: Some(true),
+            access_hints_skipped: Vec::new(),
+            triggers: Vec::new(),
+            entry_pc: 0,
+        }],
+    };
+    let debug = ivm::EmbeddedContractDebugInfoV1 {
+        source_map: vec![ivm::EmbeddedSourceMapEntryV1 {
+            function_name: "main".to_owned(),
+            pc_start: 0,
+            pc_end: 4,
+            source: ivm::EmbeddedSourceLocation { line: 2, column: 3 },
+        }],
+        budget_report: vec![ivm::EmbeddedFunctionBudgetReportV1 {
+            function_name: "main".to_owned(),
+            pc_start: 0,
+            pc_end: 4,
+            bytecode_bytes: 4,
+            bytecode_words: 1,
+            frame_bytes: 16,
+            jump_span_words: 1,
+            jump_range_risk: false,
+            source: Some(ivm::EmbeddedSourceLocation { line: 2, column: 3 }),
+        }],
+    };
+    let mut bytes = meta.encode();
+    bytes.extend_from_slice(&interface.encode_section());
+    bytes.extend_from_slice(&debug.encode_section());
+    bytes.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    bytes
+}
+
 #[test]
 fn parse_accepts_valid_default_header() {
     let meta = ProgramMetadata::default();
@@ -130,6 +184,18 @@ fn parse_accepts_contract_minor_one_with_cntr() {
         parsed.code_offset > parsed.header_len,
         "CNTR prefix must advance code offset"
     );
+}
+
+#[test]
+fn parse_accepts_contract_debug_section() {
+    let bytes = minimal_contract_artifact_with_debug();
+    let parsed = ProgramMetadata::parse(&bytes).expect("parse contract artifact with debug");
+    let debug = parsed.contract_debug.expect("DBG1 section must decode");
+    assert_eq!(debug.source_map.len(), 1);
+    assert_eq!(debug.source_map[0].function_name, "main");
+    assert_eq!(debug.source_map[0].source.line, 2);
+    assert_eq!(debug.budget_report.len(), 1);
+    assert_eq!(debug.budget_report[0].frame_bytes, 16);
 }
 
 #[test]

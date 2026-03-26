@@ -11,13 +11,13 @@ function ed25519PublicKeyBytes() {
   return new Uint8Array(der.subarray(der.length - 32));
 }
 
-function demoAccountId(domain) {
-  const address = AccountAddress.fromAccount({ domain, publicKey: ed25519PublicKeyBytes() });
+function demoAccountId() {
+  const address = AccountAddress.fromAccount({ publicKey: ed25519PublicKeyBytes() });
   return address.toI105();
 }
 
-const VALID_ACCOUNT_ID = demoAccountId("wonderland");
-const ALT_ACCOUNT_ID = demoAccountId("uk");
+const VALID_ACCOUNT_ID = demoAccountId();
+const ALT_ACCOUNT_ID = demoAccountId();
 
 function jsonResponse(status, body) {
   return new Response(body == null ? null : JSON.stringify(body), {

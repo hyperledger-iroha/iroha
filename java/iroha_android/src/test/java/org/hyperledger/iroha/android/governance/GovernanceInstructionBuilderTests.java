@@ -74,7 +74,7 @@ public final class GovernanceInstructionBuilderTests {
           .setElectionId("election-2")
           .setProofBase64("AQID")
           .setPublicInputsJson(
-              "{\"durationBlocks\":64,\"owner\":\"alice@wonderland\",\"amount\":\"100\","
+              "{\"durationBlocks\":64,\"owner\":\"sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB\",\"amount\":\"100\","
                   + "\"rootHintHex\":\""
                   + rootHint
                   + "\",\"nullifierHex\":\""
@@ -95,7 +95,7 @@ public final class GovernanceInstructionBuilderTests {
             .setElectionId("election-2b")
             .setProofBase64("AQID")
             .setPublicInputsJson(
-                "{\"owner\":\"alice@wonderland\",\"amount\":\"100\",\"duration_blocks\":64,"
+                "{\"owner\":\"sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB\",\"amount\":\"100\",\"duration_blocks\":64,"
                     + "\"root_hint\":\""
                     + rootHint
                     + "\",\"nullifier\":\""
@@ -118,7 +118,7 @@ public final class GovernanceInstructionBuilderTests {
     args.put("proof_b64", "AQID");
     args.put(
         "public_inputs_json",
-        "{\"duration_blocks\":12,\"owner\":\"alice@wonderland\",\"amount\":\"100\","
+        "{\"duration_blocks\":12,\"owner\":\"sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB\",\"amount\":\"100\","
             + "\"root_hint\":\"0x"
             + "Aa".repeat(32)
             + "\"}");
@@ -136,7 +136,7 @@ public final class GovernanceInstructionBuilderTests {
       CastZkBallotInstruction.builder()
           .setElectionId("election-3")
           .setProofBase64("AQID")
-          .setPublicInputsJson("{\"owner\":\"alice@wonderland\"}")
+          .setPublicInputsJson("{\"owner\":\"sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB\"}")
           .build();
     } catch (final IllegalArgumentException ex) {
       failed = ex.getMessage().contains("lock hints");
@@ -165,7 +165,7 @@ public final class GovernanceInstructionBuilderTests {
           .setElectionId("election-5")
           .setProofBase64("AQID")
           .setPublicInputsJson(
-              "{\"owner\":\"alice@wonderland\",\"amount\":\"100\",\"duration_blocks\":5,"
+              "{\"owner\":\"sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB\",\"amount\":\"100\",\"duration_blocks\":5,"
                   + "\"root_hint\":\"not-hex\"}")
           .build();
     } catch (final IllegalArgumentException ex) {

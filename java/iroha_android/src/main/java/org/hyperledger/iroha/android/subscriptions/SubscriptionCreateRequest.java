@@ -11,7 +11,6 @@ import org.hyperledger.iroha.android.client.JsonEncoder;
 public final class SubscriptionCreateRequest {
 
   private final String authority;
-  private final String privateKey;
   private final String subscriptionId;
   private final String planId;
   private final String billingTriggerId;
@@ -21,7 +20,6 @@ public final class SubscriptionCreateRequest {
 
   private SubscriptionCreateRequest(final Builder builder) {
     this.authority = requireNonBlank(builder.authority, "authority");
-    this.privateKey = requireNonBlank(builder.privateKey, "private_key");
     this.subscriptionId = requireNonBlank(builder.subscriptionId, "subscription_id");
     this.planId = requireNonBlank(builder.planId, "plan_id");
     this.billingTriggerId = normalizeOptional(builder.billingTriggerId);
@@ -32,10 +30,6 @@ public final class SubscriptionCreateRequest {
 
   public String authority() {
     return authority;
-  }
-
-  public String privateKey() {
-    return privateKey;
   }
 
   public String subscriptionId() {
@@ -65,7 +59,6 @@ public final class SubscriptionCreateRequest {
   public Map<String, Object> toJsonMap() {
     final Map<String, Object> json = new LinkedHashMap<>();
     json.put("authority", authority);
-    json.put("private_key", privateKey);
     json.put("subscription_id", subscriptionId);
     json.put("plan_id", planId);
     if (billingTriggerId != null) {
@@ -93,7 +86,6 @@ public final class SubscriptionCreateRequest {
 
   public static final class Builder {
     private String authority;
-    private String privateKey;
     private String subscriptionId;
     private String planId;
     private String billingTriggerId;
@@ -105,11 +97,6 @@ public final class SubscriptionCreateRequest {
 
     public Builder authority(final String authority) {
       this.authority = authority;
-      return this;
-    }
-
-    public Builder privateKey(final String privateKey) {
-      this.privateKey = privateKey;
       return this;
     }
 

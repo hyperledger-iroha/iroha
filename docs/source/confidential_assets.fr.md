@@ -238,7 +238,7 @@ pas de verrouillage.
 - Hiérarchie de dérivation des clés par compte :
   - `sk_spend` → `nk` (clé d'annulation), `ivk` (clé de visualisation entrante), `ovk` (clé de visualisation sortante), `fvk`.
 - Les charges utiles de notes cryptées utilisent AEAD avec des clés partagées dérivées d'ECDH ; Des clés de vue facultatives de l’auditeur peuvent être attachées aux sorties par politique d’actif.
-- CLI additions: `confidential create-keys`, `confidential send`, `confidential export-view-key`, auditor tooling for decrypting memos, and the `iroha app zk envelope` helper for producing/inspecting Norito memo envelopes offline. Torii expose le même flux de dérivation via `POST /v1/confidential/derive-keyset`, renvoyant à la fois les formulaires hexadécimal et base64 afin que les portefeuilles puissent récupérer les hiérarchies de clés par programme.
+- CLI additions: `confidential create-keys`, `confidential send`, `confidential export-view-key`, auditor tooling for decrypting memos, and the `iroha app zk envelope` helper for producing/inspecting Norito memo envelopes offline.
 
 ## Contrôles de gaz, limites et DoS
 - Programme de gaz déterministe :
@@ -423,7 +423,7 @@ import {
 
 const unsigned = buildRegisterZkAssetTransaction({
   registration: {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: {
       commit_params: "vk_shield",

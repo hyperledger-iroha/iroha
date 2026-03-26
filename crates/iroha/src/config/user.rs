@@ -375,18 +375,10 @@ impl Default for Connect {
 }
 
 /// Soracloud-specific client settings.
-#[derive(Debug, Clone, ReadConfig)]
+#[derive(Debug, Clone, Default, ReadConfig)]
 pub struct Soracloud {
     /// Optional path to a JSON canonical request witness used for multisig Soracloud HTTP.
     pub http_witness_file: Option<PathBuf>,
-}
-
-impl Default for Soracloud {
-    fn default() -> Self {
-        Self {
-            http_witness_file: None,
-        }
-    }
 }
 
 /// SoraFS-specific configuration.

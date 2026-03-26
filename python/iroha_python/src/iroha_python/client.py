@@ -72,6 +72,7 @@ from .query import (
     asset_definitions_query_envelope,
     asset_holders_query_envelope,
     domain_query_envelope,
+    rwa_query_envelope,
 )
 from .repo import RepoAgreementListPage
 from .sorafs import (
@@ -171,6 +172,42 @@ def _normalize_optional_string(value: Any, context: str) -> Optional[str]:
     if value is None:
         return None
     return _require_non_empty_string(value, context)
+
+
+def _normalize_canonical_account_id(value: Any, context: str) -> str:
+    literal = _require_non_empty_string(value, context)
+    if any(ch.isspace() for ch in literal):
+        raise ValueError(
+            f"{context} must be a canonical I105 account id or on-chain account alias"
+        )
+    if "@" in literal:
+        label, separator, scope = literal.partition("@")
+        scope_parts = scope.split(".") if separator else []
+        if (
+            not label
+            or not separator
+            or not scope
+            or len(scope_parts) not in (1, 2)
+            or any(not part for part in scope_parts)
+        ):
+            raise ValueError(
+                f"{context} must use canonical I105 account id or account alias `name@dataspace` / `name@domain.dataspace`"
+            )
+        return literal
+    try:
+        address = AccountAddress.parse_encoded(
+            literal, expected_discriminant=DEFAULT_I105_DISCRIMINANT
+        )
+    except AccountAddressError as exc:
+        raise ValueError(
+            f"{context} must be a canonical I105 account id or on-chain account alias"
+        ) from exc
+    canonical = address.to_i105(DEFAULT_I105_DISCRIMINANT)
+    if canonical != literal:
+        raise ValueError(
+            f"{context} must use canonical I105 account id form when not using an alias"
+        )
+    return canonical
 
 
 def _normalize_string_list(value: Any, context: str) -> List[str]:
@@ -1313,6 +1350,140 @@ class ExplorerAccountQrSnapshot:
             modules=modules,
             qr_version=qr_version,
             svg=svg,
+        )
+
+
+@dataclass(frozen=True)
+class ExplorerPaginationMeta:
+    """Pagination metadata returned by explorer list endpoints."""
+
+    page: int
+    per_page: int
+    total_pages: int
+    total_items: int
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "ExplorerPaginationMeta":
+        if not isinstance(payload, Mapping):
+            raise TypeError("explorer pagination payload must be an object")
+        page = _coerce_int(payload.get("page"), "explorer_pagination.page")
+        per_page = _coerce_int(payload.get("per_page"), "explorer_pagination.per_page")
+        total_pages = _coerce_int(
+            payload.get("total_pages"),
+            "explorer_pagination.total_pages",
+            allow_zero=True,
+        )
+        total_items = _coerce_int(
+            payload.get("total_items"),
+            "explorer_pagination.total_items",
+            allow_zero=True,
+        )
+        if page is None:
+            raise TypeError("explorer pagination missing numeric `page` field")
+        if per_page is None:
+            raise TypeError("explorer pagination missing numeric `per_page` field")
+        if total_pages is None:
+            raise TypeError("explorer pagination missing numeric `total_pages` field")
+        if total_items is None:
+            raise TypeError("explorer pagination missing numeric `total_items` field")
+        return cls(
+            page=page,
+            per_page=per_page,
+            total_pages=total_pages,
+            total_items=total_items,
+        )
+
+
+@dataclass(frozen=True)
+class ExplorerRwaRecord:
+    """Explorer RWA lot projection returned by `/v1/explorer/rwas`."""
+
+    id: str
+    owned_by: str
+    quantity: str
+    held_quantity: str
+    primary_reference: str
+    status: Optional[str]
+    is_frozen: bool
+    metadata: Dict[str, Any]
+    raw: Dict[str, Any]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "ExplorerRwaRecord":
+        if not isinstance(payload, Mapping):
+            raise TypeError("explorer RWA record must be an object")
+
+        def _require_string(key: str, label: str) -> str:
+            raw = payload.get(key)
+            if not isinstance(raw, str) or not raw.strip():
+                raise TypeError(f"{label} must be a non-empty string")
+            return raw.strip()
+
+        identifier = _require_string("id", "explorer_rwa.id")
+        owned_by = _require_string("owned_by", "explorer_rwa.owned_by")
+        quantity = _require_string("quantity", "explorer_rwa.quantity")
+        held_quantity = _require_string("held_quantity", "explorer_rwa.held_quantity")
+        primary_reference = _require_string(
+            "primary_reference",
+            "explorer_rwa.primary_reference",
+        )
+
+        is_frozen = payload.get("is_frozen")
+        if not isinstance(is_frozen, bool):
+            raise TypeError("explorer_rwa.is_frozen must be a boolean")
+
+        status_raw = payload.get("status")
+        if status_raw is None:
+            status = None
+        elif isinstance(status_raw, str) and status_raw.strip():
+            status = status_raw.strip()
+        else:
+            raise TypeError("explorer_rwa.status must be a string when present")
+
+        metadata_payload = payload.get("metadata", {})
+        if metadata_payload is None:
+            metadata: Dict[str, Any] = {}
+        elif isinstance(metadata_payload, Mapping):
+            metadata = dict(metadata_payload)
+        else:
+            raise TypeError("explorer_rwa.metadata must be an object when present")
+
+        return cls(
+            id=identifier,
+            owned_by=owned_by,
+            quantity=quantity,
+            held_quantity=held_quantity,
+            primary_reference=primary_reference,
+            status=status,
+            is_frozen=is_frozen,
+            metadata=metadata,
+            raw=dict(payload),
+        )
+
+
+@dataclass(frozen=True)
+class ExplorerRwasPage:
+    """Paginated explorer RWA list returned by `/v1/explorer/rwas`."""
+
+    pagination: ExplorerPaginationMeta
+    items: List[ExplorerRwaRecord]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "ExplorerRwasPage":
+        if not isinstance(payload, Mapping):
+            raise TypeError("explorer RWA page payload must be an object")
+        pagination_payload = payload.get("pagination")
+        if not isinstance(pagination_payload, Mapping):
+            raise TypeError("explorer RWA page missing object `pagination` field")
+        items_payload = payload.get("items", [])
+        if items_payload is None:
+            items_payload = []
+        if not isinstance(items_payload, list):
+            raise TypeError("explorer RWA page `items` must be a list")
+        items = [ExplorerRwaRecord.from_payload(entry) for entry in items_payload]
+        return cls(
+            pagination=ExplorerPaginationMeta.from_payload(pagination_payload),
+            items=items,
         )
 
 
@@ -2941,6 +3112,47 @@ class AssetHolderListPage:
         except (TypeError, ValueError) as exc:
             raise TypeError("asset holder query `total` must be numeric") from exc
         items = [AssetHolderRecord.from_payload(entry) for entry in items_payload]
+        return cls(items=items, total=total)
+
+
+@dataclass(frozen=True)
+class RwaListItem:
+    """Chain-state RWA lot entry returned by `/v1/rwas` and `/v1/rwas/query`."""
+
+    id: str
+    raw: Dict[str, Any]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "RwaListItem":
+        if not isinstance(payload, Mapping):
+            raise TypeError("RWA list item must be an object")
+        identifier = payload.get("id")
+        if not isinstance(identifier, str) or not identifier.strip():
+            raise TypeError("RWA list item missing string `id` field")
+        return cls(id=identifier.strip(), raw=dict(payload))
+
+
+@dataclass(frozen=True)
+class RwaListPage:
+    """Paginated chain-state RWA lot list returned by `/v1/rwas` and `/v1/rwas/query`."""
+
+    items: List[RwaListItem]
+    total: int
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "RwaListPage":
+        if not isinstance(payload, Mapping):
+            raise TypeError("RWA list payload must be an object")
+        items_payload = payload.get("items", [])
+        if items_payload is None:
+            items_payload = []
+        if not isinstance(items_payload, list):
+            raise TypeError("RWA list `items` must be a list")
+        try:
+            total = int(payload.get("total", len(items_payload)))
+        except (TypeError, ValueError) as exc:
+            raise TypeError("RWA list `total` must be numeric") from exc
+        items = [RwaListItem.from_payload(entry) for entry in items_payload]
         return cls(items=items, total=total)
 
 
@@ -7268,9 +7480,12 @@ class ToriiClient(_BaseToriiClient):
     ) -> Mapping[str, Any]:
         """Fetch explorer QR metadata via `GET /v1/explorer/accounts/{account_id}/qr`."""
 
+        canonical_account_id = _normalize_canonical_account_id(
+            account_id, "account_id"
+        )
         payload = self.request_json(
             "GET",
-            f"/v1/explorer/accounts/{account_id}/qr",
+            f"/v1/explorer/accounts/{quote(canonical_account_id, safe='')}/qr",
             headers={"Accept": "application/json"},
             expected_status=(200,),
         )
@@ -7288,6 +7503,84 @@ class ToriiClient(_BaseToriiClient):
 
         payload = self.get_explorer_account_qr(account_id)
         return ExplorerAccountQrSnapshot.from_payload(payload)
+
+    def list_explorer_rwas(
+        self,
+        *,
+        page: Optional[int] = None,
+        per_page: Optional[int] = None,
+        owned_by: Optional[str] = None,
+        domain: Optional[str] = None,
+    ) -> Mapping[str, Any]:
+        """List explorer RWAs via `GET /v1/explorer/rwas`."""
+
+        params: Dict[str, Any] = {}
+        page_value = _coerce_int(page, "list_explorer_rwas.page")
+        if page_value is not None:
+            params["page"] = page_value
+        per_page_value = _coerce_int(per_page, "list_explorer_rwas.per_page")
+        if per_page_value is not None:
+            params["per_page"] = per_page_value
+        owned_by_value = _normalize_optional_string(owned_by, "list_explorer_rwas.owned_by")
+        if owned_by_value is not None:
+            params["owned_by"] = owned_by_value
+        domain_value = _normalize_optional_string(domain, "list_explorer_rwas.domain")
+        if domain_value is not None:
+            params["domain"] = domain_value
+        payload = self.request_json(
+            "GET",
+            "/v1/explorer/rwas",
+            params=params or None,
+            headers={"Accept": "application/json"},
+            expected_status=(200,),
+        )
+        if payload is None:
+            raise RuntimeError("explorer RWA endpoint returned no payload")
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("explorer RWA endpoint returned malformed payload")
+        return payload
+
+    def list_explorer_rwas_typed(
+        self,
+        *,
+        page: Optional[int] = None,
+        per_page: Optional[int] = None,
+        owned_by: Optional[str] = None,
+        domain: Optional[str] = None,
+    ) -> ExplorerRwasPage:
+        """Typed wrapper for :meth:`list_explorer_rwas`."""
+
+        payload = self.list_explorer_rwas(
+            page=page,
+            per_page=per_page,
+            owned_by=owned_by,
+            domain=domain,
+        )
+        return ExplorerRwasPage.from_payload(payload)
+
+    def get_explorer_rwa_detail(self, rwa_id: str) -> Mapping[str, Any]:
+        """Fetch a single explorer RWA detail via `GET /v1/explorer/rwas/{rwa_id}`."""
+
+        rwa_id_value = _normalize_optional_string(rwa_id, "get_explorer_rwa_detail.rwa_id")
+        if rwa_id_value is None:
+            raise ValueError("get_explorer_rwa_detail.rwa_id must be a non-empty string")
+        payload = self.request_json(
+            "GET",
+            f"/v1/explorer/rwas/{quote(rwa_id_value, safe='')}",
+            headers={"Accept": "application/json"},
+            expected_status=(200,),
+        )
+        if payload is None:
+            raise RuntimeError("explorer RWA detail endpoint returned no payload")
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("explorer RWA detail endpoint returned malformed payload")
+        return payload
+
+    def get_explorer_rwa_detail_typed(self, rwa_id: str) -> ExplorerRwaRecord:
+        """Typed wrapper for :meth:`get_explorer_rwa_detail`."""
+
+        payload = self.get_explorer_rwa_detail(rwa_id)
+        return ExplorerRwaRecord.from_payload(payload)
 
     # -------------------------
     # ISO 20022 bridge APIs
@@ -8029,10 +8322,10 @@ class ToriiClient(_BaseToriiClient):
     def get_kaigi_relay(self, relay_id: str) -> Optional[Any]:
         """Fetch metadata for a specific Kaigi relay (`GET /v1/kaigi/relays/{relay_id}`)."""
 
-        relay_literal = _require_non_empty_string(relay_id, "relay_id")
+        relay_literal = _normalize_canonical_account_id(relay_id, "relay_id")
         response = self._request(
             "GET",
-            f"/v1/kaigi/relays/{relay_literal}",
+            f"/v1/kaigi/relays/{quote(relay_literal, safe='')}",
             headers={"Accept": "application/json"},
         )
         self._expect_status(response, (200, 404))
@@ -8296,13 +8589,16 @@ class ToriiClient(_BaseToriiClient):
     ) -> Optional[Any]:
         """List account assets via `GET /v1/accounts/{account_id}/assets` (optional `asset_id`)."""
 
+        canonical_account_id = _normalize_canonical_account_id(
+            account_id, "account_id"
+        )
         params = self._pagination_params(limit=limit, offset=offset)
         asset_id_value = _normalize_optional_string(asset_id, "list_account_assets.asset_id")
         if asset_id_value is not None:
             params["asset_id"] = asset_id_value
         return self.request_json(
             "GET",
-            f"/v1/accounts/{account_id}/assets",
+            f"/v1/accounts/{quote(canonical_account_id, safe='')}/assets",
             params=params or None,
             expected_status=(200,),
         )
@@ -8339,6 +8635,9 @@ class ToriiClient(_BaseToriiClient):
     ) -> Optional[Any]:
         """List account transactions via `GET /v1/accounts/{account_id}/transactions` (optional `asset_id`)."""
 
+        canonical_account_id = _normalize_canonical_account_id(
+            account_id, "account_id"
+        )
         params = self._pagination_params(limit=limit, offset=offset)
         asset_id_value = _normalize_optional_string(
             asset_id,
@@ -8348,7 +8647,7 @@ class ToriiClient(_BaseToriiClient):
             params["asset_id"] = asset_id_value
         return self.request_json(
             "GET",
-            f"/v1/accounts/{account_id}/transactions",
+            f"/v1/accounts/{quote(canonical_account_id, safe='')}/transactions",
             params=params or None,
             expected_status=(200,),
         )
@@ -8389,6 +8688,9 @@ class ToriiClient(_BaseToriiClient):
     ) -> Dict[str, Any]:
         """POST `/v1/accounts/{account_id}/assets/query` with a Norito-style envelope."""
 
+        canonical_account_id = _normalize_canonical_account_id(
+            account_id, "account_id"
+        )
         if envelope is not None:
             self._ensure_no_query_args(
                 envelope=envelope,
@@ -8411,7 +8713,7 @@ class ToriiClient(_BaseToriiClient):
             )
         response = self._request(
             "POST",
-            f"/v1/accounts/{account_id}/assets/query",
+            f"/v1/accounts/{quote(canonical_account_id, safe='')}/assets/query",
             data=json.dumps(body).encode("utf-8"),
             headers={"Content-Type": "application/json"},
         )
@@ -8461,6 +8763,9 @@ class ToriiClient(_BaseToriiClient):
     ) -> Dict[str, Any]:
         """POST `/v1/accounts/{account_id}/transactions/query` with a Norito-style envelope."""
 
+        canonical_account_id = _normalize_canonical_account_id(
+            account_id, "account_id"
+        )
         if envelope is not None:
             self._ensure_no_query_args(
                 envelope=envelope,
@@ -8483,7 +8788,7 @@ class ToriiClient(_BaseToriiClient):
             )
         response = self._request(
             "POST",
-            f"/v1/accounts/{account_id}/transactions/query",
+            f"/v1/accounts/{quote(canonical_account_id, safe='')}/transactions/query",
             data=json.dumps(body).encode("utf-8"),
             headers={"Content-Type": "application/json"},
         )
@@ -8928,6 +9233,114 @@ class ToriiClient(_BaseToriiClient):
                 time.sleep(interval)
 
     # ------------------------------------------------------------------
+    # RWA queries
+    # ------------------------------------------------------------------
+
+    def query_rwas(
+        self,
+        *,
+        filter: Optional[Dict[str, Any]] = None,
+        sort: Optional[Any] = None,
+        limit: Optional[int] = None,
+        offset: int = 0,
+        fetch_size: Optional[int] = None,
+        query_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Execute POST `/v1/rwas/query` with a structured envelope."""
+
+        body = rwa_query_envelope(
+            filter=filter,
+            sort=sort,
+            limit=limit,
+            offset=offset,
+            fetch_size=fetch_size,
+            query_name=query_name,
+        )
+        response = self._request(
+            "POST",
+            "/v1/rwas/query",
+            data=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        self._expect_status(response, {200})
+        payload = self._maybe_json(response)
+        if not isinstance(payload, dict):
+            raise RuntimeError("unexpected RWA query response")
+        return payload
+
+    def query_rwas_typed(
+        self,
+        *,
+        filter: Optional[Dict[str, Any]] = None,
+        sort: Optional[Any] = None,
+        limit: Optional[int] = None,
+        offset: int = 0,
+        fetch_size: Optional[int] = None,
+        query_name: Optional[str] = None,
+    ) -> RwaListPage:
+        """Typed wrapper for :meth:`query_rwas`."""
+
+        payload = self.query_rwas(
+            filter=filter,
+            sort=sort,
+            limit=limit,
+            offset=offset,
+            fetch_size=fetch_size,
+            query_name=query_name,
+        )
+        return RwaListPage.from_payload(payload)
+
+    def list_rwas(
+        self,
+        *,
+        filter: Optional[Any] = None,
+        sort: Optional[Any] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+    ) -> Optional[Any]:
+        """List chain-state RWAs via `GET /v1/rwas`."""
+
+        params: Dict[str, Any] = {}
+        if limit is not None:
+            params["limit"] = int(limit)
+        if offset is not None:
+            params["offset"] = int(offset)
+        filter_arg = _encode_filter_arg(filter)
+        if filter_arg is not None:
+            params["filter"] = filter_arg
+        sort_arg = _encode_sort_arg(sort)
+        if sort_arg is not None:
+            params["sort"] = sort_arg
+        return self.request_json(
+            "GET",
+            "/v1/rwas",
+            params=params or None,
+            expected_status=(200,),
+        )
+
+    def list_rwas_typed(
+        self,
+        *,
+        filter: Optional[Any] = None,
+        sort: Optional[Any] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+    ) -> RwaListPage:
+        """Typed wrapper for :meth:`list_rwas`."""
+
+        payload = self.list_rwas(
+            filter=filter,
+            sort=sort,
+            limit=limit,
+            offset=offset,
+        )
+        if payload is None:
+            return RwaListPage(items=[], total=0)
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("RWA list endpoint returned non-object payload")
+        return RwaListPage.from_payload(payload)
+
+    # ------------------------------------------------------------------
     # Account queries
     # ------------------------------------------------------------------
     def query_accounts(
@@ -9358,10 +9771,13 @@ class ToriiClient(_BaseToriiClient):
     ) -> Optional[Any]:
         """List account permissions via `GET /v1/accounts/{account_id}/permissions`."""
 
+        canonical_account_id = _normalize_canonical_account_id(
+            account_id, "account_id"
+        )
         params = self._pagination_params(limit=limit, offset=offset)
         return self.request_json(
             "GET",
-            f"/v1/accounts/{account_id}/permissions",
+            f"/v1/accounts/{quote(canonical_account_id, safe='')}/permissions",
             params=params or None,
             expected_status=(200,),
         )

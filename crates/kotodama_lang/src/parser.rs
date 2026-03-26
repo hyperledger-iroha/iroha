@@ -705,13 +705,14 @@ impl<'a> Parser<'a> {
             "asset" => Ok(TriggerDataFamily::Asset),
             "asset_definition" => Ok(TriggerDataFamily::AssetDefinition),
             "nft" => Ok(TriggerDataFamily::Nft),
+            "rwa" => Ok(TriggerDataFamily::Rwa),
             "trigger" => Ok(TriggerDataFamily::Trigger),
             "role" => Ok(TriggerDataFamily::Role),
             "configuration" => Ok(TriggerDataFamily::Configuration),
             "executor" => Ok(TriggerDataFamily::Executor),
             _ => Err(self.error(
                 self.tokens[self.pos.saturating_sub(1)].clone(),
-                "data family (`any`, `peer`, `domain`, `account`, `asset`, `asset_definition`, `nft`, `trigger`, `role`, `configuration`, or `executor`)",
+                "data family (`any`, `peer`, `domain`, `account`, `asset`, `asset_definition`, `nft`, `rwa`, `trigger`, `role`, `configuration`, or `executor`)",
             )),
         }
     }
@@ -1187,6 +1188,19 @@ impl<'a> Parser<'a> {
         name_override: Option<String>,
         mut modifiers: FunctionModifiers,
     ) -> ParseResult<Item> {
+        let location = if name_override.is_some() {
+            let tok = &self.tokens[self.pos.saturating_sub(1)];
+            SourceLocation {
+                line: tok.line,
+                column: tok.column,
+            }
+        } else {
+            let tok = &self.tokens[self.pos];
+            SourceLocation {
+                line: tok.line,
+                column: tok.column,
+            }
+        };
         let name = match name_override {
             Some(n) => n,
             None => self.expect_ident()?,
@@ -1239,6 +1253,7 @@ impl<'a> Parser<'a> {
             ret_ty,
             body,
             modifiers,
+            location,
         }))
     }
 
@@ -2642,6 +2657,10 @@ mod tests {
         let domain = "wonderland".to_string();
         let asset_definition = sample_asset_definition_literal();
         let nft = "n0$wonderland".to_string();
+        let rwa = format!(
+            "{}$wonderland",
+            iroha_crypto::Hash::prehashed([7; iroha_crypto::Hash::LENGTH])
+        );
         let trigger = "wake".to_string();
         let role = "auditor".to_string();
         let asset = {
@@ -2688,6 +2707,11 @@ mod tests {
                 vec![("nft".to_string(), nft)],
             ),
             (
+                TriggerDataFamily::Rwa,
+                "created",
+                vec![("rwa".to_string(), rwa)],
+            ),
+            (
                 TriggerDataFamily::Trigger,
                 "created",
                 vec![("trigger".to_string(), trigger)],
@@ -2709,6 +2733,7 @@ mod tests {
                 TriggerDataFamily::Asset => "asset",
                 TriggerDataFamily::AssetDefinition => "asset_definition",
                 TriggerDataFamily::Nft => "nft",
+                TriggerDataFamily::Rwa => "rwa",
                 TriggerDataFamily::Trigger => "trigger",
                 TriggerDataFamily::Role => "role",
                 TriggerDataFamily::Configuration => "configuration",

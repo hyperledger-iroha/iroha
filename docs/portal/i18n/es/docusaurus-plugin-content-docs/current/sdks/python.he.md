@@ -91,8 +91,8 @@ Los helpers de inventario de cuentas aceptan un filtro opcional `asset_id` cuand
 
 ```python
 asset_id = "norito:4e52543000000001"
-assets = client.list_account_assets("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", asset_id=asset_id, limit=5)
-txs = client.list_account_transactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", asset_id=asset_id, limit=5)
+assets = client.list_account_assets("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D", asset_id=asset_id, limit=5)
+txs = client.list_account_transactions("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D", asset_id=asset_id, limit=5)
 holders = client.list_asset_holders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", asset_id=asset_id, limit=5)
 print(assets, txs, holders)
 ```
@@ -107,7 +107,7 @@ from iroha_python import ToriiClient
 client = ToriiClient("http://127.0.0.1:8080")
 
 draft = {
-    "controller": "i105:...",
+    "controller": "<i105-account-id>",
     "allowance": {"asset": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "amount": "10", "commitment": [1, 2]},
     "spend_public_key": "ed0120deadbeef",
     "attestation_report": [3, 4],
@@ -119,7 +119,7 @@ draft = {
 
 top_up = client.top_up_offline_allowance(
     certificate=draft,
-    authority="6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ",
+    authority="sorauロ1PクCカrムhyワエトhウヤSqP2GFGラヱミケヌマzヘオミMヌヨトksJヱRRJXVB",
     private_key="operator-private-key",
 )
 print("registered", top_up.registration.certificate_id_hex)
@@ -131,7 +131,7 @@ Para renovaciones, llama `top_up_offline_allowance_renewal` con el id del certif
 renewed = client.top_up_offline_allowance_renewal(
     certificate_id_hex=top_up.registration.certificate_id_hex,
     certificate=draft,
-    authority="6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ",
+    authority="sorauロ1PクCカrムhyワエトhウヤSqP2GFGラヱミケヌマzヘオミMヌヨトksJヱRRJXVB",
     private_key="operator-private-key",
 )
 print("renewed", renewed.registration.certificate_id_hex)

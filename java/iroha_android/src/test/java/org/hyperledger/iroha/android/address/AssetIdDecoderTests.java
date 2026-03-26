@@ -3,75 +3,58 @@
 
 package org.hyperledger.iroha.android.address;
 
-import org.hyperledger.iroha.android.testing.TestAccountIds;
+import org.hyperledger.iroha.android.testing.TestAssetDefinitionIds;
 
 public final class AssetIdDecoderTests {
-
-  private static final String ACCOUNT_ID = TestAccountIds.ed25519Authority(0x11);
 
   private AssetIdDecoderTests() {}
 
   public static void main(final String[] args) {
-    isCanonicalReturnsTrueForCanonicalAssetLiteral();
-    isCanonicalReturnsFalseForMalformedAssetLiteral();
-    decodeExtractsDefinitionAddressAccountAndScope();
-    decodeRejectsMalformedScope();
+    isCanonicalReturnsTrueForCanonicalDefinitionId();
+    isCanonicalReturnsFalseForOwnerQualifiedLiteral();
+    decodeReturnsDefinitionOnly();
     decodeRejectsMalformedAssetLiteral();
     decodeDefinitionAcceptsCanonicalAddress();
     System.out.println("[IrohaAndroid] AssetIdDecoder tests passed.");
   }
 
-  private static void isCanonicalReturnsTrueForCanonicalAssetLiteral() {
-    final String definitionAddress = AssetDefinitionIdEncoder.encode("rose", "wonderland");
-    assert AssetIdDecoder.isCanonical(definitionAddress + "#" + ACCOUNT_ID)
-        : "isCanonical must accept canonical public asset literals";
+  private static void isCanonicalReturnsTrueForCanonicalDefinitionId() {
+    final String definitionAddress = TestAssetDefinitionIds.PRIMARY;
+    assert AssetIdDecoder.isCanonical(definitionAddress)
+        : "isCanonical must accept canonical Base58 asset-definition ids";
   }
 
-  private static void isCanonicalReturnsFalseForMalformedAssetLiteral() {
-    assert !AssetIdDecoder.isCanonical("not:an-asset")
-        : "isCanonical must reject malformed asset literals";
+  private static void isCanonicalReturnsFalseForOwnerQualifiedLiteral() {
+    final String definitionAddress = TestAssetDefinitionIds.PRIMARY;
+    assert !AssetIdDecoder.isCanonical(definitionAddress + "#not-public")
+        : "isCanonical must reject owner-qualified asset literals";
   }
 
-  private static void decodeExtractsDefinitionAddressAccountAndScope() {
-    final String definitionAddress = AssetDefinitionIdEncoder.encode("rose", "wonderland");
-    final AssetIdDecoder.AssetId decoded =
-        AssetIdDecoder.decode(definitionAddress + "#" + ACCOUNT_ID + "#dataspace:7");
+  private static void decodeReturnsDefinitionOnly() {
+    final String definitionAddress = TestAssetDefinitionIds.PRIMARY;
+    final AssetIdDecoder.AssetId decoded = AssetIdDecoder.decode(definitionAddress);
 
     assert definitionAddress.equals(decoded.definition().address())
         : "definition address mismatch";
-    assert ACCOUNT_ID.equals(decoded.accountId()) : "account id mismatch";
-    assert Long.valueOf(7L).equals(decoded.dataspaceId()) : "dataspace mismatch";
-  }
-
-  private static void decodeRejectsMalformedScope() {
-    final String definitionAddress = AssetDefinitionIdEncoder.encode("rose", "wonderland");
-    boolean threw = false;
-    try {
-      AssetIdDecoder.decode(definitionAddress + "#" + ACCOUNT_ID + "#scope:7");
-    } catch (final IllegalArgumentException ex) {
-      threw =
-          ex.getMessage() != null
-              && ex.getMessage().contains("dataspace:<id>");
-    }
-
-    assert threw : "decode must reject non-dataspace scope suffixes";
+    assert decoded.accountId().isEmpty() : "account id must be empty for public asset ids";
+    assert decoded.dataspaceId() == null : "dataspace must be absent for public asset ids";
   }
 
   private static void decodeRejectsMalformedAssetLiteral() {
     boolean threw = false;
     try {
-      AssetIdDecoder.decode("not:an-asset");
+      AssetIdDecoder.decode("not:an-asset#owner");
     } catch (final IllegalArgumentException ex) {
       threw =
           ex.getMessage() != null
-              && ex.getMessage().contains("<asset-definition-id>#<account-id>");
+              && (ex.getMessage().contains("Base58") || ex.getMessage().contains("canonical"));
     }
 
     assert threw : "decode must reject malformed asset literals";
   }
 
   private static void decodeDefinitionAcceptsCanonicalAddress() {
-    final String definitionAddress = AssetDefinitionIdEncoder.encode("pkr", "sbp");
+    final String definitionAddress = TestAssetDefinitionIds.TERTIARY;
     final AssetIdDecoder.AssetDefinition decoded = AssetIdDecoder.decodeDefinition(definitionAddress);
 
     assert definitionAddress.equals(decoded.address())

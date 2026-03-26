@@ -411,10 +411,12 @@ index 000000000..5bf6678d6
 +    }
 +
 +    // Test values derived from Rust unit test (encode_offline_spend_receipt_payload_matches_native)
-+    // These use the compressed AccountAddress format
-+    final String sender = "RnuaJGGDLA57fKeoK1TaFQWhYLxMXY9sEqWhSviYfXxDwTkLdBw3Khq2";
-+    final String receiver = "RnuaJGGDL9ruds8g1c7AAz8cq1kS16u1LDptWe8FC3NLR4qs1RhLjNjk";
-+    final String asset = "xor##" + sender;
++    // These use canonical I105 account ids and an owner-qualified asset-holding id
++    final String sender =
++        "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE";
++    final String receiver =
++        "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D";
++    final String asset = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#" + sender;
 +
 +    // tx_id must have LSB=1 (this is the hash from Rust test)
 +    final String txIdHex = "e2a94e18647fe0c6283a31e40c46ae1cc5f0867650f6834e4f01e34284adc9c7";
@@ -430,8 +432,8 @@ index 000000000..5bf6678d6
 +
 +    // Certificate JSON from Rust test
 +    final String certificateJson =
-+        "{\"controller\":\"" + sender + "@default\","
-+            + "\"allowance\":{\"asset\":\"" + asset + "@default\",\"amount\":\"500\","
++        "{\"controller\":\"" + sender + "\","
++            + "\"allowance\":{\"asset\":\"" + asset + "\",\"amount\":\"500\","
 +            + "\"commitment\":[66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,"
 +            + "66,66,66,66,66,66,66,66,66,66,66,66,66,66,66,66]},"
 +            + "\"spend_public_key\":\"ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4\","

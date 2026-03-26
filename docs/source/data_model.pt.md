@@ -31,9 +31,9 @@ Este documento explica as estruturas, identificadores, características e protoc
 - `IdBox`: um envelope do tipo soma para qualquer ID compatível (`DomainId`, `AccountId`, `AssetDefinitionId`, `AssetId`, `NftId`, `PeerId`, `TriggerId`, `RoleId`, `Permission`, `CustomParameterId`). Útil para fluxos genéricos e codificação Norito como um único tipo.
 - `ChainId`: Identificador de cadeia opaca utilizado para proteção de replay em transações.Formas de string de IDs (ida e volta com `Display`/`FromStr`):
 - `DomainId`: `name` (por exemplo, `wonderland`).
-- `AccountId`: identificador canônico de conta sem domínio codificado via `AccountAddress` apenas como I105. As entradas do analisador devem ser canônicas I105; sufixos de domínio (`@domain`), literais canônicos I105, literais de alias, entrada de analisador hexadecimal canônico, cargas úteis `norito:` herdadas e formulários de analisador de conta `uaid:`/`opaque:` são rejeitados.
+- `AccountId`: identificador canônico de conta sem domínio codificado via `AccountAddress` apenas como i105. As entradas do analisador devem ser canônicas i105; sufixos de domínio (`@domain`), literais canônicos i105, literais de alias, entrada de analisador hexadecimal canônico, cargas úteis `norito:` herdadas e formulários de analisador de conta `uaid:`/`opaque:` são rejeitados.
 - `AssetDefinitionId`: `unprefixed Base58 address with versioning and checksum` canônico (bytes UUID-v4).
-- `AssetId`: literal codificado canônico `<asset-definition-id>#<account-id>` (formulários textuais legados não são suportados na primeira versão).
+- `AssetId`: literal codificado canônico `<canonical-base58-asset-definition-id>` (formulários textuais legados não são suportados na primeira versão).
 - `NftId`: `nft$domain` (por exemplo, `rose$garden`).
 - `PeerId`: `public_key` (a igualdade entre pares é por chave pública).
 
@@ -43,7 +43,7 @@ Este documento explica as estruturas, identificadores, características e protoc
 - `DomainId { name: Name }` – nome exclusivo.
 -`Domain { id, logo: Option<SorafsUri>, metadata: Metadata, owned_by: AccountId }`.
 - Construtor: `NewDomain` com `with_logo`, `with_metadata`, então `Registrable::build(authority)` define `owned_by`.### Conta
-- `AccountId` é a identidade canônica da conta sem domínio codificada pelo controlador e codificada como I105 canônico.
+- `AccountId` é a identidade canônica da conta sem domínio codificada pelo controlador e codificada como i105 canônico.
 - `ScopedAccountId { account: AccountId, domain: DomainId }` transporta contexto de domínio explícito apenas quando uma visão com escopo definido é necessária.
 - `Account { id, metadata, label?, uaid? }` — `label` é um alias estável opcional usado por registros de rechave, `uaid` carrega o [ID de conta universal] opcional em todo o Nexus (./universal_accounts_guide.md).
 - Construtor: `NewAccount` via `Account::new(id)`; o registro requer um domínio `ScopedAccountId` explícito e não infere nenhum dos padrões.
@@ -250,7 +250,7 @@ iroha ledger asset definition register \
 # Mint using alias + account components (no manual norito hex copy/paste)
 iroha ledger asset mint \
   --definition-alias pkr#ubl.sbp \
-  --account sorauﾛ1P... \
+  --account sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB \
   --quantity 500
 
 # Resolve alias to canonical Base58 id via Torii
@@ -259,7 +259,7 @@ curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -d '{"alias":"pkr#ubl.sbp"}'
 ```Nota de migração:
 - IDs de definição de ativos `name#domain` antigos não são aceitos na v1.
-- Os IDs de ativos para criação/gravação/transferência permanecem canônicos `<asset-definition-id>#<account-id>`; construí-los com:
+- Os IDs de ativos para criação/gravação/transferência permanecem canônicos `<canonical-base58-asset-definition-id>`; construí-los com:
   -`iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
   - ou `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`.
 

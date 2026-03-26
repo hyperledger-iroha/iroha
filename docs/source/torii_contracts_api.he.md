@@ -55,7 +55,7 @@ Upload compiled bytecode and let Torii derive the manifest and hashes.
 
 ```jsonc
 {
-  "authority":   "i105...", // AccountId (string form)
+  "authority":   "<i105-account-id>", // AccountId (string form)
   "private_key": "ed25519:0123…",    // ExposedPrivateKey (bare or prefixed multihash hex)
   "code_b64":    "Base64Payload=="
 }
@@ -102,7 +102,7 @@ Represents a request to deploy bytecode and immediately bind `(namespace, contra
 
 ```jsonc
 {
-  "authority":   "i105...",
+  "authority":   "<i105-account-id>",
   "private_key": "ed25519:…",
   "namespace":   "apps",
   "contract_id": "calc.v1",
@@ -132,7 +132,7 @@ Bind an existing manifest/code hash to a namespace contract identifier.
 
 ```jsonc
 {
-  "authority":   "i105...",
+  "authority":   "<i105-account-id>",
   "private_key": "ed25519:0123…",
   "namespace":   "apps",
   "contract_id": "calc.v1",
@@ -177,7 +177,7 @@ Deploy code and then fetch code bytes:
 curl -s -X POST \
   -H 'Content-Type: application/json' \
   -d '{
-        "authority": "i105...",
+        "authority": "<i105-account-id>",
         "private_key": "ed25519:…",
         "code_b64": "…"
       }' \
@@ -192,7 +192,7 @@ Deploy and activate an instance atomically:
 curl -s -X POST \
   -H 'Content-Type: application/json' \
   -d '{
-        "authority": "i105...",
+        "authority": "<i105-account-id>",
         "private_key": "ed25519:…",
         "namespace": "apps",
         "contract_id": "calc.v1",
@@ -207,7 +207,7 @@ Activate an existing instance with previously uploaded artifacts:
 curl -s -X POST \
   -H 'Content-Type: application/json' \
   -d '{
-        "authority": "i105...",
+        "authority": "<i105-account-id>",
         "private_key": "ed25519:…",
         "namespace": "apps",
         "contract_id": "calc.v1",

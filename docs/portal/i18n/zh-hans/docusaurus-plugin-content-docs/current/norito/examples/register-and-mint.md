@@ -21,9 +21,9 @@ slug：/norito/examples/register-and-mint
 
 ## 账本演练
 
-- 确保目标帐户（例如 `i105...`）存在，反映每个 SDK 快速入门中的设置阶段。
+- 确保目标帐户（例如 `<i105-account-id>`）存在，反映每个 SDK 快速入门中的设置阶段。
 - 调用 `register_and_mint` 入口点来创建 ROSE 资产定义并在一笔交易中向 Alice 铸造 250 个单位。
-- 通过`client.request(FindAccountAssets)`或`iroha_cli ledger asset list --account i105...`验证余额以确认铸币成功。
+- 通过`client.request(FindAccountAssets)`或`iroha_cli ledger asset list --account <i105-account-id>`验证余额以确认铸币成功。
 
 ## 相关SDK指南
 
@@ -45,7 +45,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("i105...");
+    let to = account!("<i105-account-id>");
     let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     mint_asset(to, asset, 250);
   }

@@ -32,9 +32,9 @@ public final class OfflineSpendReceiptPayloadEncoder {
    * @param txIdHex 32-byte transaction ID as hex (64 chars)
    * @param fromAccountId sender canonical I105 AccountId
    * @param toAccountId receiver canonical I105 AccountId
-   * @param assetId canonical public asset ID
-   *     ({@code <asset-definition-id>#<account-id>} with an optional
-   *     {@code #dataspace:<id>} suffix)
+   * @param assetId canonical internal asset balance-bucket literal
+   *     ({@code <base58-asset-definition-id>#<i105-account-id>} with an optional
+   *     {@code #dataspace:<id>} suffix; canonical asset-definition ids are Base58)
    * @param amount decimal amount string
    * @param issuedAtMs timestamp in milliseconds
    * @param invoiceId invoice identifier

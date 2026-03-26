@@ -17,7 +17,7 @@
  *
  * Examples:
  *   CONTRACT_STAGE=register \
- *   AUTHORITY=6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT \
+ *   AUTHORITY=sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4 \
  *   PRIVATE_KEY_HEX=fedcba... \
  *   CONTRACT_CODE_PATH=./artifacts/contract.to \
  *   node javascript/iroha_js/recipes/contracts.mjs

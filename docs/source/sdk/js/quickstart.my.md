@@ -72,21 +72,21 @@ import {
 } from "@iroha/iroha-js";
 
 const mintInstruction = buildMintAssetInstruction({
-  assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+  assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
   quantity: "10",
 });
 
 const transferInstruction = buildTransferAssetInstruction({
-  sourceAssetId: "<base58-asset-definition-id>#<i105-account-id>",
-  destinationAccountId: "i105...",
+  sourceAssetHoldingId: "<base58-asset-definition-id>#<i105-account-id>",
+  destinationAccountId: "<i105-account-id>",
   quantity: "5",
 });
 
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
-  authority: "i105...",
-  mint: { assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", quantity: "10" },
-  transfers: [{ destinationAccountId: "i105...", quantity: "5" }],
+  authority: "<i105-account-id>",
+  mint: { assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM", quantity: "10" },
+  transfers: [{ destinationAccountId: "<i105-account-id>", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
 ```
@@ -109,16 +109,16 @@ import {
 const registerDomain = noritoEncodeInstruction(
   buildRegisterDomainInstruction({ domainId: "wonderland" }),
 );
-const registerAccount = buildRegisterAccountInstruction({ accountId: "i105..." });
+const registerAccount = buildRegisterAccountInstruction({ accountId: "<i105-account-id>" });
 const transfer = buildTransferAssetInstruction({
-  sourceAssetId: "<base58-asset-definition-id>#<i105-account-id>",
-  destinationAccountId: "i105...",
+  sourceAssetHoldingId: "<base58-asset-definition-id>#<i105-account-id>",
+  destinationAccountId: "<i105-account-id>",
   quantity: "5",
 });
 
 const tx = buildTransaction({
   chainId: "demo-chain",
-  authority: "i105...",
+  authority: "<i105-account-id>",
   instructions: [registerAccount, transfer],
   privateKey: Buffer.alloc(32, 0x42),
 });
@@ -178,7 +178,7 @@ const nftPage = await torii.listNfts({
 });
 console.log("nfts:", nftPage.items.map((it) => it.id));
 
-for await (const holding of torii.iterateAccountAssetsQuery("i105...", {
+for await (const holding of torii.iterateAccountAssetsQuery("<i105-account-id>", {
   requirePermissions: true,
   pageSize: 2,
   filter: { Gte: ["quantity", 1] },
@@ -296,9 +296,9 @@ import { ToriiClient, generateKeyPair } from "@iroha/iroha-js";
 const torii = new ToriiClient("https://torii.nexus.example");
 const { privateKey } = generateKeyPair({ seed: Buffer.alloc(32, 7) });
 
-const { items } = await torii.listAccountAssets("i105...", {
+const { items } = await torii.listAccountAssets("<i105-account-id>", {
   limit: 10,
-  canonicalAuth: { accountId: "i105...", privateKey },
+  canonicalAuth: { accountId: "<i105-account-id>", privateKey },
 });
 ```
 
@@ -332,28 +332,28 @@ const defs = await torii.queryAssetDefinitions({
 });
 console.log("filtered definitions", defs.items);
 
-const perms = await torii.listAccountPermissions("i105...", {
+const perms = await torii.listAccountPermissions("<i105-account-id>", {
   limit: 10,
 });
 console.log("direct permissions", perms.items);
-for await (const perm of torii.iterateAccountPermissions("i105...", {
+for await (const perm of torii.iterateAccountPermissions("<i105-account-id>", {
   pageSize: 5,
 })) {
   console.log("iterated permission", perm.name);
 }
-const holdings = await torii.listAccountAssets("i105...", {
+const holdings = await torii.listAccountAssets("<i105-account-id>", {
   limit: 5,
-  assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+  assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
 });
 console.log("asset holdings", holdings.items);
 const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 5,
-  assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+  assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
 });
 console.log("top holders", holders.items.map((entry) => entry.account_id));
-const txs = await torii.listAccountTransactions("i105...", {
+const txs = await torii.listAccountTransactions("<i105-account-id>", {
   limit: 3,
-  assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+  assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
 });
 console.log("recent hashes", txs.items.map((tx) => tx.entrypoint_hash));
 
@@ -365,7 +365,7 @@ for await (const nft of torii.iterateNfts({
   console.log("nft:", nft.id);
 }
 
-for await (const holding of torii.iterateAccountAssetsQuery("i105...", {
+for await (const holding of torii.iterateAccountAssetsQuery("<i105-account-id>", {
   pageSize: 8,
   filter: { Eq: ["asset_id.definition_id", "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"] },
   select: [{ Fields: ["asset_id", "quantity"] }],
@@ -384,7 +384,7 @@ in UI flows.
 
 ```js
 const assets = [];
-for await (const holding of torii.iterateAccountAssets("i105...", {
+for await (const holding of torii.iterateAccountAssets("<i105-account-id>", {
   pageSize: 2,
   maxItems: 10,
   sort: [{ key: "quantity", order: "desc" }],
@@ -414,7 +414,7 @@ try {
 }
 
 try {
-  await torii.listAccountAssets("i105...", { limit: 1 });
+  await torii.listAccountAssets("<i105-account-id>", { limit: 1 });
 } catch (error) {
   if (error instanceof ToriiHttpError && error.code === "permission_denied") {
     console.warn("missing asset read permission", error.errorMessage);
@@ -423,13 +423,13 @@ try {
   }
 }
 
-const ownedNfts = await torii.listAccountNfts("i105...", {
+const ownedNfts = await torii.listAccountNfts("<i105-account-id>", {
   domainId: "wonderland",
   limit: 5,
 });
 console.log("alice NFTs", ownedNfts.items.map((entry) => entry.id));
 
-for await (const nft of torii.iterateAccountNfts("i105...", {
+for await (const nft of torii.iterateAccountNfts("<i105-account-id>", {
   domainId: "wonderland",
   pageSize: 10,
   maxItems: 20,
@@ -450,7 +450,7 @@ const setup = await fetch(`${baseUrl}/v1/offline/reserve/setup`, {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
   body: JSON.stringify({
-    account_id: 'i105:...',
+    account_id: '<i105-account-id>',
     device_id: 'device-123',
     offline_public_key: 'ed25519:...',
     operation_id: crypto.randomUUID(),
@@ -495,7 +495,7 @@ Explorer telemetry surfaces two helper endpoints so SDKs can capture the same re
 snapshots and QR payloads exposed in the portal. `getExplorerMetrics()` fetches
 `/v1/explorer/metrics`, normalises the payload, and returns `null` when the route is
 disabled or gated. Pair it with `getExplorerAccountQr()` when you need a share-ready
-preferred I105 literal (or the I105 literal) plus inline SVG for QR buttons.
+preferred i105 literal (or the i105 literal) plus inline SVG for QR buttons.
 
 ```js
 import { promises as fs } from "node:fs";
@@ -509,7 +509,7 @@ if (!snapshot) {
   console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
 }
 
-const qr = await torii.getExplorerAccountQr("i105...");
+const qr = await torii.getExplorerAccountQr("<i105-account-id>");
 console.log("explorer literal", qr.literal);
 await fs.promises.writeFile("alice.svg", qr.svg, "utf8");
 console.log(
@@ -518,7 +518,7 @@ console.log(
 ```
 
 `getExplorerAccountQr()` returns canonical I105 output. The helper trims invalid
-combinations locally and always returns the canonical account identifier,
+combinations locally and always returns the canonical I105 account identifier,
 selected literal, and QR metadata (version, error correction level, module count,
 network prefix, and inline SVG) so automation can cache or embed the same payloads the
 Explorer renders.
@@ -762,7 +762,7 @@ followed by `/v1/contracts/instance` when `CONTRACT_STAGE` includes `instance` (
 
 ```
 TORII_URL=https://torii.devnet.example \
-AUTHORITY=i105... \
+AUTHORITY=<i105-account-id> \
 PRIVATE_KEY_HEX=$(cat ~/.iroha/keys/alice.hex) \
 CONTRACT_CODE_PATH=./artifacts/demo_contract.to \
 CONTRACT_MANIFEST_PATH=./artifacts/demo_manifest.json \

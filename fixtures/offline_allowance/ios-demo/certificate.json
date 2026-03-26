@@ -1,12 +1,12 @@
 {
   "allowance": {
     "amount": "250.00",
-    "asset": "61CtjvNd9T3THAR65GsMVHr82Bjc#6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+    "asset": "61CtjvNd9T3THAR65GsMVHr82Bjc#sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
     "commitment_hex": "26B02D14C45C0092AB5B719D78FFF20AD9A4167364BAE30ED2C749F19C5F3308"
   },
   "attestation_nonce_hex": null,
   "attestation_report_b64": "qlWqVQ==",
-  "controller": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+  "controller": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
   "expires_at_ms": 1745900000000,
   "issued_at_ms": 1730314876000,
   "metadata": {
@@ -14,7 +14,7 @@
     "ios.app_attest.environment": "production",
     "ios.app_attest.team_id": "ABCD1234"
   },
-  "operator": "6cmzPVPX8j6hZ4dceSGxHX65vr3iK4RG3em7w24HeJ9BbQXmKFVrykC",
+  "operator": "sorauロ1Pタ2サレエキクBヨコzBVSフユメRBqwdフsヘフツハネ1Yヤzy6ケ5xYWX98C",
   "operator_signature_hex": "1D5527CA0DF1AC27F371CB6DA9B21CF021DF1DBF778C58CDF0256158877A67ACB4D2C85C9A679E07D108A9F7BDFB134678E92F7DA9FEF3E3F14A9145F5E32A00",
   "policy": {
     "expires_at_ms": 1745900000000,

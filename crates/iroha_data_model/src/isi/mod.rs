@@ -688,14 +688,14 @@ impl From<crate::isi::domain_link::UnlinkAccountDomain> for InstructionBox {
 }
 
 // Allow direct boxing of offline allowance instructions.
-impl From<crate::isi::offline::RegisterOfflineReserve> for InstructionBox {
-    fn from(i: crate::isi::offline::RegisterOfflineReserve) -> Self {
+impl From<crate::isi::offline::RegisterOfflineLineage> for InstructionBox {
+    fn from(i: crate::isi::offline::RegisterOfflineLineage) -> Self {
         InstructionBox(Box::new(i))
     }
 }
 
-impl From<crate::isi::offline::CommitOfflineReserveOperation> for InstructionBox {
-    fn from(i: crate::isi::offline::CommitOfflineReserveOperation) -> Self {
+impl From<crate::isi::offline::CommitOfflineLineageOperation> for InstructionBox {
+    fn from(i: crate::isi::offline::CommitOfflineLineageOperation) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -724,14 +724,14 @@ impl From<crate::isi::offline::ReclaimExpiredOfflineAllowance> for InstructionBo
     }
 }
 
-impl From<crate::isi::offline::ReserveOfflineEscrowBalance> for InstructionBox {
-    fn from(i: crate::isi::offline::ReserveOfflineEscrowBalance) -> Self {
+impl From<crate::isi::offline::LoadOfflineEscrowBalance> for InstructionBox {
+    fn from(i: crate::isi::offline::LoadOfflineEscrowBalance) -> Self {
         InstructionBox(Box::new(i))
     }
 }
 
-impl From<crate::isi::offline::RefundOfflineEscrowBalance> for InstructionBox {
-    fn from(i: crate::isi::offline::RefundOfflineEscrowBalance) -> Self {
+impl From<crate::isi::offline::RedeemOfflineEscrowBalance> for InstructionBox {
+    fn from(i: crate::isi::offline::RedeemOfflineEscrowBalance) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -1687,6 +1687,8 @@ pub mod registry;
 pub mod repo;
 /// Runtime upgrade instructions and payloads.
 pub mod runtime_upgrade;
+/// Real-world asset lot instructions.
+pub mod rwa;
 /// DvP/PvP settlement instructions.
 pub mod settlement;
 /// Smart contract code management instructions.
@@ -2505,6 +2507,10 @@ pub mod prelude {
             ActivateRamLfeProgramPolicy, DeactivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy,
         },
         repo::{RepoInstructionBox, RepoIsi, ReverseRepoIsi},
+        rwa::{
+            ForceTransferRwa, FreezeRwa, HoldRwa, MergeRwas, RedeemRwa, RegisterRwa, ReleaseRwa,
+            RwaInstructionBox, SetRwaControls, TransferRwa, UnfreezeRwa,
+        },
         settlement::{
             DvpIsi, PvpIsi, SettlementAtomicity, SettlementExecutionOrder, SettlementFailureRecord,
             SettlementInstructionBox, SettlementKind, SettlementLedger, SettlementLedgerEntry,

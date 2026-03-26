@@ -1066,7 +1066,7 @@ impl Actor {
     fn handoff_contiguous_frontier_missing_payload_recovery(
         &mut self,
         height: u64,
-        view: u64,
+        _view: u64,
         first_seen: Instant,
         now: Instant,
     ) -> Option<super::FrontierRecoveryAdvance> {
@@ -1075,42 +1075,18 @@ impl Actor {
         if height != frontier_height || height != self.active_consensus_round_height() {
             return None;
         }
-
-        let existing_reason = self
-            .frontier_recovery
-            .filter(|state| state.frontier_height == height)
-            .map(|state| state.last_cause);
-        if existing_reason.is_none() {
-            let dependency_progress_at =
-                self.same_height_no_proposal_storm_dependency_progress_at(height);
-            self.frontier_recovery = Some(super::FrontierRecoveryState {
-                frontier_height: height,
-                phase: super::FrontierRecoveryPhase::CatchUp,
-                entered_at: first_seen,
-                last_progress_at: dependency_progress_at.unwrap_or(first_seen),
-                last_dependency_progress_at: dependency_progress_at,
-                last_action_at: None,
-                no_progress_windows: 0,
-                cleanup_done: false,
-                last_view: view,
-                last_rotation_view: None,
-                last_cause: "missing_payload",
-            });
+        let _ = first_seen;
+        if self.frontier_slot_lag_window_expired(height, now)
+            || self.frontier_slot_deep_catchup_active_at_height(height)
+        {
+            return Some(self.handle_frontier_slot_event(
+                now,
+                super::FrontierSlotEvent::OnLagWindowExpired {
+                    reason: "frontier_stall_reset",
+                },
+            ));
         }
-
-        let allow_rotation = !self
-            .phase_tracker
-            .current_view(height)
-            .is_some_and(|current| current > view);
-        Some(self.advance_frontier_recovery(
-            existing_reason.unwrap_or("missing_payload"),
-            height,
-            view,
-            false,
-            true,
-            allow_rotation,
-            now,
-        ))
+        Some(self.handle_frontier_slot_event(now, super::FrontierSlotEvent::OnFetchRetryDue))
     }
 
     pub(super) fn request_missing_block(
@@ -1121,6 +1097,30 @@ impl Actor {
         priority: super::MissingBlockPriority,
         targets: &[PeerId],
     ) {
+        if self.frontier_slot_is_exact_height(height)
+            && !self.frontier_slot_allows_deep_catchup(height, "frontier_gap_realign")
+        {
+            let now = Instant::now();
+            let mut targets = super::missing_block_request_targets_without_local(
+                &self.common_config.peer.id,
+                targets,
+            )
+            .into_iter();
+            let leader = targets.next();
+            let voters = targets.collect();
+            let _ = self.handle_frontier_slot_event(
+                now,
+                super::FrontierSlotEvent::OnFutureGapObserved {
+                    block_hash,
+                    view,
+                    leader,
+                    voters,
+                    exact_fetch_armed: true,
+                    requester: None,
+                },
+            );
+            return;
+        }
         if self.should_suppress_lock_rejected_block_fetch(
             height,
             block_hash,
@@ -5079,6 +5079,32 @@ impl Actor {
         };
         if !accepted {
             return Ok(());
+        }
+        if qc.height == self.committed_height_snapshot().saturating_add(1)
+            && matches!(
+                qc.phase,
+                crate::sumeragi::consensus::Phase::Prepare
+                    | crate::sumeragi::consensus::Phase::Commit
+            )
+        {
+            let _ = if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
+                self.handle_frontier_slot_event(
+                    Instant::now(),
+                    super::FrontierSlotEvent::OnCommitQcObserved {
+                        block_hash: qc.subject_block_hash,
+                        view: qc.view,
+                    },
+                )
+            } else {
+                self.handle_frontier_slot_event(
+                    Instant::now(),
+                    super::FrontierSlotEvent::OnVoteObserved {
+                        block_hash: qc.subject_block_hash,
+                        view: qc.view,
+                        voter: None,
+                    },
+                )
+            };
         }
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
             super::status::record_commit_qc(qc.clone());

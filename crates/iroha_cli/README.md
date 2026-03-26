@@ -230,7 +230,7 @@ Register a verifying key (provide either `vk_bytes` as base64 or `commitment_hex
 ```bash
 cat >vk_register.json <<'JSON'
 {
-  "authority": "alice@wonderland",
+  "authority": "<authority_account_i105>",
   "private_key": {"algorithm":"ed25519","payload":"..."},
   "backend": "halo2/ipa",
   "name": "vk_add",
@@ -248,7 +248,7 @@ Update an existing verifying key (version must increase). You may supply only th
 ```bash
 cat >vk_update.json <<'JSON'
 {
-  "authority": "alice@wonderland",
+  "authority": "<authority_account_i105>",
   "private_key": {"algorithm":"ed25519","payload":"..."},
   "backend": "halo2/ipa",
   "name": "vk_add",
@@ -272,7 +272,7 @@ Deprecate a VK (removes the record in v1):
 ```bash
 cat >vk_deprecate.json <<'JSON'
 {
-  "authority": "alice@wonderland",
+  "authority": "<authority_account_i105>",
   "private_key": {"algorithm":"ed25519","payload":"..."},
   "backend": "halo2/ipa",
   "name": "vk_add"
@@ -510,7 +510,7 @@ To create an account, specify the entity type (`account`) and the command (`regi
 
 ```bash
 iroha ledger account register \
-  --id "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw" \
+  --id "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE" \
   --domain "Soramitsu"
 ```
 

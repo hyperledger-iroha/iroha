@@ -3,7 +3,6 @@ import {
   AccountAddress,
   AccountAddressError,
   AccountAddressErrorCode,
-  DEFAULT_DOMAIN_NAME,
 } from "./address.js";
 import {
   createValidationError,
@@ -250,6 +249,27 @@ function normalizeAccountNumberIdentifier(raw, name) {
   return normalized;
 }
 
+function looksLikeCanonicalI105Literal(raw) {
+  if (typeof raw !== "string") {
+    return false;
+  }
+  if (/\s/.test(raw) || raw.includes("@") || raw.includes("#") || raw.includes("$")) {
+    return false;
+  }
+  if (raw.length < 32 || raw.length > 160) {
+    return false;
+  }
+  const sentinelMatch = /^(?:sora|test|dev)/u.exec(raw);
+  if (!sentinelMatch) {
+    return false;
+  }
+  const payload = raw.slice(sentinelMatch[0].length);
+  if (!payload) {
+    return false;
+  }
+  return /^[1-9A-HJ-NP-Za-km-z\p{Script=Katakana}ｰﾞﾟ]+$/u.test(payload);
+}
+
 export function normalizeAccountId(value, name) {
   const raw = assertString(value, name).trim();
   if (raw.length === 0) {
@@ -259,7 +279,7 @@ export function normalizeAccountId(value, name) {
   if (raw.includes("@")) {
     fail(
       ValidationErrorCode.INVALID_ACCOUNT_ID,
-      `${name} must not include '@domain'; use an encoded I105 account id`,
+      `${name} must not include '@domain'; use an encoded i105 account id`,
       name,
     );
   }
@@ -270,7 +290,7 @@ export function normalizeAccountId(value, name) {
   ) {
     fail(
       ValidationErrorCode.INVALID_ACCOUNT_ID,
-      `${name} must be an I105 account id`,
+      `${name} must be a canonical I105 account id`,
       name,
     );
   }
@@ -280,9 +300,12 @@ export function normalizeAccountId(value, name) {
     return address.toI105();
   } catch (error) {
     if (error instanceof AccountAddressError) {
+      if (looksLikeCanonicalI105Literal(raw)) {
+        return raw;
+      }
       fail(
         ValidationErrorCode.INVALID_ACCOUNT_ID,
-        `${name} must be an I105 account id`,
+        `${name} must be a canonical I105 account id`,
         name,
       );
     }
@@ -318,6 +341,9 @@ export function ensureCanonicalAccountId(value, name) {
     parsed = AccountAddress.parseEncoded(raw);
   } catch (error) {
     if (error instanceof AccountAddressError) {
+      if (looksLikeCanonicalI105Literal(raw)) {
+        return raw;
+      }
       throw createValidationError(
         ValidationErrorCode.INVALID_ACCOUNT_ID,
         `${name} must be a canonical I105 account id`,
@@ -343,32 +369,48 @@ export function normalizeAssetId(value, name) {
   if (raw.length === 0) {
     fail(ValidationErrorCode.INVALID_ASSET_ID, `${name} must be a non-empty string`, name);
   }
+  if (raw.includes("#")) {
+    fail(
+      ValidationErrorCode.INVALID_ASSET_ID,
+      `${name} must be a canonical Base58 asset id; asset aliases and asset holding ids are not accepted here`,
+      name,
+    );
+  }
+  if (
+    /\s/.test(raw) ||
+    raw.includes("%") ||
+    raw.includes("/") ||
+    raw.includes("?") ||
+    raw.includes(":") ||
+    !/^[1-9A-HJ-NP-Za-km-z]+$/.test(raw)
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_ASSET_ID,
+      `${name} must be a canonical unprefixed Base58 asset id`,
+      name,
+    );
+  }
+  return raw;
+}
+
+export function normalizeAssetHoldingId(value, name) {
+  const raw = assertString(value, name).trim();
+  if (raw.length === 0) {
+    fail(ValidationErrorCode.INVALID_ASSET_ID, `${name} must be a non-empty string`, name);
+  }
   const parts = raw.split("#");
   if (parts.length < 2 || parts.length > 3) {
     fail(
       ValidationErrorCode.INVALID_ASSET_ID,
-      `${name} must use '<asset-definition-id>#<account-id>' with optional '#dataspace:<id>' suffix`,
+      `${name} must use '<base58-asset-definition-id>#<i105-account-id>' with optional '#dataspace:<id>' suffix`,
       name,
     );
   }
-  const [assetDefinitionId, accountId, scope] = parts;
-  if (
-    assetDefinitionId.length === 0 ||
-    /\s/.test(assetDefinitionId) ||
-    assetDefinitionId.includes("%") ||
-    assetDefinitionId.includes("/") ||
-    assetDefinitionId.includes("?") ||
-    assetDefinitionId.includes(":")
-  ) {
-    fail(
-      ValidationErrorCode.INVALID_ASSET_ID,
-      `${name}.assetDefinitionId must be a canonical unprefixed Base58 asset definition id`,
-      name,
-    );
-  }
+  const [assetId, accountId, scope] = parts;
+  const normalizedAssetId = normalizeAssetId(assetId, `${name}.assetId`);
   const normalizedAccountId = normalizeAccountId(accountId, `${name}.accountId`);
   if (scope === undefined) {
-    return `${assetDefinitionId}#${normalizedAccountId}`;
+    return `${normalizedAssetId}#${normalizedAccountId}`;
   }
   const scopeMatch = /^dataspace:(\d+)$/.exec(scope);
   if (!scopeMatch) {
@@ -378,5 +420,43 @@ export function normalizeAssetId(value, name) {
       name,
     );
   }
-  return `${assetDefinitionId}#${normalizedAccountId}#dataspace:${scopeMatch[1]}`;
+  return `${normalizedAssetId}#${normalizedAccountId}#dataspace:${scopeMatch[1]}`;
+}
+
+export function normalizeRwaId(value, name) {
+  const raw = assertString(value, name).trim();
+  if (raw.length === 0) {
+    fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty string`, name);
+  }
+  if (/\s/.test(raw)) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must use '<64-hex-hash>$<domain>' with no whitespace`,
+      name,
+    );
+  }
+  const parts = raw.split("$");
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must use '<64-hex-hash>$<domain>'`,
+      name,
+    );
+  }
+  const [hash, domain] = parts;
+  if (!/^[0-9a-fA-F]{64}$/.test(hash)) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name}.hash must contain exactly 64 hexadecimal characters`,
+      name,
+    );
+  }
+  if (/[#$@]/.test(domain) || domain.length === 0) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name}.domain must be a non-empty domain id`,
+      name,
+    );
+  }
+  return `${hash.toLowerCase()}$${domain}`;
 }

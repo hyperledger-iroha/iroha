@@ -10,14 +10,12 @@ import org.hyperledger.iroha.android.client.JsonEncoder;
 public final class SubscriptionUsageRequest {
 
   private final String authority;
-  private final String privateKey;
   private final String unitKey;
   private final String delta;
   private final String usageTriggerId;
 
   private SubscriptionUsageRequest(final Builder builder) {
     this.authority = requireNonBlank(builder.authority, "authority");
-    this.privateKey = requireNonBlank(builder.privateKey, "private_key");
     this.unitKey = requireNonBlank(builder.unitKey, "unit_key");
     this.delta = requireNumericLiteral(builder.delta, "delta");
     this.usageTriggerId = normalizeOptional(builder.usageTriggerId);
@@ -25,10 +23,6 @@ public final class SubscriptionUsageRequest {
 
   public String authority() {
     return authority;
-  }
-
-  public String privateKey() {
-    return privateKey;
   }
 
   public String unitKey() {
@@ -46,7 +40,6 @@ public final class SubscriptionUsageRequest {
   public Map<String, Object> toJsonMap() {
     final Map<String, Object> json = new LinkedHashMap<>();
     json.put("authority", authority);
-    json.put("private_key", privateKey);
     json.put("unit_key", unitKey);
     json.put("delta", delta);
     if (usageTriggerId != null) {
@@ -65,7 +58,6 @@ public final class SubscriptionUsageRequest {
 
   public static final class Builder {
     private String authority;
-    private String privateKey;
     private String unitKey;
     private String delta;
     private String usageTriggerId;
@@ -74,11 +66,6 @@ public final class SubscriptionUsageRequest {
 
     public Builder authority(final String authority) {
       this.authority = authority;
-      return this;
-    }
-
-    public Builder privateKey(final String privateKey) {
-      this.privateKey = privateKey;
       return this;
     }
 

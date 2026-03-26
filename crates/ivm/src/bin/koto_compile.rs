@@ -11,8 +11,9 @@
 
 use std::{env, fs, path::PathBuf};
 
-use ivm::kotodama::compiler::AccessHintDiagnostics;
+use ivm::kotodama::compiler::{AccessHintDiagnostics, CompileReport};
 use ivm::{KotodamaCompiler, ProgramMetadata, kotodama};
+use norito::json::{self, Value};
 
 const EXPLAIN_ENTRIES: &[(&str, &str)] = &[
     (
@@ -59,8 +60,98 @@ fn run_lint_pass(src: &str) -> Result<Vec<kotodama::lint::LintWarning>, String> 
     Ok(kotodama::lint::lint_program(&program))
 }
 
-fn print_access_hint_diagnostics(diag: &AccessHintDiagnostics) {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DiagnosticFormat {
+    Text,
+    Json,
+}
+
+fn json_entry<K: Into<String>>(key: K, value: Value) -> (String, Value) {
+    (key.into(), value)
+}
+
+fn json_object(entries: Vec<(String, Value)>) -> Value {
+    json::object(entries).unwrap_or(Value::Null)
+}
+
+fn serialize_access_hint_diagnostics(diag: &AccessHintDiagnostics) -> Value {
+    json_object(vec![
+        json_entry("state_wildcards", Value::from(diag.state_wildcards as u64)),
+        json_entry("isi_wildcards", Value::from(diag.isi_wildcards as u64)),
+    ])
+}
+
+fn serialize_source_map(report: &CompileReport) -> Value {
+    Value::Array(
+        report
+            .source_map
+            .iter()
+            .map(|entry| {
+                json_object(vec![
+                    json_entry("function_name", Value::from(entry.function_name.clone())),
+                    json_entry("pc_start", Value::from(entry.pc_start)),
+                    json_entry("pc_end", Value::from(entry.pc_end)),
+                    json_entry("line", Value::from(entry.source.line as u64)),
+                    json_entry("column", Value::from(entry.source.column as u64)),
+                ])
+            })
+            .collect(),
+    )
+}
+
+fn serialize_budget_report(report: &CompileReport) -> Value {
+    Value::Array(
+        report
+            .budget_report
+            .iter()
+            .map(|entry| {
+                json_object(vec![
+                    json_entry("function_name", Value::from(entry.function_name.clone())),
+                    json_entry("pc_start", Value::from(entry.pc_start)),
+                    json_entry("pc_end", Value::from(entry.pc_end)),
+                    json_entry("bytecode_bytes", Value::from(entry.bytecode_bytes as u64)),
+                    json_entry("bytecode_words", Value::from(entry.bytecode_words as u64)),
+                    json_entry("frame_bytes", Value::from(entry.frame_bytes as u64)),
+                    json_entry("jump_span_words", Value::from(entry.jump_span_words as u64)),
+                    json_entry("jump_range_risk", Value::from(entry.jump_range_risk)),
+                    json_entry(
+                        "line",
+                        entry
+                            .source
+                            .as_ref()
+                            .map_or(Value::Null, |source| Value::from(source.line as u64)),
+                    ),
+                    json_entry(
+                        "column",
+                        entry
+                            .source
+                            .as_ref()
+                            .map_or(Value::Null, |source| Value::from(source.column as u64)),
+                    ),
+                ])
+            })
+            .collect(),
+    )
+}
+
+fn write_report_output(path: &str, value: &Value) -> Result<(), String> {
+    let rendered = json::to_string_pretty(value).map_err(|e| format!("report serialize: {e}"))?;
+    if path == "-" {
+        println!("{rendered}");
+    } else {
+        fs::write(path, &rendered).map_err(|e| format!("failed to write {path}: {e}"))?;
+    }
+    Ok(())
+}
+
+fn print_access_hint_diagnostics(diag: &AccessHintDiagnostics, format: DiagnosticFormat) {
     if diag.is_empty() {
+        return;
+    }
+    if format == DiagnosticFormat::Json {
+        let rendered = json::to_string_pretty(&serialize_access_hint_diagnostics(diag))
+            .unwrap_or_else(|_| "{}".to_owned());
+        eprintln!("{rendered}");
         return;
     }
     if diag.state_wildcards > 0 {
@@ -89,7 +180,7 @@ fn print_usage() {
     eprintln!("Usage:");
     eprintln!("  koto_compile <input.ko> [--out <output.to>] [--manifest-out <manifest.json>] \\");
     eprintln!(
-        "               [--abi <u8>] [--vl <u8>] [--max-cycles <u64>] [--iter-cap <u8>] [--force-zk] [--force-vector] [--no-lint] [--deny-lint-warnings]"
+        "               [--abi <u8>] [--vl <u8>] [--max-cycles <u64>] [--iter-cap <u8>] [--force-zk] [--force-vector] [--emit-source-map <path>] [--emit-budget-report <path>] [--diagnostic-format <text|json>] [--strip-debug] [--no-lint] [--deny-lint-warnings]"
     );
     eprintln!("  koto_compile --explain <code>");
     eprintln!("\nNotes:");
@@ -127,6 +218,10 @@ fn main() {
     let mut force_vector = false;
     let mut lint_enabled = true;
     let mut lint_deny_warnings = false;
+    let mut diagnostic_format = DiagnosticFormat::Text;
+    let mut emit_source_map: Option<String> = None;
+    let mut emit_budget_report: Option<String> = None;
+    let mut strip_debug = false;
     let mut explain: Option<String> = None;
 
     let mut i = 0;
@@ -187,6 +282,41 @@ fn main() {
                 }
                 explain = Some(args[i + 1].clone());
                 i += 2;
+            }
+            "--emit-source-map" => {
+                if i + 1 >= args.len() {
+                    eprintln!("--emit-source-map expects a path");
+                    std::process::exit(2);
+                }
+                emit_source_map = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--emit-budget-report" => {
+                if i + 1 >= args.len() {
+                    eprintln!("--emit-budget-report expects a path");
+                    std::process::exit(2);
+                }
+                emit_budget_report = Some(args[i + 1].clone());
+                i += 2;
+            }
+            "--diagnostic-format" => {
+                if i + 1 >= args.len() {
+                    eprintln!("--diagnostic-format expects one of: text, json");
+                    std::process::exit(2);
+                }
+                diagnostic_format = match args[i + 1].as_str() {
+                    "text" => DiagnosticFormat::Text,
+                    "json" => DiagnosticFormat::Json,
+                    other => {
+                        eprintln!("unsupported diagnostic format: {other}");
+                        std::process::exit(2);
+                    }
+                };
+                i += 2;
+            }
+            "--strip-debug" => {
+                strip_debug = true;
+                i += 1;
             }
             "--force-zk" => {
                 force_zk = true;
@@ -272,6 +402,7 @@ fn main() {
     }
     opts.force_zk = force_zk;
     opts.force_vector = force_vector;
+    opts.emit_debug = !strip_debug;
 
     let source = match std::fs::read_to_string(&input_path) {
         Ok(s) => s,
@@ -303,15 +434,14 @@ fn main() {
         }
     }
     let compiler = KotodamaCompiler::new_with_options(opts);
-    let (code, manifest, hint_diag) =
-        match compiler.compile_source_with_manifest_and_diagnostics(&source) {
-            Ok(result) => result,
-            Err(e) => {
-                eprintln!("compile error: {e}");
-                std::process::exit(1);
-            }
-        };
-    print_access_hint_diagnostics(&hint_diag);
+    let (code, manifest, report) = match compiler.compile_source_with_manifest_and_report(&source) {
+        Ok(result) => result,
+        Err(e) => {
+            eprintln!("compile error: {e}");
+            std::process::exit(1);
+        }
+    };
+    print_access_hint_diagnostics(&report.access_hint_diagnostics, diagnostic_format);
     let manifest_opt = manifest_out.is_some().then_some(manifest);
 
     // Pick output path
@@ -350,16 +480,30 @@ fn main() {
         }
     }
 
+    if let Some(path) = emit_source_map.as_deref()
+        && let Err(err) = write_report_output(path, &serialize_source_map(&report))
+    {
+        eprintln!("{err}");
+        std::process::exit(1);
+    }
+    if let Some(path) = emit_budget_report.as_deref()
+        && let Err(err) = write_report_output(path, &serialize_budget_report(&report))
+    {
+        eprintln!("{err}");
+        std::process::exit(1);
+    }
+
     // Print a short header summary to stdout
     if let Ok(parsed) = ProgramMetadata::parse(&code) {
         let meta = parsed.metadata;
         println!(
-            "Wrote {} (abi={}, mode=0x{:02x}, vl={}, max_cycles={})",
+            "Wrote {} (abi={}, mode=0x{:02x}, vl={}, max_cycles={}, debug={})",
             output_path.display(),
             meta.abi_version,
             meta.mode,
             meta.vector_length,
-            meta.max_cycles
+            meta.max_cycles,
+            parsed.contract_debug.is_some()
         );
     } else {
         println!("Wrote {}", output_path.display());

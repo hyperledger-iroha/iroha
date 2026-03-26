@@ -60,7 +60,7 @@ Prometheus テキスト形式のメトリクスを出力します。Pushgateway 
   },
   "tryIt": {
     "proxyUrl": "https://tryit-preview.sora",
-    "samplePath": "/proxy/v1/accounts/i105.../assets?limit=1",
+    "samplePath": "/proxy/v1/accounts/<i105-account-id>/assets?limit=1",
     "method": "GET",
     "timeoutMs": 7000,
     "token": "${TRYIT_BEARER}",

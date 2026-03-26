@@ -96,21 +96,67 @@ pub mod account {
     use super::*;
 
     /// Scope carried by account-alias permissions.
-    #[derive(
-        Debug,
-        Clone,
-        PartialEq,
-        Eq,
-        crate::json_macros::JsonSerialize,
-        crate::json_macros::JsonDeserialize,
-        iroha_schema::IntoSchema,
-    )]
+    #[derive(Debug, Clone, PartialEq, Eq, iroha_schema::IntoSchema)]
     #[norito(tag = "scope", content = "value", rename_all = "snake_case")]
     pub enum AccountAliasPermissionScope {
         /// Permission scoped to a specific linked domain alias segment.
         Domain(DomainId),
         /// Permission scoped to a dataspace alias segment.
         Dataspace(DataSpaceId),
+    }
+
+    impl norito::json::JsonSerialize for AccountAliasPermissionScope {
+        fn json_serialize(&self, out: &mut String) {
+            out.push_str("{\"scope\":\"");
+            match self {
+                Self::Domain(value) => {
+                    out.push_str("domain\",\"value\":");
+                    norito::json::JsonSerialize::json_serialize(value, out);
+                }
+                Self::Dataspace(value) => {
+                    out.push_str("dataspace\",\"value\":");
+                    norito::json::JsonSerialize::json_serialize(value, out);
+                }
+            }
+            out.push('}');
+        }
+    }
+
+    impl norito::json::JsonDeserialize for AccountAliasPermissionScope {
+        fn json_deserialize(p: &mut norito::json::Parser<'_>) -> Result<Self, norito::json::Error> {
+            let value =
+                <norito::json::Value as norito::json::JsonDeserialize>::json_deserialize(p)?;
+            Self::json_from_value(&value)
+        }
+
+        fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
+            let object = value.as_object().ok_or_else(|| {
+                norito::json::Error::Message("expected alias permission scope object".into())
+            })?;
+            let scope = object
+                .get("scope")
+                .and_then(norito::json::Value::as_str)
+                .ok_or_else(|| {
+                    norito::json::Error::Message(
+                        "missing alias permission scope discriminator".into(),
+                    )
+                })?;
+            let value = object.get("value").ok_or_else(|| {
+                norito::json::Error::Message("missing alias permission scope value".into())
+            })?;
+
+            match scope {
+                "domain" => Ok(Self::Domain(
+                    <DomainId as norito::json::JsonDeserialize>::json_from_value(value)?,
+                )),
+                "dataspace" => Ok(Self::Dataspace(
+                    <DataSpaceId as norito::json::JsonDeserialize>::json_from_value(value)?,
+                )),
+                other => Err(norito::json::Error::Message(format!(
+                    "unknown alias permission scope `{other}`"
+                ))),
+            }
+        }
     }
 
     permission! {
@@ -149,6 +195,49 @@ pub mod account {
         pub struct CanManageAccountAlias {
             /// Alias permission scope.
             pub scope: AccountAliasPermissionScope,
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use iroha_schema::{IntoSchema, Metadata};
+
+        #[test]
+        fn alias_scope_serializes_as_snake_case() {
+            let json =
+                norito::json::to_json(&AccountAliasPermissionScope::Dataspace(DataSpaceId::GLOBAL))
+                    .expect("serialize alias scope");
+
+            assert_eq!(json, "{\"scope\":\"dataspace\",\"value\":0}");
+        }
+
+        #[test]
+        fn alias_scope_deserializes_snake_case() {
+            let scope: AccountAliasPermissionScope =
+                norito::json::from_str("{\"scope\":\"dataspace\",\"value\":0}")
+                    .expect("deserialize alias scope");
+
+            assert_eq!(
+                scope,
+                AccountAliasPermissionScope::Dataspace(DataSpaceId::GLOBAL)
+            );
+        }
+
+        #[test]
+        fn alias_scope_schema_uses_snake_case_tags() {
+            let schema = AccountAliasPermissionScope::schema();
+            let Some(Metadata::Enum(meta)) = schema.get::<AccountAliasPermissionScope>() else {
+                panic!("alias scope schema must be an enum");
+            };
+
+            let tags = meta
+                .variants
+                .iter()
+                .map(|variant| variant.tag.as_str())
+                .collect::<Vec<_>>();
+
+            assert_eq!(tags, vec!["domain", "dataspace"]);
         }
     }
 }

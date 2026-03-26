@@ -215,7 +215,7 @@ Construtores de ponteiro (emitem TLV Norito no INPUT e retornam um ponteiro tipa
 - `proof_blob(string|0xhex) -> ProofBlob*`
 
 As macros do prelúdio fornecem aliases mais curtos e validação inline para esses construtores:
-- `account!("i105...")`, `account_id!("i105...")`
+- `account!("<i105-account-id>")`, `account_id!("<i105-account-id>")`
 - `asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`, `asset_id!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`
 - `domain!("wonderland")`, `domain_id!("wonderland")`
 - `name!("example")`

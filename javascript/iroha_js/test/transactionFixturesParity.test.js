@@ -48,10 +48,9 @@ function extractCanonicalAuthority(payloadBase64, authorityHint) {
       const atIndex = trimmed.lastIndexOf("@");
       if (atIndex !== -1) {
         const signatory = trimmed.slice(0, atIndex);
-        const domain = trimmed.slice(atIndex + 1);
-        if (signatory && domain) {
+        if (signatory) {
           try {
-            const { address } = AccountAddress.parseEncoded(signatory, undefined, domain);
+            const { address } = AccountAddress.parseEncoded(signatory);
             return address.toI105();
           } catch {
             // Fall back to payload scan.
@@ -90,12 +89,12 @@ function extractCanonicalAuthority(payloadBase64, authorityHint) {
   ];
   for (const entry of prioritized) {
     if (entry.includes("@")) {
-      const [signatory, domain] = entry.split("@", 2);
-      if (!signatory || !domain) {
+      const [signatory] = entry.split("@", 2);
+      if (!signatory) {
         continue;
       }
       try {
-        const { address } = AccountAddress.parseEncoded(signatory, undefined, domain);
+        const { address } = AccountAddress.parseEncoded(signatory);
         return address.toI105();
       } catch {
         continue;

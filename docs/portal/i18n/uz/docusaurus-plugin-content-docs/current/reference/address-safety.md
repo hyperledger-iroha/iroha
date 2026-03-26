@@ -1,78 +1,73 @@
 ---
-lang: uz
-direction: ltr
-source: docs/portal/docs/reference/address-safety.md
-status: complete
-generator: docs/portal/scripts/sync-i18n.mjs
 title: Address Safety & Accessibility
 description: UX requirements for presenting and sharing Iroha addresses safely (ADDR-6c).
-translator: machine-google-reviewed
-translation_last_reviewed: 2026-02-07
 ---
 
-Ushbu sahifada ADDR-6c hujjatlari taqdim etiladi. Bularni qo'llang
-hamyonlar, tadqiqotchilar, SDK vositalari va har qanday portal yuzasiga cheklovlar
-insonga qaragan manzillarni ko'rsatadi yoki qabul qiladi. Kanonik ma'lumotlar modeli yashaydi
-`docs/account_structure.md`; Quyidagi nazorat ro'yxati ularni qanday ochishni tushuntiradi
-xavfsizlik yoki foydalanish imkoniyatini buzmasdan formatlar.
+This page captures the ADDR-6c documentation deliverable. Apply these
+constraints to wallets, explorers, SDK tooling, and any portal surface that
+renders or accepts human-facing addresses. The canonical data model lives in
+`docs/account_structure.md`; the checklist below explains how to expose those
+formats without compromising safety or accessibility.
 
-## Xavfsiz almashish oqimlari
+## Safe sharing flows
 
-- I105 manziliga nusxa ko'chirish/ulashish uchun har bir amalni standart qilib qo'ying. Yechilganlarni ko'rsatish
-  domenni qo'llab-quvvatlovchi kontekst sifatida ishlating, shuning uchun nazorat yig'indisi qatori old va markazda qoladi.
-- Toʻliq matnli manzil va QRni birlashtirgan “Ulashish” imtiyozini taklif qiling
-  bir xil foydali yukdan olingan kod. Foydalanuvchilarga amal qilishdan oldin ikkalasini ham tekshirishga ruxsat bering.
-- Bo'sh joy kesishni talab qilganda (kichik kartalar, bildirishnomalar), yetakchilikni saqlang
-  inson tomonidan o'qiladigan prefiks, ellipslarni ko'rsating va oxirgi 4-6 belgini shunday saqlang
-  nazorat summasi langari saqlanib qoladi. Toʻliq nusxa olish uchun teginish/klaviatura yorligʻini taqdim eting
-  kesilmasdan string.
-- Oldindan ko'rib chiqadigan tasdiqlovchi tostni chiqarish orqali almashish buferining sinxronlanishini oldini oling
-  ko'chirilgan aniq I105 qatori. Telemetriya mavjud bo'lgan joyda nusxasini hisoblang
-  UX regressiyalari tezda yuzaga kelishi uchun harakatlarni almashishga urinishlar.
+- Default every copy/share action to the canonical I105 account id.
+  If an on-chain alias is present, display it as supporting metadata in a
+  separate labeled field.
+- Offer a “Share” affordance that bundles the full plain-text address and a QR
+  code derived from the same payload. Let users inspect both before committing.
+- When space requires truncation (tiny cards, notifications), keep the leading
+  human-readable prefix, show ellipses, and retain the final 4–6 characters so
+  the checksum anchor survives. Provide a tap/keyboard shortcut to copy the full
+  string without truncation.
+- Prevent clipboard desync by emitting a confirmation toast that previews the
+  exact i105 string that was copied. Where telemetry is available, count copy
+  attempts versus share actions so UX regressions surface quickly.
 
-## IME va kiritish himoyasi
+## IME & input safeguards
 
-- Manzil maydonlarida ASCII bo'lmagan kiritishni rad etish. Qachon IME kompozitsion artefaktlar (to'liq
-  kengligi, Kana, ohang belgilari) paydo bo'ladi, qanday qilib tushuntirilgan qatorli ogohlantirish paydo bo'ladi
-  qayta urinishdan oldin klaviaturani lotin yozuviga oʻtkazish uchun.
-- Birlashtiruvchi belgilarni ajratib turadigan va almashtiradigan oddiy matn joylashtirish zonasini taqdim eting
-  tekshirishdan oldin ASCII bo'shliqlari bilan bo'sh joy. Bu foydalanuvchilarni yo'qotishdan saqlaydi
-  ular IME o'rta oqimini o'chirib qo'yganlarida taraqqiyot.
-- Nol kenglikdagi birlashtiruvchilarga, variatsiya selektorlariga va boshqalarga nisbatan tasdiqlashni qattiqlashtiring
-  yashirin Unicode kod nuqtalari. Rad etilgan kod nuqtasi toifasini ro'yxatdan o'tkazing
-  Suite telemetriyani import qilishi mumkin.
+- Validate account-id fields as canonical I105 only. Validate alias
+  entry fields separately as `name@dataspace` or `name@domain.dataspace`.
+- When IME composition artefacts or zero-width characters appear, surface an
+  inline warning instead of coercing the input into a different account-id
+  format.
+- Provide a plain-text paste zone that preserves the canonical i105 literal as
+  pasted while still stripping obviously invalid stealth code points before
+  validation.
+- Harden validation against zero-width joiners, variation selectors, and other
+  stealth Unicode code points. Log the rejected code point category so fuzzing
+  suites can import the telemetry.
 
-## Yordamchi texnologiya kutilmalari
+## Assistive technology expectations
 
-- `aria-label` yoki `aria-describedby` bilan har bir manzil blokiga izoh bering
-  inson oʻqishi mumkin boʻlgan prefiksni talaffuz qiladi va foydali yukni 4–8 belgidan iborat boʻladi
-  guruhlar ("ih tire b uch ikki ..."). Bu ekranni o'qiydiganlarni ishlab chiqarishni to'xtatadi
-  tushunarsiz belgilar oqimi.
-- Hududni muloyim jonli yangilash orqali muvaffaqiyatli nusxa ko'chirish/ulashish voqealarini e'lon qiling. O'z ichiga oladi
-  maqsad (bufer, almashish varag'i, QR), shuning uchun foydalanuvchi harakatni biladi
-  diqqatni harakatlantirmasdan yakunlandi.
-- QR oldindan koʻrish uchun tavsiflovchi `alt` matnini taqdim eting (masalan, “I105 manzili
-  `<account>` zanjirida `0x1234`”). “Manzilni matn sifatida nusxalash”ni taqdim eting
-  ko'rish qobiliyati past bo'lgan foydalanuvchilar uchun QR tuvaliga ulashgan zaxira.
+- Annotate every address block with `aria-label` or `aria-describedby` that
+  spells out the human-readable prefix and chunks the payload in 4–8 character
+  groups (“ih dash b three two …”). This stops screen readers from producing an
+  unintelligible stream of characters.
+- Announce successful copy/share events via a polite live region update. Include
+  the destination (clipboard, share sheet, QR) so the user knows the action
+  completed without moving focus.
+- Supply descriptive `alt` text for QR previews (e.g., “i105 address for
+  `<account>` on chain `0x1234`”). Provide a “Copy address as text”
+  fallback adjacent to the QR canvas for low-vision users.
 
-## Sora-faqat siqilgan manzillar
+## Single-format policy
 
-- Gating: `i105` siqilgan qatorni aniq tasdiqlash orqasida yashiring.
-  Tasdiqlash ariza faqat Sora Nexus zanjirlarida ishlashini takrorlashi kerak.
-- Yorliqlash: har bir hodisada ko'rinadigan "Faqat Sora" nishoni va a bo'lishi kerak
-  Boshqa tarmoqlar nima uchun I105 shaklini talab qilishini tavsiflovchi maslahat.
-- Guardrails: agar faol zanjir diskriminanti Nexus taqsimoti bo'lmasa,
-  siqilgan manzilni to'liq yaratishdan bosh torting va foydalanuvchini qaytib yo'naltiring
-  I105.
-- Telemetriya: siqilgan shakl qanchalik tez-tez so'ralishini va shuning uchun nusxa ko'chirilishini yozib oling
-  voqea o'yin kitobi tasodifiy almashish keskinliklarini aniqlay oladi.
+- Keep canonical I105 as the only user-facing account-id format for
+  copy, share, and QR surfaces.
+- Treat `name@dataspace` and `name@domain.dataspace` as on-chain aliases that
+  point to canonical i105 account ids.
+- Do not expose alternate account-literal encodings in production wallet or
+  explorer UX.
+- Telemetry should track i105 copy/share usage, alias-resolution usage, and
+  validation failures only.
 
-## Sifatli eshiklar
+## Quality gates
 
-- Ushbu manzilni tasdiqlash uchun avtomatlashtirilgan UI testlarini (yoki hikoyalar kitobi a11y to'plamlarini) kengaytiring
-  komponentlar zarur ARIA metama'lumotlarini va IME rad etish xabarlarini ochib beradi
-  paydo bo'ladi.
-- IME kiritish (kana, pinyin), ekranni o'qish uchun o'tish uchun qo'lda QA stsenariylarini qo'shing
-  (VoiceOver/NVDA) va yuqori kontrastli mavzularda QR nusxasini chiqarishdan oldin.
-- Ushbu tekshiruvlarni I105 paritet testlari bilan bir qatorda relizlar ro'yxatida ko'rsating
-  shuning uchun regressiyalar tuzatilmaguncha bloklanadi.
+- Extend automated UI tests (or storybook a11y suites) to assert that address
+  components expose the required ARIA metadata and that IME rejection messages
+  appear.
+- Include manual QA scenarios for IME input (kana, pinyin), screen reader pass
+  (VoiceOver/NVDA), and QR copy on high-contrast themes before releasing.
+- Surface these checks in release checklists alongside the i105 parity tests
+  so regressions remain blocked until corrected.

@@ -803,8 +803,8 @@ aşağıdakı yoxlama siyahısına əməl etməklə hər kitab üçün rüblük 
 
 1. **Snapshot balansları.** Gücləndirən `FindAssets` sorğusundan istifadə edin
    `iroha ledger asset list` (`crates/iroha_cli/src/main_shared.rs`) və ya
-   `i105...` üçün XOR qalıqlarını ixrac etmək üçün `iroha_python` köməkçisi,
-   `i105...` və baxışda iştirak edən hər bir masa hesabı. Mağaza
+   `<i105-account-id>` üçün XOR qalıqlarını ixrac etmək üçün `iroha_python` köməkçisi,
+   `<i105-account-id>` və baxışda iştirak edən hər bir masa hesabı. Mağaza
    altındakı JSON
    `artifacts/finance/repo/<period>/treasury_assets.json` və git-i qeyd edin
    müşayiət olunan `README.md`-də öhdəçilik/alət silsiləsi.

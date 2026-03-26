@@ -9,7 +9,7 @@ fn kotodama_set_account_detail_with_constructors() {
     let src = r#"
         fn main() {
           // Use a valid AccountId multihash form for Iroha v2
-          set_account_detail(account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"), name("cursor"), json("{\"x\":1}"));
+          set_account_detail(account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"), name("cursor"), json("{\"x\":1}"));
         }
     "#;
     // Use default compiler options (no forced VECTOR bit)

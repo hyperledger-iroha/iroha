@@ -16,7 +16,7 @@ translation_last_reviewed: 2026-02-07
 
 - `scripts/address_local_toolkit.sh` оборачивает CLI `iroha`, чтобы получить:
   - `audit.json` -- структурированный вывод `iroha tools address audit --format json`.
-  - `normalized.txt` -- преобразованные I105 (предпочтительно) / דחוס (`sora`) (второй выбор) מילוליות ל-каждого Local-domain selector.
+  - `normalized.txt` -- преобразованные i105 (предпочтительно) / דחוס (`sora`) (второй выбор) מילוליות ל-каждого Local-domain selector.
 - Используйте скрипт вместе с לוח המחוונים ingest адресов (`dashboards/grafana/address_ingest.json`)
   и правилами Alertmanager (`dashboards/alerts/address_ingest_rules.yml`), чтобы доказать безопасность cutover Local-8 /
   מקומי-12. הצג את האוסף המקומי Local-8 ו-Local-12 ו-Alertem
@@ -33,7 +33,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 
 תיאור:
 
-- `--format I105` עבור вывода `sora...` вместо I105.
+- `--format i105` עבור вывода `sora...` вместо i105.
 - `domainless output (default)` עבור вывода מילוליות חשופות.
 - `--audit-only` чтобы пропустить шаг конвертации.
 - `--allow-errors` чтобы продолжать сканирование при ошибочных строках (поведение совпадает с CLI).

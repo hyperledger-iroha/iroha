@@ -238,7 +238,7 @@ passo a passo.
 - Hierarquia de derivação de chave por conta:
   - `sk_spend` → `nk` (chave anuladora), `ivk` (chave de visualização de entrada), `ovk` (chave de visualização de saída), `fvk`.
 - Cargas de notas criptografadas usam AEAD com chaves compartilhadas derivadas de ECDH; chaves opcionais de visão do auditor podem ser anexadas às saídas por política de ativos.
-- Adições CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, ferramentas de auditoria para descriptografar memorandos e o auxiliar `iroha app zk envelope` para produzir/inspecionar envelopes de memorando Norito offline. Torii expõe o mesmo fluxo de derivação via `POST /v1/confidential/derive-keyset`, retornando os formatos hexadecimal e base64 para que as carteiras possam buscar hierarquias de chaves programaticamente.
+- Adições CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, ferramentas de auditoria para descriptografar memorandos e o auxiliar `iroha app zk envelope` para produzir/inspecionar envelopes de memorando Norito offline.
 
 ## Controles de gás, limites e DoS
 - Cronograma determinístico de gás:
@@ -423,7 +423,7 @@ import {
 
 const unsigned = buildRegisterZkAssetTransaction({
   registration: {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: {
       commit_params: "vk_shield",

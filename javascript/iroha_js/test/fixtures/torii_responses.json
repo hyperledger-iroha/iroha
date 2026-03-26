@@ -220,8 +220,8 @@
               "label": null,
               "assets": [
                 {
-                  "asset_id": "cash#portfolio::34mSYn6NQ7iBn9WuFdt8iwCjCutwZEr6WMRz92XBxAp7yWwsND6KjsETDFaJKR3qfzzwUA3CT",
-                  "asset_definition_id": "cash#portfolio",
+                  "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+                  "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                   "quantity": "500"
                 }
               ]
@@ -237,13 +237,13 @@
               "label": "primary-cbdc",
               "assets": [
                 {
-                  "asset_id": "wholesale#cbdc::34mSYn6NQ7iBn9WuFdt8iwCjCuqiFHCGGo3SYWifYFWaTvryjW6MR26uMcyy14xZazVHC3sYA",
-                  "asset_definition_id": "wholesale#cbdc",
+                  "asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
+                  "asset_definition_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
                   "quantity": "250"
                 },
                 {
-                  "asset_id": "fx#cbdc::34mSYn6NQ7iBn9WuFdt8iwCjCuqiFHCGGo3SYWifYFWaTvryjW6MR26uMcyy14xZazVHC3sYA",
-                  "asset_definition_id": "fx#cbdc",
+                  "asset_id": "5Pz9SwdN9eXPbiXPX9HRCpzCcE3o",
+                  "asset_definition_id": "5Pz9SwdN9eXPbiXPX9HRCpzCcE3o",
                   "quantity": "25"
                 }
               ]

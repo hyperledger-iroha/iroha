@@ -10,6 +10,12 @@ pub struct Program {
     pub contract_meta: Option<ContractMeta>,
 }
 
+#[derive(Debug, PartialEq, Clone, Copy, Eq)]
+pub struct SourceLocation {
+    pub line: usize,
+    pub column: usize,
+}
+
 /// Visibility of a function when exposed to the host/runtime.
 #[derive(Debug, PartialEq, Clone, Copy, Default)]
 pub enum FunctionVisibility {
@@ -112,6 +118,7 @@ pub struct Function {
     pub ret_ty: Option<TypeExpr>,
     pub body: Block,
     pub modifiers: FunctionModifiers,
+    pub location: SourceLocation,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -184,6 +191,7 @@ pub enum TriggerDataFamily {
     Asset,
     AssetDefinition,
     Nft,
+    Rwa,
     Trigger,
     Role,
     Configuration,

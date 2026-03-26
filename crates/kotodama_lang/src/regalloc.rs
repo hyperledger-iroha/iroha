@@ -907,6 +907,7 @@ mod tests {
             params: vec![],
             blocks,
             entry: ir::Label(0),
+            location: crate::ast::SourceLocation { line: 1, column: 1 },
         };
         let alloc = allocate(&func);
         assert!(alloc.stack.is_empty());
@@ -941,6 +942,7 @@ mod tests {
             params: vec![],
             blocks,
             entry: ir::Label(0),
+            location: crate::ast::SourceLocation { line: 1, column: 1 },
         };
         let alloc = allocate(&func);
         assert!(
@@ -970,6 +972,7 @@ mod tests {
             params: vec![],
             blocks: vec![block],
             entry: ir::Label(0),
+            location: crate::ast::SourceLocation { line: 1, column: 1 },
         };
         let alloc = allocate(&func);
         let expected_first = *ALLOC_POOL.last().expect("alloc pool");

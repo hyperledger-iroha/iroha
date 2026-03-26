@@ -10691,25 +10691,23 @@ async fn frontier_body_repair_backfills_targets_from_active_topology_when_slot_i
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x61; Hash::LENGTH]));
     let now = Instant::now();
     let grace = actor.authoritative_body_ingress_fetch_grace();
-    actor.frontier_slot = Some(super::FrontierSlot {
+    let observed_at = now
+        .checked_sub(grace.saturating_add(Duration::from_millis(1)))
+        .unwrap_or(now);
+    actor.frontier_slot = Some(super::FrontierSlot::new(
         height,
         view,
         block_hash,
-        observed_at: now
-            .checked_sub(grace.saturating_add(Duration::from_millis(1)))
-            .unwrap_or(now),
-        last_updated_at: now,
-        body_present: false,
-        block_created_seen: false,
-        exact_fetch_armed: true,
-        frontier_info: None,
-        leader: None,
-        voters: BTreeSet::new(),
-        fetch_stage: super::FrontierBodyFetchStage::Leader,
-        last_fetch_at: None,
-        retry_window: Duration::from_millis(1),
-        pending_requesters: BTreeSet::new(),
-    });
+        observed_at,
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        false,
+        true,
+        false,
+        None,
+        None,
+    ));
 
     let _ = take_background_log(&background_log);
     assert!(
@@ -37404,6 +37402,59 @@ async fn seed_frontier_recovery_for_quorum_timeout_preserves_existing_same_heigh
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn seed_frontier_recovery_for_quorum_timeout_seeds_slot_from_same_height_vote_evidence() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0u64;
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB0; Hash::LENGTH]));
+    let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
+    let vote = crate::sumeragi::consensus::Vote {
+        phase: crate::sumeragi::consensus::Phase::Commit,
+        block_hash,
+        parent_state_root: zero_root,
+        post_state_root: zero_root,
+        height,
+        view,
+        epoch: actor.epoch_for_height(height),
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    actor.vote_log.insert(
+        (vote.phase, vote.height, vote.view, vote.epoch, vote.signer),
+        vote,
+    );
+    actor.frontier_recovery = None;
+
+    let now = Instant::now();
+    assert!(
+        actor.seed_frontier_recovery_for_quorum_timeout(height, view.saturating_add(1), now),
+        "same-height vote evidence should instantiate a frontier slot instead of reviving legacy frontier recovery"
+    );
+    assert!(
+        actor.frontier_recovery.is_none(),
+        "slot seeding must keep committed + 1 ownership out of the legacy frontier recovery controller"
+    );
+    let slot = actor.frontier_slot.as_ref().expect("frontier slot seeded");
+    assert_eq!(slot.height, height);
+    assert_eq!(slot.view, view);
+    assert_eq!(slot.block_hash, block_hash);
+    assert_eq!(
+        slot.repair_state.last_reason,
+        Some("quorum_timeout"),
+        "slot-owned handoff should preserve the quorum-timeout reason on the seeded frontier owner"
+    );
+    assert!(
+        actor.slot_has_proposal_evidence(height, view.saturating_add(1)),
+        "seeded same-height commit vote evidence must suppress competing local proposals after a view advance"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn frontier_recovery_suppresses_cleanup_and_rotate_while_same_height_dependency_backlog_is_active()
  {
     let _worker_guard = super::status::worker_queue_test_guard();
@@ -55633,12 +55684,13 @@ async fn trigger_view_change_updates_view_change_counters_and_index() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn trigger_view_change_quorum_timeout_suppressed_while_frontier_repair_remains_active() {
+async fn trigger_view_change_quorum_timeout_suppressed_while_future_gap_seeded_slot_awaits_body() {
     let mut harness = test_actor_harness(4).await;
     let _proof_guard = super::status::view_change_proof_test_guard();
     let _cause_guard = super::status::view_change_cause_test_guard();
     super::status::reset_view_change_cause_counters_for_tests();
     let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
 
     let now = Instant::now();
     let height = actor.committed_height_snapshot().saturating_add(1);
@@ -55647,12 +55699,28 @@ async fn trigger_view_change_quorum_timeout_suppressed_while_frontier_repair_rem
     actor
         .phase_tracker
         .on_view_change(height, current_view, now);
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA6; Hash::LENGTH]));
+    let topology = actor.effective_commit_topology();
 
-    assert!(
-        actor.frontier_recovery.is_none(),
-        "test requires frontier repair suppression to start without an owner"
+    let _ = take_background_log(&background_log);
+    actor.request_missing_block(
+        block_hash,
+        height,
+        current_view,
+        super::MissingBlockPriority::Consensus,
+        &topology,
     );
-    let _ = insert_unresolved_missing_request_for_tests(actor, 0xA6, height, 1, now, now);
+    let slot = actor.frontier_slot.as_ref().expect("frontier slot");
+    assert_eq!(slot.block_hash, block_hash);
+    assert!(
+        slot.exact_fetch_armed && !slot.body_present,
+        "future-gap evidence must seed the exact frontier owner without generic body materialization"
+    );
+    assert!(
+        actor.pending.missing_block_requests.is_empty(),
+        "future-gap evidence must not revive generic missing-block retries for committed + 1"
+    );
 
     actor.trigger_view_change_with_cause(
         height,
@@ -55663,13 +55731,31 @@ async fn trigger_view_change_quorum_timeout_suppressed_while_frontier_repair_rem
     assert_eq!(
         actor.phase_tracker.current_view(height),
         Some(current_view),
-        "active contiguous-frontier repair should suppress quorum-timeout view rotation"
+        "future-gap seeded exact frontier repair should suppress quorum-timeout view rotation"
     );
     assert!(
-        actor.frontier_recovery.is_some_and(|state| {
-            state.frontier_height == height && state.last_cause == "quorum_timeout"
-        }),
-        "suppression should seed unified quorum-timeout ownership for the frontier slot"
+        actor.frontier_recovery.is_none(),
+        "exact frontier ownership must stay in the slot FSM instead of reviving legacy frontier recovery"
+    );
+    assert!(
+        actor
+            .frontier_slot
+            .as_ref()
+            .is_some_and(|slot| slot.last_fetch_at.is_some()),
+        "quorum-timeout suppression must feed a slot-owned exact body fetch"
+    );
+    let entries = take_background_log(&background_log);
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry.msg_kind == Some("FetchBlockBody")),
+        "slot-owned suppression must emit exact FetchBlockBody traffic"
+    );
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| entry.msg_kind == Some("FetchPendingBlock")),
+        "slot-owned suppression must not fall back to generic missing-block fetches"
     );
     assert!(
         actor.subsystems.propose.forced_view_after_timeout.is_none(),
@@ -55687,13 +55773,13 @@ async fn trigger_view_change_quorum_timeout_suppressed_while_frontier_repair_rem
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn trigger_view_change_quorum_timeout_suppressed_for_exact_frontier_slot_without_block_created()
- {
+async fn trigger_view_change_quorum_timeout_suppressed_for_exact_frontier_slot() {
     let mut harness = test_actor_harness(4).await;
     let _proof_guard = super::status::view_change_proof_test_guard();
     let _cause_guard = super::status::view_change_cause_test_guard();
     super::status::reset_view_change_cause_counters_for_tests();
     let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
 
     let now = Instant::now();
     let height = actor.committed_height_snapshot().saturating_add(1);
@@ -55703,26 +55789,22 @@ async fn trigger_view_change_quorum_timeout_suppressed_for_exact_frontier_slot_w
         .phase_tracker
         .on_view_change(height, current_view, now);
 
-    actor.frontier_slot = Some(super::FrontierSlot {
+    actor.frontier_slot = Some(super::FrontierSlot::new(
         height,
-        view: current_view,
-        block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed(
-            [0xA7; Hash::LENGTH],
-        )),
-        observed_at: now,
-        last_updated_at: now,
-        body_present: false,
-        block_created_seen: false,
-        exact_fetch_armed: true,
-        frontier_info: None,
-        leader: None,
-        voters: BTreeSet::new(),
-        fetch_stage: super::FrontierBodyFetchStage::Leader,
-        last_fetch_at: None,
-        retry_window: Duration::from_secs(1),
-        pending_requesters: BTreeSet::new(),
-    });
+        current_view,
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA7; Hash::LENGTH])),
+        now,
+        Duration::from_secs(1),
+        None,
+        BTreeSet::new(),
+        false,
+        true,
+        false,
+        None,
+        None,
+    ));
 
+    let _ = take_background_log(&background_log);
     actor.trigger_view_change_with_cause(
         height,
         current_view,
@@ -55735,10 +55817,24 @@ async fn trigger_view_change_quorum_timeout_suppressed_for_exact_frontier_slot_w
         "a vote/QC-seeded exact frontier owner must suppress quorum-timeout rotation before BlockCreated arrives"
     );
     assert!(
-        actor.frontier_recovery.is_some_and(|state| {
-            state.frontier_height == height && state.last_cause == "quorum_timeout"
-        }),
-        "suppression should still seed unified quorum-timeout ownership for the active frontier"
+        actor.frontier_recovery.is_none(),
+        "exact frontier quorum-timeout suppression must stay inside the slot FSM"
+    );
+    let slot = actor.frontier_slot.as_ref().expect("frontier slot");
+    assert!(
+        slot.last_fetch_at.is_some(),
+        "suppressed quorum timeout must arm an exact body retry for the same slot"
+    );
+    assert!(
+        slot.leader.is_some() || !slot.voters.is_empty(),
+        "slot-owned retry should backfill deterministic fetch targets from topology"
+    );
+    let entries = take_background_log(&background_log);
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry.msg_kind == Some("FetchBlockBody")),
+        "exact frontier suppression must emit FetchBlockBody when the body is missing"
     );
     assert_eq!(
         super::status::snapshot()
@@ -55746,6 +55842,56 @@ async fn trigger_view_change_quorum_timeout_suppressed_for_exact_frontier_slot_w
             .quorum_timeout_total,
         0,
         "suppressed exact-frontier repair should not count a quorum-timeout view change"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn frontier_slot_lag_window_expiry_enters_deep_catchup_and_stops_exact_retry() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0u64;
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA8; Hash::LENGTH]));
+    let now = Instant::now();
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        height,
+        view,
+        block_hash,
+        now,
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        false,
+        true,
+        false,
+        None,
+        None,
+    ));
+
+    let actions = actor.apply_frontier_slot_event(
+        now,
+        super::FrontierSlotEvent::OnLagWindowExpired {
+            reason: "frontier_stall_reset",
+        },
+    );
+    assert_eq!(actions.enter_deep_catchup, Some("frontier_stall_reset"));
+    assert!(
+        actor
+            .frontier_slot
+            .as_ref()
+            .is_some_and(|slot| { matches!(slot.mode, super::FrontierSlotMode::DeepCatchup) }),
+        "lag-window expiry must move the exact frontier slot into absorbing deep catch-up mode"
+    );
+
+    let retry_actions =
+        actor.apply_frontier_slot_event(now, super::FrontierSlotEvent::OnFetchRetryDue);
+    assert!(
+        !retry_actions.fetch_block_body,
+        "exact body retry loop must stop once the exact frontier slot enters deep catch-up"
     );
 
     harness.shutdown.send();
@@ -72700,6 +72846,64 @@ async fn pacemaker_defers_reproposal_when_authoritative_block_already_owns_slot(
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn pacemaker_defers_reproposal_when_frontier_slot_owns_current_height() {
+    use std::borrow::Cow;
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    actor.subsystems.propose.new_view_tracker = NewViewTracker::default();
+    actor.highest_qc = None;
+
+    let tracked_height = actor.state.view().height() as u64 + 1;
+    let now = Instant::now();
+    let start = now
+        .checked_sub(actor.commit_quorum_timeout() + Duration::from_millis(1))
+        .unwrap_or(now);
+    actor.phase_tracker.start_new_round(tracked_height, start);
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        tracked_height,
+        0,
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB2; Hash::LENGTH])),
+        now,
+        Duration::from_secs(1),
+        None,
+        BTreeSet::new(),
+        false,
+        true,
+        false,
+        None,
+        None,
+    ));
+
+    let proposed = actor.on_pacemaker_propose_ready(now);
+    assert!(
+        !proposed,
+        "pacemaker should not assemble a competing proposal while the frontier slot already owns committed + 1 recovery"
+    );
+    assert!(
+        actor
+            .subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(tracked_height, 0)
+            .is_none(),
+        "frontier-slot ownership should block same-height proposal assembly even without cached proposal metadata"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn new_view_gossip_targets_excludes_sender_and_local() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -80517,6 +80721,113 @@ async fn slot_has_proposal_evidence_preserves_authoritative_frontier_owner_witho
     assert!(
         actor.slot_has_proposal_evidence(height, view),
         "authoritative frontier ownership must still count as observed proposal evidence"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn slot_has_proposal_evidence_preserves_same_height_candidate_across_view_change() {
+    let mut harness = test_actor_harness(4).await;
+    let _proof_guard = super::status::view_change_proof_test_guard();
+    let actor = &mut harness.actor;
+
+    let genesis_hash = seed_genesis_block_for_state(&actor.state);
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(genesis_hash));
+    let payload_hash = Hash::new(&super::proposals::block_payload_bytes(&block));
+    let proposal = Actor::build_consensus_proposal(
+        &block,
+        payload_hash,
+        sample_qc_ref(height.saturating_sub(1), view),
+        0,
+        view,
+        actor.epoch_for_height(height),
+    );
+    let created = actor
+        .frontier_block_created_from_proposal(&block, &proposal)
+        .expect("frontier BlockCreated");
+
+    actor
+        .handle_block_created(created, None)
+        .expect("handle BlockCreated");
+    actor.pending.pending_blocks.remove(&block.hash());
+    actor
+        .subsystems
+        .propose
+        .proposal_cache
+        .pop_proposal(height, view);
+    actor
+        .subsystems
+        .propose
+        .proposal_cache
+        .pop_hint(height, view);
+    actor.subsystems.propose.proposals_seen.clear();
+
+    actor.trigger_view_change_with_cause(height, view, super::ViewChangeCause::MissingQc);
+
+    assert_eq!(
+        actor.phase_tracker.current_view(height),
+        Some(view + 1),
+        "same-height view advance should still proceed through the slot FSM"
+    );
+    assert!(
+        actor.slot_has_proposal_evidence(height, view + 1),
+        "same-height view changes must preserve authoritative proposal evidence from the existing slot owner"
+    );
+    assert!(
+        actor
+            .frontier_slot
+            .as_ref()
+            .is_some_and(|slot| { slot.block_hash == block.hash() && slot.view == view }),
+        "same-height slot ownership must preserve the authoritative candidate across view changes"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn slot_has_proposal_evidence_counts_await_body_and_deep_catchup_slot_ownership() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0u64;
+    let now = Instant::now();
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB1; Hash::LENGTH]));
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        height,
+        view,
+        block_hash,
+        now,
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        false,
+        true,
+        false,
+        None,
+        None,
+    ));
+
+    assert!(
+        actor.slot_has_proposal_evidence(height, view.saturating_add(1)),
+        "an active committed+1 slot awaiting the exact body must still suppress competing same-height proposal/view-change churn"
+    );
+
+    let lag_actions = actor.apply_frontier_slot_event(
+        now.checked_add(Duration::from_secs(1)).unwrap_or(now),
+        super::FrontierSlotEvent::OnLagWindowExpired {
+            reason: "frontier_stall_reset",
+        },
+    );
+    assert_eq!(lag_actions.enter_deep_catchup, Some("frontier_stall_reset"));
+    assert!(
+        actor.slot_has_proposal_evidence(height, view.saturating_add(2)),
+        "deep-catchup ownership must continue to count as same-height proposal evidence until the slot is finalized or superseded"
     );
 
     harness.shutdown.send();

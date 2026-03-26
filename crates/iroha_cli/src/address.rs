@@ -45,7 +45,7 @@ pub struct Convert {
     /// Require I105 inputs to match the provided network prefix.
     #[arg(long = "expect-prefix", value_name = "PREFIX")]
     expect_prefix: Option<u16>,
-    /// Network prefix to use when emitting I105 output.
+    /// Network prefix to use when emitting i105 output.
     #[arg(
         long = "network-prefix",
         value_name = "PREFIX",
@@ -91,7 +91,7 @@ pub struct Audit {
     /// Require I105 inputs to match the provided network prefix.
     #[arg(long = "expect-prefix", value_name = "PREFIX")]
     expect_prefix: Option<u16>,
-    /// Network prefix to use when emitting I105 output.
+    /// Network prefix to use when emitting i105 output.
     #[arg(
         long = "network-prefix",
         value_name = "PREFIX",
@@ -208,7 +208,7 @@ pub struct Normalize {
     /// Require I105 inputs to match the provided network prefix.
     #[arg(long = "expect-prefix", value_name = "PREFIX")]
     expect_prefix: Option<u16>,
-    /// Network prefix to use when emitting I105 output.
+    /// Network prefix to use when emitting i105 output.
     #[arg(
         long = "network-prefix",
         value_name = "PREFIX",
@@ -683,7 +683,7 @@ mod tests {
                     .expect("public key literal should parse"),
             )
             .canonical_i105()
-            .expect("canonical i105"),
+            .expect("canonical I105"),
         );
     }
 }

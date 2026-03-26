@@ -20,7 +20,7 @@ docker_bins = ["iroha", "irohad", "iroha3", "iroha3d", "iroha2", "iroha2d", "kag
 [workspace.dependencies]
 iroha_core = { path = "crates/iroha_core" }
 
-iroha_torii = { path = "crates/iroha_torii", default-features = false, features = ["app_api", "transparent_api", "ws_integration_tests", "connect", "circuit-params", "zk-halo2", "zk-halo2-ipa", "ipa-commitment"] }
+iroha_torii = { path = "crates/iroha_torii", default-features = false, features = ["app_api", "transparent_api", "ws_integration_tests", "connect", "circuit-params", "zk-halo2", "zk-halo2-ipa", "zk-stark", "ipa-commitment"] }
 iroha_torii_shared = { path = "crates/iroha_torii_shared" }
 
 iroha = { path = "crates/iroha" }

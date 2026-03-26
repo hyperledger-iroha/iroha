@@ -115,7 +115,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/names/{namespace}/{literal}/freeze` | УДАЛИТЬ | `GovernanceHookV1` | Разморозить после ограничения; Убежден, что отмена совета зафиксирована. |
 | `/v1/sns/reserved/{selector}` | ПОСТ | `ReservedAssignmentRequestV1` | Назначение зарезервированных имен стюарда/совета. |
 | `/v1/sns/policies/{suffix_id}` | ПОЛУЧИТЬ | -- | Получает текущую `SuffixPolicyV1` (кэшируемо). |
-| `/v1/sns/names/{namespace}/{literal}` | ПОЛУЧИТЬ | -- | Возвращает текущий `NameRecordV1` + эффективное состояние (Active, Grace и т. д.). |**Селектор кодирования:** сегмент `{selector}` принимает I105, сжатый (`sora`) или канонический шестнадцатеричный формат по ADDR-5; Torii нормализуется через `NameSelectorV1`.
+| `/v1/sns/names/{namespace}/{literal}` | ПОЛУЧИТЬ | -- | Возвращает текущий `NameRecordV1` + эффективное состояние (Active, Grace и т. д.). |**Селектор кодирования:** сегмент `{selector}` принимает i105, сжатый (`sora`) или канонический шестнадцатеричный формат по ADDR-5; Torii нормализуется через `NameSelectorV1`.
 
 **Модель ошибок:** все эндпоинты возвращают Norito JSON с `code`, `message`, `details`. Коды включают `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
 
@@ -161,7 +161,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner <i105-account-id> \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -221,7 +221,7 @@ Torii последние доказательства, проверяя:
 
 ### 6.1 Стандартная регистрация1. Клиент запрашивает `/v1/sns/policies/{suffix_id}`, чтобы получить цены, льготы и доступные уровни.
 2. Клиент строит `RegisterNameRequestV1`:
-   - `selector` получен из предпочитаемого I105 или второго по предпочтению сжатого (`sora`) ярлыка.
+   - `selector` получен из предпочитаемого i105 или второго по предпочтению сжатого (`sora`) ярлыка.
    - `term_years` в пределах политики.
    - `payment` ссылается на перевод сплиттера казначейства/стюарда.
 3. Torii сначала:

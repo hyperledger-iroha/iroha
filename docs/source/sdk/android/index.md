@@ -59,7 +59,7 @@ TransactionBuilder builder = new TransactionBuilder(codec, keyManager);
 
 TransactionPayload payload = TransactionPayload.builder()
     .setChainId("00000000")
-    .setAuthority("i105...")
+    .setAuthority("<i105-account-id>")
     .setCreationTimeMs(System.currentTimeMillis())
     .setExecutable(Executable.ivm(new byte[] { /* Kotodama bytecode */ }))
     .build();
@@ -126,7 +126,7 @@ import org.hyperledger.iroha.android.nexus.UaidPortfolioResponse;
 String uaid = UaidLiteral.canonicalize("  UAID:DEADBEEF...  ", "lookup uaid");
 UaidPortfolioQuery portfolioQuery =
     UaidPortfolioQuery.builder()
-        .setAssetId("61CtjvNd9T3THAR65GsMVHr82Bjc#6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw")
+        .setAssetId("61CtjvNd9T3THAR65GsMVHr82Bjc")
         .build();
 UaidPortfolioResponse portfolio = transport.getUaidPortfolio(uaid, portfolioQuery).join();
 portfolio.dataspaces().forEach(ds -> {
@@ -185,9 +185,14 @@ org.hyperledger.iroha.android.gpu.CudaAcceleratorsNativeSmokeTests`).
 
 Roadmap items tracked under `AND2`–`AND5` extend this snapshot with platform
 keystore bindings (StrongBox attestation), generated instruction builders,
-telemetry hooks, and distribution artifacts. See `roadmap.md` (Android section)
-and `status.md` for the latest progress notes. For the upcoming observability
-milestone (`AND7`), refer to the companion
+telemetry hooks, and distribution artifacts. The current generated builder set
+already includes NFT register/transfer helpers plus the first dedicated RWA
+lot helpers (`RegisterRwa`, `TransferRwa`, `MergeRwas`, `RedeemRwa`,
+`FreezeRwa`, `UnfreezeRwa`, `HoldRwa`, `ReleaseRwa`, `ForceTransferRwa`,
+RWA metadata setters, and `SetRwaControls`). See `roadmap.md` (Android
+section) and `status.md` for the latest progress notes. For the upcoming
+observability milestone (`AND7`), refer
+to the companion
 [`Android Telemetry Redaction Plan`](telemetry_redaction.md) for signal
 inventory, policy deltas, and readiness deliverables ahead of the SRE
 governance review. Enablement artefacts live under

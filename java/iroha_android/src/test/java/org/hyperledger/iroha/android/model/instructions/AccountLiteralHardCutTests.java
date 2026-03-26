@@ -15,7 +15,7 @@ public final class AccountLiteralHardCutTests {
   @Test
   public void accountBuildersRejectDomainSuffixedLiterals() throws Exception {
     final String account = sampleI105(0x11);
-    final String legacy = account + "@wonderland";
+    final String legacy = account + "@hbl.dataspace";
 
     expectIllegalArgument(() -> GrantRoleInstruction.builder().setDestinationAccountId(legacy));
     expectIllegalArgument(() -> RevokeRoleInstruction.builder().setDestinationAccountId(legacy));
@@ -29,6 +29,9 @@ public final class AccountLiteralHardCutTests {
         () -> TransferAssetDefinitionInstruction.builder().setDestinationAccountId(legacy));
     expectIllegalArgument(() -> TransferNftInstruction.builder().setSourceAccountId(legacy));
     expectIllegalArgument(() -> TransferNftInstruction.builder().setDestinationAccountId(legacy));
+    expectIllegalArgument(() -> TransferRwaInstruction.builder().setSourceAccountId(legacy));
+    expectIllegalArgument(() -> TransferRwaInstruction.builder().setDestinationAccountId(legacy));
+    expectIllegalArgument(() -> ForceTransferRwaInstruction.builder().setDestinationAccountId(legacy));
     expectIllegalArgument(() -> TransferAssetInstruction.builder().setDestinationAccountId(legacy));
     expectIllegalArgument(() -> RegisterAccountInstruction.builder().setAccountId(legacy));
     expectIllegalArgument(() -> MultisigRegisterInstruction.builder().setAccountId(legacy));
@@ -38,7 +41,7 @@ public final class AccountLiteralHardCutTests {
   @Test
   public void accountTargetInstructionsRejectDomainSuffixedLiterals() throws Exception {
     final String account = sampleI105(0x22);
-    final String legacy = account + "@wonderland";
+    final String legacy = account + "@hbl.dataspace";
 
     expectIllegalArgument(() -> SetKeyValueInstruction.builder().setAccountId(legacy));
     expectIllegalArgument(() -> RemoveKeyValueInstruction.builder().setAccountId(legacy));
@@ -49,9 +52,9 @@ public final class AccountLiteralHardCutTests {
   public void persistCouncilRejectsDomainSuffixedMembers() throws Exception {
     final String account = sampleI105(0x33);
     expectIllegalArgument(
-        () -> PersistCouncilForEpochInstruction.builder().addMember(account + "@wonderland"));
+        () -> PersistCouncilForEpochInstruction.builder().addMember(account + "@hbl.dataspace"));
     expectIllegalArgument(
-        () -> PersistCouncilForEpochInstruction.builder().addAlternate(account + "@wonderland"));
+        () -> PersistCouncilForEpochInstruction.builder().addAlternate(account + "@hbl.dataspace"));
   }
 
   @Test
@@ -82,7 +85,7 @@ public final class AccountLiteralHardCutTests {
 
     try {
       ConnectCrypto.buildApprovePreimage(
-          sessionId, appPublic, walletPublic, account + "@wonderland", null, null);
+          sessionId, appPublic, walletPublic, account + "@hbl.dataspace", null, null);
       throw new AssertionError("expected ConnectProtocolException");
     } catch (final ConnectProtocolException expected) {
       assert expected.getMessage().contains("canonical I105 encoded")

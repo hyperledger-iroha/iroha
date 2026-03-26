@@ -4,22 +4,20 @@
 package org.hyperledger.iroha.android.address;
 
 import java.math.BigInteger;
-import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Objects;
 import org.hyperledger.iroha.android.crypto.Blake3;
 
 /**
- * Computes and validates canonical unprefixed Base58 asset-definition addresses.
+ * Encodes and validates canonical unprefixed Base58 asset-definition addresses.
  *
  * <p>Iroha represents {@code AssetDefinitionId} as canonical UUIDv4 bytes wrapped in a versioned
  * Base58 address with a BLAKE3 checksum:
  *
  * <ol>
- *   <li>BLAKE3({@code "name#domain"}) → 32 bytes</li>
- *   <li>Take the first 16 bytes</li>
- *   <li>Set UUIDv4 version bits: {@code bytes[6] = (bytes[6] & 0x0F) | 0x40}</li>
- *   <li>Set RFC 4122 variant bits: {@code bytes[8] = (bytes[8] & 0x3F) | 0x80}</li>
+ *   <li>Take canonical 16-byte UUIDv4 payload bytes</li>
+ *   <li>Verify UUIDv4 version bits: {@code bytes[6] = (bytes[6] & 0xF0) == 0x40}</li>
+ *   <li>Verify RFC 4122 variant bits: {@code bytes[8] = (bytes[8] & 0xC0) == 0x80}</li>
  *   <li>Wrap as {@code version_byte + 16 uuid bytes + 4-byte BLAKE3 checksum}</li>
  *   <li>Encode the 21-byte payload as unprefixed Base58</li>
  * </ol>
@@ -45,19 +43,6 @@ public final class AssetDefinitionIdEncoder {
   private AssetDefinitionIdEncoder() {}
 
   /**
-   * Computes the canonical asset-definition address from asset name and domain.
-   *
-   * @param name the asset name (e.g., "pkr")
-   * @param domain the domain name (e.g., "sbp")
-   * @return the canonical unprefixed Base58 address
-   */
-  public static String encode(String name, String domain) {
-    Objects.requireNonNull(name, "name");
-    Objects.requireNonNull(domain, "domain");
-    return encodeFromBytes(computeDefinitionBytes(name, domain));
-  }
-
-  /**
    * Wraps canonical UUIDv4 bytes as a canonical unprefixed Base58 address.
    *
    * @param definitionBytes 16-byte UUIDv4 payload
@@ -77,26 +62,6 @@ public final class AssetDefinitionIdEncoder {
           "Asset definition bytes must encode RFC 4122 variant bits");
     }
     return encodeBase58(addressPayload(definitionBytes));
-  }
-
-  /**
-   * Computes the raw 16-byte UUIDv4 payload from asset name and domain.
-   *
-   * @param name the asset name
-   * @param domain the domain name
-   * @return the 16 canonical UUIDv4 bytes
-   */
-  public static byte[] computeDefinitionBytes(String name, String domain) {
-    Objects.requireNonNull(name, "name");
-    Objects.requireNonNull(domain, "domain");
-    byte[] input = (name + "#" + domain).getBytes(StandardCharsets.UTF_8);
-    byte[] hash = Blake3.hash(input);
-
-    byte[] definitionBytes = new byte[UUID_BYTES_LEN];
-    System.arraycopy(hash, 0, definitionBytes, 0, UUID_BYTES_LEN);
-    definitionBytes[6] = (byte) ((definitionBytes[6] & 0x0F) | 0x40);
-    definitionBytes[8] = (byte) ((definitionBytes[8] & 0x3F) | 0x80);
-    return definitionBytes;
   }
 
   /**

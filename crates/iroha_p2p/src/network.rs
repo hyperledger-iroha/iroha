@@ -4840,6 +4840,7 @@ where
         rcgen::generate_simple_self_signed(["iroha-quic".to_owned()])
             .map_err(|e| Error::from(std::io::Error::other(format!("rcgen: {e}"))))?;
     let cert_der = cert.der().clone().into_owned();
+    let transport_binding = crate::transport::certificate_fingerprint(cert_der.as_ref());
     let priv_key = PrivatePkcs8KeyDer::from(signing_key.serialize_der());
 
     let mut tls = rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
@@ -4891,6 +4892,7 @@ where
             let soranet_handshake = soranet_handshake.clone();
             let relay_role = relay_role;
             let trust_gossip = trust_gossip;
+            let transport_binding = transport_binding;
             tokio::spawn(async move {
                 match incoming.accept() {
                     Ok(connecting) => {
@@ -4959,6 +4961,7 @@ where
                                 send_low,
                                 recv_low,
                                 Some(remote),
+                                Some(transport_binding),
                             ),
                             service_message_sender,
                             idle_timeout,
@@ -5084,6 +5087,7 @@ where
         rcgen::generate_simple_self_signed(["iroha-tls".to_owned()])
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("rcgen: {e}")))?;
     let cert_der = cert.der().clone();
+    let transport_binding = crate::transport::certificate_fingerprint(cert_der.as_ref());
 
     let cert_chain = vec![rustls::pki_types::CertificateDer::from(cert_der).into_owned()];
     let priv_key = rustls::pki_types::PrivateKeyDer::from(
@@ -5127,6 +5131,7 @@ where
             let tcp_keepalive = tcp_keepalive;
             let quic_datagrams_enabled = quic_datagrams_enabled;
             let quic_datagram_max_payload_bytes = quic_datagram_max_payload_bytes;
+            let transport_binding = transport_binding;
 
             tokio::spawn(async move {
                 let conn_id = id_alloc.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -5158,7 +5163,12 @@ where
                         connected_from::<T, K, E>(
                             public_address,
                             key_pair,
-                            Connection::from_split(conn_id, read_half, write_half),
+                            Connection::from_split_with_binding(
+                                conn_id,
+                                read_half,
+                                write_half,
+                                Some(transport_binding),
+                            ),
                             service_message_sender,
                             idle_timeout,
                             chain_id,

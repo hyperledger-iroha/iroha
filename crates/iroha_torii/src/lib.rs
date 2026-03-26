@@ -60,7 +60,7 @@ mod api_version;
 #[cfg(feature = "app_api")]
 mod identifier_resolution;
 #[cfg(feature = "app_api")]
-mod offline_reserve;
+mod offline_lineage;
 mod operator_auth;
 mod operator_signatures;
 #[cfg(feature = "push")]
@@ -261,6 +261,7 @@ use iroha_data_model::{
     nft::NftId,
     peer::Peer,
     permission::Permission,
+    rwa::RwaId,
     transaction::{
         SignedTransaction, TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload,
         signed::TransactionEntrypoint,
@@ -678,11 +679,12 @@ fn resolve_alias_on_chain(
         }
         if let Some(existing) = matched_account_id.as_ref() {
             if existing != account_id {
-                return Err(Error::Query(
-                    iroha_data_model::ValidationFail::InternalError(format!(
+                return Err(Error::AppConflict {
+                    code: "account_alias_conflict",
+                    message: format!(
                         "account alias `{canonical}` is bound to multiple accounts: {existing} and {account_id}"
-                    )),
-                ));
+                    ),
+                });
             }
         } else {
             matched_account_id = Some(account_id.clone());
@@ -804,14 +806,14 @@ struct TxHistoryJwtConfig {
 struct TxHistoryAccessPolicy {
     jwt: Option<TxHistoryJwtConfig>,
     mandatory_aliases: HashMap<String, HashSet<String>>,
-    allowed_asset_definition_id: Option<AssetDefinitionId>,
+    allowed_asset_definition_id: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
 impl TxHistoryAccessPolicy {
     fn is_mandatory_alias(&self, dataspace_id: &str, alias: &str) -> bool {
         let dataspace = dataspace_id.trim().to_ascii_lowercase();
-        let canonical_alias = canonical_tx_history_alias(alias);
+        let canonical_alias = normalize_tx_history_alias(alias);
         self.mandatory_aliases
             .get(&dataspace)
             .is_some_and(|aliases| aliases.contains(&canonical_alias))
@@ -867,18 +869,8 @@ fn parse_tx_history_jwt_algorithm(value: &str) -> Option<JwtAlgorithm> {
 }
 
 #[cfg(feature = "app_api")]
-fn canonical_tx_history_alias(alias: &str) -> String {
-    let normalized = alias.trim().to_ascii_lowercase();
-    let Some((label, scope)) = normalized.split_once('@') else {
-        return normalized;
-    };
-    if scope.contains('.') {
-        return normalized;
-    }
-    match scope {
-        "hbl" | "ubl" => format!("{label}@{scope}.sbp"),
-        _ => normalized,
-    }
+fn normalize_tx_history_alias(alias: &str) -> String {
+    alias.trim().to_ascii_lowercase()
 }
 
 #[cfg(feature = "app_api")]
@@ -918,7 +910,7 @@ fn parse_tx_history_mandatory_aliases(path: &Path) -> HashMap<String, HashSet<St
                     path.display()
                 )
             });
-            let canonical = canonical_tx_history_alias(alias_literal);
+            let canonical = normalize_tx_history_alias(alias_literal);
             if !canonical.is_empty() {
                 normalized_aliases.insert(canonical);
             }
@@ -1025,7 +1017,7 @@ struct AppState {
     mcp: iroha_config::parameters::actual::ToriiMcp,
     mcp_rate_limiter: limits::RateLimiter,
     mcp_tools: Arc<Vec<mcp::ToolSpec>>,
-    mcp_dispatch_router: std::sync::RwLock<Option<axum::Router<std::sync::Arc<AppState>>>>,
+    mcp_dispatch_router: std::sync::RwLock<Option<axum::Router>>,
     fee_policy: FeePolicy,
     norito_rpc: iroha_config::parameters::actual::NoritoRpcTransport,
     online_peers: OnlinePeersProvider,
@@ -1113,6 +1105,8 @@ struct AppState {
     offline_issuer: Option<OfflineIssuerSigner>,
     #[cfg(feature = "app_api")]
     account_faucet: Option<iroha_config::parameters::actual::ToriiFaucet>,
+    #[cfg(feature = "app_api")]
+    offline_policy_snapshot: Arc<std::sync::RwLock<crate::offline_lineage::OfflinePolicySnapshot>>,
     #[cfg(feature = "app_api")]
     uaid_onboarding: Option<AccountOnboardingSigner>,
     soracloud_runtime: Option<SharedSoracloudRuntime>,
@@ -2598,7 +2592,7 @@ fn push_error_response(
 #[cfg(all(feature = "app_api", feature = "push"))]
 async fn handler_push_register_device(
     State(app): State<SharedAppState>,
-    NoritoJson(req): NoritoJson<push::RegisterDeviceRequest>,
+    NoritoJson(mut req): NoritoJson<push::RegisterDeviceRequest>,
 ) -> AxResponse {
     if app.push.is_none() {
         return push_error_response(
@@ -2607,6 +2601,22 @@ async fn handler_push_register_device(
             "push bridge disabled",
         );
     }
+    let account_id = match routing::parse_account_literal_with_state(
+        app.state.as_ref(),
+        &req.account_id,
+        &app.telemetry,
+        "/v1/notify/devices",
+    ) {
+        Ok((account_id, _)) => account_id,
+        Err(_) => {
+            return push_error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_account",
+                format!("invalid account id `{}`", req.account_id.trim()),
+            );
+        }
+    };
+    req.account_id = account_id.to_string();
     let rate_key = format!("push:{}", req.account_id);
     if !app.push_rate_limiter.allow(&rate_key).await {
         return push_error_response(
@@ -2947,15 +2957,14 @@ async fn handler_account_transactions_query(
     env.pagination.limit = Some(page_limit);
     env.fetch_size = limits.clamp_fetch_size(env.fetch_size)?;
     let payload = crate::utils::extractors::NoritoJson(env);
+    let allowed_asset_definition_id = resolve_tx_history_allowed_asset_definition_id(&app)?;
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_account_transactions_with_policy(
             app.state.clone(),
             AxPath(account_id),
             payload,
             tel.clone(),
-            app.tx_history_access_policy
-                .allowed_asset_definition_id
-                .clone(),
+            allowed_asset_definition_id.clone(),
         )
         .await
         .map(IntoResponse::into_response);
@@ -2972,9 +2981,7 @@ async fn handler_account_transactions_query(
         AxPath(key_hint),
         payload,
         tel,
-        app.tx_history_access_policy
-            .allowed_asset_definition_id
-            .clone(),
+        allowed_asset_definition_id,
     )
     .await
     .map(IntoResponse::into_response)
@@ -3113,15 +3120,14 @@ async fn handler_account_transactions_get(
     let mut params = params;
     let page_limit = limits.clamp_page_limit(params.limit)?;
     params.limit = Some(page_limit);
+    let allowed_asset_definition_id = resolve_tx_history_allowed_asset_definition_id(&app)?;
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_account_transactions_get_with_policy(
             app.state.clone(),
             AxPath(account_id),
             AxQuery(params),
             tel.clone(),
-            app.tx_history_access_policy
-                .allowed_asset_definition_id
-                .clone(),
+            allowed_asset_definition_id.clone(),
         )
         .await
         .map(IntoResponse::into_response);
@@ -3138,9 +3144,7 @@ async fn handler_account_transactions_get(
         AxPath(key_hint),
         AxQuery(params),
         tel,
-        app.tx_history_access_policy
-            .allowed_asset_definition_id
-            .clone(),
+        allowed_asset_definition_id,
     )
     .await
     .map(IntoResponse::into_response)
@@ -3160,6 +3164,10 @@ async fn handler_transactions_history_get(
     let viewer = match tx_history_viewer_from_headers(&app, &headers) {
         Ok(viewer) => viewer,
         Err(response) => return Ok(response),
+    };
+    let allowed_asset_definition_id = match resolve_tx_history_allowed_asset_definition_id(&app) {
+        Ok(value) => value,
+        Err(err) => return Ok(tx_history_alias_resolution_reject(err)),
     };
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
@@ -3182,9 +3190,7 @@ async fn handler_transactions_history_get(
         crate::NoritoQuery(params),
         tel,
         visibility,
-        app.tx_history_access_policy
-            .allowed_asset_definition_id
-            .clone(),
+        allowed_asset_definition_id,
     )
     .await
     .map(IntoResponse::into_response)
@@ -3480,9 +3486,7 @@ async fn handler_accounts_onboard_multisig(
 #[derive(JsonDeserialize)]
 struct AccountsPortfolioQuery {
     #[norito(default)]
-    asset: Option<String>,
-    #[norito(default)]
-    scope: Option<String>,
+    asset_id: Option<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -3495,22 +3499,21 @@ async fn handler_accounts_portfolio(
     AxQuery(query): AxQuery<AccountsPortfolioQuery>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    let asset = query
-        .asset
+    let asset_id = query
+        .asset_id
         .as_deref()
-        .map(|raw| parse_asset_definition_id(app.as_ref(), raw))
-        .transpose()?;
-    let scope = query
-        .scope
-        .as_deref()
-        .map(crate::routing::parse_asset_balance_scope_literal)
-        .transpose()?;
+        .map(iroha_data_model::asset::AssetId::parse_literal)
+        .transpose()
+        .map_err(|err| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
+            ))
+        })?;
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_v1_accounts_portfolio(
             app.state.clone(),
             AxPath(uaid_literal),
-            asset,
-            scope,
+            asset_id,
             app.telemetry.clone(),
         )
         .await;
@@ -3530,8 +3533,7 @@ async fn handler_accounts_portfolio(
     routing::handle_v1_accounts_portfolio(
         app.state.clone(),
         AxPath(uaid_literal),
-        asset,
-        scope,
+        asset_id,
         app.telemetry.clone(),
     )
     .await
@@ -4006,13 +4008,13 @@ fn rename_offline_json_key(map: &mut norito::json::Map, from: &str, to: &str) {
 }
 
 #[cfg(feature = "app_api")]
-fn translate_cash_authorization_to_reserve_json(value: &mut Value) -> Result<(), Error> {
+fn translate_cash_authorization_to_lineage_json(value: &mut Value) -> Result<(), Error> {
     let Some(map) = value.as_object_mut() else {
         return Err(offline_cash_invalid_payload(
             "offline cash authorization must be an object",
         ));
     };
-    rename_offline_json_key(map, "lineage_id", "reserve_id");
+    rename_offline_json_key(map, "lineage_id", "lineage_id");
     if let Some(device_binding_value) = map.get("device_binding").cloned() {
         let binding = decode_offline_cash_device_binding(
             device_binding_value,
@@ -4030,7 +4032,7 @@ fn translate_cash_authorization_to_reserve_json(value: &mut Value) -> Result<(),
 
 #[cfg(feature = "app_api")]
 fn encode_offline_cash_device_binding_value(
-    binding: &crate::offline_reserve::OfflineCashAndroidDeviceBinding,
+    binding: &crate::offline_lineage::OfflineCashAndroidDeviceBinding,
 ) -> Result<Value, Error> {
     norito::json::to_value(binding).map_err(|err| {
         offline_cash_invalid_payload(format!(
@@ -4040,16 +4042,16 @@ fn encode_offline_cash_device_binding_value(
 }
 
 #[cfg(feature = "app_api")]
-fn translate_reserve_authorization_to_cash_json(
+fn translate_lineage_authorization_to_cash_json(
     value: &mut Value,
-    fallback_binding: Option<&crate::offline_reserve::OfflineCashAndroidDeviceBinding>,
+    fallback_binding: Option<&crate::offline_lineage::OfflineCashAndroidDeviceBinding>,
 ) -> Result<(), Error> {
     let Some(map) = value.as_object_mut() else {
         return Err(offline_cash_invalid_payload(
             "offline cash authorization must be an object",
         ));
     };
-    rename_offline_json_key(map, "reserve_id", "lineage_id");
+    rename_offline_json_key(map, "lineage_id", "lineage_id");
     if !map.contains_key("device_binding") {
         if let Some(binding) = fallback_binding {
             map.insert(
@@ -4065,34 +4067,34 @@ fn translate_reserve_authorization_to_cash_json(
 }
 
 #[cfg(feature = "app_api")]
-fn translate_cash_state_to_reserve_json(value: &mut Value) -> Result<(), Error> {
+fn translate_cash_state_to_lineage_json(value: &mut Value) -> Result<(), Error> {
     let Some(map) = value.as_object_mut() else {
         return Err(offline_cash_invalid_payload(
             "offline cash state must be an object",
         ));
     };
-    rename_offline_json_key(map, "lineage_id", "reserve_id");
-    rename_offline_json_key(map, "locked_balance", "parked_balance");
+    rename_offline_json_key(map, "lineage_id", "lineage_id");
+    rename_offline_json_key(map, "locked_balance", "locked_balance");
     if let Some(authorization) = map.get_mut("authorization") {
-        translate_cash_authorization_to_reserve_json(authorization)?;
+        translate_cash_authorization_to_lineage_json(authorization)?;
     }
     Ok(())
 }
 
 #[cfg(feature = "app_api")]
-fn translate_reserve_state_to_cash_json(
+fn translate_lineage_state_to_cash_json(
     value: &mut Value,
-    fallback_binding: Option<&crate::offline_reserve::OfflineCashAndroidDeviceBinding>,
+    fallback_binding: Option<&crate::offline_lineage::OfflineCashAndroidDeviceBinding>,
 ) -> Result<(), Error> {
     let Some(map) = value.as_object_mut() else {
         return Err(offline_cash_invalid_payload(
             "offline cash state must be an object",
         ));
     };
-    rename_offline_json_key(map, "reserve_id", "lineage_id");
-    rename_offline_json_key(map, "parked_balance", "locked_balance");
+    rename_offline_json_key(map, "lineage_id", "lineage_id");
+    rename_offline_json_key(map, "locked_balance", "locked_balance");
     if let Some(authorization) = map.get_mut("authorization") {
-        translate_reserve_authorization_to_cash_json(authorization, fallback_binding)?;
+        translate_lineage_authorization_to_cash_json(authorization, fallback_binding)?;
     }
     Ok(())
 }
@@ -4131,8 +4133,8 @@ fn decode_offline_transfer_payload_value(raw_payload: &str) -> Result<Value, Err
 fn decode_offline_cash_device_binding(
     value: Value,
     context: &'static str,
-) -> Result<crate::offline_reserve::OfflineCashAndroidDeviceBinding, Error> {
-    norito::json::from_value::<crate::offline_reserve::OfflineCashAndroidDeviceBinding>(value)
+) -> Result<crate::offline_lineage::OfflineCashAndroidDeviceBinding, Error> {
+    norito::json::from_value::<crate::offline_lineage::OfflineCashAndroidDeviceBinding>(value)
         .map_err(|err| {
             offline_cash_invalid_payload(format!("failed to decode offline cash {context}: {err}"))
         })
@@ -4142,28 +4144,28 @@ fn decode_offline_cash_device_binding(
 fn decode_offline_cash_device_proof(
     value: Value,
     context: &'static str,
-) -> Result<crate::offline_reserve::OfflineCashAndroidDeviceProof, Error> {
-    norito::json::from_value::<crate::offline_reserve::OfflineCashAndroidDeviceProof>(value)
+) -> Result<crate::offline_lineage::OfflineCashAndroidDeviceProof, Error> {
+    norito::json::from_value::<crate::offline_lineage::OfflineCashAndroidDeviceProof>(value)
         .map_err(|err| {
             offline_cash_invalid_payload(format!("failed to decode offline cash {context}: {err}"))
         })
 }
 
 #[cfg(feature = "app_api")]
-fn translate_cash_receipt_to_reserve_json(value: &mut Value) -> Result<(), Error> {
+fn translate_cash_receipt_to_lineage_json(value: &mut Value) -> Result<(), Error> {
     let Some(map) = value.as_object_mut() else {
         return Err(offline_cash_invalid_payload(
             "offline cash receipt must be an object",
         ));
     };
-    rename_offline_json_key(map, "lineage_id", "reserve_id");
-    rename_offline_json_key(map, "pre_locked_balance", "pre_parked_balance");
-    rename_offline_json_key(map, "post_locked_balance", "post_parked_balance");
-    rename_offline_json_key(map, "counterparty_lineage_id", "counterparty_reserve_id");
+    rename_offline_json_key(map, "lineage_id", "lineage_id");
+    rename_offline_json_key(map, "pre_locked_balance", "pre_locked_balance");
+    rename_offline_json_key(map, "post_locked_balance", "post_locked_balance");
+    rename_offline_json_key(map, "counterparty_lineage_id", "counterparty_lineage_id");
     if let Some(device_proof_value) = map.remove("device_proof") {
         let proof = decode_offline_cash_device_proof(device_proof_value, "receipt device_proof")?;
         let attestation =
-            norito::json::to_value(&crate::offline_reserve::OfflineDeviceAttestation {
+            norito::json::to_value(&crate::offline_lineage::OfflineDeviceAttestation {
                 key_id: proof.attestation_key_id,
                 counter: proof.counter.unwrap_or(0),
                 assertion_base64: proof.assertion_base64,
@@ -4181,28 +4183,28 @@ fn translate_cash_receipt_to_reserve_json(value: &mut Value) -> Result<(), Error
         map.entry("attestation".to_owned()).or_insert(attestation);
     }
     if let Some(authorization) = map.get_mut("authorization") {
-        translate_cash_authorization_to_reserve_json(authorization)?;
+        translate_cash_authorization_to_lineage_json(authorization)?;
     }
     Ok(())
 }
 
 #[cfg(feature = "app_api")]
-fn translate_cash_outgoing_payload_to_reserve_json(value: &mut Value) -> Result<(), Error> {
+fn translate_cash_outgoing_payload_to_lineage_json(value: &mut Value) -> Result<(), Error> {
     let Some(map) = value.as_object_mut() else {
         return Err(offline_cash_invalid_payload(
             "offline transfer payload must be an object",
         ));
     };
     if let Some(anchor) = map.get_mut("anchor") {
-        translate_cash_state_to_reserve_json(anchor)?;
+        translate_cash_state_to_lineage_json(anchor)?;
     }
     if let Some(Value::Array(items)) = map.get_mut("ancestry_receipts") {
         for item in items {
-            translate_cash_receipt_to_reserve_json(item)?;
+            translate_cash_receipt_to_lineage_json(item)?;
         }
     }
     if let Some(receipt) = map.get_mut("receipt") {
-        translate_cash_receipt_to_reserve_json(receipt)?;
+        translate_cash_receipt_to_lineage_json(receipt)?;
     }
     Ok(())
 }
@@ -4210,7 +4212,7 @@ fn translate_cash_outgoing_payload_to_reserve_json(value: &mut Value) -> Result<
 #[cfg(feature = "app_api")]
 fn extract_offline_cash_mode(
     value: &Value,
-) -> Result<crate::offline_reserve::OfflineCashAttestationMode, Error> {
+) -> Result<crate::offline_lineage::OfflineCashAttestationMode, Error> {
     let Some(map) = value.as_object() else {
         return Err(offline_cash_invalid_payload(
             "offline cash request must be an object",
@@ -4235,12 +4237,12 @@ fn extract_offline_cash_mode(
             }
             if binding.platform.eq_ignore_ascii_case("android") {
                 return Ok(
-                    crate::offline_reserve::OfflineCashAttestationMode::Android { binding, proof },
+                    crate::offline_lineage::OfflineCashAttestationMode::Android { binding, proof },
                 );
             }
             if binding.platform.eq_ignore_ascii_case("ios") {
                 return Ok(
-                    crate::offline_reserve::OfflineCashAttestationMode::AppleAttest {
+                    crate::offline_lineage::OfflineCashAttestationMode::AppleAttest {
                         binding,
                         proof,
                     },
@@ -4255,21 +4257,21 @@ fn extract_offline_cash_mode(
 
 #[cfg(feature = "app_api")]
 fn clone_offline_cash_mode_binding(
-    mode: &crate::offline_reserve::OfflineCashAttestationMode,
-) -> crate::offline_reserve::OfflineCashAndroidDeviceBinding {
+    mode: &crate::offline_lineage::OfflineCashAttestationMode,
+) -> crate::offline_lineage::OfflineCashAndroidDeviceBinding {
     match mode {
-        crate::offline_reserve::OfflineCashAttestationMode::AppleAttest { binding, .. }
-        | crate::offline_reserve::OfflineCashAttestationMode::Android { binding, .. } => {
+        crate::offline_lineage::OfflineCashAttestationMode::AppleAttest { binding, .. }
+        | crate::offline_lineage::OfflineCashAttestationMode::Android { binding, .. } => {
             binding.clone()
         }
     }
 }
 
 fn offline_cash_attestation_value(
-    binding: &crate::offline_reserve::OfflineCashAndroidDeviceBinding,
-    proof: &crate::offline_reserve::OfflineCashAndroidDeviceProof,
+    binding: &crate::offline_lineage::OfflineCashAndroidDeviceBinding,
+    proof: &crate::offline_lineage::OfflineCashAndroidDeviceProof,
 ) -> Result<Value, Error> {
-    let attestation = crate::offline_reserve::offline_cash_device_attestation(binding, proof)?;
+    let attestation = crate::offline_lineage::offline_cash_device_attestation(binding, proof)?;
     norito::json::to_value(&attestation).map_err(|err| {
         offline_cash_invalid_payload(format!(
             "failed to encode translated offline cash attestation: {err}"
@@ -4277,7 +4279,7 @@ fn offline_cash_attestation_value(
     })
 }
 
-fn translate_cash_request_to_reserve_json(
+fn translate_cash_request_to_lineage_json(
     value: &mut Value,
     include_device_attestation: bool,
 ) -> Result<(), Error> {
@@ -4286,7 +4288,7 @@ fn translate_cash_request_to_reserve_json(
             "offline cash request must be an object",
         ));
     };
-    rename_offline_json_key(map, "lineage_id", "reserve_id");
+    rename_offline_json_key(map, "lineage_id", "lineage_id");
     let binding_value = map.remove("device_binding").ok_or_else(|| {
         offline_cash_invalid_payload(
             "offline cash requests require both device_binding and device_proof",
@@ -4316,33 +4318,33 @@ fn translate_cash_request_to_reserve_json(
     }
     if let Some(Value::Array(receipts)) = map.get_mut("receipts") {
         for receipt in receipts {
-            translate_cash_receipt_to_reserve_json(receipt)?;
+            translate_cash_receipt_to_lineage_json(receipt)?;
         }
     }
     Ok(())
 }
 
 #[cfg(feature = "app_api")]
-fn translate_reserve_envelope_to_cash_json(
+fn translate_lineage_envelope_to_cash_json(
     mut value: Value,
-    fallback_binding: Option<&crate::offline_reserve::OfflineCashAndroidDeviceBinding>,
+    fallback_binding: Option<&crate::offline_lineage::OfflineCashAndroidDeviceBinding>,
 ) -> Result<Value, Error> {
     let Some(map) = value.as_object_mut() else {
         return Err(offline_cash_invalid_payload(
             "offline cash envelope must be an object",
         ));
     };
-    if let Some(mut reserve_state) = map.remove("reserve_state") {
-        translate_reserve_state_to_cash_json(&mut reserve_state, fallback_binding)?;
-        map.insert("lineage_state".to_owned(), reserve_state);
+    if let Some(mut lineage_state) = map.remove("lineage_state") {
+        translate_lineage_state_to_cash_json(&mut lineage_state, fallback_binding)?;
+        map.insert("lineage_state".to_owned(), lineage_state);
         return Ok(value);
     }
     if let Some(lineage_state) = map.get_mut("lineage_state") {
-        translate_reserve_state_to_cash_json(lineage_state, fallback_binding)?;
+        translate_lineage_state_to_cash_json(lineage_state, fallback_binding)?;
         return Ok(value);
     }
     Err(offline_cash_invalid_payload(
-        "offline cash envelope missing reserve_state",
+        "offline cash envelope missing lineage_state",
     ))
 }
 
@@ -4355,7 +4357,7 @@ fn decode_offline_cash_request<T>(
 where
     T: JsonDeserialize,
 {
-    translate_cash_request_to_reserve_json(&mut request_body, include_device_attestation)?;
+    translate_cash_request_to_lineage_json(&mut request_body, include_device_attestation)?;
     norito::json::from_value(request_body).map_err(|err| {
         offline_cash_invalid_payload(format!("failed to decode {context} request: {err}"))
     })
@@ -4371,17 +4373,17 @@ fn decode_offline_cash_request_body(body: &Bytes, context: &'static str) -> Resu
 #[cfg(feature = "app_api")]
 fn offline_cash_response<T>(
     envelope: &T,
-    fallback_binding: Option<&crate::offline_reserve::OfflineCashAndroidDeviceBinding>,
+    fallback_binding: Option<&crate::offline_lineage::OfflineCashAndroidDeviceBinding>,
 ) -> Result<AxResponse, Error>
 where
     T: JsonSerialize,
 {
-    let reserve_value =
+    let lineage_value =
         norito::json::to_value(envelope).map_err(|source| Error::SerializationFailure {
             context: "offline cash response",
             source,
         })?;
-    let cash_value = translate_reserve_envelope_to_cash_json(reserve_value, fallback_binding)?;
+    let cash_value = translate_lineage_envelope_to_cash_json(lineage_value, fallback_binding)?;
     json_ok(cash_value)
 }
 
@@ -4410,12 +4412,12 @@ async fn handler_offline_cash_setup(
     let request_body = decode_offline_cash_request_body(&body, "offline cash setup")?;
     let mode = extract_offline_cash_mode(&request_body)?;
     let response_binding = clone_offline_cash_mode_binding(&mode);
-    let req = decode_offline_cash_request::<crate::offline_reserve::OfflineReserveSetupRequest>(
+    let req = decode_offline_cash_request::<crate::offline_lineage::OfflineLineageSetupRequest>(
         request_body,
         "offline cash setup",
         true,
     )?;
-    let envelope = crate::offline_reserve::setup_cash(app.as_ref(), req, mode).await?;
+    let envelope = crate::offline_lineage::setup_cash(app.as_ref(), req, mode).await?;
     offline_cash_response(&envelope, Some(&response_binding))
 }
 
@@ -4444,12 +4446,12 @@ async fn handler_offline_cash_load(
     let request_body = decode_offline_cash_request_body(&body, "offline cash load")?;
     let mode = extract_offline_cash_mode(&request_body)?;
     let response_binding = clone_offline_cash_mode_binding(&mode);
-    let req = decode_offline_cash_request::<crate::offline_reserve::OfflineReserveTopUpRequest>(
+    let req = decode_offline_cash_request::<crate::offline_lineage::OfflineLineageLoadRequest>(
         request_body,
         "offline cash load",
         true,
     )?;
-    let envelope = crate::offline_reserve::load_cash(app.as_ref(), req, mode).await?;
+    let envelope = crate::offline_lineage::load_cash(app.as_ref(), req, mode).await?;
     offline_cash_response(&envelope, Some(&response_binding))
 }
 
@@ -4478,12 +4480,12 @@ async fn handler_offline_cash_refresh(
     let request_body = decode_offline_cash_request_body(&body, "offline cash refresh")?;
     let mode = extract_offline_cash_mode(&request_body)?;
     let response_binding = clone_offline_cash_mode_binding(&mode);
-    let req = decode_offline_cash_request::<crate::offline_reserve::OfflineReserveRenewRequest>(
+    let req = decode_offline_cash_request::<crate::offline_lineage::OfflineLineageRefreshRequest>(
         request_body,
         "offline cash refresh",
         true,
     )?;
-    let envelope = crate::offline_reserve::refresh_cash(app.as_ref(), req, mode).await?;
+    let envelope = crate::offline_lineage::refresh_cash(app.as_ref(), req, mode).await?;
     offline_cash_response(&envelope, Some(&response_binding))
 }
 
@@ -4512,12 +4514,12 @@ async fn handler_offline_cash_sync(
     let request_body = decode_offline_cash_request_body(&body, "offline cash sync")?;
     let mode = extract_offline_cash_mode(&request_body)?;
     let response_binding = clone_offline_cash_mode_binding(&mode);
-    let req = decode_offline_cash_request::<crate::offline_reserve::OfflineReserveSyncRequest>(
+    let req = decode_offline_cash_request::<crate::offline_lineage::OfflineLineageSyncRequest>(
         request_body,
         "offline cash sync",
         false,
     )?;
-    let envelope = crate::offline_reserve::sync_cash(app.as_ref(), req, mode).await?;
+    let envelope = crate::offline_lineage::sync_cash(app.as_ref(), req, mode).await?;
     offline_cash_response(&envelope, Some(&response_binding))
 }
 
@@ -4546,23 +4548,32 @@ async fn handler_offline_cash_redeem(
     let request_body = decode_offline_cash_request_body(&body, "offline cash redeem")?;
     let mode = extract_offline_cash_mode(&request_body)?;
     let response_binding = clone_offline_cash_mode_binding(&mode);
-    let req = decode_offline_cash_request::<crate::offline_reserve::OfflineReserveDefundRequest>(
+    let req = decode_offline_cash_request::<crate::offline_lineage::OfflineLineageRedeemRequest>(
         request_body,
         "offline cash redeem",
         false,
     )?;
-    let envelope = crate::offline_reserve::redeem_cash(app.as_ref(), req, mode).await?;
+    let envelope = crate::offline_lineage::redeem_cash(app.as_ref(), req, mode).await?;
     offline_cash_response(&envelope, Some(&response_binding))
 }
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_reserve_setup(
+async fn handler_offline_cash_readiness() -> Result<impl IntoResponse, Error> {
+    json_ok(json_object([json_entry(
+        "offline_recursive_stark",
+        crate::offline_lineage::offline_recursive_stark_ready(),
+    )]))
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_lineage_setup(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::offline_reserve::OfflineReserveSetupRequest,
+        crate::offline_lineage::OfflineLineageSetupRequest,
     >,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
@@ -4573,23 +4584,23 @@ async fn handler_offline_reserve_setup(
             &app,
             &headers,
             Some(remote_ip),
-            "v1/offline/reserve/setup",
+            "v1/offline/lineage/setup",
             enforce,
         )
         .await?;
     }
 
-    json_ok(crate::offline_reserve::setup_reserve(app.as_ref(), req).await?)
+    json_ok(crate::offline_lineage::setup_lineage(app.as_ref(), req).await?)
 }
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_reserve_topup(
+async fn handler_offline_lineage_load(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::offline_reserve::OfflineReserveTopUpRequest,
+        crate::offline_lineage::OfflineLineageLoadRequest,
     >,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
@@ -4600,23 +4611,23 @@ async fn handler_offline_reserve_topup(
             &app,
             &headers,
             Some(remote_ip),
-            "v1/offline/reserve/topup",
+            "v1/offline/lineage/load",
             enforce,
         )
         .await?;
     }
 
-    json_ok(crate::offline_reserve::top_up_reserve(app.as_ref(), req).await?)
+    json_ok(crate::offline_lineage::load_lineage(app.as_ref(), req).await?)
 }
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_reserve_renew(
+async fn handler_offline_lineage_refresh(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::offline_reserve::OfflineReserveRenewRequest,
+        crate::offline_lineage::OfflineLineageRefreshRequest,
     >,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
@@ -4627,23 +4638,23 @@ async fn handler_offline_reserve_renew(
             &app,
             &headers,
             Some(remote_ip),
-            "v1/offline/reserve/renew",
+            "v1/offline/lineage/refresh",
             enforce,
         )
         .await?;
     }
 
-    json_ok(crate::offline_reserve::renew_reserve(app.as_ref(), req).await?)
+    json_ok(crate::offline_lineage::refresh_lineage(app.as_ref(), req).await?)
 }
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_reserve_sync(
+async fn handler_offline_lineage_sync(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::offline_reserve::OfflineReserveSyncRequest,
+        crate::offline_lineage::OfflineLineageSyncRequest,
     >,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
@@ -4654,23 +4665,23 @@ async fn handler_offline_reserve_sync(
             &app,
             &headers,
             Some(remote_ip),
-            "v1/offline/reserve/sync",
+            "v1/offline/lineage/sync",
             enforce,
         )
         .await?;
     }
 
-    json_ok(crate::offline_reserve::sync_reserve(app.as_ref(), req).await?)
+    json_ok(crate::offline_lineage::sync_lineage(app.as_ref(), req).await?)
 }
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_reserve_defund(
+async fn handler_offline_lineage_redeem(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::offline_reserve::OfflineReserveDefundRequest,
+        crate::offline_lineage::OfflineLineageRedeemRequest,
     >,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
@@ -4681,18 +4692,48 @@ async fn handler_offline_reserve_defund(
             &app,
             &headers,
             Some(remote_ip),
-            "v1/offline/reserve/defund",
+            "v1/offline/lineage/redeem",
             enforce,
         )
         .await?;
     }
 
-    json_ok(crate::offline_reserve::defund_reserve(app.as_ref(), req).await?)
+    json_ok(crate::offline_lineage::redeem_lineage(app.as_ref(), req).await?)
 }
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_reserve_revocations(
+async fn handler_offline_policy_update(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    crate::utils::extractors::NoritoJson(snapshot): crate::utils::extractors::NoritoJson<
+        crate::offline_lineage::OfflinePolicySnapshot,
+    >,
+) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        check_access_enforced(
+            &app,
+            &headers,
+            Some(remote_ip),
+            "v1/offline/policy",
+            enforce,
+        )
+        .await?;
+    }
+
+    json_ok(crate::offline_lineage::set_policy_snapshot(
+        app.as_ref(),
+        snapshot,
+    )?)
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_offline_lineage_revocations(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
@@ -4711,12 +4752,12 @@ async fn handler_offline_reserve_revocations(
         .await?;
     }
 
-    json_ok(crate::offline_reserve::revocation_list(app.as_ref())?)
+    json_ok(crate::offline_lineage::revocation_list(app.as_ref())?)
 }
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_reserve_revocations_bundle(
+async fn handler_offline_lineage_revocations_bundle(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
@@ -4735,17 +4776,17 @@ async fn handler_offline_reserve_revocations_bundle(
         .await?;
     }
 
-    json_ok(crate::offline_reserve::revocation_bundle(app.as_ref())?)
+    json_ok(crate::offline_lineage::revocation_bundle(app.as_ref())?)
 }
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
-async fn handler_offline_reserve_revoke(
+async fn handler_offline_lineage_revoke(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::NoritoJson(req): crate::utils::extractors::NoritoJson<
-        crate::offline_reserve::OfflineReserveRevocationRequest,
+        crate::offline_lineage::OfflineLineageRevocationRequest,
     >,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
@@ -4762,7 +4803,7 @@ async fn handler_offline_reserve_revoke(
         .await?;
     }
 
-    json_ok(crate::offline_reserve::register_revocation(app.as_ref(), req).await?)
+    json_ok(crate::offline_lineage::register_revocation(app.as_ref(), req).await?)
 }
 
 #[cfg(feature = "app_api")]
@@ -4940,6 +4981,17 @@ struct ExplorerNftsQuery {
 
 #[cfg(feature = "app_api")]
 #[derive(JsonDeserialize)]
+struct ExplorerRwasQuery {
+    #[norito(flatten)]
+    pagination: explorer::ExplorerPaginationQuery,
+    #[norito(default)]
+    owned_by: Option<String>,
+    #[norito(default)]
+    domain: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(JsonDeserialize)]
 struct ExplorerTransactionsQuery {
     #[norito(flatten)]
     pagination: explorer::ExplorerPaginationQuery,
@@ -4982,6 +5034,8 @@ const CONTEXT_EXPLORER_ASSET_DEFINITIONS_OWNED_BY: &str = "/v1/explorer/asset-de
 const CONTEXT_EXPLORER_ASSETS_OWNED_BY: &str = "/v1/explorer/assets?owned_by";
 #[cfg(feature = "app_api")]
 const CONTEXT_EXPLORER_NFTS_OWNED_BY: &str = "/v1/explorer/nfts?owned_by";
+#[cfg(feature = "app_api")]
+const CONTEXT_EXPLORER_RWAS_OWNED_BY: &str = "/v1/explorer/rwas?owned_by";
 #[cfg(feature = "app_api")]
 const CONTEXT_EXPLORER_TRANSACTIONS_AUTHORITY: &str = "/v1/explorer/transactions?authority";
 #[cfg(feature = "app_api")]
@@ -5357,6 +5411,17 @@ fn parse_asset_definition_id(app: &AppState, raw: &str) -> Result<AssetDefinitio
 }
 
 #[cfg(feature = "app_api")]
+fn resolve_tx_history_allowed_asset_definition_id(
+    app: &AppState,
+) -> Result<Option<AssetDefinitionId>, Error> {
+    app.tx_history_access_policy
+        .allowed_asset_definition_id
+        .as_deref()
+        .map(|selector| parse_asset_definition_id(app, selector))
+        .transpose()
+}
+
+#[cfg(feature = "app_api")]
 fn parse_asset_id(raw: &str) -> Result<AssetId, Error> {
     AssetId::parse_literal(raw)
         .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))
@@ -5372,6 +5437,12 @@ fn parse_transaction_hash(raw: &str) -> Result<HashOf<TransactionEntrypoint>, Er
 #[cfg(feature = "app_api")]
 fn parse_nft_id(raw: &str) -> Result<NftId, Error> {
     raw.parse::<NftId>()
+        .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))
+}
+
+#[cfg(feature = "app_api")]
+fn parse_rwa_id(raw: &str) -> Result<RwaId, Error> {
+    raw.parse::<RwaId>()
         .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))
 }
 
@@ -5548,6 +5619,39 @@ async fn handler_explorer_nfts_list(
         check_access(&app, &headers, Some(remote_ip), "v1/explorer/nfts").await?;
     }
     routing::handle_v1_explorer_nfts(app.state.clone(), pagination, owned_by, domain).await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_explorer_rwas_list(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxQuery(query): AxQuery<ExplorerRwasQuery>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    let ExplorerRwasQuery {
+        pagination,
+        owned_by,
+        domain,
+    } = query;
+    let owned_by = match owned_by {
+        Some(raw) => Some(parse_account_id_for_endpoint(
+            &app,
+            &raw,
+            CONTEXT_EXPLORER_RWAS_OWNED_BY,
+        )?),
+        None => None,
+    };
+    let domain = match domain {
+        Some(raw) => Some(parse_domain_id(&raw)?),
+        None => None,
+    };
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    if !allowed {
+        check_access(&app, &headers, Some(remote_ip), "v1/explorer/rwas").await?;
+    }
+    routing::handle_v1_explorer_rwas(app.state.clone(), pagination, owned_by, domain).await
 }
 
 #[cfg(feature = "app_api")]
@@ -6083,6 +6187,23 @@ async fn handler_explorer_nft_detail(
 
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
+async fn handler_explorer_rwa_detail(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath(rwa_raw): AxPath<String>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    if !allowed {
+        check_access(&app, &headers, Some(remote_ip), "v1/explorer/rwas/{id}").await?;
+    }
+    let rwa_id = parse_rwa_id(&rwa_raw)?;
+    routing::handle_v1_explorer_rwa_detail(app.state.clone(), rwa_id).await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
 async fn handler_explorer_block_detail(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -6438,6 +6559,49 @@ async fn handler_nfts_query(
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(&app, &headers, Some(remote_ip), "v1/nfts/query", enforce).await?;
         routing::handle_v1_nfts_query(app.state.clone(), payload).await?
+    };
+
+    Ok(response.into_response())
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_rwas_list(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxQuery(p): AxQuery<crate::routing::ListFilterParams>,
+) -> Result<impl IntoResponse, Error> {
+    let remote_ip = remote.ip();
+    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+        return routing::handle_v1_rwas(app.state.clone(), AxQuery(p)).await;
+    }
+
+    let enforce =
+        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+    check_access_enforced(&app, &headers, Some(remote_ip), "v1/rwas", enforce).await?;
+
+    routing::handle_v1_rwas(app.state.clone(), AxQuery(p)).await
+}
+
+#[cfg(feature = "app_api")]
+#[axum::debug_handler]
+async fn handler_rwas_query(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
+        crate::filter::QueryEnvelope,
+    >,
+) -> Result<axum::response::Response, Error> {
+    let remote_ip = remote.ip();
+    let payload = crate::utils::extractors::NoritoJson(env);
+    let response = if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+        routing::handle_v1_rwas_query(app.state.clone(), payload).await?
+    } else {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        check_access_enforced(&app, &headers, Some(remote_ip), "v1/rwas/query", enforce).await?;
+        routing::handle_v1_rwas_query(app.state.clone(), payload).await?
     };
 
     Ok(response.into_response())
@@ -10352,7 +10516,8 @@ async fn handler_kaigi_relays_sse(
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
     if let Some(ref relay_literal) = params.relay {
-        let parsed = routing::parse_account_literal(
+        let parsed = routing::parse_account_literal_with_state(
+            app.state.as_ref(),
             relay_literal,
             &app.telemetry,
             CONTEXT_KAIGI_RELAY_EVENTS_QUERY,
@@ -10365,7 +10530,7 @@ async fn handler_kaigi_relays_sse(
                 )),
             ))
         })?;
-        params.relay = Some(parsed.canonical().to_string());
+        params.relay = Some(parsed.1);
     }
 
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
@@ -14241,7 +14406,7 @@ fn enforce_sorafs_repair_worker_auth(
     idempotency_key: &str,
     action: RepairWorkerActionV1,
     signature: &SignatureOf<RepairWorkerSignaturePayloadV1>,
-) -> Result<(), Error> {
+) -> Result<AccountId, Error> {
     let record = app
         .sorafs_node
         .repair_task_record(ticket_id)
@@ -14277,9 +14442,14 @@ fn enforce_sorafs_repair_worker_auth(
         conversion_error(format!("invalid repair worker signature payload: {err}"))
     })?;
 
-    let account_id: AccountId = AccountId::parse_encoded(worker_id)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .map_err(|err| conversion_error(format!("invalid worker_id `{worker_id}`: {err}")))?;
+    let account_id = crate::routing::parse_account_literal_with_state(
+        app.state.as_ref(),
+        worker_id,
+        &app.telemetry,
+        "/v1/sorafs/audit/repair#worker_id",
+    )
+    .map(|(account_id, _)| account_id)
+    .map_err(|err| conversion_error(format!("invalid worker_id `{worker_id}`: {err}")))?;
     let permission = Permission::from(CanOperateSorafsRepair {
         provider_id: ProviderId::new(record.provider_id),
     });
@@ -14307,7 +14477,7 @@ fn enforce_sorafs_repair_worker_auth(
             "repair worker signature invalid: {err}",
         )))
     })?;
-    Ok(())
+    Ok(account_id)
 }
 
 #[cfg(feature = "app_api")]
@@ -14315,13 +14485,13 @@ async fn handler_post_sorafs_repair_claim(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(req): NoritoJson<crate::routing::RepairWorkerClaimDto>,
+    NoritoJson(mut req): NoritoJson<crate::routing::RepairWorkerClaimDto>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     let action = RepairWorkerActionV1::Claim {
         claimed_at_unix: req.claimed_at_unix,
     };
-    if let Err(err) = enforce_sorafs_repair_worker_auth(
+    let worker_account = match enforce_sorafs_repair_worker_auth(
         &app,
         &req.ticket_id,
         &req.manifest_digest_hex,
@@ -14330,10 +14500,14 @@ async fn handler_post_sorafs_repair_claim(
         action,
         &req.signature,
     ) {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-        return Err(err);
-    }
+        Ok(account_id) => account_id,
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
+            return Err(err);
+        }
+    };
+    req.worker_id = worker_account.to_string();
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -14368,13 +14542,13 @@ async fn handler_post_sorafs_repair_heartbeat(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(req): NoritoJson<crate::routing::RepairWorkerHeartbeatDto>,
+    NoritoJson(mut req): NoritoJson<crate::routing::RepairWorkerHeartbeatDto>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     let action = RepairWorkerActionV1::Heartbeat {
         heartbeat_at_unix: req.heartbeat_at_unix,
     };
-    if let Err(err) = enforce_sorafs_repair_worker_auth(
+    let worker_account = match enforce_sorafs_repair_worker_auth(
         &app,
         &req.ticket_id,
         &req.manifest_digest_hex,
@@ -14383,10 +14557,14 @@ async fn handler_post_sorafs_repair_heartbeat(
         action,
         &req.signature,
     ) {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-        return Err(err);
-    }
+        Ok(account_id) => account_id,
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
+            return Err(err);
+        }
+    };
+    req.worker_id = worker_account.to_string();
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -14421,14 +14599,14 @@ async fn handler_post_sorafs_repair_complete(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(req): NoritoJson<crate::routing::RepairWorkerCompleteDto>,
+    NoritoJson(mut req): NoritoJson<crate::routing::RepairWorkerCompleteDto>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     let action = RepairWorkerActionV1::Complete {
         completed_at_unix: req.completed_at_unix,
         resolution_notes: req.resolution_notes.clone(),
     };
-    if let Err(err) = enforce_sorafs_repair_worker_auth(
+    let worker_account = match enforce_sorafs_repair_worker_auth(
         &app,
         &req.ticket_id,
         &req.manifest_digest_hex,
@@ -14437,10 +14615,14 @@ async fn handler_post_sorafs_repair_complete(
         action,
         &req.signature,
     ) {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-        return Err(err);
-    }
+        Ok(account_id) => account_id,
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
+            return Err(err);
+        }
+    };
+    req.worker_id = worker_account.to_string();
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -14475,14 +14657,14 @@ async fn handler_post_sorafs_repair_fail(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(req): NoritoJson<crate::routing::RepairWorkerFailDto>,
+    NoritoJson(mut req): NoritoJson<crate::routing::RepairWorkerFailDto>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     let action = RepairWorkerActionV1::Fail {
         failed_at_unix: req.failed_at_unix,
         reason: req.reason.clone(),
     };
-    if let Err(err) = enforce_sorafs_repair_worker_auth(
+    let worker_account = match enforce_sorafs_repair_worker_auth(
         &app,
         &req.ticket_id,
         &req.manifest_digest_hex,
@@ -14491,10 +14673,14 @@ async fn handler_post_sorafs_repair_fail(
         action,
         &req.signature,
     ) {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-        return Err(err);
-    }
+        Ok(account_id) => account_id,
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
+            return Err(err);
+        }
+    };
+    req.worker_id = worker_account.to_string();
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -14637,15 +14823,21 @@ async fn handler_iso_pacs008(
         ));
     }
 
-    let (transaction, context) = match runtime.build_pacs008_transaction(
-        &parsed,
-        Arc::as_ref(&app.chain_id),
-        &app.telemetry,
-    ) {
-        Ok(result) => result,
-        Err(err) => {
-            runtime.mark_rejected(&msg_id, Some(err.to_string()), None);
-            return Err(Error::Query(map_iso_error(err)));
+    let now_ms = routing::asset_alias_observation_time_ms(app.state.as_ref());
+    let (transaction, context) = {
+        let world = app.state.world_view();
+        match runtime.build_pacs008_transaction(
+            &parsed,
+            &world,
+            now_ms,
+            Arc::as_ref(&app.chain_id),
+            &app.telemetry,
+        ) {
+            Ok(result) => result,
+            Err(err) => {
+                runtime.mark_rejected(&msg_id, Some(err.to_string()), None);
+                return Err(Error::Query(map_iso_error(err)));
+            }
         }
     };
 
@@ -14791,15 +14983,21 @@ async fn handler_iso_pacs009(
         ));
     }
 
-    let (transaction, context) = match runtime.build_pacs009_transaction(
-        &parsed,
-        Arc::as_ref(&app.chain_id),
-        &app.telemetry,
-    ) {
-        Ok(result) => result,
-        Err(err) => {
-            runtime.mark_rejected(&msg_id, Some(err.to_string()), None);
-            return Err(Error::Query(map_iso_error(err)));
+    let now_ms = routing::asset_alias_observation_time_ms(app.state.as_ref());
+    let (transaction, context) = {
+        let world = app.state.world_view();
+        match runtime.build_pacs009_transaction(
+            &parsed,
+            &world,
+            now_ms,
+            Arc::as_ref(&app.chain_id),
+            &app.telemetry,
+        ) {
+            Ok(result) => result,
+            Err(err) => {
+                runtime.mark_rejected(&msg_id, Some(err.to_string()), None);
+                return Err(Error::Query(map_iso_error(err)));
+            }
         }
     };
 
@@ -16812,6 +17010,41 @@ fn tx_history_reject(
 }
 
 #[cfg(feature = "app_api")]
+fn tx_history_alias_resolution_error_message(err: &Error) -> String {
+    match err {
+        Error::AppConflict { message, .. } if !message.trim().is_empty() => message.clone(),
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+        ))
+        | Error::Query(iroha_data_model::ValidationFail::InternalError(message))
+            if !message.trim().is_empty() =>
+        {
+            message.clone()
+        }
+        _ => err.to_string(),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn tx_history_alias_resolution_reject(err: Error) -> AxResponse {
+    let (status, code) = match &err {
+        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(_),
+        )) => (StatusCode::BAD_REQUEST, "tx_history_alias_invalid"),
+        Error::AppConflict { .. } => (StatusCode::CONFLICT, "tx_history_alias_conflict"),
+        _ => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "tx_history_alias_resolution_failed",
+        ),
+    };
+    tx_history_reject(
+        status,
+        code,
+        tx_history_alias_resolution_error_message(&err),
+    )
+}
+
+#[cfg(feature = "app_api")]
 fn decode_tx_history_jwt_claims(
     auth_header: &str,
     jwt: &TxHistoryJwtConfig,
@@ -16882,12 +17115,12 @@ fn tx_history_subject_alias_candidates(subject: &str, dataspace_id: &str) -> Vec
         return Vec::new();
     }
     if normalized_subject.contains('@') {
-        return vec![canonical_tx_history_alias(&normalized_subject)];
+        return vec![normalize_tx_history_alias(&normalized_subject)];
     }
     if normalized_subject.contains(':') {
         return Vec::new();
     }
-    vec![canonical_tx_history_alias(&format!(
+    vec![normalize_tx_history_alias(&format!(
         "{normalized_subject}@{}",
         dataspace_id.trim().to_ascii_lowercase()
     ))]
@@ -16988,11 +17221,7 @@ fn tx_history_viewer_from_headers(
             }
             Ok(None) => {}
             Err(err) => {
-                return Err(tx_history_reject(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "tx_history_alias_resolution_failed",
-                    err.to_string(),
-                ));
+                return Err(tx_history_alias_resolution_reject(err));
             }
         }
     }
@@ -17643,7 +17872,7 @@ struct OfflineIssuerSigner {
     operator_keypair: KeyPair,
     legacy_operator_keypairs: Vec<KeyPair>,
     allowed_controllers: Vec<AccountId>,
-    reserve_policy: iroha_config::parameters::actual::ToriiOfflineReservePolicy,
+    lineage_policy: iroha_config::parameters::actual::ToriiOfflineLineagePolicy,
 }
 
 #[cfg(feature = "app_api")]
@@ -17783,6 +18012,8 @@ pub struct Torii {
     offline_issuer: Option<OfflineIssuerSigner>,
     #[cfg(feature = "app_api")]
     account_faucet: Option<iroha_config::parameters::actual::ToriiFaucet>,
+    #[cfg(feature = "app_api")]
+    offline_policy_snapshot: Arc<std::sync::RwLock<crate::offline_lineage::OfflinePolicySnapshot>>,
     #[cfg(feature = "app_api")]
     uaid_onboarding: Option<AccountOnboardingSigner>,
     soracloud_runtime: Option<SharedSoracloudRuntime>,
@@ -18357,20 +18588,10 @@ impl Torii {
     fn add_contracts_and_vk_routes(&self, builder: &mut RouterBuilder) {
         builder.apply(|router| {
             // Group contracts + VK endpoints into a small sub-router for clarity and merge it.
-            let group = Router::new()
-                .route(
-                    "/v1/contracts/code-bytes/{code_hash}",
-                    get(handler_get_contract_code_bytes),
-                )
-                .route("/v1/contracts/deploy", post(handler_post_contract_deploy))
-                .route(
-                    "/v1/contracts/instance",
-                    post(handler_post_contract_instance),
-                )
-                .route(
-                    "/v1/contracts/instance/activate",
-                    post(handler_post_contract_instance_activate),
-                );
+            let group = Router::new().route(
+                "/v1/contracts/code-bytes/{code_hash}",
+                get(handler_get_contract_code_bytes),
+            );
 
             #[cfg(feature = "app_api")]
             let group = group
@@ -18414,22 +18635,6 @@ impl Torii {
             let group = group;
 
             let group = group
-                .route(
-                    "/v1/sorafs/pin/register",
-                    post(handler_post_sorafs_register_manifest),
-                )
-                .route(
-                    "/v1/sorafs/capacity/declare",
-                    post(handler_post_sorafs_capacity_declare),
-                )
-                .route(
-                    "/v1/sorafs/capacity/telemetry",
-                    post(handler_post_sorafs_capacity_telemetry),
-                )
-                .route(
-                    "/v1/sorafs/capacity/dispute",
-                    post(handler_post_sorafs_capacity_dispute),
-                )
                 .route(
                     "/v1/sorafs/capacity/schedule",
                     post(handler_post_sorafs_capacity_schedule),
@@ -18510,9 +18715,6 @@ impl Torii {
             let group = group;
 
             let group = group
-                // VK registry lifecycle (app API convenience): register, update
-                .route("/v1/zk/vk/register", post(handler_post_vk_register))
-                .route("/v1/zk/vk/update", post(handler_post_vk_update))
                 .route(
                     "/v1/zk/vk/{backend}/{name}",
                     get(handler_get_vk_by_backend_name),
@@ -18523,10 +18725,6 @@ impl Torii {
                 .route(
                     "/v1/zk/proof/{backend}/{hash}",
                     get(handler_get_proof_by_backend_hash),
-                )
-                .route(
-                    "/v1/confidential/derive-keyset",
-                    post(handler_confidential_derive_keyset_route),
                 )
                 .route(
                     "/v1/contracts/code/{code_hash}",
@@ -18736,14 +18934,6 @@ impl Torii {
                     get(handler_space_directory_manifests),
                 )
                 .route(
-                    "/v1/space-directory/manifests",
-                    post(handler_space_directory_manifest_publish),
-                )
-                .route(
-                    "/v1/space-directory/manifests/revoke",
-                    post(handler_space_directory_manifest_revoke),
-                )
-                .route(
                     "/v1/ram-lfe/program-policies",
                     get(handler_ram_lfe_program_policies),
                 )
@@ -18773,20 +18963,17 @@ impl Torii {
                 )
                 .route(
                     "/v1/offline/revocations",
-                    get(handler_offline_reserve_revocations).post(handler_offline_reserve_revoke),
+                    get(handler_offline_lineage_revocations).post(handler_offline_lineage_revoke),
                 )
                 .route(
                     "/v1/offline/revocations/bundle",
-                    get(handler_offline_reserve_revocations_bundle),
+                    get(handler_offline_lineage_revocations_bundle),
                 )
-                .route("/v1/offline/cash/setup", post(handler_offline_cash_setup))
-                .route("/v1/offline/cash/load", post(handler_offline_cash_load))
+                .route("/v1/offline/policy", post(handler_offline_policy_update))
                 .route(
-                    "/v1/offline/cash/refresh",
-                    post(handler_offline_cash_refresh),
+                    "/v1/offline/cash/readiness",
+                    get(handler_offline_cash_readiness),
                 )
-                .route("/v1/offline/cash/sync", post(handler_offline_cash_sync))
-                .route("/v1/offline/cash/redeem", post(handler_offline_cash_redeem))
                 .route("/v1/offline/transfers", get(handler_offline_transfers_list))
                 .route(
                     "/v1/offline/transfers/{bundle_id_hex}",
@@ -19069,42 +19256,18 @@ impl Torii {
                 // NFTs listing
                 .route("/v1/nfts", get(handler_nfts_list))
                 .route("/v1/nfts/query", post(handler_nfts_query))
+                // RWA listing
+                .route("/v1/rwas", get(handler_rwas_list))
+                .route("/v1/rwas/query", post(handler_rwas_query))
                 // Subscriptions
                 .route(
                     "/v1/subscriptions/plans",
-                    get(handler_subscription_plans_list).post(handler_subscription_plans_create),
+                    get(handler_subscription_plans_list),
                 )
-                .route(
-                    "/v1/subscriptions",
-                    get(handler_subscriptions_list).post(handler_subscriptions_create),
-                )
+                .route("/v1/subscriptions", get(handler_subscriptions_list))
                 .route(
                     "/v1/subscriptions/{subscription_id}",
                     get(handler_subscription_get),
-                )
-                .route(
-                    "/v1/subscriptions/{subscription_id}/pause",
-                    post(handler_subscription_pause),
-                )
-                .route(
-                    "/v1/subscriptions/{subscription_id}/resume",
-                    post(handler_subscription_resume),
-                )
-                .route(
-                    "/v1/subscriptions/{subscription_id}/cancel",
-                    post(handler_subscription_cancel),
-                )
-                .route(
-                    "/v1/subscriptions/{subscription_id}/keep",
-                    post(handler_subscription_keep),
-                )
-                .route(
-                    "/v1/subscriptions/{subscription_id}/usage",
-                    post(handler_subscription_usage),
-                )
-                .route(
-                    "/v1/subscriptions/{subscription_id}/charge-now",
-                    post(handler_subscription_charge_now),
                 )
                 .route("/v1/parameters", get(handler_parameters))
                 // Explorer endpoints
@@ -19116,6 +19279,7 @@ impl Torii {
                 )
                 .route("/v1/explorer/assets", get(handler_explorer_assets_list))
                 .route("/v1/explorer/nfts", get(handler_explorer_nfts_list))
+                .route("/v1/explorer/rwas", get(handler_explorer_rwas_list))
                 .route("/v1/explorer/blocks", get(handler_explorer_blocks_list))
                 .route("/v1/explorer/health", get(handler_explorer_health))
                 .route(
@@ -19206,6 +19370,10 @@ impl Torii {
                 .route(
                     "/v1/explorer/nfts/{nft_id}",
                     get(handler_explorer_nft_detail),
+                )
+                .route(
+                    "/v1/explorer/rwas/{rwa_id}",
+                    get(handler_explorer_rwa_detail),
                 )
                 .route(
                     "/v1/explorer/blocks/{identifier}",
@@ -20024,11 +20192,15 @@ impl Torii {
                 operator_keypair,
                 legacy_operator_keypairs,
                 allowed_controllers: cfg.allowed_controllers.clone(),
-                reserve_policy: cfg.reserve_policy.clone(),
+                lineage_policy: cfg.lineage_policy.clone(),
             }
         });
         #[cfg(feature = "app_api")]
         let account_faucet = config.faucet.clone();
+        #[cfg(feature = "app_api")]
+        let offline_policy_snapshot = Arc::new(std::sync::RwLock::new(
+            crate::offline_lineage::OfflinePolicySnapshot::default(),
+        ));
         #[cfg(feature = "app_api")]
         let identifier_resolver = config.ram_lfe.as_ref().and_then(|cfg| {
             if cfg.programs.is_empty() {
@@ -20174,6 +20346,8 @@ impl Torii {
             offline_issuer,
             #[cfg(feature = "app_api")]
             account_faucet,
+            #[cfg(feature = "app_api")]
+            offline_policy_snapshot,
             #[cfg(feature = "app_api")]
             uaid_onboarding,
             soracloud_runtime,
@@ -20467,6 +20641,8 @@ impl Torii {
             #[cfg(feature = "app_api")]
             account_faucet: self.account_faucet.clone(),
             #[cfg(feature = "app_api")]
+            offline_policy_snapshot: self.offline_policy_snapshot.clone(),
+            #[cfg(feature = "app_api")]
             uaid_onboarding: self.uaid_onboarding.clone(),
             soracloud_runtime: self.soracloud_runtime.clone(),
             #[cfg(feature = "app_api")]
@@ -20602,8 +20778,7 @@ impl Torii {
         let router = builder
             .finish()
             .layer((
-                TraceLayer::new_for_http()
-                    .make_span_with(DefaultMakeSpan::default().include_headers(true)),
+                TraceLayer::new_for_http().make_span_with(DefaultMakeSpan::default()),
                 TimeoutLayer::with_status_code(
                     StatusCode::REQUEST_TIMEOUT,
                     SERVER_SHUTDOWN_TIMEOUT,
@@ -20636,6 +20811,8 @@ impl Torii {
             ))
             .layer(cors_layer);
 
+        let router = router.with_state(app_state.clone());
+
         {
             let mut guard = app_state
                 .mcp_dispatch_router
@@ -20644,7 +20821,7 @@ impl Torii {
             *guard = Some(router.clone());
         }
 
-        router.with_state(app_state)
+        router
     }
 
     /// Public helper to get the API router for integration tests without starting an HTTP server.
@@ -21485,7 +21662,7 @@ mod gateway_denylist_loader_tests {
         )
     }
 
-    fn sample_account_literals() -> (String, String, String) {
+    pub(super) fn sample_account_literals() -> (String, String, String) {
         let _domain: DomainId = "wonderland".parse().expect("domain parses");
         let public_key: PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
@@ -21527,7 +21704,7 @@ mod gateway_denylist_loader_tests {
         let (sample_canonical, sample_i105, _) = sample_account_literals();
         let mut entry = base_account_entry();
         entry.account_id = Some(sample_i105);
-        entry.account_alias = Some("routing@sora".to_string());
+        entry.account_alias = Some("routing@dataspace".to_string());
         entry.jurisdiction = Some("US".to_string());
         entry.reason = Some("test".to_string());
         entry.issued_at = Some("2025-01-01T00:00:00Z".to_string());
@@ -21542,7 +21719,7 @@ mod gateway_denylist_loader_tests {
             other => panic!("unexpected denylist kind: {other:?}"),
         }
 
-        assert_eq!(metadata.alias(), Some("routing@sora"));
+        assert_eq!(metadata.alias(), Some("routing@dataspace"));
         assert_eq!(metadata.jurisdiction(), Some("US"));
         assert_eq!(metadata.reason(), Some("test"));
     }
@@ -21564,7 +21741,7 @@ mod gateway_denylist_loader_tests {
     fn account_id_entries_reject_encoded_literals_with_domain_suffix() {
         let (_, i105, _) = sample_account_literals();
         let mut entry = base_account_entry();
-        entry.account_id = Some(format!("{i105}@wonderland"));
+        entry.account_id = Some(format!("{i105}@hbl.dataspace"));
         entry.issued_at = Some("2025-01-01T00:00:00Z".to_string());
 
         let policy = sample_policy();
@@ -21584,7 +21761,7 @@ mod gateway_denylist_loader_tests {
             cid_utf8: None,
             url: None,
             account_id: None,
-            account_alias: Some("alias@sora".to_string()),
+            account_alias: Some("alias@dataspace".to_string()),
             jurisdiction: None,
             reason: Some("alias".to_string()),
             issued_at: Some("2025-04-15T00:00:00Z".to_string()),
@@ -21600,12 +21777,12 @@ mod gateway_denylist_loader_tests {
 
         match kind {
             sorafs::gateway::DenylistKind::AccountAlias(ref alias) => {
-                assert_eq!(alias, "alias@sora");
+                assert_eq!(alias, "alias@dataspace");
             }
             other => panic!("unexpected denylist kind: {other:?}"),
         }
 
-        assert_eq!(metadata.alias(), Some("alias@sora"));
+        assert_eq!(metadata.alias(), Some("alias@dataspace"));
         assert_eq!(metadata.reason(), Some("alias"));
     }
 
@@ -21804,21 +21981,6 @@ fn build_gc_runtime(
     Some(runtime)
 }
 
-#[cfg(feature = "app_api")]
-async fn handler_confidential_derive_keyset_route(
-    State(app): State<SharedAppState>,
-    payload: crate::NoritoJson<routing::ConfidentialKeyRequest>,
-) -> Result<impl IntoResponse> {
-    routing::handle_post_confidential_derive_keyset(
-        app.chain_id.clone(),
-        app.queue.clone(),
-        app.state.clone(),
-        app.telemetry.clone(),
-        payload,
-    )
-    .await
-}
-
 /// Torii errors.
 #[derive(thiserror::Error, displaydoc::Display, pretty_error_debug::Debug)]
 pub enum Error {
@@ -21826,6 +21988,13 @@ pub enum Error {
     Query(#[from] iroha_data_model::ValidationFail),
     /// Validation error for app-facing query parameters `{code}`: {message}
     AppQueryValidation {
+        /// Stable machine-readable code.
+        code: &'static str,
+        /// Human-readable error message.
+        message: String,
+    },
+    /// Conflict error for app-facing operation `{code}`: {message}
+    AppConflict {
         /// Stable machine-readable code.
         code: &'static str,
         /// Human-readable error message.
@@ -22013,6 +22182,10 @@ impl IntoResponse for Error {
                     StatusCode::BAD_REQUEST
                 };
                 (status, utils::NoritoBody(payload)).into_response()
+            }
+            Self::AppConflict { code, message } => {
+                let payload = ErrorEnvelope::new(code, message);
+                (StatusCode::CONFLICT, utils::NoritoBody(payload)).into_response()
             }
             Self::ProofRateLimited {
                 endpoint,
@@ -22234,6 +22407,39 @@ pub(crate) mod tests_runtime_handlers {
         let domain = Domain::new(domain_id.clone()).build(account_id);
         let account = Account::new(account_id.to_account_id(domain_id)).build(account_id);
         World::with([domain], [account], [])
+    }
+
+    #[cfg(feature = "app_api")]
+    pub(crate) fn bind_account_alias_for_test(
+        app: &SharedAppState,
+        account_id: &AccountId,
+        alias: &str,
+    ) {
+        let label = iroha_data_model::account::rekey::AccountLabel::from_literal(
+            alias,
+            &app.state.nexus_snapshot().dataspace_catalog,
+        )
+        .expect("valid account alias");
+        let header = BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = app.state.block(header);
+        let mut tx = block.transaction();
+        let world = tx.world_mut_for_testing();
+        world
+            .account_aliases_mut_for_testing()
+            .insert(label.clone(), account_id.clone());
+        world.account_rekey_records_mut_for_testing().insert(
+            label.clone(),
+            iroha_data_model::account::rekey::AccountRekeyRecord::new(label, account_id.clone()),
+        );
+        tx.apply();
+        block.commit().expect("commit account alias for test");
     }
 
     pub(crate) fn signed_app_headers(
@@ -22558,6 +22764,10 @@ pub(crate) mod tests_runtime_handlers {
             offline_issuer: None,
             #[cfg(feature = "app_api")]
             account_faucet: None,
+            #[cfg(feature = "app_api")]
+            offline_policy_snapshot: Arc::new(std::sync::RwLock::new(
+                crate::offline_lineage::OfflinePolicySnapshot::default(),
+            )),
             #[cfg(feature = "app_api")]
             uaid_onboarding: None,
             soracloud_runtime: None,
@@ -23385,7 +23595,8 @@ pub(crate) mod tests_runtime_handlers {
     #[cfg(all(feature = "app_api", feature = "push"))]
     fn mk_push_request(token: &str) -> push::RegisterDeviceRequest {
         push::RegisterDeviceRequest {
-            account_id: "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw".to_string(),
+            account_id: "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE"
+                .to_string(),
             platform: "FCM".to_string(),
             token: token.to_string(),
             topics: Some(vec!["orders".into()]),
@@ -23466,6 +23677,36 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(resp.status(), StatusCode::ACCEPTED);
         let bridge = app.push.as_ref().expect("push bridge configured");
         assert_eq!(bridge.device_count(), 1);
+    }
+
+    #[cfg(all(feature = "app_api", feature = "push"))]
+    #[tokio::test]
+    async fn push_registration_accepts_account_alias_and_stores_canonical_i105() {
+        let app = mk_app_state_for_tests_with_options(
+            None,
+            None,
+            None,
+            Some(iroha_config::parameters::actual::Push {
+                enabled: true,
+                fcm_api_key: Some("k".to_string()),
+                ..Default::default()
+            }),
+        );
+        let mut req = mk_push_request("t-alias");
+        let canonical_account = AccountId::parse_encoded(&req.account_id)
+            .expect("canonical test i105 should parse")
+            .into_account_id();
+        bind_account_alias_for_test(&app, &canonical_account, "wallet@universal");
+        req.account_id = "wallet@universal".to_string();
+
+        let resp = super::handler_push_register_device(State(app.clone()), NoritoJson(req)).await;
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+
+        let bridge = app.push.as_ref().expect("push bridge configured");
+        let device = bridge
+            .registered_device("t-alias")
+            .expect("registered device should exist");
+        assert_eq!(device.account_id, canonical_account.to_string());
     }
 
     fn make_signed_block(
@@ -27567,6 +27808,7 @@ impl Error {
                 ErrorEnvelope::new("queue_error", "queue request rejected")
             }
             Self::AppQueryValidation { code, message } => ErrorEnvelope::new(code, message),
+            Self::AppConflict { code, message } => ErrorEnvelope::new(code, message),
             Self::ProofRateLimited {
                 endpoint,
                 retry_after_secs,
@@ -27628,6 +27870,7 @@ impl Error {
             ApiVersion(err) => err.status(),
             AcceptTransaction(_) => StatusCode::BAD_REQUEST,
             AppQueryValidation { .. } => StatusCode::BAD_REQUEST,
+            AppConflict { .. } => StatusCode::CONFLICT,
             LaneLifecycle { .. } => StatusCode::BAD_REQUEST,
             Config(_) | StatusSegmentNotFound(_) => StatusCode::NOT_FOUND,
             SerializationFailure { .. } => StatusCode::INTERNAL_SERVER_ERROR,
@@ -27936,6 +28179,8 @@ mod tests {
     };
 
     use super::*;
+    #[cfg(feature = "app_api")]
+    use crate::tests_runtime_handlers::bind_account_alias_for_test;
     #[cfg(feature = "telemetry")]
     use crate::tests_runtime_handlers::mk_norito_rpc_test_harness;
     use crate::{
@@ -27947,6 +28192,36 @@ mod tests {
         },
     };
     use iroha_core::smartcontracts::Execute;
+
+    fn bind_asset_alias_for_test(
+        app: &SharedAppState,
+        authority: &AccountId,
+        definition_id: &AssetDefinitionId,
+        alias: &AssetDefinitionAlias,
+        lease_expiry_ms: Option<u64>,
+        height: u64,
+        creation_time_ms: u64,
+    ) {
+        let header = BlockHeader::new(
+            NonZeroU64::new(height).expect("non-zero height"),
+            None,
+            None,
+            None,
+            creation_time_ms,
+            0,
+        );
+        let mut block = app.state.block(header);
+        let mut tx = block.transaction();
+        iroha_data_model::isi::SetAssetDefinitionAlias::bind(
+            definition_id.clone(),
+            alias.clone(),
+            lease_expiry_ms,
+        )
+        .execute(authority, &mut tx)
+        .expect("bind asset alias for test");
+        tx.apply();
+        block.commit().expect("commit asset alias for test");
+    }
 
     fn sample_iso_bridge_config(alias: &str, account_id: &AccountId) -> actual::IsoBridge {
         let signer_keypair = KeyPair::random();
@@ -28300,44 +28575,69 @@ mod tests {
 
     #[cfg(feature = "app_api")]
     #[test]
-    fn canonical_tx_history_alias_maps_fi_domains_into_sbp_dataspace() {
+    fn tx_history_alias_resolution_reject_maps_duplicate_bindings_to_conflict() {
+        let response = tx_history_alias_resolution_reject(Error::AppConflict {
+            code: "account_alias_conflict",
+            message:
+                "account alias `operator1@hbl` is bound to multiple accounts: account-a and account-b"
+                    .to_string(),
+        });
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn tx_history_alias_resolution_reject_maps_invalid_alias_literals_to_bad_request() {
+        let response = tx_history_alias_resolution_reject(Error::Query(
+            iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                    "alias contains invalid scope".to_string(),
+                ),
+            ),
+        ));
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn normalize_tx_history_alias_preserves_on_chain_literals() {
+        assert_eq!(normalize_tx_history_alias("operator1@hbl"), "operator1@hbl");
+        assert_eq!(normalize_tx_history_alias("operator2@ubl"), "operator2@ubl");
         assert_eq!(
-            canonical_tx_history_alias("operator1@hbl"),
-            "operator1@hbl.sbp"
+            normalize_tx_history_alias("banking@universal"),
+            "banking@universal"
         );
         assert_eq!(
-            canonical_tx_history_alias("operator2@ubl"),
-            "operator2@ubl.sbp"
-        );
-        assert_eq!(canonical_tx_history_alias("banking@sbp"), "banking@sbp");
-        assert_eq!(
-            canonical_tx_history_alias("operator1@hbl.sbp"),
-            "operator1@hbl.sbp"
+            normalize_tx_history_alias("operator1@hbl.dataspace"),
+            "operator1@hbl.dataspace"
         );
     }
 
     #[cfg(feature = "app_api")]
     #[test]
-    fn tx_history_subject_alias_candidates_canonicalize_short_fi_aliases() {
+    fn tx_history_subject_alias_candidates_preserve_short_alias_literals() {
         assert_eq!(
             tx_history_subject_alias_candidates("operator1@hbl", "hbl"),
-            vec!["operator1@hbl.sbp".to_string()]
+            vec!["operator1@hbl".to_string()]
         );
         assert_eq!(
             tx_history_subject_alias_candidates("operator2", "ubl"),
-            vec!["operator2@ubl.sbp".to_string()]
+            vec!["operator2@ubl".to_string()]
         );
         assert_eq!(
-            tx_history_subject_alias_candidates("banking", "sbp"),
-            vec!["banking@sbp".to_string()]
+            tx_history_subject_alias_candidates("banking", "universal"),
+            vec!["banking@universal".to_string()]
         );
     }
 
     #[cfg(feature = "app_api")]
     #[test]
     fn offline_cash_mode_extraction_accepts_ios_binding_and_proof() {
+        let (_, account_i105, _) = super::gateway_denylist_loader_tests::sample_account_literals();
         let request = norito::json!({
-            "account_id": "alice@users",
+            "account_id": account_i105,
             "device_binding": {
                 "platform": "ios",
                 "attestation_key_id": "att-key",
@@ -28359,7 +28659,7 @@ mod tests {
 
         let mode = extract_offline_cash_mode(&request).expect("ios offline cash mode");
         match mode {
-            crate::offline_reserve::OfflineCashAttestationMode::AppleAttest { binding, proof } => {
+            crate::offline_lineage::OfflineCashAttestationMode::AppleAttest { binding, proof } => {
                 assert_eq!(binding.platform, "ios");
                 assert_eq!(binding.device_id, "device-1");
                 assert_eq!(proof.platform, "ios");
@@ -28371,9 +28671,10 @@ mod tests {
 
     #[cfg(feature = "app_api")]
     #[test]
-    fn translate_cash_request_to_reserve_json_injects_canonical_attestation_fields() {
+    fn translate_cash_request_to_lineage_json_injects_canonical_attestation_fields() {
+        let (_, account_i105, _) = super::gateway_denylist_loader_tests::sample_account_literals();
         let mut request = norito::json!({
-            "account_id": "alice@users",
+            "account_id": account_i105,
             "lineage_id": "lineage-1",
             "amount": "25",
             "device_binding": {
@@ -28395,11 +28696,11 @@ mod tests {
             }
         });
 
-        translate_cash_request_to_reserve_json(&mut request, true)
+        translate_cash_request_to_lineage_json(&mut request, true)
             .expect("translate offline cash request");
 
         assert_eq!(
-            request.get("reserve_id").and_then(Value::as_str),
+            request.get("lineage_id").and_then(Value::as_str),
             Some("lineage-1")
         );
         assert_eq!(request.get("lineage_id"), None);
@@ -28512,7 +28813,8 @@ mod tests {
         RepairReportV1 {
             version: REPAIR_REPORT_VERSION_V1,
             ticket_id: RepairTicketId(ticket.to_string()),
-            auditor_account: "auditor#sora".into(),
+            auditor_account:
+                "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB".into(),
             submitted_at_unix,
             evidence: RepairEvidenceV1 {
                 version: REPAIR_EVIDENCE_VERSION_V1,
@@ -28671,7 +28973,53 @@ mod tests {
             },
             &signature,
         );
-        assert!(auth.is_ok(), "signed worker should be accepted: {auth:?}");
+        assert_eq!(auth.expect("signed worker should be accepted"), worker_id);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn sorafs_repair_worker_auth_accepts_alias_worker() {
+        let app = mk_app_state_for_tests();
+        let report = repair_report("REP-900A", [0x21; 32], [0x32; 32], 1_701_000_050);
+        app.sorafs_node
+            .enqueue_repair_report(&report)
+            .expect("enqueue report");
+
+        let worker_key = KeyPair::random();
+        let worker_id = AccountId::new(worker_key.public_key().clone());
+        grant_repair_worker_permission(&app, &worker_id, report.evidence.provider_id);
+        bind_account_alias_for_test(&app, &worker_id, "repair@universal");
+
+        let claimed_at = report.submitted_at_unix + 10;
+        let idempotency_key = "claim-900a";
+        let payload = RepairWorkerSignaturePayloadV1 {
+            version: REPAIR_WORKER_SIGNATURE_VERSION_V1,
+            ticket_id: report.ticket_id.clone(),
+            manifest_digest: report.evidence.manifest_digest,
+            provider_id: report.evidence.provider_id,
+            worker_id: "repair@universal".to_string(),
+            idempotency_key: idempotency_key.to_string(),
+            action: RepairWorkerActionV1::Claim {
+                claimed_at_unix: claimed_at,
+            },
+        };
+        let signature = SignatureOf::new(worker_key.private_key(), &payload);
+
+        let auth = enforce_sorafs_repair_worker_auth(
+            &app,
+            &report.ticket_id,
+            &hex::encode(report.evidence.manifest_digest),
+            "repair@universal",
+            idempotency_key,
+            RepairWorkerActionV1::Claim {
+                claimed_at_unix: claimed_at,
+            },
+            &signature,
+        );
+        assert_eq!(
+            auth.expect("signed alias worker should be accepted"),
+            worker_id
+        );
     }
 
     #[cfg(feature = "app_api")]
@@ -29789,16 +30137,15 @@ mod tests {
             Name::from_str("usd").expect("asset name token"),
         );
         let alias: AssetDefinitionAlias = "usd#issuer.main".parse().expect("asset alias");
-        let mut definition =
-            iroha_data_model::asset::AssetDefinition::numeric(definition_id.clone())
-                .with_name("usd".to_owned())
-                .build(&authority);
-        definition.alias = Some(alias.clone());
+        let definition = iroha_data_model::asset::AssetDefinition::numeric(definition_id.clone())
+            .with_name("usd".to_owned())
+            .build(&authority);
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account =
             Account::new(authority.clone().to_account_id(domain_id.clone())).build(&authority);
         let world = World::with([domain], [account], [definition]);
         let app = mk_app_state_for_tests_with_world(world);
+        bind_asset_alias_for_test(&app, &authority, &definition_id, &alias, None, 1, 0);
 
         let response = handler_asset_alias_resolve(
             State(app),
@@ -29843,16 +30190,15 @@ mod tests {
             Name::from_str("usd").expect("asset name token"),
         );
         let alias: AssetDefinitionAlias = "usd#main".parse().expect("asset alias");
-        let mut definition =
-            iroha_data_model::asset::AssetDefinition::numeric(definition_id.clone())
-                .with_name("usd".to_owned())
-                .build(&authority);
-        definition.alias = Some(alias.clone());
+        let definition = iroha_data_model::asset::AssetDefinition::numeric(definition_id.clone())
+            .with_name("usd".to_owned())
+            .build(&authority);
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account =
             Account::new(authority.clone().to_account_id(domain_id.clone())).build(&authority);
         let world = World::with([domain], [account], [definition]);
         let app = mk_app_state_for_tests_with_world(world);
+        bind_asset_alias_for_test(&app, &authority, &definition_id, &alias, None, 1, 0);
 
         let response = handler_asset_alias_resolve(
             State(app),
@@ -29895,17 +30241,16 @@ mod tests {
             Name::from_str("usd").expect("asset name token"),
         );
         let alias: AssetDefinitionAlias = "usd#issuer.main".parse().expect("asset alias");
-        let mut definition =
-            iroha_data_model::asset::AssetDefinition::numeric(definition_id.clone())
-                .with_name("usd".to_owned())
-                .with_description(Some("Treasury settlement token".to_owned()))
-                .build(&authority);
-        definition.alias = Some(alias.clone());
+        let definition = iroha_data_model::asset::AssetDefinition::numeric(definition_id.clone())
+            .with_name("usd".to_owned())
+            .with_description(Some("Treasury settlement token".to_owned()))
+            .build(&authority);
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account =
             Account::new(authority.clone().to_account_id(domain_id.clone())).build(&authority);
         let world = World::with([domain], [account], [definition.clone()]);
         let app = mk_app_state_for_tests_with_world(world);
+        bind_asset_alias_for_test(&app, &authority, &definition_id, &alias, None, 1, 0);
 
         let response = handler_asset_definition_get(
             State(app),
@@ -29929,10 +30274,7 @@ mod tests {
             Some(definition_id_literal.as_str())
         );
         assert_eq!(returned["name"].as_str(), Some(definition.name().as_str()));
-        assert_eq!(
-            returned["alias"].as_str(),
-            definition.alias().as_ref().map(AsRef::as_ref)
-        );
+        assert_eq!(returned["alias"].as_str(), Some(alias.as_ref()));
         assert_eq!(
             returned["description"].as_str(),
             definition.description().as_deref()
@@ -29964,18 +30306,15 @@ mod tests {
             Account::new(authority.clone().to_account_id(domain_id.clone())).build(&authority);
         let world = World::with([domain], [account], [definition]);
         let app = mk_app_state_for_tests_with_world(world);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1_000, 0);
-        let mut block = app.state.block(header);
-        let mut tx = block.transaction();
-        iroha_data_model::isi::SetAssetDefinitionAlias::bind(
-            definition_id.clone(),
-            alias.clone(),
+        bind_asset_alias_for_test(
+            &app,
+            &authority,
+            &definition_id,
+            &alias,
             Some(2_000),
-        )
-        .execute(&authority, &mut tx)
-        .expect("bind expired alias fixture");
-        tx.apply();
-        block.commit().expect("commit block");
+            1,
+            1_000,
+        );
 
         let after_grace = 2_000_u64 + 369_u64 * 60 * 60 * 1_000 + 1;
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, after_grace, 0);
@@ -30014,18 +30353,15 @@ mod tests {
             Account::new(authority.clone().to_account_id(domain_id.clone())).build(&authority);
         let world = World::with([domain], [account], [definition]);
         let app = mk_app_state_for_tests_with_world(world);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1_000, 0);
-        let mut block = app.state.block(header);
-        let mut tx = block.transaction();
-        iroha_data_model::isi::SetAssetDefinitionAlias::bind(
-            definition_id.clone(),
-            alias.clone(),
+        bind_asset_alias_for_test(
+            &app,
+            &authority,
+            &definition_id,
+            &alias,
             Some(2_000),
-        )
-        .execute(&authority, &mut tx)
-        .expect("bind expired alias fixture");
-        tx.apply();
-        block.commit().expect("commit block");
+            1,
+            1_000,
+        );
 
         let after_grace = 2_000_u64 + 369_u64 * 60 * 60 * 1_000 + 1;
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, after_grace, 0);
@@ -30074,18 +30410,15 @@ mod tests {
             Account::new(authority.clone().to_account_id(domain_id.clone())).build(&authority);
         let world = World::with([domain], [account], [definition]);
         let app = mk_app_state_for_tests_with_world(world);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1_000, 0);
-        let mut block = app.state.block(header);
-        let mut tx = block.transaction();
-        iroha_data_model::isi::SetAssetDefinitionAlias::bind(
-            definition_id,
-            alias.clone(),
+        bind_asset_alias_for_test(
+            &app,
+            &authority,
+            &definition_id,
+            &alias,
             Some(2_000),
-        )
-        .execute(&authority, &mut tx)
-        .expect("bind alias");
-        tx.apply();
-        block.commit().expect("commit block");
+            1,
+            1_000,
+        );
 
         let after_grace = 2_000_u64 + 369_u64 * 60 * 60 * 1_000 + 1;
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, after_grace, 0);
@@ -30116,24 +30449,38 @@ mod tests {
             domain_id.clone(),
             Name::from_str("usd").expect("asset name token"),
         );
-        let mut long_definition =
-            iroha_data_model::asset::AssetDefinition::numeric(long_id.clone())
-                .with_name("pkr".to_owned())
-                .build(&authority);
-        long_definition.alias = Some("pkr#ubl.sbp".parse().expect("alias"));
-        let mut short_definition =
-            iroha_data_model::asset::AssetDefinition::numeric(short_id.clone())
-                .with_name("usd".to_owned())
-                .build(&authority);
-        short_definition.alias = Some("usd#sbp".parse().expect("alias"));
+        let long_definition = iroha_data_model::asset::AssetDefinition::numeric(long_id.clone())
+            .with_name("pkr".to_owned())
+            .build(&authority);
+        let short_definition = iroha_data_model::asset::AssetDefinition::numeric(short_id.clone())
+            .with_name("usd".to_owned())
+            .build(&authority);
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account =
             Account::new(authority.clone().to_account_id(domain_id.clone())).build(&authority);
         let world = World::with([domain], [account], [long_definition, short_definition]);
         let app = mk_app_state_for_tests_with_world(world);
+        bind_asset_alias_for_test(
+            &app,
+            &authority,
+            &long_id,
+            &"pkr#ubl.dataspace".parse().expect("alias"),
+            None,
+            1,
+            0,
+        );
+        bind_asset_alias_for_test(
+            &app,
+            &authority,
+            &short_id,
+            &"usd#sbp".parse().expect("alias"),
+            None,
+            2,
+            0,
+        );
 
         assert_eq!(
-            parse_asset_definition_id(app.as_ref(), "pkr#ubl.sbp")
+            parse_asset_definition_id(app.as_ref(), "pkr#ubl.dataspace")
                 .expect("long alias should resolve"),
             long_id
         );

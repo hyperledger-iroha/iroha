@@ -116,7 +116,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/names/{namespace}/{literal}/freeze` | حذف کریں | `GovernanceHookV1` | تدارک کے بعد غیر منقولہ ؛ اس بات کو یقینی بناتا ہے کہ کونسل کا اوور رائڈ ریکارڈ کیا گیا ہے۔ |
 | `/v1/sns/reserved/{selector}` | پوسٹ | `ReservedAssignmentRequestV1` | اسٹیورڈ/کونسل کے ذریعہ محفوظ ناموں کی تفویض۔ |
 | `/v1/sns/policies/{suffix_id}` | حاصل کریں | - | موجودہ `SuffixPolicyV1` (کیچ ایبل) کو بازیافت کرتا ہے۔ |
-| `/v1/sns/names/{namespace}/{literal}` | حاصل کریں | - | موجودہ `NameRecordV1` + موثر حالت (فعال ، فضل ، وغیرہ) لوٹاتا ہے۔ |** سلیکٹر انکوڈنگ: ** طبقہ `{selector}` IDR-5 کے مطابق I105 ، کمپریس ، یا کیننیکل ہیکس قبول کرتا ہے۔ Torii اسے `NameSelectorV1` کے ذریعے معمول بناتا ہے۔
+| `/v1/sns/names/{namespace}/{literal}` | حاصل کریں | - | موجودہ `NameRecordV1` + موثر حالت (فعال ، فضل ، وغیرہ) لوٹاتا ہے۔ |** سلیکٹر انکوڈنگ: ** طبقہ `{selector}` IDR-5 کے مطابق i105 ، کمپریس ، یا کیننیکل ہیکس قبول کرتا ہے۔ Torii اسے `NameSelectorV1` کے ذریعے معمول بناتا ہے۔
 
 ** غلطی کا نمونہ: ** تمام اختتامی نکات Norito ، `message` ، `details` کے ساتھ Norito JSON واپس کریں گے۔ کوڈز میں `sns_err_reserved` ، `sns_err_payment_mismatch` ، `sns_err_policy_violation` ، `sns_err_governance_missing` شامل ہیں۔
 
@@ -162,7 +162,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner <i105-account-id> \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -222,7 +222,7 @@ Torii جانچ پڑتال کرکے شواہد کی تصدیق کرتا ہے:
 
 1. کلائنٹ نے قیمتوں ، فضل اور دستیاب تیسری پارٹیوں کو بازیافت کرنے کے لئے `/v1/sns/policies/{suffix_id}` سے استفسار کیا ہے۔
 2. کسٹمر `RegisterNameRequestV1` تعمیر کرتا ہے:
-   - `selector` I105 لیبل (ترجیحی) یا کمپریس (دوسری پسند) سے اخذ کرتا ہے۔
+   - `selector` i105 لیبل (ترجیحی) یا کمپریس (دوسری پسند) سے اخذ کرتا ہے۔
    - پالیسی کی حدود میں `term_years`۔
    - `payment` خزانہ/اسٹیورڈ اسپلٹر کی منتقلی کا حوالہ دیتے ہوئے۔
 3. درست Torii:

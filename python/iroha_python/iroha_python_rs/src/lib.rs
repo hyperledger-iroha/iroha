@@ -59,6 +59,7 @@ use iroha_data_model::{
     prelude::{AccountId, ChainId},
     proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox},
     repo::prelude::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
+    rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
     transaction::{
         Executable, IvmBytecode, SignedTransaction, TransactionBuilder as ModelTransactionBuilder,
         TransactionSubmissionReceipt,
@@ -3511,6 +3512,12 @@ mod tests {
         });
     }
 
+    fn canonical_i105_from_seed(seed: u8) -> String {
+        AccountId::new(PublicKey::from(parse_private_key(&[seed; 32]).unwrap()))
+            .canonical_i105()
+            .expect("canonical I105")
+    }
+
     fn provider_metadata(provider_id: &str) -> PyProviderMetadata {
         PyProviderMetadata {
             provider_id: Some(provider_id.to_string()),
@@ -3584,7 +3591,7 @@ mod tests {
         let public_key = PublicKey::from(private_key.clone());
         let authority = AccountId::new(public_key.clone())
             .canonical_i105()
-            .expect("canonical i105 authority");
+            .expect("canonical I105 authority");
 
         let mut builder =
             TransactionBuilder::new("test-chain", &authority).expect("builder constructs");
@@ -3731,6 +3738,366 @@ mod tests {
                 .and_then(json::Value::as_bool),
             Some(true)
         );
+    }
+
+    #[test]
+    fn transfer_rwa_instruction_classmethod_serializes_canonical_numeric_payload() {
+        ensure_python();
+        Python::attach(|py| {
+            let instruction_type = py.get_type::<Instruction>();
+            let quantity = pyo3::types::PyString::new(py, "1.2500");
+            let source = canonical_i105_from_seed(0x11);
+            let destination = canonical_i105_from_seed(0x22);
+            let instruction = Instruction::transfer_rwa(
+                &instruction_type,
+                &source,
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities",
+                quantity.as_any(),
+                &destination,
+            )
+            .expect("transfer rwa builds");
+            let decoded = json::from_str::<InstructionBox>(&instruction.to_json().expect("json"))
+                .expect("instruction json decodes");
+            let instruction_ref: &dyn iroha_data_model::isi::Instruction = &*decoded;
+            let Some(rwa_box) = instruction_ref
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::rwa::RwaInstructionBox>()
+            else {
+                panic!("expected TransferRwa instruction");
+            };
+            let iroha_data_model::isi::rwa::RwaInstructionBox::Transfer(transfer) = rwa_box else {
+                panic!("expected TransferRwa instruction");
+            };
+
+            assert_eq!(
+                transfer.source,
+                parse_account_id(&source).expect("source parses")
+            );
+            assert_eq!(
+                transfer.destination,
+                parse_account_id(&destination).expect("destination parses")
+            );
+            assert_eq!(
+                transfer.rwa,
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities"
+                    .parse()
+                    .expect("rwa id parses")
+            );
+            assert_eq!(
+                transfer.quantity,
+                Numeric::from_str("1.25").expect("numeric parses")
+            );
+        });
+    }
+
+    #[test]
+    fn register_rwa_instruction_classmethod_serializes_payload() {
+        ensure_python();
+        Python::attach(|py| {
+            let instruction_type = py.get_type::<Instruction>();
+            let json_module = py.import("json").expect("json module");
+            let payload = json_module
+                .call_method1(
+                    "loads",
+                    (r#"{
+                        "domain": "commodities",
+                        "quantity": "10.5",
+                        "spec": {"scale": 1},
+                        "primary_reference": "vault-cert-001",
+                        "status": null,
+                        "metadata": {"origin": "AE"},
+                        "parents": [],
+                        "controls": {
+                            "controller_accounts": [],
+                            "controller_roles": [],
+                            "freeze_enabled": true,
+                            "hold_enabled": false,
+                            "force_transfer_enabled": false,
+                            "redeem_enabled": false
+                        }
+                    }"#,),
+                )
+                .expect("register payload loads");
+            let instruction =
+                Instruction::register_rwa(&instruction_type, payload.as_any()).expect("builds");
+            let decoded = json::from_str::<InstructionBox>(&instruction.to_json().expect("json"))
+                .expect("instruction json decodes");
+            let instruction_ref: &dyn iroha_data_model::isi::Instruction = &*decoded;
+            let Some(rwa_box) = instruction_ref
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::rwa::RwaInstructionBox>()
+            else {
+                panic!("expected RegisterRwa instruction");
+            };
+            let iroha_data_model::isi::rwa::RwaInstructionBox::Register(register) = rwa_box else {
+                panic!("expected RegisterRwa instruction");
+            };
+
+            assert_eq!(register.rwa.domain, "commodities".parse().expect("domain"));
+            assert_eq!(
+                register.rwa.quantity,
+                Numeric::from_str("10.5").expect("quantity")
+            );
+            assert_eq!(register.rwa.primary_reference, "vault-cert-001");
+            assert_eq!(
+                register
+                    .rwa
+                    .metadata
+                    .get("origin")
+                    .and_then(|value| value.try_into_any_norito::<String>().ok())
+                    .as_deref(),
+                Some("AE")
+            );
+            assert!(register.rwa.controls.freeze_enabled);
+        });
+    }
+
+    #[test]
+    fn merge_rwas_and_set_rwa_controls_classmethods_roundtrip_payloads() {
+        ensure_python();
+        Python::attach(|py| {
+            let instruction_type = py.get_type::<Instruction>();
+            let json_module = py.import("json").expect("json module");
+            let controller = canonical_i105_from_seed(0x33);
+            let merge_payload = json_module
+                .call_method1(
+                    "loads",
+                    (r#"{{
+                            "parents": [
+                                {{
+                                    "rwa": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities",
+                                    "quantity": "1.500"
+                                }}
+                            ],
+                            "primary_reference": "blend-cert-007",
+                            "status": "blended",
+                            "metadata": {{"grade": "A"}}
+                        }}"#,),
+                )
+                .expect("merge payload loads");
+            let merge_instruction =
+                Instruction::merge_rwas(&instruction_type, merge_payload.as_any())
+                    .expect("merge builds");
+            let merge_decoded =
+                json::from_str::<InstructionBox>(&merge_instruction.to_json().expect("json"))
+                    .expect("merge json decodes");
+            let merge_ref: &dyn iroha_data_model::isi::Instruction = &*merge_decoded;
+            let Some(rwa_box) = merge_ref
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::rwa::RwaInstructionBox>()
+            else {
+                panic!("expected MergeRwas instruction");
+            };
+            let iroha_data_model::isi::rwa::RwaInstructionBox::Merge(merge) = rwa_box else {
+                panic!("expected MergeRwas instruction");
+            };
+
+            assert_eq!(merge.parents.len(), 1);
+            assert_eq!(merge.primary_reference, "blend-cert-007");
+            assert_eq!(
+                merge.status.as_ref().map(ToString::to_string).as_deref(),
+                Some("blended")
+            );
+            assert_eq!(
+                merge
+                    .metadata
+                    .get("grade")
+                    .and_then(|value| value.try_into_any_norito::<String>().ok())
+                    .as_deref(),
+                Some("A")
+            );
+
+            let controls_payload = json_module
+                .call_method1(
+                    "loads",
+                    (format!(
+                        r#"{{
+                            "controller_accounts": ["{controller}"],
+                            "controller_roles": [],
+                            "freeze_enabled": true,
+                            "hold_enabled": true,
+                            "force_transfer_enabled": false,
+                            "redeem_enabled": true
+                        }}"#
+                    ),),
+                )
+                .expect("controls payload loads");
+            let controls_instruction = Instruction::set_rwa_controls(
+                &instruction_type,
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities",
+                controls_payload.as_any(),
+            )
+            .expect("controls build");
+            let controls_decoded =
+                json::from_str::<InstructionBox>(&controls_instruction.to_json().expect("json"))
+                    .expect("controls json decodes");
+            let controls_ref: &dyn iroha_data_model::isi::Instruction = &*controls_decoded;
+            let Some(rwa_box) = controls_ref
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::rwa::RwaInstructionBox>()
+            else {
+                panic!("expected SetRwaControls instruction");
+            };
+            let iroha_data_model::isi::rwa::RwaInstructionBox::SetControls(controls) = rwa_box
+            else {
+                panic!("expected SetRwaControls instruction");
+            };
+
+            assert_eq!(controls.controls.controller_accounts.len(), 1);
+            assert!(controls.controls.freeze_enabled);
+            assert!(controls.controls.hold_enabled);
+            assert!(controls.controls.redeem_enabled);
+        });
+    }
+
+    #[test]
+    fn rwa_scalar_instruction_classmethods_roundtrip_payloads() {
+        ensure_python();
+        Python::attach(|py| {
+            let instruction_type = py.get_type::<Instruction>();
+            let rwa_id =
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities";
+            let destination = canonical_i105_from_seed(0x44);
+
+            let redeem = Instruction::redeem_rwa(
+                &instruction_type,
+                rwa_id,
+                pyo3::types::PyString::new(py, "2.500").as_any(),
+            )
+            .expect("redeem builds");
+            let hold = Instruction::hold_rwa(
+                &instruction_type,
+                rwa_id,
+                pyo3::types::PyString::new(py, "1.2500").as_any(),
+            )
+            .expect("hold builds");
+            let release = Instruction::release_rwa(
+                &instruction_type,
+                rwa_id,
+                pyo3::types::PyString::new(py, "0.500").as_any(),
+            )
+            .expect("release builds");
+            let force = Instruction::force_transfer_rwa(
+                &instruction_type,
+                rwa_id,
+                pyo3::types::PyString::new(py, "4").as_any(),
+                &destination,
+            )
+            .expect("force transfer builds");
+            let freeze = Instruction::freeze_rwa(&instruction_type, rwa_id).expect("freeze builds");
+            let unfreeze =
+                Instruction::unfreeze_rwa(&instruction_type, rwa_id).expect("unfreeze builds");
+            let metadata = PyDict::new(py);
+            metadata.set_item("origin", "AE").expect("origin");
+            metadata.set_item("lot", 3).expect("lot");
+            let set_metadata = Instruction::set_rwa_key_value(
+                &instruction_type,
+                rwa_id,
+                "grade",
+                Some(metadata.as_any()),
+            )
+            .expect("set metadata builds");
+            let remove_metadata =
+                Instruction::remove_rwa_key_value(&instruction_type, rwa_id, "grade")
+                    .expect("remove metadata builds");
+
+            let decoded = |instruction: &Instruction| {
+                json::from_str::<InstructionBox>(&instruction.to_json().expect("json"))
+                    .expect("instruction json decodes")
+            };
+
+            let redeem_ref: &dyn iroha_data_model::isi::Instruction = &*decoded(&redeem);
+            let hold_ref: &dyn iroha_data_model::isi::Instruction = &*decoded(&hold);
+            let release_ref: &dyn iroha_data_model::isi::Instruction = &*decoded(&release);
+            let force_ref: &dyn iroha_data_model::isi::Instruction = &*decoded(&force);
+            let freeze_ref: &dyn iroha_data_model::isi::Instruction = &*decoded(&freeze);
+            let unfreeze_ref: &dyn iroha_data_model::isi::Instruction = &*decoded(&unfreeze);
+            let set_ref: &dyn iroha_data_model::isi::Instruction = &*decoded(&set_metadata);
+            let remove_ref: &dyn iroha_data_model::isi::Instruction = &*decoded(&remove_metadata);
+
+            let Some(iroha_data_model::isi::rwa::RwaInstructionBox::Redeem(redeem_box)) =
+                redeem_ref
+                    .as_any()
+                    .downcast_ref::<iroha_data_model::isi::rwa::RwaInstructionBox>()
+            else {
+                panic!("expected RedeemRwa");
+            };
+            let Some(iroha_data_model::isi::rwa::RwaInstructionBox::Hold(hold_box)) = hold_ref
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::rwa::RwaInstructionBox>()
+            else {
+                panic!("expected HoldRwa");
+            };
+            let Some(iroha_data_model::isi::rwa::RwaInstructionBox::Release(release_box)) =
+                release_ref
+                    .as_any()
+                    .downcast_ref::<iroha_data_model::isi::rwa::RwaInstructionBox>()
+            else {
+                panic!("expected ReleaseRwa");
+            };
+            let Some(iroha_data_model::isi::rwa::RwaInstructionBox::ForceTransfer(force_box)) =
+                force_ref
+                    .as_any()
+                    .downcast_ref::<iroha_data_model::isi::rwa::RwaInstructionBox>()
+            else {
+                panic!("expected ForceTransferRwa");
+            };
+            let Some(iroha_data_model::isi::rwa::RwaInstructionBox::Freeze(_)) = freeze_ref
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::rwa::RwaInstructionBox>()
+            else {
+                panic!("expected FreezeRwa");
+            };
+            let Some(iroha_data_model::isi::rwa::RwaInstructionBox::Unfreeze(_)) = unfreeze_ref
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::rwa::RwaInstructionBox>()
+            else {
+                panic!("expected UnfreezeRwa");
+            };
+            let Some(iroha_data_model::isi::rwa::RwaInstructionBox::SetKeyValue(set_box)) = set_ref
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::rwa::RwaInstructionBox>()
+            else {
+                panic!("expected SetRwaKeyValue");
+            };
+            let Some(iroha_data_model::isi::rwa::RwaInstructionBox::RemoveKeyValue(remove_box)) =
+                remove_ref
+                    .as_any()
+                    .downcast_ref::<iroha_data_model::isi::rwa::RwaInstructionBox>()
+            else {
+                panic!("expected RemoveRwaKeyValue");
+            };
+
+            assert_eq!(
+                redeem_box.quantity,
+                Numeric::from_str("2.5").expect("numeric")
+            );
+            assert_eq!(
+                hold_box.quantity,
+                Numeric::from_str("1.25").expect("numeric")
+            );
+            assert_eq!(
+                release_box.quantity,
+                Numeric::from_str("0.5").expect("numeric")
+            );
+            assert_eq!(
+                force_box.destination,
+                parse_account_id(&destination).expect("destination parses")
+            );
+            assert_eq!(set_box.key.to_string(), "grade");
+            assert_eq!(
+                set_box
+                    .value
+                    .try_into_any_norito::<json::Value>()
+                    .ok()
+                    .and_then(|value| value.as_object().cloned())
+                    .and_then(|obj| obj.get("origin").cloned())
+                    .and_then(|value| value.as_str().map(|value| value.to_owned()))
+                    .as_deref(),
+                Some("AE")
+            );
+            assert_eq!(remove_box.key.to_string(), "grade");
+        });
     }
 
     #[test]
@@ -4099,16 +4466,19 @@ mod tests {
         ensure_python();
         Python::attach(|py| {
             let dict = PyDict::new(py);
-            dict.set_item("asset_definition_id", "usd#wonderland")
+            dict.set_item("asset_definition_id", "7EAD8EFYUx1aVKZPUU1fyKvr8dF1")
                 .unwrap();
             dict.set_item("quantity", "10").unwrap();
             let leg = parse_repo_cash_leg(py, dict.as_any()).expect("repo cash leg should parse");
-            assert_eq!(leg.asset_definition_id.to_string(), "usd#wonderland");
+            assert_eq!(
+                leg.asset_definition_id.to_string(),
+                "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
+            );
             assert_eq!(leg.quantity.to_string(), "10");
 
             let missing = PyDict::new(py);
             missing
-                .set_item("asset_definition_id", "usd#wonderland")
+                .set_item("asset_definition_id", "7EAD8EFYUx1aVKZPUU1fyKvr8dF1")
                 .unwrap();
             let err =
                 parse_repo_cash_leg(py, missing.as_any()).expect_err("missing quantity rejected");
@@ -4805,36 +5175,192 @@ fn py_to_metadata(py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<
     match value {
         None => Ok(Metadata::default()),
         Some(obj) => {
-            let json_module = py.import("json").map_err(|err| {
-                PyValueError::new_err(format!("failed to import json module: {err}"))
-            })?;
-            let dumped = json_module.call_method1("dumps", (obj,)).map_err(|err| {
-                PyValueError::new_err(format!("metadata must be JSON serializable: {err}"))
-            })?;
-            let dumped: String = dumped
-                .extract()
-                .map_err(|err| PyValueError::new_err(format!("expected JSON string: {err}")))?;
+            let dumped = py_to_json_string(py, obj, "metadata")?;
             json::from_str::<Metadata>(&dumped)
                 .map_err(|err| PyValueError::new_err(format!("invalid metadata value: {err}")))
         }
     }
 }
 
+fn py_to_json_string(py: Python<'_>, value: &Bound<'_, PyAny>, context: &str) -> PyResult<String> {
+    let json_module = py
+        .import("json")
+        .map_err(|err| PyValueError::new_err(format!("failed to import json module: {err}")))?;
+    let dumped = json_module.call_method1("dumps", (value,)).map_err(|err| {
+        PyValueError::new_err(format!("{context} must be JSON serializable: {err}"))
+    })?;
+    dumped
+        .extract()
+        .map_err(|err| PyValueError::new_err(format!("expected JSON string: {err}")))
+}
+
+fn py_to_json_model<T>(py: Python<'_>, value: &Bound<'_, PyAny>, context: &str) -> PyResult<T>
+where
+    T: norito::json::JsonDeserialize,
+{
+    let dumped = py_to_json_string(py, value, context)?;
+    json::from_str::<T>(&dumped)
+        .map_err(|err| PyValueError::new_err(format!("invalid {context} value: {err}")))
+}
+
+fn json_required_value(
+    fields: &mut std::collections::BTreeMap<String, json::Value>,
+    key: &str,
+    context: &str,
+) -> PyResult<json::Value> {
+    fields
+        .remove(key)
+        .ok_or_else(|| PyValueError::new_err(format!("{context}.{key} is required")))
+}
+
+fn json_string_value(value: json::Value, context: &str) -> PyResult<String> {
+    match value {
+        json::Value::String(value) => Ok(value),
+        _ => Err(PyValueError::new_err(format!("{context} must be a string"))),
+    }
+}
+
+fn json_rwa_id_value(value: json::Value, context: &str) -> PyResult<RwaId> {
+    let literal = json_string_value(value, context)?;
+    literal
+        .parse()
+        .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{literal}`: {err}")))
+}
+
+fn json_rwa_parent_refs_value(value: json::Value, context: &str) -> PyResult<Vec<RwaParentRef>> {
+    let json::Value::Array(entries) = value else {
+        return Err(PyValueError::new_err(format!("{context} must be an array")));
+    };
+
+    let mut parents = Vec::with_capacity(entries.len());
+    for (index, entry) in entries.into_iter().enumerate() {
+        let entry_context = format!("{context}[{index}]");
+        let json::Value::Object(mut fields) = entry else {
+            return Err(PyValueError::new_err(format!(
+                "{entry_context} must be an object"
+            )));
+        };
+        let rwa = json_rwa_id_value(
+            json_required_value(&mut fields, "rwa", &entry_context)?,
+            &format!("{entry_context}.rwa"),
+        )?;
+        let quantity = json::from_value::<Numeric>(json_required_value(
+            &mut fields,
+            "quantity",
+            &entry_context,
+        )?)
+        .map_err(|err| {
+            PyValueError::new_err(format!("invalid {entry_context}.quantity value: {err}"))
+        })?;
+        parents.push(RwaParentRef::new(rwa, quantity));
+    }
+    Ok(parents)
+}
+
+fn parse_new_rwa_payload(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<NewRwa> {
+    let dumped = py_to_json_string(py, value, "rwa")?;
+    let json::Value::Object(mut fields) = json::from_str::<json::Value>(&dumped)
+        .map_err(|err| PyValueError::new_err(format!("invalid rwa value: {err}")))?
+    else {
+        return Err(PyValueError::new_err("rwa must be a JSON object"));
+    };
+
+    let domain =
+        json::from_value::<DomainId>(json_required_value(&mut fields, "domain", "rwa")?)
+            .map_err(|err| PyValueError::new_err(format!("invalid rwa.domain value: {err}")))?;
+    let quantity =
+        json::from_value::<Numeric>(json_required_value(&mut fields, "quantity", "rwa")?)
+            .map_err(|err| PyValueError::new_err(format!("invalid rwa.quantity value: {err}")))?;
+    let spec = json::from_value::<NumericSpec>(json_required_value(&mut fields, "spec", "rwa")?)
+        .map_err(|err| PyValueError::new_err(format!("invalid rwa.spec value: {err}")))?;
+    let primary_reference = json_string_value(
+        json_required_value(&mut fields, "primary_reference", "rwa")?,
+        "rwa.primary_reference",
+    )?;
+    let status = fields
+        .remove("status")
+        .map_or(Ok(None), |value| match value {
+            json::Value::Null => Ok(None),
+            other => json::from_value(other)
+                .map(Some)
+                .map_err(|err| PyValueError::new_err(format!("invalid rwa.status value: {err}"))),
+        })?;
+    let metadata = fields
+        .remove("metadata")
+        .map_or(Ok(Metadata::default()), |value| {
+            json::from_value(value)
+                .map_err(|err| PyValueError::new_err(format!("invalid rwa.metadata value: {err}")))
+        })?;
+    let parents = fields.remove("parents").map_or(Ok(Vec::new()), |value| {
+        json_rwa_parent_refs_value(value, "rwa.parents")
+    })?;
+    let controls = fields
+        .remove("controls")
+        .map_or(Ok(RwaControlPolicy::default()), |value| {
+            json::from_value(value)
+                .map_err(|err| PyValueError::new_err(format!("invalid rwa.controls value: {err}")))
+        })?;
+
+    Ok(NewRwa::new(
+        domain,
+        quantity,
+        spec,
+        primary_reference,
+        status,
+        metadata,
+        parents,
+        controls,
+    ))
+}
+
+fn parse_merge_rwas_payload(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<iroha_data_model::isi::rwa::MergeRwas> {
+    let dumped = py_to_json_string(py, value, "merge")?;
+    let json::Value::Object(mut fields) = json::from_str::<json::Value>(&dumped)
+        .map_err(|err| PyValueError::new_err(format!("invalid merge value: {err}")))?
+    else {
+        return Err(PyValueError::new_err("merge must be a JSON object"));
+    };
+
+    let parents = json_rwa_parent_refs_value(
+        json_required_value(&mut fields, "parents", "merge")?,
+        "merge.parents",
+    )?;
+    let primary_reference = json_string_value(
+        json_required_value(&mut fields, "primary_reference", "merge")?,
+        "merge.primary_reference",
+    )?;
+    let status = fields
+        .remove("status")
+        .map_or(Ok(None), |value| match value {
+            json::Value::Null => Ok(None),
+            other => json::from_value(other)
+                .map(Some)
+                .map_err(|err| PyValueError::new_err(format!("invalid merge.status value: {err}"))),
+        })?;
+    let metadata = fields
+        .remove("metadata")
+        .map_or(Ok(Metadata::default()), |value| {
+            json::from_value(value).map_err(|err| {
+                PyValueError::new_err(format!("invalid merge.metadata value: {err}"))
+            })
+        })?;
+
+    Ok(iroha_data_model::isi::rwa::MergeRwas {
+        parents,
+        primary_reference,
+        status,
+        metadata,
+    })
+}
+
 fn py_to_json_value(py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<Json> {
     match value {
         None => Ok(Json::default()),
         Some(obj) => {
-            let json_module = py.import("json").map_err(|err| {
-                PyValueError::new_err(format!("failed to import json module: {err}"))
-            })?;
-            let dumped = json_module.call_method1("dumps", (obj,)).map_err(|err| {
-                PyValueError::new_err(format!(
-                    "trigger arguments must be JSON serializable: {err}"
-                ))
-            })?;
-            let dumped: String = dumped
-                .extract()
-                .map_err(|err| PyValueError::new_err(format!("expected JSON string: {err}")))?;
+            let dumped = py_to_json_string(py, obj, "trigger arguments")?;
             Json::from_str_norito(&dumped)
                 .map_err(|err| PyValueError::new_err(format!("invalid JSON payload: {err}")))
         }
@@ -4842,9 +5368,11 @@ fn py_to_json_value(py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResul
 }
 
 fn parse_numeric(quantity: &str) -> PyResult<Numeric> {
-    Numeric::from_str(quantity).map_err(|err| {
-        PyValueError::new_err(format!("invalid numeric quantity `{quantity}`: {err}"))
-    })
+    Numeric::from_str(quantity)
+        .map(Numeric::trim_trailing_zeros)
+        .map_err(|err| {
+            PyValueError::new_err(format!("invalid numeric quantity `{quantity}`: {err}"))
+        })
 }
 
 fn numeric_from_py(value: &Bound<'_, PyAny>) -> PyResult<Numeric> {
@@ -5506,6 +6034,19 @@ impl Instruction {
     }
 
     #[classmethod]
+    fn register_rwa<'py>(cls: &Bound<'py, PyType>, rwa: &Bound<'py, PyAny>) -> PyResult<Self> {
+        let rwa = parse_new_rwa_payload(cls.py(), rwa)?;
+        let instruction = iroha_data_model::isi::rwa::RegisterRwa { rwa };
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    fn merge_rwas<'py>(cls: &Bound<'py, PyType>, merge: &Bound<'py, PyAny>) -> PyResult<Self> {
+        let instruction = parse_merge_rwas_payload(cls.py(), merge)?;
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
     #[pyo3(signature = (agreement_id, initiator, counterparty, *, custodian=None, cash_leg, collateral_leg, rate_bps, maturity_timestamp_ms, governance))]
     #[allow(clippy::too_many_arguments)]
     fn repo_initiate<'py>(
@@ -5717,6 +6258,169 @@ impl Instruction {
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid NFT id `{nft_id}`: {err}")))?;
         let instruction = Transfer::nft(source, nft_id, destination);
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    fn transfer_rwa(
+        _cls: &Bound<'_, PyType>,
+        source: &str,
+        rwa_id: &str,
+        quantity: &Bound<'_, PyAny>,
+        destination: &str,
+    ) -> PyResult<Self> {
+        let source = parse_account_id(source)?;
+        ensure_ed25519_account(&source)?;
+        let destination = parse_account_id(destination)?;
+        ensure_ed25519_account(&destination)?;
+        let rwa_id: RwaId = rwa_id
+            .parse()
+            .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
+        let quantity = numeric_from_py(quantity)?;
+        let instruction = iroha_data_model::isi::rwa::TransferRwa {
+            source,
+            rwa: rwa_id,
+            quantity,
+            destination,
+        };
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    fn redeem_rwa(
+        _cls: &Bound<'_, PyType>,
+        rwa_id: &str,
+        quantity: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        let rwa_id: RwaId = rwa_id
+            .parse()
+            .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
+        let quantity = numeric_from_py(quantity)?;
+        let instruction = iroha_data_model::isi::rwa::RedeemRwa {
+            rwa: rwa_id,
+            quantity,
+        };
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    fn freeze_rwa(_cls: &Bound<'_, PyType>, rwa_id: &str) -> PyResult<Self> {
+        let rwa_id: RwaId = rwa_id
+            .parse()
+            .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
+        let instruction = iroha_data_model::isi::rwa::FreezeRwa { rwa: rwa_id };
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    fn unfreeze_rwa(_cls: &Bound<'_, PyType>, rwa_id: &str) -> PyResult<Self> {
+        let rwa_id: RwaId = rwa_id
+            .parse()
+            .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
+        let instruction = iroha_data_model::isi::rwa::UnfreezeRwa { rwa: rwa_id };
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    fn hold_rwa(
+        _cls: &Bound<'_, PyType>,
+        rwa_id: &str,
+        quantity: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        let rwa_id: RwaId = rwa_id
+            .parse()
+            .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
+        let quantity = numeric_from_py(quantity)?;
+        let instruction = iroha_data_model::isi::rwa::HoldRwa {
+            rwa: rwa_id,
+            quantity,
+        };
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    fn release_rwa(
+        _cls: &Bound<'_, PyType>,
+        rwa_id: &str,
+        quantity: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        let rwa_id: RwaId = rwa_id
+            .parse()
+            .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
+        let quantity = numeric_from_py(quantity)?;
+        let instruction = iroha_data_model::isi::rwa::ReleaseRwa {
+            rwa: rwa_id,
+            quantity,
+        };
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    fn force_transfer_rwa(
+        _cls: &Bound<'_, PyType>,
+        rwa_id: &str,
+        quantity: &Bound<'_, PyAny>,
+        destination: &str,
+    ) -> PyResult<Self> {
+        let destination = parse_account_id(destination)?;
+        ensure_ed25519_account(&destination)?;
+        let rwa_id: RwaId = rwa_id
+            .parse()
+            .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
+        let quantity = numeric_from_py(quantity)?;
+        let instruction = iroha_data_model::isi::rwa::ForceTransferRwa {
+            rwa: rwa_id,
+            quantity,
+            destination,
+        };
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    fn set_rwa_controls<'py>(
+        cls: &Bound<'py, PyType>,
+        rwa_id: &str,
+        controls: &Bound<'py, PyAny>,
+    ) -> PyResult<Self> {
+        let rwa_id: RwaId = rwa_id
+            .parse()
+            .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
+        let controls = py_to_json_model::<RwaControlPolicy>(cls.py(), controls, "controls")?;
+        let instruction = iroha_data_model::isi::rwa::SetRwaControls {
+            rwa: rwa_id,
+            controls,
+        };
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    #[pyo3(signature = (rwa_id, key, value=None))]
+    fn set_rwa_key_value<'py>(
+        cls: &Bound<'py, PyType>,
+        rwa_id: &str,
+        key: &str,
+        value: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Self> {
+        let rwa_id: RwaId = rwa_id
+            .parse()
+            .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
+        let key: Name = key
+            .parse()
+            .map_err(|err| PyValueError::new_err(format!("invalid metadata key `{key}`: {err}")))?;
+        let json_value = py_to_json_value(cls.py(), value)?;
+        let instruction = SetKeyValue::rwa(rwa_id, key, json_value);
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    fn remove_rwa_key_value(_cls: &Bound<'_, PyType>, rwa_id: &str, key: &str) -> PyResult<Self> {
+        let rwa_id: RwaId = rwa_id
+            .parse()
+            .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
+        let key: Name = key
+            .parse()
+            .map_err(|err| PyValueError::new_err(format!("invalid metadata key `{key}`: {err}")))?;
+        let instruction = RemoveKeyValue::rwa(rwa_id, key);
         Ok(Instruction::new(instruction.into()))
     }
 

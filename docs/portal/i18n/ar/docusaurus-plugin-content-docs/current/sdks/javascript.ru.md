@@ -69,15 +69,15 @@ const mint = buildMintAssetInstruction({
 
 const transfer = buildTransferAssetInstruction({
   sourceAssetId: "norito:4e52543000000001",
-  destinationAccountId: "i105...",
+  destinationAccountId: "<i105-account-id>",
   quantity: "5",
 });
 
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
-  authority: "i105...",
+  authority: "<i105-account-id>",
   mint: { assetId: "norito:4e52543000000001", quantity: "10" },
-  transfers: [{ destinationAccountId: "i105...", quantity: "5" }],
+  transfers: [{ destinationAccountId: "<i105-account-id>", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
 ```
@@ -163,11 +163,11 @@ const defs = await torii.queryAssetDefinitions({
 console.log("filtered definitions", defs.items);
 
 const assetId = "norito:4e52543000000001";
-const balances = await torii.listAccountAssets("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const balances = await torii.listAccountAssets("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D", {
   limit: 10,
   assetId,
 });
-const txs = await torii.listAccountTransactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const txs = await torii.listAccountTransactions("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D", {
   limit: 5,
   assetId,
 });
@@ -271,7 +271,7 @@ abort.abort(); // closes the underlying WebSocket cleanly
 نقاط النهاية `/v1/explorer/accounts/{account_id}/qr` حتى تتمكن لوحات المعلومات من إعادة تشغيل
 نفس اللقطات التي تعمل على تشغيل البوابة. `getExplorerMetrics()` يقوم بتطبيع ملف
 الحمولة وإرجاع `null` عند تعطيل المسار. إقرانها مع
-`getExplorerAccountQr()` عندما تحتاج إلى I105 (المفضل)/sora (ثاني أفضل) حرفية بالإضافة إلى المضمنة
+`getExplorerAccountQr()` عندما تحتاج إلى i105 (المفضل)/sora (ثاني أفضل) حرفية بالإضافة إلى المضمنة
 SVG لأزرار المشاركة.
 
 ```ts
@@ -286,7 +286,7 @@ if (!snapshot) {
   console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
 }
 
-const qr = await torii.getExplorerAccountQr("i105...");
+const qr = await torii.getExplorerAccountQr("<i105-account-id>");
 console.log("explorer literal", qr.literal);
 await fs.writeFile("alice.svg", qr.svg, "utf8");
 console.log(
@@ -294,8 +294,8 @@ console.log(
 );
 ```
 
-يؤدي تمرير `I105` إلى عكس ضغط Explorer الافتراضي
-محددات. حذف التجاوز لمخرج I105 المفضل أو طلب `i105_qr`
+يؤدي تمرير `i105` إلى عكس ضغط Explorer الافتراضي
+محددات. حذف التجاوز لمخرج i105 المفضل أو طلب `i105_qr`
 عندما تحتاج إلى متغير QR الآمن. الحرفي المضغوط هو ثاني أفضل
 خيار Sora فقط لـ UX. يقوم المساعد دائمًا بإرجاع المعرف الأساسي،
 البيانات الحرفية والبيانات التعريفية المحددة (بادئة الشبكة، إصدار/وحدات QR، الخطأ
@@ -506,7 +506,7 @@ for await (const event of torii.streamEvents({
   تجميع ممتلكات الأصول حسب معرفات الحساب الأساسية؛ قم بتمرير `assetId` لتصفية ملف
   المحفظة وصولاً إلى مثيل أصل واحد.
 - يقوم `getUaidBindings(uaid)` بتعداد كل حساب ↔ لمساحة البيانات
-  الربط (`I105` يُرجع القيم الحرفية `i105`).
+  الربط (`i105` يُرجع القيم الحرفية `i105`).
 - `getUaidManifests(uaid, { dataspaceId })` يُرجع كل بيان قدرة،
   حالة دورة الحياة، والحسابات المقيدة للتدقيق.
 
@@ -551,7 +551,7 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     manifest,
     privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
     reason: "Attester v2 rollout",
@@ -561,7 +561,7 @@ await torii.publishSpaceDirectoryManifest(
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
     uaid,
     dataspaceId: 11,

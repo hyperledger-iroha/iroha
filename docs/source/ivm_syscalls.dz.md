@@ -103,7 +103,7 @@ translator: machine-google-reviewed
     - JSON གིས་ ལྡེ་མིག་ `"perms"` ཡང་ན་ `"permissions"` རེ་རེ་ལུ་ ངོས་ལེན་འབདཝ་ཨིན།
     - དཔེར་ན།
       - `{ "perms": [ "mint_asset:rose#wonder" ] }`
-      - `{ "permissions": [ "read_assets:i105...", "transfer_asset:rose#wonder" ] }`
+      - `{ "permissions": [ "read_assets:<i105-account-id>", "transfer_asset:rose#wonder" ] }`
     - མོ་ཀ་ནང་ལུ་རྒྱབ་སྐྱོར་འབད་ཡོད་པའི་གནང་བ་མིང་སྔོན་འཇུག་ཚུ།
       - `register_domain`, `register_account`, `register_asset_definition`
       - `read_assets:<account_id>`

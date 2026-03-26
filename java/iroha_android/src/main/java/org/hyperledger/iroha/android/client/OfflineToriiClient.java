@@ -121,7 +121,7 @@ public final class OfflineToriiClient {
   /** Submit an offline settlement bundle for on-ledger settlement. */
   public CompletableFuture<OfflineSettlementSubmitResponse> submitSettlement(
       final Map<String, Object> transferPayload, final String authority, final String privateKeyHex) {
-    return submitSettlement(transferPayload, authority, privateKeyHex, List.of(), false);
+    return unsupportedServerSideSigning("/v1/offline/settlements");
   }
 
   /**
@@ -137,14 +137,7 @@ public final class OfflineToriiClient {
       final String authority,
       final String privateKeyHex,
       final IrohaClient statusClient) {
-    return submitSettlementAndWait(
-        transferPayload,
-        authority,
-        privateKeyHex,
-        List.of(),
-        false,
-        statusClient,
-        null);
+    return unsupportedServerSideSigning("/v1/offline/settlements");
   }
 
   /**
@@ -157,14 +150,7 @@ public final class OfflineToriiClient {
       final String privateKeyHex,
       final IrohaClient statusClient,
       final PipelineStatusOptions statusOptions) {
-    return submitSettlementAndWait(
-        transferPayload,
-        authority,
-        privateKeyHex,
-        List.of(),
-        false,
-        statusClient,
-        statusOptions);
+    return unsupportedServerSideSigning("/v1/offline/settlements");
   }
 
   /**
@@ -179,33 +165,7 @@ public final class OfflineToriiClient {
       final String privateKeyHex,
       final List<OfflineSettlementBuildClaimOverride> buildClaimOverrides,
       final boolean repairExistingBuildClaims) {
-    Objects.requireNonNull(transferPayload, "transferPayload");
-    Objects.requireNonNull(authority, "authority");
-    Objects.requireNonNull(privateKeyHex, "privateKeyHex");
-    final List<OfflineSettlementBuildClaimOverride> overrides =
-        buildClaimOverrides == null ? List.of() : List.copyOf(buildClaimOverrides);
-    final Map<String, Object> body = new LinkedHashMap<>();
-    body.put("authority", authority);
-    body.put("private_key", privateKeyHex);
-    body.put("transfer", transferPayload);
-    if (!overrides.isEmpty()) {
-      final List<Map<String, Object>> overridePayloads = new ArrayList<>(overrides.size());
-      for (final OfflineSettlementBuildClaimOverride override : overrides) {
-        overridePayloads.add(
-            Objects.requireNonNull(
-                    override,
-                    "buildClaimOverrides entries must be non-null")
-                .toJsonMap());
-      }
-      body.put("build_claim_overrides", overridePayloads);
-    }
-    if (repairExistingBuildClaims) {
-      body.put("repair_existing_build_claims", true);
-    }
-    final TransportRequest request =
-        buildPostRequest(SETTLEMENTS_PATH, JsonEncoder.encode(body).getBytes(StandardCharsets.UTF_8));
-    notifyRequest(request);
-    return executeHttpRequest(request, OfflineJsonParser::parseSettlementSubmitResponse);
+    return unsupportedServerSideSigning("/v1/offline/settlements");
   }
 
   /**
@@ -219,14 +179,7 @@ public final class OfflineToriiClient {
       final List<OfflineSettlementBuildClaimOverride> buildClaimOverrides,
       final boolean repairExistingBuildClaims,
       final IrohaClient statusClient) {
-    return submitSettlementAndWait(
-        transferPayload,
-        authority,
-        privateKeyHex,
-        buildClaimOverrides,
-        repairExistingBuildClaims,
-        statusClient,
-        null);
+    return unsupportedServerSideSigning("/v1/offline/settlements");
   }
 
   /**
@@ -241,18 +194,7 @@ public final class OfflineToriiClient {
       final boolean repairExistingBuildClaims,
       final IrohaClient statusClient,
       final PipelineStatusOptions statusOptions) {
-    Objects.requireNonNull(statusClient, "statusClient");
-    return submitSettlement(
-            transferPayload,
-            authority,
-            privateKeyHex,
-            buildClaimOverrides,
-            repairExistingBuildClaims)
-        .thenCompose(
-            settlement ->
-                statusClient
-                    .waitForTransactionStatus(settlement.transactionHashHex(), statusOptions)
-                    .thenApply(ignored -> settlement));
+    return unsupportedServerSideSigning("/v1/offline/settlements");
   }
 
   /** Fetch one offline settlement bundle detail (alias for offline transfer detail). */
@@ -328,8 +270,7 @@ public final class OfflineToriiClient {
       final OfflineWalletCertificate certificate,
       final String authority,
       final String privateKeyHex) {
-    return registerAllowanceDetailed(certificate, authority, privateKeyHex)
-        .thenApply(response -> null);
+    return unsupportedServerSideSigning("/v1/offline/allowances");
   }
 
   /** Register a signed certificate on-ledger as an offline allowance and return the response. */
@@ -337,13 +278,7 @@ public final class OfflineToriiClient {
       final OfflineWalletCertificate certificate,
       final String authority,
       final String privateKeyHex) {
-    Objects.requireNonNull(certificate, "certificate");
-    Objects.requireNonNull(authority, "authority");
-    Objects.requireNonNull(privateKeyHex, "privateKeyHex");
-    final byte[] bodyBytes = buildAllowanceRegisterBody(certificate, authority, privateKeyHex);
-    final TransportRequest request = buildPostRequest(ALLOWANCES_PATH, bodyBytes);
-    notifyRequest(request);
-    return executeHttpRequest(request, OfflineJsonParser::parseAllowanceRegisterResponse);
+    return unsupportedServerSideSigning("/v1/offline/allowances");
   }
 
   /** Renew a signed certificate on-ledger as an offline allowance. */
@@ -352,16 +287,7 @@ public final class OfflineToriiClient {
       final OfflineWalletCertificate certificate,
       final String authority,
       final String privateKeyHex) {
-    Objects.requireNonNull(certificateIdHex, "certificateIdHex");
-    Objects.requireNonNull(certificate, "certificate");
-    Objects.requireNonNull(authority, "authority");
-    Objects.requireNonNull(privateKeyHex, "privateKeyHex");
-    final String encodedId = urlEncode(certificateIdHex.trim());
-    final String path = ALLOWANCES_PATH + "/" + encodedId + "/renew";
-    final byte[] bodyBytes = buildAllowanceRegisterBody(certificate, authority, privateKeyHex);
-    final TransportRequest request = buildPostRequest(path, bodyBytes);
-    notifyRequest(request);
-    return executeHttpRequest(request, OfflineJsonParser::parseAllowanceRegisterResponse);
+    return unsupportedServerSideSigning("/v1/offline/allowances/{certificate_id_hex}/renew");
   }
 
   /**
@@ -371,19 +297,7 @@ public final class OfflineToriiClient {
       final OfflineWalletCertificateDraft draft,
       final String authority,
       final String privateKeyHex) {
-    Objects.requireNonNull(draft, "draft");
-    Objects.requireNonNull(authority, "authority");
-    Objects.requireNonNull(privateKeyHex, "privateKeyHex");
-    return issueCertificate(draft)
-        .thenCompose(
-            issued ->
-                registerAllowanceDetailed(issued.certificate(), authority, privateKeyHex)
-                    .thenApply(
-                        registered -> {
-                          ensureTopUpCertificateIdsMatch(
-                              issued.certificateIdHex(), registered.certificateIdHex());
-                          return new OfflineTopUpResponse(issued, registered);
-                        }));
+    return unsupportedServerSideSigning("/v1/offline/allowances");
   }
 
   /**
@@ -394,20 +308,7 @@ public final class OfflineToriiClient {
       final OfflineWalletCertificateDraft draft,
       final String authority,
       final String privateKeyHex) {
-    Objects.requireNonNull(certificateIdHex, "certificateIdHex");
-    Objects.requireNonNull(draft, "draft");
-    Objects.requireNonNull(authority, "authority");
-    Objects.requireNonNull(privateKeyHex, "privateKeyHex");
-    return issueCertificateRenewal(certificateIdHex, draft)
-        .thenCompose(
-            issued ->
-                renewAllowance(certificateIdHex, issued.certificate(), authority, privateKeyHex)
-                    .thenApply(
-                        registered -> {
-                          ensureTopUpCertificateIdsMatch(
-                              issued.certificateIdHex(), registered.certificateIdHex());
-                          return new OfflineTopUpResponse(issued, registered);
-                        }));
+    return unsupportedServerSideSigning("/v1/offline/allowances/{certificate_id_hex}/renew");
   }
 
   /** Issue a signed renewal certificate for an existing allowance. */
@@ -604,6 +505,12 @@ public final class OfflineToriiClient {
     for (final ClientObserver observer : observers) {
       observer.onFailure(request, error);
     }
+  }
+
+  private <T> CompletableFuture<T> unsupportedServerSideSigning(final String endpoint) {
+    throw new UnsupportedOperationException(
+        endpoint
+            + " no longer accepts server-side signing inputs; submit a locally signed transaction instead.");
   }
 
   private <T> CompletableFuture<T> executeHttpRequest(

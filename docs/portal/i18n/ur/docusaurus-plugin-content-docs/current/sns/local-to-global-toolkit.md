@@ -14,7 +14,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 - `scripts/address_local_toolkit.sh` `iroha` CLI کو wrap کرتا ہے تاکہ یہ پیدا کرے:
   - `audit.json` -- `iroha tools address audit --format json` کا structured output۔
-  - `normalized.txt` -- ہر Local-domain selector کے لیے I105 (ترجیحی) / I105 literals۔
+  - `normalized.txt` -- ہر Local-domain selector کے لیے i105 (ترجیحی) / i105 literals۔
 - اس اسکرپٹ کو address ingest dashboard (`dashboards/grafana/address_ingest.json`)
   اور Alertmanager rules (`dashboards/alerts/address_ingest_rules.yml`) کے ساتھ استعمال کریں تاکہ
   Local-8 / Local-12 cutover کی حفاظت ثابت ہو۔ Local-8 اور Local-12 collision panels اور
@@ -31,7 +31,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 
 اختیارات:
 
-- `--format i105` I105 کے بجائے `sora...` output کے لیے۔
+- `--format i105` i105 کے بجائے `sora...` output کے لیے۔
 - `domainless output (default)` تاکہ bare literals نکلیں۔
 - `--audit-only` conversion step چھوڑنے کے لیے۔
 - `--allow-errors` تاکہ malformed rows پر بھی scan جاری رہے (CLI behavior جیسا)۔

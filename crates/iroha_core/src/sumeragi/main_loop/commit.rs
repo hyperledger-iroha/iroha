@@ -170,6 +170,7 @@ pub(super) enum CommitOutcome {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)] // Spawned from unit-test-only commit worker harnesses.
 pub(super) struct CommitWorkerHandle {
     pub(super) work_tx: mpsc::SyncSender<CommitWork>,
     pub(super) result_rx: mpsc::Receiver<CommitResult>,
@@ -204,6 +205,7 @@ fn peer_ids_outside_topology(
         .collect()
 }
 
+#[allow(dead_code)] // Spawned from unit-test-only commit worker harnesses.
 pub(super) fn spawn_commit_worker(
     state: Arc<State>,
     kura: Arc<Kura>,
@@ -3303,6 +3305,7 @@ impl Actor {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)] // Queried by unit-test-only vote-log assertions.
     pub(super) fn local_precommit_vote_for(
         &self,
         height: u64,

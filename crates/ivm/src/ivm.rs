@@ -28,12 +28,15 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     SyscallPolicy, decoder,
-    error::VMError,
+    error::{
+        VMError, VmBudgetSnapshot, VmExecutionContext, VmExecutionDiagnostic, VmSourceLocation,
+        VmTrapKind,
+    },
     gas,
     host::{AccessLog, DefaultHost, IVMHost},
     instruction,
     memory::Memory,
-    metadata::ProgramMetadata,
+    metadata::{EmbeddedContractDebugInfoV1, ProgramMetadata},
     parallel::{
         self, Block, BlockResult, ExecutionContext, Scheduler, State, Transaction, TxResult,
     },
@@ -924,6 +927,7 @@ pub struct IVM {
     pub memory: Memory,
     pub pc: u64,
     host: Option<Box<dyn IVMHost + Send>>,
+    gas_limit: u64,
     pub gas_remaining: u64,
     cycles: u64,
     halted: bool,
@@ -941,6 +945,7 @@ pub struct IVM {
     max_cycles: u64,
     metadata: ProgramMetadata,
     code_hash: [u8; 32],
+    contract_debug: Option<EmbeddedContractDebugInfoV1>,
     predecoded: Option<Arc<[crate::ivm_cache::DecodedOp]>>,
     predecoded_index: HashMap<u64, usize>,
     branch_predictor: crate::branch_predictor::BranchPredictor,
@@ -966,6 +971,9 @@ pub struct IVM {
     use_cuda: bool,
     /// Flag indicating if zero-knowledge mode is active.
     pub zk_mode: bool,
+    entrypoint_pc: Option<u64>,
+    program_prefix_len: u64,
+    last_diagnostic: Option<VmExecutionDiagnostic>,
     /// Low-bit alignment shared by all valid instruction PCs in the loaded program.
     pc_alignment: u64,
     /// Does the host CPU support hardware transactional memory?
@@ -990,6 +998,7 @@ impl Clone for IVM {
             memory: self.memory.clone(),
             pc: self.pc,
             host: None,
+            gas_limit: self.gas_limit,
             gas_remaining: self.gas_remaining,
             cycles: self.cycles,
             halted: self.halted,
@@ -1005,6 +1014,7 @@ impl Clone for IVM {
             max_cycles: self.max_cycles,
             metadata: self.metadata.clone(),
             code_hash: self.code_hash,
+            contract_debug: self.contract_debug.clone(),
             predecoded: self.predecoded.clone(),
             predecoded_index: self.predecoded_index.clone(),
             branch_predictor: self.branch_predictor.clone(),
@@ -1021,6 +1031,9 @@ impl Clone for IVM {
             use_metal: self.use_metal,
             use_cuda: self.use_cuda,
             zk_mode: self.zk_mode,
+            entrypoint_pc: self.entrypoint_pc,
+            program_prefix_len: self.program_prefix_len,
+            last_diagnostic: self.last_diagnostic.clone(),
             pc_alignment: self.pc_alignment,
             htm_supported: self.htm_supported,
             input_bump_next: self.input_bump_next,
@@ -1296,6 +1309,7 @@ impl IVM {
             host: Some(Box::new(crate::runtime::SyscallDispatcher::new(
                 DefaultHost::new(),
             ))),
+            gas_limit,
             gas_remaining: gas_limit,
             cycles: 0,
             halted: false,
@@ -1311,6 +1325,7 @@ impl IVM {
             max_cycles: 0,
             metadata: ProgramMetadata::default(),
             code_hash: [0u8; 32],
+            contract_debug: None,
             predecoded: None,
             predecoded_index: HashMap::new(),
             branch_predictor: crate::branch_predictor::BranchPredictor::new(1024),
@@ -1333,6 +1348,9 @@ impl IVM {
             use_metal: false,
             use_cuda: false,
             zk_mode: false,
+            entrypoint_pc: None,
+            program_prefix_len: 0,
+            last_diagnostic: None,
             pc_alignment: 0,
             htm_supported,
             input_bump_next: 0,
@@ -1978,6 +1996,10 @@ impl IVM {
         self.memory.load_code(code);
         self.memory.clear_output();
         self.pc = 0;
+        self.entrypoint_pc = Some(0);
+        self.program_prefix_len = 0;
+        self.contract_debug = None;
+        self.last_diagnostic = None;
         self.predecoded = None;
         self.predecoded_index.clear();
         Ok(())
@@ -2001,6 +2023,7 @@ impl IVM {
         let instruction_region = &code_region[literal_prefix..];
         let meta = parsed.metadata;
         self.metadata = meta.clone();
+        self.contract_debug = parsed.contract_debug;
         self.vector_enabled = meta.mode & crate::metadata::mode::VECTOR != 0;
         self.max_cycles = meta.max_cycles;
         self.zk_mode = meta.mode & crate::metadata::mode::ZK != 0;
@@ -2023,6 +2046,9 @@ impl IVM {
         hasher.update(code_region);
         self.code_hash = hasher.finalize().into();
         self.pc = literal_prefix as u64;
+        self.entrypoint_pc = Some(self.pc);
+        self.program_prefix_len = literal_prefix as u64;
+        self.last_diagnostic = None;
         self.pc_alignment = self.pc & 0b11;
         self.halted = false;
         self.constraint_failed = false;
@@ -2066,7 +2092,108 @@ impl IVM {
 
     /// Set the gas limit for execution.
     pub fn set_gas_limit(&mut self, limit: u64) {
+        self.gas_limit = limit;
         self.gas_remaining = limit;
+    }
+
+    /// Structured trap diagnostic captured during the last failed execution, if any.
+    pub fn last_diagnostic(&self) -> Option<&VmExecutionDiagnostic> {
+        self.last_diagnostic.as_ref()
+    }
+
+    fn current_source_location(&self) -> Option<VmSourceLocation> {
+        let relative_pc = self.pc.saturating_sub(self.program_prefix_len);
+        let entry = self
+            .contract_debug
+            .as_ref()?
+            .source_map
+            .iter()
+            .find(|entry| relative_pc >= entry.pc_start && relative_pc < entry.pc_end)?;
+        Some(VmSourceLocation {
+            function: Some(entry.function_name.clone()),
+            line: Some(entry.source.line),
+            column: Some(entry.source.column),
+        })
+    }
+
+    fn classify_trap(err: &VMError) -> VmTrapKind {
+        match err {
+            VMError::OutOfGas => VmTrapKind::OutOfGas,
+            VMError::OutOfMemory => VmTrapKind::OutOfMemory,
+            VMError::MemoryAccessViolation { .. }
+            | VMError::MisalignedAccess { .. }
+            | VMError::MemoryOutOfBounds
+            | VMError::UnalignedAccess
+            | VMError::MemoryPermissionDenied => VmTrapKind::MemoryFault,
+            VMError::DecodeError => VmTrapKind::DecodeError,
+            VMError::InvalidOpcode(_) => VmTrapKind::InvalidOpcode,
+            VMError::UnknownSyscall(_) => VmTrapKind::UnknownSyscall,
+            VMError::HostUnavailable | VMError::NotImplemented { .. } => VmTrapKind::NotImplemented,
+            VMError::AssertionFailed => VmTrapKind::AssertionFailed,
+            VMError::ExceededMaxCycles => VmTrapKind::ExceededMaxCycles,
+            VMError::InvalidMetadata => VmTrapKind::InvalidMetadata,
+            VMError::VectorExtensionDisabled
+            | VMError::ZkExtensionDisabled
+            | VMError::NullifierAlreadyUsed
+            | VMError::PermissionDenied => VmTrapKind::PermissionDenied,
+            VMError::PrivacyViolation => VmTrapKind::PrivacyViolation,
+            VMError::RegisterOutOfBounds => VmTrapKind::RegisterOutOfBounds,
+            VMError::HTMAbort => VmTrapKind::HTMAbort,
+            VMError::NoritoInvalid => VmTrapKind::NoritoInvalid,
+            VMError::AbiTypeNotAllowed { .. } => VmTrapKind::AbiTypeNotAllowed,
+            VMError::AmxBudgetExceeded { .. } => VmTrapKind::AmxBudgetExceeded,
+        }
+    }
+
+    fn build_execution_diagnostic(&self, err: &VMError) -> VmExecutionDiagnostic {
+        let predecoded_loaded = self.predecoded.is_some();
+        let predecoded_hit = if predecoded_loaded {
+            Some(self.predecoded_index.contains_key(&self.pc))
+        } else {
+            Some(false)
+        };
+        let source = self.current_source_location();
+        let current_function = source
+            .as_ref()
+            .and_then(|location| location.function.clone());
+        let stack_top = self.memory.stack_top();
+        let sp = self.registers.get(31);
+        let stack_bytes_used = if sp <= stack_top {
+            stack_top.saturating_sub(sp)
+        } else {
+            0
+        };
+        VmExecutionDiagnostic {
+            trap_kind: Self::classify_trap(err),
+            message: err.to_string(),
+            pc: self.pc,
+            source,
+            budget: VmBudgetSnapshot {
+                gas_limit: self.gas_limit,
+                gas_remaining: self.gas_remaining,
+                gas_used: self.gas_limit.saturating_sub(self.gas_remaining),
+                cycles: self.cycles,
+                max_cycles: self.max_cycles,
+                stack_limit_bytes: self.memory.stack_limit(),
+                stack_bytes_used,
+            },
+            context: VmExecutionContext {
+                entrypoint_pc: self.entrypoint_pc,
+                current_function,
+                opcode: match err {
+                    VMError::InvalidOpcode(op) => Some(*op),
+                    _ => None,
+                },
+                syscall: match err {
+                    VMError::UnknownSyscall(syscall) | VMError::NotImplemented { syscall } => {
+                        Some(*syscall)
+                    }
+                    _ => None,
+                },
+                predecoded_loaded,
+                predecoded_hit,
+            },
+        }
     }
 
     /// Access the parsed program metadata for the currently loaded program.
@@ -2164,6 +2291,7 @@ impl IVM {
     pub fn set_program_counter(&mut self, pc: u64) -> Result<(), VMError> {
         if self.predecoded_index.contains_key(&pc) {
             self.pc = pc;
+            self.entrypoint_pc = Some(pc);
             Ok(())
         } else {
             Err(VMError::DecodeError)
@@ -2702,59 +2830,74 @@ impl IVM {
     }
 
     fn run_with_host_ref(&mut self, host: &mut dyn IVMHost) -> Result<(), VMError> {
+        self.last_diagnostic = None;
         self.halted = false;
         self.constraint_failed = false;
         self.cycles = 0;
-        let _pointer_policy_guard =
-            PointerPolicyGuard::install(self.syscall_policy(), self.abi_version());
-        let _reg_logger_guard = if self.zk_mode {
-            Some(zk::RegLoggerGuard::install(&mut self.reg_log))
-        } else {
-            None
-        };
-        // Basic instruction-level parallelism: build blocks of simple
-        // arithmetic instructions that have no side effects and execute them
-        // using the parallel scheduler. Complex instructions are still executed
-        // sequentially.
-        let mut ilp_block: Vec<SimpleInstruction> = Vec::new();
-        if self.zk_mode {
-            self.trace_log = DeltaTraceLog::default();
-            self.step_log = zk::StepLog::default();
-        }
-        // Optional pre-decode: build a map from PC to (inst,len) using the canonical decoder once
-        // Use global, thread-safe cache keyed by header version when available
-        // Optional pre-decode: build a map from PC to (inst,len) using the canonical decoder once
-        // Use global, thread-safe cache keyed by header version when available
-        let _code_bytes = self.memory.read_code_bytes();
-        let _predecoded: Option<(
-            Arc<[crate::ivm_cache::DecodedOp]>,
-            std::collections::HashMap<u64, usize>,
-        )> = None;
+        let result = (|| {
+            let _pointer_policy_guard =
+                PointerPolicyGuard::install(self.syscall_policy(), self.abi_version());
+            let _reg_logger_guard = if self.zk_mode {
+                Some(zk::RegLoggerGuard::install(&mut self.reg_log))
+            } else {
+                None
+            };
+            // Basic instruction-level parallelism: build blocks of simple
+            // arithmetic instructions that have no side effects and execute them
+            // using the parallel scheduler. Complex instructions are still executed
+            // sequentially.
+            let mut ilp_block: Vec<SimpleInstruction> = Vec::new();
+            if self.zk_mode {
+                self.trace_log = DeltaTraceLog::default();
+                self.step_log = zk::StepLog::default();
+            }
+            // Optional pre-decode: build a map from PC to (inst,len) using the canonical decoder once
+            // Use global, thread-safe cache keyed by header version when available
+            // Optional pre-decode: build a map from PC to (inst,len) using the canonical decoder once
+            // Use global, thread-safe cache keyed by header version when available
+            let _code_bytes = self.memory.read_code_bytes();
+            let _predecoded: Option<(
+                Arc<[crate::ivm_cache::DecodedOp]>,
+                std::collections::HashMap<u64, usize>,
+            )> = None;
 
-        let mut last_logged_cycle = 0;
-        // Fetch-Decode-Execute loop
-        loop {
-            self.flush_cycle_logs(&mut last_logged_cycle);
-            // Stop the loop if HALT was executed. When a cycle limit is set we
-            // continue executing even after a failed assertion so the trace
-            // length is independent of witness values.
-            if unlikely(self.halted || (!self.zk_mode && self.constraint_failed)) {
-                break;
-            }
-            // Gracefully stop exactly at end of code: treat as end-of-stream.
-            // Do not stop for pc > code_len() so that jumps into non-code
-            // regions still fault with execute permission errors.
-            if unlikely(self.pc == self.memory.code_len()) {
-                break;
-            }
-            if unlikely(self.max_cycles != 0 && self.cycles >= self.max_cycles) {
-                return Err(VMError::ExceededMaxCycles);
-            }
-            // Decode the next instruction. Prefer pre-decoded mapping when available.
-            let (instr, length) = if let Some(decoded) = &self.predecoded {
-                if let Some(&idx) = self.predecoded_index.get(&self.pc) {
-                    let op = &decoded[idx];
-                    (op.inst, op.len)
+            let mut last_logged_cycle = 0;
+            // Fetch-Decode-Execute loop
+            loop {
+                self.flush_cycle_logs(&mut last_logged_cycle);
+                // Stop the loop if HALT was executed. When a cycle limit is set we
+                // continue executing even after a failed assertion so the trace
+                // length is independent of witness values.
+                if unlikely(self.halted || (!self.zk_mode && self.constraint_failed)) {
+                    break;
+                }
+                // Gracefully stop exactly at end of code: treat as end-of-stream.
+                // Do not stop for pc > code_len() so that jumps into non-code
+                // regions still fault with execute permission errors.
+                if unlikely(self.pc == self.memory.code_len()) {
+                    break;
+                }
+                if unlikely(self.max_cycles != 0 && self.cycles >= self.max_cycles) {
+                    return Err(VMError::ExceededMaxCycles);
+                }
+                // Decode the next instruction. Prefer pre-decoded mapping when available.
+                let (instr, length) = if let Some(decoded) = &self.predecoded {
+                    if let Some(&idx) = self.predecoded_index.get(&self.pc) {
+                        let op = &decoded[idx];
+                        (op.inst, op.len)
+                    } else {
+                        #[cfg(test)]
+                        {
+                            self.predecoded_misses += 1;
+                        }
+                        #[cfg(any(test, debug_assertions))]
+                        eprintln!(
+                            "[ivm] predecoded miss: has_predecoded=true contains_pc={} pc=0x{pc:x}",
+                            self.predecoded_index.contains_key(&self.pc),
+                            pc = self.pc
+                        );
+                        decoder::decode(&self.memory, self.pc)?
+                    }
                 } else {
                     #[cfg(test)]
                     {
@@ -2762,855 +2905,1117 @@ impl IVM {
                     }
                     #[cfg(any(test, debug_assertions))]
                     eprintln!(
-                        "[ivm] predecoded miss: has_predecoded=true contains_pc={} pc=0x{pc:x}",
-                        self.predecoded_index.contains_key(&self.pc),
+                        "[ivm] predecoded miss: has_predecoded=false contains_pc=false pc=0x{pc:x}",
                         pc = self.pc
                     );
                     decoder::decode(&self.memory, self.pc)?
+                };
+                if crate::dev_env::decode_trace_enabled() {
+                    eprintln!(
+                        "pc=0x{pc:08x} instr=0x{w:08x} len={len}",
+                        pc = self.pc,
+                        w = instr,
+                        len = length
+                    );
                 }
-            } else {
-                #[cfg(test)]
-                {
-                    self.predecoded_misses += 1;
-                }
-                #[cfg(any(test, debug_assertions))]
-                eprintln!(
-                    "[ivm] predecoded miss: has_predecoded=false contains_pc=false pc=0x{pc:x}",
-                    pc = self.pc
-                );
-                decoder::decode(&self.memory, self.pc)?
-            };
-            if crate::dev_env::decode_trace_enabled() {
-                eprintln!(
-                    "pc=0x{pc:08x} instr=0x{w:08x} len={len}",
-                    pc = self.pc,
-                    w = instr,
-                    len = length
-                );
-            }
 
-            // Parallel execution blocks interfere with trace collection used by
-            // zero-knowledge circuits. Disable the ILP scheduler whenever a
-            // cycle limit is set so that every instruction executes
-            // sequentially and the trace contains one entry per step.
-            if self.max_cycles == 0 {
-                if let Some(simple) = to_simple(instr) {
-                    // Part of a parallelisable block – defer execution.
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    ilp_block.push(simple);
-                    continue;
-                } else if !ilp_block.is_empty() {
-                    self.execute_block_parallel(&ilp_block)?;
-                    self.cycles += ilp_block.len() as u64;
-                    ilp_block.clear();
+                // Parallel execution blocks interfere with trace collection used by
+                // zero-knowledge circuits. Disable the ILP scheduler whenever a
+                // cycle limit is set so that every instruction executes
+                // sequentially and the trace contains one entry per step.
+                if self.max_cycles == 0 {
+                    if let Some(simple) = to_simple(instr) {
+                        // Part of a parallelisable block – defer execution.
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        ilp_block.push(simple);
+                        continue;
+                    } else if !ilp_block.is_empty() {
+                        self.execute_block_parallel(&ilp_block)?;
+                        self.cycles += ilp_block.len() as u64;
+                        ilp_block.clear();
+                    }
                 }
-            }
 
-            let opcode_hi = (instr >> 24) as u8;
-            let wide_op = instruction::wide::opcode(instr);
-            if !instruction::wide::is_valid_opcode(wide_op) {
-                return Err(VMError::InvalidOpcode((instr & 0xFFFF) as u16));
-            }
+                let opcode_hi = (instr >> 24) as u8;
+                let wide_op = instruction::wide::opcode(instr);
+                if !instruction::wide::is_valid_opcode(wide_op) {
+                    return Err(VMError::InvalidOpcode((instr & 0xFFFF) as u16));
+                }
 
-            // Determine the gas cost for this operation and deduct it.
-            // Scale vector op costs by the current logical vector length.
-            // Future: include HTM retry penalties if enabled.
-            let cost = gas::cost_of_with_params(instr, self.vector_length, 0)
-                .ok_or(VMError::InvalidOpcode((instr & 0xFFFF) as u16))?;
-            if unlikely(self.gas_remaining < cost) {
-                return Err(VMError::OutOfGas);
-            }
-            self.gas_remaining -= cost;
-            // Execute the instruction
-            let opcode = instr & 0x7F;
-            if crate::dev_env::decode_trace_enabled() {
-                eprintln!("[IVM] opcode_lo=0x{opcode:02x} opcode_hi=0x{opcode_hi:02x}");
-            }
+                // Determine the gas cost for this operation and deduct it.
+                // Scale vector op costs by the current logical vector length.
+                // Future: include HTM retry penalties if enabled.
+                let cost = gas::cost_of_with_params(instr, self.vector_length, 0)
+                    .ok_or(VMError::InvalidOpcode((instr & 0xFFFF) as u16))?;
+                if unlikely(self.gas_remaining < cost) {
+                    return Err(VMError::OutOfGas);
+                }
+                self.gas_remaining -= cost;
+                // Execute the instruction
+                let opcode = instr & 0x7F;
+                if crate::dev_env::decode_trace_enabled() {
+                    eprintln!("[IVM] opcode_lo=0x{opcode:02x} opcode_hi=0x{opcode_hi:02x}");
+                }
 
-            // Dispatch via the canonical wide (8-bit opcode) instruction table. Classic
-            // encodings are no longer executable; unknown opcodes trap with `InvalidOpcode`.
-            match wide_op {
-                instruction::wide::system::GETGAS => {
-                    let rd = instruction::wide::rd(instr);
-                    self.registers.set(rd, self.gas_remaining);
-                    if self.zk_mode {
-                        self.registers.set_tag(rd, false);
-                    }
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::system::SCALL => {
-                    let imm8 = instruction::wide::imm8(instr) as u8 as u32;
-                    let extra_cost = host.syscall(imm8, self);
-                    match extra_cost {
-                        Ok(extra) => {
-                            if self.gas_remaining < extra {
-                                return Err(VMError::OutOfGas);
-                            }
-                            self.gas_remaining -= extra;
-                        }
-                        Err(e) => return Err(e),
-                    }
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::ADD => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    let tag = self.zk_match_tags(rs1, rs2)?;
-                    let val = self
-                        .registers
-                        .get(rs1)
-                        .wrapping_add(self.registers.get(rs2));
-                    self.registers.set(rd, val);
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::SUB => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    let tag = self.zk_match_tags(rs1, rs2)?;
-                    let val = self
-                        .registers
-                        .get(rs1)
-                        .wrapping_sub(self.registers.get(rs2));
-                    self.registers.set(rd, val);
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::AND => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    let tag = self.zk_match_tags(rs1, rs2)?;
-                    let val = self.registers.get(rs1) & self.registers.get(rs2);
-                    self.registers.set(rd, val);
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::OR => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    let tag = self.zk_match_tags(rs1, rs2)?;
-                    let val = self.registers.get(rs1) | self.registers.get(rs2);
-                    self.registers.set(rd, val);
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::XOR => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    let tag = self.zk_match_tags(rs1, rs2)?;
-                    let val = self.registers.get(rs1) ^ self.registers.get(rs2);
-                    self.registers.set(rd, val);
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::SLL => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    let tag = self.zk_match_tags(rs1, rs2)?;
-                    let val = self.registers.get(rs1) << (self.registers.get(rs2) & 0x3f);
-                    self.registers.set(rd, val);
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::SRL => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    let tag = self.zk_match_tags(rs1, rs2)?;
-                    let val = self.registers.get(rs1) >> (self.registers.get(rs2) & 0x3f);
-                    self.registers.set(rd, val);
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::SRA => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    let tag = self.zk_match_tags(rs1, rs2)?;
-                    let val = ((self.registers.get(rs1) as i64) >> (self.registers.get(rs2) & 0x3f))
-                        as u64;
-                    self.registers.set(rd, val);
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::MUL => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    let tag = self.zk_match_tags(rs1, rs2)?;
-                    let val = self
-                        .registers
-                        .get(rs1)
-                        .wrapping_mul(self.registers.get(rs2));
-                    self.registers.set(rd, val);
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::MULH => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    let tag = self.zk_match_tags(rs1, rs2)?;
-                    let a = self.registers.get(rs1) as i64 as i128;
-                    let b = self.registers.get(rs2) as i64 as i128;
-                    let val = ((a * b) >> 64) as u64;
-                    self.registers.set(rd, val);
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::MULHU => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    let tag = self.zk_match_tags(rs1, rs2)?;
-                    let prod = (self.registers.get(rs1) as u128)
-                        .wrapping_mul(self.registers.get(rs2) as u128);
-                    let val = (prod >> 64) as u64;
-                    self.registers.set(rd, val);
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::MULHSU => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    let tag = self.zk_match_tags(rs1, rs2)?;
-                    let a = self.registers.get(rs1) as i64 as i128;
-                    let b = self.registers.get(rs2) as u64 as i128;
-                    let val = ((a * b) >> 64) as u64;
-                    self.registers.set(rd, val);
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::DIV => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    let tag = self.zk_match_tags(rs1, rs2)?;
-                    let num = self.registers.get(rs1) as i64;
-                    let denom = self.registers.get(rs2) as i64;
-                    if denom == 0 {
-                        return Err(VMError::AssertionFailed);
-                    }
-                    let val = if num == i64::MIN && denom == -1 {
-                        num as u64
-                    } else {
-                        (num / denom) as u64
-                    };
-                    self.registers.set(rd, val);
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::DIVU => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    let tag = self.zk_match_tags(rs1, rs2)?;
-                    let denom = self.registers.get(rs2);
-                    if denom == 0 {
-                        return Err(VMError::AssertionFailed);
-                    }
-                    let val = self.registers.get(rs1) / denom;
-                    self.registers.set(rd, val);
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::REM => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    let tag = self.zk_match_tags(rs1, rs2)?;
-                    let num = self.registers.get(rs1) as i64;
-                    let denom = self.registers.get(rs2) as i64;
-                    if denom == 0 {
-                        return Err(VMError::AssertionFailed);
-                    }
-                    let val = if num == i64::MIN && denom == -1 {
-                        0
-                    } else {
-                        (num % denom) as u64
-                    };
-                    self.registers.set(rd, val);
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::REMU => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    let tag = self.zk_match_tags(rs1, rs2)?;
-                    let denom = self.registers.get(rs2);
-                    if denom == 0 {
-                        return Err(VMError::AssertionFailed);
-                    }
-                    let val = self.registers.get(rs1) % denom;
-                    self.registers.set(rd, val);
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::SLT => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    let tag = self.zk_match_tags(rs1, rs2)?;
-                    let lhs = self.registers.get(rs1) as i64;
-                    let rhs = self.registers.get(rs2) as i64;
-                    self.registers.set(rd, u64::from(lhs < rhs));
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::SLTU => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    let tag = self.zk_match_tags(rs1, rs2)?;
-                    let lhs = self.registers.get(rs1);
-                    let rhs = self.registers.get(rs2);
-                    self.registers.set(rd, u64::from(lhs < rhs));
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::SEQ => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    let tag = self.zk_match_tags(rs1, rs2)?;
-                    let lhs = self.registers.get(rs1);
-                    let rhs = self.registers.get(rs2);
-                    self.registers.set(rd, u64::from(lhs == rhs));
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::SNE => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    let tag = self.zk_match_tags(rs1, rs2)?;
-                    let lhs = self.registers.get(rs1);
-                    let rhs = self.registers.get(rs2);
-                    self.registers.set(rd, u64::from(lhs != rhs));
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::CMOV => {
-                    let rd = instruction::wide::rd(instr);
-                    let src = instruction::wide::rs1(instr);
-                    let cond = instruction::wide::rs2(instr);
-                    if self.zk_mode && self.registers.tag(cond) {
-                        return Err(VMError::PrivacyViolation);
-                    }
-                    if self.registers.get(cond) != 0 {
-                        let val = self.registers.get(src);
-                        self.registers.set(rd, val);
-                        let tag = self.zk_unary_tag(src);
-                        self.zk_apply_tag(rd, tag);
-                    }
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::NEG => {
-                    let rd = instruction::wide::rd(instr);
-                    let src = instruction::wide::rs1(instr);
-                    let tag = self.zk_unary_tag(src);
-                    let val = self.registers.get(src).wrapping_neg();
-                    self.registers.set(rd, val);
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::NOT => {
-                    let rd = instruction::wide::rd(instr);
-                    let src = instruction::wide::rs1(instr);
-                    let tag = self.zk_unary_tag(src);
-                    let val = !self.registers.get(src);
-                    self.registers.set(rd, val);
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::ROTL => {
-                    let rd = instruction::wide::rd(instr);
-                    let src = instruction::wide::rs1(instr);
-                    let amt = instruction::wide::rs2(instr);
-                    let tag = self.zk_match_tags(src, amt)?;
-                    let sh = (self.registers.get(amt) & 0x3f) as u32;
-                    let val = self.registers.get(src).rotate_left(sh);
-                    self.registers.set(rd, val);
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::ROTR => {
-                    let rd = instruction::wide::rd(instr);
-                    let src = instruction::wide::rs1(instr);
-                    let amt = instruction::wide::rs2(instr);
-                    let tag = self.zk_match_tags(src, amt)?;
-                    let sh = (self.registers.get(amt) & 0x3f) as u32;
-                    let val = self.registers.get(src).rotate_right(sh);
-                    self.registers.set(rd, val);
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::ROTL_IMM => {
-                    let rd = instruction::wide::rd(instr);
-                    let src = instruction::wide::rs1(instr);
-                    let tag = self.zk_unary_tag(src);
-                    let sh = (instruction::wide::imm8(instr) as u8 as u32) & 0x3f;
-                    let val = self.registers.get(src).rotate_left(sh);
-                    self.registers.set(rd, val);
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::ROTR_IMM => {
-                    let rd = instruction::wide::rd(instr);
-                    let src = instruction::wide::rs1(instr);
-                    let tag = self.zk_unary_tag(src);
-                    let sh = (instruction::wide::imm8(instr) as u8 as u32) & 0x3f;
-                    let val = self.registers.get(src).rotate_right(sh);
-                    self.registers.set(rd, val);
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::POPCNT => {
-                    let rd = instruction::wide::rd(instr);
-                    let src = instruction::wide::rs1(instr);
-                    let tag = self.zk_unary_tag(src);
-                    let val = self.registers.get(src).count_ones() as u64;
-                    self.registers.set(rd, val);
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::CLZ => {
-                    let rd = instruction::wide::rd(instr);
-                    let src = instruction::wide::rs1(instr);
-                    let tag = self.zk_unary_tag(src);
-                    let val = self.registers.get(src).leading_zeros() as u64;
-                    self.registers.set(rd, val);
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::CTZ => {
-                    let rd = instruction::wide::rd(instr);
-                    let src = instruction::wide::rs1(instr);
-                    let tag = self.zk_unary_tag(src);
-                    let val = self.registers.get(src).trailing_zeros() as u64;
-                    self.registers.set(rd, val);
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::ISQRT => {
-                    let rd = instruction::wide::rd(instr);
-                    let src = instruction::wide::rs1(instr);
-                    let tag = self.zk_unary_tag(src);
-                    let val = self.registers.get(src);
-                    let root = isqrt_u64(val);
-                    self.registers.set(rd, root);
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 6;
-                    continue;
-                }
-                instruction::wide::arithmetic::MIN => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    let tag = self.zk_match_tags(rs1, rs2)?;
-                    let a = self.registers.get(rs1) as i64;
-                    let b = self.registers.get(rs2) as i64;
-                    self.registers
-                        .set(rd, if a < b { a as u64 } else { b as u64 });
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::MAX => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    let tag = self.zk_match_tags(rs1, rs2)?;
-                    let a = self.registers.get(rs1) as i64;
-                    let b = self.registers.get(rs2) as i64;
-                    self.registers
-                        .set(rd, if a > b { a as u64 } else { b as u64 });
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::ABS => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs = instruction::wide::rs1(instr);
-                    let tag = self.zk_unary_tag(rs);
-                    let v = self.registers.get(rs) as i64;
-                    let abs = v.wrapping_abs();
-                    self.registers.set(rd, abs as u64);
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::DIV_CEIL => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    let tag = self.zk_match_tags(rs1, rs2)?;
-                    let num = self.registers.get(rs1) as i64;
-                    let denom = self.registers.get(rs2) as i64;
-                    let val = div_ceil_i64(num, denom)?;
-                    self.registers.set(rd, val as u64);
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 12;
-                    continue;
-                }
-                instruction::wide::arithmetic::GCD => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    let tag = self.zk_match_tags(rs1, rs2)?;
-                    let a = self.registers.get(rs1) as i64;
-                    let b = self.registers.get(rs2) as i64;
-                    let g = gcd_i64(a, b);
-                    self.registers.set(rd, g);
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 12;
-                    continue;
-                }
-                instruction::wide::arithmetic::MEAN => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    let tag = self.zk_match_tags(rs1, rs2)?;
-                    let a = self.registers.get(rs1) as i64;
-                    let b = self.registers.get(rs2) as i64;
-                    let sum = (a as i128) + (b as i128);
-                    let avg = (sum / 2) as i64;
-                    self.registers.set(rd, avg as u64);
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 3;
-                    continue;
-                }
-                instruction::wide::arithmetic::ADDI => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let tag = self.zk_unary_tag(rs1);
-                    let imm = i64::from(i16::from(instruction::wide::imm8(instr)));
-                    let val = (self.registers.get(rs1) as i64).wrapping_add(imm) as u64;
-                    self.registers.set(rd, val);
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::ANDI => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let tag = self.zk_unary_tag(rs1);
-                    let imm = instruction::wide::imm8(instr) as i64 as u64;
-                    let val = self.registers.get(rs1) & imm;
-                    self.registers.set(rd, val);
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::ORI => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let tag = self.zk_unary_tag(rs1);
-                    let imm = instruction::wide::imm8(instr) as i64 as u64;
-                    let val = self.registers.get(rs1) | imm;
-                    self.registers.set(rd, val);
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::XORI => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let tag = self.zk_unary_tag(rs1);
-                    let imm = instruction::wide::imm8(instr) as i64 as u64;
-                    let val = self.registers.get(rs1) ^ imm;
-                    self.registers.set(rd, val);
-                    self.zk_apply_tag(rd, tag);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::arithmetic::CMOVI => {
-                    let rd = instruction::wide::rd(instr);
-                    let cond = instruction::wide::rs1(instr);
-                    let imm = i64::from(instruction::wide::imm8(instr)) as u64;
-                    if self.zk_mode && self.registers.tag(cond) {
-                        return Err(VMError::PrivacyViolation);
-                    }
-                    if self.registers.get(cond) != 0 {
-                        self.registers.set(rd, imm);
+                // Dispatch via the canonical wide (8-bit opcode) instruction table. Classic
+                // encodings are no longer executable; unknown opcodes trap with `InvalidOpcode`.
+                match wide_op {
+                    instruction::wide::system::GETGAS => {
+                        let rd = instruction::wide::rd(instr);
+                        self.registers.set(rd, self.gas_remaining);
                         if self.zk_mode {
                             self.registers.set_tag(rd, false);
                         }
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
                     }
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::memory::LOAD64 => {
-                    let rd = instruction::wide::rd(instr);
-                    let base = instruction::wide::rs1(instr);
-                    let imm = i64::from(i16::from(instruction::wide::imm8(instr)));
-                    if self.zk_mode && self.registers.tag(base) {
-                        return Err(VMError::PrivacyViolation);
+                    instruction::wide::system::SCALL => {
+                        let imm8 = instruction::wide::imm8(instr) as u8 as u32;
+                        let extra_cost = host.syscall(imm8, self);
+                        match extra_cost {
+                            Ok(extra) => {
+                                if self.gas_remaining < extra {
+                                    return Err(VMError::OutOfGas);
+                                }
+                                self.gas_remaining -= extra;
+                            }
+                            Err(e) => return Err(e),
+                        }
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
                     }
-                    let addr = (self.registers.get(base) as i64).wrapping_add(imm) as u64;
-                    let value = self.memory.load_u64(addr)?;
-                    self.registers.set(rd, value);
-                    if self.zk_mode {
-                        self.registers.set_tag(rd, false);
+                    instruction::wide::arithmetic::ADD => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let val = self
+                            .registers
+                            .get(rs1)
+                            .wrapping_add(self.registers.get(rs2));
+                        self.registers.set(rd, val);
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
                     }
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::memory::LOAD128 => {
-                    if unlikely(!self.vector_enabled) {
-                        return Err(VMError::VectorExtensionDisabled);
+                    instruction::wide::arithmetic::SUB => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let val = self
+                            .registers
+                            .get(rs1)
+                            .wrapping_sub(self.registers.get(rs2));
+                        self.registers.set(rd, val);
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
                     }
-                    let rd_lo = instruction::wide::rd(instr);
-                    let base = instruction::wide::rs1(instr);
-                    let rd_hi = instruction::wide::rs2(instr);
-                    if self.zk_mode && self.registers.tag(base) {
-                        return Err(VMError::PrivacyViolation);
+                    instruction::wide::arithmetic::AND => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let val = self.registers.get(rs1) & self.registers.get(rs2);
+                        self.registers.set(rd, val);
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
                     }
-                    if rd_lo >= 256 || rd_hi >= 256 {
-                        return Err(VMError::RegisterOutOfBounds);
+                    instruction::wide::arithmetic::OR => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let val = self.registers.get(rs1) | self.registers.get(rs2);
+                        self.registers.set(rd, val);
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
                     }
-                    let addr = self.registers.get(base);
-                    if !addr.is_multiple_of(16) {
-                        return Err(VMError::MisalignedAccess { addr: addr as u32 });
+                    instruction::wide::arithmetic::XOR => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let val = self.registers.get(rs1) ^ self.registers.get(rs2);
+                        self.registers.set(rd, val);
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
                     }
-                    let value = self.memory.load_u128(addr)?;
-                    self.registers.set(rd_lo, value as u64);
-                    self.registers.set(rd_hi, (value >> 64) as u64);
-                    if self.zk_mode {
-                        self.registers.set_tag(rd_lo, false);
-                        self.registers.set_tag(rd_hi, false);
+                    instruction::wide::arithmetic::SLL => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let val = self.registers.get(rs1) << (self.registers.get(rs2) & 0x3f);
+                        self.registers.set(rd, val);
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
                     }
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::memory::STORE64 => {
-                    let base = instruction::wide::rd(instr);
-                    let rs = instruction::wide::rs1(instr);
-                    let imm = i64::from(i16::from(instruction::wide::imm8(instr)));
-                    if self.zk_mode && self.registers.tag(base) {
-                        return Err(VMError::PrivacyViolation);
+                    instruction::wide::arithmetic::SRL => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let val = self.registers.get(rs1) >> (self.registers.get(rs2) & 0x3f);
+                        self.registers.set(rd, val);
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
                     }
-                    let addr = (self.registers.get(base) as i64).wrapping_add(imm) as u64;
-                    let value = self.registers.get(rs);
-                    self.memory.store_u64(addr, value)?;
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::memory::STORE128 => {
-                    if unlikely(!self.vector_enabled) {
-                        return Err(VMError::VectorExtensionDisabled);
+                    instruction::wide::arithmetic::SRA => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let val = ((self.registers.get(rs1) as i64)
+                            >> (self.registers.get(rs2) & 0x3f))
+                            as u64;
+                        self.registers.set(rd, val);
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
                     }
-                    let base = instruction::wide::rd(instr);
-                    let rs_lo = instruction::wide::rs1(instr);
-                    let rs_hi = instruction::wide::rs2(instr);
-                    if self.zk_mode && self.registers.tag(base) {
-                        return Err(VMError::PrivacyViolation);
+                    instruction::wide::arithmetic::MUL => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let val = self
+                            .registers
+                            .get(rs1)
+                            .wrapping_mul(self.registers.get(rs2));
+                        self.registers.set(rd, val);
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
                     }
-                    if rs_lo >= 256 || rs_hi >= 256 {
-                        return Err(VMError::RegisterOutOfBounds);
+                    instruction::wide::arithmetic::MULH => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let a = self.registers.get(rs1) as i64 as i128;
+                        let b = self.registers.get(rs2) as i64 as i128;
+                        let val = ((a * b) >> 64) as u64;
+                        self.registers.set(rd, val);
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
                     }
-                    let addr = self.registers.get(base);
-                    if !addr.is_multiple_of(16) {
-                        return Err(VMError::MisalignedAccess { addr: addr as u32 });
+                    instruction::wide::arithmetic::MULHU => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let prod = (self.registers.get(rs1) as u128)
+                            .wrapping_mul(self.registers.get(rs2) as u128);
+                        let val = (prod >> 64) as u64;
+                        self.registers.set(rd, val);
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
                     }
-                    let lo = self.registers.get(rs_lo);
-                    let hi = self.registers.get(rs_hi);
-                    let value = ((hi as u128) << 64) | lo as u128;
-                    self.memory.store_u128(addr, value)?;
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::control::HALT => {
-                    self.halted = true;
-                    self.cycles += 1;
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.flush_cycle_logs(&mut last_logged_cycle);
-                    break;
-                }
-                instruction::wide::crypto::SETVL => {
-                    if unlikely(!self.vector_enabled) {
-                        return Err(VMError::VectorExtensionDisabled);
+                    instruction::wide::arithmetic::MULHSU => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let a = self.registers.get(rs1) as i64 as i128;
+                        let b = self.registers.get(rs2) as u64 as i128;
+                        let val = ((a * b) >> 64) as u64;
+                        self.registers.set(rd, val);
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
                     }
-                    let vl = {
-                        let raw = instruction::wide::rs2(instr);
-                        if raw == 0 { 1 } else { raw }
-                    };
-                    self.vector_length = vl.min(LOGICAL_VECTOR_MAX);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::crypto::VADD32 | instruction::wide::crypto::VADD64 => {
-                    if unlikely(!self.vector_enabled) {
-                        return Err(VMError::VectorExtensionDisabled);
+                    instruction::wide::arithmetic::DIV => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let num = self.registers.get(rs1) as i64;
+                        let denom = self.registers.get(rs2) as i64;
+                        if denom == 0 {
+                            return Err(VMError::AssertionFailed);
+                        }
+                        let val = if num == i64::MIN && denom == -1 {
+                            num as u64
+                        } else {
+                            (num / denom) as u64
+                        };
+                        self.registers.set(rd, val);
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
                     }
-                    let vl = self.vector_length.max(1);
-                    let stride = vl;
-                    let rd = Self::VECTOR_BASE + instruction::wide::rd(instr) * stride;
-                    let rs = Self::VECTOR_BASE + instruction::wide::rs1(instr) * stride;
-                    let rt = Self::VECTOR_BASE + instruction::wide::rs2(instr) * stride;
-                    if rd + vl > 256 || rs + vl > 256 || rt + vl > 256 {
-                        return Err(VMError::RegisterOutOfBounds);
+                    instruction::wide::arithmetic::DIVU => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let denom = self.registers.get(rs2);
+                        if denom == 0 {
+                            return Err(VMError::AssertionFailed);
+                        }
+                        let val = self.registers.get(rs1) / denom;
+                        self.registers.set(rd, val);
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
                     }
-                    if wide_op == instruction::wide::crypto::VADD64 {
-                        // Process full 128-bit chunks through the vector helpers when possible.
-                        let mut lane = 0usize;
-                        while lane + 4 <= vl {
-                            let mut a = [0u32; 4];
-                            let mut b = [0u32; 4];
-                            for offset in 0..4 {
-                                let idx = lane + offset;
+                    instruction::wide::arithmetic::REM => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let num = self.registers.get(rs1) as i64;
+                        let denom = self.registers.get(rs2) as i64;
+                        if denom == 0 {
+                            return Err(VMError::AssertionFailed);
+                        }
+                        let val = if num == i64::MIN && denom == -1 {
+                            0
+                        } else {
+                            (num % denom) as u64
+                        };
+                        self.registers.set(rd, val);
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::arithmetic::REMU => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let denom = self.registers.get(rs2);
+                        if denom == 0 {
+                            return Err(VMError::AssertionFailed);
+                        }
+                        let val = self.registers.get(rs1) % denom;
+                        self.registers.set(rd, val);
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::arithmetic::SLT => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let lhs = self.registers.get(rs1) as i64;
+                        let rhs = self.registers.get(rs2) as i64;
+                        self.registers.set(rd, u64::from(lhs < rhs));
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::arithmetic::SLTU => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let lhs = self.registers.get(rs1);
+                        let rhs = self.registers.get(rs2);
+                        self.registers.set(rd, u64::from(lhs < rhs));
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::arithmetic::SEQ => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let lhs = self.registers.get(rs1);
+                        let rhs = self.registers.get(rs2);
+                        self.registers.set(rd, u64::from(lhs == rhs));
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::arithmetic::SNE => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let lhs = self.registers.get(rs1);
+                        let rhs = self.registers.get(rs2);
+                        self.registers.set(rd, u64::from(lhs != rhs));
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::arithmetic::CMOV => {
+                        let rd = instruction::wide::rd(instr);
+                        let src = instruction::wide::rs1(instr);
+                        let cond = instruction::wide::rs2(instr);
+                        if self.zk_mode && self.registers.tag(cond) {
+                            return Err(VMError::PrivacyViolation);
+                        }
+                        if self.registers.get(cond) != 0 {
+                            let val = self.registers.get(src);
+                            self.registers.set(rd, val);
+                            let tag = self.zk_unary_tag(src);
+                            self.zk_apply_tag(rd, tag);
+                        }
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::arithmetic::NEG => {
+                        let rd = instruction::wide::rd(instr);
+                        let src = instruction::wide::rs1(instr);
+                        let tag = self.zk_unary_tag(src);
+                        let val = self.registers.get(src).wrapping_neg();
+                        self.registers.set(rd, val);
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::arithmetic::NOT => {
+                        let rd = instruction::wide::rd(instr);
+                        let src = instruction::wide::rs1(instr);
+                        let tag = self.zk_unary_tag(src);
+                        let val = !self.registers.get(src);
+                        self.registers.set(rd, val);
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::arithmetic::ROTL => {
+                        let rd = instruction::wide::rd(instr);
+                        let src = instruction::wide::rs1(instr);
+                        let amt = instruction::wide::rs2(instr);
+                        let tag = self.zk_match_tags(src, amt)?;
+                        let sh = (self.registers.get(amt) & 0x3f) as u32;
+                        let val = self.registers.get(src).rotate_left(sh);
+                        self.registers.set(rd, val);
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::arithmetic::ROTR => {
+                        let rd = instruction::wide::rd(instr);
+                        let src = instruction::wide::rs1(instr);
+                        let amt = instruction::wide::rs2(instr);
+                        let tag = self.zk_match_tags(src, amt)?;
+                        let sh = (self.registers.get(amt) & 0x3f) as u32;
+                        let val = self.registers.get(src).rotate_right(sh);
+                        self.registers.set(rd, val);
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::arithmetic::ROTL_IMM => {
+                        let rd = instruction::wide::rd(instr);
+                        let src = instruction::wide::rs1(instr);
+                        let tag = self.zk_unary_tag(src);
+                        let sh = (instruction::wide::imm8(instr) as u8 as u32) & 0x3f;
+                        let val = self.registers.get(src).rotate_left(sh);
+                        self.registers.set(rd, val);
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::arithmetic::ROTR_IMM => {
+                        let rd = instruction::wide::rd(instr);
+                        let src = instruction::wide::rs1(instr);
+                        let tag = self.zk_unary_tag(src);
+                        let sh = (instruction::wide::imm8(instr) as u8 as u32) & 0x3f;
+                        let val = self.registers.get(src).rotate_right(sh);
+                        self.registers.set(rd, val);
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::arithmetic::POPCNT => {
+                        let rd = instruction::wide::rd(instr);
+                        let src = instruction::wide::rs1(instr);
+                        let tag = self.zk_unary_tag(src);
+                        let val = self.registers.get(src).count_ones() as u64;
+                        self.registers.set(rd, val);
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::arithmetic::CLZ => {
+                        let rd = instruction::wide::rd(instr);
+                        let src = instruction::wide::rs1(instr);
+                        let tag = self.zk_unary_tag(src);
+                        let val = self.registers.get(src).leading_zeros() as u64;
+                        self.registers.set(rd, val);
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::arithmetic::CTZ => {
+                        let rd = instruction::wide::rd(instr);
+                        let src = instruction::wide::rs1(instr);
+                        let tag = self.zk_unary_tag(src);
+                        let val = self.registers.get(src).trailing_zeros() as u64;
+                        self.registers.set(rd, val);
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::arithmetic::ISQRT => {
+                        let rd = instruction::wide::rd(instr);
+                        let src = instruction::wide::rs1(instr);
+                        let tag = self.zk_unary_tag(src);
+                        let val = self.registers.get(src);
+                        let root = isqrt_u64(val);
+                        self.registers.set(rd, root);
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 6;
+                        continue;
+                    }
+                    instruction::wide::arithmetic::MIN => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let a = self.registers.get(rs1) as i64;
+                        let b = self.registers.get(rs2) as i64;
+                        self.registers
+                            .set(rd, if a < b { a as u64 } else { b as u64 });
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::arithmetic::MAX => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let a = self.registers.get(rs1) as i64;
+                        let b = self.registers.get(rs2) as i64;
+                        self.registers
+                            .set(rd, if a > b { a as u64 } else { b as u64 });
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::arithmetic::ABS => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs = instruction::wide::rs1(instr);
+                        let tag = self.zk_unary_tag(rs);
+                        let v = self.registers.get(rs) as i64;
+                        let abs = v.wrapping_abs();
+                        self.registers.set(rd, abs as u64);
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::arithmetic::DIV_CEIL => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let num = self.registers.get(rs1) as i64;
+                        let denom = self.registers.get(rs2) as i64;
+                        let val = div_ceil_i64(num, denom)?;
+                        self.registers.set(rd, val as u64);
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 12;
+                        continue;
+                    }
+                    instruction::wide::arithmetic::GCD => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let a = self.registers.get(rs1) as i64;
+                        let b = self.registers.get(rs2) as i64;
+                        let g = gcd_i64(a, b);
+                        self.registers.set(rd, g);
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 12;
+                        continue;
+                    }
+                    instruction::wide::arithmetic::MEAN => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        let tag = self.zk_match_tags(rs1, rs2)?;
+                        let a = self.registers.get(rs1) as i64;
+                        let b = self.registers.get(rs2) as i64;
+                        let sum = (a as i128) + (b as i128);
+                        let avg = (sum / 2) as i64;
+                        self.registers.set(rd, avg as u64);
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 3;
+                        continue;
+                    }
+                    instruction::wide::arithmetic::ADDI => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let tag = self.zk_unary_tag(rs1);
+                        let imm = i64::from(i16::from(instruction::wide::imm8(instr)));
+                        let val = (self.registers.get(rs1) as i64).wrapping_add(imm) as u64;
+                        self.registers.set(rd, val);
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::arithmetic::ANDI => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let tag = self.zk_unary_tag(rs1);
+                        let imm = instruction::wide::imm8(instr) as i64 as u64;
+                        let val = self.registers.get(rs1) & imm;
+                        self.registers.set(rd, val);
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::arithmetic::ORI => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let tag = self.zk_unary_tag(rs1);
+                        let imm = instruction::wide::imm8(instr) as i64 as u64;
+                        let val = self.registers.get(rs1) | imm;
+                        self.registers.set(rd, val);
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::arithmetic::XORI => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let tag = self.zk_unary_tag(rs1);
+                        let imm = instruction::wide::imm8(instr) as i64 as u64;
+                        let val = self.registers.get(rs1) ^ imm;
+                        self.registers.set(rd, val);
+                        self.zk_apply_tag(rd, tag);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::arithmetic::CMOVI => {
+                        let rd = instruction::wide::rd(instr);
+                        let cond = instruction::wide::rs1(instr);
+                        let imm = i64::from(instruction::wide::imm8(instr)) as u64;
+                        if self.zk_mode && self.registers.tag(cond) {
+                            return Err(VMError::PrivacyViolation);
+                        }
+                        if self.registers.get(cond) != 0 {
+                            self.registers.set(rd, imm);
+                            if self.zk_mode {
+                                self.registers.set_tag(rd, false);
+                            }
+                        }
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::memory::LOAD64 => {
+                        let rd = instruction::wide::rd(instr);
+                        let base = instruction::wide::rs1(instr);
+                        let imm = i64::from(i16::from(instruction::wide::imm8(instr)));
+                        if self.zk_mode && self.registers.tag(base) {
+                            return Err(VMError::PrivacyViolation);
+                        }
+                        let addr = (self.registers.get(base) as i64).wrapping_add(imm) as u64;
+                        let value = self.memory.load_u64(addr)?;
+                        self.registers.set(rd, value);
+                        if self.zk_mode {
+                            self.registers.set_tag(rd, false);
+                        }
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::memory::LOAD128 => {
+                        if unlikely(!self.vector_enabled) {
+                            return Err(VMError::VectorExtensionDisabled);
+                        }
+                        let rd_lo = instruction::wide::rd(instr);
+                        let base = instruction::wide::rs1(instr);
+                        let rd_hi = instruction::wide::rs2(instr);
+                        if self.zk_mode && self.registers.tag(base) {
+                            return Err(VMError::PrivacyViolation);
+                        }
+                        if rd_lo >= 256 || rd_hi >= 256 {
+                            return Err(VMError::RegisterOutOfBounds);
+                        }
+                        let addr = self.registers.get(base);
+                        if !addr.is_multiple_of(16) {
+                            return Err(VMError::MisalignedAccess { addr: addr as u32 });
+                        }
+                        let value = self.memory.load_u128(addr)?;
+                        self.registers.set(rd_lo, value as u64);
+                        self.registers.set(rd_hi, (value >> 64) as u64);
+                        if self.zk_mode {
+                            self.registers.set_tag(rd_lo, false);
+                            self.registers.set_tag(rd_hi, false);
+                        }
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::memory::STORE64 => {
+                        let base = instruction::wide::rd(instr);
+                        let rs = instruction::wide::rs1(instr);
+                        let imm = i64::from(i16::from(instruction::wide::imm8(instr)));
+                        if self.zk_mode && self.registers.tag(base) {
+                            return Err(VMError::PrivacyViolation);
+                        }
+                        let addr = (self.registers.get(base) as i64).wrapping_add(imm) as u64;
+                        let value = self.registers.get(rs);
+                        self.memory.store_u64(addr, value)?;
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::memory::STORE128 => {
+                        if unlikely(!self.vector_enabled) {
+                            return Err(VMError::VectorExtensionDisabled);
+                        }
+                        let base = instruction::wide::rd(instr);
+                        let rs_lo = instruction::wide::rs1(instr);
+                        let rs_hi = instruction::wide::rs2(instr);
+                        if self.zk_mode && self.registers.tag(base) {
+                            return Err(VMError::PrivacyViolation);
+                        }
+                        if rs_lo >= 256 || rs_hi >= 256 {
+                            return Err(VMError::RegisterOutOfBounds);
+                        }
+                        let addr = self.registers.get(base);
+                        if !addr.is_multiple_of(16) {
+                            return Err(VMError::MisalignedAccess { addr: addr as u32 });
+                        }
+                        let lo = self.registers.get(rs_lo);
+                        let hi = self.registers.get(rs_hi);
+                        let value = ((hi as u128) << 64) | lo as u128;
+                        self.memory.store_u128(addr, value)?;
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::control::HALT => {
+                        self.halted = true;
+                        self.cycles += 1;
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.flush_cycle_logs(&mut last_logged_cycle);
+                        break;
+                    }
+                    instruction::wide::crypto::SETVL => {
+                        if unlikely(!self.vector_enabled) {
+                            return Err(VMError::VectorExtensionDisabled);
+                        }
+                        let vl = {
+                            let raw = instruction::wide::rs2(instr);
+                            if raw == 0 { 1 } else { raw }
+                        };
+                        self.vector_length = vl.min(LOGICAL_VECTOR_MAX);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::crypto::VADD32 | instruction::wide::crypto::VADD64 => {
+                        if unlikely(!self.vector_enabled) {
+                            return Err(VMError::VectorExtensionDisabled);
+                        }
+                        let vl = self.vector_length.max(1);
+                        let stride = vl;
+                        let rd = Self::VECTOR_BASE + instruction::wide::rd(instr) * stride;
+                        let rs = Self::VECTOR_BASE + instruction::wide::rs1(instr) * stride;
+                        let rt = Self::VECTOR_BASE + instruction::wide::rs2(instr) * stride;
+                        if rd + vl > 256 || rs + vl > 256 || rt + vl > 256 {
+                            return Err(VMError::RegisterOutOfBounds);
+                        }
+                        if wide_op == instruction::wide::crypto::VADD64 {
+                            // Process full 128-bit chunks through the vector helpers when possible.
+                            let mut lane = 0usize;
+                            while lane + 4 <= vl {
+                                let mut a = [0u32; 4];
+                                let mut b = [0u32; 4];
+                                for offset in 0..4 {
+                                    let idx = lane + offset;
+                                    if self.zk_mode {
+                                        let a_tag = self.registers.tag(rs + idx);
+                                        let b_tag = self.registers.tag(rt + idx);
+                                        if a_tag != b_tag {
+                                            return Err(VMError::PrivacyViolation);
+                                        }
+                                        self.registers.set_tag(rd + idx, a_tag);
+                                    }
+                                    a[offset] = self.registers.get(rs + idx) as u32;
+                                    b[offset] = self.registers.get(rt + idx) as u32;
+                                }
+
+                                // Enforce pair tag alignment for zk mode (lo/hi halves must share a tag).
                                 if self.zk_mode {
-                                    let a_tag = self.registers.tag(rs + idx);
-                                    let b_tag = self.registers.tag(rt + idx);
-                                    if a_tag != b_tag {
-                                        return Err(VMError::PrivacyViolation);
-                                    }
-                                    self.registers.set_tag(rd + idx, a_tag);
-                                }
-                                a[offset] = self.registers.get(rs + idx) as u32;
-                                b[offset] = self.registers.get(rt + idx) as u32;
-                            }
-
-                            // Enforce pair tag alignment for zk mode (lo/hi halves must share a tag).
-                            if self.zk_mode {
-                                for pair in 0..2 {
-                                    let lo = lane + pair * 2;
-                                    let hi = lo + 1;
-                                    let tag_lo = self.registers.tag(rd + lo);
-                                    let tag_hi = self.registers.tag(rd + hi);
-                                    if tag_lo != tag_hi {
-                                        return Err(VMError::PrivacyViolation);
+                                    for pair in 0..2 {
+                                        let lo = lane + pair * 2;
+                                        let hi = lo + 1;
+                                        let tag_lo = self.registers.tag(rd + lo);
+                                        let tag_hi = self.registers.tag(rd + hi);
+                                        if tag_lo != tag_hi {
+                                            return Err(VMError::PrivacyViolation);
+                                        }
                                     }
                                 }
-                            }
 
-                            let sum = vector::vadd64(a, b);
-                            for (offset, value) in sum.iter().enumerate() {
-                                let idx = lane + offset;
-                                self.registers.set(rd + idx, u64::from(*value));
-                            }
-                            lane += 4;
-                        }
-
-                        // Handle any remaining pairs with the scalar fallback.
-                        let pairs = (vl - lane) / 2;
-                        for pair in 0..pairs {
-                            let lo_idx = lane + pair * 2;
-                            let hi_idx = lo_idx + 1;
-                            let a_lo = self.registers.get(rs + lo_idx) & 0xffff_ffff;
-                            let a_hi = self.registers.get(rs + hi_idx) & 0xffff_ffff;
-                            let b_lo = self.registers.get(rt + lo_idx) & 0xffff_ffff;
-                            let b_hi = self.registers.get(rt + hi_idx) & 0xffff_ffff;
-                            if self.zk_mode {
-                                let a_lo_tag = self.registers.tag(rs + lo_idx);
-                                let a_hi_tag = self.registers.tag(rs + hi_idx);
-                                let b_lo_tag = self.registers.tag(rt + lo_idx);
-                                let b_hi_tag = self.registers.tag(rt + hi_idx);
-                                if a_lo_tag != a_hi_tag
-                                    || b_lo_tag != b_hi_tag
-                                    || a_lo_tag != b_lo_tag
-                                {
-                                    return Err(VMError::PrivacyViolation);
+                                let sum = vector::vadd64(a, b);
+                                for (offset, value) in sum.iter().enumerate() {
+                                    let idx = lane + offset;
+                                    self.registers.set(rd + idx, u64::from(*value));
                                 }
-                                self.registers.set_tag(rd + lo_idx, a_lo_tag);
-                                self.registers.set_tag(rd + hi_idx, a_lo_tag);
+                                lane += 4;
                             }
-                            let a = (a_hi << 32) | a_lo;
-                            let b = (b_hi << 32) | b_lo;
-                            let sum = a.wrapping_add(b);
-                            self.registers.set(rd + lo_idx, sum & 0xffff_ffff);
-                            self.registers.set(rd + hi_idx, sum >> 32);
+
+                            // Handle any remaining pairs with the scalar fallback.
+                            let pairs = (vl - lane) / 2;
+                            for pair in 0..pairs {
+                                let lo_idx = lane + pair * 2;
+                                let hi_idx = lo_idx + 1;
+                                let a_lo = self.registers.get(rs + lo_idx) & 0xffff_ffff;
+                                let a_hi = self.registers.get(rs + hi_idx) & 0xffff_ffff;
+                                let b_lo = self.registers.get(rt + lo_idx) & 0xffff_ffff;
+                                let b_hi = self.registers.get(rt + hi_idx) & 0xffff_ffff;
+                                if self.zk_mode {
+                                    let a_lo_tag = self.registers.tag(rs + lo_idx);
+                                    let a_hi_tag = self.registers.tag(rs + hi_idx);
+                                    let b_lo_tag = self.registers.tag(rt + lo_idx);
+                                    let b_hi_tag = self.registers.tag(rt + hi_idx);
+                                    if a_lo_tag != a_hi_tag
+                                        || b_lo_tag != b_hi_tag
+                                        || a_lo_tag != b_lo_tag
+                                    {
+                                        return Err(VMError::PrivacyViolation);
+                                    }
+                                    self.registers.set_tag(rd + lo_idx, a_lo_tag);
+                                    self.registers.set_tag(rd + hi_idx, a_lo_tag);
+                                }
+                                let a = (a_hi << 32) | a_lo;
+                                let b = (b_hi << 32) | b_lo;
+                                let sum = a.wrapping_add(b);
+                                self.registers.set(rd + lo_idx, sum & 0xffff_ffff);
+                                self.registers.set(rd + hi_idx, sum >> 32);
+                            }
+                        } else {
+                            let mut lane = 0usize;
+                            while lane + 4 <= vl {
+                                let mut a = [0u32; 4];
+                                let mut b = [0u32; 4];
+                                for offset in 0..4 {
+                                    let idx = lane + offset;
+                                    if self.zk_mode {
+                                        let taga = self.registers.tag(rs + idx);
+                                        let tagb = self.registers.tag(rt + idx);
+                                        if taga != tagb {
+                                            return Err(VMError::PrivacyViolation);
+                                        }
+                                        self.registers.set_tag(rd + idx, taga);
+                                    }
+                                    a[offset] = self.registers.get(rs + idx) as u32;
+                                    b[offset] = self.registers.get(rt + idx) as u32;
+                                }
+                                let sum = vector::vadd32(a, b);
+                                for (offset, value) in sum.iter().enumerate() {
+                                    let idx = lane + offset;
+                                    self.registers.set(rd + idx, u64::from(*value));
+                                }
+                                lane += 4;
+                            }
+                            for idx in lane..vl {
+                                let a = self.registers.get(rs + idx) as u32;
+                                let b = self.registers.get(rt + idx) as u32;
+                                if self.zk_mode {
+                                    let taga = self.registers.tag(rs + idx);
+                                    let tagb = self.registers.tag(rt + idx);
+                                    if taga != tagb {
+                                        return Err(VMError::PrivacyViolation);
+                                    }
+                                    self.registers.set_tag(rd + idx, taga);
+                                }
+                                self.registers.set(rd + idx, u64::from(a.wrapping_add(b)));
+                            }
                         }
-                    } else {
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::control::BEQ => {
+                        let rs = instruction::wide::rd(instr);
+                        let rt = instruction::wide::rs1(instr);
+                        let offset = i64::from(instruction::wide::imm8(instr));
+                        if self.zk_mode && (self.registers.tag(rs) || self.registers.tag(rt)) {
+                            return Err(VMError::PrivacyViolation);
+                        }
+                        let a = self.registers.get(rs);
+                        let b = self.registers.get(rt);
+                        let predicted = self.branch_predictor.predict(self.pc);
+                        let taken = a == b;
+                        self.branch_predictions += 1;
+                        if likely(predicted == taken) {
+                            self.branch_correct += 1;
+                        } else {
+                            self.cycles += 1;
+                        }
+                        self.branch_predictor.update(self.pc, taken);
+                        if taken {
+                            let byte_off = offset as i64 * 4;
+                            self.pc = ((self.pc as i64) + byte_off) as u64;
+                        } else {
+                            self.pc = self.pc.wrapping_add(length as u64);
+                        }
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::control::BNE => {
+                        let rs = instruction::wide::rd(instr);
+                        let rt = instruction::wide::rs1(instr);
+                        let offset = i64::from(instruction::wide::imm8(instr));
+                        if self.zk_mode && (self.registers.tag(rs) || self.registers.tag(rt)) {
+                            return Err(VMError::PrivacyViolation);
+                        }
+                        let a = self.registers.get(rs);
+                        let b = self.registers.get(rt);
+                        let predicted = self.branch_predictor.predict(self.pc);
+                        let taken = a != b;
+                        self.branch_predictions += 1;
+                        if likely(predicted == taken) {
+                            self.branch_correct += 1;
+                        } else {
+                            self.cycles += 1;
+                        }
+                        self.branch_predictor.update(self.pc, taken);
+                        if taken {
+                            let byte_off = offset as i64 * 4;
+                            self.pc = ((self.pc as i64) + byte_off) as u64;
+                        } else {
+                            self.pc = self.pc.wrapping_add(length as u64);
+                        }
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::control::BLT => {
+                        let rs = instruction::wide::rd(instr);
+                        let rt = instruction::wide::rs1(instr);
+                        let offset = i64::from(instruction::wide::imm8(instr));
+                        if self.zk_mode && (self.registers.tag(rs) || self.registers.tag(rt)) {
+                            return Err(VMError::PrivacyViolation);
+                        }
+                        let a = self.registers.get(rs) as i64;
+                        let b = self.registers.get(rt) as i64;
+                        let predicted = self.branch_predictor.predict(self.pc);
+                        let taken = a < b;
+                        self.branch_predictions += 1;
+                        if likely(predicted == taken) {
+                            self.branch_correct += 1;
+                        } else {
+                            self.cycles += 1;
+                        }
+                        self.branch_predictor.update(self.pc, taken);
+                        if taken {
+                            let byte_off = offset as i64 * 4;
+                            self.pc = ((self.pc as i64) + byte_off) as u64;
+                        } else {
+                            self.pc = self.pc.wrapping_add(length as u64);
+                        }
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::control::BGE => {
+                        let rs = instruction::wide::rd(instr);
+                        let rt = instruction::wide::rs1(instr);
+                        let offset = i64::from(instruction::wide::imm8(instr));
+                        if self.zk_mode && (self.registers.tag(rs) || self.registers.tag(rt)) {
+                            return Err(VMError::PrivacyViolation);
+                        }
+                        let a = self.registers.get(rs) as i64;
+                        let b = self.registers.get(rt) as i64;
+                        let predicted = self.branch_predictor.predict(self.pc);
+                        let taken = a >= b;
+                        self.branch_predictions += 1;
+                        if likely(predicted == taken) {
+                            self.branch_correct += 1;
+                        } else {
+                            self.cycles += 1;
+                        }
+                        self.branch_predictor.update(self.pc, taken);
+                        if taken {
+                            let byte_off = offset as i64 * 4;
+                            self.pc = ((self.pc as i64) + byte_off) as u64;
+                        } else {
+                            self.pc = self.pc.wrapping_add(length as u64);
+                        }
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::control::BLTU => {
+                        let rs = instruction::wide::rd(instr);
+                        let rt = instruction::wide::rs1(instr);
+                        let offset = i64::from(instruction::wide::imm8(instr));
+                        if self.zk_mode && (self.registers.tag(rs) || self.registers.tag(rt)) {
+                            return Err(VMError::PrivacyViolation);
+                        }
+                        let a = self.registers.get(rs);
+                        let b = self.registers.get(rt);
+                        let predicted = self.branch_predictor.predict(self.pc);
+                        let taken = a < b;
+                        self.branch_predictions += 1;
+                        if likely(predicted == taken) {
+                            self.branch_correct += 1;
+                        } else {
+                            self.cycles += 1;
+                        }
+                        self.branch_predictor.update(self.pc, taken);
+                        if taken {
+                            let byte_off = offset as i64 * 4;
+                            self.pc = ((self.pc as i64) + byte_off) as u64;
+                        } else {
+                            self.pc = self.pc.wrapping_add(length as u64);
+                        }
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::control::BGEU => {
+                        let rs = instruction::wide::rd(instr);
+                        let rt = instruction::wide::rs1(instr);
+                        let offset = i64::from(instruction::wide::imm8(instr));
+                        if self.zk_mode && (self.registers.tag(rs) || self.registers.tag(rt)) {
+                            return Err(VMError::PrivacyViolation);
+                        }
+                        let a = self.registers.get(rs);
+                        let b = self.registers.get(rt);
+                        let predicted = self.branch_predictor.predict(self.pc);
+                        let taken = a >= b;
+                        self.branch_predictions += 1;
+                        if likely(predicted == taken) {
+                            self.branch_correct += 1;
+                        } else {
+                            self.cycles += 1;
+                        }
+                        self.branch_predictor.update(self.pc, taken);
+                        if taken {
+                            let byte_off = offset as i64 * 4;
+                            self.pc = ((self.pc as i64) + byte_off) as u64;
+                        } else {
+                            self.pc = self.pc.wrapping_add(length as u64);
+                        }
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::control::JR => {
+                        let rs = instruction::wide::rd(instr);
+                        if self.zk_mode && self.registers.tag(rs) {
+                            return Err(VMError::PrivacyViolation);
+                        }
+                        self.pc = self.registers.get(rs);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::control::JALR => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs = instruction::wide::rs1(instr);
+                        if self.zk_mode && self.registers.tag(rs) {
+                            return Err(VMError::PrivacyViolation);
+                        }
+                        let imm = i64::from(instruction::wide::imm8(instr));
+                        let raw_target = ((self.registers.get(rs) as i64) + imm) as u64;
+                        let target =
+                            ((raw_target.wrapping_sub(self.pc_alignment)) & !3) | self.pc_alignment;
+                        let return_pc = self.pc.wrapping_add(length as u64);
+                        self.registers.set(rd, return_pc);
+                        if self.zk_mode {
+                            self.registers.set_tag(rd, false);
+                        }
+                        self.pc = target;
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::control::JAL => {
+                        let rd = instruction::wide::rd(instr);
+                        let imm = instruction::wide::imm16(instr) as i64;
+                        let return_pc = self.pc.wrapping_add(length as u64);
+                        self.registers.set(rd, return_pc);
+                        if self.zk_mode {
+                            self.registers.set_tag(rd, false);
+                        }
+                        self.pc = ((self.pc as i64) + (imm * 4)) as u64;
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::control::JMP => {
+                        let imm = instruction::wide::imm16(instr) as i64;
+                        self.pc = ((self.pc as i64) + (imm * 4)) as u64;
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::control::JALS => {
+                        let rd = instruction::wide::rd(instr);
+                        let imm = instruction::wide::imm16(instr) as i64;
+                        let return_pc = self.pc.wrapping_add(length as u64);
+                        self.registers.set(rd, return_pc);
+                        if self.zk_mode {
+                            self.registers.set_tag(rd, false);
+                        }
+                        self.pc = ((self.pc as i64) + (imm * 4)) as u64;
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::crypto::VAND => {
+                        if unlikely(!self.vector_enabled) {
+                            return Err(VMError::VectorExtensionDisabled);
+                        }
+                        let vl = self.vector_length.max(1);
+                        let stride = vl;
+                        let rd = Self::VECTOR_BASE + instruction::wide::rd(instr) * stride;
+                        let rs = Self::VECTOR_BASE + instruction::wide::rs1(instr) * stride;
+                        let rt = Self::VECTOR_BASE + instruction::wide::rs2(instr) * stride;
+                        if rd + vl > 256 || rs + vl > 256 || rt + vl > 256 {
+                            return Err(VMError::RegisterOutOfBounds);
+                        }
                         let mut lane = 0usize;
                         while lane + 4 <= vl {
                             let mut a = [0u32; 4];
@@ -3628,16 +4033,67 @@ impl IVM {
                                 a[offset] = self.registers.get(rs + idx) as u32;
                                 b[offset] = self.registers.get(rt + idx) as u32;
                             }
-                            let sum = vector::vadd32(a, b);
-                            for (offset, value) in sum.iter().enumerate() {
+                            let out = vector::vand(a, b);
+                            for (offset, value) in out.iter().enumerate() {
                                 let idx = lane + offset;
                                 self.registers.set(rd + idx, u64::from(*value));
                             }
                             lane += 4;
                         }
                         for idx in lane..vl {
+                            if self.zk_mode {
+                                let taga = self.registers.tag(rs + idx);
+                                let tagb = self.registers.tag(rt + idx);
+                                if taga != tagb {
+                                    return Err(VMError::PrivacyViolation);
+                                }
+                                self.registers.set_tag(rd + idx, taga);
+                            }
                             let a = self.registers.get(rs + idx) as u32;
                             let b = self.registers.get(rt + idx) as u32;
+                            self.registers.set(rd + idx, u64::from(a & b));
+                        }
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::crypto::VXOR => {
+                        if unlikely(!self.vector_enabled) {
+                            return Err(VMError::VectorExtensionDisabled);
+                        }
+                        let vl = self.vector_length.max(1);
+                        let stride = vl;
+                        let rd = Self::VECTOR_BASE + instruction::wide::rd(instr) * stride;
+                        let rs = Self::VECTOR_BASE + instruction::wide::rs1(instr) * stride;
+                        let rt = Self::VECTOR_BASE + instruction::wide::rs2(instr) * stride;
+                        if rd + vl > 256 || rs + vl > 256 || rt + vl > 256 {
+                            return Err(VMError::RegisterOutOfBounds);
+                        }
+                        let mut lane = 0usize;
+                        while lane + 4 <= vl {
+                            let mut a = [0u32; 4];
+                            let mut b = [0u32; 4];
+                            for offset in 0..4 {
+                                let idx = lane + offset;
+                                if self.zk_mode {
+                                    let taga = self.registers.tag(rs + idx);
+                                    let tagb = self.registers.tag(rt + idx);
+                                    if taga != tagb {
+                                        return Err(VMError::PrivacyViolation);
+                                    }
+                                    self.registers.set_tag(rd + idx, taga);
+                                }
+                                a[offset] = self.registers.get(rs + idx) as u32;
+                                b[offset] = self.registers.get(rt + idx) as u32;
+                            }
+                            let out = vector::vxor(a, b);
+                            for (offset, value) in out.iter().enumerate() {
+                                let idx = lane + offset;
+                                self.registers.set(rd + idx, u64::from(*value));
+                            }
+                            lane += 4;
+                        }
+                        for idx in lane..vl {
                             if self.zk_mode {
                                 let taga = self.registers.tag(rs + idx);
                                 let tagb = self.registers.tag(rt + idx);
@@ -3646,251 +4102,51 @@ impl IVM {
                                 }
                                 self.registers.set_tag(rd + idx, taga);
                             }
-                            self.registers.set(rd + idx, u64::from(a.wrapping_add(b)));
+                            let a = self.registers.get(rs + idx) as u32;
+                            let b = self.registers.get(rt + idx) as u32;
+                            self.registers.set(rd + idx, u64::from(a ^ b));
                         }
-                    }
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::control::BEQ => {
-                    let rs = instruction::wide::rd(instr);
-                    let rt = instruction::wide::rs1(instr);
-                    let offset = i64::from(instruction::wide::imm8(instr));
-                    if self.zk_mode && (self.registers.tag(rs) || self.registers.tag(rt)) {
-                        return Err(VMError::PrivacyViolation);
-                    }
-                    let a = self.registers.get(rs);
-                    let b = self.registers.get(rt);
-                    let predicted = self.branch_predictor.predict(self.pc);
-                    let taken = a == b;
-                    self.branch_predictions += 1;
-                    if likely(predicted == taken) {
-                        self.branch_correct += 1;
-                    } else {
-                        self.cycles += 1;
-                    }
-                    self.branch_predictor.update(self.pc, taken);
-                    if taken {
-                        let byte_off = offset as i64 * 4;
-                        self.pc = ((self.pc as i64) + byte_off) as u64;
-                    } else {
                         self.pc = self.pc.wrapping_add(length as u64);
-                    }
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::control::BNE => {
-                    let rs = instruction::wide::rd(instr);
-                    let rt = instruction::wide::rs1(instr);
-                    let offset = i64::from(instruction::wide::imm8(instr));
-                    if self.zk_mode && (self.registers.tag(rs) || self.registers.tag(rt)) {
-                        return Err(VMError::PrivacyViolation);
-                    }
-                    let a = self.registers.get(rs);
-                    let b = self.registers.get(rt);
-                    let predicted = self.branch_predictor.predict(self.pc);
-                    let taken = a != b;
-                    self.branch_predictions += 1;
-                    if likely(predicted == taken) {
-                        self.branch_correct += 1;
-                    } else {
                         self.cycles += 1;
+                        continue;
                     }
-                    self.branch_predictor.update(self.pc, taken);
-                    if taken {
-                        let byte_off = offset as i64 * 4;
-                        self.pc = ((self.pc as i64) + byte_off) as u64;
-                    } else {
-                        self.pc = self.pc.wrapping_add(length as u64);
-                    }
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::control::BLT => {
-                    let rs = instruction::wide::rd(instr);
-                    let rt = instruction::wide::rs1(instr);
-                    let offset = i64::from(instruction::wide::imm8(instr));
-                    if self.zk_mode && (self.registers.tag(rs) || self.registers.tag(rt)) {
-                        return Err(VMError::PrivacyViolation);
-                    }
-                    let a = self.registers.get(rs) as i64;
-                    let b = self.registers.get(rt) as i64;
-                    let predicted = self.branch_predictor.predict(self.pc);
-                    let taken = a < b;
-                    self.branch_predictions += 1;
-                    if likely(predicted == taken) {
-                        self.branch_correct += 1;
-                    } else {
-                        self.cycles += 1;
-                    }
-                    self.branch_predictor.update(self.pc, taken);
-                    if taken {
-                        let byte_off = offset as i64 * 4;
-                        self.pc = ((self.pc as i64) + byte_off) as u64;
-                    } else {
-                        self.pc = self.pc.wrapping_add(length as u64);
-                    }
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::control::BGE => {
-                    let rs = instruction::wide::rd(instr);
-                    let rt = instruction::wide::rs1(instr);
-                    let offset = i64::from(instruction::wide::imm8(instr));
-                    if self.zk_mode && (self.registers.tag(rs) || self.registers.tag(rt)) {
-                        return Err(VMError::PrivacyViolation);
-                    }
-                    let a = self.registers.get(rs) as i64;
-                    let b = self.registers.get(rt) as i64;
-                    let predicted = self.branch_predictor.predict(self.pc);
-                    let taken = a >= b;
-                    self.branch_predictions += 1;
-                    if likely(predicted == taken) {
-                        self.branch_correct += 1;
-                    } else {
-                        self.cycles += 1;
-                    }
-                    self.branch_predictor.update(self.pc, taken);
-                    if taken {
-                        let byte_off = offset as i64 * 4;
-                        self.pc = ((self.pc as i64) + byte_off) as u64;
-                    } else {
-                        self.pc = self.pc.wrapping_add(length as u64);
-                    }
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::control::BLTU => {
-                    let rs = instruction::wide::rd(instr);
-                    let rt = instruction::wide::rs1(instr);
-                    let offset = i64::from(instruction::wide::imm8(instr));
-                    if self.zk_mode && (self.registers.tag(rs) || self.registers.tag(rt)) {
-                        return Err(VMError::PrivacyViolation);
-                    }
-                    let a = self.registers.get(rs);
-                    let b = self.registers.get(rt);
-                    let predicted = self.branch_predictor.predict(self.pc);
-                    let taken = a < b;
-                    self.branch_predictions += 1;
-                    if likely(predicted == taken) {
-                        self.branch_correct += 1;
-                    } else {
-                        self.cycles += 1;
-                    }
-                    self.branch_predictor.update(self.pc, taken);
-                    if taken {
-                        let byte_off = offset as i64 * 4;
-                        self.pc = ((self.pc as i64) + byte_off) as u64;
-                    } else {
-                        self.pc = self.pc.wrapping_add(length as u64);
-                    }
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::control::BGEU => {
-                    let rs = instruction::wide::rd(instr);
-                    let rt = instruction::wide::rs1(instr);
-                    let offset = i64::from(instruction::wide::imm8(instr));
-                    if self.zk_mode && (self.registers.tag(rs) || self.registers.tag(rt)) {
-                        return Err(VMError::PrivacyViolation);
-                    }
-                    let a = self.registers.get(rs);
-                    let b = self.registers.get(rt);
-                    let predicted = self.branch_predictor.predict(self.pc);
-                    let taken = a >= b;
-                    self.branch_predictions += 1;
-                    if likely(predicted == taken) {
-                        self.branch_correct += 1;
-                    } else {
-                        self.cycles += 1;
-                    }
-                    self.branch_predictor.update(self.pc, taken);
-                    if taken {
-                        let byte_off = offset as i64 * 4;
-                        self.pc = ((self.pc as i64) + byte_off) as u64;
-                    } else {
-                        self.pc = self.pc.wrapping_add(length as u64);
-                    }
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::control::JR => {
-                    let rs = instruction::wide::rd(instr);
-                    if self.zk_mode && self.registers.tag(rs) {
-                        return Err(VMError::PrivacyViolation);
-                    }
-                    self.pc = self.registers.get(rs);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::control::JALR => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs = instruction::wide::rs1(instr);
-                    if self.zk_mode && self.registers.tag(rs) {
-                        return Err(VMError::PrivacyViolation);
-                    }
-                    let imm = i64::from(instruction::wide::imm8(instr));
-                    let raw_target = ((self.registers.get(rs) as i64) + imm) as u64;
-                    let target =
-                        ((raw_target.wrapping_sub(self.pc_alignment)) & !3) | self.pc_alignment;
-                    let return_pc = self.pc.wrapping_add(length as u64);
-                    self.registers.set(rd, return_pc);
-                    if self.zk_mode {
-                        self.registers.set_tag(rd, false);
-                    }
-                    self.pc = target;
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::control::JAL => {
-                    let rd = instruction::wide::rd(instr);
-                    let imm = instruction::wide::imm16(instr) as i64;
-                    let return_pc = self.pc.wrapping_add(length as u64);
-                    self.registers.set(rd, return_pc);
-                    if self.zk_mode {
-                        self.registers.set_tag(rd, false);
-                    }
-                    self.pc = ((self.pc as i64) + (imm * 4)) as u64;
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::control::JMP => {
-                    let imm = instruction::wide::imm16(instr) as i64;
-                    self.pc = ((self.pc as i64) + (imm * 4)) as u64;
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::control::JALS => {
-                    let rd = instruction::wide::rd(instr);
-                    let imm = instruction::wide::imm16(instr) as i64;
-                    let return_pc = self.pc.wrapping_add(length as u64);
-                    self.registers.set(rd, return_pc);
-                    if self.zk_mode {
-                        self.registers.set_tag(rd, false);
-                    }
-                    self.pc = ((self.pc as i64) + (imm * 4)) as u64;
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::crypto::VAND => {
-                    if unlikely(!self.vector_enabled) {
-                        return Err(VMError::VectorExtensionDisabled);
-                    }
-                    let vl = self.vector_length.max(1);
-                    let stride = vl;
-                    let rd = Self::VECTOR_BASE + instruction::wide::rd(instr) * stride;
-                    let rs = Self::VECTOR_BASE + instruction::wide::rs1(instr) * stride;
-                    let rt = Self::VECTOR_BASE + instruction::wide::rs2(instr) * stride;
-                    if rd + vl > 256 || rs + vl > 256 || rt + vl > 256 {
-                        return Err(VMError::RegisterOutOfBounds);
-                    }
-                    let mut lane = 0usize;
-                    while lane + 4 <= vl {
-                        let mut a = [0u32; 4];
-                        let mut b = [0u32; 4];
-                        for offset in 0..4 {
-                            let idx = lane + offset;
+                    instruction::wide::crypto::VOR => {
+                        if unlikely(!self.vector_enabled) {
+                            return Err(VMError::VectorExtensionDisabled);
+                        }
+                        let vl = self.vector_length.max(1);
+                        let stride = vl;
+                        let rd = Self::VECTOR_BASE + instruction::wide::rd(instr) * stride;
+                        let rs = Self::VECTOR_BASE + instruction::wide::rs1(instr) * stride;
+                        let rt = Self::VECTOR_BASE + instruction::wide::rs2(instr) * stride;
+                        if rd + vl > 256 || rs + vl > 256 || rt + vl > 256 {
+                            return Err(VMError::RegisterOutOfBounds);
+                        }
+                        let mut lane = 0usize;
+                        while lane + 4 <= vl {
+                            let mut a = [0u32; 4];
+                            let mut b = [0u32; 4];
+                            for offset in 0..4 {
+                                let idx = lane + offset;
+                                if self.zk_mode {
+                                    let taga = self.registers.tag(rs + idx);
+                                    let tagb = self.registers.tag(rt + idx);
+                                    if taga != tagb {
+                                        return Err(VMError::PrivacyViolation);
+                                    }
+                                    self.registers.set_tag(rd + idx, taga);
+                                }
+                                a[offset] = self.registers.get(rs + idx) as u32;
+                                b[offset] = self.registers.get(rt + idx) as u32;
+                            }
+                            let out = vector::vor(a, b);
+                            for (offset, value) in out.iter().enumerate() {
+                                let idx = lane + offset;
+                                self.registers.set(rd + idx, u64::from(*value));
+                            }
+                            lane += 4;
+                        }
+                        for idx in lane..vl {
                             if self.zk_mode {
                                 let taga = self.registers.tag(rs + idx);
                                 let tagb = self.registers.tag(rt + idx);
@@ -3899,573 +4155,458 @@ impl IVM {
                                 }
                                 self.registers.set_tag(rd + idx, taga);
                             }
-                            a[offset] = self.registers.get(rs + idx) as u32;
-                            b[offset] = self.registers.get(rt + idx) as u32;
+                            let a = self.registers.get(rs + idx) as u32;
+                            let b = self.registers.get(rt + idx) as u32;
+                            self.registers.set(rd + idx, u64::from(a | b));
                         }
-                        let out = vector::vand(a, b);
-                        for (offset, value) in out.iter().enumerate() {
-                            let idx = lane + offset;
-                            self.registers.set(rd + idx, u64::from(*value));
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::crypto::VROT32 => {
+                        if unlikely(!self.vector_enabled) {
+                            return Err(VMError::VectorExtensionDisabled);
                         }
-                        lane += 4;
-                    }
-                    for idx in lane..vl {
-                        if self.zk_mode {
-                            let taga = self.registers.tag(rs + idx);
-                            let tagb = self.registers.tag(rt + idx);
-                            if taga != tagb {
-                                return Err(VMError::PrivacyViolation);
-                            }
-                            self.registers.set_tag(rd + idx, taga);
+                        let vl = self.vector_length.max(1);
+                        let stride = vl;
+                        let rd = Self::VECTOR_BASE + instruction::wide::rd(instr) * stride;
+                        let rs = Self::VECTOR_BASE + instruction::wide::rs1(instr) * stride;
+                        if rd + vl > 256 || rs + vl > 256 {
+                            return Err(VMError::RegisterOutOfBounds);
                         }
-                        let a = self.registers.get(rs + idx) as u32;
-                        let b = self.registers.get(rt + idx) as u32;
-                        self.registers.set(rd + idx, u64::from(a & b));
-                    }
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::crypto::VXOR => {
-                    if unlikely(!self.vector_enabled) {
-                        return Err(VMError::VectorExtensionDisabled);
-                    }
-                    let vl = self.vector_length.max(1);
-                    let stride = vl;
-                    let rd = Self::VECTOR_BASE + instruction::wide::rd(instr) * stride;
-                    let rs = Self::VECTOR_BASE + instruction::wide::rs1(instr) * stride;
-                    let rt = Self::VECTOR_BASE + instruction::wide::rs2(instr) * stride;
-                    if rd + vl > 256 || rs + vl > 256 || rt + vl > 256 {
-                        return Err(VMError::RegisterOutOfBounds);
-                    }
-                    let mut lane = 0usize;
-                    while lane + 4 <= vl {
-                        let mut a = [0u32; 4];
-                        let mut b = [0u32; 4];
-                        for offset in 0..4 {
-                            let idx = lane + offset;
-                            if self.zk_mode {
-                                let taga = self.registers.tag(rs + idx);
-                                let tagb = self.registers.tag(rt + idx);
-                                if taga != tagb {
-                                    return Err(VMError::PrivacyViolation);
+                        let shift = (instruction::wide::imm8(instr) as u8 & 0x1F) as u32;
+                        let mut lane = 0usize;
+                        while lane + 4 <= vl {
+                            let mut a = [0u32; 4];
+                            for (offset, value) in a.iter_mut().enumerate() {
+                                let idx = lane + offset;
+                                if self.zk_mode {
+                                    let src_tag = self.registers.tag(rs + idx);
+                                    self.registers.set_tag(rd + idx, src_tag);
                                 }
-                                self.registers.set_tag(rd + idx, taga);
+                                *value = self.registers.get(rs + idx) as u32;
                             }
-                            a[offset] = self.registers.get(rs + idx) as u32;
-                            b[offset] = self.registers.get(rt + idx) as u32;
-                        }
-                        let out = vector::vxor(a, b);
-                        for (offset, value) in out.iter().enumerate() {
-                            let idx = lane + offset;
-                            self.registers.set(rd + idx, u64::from(*value));
-                        }
-                        lane += 4;
-                    }
-                    for idx in lane..vl {
-                        if self.zk_mode {
-                            let taga = self.registers.tag(rs + idx);
-                            let tagb = self.registers.tag(rt + idx);
-                            if taga != tagb {
-                                return Err(VMError::PrivacyViolation);
+                            let rotated = vector::vrot32(a, shift);
+                            for (offset, value) in rotated.iter().enumerate() {
+                                let idx = lane + offset;
+                                self.registers.set(rd + idx, u64::from(*value));
                             }
-                            self.registers.set_tag(rd + idx, taga);
+                            lane += 4;
                         }
-                        let a = self.registers.get(rs + idx) as u32;
-                        let b = self.registers.get(rt + idx) as u32;
-                        self.registers.set(rd + idx, u64::from(a ^ b));
-                    }
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::crypto::VOR => {
-                    if unlikely(!self.vector_enabled) {
-                        return Err(VMError::VectorExtensionDisabled);
-                    }
-                    let vl = self.vector_length.max(1);
-                    let stride = vl;
-                    let rd = Self::VECTOR_BASE + instruction::wide::rd(instr) * stride;
-                    let rs = Self::VECTOR_BASE + instruction::wide::rs1(instr) * stride;
-                    let rt = Self::VECTOR_BASE + instruction::wide::rs2(instr) * stride;
-                    if rd + vl > 256 || rs + vl > 256 || rt + vl > 256 {
-                        return Err(VMError::RegisterOutOfBounds);
-                    }
-                    let mut lane = 0usize;
-                    while lane + 4 <= vl {
-                        let mut a = [0u32; 4];
-                        let mut b = [0u32; 4];
-                        for offset in 0..4 {
-                            let idx = lane + offset;
-                            if self.zk_mode {
-                                let taga = self.registers.tag(rs + idx);
-                                let tagb = self.registers.tag(rt + idx);
-                                if taga != tagb {
-                                    return Err(VMError::PrivacyViolation);
-                                }
-                                self.registers.set_tag(rd + idx, taga);
-                            }
-                            a[offset] = self.registers.get(rs + idx) as u32;
-                            b[offset] = self.registers.get(rt + idx) as u32;
-                        }
-                        let out = vector::vor(a, b);
-                        for (offset, value) in out.iter().enumerate() {
-                            let idx = lane + offset;
-                            self.registers.set(rd + idx, u64::from(*value));
-                        }
-                        lane += 4;
-                    }
-                    for idx in lane..vl {
-                        if self.zk_mode {
-                            let taga = self.registers.tag(rs + idx);
-                            let tagb = self.registers.tag(rt + idx);
-                            if taga != tagb {
-                                return Err(VMError::PrivacyViolation);
-                            }
-                            self.registers.set_tag(rd + idx, taga);
-                        }
-                        let a = self.registers.get(rs + idx) as u32;
-                        let b = self.registers.get(rt + idx) as u32;
-                        self.registers.set(rd + idx, u64::from(a | b));
-                    }
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::crypto::VROT32 => {
-                    if unlikely(!self.vector_enabled) {
-                        return Err(VMError::VectorExtensionDisabled);
-                    }
-                    let vl = self.vector_length.max(1);
-                    let stride = vl;
-                    let rd = Self::VECTOR_BASE + instruction::wide::rd(instr) * stride;
-                    let rs = Self::VECTOR_BASE + instruction::wide::rs1(instr) * stride;
-                    if rd + vl > 256 || rs + vl > 256 {
-                        return Err(VMError::RegisterOutOfBounds);
-                    }
-                    let shift = (instruction::wide::imm8(instr) as u8 & 0x1F) as u32;
-                    let mut lane = 0usize;
-                    while lane + 4 <= vl {
-                        let mut a = [0u32; 4];
-                        for (offset, value) in a.iter_mut().enumerate() {
-                            let idx = lane + offset;
+                        for idx in lane..vl {
                             if self.zk_mode {
                                 let src_tag = self.registers.tag(rs + idx);
                                 self.registers.set_tag(rd + idx, src_tag);
                             }
-                            *value = self.registers.get(rs + idx) as u32;
+                            let value = self.registers.get(rs + idx) as u32;
+                            let rotated = value.rotate_left(shift) as u64;
+                            self.registers.set(rd + idx, rotated);
                         }
-                        let rotated = vector::vrot32(a, shift);
-                        for (offset, value) in rotated.iter().enumerate() {
-                            let idx = lane + offset;
-                            self.registers.set(rd + idx, u64::from(*value));
-                        }
-                        lane += 4;
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
                     }
-                    for idx in lane..vl {
+                    instruction::wide::crypto::SHA256BLOCK => {
+                        if unlikely(!self.vector_enabled) {
+                            return Err(VMError::VectorExtensionDisabled);
+                        }
+                        let vl = self.vector_length.max(1);
+                        let stride = vl;
+                        let rd = instruction::wide::rd(instr);
+                        let ptr_reg = instruction::wide::rs1(instr);
+                        if self.zk_mode && self.registers.tag(ptr_reg) {
+                            return Err(VMError::PrivacyViolation);
+                        }
+                        let base = Self::VECTOR_BASE + rd * stride;
+                        let second = base + stride;
+                        if second + stride > 256 || ptr_reg >= 256 {
+                            return Err(VMError::RegisterOutOfBounds);
+                        }
+                        let addr = self.registers.get(ptr_reg);
+                        let mut block = [0u8; 64];
+                        self.memory.load_bytes(addr, &mut block)?;
                         if self.zk_mode {
-                            let src_tag = self.registers.tag(rs + idx);
-                            self.registers.set_tag(rd + idx, src_tag);
+                            for (i, b) in block.iter().enumerate() {
+                                let (root, path) =
+                                    self.memory.merkle_root_and_path(addr + i as u64);
+                                self.mem_log.record(MemEvent::Load {
+                                    addr: addr + i as u64,
+                                    value: *b as u128,
+                                    size: 1,
+                                    path,
+                                    root,
+                                });
+                            }
                         }
-                        let value = self.registers.get(rs + idx) as u32;
-                        let rotated = value.rotate_left(shift) as u64;
-                        self.registers.set(rd + idx, rotated);
-                    }
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::crypto::SHA256BLOCK => {
-                    if unlikely(!self.vector_enabled) {
-                        return Err(VMError::VectorExtensionDisabled);
-                    }
-                    let vl = self.vector_length.max(1);
-                    let stride = vl;
-                    let rd = instruction::wide::rd(instr);
-                    let ptr_reg = instruction::wide::rs1(instr);
-                    if self.zk_mode && self.registers.tag(ptr_reg) {
-                        return Err(VMError::PrivacyViolation);
-                    }
-                    let base = Self::VECTOR_BASE + rd * stride;
-                    let second = base + stride;
-                    if second + stride > 256 || ptr_reg >= 256 {
-                        return Err(VMError::RegisterOutOfBounds);
-                    }
-                    let addr = self.registers.get(ptr_reg);
-                    let mut block = [0u8; 64];
-                    self.memory.load_bytes(addr, &mut block)?;
-                    if self.zk_mode {
-                        for (i, b) in block.iter().enumerate() {
-                            let (root, path) = self.memory.merkle_root_and_path(addr + i as u64);
-                            self.mem_log.record(MemEvent::Load {
-                                addr: addr + i as u64,
-                                value: *b as u128,
-                                size: 1,
-                                path,
-                                root,
-                            });
+                        let mut state = [0u32; 8];
+                        let first_lanes = vl.min(4);
+                        for (lane, slot) in state.iter_mut().take(first_lanes).enumerate() {
+                            *slot = self.registers.get(base + lane) as u32;
                         }
+                        let second_lanes = vl.min(4);
+                        for (lane, slot) in state.iter_mut().skip(4).take(second_lanes).enumerate()
+                        {
+                            *slot = self.registers.get(second + lane) as u32;
+                        }
+                        vector::sha256_compress(&mut state, &block);
+                        for (lane, value) in state.iter().take(first_lanes).enumerate() {
+                            self.registers.set(base + lane, u64::from(*value));
+                        }
+                        for (lane, value) in state.iter().skip(4).take(second_lanes).enumerate() {
+                            self.registers.set(second + lane, u64::from(*value));
+                        }
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
                     }
-                    let mut state = [0u32; 8];
-                    let first_lanes = vl.min(4);
-                    for (lane, slot) in state.iter_mut().take(first_lanes).enumerate() {
-                        *slot = self.registers.get(base + lane) as u32;
-                    }
-                    let second_lanes = vl.min(4);
-                    for (lane, slot) in state.iter_mut().skip(4).take(second_lanes).enumerate() {
-                        *slot = self.registers.get(second + lane) as u32;
-                    }
-                    vector::sha256_compress(&mut state, &block);
-                    for (lane, value) in state.iter().take(first_lanes).enumerate() {
-                        self.registers.set(base + lane, u64::from(*value));
-                    }
-                    for (lane, value) in state.iter().skip(4).take(second_lanes).enumerate() {
-                        self.registers.set(second + lane, u64::from(*value));
-                    }
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::crypto::SHA3BLOCK => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs_state = instruction::wide::rs1(instr);
-                    let rs_block = instruction::wide::rs2(instr);
-                    if self.zk_mode
-                        && (self.registers.tag(rd)
-                            || self.registers.tag(rs_state)
-                            || self.registers.tag(rs_block))
-                    {
-                        return Err(VMError::PrivacyViolation);
-                    }
-                    if rd >= 256 || rs_state >= 256 || rs_block >= 256 {
-                        return Err(VMError::RegisterOutOfBounds);
-                    }
-                    let state_ptr = self.registers.get(rs_state);
-                    let block_ptr = self.registers.get(rs_block);
-                    let out_ptr = self.registers.get(rd);
-                    let mut state = [0u64; 25];
-                    let mut state_bytes = [0u8; 25 * 8];
-                    self.memory.load_bytes(state_ptr, &mut state_bytes)?;
-                    for i in 0..25 {
-                        let mut lane = [0u8; 8];
-                        lane.copy_from_slice(&state_bytes[i * 8..(i + 1) * 8]);
-                        state[i] = u64::from_le_bytes(lane);
-                    }
-                    let mut block = [0u8; 136];
-                    self.memory.load_bytes(block_ptr, &mut block)?;
-                    crate::sha3::sha3_absorb_block(&mut state, &block);
-                    let mut out_bytes = [0u8; 25 * 8];
-                    for i in 0..25 {
-                        out_bytes[i * 8..(i + 1) * 8].copy_from_slice(&state[i].to_le_bytes());
-                    }
-                    self.memory.store_bytes(out_ptr, &out_bytes)?;
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::crypto::AESENC => {
-                    if unlikely(!self.vector_enabled) {
-                        return Err(VMError::VectorExtensionDisabled);
-                    }
-                    let rd = instruction::wide::rd(instr);
-                    let rs_state = instruction::wide::rs1(instr);
-                    let rs_key = instruction::wide::rs2(instr);
-                    if rd + 1 >= 256 || rs_state + 1 >= 256 || rs_key + 1 >= 256 {
-                        return Err(VMError::RegisterOutOfBounds);
-                    }
-                    if self.zk_mode {
-                        let state_tag_lo = self.registers.tag(rs_state);
-                        let state_tag_hi = self.registers.tag(rs_state + 1);
-                        let key_tag_lo = self.registers.tag(rs_key);
-                        let key_tag_hi = self.registers.tag(rs_key + 1);
-                        if state_tag_lo != state_tag_hi
-                            || key_tag_lo != key_tag_hi
-                            || state_tag_lo != key_tag_lo
+                    instruction::wide::crypto::SHA3BLOCK => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs_state = instruction::wide::rs1(instr);
+                        let rs_block = instruction::wide::rs2(instr);
+                        if self.zk_mode
+                            && (self.registers.tag(rd)
+                                || self.registers.tag(rs_state)
+                                || self.registers.tag(rs_block))
                         {
                             return Err(VMError::PrivacyViolation);
                         }
-                        self.registers.set_tag(rd, state_tag_lo);
-                        self.registers.set_tag(rd + 1, state_tag_lo);
-                    }
-                    let mut state = [0u8; 16];
-                    let s_lo = self.registers.get(rs_state).to_le_bytes();
-                    let s_hi = self.registers.get(rs_state + 1).to_le_bytes();
-                    state[..8].copy_from_slice(&s_lo);
-                    state[8..].copy_from_slice(&s_hi);
-                    let mut rk = [0u8; 16];
-                    let k_lo = self.registers.get(rs_key).to_le_bytes();
-                    let k_hi = self.registers.get(rs_key + 1).to_le_bytes();
-                    rk[..8].copy_from_slice(&k_lo);
-                    rk[8..].copy_from_slice(&k_hi);
-                    let out = crate::aes::aesenc(state, rk);
-                    let lo = u64::from_le_bytes(out[..8].try_into().unwrap());
-                    let hi = u64::from_le_bytes(out[8..].try_into().unwrap());
-                    self.registers.set(rd, lo);
-                    self.registers.set(rd + 1, hi);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::crypto::AESDEC => {
-                    if unlikely(!self.vector_enabled) {
-                        return Err(VMError::VectorExtensionDisabled);
-                    }
-                    let rd = instruction::wide::rd(instr);
-                    let rs_state = instruction::wide::rs1(instr);
-                    let rs_key = instruction::wide::rs2(instr);
-                    if rd + 1 >= 256 || rs_state + 1 >= 256 || rs_key + 1 >= 256 {
-                        return Err(VMError::RegisterOutOfBounds);
-                    }
-                    if self.zk_mode {
-                        let state_tag_lo = self.registers.tag(rs_state);
-                        let state_tag_hi = self.registers.tag(rs_state + 1);
-                        let key_tag_lo = self.registers.tag(rs_key);
-                        let key_tag_hi = self.registers.tag(rs_key + 1);
-                        if state_tag_lo != state_tag_hi
-                            || key_tag_lo != key_tag_hi
-                            || state_tag_lo != key_tag_lo
-                        {
-                            return Err(VMError::PrivacyViolation);
+                        if rd >= 256 || rs_state >= 256 || rs_block >= 256 {
+                            return Err(VMError::RegisterOutOfBounds);
                         }
-                        self.registers.set_tag(rd, state_tag_lo);
-                        self.registers.set_tag(rd + 1, state_tag_lo);
+                        let state_ptr = self.registers.get(rs_state);
+                        let block_ptr = self.registers.get(rs_block);
+                        let out_ptr = self.registers.get(rd);
+                        let mut state = [0u64; 25];
+                        let mut state_bytes = [0u8; 25 * 8];
+                        self.memory.load_bytes(state_ptr, &mut state_bytes)?;
+                        for i in 0..25 {
+                            let mut lane = [0u8; 8];
+                            lane.copy_from_slice(&state_bytes[i * 8..(i + 1) * 8]);
+                            state[i] = u64::from_le_bytes(lane);
+                        }
+                        let mut block = [0u8; 136];
+                        self.memory.load_bytes(block_ptr, &mut block)?;
+                        crate::sha3::sha3_absorb_block(&mut state, &block);
+                        let mut out_bytes = [0u8; 25 * 8];
+                        for i in 0..25 {
+                            out_bytes[i * 8..(i + 1) * 8].copy_from_slice(&state[i].to_le_bytes());
+                        }
+                        self.memory.store_bytes(out_ptr, &out_bytes)?;
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
                     }
-                    let mut state = [0u8; 16];
-                    let s_lo = self.registers.get(rs_state).to_le_bytes();
-                    let s_hi = self.registers.get(rs_state + 1).to_le_bytes();
-                    state[..8].copy_from_slice(&s_lo);
-                    state[8..].copy_from_slice(&s_hi);
-                    let mut rk = [0u8; 16];
-                    let k_lo = self.registers.get(rs_key).to_le_bytes();
-                    let k_hi = self.registers.get(rs_key + 1).to_le_bytes();
-                    rk[..8].copy_from_slice(&k_lo);
-                    rk[8..].copy_from_slice(&k_hi);
-                    let out = crate::aes::aesdec(state, rk);
-                    let lo = u64::from_le_bytes(out[..8].try_into().unwrap());
-                    let hi = u64::from_le_bytes(out[8..].try_into().unwrap());
-                    self.registers.set(rd, lo);
-                    self.registers.set(rd + 1, hi);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::crypto::BLAKE2S => {
-                    use iroha_crypto::blake2::{Blake2s256, Digest as _};
-                    let rd = instruction::wide::rd(instr);
-                    let rs = instruction::wide::rs1(instr);
-                    if self.zk_mode && self.registers.tag(rs) {
-                        return Err(VMError::PrivacyViolation);
-                    }
-                    if rd + 1 >= 256 || rs >= 256 {
-                        return Err(VMError::RegisterOutOfBounds);
-                    }
-                    let ptr = self.registers.get(rs);
-                    let mut input = [0u8; 64];
-                    self.memory.load_bytes(ptr, &mut input)?;
-                    let mut hasher = Blake2s256::new();
-                    hasher.update(input);
-                    let digest = hasher.finalize();
-                    let mut out = [0u8; 32];
-                    out.copy_from_slice(&digest);
-                    let lo = u64::from_le_bytes(out[..8].try_into().unwrap());
-                    let hi = u64::from_le_bytes(out[8..16].try_into().unwrap());
-                    self.registers.set(rd, lo);
-                    self.registers.set(rd + 1, hi);
-                    if self.zk_mode {
-                        self.registers.set_tag(rd, false);
-                        self.registers.set_tag(rd + 1, false);
-                    }
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::crypto::POSEIDON2 => {
-                    let rd = instruction::wide::rd(instr);
-                    let base = instruction::wide::rs1(instr);
-                    let imm = i64::from(i16::from(instruction::wide::imm8(instr)));
-                    if self.zk_mode && self.registers.tag(base) {
-                        return Err(VMError::PrivacyViolation);
-                    }
-                    if rd >= 256 || base >= 256 {
-                        return Err(VMError::RegisterOutOfBounds);
-                    }
-                    let addr = (self.registers.get(base) as i64).wrapping_add(imm) as u64;
-                    let a = self.memory.load_u64(addr)?;
-                    let b = self.memory.load_u64(addr + 8)?;
-                    if self.zk_mode {
-                        let (root, path_a) = self.memory.merkle_root_and_path(addr);
-                        let (_root2, path_b) = self.memory.merkle_root_and_path(addr + 8);
-                        self.mem_log.record(MemEvent::Load {
-                            addr,
-                            value: a as u128,
-                            size: 8,
-                            path: path_a,
-                            root,
-                        });
-                        self.mem_log.record(MemEvent::Load {
-                            addr: addr + 8,
-                            value: b as u128,
-                            size: 8,
-                            path: path_b,
-                            root,
-                        });
-                    }
-                    let res = crate::poseidon::poseidon2(a, b);
-                    self.registers.set(rd, res);
-                    if self.zk_mode {
-                        self.registers.set_tag(rd, false);
-                    }
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::crypto::POSEIDON6 => {
-                    let rd = instruction::wide::rd(instr);
-                    let base = instruction::wide::rs1(instr);
-                    let imm = i64::from(i16::from(instruction::wide::imm8(instr)));
-                    if self.zk_mode && self.registers.tag(base) {
-                        return Err(VMError::PrivacyViolation);
-                    }
-                    if rd >= 256 || base >= 256 {
-                        return Err(VMError::RegisterOutOfBounds);
-                    }
-                    let addr = (self.registers.get(base) as i64).wrapping_add(imm) as u64;
-                    let mut bytes = [0u8; 48];
-                    self.memory.load_bytes(addr, &mut bytes)?;
-                    let mut vals = [0u64; 6];
-                    for (i, slot) in vals.iter_mut().enumerate() {
-                        let off = i * 8;
-                        let word = u64::from_le_bytes(bytes[off..off + 8].try_into().unwrap());
+                    instruction::wide::crypto::AESENC => {
+                        if unlikely(!self.vector_enabled) {
+                            return Err(VMError::VectorExtensionDisabled);
+                        }
+                        let rd = instruction::wide::rd(instr);
+                        let rs_state = instruction::wide::rs1(instr);
+                        let rs_key = instruction::wide::rs2(instr);
+                        if rd + 1 >= 256 || rs_state + 1 >= 256 || rs_key + 1 >= 256 {
+                            return Err(VMError::RegisterOutOfBounds);
+                        }
                         if self.zk_mode {
-                            let (root, path) = self.memory.merkle_root_and_path(addr + off as u64);
-                            self.mem_log.record(MemEvent::Load {
-                                addr: addr + off as u64,
-                                value: word as u128,
-                                size: 8,
-                                path,
-                                root,
-                            });
-                        }
-                        *slot = word;
-                    }
-                    let res = crate::poseidon::poseidon6(vals);
-                    self.registers.set(rd, res);
-                    if self.zk_mode {
-                        self.registers.set_tag(rd, false);
-                    }
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::crypto::PUBKGEN => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs = instruction::wide::rs1(instr);
-                    let secret = self.registers.get(rs);
-                    let res = crate::field::mul(secret, 2);
-                    self.registers.set(rd, res);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::crypto::VALCOM => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    let value = self.registers.get(rs1);
-                    let randomness = self.registers.get(rs2);
-                    let res = crate::pedersen::pedersen_commit_truncated(value, randomness);
-                    self.registers.set(rd, res);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::crypto::ECADD => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    let p = self.registers.get(rs1);
-                    let q = self.registers.get(rs2);
-                    let res = crate::ec::ec_add_truncated(p, q);
-                    self.registers.set(rd, res);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::crypto::ECMUL_VAR => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    let point = self.registers.get(rs1);
-                    let scalar = self.registers.get(rs2);
-                    let res = crate::ec::ec_mul_truncated(point, scalar);
-                    self.registers.set(rd, res);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::crypto::PAIRING => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    let a = self.registers.get(rs1);
-                    let b = self.registers.get(rs2);
-                    let res = crate::ec::pairing_check_truncated(a, b);
-                    self.registers.set(rd, res);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::crypto::ED25519BATCHVERIFY => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    if self.zk_mode && self.registers.tag(rs1) {
-                        return Err(VMError::PrivacyViolation);
-                    }
-                    let mut fail_index = 0u64;
-                    let ok = if let Ok(tlv_req) = self.memory.validate_tlv(self.registers.get(rs1))
-                    {
-                        let is_norito = tlv_req.type_id_raw()
-                            == crate::pointer_abi::PointerType::NoritoBytes as u16;
-                        is_norito
-                            && match norito::decode_from_bytes::<
-                                crate::signature::Ed25519BatchRequest,
-                            >(tlv_req.payload)
+                            let state_tag_lo = self.registers.tag(rs_state);
+                            let state_tag_hi = self.registers.tag(rs_state + 1);
+                            let key_tag_lo = self.registers.tag(rs_key);
+                            let key_tag_hi = self.registers.tag(rs_key + 1);
+                            if state_tag_lo != state_tag_hi
+                                || key_tag_lo != key_tag_hi
+                                || state_tag_lo != key_tag_lo
                             {
-                                Ok(req) => {
-                                    if req.entries.is_empty() {
-                                        false
-                                    } else if req.entries.len() > Self::MAX_ED25519_BATCH_ENTRIES {
-                                        fail_index = req.entries.len() as u64;
-                                        false
-                                    } else {
-                                        let extra_cost = Self::GAS_ED25519_BATCH_PER_ENTRY
-                                            .saturating_mul(req.entries.len() as u64);
-                                        if self.gas_remaining < extra_cost {
-                                            return Err(VMError::OutOfGas);
-                                        }
-                                        self.gas_remaining -= extra_cost;
-
-                                        #[cfg(all(feature = "metal", target_os = "macos"))]
-                                        let batch_result = self
-                                            .verify_ed25519_batch_cuda(&req)
-                                            .or_else(|| self.verify_ed25519_batch_metal(&req));
-                                        #[cfg(not(all(feature = "metal", target_os = "macos")))]
-                                        let batch_result = self.verify_ed25519_batch_cuda(&req);
-
-                                        match batch_result {
-                                            Some(Ok(())) => true,
-                                            Some(Err(index)) => {
-                                                fail_index = index as u64;
-                                                false
+                                return Err(VMError::PrivacyViolation);
+                            }
+                            self.registers.set_tag(rd, state_tag_lo);
+                            self.registers.set_tag(rd + 1, state_tag_lo);
+                        }
+                        let mut state = [0u8; 16];
+                        let s_lo = self.registers.get(rs_state).to_le_bytes();
+                        let s_hi = self.registers.get(rs_state + 1).to_le_bytes();
+                        state[..8].copy_from_slice(&s_lo);
+                        state[8..].copy_from_slice(&s_hi);
+                        let mut rk = [0u8; 16];
+                        let k_lo = self.registers.get(rs_key).to_le_bytes();
+                        let k_hi = self.registers.get(rs_key + 1).to_le_bytes();
+                        rk[..8].copy_from_slice(&k_lo);
+                        rk[8..].copy_from_slice(&k_hi);
+                        let out = crate::aes::aesenc(state, rk);
+                        let lo = u64::from_le_bytes(out[..8].try_into().unwrap());
+                        let hi = u64::from_le_bytes(out[8..].try_into().unwrap());
+                        self.registers.set(rd, lo);
+                        self.registers.set(rd + 1, hi);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::crypto::AESDEC => {
+                        if unlikely(!self.vector_enabled) {
+                            return Err(VMError::VectorExtensionDisabled);
+                        }
+                        let rd = instruction::wide::rd(instr);
+                        let rs_state = instruction::wide::rs1(instr);
+                        let rs_key = instruction::wide::rs2(instr);
+                        if rd + 1 >= 256 || rs_state + 1 >= 256 || rs_key + 1 >= 256 {
+                            return Err(VMError::RegisterOutOfBounds);
+                        }
+                        if self.zk_mode {
+                            let state_tag_lo = self.registers.tag(rs_state);
+                            let state_tag_hi = self.registers.tag(rs_state + 1);
+                            let key_tag_lo = self.registers.tag(rs_key);
+                            let key_tag_hi = self.registers.tag(rs_key + 1);
+                            if state_tag_lo != state_tag_hi
+                                || key_tag_lo != key_tag_hi
+                                || state_tag_lo != key_tag_lo
+                            {
+                                return Err(VMError::PrivacyViolation);
+                            }
+                            self.registers.set_tag(rd, state_tag_lo);
+                            self.registers.set_tag(rd + 1, state_tag_lo);
+                        }
+                        let mut state = [0u8; 16];
+                        let s_lo = self.registers.get(rs_state).to_le_bytes();
+                        let s_hi = self.registers.get(rs_state + 1).to_le_bytes();
+                        state[..8].copy_from_slice(&s_lo);
+                        state[8..].copy_from_slice(&s_hi);
+                        let mut rk = [0u8; 16];
+                        let k_lo = self.registers.get(rs_key).to_le_bytes();
+                        let k_hi = self.registers.get(rs_key + 1).to_le_bytes();
+                        rk[..8].copy_from_slice(&k_lo);
+                        rk[8..].copy_from_slice(&k_hi);
+                        let out = crate::aes::aesdec(state, rk);
+                        let lo = u64::from_le_bytes(out[..8].try_into().unwrap());
+                        let hi = u64::from_le_bytes(out[8..].try_into().unwrap());
+                        self.registers.set(rd, lo);
+                        self.registers.set(rd + 1, hi);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::crypto::BLAKE2S => {
+                        use iroha_crypto::blake2::{Blake2s256, Digest as _};
+                        let rd = instruction::wide::rd(instr);
+                        let rs = instruction::wide::rs1(instr);
+                        if self.zk_mode && self.registers.tag(rs) {
+                            return Err(VMError::PrivacyViolation);
+                        }
+                        if rd + 1 >= 256 || rs >= 256 {
+                            return Err(VMError::RegisterOutOfBounds);
+                        }
+                        let ptr = self.registers.get(rs);
+                        let mut input = [0u8; 64];
+                        self.memory.load_bytes(ptr, &mut input)?;
+                        let mut hasher = Blake2s256::new();
+                        hasher.update(input);
+                        let digest = hasher.finalize();
+                        let mut out = [0u8; 32];
+                        out.copy_from_slice(&digest);
+                        let lo = u64::from_le_bytes(out[..8].try_into().unwrap());
+                        let hi = u64::from_le_bytes(out[8..16].try_into().unwrap());
+                        self.registers.set(rd, lo);
+                        self.registers.set(rd + 1, hi);
+                        if self.zk_mode {
+                            self.registers.set_tag(rd, false);
+                            self.registers.set_tag(rd + 1, false);
+                        }
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::crypto::POSEIDON2 => {
+                        let rd = instruction::wide::rd(instr);
+                        let base = instruction::wide::rs1(instr);
+                        let imm = i64::from(i16::from(instruction::wide::imm8(instr)));
+                        if self.zk_mode && self.registers.tag(base) {
+                            return Err(VMError::PrivacyViolation);
+                        }
+                        if rd >= 256 || base >= 256 {
+                            return Err(VMError::RegisterOutOfBounds);
+                        }
+                        let addr = (self.registers.get(base) as i64).wrapping_add(imm) as u64;
+                        let a = self.memory.load_u64(addr)?;
+                        let b = self.memory.load_u64(addr + 8)?;
+                        if self.zk_mode {
+                            let (root, path_a) = self.memory.merkle_root_and_path(addr);
+                            let (_root2, path_b) = self.memory.merkle_root_and_path(addr + 8);
+                            self.mem_log.record(MemEvent::Load {
+                                addr,
+                                value: a as u128,
+                                size: 8,
+                                path: path_a,
+                                root,
+                            });
+                            self.mem_log.record(MemEvent::Load {
+                                addr: addr + 8,
+                                value: b as u128,
+                                size: 8,
+                                path: path_b,
+                                root,
+                            });
+                        }
+                        let res = crate::poseidon::poseidon2(a, b);
+                        self.registers.set(rd, res);
+                        if self.zk_mode {
+                            self.registers.set_tag(rd, false);
+                        }
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::crypto::POSEIDON6 => {
+                        let rd = instruction::wide::rd(instr);
+                        let base = instruction::wide::rs1(instr);
+                        let imm = i64::from(i16::from(instruction::wide::imm8(instr)));
+                        if self.zk_mode && self.registers.tag(base) {
+                            return Err(VMError::PrivacyViolation);
+                        }
+                        if rd >= 256 || base >= 256 {
+                            return Err(VMError::RegisterOutOfBounds);
+                        }
+                        let addr = (self.registers.get(base) as i64).wrapping_add(imm) as u64;
+                        let mut bytes = [0u8; 48];
+                        self.memory.load_bytes(addr, &mut bytes)?;
+                        let mut vals = [0u64; 6];
+                        for (i, slot) in vals.iter_mut().enumerate() {
+                            let off = i * 8;
+                            let word = u64::from_le_bytes(bytes[off..off + 8].try_into().unwrap());
+                            if self.zk_mode {
+                                let (root, path) =
+                                    self.memory.merkle_root_and_path(addr + off as u64);
+                                self.mem_log.record(MemEvent::Load {
+                                    addr: addr + off as u64,
+                                    value: word as u128,
+                                    size: 8,
+                                    path,
+                                    root,
+                                });
+                            }
+                            *slot = word;
+                        }
+                        let res = crate::poseidon::poseidon6(vals);
+                        self.registers.set(rd, res);
+                        if self.zk_mode {
+                            self.registers.set_tag(rd, false);
+                        }
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::crypto::PUBKGEN => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs = instruction::wide::rs1(instr);
+                        let secret = self.registers.get(rs);
+                        let res = crate::field::mul(secret, 2);
+                        self.registers.set(rd, res);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::crypto::VALCOM => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        let value = self.registers.get(rs1);
+                        let randomness = self.registers.get(rs2);
+                        let res = crate::pedersen::pedersen_commit_truncated(value, randomness);
+                        self.registers.set(rd, res);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::crypto::ECADD => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        let p = self.registers.get(rs1);
+                        let q = self.registers.get(rs2);
+                        let res = crate::ec::ec_add_truncated(p, q);
+                        self.registers.set(rd, res);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::crypto::ECMUL_VAR => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        let point = self.registers.get(rs1);
+                        let scalar = self.registers.get(rs2);
+                        let res = crate::ec::ec_mul_truncated(point, scalar);
+                        self.registers.set(rd, res);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::crypto::PAIRING => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        let a = self.registers.get(rs1);
+                        let b = self.registers.get(rs2);
+                        let res = crate::ec::pairing_check_truncated(a, b);
+                        self.registers.set(rd, res);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::crypto::ED25519BATCHVERIFY => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        if self.zk_mode && self.registers.tag(rs1) {
+                            return Err(VMError::PrivacyViolation);
+                        }
+                        let mut fail_index = 0u64;
+                        let ok = if let Ok(tlv_req) =
+                            self.memory.validate_tlv(self.registers.get(rs1))
+                        {
+                            let is_norito = tlv_req.type_id_raw()
+                                == crate::pointer_abi::PointerType::NoritoBytes as u16;
+                            is_norito
+                                && match norito::decode_from_bytes::<
+                                    crate::signature::Ed25519BatchRequest,
+                                >(tlv_req.payload)
+                                {
+                                    Ok(req) => {
+                                        if req.entries.is_empty() {
+                                            false
+                                        } else if req.entries.len()
+                                            > Self::MAX_ED25519_BATCH_ENTRIES
+                                        {
+                                            fail_index = req.entries.len() as u64;
+                                            false
+                                        } else {
+                                            let extra_cost = Self::GAS_ED25519_BATCH_PER_ENTRY
+                                                .saturating_mul(req.entries.len() as u64);
+                                            if self.gas_remaining < extra_cost {
+                                                return Err(VMError::OutOfGas);
                                             }
-                                            None => match crate::signature::verify_ed25519_batch(
-                                                &req,
-                                                Self::MAX_ED25519_BATCH_ENTRIES,
-                                            ) {
-                                                Ok(()) => true,
-                                                Err(err) => {
-                                                    fail_index = match err {
+                                            self.gas_remaining -= extra_cost;
+
+                                            #[cfg(all(feature = "metal", target_os = "macos"))]
+                                            let batch_result = self
+                                                .verify_ed25519_batch_cuda(&req)
+                                                .or_else(|| self.verify_ed25519_batch_metal(&req));
+                                            #[cfg(not(all(
+                                                feature = "metal",
+                                                target_os = "macos"
+                                            )))]
+                                            let batch_result = self.verify_ed25519_batch_cuda(&req);
+
+                                            match batch_result {
+                                                Some(Ok(())) => true,
+                                                Some(Err(index)) => {
+                                                    fail_index = index as u64;
+                                                    false
+                                                }
+                                                None => {
+                                                    match crate::signature::verify_ed25519_batch(
+                                                        &req,
+                                                        Self::MAX_ED25519_BATCH_ENTRIES,
+                                                    ) {
+                                                        Ok(()) => true,
+                                                        Err(err) => {
+                                                            fail_index = match err {
                                                         crate::signature::Ed25519BatchError::Empty => 0,
                                                         crate::signature::Ed25519BatchError::TooMany { actual, .. } => {
                                                             actual as u64
@@ -4477,326 +4618,335 @@ impl IVM {
                                                             index,
                                                         } => index as u64,
                                                     };
-                                                    false
+                                                            false
+                                                        }
+                                                    }
                                                 }
-                                            },
+                                            }
                                         }
                                     }
+                                    Err(_) => false,
                                 }
-                                Err(_) => false,
-                            }
-                    } else {
-                        false
-                    };
-                    self.registers.set(rd, if ok { 1 } else { 0 });
-                    self.registers.set(rs2, fail_index);
-                    if self.zk_mode {
-                        self.registers.set_tag(rd, false);
-                        self.registers.set_tag(rs2, false);
-                    }
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::crypto::ED25519VERIFY => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    if self.zk_mode
-                        && (self.registers.tag(rd)
-                            || self.registers.tag(rs1)
-                            || self.registers.tag(rs2))
-                    {
-                        return Err(VMError::PrivacyViolation);
-                    }
-                    let msg_ptr = self.registers.get(rs1);
-                    let sig_ptr = self.registers.get(rs2);
-                    let pk_ptr = self.registers.get(rd);
-                    let ok = if let (Ok(tlv_msg), Ok(tlv_sig), Ok(tlv_pk)) = (
-                        self.memory.validate_tlv(msg_ptr),
-                        self.memory.validate_tlv(sig_ptr),
-                        self.memory.validate_tlv(pk_ptr),
-                    ) {
-                        let types_ok = tlv_msg.type_id_raw()
-                            == crate::pointer_abi::PointerType::Blob as u16
-                            && tlv_sig.type_id_raw()
-                                == crate::pointer_abi::PointerType::Blob as u16
-                            && tlv_pk.type_id_raw() == crate::pointer_abi::PointerType::Blob as u16;
-                        types_ok
-                            && crate::signature::verify_signature(
-                                crate::signature::SignatureScheme::Ed25519,
-                                tlv_msg.payload,
-                                tlv_sig.payload,
-                                tlv_pk.payload,
-                            )
-                    } else {
-                        false
-                    };
-                    self.registers.set(rd, if ok { 1 } else { 0 });
-                    if self.zk_mode {
-                        self.registers.set_tag(rd, false);
-                    }
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::crypto::ECDSAVERIFY => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    if self.zk_mode
-                        && (self.registers.tag(rd)
-                            || self.registers.tag(rs1)
-                            || self.registers.tag(rs2))
-                    {
-                        return Err(VMError::PrivacyViolation);
-                    }
-                    let msg_ptr = self.registers.get(rs1);
-                    let sig_ptr = self.registers.get(rs2);
-                    let pk_ptr = self.registers.get(rd);
-                    let ok = if let (Ok(tlv_msg), Ok(tlv_sig), Ok(tlv_pk)) = (
-                        self.memory.validate_tlv(msg_ptr),
-                        self.memory.validate_tlv(sig_ptr),
-                        self.memory.validate_tlv(pk_ptr),
-                    ) {
-                        let types_ok = tlv_msg.type_id_raw()
-                            == crate::pointer_abi::PointerType::Blob as u16
-                            && tlv_sig.type_id_raw()
-                                == crate::pointer_abi::PointerType::Blob as u16
-                            && tlv_pk.type_id_raw() == crate::pointer_abi::PointerType::Blob as u16;
-                        types_ok
-                            && crate::signature::verify_signature(
-                                crate::signature::SignatureScheme::Secp256k1,
-                                tlv_msg.payload,
-                                tlv_sig.payload,
-                                tlv_pk.payload,
-                            )
-                    } else {
-                        false
-                    };
-                    self.registers.set(rd, if ok { 1 } else { 0 });
-                    if self.zk_mode {
-                        self.registers.set_tag(rd, false);
-                    }
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::crypto::DILITHIUMVERIFY => {
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    if self.zk_mode
-                        && (self.registers.tag(rd)
-                            || self.registers.tag(rs1)
-                            || self.registers.tag(rs2))
-                    {
-                        return Err(VMError::PrivacyViolation);
-                    }
-                    let msg_ptr = self.registers.get(rs1);
-                    let sig_ptr = self.registers.get(rs2);
-                    let pk_ptr = self.registers.get(rd);
-                    let ok = if let (Ok(tlv_msg), Ok(tlv_sig), Ok(tlv_pk)) = (
-                        self.memory.validate_tlv(msg_ptr),
-                        self.memory.validate_tlv(sig_ptr),
-                        self.memory.validate_tlv(pk_ptr),
-                    ) {
-                        let types_ok = tlv_msg.type_id_raw()
-                            == crate::pointer_abi::PointerType::Blob as u16
-                            && tlv_sig.type_id_raw()
-                                == crate::pointer_abi::PointerType::Blob as u16
-                            && tlv_pk.type_id_raw() == crate::pointer_abi::PointerType::Blob as u16;
-                        types_ok
-                            && crate::signature::verify_signature(
-                                crate::signature::SignatureScheme::MlDsa,
-                                tlv_msg.payload,
-                                tlv_sig.payload,
-                                tlv_pk.payload,
-                            )
-                    } else {
-                        false
-                    };
-                    self.registers.set(rd, if ok { 1 } else { 0 });
-                    if self.zk_mode {
-                        self.registers.set_tag(rd, false);
-                    }
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::zk::ASSERT => {
-                    if unlikely(!self.zk_mode) {
-                        return Err(VMError::ZkExtensionDisabled);
-                    }
-                    let rs = instruction::wide::rs1(instr);
-                    self.constraints.record(Constraint::Zero {
-                        reg: rs,
-                        cycle: self.cycles,
-                    });
-                    let value = self.registers.get(rs);
-                    if value != 0 {
-                        self.constraint_failed = true;
-                    }
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::zk::ASSERT_EQ => {
-                    if unlikely(!self.zk_mode) {
-                        return Err(VMError::ZkExtensionDisabled);
-                    }
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    self.constraints.record(Constraint::Eq {
-                        reg1: rs1,
-                        reg2: rs2,
-                        cycle: self.cycles,
-                    });
-                    let v1 = self.registers.get(rs1);
-                    let v2 = self.registers.get(rs2);
-                    if v1 != v2 {
-                        self.constraint_failed = true;
-                    }
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::zk::FADD => {
-                    if unlikely(!self.zk_mode) {
-                        return Err(VMError::ZkExtensionDisabled);
-                    }
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    let v1 = self.registers.get(rs1);
-                    let v2 = self.registers.get(rs2);
-                    let res = crate::field::add(v1, v2);
-                    self.registers.set(rd, res);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::zk::FSUB => {
-                    if unlikely(!self.zk_mode) {
-                        return Err(VMError::ZkExtensionDisabled);
-                    }
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    let v1 = self.registers.get(rs1);
-                    let v2 = self.registers.get(rs2);
-                    let res = crate::field::sub(v1, v2);
-                    self.registers.set(rd, res);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::zk::FMUL => {
-                    if unlikely(!self.zk_mode) {
-                        return Err(VMError::ZkExtensionDisabled);
-                    }
-                    let rd = instruction::wide::rd(instr);
-                    let rs1 = instruction::wide::rs1(instr);
-                    let rs2 = instruction::wide::rs2(instr);
-                    let v1 = self.registers.get(rs1);
-                    let v2 = self.registers.get(rs2);
-                    let res = crate::field::mul(v1, v2);
-                    self.registers.set(rd, res);
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::zk::FINV => {
-                    if unlikely(!self.zk_mode) {
-                        return Err(VMError::ZkExtensionDisabled);
-                    }
-                    let rd = instruction::wide::rd(instr);
-                    let rs = instruction::wide::rs1(instr);
-                    let value = self.registers.get(rs);
-                    match crate::field::inv(value) {
-                        Some(inv) => self.registers.set(rd, inv),
-                        None => {
-                            self.constraint_failed = true;
-                        }
-                    }
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::zk::ASSERT_RANGE => {
-                    if unlikely(!self.zk_mode) {
-                        return Err(VMError::ZkExtensionDisabled);
-                    }
-                    let rs = instruction::wide::rs1(instr);
-                    let imm = instruction::wide::imm8(instr) as u8;
-                    self.constraints.record(Constraint::Range {
-                        reg: rs,
-                        bits: imm,
-                        cycle: self.cycles,
-                    });
-                    if imm <= 64 {
-                        let mask = if imm == 64 {
-                            u64::MAX
                         } else {
-                            (1u64 << imm) - 1
+                            false
                         };
+                        self.registers.set(rd, if ok { 1 } else { 0 });
+                        self.registers.set(rs2, fail_index);
+                        if self.zk_mode {
+                            self.registers.set_tag(rd, false);
+                            self.registers.set_tag(rs2, false);
+                        }
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::crypto::ED25519VERIFY => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        if self.zk_mode
+                            && (self.registers.tag(rd)
+                                || self.registers.tag(rs1)
+                                || self.registers.tag(rs2))
+                        {
+                            return Err(VMError::PrivacyViolation);
+                        }
+                        let msg_ptr = self.registers.get(rs1);
+                        let sig_ptr = self.registers.get(rs2);
+                        let pk_ptr = self.registers.get(rd);
+                        let ok = if let (Ok(tlv_msg), Ok(tlv_sig), Ok(tlv_pk)) = (
+                            self.memory.validate_tlv(msg_ptr),
+                            self.memory.validate_tlv(sig_ptr),
+                            self.memory.validate_tlv(pk_ptr),
+                        ) {
+                            let types_ok = tlv_msg.type_id_raw()
+                                == crate::pointer_abi::PointerType::Blob as u16
+                                && tlv_sig.type_id_raw()
+                                    == crate::pointer_abi::PointerType::Blob as u16
+                                && tlv_pk.type_id_raw()
+                                    == crate::pointer_abi::PointerType::Blob as u16;
+                            types_ok
+                                && crate::signature::verify_signature(
+                                    crate::signature::SignatureScheme::Ed25519,
+                                    tlv_msg.payload,
+                                    tlv_sig.payload,
+                                    tlv_pk.payload,
+                                )
+                        } else {
+                            false
+                        };
+                        self.registers.set(rd, if ok { 1 } else { 0 });
+                        if self.zk_mode {
+                            self.registers.set_tag(rd, false);
+                        }
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::crypto::ECDSAVERIFY => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        if self.zk_mode
+                            && (self.registers.tag(rd)
+                                || self.registers.tag(rs1)
+                                || self.registers.tag(rs2))
+                        {
+                            return Err(VMError::PrivacyViolation);
+                        }
+                        let msg_ptr = self.registers.get(rs1);
+                        let sig_ptr = self.registers.get(rs2);
+                        let pk_ptr = self.registers.get(rd);
+                        let ok = if let (Ok(tlv_msg), Ok(tlv_sig), Ok(tlv_pk)) = (
+                            self.memory.validate_tlv(msg_ptr),
+                            self.memory.validate_tlv(sig_ptr),
+                            self.memory.validate_tlv(pk_ptr),
+                        ) {
+                            let types_ok = tlv_msg.type_id_raw()
+                                == crate::pointer_abi::PointerType::Blob as u16
+                                && tlv_sig.type_id_raw()
+                                    == crate::pointer_abi::PointerType::Blob as u16
+                                && tlv_pk.type_id_raw()
+                                    == crate::pointer_abi::PointerType::Blob as u16;
+                            types_ok
+                                && crate::signature::verify_signature(
+                                    crate::signature::SignatureScheme::Secp256k1,
+                                    tlv_msg.payload,
+                                    tlv_sig.payload,
+                                    tlv_pk.payload,
+                                )
+                        } else {
+                            false
+                        };
+                        self.registers.set(rd, if ok { 1 } else { 0 });
+                        if self.zk_mode {
+                            self.registers.set_tag(rd, false);
+                        }
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::crypto::DILITHIUMVERIFY => {
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        if self.zk_mode
+                            && (self.registers.tag(rd)
+                                || self.registers.tag(rs1)
+                                || self.registers.tag(rs2))
+                        {
+                            return Err(VMError::PrivacyViolation);
+                        }
+                        let msg_ptr = self.registers.get(rs1);
+                        let sig_ptr = self.registers.get(rs2);
+                        let pk_ptr = self.registers.get(rd);
+                        let ok = if let (Ok(tlv_msg), Ok(tlv_sig), Ok(tlv_pk)) = (
+                            self.memory.validate_tlv(msg_ptr),
+                            self.memory.validate_tlv(sig_ptr),
+                            self.memory.validate_tlv(pk_ptr),
+                        ) {
+                            let types_ok = tlv_msg.type_id_raw()
+                                == crate::pointer_abi::PointerType::Blob as u16
+                                && tlv_sig.type_id_raw()
+                                    == crate::pointer_abi::PointerType::Blob as u16
+                                && tlv_pk.type_id_raw()
+                                    == crate::pointer_abi::PointerType::Blob as u16;
+                            types_ok
+                                && crate::signature::verify_signature(
+                                    crate::signature::SignatureScheme::MlDsa,
+                                    tlv_msg.payload,
+                                    tlv_sig.payload,
+                                    tlv_pk.payload,
+                                )
+                        } else {
+                            false
+                        };
+                        self.registers.set(rd, if ok { 1 } else { 0 });
+                        if self.zk_mode {
+                            self.registers.set_tag(rd, false);
+                        }
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::zk::ASSERT => {
+                        if unlikely(!self.zk_mode) {
+                            return Err(VMError::ZkExtensionDisabled);
+                        }
+                        let rs = instruction::wide::rs1(instr);
+                        self.constraints.record(Constraint::Zero {
+                            reg: rs,
+                            cycle: self.cycles,
+                        });
                         let value = self.registers.get(rs);
-                        if value & !mask != 0 {
+                        if value != 0 {
                             self.constraint_failed = true;
                         }
-                    } else {
-                        self.constraint_failed = true;
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
                     }
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                instruction::wide::crypto::PARBEGIN | instruction::wide::crypto::PAREND => {
-                    // Parallel sections are markers; no state change required.
-                    self.pc = self.pc.wrapping_add(length as u64);
-                    self.cycles += 1;
-                    continue;
-                }
-                _ => {
-                    if crate::dev_env::debug_invalid_enabled() {
-                        eprintln!(
-                            "[invalid wide opcode] pc=0x{pc:08x} instr=0x{ins:08x} op_lo=0x{op_lo:02x} op_hi=0x{op_hi:02x}",
-                            pc = self.pc,
-                            ins = instr,
-                            op_lo = opcode,
-                            op_hi = wide_op,
-                        );
+                    instruction::wide::zk::ASSERT_EQ => {
+                        if unlikely(!self.zk_mode) {
+                            return Err(VMError::ZkExtensionDisabled);
+                        }
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        self.constraints.record(Constraint::Eq {
+                            reg1: rs1,
+                            reg2: rs2,
+                            cycle: self.cycles,
+                        });
+                        let v1 = self.registers.get(rs1);
+                        let v2 = self.registers.get(rs2);
+                        if v1 != v2 {
+                            self.constraint_failed = true;
+                        }
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
                     }
-                    return Err(VMError::InvalidOpcode((instr & 0xFFFF) as u16));
+                    instruction::wide::zk::FADD => {
+                        if unlikely(!self.zk_mode) {
+                            return Err(VMError::ZkExtensionDisabled);
+                        }
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        let v1 = self.registers.get(rs1);
+                        let v2 = self.registers.get(rs2);
+                        let res = crate::field::add(v1, v2);
+                        self.registers.set(rd, res);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::zk::FSUB => {
+                        if unlikely(!self.zk_mode) {
+                            return Err(VMError::ZkExtensionDisabled);
+                        }
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        let v1 = self.registers.get(rs1);
+                        let v2 = self.registers.get(rs2);
+                        let res = crate::field::sub(v1, v2);
+                        self.registers.set(rd, res);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::zk::FMUL => {
+                        if unlikely(!self.zk_mode) {
+                            return Err(VMError::ZkExtensionDisabled);
+                        }
+                        let rd = instruction::wide::rd(instr);
+                        let rs1 = instruction::wide::rs1(instr);
+                        let rs2 = instruction::wide::rs2(instr);
+                        let v1 = self.registers.get(rs1);
+                        let v2 = self.registers.get(rs2);
+                        let res = crate::field::mul(v1, v2);
+                        self.registers.set(rd, res);
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::zk::FINV => {
+                        if unlikely(!self.zk_mode) {
+                            return Err(VMError::ZkExtensionDisabled);
+                        }
+                        let rd = instruction::wide::rd(instr);
+                        let rs = instruction::wide::rs1(instr);
+                        let value = self.registers.get(rs);
+                        match crate::field::inv(value) {
+                            Some(inv) => self.registers.set(rd, inv),
+                            None => {
+                                self.constraint_failed = true;
+                            }
+                        }
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::zk::ASSERT_RANGE => {
+                        if unlikely(!self.zk_mode) {
+                            return Err(VMError::ZkExtensionDisabled);
+                        }
+                        let rs = instruction::wide::rs1(instr);
+                        let imm = instruction::wide::imm8(instr) as u8;
+                        self.constraints.record(Constraint::Range {
+                            reg: rs,
+                            bits: imm,
+                            cycle: self.cycles,
+                        });
+                        if imm <= 64 {
+                            let mask = if imm == 64 {
+                                u64::MAX
+                            } else {
+                                (1u64 << imm) - 1
+                            };
+                            let value = self.registers.get(rs);
+                            if value & !mask != 0 {
+                                self.constraint_failed = true;
+                            }
+                        } else {
+                            self.constraint_failed = true;
+                        }
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    instruction::wide::crypto::PARBEGIN | instruction::wide::crypto::PAREND => {
+                        // Parallel sections are markers; no state change required.
+                        self.pc = self.pc.wrapping_add(length as u64);
+                        self.cycles += 1;
+                        continue;
+                    }
+                    _ => {
+                        if crate::dev_env::debug_invalid_enabled() {
+                            eprintln!(
+                                "[invalid wide opcode] pc=0x{pc:08x} instr=0x{ins:08x} op_lo=0x{op_lo:02x} op_hi=0x{op_hi:02x}",
+                                pc = self.pc,
+                                ins = instr,
+                                op_lo = opcode,
+                                op_hi = wide_op,
+                            );
+                        }
+                        return Err(VMError::InvalidOpcode((instr & 0xFFFF) as u16));
+                    }
                 }
             }
-        }
 
-        if !ilp_block.is_empty() {
-            self.execute_block_parallel(&ilp_block)?;
-            self.cycles += ilp_block.len() as u64;
-        }
-        // If we exit the loop early, pad the trace so that prover and verifier
-        // observe exactly `max_cycles` steps when zero‑knowledge mode is enabled.
-        if self.zk_mode && self.max_cycles != 0 && self.cycles < self.max_cycles {
-            // Append dummy cycles (treated as NOPs) until the target length is
-            // reached. Each padded cycle still costs one unit of gas.
-            let remaining = self.max_cycles - self.cycles;
-            self.cycles = self.max_cycles;
-            // Padding instructions still consume gas like NOPs (cost 1 each)
-            if self.gas_remaining < remaining {
-                return Err(VMError::OutOfGas);
-            } else {
-                self.gas_remaining -= remaining;
+            if !ilp_block.is_empty() {
+                self.execute_block_parallel(&ilp_block)?;
+                self.cycles += ilp_block.len() as u64;
             }
-            self.flush_cycle_logs(&mut last_logged_cycle);
+            // If we exit the loop early, pad the trace so that prover and verifier
+            // observe exactly `max_cycles` steps when zero‑knowledge mode is enabled.
+            if self.zk_mode && self.max_cycles != 0 && self.cycles < self.max_cycles {
+                // Append dummy cycles (treated as NOPs) until the target length is
+                // reached. Each padded cycle still costs one unit of gas.
+                let remaining = self.max_cycles - self.cycles;
+                self.cycles = self.max_cycles;
+                // Padding instructions still consume gas like NOPs (cost 1 each)
+                if self.gas_remaining < remaining {
+                    return Err(VMError::OutOfGas);
+                } else {
+                    self.gas_remaining -= remaining;
+                }
+                self.flush_cycle_logs(&mut last_logged_cycle);
+            }
+            self.memory.commit();
+            if self.constraint_failed {
+                Err(VMError::AssertionFailed)
+            } else {
+                Ok(())
+            }
+        })();
+        if let Err(err) = &result {
+            self.last_diagnostic = Some(self.build_execution_diagnostic(err));
         }
-        self.memory.commit();
-        if self.constraint_failed {
-            Err(VMError::AssertionFailed)
-        } else {
-            Ok(())
-        }
+        result
     }
 
     /// Get the number of cycles executed in the last `run()`.
@@ -5900,6 +6050,37 @@ mod tests {
         vm.reset_predecode_misses();
         vm.run().expect("second run succeeds");
         assert_eq!(vm.predecode_misses(), 0);
+    }
+
+    #[test]
+    fn runtime_trap_populates_last_diagnostic() {
+        set_banner_enabled(false);
+        let source = r#"
+seiyaku Demo {
+  hajimari() {
+    let x = 1;
+  }
+}
+"#;
+        let compiler = crate::KotodamaCompiler::new();
+        let (program, _manifest) = compiler
+            .compile_source_with_manifest(source)
+            .expect("compile kotodama source");
+        let mut vm = IVM::new(0);
+        vm.load_program(&program).expect("load compiled program");
+        let err = vm.run().expect_err("zero gas should trap");
+        assert_eq!(err, VMError::OutOfGas);
+        let diag = vm.last_diagnostic().expect("diagnostic should be captured");
+        assert_eq!(diag.trap_kind, VmTrapKind::OutOfGas);
+        assert_eq!(diag.budget.gas_limit, 0);
+        assert_eq!(diag.context.entrypoint_pc, Some(vm.pc()));
+        assert!(
+            diag.source
+                .as_ref()
+                .and_then(|source| source.line)
+                .is_some(),
+            "compiled programs should carry function-level source locations"
+        );
     }
 
     #[test]

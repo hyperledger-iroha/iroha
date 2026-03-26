@@ -241,7 +241,7 @@ Norito انکوڈر میں `ConfidentialEncryptedPayload`
 - فی اکاؤنٹ کلیدی مشتق درجہ بندی:
   - `sk_spend` → `nk` (nullifier KEY) ، `ivk` (آنے والی دیکھنے کی کلید) ، `ovk` (سبکدوش ہونے والی دیکھنے کی کلید) ، `fvk`۔
 - خفیہ کردہ نوٹ پے لوڈ ECDH سے ماخوذ مشترکہ چابیاں کے ساتھ AEAD استعمال کرتے ہیں۔ اختیاری آڈیٹر ویو کیز ہر اثاثہ پالیسی کے آؤٹ پٹس کے ساتھ منسلک ہوسکتی ہیں۔
-- CLI اضافے: `confidential create-keys` ، `confidential send` ، `confidential export-view-key` ، میمو کو ڈکرپٹنگ کے لئے آڈیٹر ٹولنگ ، اور Norito میمو لفافوں کو آف لائن تیار کرنے/معائنہ کرنے کے لئے `iroha app zk envelope` مددگار۔ Torii ایک ہی مشتق بہاؤ کو `POST /v1/confidential/derive-keyset` کے ذریعے بے نقاب کرتا ہے ، ہیکس اور بیس 64 دونوں فارموں کو واپس کرتا ہے تاکہ بٹوے اہم درجہ بندی کو پروگرام میں لایا جاسکے۔
+- CLI اضافے: `confidential create-keys` ، `confidential send` ، `confidential export-view-key` ، میمو کو ڈکرپٹنگ کے لئے آڈیٹر ٹولنگ ، اور Norito میمو لفافوں کو آف لائن تیار کرنے/معائنہ کرنے کے لئے `iroha app zk envelope` مددگار۔
 
 ## گیس ، حدود اور ڈاس کنٹرولز
 - گیس کا تعی .ن شیڈول:
@@ -426,7 +426,7 @@ import {
 
 const unsigned = buildRegisterZkAssetTransaction({
   registration: {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: {
       commit_params: "vk_shield",

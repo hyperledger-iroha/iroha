@@ -69,7 +69,7 @@ Sidebar_label: تشغيل الدليل والإلغاء
      --base64-out=dispute.b64 \
      --json-out=dispute_summary.json \
      --request-out=dispute_request.json \
-     --authority=i105... \
+     --authority=<i105-account-id> \
      --private-key=ed25519:<key>
    ```3. راجع `dispute_summary.json` ( تأكد من النوع، ملخص الأدلة، والطوابع الزمنية).
 4. أرسل طلب JSON إلى Torii `/v1/sorafs/capacity/dispute` عبر الطابور التداولي. قطّر قيمة القيمة `dispute_id_hex`؛ فهي تثبّت إجراءات الإلغاء اللاحقة وتقارير التدقيق.

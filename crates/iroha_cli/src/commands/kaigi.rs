@@ -681,8 +681,8 @@ mod tests {
     use clap::Parser;
     use std::path::Path;
 
-    const HOST_ACCOUNT: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
-    const PARTICIPANT_ACCOUNT: &str = "6cmzPVPX7WxKCts6hciUhyLdu7eZ7ZoHVuXXQ4YijdycaXbKykgP8jV";
+    const HOST_ACCOUNT: &str = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
+    const PARTICIPANT_ACCOUNT: &str = "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D";
 
     #[derive(Parser, Debug)]
     struct TestCli {

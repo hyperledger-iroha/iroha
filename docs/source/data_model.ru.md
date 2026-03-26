@@ -31,9 +31,9 @@ translator: machine-google-reviewed
 - `IdBox`: конверт типа суммы для любого поддерживаемого идентификатора (`DomainId`, `AccountId`, `AssetDefinitionId`, `AssetId`, `NftId`, `PeerId`, `TriggerId`, `RoleId`, `Permission`, `CustomParameterId`). Полезно для общих потоков и кодирования Norito как одного типа.
 - `ChainId`: непрозрачный идентификатор цепочки, используемый для защиты от повтора в транзакциях.Строковые формы идентификаторов (возможны двусторонние действия с `Display`/`FromStr`):
 - `DomainId`: `name` (например, `wonderland`).
-- `AccountId`: канонический идентификатор учетной записи без домена, закодированный с помощью `AccountAddress` только как I105. Входные данные парсера должны быть каноническими I105; суффиксы домена (`@domain`), канонические литералы I105, литералы псевдонимов, канонические входные данные шестнадцатеричного анализатора, устаревшие полезные нагрузки `norito:` и формы анализатора учетных записей `uaid:`/`opaque:` отклоняются.
+- `AccountId`: канонический идентификатор учетной записи без домена, закодированный с помощью `AccountAddress` только как i105. Входные данные парсера должны быть каноническими i105; суффиксы домена (`@domain`), канонические литералы i105, литералы псевдонимов, канонические входные данные шестнадцатеричного анализатора, устаревшие полезные нагрузки `norito:` и формы анализатора учетных записей `uaid:`/`opaque:` отклоняются.
 - `AssetDefinitionId`: канонический `unprefixed Base58 address with versioning and checksum` (байты UUID-v4).
-- `AssetId`: канонический литерал `<asset-definition-id>#<account-id>` (устаревшие текстовые формы не поддерживаются в первом выпуске).
+- `AssetId`: канонический литерал `<canonical-base58-asset-definition-id>` (устаревшие текстовые формы не поддерживаются в первом выпуске).
 - `NftId`: `nft$domain` (например, `rose$garden`).
 - `PeerId`: `public_key` (равенство одноранговых узлов осуществляется по открытому ключу).
 
@@ -43,7 +43,7 @@ translator: machine-google-reviewed
 - `DomainId { name: Name }` – уникальное имя.
 - `Domain { id, logo: Option<SorafsUri>, metadata: Metadata, owned_by: AccountId }`.
 - Строитель: `NewDomain` с `with_logo`, `with_metadata`, затем `Registrable::build(authority)` устанавливает `owned_by`.### Аккаунт
-- `AccountId` — это канонический идентификатор учетной записи без домена, заданный контроллером и закодированный как канонический I105.
+- `AccountId` — это канонический идентификатор учетной записи без домена, заданный контроллером и закодированный как канонический i105.
 - `ScopedAccountId { account: AccountId, domain: DomainId }` содержит явный контекст домена только там, где требуется ограниченное представление.
 - `Account { id, metadata, label?, uaid? }` — `label` — это необязательный стабильный псевдоним, используемый записями смены ключей, `uaid` содержит необязательный общий для Nexus [универсальный идентификатор учетной записи] (./universal_accounts_guide.md).
 - Строитель: `NewAccount` через `Account::new(id)`; для регистрации требуется явный домен `ScopedAccountId`, который не выводится из значений по умолчанию.
@@ -250,7 +250,7 @@ iroha ledger asset definition register \
 # Mint using alias + account components (no manual norito hex copy/paste)
 iroha ledger asset mint \
   --definition-alias pkr#ubl.sbp \
-  --account sorauﾛ1P... \
+  --account sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB \
   --quantity 500
 
 # Resolve alias to canonical Base58 id via Torii
@@ -259,7 +259,7 @@ curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -d '{"alias":"pkr#ubl.sbp"}'
 ```Примечание по миграции:
 — Старые идентификаторы определения актива `name#domain` не принимаются в версии 1.
-— Идентификаторы активов для выпуска/сжигания/передачи остаются каноническими `<asset-definition-id>#<account-id>`; создайте их с помощью:
+— Идентификаторы активов для выпуска/сжигания/передачи остаются каноническими `<canonical-base58-asset-definition-id>`; создайте их с помощью:
   - `iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
   - или `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`.
 

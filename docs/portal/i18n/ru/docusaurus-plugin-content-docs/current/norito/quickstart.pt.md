@@ -90,7 +90,7 @@ ivm_run target/quickstart/hello.to --args '{}'
 
 Как ни странно, завидуйте компиляции байт-кода для Torii с использованием CLI. Идентификация вовлеченного человека и полученная от него публичная информация под номером `defaults/client.toml`, в порту или с идентификатором содержания
 ```
-i105...
+<i105-account-id>
 ```
 
 Используйте архив конфигурации для получения URL-адреса Torii, идентификатора цепочки и ввода-вывода:
@@ -108,7 +108,7 @@ iroha --config defaults/client.toml \
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id i105... \
+  --id <i105-account-id> \
   --key example | jq .
 ```
 

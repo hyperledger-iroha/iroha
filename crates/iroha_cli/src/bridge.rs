@@ -171,8 +171,8 @@ mod tests {
             direction: "mint".to_string(),
             source_tx: "11".repeat(32),
             amount: 5,
-            asset_id: "wBTC#btc".to_string(),
-            recipient: "alice@main".to_string(),
+            asset_id: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".to_string(),
+            recipient: "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE".to_string(),
             dest_tx: Some("22".repeat(32)),
             proof_hash: Some("33".repeat(32)),
         };
@@ -197,7 +197,7 @@ mod tests {
         assert_eq!(receipt.dest_tx, Some([0x22; 32]));
         assert_eq!(receipt.proof_hash, [0x33; 32]);
         assert_eq!(receipt.amount, 5);
-        assert_eq!(receipt.asset_id, b"wBTC#btc".to_vec());
-        assert_eq!(receipt.recipient, b"alice@main".to_vec());
+        assert_eq!(receipt.asset_id, b"62Fk4FPcMuLvW5QjDGNF2a4jAmjM".to_vec());
+        assert_eq!(receipt.recipient, "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE".as_bytes().to_vec());
     }
 }

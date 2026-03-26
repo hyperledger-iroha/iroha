@@ -113,16 +113,10 @@ Iroha ہم مرتبہ پرعزم ریاست سے اخذ کردہ ایک آرڈر
 
 `iroha_data_model` کریٹ تمام لیجر اشیاء ، ہدایات ، سوالات اور واقعات کی وضاحت کرتا ہے۔ جھلکیاں:
 
-- ** ڈومینز ، اکاؤنٹس ، اور اثاثے ** کیننیکل I105 اکاؤنٹ IDs (ترجیحی) استعمال کریں ؛ `name@domain` روٹنگ بنی ہوئی ہے
-  عرف جب واضح طور پر فراہم کی جاتی ہے۔ میٹا ڈیٹا ڈٹرمینسٹک ہے (`Metadata` نقشہ)۔ عددی اثاثے فکسڈ پوائنٹ کی حمایت کرتے ہیں
-  آپریشنز ؛ NFTs صوابدیدی ساختہ میٹا ڈیٹا لے کر جاتے ہیں۔
-۔
-۔
-  پھانسی دینے والا
-۔
-  گورننس کے اقدامات۔
-۔
-  واضح ورژن ہیڈر ، آگے بڑھنے والے ضابطہ کشائی کو یقینی بناتے ہوئے۔
+- **Domains, accounts, and assets** use canonical I105 account ids and canonical Base58 asset ids. Account aliases are separate on-chain
+  bindings in `name@dataspace` / `name@domain.dataspace` form that resolve to I105 account ids, and asset aliases are separate on-chain bindings in `name#dataspace` / `name#domain.dataspace` form that resolve to canonical Base58 asset ids. Metadata is deterministic (`Metadata` map). Numeric assets support fixed-point
+  operations; NFTs carry arbitrary structured metadata.
+
 - ** تخصیص ** ایگزیکٹر ڈیٹا ماڈل کے ذریعہ ہوتا ہے: آپریٹرز کسٹم ہدایات کو رجسٹر کرسکتے ہیں ،
   تعی .ن کو محفوظ رکھتے ہوئے اجازتیں ، اور پیرامیٹرز۔
 ۔

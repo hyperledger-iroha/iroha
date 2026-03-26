@@ -45,8 +45,6 @@ int32_t connect_norito_account_address_render(
     unsigned long* out_canonical_hex_len,
     uint8_t** out_i105_ptr,
     unsigned long* out_i105_len,
-    uint8_t** out_i105_default_ptr,
-    unsigned long* out_i105_default_len,
     uint8_t** out_error_json_ptr,
     unsigned long* out_error_json_len);
 

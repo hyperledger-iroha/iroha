@@ -76,9 +76,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -87,7 +87,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -245,7 +245,7 @@ alineados о большом прогрессе. Эль-табло Grafana
   Ссылки на архивы могут быть найдены относительно распространения CSV. Метаданные
   ни один морской объект не может привести к ошибке проверки.
 - **Контроллеры:** указаны на белом фоне `--default-controllers`. Пропорционе
-  явные списки контроллеров (например, `i105...;i105...`) и делегировать
+  явные списки контроллеров (например, `<i105-account-id>;<i105-account-id>`) и делегировать
   актеры без владельца.
 
 Los Fallos se reportan con numeros de fila contextuales (например,

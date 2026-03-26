@@ -238,7 +238,7 @@ lockstep.
 - التسلسل الهرمي لاشتقاق المفاتيح لكل حساب:
   - `sk_spend` → `nk` (مفتاح الإلغاء)، `ivk` (مفتاح العرض الوارد)، `ovk` (مفتاح العرض الصادر)، `fvk`.
 - تستخدم حمولات الملاحظات المشفرة AEAD مع المفاتيح المشتركة المشتقة من ECDH؛ قد يتم إرفاق مفاتيح عرض المدقق الاختيارية بالمخرجات وفقًا لسياسة الأصول.
-- إضافات واجهة سطر الأوامر: `confidential create-keys`، و`confidential send`، و`confidential export-view-key`، وأدوات المدقق لفك تشفير المذكرات، ومساعد `iroha app zk envelope` لإنتاج/فحص أظرف المذكرات Norito دون الاتصال بالإنترنت. يعرض Torii نفس تدفق الاشتقاق عبر `POST /v1/confidential/derive-keyset`، مما يؤدي إلى إرجاع كلا النموذجين السداسي وbase64 حتى تتمكن المحافظ من جلب التسلسلات الهرمية الرئيسية برمجيًا.
+- إضافات واجهة سطر الأوامر: `confidential create-keys`، و`confidential send`، و`confidential export-view-key`، وأدوات المدقق لفك تشفير المذكرات، ومساعد `iroha app zk envelope` لإنتاج/فحص أظرف المذكرات Norito دون الاتصال بالإنترنت. يعرض
 
 ## الغاز والحدود وضوابط DoS
 - جدول الغاز الحتمي:
@@ -423,7 +423,7 @@ import {
 
 const unsigned = buildRegisterZkAssetTransaction({
   registration: {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: {
       commit_params: "vk_shield",

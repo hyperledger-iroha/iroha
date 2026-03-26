@@ -192,6 +192,10 @@ final class SorafsOrchestratorParityTests: XCTestCase {
 private enum SorafsBridgeBootstrap {
     private static var cachedResult: Bool?
     private static var handle: UnsafeMutableRawPointer?
+    private static let requiredSymbols = [
+        "connect_norito_free",
+        "connect_norito_sorafs_local_fetch",
+    ]
 
     static func ensureLoaded() -> Bool {
         if let result = cachedResult {
@@ -212,6 +216,11 @@ private enum SorafsBridgeBootstrap {
             return true
         }
 
+        if let inProcessHandle = openInProcessHandleIfAvailable() {
+            handle = inProcessHandle
+            return true
+        }
+
         let fileManager = FileManager.default
         let candidates = try candidateLibraryURLs(fileManager: fileManager)
 
@@ -225,6 +234,46 @@ private enum SorafsBridgeBootstrap {
 
         handle = nil
         return false
+    }
+
+    private static func openInProcessHandleIfAvailable() -> UnsafeMutableRawPointer? {
+        if let executableURL = Bundle.main.executableURL {
+            let debugDylibURL = executableURL.deletingLastPathComponent()
+                .appendingPathComponent(executableURL.lastPathComponent + ".debug.dylib")
+            if FileManager.default.fileExists(atPath: debugDylibURL.path),
+               let handle = openImageIfSymbolsPresent(at: debugDylibURL) {
+                return handle
+            }
+            if let handle = openImageIfSymbolsPresent(at: executableURL) {
+                return handle
+            }
+        }
+
+        if let handle = dlopen(nil, RTLD_NOW | RTLD_GLOBAL),
+           hasRequiredSymbols(in: handle) {
+            return handle
+        }
+
+        return nil
+    }
+
+    private static func openImageIfSymbolsPresent(at url: URL) -> UnsafeMutableRawPointer? {
+        let handle = dlopen(url.path, RTLD_NOW | RTLD_GLOBAL)
+        guard hasRequiredSymbols(in: handle) else {
+            if let handle {
+                dlclose(handle)
+            }
+            return nil
+        }
+        return handle
+    }
+
+    private static func hasRequiredSymbols(in handle: UnsafeMutableRawPointer?) -> Bool {
+        guard let handle else { return false }
+        for symbol in requiredSymbols where dlsym(handle, symbol) == nil {
+            return false
+        }
+        return true
     }
 
     private static func candidateLibraryURLs(fileManager: FileManager) throws -> [URL] {
@@ -300,15 +349,15 @@ private enum SorafsBridgeBootstrap {
 
     private static func bridgeBinaryPathComponents() -> [String] {
         #if arch(arm64)
-        return ["macos-arm64", "NoritoBridge.framework", "NoritoBridge"]
+        return ["macos-arm64", "libNoritoBridge.a"]
         #else
-        return ["ios-arm64_x86_64-simulator", "NoritoBridge.framework", "NoritoBridge"]
+        return ["ios-arm64_x86_64-simulator", "libNoritoBridge.a"]
         #endif
     }
 
     private static func appendPathComponents(_ base: URL, components: [String]) -> URL {
         components.reduce(base) { partial, component in
-            let isDirectory = component.hasSuffix(".framework")
+            let isDirectory = component.hasSuffix(".framework") || component.hasSuffix(".xcframework")
             return partial.appendingPathComponent(component, isDirectory: isDirectory)
         }
     }
@@ -327,6 +376,7 @@ private enum SorafsBridgeBootstrap {
         var env = ProcessInfo.processInfo.environment
         // Avoid build-dir lock contention with other concurrent cargo tasks (common in CI and local dev).
         env["CARGO_TARGET_DIR"] = bridgeTargetDir.path
+        env["NORITO_SKIP_BINDINGS_SYNC"] = "1"
         process.environment = env
         let outputPipe = Pipe()
         process.standardOutput = outputPipe

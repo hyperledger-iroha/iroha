@@ -86,9 +86,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -97,7 +97,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -256,7 +256,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
   лавлагаа нь CSV байршилтай харьцуулахад шийдэгддэг. Объект бус мета өгөгдөл
   баталгаажуулалтын алдаа гаргадаг.
 - **Хянагч:** хоосон нүднүүд нь `--default-controllers`. Тодорхой өгөх
-  эзэмшигч бус этгээдэд шилжүүлэх үед хянагчийн жагсаалт (жишээ нь `i105...;i105...`)
+  эзэмшигч бус этгээдэд шилжүүлэх үед хянагчийн жагсаалт (жишээ нь `<i105-account-id>;<i105-account-id>`)
   жүжигчид.
 
 Алдаа дутагдлыг контекст мөрийн дугаараар мэдээлдэг (жишээ нь

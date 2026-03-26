@@ -1,46 +1,73 @@
 ---
-lang: pt
-direction: ltr
-source: docs/portal/docs/reference/address-safety.fr.md
-status: complete
-generator: docs/portal/scripts/sync-i18n.mjs
-translator: machine-google-reviewed
-translation_last_reviewed: 2026-02-07
+title: Address Safety & Accessibility
+description: UX requirements for presenting and sharing Iroha addresses safely (ADDR-6c).
 ---
 
----
-título: Segurança e acessibilidade de endereços
-descrição: Exigências UX para apresentar e compartilhar endereços Iroha em segurança (ADDR-6c).
----
+This page captures the ADDR-6c documentation deliverable. Apply these
+constraints to wallets, explorers, SDK tooling, and any portal surface that
+renders or accepts human-facing addresses. The canonical data model lives in
+`docs/account_structure.md`; the checklist below explains how to expose those
+formats without compromising safety or accessibility.
 
-Esta captura de página está disponível na documentação ADDR-6c. Aplique essas restrições a carteiras, exploradores, ferramentas SDK e toda a superfície do portal que renderiza ou aceita endereços destinados a seres humanos. O modelo de donnees canônico é encontrado em `docs/account_structure.md`; a lista de verificação contém comentários explícitos, expõe esses formatos sem comprometer a segurança ou a acessibilidade.
+## Safe sharing flows
 
-## Flux de partage surs
+- Default every copy/share action to the canonical I105 account id.
+  If an on-chain alias is present, display it as supporting metadata in a
+  separate labeled field.
+- Offer a “Share” affordance that bundles the full plain-text address and a QR
+  code derived from the same payload. Let users inspect both before committing.
+- When space requires truncation (tiny cards, notifications), keep the leading
+  human-readable prefix, show ellipses, and retain the final 4–6 characters so
+  the checksum anchor survives. Provide a tap/keyboard shortcut to copy the full
+  string without truncation.
+- Prevent clipboard desync by emitting a confirmation toast that previews the
+  exact i105 string that was copied. Where telemetry is available, count copy
+  attempts versus share actions so UX regressions surface quickly.
 
-- Por padrão, toda ação de cópia/partilha deve utilizar o endereço I105. Exiba o domínio resolvido como o contexto do aplicativo para que a cadeia com a soma de verificação fique no centro.
-- Proponha uma ação "Compartilhar" que reagrupe o endereço em texto bruto e um QR derivado da carga útil do meme. Permita que os usuários inspecionem os dois antes de confirmar.
-- Ao impor o intervalo (cartões minúsculos, notificações), manter o prefixo visível, exibir reticências e guardar os 4-6 caracteres mais recentes para que o espaço da soma de verificação sobreviva. Oferece um teclado de gesto/raccourci para copiar a cadeia completa sem troncatura.
-- Execute a dessincronização dos papéis de impressão e emita um brinde de confirmação que pré-visualiza a cadeia I105 exata. Se a telemetria existir, compare as tentativas de cópia versus as ações de compartilhamento para detectar rapidamente as regressões UX.
+## IME & input safeguards
 
-## IME e proteções de entrada
+- Validate account-id fields as canonical I105 only. Validate alias
+  entry fields separately as `name@dataspace` or `name@domain.dataspace`.
+- When IME composition artefacts or zero-width characters appear, surface an
+  inline warning instead of coercing the input into a different account-id
+  format.
+- Provide a plain-text paste zone that preserves the canonical i105 literal as
+  pasted while still stripping obviously invalid stealth code points before
+  validation.
+- Harden validation against zero-width joiners, variation selectors, and other
+  stealth Unicode code points. Log the rejected code point category so fuzzing
+  suites can import the telemetry.
 
-- Rejeite todas as entradas não ASCII nos campos de endereço. Quando os artefatos de composição IME (largura total, Kana, marca de tonalite) forem exibidos, exiba um aviso inline explícito comente passer le clavier en saisie latine avant de reensayer.
-- Forneça uma zona de colagem em texto bruto que suprima as marcas combinadas e substitua os espaços pelos espaços ASCII antes da validação. Isso evita que você perca a progressão se o usuário desativar o IME durante o fluxo.
-- Execute a validação com joiners de largura zero, seletores de variação e outros pontos de código furtivos Unicode. Divulgue a categoria do ponto de código rejeitado para que as suítes de fuzzing possam importar a telemetria.
+## Assistive technology expectations
 
-## Atentes para as tecnologias de assistência- Anote todo bloco de endereço com `aria-label` ou `aria-describedby` que forma o prefixo lisível e segmenta a carga útil em grupos de 4 a 8 caracteres ("ih traço b três dois ..."). Isso evita que os leitores de tela produzam um fluxo ininteligível de caracteres.
-- Anuncie ações de cópia/compartilhamento reutilizáveis ​​por meio de uma região ao vivo no modo educado. Inclua o destino (papéis de impressão, partilha, QR) para que o usuário sache que a ação termina sem substituir o foco.
-- Forneça um texto `alt` descritivo para abrir o QR (por exemplo, "Endereço I105 para `<account>` na cadeia `0x1234`"). Oferece um substituto "Copiar o endereço em texto" na parte inferior da tela QR para usuários mal-intencionados.
+- Annotate every address block with `aria-label` or `aria-describedby` that
+  spells out the human-readable prefix and chunks the payload in 4–8 character
+  groups (“ih dash b three two …”). This stops screen readers from producing an
+  unintelligible stream of characters.
+- Announce successful copy/share events via a polite live region update. Include
+  the destination (clipboard, share sheet, QR) so the user knows the action
+  completed without moving focus.
+- Supply descriptive `alt` text for QR previews (e.g., “i105 address for
+  `<account>` on chain `0x1234`”). Provide a “Copy address as text”
+  fallback adjacent to the QR canvas for low-vision users.
 
-## Endereços somente para Sora
+## Single-format policy
 
-- Gating: armazena em cache a cadeia compactada `sora...` após uma confirmação explícita. A confirmação é reiterar que o formato não funciona nas cadeias Sora Nexus.
-- Etiqueta: cada ocorrência deve incluir um emblema visível "Somente Sora" e uma dica de ferramenta explícita para outras pesquisas que exijam o formato I105.
-- Guardrails: se o discriminante de cadeia ativa não for a alocação Nexus, recuse a geração do endereço comprimido e redirecione-o para I105.
-- Telemetria: registre a frequência de demanda e a cópia da forma compactada para que o manual de incidentes detecte as fotos de uma partida acidental.
+- Keep canonical I105 as the only user-facing account-id format for
+  copy, share, and QR surfaces.
+- Treat `name@dataspace` and `name@domain.dataspace` as on-chain aliases that
+  point to canonical i105 account ids.
+- Do not expose alternate account-literal encodings in production wallet or
+  explorer UX.
+- Telemetry should track i105 copy/share usage, alias-resolution usage, and
+  validation failures only.
 
-## Portões de qualidade
+## Quality gates
 
-- Mantenha os testes UI automatizados (ou os pacotes a11y do storybook) para verificar se os componentes do endereço expõem os metadonnees ARIA necessários e se as mensagens de IME rejeitadas são exibidas.
-- Inclui cenários de manuais de controle de qualidade para entrada IME (kana, pinyin), um leitor de tela (VoiceOver/NVDA) e uma cópia de QR em temas com forte contraste antes do lançamento.
-- Faites remonter essas verificações nas listas de verificação de lançamento nas costas dos testes de parite I105 para que as regressões permaneçam bloqueadas apenas com a correção.
+- Extend automated UI tests (or storybook a11y suites) to assert that address
+  components expose the required ARIA metadata and that IME rejection messages
+  appear.
+- Include manual QA scenarios for IME input (kana, pinyin), screen reader pass
+  (VoiceOver/NVDA), and QR copy on high-contrast themes before releasing.
+- Surface these checks in release checklists alongside the i105 parity tests
+  so regressions remain blocked until corrected.

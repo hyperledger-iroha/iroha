@@ -46,7 +46,7 @@ fn kotodama_transfer_domain() {
     // Program transfers a domain from `authority()` to bob
     let src = r#"
         fn main() {
-          transfer_domain(authority(), domain("wonderland"), account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"));
+          transfer_domain(authority(), domain("wonderland"), account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"));
         }
     "#;
     unsafe { std::env::set_var("IVM_COMPILER_DEBUG", "1") };

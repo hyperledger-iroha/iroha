@@ -31,9 +31,9 @@ translator: machine-google-reviewed
 - `IdBox`: کسی بھی تعاون یافتہ ID کے لیے ایک مجموعہ قسم کا لفافہ `TriggerId`, `RoleId`, `Permission`, `CustomParameterId`)۔ ایک قسم کے طور پر عام بہاؤ اور Norito انکوڈنگ کے لیے مفید ہے۔
 - `ChainId`: مبہم چین شناخت کنندہ لین دین میں ری پلے تحفظ کے لیے استعمال ہوتا ہے۔IDs کی اسٹرنگ فارمز (`Display`/`FromStr` کے ساتھ گول ٹرپ ایبل):
 - `DomainId`: `name` (e.g., `wonderland`).
-- `AccountId`: کیننیکل ڈومین لیس اکاؤنٹ شناخت کنندہ `AccountAddress` کے ذریعے صرف I105 کے طور پر انکوڈ کیا گیا ہے۔ تجزیہ کار ان پٹ کو کینونیکل I105 ہونا چاہیے؛ ڈومین لاحقے (`@domain`)، کیننیکل I105 لٹریلز، عرفی لٹریلز، کینونیکل ہیکس پارسر ان پٹ، لیگیسی `norito:` پے لوڈز، اور `uaid:`/`opaque:` اکاؤنٹس کو دوبارہ ترتیب دیا گیا ہے۔
+- `AccountId`: کیننیکل ڈومین لیس اکاؤنٹ شناخت کنندہ `AccountAddress` کے ذریعے صرف i105 کے طور پر انکوڈ کیا گیا ہے۔ تجزیہ کار ان پٹ کو کینونیکل i105 ہونا چاہیے؛ ڈومین لاحقے (`@domain`)، کیننیکل i105 لٹریلز، عرفی لٹریلز، کینونیکل ہیکس پارسر ان پٹ، لیگیسی `norito:` پے لوڈز، اور `uaid:`/`opaque:` اکاؤنٹس کو دوبارہ ترتیب دیا گیا ہے۔
 - `AssetDefinitionId`: کیننیکل `unprefixed Base58 address with versioning and checksum` (UUID-v4 بائٹس)۔
-- `AssetId`: کیننیکل انکوڈ شدہ لٹریل `<asset-definition-id>#<account-id>` (میراثی متنی شکلیں پہلی ریلیز میں تعاون یافتہ نہیں ہیں)۔
+- `AssetId`: کیننیکل انکوڈ شدہ لٹریل `<canonical-base58-asset-definition-id>` (میراثی متنی شکلیں پہلی ریلیز میں تعاون یافتہ نہیں ہیں)۔
 - `NftId`: `nft$domain` (جیسے، `rose$garden`)۔
 - `PeerId`: `public_key` (ہم مرتبہ کی مساوات عوامی کلید کے ذریعہ ہے)۔
 
@@ -43,7 +43,7 @@ translator: machine-google-reviewed
 - `DomainId { name: Name }` - منفرد نام۔
 - `Domain { id, logo: Option<SorafsUri>, metadata: Metadata, owned_by: AccountId }`۔
 - بلڈر: `NewDomain` `with_logo` کے ساتھ، `with_metadata`، پھر `Registrable::build(authority)` `owned_by` سیٹ کرتا ہے۔### اکاؤنٹ
-- `AccountId` ایک کینونیکل ڈومین لیس اکاؤنٹ کی شناخت ہے جسے کنٹرولر نے کلید کیا ہے اور کینونیکل I105 کے طور پر انکوڈ کیا ہے۔
+- `AccountId` ایک کینونیکل ڈومین لیس اکاؤنٹ کی شناخت ہے جسے کنٹرولر نے کلید کیا ہے اور کینونیکل i105 کے طور پر انکوڈ کیا ہے۔
 - `ScopedAccountId { account: AccountId, domain: DomainId }` صرف واضح ڈومین سیاق و سباق رکھتا ہے جہاں اسکوپڈ ویو کی ضرورت ہوتی ہے۔
 - `Account { id, metadata, label?, uaid? }` — `label` ایک اختیاری مستحکم عرف ہے جسے ریکی ریکارڈز کے ذریعے استعمال کیا جاتا ہے، `uaid` اختیاری Nexus وسیع [یونیورسل اکاؤنٹ ID](Kotodama) رکھتا ہے۔
 - بلڈر: `NewAccount` بذریعہ `Account::new(id)`؛ رجسٹریشن کے لیے ایک واضح `ScopedAccountId` ڈومین کی ضرورت ہوتی ہے اور ڈیفالٹس سے کسی کا اندازہ نہیں ہوتا ہے۔
@@ -250,7 +250,7 @@ iroha ledger asset definition register \
 # Mint using alias + account components (no manual norito hex copy/paste)
 iroha ledger asset mint \
   --definition-alias pkr#ubl.sbp \
-  --account sorauﾛ1P... \
+  --account sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB \
   --quantity 500
 
 # Resolve alias to canonical Base58 id via Torii
@@ -259,7 +259,7 @@ curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -d '{"alias":"pkr#ubl.sbp"}'
 ```نقل مکانی نوٹ:
 - پرانی `name#domain` اثاثہ کی تعریف کی IDs v1 میں قبول نہیں کی جاتی ہیں۔
-- ٹکسال/برن/منتقلی کے لیے اثاثہ IDs کیننیکل `<asset-definition-id>#<account-id>` رہیں۔ ان کے ساتھ بنائیں:
+- ٹکسال/برن/منتقلی کے لیے اثاثہ IDs کیننیکل `<canonical-base58-asset-definition-id>` رہیں۔ ان کے ساتھ بنائیں:
   - `iroha tools encode asset-id --definition <base58-asset-definition-id> --account <i105>`
   - یا `--alias <name>#<domain>.<dataspace>` / `--alias <name>#<dataspace>` + `--account`۔
 

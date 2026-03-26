@@ -88,9 +88,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -99,7 +99,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -258,7 +258,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
   მითითებები წყდება CSV მდებარეობის მიმართ. არაობიექტური მეტამონაცემები
   წარმოქმნის ვალიდაციის შეცდომას.
 - **კონტროლერები:** ცარიელი უჯრედები პატივია `--default-controllers`. მიაწოდეთ მკაფიო
-  კონტროლერების სიები (მაგალითად `i105...;i105...`) არამფლობელზე დელეგირებისას
+  კონტროლერების სიები (მაგალითად `<i105-account-id>;<i105-account-id>`) არამფლობელზე დელეგირებისას
   მსახიობები.
 
 წარუმატებლობა მოხსენებულია კონტექსტური მწკრივის ნომრებით (მაგალითად

@@ -86,9 +86,9 @@ Müvəffəqiyyət haqqında skript ümumiləşdirilmiş manifest yazır:
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -97,7 +97,7 @@ Müvəffəqiyyət haqqında skript ümumiləşdirilmiş manifest yazır:
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -256,7 +256,7 @@ Lövhə `release` filtrindən keçir ki, auditorlar tək bir CSV proqramına ke�
   istinadlar CSV məkanına nisbətən həll edilir. Qeyri-obyekt metadata
   doğrulama xətası yaradır.
 - **Nəzarətçilər:** boş xanalar `--default-controllers`-ni şərəfləndirir. Açıq şəkildə təqdim edin
-  nəzarətçi siyahıları (məsələn, `i105...;i105...`) sahibi olmayanlara həvalə edərkən
+  nəzarətçi siyahıları (məsələn, `<i105-account-id>;<i105-account-id>`) sahibi olmayanlara həvalə edərkən
   aktyorlar.
 
 Uğursuzluqlar kontekstli sıra nömrələri ilə bildirilir (məsələn

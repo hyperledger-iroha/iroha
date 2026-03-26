@@ -29,14 +29,14 @@ public final class CanonicalRequestSignerTests {
     final KeyPairGenerator generator = KeyPairGenerator.getInstance("Ed25519");
     final KeyPair keyPair = generator.generateKeyPair();
     final URI uri =
-        new URI("http://localhost:8080/v1/accounts/alice@wonderland/assets?limit=5");
+        new URI("http://localhost:8080/v1/accounts/sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB/assets?limit=5");
     final byte[] body = "{\"foo\":1}".getBytes(StandardCharsets.UTF_8);
     final long timestampMs = 1_717_171_717_000L;
     final String nonce = "android-canonical-nonce";
 
     final Map<String, String> headers =
         CanonicalRequestSigner.buildHeaders(
-            "get", uri, body, "alice@wonderland", keyPair.getPrivate(), timestampMs, nonce);
+            "get", uri, body, "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB", keyPair.getPrivate(), timestampMs, nonce);
     final byte[] message =
         CanonicalRequestSigner.canonicalRequestSignatureMessage(
             "get", uri, body, timestampMs, nonce);

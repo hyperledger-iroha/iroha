@@ -26,10 +26,10 @@ import {
 
 const { signedTransaction } = buildTransaction({
   chainId: "offline-demo",
-  authority: "i105...",
+  authority: "<i105-account-id>",
   instructions: [
     buildMintAssetInstruction({
-      assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+      assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
       quantity: "10",
     }),
   ],

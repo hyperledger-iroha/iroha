@@ -186,7 +186,7 @@ Champs d'en‑tête de `manifest.json` :
     `scripts/address_local_toolkit.sh` pour confirmer le mapping de digest et
     coordonnez avec la gouvernance Nexus avant de réémettre l'entrée de registre
     affectée.
-  - `AddressInvalidRatioSlo` — avertit lorsque les soumissions I105/compressées
+  - `AddressInvalidRatioSlo` — avertit lorsque les soumissions i105/compressées
     invalides (hors rejets Local‑8/strict‑mode) dépassent le SLO global de 0,1 %
     pendant dix minutes. Analysez `torii_address_invalid_total` par
     contexte/raison et coordonnez avec l'équipe SDK propriétaire avant de

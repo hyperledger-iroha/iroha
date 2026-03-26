@@ -106,25 +106,23 @@ const offline = Offline.buildOfflineEnvelope({ signedTransaction: encoded, metad
 import { AccountAddress } from "@iroha/iroha-js";
 
 const address = AccountAddress.fromAccount({
-  domain: "default",
   publicKey: new Uint8Array(32),
 });
 console.log(address.canonicalHex());
 console.log(address.toI105(753));
-console.log(address.toI105Default());
+console.log(address.toI105());
 
 const formats = address.displayFormats(753);
 console.log(formats.i105);
 console.log(formats.i105Warning);
-console.log(formats.domainSummary.selector.label); // "default"
-console.log(formats.domainSummary.selector.registryId); // registry id when Global selectors are used
 ```
 
 > ℹ️ When showing addresses in wallets, explorers, or SDK samples, follow the
-> dual-format UX checklist captured in
+> single-format UX checklist captured in
 > [`docs/source/sns/address_display_guidelines.md`](../../docs/source/sns/address_display_guidelines.md):
-> I105 remains the default copy/share target, I105 strings need an inline
-> warning, and QR codes should always encode the I105 value.
+> i105 remains the copy/share target, aliases should be shown as
+> `name@dataspace` or `name@domain.dataspace`, and QR codes should always
+> encode the i105 value.
 
 ## Subscriptions
 
@@ -141,7 +139,7 @@ const torii = new ToriiClient("http://127.0.0.1:8080", {
 });
 
 const usagePlan = {
-  provider: "aws@commerce",
+  provider: "<provider_account_i105>",
   billing: {
     cadence: {
       kind: "monthly_calendar",
@@ -163,28 +161,28 @@ const usagePlan = {
 };
 
 await torii.createSubscriptionPlan({
-  authority: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
+  authority: "sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4",
   private_key: "provider-private-key-hex",
   plan_id: "aws_compute#commerce",
   plan: usagePlan,
 });
 
 await torii.createSubscription({
-  authority: "6cmzPVPX4ZZ37ssFtJnQzouYHC9YVUEsVZUWF966ToXNoKUsfX1qgpC",
+  authority: "sorauロ1Ni1A1mYイzウレハGニイgオ4ワセメヤzコヘz6タFoVDヌXzケCkル4CQVXL",
   private_key: "subscriber-private-key-hex",
   subscription_id: "sub-001",
   plan_id: "aws_compute#commerce",
 });
 
 await torii.recordSubscriptionUsage("sub-001", {
-  authority: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
+  authority: "sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4",
   private_key: "provider-private-key-hex",
   unit_key: "compute_ms",
   delta: "3600000",
 });
 
 await torii.chargeSubscriptionNow("sub-001", {
-  authority: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
+  authority: "sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4",
   private_key: "provider-private-key-hex",
 });
 ```
@@ -197,8 +195,8 @@ import { MultisigSpecBuilder, buildProposeMultisigInstruction } from "@iroha/iro
 const spec = new MultisigSpecBuilder()
   .setQuorum(3)
   .setTransactionTtlMs(86_400_000)
-  .addSignatory("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", 2)
-  .addSignatory("6cmzPVPX9CDKZ7zp4XqnygVMaXeKCZHvBaeZNTPuH1TvtP7SvKbSzxA", 1)
+  .addSignatory("sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4", 2)
+  .addSignatory("sorauロ1PケiコPヨソRhgラ1EコリNソnhレdシユAYGwワテYqケGLニwKヘaQUJKW1", 1)
   .build();
 
 // Preview the effective TTL (clamped to the policy cap) and expiry time
@@ -207,7 +205,7 @@ console.log(preview.effectiveTtlMs, preview.expiresAtMs, preview.wasCapped);
 
 // Build a multisig proposal while enforcing the policy TTL cap client-side
 const propose = buildProposeMultisigInstruction({
-  accountId: "6cmzPVPX4ZZ37ssFtJnQzouYHC9YVUEsVZUWF966ToXNoKUsfX1qgpC",
+  accountId: "sorauロ1Ni1A1mYイzウレハGニイgオ4ワセメヤzコヘz6タFoVDヌXzケCkル4CQVXL",
   spec,
   instructions: [{ Log: { Level: "INFO", message: "hello" } }],
   transactionTtlMs: 45_000, // throws if above spec.transaction_ttl_ms
@@ -216,8 +214,8 @@ const propose = buildProposeMultisigInstruction({
 // Register the multisig controller with an explicit (non-derived) account id
 const register = buildRegisterMultisigTransaction({
   chainId: "wonderland",
-  authority: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
-  accountId: "6cmzPVPX4ZZ37ssFtJnQzouYHC9YVUEsVZUWF966ToXNoKUsfX1qgpC",
+  authority: "sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4",
+  accountId: "sorauロ1Ni1A1mYイzウレハGニイgオ4ワセメヤzコヘz6タFoVDヌXzケCkル4CQVXL",
   spec,
   privateKey: generateKeyPair().privateKey, // controller key is NOT used for signing
 });
@@ -252,24 +250,33 @@ import {
   buildRegisterDomainAndMintTransaction,
   buildRegisterAccountAndTransferTransaction,
   buildRegisterAssetDefinitionAndMintTransaction,
+  buildRegisterRwaTransaction,
   buildRegisterDomainInstruction,
   buildRegisterAccountInstruction,
   buildTransferAssetInstruction,
   buildTransferAssetTransaction,
+  buildTransferRwaInstruction,
   submitSignedTransaction,
   normalizeAccountId,
   normalizeAssetId,
+  normalizeAssetHoldingId,
+  normalizeRwaId,
 } from "@iroha/iroha-js";
 
 const { publicKey, privateKey } = generateKeyPair();
 const authorityInput =
-  "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+  "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
 const newAccountIdInput =
-  "6cmzPVPX8e5qQsHdB57DhqFT9wp2MiMoXsvt9LYUtypj1nx96bF5s8W";
+  "sorauロ1PワKNラ7シコa2WクシメミQホbコトocニチヰJaアbg6sセgイヨPfX7WAWRY";
 const authority = normalizeAccountId(authorityInput);
 const newAccountId = normalizeAccountId(newAccountIdInput);
-const roseAssetId = normalizeAssetId("<base58-asset-definition-id>#<i105-account-id>");
-const lilyAssetId = normalizeAssetId("<base58-asset-definition-id>#<i105-account-id>");
+const roseAssetId = normalizeAssetId("<base58-asset-definition-id>");
+const lilyAssetId = normalizeAssetId("<base58-asset-definition-id>");
+const roseAssetHoldingId = normalizeAssetHoldingId(`${roseAssetId}#${authority}`);
+const lilyAssetHoldingId = normalizeAssetHoldingId(`${lilyAssetId}#${newAccountId}`);
+const vaultLotId = normalizeRwaId(
+  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities",
+);
 // Normalise human-supplied identifiers once and reuse the canonical forms below.
 const message = Buffer.from("test");
 const signature = signEd25519(message, privateKey);
@@ -375,11 +382,11 @@ if (recovery) {
   );
 }
 
-### Iterating NFTs and account assets
+### Iterating NFTs, RWAs, and account assets
 
 The iterable helpers accept `requirePermissions` to fail fast when credentials are missing. NFT
-filters only admit `id` equality/exists checks, while account-asset queries allow quantity
-comparisons.
+and RWA explorer filters accept owner/domain pagination, while account-asset queries allow
+quantity comparisons.
 
 ```js
 const torii = new ToriiClient("https://torii.example", {
@@ -393,7 +400,20 @@ const nftPage = await torii.listNfts({
 });
 console.log("first nft page:", nftPage.items.map((it) => it.id));
 
-for await (const holding of torii.iterateAccountAssetsQuery("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", {
+const rwaPage = await torii.listExplorerRwas({
+  ownedBy: authority,
+  perPage: 2,
+});
+console.log("first RWA page:", rwaPage.items.map((it) => it.id));
+
+for await (const lot of torii.iterateAccountRwas(authority, {
+  pageSize: 2,
+  domainId: "commodities",
+})) {
+  console.log(`${lot.id} => ${lot.quantity}`);
+}
+
+for await (const holding of torii.iterateAccountAssetsQuery("sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4", {
   requirePermissions: true,
   pageSize: 2,
   filter: { Gte: ["quantity", 1] },
@@ -485,17 +505,17 @@ const registerDomain = noritoEncodeInstruction(
   buildRegisterDomainInstruction({ domainId: "wonderland" }),
 );
 const registerAccount = buildRegisterAccountInstruction({
-  accountId: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
+  accountId: "sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4",
 });
 const transfer = buildTransferAssetInstruction({
-  sourceAssetId: "<base58-asset-definition-id>#<i105-account-id>",
-  destinationAccountId: "6cmzPVPX9CDKZ7zp4XqnygVMaXeKCZHvBaeZNTPuH1TvtP7SvKbSzxA",
+  sourceAssetHoldingId: "<base58-asset-definition-id>#<i105-account-id>",
+  destinationAccountId: "sorauロ1PケiコPヨソRhgラ1EコリNソnhレdシユAYGwワテYqケGLニwKヘaQUJKW1",
   quantity: "5",
 });
 
 const transferTx = buildTransaction({
   chainId: "demo-chain",
-  authority: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
+  authority: "sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4",
   instructions: [transfer],
   privateKey,
 });
@@ -506,6 +526,7 @@ console.log(transferTx.signedTransaction.length); // deterministic Norito bytes
 ### Validation errors
 
 Input guards exposed by helpers such as `normalizeAccountId()`, `normalizeAssetId()`,
+`normalizeAssetHoldingId()`,
 and the instruction builders now throw `ValidationError` instances. They extend
 `TypeError` while providing a deterministic `code` and `path` that automation can
 key on.
@@ -575,11 +596,11 @@ const built = buildRegisterDomainTransaction({
 console.log(Buffer.from(built.hash).toString("hex"));
 
 const mint = buildMintAssetInstruction({
-  assetId: roseAssetId,
+  assetHoldingId: roseAssetHoldingId,
   quantity: "10",
 });
 const transfer = buildTransferAssetInstruction({
-  sourceAssetId: roseAssetId,
+  sourceAssetHoldingId: roseAssetHoldingId,
   quantity: "5",
   destinationAccountId: authority,
 });
@@ -588,7 +609,7 @@ console.log(noritoDecodeInstruction(mint)); // structured JSON
 const mintTx = buildMintAssetTransaction({
   chainId: "test-chain",
   authority,
-  assetId: roseAssetId,
+  assetHoldingId: roseAssetHoldingId,
   quantity: "10",
   privateKey,
 });
@@ -596,7 +617,7 @@ const mintTx = buildMintAssetTransaction({
 const burnTx = buildBurnAssetTransaction({
   chainId: "test-chain",
   authority,
-  assetId: roseAssetId,
+  assetHoldingId: roseAssetHoldingId,
   quantity: "2",
   privateKey,
 });
@@ -604,23 +625,51 @@ const burnTx = buildBurnAssetTransaction({
 const transferTx = buildTransferAssetTransaction({
   chainId: "test-chain",
   authority,
-  sourceAssetId: roseAssetId,
+  sourceAssetHoldingId: roseAssetHoldingId,
   quantity: "5",
   destinationAccountId: authority,
   privateKey,
 });
 
+const registerRwaTx = buildRegisterRwaTransaction({
+  chainId: "test-chain",
+  authority,
+  rwa: {
+    domain: "commodities",
+    quantity: "10.5",
+    spec: { scale: 1 },
+    primaryReference: "vault-cert-001",
+    metadata: { origin: "AE" },
+  },
+  privateKey,
+});
+
+const transferRwa = buildTransferRwaInstruction({
+  sourceAccountId: authority,
+  rwaId: vaultLotId,
+  quantity: "2.5",
+  destinationAccountId: newAccountId,
+});
+console.log(noritoDecodeInstruction(transferRwa));
+
+const setRwaMetadata = buildSetRwaKeyValueInstruction({
+  rwaId: vaultLotId,
+  key: "grade",
+  value: { origin: "AE", score: 9n },
+});
+console.log(noritoDecodeInstruction(setRwaMetadata));
+
 const mintAndTransferTx = buildMintAndTransferTransaction({
   chainId: "test-chain",
   authority,
-  mint: { assetId: roseAssetId, quantity: "10" },
+  mint: { assetHoldingId: roseAssetHoldingId, quantity: "10" },
   transfers: [
     {
       quantity: "6",
       destinationAccountId: authority,
     },
     {
-      sourceAssetId: roseAssetId,
+      sourceAssetHoldingId: roseAssetHoldingId,
       quantity: "1",
       destinationAccountId: authority,
     },
@@ -634,7 +683,7 @@ const domainAndMintTx = buildRegisterDomainAndMintTransaction({
   domain: { domainId: "garden_of_live_flowers", metadata: { key: "value" } },
   mints: [
     { assetId: roseAssetId, quantity: "5" },
-    { assetId: normalizeAssetId("<base58-asset-definition-id>#<i105-account-id>"), quantity: "2" },
+    { assetId: normalizeAssetId("<base58-asset-definition-id>"), quantity: "2" },
   ],
   privateKey,
 });
@@ -645,12 +694,12 @@ const accountAndTransferTx = buildRegisterAccountAndTransferTransaction({
   account: { accountId: newAccountId, metadata: { nickname: "alice" } },
   transfers: [
     {
-      sourceAssetId: roseAssetId,
+      sourceAssetHoldingId: roseAssetHoldingId,
       quantity: "2",
       destinationAccountId: newAccountId,
     },
     {
-      sourceAssetId: roseAssetId,
+      sourceAssetHoldingId: roseAssetHoldingId,
       quantity: "1",
       destinationAccountId: authority,
     },
@@ -707,7 +756,7 @@ const assetDefinitionMintAndTransferTx = buildRegisterAssetDefinitionMintAndTran
       destinationAccountId: authority,
     },
     {
-      sourceAssetId: lilyAssetId,
+      sourceAssetHoldingId: lilyAssetHoldingId,
       quantity: "3",
       destinationAccountId: newAccountId,
     },
@@ -887,8 +936,8 @@ pinned to the configured base.
   JavaScript floating-point pitfalls; the builders accept `string | number |
   bigint` but require plain decimal literals (no exponent), with up to 28
   fractional digits and a 512-bit mantissa.
-- Keep asset IDs in canonical public form
-  (`<asset-definition-id>#<account-id>` with optional `#dataspace:<id>`) when
+- Keep asset IDs in canonical holding form
+  (`<base58-asset-definition-id>#<i105-account-id>` with optional `#dataspace:<id>`) when
   chaining mint and transfer steps. The helpers do not guess missing account or
   scope suffixes, ensuring all peers derive the same destination.
 - Reuse the exported `normalizeAccountId()` / `normalizeAssetId()` helpers when you
@@ -1254,7 +1303,7 @@ const pinResult = await torii.pinSorafsManifest({
 console.log(`manifest=${pinResult.manifest_id_hex} digest=${pinResult.payload_digest_hex}`);
 
 const registerRequest = {
-  authority: process.env.SORAFS_OPERATOR_ID ?? "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
+  authority: process.env.SORAFS_OPERATOR_ID ?? "sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4",
   privateKey: process.env.SORAFS_OPERATOR_KEY ?? "ed25519:deadbeef",
   manifestDigestHex: pinResult.manifest_id_hex,
   chunkDigestSha3_256Hex: process.env.SORAFS_CHUNK_DIGEST ?? "1".repeat(64),
@@ -1478,8 +1527,8 @@ helpers for all three surfaces:
 const uaidLiteral = "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11";
 
 const portfolio = await torii.getUaidPortfolio(uaidLiteral);
-// Optionally filter positions by a specific asset id.
-// const portfolio = await torii.getUaidPortfolio(uaidLiteral, { assetId: "cash#portfolio::..." });
+// Optionally filter positions by a specific asset-holding id.
+// const portfolio = await torii.getUaidPortfolio(uaidLiteral, { assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D" });
 for (const ds of portfolio.dataspaces) {
   console.log(`dataspace ${ds.dataspace_alias ?? ds.dataspace_id} accounts=${ds.accounts.length}`);
   ds.accounts.forEach((account) => {
@@ -1540,7 +1589,7 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
+    authority: "sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4",
     privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
     manifest,
     reason: "Rotation to attester set v2",
@@ -1550,7 +1599,7 @@ await torii.publishSpaceDirectoryManifest(
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
+    authority: "sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4",
     privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
     uaid: "uaid:c2b61dd6bb73e91ee6d0949508d491bbc1b2a347a3f41b5cd35d733c1e751111",
     dataspaceId: 11,
@@ -1634,7 +1683,7 @@ relays.items.forEach((relay) => {
   console.log(`${relay.relay_id} (${relay.domain}) status=${relay.status ?? "unknown"}`);
 });
 
-const detail = await torii.getKaigiRelay(relays.items[0]?.relay_id ?? "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw");
+const detail = await torii.getKaigiRelay(relays.items[0]?.relay_id ?? "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE");
 if (detail?.metrics) {
   console.log(`${detail.metrics.domain} registrations=${detail.metrics.registrations_total}`);
 }
@@ -1838,9 +1887,9 @@ const settlement = buildPacs008Message({
   instigatingAgent: { bic: "DEUTDEFF", lei: "529900ODI3047E2LIV03" },
   instructedAgent: { bic: "COBADEFF" },
   debtorAccount: { iban: "DE89370400440532013000" },
-  creditorAccount: { otherId: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT" },
+  creditorAccount: { otherId: "sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4" },
   purposeCode: "SECU",
-  supplementaryData: { account_id: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", leg: "delivery" },
+  supplementaryData: { account_id: "sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4", leg: "delivery" },
 });
 
 const torii = new ToriiClient("http://localhost:8080");
@@ -1898,19 +1947,11 @@ and encodes code bytes as base64 strings before signing:
 import { AccountAddress } from "@iroha/iroha-js";
 
 const address = AccountAddress.fromAccount({
-  domain: "default",
   publicKey: new Uint8Array(32),
 });
 console.log(address.canonicalHex());
 console.log(address.toI105(753));
-console.log(address.toI105Default());
-
-// Build a registry-backed selector when a global registry id is available.
-const registryAddress = AccountAddress.fromAccount({
-  registryId: 42,
-  publicKey: new Uint8Array(32),
-});
-console.log(registryAddress.domainSummary()); // { kind: "global", warning: null }
+console.log(address.toI105());
 ```
 
 ```js
@@ -1929,7 +1970,7 @@ const manifestTx = buildRegisterSmartContractCodeTransaction({
     abiHash: "hash:…",
     compilerFingerprint: "kotodama-1.2 rustc-1.79",
     accessSetHints: {
-      readKeys: ["account:6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT"],
+      readKeys: ["account:sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4"],
       writeKeys: ["contract:apps:ledger"],
     },
   },
@@ -2030,13 +2071,11 @@ normalisation, referendum windows, and ballot encoding:
 ```js
 import { AccountAddress } from "@iroha/iroha-js";
 
-const address = AccountAddress.fromAccount({
-  domain: "default",
-  publicKey: new Uint8Array(32),
+const address = AccountAddress.fromAccount({ publicKey: new Uint8Array(32),
 });
 console.log(address.canonicalHex());
 console.log(address.toI105(753));
-console.log(address.toI105Default());
+console.log(address.toI105());
 ```
 
 ```js
@@ -2062,7 +2101,7 @@ const proposalTx = buildProposeDeployContractTransaction({
   privateKey,
 });
 
-const zkOwner = "6cmzPVPX4ZZ37ssFtJnQzouYHC9YVUEsVZUWF966ToXNoKUsfX1qgpC"; // canonical I105 account id for ZK public inputs
+const zkOwner = "sorauロ1Ni1A1mYイzウレハGニイgオ4ワセメヤzコヘz6タFoVDヌXzケCkル4CQVXL"; // canonical I105 account id for ZK public inputs
 
 const zkBallotTx = buildCastZkBallotTransaction({
   chainId: "test-chain",
@@ -2201,7 +2240,7 @@ const detail = await torii.getVerifyingKeyTyped("halo2/ipa", "vk_main");
 console.log(detail.record.status); // "Active"
 
 await torii.registerVerifyingKey({
-  authority: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
+  authority: "sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4",
   private_key: "ed0120…",
   backend: "halo2/ipa",
   name: "vk_main",
@@ -2400,10 +2439,10 @@ import {
 
 const { signedTransaction } = buildTransaction({
   chainId: "offline-demo",
-  authority: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
+  authority: "sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4",
   instructions: [
     buildMintAssetInstruction({
-      assetId: "<base58-asset-definition-id>#<i105-account-id>",
+      assetHoldingId: "<base58-asset-definition-id>#<i105-account-id>",
       quantity: "10",
     }),
   ],
@@ -2696,13 +2735,11 @@ console.log("histogram", status.rtt.buckets);
 ```js
 import { AccountAddress } from "@iroha/iroha-js";
 
-const address = AccountAddress.fromAccount({
-  domain: "default",
-  publicKey: new Uint8Array(32),
+const address = AccountAddress.fromAccount({ publicKey: new Uint8Array(32),
 });
 console.log(address.canonicalHex());
 console.log(address.toI105(753));
-console.log(address.toI105Default());
+console.log(address.toI105());
 ```
 
 ```js
@@ -2978,7 +3015,7 @@ so you can persist the verdict metadata immediately.
 
 ```js
 const draft = {
-  controller: "i105:...",
+  controller: "<i105-account-id>",
   allowance: {
     asset: "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
     amount: "10",
@@ -2998,7 +3035,7 @@ const draft = {
 // Torii derives the certificate operator from its configured offline issuer keypair.
 
 const topUp = await torii.topUpOfflineAllowance({
-  authority: "i105:...",
+  authority: "<i105-account-id>",
   privateKey: "ed25519:...",
   certificate: draft,
 });
@@ -3011,7 +3048,7 @@ For renewals, call `topUpOfflineAllowanceRenewal` with the existing certificate 
 const renewed = await torii.topUpOfflineAllowanceRenewal(
   topUp.registration.certificate_id_hex,
   {
-    authority: "i105:...",
+    authority: "<i105-account-id>",
     privateKey: "ed25519:...",
     certificate: draft,
   },
@@ -3041,7 +3078,7 @@ certificates), pass per-receipt `buildClaimOverrides` and set
 
 ```js
 const settlement = await torii.submitOfflineSettlement({
-  authority: "i105:...",
+  authority: "<i105-account-id>",
   privateKey: "ed25519:...",
   transfer: transferPayload,
   buildClaimOverrides: [
@@ -3066,7 +3103,7 @@ try {
   const settleAbort = new AbortController();
   const settlement = await torii.submitOfflineSettlementAndWait(
     {
-      authority: "i105:...",
+      authority: "<i105-account-id>",
       privateKey: "ed25519:...",
       transfer: transferPayload,
     },
@@ -3179,30 +3216,30 @@ const defs = await torii.queryAssetDefinitions({
 });
 console.log("filtered definitions", defs.items);
 
-const perms = await torii.listAccountPermissions("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", {
+const perms = await torii.listAccountPermissions("sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4", {
   limit: 5,
 });
 console.log("direct permissions", perms.items.map((item) => item.name));
-for await (const perm of torii.iterateAccountPermissions("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", {
+for await (const perm of torii.iterateAccountPermissions("sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4", {
   pageSize: 2,
 })) {
   console.log("paged permission", perm.name);
 }
 const nfts = await torii.listNfts({ limit: 10 });
 console.log("first NFT ids", nfts.items.map((nft) => nft.id));
-const balances = await torii.listAccountAssets("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", {
+const balances = await torii.listAccountAssets("sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4", {
   limit: 3,
-  assetId: "<base58-asset-definition-id>#<i105-account-id>",
+  assetHoldingId: "<base58-asset-definition-id>#<i105-account-id>",
 });
 console.log("alice balances", balances.items);
 const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 3,
-  assetId: "<base58-asset-definition-id>#<i105-account-id>",
+  assetHoldingId: "<base58-asset-definition-id>#<i105-account-id>",
 });
 console.log("top holders", holders.items.map((entry) => entry.account_id));
-const history = await torii.listAccountTransactions("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", {
+const history = await torii.listAccountTransactions("sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4", {
   limit: 2,
-  assetId: "<base58-asset-definition-id>#<i105-account-id>",
+  assetHoldingId: "<base58-asset-definition-id>#<i105-account-id>",
 });
 console.log(
   "recent hashes",
@@ -3211,13 +3248,13 @@ console.log(
 
 for await (const account of torii.iterateAccountsQuery({
   pageSize: 100,
-  filter: { Eq: ["id", "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT"] },
+  filter: { Eq: ["id", "sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4"] },
   select: [{ Fields: ["id", "metadata.display_name"] }],
 })) {
   console.log("matching account", account.id);
 }
 
-for await (const balance of torii.iterateAccountAssetsQuery("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", {
+for await (const balance of torii.iterateAccountAssetsQuery("sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4", {
   pageSize: 32,
   filter: { Eq: ["asset_id.definition_id", "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"] },
 })) {
@@ -3233,7 +3270,7 @@ for await (const instance of torii.iterateGovernanceInstances("apps", {
 
 for await (const trigger of torii.iterateTriggersQuery({
   pageSize: 50,
-  filter: { Eq: ["object.authority", "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT"] },
+  filter: { Eq: ["object.authority", "sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4"] },
 })) {
   console.log("trigger id:", trigger.id);
 }
@@ -3241,12 +3278,12 @@ for await (const trigger of torii.iterateTriggersQuery({
 // Or mirror the same calls from the runnable recipe:
 //   node ./recipes/nft_account_iteration.mjs \
 //     TORII_URL=http://127.0.0.1:8080 \
-//     ACCOUNT_ID=6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT \
+//     ACCOUNT_ID=sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4 \
 //     ASSET_DEFINITION_ID=62Fk4FPcMuLvW5QjDGNF2a4jAmjM \
 //     NFT_DEFINITION_ID=5Pz9SwdN9eXPbiXPX9HRCpzCcE3o
 ```
 
-> **Hard-cut account parser:** Account-scoped helpers (`listAccountAssets`, `listAccountPermissions`, `listAccountTransactions`, and query/iterator variants) accept only canonical I105 account IDs. Domain-suffixed and legacy compatibility literals are rejected.
+> **Account selectors:** Account-scoped helpers (`listAccountAssets`, `listAccountPermissions`, `listAccountTransactions`, and query/iterator variants) accept canonical I105 account ids or on-chain account aliases (`name@dataspace` / `name@domain.dataspace`). Torii resolves aliases to canonical account ids before returning the result set.
 
 Use the SNS helpers to manage Sora Name Service records without hand-crafting JSON:
 
@@ -3256,13 +3293,13 @@ console.log(policy.suffix, policy.pricing.length);
 
 const registration = await torii.registerSnsName({
   selector: { suffix_id: 0x1002, label: "demo" },
-  owner: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
+  owner: "sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4",
   payment: {
-    asset_id: "<base58-asset-definition-id>#<i105-account-id>",
+    asset_id: "<base58-asset-definition-id>",
     gross_amount: 120,
     net_amount: 120,
     settlement_tx: { tx: "hash" },
-    payer: "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT",
+    payer: "sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4",
     signature: "sig-json",
   },
 });
@@ -3284,13 +3321,11 @@ retained only as explicit validation stubs that reject immediately.
 ```js
 import { AccountAddress } from "@iroha/iroha-js";
 
-const address = AccountAddress.fromAccount({
-  domain: "default",
-  publicKey: new Uint8Array(32),
+const address = AccountAddress.fromAccount({ publicKey: new Uint8Array(32),
 });
 console.log(address.canonicalHex());
 console.log(address.toI105(753));
-console.log(address.toI105Default());
+console.log(address.toI105());
 ```
 
 ```js
@@ -3310,7 +3345,7 @@ if (explorerMetrics) {
   console.log("explorer metrics disabled on this node");
 }
 
-const qr = await torii.getExplorerAccountQr("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT");
+const qr = await torii.getExplorerAccountQr("sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4");
 console.log(qr.literal); // i105 literal embedded in the QR SVG
 console.log(qr.svg); // inline SVG (192x192) ready to drop into your UI
 
@@ -3327,7 +3362,7 @@ for (const entry of recentBlocks.items) {
 
 // NFT and account-asset iteration mirrors the Torii JSON envelopes while handling pagination.
 const holdings = [];
-for await (const holding of torii.iterateAccountAssets("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", {
+for await (const holding of torii.iterateAccountAssets("sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4", {
   pageSize: 2,
   maxItems: 5,
   sort: [{ key: "quantity", order: "desc" }],
@@ -3347,7 +3382,7 @@ for await (const nft of torii.iterateNftsQuery({
 console.log("matching NFTs", nftIds);
 
 const ownedNfts = [];
-for await (const nft of torii.iterateAccountNfts("6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT", {
+for await (const nft of torii.iterateAccountNfts("sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4", {
   domainId: "wonderland",
   pageSize: 10,
 })) {
@@ -3436,7 +3471,7 @@ if (!ballot.accepted) {
   console.warn("ballot rejected:", ballot.reason);
 }
 
-const zkOwner = "6cmzPVPX4ZZ37ssFtJnQzouYHC9YVUEsVZUWF966ToXNoKUsfX1qgpC"; // canonical I105 account id for ZK public inputs
+const zkOwner = "sorauロ1Ni1A1mYイzウレハGニイgオ4ワセメヤzコヘz6タFoVDヌXzケCkル4CQVXL"; // canonical I105 account id for ZK public inputs
 await torii.governanceSubmitZkBallot({
   authority,
   chainId: "00000000-0000-0000-0000-000000000000",
@@ -3462,7 +3497,7 @@ const deriveResponse = await torii.governanceDeriveCouncilVrf({
   committeeSize: 2,
   candidates: [
     {
-      accountId: "6cmzPVPX9CDKZ7zp4XqnygVMaXeKCZHvBaeZNTPuH1TvtP7SvKbSzxA",
+      accountId: "sorauロ1PケiコPヨソRhgラ1EコリNソnhレdシユAYGwワテYqケGLニwKヘaQUJKW1",
       variant: "Normal",
       pk: validatorPublicKeyBytes,
       proof: validatorProofBytes,
@@ -3508,7 +3543,7 @@ console.log(`enact instructions=${enactDraft.tx_instructions.length}`);
 
 const registeredTriggers = await torii.listTriggers({
   namespace: "apps",
-  authority: "6cmzPVPX8e5qQsHdB57DhqFT9wp2MiMoXsvt9LYUtypj1nx96bF5s8W",
+  authority: "sorauロ1PワKNラ7シコa2WクシメミQホbコトocニチヰJaアbg6sセgイヨPfX7WAWRY",
   limit: 5,
 });
 registeredTriggers.items.forEach((trigger) => {
@@ -3524,7 +3559,7 @@ if (!trigger) {
       Mint: {
         Asset: {
           object: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-          destination_id: "6cmzPVPX8e5qQsHdB57DhqFT9wp2MiMoXsvt9LYUtypj1nx96bF5s8W",
+          destination_id: "sorauロ1PワKNラ7シコa2WクシメミQホbコトocニチヰJaアbg6sセgイヨPfX7WAWRY",
           value: "5",
         },
       },
@@ -3537,7 +3572,7 @@ if (!trigger) {
       Mint: {
         Asset: {
           object: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-          destination_id: "6cmzPVPX8e5qQsHdB57DhqFT9wp2MiMoXsvt9LYUtypj1nx96bF5s8W",
+          destination_id: "sorauロ1PワKNラ7シコa2WクシメミQホbコトocニチヰJaアbg6sセgイヨPfX7WAWRY",
           value: "5",
         },
       },
@@ -3565,7 +3600,7 @@ const timeAction = buildTimeTriggerAction({
   authority,
   instructions: [
     buildMintAssetInstruction({
-      assetId: "<base58-asset-definition-id>#<i105-account-id>",
+      assetHoldingId: "<base58-asset-definition-id>#<i105-account-id>",
       quantity: "250",
     }),
   ],
@@ -3593,7 +3628,7 @@ await torii.registerTrigger({
 });
 ```
 
-`list*`/`query*` helpers and explorer QR snapshots now emit canonical i105 account
+`list*`/`query*` helpers and explorer QR snapshots now emit canonical I105 account
 literals only; address-format hints are no longer supported.
 
 `governanceFinalizeReferendumTyped` and `governanceEnactProposalTyped` normalise
@@ -3629,13 +3664,11 @@ for `null`.
 ```js
 import { AccountAddress } from "@iroha/iroha-js";
 
-const address = AccountAddress.fromAccount({
-  domain: "default",
-  publicKey: new Uint8Array(32),
+const address = AccountAddress.fromAccount({ publicKey: new Uint8Array(32),
 });
 console.log(address.canonicalHex());
 console.log(address.toI105(753));
-console.log(address.toI105Default());
+console.log(address.toI105());
 ```
 
 ```js

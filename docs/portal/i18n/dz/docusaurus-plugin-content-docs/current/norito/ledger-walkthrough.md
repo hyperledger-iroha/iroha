@@ -32,8 +32,8 @@ SDK མགྱོགས་དྲགས་འགོ་འཛིན། ཁྱོད
 བརྡ་སྟོན་ལྡེ་མིག་ལས་བྱུང་བ།
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 གནས་གོང་ཚུ་ རྩིས་ཐོ་འགོ་དང་པ་ཚུ་ ཐོ་བཀོད་འབད་དེ་ ངེས་དཔྱད་འབད།

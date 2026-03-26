@@ -1,40 +1,38 @@
----
-lang: am
-direction: ltr
-source: docs/account_structure_sdk_alignment.md
-status: complete
-generator: scripts/sync_docs_i18n.py
-source_hash: 164bd373091ae3280f9f90fcfd915a90088b0c79b8f3759ffd2548edb64d0a90
-source_last_modified: "2026-01-28T17:11:30.632934+00:00"
-translation_last_reviewed: 2026-02-07
-translator: machine-google-reviewed
----
+# Account/Asset Hard-Cut Alignment
 
-# I105 ልቀት ማስታወሻ ለኤስዲኬ እና ኮዴክ ባለቤቶች
+Teams: Rust runtime, Rust/Swift/Android/JS SDKs, bridge/codec tooling.
 
-ቡድኖች፡ Rust SDK፣ TypeScript/JavaScript SDK፣ Python SDK፣ Kotlin SDK፣ Codec tooling
+This repository ships strict first-release semantics. There is no compatibility
+path for legacy account/asset literals.
 
-አውድ፡ I18NI0000000X አሁን የመላኪያ I105 መለያ መታወቂያውን ያንጸባርቃል
-ትግበራ. እባክዎ የኤስዲኬ ባህሪን እና ሙከራዎችን ከቀኖናዊው ዝርዝር ጋር ያስተካክሉ።
+## Required behavior
+1. **Account parser contract (strict):**
+   - Accept only canonical I105 account literals.
+   - Reject all of:
+     - any `@domain` suffix
+     - alias literals
+     - canonical hex account literals in parser input
+    - non-canonical/legacy i105 literals
+     - legacy `norito:<hex>` account literals
+     - `uaid:` / `opaque:` account parser forms
+2. **Account identity surface:**
+   - Account-facing APIs are domainless and operate on subject identity.
+   - Domain context is represented only via explicit scoped/link records where needed.
+3. **Asset parser contract (strict):**
+   - Accept only canonical Base58 `AssetDefinitionId` values as public asset IDs.
+   - Accept asset aliases only in `name#domain.dataspace` / `name#dataspace` form, and resolve
+     them on-chain to a canonical Base58 asset-definition id.
+   - Treat `<base58-asset-definition-id>#<i105-account-id>[#dataspace:<id>]` as an
+     asset-holding identifier, not as a public asset id or alias target.
+   - Reject all prefixed/legacy forms (`norito:<hex>`, `aid:<hex>`,
+     owner-qualified asset-holding literals, `asset#domain#account`, `asset##account`, etc.).
+4. **Canonical output:**
+   - Render account IDs as canonical I105 in user-facing output.
+   - Canonical hex remains envelope/debug-only and is not accepted as parser input.
+5. **Compatibility policy:**
+   - No parser fallback branches.
+   - No parse-any account/asset entrypoints in runtime SDK paths.
 
-ቁልፍ ማጣቀሻዎች፡-
-- የአድራሻ ኮዴክ + ራስጌ አቀማመጥ - I18NI0000001X §2
-- ከርቭ መዝገብ - `docs/source/references/address_curve_registry.md`
-- መደበኛ v1 ጎራ አያያዝ - `docs/source/references/address_norm_v1.md`
-- ቋሚ ቬክተሮች - `fixtures/account/address_vectors.json`
-
-የእርምጃ እቃዎች፡-
-1. ** ቀኖናዊ ውፅዓት፡** I18NI0000005X/ማሳያ I105 ብቻ መልቀቅ አለበት
-   (አይ18NI00000006X ቅጥያ የለም)። ቀኖናዊ ሄክስ ለማረም (`0x...`) ነው።
-2. **Accepted inputs:** parsers MUST accept only canonical I105 account literals. Reject i105-default `sora...`, canonical hex (`0x...`), any `@<domain>` suffix, alias literals, legacy `norito:<hex>`, and `uaid:` / `opaque:` parser forms.
-3. **Resolvers:** canonical account parsing has no default-domain binding, scoped inference, or fallback resolver path. Use `ScopedAccountId` only on interfaces that explicitly require `<account>@<domain>`.
-4. **I105 checksum:** Blake2b-512 ከ `I105PRE || prefix || payload` በላይ ይጠቀሙ፣ ይውሰዱ
-   የመጀመሪያዎቹ 2 ባይት. የታመቀ ፊደል መሠረት **105** ነው።
-5. ** ከርቭ ጋቲንግ፡** ኤስዲኬዎች ነባሪ ወደ Ed25519-ብቻ። ለ ግልጽ መርጦ መግባትን ያቅርቡ
-   ML-DSA/GOST/SM (ፈጣን የግንባታ ባንዲራዎች፣ JS/Android `configureCurveSupport`)። አድርግ
-   sep256k1 በነባሪነት ከዝገት ውጭ ነቅቷል ብለው አያስቡ።
-6. ** CAIP-10 የለም: ** እስካሁን የተላከ CAIP-10 ካርታ የለም; አለማጋለጥ ወይም
-   በ CAIP-10 ልወጣዎች ላይ የተመሠረተ ነው።
-
-እባክዎ አንዴ ኮዴኮች/ሙከራዎች ከተዘመኑ ያረጋግጡ፤ ክፍት ጥያቄዎችን መከታተል ይቻላል
-በመለያ-አድራሻ RFC ክር ውስጥ.
+## Validation closure
+- Include explicit rejection tests for all forbidden literal forms.
+- Keep legacy forms only in negative-path tests.

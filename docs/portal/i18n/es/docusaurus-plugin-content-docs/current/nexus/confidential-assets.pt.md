@@ -206,7 +206,7 @@ Ledgers confidenciais devem reter historico suficiente para provar frescor de no
 - Jerarquía de derivación por cuenta:
   - `sk_spend` -> `nk` (clave anuladora), `ivk` (clave de visualización entrante), `ovk` (clave de visualización saliente), `fvk`.
 - Cargas útiles de notas encriptadas usando AEAD con claves compartidas derivadas por ECDH; ver claves de auditor opcionales podem ser anexadas a salidas conforme a política del activo.
-- Adicoes ao CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, herramientas de auditor para descriptografar notas, y el ayudante `iroha app zk envelope` para producir/inspeccionar sobres Norito fuera de línea. Torii expone o mesmo fluxo de derivacao via `POST /v1/confidential/derive-keyset`, retornando formas hexadecimal y base64 para que wallets busquen jerarquías de chave programáticamente.## Gas, límites y controles DoS
+- Adicoes ao CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, herramientas de auditor para descriptografar notas, y el ayudante `iroha app zk envelope` para producir/inspeccionar sobres Norito fuera de línea.
 - Horario determinista de gas:
   - Halo2 (Plonkish): gas base `250_000` + gas `2_000` por entrada del público.
   - `5` gas por byte de prueba, más cargas por anulador (`300`) y por compromiso (`500`).

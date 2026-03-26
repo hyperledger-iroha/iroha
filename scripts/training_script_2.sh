@@ -40,6 +40,7 @@ AUTO_PORTS=false
 STALL_THRESHOLD=40
 PUBLIC_HOST="127.0.0.1"
 BIND_HOST="127.0.0.1"
+TRAINING_ASSET_DEFINITION_ID="7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -356,6 +357,11 @@ read_public_key() {
   read_toml_string "public_key" "$1"
 }
 
+public_key_to_i105() {
+  local public_key="$1"
+  "$IROHA_BIN" tools address convert "$public_key" --format i105
+}
+
 read_domain() {
   read_toml_string "domain" "$1"
 }
@@ -583,8 +589,9 @@ for run in $(seq 1 "$RUNS"); do
   client_cfg="$run_dir/client.toml"
   domain="$(read_domain "$client_cfg")"
   sender_pub="$(read_public_key "$client_cfg")"
-  sender_account="${sender_pub}@${domain}"
-  asset_def="train${run}#${domain}"
+  sender_account="$(public_key_to_i105 "$sender_pub")"
+  asset_def="$TRAINING_ASSET_DEFINITION_ID"
+  asset_name="train${run}"
 
   clients_dir="$run_dir/clients"
   rm -rf "$clients_dir"
@@ -602,7 +609,10 @@ for run in $(seq 1 "$RUNS"); do
   echo "[run $run] asset flow..."
   asset_ok=true
   if ! retry_cmd "asset definition register" 3 2 \
-      "$IROHA_BIN" --config "$client_cfg" asset definition register --id "$asset_def"; then
+      "$IROHA_BIN" --config "$client_cfg" asset definition register \
+      --id "$asset_def" \
+      --name "$asset_name" \
+      --scale 0; then
     asset_ok=false
   fi
   if ! retry_cmd "asset mint" 3 2 \
@@ -615,7 +625,7 @@ for run in $(seq 1 "$RUNS"); do
     echo "[run $run] failed to read recipient public key" >&2
     asset_ok=false
   fi
-  recipient_account="${recipient_pub}@${domain}"
+  recipient_account="$(public_key_to_i105 "$recipient_pub")"
   if ! retry_cmd "recipient account register" 3 2 \
       "$IROHA_BIN" --config "$client_cfg" account register --id "$recipient_account"; then
     asset_ok=false
@@ -652,9 +662,9 @@ for run in $(seq 1 "$RUNS"); do
     echo "[run $run] failed to read multisig public key" >&2
     multisig_ok=false
   fi
-  sig1_account="${sig1_pub}@${domain}"
-  sig2_account="${sig2_pub}@${domain}"
-  sig3_account="${sig3_pub}@${domain}"
+  sig1_account="$(public_key_to_i105 "$sig1_pub")"
+  sig2_account="$(public_key_to_i105 "$sig2_pub")"
+  sig3_account="$(public_key_to_i105 "$sig3_pub")"
 
   for acct in "$sig1_account" "$sig2_account" "$sig3_account"; do
     if ! retry_cmd "signatory account register" 3 2 \
@@ -665,7 +675,7 @@ for run in $(seq 1 "$RUNS"); do
     fi
   done
 
-  multisig_account="${multisig_pub}@${domain}"
+  multisig_account="$(public_key_to_i105 "$multisig_pub")"
 
   if ! retry_cmd "multisig register" 3 2 \
       "$IROHA_BIN" --config "$client_cfg" multisig register \

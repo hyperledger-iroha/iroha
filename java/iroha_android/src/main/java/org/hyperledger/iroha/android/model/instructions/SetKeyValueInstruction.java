@@ -8,7 +8,7 @@ import org.hyperledger.iroha.android.model.InstructionBox;
 
 /**
  * Typed builder for {@code SetKeyValue} instructions targeting domains, accounts, asset
- * definitions, NFTs, and triggers.
+ * definitions, NFTs, RWAs, and triggers.
  */
 public final class SetKeyValueInstruction implements InstructionTemplate {
 
@@ -108,6 +108,7 @@ public final class SetKeyValueInstruction implements InstructionTemplate {
     ACCOUNT("SetAccountKeyValue", "account"),
     ASSET_DEFINITION("SetAssetDefinitionKeyValue", "definition"),
     NFT("SetNftKeyValue", "nft"),
+    RWA("SetRwaKeyValue", "rwa"),
     TRIGGER("SetTriggerKeyValue", "trigger");
 
     private final String action;
@@ -161,6 +162,10 @@ public final class SetKeyValueInstruction implements InstructionTemplate {
 
     public Builder setNftId(final String nftId) {
       return setTarget(Target.NFT, nftId);
+    }
+
+    public Builder setRwaId(final String rwaId) {
+      return setTarget(Target.RWA, rwaId);
     }
 
     public Builder setTriggerId(final String triggerId) {

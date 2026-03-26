@@ -19,9 +19,9 @@ title: Invocar Transferencia do Host a Partir de Kotodama
 
 ## Ротейру до Ливро Разау
 
-- Финансирование авторитарного договора (например, `i105...`) как активная операция, требующая перевода и предоставление авторизации на бумаге `CanTransfer` или эквивалентного разрешения.
-- Вызовите точку входа `call_transfer_asset` для передачи 5 сообщений из договора по контрато для `i105...`, отобразите как автоматический сетевой способ охвата хоста.
-- Подтвердите вводы через `FindAccountAssets` или `iroha_cli ledger assets list --account i105...` и проверьте события, чтобы подтвердить защиту регистрации метаданных или контекста передачи.
+- Финансирование авторитарного договора (например, `<i105-account-id>`) как активная операция, требующая перевода и предоставление авторизации на бумаге `CanTransfer` или эквивалентного разрешения.
+- Вызовите точку входа `call_transfer_asset` для передачи 5 сообщений из договора по контрато для `<i105-account-id>`, отобразите как автоматический сетевой способ охвата хоста.
+- Подтвердите вводы через `FindAccountAssets` или `iroha_cli ledger assets list --account <i105-account-id>` и проверьте события, чтобы подтвердить защиту регистрации метаданных или контекста передачи.
 
 ## Рекомендации по использованию SDK
 
@@ -36,8 +36,8 @@ title: Invocar Transferencia do Host a Partir de Kotodama
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("i105..."),
-      account!("i105..."),
+      account!("<i105-account-id>"),
+      account!("<i105-account-id>"),
       asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );

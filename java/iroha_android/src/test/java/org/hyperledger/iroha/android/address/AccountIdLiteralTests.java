@@ -24,7 +24,7 @@ public final class AccountIdLiteralTests {
   public void rejectsDomainSuffixedLiterals() throws Exception {
     final String address = sampleI105(0x33);
     try {
-      AccountIdLiteral.requireCanonicalI105Address(address + "@wonderland", "accountId");
+      AccountIdLiteral.requireCanonicalI105Address(address + "@hbl.dataspace", "accountId");
       throw new AssertionError("expected IllegalArgumentException");
     } catch (final IllegalArgumentException expected) {
       assert expected.getMessage().contains("without @domain")
@@ -39,8 +39,8 @@ public final class AccountIdLiteralTests {
     final AccountAddress address = AccountAddress.fromAccount(publicKey, "ed25519");
     try {
       AccountIdLiteral.requireCanonicalI105Address(
-          "RnuaJGGDL6wUPVUV8Zs7Q5jS8bPCeAncRruN7MczGuKyLa63FZwB95e9", "accountId");
-      throw new AssertionError("expected legacy base58 literal to be rejected");
+          "soraチキVMXfkAweDFテqSkhXウrdUイヒニ4eYqサアYsミヰヲt4オサウキHヰkNチヲメミwjQgmワdnク9h5BSkヱワルvセ6サyWtSヨロAカaヱロレサxトメシMAyス8ソjDZナイスMwチBモヰ9ホヰロRユQコk3キニリシmDラyiRGユfGコHaマVY5phTKQ316", "accountId");
+      throw new AssertionError("expected legacy non-i105 literal to be rejected");
     } catch (final IllegalArgumentException expected) {
       assert expected.getMessage().contains("canonical I105")
           : "legacy rejection must mention canonical I105";

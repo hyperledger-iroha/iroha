@@ -210,7 +210,7 @@ Utilisez la fonction `GET /v1/confidential/assets/{definition_id}/transitions` p
 - تسلسل اشتقاق المفاتيح لكل حساب:
   - `sk_spend` → `nk` (clé d'annulation) ، `ivk` (clé de visualisation entrante) ، `ovk` (clé de visualisation sortante) ، `fvk`.
 - Notes sur les charges utiles de l'AEAD et de l'ECDH؛ Il s'agit des clés de vue de l'auditeur et des sorties.
-- Lignes CLI : `confidential create-keys`, `confidential send`, `confidential export-view-key`, fonctions pour les mémos et `iroha app zk envelope`. Les enveloppes Norito sont disponibles. يعرض Torii نفس تدفق الاشتقاق عبر `POST /v1/confidential/derive-keyset` ويعيد اشكالا hex وbase64 لكي تستطيع المحافظ جلب هياكل المفاتيح برمجيا.## الغاز، الحدود، وضوابط DoS
+- Lignes CLI : `confidential create-keys`, `confidential send`, `confidential export-view-key`, fonctions pour les mémos et `iroha app zk envelope`. Les enveloppes Norito sont disponibles. يعرض
 - جدول gaz حتمي:
   - Halo2 (Plonkish) : gaz `250_000` + gaz `2_000` pour la contribution du public.
   - `5` gaz pour la preuve, pour l'annulation (`300`) et l'engagement (`500`).

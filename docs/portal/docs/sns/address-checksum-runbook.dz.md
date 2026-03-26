@@ -1,114 +1,105 @@
 ---
-lang: dz
-direction: ltr
-source: docs/portal/docs/sns/address-checksum-runbook.md
-status: complete
-generator: scripts/sync_docs_i18n.py
-source_hash: fcd909a7013c5147e4f0c89c67de856ff56797b99281b954c7708ad83ab5cdc8
-source_last_modified: "2026-01-28T17:11:30.699790+00:00"
-translation_last_reviewed: 2026-02-07
 id: address-checksum-runbook
 title: Account Address Checksum Incident Runbook
 sidebar_label: Checksum incidents
-description: Operational response for I105 checksum failures (ADDR-7).
-translator: machine-google-reviewed
+description: Operational response for i105 checksum failures (ADDR-7).
 ---
 
-:::དྲན་ཐོའི་འབྱུང་ཁུངས།
-ཤོག་ངོས་འདིའི་ནང་ `docs/source/sns/address_checksum_failure_runbook.md` ལ་མཐོང་སྣང་། དུས༌མཐུན༌བཟོ༌ནི
-འབྱུང་ཁུངས་ཡིག་སྣོད་དང་པ་ དེ་ལས་ འདྲ་བཤུས་འདི་མཉམ་མཐུད་འབད།
+:::note Canonical Source
+This page mirrors `docs/source/sns/address_checksum_failure_runbook.md`. Update
+the source file first, then sync this copy.
 :::
 
-བརྟག་དཔྱད་དམ་སྦྱིས་ཚུ་ `ERR_CHECKSUM_MISMATCH` (I18NI000000013X) ནང་ལུ་སྦེ་ ཁ་ཐོག་ལུ་སྦེ་ ཁ་ཐོག་ལུ་ ཁ་ཐོག་ལུ་སྦེ་ ཁ་ཐོག་ལུ་ འཐུས་ཤོར་བྱུང་ཡོདཔ་ཨིན།
-I18NT000000007X, SDKs, དང་དངུལ་ཁུག་/འཚོལ་ཞིབ་མཁོ་མངགས་པ། ད་ལྟོ་ ADDR-6/ADDR-7 ལམ་གྱི་ས་ཁྲ་ཚུ།
-བརྟག་ཞིབ་བསྡོམས་ཉེན་བརྡ་ ཡང་ན་ རྒྱབ་སྐྱོར་ག་དུས་འབད་རུང་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ རན་དེབ་འདི་རྗེས་སུ་འཇུག་དགོཔ་ཨིན།
-ཊིཀཊ་མེ་འཕེལ།
+Checksum failures surface as `ERR_CHECKSUM_MISMATCH` (`ChecksumMismatch`) across
+Torii, SDKs, and wallet/explorer clients. The ADDR-6/ADDR-7 roadmap items now
+require operators to follow this runbook whenever checksum alerts or support
+tickets fire.
 
-## རྩེདམོ་འདི་གཡོག་བཀོལ་བའི་སྐབས།
+## When to run the play
 
-- **ཨེ་ལར་ཊི་:** `AddressInvalidRatioSlo` (ནང་གསལ་ལྟར་དུ་ངེས་ཚིག་བཀོད་ཡོད།
-  `dashboards/alerts/address_ingest_rules.yml`) འགྲུལ་བཞུད་དང་མཆན་འགྲེལ་ཐོ་ཡིག།
+- **Alerts:** `AddressInvalidRatioSlo` (defined in
+  `dashboards/alerts/address_ingest_rules.yml`) trips and the annotations list
   `reason="ERR_CHECKSUM_MISMATCH"`.
-- **ཕིག་ཅར་ཌིཕཊ་:** I18NI000000017X Prometheus ཚིག་ཡིག་ཡིག་སྣོད་ཡང་ན་
-  Grafana ཌེཤ་བོརཌི་གིས་ ཨེསི་ཌི་ཀེ་འདྲ་བཤུས་གང་རུང་ཅིག་གི་དོན་ལུ་ ཅེག་སམ་གྱི་མི་མཐུན་པའི་སྙན་ཞུ་འབདཝ་ཨིན།
-- **རྒྱབ་སྐྱོར་ཚུ་:** དངུལ་འཛིན་/འཚོལ་ཞིབ་/ཨེསི་ཌི་ཀེ་སྡེ་ཚན་ཚུ་གིས་ ཅེག་སམ་འཛོལ་བ་ཚུ་ བཤད་ཡོདཔ་ཨིན།
-  ངན་ལྷད་ཡང་ན་ ད་ལས་ཕར་ བརྡ་རྟགས་མ་བཀོད་པའི་ བརྡ་བཀོད་པར་རིས།
-- **ལག་ཐོག་ལྟ་རྟོག:** Torii དྲན་ཐོ་ཚུ་གིས་ བསྐྱར་ལོག་འབདཝ་ཨིན།
-  བཟོ་བསྐྲུན་གྱི་མཇུག་བསྡུའི་དོན་ལུ།
+- **Fixture drift:** The `account_address_fixture_status` Prometheus textfile or
+  Grafana dashboard reports a checksum mismatch for any SDK copy.
+- **Support escalations:** Wallet/explorer/SDK teams cite checksum errors, IME
+  corruption, or clipboard scans that no longer decode.
+- **Manual observation:** Torii logs show repeated `address_parse_error=checksum_mismatch`
+  for production endpoints.
 
-བྱུང་རྐྱེན་འདི་དམིགས་བསལ་གྱིས་ས་གནས་-༨/Local-12 ཁ་ཐུག་རྐྱབ་པའི་སྐོར་ལས་ཨིན་པ་ཅིན་ འདི་གི་ཤུལ་ལས་བལྟ།
-`AddressLocal8Resurgence` ཡང་ན་ `AddressLocal12Collision` རྩེད་དེབ་ཚུ།
+If the incident is specifically about Local-8/Local-12 collisions, follow the
+`AddressLocal8Resurgence` or `AddressLocal12Collision` playbooks instead.
 
-## བདེན་དཔང་ཞིབ་དཔྱད་ཐོ་ཡིག་།
+## Evidence checklist
 
-| སྒྲུབ་བྱེད་ | བརྡ་བཀོད་ / ས་གནས་ | དྲན་ཐོ། |
-|------------------------------------------- |
-| I18NT0000003X པར་ལེན་ | I18NI0000021X | ནུས་མེད་ཀྱི་རྒྱུ་མཚན་ཚུ་ བརྡལ་བཤིག་དང་ གནོད་སྐྱོན་བྱུང་མི་ མཐའ་མཚམས་ཚུ་ བཏོན་གཏང་། |
-| དྲན་སྐུལ་པེ་ལོཌ་ | PagerDuty/slack + I18NI0000022X | སྐབས་དོན་ཁ་ཡིག་དང་དུས་ཚོད་མཚོན་རྟགས་ཚུ་བཙུགས། |
-| ཕིགསི་ཅུར་གསོ་བའི་ | `artifacts/account_fixture/address_fixture.prom` + I18NT0000004X | ཨེསི་ཌི་ཀེ་འདྲ་བཤུས་ཚུ་ I18NI000000024X ལས་ འཕྱེལ་འགྱོ་ཡི་ག་ བདེན་དཔང་འབདཝ་ཨིན། |
-| PromQL འདྲི་དཔྱད་ | I18NI0000025X | བྱུང་རྐྱེན་ཡིག་ཆ་གི་དོན་ལུ་ CSV ཕྱིར་འདྲེན་འབད། |
-| དྲན་ཐོ་ | `journalctl -u iroha_torii --since -30m | rg 'checksum_mismatch'` (ཡང་ན་ དྲན་ཐོ་བསྡུ་སྒྲིག) | བགོ་བཤའ་མ་རྐྱབ་པའི་ཧེ་མ་ Scrub PII . |
-| རིམ་སྒྲིག་བདེན་དཔྱད་ | I18NI0000027X | ཀེ་ནོ་ནིག་གློག་ཤུགས་འཕྲུལ་ཆས་ངེས་གཏན་བཟོ་སྟེ་ ཇེ་ཨེསི་ཨོ་ཨེན་གྱིས་ ངོས་ལེན་འབདཝ་ཨིན། |
-| ཨེསི་ཌི་ཀེ་ ཆ་སྙོམས་ཞིབ་དཔྱད་ | I18NI0000028X | ཨེསི་ཌི་ཀེ་རེ་རེ་གི་དོན་ལུ་ ཉེན་བརྡ་/ཊིཀ་ཚུ་ནང་སྙན་ཞུ་འབད། |
-| བཏོན་གཏང་/ཨའི་ཨེམ་ཨི་ བློ་རིག་ | I18NI0000029X | སྦ་བཞག་ཡོད་པའི་ཡིག་འབྲུ་ཚུ་ཡང་ན་ཨའི་ཨེམ་ཨི་ལོག་འབྲི་ནི་ཚུ་ བརྟག་དཔྱད་འབདཝ་ཨིན། cite `address_display_guidelines.md`. |
+| Evidence | Command / Location | Notes |
+|----------|-------------------|-------|
+| Grafana snapshot | `dashboards/grafana/address_ingest.json` | Capture invalid reason breakdowns and affected endpoints. |
+| Alert payload | PagerDuty/Slack + `dashboards/alerts/address_ingest_rules.yml` | Include context labels and timestamps. |
+| Fixture health | `artifacts/account_fixture/address_fixture.prom` + Grafana | Proves whether SDK copies drifted from `fixtures/account/address_vectors.json`. |
+| PromQL query | `sum by (context) (increase(torii_address_invalid_total{reason="ERR_CHECKSUM_MISMATCH"}[5m]))` | Export CSV for the incident doc. |
+| Logs | `journalctl -u iroha_torii --since -30m | rg 'checksum_mismatch'` (or log aggregation) | Scrub PII before sharing. |
+| Fixture verification | `cargo xtask address-vectors --verify` | Confirms canonical generator and committed JSON agree. |
+| SDK parity check | `python3 scripts/account_fixture_helper.py check --target <path> --metrics-out artifacts/account_fixture/<label>.prom --metrics-label <label>` | Run for every SDK reported in alerts/tickets. |
+| Clipboard/IME sanity | `iroha tools address inspect <literal>` | Detects hidden characters or IME rewrites; cite `address_display_guidelines.md`. |
 
-## འཕྲལ་མགྱོགས་རང་ལན་གསལ་བ།
+## Immediate response
 
-1. ཉེན་བརྡ་འདི་ངོས་ལེན་འབད་, འབྲེལ་ལམ་ Grafana པར་ལེན་ཚུ་ + PromQL ཐོན་འབྲས་འདི་ བྱུང་རྐྱེན་ནང་།
-   thype, དྲན་ཐོ་ I18NT0000009X སྐབས་དོན་ལུ་གནོད་སྐྱོན་བྱུང་ཡོདཔ།
-༢ ཕིརི་ཟེ་གིས་ ཁྱབ་བསྒྲགས་གསལ་སྟོན་/ཨེསི་ཌི་ཀེ་གིས་ ཁ་བྱང་དབྱེ་དཔྱད་འབད་ནི་ལུ་ ལགཔ་བརྐྱབ་ཨིན།
-3. 2 2 2 2 201.2011.
-   བྱུང་རྐྱེན་སྣོད་འཛིན་ (`docs/source/sns/incidents/YYYY-MM/<ticket>/`).
-4. `checksum_mismatch` པེ་ལོཌི་ཚུ་སྟོན་མི་ དྲན་ཐོ་དཔེ་ཚད་ཚུ།
-༥ ཨེསི་ཌི་ཀེ་གི་ཇོ་བདག་ཚུ་ལུ་ (`#sdk-parity`) དཔེ་ཚད་ཀྱི་ པེ་ལོཌི་ཚུ་དང་གཅིག་ཁར་ བརྡ་སྤྲོད་འབད་ཞིནམ་ལས་ དེ་ཚུ་ བརྟག་དཔྱད་འབད་ཚུགས།
+1. Acknowledge the alert, link Grafana snapshots + PromQL output in the incident
+   thread, and note affected Torii contexts.
+2. Freeze manifest promotions / SDK releases touching address parsing.
+3. Save dashboard snapshots and the generated Prometheus textfile artefacts in
+   the incident folder (`docs/source/sns/incidents/YYYY-MM/<ticket>/`).
+4. Pull log samples showing `checksum_mismatch` payloads.
+5. Notify SDK owners (`#sdk-parity`) with sample payloads so they can triage.
 
-## རྩ་བའི་རྒྱུ་རྐྱེན་ཟུར་ཐོ།
+## Root-cause isolation
 
-### བརྐོས་བའམ་ གློག་ཤུགས་འཕྲུལ་འདེབས།
+### Fixture or generator drift
 
-- ལོག་སྟེ་ `cargo xtask address-vectors --verify`; འཐུས་ཤོར་བྱུང་པ་ཅིན་ བསྐྱར་བཟོ་འབད།
-- I18NI000000035X (ཡང་ན་མི་ངོ་རྐྱང་པ།
-  བུནཌི་ངེས་དཔྱད་འབད་ནིའི་དོན་ལུ་ ཨེསི་ཌི་ཀེ་རེ་རེའི་དོན་ལུ་ `scripts/account_fixture_helper.py check`)
-  སྒྲིག་བཀོད་ཚུ་ ཀེ་ནོ་ནིག་ཇེ་ཨེསི་ཨོ་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན།
+- Re-run `cargo xtask address-vectors --verify`; regenerate if it fails.
+- Execute `ci/account_fixture_metrics.sh` (or individual
+  `scripts/account_fixture_helper.py check`) for each SDK to confirm bundled
+  fixtures match the canonical JSON.
 
-### མཁོ་མངགས་འབད་མི་ཨིན་ཀོ་ཌར་ / ཨའི་ཨེམ་ཨི་གི་རི་བ།
+### Client encoders / IME regressions
 
-- ཀླད་ཀོར་རྒྱ་ཚད་འཚོལ་ནི་ལུ་ `iroha tools address inspect` བརྒྱུད་དེ་ ལག་ལེན་པ་གིས་བྱིན་མི་ཡིག་འབྲི།
-  nonss, ཀ་ན་གཞི་བསྒྱུར་, ཡང་ན་ བཏོག་བཏོགཔ་ཨིན་ པེ་ལོཌ་ཚུ།
-- བརྟག་ཞིབ་ཀྱི་དངུལ་ཁུག་/འཚོལ་ཞིབ་འདི་དང་གཅིག་ཁར་བཞུར།
-  `docs/source/sns/address_display_guidelines.md` (འདྲ་བཤུས་དམིགས་ཚད་གཉིས་པ། ཉེན་བརྡ་ཚུ།
-  ཆ་འཇོག་གྲུབ་པའི་ UX གི་རྗེས་སུ་འབྲང་ནིའི་དོན་ལུ་ QR གྲོགས་རམ་པ།
+- Inspect user-provided literals via `iroha tools address inspect` to find zero-width
+  joins, kana conversions, or truncated payloads.
+- Cross-check wallet/explorer flows with
+  `docs/source/sns/address_display_guidelines.md` (canonical i105 copy/share,
+  alias labeling, QR helpers) to ensure they follow the approved UX.
 
-### ངོ་མའི་ཡང་ན་ཐོ་བཀོད་ཀྱི་གནད་དོན།
+### Manifest or registry issues
 
-- གསར་ཤོས་གསལ་སྟོན་བང་རིམ་དང་ `address_manifest_ops.md` ལུ་ རྗེས་སུ་འཇུག་དགོ།
-  ས་གནས་ཀྱི་-༨ སེལ་འཐུ་འབད་མི་ཚུ་ ལོག་མ་འབྱུང་པར་ ངེས་གཏན་བཟོ།
-  འབབ་ཁུངས་ནང་འབྱུང་།
+- Follow `address_manifest_ops.md` to re-validate the latest manifest bundle and
+  ensure no Local-8 selectors resurfaced.
+  appear in payloads.
 
-འགྲིམ་འགྲུལ་ ངན་པམ་ཡང་ན་ སྐྱོན་ཆ་ཅན་གྱི་འགྲིམ་པ།
+### Malicious or malformed traffic
 
-- ཉེས་འཛུགས་ IPs/app IDs ཚུ་ Torii དྲན་ཐོ་ཚུ་དང་ I18NI000000040X བརྒྱུད་དེ་ བརྡལ་བཤིག་གཏང་།
-- ཉེན་སྲུང་/གཞུང་གི་རྗེས་སྙེག་འབད་ནིའི་དོན་ལུ་ ཉུང་མཐའ་ཆུ་ཚོད་༢༤ གི་དྲན་ཐོ་ཚུ་ ཉམས་སྲུང་འབད།
+- Break down offending IPs/app IDs via Torii logs and `torii_http_requests_total`.
+- Preserve at least 24 hours of logs for Security/Governance follow-up.
 
-## ཉེར་སྤྱོད་དང་བསྐྱར་གསོ་འབད་ནི།
+## Mitigation & recovery
 
-| པར་སྐྲུན། | བྱ་བ་ |
-|-----------------------------------------------------------------------------------------------------------------------------------------
-| ཕིགསི་ཅར་ཌིཕཊ་ | `fixtures/account/address_vectors.json` བསྐྱར་བཟོ་ I18NI000000042X, དུས་མཐུན་བཟོ་ཡོད་པའི་ SDK བཱན་ཌིལསི་དང་ དེ་ལས་ ཊིཀཊ་ལུ་ `address_fixture.prom` པར་ལེན་ཚུ་ མཉམ་སྦྲགས་འབད། |
-| SDK/client འགྱུར་ལྡོག་ | ཡིག་སྣོད་ཀྱི་གནད་དོན་ཚུ་ ཀེ་ནོ་ནིག་སྒྲིག་ཆས་ + `iroha tools address inspect` ཐོན་འབྲས་ལུ་གཞི་བསྟུན་འབད་དེ་ ཨེསི་ཌི་ཀེ་ པཱར་ཊི་སི་ཨའི་ (དཔེར་ན་ I18NI000000045X) གི་རྒྱབ་ལུ་ སྒོ་ར་སྒོ་བཏོནམ་ཨིན། |
-| ངལ་གསོའི་ཕུལ་ནི། | གནས་རིམ་ཚད་འཛིན་ཡང་ན་ བཀག་ཆ་འབད་མི་ ཉེས་ཅན་གཙོ་བོ་ཚུ་ གལ་སྲིད་ དུར་ཁྲོད་ཀྱི་ སེལ་འཐུ་འབད་མི་ཚུ་ དགོཔ་འདྲཝ་ཅིག་འབད་བ་ཅིན་ གཞུང་ལུ་ ཡར་སེང་འབད་དགོ། |
+| Scenario | Actions |
+|----------|---------|
+| Fixture drift | Regenerate `fixtures/account/address_vectors.json`, rerun `cargo xtask address-vectors --verify`, update SDK bundles, and attach `address_fixture.prom` snapshots to the ticket. |
+| SDK/client regression | File issues referencing the canonical fixture + `iroha tools address inspect` output, and gate releases behind the SDK parity CI (e.g., `ci/check_address_normalize.sh`). |
+| Malicious submissions | Rate-limit or block offending principals, escalate to Governance if tombstoning selectors is required. |
 
-ཉམས་སྲུང་འབད་ཚརཝ་ད་ ངེས་གཏན་བཟོ་ནིའི་དོན་ལུ་ གོང་ལས་ PromQL འདྲི་དཔྱད་འདི་ ལོག་གཡོག་བཀོལ།
-I18NI000000046X ཀླད་ཀོར་ (`/tests/*` མ་རྩིས་བར་) ཉུང་མཐའ་ལུ་སྡོད་དོ་ཡོདཔ་ཨིན།
-བྱུང་རྐྱེན་འདི་ མར་ཕབ་མ་འབད་བའི་ཧེ་མ་ སྐར་མ་༣༠ .
+Once mitigations land, rerun the PromQL query above to confirm
+`ERR_CHECKSUM_MISMATCH` stays at zero (excluding `/tests/*`) for at least
+30 minutes before downgrading the incident.
 
-## ཉེར་མཁོ།
+## Closure
 
-1. གཏན་མཛོད་ Grafana པར་ལེན་དང་ PromQL CSV དྲན་ཐོ་ཕྱིར་འཐེན་དང་ `address_fixture.prom`.
-2. I18NI0000004X (ADDR དབྱེ་ཚན་) དང་ ལག་ཆས་/ཡིག་ཆ་ཚུ་ཨིན་པ་ཅིན་ ལམ་གྱི་ས་ཁྲ་ དུས་མཐུན་བཟོ་ནི།
-   འགྱུར་བཅོས་; འགྱུར་བ་
-3. ཡིག་སྣོད་རྗེས་མའི་དྲན་ཐོ། I18NI0000000050X འོག་ལུ་སློབ་ཚན་གསརཔ་ཚུ།
-   འཐོན་ནི།
-༤ འཇུག་སྤྱོད་འབད་བའི་སྐབས་ ཨེསི་ཌི་ཀེ་ གསར་བཏོན་འབད་ཡོད་པའི་ དྲན་ཐོ་ཚུ་ བརྟག་དཔྱད་ཀྱི་ བཅོ་ཁ་ཚུ་ བཤད་དགོ།
-༥ ཆུ་ཚོད་༢༤ གི་རིང་ལུ་ ཉེན་བརྡ་འདི་ ལྗང་ཁུ་སྦེ་སྡོད་ཞིནམ་ལས་ བརྟན་ཏོག་ཏོ་གི་བརྟག་དཔྱད་འདི་ ལྗང་ཁུ་སྦེ་ལུས་ཏེ་ཡོདཔ་ཨིན།
-   རང༌གཞི༌
+1. Archive Grafana snapshots, PromQL CSV, log excerpts, and `address_fixture.prom`.
+2. Update `status.md` (ADDR section) plus the roadmap row if tooling/docs
+   changed.
+3. File post-incident notes under `docs/source/sns/incidents/` when new lessons
+   emerge.
+4. Ensure SDK release notes mention checksum fixes when applicable.
+5. Confirm the alert stays green for 24h and fixture checks remain green before
+   resolving.

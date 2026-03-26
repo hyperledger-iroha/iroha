@@ -11,8 +11,9 @@ formats without compromising safety or accessibility.
 
 ## Safe sharing flows
 
-- Default every copy/share action to the I105 address. Display the resolved
-  domain as supporting context so the checksummed string stays front and centre.
+- Default every copy/share action to the canonical I105 account id.
+  If an on-chain alias is present, display it as supporting metadata in a
+  separate labeled field.
 - Offer a “Share” affordance that bundles the full plain-text address and a QR
   code derived from the same payload. Let users inspect both before committing.
 - When space requires truncation (tiny cards, notifications), keep the leading
@@ -20,17 +21,19 @@ formats without compromising safety or accessibility.
   the checksum anchor survives. Provide a tap/keyboard shortcut to copy the full
   string without truncation.
 - Prevent clipboard desync by emitting a confirmation toast that previews the
-  exact I105 string that was copied. Where telemetry is available, count copy
+  exact i105 string that was copied. Where telemetry is available, count copy
   attempts versus share actions so UX regressions surface quickly.
 
 ## IME & input safeguards
 
-- Reject non-ASCII input in address fields. When IME composition artefacts (full
-  width, Kana, tone marks) appear, surface an inline warning that explains how
-  to switch the keyboard to Latin input before retrying.
-- Provide a plain-text paste zone that strips combining marks and replaces
-  whitespace with ASCII spaces before validation. This keeps users from losing
-  progress when they disable their IME mid-flow.
+- Validate account-id fields as canonical I105 only. Validate alias
+  entry fields separately as `name@dataspace` or `name@domain.dataspace`.
+- When IME composition artefacts or zero-width characters appear, surface an
+  inline warning instead of coercing the input into a different account-id
+  format.
+- Provide a plain-text paste zone that preserves the canonical i105 literal as
+  pasted while still stripping obviously invalid stealth code points before
+  validation.
 - Harden validation against zero-width joiners, variation selectors, and other
   stealth Unicode code points. Log the rejected code point category so fuzzing
   suites can import the telemetry.
@@ -44,17 +47,20 @@ formats without compromising safety or accessibility.
 - Announce successful copy/share events via a polite live region update. Include
   the destination (clipboard, share sheet, QR) so the user knows the action
   completed without moving focus.
-- Supply descriptive `alt` text for QR previews (e.g., “I105 address for
+- Supply descriptive `alt` text for QR previews (e.g., “i105 address for
   `<account>` on chain `0x1234`”). Provide a “Copy address as text”
   fallback adjacent to the QR canvas for low-vision users.
 
 ## Single-format policy
 
-- Keep canonical I105 as the only user-facing account literal format for copy,
-  share, and QR surfaces.
+- Keep canonical I105 as the only user-facing account-id format for
+  copy, share, and QR surfaces.
+- Treat `name@dataspace` and `name@domain.dataspace` as on-chain aliases that
+  point to canonical i105 account ids.
 - Do not expose alternate account-literal encodings in production wallet or
   explorer UX.
-- Telemetry should track I105 copy/share usage and validation failures only.
+- Telemetry should track i105 copy/share usage, alias-resolution usage, and
+  validation failures only.
 
 ## Quality gates
 
@@ -63,5 +69,5 @@ formats without compromising safety or accessibility.
   appear.
 - Include manual QA scenarios for IME input (kana, pinyin), screen reader pass
   (VoiceOver/NVDA), and QR copy on high-contrast themes before releasing.
-- Surface these checks in release checklists alongside the I105 parity tests
+- Surface these checks in release checklists alongside the i105 parity tests
   so regressions remain blocked until corrected.

@@ -608,7 +608,28 @@ impl Actor {
     ) {
         let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         let topology_peers = context.topology.as_ref().to_vec();
-        self.touch_pending_progress(vote.block_hash, vote.height, vote.view, Instant::now());
+        let now = Instant::now();
+        self.touch_pending_progress(vote.block_hash, vote.height, vote.view, now);
+        if vote.height == committed_height.saturating_add(1)
+            && matches!(vote.phase, Phase::Prepare | Phase::Commit)
+        {
+            let voter = usize::try_from(vote.signer).ok().and_then(|idx| {
+                context
+                    .signature_topology
+                    .as_ref()
+                    .as_ref()
+                    .get(idx)
+                    .cloned()
+            });
+            let _ = self.handle_frontier_slot_event(
+                now,
+                super::FrontierSlotEvent::OnVoteObserved {
+                    block_hash: vote.block_hash,
+                    view: vote.view,
+                    voter,
+                },
+            );
+        }
         if !matches!(vote.phase, Phase::NewView) {
             // NEW_VIEW votes reference the highest QC block hash; caching would poison rosters for
             // subsequent PREPARE/COMMIT votes on that block.

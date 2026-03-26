@@ -116,7 +116,7 @@ Struct ReservedAssignmentRequestV1 {
 | `/v1/sns/policies/{suffix_id}` |入手 | -- | يجلب `SuffixPolicyV1` الحالي (قابل للكاش)。 |
 | `/v1/sns/names/{namespace}/{literal}` |入手 | -- | يعيد `NameRecordV1` الحالي + الحالة الفعلية (アクティブ、グレース、الخ)。 |
 
-** セレクタ:** مقطع `{selector}` يقبل I105 او مضغوط او 16 進数 قياسي حسب ADDR-5; Torii يطبعها عبر `NameSelectorV1`。
+** セレクタ:** مقطع `{selector}` يقبل i105 او مضغوط او 16 進数 قياسي حسب ADDR-5; Torii يطبعها عبر `NameSelectorV1`。
 
 ** 説明:** Norito JSON は `code`、`message`、`details` です。 `sns_err_reserved`、`sns_err_payment_mismatch`、`sns_err_policy_violation`、`sns_err_governance_missing`。
 
@@ -162,7 +162,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner <i105-account-id> \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -222,7 +222,7 @@ Torii يتحقق من الاثباتات عبر فحص:
 
 1. `/v1/sns/policies/{suffix_id}` は、グレース والشرائح المتاحة を意味します。
 2. `RegisterNameRequestV1`:
-   - `selector` مشتق من ラベル I105 (المفضل) او المضغوط (الخيار الثاني)。
+   - `selector` مشتق من ラベル i105 (المفضل) او المضغوط (الخيار الثاني)。
    - `term_years` 認証済み。
    - `payment` يشير الى تحويل スプリッター الخزينة/スチュワード。
 3. Torii :
