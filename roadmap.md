@@ -42,8 +42,6 @@ Validation:
 - `env NORITO_SKIP_BINDINGS_SYNC=1 CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target5 cargo test -p iroha_torii --lib handle_v1_subscription_plans_filters_provider_alias -- --nocapture`
 
 Open work for this slice now remains:
-- clear the unrelated syntax error at `mochi/mochi-ui-egui/src/main.rs:9920`
-  so `cargo fmt --all` works workspace-wide again;
 - rerun the broader workspace-wide `cargo test --workspace` / `cargo clippy
   --workspace --all-targets -- -D warnings` sweeps once time allows; and
 - no additional Torii account-alias resolution drift is known after the focused
@@ -63,8 +61,8 @@ Validation:
 - `cargo test -p integration_tests --test zk_confidential_localnet pressure_submitter_clients_applies_short_timeouts -- --exact --nocapture`
 
 Open work for this slice now remains:
-- clear the unrelated syntax error at `mochi/mochi-ui-egui/src/main.rs:9920`
-  so `cargo fmt --all` works workspace-wide again.
+- no additional zk confidential localnet `Config` literal drift is known after
+  the focused compatibility fix and targeted test rerun.
 
 Latest sync (2026-03-26 Swift account-address bridge fallback without `NoritoBridge.xcframework`):
 `IrohaSwift/Sources/IrohaSwift/NativeBridge.swift`
