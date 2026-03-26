@@ -2,6 +2,49 @@
 
 Last updated: 2026-03-26
 
+## 2026-03-26 Follow-up: Kagami now has a task-first CLI surface, scriptable wizard flags, and generated next-step guidance
+- Extended
+  `crates/iroha_kagami/src/main.rs`,
+  `crates/iroha_kagami/src/localnet.rs`,
+  `crates/iroha_kagami/src/localnet_tui.rs`,
+  `crates/iroha_kagami/src/swarm.rs`,
+  `crates/iroha_kagami/src/wizard.rs`,
+  `crates/iroha_kagami/src/codec.rs`,
+  `crates/iroha_kagami/README.md`,
+  `crates/iroha_kagami/CommandLineHelp.md`,
+  `crates/iroha_kagami/docs/{codec,kura,swarm}.md`,
+  `crates/iroha_kagami/samples/codec/{README.md,account.{json,bin},domain.{json,bin}}`,
+  `defaults/docker-compose*.yml`,
+  and
+  `docs/source/{norito_streaming*,sumeragi*}.md`
+  so Kagami is organized around user tasks instead of a flat expert-only
+  toolbox.
+- The shipped behavior in this slice:
+  - the top-level CLI is now `wizard`, `localnet-wizard`, `localnet`,
+    `docker`, `keys`, `genesis`, `verify`, and `advanced`, with the narrower
+    `codec`, `kura`, `schema`, `client-configs`, and markdown-help tooling
+    moved under `advanced`;
+  - top-level help now includes concrete task examples, and the checked-in
+    `CommandLineHelp.md` snapshot is generated from the live clap surface and
+    verified in tests so the README/help links cannot silently drift again;
+  - `wizard --non-interactive` now accepts the previously prompt-only host,
+    port, relay-mode, and relay-hub fields, and both `wizard` and `localnet`
+    now print labeled summaries plus generated per-output `README.md` guidance
+    with exact next commands instead of terse one-line success text;
+  - generic `localnet` and the localnet TUI now default to permissioned
+    consensus unless a profile/perf preset requires NPoS, while Docker/localnet
+    output now surfaces the effective consensus mode, generated artifact paths,
+    and Torii/bootstrap commands directly; and
+  - Kagami docs/examples were rewritten around the new `docker`, `keys`, and
+    `advanced ...` command names, while the codec fixture samples were refreshed
+    to the current canonical JSON/Binary forms so the codec regression suite
+    matches the live schema.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `cargo run -p iroha_kagami -- advanced markdown-help > crates/iroha_kagami/CommandLineHelp.md` (pass; unrelated pre-existing `iroha_core` lifetime warnings remain)
+  - `CARGO_TARGET_DIR=/tmp/codex-target-iroha-kagami cargo test -p iroha_kagami --test codec regenerate_codec_samples -- --ignored --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/codex-target-iroha-kagami cargo test -p iroha_kagami` (pass; unrelated pre-existing `iroha_core` lifetime warnings remain)
+
 ## 2026-03-26 Follow-up: MOCHI now leans into a warmer Ganache-like desktop feel and faster local-app setup
 - Extended
   `mochi/mochi-ui-egui/src/main.rs`

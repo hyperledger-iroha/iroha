@@ -1,6 +1,10 @@
 //! MOCHI egui desktop entry point.
 
+mod chaos_view;
+mod composer_scenarios;
 mod config;
+mod dashboard_view;
+mod wizard;
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
@@ -12,7 +16,10 @@ use std::{
     path::{Path, PathBuf},
     process,
     str::FromStr,
-    sync::{Arc, LazyLock, Mutex},
+    sync::{
+        Arc, LazyLock, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant, SystemTime, SystemTimeError, UNIX_EPOCH},
 };
 
@@ -63,19 +70,23 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::isi::multisig::MultisigSpec;
 use mochi_core::{
-    BlockDecodeStage, BlockStreamDecodeError, BlockStreamEvent, BlockSummary, EventCategory,
-    EventDecodeStage, EventStreamDecodeError, EventStreamEvent, EventSummary, ExposedPrivateKey,
-    GenesisProfile, InstructionDraft, InstructionPermission, KeyPair, LifecycleEvent,
-    LogStreamKind, ManagedBlockStream, ManagedEventStream, ManagedStatusStream, NetworkProfile,
-    PeerLogEvent, PeerState, PrivateKey, ProfilePreset, SigningAuthority, StateCursor, StateEntry,
-    StatePage, StateQueryKind, StatusStreamEvent, Supervisor, SupervisorBuilder, SupervisorError,
-    ToriiClient, TransactionComposeOptions, TransactionPreview, compose_preview_with_options,
-    development_signing_authorities, drafts_from_json_str, drafts_to_pretty_json, run_state_query,
+    BlockDecodeStage, BlockStreamDecodeError, BlockStreamEvent, BlockSummary, BootstrapBundle,
+    BootstrapInputs, BootstrapWriteError, ChaosEvent, ChaosPreset, ChaosReport, ChaosRunRequest,
+    DashboardSnapshot, EventCategory, EventDecodeStage, EventStreamDecodeError, EventStreamEvent,
+    EventSummary, ExposedPrivateKey, GenesisProfile, InstructionDraft, InstructionPermission,
+    KeyPair, LifecycleEvent, LogStreamKind, ManagedBlockStream, ManagedEventStream,
+    ManagedStatusStream, NetworkProfile, PeerLogEvent, PeerState, PrivateKey, ProfilePreset,
+    SigningAuthority, StateCursor, StateEntry, StatePage, StateQueryKind, StatusStreamEvent,
+    Supervisor, SupervisorBuilder, SupervisorError, ToriiClient, TransactionComposeOptions,
+    TransactionPreview, compose_preview_with_options, development_signing_authorities,
+    drafts_from_json_str, drafts_to_pretty_json, fetch_dashboard_snapshot, run_chaos_preset,
+    run_state_query,
     supervisor::RestartPolicy,
     torii::{
         ReadinessOptions, ReadinessSmokeOutcome, SmokeCommitOptions, StatusMetrics, ToriiErrorInfo,
         ToriiErrorKind, ToriiMetricsSnapshot, ToriiStatusSnapshot,
     },
+    write_bootstrap_bundle,
 };
 use norito::json::{self, Map, Value};
 use tokio::{
@@ -98,6 +109,8 @@ const READINESS_POLL_INTERVAL: Duration = Duration::from_millis(150);
 const SMOKE_TIMEOUT: Duration = Duration::from_secs(12);
 const SMOKE_MAX_ATTEMPTS: usize = 3;
 const EVENT_FILTER_STORAGE_KEY: &str = "mochi.event_filter";
+const ACTIVE_VIEW_STORAGE_KEY: &str = "mochi.active_view";
+const FIRST_RUN_COMPLETED_STORAGE_KEY: &str = "mochi.first_run_completed";
 const COMPOSER_DRAFT_SPACE_MANIFEST_TOUCH: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../fixtures/composer/draft_space_manifest_touch.json"
@@ -851,29 +864,58 @@ fn print_cli_usage() {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ActiveView {
+    Dashboard,
     Network,
     Activity,
     State,
     Composer,
+    Chaos,
 }
 
 impl ActiveView {
     fn label(self) -> &'static str {
         match self {
+            ActiveView::Dashboard => "Dashboard",
             ActiveView::Network => "Network",
             ActiveView::Activity => "Activity",
             ActiveView::State => "State",
             ActiveView::Composer => "Transactions",
+            ActiveView::Chaos => "Chaos Lab",
         }
     }
 
-    fn all() -> [ActiveView; 4] {
+    fn all() -> [ActiveView; 6] {
         [
+            ActiveView::Dashboard,
             ActiveView::Network,
             ActiveView::Activity,
             ActiveView::State,
             ActiveView::Composer,
+            ActiveView::Chaos,
         ]
+    }
+
+    fn storage_value(self) -> &'static str {
+        match self {
+            ActiveView::Dashboard => "dashboard",
+            ActiveView::Network => "network",
+            ActiveView::Activity => "activity",
+            ActiveView::State => "state",
+            ActiveView::Composer => "composer",
+            ActiveView::Chaos => "chaos",
+        }
+    }
+
+    fn from_storage_value(raw: &str) -> Option<Self> {
+        match raw.trim() {
+            "dashboard" => Some(Self::Dashboard),
+            "network" => Some(Self::Network),
+            "activity" => Some(Self::Activity),
+            "state" => Some(Self::State),
+            "composer" => Some(Self::Composer),
+            "chaos" => Some(Self::Chaos),
+            _ => None,
+        }
     }
 }
 
@@ -918,6 +960,21 @@ enum ComposerStep {
     Build,
     Raw,
     Preview,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ComposerMode {
+    Scenarios,
+    Advanced,
+}
+
+impl ComposerMode {
+    fn label(self) -> &'static str {
+        match self {
+            ComposerMode::Scenarios => "Scenarios",
+            ComposerMode::Advanced => "Advanced",
+        }
+    }
 }
 
 impl ComposerStep {
@@ -1759,6 +1816,24 @@ struct StateUpdate {
     result: Result<StatePage, String>,
 }
 
+#[derive(Debug)]
+struct DashboardUpdate {
+    peer: String,
+    result: Result<DashboardSnapshot, String>,
+}
+
+#[derive(Debug)]
+enum ChaosUpdate {
+    Event {
+        message: String,
+    },
+    Finished {
+        supervisor: Supervisor,
+        report: ChaosReport,
+        error: Option<String>,
+    },
+}
+
 #[derive(Debug, Clone)]
 struct SignerEntryState {
     label: String,
@@ -1868,6 +1943,7 @@ struct MochiApp {
     last_info: Option<String>,
     theme_applied: bool,
     active_view: ActiveView,
+    first_run_wizard: FirstRunWizardState,
     activity_view: ActivityView,
     runtime: Runtime,
     block_stream: Option<ManagedBlockStream>,
@@ -1896,12 +1972,19 @@ struct MochiApp {
     readiness_tx: UnboundedSender<ReadinessUpdate>,
     readiness_inflight: HashSet<String>,
     readiness_results: HashMap<String, PeerReadinessView>,
+    dashboard_snapshot: Option<DashboardSnapshot>,
+    dashboard_error: Option<String>,
+    dashboard_inflight: bool,
+    dashboard_rx: UnboundedReceiver<DashboardUpdate>,
+    dashboard_tx: UnboundedSender<DashboardUpdate>,
+    bootstrap_replace_existing: bool,
     state_selected_peer: Option<String>,
     state_query_kind: StateQueryKind,
     state_fetch_size: u32,
     state_tabs: StateTabs,
     state_rx: UnboundedReceiver<StateUpdate>,
     state_tx: UnboundedSender<StateUpdate>,
+    composer_mode: ComposerMode,
     composer_step: ComposerStep,
     composer_asset_id: String,
     composer_quantity: String,
@@ -1988,6 +2071,16 @@ struct MochiApp {
     auto_block_stream: bool,
     auto_event_stream: bool,
     auto_log_stream: bool,
+    chaos_selected_peer: Option<String>,
+    chaos_selected_preset: ChaosPreset,
+    chaos_duration_ms: u64,
+    chaos_log: Vec<String>,
+    chaos_report: Option<ChaosReport>,
+    chaos_pending_request: Option<ChaosRunRequest>,
+    chaos_inflight: bool,
+    chaos_cancel: Option<Arc<AtomicBool>>,
+    chaos_rx: UnboundedReceiver<ChaosUpdate>,
+    chaos_tx: UnboundedSender<ChaosUpdate>,
 }
 
 #[derive(Debug)]
@@ -1995,6 +2088,27 @@ struct PendingSettingsApply {
     force_start_after_rebuild: bool,
     close_dialog: bool,
     success_message: String,
+}
+
+#[derive(Debug, Clone)]
+struct FirstRunWizardState {
+    open: bool,
+    completed: bool,
+    workspace_input: String,
+    preset: ProfilePreset,
+    enable_nexus: bool,
+}
+
+impl Default for FirstRunWizardState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            completed: false,
+            workspace_input: String::new(),
+            preset: ProfilePreset::SinglePeer,
+            enable_nexus: false,
+        }
+    }
 }
 
 fn prepare_supervisor() -> (
@@ -2039,22 +2153,30 @@ fn prepare_supervisor() -> (
 
 impl Default for MochiApp {
     fn default() -> Self {
-        Self::with_event_filter(EventFilterState::default())
+        Self::with_persisted_ui(EventFilterState::default(), ActiveView::Dashboard, false)
     }
 }
 
 impl MochiApp {
     fn new(cc: &CreationContext<'_>) -> Self {
         let filter = load_event_filter(cc.storage);
-        Self::with_event_filter(filter)
+        let active_view = load_active_view(cc.storage).unwrap_or(ActiveView::Dashboard);
+        let wizard_completed = load_first_run_completed(cc.storage);
+        Self::with_persisted_ui(filter, active_view, wizard_completed)
     }
 
-    fn with_event_filter(event_filter: EventFilterState) -> Self {
+    fn with_persisted_ui(
+        event_filter: EventFilterState,
+        active_view: ActiveView,
+        wizard_completed: bool,
+    ) -> Self {
         let runtime = Runtime::new().expect("tokio runtime");
         let (state_tx, state_rx) = mpsc::unbounded_channel();
         let (composer_submit_tx, composer_submit_rx) = mpsc::unbounded_channel();
         let (maintenance_tx, maintenance_rx) = mpsc::unbounded_channel();
         let (readiness_tx, readiness_rx) = mpsc::unbounded_channel();
+        let (dashboard_tx, dashboard_rx) = mpsc::unbounded_channel();
+        let (chaos_tx, chaos_rx) = mpsc::unbounded_channel();
         let (supervisor, supervisor_error, bundle_config) = prepare_supervisor();
         let mut app = Self {
             supervisor,
@@ -2064,7 +2186,12 @@ impl MochiApp {
             last_error: None,
             last_info: None,
             theme_applied: false,
-            active_view: ActiveView::Network,
+            active_view,
+            first_run_wizard: FirstRunWizardState {
+                open: !wizard_completed,
+                completed: wizard_completed,
+                ..FirstRunWizardState::default()
+            },
             activity_view: ActivityView::Logs,
             runtime,
             block_stream: None,
@@ -2093,12 +2220,19 @@ impl MochiApp {
             readiness_tx,
             readiness_inflight: HashSet::new(),
             readiness_results: HashMap::new(),
+            dashboard_snapshot: None,
+            dashboard_error: None,
+            dashboard_inflight: false,
+            dashboard_rx,
+            dashboard_tx,
+            bootstrap_replace_existing: false,
             state_selected_peer: None,
             state_query_kind: StateQueryKind::Accounts,
             state_fetch_size: 50,
             state_tabs: StateTabs::default(),
             state_rx,
             state_tx,
+            composer_mode: ComposerMode::Scenarios,
             composer_step: ComposerStep::Build,
             composer_asset_id: String::new(),
             composer_quantity: String::from("1"),
@@ -2185,11 +2319,22 @@ impl MochiApp {
             auto_block_stream: true,
             auto_event_stream: true,
             auto_log_stream: true,
+            chaos_selected_peer: None,
+            chaos_selected_preset: ChaosPreset::PeerBounce,
+            chaos_duration_ms: ChaosPreset::PeerBounce.default_duration().as_millis() as u64,
+            chaos_log: Vec::new(),
+            chaos_report: None,
+            chaos_pending_request: None,
+            chaos_inflight: false,
+            chaos_cancel: None,
+            chaos_rx,
+            chaos_tx,
         };
         app.sync_raw_editor_from_drafts();
         app.initialize_settings_from_supervisor();
         app.sync_log_export_dir_input();
         app.sync_state_export_dir_input();
+        app.initialize_first_run_wizard();
         app
     }
 }
@@ -2890,16 +3035,16 @@ impl MochiApp {
     fn app_env_recipe(&self, supervisor: &Supervisor, peer_rows: &[PeerRow]) -> Option<String> {
         let peer = Self::recipe_peer(peer_rows)?;
         let signer = supervisor.signers().first();
-        let account_id = signer.map(|entry| account_literal(entry.account_id()));
-        let private_key = signer
-            .map(|entry| ExposedPrivateKey(entry.key_pair().private_key().clone()).to_string());
-        Some(compose_app_env_recipe(
-            &Self::peer_api_base(peer),
-            &peer.torii,
-            &self.effective_chain_id_recipe(supervisor),
-            account_id.as_deref(),
-            private_key.as_deref(),
-        ))
+        let inputs = BootstrapInputs {
+            api_base: Self::peer_api_base(peer),
+            torii_url: peer.torii.clone(),
+            chain_id: self.effective_chain_id_recipe(supervisor),
+            account_id: signer.map(|entry| account_literal(entry.account_id())),
+            private_key: signer.map(|entry| {
+                ExposedPrivateKey(entry.key_pair().private_key().clone()).to_string()
+            }),
+        };
+        Some(inputs.render_shell_exports())
     }
 
     fn start_block_stream_for(
@@ -4558,6 +4703,7 @@ impl MochiApp {
         self.poll_state_updates();
         self.poll_composer_updates();
         self.poll_readiness_updates();
+        self.poll_dashboard_updates();
 
         let peer_aliases: Vec<String> = supervisor
             .peers()
@@ -4573,6 +4719,7 @@ impl MochiApp {
         Self::ensure_selection(&mut self.log_selected_peer, &peer_aliases);
         Self::ensure_selection(&mut self.state_selected_peer, &peer_aliases);
         Self::ensure_selection(&mut self.composer_selected_peer, &peer_aliases);
+        Self::ensure_selection(&mut self.chaos_selected_peer, &peer_aliases);
         Self::ensure_signer_selection(&mut self.composer_selected_signer, supervisor.signers());
         self.ensure_auto_activity_streams(supervisor);
 
@@ -4617,12 +4764,16 @@ impl MochiApp {
         ui.add_space(16.0);
 
         match self.active_view {
+            ActiveView::Dashboard => {
+                self.render_dashboard_view(ui, supervisor, &peer_rows, &peer_aliases, &metrics);
+            }
             ActiveView::Network => {
                 self.render_network_view(ui, supervisor, &peer_rows, &peer_aliases, &metrics);
             }
             ActiveView::Activity => self.render_activity_view(ui, supervisor, &peer_aliases),
             ActiveView::State => self.render_state_view(ui, supervisor, &peer_aliases),
             ActiveView::Composer => self.render_composer_view(ui, supervisor, &peer_aliases),
+            ActiveView::Chaos => self.render_chaos_view(ui, supervisor, &peer_aliases),
         }
     }
 
@@ -4748,12 +4899,21 @@ impl MochiApp {
         self.status_streams.clear();
         self.readiness_inflight.clear();
         self.readiness_results.clear();
+        self.dashboard_snapshot = None;
+        self.dashboard_error = None;
+        self.dashboard_inflight = false;
         self.block_stream_peer = None;
         self.event_stream_peer = None;
         self.selected_peer = None;
         self.event_selected_peer = None;
         self.log_selected_peer = None;
         self.state_selected_peer = None;
+        self.chaos_selected_peer = None;
+        self.chaos_log.clear();
+        self.chaos_report = None;
+        self.chaos_pending_request = None;
+        self.chaos_inflight = false;
+        self.chaos_cancel = None;
         self.state_tabs = StateTabs::default();
         self.composer_preview = None;
         self.composer_submit_error = None;
@@ -4937,6 +5097,25 @@ impl MochiApp {
 
         self.sync_log_export_dir_input();
         self.sync_state_export_dir_input();
+    }
+
+    fn initialize_first_run_wizard(&mut self) {
+        if let Some(supervisor) = self.supervisor.as_ref() {
+            self.first_run_wizard.workspace_input = Self::supervisor_base_data_root(supervisor)
+                .display()
+                .to_string();
+            self.first_run_wizard.preset = supervisor
+                .profile()
+                .preset
+                .unwrap_or(ProfilePreset::SinglePeer);
+            self.first_run_wizard.enable_nexus = supervisor
+                .nexus_config_overrides()
+                .and_then(|table| table.get("enabled").and_then(TomlValue::as_bool))
+                .unwrap_or_else(|| supervisor.nexus_config_overrides().is_some());
+        } else if self.first_run_wizard.workspace_input.trim().is_empty() {
+            self.first_run_wizard.workspace_input =
+                PathBuf::from("dist/mochi").display().to_string();
+        }
     }
 
     fn supervisor_base_data_root(supervisor: &Supervisor) -> PathBuf {
@@ -9276,6 +9455,7 @@ impl MochiApp {
         });
         ui.add_space(6.0);
         self.render_composer_advanced_options(ui);
+        self.render_composer_mode_selector(ui);
 
         ui.horizontal(|ui| {
             ui.label("Wizard");
@@ -9904,6 +10084,10 @@ impl MochiApp {
         let selected_signer = self
             .composer_selected_signer
             .and_then(|index| signers.get(index));
+
+        if self.composer_mode == ComposerMode::Scenarios {
+            self.render_composer_scenario_cards(ui, signers);
+        }
 
         ui.label(RichText::new("Common local-dev actions").strong());
         ui.horizontal_wrapped(|ui| {
@@ -10924,10 +11108,14 @@ impl App for MochiApp {
         let mut supervisor_opt = self.supervisor.take();
         self.poll_maintenance_updates(&mut supervisor_opt);
         self.schedule_pending_maintenance(&mut supervisor_opt);
+        self.poll_chaos_updates(&mut supervisor_opt);
+        self.schedule_pending_chaos(&mut supervisor_opt);
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.add_space(4.0);
             if let Some(supervisor) = supervisor_opt.as_mut() {
                 self.render_ready(ui, supervisor);
+            } else if self.chaos_inflight {
+                ui.label("Chaos scenario running…");
             } else if matches!(self.maintenance_state, MaintenanceState::Running(_)) {
                 ui.label("Maintenance task running…");
             } else if let Some(err) = self.supervisor_error.as_ref() {
@@ -10948,6 +11136,8 @@ impl App for MochiApp {
             self.render_signer_vault_dialog(ctx, supervisor);
         }
         self.schedule_pending_maintenance(&mut supervisor_opt);
+        self.schedule_pending_chaos(&mut supervisor_opt);
+        self.render_first_run_wizard(ctx);
         self.supervisor = supervisor_opt;
         self.flush_pending_settings_apply();
     }
@@ -10956,6 +11146,18 @@ impl App for MochiApp {
         if let Some(serialized) = serialize_event_filter(&self.event_filter) {
             storage.set_string(EVENT_FILTER_STORAGE_KEY, serialized);
         }
+        storage.set_string(
+            ACTIVE_VIEW_STORAGE_KEY,
+            self.active_view.storage_value().to_owned(),
+        );
+        storage.set_string(
+            FIRST_RUN_COMPLETED_STORAGE_KEY,
+            if self.first_run_wizard.completed {
+                "true".to_owned()
+            } else {
+                "false".to_owned()
+            },
+        );
     }
 }
 
@@ -11749,6 +11951,22 @@ fn compose_search_blob(alias: &str, summary: &str, detail: Option<&str>) -> Stri
 
 fn serialize_event_filter(filter: &EventFilterState) -> Option<String> {
     json::to_string(&filter.to_json_value()).ok()
+}
+
+fn load_active_view(storage: Option<&dyn Storage>) -> Option<ActiveView> {
+    let storage = storage?;
+    let raw = storage.get_string(ACTIVE_VIEW_STORAGE_KEY)?;
+    ActiveView::from_storage_value(&raw)
+}
+
+fn load_first_run_completed(storage: Option<&dyn Storage>) -> bool {
+    let Some(storage) = storage else {
+        return false;
+    };
+    storage
+        .get_string(FIRST_RUN_COMPLETED_STORAGE_KEY)
+        .map(|value| value.trim().eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
 }
 
 fn load_event_filter(storage: Option<&dyn Storage>) -> EventFilterState {
@@ -15606,7 +15824,7 @@ mod tests {
         assert_eq!(supervisor.chain_id(), "mochi-local");
         assert!(app.last_error.is_none());
         assert!(!app.theme_applied);
-        assert!(matches!(app.active_view, ActiveView::Network));
+        assert!(matches!(app.active_view, ActiveView::Dashboard));
         assert!(matches!(app.activity_view, ActivityView::Logs));
         assert!(app.auto_block_stream);
         assert!(app.auto_event_stream);

@@ -2,6 +2,45 @@
 
 Last updated: 2026-03-26
 
+Latest sync (2026-03-26 Kagami task-first CLI + docs/help refresh):
+`crates/iroha_kagami/src/{main,localnet,localnet_tui,swarm,wizard,codec}.rs`,
+`crates/iroha_kagami/{README.md,CommandLineHelp.md}`,
+`crates/iroha_kagami/docs/{codec,kura,swarm}.md`,
+`crates/iroha_kagami/samples/codec/{README.md,account.{json,bin},domain.{json,bin}}`,
+`defaults/docker-compose*.yml`,
+and
+`docs/source/{norito_streaming*,sumeragi*}.md`
+now carry the Kagami usability overhaul:
+
+- the CLI is task-first at the top level (`wizard`, `localnet-wizard`,
+  `localnet`, `docker`, `keys`, `genesis`, `verify`, `advanced`) instead of
+  exposing the narrower operator subcommands as peers;
+- `wizard --non-interactive` now exposes the formerly prompt-only host/port and
+  relay fields, while `wizard`, `localnet`, and `docker` all emit labeled
+  summaries and generated next-step guidance instead of terse completion lines;
+- generic localnet flows now default to permissioned consensus unless the
+  selected profile/perf mode requires NPoS, the localnet TUI matches that
+  default, and the checked-in markdown help is now generated from the live CLI
+  and asserted in tests; and
+- Kagami README/docs/examples plus the codec fixture samples were refreshed to
+  the new command names and current codec schema so the crate-level suite is
+  green again.
+
+Validation:
+- `cargo fmt --all`
+- `cargo run -p iroha_kagami -- advanced markdown-help > crates/iroha_kagami/CommandLineHelp.md`
+- `CARGO_TARGET_DIR=/tmp/codex-target-iroha-kagami cargo test -p iroha_kagami --test codec regenerate_codec_samples -- --ignored --nocapture`
+- `CARGO_TARGET_DIR=/tmp/codex-target-iroha-kagami cargo test -p iroha_kagami`
+
+Open work for this slice now remains:
+- consider whether a future Kagami follow-up should add the deferred
+  `doctor`/spec-file workflows instead of only improving the current
+  flag-driven and generated-guide UX;
+- rerun broader workspace validation when budget allows, since this slice only
+  exercised `iroha_kagami`; and
+- no additional Kagami CLI/doc/help regressions are known after the task-first
+  surface change, regenerated markdown help, and green crate test suite.
+
 Latest sync (2026-03-26 MOCHI desktop UI + devex refresh):
 `mochi/mochi-ui-egui/src/main.rs`
 and
