@@ -65,6 +65,7 @@ const test = makeNativeTest(baseTest, { require: noritoRequiredMethods });
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..", "..", "..");
+const SORA_I105_DISCRIMINANT = 0x2f1;
 
 function loadInstructionFixture(name) {
   const fixturePath = path.join(repoRoot, "fixtures", "norito_instructions", name);
@@ -79,12 +80,11 @@ function decodeFixtureInstruction(name) {
 import {
   normalizeAccountId as exportedNormalizeAccountId,
   normalizeAssetId as exportedNormalizeAssetId,
+  normalizeAssetHoldingId as exportedNormalizeAssetHoldingId,
 } from "../src/index.js";
 import { ValidationErrorCode } from "../src/validationError.js";
 import {
   AccountAddress,
-  AccountAddressError,
-  AccountAddressErrorCode,
 } from "../src/address.js";
 
 function hexToBytes(hex) {
@@ -115,7 +115,7 @@ function canonicalizeValue(value) {
   if (typeof value === "string") {
     if (!value.startsWith("hash:") && value.includes("#")) {
       try {
-        return exportedNormalizeAssetId(value);
+        return exportedNormalizeAssetHoldingId(value);
       } catch {
         return value;
       }
@@ -164,7 +164,7 @@ const ACCOUNT_SIGNATORY =
 const ACCOUNT_PUBLIC_KEY = hexToBytes(ACCOUNT_SIGNATORY.slice(6));
 const ACCOUNT_ADDRESS = AccountAddress.fromAccount({ publicKey: ACCOUNT_PUBLIC_KEY,
 });
-const ACCOUNT_ID = ACCOUNT_ADDRESS.toI105();
+const ACCOUNT_ID = ACCOUNT_ADDRESS.toI105(SORA_I105_DISCRIMINANT);
 const ACCOUNT_ID_INPUT = ACCOUNT_ID;
 const ACCOUNT_ID_CANONICAL = hasNoritoBinding()
   ? canonicalizeAccountIdUsingNorito(ACCOUNT_ID)
@@ -185,8 +185,8 @@ const SAMPLE_PUBLIC_KEY = hexToBytes(
 );
 const SAMPLE_ACCOUNT_ADDRESS = AccountAddress.fromAccount({ publicKey: SAMPLE_PUBLIC_KEY,
 });
-const SAMPLE_ACCOUNT_I105_LITERAL = SAMPLE_ACCOUNT_ADDRESS.toI105();
-const SAMPLE_ACCOUNT_COMPRESSED_LITERAL = SAMPLE_ACCOUNT_ADDRESS.toI105();
+const SAMPLE_ACCOUNT_I105_LITERAL = SAMPLE_ACCOUNT_ADDRESS.toI105(SORA_I105_DISCRIMINANT);
+const SAMPLE_ACCOUNT_COMPRESSED_LITERAL = SAMPLE_ACCOUNT_ADDRESS.toI105(SORA_I105_DISCRIMINANT);
 const SAMPLE_ACCOUNT_CANONICAL = exportedNormalizeAccountId(SAMPLE_ACCOUNT_I105_LITERAL);
 const SAMPLE_ACCOUNT_LOCAL8_LITERAL = buildLocal8Literal(SAMPLE_ACCOUNT_ADDRESS);
 
@@ -284,23 +284,28 @@ test("normalizeAccountId rejects Local-8 selectors", () => {
   assert.throws(
     () => exportedNormalizeAccountId(SAMPLE_ACCOUNT_LOCAL8_LITERAL),
     (error) => {
-      assert(error instanceof AccountAddressError);
-      assert.equal(error.code, AccountAddressErrorCode.LOCAL_DIGEST_TOO_SHORT);
+      assert.equal(error?.code, ValidationErrorCode.INVALID_ACCOUNT_ID);
+      assert.match(String(error?.message), /canonical katakana i105 account id/i);
       return true;
     },
   );
 });
 
-test("normalizeAssetId exported canonicalizes asset-holding identifiers", () => {
-  const canonical = exportedNormalizeAssetId(ASSET_ID_INPUT);
-  assert.equal(canonical, ASSET_ID_CANONICAL);
+test("normalizeAssetId exported canonicalizes bare Base58 asset ids", () => {
+  const canonical = exportedNormalizeAssetId(ASSET_DEFINITION_ID);
+  assert.equal(canonical, ASSET_DEFINITION_ID);
 });
 
 test("normalizeAssetId rejects malformed asset literals", () => {
   assert.throws(
-    () => exportedNormalizeAssetId("not:an-asset"),
-    /must use '<base58-asset-definition-id>#<katakana-i105-account-id>' with optional '#dataspace:<id>' suffix/,
+    () => exportedNormalizeAssetId(ASSET_ID_INPUT),
+    /canonical Base58 asset id/,
   );
+});
+
+test("normalizeAssetHoldingId exported canonicalizes asset-holding identifiers", () => {
+  const canonical = exportedNormalizeAssetHoldingId(ASSET_ID_INPUT);
+  assert.equal(canonical, ASSET_ID_CANONICAL);
 });
 
 test("buildMintAssetInstruction produces Norito-compatible payload", () => {
@@ -980,7 +985,14 @@ test("buildRegisterSmartContractCodeInstruction normalizes manifest fields", () 
   };
   assert.deepEqual(instruction, expected);
   const decoded = encodeAndDecode(instruction);
-  assert.deepEqual(decoded, expected);
+  assert.deepEqual(decoded, {
+    RegisterSmartContractCode: {
+      manifest: {
+        ...expected.RegisterSmartContractCode.manifest,
+        kotoba: null,
+      },
+    },
+  });
 });
 
 test("buildRegisterSmartContractBytesInstruction encodes bytes deterministically", () => {
@@ -1212,20 +1224,21 @@ test("buildCastZkBallotInstruction requires complete lock hints", () => {
 });
 
 test("buildCastZkBallotInstruction rejects noncanonical owner", () => {
+  const nonCanonicalOwner = ACCOUNT_ADDRESS.toI105(0x02f2);
   assert.throws(
     () =>
       buildCastZkBallotInstruction({
         electionId: "ref-5",
         proof: Buffer.from([0x06]),
         publicInputs: {
-          owner: ACCOUNT_ID_INPUT,
+          owner: nonCanonicalOwner,
           amount: "250",
           duration_blocks: 12,
         },
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_ACCOUNT_ID);
-      assert.match(String(error?.message), /canonical (?:I105 )?account id/i);
+      assert.match(String(error?.message), /canonical .*i105 account id/i);
       return true;
     },
   );
@@ -1576,6 +1589,7 @@ test("buildSubmitBallotInstruction encodes ciphertext and proof", () => {
 });
 
 test("buildSubmitBallotInstruction rejects non-byte nullifier arrays", () => {
+  const invalidNullifier = Array.from({ length: 32 }, (_, index) => (index === 0 ? 256 : 0));
   assert.throws(
     () =>
       buildSubmitBallotInstruction({
@@ -1586,7 +1600,7 @@ test("buildSubmitBallotInstruction rejects non-byte nullifier arrays", () => {
           proof: Buffer.from("proof"),
           verifyingKeyRef: "halo2/ipa:vk_ballot",
         },
-        nullifier: [256],
+        nullifier: invalidNullifier,
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.VALUE_OUT_OF_RANGE);

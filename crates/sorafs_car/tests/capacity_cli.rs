@@ -86,7 +86,7 @@ fn capacity_declaration_cli_writes_request_payload() {
     fs::write(&spec_path, SPEC_JSON.trim_start().as_bytes()).expect("write spec");
 
     let request_out = temp.path().join("declaration_request.json");
-    let authority_str = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
+    let authority_str = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
     let private_key_str = "ed25519:deadbeefcafebabe";
 
     let mut cmd = cargo_bin_cmd!("sorafs_manifest_stub");
@@ -245,7 +245,7 @@ fn capacity_telemetry_cli_writes_request_payload() {
     fs::write(&spec_path, TELEMETRY_JSON.trim_start().as_bytes()).expect("write spec");
 
     let request_out = temp.path().join("telemetry_request.json");
-    let authority_str = "soraゴヂアニラショリャヒャャサピテヶベチュヲボヹヂギタクアニョロホドチャヘヱヤジヶハシャウンベニョャルフハケネキカ";
+    let authority_str = "sorauロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76";
     let private_key_str = "ed25519:bobcafedeadfeed";
 
     let mut cmd = cargo_bin_cmd!("sorafs_manifest_stub");

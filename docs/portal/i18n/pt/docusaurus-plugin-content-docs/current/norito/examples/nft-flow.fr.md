@@ -19,7 +19,7 @@ Parcourt o ciclo de vida de um NFT de luta em luta: frappe au propriétaire, tra
 
 ## Parcours du registre
 
-- Certifique-se de que a definição de NFT (por exemplo, `n0#wonderland`) existe com as contas proprietárias/destinatárias utilizadas no snippet (`soraカタカナ...`, `soraカタカナ...`).
+- Certifique-se de que a definição de NFT (por exemplo, `n0#wonderland`) existe com as contas proprietárias/destinatárias utilizadas no snippet (`<katakana-i105-account-id>`, `<katakana-i105-account-id>`).
 - Invoque o ponto de entrada `nft_issue_and_transfer` para frapper o NFT, transfira Alice para Bob e anexe um indicador de metadonées que descreva a emissão.
 - Inspecione o estado do registro NFT com `iroha_cli ledger nfts list --account <id>` ou os SDKs equivalentes para verificar a transferência e depois confirme se o ativo foi suprimido quando a instrução de gravação foi executada.
 
@@ -35,11 +35,11 @@ Parcourt o ciclo de vida de um NFT de luta em luta: frappe au propriétaire, tra
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
 seiyaku NftFlow {
   kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
-    let owner = account!("soraカタカナ...");
+    let owner = account!("<katakana-i105-account-id>");
     let nft = nft_id!("n0$wonderland");
     nft_mint_asset(nft, owner);
 
-    let to = account!("soraカタカナ...");
+    let to = account!("<katakana-i105-account-id>");
     nft_transfer_asset(owner, nft, to);
     nft_set_metadata(nft, json!{ issued: "demo" });
     nft_burn_asset(nft);

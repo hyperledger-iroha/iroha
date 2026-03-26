@@ -1608,13 +1608,18 @@ mod tests {
     fn fullwidth_sentinel_literal(canonical: &str) -> String {
         for sentinel in [I105_SENTINEL_SORA, I105_SENTINEL_TEST, I105_SENTINEL_DEV] {
             if let Some(rest) = canonical.strip_prefix(sentinel) {
-                return format!("{}{}", ascii_str_to_fullwidth(sentinel), rest);
+                return format!(
+                    "{}{}",
+                    ascii_str_to_fullwidth(sentinel).expect("ASCII sentinel must widen"),
+                    rest
+                );
             }
         }
         if let Some(rest) = canonical.strip_prefix(I105_SENTINEL_FALLBACK_PREFIX) {
             return format!(
                 "{}{}",
-                ascii_str_to_fullwidth(I105_SENTINEL_FALLBACK_PREFIX),
+                ascii_str_to_fullwidth(I105_SENTINEL_FALLBACK_PREFIX)
+                    .expect("ASCII sentinel must widen"),
                 rest
             );
         }
@@ -1764,12 +1769,16 @@ mod tests {
             let canonical = address
                 .canonical_hex()
                 .expect("canonical encoding must succeed");
-            let literal = address.to_i105().expect("i105 encoding must succeed");
+            let literal = address
+                .to_i105_for_discriminant(CHAIN_DISCRIMINANT_SORA)
+                .expect("i105 encoding must succeed");
             assert!(
                 canonical.starts_with("0x020001"),
                 "canonical payloads must not include a domain selector byte: label={label} seed={seed_byte} canonical={canonical}"
             );
-            let decoded = AccountAddress::from_i105(&literal).expect("i105 decode");
+            let decoded =
+                AccountAddress::from_i105_for_discriminant(&literal, Some(CHAIN_DISCRIMINANT_SORA))
+                    .expect("i105 decode");
             assert_eq!(
                 decoded.canonical_hex().expect("canonical"),
                 canonical,
@@ -1931,7 +1940,7 @@ mod tests {
         let canonical = AccountAddress::from_account_id(&account)
             .expect("encode")
             .to_i105_for_discriminant(CHAIN_DISCRIMINANT_SORA)
-            .expect("canonical I105");
+            .expect("canonical Katakana i105");
         let noncanonical = fullwidth_sentinel_literal(&canonical);
 
         let err = AccountAddress::parse_encoded(&noncanonical, Some(CHAIN_DISCRIMINANT_SORA))
@@ -1958,15 +1967,18 @@ mod tests {
             "canonical literal must contain payload symbols"
         );
         assert!(
-            payload.chars().any(char::is_ascii_alphanumeric),
-            "canonical I105 payload must expose Base58 symbols: {literal}"
+            payload.chars().any(|ch| ch.is_ascii_alphanumeric()),
+            "canonical Katakana i105 payload must expose Base58 symbols: {literal}"
         );
         assert!(
             payload.chars().any(|ch| {
                 let mut symbol = [0_u8; 4];
-                IROHA_POEM_KANA_FULLWIDTH.contains(&ch.encode_utf8(&mut symbol))
+                let encoded = ch.encode_utf8(&mut symbol);
+                IROHA_POEM_KANA_FULLWIDTH
+                    .iter()
+                    .any(|candidate| *candidate == encoded)
             }),
-            "canonical I105 payload must expose Iroha-poem katakana: {literal}"
+            "canonical Katakana i105 payload must expose Iroha-poem katakana: {literal}"
         );
     }
 
@@ -2044,14 +2056,18 @@ mod tests {
     fn i105_round_trip_accepts_halfwidth_iroha_kana_inputs() {
         let account = AccountId::new(ed25519_pk());
         let original = AccountAddress::from_account_id(&account).expect("encode");
-        let mut halfwidth = original.to_i105().expect("i105 encode");
+        let mut halfwidth = original
+            .to_i105_for_discriminant(CHAIN_DISCRIMINANT_SORA)
+            .expect("i105 encode");
         for (fullwidth, halfwidth_kana) in IROHA_POEM_KANA_FULLWIDTH
             .iter()
             .zip(IROHA_POEM_KANA_HALFWIDTH.iter())
         {
             halfwidth = halfwidth.replace(fullwidth, halfwidth_kana);
         }
-        let decoded = AccountAddress::from_i105(&halfwidth).expect("i105 decode");
+        let decoded =
+            AccountAddress::from_i105_for_discriminant(&halfwidth, Some(CHAIN_DISCRIMINANT_SORA))
+                .expect("i105 decode");
         assert_eq!(
             decoded.canonical_bytes().unwrap(),
             original.canonical_bytes().unwrap()
@@ -2061,12 +2077,18 @@ mod tests {
     #[test]
     fn i105_invalid_char_rejected() {
         let account = AccountId::new(ed25519_pk());
-        let mut literal = AccountAddress::from_account_id(&account)
+        let mut chars = AccountAddress::from_account_id(&account)
             .expect("encode")
-            .to_i105()
-            .expect("i105 encode");
-        literal.replace_range(0..=0, "!");
-        let err = AccountAddress::from_i105(&literal).expect_err("invalid char should fail");
+            .to_i105_for_discriminant(CHAIN_DISCRIMINANT_SORA)
+            .expect("i105 encode")
+            .chars()
+            .collect::<Vec<_>>();
+        let last = chars.len() - 1;
+        chars[last] = '!';
+        let literal = chars.into_iter().collect::<String>();
+        let err =
+            AccountAddress::from_i105_for_discriminant(&literal, Some(CHAIN_DISCRIMINANT_SORA))
+                .expect_err("invalid char should fail");
         assert!(matches!(err, AccountAddressError::InvalidI105Char('!')));
     }
 
@@ -2074,11 +2096,17 @@ mod tests {
     fn i105_checksum_mismatch_detected() {
         let account = AccountId::new(ed25519_pk());
         let address = AccountAddress::from_account_id(&account).expect("encode");
-        let mut tampered = address.to_i105().expect("i105 encode").into_bytes();
+        let mut tampered = address
+            .to_i105_for_discriminant(CHAIN_DISCRIMINANT_SORA)
+            .expect("i105 encode")
+            .chars()
+            .collect::<Vec<_>>();
         let last = tampered.len() - 1;
-        tampered[last] = if tampered[last] == b'1' { b'2' } else { b'1' };
-        let tampered = String::from_utf8(tampered).expect("utf8");
-        let err = AccountAddress::from_i105(&tampered).expect_err("checksum mismatch");
+        tampered[last] = if tampered[last] == '1' { '2' } else { '1' };
+        let tampered = tampered.into_iter().collect::<String>();
+        let err =
+            AccountAddress::from_i105_for_discriminant(&tampered, Some(CHAIN_DISCRIMINANT_SORA))
+                .expect_err("checksum mismatch");
         assert!(matches!(err, AccountAddressError::ChecksumMismatch));
     }
 
@@ -2087,14 +2115,24 @@ mod tests {
         fn i105_checksum_corruption_detected(seed in any::<u8>(), offset in any::<u8>()) {
             let _guard = guard_default_label();
             let address = account_address_for_seed(seed);
-            let mut literal = address.to_i105().expect("i105 encode").into_bytes();
-            let index = usize::from(offset) % literal.len();
-            literal[index] = match literal[index] {
-                b'1' => b'2',
-                _ => b'1',
+            let literal = address
+                .to_i105_for_discriminant(CHAIN_DISCRIMINANT_SORA)
+                .expect("i105 encode");
+            let sentinel_len = i105_sentinel_for_discriminant(CHAIN_DISCRIMINANT_SORA)
+                .chars()
+                .count();
+            let mut chars = literal.chars().collect::<Vec<_>>();
+            let payload_len = chars.len() - sentinel_len;
+            let index = sentinel_len + (usize::from(offset) % payload_len);
+            chars[index] = match chars[index] {
+                '1' => '2',
+                _ => '1',
             };
-            let tampered = String::from_utf8(literal).expect("utf8");
-            let err = AccountAddress::from_i105(&tampered)
+            let tampered = chars.into_iter().collect::<String>();
+            let err = AccountAddress::from_i105_for_discriminant(
+                &tampered,
+                Some(CHAIN_DISCRIMINANT_SORA),
+            )
                 .expect_err("checksum mismatch");
             prop_assert!(matches!(err, AccountAddressError::ChecksumMismatch));
         }

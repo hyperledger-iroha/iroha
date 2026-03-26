@@ -134,7 +134,7 @@ For tooling:
 
 These fixtures use the canonical hash literal form (`hash:...#...`), uppercase
 signatures, and i105 provider IDs derived from deterministic ed25519 keys (e.g.,
-`soraゴヂアヌメネヒョタルアキュカンコプヱガョラツゴヸナゥヘガヮザネチョヷニャヒュニョメヺェヅヤアキャヅアタタナイス`).
+`sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D`).
 
 For social/PII-bearing feeds, `ObservationValue::from_hash`, `from_keyed_hash`,
 and `from_uaid` derive deterministic fixed-point values from hashed identifiers

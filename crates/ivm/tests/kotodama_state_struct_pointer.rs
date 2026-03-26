@@ -55,7 +55,7 @@ fn encode_account_id_pointer_without_inner_hash(id: &str) -> Vec<u8> {
 
 #[test]
 fn pointer_from_norito_syscall_returns_pointer() {
-    const OWNER_ID: &str = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
+    const OWNER_ID: &str = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
     let pointer_bytes = encode_account_id_pointer(OWNER_ID);
 
     let mut vm = IVM::new(u64::MAX);
@@ -83,7 +83,7 @@ fn pointer_from_norito_syscall_returns_pointer() {
 
 #[test]
 fn pointer_from_norito_rejects_inner_tlv_without_hash() {
-    const OWNER_ID: &str = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
+    const OWNER_ID: &str = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
     let pointer_bytes = encode_account_id_pointer_without_inner_hash(OWNER_ID);
 
     let mut vm = IVM::new(u64::MAX);
@@ -102,7 +102,7 @@ fn pointer_from_norito_rejects_inner_tlv_without_hash() {
 
 #[test]
 fn pointer_from_norito_rejects_wrong_expected_type() {
-    const OWNER_ID: &str = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
+    const OWNER_ID: &str = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
     let pointer_bytes = encode_account_id_pointer(OWNER_ID);
 
     let mut vm = IVM::new(u64::MAX);

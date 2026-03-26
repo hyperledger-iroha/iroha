@@ -11,7 +11,7 @@ Examples (hex, spaces added for readability)
 
 - AccountId (type_id=0x0001, version=1)
   - Payload (UTF‑8): canonical encoded account literal (I105), for example:
-    - `soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ`
+    - `sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE`
   - TLV (no hash filled):
     - `00 01` | `01` | `<len:be u32>` | `<utf8 bytes of encoded literal>` | `00..00 (32 bytes)`
 

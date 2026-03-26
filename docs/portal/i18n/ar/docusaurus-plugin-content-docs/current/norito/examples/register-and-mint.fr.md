@@ -19,9 +19,9 @@ translation_last_reviewed: 2026-02-07
 
 ## باركور دو ريجيستري
 
-- تأكد من وجود حساب الوجهة (على سبيل المثال `soraカタカナ...`)، بما يعكس مرحلة الإعداد في كل Quickstart SDK.
+- تأكد من وجود حساب الوجهة (على سبيل المثال `<katakana-i105-account-id>`)، بما يعكس مرحلة الإعداد في كل Quickstart SDK.
 - قم باستدعاء نقطة الإدخال `register_and_mint` لإنشاء تعريف نشط ROSE وقم بإعداد 250 وحدة لـ Alice في معاملة واحدة.
-- تحقق من المبيعات عبر `client.request(FindAccountAssets)` أو `iroha_cli ledger assets list --account soraカタカナ...` لتأكيد عملية الطحن.
+- تحقق من المبيعات عبر `client.request(FindAccountAssets)` أو `iroha_cli ledger assets list --account <katakana-i105-account-id>` لتأكيد عملية الطحن.
 
 ## أدلة شركاء SDK
 
@@ -43,7 +43,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("soraカタカナ...");
+    let to = account!("<katakana-i105-account-id>");
     let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     mint_asset(to, asset, 250);
   }

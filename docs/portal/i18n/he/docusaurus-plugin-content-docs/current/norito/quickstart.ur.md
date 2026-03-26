@@ -90,7 +90,7 @@ Runner `info("Hello from Kotodama")` لاگ پرنٹ کرتا ہے اور mocked
 
 קוד הבתים קוד הבתים של CLI קוד Torii קוד הבתים של Torii ڈیفالٹ development identity `defaults/client.toml` میں موجود public key سے اخذ ہوتی ہے، اس لئے account ID یہ ہے:
 ```
-soraカタカナ...
+<katakana-i105-account-id>
 ```
 
 Torii כתובת אתר, מזהה שרשרת או מפתח חתימה. קוד חתימה
@@ -108,7 +108,7 @@ iroha --config defaults/client.toml \
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id soraカタカナ... \
+  --id <katakana-i105-account-id> \
   --key example | jq .
 ```
 

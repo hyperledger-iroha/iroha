@@ -9,7 +9,7 @@ seiyaku ZkShieldDemo {
 
   // Public entrypoint: demonstrates pointer constructors and host calls
   kotoage fn run() permission(Admin) {
-    let who = account!("soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ");
+    let who = account!("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D");
     let ad = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
 
     info("ZkShieldDemo: start");

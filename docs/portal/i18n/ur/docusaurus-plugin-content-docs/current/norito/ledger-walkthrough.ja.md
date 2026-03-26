@@ -32,8 +32,8 @@ slug: /norito/ledger-walkthrough
 اس گائیڈ میں `$ADMIN_ACCOUNT` اور `$RECEIVER_ACCOUNT` کو ان account IDs سے بدلیں جو آپ استعمال کرنا چاہتے ہیں۔ defaults bundle پہلے ہی demo keys سے اخذ کیے گئے دو accounts شامل کرتا ہے:
 
 ```sh
-export ADMIN_ACCOUNT="soraカタカナ..."
-export RECEIVER_ACCOUNT="soraカタカナ..."
+export ADMIN_ACCOUNT="<katakana-i105-account-id>"
+export RECEIVER_ACCOUNT="<katakana-i105-account-id>"
 ```
 
 پہلے چند accounts لسٹ کر کے ویلیوز کی تصدیق کریں:

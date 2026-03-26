@@ -30,8 +30,8 @@ Tout au long du guide, remplacez `$ADMIN_ACCOUNT` et `$RECEIVER_ACCOUNT` par les
 issus des cles demo :
 
 ```sh
-export ADMIN_ACCOUNT="soraカタカナ..."
-export RECEIVER_ACCOUNT="soraカタカナ..."
+export ADMIN_ACCOUNT="<katakana-i105-account-id>"
+export RECEIVER_ACCOUNT="<katakana-i105-account-id>"
 ```
 
 אשרת את הבחירה ב-listant les premiers מתחרה:

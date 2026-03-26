@@ -8,7 +8,7 @@
         },
         "expected_prefix": 753,
         "format": "i105",
-        "input": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハア",
+        "input": "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSア",
         "note": "Checksum tampering on I105 alias for the default-domain vector."
       },
       {
@@ -20,7 +20,7 @@
         },
         "expected_prefix": 753,
         "format": "i105",
-        "input": "n754ゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
+        "input": "n754uロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
         "note": "Encoded with prefix NETWORK_PREFIX + 1 while validators expect NETWORK_PREFIX."
       },
       {
@@ -30,7 +30,7 @@
           "kind": "InvalidI105Char"
         },
         "format": "i105",
-        "input": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハ0",
+        "input": "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HS0",
         "note": "Introduces a glyph outside the canonical Katakana i105 alphabet."
       },
       {
@@ -39,7 +39,7 @@
           "kind": "ChecksumMismatch"
         },
         "format": "i105",
-        "input": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハァ",
+        "input": "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HS1",
         "note": "Checksum bytes replaced to trigger canonical Katakana i105 verification failure."
       },
       {
@@ -85,7 +85,7 @@
           "canonical_hex": "0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29",
           "i105": {
             "prefix": 753,
-            "string": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ"
+            "string": "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE"
           }
         },
         "input": {
@@ -112,7 +112,7 @@
           "canonical_hex": "0x020001208a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
           "i105": {
             "prefix": 753,
-            "string": "soraゴヂアヌメネヒョタルアキュカンコプヱガョラツゴヸナゥヘガヮザネチョヷニャヒュニョメヺェヅヤアキャヅアタタナイス"
+            "string": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"
           }
         },
         "input": {
@@ -162,7 +162,7 @@
           "canonical_hex": "0x0a010100030003010001002068f4b6017d0f876a55c80a82b8388a54aad264d367269e2de8be079c935b5f9601000100207ea0e3bd52e207c9d3b0eba65c0704e66fca2d8e165a175218b174fc4160e4130100020020884b8857f4eaa1613c61504db34d4beaf346517a0e31de3cddd4d9b4201d9d0b",
           "i105": {
             "prefix": 753,
-            "string": "soraブショヘナマラワコジヨスソキョガハワルマェギユフダニョデエヨミガシュシャミグチョォピゲエュシュェショチォワニブピチュチョジロネリヰプユヱョケルオサハワニュプパザヒュカシュゼホゲハポヂコペメニュヂヷシュズビチュニャナコゼヒョクヸロスムァダヒョナジブサヒャォケドォヂノチャネキャワウショデベニャヰスィゼレノタチャラタキャチメヮヘミオンルヒテネウアカ"
+            "string": "soraチキVMXfkAweDFテqSkhXウrdUイヒニ4eYqサアYsミヰヲt4オサウキHヰkNチヲメミwjQgmワdnク9h5BSkヱワルvセ6サyWtSヨロAカaヱロレサxトメシMAyス8ソjDZナイスMwチBモヰ9ホヰロRユQコk3キニリシmDラyiRGユfGコHaマVY5phTKQ316"
           }
         },
         "input": {
@@ -215,7 +215,7 @@
           "canonical_hex": "0x0a01010002000201000100205c9c6df261c9cb840475776aaefcd944b405328fab28f9b3a95ef40490d3de840100020020d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737",
           "i105": {
             "prefix": 753,
-            "string": "soraヰミマワヸゴスピナデチツヷシャワビエムキョキョミムムッニュアチャヸニヹヱトヰゼァヒョヨヺウョブアマョルプヘヒュガィピアセゼドヂコチャグビテヂゲリゼドヒュッカャオギロゲバレヨィヱロチャデキゾヒョセァダコアガヮコバヸペニノエエマヘ"
+            "string": "soramYXkソuDヲMニHJレアkト4ZテテYZZヤヱ1ユソNツnLmyナスeネ3クチ1XクhワVセqラヲ1EyホロAユsトKロtgyホセヤ6ノ5rjtヘieラnjユニ7zスEナイA1qマAヘソカNR44XV"
           }
         },
         "input": {
@@ -280,7 +280,7 @@
           "canonical_hex": "0x0a010100030004010001002065e8f9b0bc6eae124169f0576f97362d295a8cf5f770b45e14357ce647d33eec0100010020acf12b4acc1c660a8326aed34039efb728a5e496488240f50a932ab7aba517510100010020b533d8ad9fcfbdde0b481c1b334ddc3c53412fd614564e7e5afd020368d382c30100010020bc7cbcb5636375fa1d82434d466724d92377f53b980695dd49d26d0ce12205a5",
           "i105": {
             "prefix": 753,
-            "string": "soraチョキコキョロソポニョソニュセワチュクヨオニドヒゥョポシュゲヸレヌプヴヶメルイヸセヶピキュコツピクニュヴォシュガダズュシャテヨヹェワショメユツリマキュッサィェタキチャゲヺキャログギヘプゴゲヒョノヒョムソグダブボガピノバニャヷビッマウプソヒュニワニャゼァムチャチリブィピグンチリセヒャヤヱビヸウキュオジピショキャドヨボワイビネフメリアニュニャヂデヵションマレゾズボブモキャナヷニュノテシレヱヲピヒブシヒゲッゥヲヶロテャゼテダホヷコタナネチイ"
+            "string": "soraミ7AテjFヨヒFヱEkメ8e5NホTムクヨサtソiPワタフah2ソEフヲエAJヲ8ヱタヰサqイxオアKeツウkキadJgXエヤBラウG7ユtネコjsrVワutスRスZFsイチヌqヲRヘシレトヤX3ワFセNkシyナZユHgチラヲspHgEモcnトソ3エ5wヲキコホeヌk2トQUag1ヱシロニケキpXizxヌチbコMレヱRKCinoヲTチCTtヤムoフjKノyKイWレAGMQH2"
           }
         },
         "input": {

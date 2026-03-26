@@ -73,9 +73,9 @@ En caso de éxito, el guión escribe un manifiesto agregado:
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "soraカタカナ...",
+      "owner": "<katakana-i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"soraカタカナ...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<katakana-i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -84,7 +84,7 @@ En caso de éxito, el guión escribe un manifiesto agregado:
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"soraカタカナ...",
+        "payer":"<katakana-i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -241,7 +241,7 @@ Los auditores pueden concentrarse en una sola ejecución CSV.
   Las referencias a los archivos son resoluciones relativas a la ubicación del CSV.
   Los metadatos no objeto producen un error de validación.
 - **Controladores:** les cellules vides respectent `--default-controllers`. Fournissez
-  des listes explicites (por ejemplo `soraカタカナ...;soraカタカナ...`) quand vous deleguez a des
+  des listes explicites (por ejemplo `<katakana-i105-account-id>;<katakana-i105-account-id>`) quand vous deleguez a des
   actores no propietarios.
 
 Les echecs sont signales avec des numeros de ligne contextuels (por ejemplo

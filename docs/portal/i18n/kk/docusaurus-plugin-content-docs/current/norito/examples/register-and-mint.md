@@ -21,9 +21,9 @@ translation_last_reviewed: 2026-02-07
 
 ## Бухгалтерлік кітапшаға шолу
 
-- Әрбір SDK жылдам іске қосуында орнату кезеңін көрсететін тағайындалған тіркелгінің (мысалы, `soraカタカナ...`) бар екеніне көз жеткізіңіз.
+- Әрбір SDK жылдам іске қосуында орнату кезеңін көрсететін тағайындалған тіркелгінің (мысалы, `<katakana-i105-account-id>`) бар екеніне көз жеткізіңіз.
 - ROSE актив анықтамасын жасау үшін `register_and_mint` кіру нүктесін шақырыңыз және бір транзакцияда Алисаға 250 бірлік беріңіз.
-- Жалбыздың сәтті болғанын растау үшін `client.request(FindAccountAssets)` немесе `iroha_cli ledger asset list --account soraカタカナ...` арқылы теңгерімдерді тексеріңіз.
+- Жалбыздың сәтті болғанын растау үшін `client.request(FindAccountAssets)` немесе `iroha_cli ledger asset list --account <katakana-i105-account-id>` арқылы теңгерімдерді тексеріңіз.
 
 ## Қатысты SDK нұсқаулықтары
 
@@ -45,7 +45,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("soraカタカナ...");
+    let to = account!("<katakana-i105-account-id>");
     let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     mint_asset(to, asset, 250);
   }

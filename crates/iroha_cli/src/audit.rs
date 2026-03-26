@@ -67,7 +67,7 @@ pub struct WitnessArgs {
     ///   Applied only with --decode; prefixes match the human-readable key labels.
     ///
     /// Matching on the identifier segment supports:
-    /// - exact (e.g., `account.detail:soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ`)
+    /// - exact (e.g., `account.detail:sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB`)
     /// - partial substring (e.g., `account.detail:6cmzPVPX`)
     /// - glob wildcards `*` and `?` (e.g., `asset:rose#*#6cmz*`)
     /// - regex-like syntax `/.../` (treated as a glob pattern inside the slashes)

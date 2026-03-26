@@ -19,9 +19,9 @@ description: يوضح إنشاء النطاقات المصرح وتسجيل ال
 
 ## جولة أستاذ الأستاذ
 
-- التأكد من وجود حساب الوجه (مثل `soraカタカナ...`) بما في ذلك التحقق من صحة كل بدء سريع لـ SDK.
+- التأكد من وجود حساب الوجه (مثل `<katakana-i105-account-id>`) بما في ذلك التحقق من صحة كل بدء سريع لـ SDK.
 - فوراِ نقطة الدخول `register_and_mint` لتعريف التعريف الأصلي ROSE وسك 250 وحدة لأليس في فارة واحدة.
-- تحقق من الرصدة عبر `client.request(FindAccountAssets)` أو `iroha_cli ledger assets list --account soraカタカナ...` لتأكيد نجاح السك.
+- تحقق من الرصدة عبر `client.request(FindAccountAssets)` أو `iroha_cli ledger assets list --account <katakana-i105-account-id>` لتأكيد نجاح السك.
 
 ## دليل SDK ذات صلة
 
@@ -43,7 +43,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("soraカタカナ...");
+    let to = account!("<katakana-i105-account-id>");
     let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     mint_asset(to, asset, 250);
   }

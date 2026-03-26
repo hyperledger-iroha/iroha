@@ -4,7 +4,7 @@
   <text x="40" y="82" font-size="14" font-family="SanFrancisco,Helvetica,Arial,sans-serif" fill="#555">Domainless account literal: render domain context separately when a workflow requires it.</text>
   <text x="40" y="110" font-size="15" font-family="SanFrancisco,Helvetica,Arial,sans-serif" fill="#444">i105 (prefix 753)</text>
   <rect x="40" y="120" width="640" height="40" rx="10" ry="10" fill="#f8f8f8" stroke="#e2e2e2" />
-  <text x="50" y="147" font-family="SFMono-Regular,Consolas,monospace" font-size="14" fill="#333">soraカタカナ...</text>
+  <text x="50" y="147" font-family="SFMono-Regular,Consolas,monospace" font-size="14" fill="#333"><katakana-i105-account-id></text>
   <text x="40" y="175" font-size="15" font-family="SanFrancisco,Helvetica,Arial,sans-serif" fill="#444">canonical katakana i105</text>
   <rect x="40" y="185" width="640" height="40" rx="10" ry="10" fill="#f8f8f8" stroke="#e2e2e2" />
   <text x="50" y="212" font-family="SFMono-Regular,Consolas,monospace" font-size="14" fill="#333">alias@domain.dataspace</text>

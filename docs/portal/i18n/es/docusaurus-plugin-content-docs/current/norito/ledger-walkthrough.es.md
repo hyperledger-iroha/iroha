@@ -30,8 +30,8 @@ ID de cuenta que planeas usar. El paquete por defecto ya incluye dos cuentas
 Demostración de Derivadas de las claves:
 
 ```sh
-export ADMIN_ACCOUNT="soraカタカナ..."
-export RECEIVER_ACCOUNT="soraカタカナ..."
+export ADMIN_ACCOUNT="<katakana-i105-account-id>"
+export RECEIVER_ACCOUNT="<katakana-i105-account-id>"
 ```
 
 Confirma los valores listando las primeras cuentas:

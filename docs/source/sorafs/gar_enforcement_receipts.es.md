@@ -52,7 +52,7 @@ receipts se emitan incluso cuando un GAR no tenga digest publicado.
   "expires_at_unix": 1747569600,
   "policy_version": "2026-q2",
   "policy_digest": "abababababababababababababababababababababababababababababababab",
-  "operator": "soraカタカナ...",
+  "operator": "<katakana-i105-account-id>",
   "reason": "Guardian freeze window",
   "notes": "Escalated during SNNet-15 drill",
   "evidence_uris": [
@@ -86,7 +86,7 @@ cargo run --bin iroha -- sorafs gar receipt \
   --gar-name docs.sora \
   --canonical-host docs.gateway.sora.net \
   --action rate-limit-override \
-  --operator soraカタカナ... \
+  --operator <katakana-i105-account-id> \
   --reason "Guardian freeze window" \
   --policy-version 2026-q2 \
   --policy-digest abab...abab \

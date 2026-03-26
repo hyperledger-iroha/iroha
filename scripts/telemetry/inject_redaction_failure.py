@@ -10,8 +10,8 @@ to hook up to a live admin surface.
 
 Example invocations::
 
-    # Inject a mismatch for soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ and update the local cache
-    scripts/telemetry/inject_redaction_failure.py --authority soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ
+    # Inject a mismatch for sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D and update the local cache
+    scripts/telemetry/inject_redaction_failure.py --authority sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D
 
     # Clear recorded failures (after verifying alert recovery)
     scripts/telemetry/inject_redaction_failure.py --clear
@@ -68,8 +68,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--authority",
-        default="soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
-        help="Authority to flag (default: soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ).",
+        default="sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+        help="Authority to flag (default: sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D).",
     )
     parser.add_argument(
         "--reason",

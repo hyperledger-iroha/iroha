@@ -134,7 +134,7 @@ translation_last_reviewed: 2026-01-21
 
 fixtures אלו משתמשים בצורת hash קנונית (`hash:...#...`), חתימות באותיות גדולות,
 ומזהי ספק i105 שנגזרים ממפתחות ed25519 דטרמיניסטיים (למשל,
-`soraゴヂアヌメネヒョタルアキュカンコプヱガョラツゴヸナゥヘガヮザネチョヷニャヒュニョメヺェヅヤアキャヅアタタナイス`).
+`sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D`).
 
 ל‑feeds חברתיים/נושאי PII, `ObservationValue::from_hash`, `from_keyed_hash`,
 ו‑`from_uaid` גוזרים ערכי fixed‑point דטרמיניסטיים ממזהים מגובבים כדי שערכת

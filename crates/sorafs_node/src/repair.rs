@@ -3166,7 +3166,8 @@ mod tests {
         RepairReportV1 {
             version: REPAIR_REPORT_VERSION_V1,
             ticket_id: RepairTicketId(ticket.to_string()),
-            auditor_account: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
+            auditor_account:
+                "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB".into(),
             submitted_at_unix,
             evidence: RepairEvidenceV1 {
                 version: REPAIR_EVIDENCE_VERSION_V1,
@@ -3966,7 +3967,7 @@ mod tests {
         let record = manager
             .claim_ticket(
                 &report.ticket_id,
-                "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
+                "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
                 report.submitted_at_unix + 10,
                 "key-1",
             )
@@ -3976,9 +3977,7 @@ mod tests {
                 assert_eq!(state.started_at_unix, report.submitted_at_unix + 10);
                 assert_eq!(
                     state.repair_agent.as_deref(),
-                    Some(
-                        "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ"
-                    )
+                    Some("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D")
                 );
             }
             other => panic!("unexpected state {other:?}"),
@@ -3987,7 +3986,7 @@ mod tests {
         let replay = manager
             .claim_ticket(
                 &report.ticket_id,
-                "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
+                "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
                 report.submitted_at_unix + 10,
                 "key-1",
             )
@@ -4006,7 +4005,7 @@ mod tests {
         let update = manager
             .claim_ticket_with_event(
                 &report.ticket_id,
-                "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
+                "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
                 report.submitted_at_unix + 10,
                 "key-1",
             )
@@ -4016,7 +4015,7 @@ mod tests {
         let replay = manager
             .claim_ticket_with_event(
                 &report.ticket_id,
-                "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
+                "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
                 report.submitted_at_unix + 10,
                 "key-1",
             )
@@ -4034,7 +4033,7 @@ mod tests {
         manager
             .claim_ticket(
                 &report.ticket_id,
-                "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
+                "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
                 report.submitted_at_unix + 5,
                 "claim-1",
             )
@@ -4043,14 +4042,14 @@ mod tests {
         manager
             .heartbeat_ticket(
                 &report.ticket_id,
-                "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
+                "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
                 report.submitted_at_unix + 15,
                 "hb-1",
             )
             .expect("heartbeat ticket");
         let stale = manager.heartbeat_ticket(
             &report.ticket_id,
-            "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
+            "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
             report.submitted_at_unix + 12,
             "hb-2",
         );
@@ -4423,9 +4422,7 @@ mod tests {
         );
         assert_eq!(
             snapshot.events[0].actor.as_deref(),
-            Some(
-                "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"
-            )
+            Some("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB")
         );
         assert_eq!(snapshot.events[1].actor.as_deref(), Some("worker-e"));
         assert_eq!(snapshot.events[2].actor.as_deref(), Some("worker-e"));

@@ -19,9 +19,9 @@ Démontre la creación de dominios con autorizaciones, el registro de activos y 
 
 ## Rutas del registro
 
-- Asegúrese de que la cuenta de destino (por ejemplo, `soraカタカナ...`) exista, reflejando la fase de instalación en cada SDK de inicio rápido.
+- Asegúrese de que la cuenta de destino (por ejemplo, `<katakana-i105-account-id>`) exista, reflejando la fase de instalación en cada SDK de inicio rápido.
 - Invoquez le point d'entrée `register_and_mint` pour créer la definición de actif ROSE et frapper 250 unités pour Alice en una única transacción.
-- Verifique las ventas a través de `client.request(FindAccountAssets)` o `iroha_cli ledger assets list --account soraカタカナ...` para confirmar que el frappe a réussi.
+- Verifique las ventas a través de `client.request(FindAccountAssets)` o `iroha_cli ledger assets list --account <katakana-i105-account-id>` para confirmar que el frappe a réussi.
 
 ## Guías SDK asociadas
 
@@ -43,7 +43,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("soraカタカナ...");
+    let to = account!("<katakana-i105-account-id>");
     let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     mint_asset(to, asset, 250);
   }

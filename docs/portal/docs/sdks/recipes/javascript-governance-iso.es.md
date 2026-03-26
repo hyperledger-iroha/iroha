@@ -36,7 +36,7 @@ against the published `@iroha/iroha-js` package and mirrors the snippets in
 ```bash
 npm install @iroha/iroha-js
 export TORII_URL="https://torii.nexus.example"
-export AUTHORITY="soraカタカナ..."
+export AUTHORITY="<katakana-i105-account-id>"
 export PRIVATE_KEY_HEX="$(cat ~/.iroha/keys/alice.key)"
 export CHAIN_ID="00000000-0000-0000-0000-000000000000"
 # optional lookups for GOV_FETCH
@@ -66,7 +66,7 @@ import {
 
 const TORII_URL = process.env.TORII_URL ?? "http://127.0.0.1:8080";
 const CHAIN_ID = process.env.CHAIN_ID ?? "00000000-0000-0000-0000-000000000000";
-const AUTHORITY = process.env.AUTHORITY ?? "soraカタカナ...";
+const AUTHORITY = process.env.AUTHORITY ?? "<katakana-i105-account-id>";
 const PRIVATE_KEY = process.env.PRIVATE_KEY_HEX
   ? Buffer.from(process.env.PRIVATE_KEY_HEX, "hex")
   : Buffer.alloc(32, 0x11);

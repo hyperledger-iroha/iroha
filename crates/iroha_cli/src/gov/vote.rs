@@ -683,7 +683,7 @@ mod tests {
         map.insert(
             "owner".to_string(),
             json::Value::String(
-                "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".to_owned(),
+                "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB".to_owned(),
             ),
         );
         let err = normalize_public_input_owner(&mut map).expect_err("compressed owner");

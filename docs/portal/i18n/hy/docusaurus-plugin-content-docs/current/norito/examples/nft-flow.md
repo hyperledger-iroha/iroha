@@ -21,7 +21,7 @@ slug: /norito/examples/nft-flow
 
 ## Լեջերի քայլարշավ
 
-- Համոզվեք, որ NFT սահմանումը (օրինակ՝ `n0#wonderland`) գոյություն ունի հատվածում օգտագործվող սեփականատիրոջ/ստացողի հաշիվների կողքին (`soraカタカナ...`, `soraカタカナ...`):
+- Համոզվեք, որ NFT սահմանումը (օրինակ՝ `n0#wonderland`) գոյություն ունի հատվածում օգտագործվող սեփականատիրոջ/ստացողի հաշիվների կողքին (`<katakana-i105-account-id>`, `<katakana-i105-account-id>`):
 - Զանգահարեք `nft_issue_and_transfer` մուտքի կետը՝ NFT-ը հատելու համար, փոխանցեք այն Ալիսից Բոբին և կցեք մետատվյալների դրոշակ, որը նկարագրում է թողարկումը:
 - Ստուգեք NFT մատյանային վիճակը `iroha_cli ledger nfts list --account <id>`-ով կամ SDK-ի համարժեքներով՝ փոխանցումը ստուգելու համար, այնուհետև հաստատեք, որ ակտիվը հեռացված է, երբ գործարկվի այրման հրահանգը:
 
@@ -37,11 +37,11 @@ slug: /norito/examples/nft-flow
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
 seiyaku NftFlow {
   kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
-    let owner = account!("soraカタカナ...");
+    let owner = account!("<katakana-i105-account-id>");
     let nft = nft_id!("n0$wonderland");
     nft_mint_asset(nft, owner);
 
-    let to = account!("soraカタカナ...");
+    let to = account!("<katakana-i105-account-id>");
     nft_transfer_asset(owner, nft, to);
     nft_set_metadata(nft, json!{ issued: "demo" });
     nft_burn_asset(nft);

@@ -695,7 +695,8 @@ mod tests {
 
     use super::*;
 
-    const TEST_ACCOUNT_I105: &str = "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ";
+    const TEST_ACCOUNT_I105: &str =
+        "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE";
 
     fn minimal_state_with_account(account: &AccountId) -> Arc<State> {
         let domain_id: DomainId = "wonderland".parse().unwrap();
@@ -718,13 +719,12 @@ mod tests {
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        tx.world
-            .account_aliases
-            .insert(label.clone(), account_id.clone());
-        tx.world.account_rekey_records.insert(
-            label.clone(),
-            iroha_data_model::account::rekey::AccountRekeyRecord::new(label, account_id.clone()),
-        );
+        let bind = iroha_data_model::isi::domain_link::BindAccountAlias {
+            account: account_id.clone(),
+            label,
+        };
+        bind.execute(account_id, &mut tx)
+            .expect("bind account alias for test");
         tx.apply();
         block.commit().expect("commit account alias for test");
     }
@@ -815,7 +815,7 @@ mod tests {
         let _guard = test_guard(CanonicalRequestAuthConfig::default());
         let account = ALICE_ID.clone();
         let state = minimal_state_with_account(&account);
-        bind_account_alias_for_test(&state, &account, "wallet@sbp");
+        bind_account_alias_for_test(&state, &account, "wallet@universal");
         let method = Method::GET;
         let uri: Uri = format!("/v1/accounts/{TEST_ACCOUNT_I105}/assets?limit=10")
             .parse()
@@ -827,7 +827,7 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(
             HEADER_ACCOUNT,
-            axum::http::HeaderValue::from_static("wallet@sbp"),
+            axum::http::HeaderValue::from_static("wallet@universal"),
         );
         headers.insert(
             HEADER_SIGNATURE,

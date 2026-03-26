@@ -178,7 +178,7 @@ def _normalize_canonical_account_id(value: Any, context: str) -> str:
     literal = _require_non_empty_string(value, context)
     if any(ch.isspace() for ch in literal):
         raise ValueError(
-            f"{context} must be a canonical Katakana i105 account id or on-chain account alias"
+            f"{context} must be a canonical I105 account id or on-chain account alias"
         )
     if "@" in literal:
         label, separator, scope = literal.partition("@")
@@ -191,7 +191,7 @@ def _normalize_canonical_account_id(value: Any, context: str) -> str:
             or any(not part for part in scope_parts)
         ):
             raise ValueError(
-                f"{context} must use canonical Katakana i105 account id or account alias `name@dataspace` / `name@domain.dataspace`"
+                f"{context} must use canonical I105 account id or account alias `name@dataspace` / `name@domain.dataspace`"
             )
         return literal
     try:
@@ -200,12 +200,12 @@ def _normalize_canonical_account_id(value: Any, context: str) -> str:
         )
     except AccountAddressError as exc:
         raise ValueError(
-            f"{context} must be a canonical Katakana i105 account id or on-chain account alias"
+            f"{context} must be a canonical I105 account id or on-chain account alias"
         ) from exc
     canonical = address.to_i105(DEFAULT_I105_DISCRIMINANT)
     if canonical != literal:
         raise ValueError(
-            f"{context} must use canonical Katakana i105 account id form when not using an alias"
+            f"{context} must use canonical I105 account id form when not using an alias"
         )
     return canonical
 
@@ -753,21 +753,21 @@ def _ensure_governance_owner_canonical(owner: Any, *, context: str) -> None:
     if owner is None:
         return
     if not isinstance(owner, str):
-        raise ValueError(f"{context}.owner must be a canonical Katakana i105 account id")
+        raise ValueError(f"{context}.owner must be a canonical I105 account id")
     trimmed = owner.strip()
     if not trimmed or trimmed != owner:
-        raise ValueError(f"{context}.owner must be a canonical Katakana i105 account id")
+        raise ValueError(f"{context}.owner must be a canonical I105 account id")
     if any(ch.isspace() for ch in trimmed):
-        raise ValueError(f"{context}.owner must be a canonical Katakana i105 account id")
+        raise ValueError(f"{context}.owner must be a canonical I105 account id")
     if "@" in trimmed:
-        raise ValueError(f"{context}.owner must be a canonical Katakana i105 account id")
+        raise ValueError(f"{context}.owner must be a canonical I105 account id")
     try:
         address = AccountAddress.parse_encoded(trimmed, expected_discriminant=DEFAULT_I105_DISCRIMINANT)
     except AccountAddressError as exc:
-        raise ValueError(f"{context}.owner must be a canonical Katakana i105 account id") from exc
+        raise ValueError(f"{context}.owner must be a canonical I105 account id") from exc
     canonical = address.to_i105(DEFAULT_I105_DISCRIMINANT)
     if canonical != owner:
-        raise ValueError(f"{context}.owner must be a canonical Katakana i105 account id")
+        raise ValueError(f"{context}.owner must be a canonical I105 account id")
 
 
 def _normalize_governance_zk_public_inputs(value: Any, *, context: str) -> Dict[str, Any]:

@@ -415,7 +415,7 @@ from iroha_python import create_torii_client
 
 client = create_torii_client("http://127.0.0.1:8080", auth_token="admin-token")
 snapshot = client.get_explorer_account_qr_typed(
-    "soraカタカナ...",
+    "<katakana-i105-account-id>",
 )
 
 print("Literal:", snapshot.literal)

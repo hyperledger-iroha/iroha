@@ -30,8 +30,8 @@ translation_last_reviewed: 2026-02-07
 Derivadas de las claves العرض التوضيحي:
 
 ```sh
-export ADMIN_ACCOUNT="soraカタカナ..."
-export RECEIVER_ACCOUNT="soraカタカナ..."
+export ADMIN_ACCOUNT="<katakana-i105-account-id>"
+export RECEIVER_ACCOUNT="<katakana-i105-account-id>"
 ```
 
 تأكيد القيم المدرجة في الحسابات الأولى:

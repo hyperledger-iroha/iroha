@@ -3,8 +3,8 @@
   "items": [
     {
       "verdict_id_hex": "0000000000000000000000000000000000000000000000000000000000000101",
-      "issuer_id": "soraゴヂアニダベェユヌサヨニャノヲョネイッリニャネガヨペバヒョブルノホイキャヸムケチャピファノマオニツミチオウ",
-      "issuer_display": "soraゴヂアニダベェユヌサヨニャノヲョネイッリニャネガヨペバヒョブルノホイキャヸムケチャピファノマオニツミチオウ",
+      "issuer_id": "sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53",
+      "issuer_display": "sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53",
       "revoked_at_ms": 1730314876000,
       "reason": "device_compromised",
       "note": "Retail kiosk tamper alert",
@@ -14,7 +14,7 @@
       },
       "record": {
         "verdict_id": "0000000000000000000000000000000000000000000000000000000000000101",
-        "issuer": "soraゴヂアニダベェユヌサヨニャノヲョネイッリニャネガヨペバヒョブルノホイキャヸムケチャピファノマオニツミチオウ",
+        "issuer": "sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53",
         "revoked_at_ms": 1730314876000,
         "reason": "device_compromised",
         "note": "Retail kiosk tamper alert",
@@ -26,13 +26,13 @@
     },
     {
       "verdict_id_hex": "0000000000000000000000000000000000000000000000000000000000000202",
-      "issuer_id": "soraゴヂアニダベェユヌサヨニャノヲョネイッリニャネガヨペバヒョブルノホイキャヸムケチャピファノマオニツミチオウ",
-      "issuer_display": "soraゴヂアニダベェユヌサヨニャノヲョネイッリニャネガヨペバヒョブルノホイキャヸムケチャピファノマオニツミチオウ",
+      "issuer_id": "sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53",
+      "issuer_display": "sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53",
       "revoked_at_ms": 1730414876000,
       "reason": "issuer_request",
       "record": {
         "verdict_id": "0000000000000000000000000000000000000000000000000000000000000202",
-        "issuer": "soraゴヂアニダベェユヌサヨニャノヲョネイッリニャネガヨペバヒョブルノホイキャヸムケチャピファノマオニツミチオウ",
+        "issuer": "sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53",
         "revoked_at_ms": 1730414876000,
         "reason": "issuer_request",
         "metadata": {}

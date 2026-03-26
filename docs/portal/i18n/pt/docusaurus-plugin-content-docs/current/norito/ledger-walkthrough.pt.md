@@ -30,8 +30,8 @@ conta que você planeja usar. O pacote padrão já inclui duas contas derivadas 
 chaves de demonstração:
 
 ```sh
-export ADMIN_ACCOUNT="soraカタカナ..."
-export RECEIVER_ACCOUNT="soraカタカナ..."
+export ADMIN_ACCOUNT="<katakana-i105-account-id>"
+export RECEIVER_ACCOUNT="<katakana-i105-account-id>"
 ```
 
 Confirme os valores listados como primeiras contas:

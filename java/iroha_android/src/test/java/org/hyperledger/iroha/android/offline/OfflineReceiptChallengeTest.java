@@ -29,7 +29,7 @@ public final class OfflineReceiptChallengeTest {
     OfflineReceiptChallenge.compute(
         "testnet",
         "inv-frac",
-        "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
+        "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
         "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
         "12.5",
         1_700_000_000_000L,
@@ -49,7 +49,7 @@ public final class OfflineReceiptChallengeTest {
         OfflineReceiptChallenge.compute(
             "testnet",
             "inv-android-tests",
-            "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
+            "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
             "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
             "100",
             1_700_000_000_000L,

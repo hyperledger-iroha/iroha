@@ -30,8 +30,8 @@ IDs de cuenta que planeas usar. El bundle por defecto ya incluye dos cuentas
 הדגמה של Derivadas de las claves:
 
 ```sh
-export ADMIN_ACCOUNT="soraカタカナ..."
-export RECEIVER_ACCOUNT="soraカタカナ..."
+export ADMIN_ACCOUNT="<katakana-i105-account-id>"
+export RECEIVER_ACCOUNT="<katakana-i105-account-id>"
 ```
 
 אישור לוס valores listando las primeras cuentas:

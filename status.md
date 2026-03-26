@@ -2,6 +2,53 @@
 
 Last updated: 2026-03-26
 
+## 2026-03-26 Follow-up: Swift account-address bridge-style APIs no longer depend on `NoritoBridge.xcframework` for parse/render coverage
+- Extended
+  `IrohaSwift/Sources/IrohaSwift/NativeBridge.swift`
+  so the bridge wrapper now falls back to the pure-Swift account-address codec
+  when the native account-address symbols are unavailable.
+- The shipped behavior in this slice:
+  - `NoritoNativeBridge.isAccountAddressCodecAvailable` now reflects the
+    bridge-style account-address API surface instead of the presence of the
+    xcframework alone;
+  - `parseAccountAddress(...)` and `renderAccountAddress(...)` now use the
+    native bridge when present and otherwise resolve through the same pure-Swift
+    I105/canonical-byte codec already used by `AccountAddress`; and
+  - the focused Swift fixture parity test now exercises the bridge-style API
+    without skipping when `dist/NoritoBridge.xcframework` is absent.
+- Validation:
+  - `cd IrohaSwift && swift test --filter AccountAddressTests` (pass, including `testBridgeCodecMatchesFixtures` without skip)
+
+## 2026-03-26 Follow-up: stale ASCII-corrupted and unsupported-kana account literals are gone from first-party fixtures, docs, SDK tests, and the shipped JS bundle
+- Extended
+  `fixtures/account/address_vectors.json`,
+  `javascript/iroha_js/test/{address,address_inspect}.test.js`,
+  `javascript/iroha_js/dist/address.js`,
+  `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java`,
+  `kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/address/AccountAddressTest.kt`,
+  `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift`,
+  `python/iroha_python/README.md`,
+  `docs/source/data_model*.md`,
+  `crates/ivm/docs/kotodama_grammar.md`,
+  and the broader first-party fixtures/examples/docs that still carried stale
+  ASCII-corrupted account ids or bogus unsupported-kana placeholders.
+- The shipped behavior in this slice:
+  - shared account-address fixtures now derive every positive I105 sample from
+    the canonical bytes using the live encoder, so multisig vectors no longer
+    carry stale checksum-broken literals;
+  - first-party docs/examples/tests now use the same canonical katakana-I105
+    account ids as the current codecs instead of old ASCII-corrupted samples or
+    unsupported-kana placeholder strings;
+  - the JS source tests now match the current encoder output; and
+  - the checked-in JS `dist` bundle was rebuilt from the corrected source, so
+    the published package no longer carries the deprecated wide-kana alphabet.
+- Validation:
+  - `cd javascript/iroha_js && IROHA_JS_DISABLE_NATIVE=1 node --test test/address.test.js test/address_inspect.test.js` (pass)
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.address.AccountAddressTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --rerun-tasks` (pass)
+  - `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.address.AccountAddressTest --console=plain` (pass)
+  - `cd IrohaSwift && swift test --filter AccountAddressTests` (pass)
+  - targeted `rg` sweeps for the retired stale-account-literal patterns across first-party source/docs/fixtures (no matches)
+
 ## 2026-03-26 Follow-up: public docs and validation guides now describe owner-qualified `AssetId` literals consistently
 - Extended
   `docs/source/data_model.md`,
@@ -14,19 +61,19 @@ Last updated: 2026-03-26
 - The shipped behavior in this slice:
   - public docs now describe `AssetDefinitionId` as the only public asset id
     and `AssetId` as the owner-qualified asset-holding identifier
-    `<base58-asset-definition-id>#<canonical-katakana-i105-account-id>[#dataspace:<id>]`;
+    `<base58-asset-definition-id>#<canonical-i105-account-id>[#dataspace:<id>]`;
   - translated `data_model_and_isi_spec*` copies and the top-level
     `data_model.md` no longer describe `AssetId` as a bare asset-definition id
     with an optional dataspace suffix;
   - JS SDK validation docs now report the same owner-qualified `AssetId`
     contract in `ERR_INVALID_ASSET_ID`; and
   - the Swift README transfer-history example now uses the canonical
-    Katakana-i105 account placeholder in its `assetId` filter example.
+    I105 account placeholder in its `assetId` filter example.
 - Validation:
   - targeted `rg` sweeps over `docs/source/data_model*.md`, `docs/source/data_model_and_isi_spec*.md`, `docs/source/sdk/js/validation*.md`, and `IrohaSwift/README.md` found no remaining bare-asset `AssetId` wording or old Swift placeholder examples
-  - `rg -n -F '<canonical-base58-asset-definition-id>#<canonical-katakana-i105-account-id>' docs/source IrohaSwift/README.md` (matches only the updated doc/spec surfaces)
+  - `rg -n -F '<canonical-base58-asset-definition-id>#<canonical-i105-account-id>' docs/source IrohaSwift/README.md` (matches only the updated doc/spec surfaces)
 
-## 2026-03-26 Follow-up: Python i105 decoding now handles multi-symbol Katakana tokens correctly, and the broader Python SDK suites pass
+## 2026-03-26 Follow-up: Python I105 validation now matches the mixed alphabet contract, and the broader Python SDK suites pass
 - Extended
   `python/iroha_python/src/iroha_python/address.py`,
   `python/iroha_python/tests/test_address_format.py`,
@@ -40,11 +87,9 @@ Last updated: 2026-03-26
   so the Python SDK now survives the broader package-level validation rather
   than only the focused RWA slice.
 - The shipped behavior in this slice:
-  - `decode_i105_string(...)` now tokenizes Katakana i105 payloads by the
-    longest matching alphabet symbol instead of iterating one Unicode code
-    point at a time, which restores round-trips for literals containing
-    multi-symbol entries such as `キョ`, `チャ`, and the other small-kana
-    combinations in the first-release alphabet;
+  - `decode_i105_string(...)` now validates the restored mixed I105 alphabet
+    directly: Base58 plus the 47 katakana from the Iroha poem, with the
+    halfwidth Iroha-kana aliases still accepted on decode;
   - the governance ZK ballot owner-normalization path once again accepts
     canonical i105 literals generated by the Python address helpers instead of
     rejecting them with a false checksum mismatch;
@@ -89,7 +134,7 @@ Last updated: 2026-03-26
   - `source /tmp/iroha-py-tools/bin/activate && python -m pytest python/iroha_python/tests/test_rwa_client.py python/iroha_python/tests/test_tx_rwa.py -q` (pass)
   - `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_py_rwa_fresh cargo test --manifest-path python/iroha_python/iroha_python_rs/Cargo.toml rwa_ -- --nocapture` (pass)
 
-## 2026-03-26 Follow-up: first-release identifier contract is now hard-cut toward Katakana i105 account ids, on-chain aliases, and Base58 public asset ids
+## 2026-03-26 Follow-up: first-release identifier contract is now hard-cut toward I105 account ids, on-chain aliases, and Base58 public asset ids
 - Extended
   `crates/iroha_data_model/src/account/address.rs`,
   `crates/iroha_data_model/src/account/address/compliance_vectors.rs`,
@@ -112,11 +157,11 @@ Last updated: 2026-03-26
   so the first-release identifier contract is stricter and more consistent across
   the core codecs and client SDKs.
 - The shipped behavior in this slice:
-  - canonical account ids are now Katakana i105 only across the Rust/Swift/Kotlin/Java/JS/Python account-address helpers; legacy Base58/ASCII/full-width fallback alphabets are gone from the public decoders;
+  - canonical account ids are now I105 only across the Rust/Swift/Kotlin/Java/JS/Python account-address helpers, with Base58 plus the 47 Iroha-poem katakana as the canonical alphabet and halfwidth kana aliases accepted on decode;
   - on-chain account aliases remain `name@domain.dataspace` / `name@dataspace`, and the CLI alias validator now enforces that syntax directly instead of mis-validating aliases as bare `Name` values;
   - public asset ids remain canonical unprefixed Base58 `AssetDefinitionId` values, while asset aliases remain `name#domain.dataspace` / `name#dataspace`;
-  - the Android `AssetIdDecoder` now matches the asset-holding literal contract (`<base58-asset-definition-id>#<katakana-i105-account-id>[#dataspace:<id>]`) instead of silently decoding only the bare definition id; and
-  - the shared account-address fixture now uses Katakana-only checksum-mismatch mutations, matching the stricter decoder behavior.
+  - the Android `AssetIdDecoder` now matches the asset-holding literal contract (`<base58-asset-definition-id>#<i105-account-id>[#dataspace:<id>]`) instead of silently decoding only the bare definition id; and
+  - the shared account-address fixture now uses I105 checksum-mismatch mutations that preserve valid UTF-8 while still exercising the strict decoder behavior.
 - Validation:
   - `cargo fmt --all` (pass)
   - `CARGO_TARGET_DIR=/tmp/iroha_id_contract cargo check -p iroha_data_model --message-format short` (pass)
@@ -130,16 +175,16 @@ Last updated: 2026-03-26
   `crates/iroha_torii/src/routing.rs`,
   and
   `crates/iroha_torii/src/openapi.rs`
-  so canonical `AccountId` parsing remains Katakana i105-only while
+  so canonical `AccountId` parsing remains I105-only while
   state-backed selector surfaces consistently resolve on-chain aliases in
   `name@domain.dataspace` / `name@dataspace` form and still emit canonical
-  Katakana i105 account ids.
+  I105 account ids.
 - The shipped behavior in this slice:
   - Torii’s state-backed account selector paths now resolve on-chain account
     aliases in `name@domain.dataspace` / `name@dataspace` form on
     `/v1/accounts/{account_id}/...`, `/v1/explorer/accounts/{account_id}...`,
     and `/v1/kaigi/relays/{relay_id}`, while still returning canonical
-    Katakana i105 account ids in the response payloads;
+    I105 account ids in the response payloads;
   - `GET /v1/accounts` now canonicalizes `id` filters with state just like
     `POST /v1/accounts/query`, so alias filters behave the same on both
     endpoints and still return canonical i105 ids; and
@@ -307,7 +352,7 @@ Last updated: 2026-03-26
 - Normalized the remaining CLI, Torii, core, JS, Python, Swift, Java, Kotlin,
   OpenAPI, docs, status, and roadmap wording so public account-id text now uses
   `i105` consistently, while asset-id placeholders now use
-  `<base58-asset-definition-id>#<katakana-i105-account-id>`.
+  `<base58-asset-definition-id>#<i105-account-id>`.
 - This follow-up also removed the last stale generic account-id validation
   messages from governance paths and aligned the generated/documented Torii
   account-id query descriptions with the same `i105` wording.
@@ -1719,7 +1764,7 @@ Last updated: 2026-03-26
     not become a new live runtime finding in this pass.
 
 ## 2026-03-25 Follow-up: final first-release asset-id legacy literals removed from live sources and fixtures
-- Completed the last live public asset-id cleanup so first-release user-facing paths now consistently use a single canonical owner-qualified asset-holding literal form: `<base58-asset-definition-id>#<katakana-i105-account-id>` with optional `#dataspace:<id>` for scoped balances.
+- Completed the last live public asset-id cleanup so first-release user-facing paths now consistently use a single canonical owner-qualified asset-holding literal form: `<base58-asset-definition-id>#<i105-account-id>` with optional `#dataspace:<id>` for scoped balances.
 - The shipped behavior in this slice:
   - Swift offline encoding/decoding and Torii client parsing now build, validate, and render canonical public `AssetId` literals instead of `norito:<hex>` wrappers; `TransactionEncoder`, `OfflineNoritoEncoding`, `OfflineNoritoDecoding`, and Torii explorer parsing all share the same public-form validation path;
   - the remaining live Rust/JS host/bridge/docs wording in `iroha_js_host`, `connect_norito_bridge`, Torii MCP tests, the tutorial example, and the IVM TLV examples no longer describe `norito:<hex>` or `aid:` as current asset-id interfaces;
@@ -1755,7 +1800,7 @@ Last updated: 2026-03-26
 
 ## 2026-03-24 Follow-up: owner-qualified `AssetId` literals now use one canonical text form
 - Switched `iroha_data_model::asset::AssetId` display/`FromStr`/JSON behavior to
-  the owner-qualified asset-holding literal `<base58-asset-definition-id>#<katakana-i105-account-id>` with optional
+  the owner-qualified asset-holding literal `<base58-asset-definition-id>#<i105-account-id>` with optional
   `#dataspace:<id>` for scoped balances. This entry originally still mentioned
   internal `norito:<hex>` helpers; those helpers were removed in the
   2026-03-25 follow-up above.
@@ -1937,7 +1982,7 @@ Last updated: 2026-03-26
   - result: failed during peer startup, before block 1 and before any meaningful soak progress could be measured.
   - concrete genesis failures from peer stdout:
     `InstructionFailed(InvariantViolation("active SNS domain-name lease is required before registering \`wonderland\`"))`,
-    `InstructionFailed(Find(Account(soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ)))`,
+    `InstructionFailed(Find(Account(sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB)))`,
     `InstructionFailed(InvariantViolation("active SNS domain-name lease is required before registering \`chaosnet\`"))`.
 - NPoS attempt:
   - log:
@@ -9782,7 +9827,7 @@ Last updated: 2026-03-26
   - `cargo run -p iroha_cli --bin iroha -- tools markdown-help > crates/iroha_cli/CommandLineHelp.md`
 - Continued SDK docs hard-cut cleanup:
   - removed stale `addressFormat`/`address_format` argument examples from JS/Python/Swift SDK docs where APIs are now canonical i105-only.
-  - normalized `docs/source/sdk/js/quickstart*.md` explorer QR snippets to no-option `getExplorerAccountQr("soraカタカナ...")` usage and canonical i105 wording.
+  - normalized `docs/source/sdk/js/quickstart*.md` explorer QR snippets to no-option `getExplorerAccountQr("<i105-account-id>")` usage and canonical i105 wording.
   - normalized `docs/source/sdk/python/index*.md` and `connect_end_to_end*.md` QR helper wording to canonical i105 output.
   - normalized `docs/source/sdk/swift/index*.md` QR/address sections to canonical i105 wording and removed stale `addressFormat: .compressed` snippets.
   - applied a follow-up docs sweep across `docs/`, `docs/source/`, and `docs/portal/` to remove remaining explicit `legacy compatibility`/`legacy compatibility `sora`` account-literal wording on address-format examples and QR snippets.

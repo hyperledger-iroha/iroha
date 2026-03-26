@@ -2,12 +2,12 @@
   "certificate": {
     "allowance": {
       "amount": "90",
-      "asset": "6qZbrYPmQHMjXG6tx4BV8cfz2pEm#soraゴヂアヌタセヺチザニゼヒョォマカゴムヵモォグワレジモゲヒャビニュニゴヸゴワケグパチュヶキョォショクミヒタヒハ",
+      "asset": "6qZbrYPmQHMjXG6tx4BV8cfz2pEm#sorauロ1PGEネHvNyスヰX6uZケbヰskiwbtモトヱNuソuk9sルメフテヰキ8YTGTS",
       "commitment_hex": "B4C25EF1B00CB0D8EA5E3C675DF4826A5AF782C12EF0846DC36A5704E9CCE84C"
     },
     "attestation_nonce_hex": "3333333333333333333333333333333333333333333333333333333333333333",
     "attestation_report_b64": "zHfMdw==",
-    "controller": "soraゴヂアヌタセヺチザニゼヒョォマカゴムヵモォグワレジモゲヒャビニュニゴヸゴワケグパチュヶキョォショクミヒタヒハ",
+    "controller": "sorauロ1PGEネHvNyスヰX6uZケbヰskiwbtモトヱNuソuk9sルメフテヰキ8YTGTS",
     "expires_at_ms": 1745900000000,
     "issued_at_ms": 1730314876000,
     "metadata": {
@@ -25,7 +25,7 @@
       ],
       "android.integrity.policy": "hms_safety_detect"
     },
-    "operator": "soraゴヂアヌヴイシュヷキュショョサポキャゾサヘハヶチャチュノサガジユヶグバヶヹヅヺアミッゾゼカヵオズミホマケクシ",
+    "operator": "sorauロ1Pタ2サレエキクBヨコzBVSフユメRBqwdフsヘフツハネ1Yヤzy6ケ5xYWX98C",
     "operator_signature_hex": "F4BC790FF1DBFA920B86E50E2B1766324021F583230A912A01E432436B9738C7E61E4B16092B8E83E36EA0ECBC41277E8365BBC509591BE89AE13D7D31CA4F00",
     "policy": {
       "expires_at_ms": 1745900000000,

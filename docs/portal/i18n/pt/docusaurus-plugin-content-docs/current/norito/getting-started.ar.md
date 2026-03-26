@@ -71,7 +71,7 @@ Você pode usar o CLI para usar o CLI. O valor da carga útil é o `.to` e a car
 
 ```sh
 iroha_cli app contracts deploy \
-  --authority soraカタカナ... \
+  --authority <katakana-i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
 ```

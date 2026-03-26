@@ -15,7 +15,7 @@ const SAMPLE_KEY = Buffer.from(
   "hex",
 );
 const DEFAULT_DOMAIN_CANONICAL_I105 =
-  "soraゴヂアヌオブマセキュチャタロリチャヷドチャョブセゲヴウヹキャイリコトキャチュヨラバクストリヒュヲシヘタフミチハオ";
+  "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE";
 
 function buildAccount() {
   const address = AccountAddress.fromAccount({

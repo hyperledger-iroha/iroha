@@ -298,13 +298,13 @@ Operators can curate Kaigi calls directly from the CLI:
 
 ```bash
 # Register a session
-iroha kaigi create --domain streaming --call-name daily --host soraカタカナ... \
+iroha kaigi create --domain streaming --call-name daily --host <katakana-i105-account-id> \
   --privacy-mode transparent --room-policy public \
   --relay-manifest manifests/torii.json
 
 # Join/leave flows for participants
-iroha kaigi join --domain streaming --call-name daily --participant soraカタカナ...
-iroha kaigi leave --domain streaming --call-name daily --participant soraカタカナ...
+iroha kaigi join --domain streaming --call-name daily --participant <katakana-i105-account-id>
+iroha kaigi leave --domain streaming --call-name daily --participant <katakana-i105-account-id>
 
 # Record billable usage (milliseconds + gas)
 iroha kaigi record-usage --domain streaming --call-name daily \

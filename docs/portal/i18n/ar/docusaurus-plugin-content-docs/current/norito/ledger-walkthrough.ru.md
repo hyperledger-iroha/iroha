@@ -29,8 +29,8 @@ translation_last_reviewed: 2026-02-07
 حسابات الهوية. يوجد في الحزمة الافتراضية حسابان مستفيدان من المفاتيح التجريبية:
 
 ```sh
-export ADMIN_ACCOUNT="soraカタカナ..."
-export RECEIVER_ACCOUNT="soraカタカナ..."
+export ADMIN_ACCOUNT="<katakana-i105-account-id>"
+export RECEIVER_ACCOUNT="<katakana-i105-account-id>"
 ```
 
 قم بالإجابة على الأسئلة السابقة بالحسابات الأولى:

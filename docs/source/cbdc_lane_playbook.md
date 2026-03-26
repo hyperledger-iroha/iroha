@@ -95,10 +95,10 @@ Lane manifests live under the directory configured via `nexus.registry.manifest_
   "version": 1,
   "governance": "central_bank_multisig",
   "validators": [
-    "soraカタカナ...",
-    "soraカタカナ...",
-    "soraカタカナ...",
-    "soraカタカナ..."
+    "<katakana-i105-account-id>",
+    "<katakana-i105-account-id>",
+    "<katakana-i105-account-id>",
+    "<katakana-i105-account-id>"
   ],
   "quorum": 3,
   "protected_namespaces": [
@@ -241,7 +241,7 @@ directory so auditors and regulators can replay the exact bytes later.
   curl -X POST https://torii.soranexus/v1/space-directory/manifests \
        -H 'Content-Type: application/json' \
        -d '{
-            "authority": "soraカタカナ...",
+            "authority": "<katakana-i105-account-id>",
             "private_key": "ed25519:CiC7…",
             "manifest": '"'"'$(cat fixtures/space_directory/capability/cbdc_wholesale.manifest.json)'"'"',
             "reason": "CBDC onboarding wave 4"
@@ -257,7 +257,7 @@ directory so auditors and regulators can replay the exact bytes later.
   curl -X POST https://torii.soranexus/v1/space-directory/manifests/revoke \
        -H 'Content-Type: application/json' \
        -d '{
-            "authority": "soraカタカナ...",
+            "authority": "<katakana-i105-account-id>",
             "private_key": "ed25519:CiC7…",
             "uaid": "uaid:0f4d…ab11",
             "dataspace": 11,

@@ -5,7 +5,7 @@
       "amount": "250.00",
       "attestation_report_hex": "aa55aa55",
       "blinding_hex": "1111111111111111111111111111111111111111111111111111111111111111",
-      "controller": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+      "controller": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
       "expires_at_ms": 1745900000000,
       "issued_at_ms": 1730314876000,
       "label": "ios-demo",
@@ -26,7 +26,7 @@
       "amount": "150.00",
       "attestation_report_hex": "bb66bb66",
       "blinding_hex": "2222222222222222222222222222222222222222222222222222222222222222",
-      "controller": "soraゴヂアヌゼマャグンロリカリヱザキュアチュゥトヺュサビセジゲキョスクノョボリピドヒュヷペキキュザホフツコオコ",
+      "controller": "sorauロ1PyXノspjg6gnvエ1メムLネオBトEwtテD8Rクヌgヲホセレカ7エvWUJA5A",
       "expires_at_ms": 1745900000000,
       "issued_at_ms": 1730314876000,
       "label": "android-demo",
@@ -54,7 +54,7 @@
       "attestation_nonce_hex": "3333333333333333333333333333333333333333333333333333333333333333",
       "attestation_report_hex": "cc77cc77",
       "blinding_hex": "4444444444444444444444444444444444444444444444444444444444444444",
-      "controller": "soraゴヂアヌタセヺチザニゼヒョォマカゴムヵモォグワレジモゲヒャビニュニゴヸゴワケグパチュヶキョォショクミヒタヒハ",
+      "controller": "sorauロ1PGEネHvNyスヰX6uZケbヰskiwbtモトヱNuソuk9sルメフテヰキ8YTGTS",
       "expires_at_ms": 1745900000000,
       "issued_at_ms": 1730314876000,
       "label": "android-hms-demo",
@@ -86,7 +86,7 @@
       "amount": "175.00",
       "attestation_report_hex": "dd88dd88",
       "blinding_hex": "5555555555555555555555555555555555555555555555555555555555555555",
-      "controller": "soraゴヂアニラショリャヒャャサピテヶベチュヲボヹヂギタクアニョロホドチャヘヱヤジヶハシャウンベニョャルフハケネキカ",
+      "controller": "sorauロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76",
       "expires_at_ms": 1745900000000,
       "issued_at_ms": 1730314876000,
       "label": "android-play-demo",
@@ -121,7 +121,7 @@
       "allowance_asset": "61CtjvNd9T3THAR65GsMVHr82Bjc",
       "amount": "200.00",
       "blinding_hex": "6666666666666666666666666666666666666666666666666666666666666666",
-      "controller": "soraゴヂアヌヒョニリヸベケヮチャイチャケビムヴキョヶホジニョヒュォビヹヒウホキャヒズペュドテヒャヂヰショエミカヌトニ",
+      "controller": "sorauロ1PスNgソリ9マユ2ユ9トZタテフWwヒセヰトツT3WコTxカオホKモロmキNSD7UG",
       "expires_at_ms": 1745900000000,
       "issued_at_ms": 1730314876000,
       "label": "android-provisioned-demo",
@@ -142,7 +142,7 @@
     }
   ],
   "operator": {
-    "account": "soraゴヂアヌヴイシュヷキュショョサポキャゾサヘハヶチャチュノサガジユヶグバヶヹヅヺアミッゾゼカヵオズミホマケクシ",
+    "account": "sorauロ1Pタ2サレエキクBヨコzBVSフユメRBqwdフsヘフツハネ1Yヤzy6ケ5xYWX98C",
     "private_key": "ed25519:8f8c7d6c5b4a392817161514131211100f0e0d0c0b0a09080706050403020100"
   }
 }

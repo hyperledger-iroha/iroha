@@ -19,9 +19,9 @@ translation_last_reviewed: 2026-02-07
 
 ## Полаговый обход рестра
 
-- Пополните полномочия контракта (например `soraカタカナ...`) активом, который он будет переводить, и выдайте `CanTransfer` は、これを実行します。
-- Вызовите точку входа `call_transfer_asset`, чтобы перевести 5 единиц с аккаунта контракта на `soraカタカナ...`, отражая то, Сончейн-автоматизация может оборачивать вызовы хоста.
-- Проверьте балансы через `FindAccountAssets` または `iroha_cli ledger assets list --account soraカタカナ...` и просмотрите события、чтобы подтвердить、что ガードПонтекст перевода です。
+- Пополните полномочия контракта (например `<katakana-i105-account-id>`) активом, который он будет переводить, и выдайте `CanTransfer` は、これを実行します。
+- Вызовите точку входа `call_transfer_asset`, чтобы перевести 5 единиц с аккаунта контракта на `<katakana-i105-account-id>`, отражая то, Сончейн-автоматизация может оборачивать вызовы хоста.
+- Проверьте балансы через `FindAccountAssets` または `iroha_cli ledger assets list --account <katakana-i105-account-id>` и просмотрите события、чтобы подтвердить、что ガードПонтекст перевода です。
 
 ## Связанные руководства SDK
 
@@ -36,8 +36,8 @@ translation_last_reviewed: 2026-02-07
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("soraカタカナ..."),
-      account!("soraカタカナ..."),
+      account!("<katakana-i105-account-id>"),
+      account!("<katakana-i105-account-id>"),
       asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );

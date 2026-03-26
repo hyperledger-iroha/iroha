@@ -19,9 +19,9 @@ translation_last_reviewed: 2026-02-07
 
 ## جولة دفتر الأستاذ
 
-- Написано в фильме "Проект" (в роли `soraカタカナ...`) Загрузите SDK.
+- Написано в фильме "Проект" (в роли `<katakana-i105-account-id>`) Загрузите SDK.
 - استدعِ نقطة الدخول `register_and_mint` لإنشاء تعريف أصل ROSE وسك 250 وحدة لأليس في معاملة واحدة.
-- Вы можете установить `client.request(FindAccountAssets)` или `iroha_cli ledger assets list --account soraカタカナ...` в исходное состояние.
+- Вы можете установить `client.request(FindAccountAssets)` или `iroha_cli ledger assets list --account <katakana-i105-account-id>` в исходное состояние.
 
 ## Использование SDK
 
@@ -43,7 +43,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("soraカタカナ...");
+    let to = account!("<katakana-i105-account-id>");
     let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     mint_asset(to, asset, 250);
   }

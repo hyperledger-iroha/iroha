@@ -3,7 +3,7 @@
   "description": "Template for Torii /v1/offline/settlements replay of a redacted real-device App Attest capture under strict and non-strict signature modes.",
   "redaction_note": "Use test-only accounts/keys. Remove sensitive production values before committing.",
   "chain_id": "test-chain",
-  "authority": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+  "authority": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
   "private_key": "ed0120REPLACE_WITH_TEST_PRIVATE_KEY",
   "expect_non_strict_ok": true,
   "expect_non_strict_reject_code": null,

@@ -19,7 +19,7 @@ slug: /norito/examples/nft-flow
 
 ## Пошаговый обход реестра
 
-- Убедитесь, что определение NFT (נוסח `n0#wonderland`) существует вместе с аккаунтами владельца/полич, в сниппете (`soraカタカナ...`, `soraカタカナ...`).
+- Убедитесь, что определение NFT (נוסח `n0#wonderland`) существует вместе с аккаунтами владельца/полич, в сниппете (`<katakana-i105-account-id>`, `<katakana-i105-account-id>`).
 - צור קשר עם `nft_issue_and_transfer`, משתמש ב-NFT, פועל גם עם אליס עם בוב ו-Prикрепить флаг мет описывающий выпуск.
 - התקן את ה-NFT-reestra через `iroha_cli ledger nfts list --account <id>` או эквиваленты SDK. удаляется после выполнения инструкции לשרוף.
 
@@ -35,11 +35,11 @@ slug: /norito/examples/nft-flow
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
 seiyaku NftFlow {
   kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
-    let owner = account!("soraカタカナ...");
+    let owner = account!("<katakana-i105-account-id>");
     let nft = nft_id!("n0$wonderland");
     nft_mint_asset(nft, owner);
 
-    let to = account!("soraカタカナ...");
+    let to = account!("<katakana-i105-account-id>");
     nft_transfer_asset(owner, nft, to);
     nft_set_metadata(nft, json!{ issued: "demo" });
     nft_burn_asset(nft);

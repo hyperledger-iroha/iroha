@@ -49,7 +49,7 @@ fn encode_int_norito(value: i64) -> Vec<u8> {
 
 #[test]
 fn durable_map_account_id_path_hashes() {
-    const OWNER_ID: &str = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
+    const OWNER_ID: &str = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
     let (raw_ptr, _norito_ptr) = account_pointer_tlvs(OWNER_ID);
     let path = map_path("balances", &raw_ptr);
     assert!(path.starts_with("balances/"));
@@ -79,7 +79,7 @@ fn durable_map_name_value_roundtrip() {
 
 #[test]
 fn durable_map_account_id_value_roundtrip() {
-    const OWNER_ID: &str = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
+    const OWNER_ID: &str = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
     let (_raw_ptr, norito_ptr) = account_pointer_tlvs(OWNER_ID);
     let mut host = CoreHost::new();
     host.insert_state_value("owners/7", norito_ptr.clone());

@@ -19,7 +19,7 @@ const I105_SENTINEL_NUMERIC_PREFIX_FULLWIDTH = "ｎ";
 const I105_CHECKSUM_LEN = 6;
 const BECH32M_CONST = 0x2bc830a3;
 const I105_WARNING =
-  "i105 addresses are the canonical katakana account literal encoding. Render and validate them with the intended chain discriminant.";
+  "i105 addresses use the canonical Katakana i105 alphabet: Base58 plus the 47 katakana from the Iroha poem. Render and validate them with the intended chain discriminant.";
 
 const MULTISIG_DIGEST_PERSONALIZATION = (() => {
   const bytes = new Uint8Array(16);
@@ -30,20 +30,22 @@ const MULTISIG_DIGEST_PERSONALIZATION = (() => {
 let cachedNativeAddressCodec;
 let nativeAddressCodecResolved = false;
 
-const I105_KATAKANA_ALPHABET = [
-  "ア", "イ", "ウ", "エ", "オ", "カ", "キ", "ク", "ケ", "コ", "サ", "シ",
-  "ス", "セ", "ソ", "タ", "チ", "ツ", "テ", "ト", "ナ", "ニ", "ヌ", "ネ",
-  "ノ", "ハ", "ヒ", "フ", "ヘ", "ホ", "マ", "ミ", "ム", "メ", "モ", "ヤ",
-  "ユ", "ヨ", "ラ", "リ", "ル", "レ", "ロ", "ワ", "ヰ", "ヱ", "ヲ", "ン",
-  "ガ", "ギ", "グ", "ゲ", "ゴ", "ザ", "ジ", "ズ", "ゼ", "ゾ", "ダ", "ヂ",
-  "ヅ", "デ", "ド", "バ", "ビ", "ブ", "ベ", "ボ", "パ", "ピ", "プ", "ペ",
-  "ポ", "ヴ", "ヷ", "ヸ", "ヹ", "ヺ", "ァ", "ィ", "ゥ", "ェ", "ォ", "ャ",
-  "ュ", "ョ", "ッ", "ヮ", "ヵ", "ヶ", "キャ", "キュ", "キョ", "シャ",
-  "シュ", "ショ", "チャ", "チュ", "チョ", "ニャ", "ニュ", "ニョ", "ヒャ",
-  "ヒュ", "ヒョ",
+const BASE58_ALPHABET = Array.from(
+  "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz",
+);
+const IROHA_POEM_KANA_FULLWIDTH = [
+  "イ", "ロ", "ハ", "ニ", "ホ", "ヘ", "ト", "チ", "リ", "ヌ", "ル", "ヲ", "ワ", "カ",
+  "ヨ", "タ", "レ", "ソ", "ツ", "ネ", "ナ", "ラ", "ム", "ウ", "ヰ", "ノ", "オ", "ク",
+  "ヤ", "マ", "ケ", "フ", "コ", "エ", "テ", "ア", "サ", "キ", "ユ", "メ", "ミ", "シ",
+  "ヱ", "ヒ", "モ", "セ", "ス",
 ];
-const I105_MAX_SYMBOL_CHARS = 2;
-const I105_ALPHABET = I105_KATAKANA_ALPHABET;
+const IROHA_POEM_KANA_HALFWIDTH = [
+  "ｲ", "ﾛ", "ﾊ", "ﾆ", "ﾎ", "ﾍ", "ﾄ", "ﾁ", "ﾘ", "ﾇ", "ﾙ", "ｦ", "ﾜ", "ｶ",
+  "ﾖ", "ﾀ", "ﾚ", "ｿ", "ﾂ", "ﾈ", "ﾅ", "ﾗ", "ﾑ", "ｳ", "ヰ", "ﾉ", "ｵ", "ｸ",
+  "ﾔ", "ﾏ", "ｹ", "ﾌ", "ｺ", "ｴ", "ﾃ", "ｱ", "ｻ", "ｷ", "ﾕ", "ﾒ", "ﾐ", "ｼ",
+  "ヱ", "ﾋ", "ﾓ", "ｾ", "ｽ",
+];
+const I105_ALPHABET = [...BASE58_ALPHABET, ...IROHA_POEM_KANA_FULLWIDTH];
 const I105_BASE = I105_ALPHABET.length;
 
 export const AccountAddressErrorCode = Object.freeze({
@@ -1154,7 +1156,7 @@ function assertCanonicalI105Literal(input, address) {
   if (address.toI105(discriminant) !== input) {
     throw new AccountAddressError(
       AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
-      "account address literals must use canonical katakana i105 form",
+      "account address literals must use canonical Katakana i105 form",
     );
   }
 }
@@ -1617,90 +1619,49 @@ function decodeSupportedI105String(encoded, expectedDiscriminant) {
 }
 
 function lookupI105Digit(symbol) {
-  const canonicalIndex = I105_KATAKANA_ALPHABET.indexOf(symbol);
+  const canonicalIndex = I105_ALPHABET.indexOf(symbol);
   if (canonicalIndex !== -1) {
     return canonicalIndex;
+  }
+  const halfwidthIndex = IROHA_POEM_KANA_HALFWIDTH.indexOf(symbol);
+  if (halfwidthIndex !== -1) {
+    return BASE58_ALPHABET.length + halfwidthIndex;
   }
   return undefined;
 }
 
 function decodeI105Payload(payload) {
-  const units = Array.from(payload);
   const digits = [];
-  let sawTooShort = false;
-  let sawChecksumMismatch = false;
-  let invalidChar = undefined;
-
-  function backtrack(index) {
-    if (index === units.length) {
-      if (digits.length <= I105_CHECKSUM_LEN) {
-        sawTooShort = true;
-        return undefined;
-      }
-      const dataDigits = digits.slice(0, -I105_CHECKSUM_LEN);
-      const checksumDigits = digits.slice(-I105_CHECKSUM_LEN);
-      const canonicalBytes = decodeBaseN(dataDigits, I105_BASE);
-      const expected = i105ChecksumDigits(canonicalBytes);
-      if (Buffer.from(expected).equals(Buffer.from(checksumDigits))) {
-        return canonicalBytes;
-      }
-      sawChecksumMismatch = true;
-      return undefined;
+  for (const symbol of Array.from(payload)) {
+    const digit = lookupI105Digit(symbol);
+    if (digit === undefined) {
+      throw new AccountAddressError(
+        AccountAddressErrorCode.INVALID_I105_CHAR,
+        `invalid character in i105 address: ${symbol}`,
+        { details: { char: symbol } },
+      );
     }
-
-    const currentChar = units[index];
-    let matched = false;
-    for (let symbolLen = I105_MAX_SYMBOL_CHARS; symbolLen >= 1; symbolLen -= 1) {
-      if (index + symbolLen > units.length) {
-        continue;
-      }
-      const candidate = units.slice(index, index + symbolLen).join("");
-      const digit = lookupI105Digit(candidate);
-      if (digit === undefined) {
-        continue;
-      }
-      matched = true;
-      digits.push(digit);
-      const canonicalBytes = backtrack(index + symbolLen);
-      digits.pop();
-      if (canonicalBytes !== undefined) {
-        return canonicalBytes;
-      }
-    }
-
-    if (!matched && invalidChar === undefined) {
-      invalidChar = currentChar;
-    }
-    return undefined;
+    digits.push(digit);
   }
 
-  const canonicalBytes = backtrack(0);
-  if (canonicalBytes !== undefined) {
-    return canonicalBytes;
-  }
-  if (sawChecksumMismatch) {
-    throw new AccountAddressError(
-      AccountAddressErrorCode.CHECKSUM_MISMATCH,
-      "i105 checksum mismatch",
-    );
-  }
-  if (sawTooShort) {
+  if (digits.length <= I105_CHECKSUM_LEN) {
     throw new AccountAddressError(
       AccountAddressErrorCode.I105_TOO_SHORT,
       "i105 address too short",
     );
   }
-  if (invalidChar !== undefined) {
+
+  const dataDigits = digits.slice(0, -I105_CHECKSUM_LEN);
+  const checksumDigits = digits.slice(-I105_CHECKSUM_LEN);
+  const canonicalBytes = decodeBaseN(dataDigits, I105_BASE);
+  const expected = i105ChecksumDigits(canonicalBytes);
+  if (!Buffer.from(expected).equals(Buffer.from(checksumDigits))) {
     throw new AccountAddressError(
-      AccountAddressErrorCode.INVALID_I105_CHAR,
-      `invalid character in i105 address: ${invalidChar}`,
-      { details: { char: invalidChar } },
+      AccountAddressErrorCode.CHECKSUM_MISMATCH,
+      "i105 checksum mismatch",
     );
   }
-  throw new AccountAddressError(
-    AccountAddressErrorCode.CHECKSUM_MISMATCH,
-      "i105 checksum mismatch",
-  );
+  return canonicalBytes;
 }
 
 function decodeI105String(encoded, expectedDiscriminant) {

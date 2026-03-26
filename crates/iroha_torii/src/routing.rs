@@ -4490,6 +4490,8 @@ fn bind_account_alias_for_test(
     account_id: &AccountId,
     alias_literal: &str,
 ) {
+    use iroha_core::smartcontracts::Execute as _;
+
     let label = iroha_data_model::account::rekey::AccountLabel::from_literal(
         alias_literal,
         &state.nexus_snapshot().dataspace_catalog,
@@ -4505,13 +4507,12 @@ fn bind_account_alias_for_test(
     );
     let mut block = state.block(header);
     let mut tx = block.transaction();
-    tx.world
-        .account_aliases
-        .insert(label.clone(), account_id.clone());
-    tx.world.account_rekey_records.insert(
-        label.clone(),
-        iroha_data_model::account::rekey::AccountRekeyRecord::new(label, account_id.clone()),
-    );
+    let bind = iroha_data_model::isi::domain_link::BindAccountAlias {
+        account: account_id.clone(),
+        label,
+    };
+    bind.execute(account_id, &mut tx)
+        .expect("bind account alias for test");
     tx.apply();
     block.commit().expect("commit account alias for test");
 }
@@ -4604,8 +4605,8 @@ mod zk_roots_selector_tests {
 
     #[test]
     fn resolve_tx_history_asset_selector_accepts_asset_alias_literal() {
-        let (world, definition_id) = selector_world();
-        let view = world.view();
+        let (state, definition_id) = selector_state();
+        let view = state.world_view();
         let resolved = resolve_tx_history_asset_selector(&view, 0, Some("usd#main"), None)
             .expect("selector should resolve");
 
@@ -4617,8 +4618,8 @@ mod zk_roots_selector_tests {
 
     #[test]
     fn resolve_tx_history_asset_selector_rejects_alias_outside_allowed_definition() {
-        let (world, definition_id) = selector_world();
-        let view = world.view();
+        let (state, definition_id) = selector_state();
+        let view = state.world_view();
         let other_definition =
             test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400ee");
         let err =
@@ -14991,7 +14992,8 @@ mod repair_query_tests {
     use sorafs_node::config::StorageConfig;
     use tokio::runtime::Runtime;
 
-    const TEST_AUDITOR_I105: &str = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
+    const TEST_AUDITOR_I105: &str =
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
 
     fn report(
         ticket: &str,
@@ -15134,9 +15136,12 @@ mod repair_worker_tests {
     use sorafs_node::config::StorageConfig;
     use tokio::runtime::Runtime;
 
-    const TEST_AUDITOR_I105: &str = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
-    const TEST_WORKER_A_I105: &str = "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ";
-    const TEST_WORKER_B_I105: &str = "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ";
+    const TEST_AUDITOR_I105: &str =
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
+    const TEST_WORKER_A_I105: &str =
+        "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D";
+    const TEST_WORKER_B_I105: &str =
+        "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE";
 
     fn report(
         ticket: &str,
@@ -19131,11 +19136,30 @@ pub(crate) fn parse_account_literal_with_state(
             let nexus = state.nexus_snapshot();
             if let Ok(alias) =
                 account::rekey::AccountLabel::from_literal(trimmed, &nexus.dataspace_catalog)
-                && let Some(resolved) =
-                    iroha_core::block::resolve_account_alias_in_world(world, &alias)
             {
-                record_account_literal_accept(telemetry, context, &resolved);
-                return Ok((resolved.clone(), resolved.to_string()));
+                if let Some(resolved) = world.account_aliases().get(&alias).cloned() {
+                    record_account_literal_accept(telemetry, context, &resolved);
+                    return Ok((resolved.clone(), resolved.to_string()));
+                }
+
+                let mut matched_account_id: Option<iroha_data_model::account::AccountId> = None;
+                for (account_id, value) in world.accounts().iter() {
+                    if value.as_ref().label() != Some(&alias) {
+                        continue;
+                    }
+                    if let Some(existing) = matched_account_id.as_ref() {
+                        if existing != account_id {
+                            matched_account_id = None;
+                            break;
+                        }
+                    } else {
+                        matched_account_id = Some(account_id.clone());
+                    }
+                }
+                if let Some(resolved) = matched_account_id {
+                    record_account_literal_accept(telemetry, context, &resolved);
+                    return Ok((resolved.clone(), resolved.to_string()));
+                }
             }
             record_account_literal_reject(telemetry, context, literal, base_err.reason());
             Err(base_err)
@@ -19678,7 +19702,7 @@ mod address_metrics_tests {
     #[tokio::test(flavor = "current_thread")]
     async fn kaigi_sse_accepts_i105_literal() {
         let telemetry = MaybeTelemetry::for_tests();
-        let literal = "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ";
+        let literal = "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE";
 
         let parsed = parse_account_literal(&literal, &telemetry, KAIGI_SSE_CONTEXT)
             .expect("i105 literal should parse");
@@ -19843,8 +19867,8 @@ fn committed_transactions_snapshot(
 ///   curl -X POST \
 ///     -H 'Content-Type: application/json' \
 ///     -H 'Accept: application/json' \
-///     -d '{"filter": {"op":"eq","args":[{"FieldPath":"authority"},"soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ"]}, "pagination": {"limit": 50}}' \
-///     http://127.0.0.1:8080/v1/accounts/soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ/transactions/query
+///     -d '{"filter": {"op":"eq","args":[{"FieldPath":"authority"},"sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE"]}, "pagination": {"limit": 50}}' \
+///     http://127.0.0.1:8080/v1/accounts/sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE/transactions/query
 ///
 /// Returns: `{ "items": [ {"authority": "...", "timestamp_ms": 0, "entrypoint_hash": "...", "result_ok": true } ], "total": N }`
 ///
@@ -22123,7 +22147,8 @@ mod tx_query_integration_smoke {
     use super::*;
     // use tower::ServiceExt; // not needed in this module
 
-    const TEST_ACCOUNT: &str = "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ";
+    const TEST_ACCOUNT: &str =
+        "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE";
 
     #[must_use]
     struct DebugEnvGuard {
@@ -22190,7 +22215,8 @@ mod tx_query_integration_smoke {
             filter: Some(crate::filter::FilterExpr::Eq(
                 crate::filter::FieldPath("authority".into()),
                 norito::json::Value::String(
-                    "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ".into(),
+                    "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE"
+                        .into(),
                 ),
             )),
             select: None,
@@ -22204,7 +22230,9 @@ mod tx_query_integration_smoke {
 
         let resp = handle_v1_account_transactions(
             Arc::new(state),
-            axum::extract::Path("soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ".into()),
+            axum::extract::Path(
+                "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE".into(),
+            ),
             crate::utils::extractors::NoritoJson(env),
             crate::routing::MaybeTelemetry::for_tests(),
         )
@@ -24622,7 +24650,7 @@ mod app_api_integration_tests {
         ]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/accounts/soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ/transactions/query")
+            .uri("/v1/accounts/sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE/transactions/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(req_body))
             .unwrap();
@@ -24768,7 +24796,7 @@ mod app_api_integration_tests {
         ]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/accounts/soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ/transactions/query")
+            .uri("/v1/accounts/sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE/transactions/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -24812,7 +24840,7 @@ mod app_api_integration_tests {
         )]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/accounts/soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ/transactions/query")
+            .uri("/v1/accounts/sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE/transactions/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -24829,7 +24857,7 @@ mod app_api_integration_tests {
         )]));
         let req2 = http::Request::builder()
             .method("POST")
-            .uri("/v1/accounts/soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ/transactions/query")
+            .uri("/v1/accounts/sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE/transactions/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body2))
             .unwrap();
@@ -24866,7 +24894,7 @@ mod app_api_integration_tests {
         let mut set = Vec::new();
         for _ in 0..300 {
             set.push(norito::json::Value::String(
-                "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ".into(),
+                "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE".into(),
             ));
         }
         let body = json_string(obj(vec![(
@@ -24878,7 +24906,7 @@ mod app_api_integration_tests {
         )]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/accounts/soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ/transactions/query")
+            .uri("/v1/accounts/sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE/transactions/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -24897,7 +24925,7 @@ mod app_api_integration_tests {
         let body2 = json_string(obj(vec![("filter", deep)]));
         let req2 = http::Request::builder()
             .method("POST")
-            .uri("/v1/accounts/soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ/transactions/query")
+            .uri("/v1/accounts/sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE/transactions/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body2))
             .unwrap();
@@ -24941,7 +24969,7 @@ mod app_api_integration_tests {
         )]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/accounts/soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ/transactions/query")
+            .uri("/v1/accounts/sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE/transactions/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -24988,7 +25016,7 @@ mod app_api_integration_tests {
         let req = http::Request::builder()
             .method("POST")
             .uri(
-                "/v1/accounts/soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ/assets/query",
+                "/v1/accounts/sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE/assets/query",
             )
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
@@ -25216,7 +25244,7 @@ mod app_api_integration_tests {
         let req = http::Request::builder()
             .method("POST")
             .uri(
-                "/v1/accounts/soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ/assets/query",
+                "/v1/accounts/sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE/assets/query",
             )
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
@@ -25763,7 +25791,7 @@ mod app_api_integration_tests {
 
         let req = http::Request::builder()
             .method("GET")
-            .uri("/v1/assets/rose%23sbp/holders?account_id=treasury%40sbp")
+            .uri("/v1/assets/rose%23sbp/holders?account_id=treasury%40universal")
             .body(axum::body::Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -26157,7 +26185,10 @@ mod app_api_integration_tests {
                 "filter",
                 obj(vec![
                     ("op", val("eq")),
-                    ("args", arr(vec![val("account_id"), val("treasury@sbp")])),
+                    (
+                        "args",
+                        arr(vec![val("account_id"), val("treasury@universal")]),
+                    ),
                 ]),
             ),
             (
@@ -26227,7 +26258,7 @@ mod app_api_integration_tests {
             LiveQueryStore::start_test(),
         ));
         bind_permanent_asset_alias_for_test(&state, &alice_id, &rose_def, "rose#sbp");
-        bind_account_alias_for_test(&state, &alice_id, "treasury@sbp");
+        bind_account_alias_for_test(&state, &alice_id, "treasury@universal");
 
         (state, alice_id, bob_id)
     }
@@ -26508,10 +26539,11 @@ mod query_endpoint_tests {
         use iroha_data_model::isi;
         let isi: dm::InstructionBox = isi::zk::VerifyProof::new(attachment).into();
 
-        let authority: dm::AccountId =
-            dm::AccountId::parse_encoded("soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ")
-                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                .expect("valid account id");
+        let authority: dm::AccountId = dm::AccountId::parse_encoded(
+            "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
+        )
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .expect("valid account id");
         isi.execute(&authority, &mut stx)
             .expect("execute verify-proof");
         stx.apply();
@@ -35894,7 +35926,8 @@ mod pagination_enforcement_tests {
 
     use super::*;
 
-    const TEST_ACCOUNT: &str = "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ";
+    const TEST_ACCOUNT: &str =
+        "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE";
 
     fn test_state() -> Arc<CoreState> {
         Arc::new(State::new_for_testing(
@@ -39189,7 +39222,12 @@ mod accounts_query_tests {
             Value::String(alias_literal.clone()),
         );
         let params = ListFilterParams {
-            filter: Some(norito::json::to_string(&filter).expect("filter JSON")),
+            filter: Some(
+                norito::json::to_string(
+                    &norito::json::to_value(&filter).expect("filter should encode to JSON value"),
+                )
+                .expect("filter JSON"),
+            ),
             limit: Some(8),
             offset: 0,
             sort: None,
@@ -45535,6 +45573,7 @@ mod public_lane_tests {
 
 #[cfg(all(test, feature = "app_api"))]
 mod nexus_dataspaces_summary_tests {
+    use http_body_util::BodyExt as _;
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
         account::Account,
@@ -45542,6 +45581,7 @@ mod nexus_dataspaces_summary_tests {
         domain::Domain,
         nexus::{AssetPermissionManifest, DataSpaceId, ManifestVersion, UniversalAccountId},
     };
+    use iroha_test_samples::ALICE_ID;
 
     use super::*;
 
@@ -45657,11 +45697,11 @@ mod nexus_dataspaces_summary_tests {
             Kura::blank_kura_for_testing(),
             iroha_core::query::store::LiveQueryStore::start_test(),
         ));
-        bind_account_alias_for_test(&state, &authority, "summary@sbp");
+        bind_account_alias_for_test(&state, &authority, "summary@universal");
 
         let resp = handle_v1_nexus_dataspaces_account_summary(
             state,
-            axum::extract::Path("summary@sbp".to_string()),
+            axum::extract::Path("summary@universal".to_string()),
             crate::NoritoQuery(NexusDataspacesAccountSummaryQueryParams::default()),
             MaybeTelemetry::disabled(),
         )
@@ -51176,10 +51216,10 @@ mod subscription_api_tests {
             ],
             Vec::new(),
         );
-        bind_account_alias_for_test(&state, &provider, "billing@sbp");
+        bind_account_alias_for_test(&state, &provider, "billing@universal");
 
         let params = SubscriptionPlanListParams {
-            provider: Some("billing@sbp".to_string()),
+            provider: Some("billing@universal".to_string()),
             limit: None,
             offset: 0,
         };
@@ -51329,12 +51369,12 @@ mod subscription_api_tests {
                 (paused_id.clone(), paused_state, None),
             ],
         );
-        bind_account_alias_for_test(&state, &provider, "billing@sbp");
-        bind_account_alias_for_test(&state, &subscriber, "member@sbp");
+        bind_account_alias_for_test(&state, &provider, "billing@universal");
+        bind_account_alias_for_test(&state, &subscriber, "member@universal");
 
         let params = SubscriptionListParams {
-            owned_by: Some("member@sbp".to_string()),
-            provider: Some("billing@sbp".to_string()),
+            owned_by: Some("member@universal".to_string()),
+            provider: Some("billing@universal".to_string()),
             status: Some("paused".to_string()),
             limit: None,
             offset: 0,
@@ -51713,7 +51753,7 @@ mod adapter_filter_tests {
                 arr(vec![
                     val("id"),
                     val(
-                        "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
+                        "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
                     ),
                 ]),
             ),
@@ -52701,7 +52741,7 @@ fn sample_transfer_record() -> OfflineTransferRecord {
             commitment: vec![0xAB; 32],
         },
         spend_public_key: PublicKey::from_str(
-            "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
+            "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
         )
         .expect("public key"),
         attestation_report: Vec::new(),

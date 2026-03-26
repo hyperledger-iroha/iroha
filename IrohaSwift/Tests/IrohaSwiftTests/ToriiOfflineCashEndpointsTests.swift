@@ -41,8 +41,8 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
 
     func testOfflineCashEndpointsRejectRemovedServerSideSigningFlowsAndKeepRevocationReads() async throws {
         let client = makeClient()
-        let aliceId = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"
-        let bobId = "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ"
+        let aliceId = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"
+        let bobId = "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"
         let assetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
         let deviceBinding = ToriiOfflineDeviceBinding(
             platform: "ios",

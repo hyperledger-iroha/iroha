@@ -103,7 +103,7 @@ translator: machine-google-reviewed
     - JSON йәки асҡыс ҡабул итә `"perms"` йәки `"permissions"`, һәр береһе рөхсәт исемдәре строкаһы.
     - Миҫалдар:
       - `{ "perms": [ "mint_asset:rose#wonder" ] }`
-      - `{ "permissions": [ "read_assets:soraカタカナ...", "transfer_asset:rose#wonder" ] }`
+      - `{ "permissions": [ "read_assets:<katakana-i105-account-id>", "transfer_asset:rose#wonder" ] }`
     - Рөхсәт исеменә ярҙам иткән мысҡылда:
       - `register_domain`, `register_account`, Norito.
       - `read_assets:<account_id>`

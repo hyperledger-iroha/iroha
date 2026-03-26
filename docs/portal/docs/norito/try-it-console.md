@@ -70,7 +70,7 @@ When the OAuth variables are present the sandbox renders a **Sign in with device
 4. Choose the `application/x-norito` content type in the “Try it” drawer, click **Choose File**, and select your payload. The proxy rewrites the request to `/proxy/v1/pipeline/submit` and tags it with `X-TryIt-Client=docs-portal-rapidoc`.
 5. To download Norito responses, set `Accept: application/x-norito`. Swagger/RapiDoc expose the header selector in the same drawer and stream the binary back through the proxy.
 
-For JSON-only routes the embedded Try it sandbox is often faster: enter the path (for example, `/v1/accounts/soraカタカナ.../assets`), select the HTTP method, paste a JSON body when needed, and hit **Send request** to inspect headers, duration, and payloads inline.
+For JSON-only routes the embedded Try it sandbox is often faster: enter the path (for example, `/v1/accounts/<katakana-i105-account-id>/assets`), select the HTTP method, paste a JSON body when needed, and hit **Send request** to inspect headers, duration, and payloads inline.
 
 ## Troubleshooting
 

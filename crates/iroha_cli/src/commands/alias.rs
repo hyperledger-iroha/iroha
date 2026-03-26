@@ -331,7 +331,7 @@ mod tests {
         command: Command,
     }
 
-    const SAMPLE_ACCOUNT_ID: &str = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
+    const SAMPLE_ACCOUNT_ID: &str = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
 
     #[test]
     fn parse_voprf_args() {

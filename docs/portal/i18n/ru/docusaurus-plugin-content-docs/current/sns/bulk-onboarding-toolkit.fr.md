@@ -77,9 +77,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "soraカタカナ...",
+      "owner": "<katakana-i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"soraカタカナ...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<katakana-i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -88,7 +88,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"soraカタカナ...",
+        "payer":"<katakana-i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -249,7 +249,7 @@ panneaux pour les comptes par suffixe, le Volume de Paiement et les Ratios de
   ссылки на файлы, которые разрешают соотнесение с размещением CSV.
   Необъективные метаданные приводят к ошибке проверки.
 - **Контроллеры:** ячейки имеют соответствующий `--default-controllers`. Фурниссе
-  явные списки (пример `soraカタカナ...;soraカタカナ...`), когда вы делегируете их
+  явные списки (пример `<katakana-i105-account-id>;<katakana-i105-account-id>`), когда вы делегируете их
   актеры не являются владельцами.
 
 Сигнальные сигналы с числом строк контекста (например,

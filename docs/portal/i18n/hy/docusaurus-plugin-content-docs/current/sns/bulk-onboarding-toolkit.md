@@ -86,9 +86,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "soraカタカナ...",
+      "owner": "<katakana-i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"soraカタカナ...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<katakana-i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -97,7 +97,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"soraカタカナ...",
+        "payer":"<katakana-i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -256,7 +256,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
   հղումները լուծվում են CSV-ի գտնվելու վայրի համեմատ: Ոչ օբյեկտի մետատվյալներ
   առաջացնում է վավերացման սխալ:
 - **Կարգավորիչներ.** դատարկ բջիջներ հարգում են `--default-controllers`: Տրամադրել բացահայտ
-  վերահսկիչների ցուցակները (օրինակ՝ `soraカタカナ...;soraカタカナ...`) ոչ սեփականատիրոջը պատվիրելիս
+  վերահսկիչների ցուցակները (օրինակ՝ `<katakana-i105-account-id>;<katakana-i105-account-id>`) ոչ սեփականատիրոջը պատվիրելիս
   դերասաններ.
 
 Անհաջողությունները հաղորդվում են համատեքստային տողերի համարներով (օրինակ

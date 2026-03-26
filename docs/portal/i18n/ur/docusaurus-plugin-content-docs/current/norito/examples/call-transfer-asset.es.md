@@ -19,9 +19,9 @@ translation_last_reviewed: 2026-02-07
 
 ## لیجر ٹور
 
-- معاہدہ اتھارٹی (مثال کے طور پر `soraカタカナ...`) کو اس اثاثہ کے ساتھ فنڈ دیں جس کی آپ منتقلی کریں گے اور اس کو `CanTransfer` یا مساوی اجازت دیں گے۔
-- کال انٹریپوائنٹ `call_transfer_asset` معاہدے کے اکاؤنٹ سے 5 یونٹوں کو `soraカタカナ...` میں منتقل کرنے کے لئے ، جس طرح سے آن چین آٹومیشن میں میزبان کالز شامل ہوسکتی ہیں اس کی عکاسی کرتی ہے۔
-- `FindAccountAssets` یا `iroha_cli ledger assets list --account soraカタカナ...` کا استعمال کرتے ہوئے بیلنس چیک کرتا ہے اور اس بات کی تصدیق کرنے کے لئے واقعات کا معائنہ کرتا ہے کہ میٹا ڈیٹا گارڈ نے منتقلی کے سیاق و سباق کو ریکارڈ کیا۔
+- معاہدہ اتھارٹی (مثال کے طور پر `<katakana-i105-account-id>`) کو اس اثاثہ کے ساتھ فنڈ دیں جس کی آپ منتقلی کریں گے اور اس کو `CanTransfer` یا مساوی اجازت دیں گے۔
+- کال انٹریپوائنٹ `call_transfer_asset` معاہدے کے اکاؤنٹ سے 5 یونٹوں کو `<katakana-i105-account-id>` میں منتقل کرنے کے لئے ، جس طرح سے آن چین آٹومیشن میں میزبان کالز شامل ہوسکتی ہیں اس کی عکاسی کرتی ہے۔
+- `FindAccountAssets` یا `iroha_cli ledger assets list --account <katakana-i105-account-id>` کا استعمال کرتے ہوئے بیلنس چیک کرتا ہے اور اس بات کی تصدیق کرنے کے لئے واقعات کا معائنہ کرتا ہے کہ میٹا ڈیٹا گارڈ نے منتقلی کے سیاق و سباق کو ریکارڈ کیا۔
 
 ## متعلقہ SDK گائیڈز
 
@@ -36,8 +36,8 @@ translation_last_reviewed: 2026-02-07
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("soraカタカナ..."),
-      account!("soraカタカナ..."),
+      account!("<katakana-i105-account-id>"),
+      account!("<katakana-i105-account-id>"),
       asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );

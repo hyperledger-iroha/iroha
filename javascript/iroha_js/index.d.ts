@@ -417,10 +417,16 @@ export interface ProofAttachmentInput {
 export function normalizeAccountId(value: string, name?: string): string;
 
 /**
- * Canonicalise an asset-holding identifier in
- * `<base58-asset-definition-id>#<katakana-i105-account-id>` form.
+ * Canonicalise a public asset identifier to bare Base58 form.
+ * Asset aliases (`name#dataspace` / `name#domain.dataspace`) must be resolved first.
  */
 export function normalizeAssetId(value: string, name?: string): string;
+
+/**
+ * Canonicalise an internal asset-holding identifier in
+ * `<base58-asset-definition-id>#<katakana-i105-account-id>` form.
+ */
+export function normalizeAssetHoldingId(value: string, name?: string): string;
 
 /**
  * Canonicalise an RWA identifier in `<64-hex-hash>$<domain>` form.
@@ -4249,18 +4255,18 @@ type DomainMintSpec = {
 
 type AssetDefinitionMintSpec = {
   accountId?: string;
-  assetId?: string;
+  assetHoldingId?: string;
   quantity: NumericLike;
 };
 
 type MintTransferSpec = {
-  sourceAssetId?: string;
+  sourceAssetHoldingId?: string;
   quantity: NumericLike;
   destinationAccountId: string;
 };
 
 type AccountTransferSpec = {
-  sourceAssetId: string;
+  sourceAssetHoldingId: string;
   quantity: NumericLike;
   destinationAccountId: string;
 };
@@ -4309,7 +4315,7 @@ export interface TransactionAssemblyInput {
 export interface MintAssetInput {
   chainId: string;
   authority: string;
-  assetId: string;
+  assetHoldingId: string;
   quantity: NumericLike;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
@@ -4321,7 +4327,7 @@ export interface MintAssetInput {
 export interface BurnAssetInput {
   chainId: string;
   authority: string;
-  assetId: string;
+  assetHoldingId: string;
   quantity: NumericLike;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
@@ -4357,7 +4363,7 @@ export interface BurnTriggerInput {
 export interface TransferAssetInput {
   chainId: string;
   authority: string;
-  sourceAssetId: string;
+  sourceAssetHoldingId: string;
   quantity: NumericLike;
   destinationAccountId: string;
   metadata?: MetadataLike;
@@ -4577,15 +4583,15 @@ export interface RemoveRwaKeyValueInput {
 
 /**
  * Parameters for {@link buildMintAndTransferTransaction}. Provide either
- * `transfer` or `transfers`; when `sourceAssetId` is omitted on a transfer the
- * helper reuses `mint.assetId` and enforces that at least one transfer is
+ * `transfer` or `transfers`; when `sourceAssetHoldingId` is omitted on a transfer the
+ * helper reuses `mint.assetHoldingId` and enforces that at least one transfer is
  * present.
  */
 interface MintAndTransferInputBase {
   chainId: string;
   authority: string;
   mint: {
-    assetId: string;
+    assetHoldingId: string;
     quantity: NumericLike;
   };
   metadata?: MetadataLike;
@@ -4665,9 +4671,9 @@ export type RegisterAccountAndTransferInput =
 
 /**
  * Parameters for {@link buildRegisterAssetDefinitionAndMintTransaction}. Supply
- * either `mint` or `mints`. When `assetId` is omitted the helper derives it as
+ * either `mint` or `mints`. When `assetHoldingId` is omitted the helper derives it as
  * the canonical asset-holding id for `assetDefinitionId + accountId`, and
- * enforces that any provided `assetId` matches the derived value.
+ * enforces that any provided `assetHoldingId` matches the derived value.
  */
 interface RegisterAssetDefinitionAndMintInputBase {
   chainId: string;
@@ -4700,7 +4706,7 @@ export type RegisterAssetDefinitionAndMintInput =
 /**
  * Extends {@link RegisterAssetDefinitionAndMintInput} with optional transfer
  * descriptors. Provide either `transfer` or `transfers`; when a transfer omits
- * `sourceAssetId` the helper reuses the first minted asset destination.
+ * `sourceAssetHoldingId` the helper reuses the first minted asset destination.
  */
 type RegisterAssetDefinitionMintRequired = ExclusiveSingleOrMany<
   "mint",
@@ -7984,7 +7990,7 @@ export function buildRemoveRwaKeyValueTransaction(
 ): SignedTransactionResult;
 /**
  * Compose a mint followed by one or more transfers. Provide either `transfer`
- * or `transfers`; transfers without an explicit `sourceAssetId` reuse the mint's
+ * or `transfers`; transfers without an explicit `sourceAssetHoldingId` reuse the mint's
  * destination asset identifier.
  */
 export function buildMintAndTransferTransaction(
@@ -8006,7 +8012,7 @@ export function buildRegisterAccountAndTransferTransaction(
 ): SignedTransactionResult;
 /**
  * Register an asset definition and optionally mint initial supply. When both
- * `accountId` and `assetId` are provided the helper validates that they match
+ * `accountId` and `assetHoldingId` are provided the helper validates that they match
  * the canonical asset-holding id derived from `assetDefinitionId + accountId`.
  */
 export function buildRegisterAssetDefinitionAndMintTransaction(
@@ -8014,7 +8020,7 @@ export function buildRegisterAssetDefinitionAndMintTransaction(
 ): SignedTransactionResult;
 /**
  * Register an asset definition, mint supply, and optionally fan-out transfers.
- * When a transfer omits `sourceAssetId` the helper reuses the first minted
+ * When a transfer omits `sourceAssetHoldingId` the helper reuses the first minted
  * destination identifier.
  */
 export function buildRegisterAssetDefinitionMintAndTransferTransaction(
@@ -8231,11 +8237,11 @@ export function buildProposeMultisigInstruction({
 }): object;
 
 export function buildTransferAssetInstruction({
-  sourceAssetId,
+  sourceAssetHoldingId,
   quantity,
   destinationAccountId,
 }: {
-  sourceAssetId: string;
+  sourceAssetHoldingId: string;
   quantity: NumericLike;
   destinationAccountId: string;
 }): object;

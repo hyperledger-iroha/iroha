@@ -53,7 +53,7 @@ GET /v1/accounts/{uaid}/portfolio
       "dataspace_alias": "universal",
       "accounts": [
         {
-          "account_id": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
+          "account_id": "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
           "label": null,
           "assets": [
             {
@@ -70,7 +70,7 @@ GET /v1/accounts/{uaid}/portfolio
       "dataspace_alias": "cbdc",
       "accounts": [
         {
-          "account_id": "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
+          "account_id": "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
           "label": "primary-cbdc",
           "assets": [
             {
@@ -155,12 +155,12 @@ Sample response:
     {
       "dataspace_id": 0,
       "dataspace_alias": "universal",
-      "accounts": ["soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ"]
+      "accounts": ["sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE"]
     },
     {
       "dataspace_id": 11,
       "dataspace_alias": "cbdc",
-      "accounts": ["soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ"]
+      "accounts": ["sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE"]
     }
   ]
 }
@@ -212,7 +212,7 @@ Sample response:
         "expired_epoch": null,
         "revocation": null
       },
-      "accounts": ["soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ"],
+      "accounts": ["sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE"],
       "manifest": {
         "version": 1,
         "uaid": "uaid:0f4d…ab11",
@@ -271,7 +271,7 @@ Example payload:
 
 ```jsonc
 {
-  "authority": "soraカタカナ...",
+  "authority": "<katakana-i105-account-id>",
   "private_key": "ed25519:CiC7…",
   "manifest": {
     "version": 1,
@@ -323,7 +323,7 @@ Example payload:
 
 ```jsonc
 {
-  "authority": "soraカタカナ...",
+  "authority": "<katakana-i105-account-id>",
   "private_key": "ed25519:CiC7…",
   "uaid": "uaid:0f4d…ab11",
   "dataspace": 11,

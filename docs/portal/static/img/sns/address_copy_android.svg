@@ -3,7 +3,7 @@
   <text x="40" y="50" font-family="Inter,Helvetica,Arial,sans-serif" font-size="20" font-weight="600" fill="#222">Android retail wallet — i105 copy and alias view</text>
   <text x="40" y="85" font-size="14" font-family="Inter,Helvetica,Arial,sans-serif" fill="#555">i105 (prefix 753)</text>
   <rect x="40" y="95" width="640" height="40" rx="6" ry="6" fill="#fff" stroke="#d0d0d0" />
-  <text x="50" y="122" font-family="SFMono-Regular,Consolas,monospace" font-size="14" fill="#333">soraカタカナ...</text>
+  <text x="50" y="122" font-family="SFMono-Regular,Consolas,monospace" font-size="14" fill="#333"><katakana-i105-account-id></text>
   <text x="40" y="150" font-size="14" font-family="Inter,Helvetica,Arial,sans-serif" fill="#555">canonical katakana i105</text>
   <rect x="40" y="160" width="640" height="40" rx="6" ry="6" fill="#fff" stroke="#d0d0d0" />
   <text x="50" y="187" font-family="SFMono-Regular,Consolas,monospace" font-size="14" fill="#333">alias@domain.dataspace</text>

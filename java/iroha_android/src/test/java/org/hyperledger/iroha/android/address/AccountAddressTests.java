@@ -20,7 +20,7 @@ public final class AccountAddressTests {
     AccountAddress.configureCurveSupport(AccountAddress.CurveSupportConfig.ed25519Only());
     complianceFixtureSuite();
     goldenVectorsRoundTrip();
-    ambiguousKatakanaLiteralRoundTrip();
+    mixedI105LiteralRoundTrip();
     i105PrefixMismatchThrows();
     i105RejectsFullwidthSentinel();
     i105RejectsInvalidCharacters();
@@ -124,7 +124,7 @@ public final class AccountAddressTests {
 
     assert canonical.equals("0x020001200000000000000000000000000000000000000000000000000000000000000000")
         : "canonical encoding mismatch";
-    assert i105.equals("soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ")
+    assert i105.equals("sorauロ1NcMBm2dフBokヱDムナekAbカヘワヌミMFスヱヒZリ2u4WGUMMS63EY6")
         : "i105 encoding mismatch";
 
     final AccountAddress.ParseResult i105Parsed =
@@ -134,9 +134,9 @@ public final class AccountAddressTests {
         : "i105 round-trip mismatch";
   }
 
-  private static void ambiguousKatakanaLiteralRoundTrip() throws Exception {
+  private static void mixedI105LiteralRoundTrip() throws Exception {
     final String literal =
-        "soraゴヂアヌプユドニャニョャニョユブゥワレボウュヒャメヌサネスヒダテガニャガュギィペジハネアヶァネフカアミキ";
+        "sorauロ1PワdホシヒノNクdチムkiヌ3オモaPBQDTイKqシqオrラカwSQ1フナQU61Y7";
     final AccountAddress address =
         AccountAddress.fromI105(literal, AccountAddress.DEFAULT_I105_DISCRIMINANT);
     assert address.canonicalHex().equals(
@@ -206,7 +206,7 @@ public final class AccountAddressTests {
           AccountAddress.fromAccount(key, "ed25519")
               .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
     } catch (final AccountAddress.AccountAddressException ex) {
-      throw new AssertionError("failed to build canonical Katakana i105 literal", ex);
+      throw new AssertionError("failed to build canonical I105 literal", ex);
     }
     final String malformed = literal.substring(0, literal.length() - 1) + "!";
     boolean threw = false;

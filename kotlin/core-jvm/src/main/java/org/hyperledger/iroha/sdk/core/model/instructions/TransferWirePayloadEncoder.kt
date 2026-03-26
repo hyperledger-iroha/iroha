@@ -60,7 +60,7 @@ object TransferWirePayloadEncoder {
      *
      * @param assetId The internal asset balance-bucket literal
      * (`<base58-asset-definition-id>#<katakana-i105-account-id>` with an optional
-     * `#dataspace:<id>` suffix; public asset ids are bare Base58)
+     * `#dataspace:<id>` suffix; canonical asset-definition ids are Base58)
      * @param amount The amount to transfer as a string (e.g., "10" or "10.50")
      * @param destinationAccountId The recipient's account ID
      * @return InstructionBox with wire payload ready for Norito encoding
@@ -206,7 +206,7 @@ object TransferWirePayloadEncoder {
             fun parse(assetIdStr: String): AssetId {
                 val parts = assetIdStr.split('#')
                 require(parts.size == 2 || parts.size == 3) {
-                    "AssetId must use internal '<base58-asset-definition-id>#<katakana-i105-account-id>' with optional '#dataspace:<id>' suffix; public asset ids are bare Base58"
+                    "AssetId must use internal '<base58-asset-definition-id>#<katakana-i105-account-id>' with optional '#dataspace:<id>' suffix; canonical asset-definition ids are Base58"
                 }
 
                 val assetDef = AssetDefinitionId.fromAddress(parts[0])

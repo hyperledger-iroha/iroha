@@ -229,7 +229,8 @@ impl PushBridge {
 mod tests {
     use super::*;
 
-    const TEST_ACCOUNT_I105: &str = "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ";
+    const TEST_ACCOUNT_I105: &str =
+        "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE";
 
     #[test]
     fn disabled_rejected() {

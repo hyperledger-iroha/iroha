@@ -79,7 +79,7 @@ OAuth dəyişənləri mövcud olduqda, qum qutusu konfiqurasiya edilmiş Auth se
 4. “Sınayın” qovluğunda `application/x-norito` məzmun növünü seçin, **Fayl seçin** üzərinə klikləyin və yükünüzü seçin. Proksi sorğunu `/proxy/v1/pipeline/submit`-ə yenidən yazır və onu `X-TryIt-Client=docs-portal-rapidoc` ilə işarələyir.
 5. Norito cavablarını yükləmək üçün `Accept: application/x-norito` seçin. Swagger/RapiDoc eyni qutuda başlıq seçicisini açır və ikili faylı proksi vasitəsilə geri axır.
 
-Yalnız JSON marşrutları üçün daxil edilmiş Sınaq qutusu tez-tez daha sürətli olur: yolu daxil edin (məsələn, `/v1/accounts/soraカタカナ.../assets`), HTTP metodunu seçin, lazım olduqda JSON gövdəsini yapışdırın və başlıqları, müddəti və faydalı yükləri yoxlamaq üçün **Sorğu göndər** düyməsini basın.
+Yalnız JSON marşrutları üçün daxil edilmiş Sınaq qutusu tez-tez daha sürətli olur: yolu daxil edin (məsələn, `/v1/accounts/<katakana-i105-account-id>/assets`), HTTP metodunu seçin, lazım olduqda JSON gövdəsini yapışdırın və başlıqları, müddəti və faydalı yükləri yoxlamaq üçün **Sorğu göndər** düyməsini basın.
 
 ## Problemlərin aradan qaldırılması
 

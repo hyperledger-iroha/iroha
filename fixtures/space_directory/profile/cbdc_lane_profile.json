@@ -3,16 +3,16 @@
   "dataspace": 11,
   "activation_epoch": 4096,
   "governance": {
-    "issuer": "soraゴヂアヌゼマャグンロリカリヱザキュアチュゥトヺュサビセジゲキョスクノョボリピドヒュヷペキキュザホフツコオコ",
+    "issuer": "sorauロ1PyXノspjg6gnvエ1メムLネオBトEwtテD8Rクヌgヲホセレカ7エvWUJA5A",
     "evidence_ticket": "gov-2026-01-15-cbdc-wholesale",
     "quorum": 5
   },
   "validators": [
-    "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
-    "soraゴヂアヌョシペギゥルゼプキュビルェッハガヌイタソタィニュチョヵボヮゾバュチョナボポビワグツニュノノツマヘサ",
-    "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
-    "soraゴヂアニラショリャヒャャサピテヶベチュヲボヹヂギタクアニョロホドチャヘヱヤジヶハシャウンベニョャルフハケネキカ",
-    "soraゴヂアニダベェユヌサヨニャノヲョネイッリニャネガヨペバヒョブルノホイキャヸムケチャピファノマオニツミチオウ"
+    "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
+    "sorauロ1PクCカrムhyワエトhウヤSqP2GFGラヱミケヌマzヘオミMヌヨトksJヱRRJXVB",
+    "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+    "sorauロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76",
+    "sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53"
   ],
   "validator_quorum": 3,
   "protected_namespaces": [
@@ -23,18 +23,18 @@
     "class": "A",
     "quorum": 8,
     "attesters": [
-      "soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ",
-      "soraゴヂアニヤチョゴヂヴテヒャルヺリヒョマピスヒヮキュゲッチョクヌツヌラハチャヌゴキョククエェボォエボツテヒトウカ",
-      "soraゴヂアニラキャショベヤパピセゥリグテゲレエムベカチテェムシァョニャアカラザハダゼヰペシュベドイケツニホセ",
-      "soraゴヂアニレアコアヰミダゾェヷヅタデダリュエプヒュチュッゾキャバゾカヴソヲヘスボマゾヵシワパエシネヘマト",
-      "soraゴヂアニワグヹツムチョトヹヒョロポギフンルシハドクホャヒョヮブヒャギウゥトヒュボニョミガジヶャマアアミサヘ",
-      "soraゴヂアニヴヒュルロヒュキンムメタケトキキュヰサヱョモポケォグェエユガヰァキャヰブドイエシェュセコセケトエ",
-      "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
-      "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
-      "soraゴヂアニャヮイヒョバヺユヰヤトラスサジヲヒョベニャヲソオグチヨペユペネモヺズタヘォクゲシドエヌエテマキ",
-      "soraゴヂアヌオブマセキュチャタロリチャヷドチャョブセゲヴウヹキャイリコトキャチュヨラバクストリヒュヲシヘタフミチハオ",
-      "soraゴヂアヌタセヺチザニゼヒョォマカゴムヵモォグワレジモゲヒャビニュニゴヸゴワケグパチュヶキョォショクミヒタヒハ",
-      "soraゴヂアヌメネヒョタルアキュカンコプヱガョラツゴヸナゥヘガヮザネチョヷニャヒュニョメヺェヅヤアキャヅアタタナイス"
+      "sorauロ1NcMBm2dフBokヱDムナekAbカヘワヌミMFスヱヒZリ2u4WGUMMS63EY6",
+      "sorauロ1NcミuロタKモhネgスXヲDTマエtヤミ8PJPfSユPuテ884ウヌヰ4ヌJKTL36",
+      "sorauロ1NfコキリcルヲEムgsKti4Zリ6HKウZCナクシ16fvSイymカサリホ29JNWE",
+      "sorauロ1Ni1A1mYイzウレハGニイgオ4ワセメヤzコヘz6タFoVDヌXzケCkル4CQVXL",
+      "sorauロ1NksツJZミLツスjヨrUphCSホ8Wノスマチモr3ムLセヌヒYqwフノFTMDQE",
+      "sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4",
+      "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
+      "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
+      "sorauロ1シマ2スヘネdmcLfDBwoスリシoF5sHeカdカQbネxGVヰ8tCホBMY2FH",
+      "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
+      "sorauロ1PGEネHvNyスヰX6uZケbヰskiwbtモトヱNuソuk9sルメフテヰキ8YTGTS",
+      "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"
     ],
     "rotation_epochs": 96
   },

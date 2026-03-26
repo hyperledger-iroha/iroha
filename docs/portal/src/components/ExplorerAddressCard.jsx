@@ -1,7 +1,7 @@
 import React, {useState} from 'react';
 
 const SAMPLE_ADDRESS = {
-  i105: 'soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ',
+  i105: 'sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE',
 };
 
 export default function ExplorerAddressCard() {

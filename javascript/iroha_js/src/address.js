@@ -19,7 +19,7 @@ const I105_SENTINEL_NUMERIC_PREFIX_FULLWIDTH = "ｎ";
 const I105_CHECKSUM_LEN = 6;
 const BECH32M_CONST = 0x2bc830a3;
 const I105_WARNING =
-  "i105 addresses use the canonical I105 alphabet: Base58 plus the 47 katakana from the Iroha poem. Render and validate them with the intended chain discriminant.";
+  "i105 addresses use the canonical Katakana i105 alphabet: Base58 plus the 47 katakana from the Iroha poem. Render and validate them with the intended chain discriminant.";
 
 const MULTISIG_DIGEST_PERSONALIZATION = (() => {
   const bytes = new Uint8Array(16);
@@ -1156,7 +1156,7 @@ function assertCanonicalI105Literal(input, address) {
   if (address.toI105(discriminant) !== input) {
     throw new AccountAddressError(
       AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
-      "account address literals must use canonical katakana i105 form",
+      "account address literals must use canonical Katakana i105 form",
     );
   }
 }

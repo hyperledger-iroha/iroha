@@ -165,7 +165,7 @@ JSON باڈی کی مثال:
 
 ```jsonc
 {
-  "authority": "soraカタカナ...",
+  "authority": "<katakana-i105-account-id>",
   "private_key": "ed25519:CiC7…",
   "manifest": {
     "version": 1,
@@ -223,7 +223,7 @@ JSON باڈی کی مثال:
 
 ```jsonc
 {
-  "authority": "soraカタカナ...",
+  "authority": "<katakana-i105-account-id>",
   "private_key": "ed25519:CiC7…",
   "uaid": "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
   "dataspace": 11,

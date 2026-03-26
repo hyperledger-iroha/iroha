@@ -284,8 +284,8 @@ value:
     "receipts": [
       {
         "tx_id": "00ff...",
-        "from": "soraカタカナ...",
-        "to": "soraカタカナ...",
+        "from": "<katakana-i105-account-id>",
+        "to": "<katakana-i105-account-id>",
         "issued_at_ms": 1730314876000,
         "platform_proof": { "...": "..." },
         "platform_snapshot": {

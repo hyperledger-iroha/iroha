@@ -47,8 +47,8 @@ cargo xtask soranet-gateway-billing \
   --usage configs/soranet/gateway_m0/billing_usage_sample.json \
   --catalog configs/soranet/gateway_m0/meter_catalog.json \
   --guardrails configs/soranet/gateway_m0/billing_guardrails.json \
-  --payer soraカタカナ... \
-  --treasury soraカタカナ... \
+  --payer <katakana-i105-account-id> \
+  --treasury <katakana-i105-account-id> \
   --asset 4cuvDVPuLBKJyN6dPbRQhmLh68sU \
   --out artifacts/soranet/gateway_billing
 ```

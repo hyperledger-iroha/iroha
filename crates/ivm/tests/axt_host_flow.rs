@@ -174,7 +174,8 @@ fn default_host_axt_flow_happy_path() {
     let handle = AssetHandle {
         scope: vec!["transfer".into()],
         subject: HandleSubject {
-            account: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
+            account: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"
+                .into(),
             origin_dsid: Some(dsid),
         },
         budget: HandleBudget {
@@ -200,8 +201,8 @@ fn default_host_axt_flow_happy_path() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
-            to: "soraゴヂアネイョサテゾギニャハゲヅミゼマヶアヵチヸヒュワハザヨャゼシュヺチィヸゴリキゾホゥォゼノナチククク".into(),
+            from: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB".into(),
+            to: "sorauロ1Q2クBKzrシStハYyXフ1ケHソセkSveノyサネHラソug7zWムヰyRMH888".into(),
             amount: "200".into(),
         },
     };
@@ -250,7 +251,7 @@ fn asset_handle_roundtrip_preserves_origin_dsid() {
         dsid,
         binding,
         &["transfer"],
-        "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
         10,
         Some(10),
     );
@@ -266,7 +267,8 @@ fn asset_handle_roundtrip_preserves_origin_dsid() {
 fn handle_subject_roundtrip() {
     let dsid = DataSpaceId::new(11);
     let subject = HandleSubject {
-        account: "soraゴヂアニラショリャヒャャサピテヶベチュヲボヹヂギタクアニョロホドチャヘヱヤジヶハシャウンベニョャルフハケネキカ".to_string(),
+        account: "sorauロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76"
+            .to_string(),
         origin_dsid: Some(dsid),
     };
 
@@ -310,7 +312,7 @@ fn default_host_rejects_binding_mismatch() {
         dsid,
         binding,
         &["transfer"],
-        "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
         10,
         None,
     );
@@ -321,8 +323,8 @@ fn default_host_rejects_binding_mismatch() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
-            to: "soraゴヂアネイョサテゾギニャハゲヅミゼマヶアヵチヸヒュワハザヨャゼシュヺチィヸゴリキゾホゥォゼノナチククク".into(),
+            from: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB".into(),
+            to: "sorauロ1Q2クBKzrシStハYyXフ1ケHソセkSveノyサネHラソug7zWムヰyRMH888".into(),
             amount: "1".into(),
         },
     };
@@ -354,7 +356,7 @@ fn default_host_allows_multiple_handle_usages_within_budget() {
         dsid,
         binding,
         &["transfer"],
-        "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
         300,
         Some(200),
     );
@@ -367,8 +369,8 @@ fn default_host_allows_multiple_handle_usages_within_budget() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
-            to: "soraゴヂアネイョサテゾギニャハゲヅミゼマヶアヵチヸヒュワハザヨャゼシュヺチィヸゴリキゾホゥォゼノナチククク".into(),
+            from: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB".into(),
+            to: "sorauロ1Q2クBKzrシStハYyXフ1ケHソセkSveノyサネHラソug7zWムヰyRMH888".into(),
             amount: "150".into(),
         },
     };
@@ -381,8 +383,8 @@ fn default_host_allows_multiple_handle_usages_within_budget() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
-            to: "soraゴヂアヌメネヒョタルアキュカンコプヱガョラツゴヸナゥヘガヮザネチョヷニャヒュニョメヺェヅヤアキャヅアタタナイス".into(),
+            from: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB".into(),
+            to: "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D".into(),
             amount: "40".into(),
         },
     };
@@ -432,7 +434,7 @@ fn default_host_rejects_handle_scope_mismatch() {
         dsid,
         binding,
         &["transfer"],
-        "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
         50,
         None,
     );
@@ -444,8 +446,8 @@ fn default_host_rejects_handle_scope_mismatch() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "burn".into(),
-            from: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
-            to: "soraゴヂアネイョサテゾギニャハゲヅミゼマヶアヵチヸヒュワハザヨャゼシュヺチィヸゴリキゾホゥォゼノナチククク".into(),
+            from: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB".into(),
+            to: "sorauロ1Q2クBKzrシStハYyXフ1ケHソセkSveノyサネHラソug7zWムヰyRMH888".into(),
             amount: "10".into(),
         },
     };
@@ -481,7 +483,7 @@ fn default_host_rejects_handle_subject_mismatch() {
         dsid,
         binding,
         &["transfer"],
-        "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
         80,
         None,
     );
@@ -493,8 +495,8 @@ fn default_host_rejects_handle_subject_mismatch() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "soraゴヂアニラショリャヒャャサピテヶベチュヲボヹヂギタクアニョロホドチャヘヱヤジヶハシャウンベニョャルフハケネキカ".into(),
-            to: "soraゴヂアネイョサテゾギニャハゲヅミゼマヶアヵチヸヒュワハザヨャゼシュヺチィヸゴリキゾホゥォゼノナチククク".into(),
+            from: "sorauロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76".into(),
+            to: "sorauロ1Q2クBKzrシStハYyXフ1ケHソセkSveノyサネHラソug7zWムヰyRMH888".into(),
             amount: "10".into(),
         },
     };
@@ -530,7 +532,7 @@ fn default_host_rejects_commit_without_required_proof() {
         dsid,
         binding,
         &["transfer"],
-        "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
         60,
         None,
     );
@@ -538,8 +540,8 @@ fn default_host_rejects_commit_without_required_proof() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
-            to: "soraゴヂアネイョサテゾギニャハゲヅミゼマヶアヵチヸヒュワハザヨャゼシュヺチィヸゴリキゾホゥォゼノナチククク".into(),
+            from: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB".into(),
+            to: "sorauロ1Q2クBKzrシStハYyXフ1ケHソセkSveノyサネHラソug7zWムヰyRMH888".into(),
             amount: "10".into(),
         },
     };
@@ -578,7 +580,7 @@ fn handle_proof_satisfies_dataspace_requirement() {
         dsid,
         binding,
         &["transfer"],
-        "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
         90,
         None,
     );
@@ -590,8 +592,8 @@ fn handle_proof_satisfies_dataspace_requirement() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
-            to: "soraゴヂアネイョサテゾギニャハゲヅミゼマヶアヵチヸヒュワハザヨャゼシュヺチィヸゴリキゾホゥォゼノナチククク".into(),
+            from: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB".into(),
+            to: "sorauロ1Q2クBKzrシStハYyXフ1ケHソセkSveノyサネHラソug7zWムヰyRMH888".into(),
             amount: "15".into(),
         },
     };
@@ -628,7 +630,7 @@ fn default_host_rejects_handle_with_invalid_manifest_root() {
         dsid,
         binding,
         &["transfer"],
-        "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
         50,
         None,
     );
@@ -641,8 +643,8 @@ fn default_host_rejects_handle_with_invalid_manifest_root() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
-            to: "soraゴヂアネイョサテゾギニャハゲヅミゼマヶアヵチヸヒュワハザヨャゼシュヺチィヸゴリキゾホゥォゼノナチククク".into(),
+            from: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB".into(),
+            to: "sorauロ1Q2クBKzrシStハYyXフ1ケHソセkSveノyサネHラソug7zWムヰyRMH888".into(),
             amount: "10".into(),
         },
     };
@@ -678,7 +680,7 @@ fn default_host_rejects_handle_with_empty_scope() {
         dsid,
         binding,
         &["transfer"],
-        "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
         10,
         None,
     );
@@ -691,8 +693,8 @@ fn default_host_rejects_handle_with_empty_scope() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
-            to: "soraゴヂアネイョサテゾギニャハゲヅミゼマヶアヵチヸヒュワハザヨャゼシュヺチィヸゴリキゾホゥォゼノナチククク".into(),
+            from: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB".into(),
+            to: "sorauロ1Q2クBKzrシStハYyXフ1ケHソセkSveノyサネHラソug7zWムヰyRMH888".into(),
             amount: "1".into(),
         },
     };
@@ -728,7 +730,7 @@ fn default_host_rejects_handle_with_zero_era_or_nonce_or_expiry() {
         dsid,
         binding,
         &["transfer"],
-        "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
         10,
         None,
     );
@@ -740,8 +742,8 @@ fn default_host_rejects_handle_with_zero_era_or_nonce_or_expiry() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
-            to: "soraゴヂアネイョサテゾギニャハゲヅミゼマヶアヵチヸヒュワハザヨャゼシュヺチィヸゴリキゾホゥォゼノナチククク".into(),
+            from: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB".into(),
+            to: "sorauロ1Q2クBKzrシStハYyXフ1ケHソセkSveノyサネHラソug7zWムヰyRMH888".into(),
             amount: "1".into(),
         },
     };
@@ -793,7 +795,7 @@ fn default_host_rejects_handle_with_zero_budget_or_empty_group() {
         dsid,
         binding,
         &["transfer"],
-        "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
         10,
         None,
     );
@@ -805,8 +807,8 @@ fn default_host_rejects_handle_with_zero_budget_or_empty_group() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
-            to: "soraゴヂアネイョサテゾギニャハゲヅミゼマヶアヵチヸヒュワハザヨャゼシュヺチィヸゴリキゾホゥォゼノナチククク".into(),
+            from: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB".into(),
+            to: "sorauロ1Q2クBKzrシStハYyXフ1ケHソセkSveノyサネHラソug7zWムヰyRMH888".into(),
             amount: "1".into(),
         },
     };
@@ -821,7 +823,7 @@ fn default_host_rejects_handle_with_zero_budget_or_empty_group() {
         dsid,
         binding,
         &["transfer"],
-        "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
         10,
         None,
     );
@@ -906,7 +908,7 @@ fn commit_requires_proof_for_every_dataspace() {
         ds_a,
         binding,
         &["transfer"],
-        "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
         10,
         None,
     );
@@ -914,7 +916,7 @@ fn commit_requires_proof_for_every_dataspace() {
         ds_b,
         binding,
         &["transfer"],
-        "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
         10,
         None,
     );
@@ -933,8 +935,8 @@ fn commit_requires_proof_for_every_dataspace() {
         asset_dsid: ds_a,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
-            to: "soraゴヂアネイョサテゾギニャハゲヅミゼマヶアヵチヸヒュワハザヨャゼシュヺチィヸゴリキゾホゥォゼノナチククク".into(),
+            from: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB".into(),
+            to: "sorauロ1Q2クBKzrシStハYyXフ1ケHソセkSveノyサネHラソug7zWムヰyRMH888".into(),
             amount: "1".into(),
         },
     };
@@ -946,8 +948,8 @@ fn commit_requires_proof_for_every_dataspace() {
         asset_dsid: ds_b,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
-            to: "soraゴヂアネイョサテゾギニャハゲヅミゼマヶアヵチヸヒュワハザヨャゼシュヺチィヸゴリキゾホゥォゼノナチククク".into(),
+            from: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB".into(),
+            to: "sorauロ1Q2クBKzrシStハYyXフ1ケHソセkSveノyサネHラソug7zWムヰyRMH888".into(),
             amount: "1".into(),
         },
     };
@@ -1198,7 +1200,7 @@ fn wsv_host_policy_checks_root_and_expiry() {
         dsid,
         binding,
         &["transfer"],
-        "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
         10,
         None,
     );
@@ -1207,8 +1209,8 @@ fn wsv_host_policy_checks_root_and_expiry() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
-            to: "soraゴヂアネイョサテゾギニャハゲヅミゼマヶアヵチヸヒュワハザヨャゼシュヺチィヸゴリキゾホゥォゼノナチククク".into(),
+            from: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB".into(),
+            to: "sorauロ1Q2クBKzrシStハYyXフ1ケHソセkSveノyサネHラソug7zWムヰyRMH888".into(),
             amount: "1".into(),
         },
     };
@@ -1225,7 +1227,7 @@ fn wsv_host_policy_checks_root_and_expiry() {
         dsid,
         binding,
         &["transfer"],
-        "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
         10,
         None,
     );
@@ -1240,7 +1242,7 @@ fn wsv_host_policy_checks_root_and_expiry() {
         dsid,
         binding,
         &["transfer"],
-        "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
         10,
         None,
     );
@@ -1294,7 +1296,7 @@ fn wsv_host_uses_slot_length_and_skew_for_expiry() {
         dsid,
         binding,
         &["transfer"],
-        "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
         10,
         None,
     );
@@ -1305,8 +1307,8 @@ fn wsv_host_uses_slot_length_and_skew_for_expiry() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
-            to: "soraゴヂアネイョサテゾギニャハゲヅミゼマヶアヵチヸヒュワハザヨャゼシュヺチィヸゴリキゾホゥォゼノナチククク".into(),
+            from: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB".into(),
+            to: "sorauロ1Q2クBKzrシStハYyXフ1ケHソセkSveノyサネHラソug7zWムヰyRMH888".into(),
             amount: "1".into(),
         },
     };
@@ -1362,7 +1364,7 @@ fn wsv_host_rejects_handle_skew_above_config() {
         dsid,
         binding,
         &["transfer"],
-        "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
         10,
         None,
     );
@@ -1373,8 +1375,8 @@ fn wsv_host_rejects_handle_skew_above_config() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
-            to: "soraゴヂアネイョサテゾギニャハゲヅミゼマヶアヵチヸヒュワハザヨャゼシュヺチィヸゴリキゾホゥォゼノナチククク".into(),
+            from: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB".into(),
+            to: "sorauロ1Q2クBKzrシStハYyXフ1ケHソセkSveノyサネHラソug7zWムヰyRMH888".into(),
             amount: "1".into(),
         },
     };
@@ -1484,7 +1486,7 @@ fn wsv_host_rejects_inline_proof_expired_with_skew() {
         dsid,
         binding,
         &["transfer"],
-        "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
         10,
         None,
     );
@@ -1494,8 +1496,8 @@ fn wsv_host_rejects_inline_proof_expired_with_skew() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
-            to: "soraゴヂアネイョサテゾギニャハゲヅミゼマヶアヵチヸヒュワハザヨャゼシュヺチィヸゴリキゾホゥォゼノナチククク".into(),
+            from: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB".into(),
+            to: "sorauロ1Q2クBKzrシStハYyXフ1ケHソセkSveノyサネHラソug7zWムヰyRMH888".into(),
             amount: "1".into(),
         },
     };
@@ -1546,7 +1548,7 @@ fn wsv_host_rejects_zero_manifest_root_and_handle_root() {
         op: SpendOp {
             kind: "transfer".into(),
             from: caller.to_string(),
-            to: "soraゴヂアネイョサテゾギニャハゲヅミゼマヶアヵチヸヒュワハザヨャゼシュヺチィヸゴリキゾホゥォゼノナチククク".into(),
+            to: "sorauロ1Q2クBKzrシStハYyXフ1ケHソセkSveノyサネHラソug7zWムヰyRMH888".into(),
             amount: "1".into(),
         },
     };
@@ -1595,7 +1597,7 @@ fn wsv_host_rejects_missing_policy_binding() {
         op: SpendOp {
             kind: "transfer".into(),
             from: caller.to_string(),
-            to: "soraゴヂアネイョサテゾギニャハゲヅミゼマヶアヵチヸヒュワハザヨャゼシュヺチィヸゴリキゾホゥォゼノナチククク".into(),
+            to: "sorauロ1Q2クBKzrシStハYyXフ1ケHソセkSveノyサネHラソug7zWムヰyRMH888".into(),
             amount: "1".into(),
         },
     };
@@ -1642,7 +1644,7 @@ fn wsv_host_policy_checks_target_lane() {
         dsid,
         binding,
         &["transfer"],
-        "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
         10,
         None,
     );
@@ -1651,8 +1653,8 @@ fn wsv_host_policy_checks_target_lane() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
-            to: "soraゴヂアネイョサテゾギニャハゲヅミゼマヶアヵチヸヒュワハザヨャゼシュヺチィヸゴリキゾホゥォゼノナチククク".into(),
+            from: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB".into(),
+            to: "sorauロ1Q2クBKzrシStハYyXフ1ケHソセkSveノyサネHラソug7zWムヰyRMH888".into(),
             amount: "1".into(),
         },
     };
@@ -1669,7 +1671,7 @@ fn wsv_host_policy_checks_target_lane() {
         dsid,
         binding,
         &["transfer"],
-        "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
         10,
         None,
     );
@@ -1727,7 +1729,7 @@ fn wsv_host_applies_policy_snapshot_lane_and_root() {
         op: SpendOp {
             kind: "transfer".into(),
             from: caller.to_string(),
-            to: "soraゴヂアネイョサテゾギニャハゲヅミゼマヶアヵチヸヒュワハザヨャゼシュヺチィヸゴリキゾホゥォゼノナチククク".into(),
+            to: "sorauロ1Q2クBKzrシStハYyXフ1ケHソセkSveノyサネHラソug7zWムヰyRMH888".into(),
             amount: "1".into(),
         },
     };
@@ -1793,7 +1795,7 @@ fn wsv_host_respects_explicit_policy_slot_over_time() {
         dsid,
         binding,
         &["transfer"],
-        "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
         10,
         None,
     );
@@ -1803,8 +1805,8 @@ fn wsv_host_respects_explicit_policy_slot_over_time() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
-            to: "soraゴヂアネイョサテゾギニャハゲヅミゼマヶアヵチヸヒュワハザヨャゼシュヺチィヸゴリキゾホゥォゼノナチククク".into(),
+            from: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB".into(),
+            to: "sorauロ1Q2クBKzrシStハYyXフ1ケHソセkSveノyサネHラソug7zWムヰyRMH888".into(),
             amount: "1".into(),
         },
     };
@@ -1852,8 +1854,8 @@ fn wsv_host_policy_checks_min_era_and_nonce() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
-            to: "soraゴヂアネイョサテゾギニャハゲヅミゼマヶアヵチヸヒュワハザヨャゼシュヺチィヸゴリキゾホゥォゼノナチククク".into(),
+            from: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB".into(),
+            to: "sorauロ1Q2クBKzrシStハYyXフ1ケHソセkSveノyサネHラソug7zWムヰyRMH888".into(),
             amount: "1".into(),
         },
     };
@@ -1866,7 +1868,7 @@ fn wsv_host_policy_checks_min_era_and_nonce() {
         dsid,
         binding,
         &["transfer"],
-        "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
         10,
         None,
     );
@@ -1880,7 +1882,7 @@ fn wsv_host_policy_checks_min_era_and_nonce() {
         dsid,
         binding,
         &["transfer"],
-        "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
         10,
         None,
     );
@@ -1894,7 +1896,7 @@ fn wsv_host_policy_checks_min_era_and_nonce() {
         dsid,
         binding,
         &["transfer"],
-        "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
         10,
         None,
     );
@@ -1931,7 +1933,7 @@ fn axt_policy_rejects_handle_usage() {
         dsid,
         binding,
         &["transfer"],
-        "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
         10,
         None,
     );
@@ -1939,8 +1941,8 @@ fn axt_policy_rejects_handle_usage() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
-            to: "soraゴヂアネイョサテゾギニャハゲヅミゼマヶアヵチヸヒュワハザヨャゼシュヺチィヸゴリキゾホゥォゼノナチククク".into(),
+            from: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB".into(),
+            to: "sorauロ1Q2クBKzrシStハYyXフ1ケHソセkSveノyサネHラソug7zWムヰyRMH888".into(),
             amount: "1".into(),
         },
     };

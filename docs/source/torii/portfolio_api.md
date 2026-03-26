@@ -262,7 +262,7 @@ Example payload:
 
 ```jsonc
 {
-  "authority": "soraカタカナ...",
+  "authority": "<katakana-i105-account-id>",
   "private_key": "ed25519:CiC7…",
   "manifest": {
     "version": 1,
@@ -314,7 +314,7 @@ Example payload:
 
 ```jsonc
 {
-  "authority": "soraカタカナ...",
+  "authority": "<katakana-i105-account-id>",
   "private_key": "ed25519:CiC7…",
   "uaid": "uaid:0f4d…ab11",
   "dataspace": 11,

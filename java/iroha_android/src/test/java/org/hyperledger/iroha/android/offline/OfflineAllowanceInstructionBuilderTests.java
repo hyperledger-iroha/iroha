@@ -11,7 +11,7 @@ import org.hyperledger.iroha.android.model.instructions.RegisterOfflineAllowance
 public final class OfflineAllowanceInstructionBuilderTests {
 
   private static final String ACCOUNT_ID =
-      "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ";
+      "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE";
   private static final String ASSET_ID =
       "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#" + ACCOUNT_ID;
 

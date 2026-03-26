@@ -287,7 +287,7 @@ mod tests {
             policy_version: Some("2026-q2".to_string()),
             policy_digest: Some([0xAB; 32]),
             operator: AccountId::parse_encoded(
-                "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
+                "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
             )
             .map(crate::account::ParsedAccountId::into_account_id)
             .expect("account id"),
@@ -318,7 +318,7 @@ mod tests {
             policy_version: None,
             policy_digest: None,
             operator: AccountId::parse_encoded(
-                "soraゴヂアヌペゲクュリショィィョオチャデォブェニュプピニュトトャヘヒュチャマヵニャベヱャヅロョケヨネトイナヘタケヒ",
+                "sorauロ1Pカt8オgキララク5ユニヰチウヱワヲヱLLノVセユXケシリnノハjク9eQL2MVG9T",
             )
             .expect("account id")
             .into_account_id(),

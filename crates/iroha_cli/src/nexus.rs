@@ -570,8 +570,8 @@ mod tests {
             (
                 "validator_ids".into(),
                 Value::Array(vec![
-                    Value::from("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"),
-                    Value::from("soraゴヂアヌメネヒョタルアキュカンコプヱガョラツゴヸナゥヘガヮザネチョヷニャヒュニョメヺェヅヤアキャヅアタタナイス"),
+                    Value::from("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"),
+                    Value::from("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"),
                 ]),
             ),
             ("manifest_path".into(), Value::Null),
@@ -643,11 +643,11 @@ mod tests {
             ("lane_id".into(), Value::from(0u64)),
             (
                 "validator".into(),
-                Value::from("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"),
+                Value::from("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"),
             ),
             (
                 "stake_account".into(),
-                Value::from("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"),
+                Value::from("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"),
             ),
             ("total_stake".into(), Value::from("1000")),
             ("self_stake".into(), Value::from("800")),
@@ -686,11 +686,11 @@ mod tests {
             ("lane_id".into(), Value::from(0u64)),
             (
                 "validator".into(),
-                Value::from("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"),
+                Value::from("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"),
             ),
             (
                 "staker".into(),
-                Value::from("soraゴヂアヌメネヒョタルアキュカンコプヱガョラツゴヸナゥヘガヮザネチョヷニャヒュニョメヺェヅヤアキャヅアタタナイス"),
+                Value::from("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"),
             ),
             ("bonded".into(), Value::from("750")),
             (

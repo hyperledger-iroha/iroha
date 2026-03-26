@@ -80,7 +80,7 @@ Lorsque vous etes satisfait du contrat, deployez-le sur un nud via le CLI. Fourn
 
 ```sh
 iroha_cli app contracts deploy \
-  --authority soraカタカナ... \
+  --authority <katakana-i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
 ```

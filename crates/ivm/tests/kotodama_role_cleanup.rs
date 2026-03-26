@@ -43,11 +43,11 @@ fn kotodama_revoke_role_denies_mint() {
         r#"
         fn main() {
           register_domain(domain("default"));
-          register_account(account_id("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"));
+          register_account(account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"));
           register_asset("rose", "ROSE", 0, 1);
           create_role(name("minter"), json("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
-          grant_role(account_id("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"), name("minter"));
-          mint_asset(account_id("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"), asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), 1);
+          grant_role(account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"), name("minter"));
+          mint_asset(account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"), asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), 1);
         }
     "#,
     );
@@ -58,8 +58,8 @@ fn kotodama_revoke_role_denies_mint() {
     let prog_revoke_then_mint = compile(
         r#"
         fn main() {
-          revoke_role(account_id("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"), name("minter"));
-          mint_asset(account_id("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"), asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), 1);
+          revoke_role(account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"), name("minter"));
+          mint_asset(account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"), asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), 1);
         }
     "#,
     );
@@ -90,7 +90,7 @@ fn kotodama_delete_role_prevents_grant() {
         r#"
         fn main() {
           register_domain(domain("default"));
-          register_account(account_id("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"));
+          register_account(account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"));
           register_asset("rose", "ROSE", 0, 1);
           create_role(name("minter"), json("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
         }
@@ -104,7 +104,7 @@ fn kotodama_delete_role_prevents_grant() {
         r#"
         fn main() {
           delete_role(name("minter"));
-          grant_role(account_id("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"), name("minter"));
+          grant_role(account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"), name("minter"));
         }
     "#,
     );
@@ -134,10 +134,10 @@ fn kotodama_delete_role_denied_while_assigned_then_succeeds_after_revoke() {
         r#"
         fn main() {
           register_domain(domain("default"));
-          register_account(account_id("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"));
+          register_account(account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"));
           register_asset("rose", "ROSE", 0, 1);
           create_role(name("minter"), json("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
-          grant_role(account_id("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"), name("minter"));
+          grant_role(account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"), name("minter"));
         }
     "#,
     );
@@ -158,7 +158,7 @@ fn kotodama_delete_role_denied_while_assigned_then_succeeds_after_revoke() {
     let revoke_delete = compile(
         r#"
         fn main() {
-          revoke_role(account_id("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"), name("minter"));
+          revoke_role(account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"), name("minter"));
           delete_role(name("minter"));
         }
     "#,
@@ -188,10 +188,10 @@ fn kotodama_combined_revoke_then_delete_blocks_grant_and_mint() {
         r#"
         fn main() {
           register_domain(domain("default"));
-          register_account(account_id("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"));
+          register_account(account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"));
           register_asset("rose", "ROSE", 0, 1);
           create_role(name("minter"), json("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
-          grant_role(account_id("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"), name("minter"));
+          grant_role(account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"), name("minter"));
         }
     "#,
     );
@@ -202,7 +202,7 @@ fn kotodama_combined_revoke_then_delete_blocks_grant_and_mint() {
     let revoke_delete = compile(
         r#"
         fn main() {
-          revoke_role(account_id("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"), name("minter"));
+          revoke_role(account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"), name("minter"));
           delete_role(name("minter"));
         }
     "#,
@@ -214,7 +214,7 @@ fn kotodama_combined_revoke_then_delete_blocks_grant_and_mint() {
     let grant_again = compile(
         r#"
         fn main() {
-          grant_role(account_id("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"), name("minter"));
+          grant_role(account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"), name("minter"));
         }
     "#,
     );
@@ -226,7 +226,7 @@ fn kotodama_combined_revoke_then_delete_blocks_grant_and_mint() {
     let mint = compile(
         r#"
         fn main() {
-          mint_asset(account_id("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"), asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), 1);
+          mint_asset(account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"), asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), 1);
         }
     "#,
     );

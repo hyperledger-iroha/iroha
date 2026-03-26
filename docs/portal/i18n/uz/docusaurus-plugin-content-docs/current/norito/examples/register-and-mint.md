@@ -21,9 +21,9 @@ Ruxsat berilgan domen yaratish, aktivlarni ro'yxatdan o'tkazish va deterministik
 
 ## Buxgalteriya kitobi bo'yicha ko'rsatmalar
 
-- Har bir SDK tezkor ishga tushirishda sozlash bosqichini aks ettirgan holda maqsadli hisob qaydnomasi (masalan, `soraカタカナ...`) mavjudligiga ishonch hosil qiling.
+- Har bir SDK tezkor ishga tushirishda sozlash bosqichini aks ettirgan holda maqsadli hisob qaydnomasi (masalan, `<katakana-i105-account-id>`) mavjudligiga ishonch hosil qiling.
 - ROSE aktivi ta'rifini yaratish uchun `register_and_mint` kirish nuqtasini chaqiring va bitta tranzaksiyada Elisga 250 birlik bering.
-- Yalpiz muvaffaqiyatli bo'lganligini tasdiqlash uchun `client.request(FindAccountAssets)` yoki `iroha_cli ledger asset list --account soraカタカナ...` orqali balanslarni tekshiring.
+- Yalpiz muvaffaqiyatli bo'lganligini tasdiqlash uchun `client.request(FindAccountAssets)` yoki `iroha_cli ledger asset list --account <katakana-i105-account-id>` orqali balanslarni tekshiring.
 
 ## Tegishli SDK qo'llanmalari
 
@@ -45,7 +45,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("soraカタカナ...");
+    let to = account!("<katakana-i105-account-id>");
     let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     mint_asset(to, asset, 250);
   }

@@ -40,7 +40,7 @@ final class ConnectViewModelTests: XCTestCase {
       "CONNECT_ROLE": "wallet",
       "CONNECT_PEER_PUB_B64": "cGVlci1wdWI=",
       "CONNECT_SHARED_KEY_B64": "c2hhcmVkLWtleQ==",
-      "CONNECT_APPROVE_ACCOUNT_ID": "soraゴヂアネタアニャヴウザニキニョゾビバヤチョトテスシコダオョキュロッベイゴビチャヰショチャパヨツサツホキマイニキ",
+      "CONNECT_APPROVE_ACCOUNT_ID": "sorauロ1QG1シタ3vN7ヒzトヘcミLKDCAイ5クエjヤリ2uトユmキユルeJBJW7X2N7",
       "CONNECT_APPROVE_PRIVATE_KEY_B64": "cHJpdmF0ZS1rZXk=",
       "CONNECT_APPROVE_SIGNATURE_B64": "c2lnbmF0dXJl"
     ]
@@ -65,7 +65,7 @@ final class ConnectViewModelTests: XCTestCase {
     XCTAssertEqual(viewModel.aeadKeyB64, "c2hhcmVkLWtleQ==")
     XCTAssertEqual(
       viewModel.approveAccountId,
-      "soraゴヂアネタアニャヴウザニキニョゾビバヤチョトテスシコダオョキュロッベイゴビチャヰショチャパヨツサツホキマイニキ"
+      "sorauロ1QG1シタ3vN7ヒzトヘcミLKDCAイ5クエjヤリ2uトユmキユルeJBJW7X2N7"
     )
     XCTAssertEqual(viewModel.approvePrivKeyB64, "cHJpdmF0ZS1rZXk=")
     XCTAssertEqual(viewModel.approveSigB64, "c2lnbmF0dXJl")

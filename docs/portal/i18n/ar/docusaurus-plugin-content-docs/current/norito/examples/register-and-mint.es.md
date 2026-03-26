@@ -19,9 +19,9 @@ translation_last_reviewed: 2026-02-07
 
 ## Recorrido del libro mayor
 
-- التأكد من وجود حساب الوجهة (على سبيل المثال `soraカタカナ...`)، مما يعكس عملية التكوين في كل Quickstart من SDK.
+- التأكد من وجود حساب الوجهة (على سبيل المثال `<katakana-i105-account-id>`)، مما يعكس عملية التكوين في كل Quickstart من SDK.
 - استدعاء نقطة الدخول `register_and_mint` لإنشاء تعريف نشط ROSE والحصول على 250 وحدة لـ Alice في معاملة واحدة فقط.
-- تحقق من الأرصدة المتوسطة `client.request(FindAccountAssets)` أو `iroha_cli ledger assets list --account soraカタカナ...` لتأكيد نجاح الإحصاء.
+- تحقق من الأرصدة المتوسطة `client.request(FindAccountAssets)` أو `iroha_cli ledger assets list --account <katakana-i105-account-id>` لتأكيد نجاح الإحصاء.
 
 ## أدلة SDK ذات الصلة
 
@@ -43,7 +43,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("soraカタカナ...");
+    let to = account!("<katakana-i105-account-id>");
     let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     mint_asset(to, asset, 250);
   }

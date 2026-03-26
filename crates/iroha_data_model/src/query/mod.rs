@@ -3675,7 +3675,7 @@ mod fault_injection_tests {
             id: TriggerId::from_str("fault_trigger").expect("valid trigger id"),
             instructions: ExecutionStep(Vec::<InstructionBox>::new().into()),
             authority: AccountId::parse_encoded(
-                "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
+                "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
             )
             .map(crate::account::ParsedAccountId::into_account_id)
             .expect("valid authority"),

@@ -4864,8 +4864,10 @@ fn operation_key(kind: &str, operation_id: &str) -> String {
 mod tests {
     use super::*;
 
-    const TEST_ACCOUNT_I105: &str = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
-    const TEST_COUNTERPARTY_ACCOUNT_I105: &str = "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ";
+    const TEST_ACCOUNT_I105: &str =
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
+    const TEST_COUNTERPARTY_ACCOUNT_I105: &str =
+        "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D";
 
     #[test]
     fn sync_request_hash_is_stable_for_reordered_receipts() {

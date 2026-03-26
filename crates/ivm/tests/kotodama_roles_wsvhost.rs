@@ -61,7 +61,7 @@ fn kotodama_roles_roundtrip_on_wsvhost() {
     // 2) Grant role to alice and check derived permission
     let src_grant = r#"
         fn main() {
-          grant_role(account_id("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"), name("minter"));
+          grant_role(account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"), name("minter"));
         }
     "#;
     let prog = compiler
@@ -88,7 +88,7 @@ fn kotodama_roles_roundtrip_on_wsvhost() {
     // 3) Revoke role and delete; verify permissions removed and role absent
     let src_cleanup = r#"
         fn main() {
-          revoke_role(account_id("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"), name("minter"));
+          revoke_role(account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"), name("minter"));
           delete_role(name("minter"));
         }
     "#;

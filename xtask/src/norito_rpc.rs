@@ -859,7 +859,9 @@ fn normalize_authority_hint(authority: &str) -> String {
 fn parse_account_id(value: &str) -> Result<AccountId> {
     AccountId::parse_encoded(value.trim())
         .map(|parsed| parsed.into_account_id())
-        .with_context(|| format!("account id '{value}' must be a canonical I105-encoded literal"))
+        .with_context(|| {
+            format!("account id '{value}' must be a canonical Katakana i105-encoded literal")
+        })
 }
 
 fn optional_u64_value(value: Option<u64>) -> Value {
@@ -1379,7 +1381,8 @@ mod tests {
     fn fixture(name: &str) -> FixtureEntry {
         FixtureEntry {
             name: name.to_string(),
-            authority: "soraゴヂアニダベェユヌサヨニャノヲョネイッリニャネガヨペバヒョブルノホイキャヸムケチャピファノマオニツミチオウ".into(),
+            authority: "sorauロ1NイリウdPBeシRoクQ2ヤgシQqeカヘスチhRW2コソZ9ユヲUナRX5NJYH53"
+                .into(),
             chain: "00000001".into(),
             creation_time_ms: 1_735_000_000_000,
             encoded_file: format!("{name}.norito"),

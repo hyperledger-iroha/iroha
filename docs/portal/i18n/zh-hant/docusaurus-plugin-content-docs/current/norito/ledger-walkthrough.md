@@ -32,8 +32,8 @@ SDK 快速入門，以便您可以確認 CLI 和 SDK 行為之間的一致性。
 從演示密鑰派生：
 
 ```sh
-export ADMIN_ACCOUNT="soraカタカナ..."
-export RECEIVER_ACCOUNT="soraカタカナ..."
+export ADMIN_ACCOUNT="<katakana-i105-account-id>"
+export RECEIVER_ACCOUNT="<katakana-i105-account-id>"
 ```
 
 通過列出前幾個帳戶來確認值：

@@ -32,9 +32,9 @@ boshqaruv tekshiruvchilari har bir hisob-kitob davrini tekshirishlari mumkin.
 
   sorafs reserve ledger \
     --quote artifacts/sorafs_reserve/quotes/provider-alpha-apr.json \
-    --provider-account soraカタカナ... \
-    --treasury-account soraカタカナ... \
-    --reserve-account soraカタカナ... \
+    --provider-account <katakana-i105-account-id> \
+    --treasury-account <katakana-i105-account-id> \
+    --reserve-account <katakana-i105-account-id> \
     --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc \
     --json-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.json
    ```

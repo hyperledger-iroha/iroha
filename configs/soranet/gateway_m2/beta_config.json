@@ -14,8 +14,8 @@
     "usage": "../gateway_m0/billing_usage_sample.json",
     "catalog": "../gateway_m0/meter_catalog.json",
     "guardrails": "../gateway_m0/billing_guardrails.json",
-    "payer": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
-    "treasury": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+    "payer": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+    "treasury": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
     "asset": "xor#wonderland"
   },
   "hardening": {

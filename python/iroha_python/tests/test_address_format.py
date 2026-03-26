@@ -120,12 +120,15 @@ def test_query_asset_holders_omits_canonical_i105() -> None:
     assert "canonical_i105" not in body
 
 
-def test_i105_roundtrip_accepts_multicodepoint_symbols() -> None:
+def test_i105_roundtrip_uses_mixed_base58_and_iroha_poem_alphabet() -> None:
     address = AccountAddress.from_account(domain="wonderland", public_key=bytes([0x11] * 32))
     literal = address.to_i105(0x02F1)
 
     parsed = AccountAddress.parse_encoded(literal, expected_discriminant=0x02F1)
 
+    payload = literal.removeprefix("sora")
+    assert any(ch.isascii() and ch.isalnum() for ch in payload)
+    assert any(ch in "イロハニホヘトチリヌルヲワカヨタレソツネナラムウヰノオクヤマケフコエテアサキユメミシヱヒモセス" for ch in payload)
     assert parsed.to_i105(0x02F1) == literal
 
 

@@ -1907,14 +1907,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     }
 
     private func inferredAuthorityDiscriminant(_ authority: String) -> UInt16? {
-        #if canImport(Darwin)
-        guard let parsed = try? parseAccountAddress(literal: authority, expectedPrefix: nil) else {
-            return nil
-        }
-        return parsed.networkPrefix
-        #else
-        return nil
-        #endif
+        fallbackAccountAddressDiscriminant(authority)
     }
 
     private func withAuthorityChainDiscriminant<R>(
@@ -2752,13 +2745,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     }
 
     var isAccountAddressCodecAvailable: Bool {
-        #if canImport(Darwin)
-        return accountAddressParseFn != nil
-            && accountAddressRenderFn != nil
-            && freeFn != nil
-        #else
-        return false
-        #endif
+        true
     }
 
     var isConnectCodecAvailable: Bool {
@@ -2907,55 +2894,93 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     }
     #endif
 
+    private func fallbackAccountAddressDiscriminant(_ literal: String) -> UInt16? {
+        let trimmed = literal.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("sora") {
+            return 753
+        }
+        if trimmed.hasPrefix("test") {
+            return 0x0171
+        }
+        if trimmed.hasPrefix("dev") {
+            return 0
+        }
+        guard trimmed.hasPrefix("n") else {
+            return nil
+        }
+        let digits = trimmed.dropFirst().prefix { $0.isASCII && $0.isNumber }
+        guard !digits.isEmpty else {
+            return nil
+        }
+        return UInt16(String(digits))
+    }
+
     func parseAccountAddress(
         literal: String,
         expectedPrefix: UInt16?
     ) throws -> NativeAccountAddressParseResult? {
         #if canImport(Darwin)
-        guard let accountAddressParseFn else { return nil }
-        var canonicalPtr: UnsafeMutablePointer<UInt8>? = nil
-        var canonicalLen: UInt = 0
-        var networkPrefix: UInt16 = 0
-        var errorPtr: UnsafeMutablePointer<UInt8>? = nil
-        var errorLen: UInt = 0
-        let prefixFlag: UInt8 = expectedPrefix == nil ? 0 : 1
-        let prefixValue = expectedPrefix ?? 0
+        if let accountAddressParseFn {
+            var canonicalPtr: UnsafeMutablePointer<UInt8>? = nil
+            var canonicalLen: UInt = 0
+            var networkPrefix: UInt16 = 0
+            var errorPtr: UnsafeMutablePointer<UInt8>? = nil
+            var errorLen: UInt = 0
+            let prefixFlag: UInt8 = expectedPrefix == nil ? 0 : 1
+            let prefixValue = expectedPrefix ?? 0
 
-        let status = literal.withCString { cString in
-            accountAddressParseFn(
-                cString,
-                UInt(literal.utf8.count),
-                prefixValue,
-                prefixFlag,
-                &canonicalPtr,
-                &canonicalLen,
-                &networkPrefix,
-                &errorPtr,
-                &errorLen
-            )
-        }
-
-        if status == 0 {
-            guard let canonicalPtr,
-                  let canonical = takeData(pointer: canonicalPtr, length: canonicalLen)
-            else {
-                return nil
+            let status = literal.withCString { cString in
+                accountAddressParseFn(
+                    cString,
+                    UInt(literal.utf8.count),
+                    prefixValue,
+                    prefixFlag,
+                    &canonicalPtr,
+                    &canonicalLen,
+                    &networkPrefix,
+                    &errorPtr,
+                    &errorLen
+                )
             }
-            return NativeAccountAddressParseResult(
-                canonicalBytes: canonical,
-                networkPrefix: networkPrefix
-            )
+
+            if status == 0 {
+                guard let canonicalPtr,
+                      let canonical = takeData(pointer: canonicalPtr, length: canonicalLen)
+                else {
+                    return nil
+                }
+                return NativeAccountAddressParseResult(
+                    canonicalBytes: canonical,
+                    networkPrefix: networkPrefix
+                )
+            }
+
+            if let error = consumeAccountAddressError(pointer: errorPtr, length: errorLen) {
+                throw error
+            }
+            if let canonicalPtr {
+                freeFn?(canonicalPtr)
+            }
+            return nil
         }
 
-        if let error = consumeAccountAddressError(pointer: errorPtr, length: errorLen) {
-            throw error
-        }
-        if let canonicalPtr {
-            freeFn?(canonicalPtr)
-        }
-        return nil
+        let address = try AccountAddress.parseEncodedSwiftOnly(
+            literal,
+            expectedPrefix: expectedPrefix
+        )
+        return NativeAccountAddressParseResult(
+            canonicalBytes: try address.canonicalBytes(),
+            networkPrefix: expectedPrefix ?? fallbackAccountAddressDiscriminant(literal)
+        )
         #else
-        return nil
+        let address = try AccountAddress.parseEncodedSwiftOnly(
+            literal,
+            expectedPrefix: expectedPrefix
+        )
+        return NativeAccountAddressParseResult(
+            canonicalBytes: try address.canonicalBytes(),
+            networkPrefix: expectedPrefix ?? fallbackAccountAddressDiscriminant(literal)
+        )
         #endif
     }
 
@@ -2964,52 +2989,63 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         networkPrefix: UInt16
     ) throws -> NativeAccountAddressRenderResult? {
         #if canImport(Darwin)
-        guard let accountAddressRenderFn else { return nil }
-        var hexPtr: UnsafeMutablePointer<UInt8>? = nil
-        var hexLen: UInt = 0
-        var i105Ptr: UnsafeMutablePointer<UInt8>? = nil
-        var i105Len: UInt = 0
-        var errorPtr: UnsafeMutablePointer<UInt8>? = nil
-        var errorLen: UInt = 0
+        if let accountAddressRenderFn {
+            var hexPtr: UnsafeMutablePointer<UInt8>? = nil
+            var hexLen: UInt = 0
+            var i105Ptr: UnsafeMutablePointer<UInt8>? = nil
+            var i105Len: UInt = 0
+            var errorPtr: UnsafeMutablePointer<UInt8>? = nil
+            var errorLen: UInt = 0
 
-        let status = canonicalBytes.withUnsafeBytes { buffer in
-            accountAddressRenderFn(
-                buffer.bindMemory(to: UInt8.self).baseAddress,
-                UInt(canonicalBytes.count),
-                networkPrefix,
-                &hexPtr,
-                &hexLen,
-                &i105Ptr,
-                &i105Len,
-                &errorPtr,
-                &errorLen
-            )
-        }
-
-        if status == 0 {
-            guard
-                let canonicalHex = takeString(pointer: hexPtr, length: hexLen),
-                let i105 = takeString(pointer: i105Ptr, length: i105Len)
-            else {
-                return nil
+            let status = canonicalBytes.withUnsafeBytes { buffer in
+                accountAddressRenderFn(
+                    buffer.bindMemory(to: UInt8.self).baseAddress,
+                    UInt(canonicalBytes.count),
+                    networkPrefix,
+                    &hexPtr,
+                    &hexLen,
+                    &i105Ptr,
+                    &i105Len,
+                    &errorPtr,
+                    &errorLen
+                )
             }
-            return NativeAccountAddressRenderResult(
-                canonicalHex: canonicalHex,
-                i105: i105
-            )
-        }
 
-        if let error = consumeAccountAddressError(pointer: errorPtr, length: errorLen) {
+            if status == 0 {
+                guard
+                    let canonicalHex = takeString(pointer: hexPtr, length: hexLen),
+                    let i105 = takeString(pointer: i105Ptr, length: i105Len)
+                else {
+                    return nil
+                }
+                return NativeAccountAddressRenderResult(
+                    canonicalHex: canonicalHex,
+                    i105: i105
+                )
+            }
+
+            if let error = consumeAccountAddressError(pointer: errorPtr, length: errorLen) {
+                if let hexPtr { freeFn?(hexPtr) }
+                if let i105Ptr { freeFn?(i105Ptr) }
+                throw error
+            }
+
             if let hexPtr { freeFn?(hexPtr) }
             if let i105Ptr { freeFn?(i105Ptr) }
-            throw error
+            return nil
         }
 
-        if let hexPtr { freeFn?(hexPtr) }
-        if let i105Ptr { freeFn?(i105Ptr) }
-        return nil
+        let address = try AccountAddress.fromCanonicalBytes(canonicalBytes)
+        return NativeAccountAddressRenderResult(
+            canonicalHex: try address.canonicalHex(),
+            i105: try address.toI105(networkPrefix: networkPrefix)
+        )
         #else
-        return nil
+        let address = try AccountAddress.fromCanonicalBytes(canonicalBytes)
+        return NativeAccountAddressRenderResult(
+            canonicalHex: try address.canonicalHex(),
+            i105: try address.toI105(networkPrefix: networkPrefix)
+        )
         #endif
     }
 

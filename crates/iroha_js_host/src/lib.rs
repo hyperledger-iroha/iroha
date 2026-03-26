@@ -433,7 +433,7 @@ pub fn soradns_derive_gateway_hosts(fqdn: String) -> napi::Result<JsGatewayHosts
     })
 }
 
-/// Parse an account address string in strict encoded form (canonical Katakana i105).
+/// Parse an account address string in strict encoded form (canonical I105).
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // napi-rs requires owned `String` for bindings
 pub fn account_address_parse_encoded(
@@ -4690,7 +4690,7 @@ fn account_id_to_canonical_i105(account_id: &AccountId) -> napi::Result<String> 
     account_id.canonical_i105().map_err(|err| {
         napi::Error::new(
             napi::Status::InvalidArg,
-            format!("failed to encode account id as canonical Katakana i105: {err}"),
+            format!("failed to encode account id as canonical I105: {err}"),
         )
     })
 }
@@ -4882,7 +4882,7 @@ fn ensure_zk_public_input_owner_canonical(map: &json::Map, context: &str) -> nap
     let owner = value.as_str().ok_or_else(|| {
         napi::Error::new(
             napi::Status::InvalidArg,
-            format!("{context}.owner must be a canonical Katakana i105 account id"),
+            format!("{context}.owner must be a canonical I105 account id"),
         )
     })?;
     let canonical = AccountId::parse_encoded(owner)
@@ -4891,13 +4891,13 @@ fn ensure_zk_public_input_owner_canonical(map: &json::Map, context: &str) -> nap
         .map_err(|_| {
             napi::Error::new(
                 napi::Status::InvalidArg,
-                format!("{context}.owner must be a canonical Katakana i105 account id"),
+                format!("{context}.owner must be a canonical I105 account id"),
             )
         })?;
     if canonical != owner {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
-            format!("{context}.owner must use canonical Katakana i105 account id form"),
+            format!("{context}.owner must use canonical I105 account id form"),
         ));
     }
     Ok(())
@@ -9124,12 +9124,12 @@ mod tests {
             }),
             norito_json!({
                 "TransferRwa": norito_json!({
-                    "source": source_account.canonical_i105().expect("canonical Katakana i105 source"),
+                    "source": source_account.canonical_i105().expect("canonical I105 source"),
                     "rwa": rwa_id.to_string(),
                     "quantity": Numeric::from_str("2.5").expect("valid numeric"),
                     "destination": destination
                         .canonical_i105()
-                        .expect("canonical Katakana i105 destination"),
+                        .expect("canonical I105 destination"),
                 })
             }),
             norito_json!({
@@ -9166,7 +9166,7 @@ mod tests {
                     "quantity": Numeric::from_str("1.5").expect("valid numeric"),
                     "destination": destination
                         .canonical_i105()
-                        .expect("canonical Katakana i105 destination"),
+                        .expect("canonical I105 destination"),
                 })
             }),
             norito_json!({

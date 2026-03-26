@@ -12152,7 +12152,9 @@ mod tests {
         let mut map = JsonMap::new();
         map.insert(
             "owner".to_owned(),
-            JsonValue::from("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"),
+            JsonValue::from(
+                "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+            ),
         );
         let mut value = JsonValue::Object(map);
         assert!(normalize_zk_ballot_public_inputs(&mut value).is_err());
@@ -12177,7 +12179,9 @@ mod tests {
         let mut map = JsonMap::new();
         map.insert(
             "owner".to_owned(),
-            JsonValue::from("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"),
+            JsonValue::from(
+                "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+            ),
         );
         map.insert("amount".to_owned(), JsonValue::from("100"));
         map.insert("duration_blocks".to_owned(), JsonValue::from(64u64));

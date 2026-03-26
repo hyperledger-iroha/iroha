@@ -217,7 +217,7 @@ Constructeurs de pointeurs (émettent un TLV Norito dans INPUT et renvoient un p
 - `proof_blob(string|0xhex) -> ProofBlob*`
 
 Les macros du prélude fournissent des alias plus courts et une validation en ligne pour ces constructeurs :
-- `account!("soraカタカナ...")`, `account_id!("soraカタカナ...")`
+- `account!("<katakana-i105-account-id>")`, `account_id!("<katakana-i105-account-id>")`
 - `asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`, `asset_id!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`
 - `domain!("wonderland")`, `domain_id!("wonderland")`
 - `name!("example")`

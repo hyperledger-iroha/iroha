@@ -36,7 +36,7 @@
         {
           "Register": {
             "Account": {
-              "id": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+              "id": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
               "label": null,
               "metadata": {
                 "key": "value"
@@ -218,7 +218,7 @@
         {
           "Transfer": {
             "AssetDefinition": {
-              "destination": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+              "destination": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
               "object": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
               "source": "34mSYmtx2t7jKZDQcTrSU7yorGequhMUV842SfcxYBZgXASYDFrxxbA7Jn8p4Bkx57CsYtcbB"
             }
@@ -227,7 +227,7 @@
         {
           "Grant": {
             "Permission": {
-              "destination": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+              "destination": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
               "object": {
                 "name": "CanSetParameters"
               }
@@ -237,7 +237,7 @@
         {
           "Grant": {
             "Permission": {
-              "destination": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+              "destination": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
               "object": {
                 "name": "CanRegisterDomain"
               }
@@ -247,7 +247,7 @@
         {
           "Grant": {
             "Permission": {
-              "destination": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+              "destination": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
               "object": {
                 "name": "CanRegisterAccount"
               }

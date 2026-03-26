@@ -70,7 +70,7 @@ TransactionBuilder builder = new TransactionBuilder(codec, keyManager);
 
 TransactionPayload payload = TransactionPayload.builder()
     .setChainId("00000000")
-    .setAuthority("soraカタカナ...")
+    .setAuthority("<katakana-i105-account-id>")
     .setCreationTimeMs(System.currentTimeMillis())
     .setExecutable(Executable.ivm(new byte[] { /* Kotodama bytecode */ }))
     .build();

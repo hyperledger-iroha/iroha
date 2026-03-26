@@ -230,7 +230,7 @@ client.create_subscription_plan(
 )
 
 subscription = client.create_subscription(
-    authority="soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
+    authority="sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
     private_key="subscriber-private-key-hex",
     subscription_id="sub-001",
     plan_id="aws_compute#commerce",
@@ -355,11 +355,11 @@ print(params.block_time_ms, params.next_mode)
 trigger_payload = {
     "id": "notify-admins",
     "action": {"Mint": {"asset_id": "norito:<alert-asset-id-hex>", "value": 1}},
-    "authority": "soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ",
+    "authority": "sorauロ1NcMBm2dフBokヱDムナekAbカヘワヌミMFスヱヒZリ2u4WGUMMS63EY6",
     "filter": {"ByTime": {"schedule_ms": 60_000}},
 }
 client.register_trigger(trigger_payload)
-for row in client.query_triggers(filter={"authority": "soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ"})["items"]:
+for row in client.query_triggers(filter={"authority": "sorauロ1NcMBm2dフBokヱDムナekAbカヘワヌミMFスヱヒZリ2u4WGUMMS63EY6"})["items"]:
     print("Trigger row", row)
 client.delete_trigger("notify-admins")
 
@@ -383,17 +383,17 @@ for provider in ingestion.providers:
 
 # Account listings
 assets = client.list_account_assets(
-    "soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ",
+    "sorauロ1NcMBm2dフBokヱDムナekAbカヘワヌミMFスヱヒZリ2u4WGUMMS63EY6",
     limit=10,
     asset_id="norito:<asset-id-hex>",
 )
 txs = client.list_account_transactions(
-    "soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ",
+    "sorauロ1NcMBm2dフBokヱDムナekAbカヘワヌミMFスヱヒZリ2u4WGUMMS63EY6",
     limit=5,
     asset_id="norito:<asset-id-hex>",
 )
 query_txs = client.query_account_transactions(
-    "soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ",
+    "sorauロ1NcMBm2dフBokヱDムナekAbカヘワヌミMFスヱヒZリ2u4WGUMMS63EY6",
     filter={"status": {"Eq": "Committed"}},
     sort={"timestamp": "DESC"},
     limit=3,
@@ -426,13 +426,13 @@ Build transactions with ergonomic helpers that wrap the low-level `Instruction` 
 ```python
 from iroha_python import TransactionConfig, TransactionDraft, Ed25519KeyPair
 
-config = TransactionConfig(chain_id="dev-chain", authority="soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ", ttl_ms=120_000)
+config = TransactionConfig(chain_id="dev-chain", authority="sorauロ1NcMBm2dフBokヱDムナekAbカヘワヌミMFスヱヒZリ2u4WGUMMS63EY6", ttl_ms=120_000)
 draft = TransactionDraft(config)
 draft.register_domain("wonderland") \
-     .register_account("soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ", metadata={"role": "admin"}) \
+     .register_account("sorauロ1NcMBm2dフBokヱDムナekAbカヘワヌミMFスヱヒZリ2u4WGUMMS63EY6", metadata={"role": "admin"}) \
      .register_asset_definition_numeric(
         "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
-        owner="soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ",
+        owner="sorauロ1NcMBm2dフBokヱDムナekAbカヘワヌミMFスヱヒZリ2u4WGUMMS63EY6",
         scale=2,
         mintable="Infinitely",
         metadata={"sym": "ROS"},
@@ -450,13 +450,13 @@ Apply metadata updates or transfer ownership without dropping to raw Norito:
 
 ```python
 draft.set_account_key_value("nickname", "Queen Alice")
-draft.transfer_domain("wonderland", destination="soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ")
-draft.transfer_asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", destination="soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ")
-draft.transfer_nft("nft#dataspace", destination="soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ")
+draft.transfer_domain("wonderland", destination="sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE")
+draft.transfer_asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", destination="sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE")
+draft.transfer_nft("nft#dataspace", destination="sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE")
 draft.transfer_rwa(
     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities",
     quantity="2.5",
-    destination="soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
+    destination="sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
 )
 ```
 
@@ -477,8 +477,8 @@ governance = RepoGovernance(haircut_bps=1500, margin_frequency_secs=86_400)
 
 draft.repo_initiate(
     agreement_id="daily_repo",
-    initiator="soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ",
-    counterparty="soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
+    initiator="sorauロ1NcMBm2dフBokヱDムナekAbカヘワヌミMFスヱヒZリ2u4WGUMMS63EY6",
+    counterparty="sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
     cash_leg=cash,
     collateral_leg=collateral,
     rate_bps=250,
@@ -487,8 +487,8 @@ draft.repo_initiate(
 )
 draft.repo_unwind(
     agreement_id="daily_repo",
-    initiator="soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ",
-    counterparty="soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
+    initiator="sorauロ1NcMBm2dフBokヱDムナekAbカヘワヌミMFスヱヒZリ2u4WGUMMS63EY6",
+    counterparty="sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
     cash_leg=cash,
     collateral_leg=collateral,
     settlement_timestamp_ms=1_704_086_400_000,
@@ -527,15 +527,15 @@ from iroha_python import (
 delivery_leg = SettlementLeg(
     asset_definition_id="<bond_asset_definition_base58>",
     quantity="10",
-    from_account="soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ",
-    to_account="soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
+    from_account="sorauロ1NcMBm2dフBokヱDムナekAbカヘワヌミMFスヱヒZリ2u4WGUMMS63EY6",
+    to_account="sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
     metadata={"isin": "ABC123"},
 )
 payment_leg = SettlementLeg(
     asset_definition_id="<cash_asset_definition_base58>",
     quantity="1000",
-    from_account="soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
-    to_account="soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ",
+    from_account="sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
+    to_account="sorauロ1NcMBm2dフBokヱDムナekAbカヘワヌミMFスヱヒZリ2u4WGUMMS63EY6",
 )
 plan = SettlementPlan(
     order=SettlementExecutionOrder.PAYMENT_THEN_DELIVERY,
@@ -553,8 +553,8 @@ draft.settlement_dvp(
 counter_leg = SettlementLeg(
     asset_definition_id="<counter_asset_definition_base58>",
     quantity="900",
-    from_account="soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
-    to_account="soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ",
+    from_account="sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
+    to_account="sorauロ1NcMBm2dフBokヱDムナekAbカヘワヌミMFスヱヒZリ2u4WGUMMS63EY6",
 )
 draft.settlement_pvp(
     settlement_id="trade_pvp",
@@ -701,7 +701,7 @@ preimage = build_connect_approve_preimage(
     sid=b"\xAA" * 32,
     app_public_key=b"\xBB" * 32,
     wallet_public_key=b"\xCC" * 32,
-    account_id="soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
+    account_id="sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
     permissions=ConnectPermissions(methods=["SIGN_REQUEST_TX"], events=[]),
     proof=ConnectSignInProof(
         domain="example.org",
@@ -985,7 +985,7 @@ for record in manifests.manifests:
 # Publish or revoke capability manifests directly from Python.
 client.publish_space_directory_manifest(
     {
-        "authority": "soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ",
+        "authority": "sorauロ1NcMBm2dフBokヱDムナekAbカヘワヌミMFスヱヒZリ2u4WGUMMS63EY6",
         "privateKeyHex": "ed0123...",
         "manifest": manifest_payload,  # matches AssetPermissionManifest JSON
         "reason": "CBDC onboarding wave",
@@ -993,7 +993,7 @@ client.publish_space_directory_manifest(
 )
 client.revoke_space_directory_manifest(
     {
-        "authority": "soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ",
+        "authority": "sorauロ1NcMBm2dフBokヱDムナekAbカヘワヌミMFスヱヒZリ2u4WGUMMS63EY6",
         "privateKeyBytes": bytes.fromhex("11" * 32),
         "uaid": uaid_literal,
         "dataspace": 11,
@@ -1019,10 +1019,10 @@ trigger_id = "hourly-reward"
 # 1) Build the instruction with the high-level helper.
 register = Instruction.register_time_trigger(
     trigger_id=trigger_id,
-    authority="soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ",
+    authority="sorauロ1NcMBm2dフBokヱDムナekAbカヘワヌミMFスヱヒZリ2u4WGUMMS63EY6",
     action=Instruction.mint_asset(
         asset_id="norito:<reward-asset-id-hex>",
-        account_id="soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
+        account_id="sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
         value=1,
     ),
     interval_ms=3_600_000,
@@ -1032,7 +1032,7 @@ register = Instruction.register_time_trigger(
 # 2) Submit the transaction and wait for confirmation.
 envelope, status = client.build_and_submit_transaction(
     chain_id="local",
-    authority="soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ",
+    authority="sorauロ1NcMBm2dフBokヱDムナekAbカヘワヌミMFスヱヒZリ2u4WGUMMS63EY6",
     private_key="ed25519:...",
     instructions=[register],
     wait=True,
@@ -1049,7 +1049,7 @@ for event in client.stream_trigger_events(trigger_id=trigger_id, resume=True):
     break  # demonstration
 
 # 5) Query triggers with pagination helpers.
-page = client.query_triggers(filter={"authority": "soraゴヂアニヤナサヰイユヶサヲワニュスゥァヨワコモペバプボチョナソヒョニュニョムベイゴエホタフナナハカウセミカ"}, limit=10)
+page = client.query_triggers(filter={"authority": "sorauロ1NcMBm2dフBokヱDムナekAbカヘワヌミMFスヱヒZリ2u4WGUMMS63EY6"}, limit=10)
 for item in page["items"]:
     print(item["id"])
 

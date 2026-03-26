@@ -31,8 +31,8 @@ IDs de compte que vous comptez utiliser. Le bundle par defaut inclut deja deux c
 issus des cles de demo :
 
 ```sh
-export ADMIN_ACCOUNT="soraカタカナ..."
-export RECEIVER_ACCOUNT="soraカタカナ..."
+export ADMIN_ACCOUNT="<katakana-i105-account-id>"
+export RECEIVER_ACCOUNT="<katakana-i105-account-id>"
 ```
 
 Confirmez les valeurs en listant les premiers comptes :

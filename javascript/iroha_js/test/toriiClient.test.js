@@ -62,7 +62,6 @@ function sampleAccountForms() {
   const publicKeyHex = SAMPLE_ACCOUNT_SIGNATORY.slice(6);
   const publicKey = Buffer.from(publicKeyHex, "hex");
   const address = AccountAddress.fromAccount({
-    domain: SAMPLE_ACCOUNT_DOMAIN,
     publicKey,
   });
   const i105Literal = address.toI105(SORA_I105_DISCRIMINANT);
@@ -81,7 +80,6 @@ function sampleAccountForms() {
   return Object.freeze({
     canonical,
     i105: i105Literal,
-    i105: address.toI105(),
     nonCanonicalI105,
     local8,
   });
@@ -125,7 +123,7 @@ function fixtureAccountForms(label, domain = "fixture-domain") {
   const address = fixtureAccountAddress(label, domain);
   return {
     i105: address.toI105(SORA_I105_DISCRIMINANT),
-    i105: address.toI105(),
+    nonCanonicalI105: address.toI105(0x02f2),
   };
 }
 
@@ -142,10 +140,10 @@ const FIXTURE_AUTHORITY_ID = fixtureAccountId("authority");
 const FIXTURE_COUNCIL_TEST_ID = fixtureAccountId("council", "test");
 const FIXTURE_ALICE_FORMS = fixtureAccountForms("alice");
 const FIXTURE_BOB_FORMS = fixtureAccountForms("bob");
-const FIXTURE_ASSET_ID_A = `62Fk4FPcMuLvW5QjDGNF2a4jAmjM#${FIXTURE_ALICE_ID}`;
-const FIXTURE_ASSET_ID_B = `61CtjvNd9T3THAR65GsMVHr82Bjc#${FIXTURE_BOB_ID}`;
-const FIXTURE_ASSET_ID_C = `5Pz9SwdN9eXPbiXPX9HRCpzCcE3o#${FIXTURE_CAROL_ID}#dataspace:7`;
-const FIXTURE_ASSET_ID_D = `62Fk4FPcMuLvW5QjDGNF2a4jAmjM#${FIXTURE_AUTHORITY_ID}`;
+const FIXTURE_ASSET_ID_A = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+const FIXTURE_ASSET_ID_B = "61CtjvNd9T3THAR65GsMVHr82Bjc";
+const FIXTURE_ASSET_ID_C = "5Pz9SwdN9eXPbiXPX9HRCpzCcE3o";
+const FIXTURE_ASSET_ID_D = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1";
 
 function expectValidationErrorFixture(error, key) {
   assert(error instanceof ValidationError);
@@ -9552,7 +9550,7 @@ test("governanceSubmitZk ballots reject noncanonical owners", async () => {
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_ACCOUNT_ID);
-      assert.match(String(error?.message), /canonical (?:I105 )?account id/i);
+      assert.match(String(error?.message), /canonical .*i105 account id/i);
       return true;
     },
   );
@@ -9602,7 +9600,7 @@ test("governanceSubmitZkBallotV1 rejects noncanonical owner", async () => {
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_ACCOUNT_ID);
-      assert.match(String(error?.message), /canonical (?:I105 )?account id/i);
+      assert.match(String(error?.message), /canonical .*i105 account id/i);
       return true;
     },
   );
@@ -9674,7 +9672,7 @@ test("governanceSubmitZkBallotProofV1 rejects noncanonical owner", async () => {
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_ACCOUNT_ID);
-      assert.match(String(error?.message), /canonical (?:I105 )?account id/i);
+      assert.match(String(error?.message), /canonical .*i105 account id/i);
       return true;
     },
   );
@@ -12044,7 +12042,7 @@ test("listAccountPermissions encodes pagination and parses response", async () =
   });
   await assert.rejects(
     () => client.listAccountPermissions(""),
-    /accountId must be a non-empty string/,
+    /accountId must not be empty/,
   );
 });
 
@@ -12200,7 +12198,7 @@ test("listAccountAssets encodes pagination params", async () => {
 });
 
 test("listAccountAssets encodes assetId filters", async () => {
-  const assetId = `62Fk4FPcMuLvW5QjDGNF2a4jAmjM#${FIXTURE_ALICE_FORMS.i105}`;
+  const assetId = FIXTURE_ASSET_ID_A;
   const normalizedAssetId = FIXTURE_ASSET_ID_A;
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
@@ -12227,7 +12225,7 @@ test("listAccountAssets rejects malformed asset filters", async () => {
 
   await assert.rejects(
     () => client.listAccountAssets(FIXTURE_ALICE_ID, { assetId: invalidAssetId }),
-    /must use '<base58-asset-definition-id>#<katakana-i105-account-id>' with optional '#dataspace:<id>' suffix/,
+    /canonical unprefixed Base58 asset id/,
   );
 });
 
@@ -12515,7 +12513,7 @@ test("listAccountTransactions encodes pagination params", async () => {
 });
 
 test("listAccountTransactions encodes assetId filters", async () => {
-  const assetId = `62Fk4FPcMuLvW5QjDGNF2a4jAmjM#${FIXTURE_ALICE_FORMS.i105}`;
+  const assetId = FIXTURE_ASSET_ID_A;
   const normalizedAssetId = FIXTURE_ASSET_ID_A;
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
@@ -12676,7 +12674,7 @@ test("listAccountAssets rejects blank account ids", async () => {
   });
   await assert.rejects(
     () => client.listAccountAssets("", {}),
-    /accountId must be a non-empty string/,
+    /accountId must not be empty/,
   );
 });
 
@@ -12715,7 +12713,7 @@ test("listAssetHolders encodes definition id", async () => {
 });
 
 test("listAssetHolders encodes assetId filters", async () => {
-  const assetId = `62Fk4FPcMuLvW5QjDGNF2a4jAmjM#${FIXTURE_ALICE_FORMS.i105}`;
+  const assetId = FIXTURE_ASSET_ID_A;
   const normalizedAssetId = FIXTURE_ASSET_ID_A;
   const fetchImpl = async (url) => {
     const parsed = new URL(url);
@@ -13054,7 +13052,7 @@ test("resolveToriiClientConfig merges config, env, and overrides", async () => {
 });
 
 test("extractToriiFeatureConfig normalizes feature sections", () => {
-  const hashedAccountRaw = SAMPLE_ACCOUNT_FORMS.nonCanonicalI105;
+  const hashedAccountRaw = SAMPLE_ACCOUNT_FORMS.i105;
   const hashedAccountCanonical = normalizeAccountId(
     hashedAccountRaw,
     "hashedAccount",
@@ -13576,7 +13574,7 @@ test("listKaigiRelays normalizes summary payloads", async () => {
         total: "2",
         items: [
           {
-            relay_id: "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
+            relay_id: "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
             domain: "kaigi",
             bandwidth_class: 5,
             hpke_fingerprint_hex: "aa".repeat(32),
@@ -13761,23 +13759,24 @@ test("getKaigiRelaysHealth forwards AbortSignal", async () => {
 });
 
 test("streamKaigiRelayEvents encodes filters and normalizes payloads", async () => {
+  const relayId = FIXTURE_ALICE_ID;
   let requested;
   const fetchImpl = async (url, init) => {
     requested = url;
     assert.equal(init.headers["Last-Event-ID"], "cursor");
     return createSseResponse([
       'event: kaigi\n',
-      `data: {"kind":"registration","domain":"kaigi","relay_id":"soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ","bandwidth_class":1,"hpke_fingerprint_hex":"${"aa".repeat(32)}"}\n`,
+      `data: {"kind":"registration","domain":"kaigi","relay_id":"${relayId}","bandwidth_class":1,"hpke_fingerprint_hex":"${"aa".repeat(32)}"}\n`,
       "\n",
       'event: kaigi\n',
-      'data: {"kind":"health","domain":"kaigi","relay_id":"soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ","status":"degraded","reported_at_ms":5000,"call":{"domain":"kaigi","name":"demo"}}\n',
+      `data: {"kind":"health","domain":"kaigi","relay_id":"${relayId}","status":"degraded","reported_at_ms":5000,"call":{"domain":"kaigi","name":"demo"}}\n`,
       "\n",
     ]);
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const iterator = client.streamKaigiRelayEvents({
     domain: "Kaigi",
-    relay: "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
+    relay: relayId,
     kind: ["registration", "health"],
     lastEventId: "cursor",
   });
@@ -13787,9 +13786,7 @@ test("streamKaigiRelayEvents encodes filters and normalizes payloads", async () 
   assert.equal(second.value?.data?.status, "degraded");
   assert.equal(second.value?.data?.call.name, "demo");
   assert.ok(requested?.includes("domain=kaigi"));
-  assert.ok(
-    requested?.includes("relay=soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ"),
-  );
+  assert.ok(requested?.includes(`relay=${encodeURIComponent(relayId)}`));
   assert.ok(requested?.includes("kind=registration%2Chealth"));
 });
 
@@ -16146,7 +16143,7 @@ test("listOfflineAllowances captures hms safety detect metadata", async () => {
 
 test("listOfflineTransfers normalizes payloads and metadata", async () => {
   let capturedUrl = null;
-  const assetId = `62Fk4FPcMuLvW5QjDGNF2a4jAmjM#${FIXTURE_ALICE_FORMS.i105}`;
+  const assetId = FIXTURE_ASSET_ID_A;
   const normalizedAssetId = FIXTURE_ASSET_ID_A;
   const receiverId = normalizeAccountId(
     FIXTURE_VAULT_ID,
@@ -17009,7 +17006,7 @@ test("topUpOfflineAllowanceRenewal chains issue and renew", async () => {
 
 test("listOfflineAllowances encodes convenience query params", async () => {
   let capturedUrl = null;
-  const assetId = `62Fk4FPcMuLvW5QjDGNF2a4jAmjM#${FIXTURE_ALICE_FORMS.i105}`;
+  const assetId = FIXTURE_ASSET_ID_A;
   const normalizedAssetId = FIXTURE_ASSET_ID_A;
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async (url) => {

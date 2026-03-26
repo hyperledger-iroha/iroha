@@ -256,7 +256,7 @@ public struct AccountAddress {
         try toI105(networkPrefix: chainDiscriminant)
     }
 
-    /// Returns canonical Katakana i105 output plus the UX warning required by
+    /// Returns canonical I105 output plus the UX warning required by
     /// `docs/source/sns/address_display_guidelines.md`.
     public func displayFormats(networkPrefix: UInt16 = 753) throws -> AccountAddressDisplayFormats {
         let canonical = try canonicalBytes()
@@ -319,7 +319,7 @@ public struct AccountAddress {
 
     static let multisigPersonalisation = Data("iroha-ms-policy".utf8)
     private static let i105WarningMessage =
-        "i105 addresses are the canonical katakana account literal encoding. " +
+        "i105 addresses use the canonical I105 alphabet: Base58 plus the 47 katakana from the Iroha poem. " +
         "Render and validate them with the intended chain discriminant."
 }
 

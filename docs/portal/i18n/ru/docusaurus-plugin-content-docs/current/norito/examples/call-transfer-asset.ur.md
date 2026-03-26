@@ -19,9 +19,9 @@ title: Kotodama سے ہوسٹ ٹرانسفر کال کریں
 
 ## لیجر واک تھرو
 
-- Установите флажок (`soraカタカナ...`) для получения дополнительной информации о Если у вас есть `CanTransfer`, вы можете использовать его в качестве источника питания.
-- `call_transfer_asset` Для получения дополнительной информации о `soraカタカナ...` для 5 یونٹس منتقل ہوں، یہ اس طریقے کی عکاسی کرتا ہے کہ کین آٹومیشن ہوسٹ کالز کو لپیٹ سکتی ہے۔
-- `FindAccountAssets` یا `iroha_cli ledger assets list --account soraカタカナ...` может быть использовано в качестве дополнительного источника питания. Если вы хотите, чтобы вы выбрали лучший вариант
+- Установите флажок (`<katakana-i105-account-id>`) для получения дополнительной информации о Если у вас есть `CanTransfer`, вы можете использовать его в качестве источника питания.
+- `call_transfer_asset` Для получения дополнительной информации о `<katakana-i105-account-id>` для 5 یونٹس منتقل ہوں، یہ اس طریقے کی عکاسی کرتا ہے کہ کین آٹومیشن ہوسٹ کالز کو لپیٹ سکتی ہے۔
+- `FindAccountAssets` یا `iroha_cli ledger assets list --account <katakana-i105-account-id>` может быть использовано в качестве дополнительного источника питания. Если вы хотите, чтобы вы выбрали лучший вариант
 
 ## Использование SDK
 
@@ -36,8 +36,8 @@ title: Kotodama سے ہوسٹ ٹرانسفر کال کریں
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("soraカタカナ..."),
-      account!("soraカタカナ..."),
+      account!("<katakana-i105-account-id>"),
+      account!("<katakana-i105-account-id>"),
       asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );

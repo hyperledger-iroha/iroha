@@ -30,8 +30,8 @@ ID de cuenta que vas a utilizar. El paquete por defecto incluye deja dos cuentas
 issus des cles de demo:
 
 ```sh
-export ADMIN_ACCOUNT="soraカタカナ..."
-export RECEIVER_ACCOUNT="soraカタカナ..."
+export ADMIN_ACCOUNT="<katakana-i105-account-id>"
+export RECEIVER_ACCOUNT="<katakana-i105-account-id>"
 ```
 
 Confirme los valores en la lista de las primeras cuentas:

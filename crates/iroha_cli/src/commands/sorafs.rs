@@ -10747,7 +10747,7 @@ mod gateway_tests {
         [
             {
                 "kind": "account_id",
-                "account_id": "soraゴヂアヌメネヒョタルアキュカンコプヱガョラツゴヸナゥヘガヮザネチョヷニャヒュニョメヺェヅヤアキャヅアタタナイス",
+                "account_id": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
                 "policy_tier": "standard",
                 "issued_at": "2026-01-01T00:00:00Z",
                 "expires_at": "2026-06-30T00:00:00Z"
@@ -10791,7 +10791,7 @@ mod gateway_tests {
         [
             {
                 "kind": "account_id",
-                "account_id": "soraゴヂアヌメネヒョタルアキュカンコプヱガョラツゴヸナゥヘガヮザネチョヷニャヒュニョメヺェヅヤアキャヅアタタナイス",
+                "account_id": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
                 "policy_tier": "standard",
                 "issued_at": "2026-01-01T00:00:00Z",
                 "expires_at": "2026-06-15T00:00:00Z"
@@ -10827,7 +10827,7 @@ mod gateway_tests {
         assert_eq!(summary_entries[0].kind, "account_id");
         assert_eq!(
             summary_entries[0].descriptor,
-            "account_id:soraゴヂアヌメネヒョタルアキュカンコプヱガョラツゴヸナゥヘガヮザネチョヷニャヒュニョメヺェヅヤアキャヅアタタナイス"
+            "account_id:sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"
         );
         assert_eq!(summary_entries[1].kind, "provider");
         assert_eq!(
@@ -10844,7 +10844,7 @@ mod gateway_tests {
         [
             {
                 "kind": "account_id",
-                "account_id": "soraゴヂアヌメネヒョタルアキュカンコプヱガョラツゴヸナゥヘガヮザネチョヷニャヒュニョメヺェヅヤアキャヅアタタナイス",
+                "account_id": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
                 "policy_tier": "standard",
                 "issued_at": "2026-01-01T00:00:00Z",
                 "expires_at": "2026-06-15T00:00:00Z"
@@ -10881,7 +10881,7 @@ mod gateway_tests {
         [
             {
                 "kind": "account_id",
-                "account_id": "soraゴヂアヌメネヒョタルアキュカンコプヱガョラツゴヸナゥヘガヮザネチョヷニャヒュニョメヺェヅヤアキャヅアタタナイス",
+                "account_id": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
                 "account_alias": "routing@dataspace",
                 "policy_tier": "standard",
                 "issued_at": "2025-01-01T00:00:00Z",
@@ -10922,7 +10922,7 @@ mod gateway_tests {
         [
             {
                 "kind": "account_id",
-                "account_id": "soraゴヂアヌメネヒョタルアキュカンコプヱガョラツゴヸナゥヘガヮザネチョヷニャヒュニョメヺェヅヤアキャヅアタタナイス",
+                "account_id": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
                 "account_alias": "routing@dataspace",
                 "policy_tier": "standard",
                 "issued_at": "2025-01-01T00:00:00Z",
@@ -10965,7 +10965,7 @@ mod gateway_tests {
         [
             {
                 "kind": "account_id",
-                "account_id": "soraゴヂアヌメネヒョタルアキュカンコプヱガョラツゴヸナゥヘガヮザネチョヷニャヒュニョメヺェヅヤアキャヅアタタナイス",
+                "account_id": "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
                 "account_alias": "routing@dataspace",
                 "policy_tier": "standard",
                 "issued_at": "2025-01-01T00:00:00Z",

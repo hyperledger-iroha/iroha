@@ -14,9 +14,9 @@ source: crates/ivm/docs/examples/13_register_and_mint.ko
 
 ## جولة دفتر الأستاذ
 
-- تأكد من وجود حساب الوجهة (مثل `soraカタカナ...`) بما يعكس مرحلة الإعداد في كل بدء سريع للـ SDK.
+- تأكد من وجود حساب الوجهة (مثل `<katakana-i105-account-id>`) بما يعكس مرحلة الإعداد في كل بدء سريع للـ SDK.
 - استدعِ نقطة الدخول `register_and_mint` لإنشاء تعريف أصل ROSE وسك 250 وحدة لأليس في معاملة واحدة.
-- تحقق من الأرصدة عبر `client.request(FindAccountAssets)` أو `iroha_cli ledger assets list --account soraカタカナ...` لتأكيد نجاح السك.
+- تحقق من الأرصدة عبر `client.request(FindAccountAssets)` أو `iroha_cli ledger assets list --account <katakana-i105-account-id>` لتأكيد نجاح السك.
 
 ## أدلة SDK ذات صلة
 
@@ -38,7 +38,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("soraカタカナ...");
+    let to = account!("<katakana-i105-account-id>");
     let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     mint_asset(to, asset, 250);
   }

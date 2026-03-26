@@ -1149,7 +1149,7 @@ mod account_id_parsing_tests {
         let alias_label = "primary";
         let err = AccountAddress::parse_encoded(alias_label, Some(address::chain_discriminant()))
             .expect_err("alias label should not parse as a valid address");
-        assert_eq!(err.code_str(), "ERR_CHECKSUM_MISMATCH");
+        assert_eq!(err.code_str(), "ERR_MISSING_I105_SENTINEL");
 
         let err = AccountId::parse_encoded("primary@hbl.dataspace")
             .map(crate::account::ParsedAccountId::into_account_id)
@@ -1556,7 +1556,7 @@ mod tests {
     #[test]
     fn i105_checksum_failure_reports_error_code() {
         // Negative vector from fixtures/account/address_vectors.json (`i105-checksum-mismatch`).
-        let literal = "RnuaJGGDL8HNkN8bwHwBTU32fTWQmbRoM3QZBJintx5RqTU7GgPJmNiz";
+        let literal = "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE";
         let err = AccountId::parse_encoded(literal).expect_err("invalid i105 payload must fail");
         assert_eq!(
             err.reason(),

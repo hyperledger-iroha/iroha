@@ -19,9 +19,9 @@ translation_last_reviewed: 2026-02-07
 
 ## قدم بہ قدم رجسٹری ٹریورسل
 
-- کسی معاہدے کے اتھارٹی (جیسے `soraカタカナ...`) کو اثاثہ کے ساتھ تقویت بخشیں وہ اتھارٹی کو `CanTransfer` یا مساوی اجازت کی منتقلی اور جاری کرے گی۔
-- کال انٹری پوائنٹ `call_transfer_asset` کو معاہدہ اکاؤنٹ سے 5 یونٹوں کو `soraカタカナ...` میں منتقل کرنے کے لئے ، اس بات کی عکاسی کرتی ہے کہ آن چین آٹومیشن میزبان کالوں کو کیسے لپیٹ سکتا ہے۔
-- `FindAccountAssets` یا `iroha_cli ledger assets list --account soraカタカナ...` کے ذریعے بیلنس چیک کریں اور اس بات کی تصدیق کے ل investims واقعات کا جائزہ لیں کہ میٹا ڈیٹا گارڈ نے منتقلی کا سیاق و سباق ریکارڈ کیا ہے۔
+- کسی معاہدے کے اتھارٹی (جیسے `<katakana-i105-account-id>`) کو اثاثہ کے ساتھ تقویت بخشیں وہ اتھارٹی کو `CanTransfer` یا مساوی اجازت کی منتقلی اور جاری کرے گی۔
+- کال انٹری پوائنٹ `call_transfer_asset` کو معاہدہ اکاؤنٹ سے 5 یونٹوں کو `<katakana-i105-account-id>` میں منتقل کرنے کے لئے ، اس بات کی عکاسی کرتی ہے کہ آن چین آٹومیشن میزبان کالوں کو کیسے لپیٹ سکتا ہے۔
+- `FindAccountAssets` یا `iroha_cli ledger assets list --account <katakana-i105-account-id>` کے ذریعے بیلنس چیک کریں اور اس بات کی تصدیق کے ل investims واقعات کا جائزہ لیں کہ میٹا ڈیٹا گارڈ نے منتقلی کا سیاق و سباق ریکارڈ کیا ہے۔
 
 ## متعلقہ SDK سبق
 
@@ -36,8 +36,8 @@ translation_last_reviewed: 2026-02-07
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("soraカタカナ..."),
-      account!("soraカタカナ..."),
+      account!("<katakana-i105-account-id>"),
+      account!("<katakana-i105-account-id>"),
       asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );

@@ -69,7 +69,7 @@ Cuando esté satisfecho con el contrato, despliega en un nodo usando el CLI. Pro
 
 ```sh
 iroha_cli app contracts deploy \
-  --authority soraカタカナ... \
+  --authority <katakana-i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
 ```

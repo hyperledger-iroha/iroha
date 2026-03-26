@@ -76,9 +76,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "soraカタカナ...",
+      "owner": "<katakana-i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"soraカタカナ...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<katakana-i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -87,7 +87,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"soraカタカナ...",
+        "payer":"<katakana-i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -238,7 +238,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
 - **تحليل metadata او governance:** يتم تحليل JSON inline مباشرة؛ ويتم حل
   مراجع الملفات نسبة الى موقع CSV. metadata غير الكائن ينتج خطا تحقق.
 - **Controllers:** الخلايا الفارغة تلتزم بـ `--default-controllers`. قدم قوائم
-  controller صريحة (مثل `soraカタカナ...;soraカタカナ...`) عند التفويض لجهات غير المالك.
+  controller صريحة (مثل `<katakana-i105-account-id>;<katakana-i105-account-id>`) عند التفويض لجهات غير المالك.
 
 يتم الابلاغ عن الاخطاء مع ارقام صفوف سياقية (مثلا
 `error: row 12 term_years must be between 1 and 255`). يخرج السكربت بالكود `1`

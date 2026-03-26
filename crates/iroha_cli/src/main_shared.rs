@@ -7563,7 +7563,7 @@ mod tests {
 
     #[test]
     fn resolve_account_id_with_rejects_non_canonical_i105_literal() {
-        let literal = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
+        let literal = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
 
         let err =
             resolve_account_id_with(&literal).expect_err("non-canonical Katakana i105 literal should fail");
@@ -7603,7 +7603,7 @@ mod tests {
     #[test]
     fn parse_register_account_id_rejects_non_canonical_i105_literal() {
         let domain: DomainId = "wonderland".parse().expect("domain");
-        let literal = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
+        let literal = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
         let err = parse_register_account_id(&literal, &domain)
             .expect_err("non-canonical Katakana i105 literal should fail");
         assert!(

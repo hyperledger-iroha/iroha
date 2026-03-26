@@ -970,7 +970,7 @@ mod tests {
             iroha_crypto::MerkleProof::from_audit_path(0, vec![]);
         // Construct a minimal time-triggered entrypoint and a rejected result
         let authority = crate::account::AccountId::parse_encoded(
-            "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ",
+            "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
         )
         .expect("valid account id")
         .into_account_id();

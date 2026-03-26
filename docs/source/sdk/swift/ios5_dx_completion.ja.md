@@ -24,7 +24,7 @@ IOS5 は、より高レベルなクライアントアダプターと再現可能
   var cancellables: Set<AnyCancellable> = []
   let client = ToriiClient(baseURL: URL(string: "https://torii.dev")!)
 
-  client.assetsPublisher(accountId: "soraカタカナ...")
+  client.assetsPublisher(accountId: "<katakana-i105-account-id>")
       .sink(receiveCompletion: { completion in
           print("Finished: \(completion)")
       }, receiveValue: { balances in

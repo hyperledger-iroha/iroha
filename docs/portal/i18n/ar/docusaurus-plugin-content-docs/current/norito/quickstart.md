@@ -85,7 +85,7 @@ ivm_run target/quickstart/hello.to --args '{}'
 
 مع استمرار تشغيل العقدة، ارسل bytecode المترجم الى Torii باستخدام CLI. هوية التطوير الافتراضية مشتقة من المفتاح العام في `defaults/client.toml`، لذلك يكون معرّف الحساب:
 ```
-soraカタカナ...
+<katakana-i105-account-id>
 ```
 
 استخدم ملف التكوين لتوفير URL الخاص ب Torii و chain ID ومفتاح التوقيع:
@@ -105,7 +105,7 @@ iroha --config defaults/client.toml \
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id soraカタカナ... \
+  --id <katakana-i105-account-id> \
   --key example | jq .
 ```
 

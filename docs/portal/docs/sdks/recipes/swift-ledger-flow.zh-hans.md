@@ -36,8 +36,8 @@ iroha --config defaults/client.toml asset definition register --id 7Sp2j6zDvJFnM
 ```bash
 # raw 32-byte Ed25519 key in hex (use `iroha_cli tools crypto private-key export --raw` if needed)
 export ADMIN_PRIVATE_KEY_RAW="4f94...<64 hex chars>..."
-export ADMIN_ACCOUNT="soraカタカナ..."
-export RECEIVER_ACCOUNT="soraカタカナ..."
+export ADMIN_ACCOUNT="<katakana-i105-account-id>"
+export RECEIVER_ACCOUNT="<katakana-i105-account-id>"
 ```
 
 ## 3. 将 IrohaSwift 添加到您的包中

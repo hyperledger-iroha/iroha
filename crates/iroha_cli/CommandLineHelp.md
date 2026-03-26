@@ -3447,7 +3447,7 @@ Fetch current execution witness snapshot from Torii debug endpoints
 * `--decode <PATH>` — Decode a Norito-encoded `ExecWitness` from a file and print with human-readable keys
 * `--filter <PREFIXES>` — Filter decoded entries by key namespace prefix (comma-separated). Shorthand groups supported: - roles => [role, role.binding, perm.account, perm.role] - assets => [asset, `asset_def.total`] - `all_assets` => [asset, `asset_def.total`, `asset_def.detail`] - metadata => [account.detail, domain.detail, nft.detail, `asset_def.detail`] - `all_meta` => [account.detail, domain.detail, nft.detail, `asset_def.detail`] (alias of metadata) - perm | perms | permissions => [perm.account, perm.role] Examples: "assets,metadata", "roles", "account.detail,domain.detail". Applied only with --decode; prefixes match the human-readable key labels.
 
-   Matching on the identifier segment supports: - exact (e.g., `account.detail:soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ`) - partial substring (e.g., `account.detail:6cmzPVPX`) - glob wildcards `*` and `?` (e.g., `asset:rose#*#6cmz*`) - regex-like syntax `/.../` (treated as a glob pattern inside the slashes)
+   Matching on the identifier segment supports: - exact (e.g., `account.detail:sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB`) - partial substring (e.g., `account.detail:6cmzPVPX`) - glob wildcards `*` and `?` (e.g., `asset:rose#*#6cmz*`) - regex-like syntax `/.../` (treated as a glob pattern inside the slashes)
 * `--fastpq-batches` — Include FASTPQ transition batches recorded in the witness when decoding (enabled by default)
 
   Default value: `true`

@@ -19,7 +19,7 @@ Il s'agit d'un NFT proche de la réalité : il s'agit d'une source de revenus e
 
 ## جولة دفتر الأستاذ
 
-- Il s'agit d'un NFT (`n0#wonderland`) ou d'un lien vers un service client. (`soraカタカナ...`, `soraカタカナ...`).
+- Il s'agit d'un NFT (`n0#wonderland`) ou d'un lien vers un service client. (`<katakana-i105-account-id>`, `<katakana-i105-account-id>`).
 - Il s'agit d'un `nft_issue_and_transfer` pour NFT et d'Alice et Bob et d'un proche.
 - Utilisez le logiciel NFT `iroha_cli ledger nfts list --account <id>` pour utiliser le SDK pour votre recherche. تنفيذ تعليمة الحرق.
 
@@ -35,11 +35,11 @@ Il s'agit d'un NFT proche de la réalité : il s'agit d'une source de revenus e
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
 seiyaku NftFlow {
   kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
-    let owner = account!("soraカタカナ...");
+    let owner = account!("<katakana-i105-account-id>");
     let nft = nft_id!("n0$wonderland");
     nft_mint_asset(nft, owner);
 
-    let to = account!("soraカタカナ...");
+    let to = account!("<katakana-i105-account-id>");
     nft_transfer_asset(owner, nft, to);
     nft_set_metadata(nft, json!{ issued: "demo" });
     nft_burn_asset(nft);

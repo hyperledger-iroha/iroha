@@ -377,7 +377,7 @@ Content-Type: application/json
 POST /governance/referenda/{id}/vote
 Content-Type: application/json
 
-{ "voter": "soraカタカナ...", "conviction": 2, "choice": "Aye" }
+{ "voter": "<katakana-i105-account-id>", "conviction": 2, "choice": "Aye" }
 ```
 
 - Query enactments (shows execution windows)
@@ -1109,7 +1109,7 @@ BridgeEventFilter {
 {
   "src_chain": "iroha-mainnet",
   "dst_chain": "evm-eth",
-  "payload": { "Mint": { "asset": "wBTC#btc", "to": "soraカタカナ...", "amount": "100000" } },
+  "payload": { "Mint": { "asset": "wBTC#btc", "to": "<katakana-i105-account-id>", "amount": "100000" } },
   "inclusion_path": "0x...",
   "header_hash": "0x..."
 }

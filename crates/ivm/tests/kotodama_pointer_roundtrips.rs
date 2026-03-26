@@ -18,7 +18,7 @@ fn roundtrip_nft_mint_asset() {
         fn main() {
           nft_mint_asset(
             nft_id("rose:uuid:0123$wonderland"),
-            account_id("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ")
+            account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB")
           );
         }
     "#;
@@ -40,8 +40,8 @@ fn roundtrip_transfer_asset() {
     let src = r#"
         fn main() {
           transfer_asset(
-            account_id("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"),
-            account_id("soraゴヂアヌピッツユチョジジカデラリヒュキウズツワキャヒャキャヴセヸタゾネゴビリウチョヨチャェペチュヷシュミアソシクテ"),
+            account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"),
+            account_id("sorauロ1PヲヤJdミww6ニfgセ73xJkコモコタEソGzQuトg3ミeユウカメレサY1FC8K"),
             asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
             1
           );
@@ -64,7 +64,7 @@ fn roundtrip_nft_burn_asset() {
 fn roundtrip_nft_mint_asset_accepts_runtime_owner() {
     let src = r#"
         fn main() {
-          let owner = account_id("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ");
+          let owner = account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB");
           nft_mint_asset(
             nft_id("rose:uuid:0123$wonderland"),
             owner
@@ -78,8 +78,8 @@ fn roundtrip_nft_mint_asset_accepts_runtime_owner() {
 fn roundtrip_nft_transfer_asset_accepts_runtime_from() {
     let src = r#"
         fn main() {
-          let from = account_id("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ");
-          let to = account_id("soraゴヂアヌピッツユチョジジカデラリヒュキウズツワキャヒャキャヴセヸタゾネゴビリウチョヨチャェペチュヷシュミアソシクテ");
+          let from = account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB");
+          let to = account_id("sorauロ1PヲヤJdミww6ニfgセ73xJkコモコタEソGzQuトg3ミeユウカメレサY1FC8K");
           let nft = nft_id("rose:uuid:bead$wonderland");
           nft_transfer_asset(from, nft, to);
         }

@@ -21,7 +21,7 @@ slug：/norito/examples/nft-flow
 
 ## 账本演练
 
-- 确保 NFT 定义（例如 `n0#wonderland`）与代码段中使用的所有者/接收者帐户（`soraカタカナ...`、`soraカタカナ...`）一起存在。
+- 确保 NFT 定义（例如 `n0#wonderland`）与代码段中使用的所有者/接收者帐户（`<katakana-i105-account-id>`、`<katakana-i105-account-id>`）一起存在。
 - 调用 `nft_issue_and_transfer` 入口点来铸造 NFT，将其从 Alice 转移到 Bob，并附加描述发行的元数据标志。
 - 使用 `iroha_cli ledger nfts list --account <id>` 或 SDK 等效项检查 NFT 账本状态以验证传输，然后在刻录指令运行后确认资产已被删除。
 
@@ -37,11 +37,11 @@ slug：/norito/examples/nft-flow
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
 seiyaku NftFlow {
   kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
-    let owner = account!("soraカタカナ...");
+    let owner = account!("<katakana-i105-account-id>");
     let nft = nft_id!("n0$wonderland");
     nft_mint_asset(nft, owner);
 
-    let to = account!("soraカタカナ...");
+    let to = account!("<katakana-i105-account-id>");
     nft_transfer_asset(owner, nft, to);
     nft_set_metadata(nft, json!{ issued: "demo" });
     nft_burn_asset(nft);

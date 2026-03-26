@@ -26,7 +26,7 @@ final class ConnectEventsTests: XCTestCase {
             "quantity": "1"
         ]
         let json: [String: Any] = [
-            "account_id": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+            "account_id": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
             "assets": [asset],
             "last_updated_ms": 1.25
         ]

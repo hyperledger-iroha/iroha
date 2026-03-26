@@ -316,7 +316,7 @@ iroha app zk attachments cleanup --content-type application/json --before-ms 172
 Shield public funds (append a shielded note commitment):
 
 ```
-iroha app zk shield --asset <base58-asset-definition-id> --from <i105-account-id> \
+iroha app zk shield --asset <base58-asset-definition-id> --from <katakana-i105-account-id> \
   --amount 1000 --note-commitment 0123ABCD0123ABCD0123ABCD0123ABCD0123ABCD0123ABCD0123ABCD0123ABCD
 ```
 
@@ -346,7 +346,7 @@ cat > fuzz/attachments/zk/unshield_proof.sample.json <<'JSON'
 }
 JSON
 
-iroha app zk unshield --asset <base58-asset-definition-id> --to <i105-account-id> --amount 1000 \
+iroha app zk unshield --asset <base58-asset-definition-id> --to <katakana-i105-account-id> --amount 1000 \
   --inputs DEADBEEF...CAFE,0123ABCD...ABCD --proof-json fuzz/attachments/zk/unshield_proof.sample.json
 
 ### Register a ZK-capable asset (Hybrid)
@@ -510,7 +510,7 @@ To create an account, specify the entity type (`account`) and the command (`regi
 
 ```bash
 iroha ledger account register \
-  --id "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ" \
+  --id "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE" \
   --domain "Soramitsu"
 ```
 

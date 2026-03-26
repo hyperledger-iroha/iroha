@@ -26,8 +26,8 @@ translation_last_reviewed: 2026-02-07
 IP الدليل، استبدل `$ADMIN_ACCOUNT` و `$RECEIVER_ACCOUNT` بمعرفات الحساب التي تخطط لاستخدامها. تتضمن ـ الحزمة الافتراضية بالفعل حسابين مشتقين من مفاتيح العرض:
 
 ```sh
-export ADMIN_ACCOUNT="soraカタカナ..."
-export RECEIVER_ACCOUNT="soraカタカナ..."
+export ADMIN_ACCOUNT="<katakana-i105-account-id>"
+export RECEIVER_ACCOUNT="<katakana-i105-account-id>"
 ```
 
 قيم القيم عبر سرد اولى آت:

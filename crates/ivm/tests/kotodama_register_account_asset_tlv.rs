@@ -11,10 +11,10 @@ fn kotodama_register_account_and_unregister_asset() {
     let src = r#"
         fn main() {
           register_domain(domain("default"));
-          register_account(account_id("soraゴヂアヌゾセヤョムワラタヅアヷケチョヹノチャスコゴマニョゼッォォウヘリコョエボヵホトカレマシセミスシホ"));
+          register_account(account_id("sorauロ1PzEcクZkfGハ1レ9ミツRユDAuXヒyヤヰヰ3VgAク4ヌケWL6iXCEYDCW"));
           register_asset("rose", "ROSE", 0, 1);
           unregister_asset(asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"));
-          unregister_account(account_id("soraゴヂアヌゾセヤョムワラタヅアヷケチョヹノチャスコゴマニョゼッォォウヘリコョエボヵホトカレマシセミスシホ"));
+          unregister_account(account_id("sorauロ1PzEcクZkfGハ1レ9ミツRユDAuXヒyヤヰヰ3VgAク4ヌケWL6iXCEYDCW"));
         }
     "#;
     let compiler = KotodamaCompiler::new();

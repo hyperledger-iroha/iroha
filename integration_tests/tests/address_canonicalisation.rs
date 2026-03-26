@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Roadmap ADDR-5 coverage ensuring Torii surfaces canonical I105 account IDs.
+//! Roadmap ADDR-5 coverage ensuring Torii surfaces canonical Katakana i105 account IDs.
 
 use std::{
     collections::BTreeSet,
@@ -827,7 +827,7 @@ async fn accounts_listing_emits_i105_identifiers() -> Result<()> {
     );
     assert!(
         ids.iter().all(|id| !id.contains('@')),
-        "account listing should emit canonical I105 strings"
+        "account listing should emit canonical Katakana i105 strings"
     );
 
     Ok(())
@@ -1011,7 +1011,7 @@ async fn accounts_listing_supports_i105_response() -> Result<()> {
     );
     for id in &ids {
         AccountId::parse_encoded(id)
-            .wrap_err_with(|| format!("account id {id} should parse as canonical I105"))?;
+            .wrap_err_with(|| format!("account id {id} should parse as canonical Katakana i105"))?;
     }
 
     Ok(())
@@ -1266,7 +1266,7 @@ async fn asset_holders_get_supports_i105_response() -> Result<()> {
     );
     for id in &ids {
         AccountId::parse_encoded(id)
-            .wrap_err_with(|| format!("holder id {id} should parse as canonical I105"))?;
+            .wrap_err_with(|| format!("holder id {id} should parse as canonical Katakana i105"))?;
     }
 
     Ok(())

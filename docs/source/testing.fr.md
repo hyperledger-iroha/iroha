@@ -28,7 +28,7 @@ Ce guide explique comment reproduire des scenarios d integration, quelle infrast
        "chain" : "testnet",
        "peers" : ["127.0.0.1:1337"],
        "accounts" : [{
-           "id" : "soraカタカナ...",
+           "id" : "<katakana-i105-account-id>",
            "public_key" : "ed0120..."
        }]
    }))?;

@@ -55,7 +55,7 @@ node javascript/iroha_js/recipes/governance.mjs
 
 # Submit + fetch using live credentials.
 TORII_URL=https://torii.testnet.sora \
-AUTHORITY=soraカタカナ... \
+AUTHORITY=<katakana-i105-account-id> \
 PRIVATE_KEY_HEX="$(cat ~/.iroha/keys/alice.key)" \
 CHAIN_ID=7f2c...-prod \
 GOV_SUBMIT=1 GOV_FETCH=1 \
@@ -173,7 +173,7 @@ console.log(proposal?.kind, proposal?.status);
 འོག་ལུ་སྟོན་ཡོད་མི་ པི་ཨོ་ཨེསི་ཊི་གྲོགས་རམ་རེ་རེ་གི་དོན་ལུ་ གདམ་ཁ་ཅན་གྱི་ `{ signal }` དངོས་པོ་ཅིག་ དང་ལེན་འབདཝ་ཨིན།
 
 ```ts
-const authority = "soraカタカナ...";
+const authority = "<katakana-i105-account-id>";
 const privateKey = Buffer.alloc(32, 0xaa);
 
 // All governance writes accept optional `{ signal }` options for cancellation.
@@ -202,7 +202,7 @@ if (!ballot.accepted) {
   console.warn("ballot rejected", ballot.reason);
 }
 
-const zkOwner = "soraカタカナ..."; // canonical Katakana i105 account id for ZK public inputs
+const zkOwner = "<katakana-i105-account-id>"; // canonical Katakana i105 account id for ZK public inputs
 await torii.governanceSubmitZkBallot({
   authority,
   chainId: "00000000-0000-0000-0000-000000000000",
@@ -230,7 +230,7 @@ const derived = await torii.governanceDeriveCouncilVrf({
   committeeSize: 2,
   candidates: [
     {
-      accountId: "soraカタカナ...",
+      accountId: "<katakana-i105-account-id>",
       variant: "Normal",
       pk: validatorPk,
       proof: validatorProof,
@@ -277,9 +277,9 @@ const settlement = buildPacs008Message({
   instigatingAgent: { bic: "DEUTDEFF", lei: "529900ODI3047E2LIV03" },
   instructedAgent: { bic: "COBADEFF" },
   debtorAccount: { iban: "DE89370400440532013000" },
-  creditorAccount: { otherId: "soraカタカナ..." },
+  creditorAccount: { otherId: "<katakana-i105-account-id>" },
   purposeCode: "SECU",
-  supplementaryData: { account_id: "soraカタカナ...", leg: "delivery" },
+  supplementaryData: { account_id: "<katakana-i105-account-id>", leg: "delivery" },
 });
 ```
 

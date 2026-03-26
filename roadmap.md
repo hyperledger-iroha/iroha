@@ -2,6 +2,57 @@
 
 Last updated: 2026-03-26
 
+Latest sync (2026-03-26 Swift account-address bridge fallback without `NoritoBridge.xcframework`):
+`IrohaSwift/Sources/IrohaSwift/NativeBridge.swift`
+now carries the remaining Swift-side account-address bridge cleanup:
+
+- the bridge-style account-address API now falls back to the pure-Swift codec
+  when the native xcframework symbols are unavailable, instead of reporting the
+  codec as missing;
+- `parseAccountAddress(...)` and `renderAccountAddress(...)` still prefer the
+  native bridge when present, but the test and wrapper surface no longer depend
+  on `dist/NoritoBridge.xcframework` for account-address coverage; and
+- the focused Swift fixture parity test now executes instead of skipping on a
+  missing local bridge archive.
+
+Validation:
+- `cd IrohaSwift && swift test --filter AccountAddressTests`
+
+Open work for this slice now remains:
+- no additional Swift account-address bridge shim is known after the fallback
+  path and focused test rerun.
+
+Latest sync (2026-03-26 stale ASCII-corrupted / unsupported-kana account-literal sweep):
+`fixtures/account/address_vectors.json`,
+`javascript/iroha_js/test/{address,address_inspect}.test.js`,
+`javascript/iroha_js/dist/address.js`,
+`java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java`,
+`kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/address/AccountAddressTest.kt`,
+`IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift`,
+`python/iroha_python/README.md`,
+`docs/source/data_model*.md`,
+and
+`crates/ivm/docs/kotodama_grammar.md`
+now carry the remaining first-party account-literal cleanup:
+
+- stale ASCII-corrupted examples and bogus unsupported-kana placeholders were
+  replaced with canonical katakana-I105 account ids;
+- the shared address fixture now re-encodes every positive I105 vector from
+  canonical bytes, which removes the last stale multisig checksum drift; and
+- the checked-in JS `dist` bundle was rebuilt so the published package matches
+  the current Base58-plus-Iroha-poem alphabet from source.
+
+Validation:
+- `cd javascript/iroha_js && IROHA_JS_DISABLE_NATIVE=1 node --test test/address.test.js test/address_inspect.test.js`
+- `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.address.AccountAddressTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --rerun-tasks`
+- `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.address.AccountAddressTest --console=plain`
+- `cd IrohaSwift && swift test --filter AccountAddressTests`
+- targeted `rg` sweeps for the retired stale-account-literal patterns across first-party source/docs/fixtures
+
+Open work for this slice now remains:
+- no additional first-party stale account-literal drift is known after the
+  repo-wide sweep and focused SDK fixture/test reruns.
+
 Latest sync (2026-03-26 identifier doc/spec/validation alignment):
 `docs/source/data_model.md`,
 `docs/source/data_model_and_isi_spec*.md`,
@@ -13,14 +64,14 @@ now carry the remaining public identifier wording cleanup:
 - public docs now distinguish canonical Base58 `AssetDefinitionId` values from
   owner-qualified `AssetId` holdings;
 - translated/generated spec copies and JS validation guides now require
-  `<base58-asset-definition-id>#<canonical-katakana-i105-account-id>[#dataspace:<id>]`
+  `<base58-asset-definition-id>#<canonical-i105-account-id>[#dataspace:<id>]`
   wherever they describe asset identifiers; and
-- the Swift README examples now use the same canonical Katakana-i105 account
+- the Swift README examples now use the same canonical I105 account
   placeholder in `assetId` examples.
 
 Validation:
 - targeted `rg` sweeps over `docs/source/data_model*.md`, `docs/source/data_model_and_isi_spec*.md`, `docs/source/sdk/js/validation*.md`, and `IrohaSwift/README.md`
-- `rg -n -F '<canonical-base58-asset-definition-id>#<canonical-katakana-i105-account-id>' docs/source IrohaSwift/README.md`
+- `rg -n -F '<canonical-base58-asset-definition-id>#<canonical-i105-account-id>' docs/source IrohaSwift/README.md`
 
 Open work for this slice now remains:
 - no additional public/docs identifier drift is known after the targeted
@@ -38,9 +89,9 @@ and
 `python/iroha_python/iroha_python_rs/src/lib.rs`
 now carry the broader Python SDK validation follow-up:
 
-- the Python i105 decoder now tokenizes the Katakana alphabet greedily by
-  symbol, which fixes checksum/roundtrip failures for literals containing
-  multi-symbol entries such as `キョ` and `チャ`;
+- the Python I105 helpers now validate the restored mixed alphabet directly:
+  Base58 plus the 47 katakana from the Iroha poem, with halfwidth Iroha-kana
+  aliases still accepted on decode;
 - the governance ZK ballot owner-normalization path now accepts canonical
   Python-generated i105 literals again;
 - the broader Python Torii RWA read surface remains green under the full
@@ -117,7 +168,7 @@ and
 `docs/account_structure_sdk_alignment.md`
 now carry the stricter first-release identifier contract:
 
-- canonical account ids are Katakana i105 only, with the legacy public decoder
+- canonical account ids are I105 only, with the legacy public decoder
   alphabets removed across the core codecs and SDK helpers;
 - account aliases remain on-chain aliases in `name@domain.dataspace` /
   `name@dataspace` form, and the CLI validator now enforces that syntax
@@ -146,7 +197,7 @@ and
 `crates/iroha_torii/src/openapi.rs`
 now carry the next account-selector cleanup slice:
 
-- strict `AccountId` parsing still accepts only canonical Katakana i105
+- strict `AccountId` parsing still accepts only canonical I105
   literals, but the world/state-backed selector layer now resolves on-chain
   account aliases in `name@domain.dataspace` / `name@dataspace` form against
   the live dataspace catalog;
@@ -9359,7 +9410,7 @@ This appendix tracks open TODO markers discovered in the repository. Items are g
 
 ## Asset ID Follow-up
 1. Completed: `AssetDefinitionId::from_str` and the public Rust selectors are Base58-only, the last checked-in capability fixtures were migrated from `aid:<hex>` to canonical Base58 addresses, and the remaining `aid:` literals in-tree are deliberate negative tests.
-2. Completed: the remaining public `norito:<hex>` `AssetId` helpers/examples in Swift offline encoding/decoding, Torii client parsing, bridge/docs wording, and Android/JVM transfer helpers were removed so the first release exposes a single canonical owner-qualified asset-holding form: `<base58-asset-definition-id>#<katakana-i105-account-id>` with optional `#dataspace:<id>` for scoped balances.
+2. Completed: the remaining public `norito:<hex>` `AssetId` helpers/examples in Swift offline encoding/decoding, Torii client parsing, bridge/docs wording, and Android/JVM transfer helpers were removed so the first release exposes a single canonical owner-qualified asset-holding form: `<base58-asset-definition-id>#<i105-account-id>` with optional `#dataspace:<id>` for scoped balances.
 3. Completed: translated data-model docs, Swift SDK docs/examples, Swift client references, and JS Torii typings/JSDoc no longer describe legacy `aid:` literals or the old `name#domain.dataspace`-predecessor alias grammar.
 4. Completed: the dead `xtask` `rewrite-legacy-asset-literals` bin target and the old `asset_def:` access-hint compatibility path were removed, so workspace tooling and access hints no longer rely on any first-release asset-id compatibility shim.
 5. Completed: alias-hostile config/runtime selectors are now closed too; Torii faucet, ISO 20022 currency bindings, Nexus fee charging, and Nexus staking/slash flows resolve canonical Base58 ids or active on-chain asset aliases against world state, while non-alias-aware typed examples/tests now use canonical Base58 literals.

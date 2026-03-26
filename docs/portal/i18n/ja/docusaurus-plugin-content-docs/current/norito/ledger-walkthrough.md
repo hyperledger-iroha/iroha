@@ -21,8 +21,8 @@ slug: /norito/ledger-walkthrough
 ガイド全体で `$ADMIN_ACCOUNT` と `$RECEIVER_ACCOUNT` を使用するアカウント ID に置き換えてください。デフォルトの bundle にはデモ鍵由来の 2 つのアカウントが含まれています:
 
 ```sh
-export ADMIN_ACCOUNT="soraカタカナ..."
-export RECEIVER_ACCOUNT="soraカタカナ..."
+export ADMIN_ACCOUNT="<katakana-i105-account-id>"
+export RECEIVER_ACCOUNT="<katakana-i105-account-id>"
 ```
 
 最初のアカウントを一覧して値を確認します:

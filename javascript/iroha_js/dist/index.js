@@ -249,6 +249,7 @@ export {
   encodeInstruction,
   normalizeAccountId,
   normalizeAssetId,
+  normalizeAssetHoldingId,
   normalizeRwaId,
 } from "./instructionBuilders.js";
 export {

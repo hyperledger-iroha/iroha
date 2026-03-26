@@ -30,8 +30,8 @@ conta que voce planja usar. Le bundle padrao comprend deux éléments dérivés 
 chaves de démo:
 
 ```sh
-export ADMIN_ACCOUNT="soraカタカナ..."
-export RECEIVER_ACCOUNT="soraカタカナ..."
+export ADMIN_ACCOUNT="<katakana-i105-account-id>"
+export RECEIVER_ACCOUNT="<katakana-i105-account-id>"
 ```
 
 Confirmez les valeurs répertoriées comme les premiers contenants :

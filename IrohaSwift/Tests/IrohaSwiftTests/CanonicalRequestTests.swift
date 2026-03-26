@@ -24,16 +24,16 @@ final class CanonicalRequestTests: XCTestCase {
         let nonce = "swift-canonical-nonce"
         let message = try CanonicalRequest.signatureMessage(
             method: "get",
-            path: "/v1/accounts/soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ/assets",
+            path: "/v1/accounts/sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB/assets",
             query: "limit=1",
             body: Data("{\"foo\":1}".utf8),
             timestampMs: timestampMs,
             nonce: nonce
         )
         let headers = try CanonicalRequest.signingHeaders(
-            accountId: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+            accountId: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
             method: "get",
-            path: "/v1/accounts/soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ/assets",
+            path: "/v1/accounts/sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB/assets",
             query: "limit=1",
             body: Data("{\"foo\":1}".utf8),
             signer: signingKey,

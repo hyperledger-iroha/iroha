@@ -103,7 +103,7 @@ Esta seção documenta as formas TLV e as cargas JSON mínimas aceitas pelo host
     - JSON aceita a chave `"perms"` ou `"permissions"`, cada uma uma matriz de strings de nomes de permissão.
     - Exemplos:
       -`{ "perms": [ "mint_asset:rose#wonder" ] }`
-      -`{ "permissions": [ "read_assets:soraカタカナ...", "transfer_asset:rose#wonder" ] }`
+      -`{ "permissions": [ "read_assets:<katakana-i105-account-id>", "transfer_asset:rose#wonder" ] }`
     - Prefixos de nomes de permissão suportados na simulação:
       -`register_domain`, `register_account`, `register_asset_definition`
       -`read_assets:<account_id>`

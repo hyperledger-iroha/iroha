@@ -51,12 +51,12 @@ const DEFAULT_PUBLIC_KEY = hexToBytes(
   "641297079357229F295938A4B5A333DE35069BF47B9D0704E45805713D13C201",
 );
 const DEFAULT_PUBLIC_KEY_I105 =
-  "soraゴヂアヌオブマセキュチャタロリチャヷドチャョブセゲヴウヹキャイリコトキャチュヨラバクストリヒュヲシヘタフミチハオ";
+  "sorauロ1P5チXEエユGjgユレホユクチEtタ3ツコ2gALコメefヘ8DLgセoCVGUYHS5";
 const AMBIGUOUS_ED25519_PUBLIC_KEY = hexToBytes(
   "BC717326224E4B4119298E7B1DB8133CB27D6CDF6B3E04D75A6D27B29A34C1CF",
 );
 const AMBIGUOUS_ED25519_I105 =
-  "soraゴヂアヌプユドニャニョャニョユブゥワレボウュヒャメヌサネスヒダテガニャガュギィペジハネアヶァネフカアミキ";
+  "sorauロ1PワdホシヒノNクdチムkiヌ3オモaPBQDTイKqシqオrラカwSQ1フナQU61Y7";
 const INVALID_I105_CHAR_LITERAL = `${DEFAULT_PUBLIC_KEY_I105.slice(0, -1)}!`;
 const ALT_PUBLIC_KEY = hexToBytes(
   "3B77A042F1DE02F6D5F418F36A20FD68C8329FE3BBFBECD26A2D72878CD827F8",
@@ -199,7 +199,7 @@ test("account address golden vectors round-trip", () => {
   );
 });
 
-test("decodeI105AccountAddress accepts live canonical Katakana i105 literals", () => {
+test("decodeI105AccountAddress accepts live canonical I105 literals", () => {
   const address = AccountAddress.fromAccount({ publicKey: DEFAULT_PUBLIC_KEY,
   });
   const decoded = decodeI105AccountAddress(DEFAULT_PUBLIC_KEY_I105, {
@@ -210,7 +210,7 @@ test("decodeI105AccountAddress accepts live canonical Katakana i105 literals", (
   assert.equal(parsed.toI105(), DEFAULT_PUBLIC_KEY_I105);
 });
 
-test("ambiguous canonical Katakana i105 literals round-trip to the original ed25519 payload", () => {
+test("mixed canonical I105 literals round-trip to the original ed25519 payload", () => {
   const address = AccountAddress.fromAccount({ publicKey: AMBIGUOUS_ED25519_PUBLIC_KEY,
   });
   assert.equal(address.canonicalHex(), "0x02000120bc717326224e4b4119298e7b1db8133cb27d6cdf6b3e04d75a6d27b29a34c1cf");

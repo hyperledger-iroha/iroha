@@ -30,8 +30,8 @@ slug: /norito/ledger-walkthrough
 ID аккаунтов. В дефолтном bundle уже есть два аккаунта, полученных из demo-ключей:
 
 ```sh
-export ADMIN_ACCOUNT="soraカタカナ..."
-export RECEIVER_ACCOUNT="soraカタカナ..."
+export ADMIN_ACCOUNT="<katakana-i105-account-id>"
+export RECEIVER_ACCOUNT="<katakana-i105-account-id>"
 ```
 
 Подтвердите значения, выведя первые аккаунты:

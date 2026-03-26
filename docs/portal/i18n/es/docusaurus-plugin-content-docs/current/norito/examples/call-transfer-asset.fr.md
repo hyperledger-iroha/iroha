@@ -19,9 +19,9 @@ Démontre comment un punto de entrada Kotodama puede llamar a la instrucción de
 
 ## Rutas del registro
 
-- Approvisionnez l'autorité du contrat (por ejemplo `soraカタカナ...`) avec l'actif qu'elle transférera et Accordez-lui le rôle `CanTransfer` ou un permiso équivalente.
-- Toque el punto de entrada `call_transfer_asset` para transferir 5 unidades de la cuenta del contrato frente a `soraカタカナ...`, para reflejar la manera en que la automatización en cadena puede encapsular las llamadas telefónicas.
-- Verifique las ventas a través de `FindAccountAssets` o `iroha_cli ledger assets list --account soraカタカナ...` e inspeccione los eventos para confirmar que la guardia de métadonnées a periodisé le contexte du transfert.
+- Approvisionnez l'autorité du contrat (por ejemplo `<katakana-i105-account-id>`) avec l'actif qu'elle transférera et Accordez-lui le rôle `CanTransfer` ou un permiso équivalente.
+- Toque el punto de entrada `call_transfer_asset` para transferir 5 unidades de la cuenta del contrato frente a `<katakana-i105-account-id>`, para reflejar la manera en que la automatización en cadena puede encapsular las llamadas telefónicas.
+- Verifique las ventas a través de `FindAccountAssets` o `iroha_cli ledger assets list --account <katakana-i105-account-id>` e inspeccione los eventos para confirmar que la guardia de métadonnées a periodisé le contexte du transfert.
 
 ## Guías SDK asociadas
 
@@ -36,8 +36,8 @@ Démontre comment un punto de entrada Kotodama puede llamar a la instrucción de
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("soraカタカナ..."),
-      account!("soraカタカナ..."),
+      account!("<katakana-i105-account-id>"),
+      account!("<katakana-i105-account-id>"),
       asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );

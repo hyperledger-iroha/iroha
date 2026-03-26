@@ -103,7 +103,7 @@ Ushbu bo'lim testlarda ishlatiladigan administrator uslubidagi tizim qo'ng'iroql
     - JSON `"perms"` yoki `"permissions"` kalitlarini qabul qiladi, ularning har biri ruxsat nomlari qatori.
     - Misollar:
       - `{ "perms": [ "mint_asset:rose#wonder" ] }`
-      - `{ "permissions": [ "read_assets:soraカタカナ...", "transfer_asset:rose#wonder" ] }`
+      - `{ "permissions": [ "read_assets:<katakana-i105-account-id>", "transfer_asset:rose#wonder" ] }`
     - Soxtada qo'llab-quvvatlanadigan ruxsat nomi prefikslari:
       - `register_domain`, `register_account`, `register_asset_definition`
       - `read_assets:<account_id>`

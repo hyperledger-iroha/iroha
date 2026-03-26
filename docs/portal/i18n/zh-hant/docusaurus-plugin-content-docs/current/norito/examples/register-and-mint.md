@@ -21,9 +21,9 @@ slug：/norito/examples/register-and-mint
 
 ## 賬本演練
 
-- 確保目標帳戶（例如 `soraカタカナ...`）存在，反映每個 SDK 快速入門中的設置階段。
+- 確保目標帳戶（例如 `<katakana-i105-account-id>`）存在，反映每個 SDK 快速入門中的設置階段。
 - 調用 `register_and_mint` 入口點來創建 ROSE 資產定義並在一筆交易中向 Alice 鑄造 250 個單位。
-- 通過`client.request(FindAccountAssets)`或`iroha_cli ledger asset list --account soraカタカナ...`驗證餘額以確認鑄幣成功。
+- 通過`client.request(FindAccountAssets)`或`iroha_cli ledger asset list --account <katakana-i105-account-id>`驗證餘額以確認鑄幣成功。
 
 ## 相關SDK指南
 
@@ -45,7 +45,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("soraカタカナ...");
+    let to = account!("<katakana-i105-account-id>");
     let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     mint_asset(to, asset, 250);
   }

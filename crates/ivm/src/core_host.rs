@@ -2098,7 +2098,8 @@ impl IVMHost for CoreHost {
             syscalls::SYSCALL_GET_AUTHORITY => {
                 // Return the domainless account subject so contracts can compare
                 // authority() against AccountId literals and stored AccountId state.
-                const ACCOUNT: &str = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
+                const ACCOUNT: &str =
+                    "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
                 let account =
                     ScopedAccountId::parse_encoded(ACCOUNT).map_err(|_| VMError::NoritoInvalid)?;
                 let authority = AccountId::from(&account);
@@ -2438,10 +2439,10 @@ mod tests {
     fn fastpq_batch_validates_transfer_entries() {
         let mut host = CoreHost::new();
         let mut vm = IVM::new(1_000);
-        let from_account = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
+        let from_account = "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
         let from = make_pointer_tlv(PointerType::AccountId, from_account.as_bytes());
         vm.memory.preload_input(0, &from).expect("preload from");
-        let to_account = "soraゴヂアニラショリャヒャャサピテヶベチュヲボヹヂギタクアニョロホドチャヘヱヤジヶハシャウンベニョャルフハケネキカ";
+        let to_account = "sorauロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76";
         let to = make_pointer_tlv(PointerType::AccountId, to_account.as_bytes());
         vm.memory
             .preload_input(from.len() as u64 + 8, &to)

@@ -18,12 +18,12 @@ import { makeNativeTest } from "./helpers/native.js";
 
 const BASE_URL = "http://localhost:8080";
 const AUTHORITY_ID_RAW =
-  "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ";
+  "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D";
 const AUTHORITY_ID = i105FromEd25519AccountId(AUTHORITY_ID_RAW);
 const AUTHORITY_ID_INPUT = i105FromEd25519AccountId(AUTHORITY_ID_RAW);
 const PRIVATE_KEY = Buffer.alloc(32, 0x11);
 const NEW_ACCOUNT_ID_RAW =
-  "soraゴヂアヌヴヷヸアバペグソダコラヒュヨサウヒョニュニュェヤゼヅゼヵアヹヺォォカヂォセコキョシャェポトヌニエマナ";
+  "sorauロ1Pタレソ1ヘカsFイAfセeB3スヱヱウcyハyケ1ツネヰヰ6ロヰEAテアウヨLPN4XM";
 const NEW_ACCOUNT_ID = i105FromEd25519AccountId(NEW_ACCOUNT_ID_RAW);
 const NEW_ACCOUNT_ID_INPUT = i105FromEd25519AccountId(NEW_ACCOUNT_ID_RAW);
 const REGISTER_ACCOUNT_DOMAIN_ID = "wonderland";
@@ -618,7 +618,7 @@ test("buildRegisterAccountAndTransferTransaction expands registration and transf
 test("buildRegisterAccountAndTransferTransaction supports transfer arrays", () => {
   const captures = [];
   const secondAccountIdRaw =
-    "soraゴヂアヌリャヴマポヱホシャヅショチャヺロショムポギァズダホッヴベミォバズキャヴキョヂヒョラポイタダクヌウトハナ";
+    "sorauロ1PgノタXヨnWアハキユネjキZヨrナxイWヤタリYヰヘxコタテロスfヨ2Gイ8P3LSM";
   const secondAccountId = i105FromEd25519AccountId(secondAccountIdRaw);
   withNativeBinding(
     {
@@ -916,7 +916,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction expands definition,
 test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer arrays", () => {
   const captures = [];
   const secondAccountIdRaw =
-    "soraゴヂアヌゴメニャパテイヸシャヒャシュニョャヵデュバヌヤニョキヶボキョペペザトヒャヒョゥヮクジゥュショピデシサクシニホ";
+    "sorauロ1PuaシルK2ソアモサヒノケニオヘPcヒ7フヌテカカvLモスムマ8wムオキヲニCB8CNW";
   const secondAccountId = i105FromEd25519AccountId(secondAccountIdRaw);
   const secondAccountIdInput = i105FromEd25519AccountId(secondAccountIdRaw);
   withNativeBinding(

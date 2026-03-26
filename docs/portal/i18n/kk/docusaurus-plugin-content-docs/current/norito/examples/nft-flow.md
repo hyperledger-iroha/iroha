@@ -21,7 +21,7 @@ NFT өмірлік циклінің соңына дейін жүреді: иес
 
 ## Бухгалтерлік кітапшаға шолу
 
-- NFT анықтамасының (мысалы, `n0#wonderland`) үзіндіде (`soraカタカナ...`, `soraカタカナ...`) пайдаланылған иесі/алушы тіркелгілерімен қатар бар екеніне көз жеткізіңіз.
+- NFT анықтамасының (мысалы, `n0#wonderland`) үзіндіде (`<katakana-i105-account-id>`, `<katakana-i105-account-id>`) пайдаланылған иесі/алушы тіркелгілерімен қатар бар екеніне көз жеткізіңіз.
 - NFT жасау үшін `nft_issue_and_transfer` кіру нүктесін шақырыңыз, оны Алисадан Бобқа тасымалдаңыз және шығарылымды сипаттайтын метадеректер жалауын тіркеңіз.
 - Тасымалдауды тексеру үшін `iroha_cli ledger nfts list --account <id>` немесе SDK баламалары арқылы NFT кітапшасының күйін тексеріңіз, содан кейін жазу нұсқауы орындалғаннан кейін актив жойылғанын растаңыз.
 
@@ -37,11 +37,11 @@ NFT өмірлік циклінің соңына дейін жүреді: иес
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
 seiyaku NftFlow {
   kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
-    let owner = account!("soraカタカナ...");
+    let owner = account!("<katakana-i105-account-id>");
     let nft = nft_id!("n0$wonderland");
     nft_mint_asset(nft, owner);
 
-    let to = account!("soraカタカナ...");
+    let to = account!("<katakana-i105-account-id>");
     nft_transfer_asset(owner, nft, to);
     nft_set_metadata(nft, json!{ issued: "demo" });
     nft_burn_asset(nft);

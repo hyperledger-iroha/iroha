@@ -10,7 +10,7 @@
  *   5. Persisting a council snapshot
  *
  * By default the script only prints the deterministic hashes. Set
- *   GOV_SUBMIT=1 TORII_URL=http://localhost:8080 AUTHORITY=soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ PRIVATE_KEY_HEX=...
+ *   GOV_SUBMIT=1 TORII_URL=http://localhost:8080 AUTHORITY=sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB PRIVATE_KEY_HEX=...
  * to submit them to a Torii node (requires the account to hold the relevant permissions).
  */
 import { Buffer } from "node:buffer";
@@ -30,7 +30,7 @@ const SHOULD_FETCH = process.env.GOV_FETCH === "1";
 const CHAIN_ID = process.env.CHAIN_ID ?? "00000000-0000-0000-0000-000000000000";
 const AUTHORITY =
   process.env.AUTHORITY ??
-  "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
+  "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
 const PRIVATE_KEY =
   process.env.PRIVATE_KEY_HEX != null
     ? Buffer.from(process.env.PRIVATE_KEY_HEX, "hex")

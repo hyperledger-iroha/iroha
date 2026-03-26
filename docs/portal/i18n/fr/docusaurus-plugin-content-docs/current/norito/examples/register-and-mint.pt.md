@@ -19,9 +19,9 @@ Démontrez la création de domaines avec autorisation, le registre des activité
 
 ## Roteiro do livro razão
 
-- Garantissez qu'un compte de destination (par exemple `soraカタカナ...`) existe, en particulier la phase de configuration dans chaque démarrage rapide du SDK.
+- Garantissez qu'un compte de destination (par exemple `<katakana-i105-account-id>`) existe, en particulier la phase de configuration dans chaque démarrage rapide du SDK.
 - Appelez le point d'entrée `register_and_mint` pour définir l'activité ROSE et obtenir 250 unités pour Alice dans une seule transaction.
-- Vérifiez les saldos via `client.request(FindAccountAssets)` ou `iroha_cli ledger assets list --account soraカタカナ...` pour confirmer que l'opération a été réussie.
+- Vérifiez les saldos via `client.request(FindAccountAssets)` ou `iroha_cli ledger assets list --account <katakana-i105-account-id>` pour confirmer que l'opération a été réussie.
 
 ## Guides des utilisateurs du SDK
 
@@ -43,7 +43,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("soraカタカナ...");
+    let to = account!("<katakana-i105-account-id>");
     let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     mint_asset(to, asset, 250);
   }

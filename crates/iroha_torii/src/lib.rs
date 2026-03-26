@@ -22360,7 +22360,7 @@ pub(crate) mod tests_runtime_handlers {
         World::with([domain], [account], [])
     }
 
-    #[cfg(all(feature = "app_api", feature = "push"))]
+    #[cfg(feature = "app_api")]
     pub(crate) fn bind_account_alias_for_test(
         app: &SharedAppState,
         account_id: &AccountId,
@@ -22381,13 +22381,12 @@ pub(crate) mod tests_runtime_handlers {
         );
         let mut block = app.state.block(header);
         let mut tx = block.transaction();
-        tx.world
-            .account_aliases
-            .insert(label.clone(), account_id.clone());
-        tx.world.account_rekey_records.insert(
-            label.clone(),
-            iroha_data_model::account::rekey::AccountRekeyRecord::new(label, account_id.clone()),
-        );
+        let bind = iroha_data_model::isi::domain_link::BindAccountAlias {
+            account: account_id.clone(),
+            label,
+        };
+        iroha_core::smartcontracts::Execute::execute(bind, account_id, &mut tx)
+            .expect("bind account alias for test");
         tx.apply();
         block.commit().expect("commit account alias for test");
     }
@@ -23545,7 +23544,8 @@ pub(crate) mod tests_runtime_handlers {
     #[cfg(all(feature = "app_api", feature = "push"))]
     fn mk_push_request(token: &str) -> push::RegisterDeviceRequest {
         push::RegisterDeviceRequest {
-            account_id: "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ".to_string(),
+            account_id: "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE"
+                .to_string(),
             platform: "FCM".to_string(),
             token: token.to_string(),
             topics: Some(vec!["orders".into()]),
@@ -23645,8 +23645,8 @@ pub(crate) mod tests_runtime_handlers {
         let canonical_account = AccountId::parse_encoded(&req.account_id)
             .expect("canonical test i105 should parse")
             .into_account_id();
-        bind_account_alias_for_test(&app, &canonical_account, "wallet@sbp");
-        req.account_id = "wallet@sbp".to_string();
+        bind_account_alias_for_test(&app, &canonical_account, "wallet@universal");
+        req.account_id = "wallet@universal".to_string();
 
         let resp = super::handler_push_register_device(State(app.clone()), NoritoJson(req)).await;
         assert_eq!(resp.status(), StatusCode::ACCEPTED);
@@ -28111,6 +28111,8 @@ mod tests {
     };
 
     use super::*;
+    #[cfg(feature = "app_api")]
+    use crate::tests_runtime_handlers::bind_account_alias_for_test;
     #[cfg(feature = "telemetry")]
     use crate::tests_runtime_handlers::mk_norito_rpc_test_harness;
     use crate::{
@@ -28535,7 +28537,10 @@ mod tests {
     fn normalize_tx_history_alias_preserves_on_chain_literals() {
         assert_eq!(normalize_tx_history_alias("operator1@hbl"), "operator1@hbl");
         assert_eq!(normalize_tx_history_alias("operator2@ubl"), "operator2@ubl");
-        assert_eq!(normalize_tx_history_alias("banking@sbp"), "banking@sbp");
+        assert_eq!(
+            normalize_tx_history_alias("banking@universal"),
+            "banking@universal"
+        );
         assert_eq!(
             normalize_tx_history_alias("operator1@hbl.dataspace"),
             "operator1@hbl.dataspace"
@@ -28554,8 +28559,8 @@ mod tests {
             vec!["operator2@ubl".to_string()]
         );
         assert_eq!(
-            tx_history_subject_alias_candidates("banking", "sbp"),
-            vec!["banking@sbp".to_string()]
+            tx_history_subject_alias_candidates("banking", "universal"),
+            vec!["banking@universal".to_string()]
         );
     }
 
@@ -28740,7 +28745,8 @@ mod tests {
         RepairReportV1 {
             version: REPAIR_REPORT_VERSION_V1,
             ticket_id: RepairTicketId(ticket.to_string()),
-            auditor_account: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ".into(),
+            auditor_account:
+                "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB".into(),
             submitted_at_unix,
             evidence: RepairEvidenceV1 {
                 version: REPAIR_EVIDENCE_VERSION_V1,
@@ -28914,7 +28920,7 @@ mod tests {
         let worker_key = KeyPair::random();
         let worker_id = AccountId::new(worker_key.public_key().clone());
         grant_repair_worker_permission(&app, &worker_id, report.evidence.provider_id);
-        bind_account_alias_for_test(&app, &worker_id, "repair@sbp");
+        bind_account_alias_for_test(&app, &worker_id, "repair@universal");
 
         let claimed_at = report.submitted_at_unix + 10;
         let idempotency_key = "claim-900a";
@@ -28923,7 +28929,7 @@ mod tests {
             ticket_id: report.ticket_id.clone(),
             manifest_digest: report.evidence.manifest_digest,
             provider_id: report.evidence.provider_id,
-            worker_id: "repair@sbp".to_string(),
+            worker_id: "repair@universal".to_string(),
             idempotency_key: idempotency_key.to_string(),
             action: RepairWorkerActionV1::Claim {
                 claimed_at_unix: claimed_at,
@@ -28935,7 +28941,7 @@ mod tests {
             &app,
             &report.ticket_id,
             &hex::encode(report.evidence.manifest_digest),
-            "repair@sbp",
+            "repair@universal",
             idempotency_key,
             RepairWorkerActionV1::Claim {
                 claimed_at_unix: claimed_at,

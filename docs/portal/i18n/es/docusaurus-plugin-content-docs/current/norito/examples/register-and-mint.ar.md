@@ -19,9 +19,9 @@ fuente: crates/ivm/docs/examples/13_register_and_mint.ko
 
 ## جولة دفتر الأستاذ
 
-- تأكد من وجود حساب الوجهة (مثل `soraカタカナ...`) بما يعكس مرحلة الإعداد في كل بدء سريع للـ SDK.
+- تأكد من وجود حساب الوجهة (مثل `<katakana-i105-account-id>`) بما يعكس مرحلة الإعداد في كل بدء سريع للـ SDK.
 - Para el hogar `register_and_mint`, coloque el ROSE y el 250 y el aire acondicionado.
-- Haga clic en el botón `client.request(FindAccountAssets)` y `iroha_cli ledger assets list --account soraカタカナ...`.
+- Haga clic en el botón `client.request(FindAccountAssets)` y `iroha_cli ledger assets list --account <katakana-i105-account-id>`.
 
 ## أدلة SDK ذات صلة
 
@@ -43,7 +43,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("soraカタカナ...");
+    let to = account!("<katakana-i105-account-id>");
     let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     mint_asset(to, asset, 250);
   }

@@ -30,8 +30,8 @@ conta que voce planeja usar. O צרור padrao ja inclui duas contas derivadas d
 chaves demo:
 
 ```sh
-export ADMIN_ACCOUNT="soraカタカナ..."
-export RECEIVER_ACCOUNT="soraカタカナ..."
+export ADMIN_ACCOUNT="<katakana-i105-account-id>"
+export RECEIVER_ACCOUNT="<katakana-i105-account-id>"
 ```
 
 אשר את os valores listando בתור נקודות ראשונות:

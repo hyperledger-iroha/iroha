@@ -73,9 +73,9 @@ Voici le manifeste agrégé du script :
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "soraカタカナ...",
+      "owner": "<katakana-i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"soraカタカナ...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<katakana-i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -84,7 +84,7 @@ Voici le manifeste agrégé du script :
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"soraカタカナ...",
+        "payer":"<katakana-i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -237,7 +237,7 @@ filtre les auditeurs et l'exécution CSV pour les exercices
   références emplacement CSV et résolution relative ہوتی ہیں۔ Métadonnées non-objet
   erreur de validation دیتا ہے۔
 - **Contrôleurs :** Cellules `--default-controllers` et Honor Honor non-propriétaire
-  acteurs et délégués et listes de contrôleurs explicites (`soraカタカナ...;soraカタカナ...`)
+  acteurs et délégués et listes de contrôleurs explicites (`<katakana-i105-account-id>;<katakana-i105-account-id>`)
 
 Numéros de ligne contextuels des échecs rapport de rapport ہوتے ہیں (مثال
 `error: row 12 term_years must be between 1 and 255`). Erreurs de validation de script ici

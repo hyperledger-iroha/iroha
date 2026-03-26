@@ -19,9 +19,9 @@ translation_last_reviewed: 2026-02-07
 
 ## Roteiro do livro razao
 
-- تمويل التفويض التعاقدي (على سبيل المثال `soraカタカナ...`) من خلال القيام بنقل والتنازل عن التفويض أو الورق `CanTransfer` أو السماح بما يعادل ذلك.
-- اسم نقطة الدخول `call_transfer_asset` لنقل 5 وحدات من عقد الحساب لـ `soraカタカナ...`، كما يمكن أن يشمل الاتصال التلقائي على السلسلة مكالمات المضيف.
-- التحقق من البيانات عبر `FindAccountAssets` أو `iroha_cli ledger assets list --account soraカタカナ...` وفحص الأحداث للتأكد من أن حارس التعريفات يسجل سياق النقل.
+- تمويل التفويض التعاقدي (على سبيل المثال `<katakana-i105-account-id>`) من خلال القيام بنقل والتنازل عن التفويض أو الورق `CanTransfer` أو السماح بما يعادل ذلك.
+- اسم نقطة الدخول `call_transfer_asset` لنقل 5 وحدات من عقد الحساب لـ `<katakana-i105-account-id>`، كما يمكن أن يشمل الاتصال التلقائي على السلسلة مكالمات المضيف.
+- التحقق من البيانات عبر `FindAccountAssets` أو `iroha_cli ledger assets list --account <katakana-i105-account-id>` وفحص الأحداث للتأكد من أن حارس التعريفات يسجل سياق النقل.
 
 ## أدلة SDK ذات الصلة
 
@@ -36,8 +36,8 @@ translation_last_reviewed: 2026-02-07
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("soraカタカナ..."),
-      account!("soraカタカナ..."),
+      account!("<katakana-i105-account-id>"),
+      account!("<katakana-i105-account-id>"),
       asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );

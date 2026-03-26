@@ -19,9 +19,9 @@ Demuestra cómo un punto de entrada de Kotodama puede llamar a la instrucción d
 
 ## Recorrido del libro mayor
 
-- Fondea la autoridad del contrato (por ejemplo `soraカタカナ...`) con el activo que transferirá y otórgale el rol `CanTransfer` o un permiso equivalente.
-- Llama al punto de entrada `call_transfer_asset` para transferir 5 unidades desde la cuenta del contrato a `soraカタカナ...`, reflejando la forma en que la automatización on-chain puede involucrar llamadas del host.
-- Verifica los saldos mediante `FindAccountAssets` o `iroha_cli ledger assets list --account soraカタカナ...` e inspecciona los eventos para confirmar que la guardia de metadatos registró el contexto de la transferencia.
+- Fondea la autoridad del contrato (por ejemplo `<katakana-i105-account-id>`) con el activo que transferirá y otórgale el rol `CanTransfer` o un permiso equivalente.
+- Llama al punto de entrada `call_transfer_asset` para transferir 5 unidades desde la cuenta del contrato a `<katakana-i105-account-id>`, reflejando la forma en que la automatización on-chain puede involucrar llamadas del host.
+- Verifica los saldos mediante `FindAccountAssets` o `iroha_cli ledger assets list --account <katakana-i105-account-id>` e inspecciona los eventos para confirmar que la guardia de metadatos registró el contexto de la transferencia.
 
 ## Guías de SDK relacionadas
 
@@ -36,8 +36,8 @@ Demuestra cómo un punto de entrada de Kotodama puede llamar a la instrucción d
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("soraカタカナ..."),
-      account!("soraカタカナ..."),
+      account!("<katakana-i105-account-id>"),
+      account!("<katakana-i105-account-id>"),
       asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );

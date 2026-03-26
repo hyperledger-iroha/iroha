@@ -78,9 +78,9 @@ En cas de succes le script ecrit un manifeste agrege:
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "soraカタカナ...",
+      "owner": "<katakana-i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"soraカタカナ...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<katakana-i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -89,7 +89,7 @@ En cas de succes le script ecrit un manifeste agrege:
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"soraカタカナ...",
+        "payer":"<katakana-i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -254,7 +254,7 @@ auditeurs puissent se concentrer sur une seule execution CSV.
   references a des fichiers sont resolues relativement a l'emplacement du CSV.
   Les metadata non-objet produisent une erreur de validation.
 - **Controllers:** les cellules vides respectent `--default-controllers`. Fournissez
-  des listes explicites (par exemple `soraカタカナ...;soraカタカナ...`) quand vous deleguez a des
+  des listes explicites (par exemple `<katakana-i105-account-id>;<katakana-i105-account-id>`) quand vous deleguez a des
   acteurs non owner.
 
 Les echecs sont signales avec des numeros de ligne contextuels (par exemple

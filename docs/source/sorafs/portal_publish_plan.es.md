@@ -98,7 +98,7 @@ este archivo se centra en el runbook multi-equipo vinculado a DOCS-7.
    ```bash
    OUT="artifacts/devportal/sorafs/20260219T130012Z"
    TORII_URL="https://torii.stg.sora.net/"
-   AUTHORITY="soraカタカナ..."
+   AUTHORITY="<katakana-i105-account-id>"
    KEY_FILE="secrets/docs-admin.key"
    ALIAS_PROOF="secrets/docs.alias.proof"
 

@@ -3533,7 +3533,7 @@ mod status_tests {
             last_asset_id: Some("61CtjvNd9T3THAR65GsMVHr82Bjc".to_owned()),
             last_payer: Some(sumeragi::status::NexusFeePayer::Sponsor),
             last_payer_id: Some(
-                "soraゴヂアニラショリャヒャャサピテヶベチュヲボヹヂギタクアニョロホドチャヘヱヤジヶハシャウンベニョャルフハケネキカ".to_owned(),
+                "sorauロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76".to_owned(),
             ),
             last_error: Some("denied".to_owned()),
         };

@@ -90,7 +90,7 @@ O executor é `info("Hello from Kotodama")` e o syscall `SET_ACCOUNT_DETAIL` é 
 
 Para configurar o bytecode Torii, use CLI. هوية التطوير الافتراضية مشتقة من المفتاح العام في `defaults/client.toml`, لذلك يكون معرّف الحساب:
 ```
-soraカタカナ...
+<katakana-i105-account-id>
 ```
 
 Verifique o URL do site como Torii e o ID da cadeia e o ID da cadeia:
@@ -110,7 +110,7 @@ A CLI usa o Norito e o peer é definido como peer. Execute Docker para syscall `
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id soraカタカナ... \
+  --id <katakana-i105-account-id> \
   --key example | jq .
 ```
 

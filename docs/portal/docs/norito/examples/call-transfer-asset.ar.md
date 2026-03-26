@@ -20,9 +20,9 @@ source: crates/ivm/docs/examples/08_call_transfer_asset.ko
 
 ## جولة دفتر الأستاذ
 
-- موّل سلطة العقد (مثلا `soraカタカナ...`) بالأصل الذي ستنقله وامنح السلطة دور `CanTransfer` أو إذنا مكافئا.
-- استدعِ نقطة الدخول `call_transfer_asset` لنقل 5 وحدات من حساب العقد إلى `soraカタカナ...`، بما يعكس طريقة تغليف الأتمتة على السلسلة لنداءات المضيف.
-- تحقق من الأرصدة عبر `FindAccountAssets` أو `iroha_cli ledger assets list --account soraカタカナ...` وافحص الأحداث لتأكيد أن حارس بيانات التعريف سجل سياق النقل.
+- موّل سلطة العقد (مثلا `<katakana-i105-account-id>`) بالأصل الذي ستنقله وامنح السلطة دور `CanTransfer` أو إذنا مكافئا.
+- استدعِ نقطة الدخول `call_transfer_asset` لنقل 5 وحدات من حساب العقد إلى `<katakana-i105-account-id>`، بما يعكس طريقة تغليف الأتمتة على السلسلة لنداءات المضيف.
+- تحقق من الأرصدة عبر `FindAccountAssets` أو `iroha_cli ledger assets list --account <katakana-i105-account-id>` وافحص الأحداث لتأكيد أن حارس بيانات التعريف سجل سياق النقل.
 
 ## أدلة SDK ذات صلة
 
@@ -37,8 +37,8 @@ source: crates/ivm/docs/examples/08_call_transfer_asset.ko
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("soraカタカナ..."),
-      account!("soraカタカナ..."),
+      account!("<katakana-i105-account-id>"),
+      account!("<katakana-i105-account-id>"),
       asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );

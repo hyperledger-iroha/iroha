@@ -103,7 +103,7 @@ translator: machine-google-reviewed
     - JSON 接受鍵 `"perms"` 或 `"permissions"`，每個鍵都是權限名稱的字符串數組。
     - 示例：
       - `{ "perms": [ "mint_asset:rose#wonder" ] }`
-      - `{ "permissions": [ "read_assets:soraカタカナ...", "transfer_asset:rose#wonder" ] }`
+      - `{ "permissions": [ "read_assets:<katakana-i105-account-id>", "transfer_asset:rose#wonder" ] }`
     - 模擬中支持的權限名稱前綴：
       - `register_domain`、`register_account`、`register_asset_definition`
       - `read_assets:<account_id>`

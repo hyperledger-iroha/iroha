@@ -34,7 +34,7 @@ public final class OfflineSpendReceiptPayloadEncoder {
    * @param toAccountId receiver canonical Katakana i105 AccountId
    * @param assetId canonical internal asset balance-bucket literal
    *     ({@code <base58-asset-definition-id>#<katakana-i105-account-id>} with an optional
-   *     {@code #dataspace:<id>} suffix; public asset ids are bare Base58)
+   *     {@code #dataspace:<id>} suffix; canonical asset-definition ids are Base58)
    * @param amount decimal amount string
    * @param issuedAtMs timestamp in milliseconds
    * @param invoiceId invoice identifier

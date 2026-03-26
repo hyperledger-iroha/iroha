@@ -103,7 +103,7 @@ Bu bölmə sınaqlarda istifadə edilən admin-stil sistem zəngləri üçün sa
     - JSON ya açarı `"perms"`, ya da `"permissions"` qəbul edir, hər biri icazə adlarının sətirləridir.
     - Nümunələr:
       - `{ "perms": [ "mint_asset:rose#wonder" ] }`
-      - `{ "permissions": [ "read_assets:soraカタカナ...", "transfer_asset:rose#wonder" ] }`
+      - `{ "permissions": [ "read_assets:<katakana-i105-account-id>", "transfer_asset:rose#wonder" ] }`
     - İstehzada dəstəklənən icazə adı prefiksləri:
       - `register_domain`, `register_account`, `register_asset_definition`
       - `read_assets:<account_id>`

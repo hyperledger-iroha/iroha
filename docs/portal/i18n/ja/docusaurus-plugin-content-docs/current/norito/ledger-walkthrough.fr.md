@@ -30,8 +30,8 @@ comptez utiliser の compte que の ID。デジャドゥコンプを含むデフ
 デモの課題:
 
 ```sh
-export ADMIN_ACCOUNT="soraカタカナ..."
-export RECEIVER_ACCOUNT="soraカタカナ..."
+export ADMIN_ACCOUNT="<katakana-i105-account-id>"
+export RECEIVER_ACCOUNT="<katakana-i105-account-id>"
 ```
 
 値のリストとプルミエのコンパイルを確認します:

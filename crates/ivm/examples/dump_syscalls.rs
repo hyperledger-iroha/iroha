@@ -37,7 +37,7 @@ fn main() {
     dump(src1);
 
     // Case 2: typed NFT syscalls
-    let src2 = "seiyaku Sample2 { kotoage fn run() { nft_mint_asset(nft_id!(\"n0$wonderland\"), account!(\"soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ\")); nft_transfer_asset(account!(\"soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ\"), nft_id!(\"n0$wonderland\"), account!(\"soraゴヂアニラショリャヒャャサピテヶベチュヲボヹヂギタクアニョロホドチャヘヱヤジヶハシャウンベニョャルフハケネキカ\")); } }";
+    let src2 = "seiyaku Sample2 { kotoage fn run() { nft_mint_asset(nft_id!(\"n0$wonderland\"), account!(\"sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB\")); nft_transfer_asset(account!(\"sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB\"), nft_id!(\"n0$wonderland\"), account!(\"sorauロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76\")); } }";
     println!("-- case 2 --");
     dump(src2);
 }

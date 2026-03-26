@@ -803,8 +803,8 @@ artifacts/finance/repo/<agreement-id>/governance/
 
 1. **快照餘額。 ** 使用支持的 `FindAssets` 查詢
    `iroha ledger asset list` (`crates/iroha_cli/src/main_shared.rs`) 或
-   `iroha_python` 幫助程序導出 `soraカタカナ...` 的異或餘額，
-   `soraカタカナ...`，以及參與審核的每個台賬。商店
+   `iroha_python` 幫助程序導出 `<katakana-i105-account-id>` 的異或餘額，
+   `<katakana-i105-account-id>`，以及參與審核的每個台賬。商店
    下的 JSON
    `artifacts/finance/repo/<period>/treasury_assets.json`並記錄git
    隨附的 `README.md` 中的提交/工具鏈。

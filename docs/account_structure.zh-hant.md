@@ -311,11 +311,11 @@ of truth instead of duplicating stale inline strings.
 
 - **Canonical account id:** a Katakana i105 literal only.
 - **On-chain account aliases:** `name@dataspace` or `name@domain.dataspace`.
-  These aliases resolve on-chain to canonical i105 account ids and are not a
+  These aliases resolve on-chain to canonical Katakana i105 account ids and are not a
   second account-id codec.
 - **Out-of-band wrappers:** transport wrappers such as CAIP-style URIs or other
   integration envelopes may exist in downstream systems, but they are not
-  public account ids. Any such wrapper must resolve to canonical i105 or an
+  canonical account ids. Any such wrapper must resolve to a canonical Katakana i105 account id or an
   on-chain alias before it reaches strict parser paths.
 - **Machine helpers:** Rust, TypeScript/JavaScript, Python, Swift, Kotlin, and
   Java SDKs expose canonical Katakana i105 codecs

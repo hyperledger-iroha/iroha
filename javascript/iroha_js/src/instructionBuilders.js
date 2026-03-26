@@ -4,6 +4,7 @@ import {
   ensureCanonicalAccountId,
   normalizeAccountId,
   normalizeAssetId,
+  normalizeAssetHoldingId,
   normalizeRwaId,
 } from "./normalizers.js";
 import { MultisigSpec, MultisigSpecBuilder } from "./multisig.js";
@@ -1813,11 +1814,14 @@ function normalizeAccountIds(values, name, { allowEmpty = false } = {}) {
 
 /**
  * Build a `Mint::Asset` instruction payload.
- * @param {{ assetId: string, quantity: string|number|bigint }} options
+ * @param {{ assetHoldingId: string, quantity: string|number|bigint }} options
  * @returns {{Mint: {Asset: {object: string, destination: string}}}}
  */
-export function buildMintAssetInstruction({ assetId, quantity }) {
-  const destination = normalizeAssetId(assetId, "assetId");
+export function buildMintAssetInstruction({ assetHoldingId, assetId, quantity }) {
+  const destination = normalizeAssetHoldingId(
+    assetHoldingId ?? assetId,
+    assetHoldingId !== undefined ? "assetHoldingId" : "assetId",
+  );
   const object = asNumericQuantity(quantity, "quantity");
   return {
     Mint: {
@@ -1831,11 +1835,14 @@ export function buildMintAssetInstruction({ assetId, quantity }) {
 
 /**
  * Build a `Burn::Asset` instruction payload.
- * @param {{ assetId: string, quantity: string|number|bigint }} options
+ * @param {{ assetHoldingId: string, quantity: string|number|bigint }} options
  * @returns {{Burn: {Asset: {object: string, destination: string}}}}
  */
-export function buildBurnAssetInstruction({ assetId, quantity }) {
-  const destination = normalizeAssetId(assetId, "assetId");
+export function buildBurnAssetInstruction({ assetHoldingId, assetId, quantity }) {
+  const destination = normalizeAssetHoldingId(
+    assetHoldingId ?? assetId,
+    assetHoldingId !== undefined ? "assetHoldingId" : "assetId",
+  );
   const object = asNumericQuantity(quantity, "quantity");
   return {
     Burn: {
@@ -1891,15 +1898,19 @@ export function buildBurnTriggerRepetitionsInstruction({
 
 /**
  * Build a `Transfer::Asset` instruction payload.
- * @param {{ sourceAssetId: string, quantity: string|number|bigint, destinationAccountId: string }} options
+ * @param {{ sourceAssetHoldingId: string, quantity: string|number|bigint, destinationAccountId: string }} options
  * @returns {{Transfer: {Asset: {source: string, object: string, destination: string}}}}
  */
 export function buildTransferAssetInstruction({
+  sourceAssetHoldingId,
   sourceAssetId,
   quantity,
   destinationAccountId,
 }) {
-  const source = normalizeAssetId(sourceAssetId, "sourceAssetId");
+  const source = normalizeAssetHoldingId(
+    sourceAssetHoldingId ?? sourceAssetId,
+    sourceAssetHoldingId !== undefined ? "sourceAssetHoldingId" : "sourceAssetId",
+  );
   const destination = normalizeAccountId(
     destinationAccountId,
     "destinationAccountId",
@@ -3050,7 +3061,7 @@ export function buildFinalizeElectionInstruction(options) {
   };
 }
 
-export { normalizeAccountId, normalizeAssetId, normalizeRwaId };
+export { normalizeAccountId, normalizeAssetId, normalizeAssetHoldingId, normalizeRwaId };
 
 /**
  * Helper that encodes a builder result to ensure structural validity.

@@ -76,9 +76,9 @@ No caso de saída, o script descreve uma manifestação agregada:
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "soraカタカナ...",
+      "owner": "<katakana-i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"soraカタカナ...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<katakana-i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -87,7 +87,7 @@ No caso de saída, o script descreve uma manifestação agregada:
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"soraカタカナ...",
+        "payer":"<katakana-i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -245,7 +245,7 @@ corrida de CSV.
   referências a arquivos serão resolvidas em relação à localização do CSV. Metadados
   que nenhum objeto marinho produz um erro de validação.
 - **Controladores:** celdas em branco respetan `--default-controllers`. Proporção
-  listas de controladores explícitas (por exemplo `soraカタカナ...;soraカタカナ...`) para delegar a
+  listas de controladores explícitas (por exemplo `<katakana-i105-account-id>;<katakana-i105-account-id>`) para delegar a
   atores não têm dono.
 
 Los fallos são reportados com numerosos filas contextuais (por exemplo

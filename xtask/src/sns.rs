@@ -623,13 +623,13 @@ fn ensure_account_literal(literal: &str, field: &str, prefix: &str, errors: &mut
     }
     if trimmed.contains('@') {
         errors.push(format!(
-            "{prefix}: {field} `{literal}` must be a canonical I105-encoded account id and must not include `@domain`"
+            "{prefix}: {field} `{literal}` must be a canonical Katakana i105-encoded account id and must not include `@domain`"
         ));
         return;
     }
     if let Err(err) = iroha_data_model::account::AccountId::parse_encoded(trimmed) {
         errors.push(format!(
-            "{prefix}: {field} `{literal}` must be a canonical I105-encoded account id: {err}"
+            "{prefix}: {field} `{literal}` must be a canonical Katakana i105-encoded account id: {err}"
         ));
     }
 }
@@ -2547,7 +2547,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 mod catalog_verify_tests {
     use super::*;
 
-    const SAMPLE_ASSET_ID: &str = "6sLdgCzX8t3h4cU4cinuyqHVivrr#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
+    const SAMPLE_ASSET_ID: &str = "6sLdgCzX8t3h4cU4cinuyqHVivrr#sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
 
     fn sample_pricing() -> PricingTier {
         PricingTier {
@@ -2569,8 +2569,10 @@ mod catalog_verify_tests {
             suffix: ".sora".into(),
             suffix_id: 1,
             status: "active".into(),
-            steward_account: "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ".into(),
-            fund_splitter_account: "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ".into(),
+            steward_account:
+                "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D".into(),
+            fund_splitter_account:
+                "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D".into(),
             payment_asset_id: SAMPLE_ASSET_ID.into(),
             referral_cap_bps: 500,
             min_term_years: 1,
@@ -2580,7 +2582,10 @@ mod catalog_verify_tests {
             policy_version: 1,
             reserved_labels: vec![ReservedLabel {
                 label: "treasury".into(),
-                assigned_to: Some("soraゴヂアヌョシペギゥルゼプキュビルェッハガヌイタソタィニュチョヵボヮゾバュチョナボポビワグツニュノノツマヘサ".into()),
+                assigned_to: Some(
+                    "sorauロ1PクCカrムhyワエトhウヤSqP2GFGラヱミケヌマzヘオミMヌヨトksJヱRRJXVB"
+                        .into(),
+                ),
                 release_at_ms: None,
                 note: None,
             }],

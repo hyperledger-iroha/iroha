@@ -11,8 +11,8 @@
   "receipts": [
     {
       "amount": "25.00",
-      "asset": "6sLdgCzX8t3h4cU4cinuyqHVivrr#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
-      "from": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+      "asset": "6sLdgCzX8t3h4cU4cinuyqHVivrr#sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+      "from": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
       "invoice_id": "INV-1001",
       "issued_at_ms": 1730314876000,
       "platform_proof": {
@@ -22,13 +22,13 @@
         "key_id": "QUFQTERFTU8x",
         "kind": "apple_app_attest"
       },
-      "to": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+      "to": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
       "tx_id_hex": "FDE7DAC62A81775C0B6185C71D0BE28D05D2EAAAADE4C70DBD89DC3B3D8FFD1E"
     },
     {
       "amount": "20.00",
-      "asset": "6sLdgCzX8t3h4cU4cinuyqHVivrr#soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
-      "from": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+      "asset": "6sLdgCzX8t3h4cU4cinuyqHVivrr#sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+      "from": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
       "invoice_id": "INV-1002",
       "issued_at_ms": 1730314877000,
       "platform_proof": {
@@ -38,7 +38,7 @@
         "key_id": "QUFQTERFTU8x",
         "kind": "apple_app_attest"
       },
-      "to": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+      "to": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
       "tx_id_hex": "8D9C844236791FBB80337F4201F19B3430B0004A00BBD5DF1626B28B912E2065"
     }
   ],

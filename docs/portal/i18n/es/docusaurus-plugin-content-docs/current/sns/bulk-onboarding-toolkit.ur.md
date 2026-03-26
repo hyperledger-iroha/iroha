@@ -73,9 +73,9 @@ Opciones clave:
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "soraカタカナ...",
+      "owner": "<katakana-i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"soraカタカナ...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<katakana-i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -84,7 +84,7 @@ Opciones clave:
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"soraカタカナ...",
+        "payer":"<katakana-i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -237,7 +237,7 @@ filtro کرتا ہے تاکہ auditores ایک CSV ejecutar پر taladro کر س
   referencias ubicación CSV کے resolución relativa ہوتی ہیں۔ Metadatos que no son objetos
   error de validación دیتا ہے۔
 - **Controladores:** خالی celdas `--default-controllers` کو honor کرتے ہیں۔ no propietario
-  actores کو delegado کرتے وقت listas de controladores explícitos دیں (مثال `soraカタカナ...;soraカタカナ...`)۔
+  actores کو delegado کرتے وقت listas de controladores explícitos دیں (مثال `<katakana-i105-account-id>;<katakana-i105-account-id>`)۔
 
 Números de fila contextuales de fallas کے ساتھ informe ہوتے ہیں (مثال
 `error: row 12 term_years must be between 1 and 255`). Errores de validación del script

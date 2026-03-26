@@ -19,7 +19,7 @@ fuente: crates/ivm/docs/examples/12_nft_flow.ko
 
 ## Пошаговый обход реестра
 
-- Tenga en cuenta que la propiedad NFT (nombre `n0#wonderland`) está conectada a cuentas/cuentas, используемыми в сниппете (`soraカタカナ...`, `soraカタカナ...`).
+- Tenga en cuenta que la propiedad NFT (nombre `n0#wonderland`) está conectada a cuentas/cuentas, используемыми в сниппете (`<katakana-i105-account-id>`, `<katakana-i105-account-id>`).
 - Utilice el archivo `nft_issue_and_transfer`, para descargar NFT, para proteger el ego de Alice y Bob y activar la bandera metadana, описывающий выпуск.
 - Guarde el archivo NFT con `iroha_cli ledger nfts list --account <id>` o SDK emergente, para poder descargarlo previamente, según sea necesario. актив удаляется после выполнения инструкции burn.
 
@@ -35,11 +35,11 @@ fuente: crates/ivm/docs/examples/12_nft_flow.ko
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
 seiyaku NftFlow {
   kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
-    let owner = account!("soraカタカナ...");
+    let owner = account!("<katakana-i105-account-id>");
     let nft = nft_id!("n0$wonderland");
     nft_mint_asset(nft, owner);
 
-    let to = account!("soraカタカナ...");
+    let to = account!("<katakana-i105-account-id>");
     nft_transfer_asset(owner, nft, to);
     nft_set_metadata(nft, json!{ issued: "demo" });
     nft_burn_asset(nft);

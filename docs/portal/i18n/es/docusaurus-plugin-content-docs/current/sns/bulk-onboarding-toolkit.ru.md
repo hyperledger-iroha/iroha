@@ -72,9 +72,9 @@ En el siguiente script se muestra un manifiesto agregado:
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "soraカタカナ...",
+      "owner": "<katakana-i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"soraカタカナ...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<katakana-i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -83,7 +83,7 @@ En el siguiente script se muestra un manifiesto agregado:
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"soraカタカナ...",
+        "payer":"<katakana-i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -231,7 +231,7 @@ Los filtros de `release`, los auditores pueden utilizar el programa CSV.
 - **Análisis de metadatos/gobernanza:** JSON парсится напрямую en línea; ссылки на файлы
   разрешаются относительно CSV. Los metadatos no están disponibles para las validaciones.
 - **Controladores:** пустые ячейки соблюдают `--default-controllers`. Указывайте
-  явные списки controladores (nombre `soraカタカナ...;soraカタカナ...`) при делегировании не-owner.
+  явные списки controladores (nombre `<katakana-i105-account-id>;<katakana-i105-account-id>`) при делегировании не-owner.
 
 Ошибки сообщаются с контекстными номерами строк (por ejemplo
 `error: row 12 term_years must be between 1 and 255`). Script de escritura con código `1`

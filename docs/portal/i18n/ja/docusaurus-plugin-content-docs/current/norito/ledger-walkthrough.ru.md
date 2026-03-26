@@ -29,8 +29,8 @@ translation_last_reviewed: 2026-02-07
 ID は。バンドルを使用して、デモ版をバンドルします:
 
 ```sh
-export ADMIN_ACCOUNT="soraカタカナ..."
-export RECEIVER_ACCOUNT="soraカタカナ..."
+export ADMIN_ACCOUNT="<katakana-i105-account-id>"
+export RECEIVER_ACCOUNT="<katakana-i105-account-id>"
 ```
 
 Подтвердите значения, выведя первые аккаунты:

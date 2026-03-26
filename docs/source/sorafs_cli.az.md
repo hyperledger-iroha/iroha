@@ -235,7 +235,7 @@ cargo run -p sorafs_car --features cli --bin sorafs_cli -- \
   --chunk-plan artifacts/chunk_plan.json \
   --torii-url https://localhost:8080 \
   --submitted-epoch=42 \
-  --authority=soraカタカナ... \
+  --authority=<katakana-i105-account-id> \
   --private-key=ed25519:0123...cafe \
   --summary-out artifacts/manifest.submit.json \
   --response-out artifacts/manifest.submit.body
@@ -609,12 +609,12 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   --deposit=420 \
   --outcome=withdrawn_before_panel \
   --panel-size=7 \
-  --refund-account=soraカタカナ... \
-  --treasury-account=soraカタカナ... \
-  --escrow-account=soraカタカナ... \
-  --juror=soraカタカナ... --juror=soraカタカナ... --juror=soraカタカナ... \
-  --juror=soraカタカナ... --juror=soraカタカナ... --juror=soraカタカナ... --juror=soraカタカナ... \
-  --no-show=soraカタカナ... --no-show=soraカタカナ... \
+  --refund-account=<katakana-i105-account-id> \
+  --treasury-account=<katakana-i105-account-id> \
+  --escrow-account=<katakana-i105-account-id> \
+  --juror=<katakana-i105-account-id> --juror=<katakana-i105-account-id> --juror=<katakana-i105-account-id> \
+  --juror=<katakana-i105-account-id> --juror=<katakana-i105-account-id> --juror=<katakana-i105-account-id> --juror=<katakana-i105-account-id> \
+  --no-show=<katakana-i105-account-id> --no-show=<katakana-i105-account-id> \
   --format=json
 ```
 

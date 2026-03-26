@@ -10,6 +10,7 @@ import {
   ensureCanonicalAccountId,
   normalizeAccountId,
   normalizeAssetId,
+  normalizeAssetHoldingId,
   normalizeIdentifierInput,
   normalizeOpaqueLiteral,
   normalizeRwaId,
@@ -9521,6 +9522,14 @@ export class ToriiClient {
 
   static _normalizeAssetId(assetId, name = "assetId") {
     return ToriiClient._requireAssetId(assetId, name);
+  }
+
+  static _requireAssetHoldingId(assetHoldingId, name = "assetHoldingId") {
+    return normalizeAssetHoldingId(assetHoldingId, name);
+  }
+
+  static _normalizeAssetHoldingId(assetHoldingId, name = "assetHoldingId") {
+    return ToriiClient._requireAssetHoldingId(assetHoldingId, name);
   }
 
   static _requireAssetDefinitionId(assetDefinitionId) {

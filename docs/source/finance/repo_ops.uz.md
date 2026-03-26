@@ -803,8 +803,8 @@ Quyidagi nazorat ro'yxatiga rioya qilish orqali har chorakda bir kitob to'plami.
 
 1. **Snapshot balanslari.** quvvat beruvchi `FindAssets` so‘rovidan foydalaning
    `iroha ledger asset list` (`crates/iroha_cli/src/main_shared.rs`) yoki
-   `iroha_python` `soraカタカナ...` uchun XOR balanslarini eksport qilish uchun yordamchi,
-   `soraカタカナ...` va ko'rib chiqishda ishtirok etgan har bir stol hisobi. Do'kon
+   `iroha_python` `<katakana-i105-account-id>` uchun XOR balanslarini eksport qilish uchun yordamchi,
+   `<katakana-i105-account-id>` va ko'rib chiqishda ishtirok etgan har bir stol hisobi. Do'kon
    ostidagi JSON
    `artifacts/finance/repo/<period>/treasury_assets.json` va gitni yozib oling
    hamroh bo'lgan `README.md`-da majburiyat/uskunalar zanjiri.

@@ -1861,7 +1861,7 @@ Last update: 2026-02-07
 - Localnet (permissioned, 7 peers, 753ms, soft limits 1/2/8, telemetry=extended): `/private/tmp/iroha-localnet-7peer-run154-perm` (24780/25700). 100 TPS for 120s -> height 5, peer0 view changes 9 (`missing_qc_total=7`, `quorum_timeout_total=2`), `tx_queue.depth=11522`, `sumeragi_pending_blocks_total` max 0, `sumeragi_commit_inflight_queue_depth` max 0; commit intervals after initial gap ~3.8s (4 commits). Metrics: `metrics-sumeragi-load.log`.
 - Tests: not run (localnet-only focus per request).
 - Merge: resolved status.md conflict markers between doc updates, CLI fixes, and FASTPQ test adjustments.
-- Docs: aligned governance API translations with i105 account_id responses and `--owner soraカタカナ...`, updated JS SDK validation error guidance, and removed `@domain` from `inspectAccountId` examples.
+- Docs: aligned governance API translations with i105 account_id responses and `--owner <katakana-i105-account-id>`, updated JS SDK validation error guidance, and removed `@domain` from `inspectAccountId` examples.
 - Docs: switched Soranet incentive packet beneficiary example to canonical Katakana i105 account ids.
 - Merge: resolved conflicts in Sumeragi pending-block gating + docs/portal CLI examples (app/tools/ledger updates).
 - Tests: not run (merge conflict resolution).

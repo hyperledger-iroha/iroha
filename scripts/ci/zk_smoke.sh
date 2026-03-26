@@ -11,7 +11,7 @@ set -euo pipefail
 # Env overrides:
 # - CLI_CONFIG: path to client config TOML (optional)
 # - ASSET_DEFINITION_ID: canonical public asset definition id (default 62Fk4FPcMuLvW5QjDGNF2a4jAmjM)
-# - FROM: AccountId to debit (default soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ)
+# - FROM: AccountId to debit (default sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D)
 # - ASSET_ID: canonical public AssetId (defaults to "${ASSET_DEFINITION_ID}#${FROM}")
 # - AMOUNT: amount to shield (default 1)
 # - NOTE_COMMITMENT_HEX: 64-hex commitment (default zeros)
@@ -22,7 +22,7 @@ need iroha
 CONFIG_FLAG=()
 if [[ -n "${CLI_CONFIG:-}" ]]; then CONFIG_FLAG=(--config "$CLI_CONFIG"); fi
 
-FROM="${FROM:-soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ}"
+FROM="${FROM:-sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D}"
 ASSET_DEFINITION_ID="${ASSET_DEFINITION_ID:-62Fk4FPcMuLvW5QjDGNF2a4jAmjM}"
 ASSET_ID="${ASSET_ID:-${ASSET_DEFINITION_ID}#${FROM}}"
 AMOUNT="${AMOUNT:-1}"

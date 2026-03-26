@@ -19,9 +19,9 @@ Demonstra a criação de domínios com permissão, o registro de ativos e a cunh
 
 ## Roteiro do livro razão
 
-- Garanta que a conta de destino (por exemplo `soraカタカナ...`) exista, espelhando a fase de configuração em cada quickstart do SDK.
+- Garanta que a conta de destino (por exemplo `<katakana-i105-account-id>`) exista, espelhando a fase de configuração em cada quickstart do SDK.
 - Invoque o ponto de entrada `register_and_mint` para criar a definição do ativo ROSE e cunhar 250 unidades para Alice em uma transação única.
-- Verifique os saldos via `client.request(FindAccountAssets)` ou `iroha_cli ledger assets list --account soraカタカナ...` para confirmar que a cunhagem foi bem-sucedida.
+- Verifique os saldos via `client.request(FindAccountAssets)` ou `iroha_cli ledger assets list --account <katakana-i105-account-id>` para confirmar que a cunhagem foi bem-sucedida.
 
 ## Guias de SDK relacionados
 
@@ -43,7 +43,7 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("soraカタカナ...");
+    let to = account!("<katakana-i105-account-id>");
     let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     mint_asset(to, asset, 250);
   }

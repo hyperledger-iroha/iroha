@@ -75,9 +75,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "soraカタカナ...",
+      "owner": "<katakana-i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"soraカタカナ...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<katakana-i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -86,7 +86,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"soraカタカナ...",
+        "payer":"<katakana-i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -233,7 +233,7 @@ Então.
 - **metadados e governança:** no JSON inline مباشرة؛ ويتم حل
   مراجع الملفات نسبة em formato CSV. metadata não está disponível.
 - **Controladores:** O controlador é o `--default-controllers`. قدم قوائم
-  O controlador de controle (como `soraカタカナ...;soraカタカナ...`) não funciona mais.
+  O controlador de controle (como `<katakana-i105-account-id>;<katakana-i105-account-id>`) não funciona mais.
 
 يتم الابلاغ عن الاخطاء مع ارقام صفوف سياقية (مثلا
 `error: row 12 term_years must be between 1 and 255`). Chave de fenda `1`

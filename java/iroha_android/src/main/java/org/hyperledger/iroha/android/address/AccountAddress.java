@@ -7,6 +7,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.Optional;
 
 import org.hyperledger.iroha.android.crypto.Blake2s;
@@ -272,12 +273,12 @@ public final class AccountAddress {
     if (trimmed.contains("@")) {
       throw new AccountAddressException(
           AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
-          "account address literals must not include @domain; use canonical Katakana i105 form");
+          "account address literals must not include @domain; use canonical I105 form");
     }
     if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
       throw new AccountAddressException(
           AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
-          "canonical hex account addresses are not accepted; use canonical Katakana i105 form");
+          "canonical hex account addresses are not accepted; use canonical I105 form");
     }
     return new ParseResult(fromI105(trimmed, expectedPrefix), Format.I105);
   }
@@ -295,12 +296,12 @@ public final class AccountAddress {
     if (trimmed.contains("@")) {
       throw new AccountAddressException(
           AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
-          "account address literals must not include @domain; use canonical Katakana i105 form");
+          "account address literals must not include @domain; use canonical I105 form");
     }
     if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
       throw new AccountAddressException(
           AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
-          "canonical hex account addresses are not accepted; use canonical Katakana i105 form");
+          "canonical hex account addresses are not accepted; use canonical I105 form");
     }
     return new ParseResult(fromI105(trimmed, expectedPrefix), Format.I105);
   }
@@ -332,12 +333,12 @@ public final class AccountAddress {
     if (trimmed.contains("@")) {
       throw new AccountAddressException(
           AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
-          "account address literals must not include @domain; use canonical Katakana i105 form");
+          "account address literals must not include @domain; use canonical I105 form");
     }
     if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
       throw new AccountAddressException(
           AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
-          "canonical hex account addresses are not accepted; use canonical Katakana i105 form");
+          "canonical hex account addresses are not accepted; use canonical I105 form");
     }
     final byte[] canonical = decodeI105(trimmed, expectedPrefix);
     parseCanonical(canonical, true);
@@ -926,92 +927,46 @@ public final class AccountAddress {
 
   private static byte[] decodeI105Payload(final String payload) throws AccountAddressException {
     final List<Integer> digits = new ArrayList<>();
-    final DecodeAttemptState state = new DecodeAttemptState();
-    final byte[] canonical = backtrackI105Payload(payload, 0, digits, state);
-    if (canonical != null) {
-      return canonical;
+    for (int index = 0; index < payload.length(); index++) {
+      final String candidate = String.valueOf(payload.charAt(index));
+      final Integer digit = lookupI105Digit(candidate);
+      if (digit == null) {
+        throw new AccountAddressException(
+            AccountAddressErrorCode.INVALID_I105_CHAR,
+            "invalid i105 alphabet symbol: " + payload.charAt(index));
+      }
+      digits.add(digit);
     }
-    if (state.sawChecksumMismatch) {
-      throw new AccountAddressException(
-          AccountAddressErrorCode.CHECKSUM_MISMATCH, "i105 checksum mismatch");
-    }
-    if (state.sawTooShort) {
+    if (digits.size() <= I105_CHECKSUM_LEN) {
       throw new AccountAddressException(
           AccountAddressErrorCode.I105_TOO_SHORT, "i105 address is too short");
     }
-    if (state.invalidChar != null) {
+    final int splitAt = digits.size() - I105_CHECKSUM_LEN;
+    final int[] dataDigits = new int[splitAt];
+    for (int i = 0; i < splitAt; i++) {
+      dataDigits[i] = digits.get(i);
+    }
+    final int[] checksumDigits = new int[I105_CHECKSUM_LEN];
+    for (int i = 0; i < I105_CHECKSUM_LEN; i++) {
+      checksumDigits[i] = digits.get(splitAt + i);
+    }
+    final byte[] canonical = decodeBaseN(dataDigits, I105_BASE);
+    if (!Arrays.equals(checksumDigits, i105ChecksumDigits(canonical))) {
       throw new AccountAddressException(
-          AccountAddressErrorCode.INVALID_I105_CHAR,
-          "invalid i105 alphabet symbol: " + state.invalidChar.charValue());
+          AccountAddressErrorCode.CHECKSUM_MISMATCH, "i105 checksum mismatch");
     }
-    throw new AccountAddressException(
-        AccountAddressErrorCode.CHECKSUM_MISMATCH, "i105 checksum mismatch");
-  }
-
-  private static byte[] backtrackI105Payload(
-      final String payload,
-      final int index,
-      final List<Integer> digits,
-      final DecodeAttemptState state)
-      throws AccountAddressException {
-    if (index == payload.length()) {
-      if (digits.size() <= I105_CHECKSUM_LEN) {
-        state.sawTooShort = true;
-        return null;
-      }
-      final int splitAt = digits.size() - I105_CHECKSUM_LEN;
-      final int[] dataDigits = new int[splitAt];
-      for (int i = 0; i < splitAt; i++) {
-        dataDigits[i] = digits.get(i);
-      }
-      final int[] checksumDigits = new int[I105_CHECKSUM_LEN];
-      for (int i = 0; i < I105_CHECKSUM_LEN; i++) {
-        checksumDigits[i] = digits.get(splitAt + i);
-      }
-      final byte[] canonical = decodeBaseN(dataDigits, I105_BASE);
-      if (Arrays.equals(checksumDigits, i105ChecksumDigits(canonical))) {
-        return canonical;
-      }
-      state.sawChecksumMismatch = true;
-      return null;
-    }
-
-    final char currentChar = payload.charAt(index);
-    boolean matched = false;
-    for (int symbolLength = I105_MAX_SYMBOL_CHARS; symbolLength >= 1; symbolLength--) {
-      if (index + symbolLength > payload.length()) {
-        continue;
-      }
-      final String candidate = payload.substring(index, index + symbolLength);
-      final Integer digit = lookupI105Digit(candidate);
-      if (digit == null) {
-        continue;
-      }
-      matched = true;
-      digits.add(digit);
-      final byte[] canonical = backtrackI105Payload(payload, index + symbolLength, digits, state);
-      digits.remove(digits.size() - 1);
-      if (canonical != null) {
-        return canonical;
-      }
-    }
-
-    if (!matched && state.invalidChar == null) {
-      state.invalidChar = Character.valueOf(currentChar);
-    }
-    return null;
-  }
-
-  private static final class DecodeAttemptState {
-    private boolean sawTooShort;
-    private boolean sawChecksumMismatch;
-    private Character invalidChar;
+    return canonical;
   }
 
   private static Integer lookupI105Digit(final String symbol) {
     for (int i = 0; i < I105_ALPHABET.length; i++) {
       if (I105_ALPHABET[i].equals(symbol)) {
         return Integer.valueOf(i);
+      }
+    }
+    for (int i = 0; i < IROHA_POEM_KANA_HALFWIDTH.length; i++) {
+      if (IROHA_POEM_KANA_HALFWIDTH[i].equals(symbol)) {
+        return Integer.valueOf(BASE58_ALPHABET.length + i);
       }
     }
     return null;
@@ -1281,7 +1236,7 @@ public final class AccountAddress {
     if (!canonical.equals(literal)) {
       throw new AccountAddressException(
           AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
-          "account address literals must use canonical katakana i105 form");
+          "account address literals must use canonical I105 form");
     }
   }
 

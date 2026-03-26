@@ -19,9 +19,9 @@ title: Вы называете перенос с хоста из Kotodama
 
 ## Пошаговый обход реестра
 
-- Пополните полномочия контракта (например, `soraカタカナ...`) активом, который он будет переводить, и выдайте полную роль `CanTransfer` или эквивалентное решение.
-- Вызовите точку входа `call_transfer_asset`, чтобы перевести 5 единиц с контрактом аккаунта на `soraカタカナ...`, учитывая, что ончейн-автоматизация может оборачивать вызовы хоста.
-- Проверьте балансы через `FindAccountAssets` или `iroha_cli ledger assets list --account soraカタカナ...` и просмотрите события, чтобы убедиться, что защита метаданных записала преобразование контекста.
+- Пополните полномочия контракта (например, `<katakana-i105-account-id>`) активом, который он будет переводить, и выдайте полную роль `CanTransfer` или эквивалентное решение.
+- Вызовите точку входа `call_transfer_asset`, чтобы перевести 5 единиц с контрактом аккаунта на `<katakana-i105-account-id>`, учитывая, что ончейн-автоматизация может оборачивать вызовы хоста.
+- Проверьте балансы через `FindAccountAssets` или `iroha_cli ledger assets list --account <katakana-i105-account-id>` и просмотрите события, чтобы убедиться, что защита метаданных записала преобразование контекста.
 
 ## Связанные управления SDK
 
@@ -36,8 +36,8 @@ title: Вы называете перенос с хоста из Kotodama
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("soraカタカナ..."),
-      account!("soraカタカナ..."),
+      account!("<katakana-i105-account-id>"),
+      account!("<katakana-i105-account-id>"),
       asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );

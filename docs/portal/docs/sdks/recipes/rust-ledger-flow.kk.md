@@ -34,8 +34,8 @@ SampleDownload файлын '@site/src/components/SampleDownload' ішінен �
    `defaults/client.toml`:
 
    ```bash
-   export ADMIN_ACCOUNT="soraカタカナ..."
-   export RECEIVER_ACCOUNT="soraカタカナ..."
+   export ADMIN_ACCOUNT="<katakana-i105-account-id>"
+   export RECEIVER_ACCOUNT="<katakana-i105-account-id>"
    export ADMIN_PRIVATE_KEY="802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
    ```
 
@@ -122,7 +122,7 @@ cargo run
 Келесіге ұқсас журнал шығысын көруіңіз керек:
 
 ```
-soraカタカナ... now holds:
+<katakana-i105-account-id> now holds:
   50 units of 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 

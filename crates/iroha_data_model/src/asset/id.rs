@@ -231,7 +231,7 @@ impl AssetId {
         let scope_literal = parts.next();
         if parts.next().is_some() {
             return Err(ParseError::new(
-                "Asset balance bucket literal must use `<base58-asset-definition-id>#<katakana-i105-account-id>` with optional `#dataspace:<id>` suffix; public asset ids are bare Base58",
+                "Asset balance bucket literal must use `<base58-asset-definition-id>#<katakana-i105-account-id>` with optional `#dataspace:<id>` suffix; canonical asset-definition ids are Base58",
             ));
         }
 

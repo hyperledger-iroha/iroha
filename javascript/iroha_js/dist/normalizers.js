@@ -249,6 +249,27 @@ function normalizeAccountNumberIdentifier(raw, name) {
   return normalized;
 }
 
+function looksLikeCanonicalI105Literal(raw) {
+  if (typeof raw !== "string") {
+    return false;
+  }
+  if (/\s/.test(raw) || raw.includes("@") || raw.includes("#") || raw.includes("$")) {
+    return false;
+  }
+  if (raw.length < 32 || raw.length > 160) {
+    return false;
+  }
+  const sentinelMatch = /^(?:sora|test|dev|n[0-9]+)/u.exec(raw);
+  if (!sentinelMatch) {
+    return false;
+  }
+  const payload = raw.slice(sentinelMatch[0].length);
+  if (!payload) {
+    return false;
+  }
+  return /^[1-9A-HJ-NP-Za-km-z\p{Script=Katakana}ｰﾞﾟ]+$/u.test(payload);
+}
+
 export function normalizeAccountId(value, name) {
   const raw = assertString(value, name).trim();
   if (raw.length === 0) {
@@ -279,6 +300,9 @@ export function normalizeAccountId(value, name) {
     return address.toI105();
   } catch (error) {
     if (error instanceof AccountAddressError) {
+      if (looksLikeCanonicalI105Literal(raw)) {
+        return raw;
+      }
       fail(
         ValidationErrorCode.INVALID_ACCOUNT_ID,
         `${name} must be a canonical katakana i105 account id`,
@@ -317,6 +341,9 @@ export function ensureCanonicalAccountId(value, name) {
     parsed = AccountAddress.parseEncoded(raw);
   } catch (error) {
     if (error instanceof AccountAddressError) {
+      if (looksLikeCanonicalI105Literal(raw)) {
+        return raw;
+      }
       throw createValidationError(
         ValidationErrorCode.INVALID_ACCOUNT_ID,
         `${name} must be a canonical Katakana i105 account id`,
@@ -342,6 +369,35 @@ export function normalizeAssetId(value, name) {
   if (raw.length === 0) {
     fail(ValidationErrorCode.INVALID_ASSET_ID, `${name} must be a non-empty string`, name);
   }
+  if (raw.includes("#")) {
+    fail(
+      ValidationErrorCode.INVALID_ASSET_ID,
+      `${name} must be a canonical Base58 asset id; asset aliases and asset holding ids are not accepted here`,
+      name,
+    );
+  }
+  if (
+    /\s/.test(raw) ||
+    raw.includes("%") ||
+    raw.includes("/") ||
+    raw.includes("?") ||
+    raw.includes(":") ||
+    !/^[1-9A-HJ-NP-Za-km-z]+$/.test(raw)
+  ) {
+    fail(
+      ValidationErrorCode.INVALID_ASSET_ID,
+      `${name} must be a canonical unprefixed Base58 asset id`,
+      name,
+    );
+  }
+  return raw;
+}
+
+export function normalizeAssetHoldingId(value, name) {
+  const raw = assertString(value, name).trim();
+  if (raw.length === 0) {
+    fail(ValidationErrorCode.INVALID_ASSET_ID, `${name} must be a non-empty string`, name);
+  }
   const parts = raw.split("#");
   if (parts.length < 2 || parts.length > 3) {
     fail(
@@ -350,24 +406,11 @@ export function normalizeAssetId(value, name) {
       name,
     );
   }
-  const [assetDefinitionId, accountId, scope] = parts;
-  if (
-    assetDefinitionId.length === 0 ||
-    /\s/.test(assetDefinitionId) ||
-    assetDefinitionId.includes("%") ||
-    assetDefinitionId.includes("/") ||
-    assetDefinitionId.includes("?") ||
-    assetDefinitionId.includes(":")
-  ) {
-    fail(
-      ValidationErrorCode.INVALID_ASSET_ID,
-      `${name}.assetDefinitionId must be a canonical unprefixed Base58 asset definition id`,
-      name,
-    );
-  }
+  const [assetId, accountId, scope] = parts;
+  const normalizedAssetId = normalizeAssetId(assetId, `${name}.assetId`);
   const normalizedAccountId = normalizeAccountId(accountId, `${name}.accountId`);
   if (scope === undefined) {
-    return `${assetDefinitionId}#${normalizedAccountId}`;
+    return `${normalizedAssetId}#${normalizedAccountId}`;
   }
   const scopeMatch = /^dataspace:(\d+)$/.exec(scope);
   if (!scopeMatch) {
@@ -377,7 +420,7 @@ export function normalizeAssetId(value, name) {
       name,
     );
   }
-  return `${assetDefinitionId}#${normalizedAccountId}#dataspace:${scopeMatch[1]}`;
+  return `${normalizedAssetId}#${normalizedAccountId}#dataspace:${scopeMatch[1]}`;
 }
 
 export function normalizeRwaId(value, name) {

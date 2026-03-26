@@ -90,7 +90,7 @@ ivm_run target/quickstart/hello.to --args '{}'
 
 Загрузите байт-код в Torii для CLI. Он был создан в соответствии с требованиями `defaults/client.toml`, لذلك يكون. Автор сообщения:
 ```
-soraカタカナ...
+<katakana-i105-account-id>
 ```
 
 Чтобы получить доступ к URL-адресу Torii и идентификатору цепочки, выполните следующие действия:
@@ -110,7 +110,7 @@ iroha --config defaults/client.toml \
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id soraカタカナ... \
+  --id <katakana-i105-account-id> \
   --key example | jq .
 ```
 

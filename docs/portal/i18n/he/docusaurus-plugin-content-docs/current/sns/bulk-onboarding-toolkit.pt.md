@@ -77,9 +77,9 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "soraカタカナ...",
+      "owner": "<katakana-i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"soraカタカナ...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<katakana-i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -88,7 +88,7 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"soraカタカナ...",
+        "payer":"<katakana-i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -244,7 +244,7 @@ unica execucao de CSV.
   רפרנסים א arquivos sao resolvidas relativo a localizacao do CSV. מטא נתונים
   nao objeto produz um erro de validacao.
 - **בקרים:** celulas em branco respeitam `--default-controllers`. פורנקה
-  רשימה מפורשת (לדוגמה `soraカタカナ...;soraカタカナ...`) ao delegar para atores nao הבעלים.
+  רשימה מפורשת (לדוגמה `<katakana-i105-account-id>;<katakana-i105-account-id>`) ao delegar para atores nao הבעלים.
 
 Falhas sao reportadas com numeros de linha contextuais (por exemplo
 `error: row 12 term_years must be between 1 and 255`). O script sai com codigo

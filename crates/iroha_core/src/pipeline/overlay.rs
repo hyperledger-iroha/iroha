@@ -3049,7 +3049,8 @@ mod tests {
             op: axt::SpendOp {
                 kind: "transfer".into(),
                 from: authority_str,
-                to: "soraゴヂアニラショリャヒャャサピテヶベチュヲボヹヂギタクアニョロホドチャヘヱヤジヶハシャウンベニョャルフハケネキカ".into(),
+                to: "sorauロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76"
+                    .into(),
                 amount: "5".into(),
             },
         };

@@ -77,9 +77,9 @@ Em caso de sucesso o script grava um manifesto agregado:
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "soraカタカナ...",
+      "owner": "<katakana-i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"soraカタカナ...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<katakana-i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -88,7 +88,7 @@ Em caso de sucesso o script grava um manifesto agregado:
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"soraカタカナ...",
+        "payer":"<katakana-i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -244,7 +244,7 @@ submissões. O quadro filtrado por `release` para que os auditores possam focar 
   referencias a arquivos são resolvidos relativos à localização do CSV. Metadados
   nenhum objeto produz um erro de validação.
 - **Controladores:** celulas em branco respeitam `--default-controllers`. Forneca
-  listas explícitas (por exemplo `soraカタカナ...;soraカタカナ...`) ao delegar para atores não proprietário.
+  listas explícitas (por exemplo `<katakana-i105-account-id>;<katakana-i105-account-id>`) ao delegar para atores não proprietário.
 
 Falhas são reportadas com números de linha contextuais (por exemplo
 `error: row 12 term_years must be between 1 and 255`). O script sai com código

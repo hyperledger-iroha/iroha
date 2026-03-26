@@ -80,7 +80,7 @@ enabled = true
 lane_count = 3
 
 [nexus.fees]
-fee_asset_id = "xor#universal"
+fee_asset_id = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
 base_fee = "0"
 per_byte_fee = "0"
 per_instruction_fee = "0.001"

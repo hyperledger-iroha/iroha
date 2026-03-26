@@ -18,11 +18,11 @@ seiyaku PredictionMarket {
   kotoage fn main() permission(MarketUser) {
     let caller = authority();
     let asset = asset_definition("61CtjvNd9T3THAR65GsMVHr82Bjc");
-    let pool = account_id("soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ");
-    let alice = account_id("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ");
-    let bob = account_id("soraゴヂアニラショリャヒャャサピテヶベチュヲボヹヂギタクアニョロホドチャヘヱヤジヶハシャウンベニョャルフハケネキカ");
-    let oracle_yes = account_id("soraゴヂアネイョサテゾギニャハゲヅミゼマヶアヵチヸヒュワハザヨャゼシュヺチィヸゴリキゾホゥォゼノナチククク");
-    let oracle_no = account_id("soraゴヂアヌメネヒョタルアキュカンコプヱガョラツゴヸナゥヘガヮザネチョヷニャヒュニョメヺェヅヤアキャヅアタタナイス");
+    let pool = account_id("sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE");
+    let alice = account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB");
+    let bob = account_id("sorauロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76");
+    let oracle_yes = account_id("sorauロ1Q2クBKzrシStハYyXフ1ケHソセkSveノyサネHラソug7zWムヰyRMH888");
+    let oracle_no = account_id("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D");
 
     if (caller == oracle_yes) {
       if (!resolved && alice_staked && bob_staked) {

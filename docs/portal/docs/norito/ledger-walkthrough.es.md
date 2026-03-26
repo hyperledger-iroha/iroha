@@ -31,8 +31,8 @@ IDs de cuenta que planeas usar. El bundle por defecto ya incluye dos cuentas
 Derivadas de las claves demo:
 
 ```sh
-export ADMIN_ACCOUNT="soraカタカナ..."
-export RECEIVER_ACCOUNT="soraカタカナ..."
+export ADMIN_ACCOUNT="<katakana-i105-account-id>"
+export RECEIVER_ACCOUNT="<katakana-i105-account-id>"
 ```
 
 Confirma los valores listando las primeras cuentas:

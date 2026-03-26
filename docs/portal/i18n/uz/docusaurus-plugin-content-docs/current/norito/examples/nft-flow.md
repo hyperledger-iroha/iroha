@@ -21,7 +21,7 @@ NFT hayotiy tsiklini oxirigacha bosib o'tadi: egasiga zarb qilish, metama'lumotl
 
 ## Buxgalteriya kitobi bo'yicha ko'rsatmalar
 
-- NFT ta'rifi (masalan, `n0#wonderland`) parchada ishlatiladigan egasi/oluvchi hisoblari (`soraカタカナ...`, `soraカタカナ...`) bilan birga mavjudligiga ishonch hosil qiling.
+- NFT ta'rifi (masalan, `n0#wonderland`) parchada ishlatiladigan egasi/oluvchi hisoblari (`<katakana-i105-account-id>`, `<katakana-i105-account-id>`) bilan birga mavjudligiga ishonch hosil qiling.
 - NFTni zarb qilish uchun `nft_issue_and_transfer` kirish nuqtasini chaqiring, uni Elisdan Bobga o'tkazing va emissiyani tavsiflovchi metadata bayrog'ini qo'shing.
 - O'tkazishni tekshirish uchun `iroha_cli ledger nfts list --account <id>` yoki SDK ekvivalentlari bilan NFT daftarining holatini tekshiring, so'ngra yoqish bo'yicha ko'rsatma bajarilgandan so'ng aktiv o'chirilganligini tasdiqlang.
 
@@ -37,11 +37,11 @@ NFT hayotiy tsiklini oxirigacha bosib o'tadi: egasiga zarb qilish, metama'lumotl
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
 seiyaku NftFlow {
   kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
-    let owner = account!("soraカタカナ...");
+    let owner = account!("<katakana-i105-account-id>");
     let nft = nft_id!("n0$wonderland");
     nft_mint_asset(nft, owner);
 
-    let to = account!("soraカタカナ...");
+    let to = account!("<katakana-i105-account-id>");
     nft_transfer_asset(owner, nft, to);
     nft_set_metadata(nft, json!{ issued: "demo" });
     nft_burn_asset(nft);

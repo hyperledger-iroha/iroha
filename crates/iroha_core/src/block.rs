@@ -12803,8 +12803,10 @@ mod commit {
             state::{State, World},
         };
 
-        const ACCOUNT_FROM_LITERAL: &str = "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ";
-        const ACCOUNT_TO_LITERAL: &str = "soraゴヂアニラショリャヒャャサピテヶベチュヲボヹヂギタクアニョロホドチャヘヱヤジヶハシャウンベニョャルフハケネキカ";
+        const ACCOUNT_FROM_LITERAL: &str =
+            "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
+        const ACCOUNT_TO_LITERAL: &str =
+            "sorauロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76";
 
         fn binding_for_descriptor(descriptor: &AxtDescriptor) -> AxtBinding {
             descriptor.binding().expect("descriptor binding")

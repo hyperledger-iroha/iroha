@@ -15,10 +15,10 @@ final class ConnectSessionBalanceTests: XCTestCase {
             try? FileManager.default.removeItem(at: tempURL)
         }
 
-        let stream = session.balanceStream(accountID: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ")
+        let stream = session.balanceStream(accountID: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB")
         var iterator = stream.makeAsyncIterator()
         let first = try await iterator.next()
-        XCTAssertEqual(first?.accountID, "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ")
+        XCTAssertEqual(first?.accountID, "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB")
         XCTAssertEqual(first?.sequence, 1)
         XCTAssertEqual(first?.assets.first?.assetId, encodedUsdAssetID)
         XCTAssertEqual(first?.queueDiagnostics?.state, .healthy)
@@ -38,7 +38,7 @@ final class ConnectSessionBalanceTests: XCTestCase {
 
         var received: [ConnectBalanceSnapshot] = []
         let cancellable = session
-            .balancePublisher(accountID: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ", scheduler: nil)
+            .balancePublisher(accountID: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB", scheduler: nil)
             .sink(receiveCompletion: { completion in
                 if case .failure(let error) = completion {
                     XCTFail("Unexpected error \(error)")
@@ -78,13 +78,13 @@ final class ConnectSessionBalanceTests: XCTestCase {
         let events = [
             ConnectEvent(sequence: 1,
                          direction: .walletToApp,
-                         payload: .balanceSnapshot(ConnectBalanceSnapshot(accountID: "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+                         payload: .balanceSnapshot(ConnectBalanceSnapshot(accountID: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
                                                                           assets: [ConnectBalanceAsset(assetId: encodedUsdAssetID,
                                                                                                        quantity: "10")],
                                                                           lastUpdatedMs: 1))),
             ConnectEvent(sequence: 2,
                          direction: .walletToApp,
-                         payload: .balanceSnapshot(ConnectBalanceSnapshot(accountID: "soraゴヂアネウテニュメヴヺテヺヌヺツテニョチュゴヒャシャハゼェタゲヹツザヒドラノヒョンコツニョバエドニュトトウオヒミ",
+                         payload: .balanceSnapshot(ConnectBalanceSnapshot(accountID: "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D",
                                                                           assets: [ConnectBalanceAsset(assetId: encodedUsdAssetID,
                                                                                                        quantity: "20")],
                                                                           lastUpdatedMs: 2)))

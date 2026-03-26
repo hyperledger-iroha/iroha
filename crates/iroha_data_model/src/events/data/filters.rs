@@ -1888,10 +1888,11 @@ mod tests {
             offline::{AndroidIntegrityPolicy, OfflinePlatformTokenSnapshot},
         };
 
-        let controller =
-            AccountId::parse_encoded("soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ")
-                .map(crate::account::ParsedAccountId::into_account_id)
-                .unwrap();
+        let controller = AccountId::parse_encoded(
+            "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
+        )
+        .map(crate::account::ParsedAccountId::into_account_id)
+        .unwrap();
         let receiver = AccountId::new(
             "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D"
                 .parse()

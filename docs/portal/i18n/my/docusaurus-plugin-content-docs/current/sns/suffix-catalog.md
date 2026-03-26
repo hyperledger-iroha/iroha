@@ -45,9 +45,9 @@ tooling သည် status docs ကို မခြစ်ဘဲ တူညီသေ
 
 | နောက်ဆက် | ID (`hex`) | ဘဏ္ဍာစိုး | ရန်ပုံငွေခွဲခြမ်းစိတ်ဖြာ | အဆင့်အတန်း | ငွေပေးချေမှု ပိုင်ဆိုင်မှု | ရည်ညွှန်းထုပ် (bps) | သက်တမ်း (အနည်းဆုံး – အများဆုံးနှစ်) | ကျေးဇူးတော် / ရွေးနှုတ်ခြင်း (နေ့ရက်များ) | စျေးနှုန်းအဆင့်များ (regex → အခြေခံစျေးနှုန်း / လေလံ) | တံဆိပ်များ | အခကြေးငွေ ပိုင်းခြားခြင်း (T/S/R/E bps) | မူဝါဒဗားရှင်း |
 |--------|------------------|---------------------|----------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `.sora` | `0x0001` | `soraカタカナ...` | `soraカタカナ...` | သက်ဝင် | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 500 | 1 – 5 | 30/60 | `T0: ^[a-z0-9]{3,}$ → 120 XOR (Vickrey)` | `treasury → soraカタカナ...` | `7000 / 3000 / 1000 / 0` | ၁ |
-| `.nexus` | `0x0002` | `soraカタカナ...` | `soraカタカナ...` | ရပ်ထားသည် | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 300 | 1 – 3 | ၁၅/၃၀| `T0: ^[a-z0-9]{4,}$ → 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ → 4000 XOR (Dutch floor 500)` | `treasury → soraカタカナ...`, `guardian → soraカタカナ...` | `6500 / 2500 / 800 / 200` | 2 |
-| `.dao` | `0x0003` | `soraカタカナ...` | `soraカタカナ...` | ရုတ်သိမ်း | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 0 | 1 – 2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ → 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
+| `.sora` | `0x0001` | `<katakana-i105-account-id>` | `<katakana-i105-account-id>` | သက်ဝင် | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 500 | 1 – 5 | 30/60 | `T0: ^[a-z0-9]{3,}$ → 120 XOR (Vickrey)` | `treasury → <katakana-i105-account-id>` | `7000 / 3000 / 1000 / 0` | ၁ |
+| `.nexus` | `0x0002` | `<katakana-i105-account-id>` | `<katakana-i105-account-id>` | ရပ်ထားသည် | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 300 | 1 – 3 | ၁၅/၃၀| `T0: ^[a-z0-9]{4,}$ → 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ → 4000 XOR (Dutch floor 500)` | `treasury → <katakana-i105-account-id>`, `guardian → <katakana-i105-account-id>` | `6500 / 2500 / 800 / 200` | 2 |
+| `.dao` | `0x0003` | `<katakana-i105-account-id>` | `<katakana-i105-account-id>` | ရုတ်သိမ်း | `61CtjvNd9T3THAR65GsMVHr82Bjc` | 0 | 1 – 2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ → 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
 
 ## JSON ကောက်နုတ်ချက်
 
@@ -60,7 +60,7 @@ tooling သည် status docs ကို မခြစ်ဘဲ တူညီသေ
       "suffix": ".sora",
       "suffix_id": 1,
       "status": "active",
-      "fund_splitter_account": "soraカタカナ...",
+      "fund_splitter_account": "<katakana-i105-account-id>",
       "payment_asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
       "referral_cap_bps": 500,
       "pricing": [

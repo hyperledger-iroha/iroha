@@ -4,8 +4,8 @@
     "asset": "xor#wonderland",
     "catalog": "../gateway_m0/meter_catalog.json",
     "guardrails": "../gateway_m0/billing_guardrails.json",
-    "payer": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
-    "treasury": "soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ",
+    "payer": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+    "treasury": "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
     "usage": "../gateway_m0/billing_usage_sample.json"
   },
   "image_tag": "soranet-gateway-m1-alpha",

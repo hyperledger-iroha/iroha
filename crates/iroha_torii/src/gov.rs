@@ -2715,12 +2715,15 @@ mod tests {
     };
     use iroha_primitives::numeric::Numeric;
     use iroha_test_samples::ALICE_ID;
+    use nonzero_ext::nonzero;
 
     use super::*;
     use crate::routing::MaybeTelemetry;
 
-    const ACCOUNT_AUTHORITY: &str = "soraゴヂアニィルサフユイサヹピビレッデヹボテハキョメベチュヒャネィギチュヲベァヱェベモネェネツデトツオチハセ";
-    const ACCOUNT_OWNER_ALT: &str = "soraゴヂアヌメネヒョタルアキュカンコプヱガョラツゴヸナゥヘガヮザネチョヷニャヒュニョメヺェヅヤアキャヅアタタナイス";
+    const ACCOUNT_AUTHORITY: &str =
+        "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE";
+    const ACCOUNT_OWNER_ALT: &str =
+        "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D";
 
     #[test]
     fn hint_present_handles_nulls() {
@@ -2787,10 +2790,12 @@ mod tests {
     #[test]
     fn parse_candidates_accepts_account_alias_and_resolves_to_canonical_i105() {
         let (state, _, _) = mk_basic_context();
-        let account_id: AccountId = ACCOUNT_AUTHORITY.parse().expect("account parses");
-        bind_account_alias_for_test(&state, &account_id, "council@sbp");
+        let account_id = AccountId::parse_encoded(ACCOUNT_AUTHORITY)
+            .expect("account parses")
+            .into_account_id();
+        bind_account_alias_for_test(&state, &account_id, "council@universal");
         let candidates = vec![VrfCandidateDto {
-            account_id: "council@sbp".to_string(),
+            account_id: "council@universal".to_string(),
             variant: "Normal".to_string(),
             pk_b64: "AQ==".to_string(),
             proof_b64: "AQ==".to_string(),
@@ -2838,13 +2843,12 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        tx.world
-            .account_aliases
-            .insert(label.clone(), account_id.clone());
-        tx.world.account_rekey_records.insert(
-            label.clone(),
-            iroha_data_model::account::rekey::AccountRekeyRecord::new(label, account_id.clone()),
-        );
+        let bind = iroha_data_model::isi::domain_link::BindAccountAlias {
+            account: account_id.clone(),
+            label,
+        };
+        bind.execute(account_id, &mut tx)
+            .expect("bind account alias for test");
         tx.apply();
         block.commit().expect("commit account alias for test");
     }
@@ -3206,14 +3210,16 @@ mod tests {
     #[tokio::test]
     async fn ballot_plain_accepts_account_aliases() {
         let (state, queue, chain_id) = mk_basic_context();
-        let authority: AccountId = ACCOUNT_AUTHORITY.parse().expect("account parses");
-        bind_account_alias_for_test(&state, &authority, "ballot@sbp");
+        let authority = AccountId::parse_encoded(ACCOUNT_AUTHORITY)
+            .expect("account parses")
+            .into_account_id();
+        bind_account_alias_for_test(&state, &authority, "ballot@universal");
         let chain_id_str = chain_id.as_str().to_string();
         let body = crate::json_object(vec![
-            crate::json_entry("authority", "ballot@sbp"),
+            crate::json_entry("authority", "ballot@universal"),
             crate::json_entry("chain_id", chain_id_str),
             crate::json_entry("referendum_id", "r1"),
-            crate::json_entry("owner", "ballot@sbp"),
+            crate::json_entry("owner", "ballot@universal"),
             crate::json_entry("amount", "100"),
             crate::json_entry("duration_blocks", 600u64),
             crate::json_entry("direction", "Aye"),
@@ -4308,7 +4314,11 @@ mod tests {
             backend: "halo2/ipa".into(),
             envelope_bytes: vec![1u8, 2, 3, 4],
             root_hint: None,
-            owner: Some(ACCOUNT_AUTHORITY.parse().expect("valid account id")),
+            owner: Some(
+                AccountId::parse_encoded(ACCOUNT_AUTHORITY)
+                    .expect("valid account id")
+                    .into_account_id(),
+            ),
             nullifier: None,
             amount: None,
             duration_blocks: None,

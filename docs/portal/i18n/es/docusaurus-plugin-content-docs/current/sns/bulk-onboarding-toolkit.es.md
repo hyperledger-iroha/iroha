@@ -72,9 +72,9 @@ En caso de éxito el guión escribe un manifiesto agregado:
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "soraカタカナ...",
+      "owner": "<katakana-i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"soraカタカナ...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<katakana-i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
@@ -83,7 +83,7 @@ En caso de éxito el guión escribe un manifiesto agregado:
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"soraカタカナ...",
+        "payer":"<katakana-i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -237,7 +237,7 @@ corrida de CSV.
   referencias a archivos se resuelven relativa a la ubicación del CSV. Metadatos
   que ningún objeto sea produce un error de validación.
 - **Controladores:** celdas en blanco respetan `--default-controllers`. proporción
-  listas de controlador explícitas (por ejemplo `soraカタカナ...;soraカタカナ...`) al delegar a
+  listas de controlador explícitas (por ejemplo `<katakana-i105-account-id>;<katakana-i105-account-id>`) al delegar a
   actores sin dueño.
 
 Los fallos se reportan con numeros de fila contextuales (por ejemplo

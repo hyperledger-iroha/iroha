@@ -4265,7 +4265,7 @@ mod tests {
             seiyaku C {
                 struct TransferArgs { domain: DomainId; to: AccountId; }
                 fn main() {
-                    let args = TransferArgs(domain("wonderland"), account_id("soraゴヂアヌャェボヰセキュホュヨモチゥカッパダォレジゴシホセギツキゴヒョヲヌタシャッヱロゥテニョヒシホイヌヘ"));
+                    let args = TransferArgs(domain("wonderland"), account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"));
                     transfer_domain(authority(), args.domain, args.to);
                 }
             }
