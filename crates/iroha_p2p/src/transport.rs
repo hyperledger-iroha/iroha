@@ -216,6 +216,11 @@ pub fn certificate_fingerprint(cert_der: &[u8]) -> crate::peer::TransportBinding
 }
 
 /// Extract the peer certificate fingerprint from an established TLS client session.
+///
+/// # Errors
+///
+/// Returns an error when the peer does not present a certificate or when the
+/// certificate chain is empty.
 #[cfg(feature = "p2p_tls")]
 pub fn tls_peer_certificate_fingerprint<S>(
     tls: &tokio_rustls::client::TlsStream<S>,
@@ -237,6 +242,11 @@ pub fn tls_peer_certificate_fingerprint<S>(
 }
 
 /// Extract the peer certificate fingerprint from an established QUIC session.
+///
+/// # Errors
+///
+/// Returns an error when the peer does not present an identity, when the
+/// identity is not encoded as a certificate chain, or when the chain is empty.
 #[cfg(feature = "quic")]
 pub fn quic_peer_certificate_fingerprint(
     connection: &quinn::Connection,

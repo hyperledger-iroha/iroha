@@ -4525,6 +4525,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // End-to-end config assertions are kept together for this localnet scenario.
     fn npos_iroha3_without_sora_profile_enables_nexus_in_peer_config() {
         let temp = tempfile::tempdir().expect("tmp dir");
         let opts = LocalnetOptions {

@@ -3323,6 +3323,7 @@ pub(crate) enum RoundPhaseTrace {
 pub(crate) enum RoundEventCauseTrace {
     #[default]
     Tick,
+    #[allow(dead_code)] // Only emitted/asserted by round-trace unit tests.
     ProposalObserved,
     BlockAvailable,
     RbcDelivered,
@@ -6890,6 +6891,7 @@ fn round_gap_snapshot() -> RoundGapSnapshot {
         .unwrap_or_default()
 }
 
+#[allow(dead_code)] // Read by round-trace unit tests.
 pub(crate) fn round_trace_snapshot() -> RoundTraceSnapshot {
     round_trace_status_slot()
         .lock()

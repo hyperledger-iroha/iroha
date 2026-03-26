@@ -152,9 +152,9 @@ pub mod account {
                 "dataspace" => Ok(Self::Dataspace(
                     <DataSpaceId as norito::json::JsonDeserialize>::json_from_value(value)?,
                 )),
-                other => Err(norito::json::Error::Message(
-                    format!("unknown alias permission scope `{other}`").into(),
-                )),
+                other => Err(norito::json::Error::Message(format!(
+                    "unknown alias permission scope `{other}`"
+                ))),
             }
         }
     }

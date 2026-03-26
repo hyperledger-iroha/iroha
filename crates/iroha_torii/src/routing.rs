@@ -19765,14 +19765,14 @@ mod stateful_account_path_parser_tests {
     async fn stateful_account_path_parser_resolves_bound_alias_literal() {
         let domain_id: DomainId = "hbl".parse().expect("domain");
         let authority = ALICE_ID.clone();
-        let account_id = authority.to_account_id(domain_id.clone());
+        let scoped_account_id = authority.to_account_id(domain_id.clone());
         let alias = AccountLabel::new(
             domain_id.clone(),
             Name::from_str("operator").expect("alias name"),
         );
         let world = World::with(
             [Domain::new(domain_id).build(&authority)],
-            [Account::new(account_id)
+            [Account::new(scoped_account_id)
                 .with_label(Some(alias))
                 .build(&authority)],
             [],
@@ -19792,8 +19792,8 @@ mod stateful_account_path_parser_tests {
         )
         .expect("bound alias literal should resolve on account_id paths");
 
-        assert_eq!(resolved, account_id);
-        assert_eq!(canonical, account_id.to_string());
+        assert_eq!(resolved, authority);
+        assert_eq!(canonical, authority.to_string());
     }
 }
 

@@ -1404,7 +1404,7 @@ mod tests {
         let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
             .with_name("USD".to_owned())
             .build(&authority);
-        let mut world = World::with([domain], [account], [asset_definition]);
+        let world = World::with([domain], [account], [asset_definition]);
         if let Some(alias_literal) = asset_alias {
             let alias: AssetDefinitionAlias = alias_literal.parse().expect("asset alias");
             let mut block = world.block();

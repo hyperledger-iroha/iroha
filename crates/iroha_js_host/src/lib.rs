@@ -9089,6 +9089,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // End-to-end JSON roundtrip coverage is easier to read as one consolidated case table.
     fn rwa_instruction_json_roundtrip() {
         disable_packed_struct_once();
         let source_account = sample_account("wonderland");
@@ -9134,7 +9135,7 @@ mod tests {
             }),
             norito_json!({
                 "MergeRwas": norito_json!({
-                    "parents": rwa_parent_refs_to_json(&[parent.clone()]),
+                    "parents": rwa_parent_refs_to_json(std::slice::from_ref(&parent)),
                     "primary_reference": "blend-001".to_owned(),
                     "status": Value::Null,
                     "metadata": Metadata::default(),
